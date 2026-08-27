@@ -181,6 +181,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "pyyaml" },
     { name = "sqlite-vec" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -194,6 +195,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.116,<1.0" },
     { name = "httpx", specifier = ">=0.28,<1.0" },
+    { name = "pyyaml", specifier = ">=6.0,<7.0" },
     { name = "sqlite-vec", specifier = ">=0.1.9" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.35,<1.0" },
 ]

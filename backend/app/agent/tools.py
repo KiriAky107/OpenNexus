@@ -47,6 +47,9 @@ class ToolRegistry:
     def unregister(self, name: str) -> None:
         self._tools.pop(name, None)
 
+    def contains(self, name: str) -> bool:
+        return name in self._tools
+
     def get(self, name: str) -> RegisteredTool:
         try:
             return self._tools[name]

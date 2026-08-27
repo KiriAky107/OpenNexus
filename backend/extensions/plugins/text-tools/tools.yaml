@@ -1,0 +1,11 @@
+tools:
+  - name: text.uppercase
+    description: Convert input text to uppercase.
+    handler: uppercase
+    parameters:
+      type: object
+      properties:
+        text:
+          type: string
+      required:
+        - text

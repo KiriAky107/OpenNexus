@@ -1,0 +1,11 @@
+id: text-tools
+name: Text Tools
+version: 1.0.0
+description: 内置示例 Plugin，提供安全的文本转换 Tool。
+permissions: []
+contributes:
+  tools:
+    - text.uppercase
+backend:
+  type: internal_rpc
+  transport: none
