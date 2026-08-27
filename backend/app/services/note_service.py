@@ -32,16 +32,43 @@ def _safe_name(title: str) -> str:
     return name or "untitled"
 
 
-def _rel_path(folder: str | None, title: str) -> str:
-    folder_part = folder.strip().strip("/") if folder else ""
+def _normalize_folder(folder: str | None) -> str:
+    """清洗 folder 为安全的相对目录，拒绝 `..`/`.`/绝对路径/盘符/空字节，防路径逃逸。"""
+    if not folder:
+        return ""
+    if "\x00" in folder:
+        raise ApiError(400, "INVALID_PATH", "folder must not contain NUL bytes", {"folder": folder})
+    segments: list[str] = []
+    for part in re.split(r"[\\/]+", folder):
+        if part == "":
+            continue
+        if part in (".", ".."):
+            raise ApiError(400, "INVALID_PATH", "folder must not contain '.' or '..'", {"folder": folder})
+        if ":" in part:
+            raise ApiError(400, "INVALID_PATH", "folder must be a relative path", {"folder": folder})
+        segments.append(part)
+    return "/".join(segments)
+
+
+def _rel_path(folder: str | None, title: str) -> tuple[str, str]:
+    """由 folder + title 生成安全的相对路径，返回 (rel_path, 清洗后的 folder)。"""
+    clean_folder = _normalize_folder(folder)
     name = _safe_name(title)
     if not name.endswith(".md"):
         name += ".md"
-    return f"{folder_part}/{name}" if folder_part else name
+    rel = f"{clean_folder}/{name}" if clean_folder else name
+    return rel, clean_folder
 
 
 def _abs_path(rel_path: str) -> Path:
-    return _vault() / rel_path
+    """把相对路径解析为 Vault 内的绝对路径；越界即报 400，杜绝路径逃逸。"""
+    if not rel_path or "\x00" in rel_path:
+        raise ApiError(400, "INVALID_PATH", "invalid file path", {"file_path": rel_path})
+    root = _vault().resolve()
+    candidate = (_vault() / rel_path).resolve()
+    if not candidate.is_relative_to(root):
+        raise ApiError(400, "INVALID_PATH", "path escapes vault", {"file_path": rel_path})
+    return candidate
 
 
 def _read_markdown(rel_path: str) -> str:
@@ -62,9 +89,13 @@ def _delete_markdown(rel_path: str) -> None:
 
 
 async def index_note(parsed: ParsedNote) -> None:
-    """把解析结果写入元数据 + FTS5 + 向量（三层可重建索引）。"""
+    """把解析结果写入元数据 + FTS5 + 向量（三层可重建索引）。
+
+    替换元数据时拿到旧 block_id：清理已删除/内容变化的旧向量，只为新增 block 写向量，
+    避免失效向量残留（内容未变的 block 其向量仍有效，无需重复写入）。
+    """
     vectors = await embedding.embed_documents([block.content for block in parsed.blocks])
-    repository.replace_note_metadata(
+    old_block_ids = repository.replace_note_metadata(
         note_id=parsed.note_id,
         title=parsed.title,
         file_path=parsed.file_path,
@@ -74,24 +105,35 @@ async def index_note(parsed: ParsedNote) -> None:
         updated_at=parsed.updated_at,
         blocks=parsed.blocks,
     )
+    old_ids = set(old_block_ids)
+    new_ids = {block.block_id for block in parsed.blocks}
+    stale_ids = [bid for bid in old_ids if bid not in new_ids]
+    if stale_ids:
+        await vector_store.delete(stale_ids)
+    missing_ids = [bid for bid in new_ids if bid not in old_ids]
     records = [
         VectorRecord(id=block.block_id, vector=vector)
         for block, vector in zip(parsed.blocks, vectors)
+        if block.block_id in missing_ids
     ]
     await vector_store.upsert(records)
     repository.set_index_meta({"embedding_model": embedding.model_id, "embedding_dim": str(embedding.dim)})
 
 
 async def create_note(*, title: str, markdown: str, folder: str | None, tags: list[str]) -> Note:
-    rel_path = _rel_path(folder, title)
-    _write_markdown(rel_path, markdown)
+    rel_path, clean_folder = _rel_path(folder, title)
     now = datetime.now(timezone.utc)
     parsed = parse_note(
-        markdown=markdown, file_path=rel_path, folder=folder or "", tags=tags,
+        markdown=markdown, file_path=rel_path, folder=clean_folder, tags=tags,
         created_at=now, updated_at=now,
     )
     parsed.title = title  # 显式传入的 title 优先于正文推导（与 update_note 保持一致）
-    await index_note(parsed)
+    _write_markdown(rel_path, markdown)
+    try:
+        await index_note(parsed)
+    except BaseException:
+        _delete_markdown(rel_path)  # 索引失败时回滚，避免「文件已写、索引缺失」的部分提交
+        raise
     return _build_note(parsed.note_id, parsed.title, parsed.file_path, parsed.tags,
                        parsed.created_at, parsed.updated_at, parsed.blocks, markdown)
 
@@ -112,18 +154,23 @@ async def update_note(
     if record is None:
         raise ApiError(404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id})
 
-    new_md = _read_markdown(record.file_path) if markdown is None else markdown
+    old_md = _read_markdown(record.file_path)
+    new_md = old_md if markdown is None else markdown
     _write_markdown(record.file_path, new_md)
 
     now = datetime.now(timezone.utc)
-    parsed = parse_note(
-        markdown=new_md, file_path=record.file_path, folder=record.folder, tags=tags,
-        created_at=record.created_at, updated_at=now,
-    )
-    if title is not None:
-        parsed.title = title  # 显式传入的 title 覆盖正文推导结果
+    try:
+        parsed = parse_note(
+            markdown=new_md, file_path=record.file_path, folder=record.folder, tags=tags,
+            created_at=record.created_at, updated_at=now,
+        )
+        if title is not None:
+            parsed.title = title  # 显式传入的 title 覆盖正文推导结果
 
-    await index_note(parsed)
+        await index_note(parsed)
+    except BaseException:
+        _write_markdown(record.file_path, old_md)  # 索引失败时回滚正文，避免部分提交
+        raise
     return _build_note(parsed.note_id, parsed.title, parsed.file_path, parsed.tags,
                        parsed.created_at, parsed.updated_at, parsed.blocks, new_md)
 
