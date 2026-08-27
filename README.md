@@ -110,3 +110,4 @@ pnpm build
 - `backend/.venv`、`frontend/node_modules`、`frontend/dist` 均为本地生成目录，不提交到 Git。
 - API 默认监听 `127.0.0.1:8000`，前端默认监听 `127.0.0.1:5173`。
 - 跨模块接口发生变化时，需要同步更新前后端类型和 `docs` 中的接口说明。
+- 当前前后端接口清单见 `docs/后端接口契约-开发版.md`，OpenAPI 以 `/openapi.json` 为准。

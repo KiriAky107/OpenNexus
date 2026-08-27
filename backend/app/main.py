@@ -1,7 +1,11 @@
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHttpException
 
 from app.config import get_settings
+from app.errors import ApiError, api_error_handler, http_error_handler, validation_error_handler
+from app.routes import router as api_router
 from app.schemas import HealthResponse, ServiceStatusResponse
 
 settings = get_settings()
@@ -19,6 +23,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_exception_handler(ApiError, api_error_handler)
+app.add_exception_handler(RequestValidationError, validation_error_handler)
+app.add_exception_handler(StarletteHttpException, http_error_handler)
+app.include_router(api_router)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["System"])

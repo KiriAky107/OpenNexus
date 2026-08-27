@@ -13,3 +13,5 @@ uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 - 健康检查：<http://127.0.0.1:8000/health>
 - API 文档：<http://127.0.0.1:8000/docs>
+
+团队接口清单见 `../docs/后端接口契约-开发版.md`，机器可读契约以运行时的 `/openapi.json` 为准。

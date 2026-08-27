@@ -8,6 +8,7 @@ frontend/*.tsbuildinfo
 backend/.venv/
 backend/.uv-cache/
 backend/.pytest_cache/
+backend/*.egg-info/
 backend/**/__pycache__/
 backend/.env
 
