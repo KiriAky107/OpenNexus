@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from app import repository
 from app.config import get_settings
@@ -216,9 +217,30 @@ async def delete_note(note_id: str) -> bool:
     record = repository.get_note_record(note_id)
     if record is None:
         return False
-    block_ids = repository.delete_note(note_id)
-    await vector_store.delete(block_ids)
-    _delete_markdown(record.file_path)
+
+    path = _abs_path(record.file_path)
+    tombstone = path.with_name(f".{path.name}.{uuid4().hex}.deleting") if path.exists() else None
+    if tombstone is not None:
+        path.replace(tombstone)
+
+    conn = connect()
+    try:
+        with transaction(conn):
+            block_ids = repository.delete_note(note_id, conn=conn)
+            await vector_store.delete(block_ids, conn=conn)
+    except BaseException:
+        if tombstone is not None and tombstone.exists():
+            tombstone.replace(path)
+        raise
+    finally:
+        conn.close()
+
+    if tombstone is not None:
+        # 数据库已提交后，tombstone 即不再属于 Vault；清理失败不应把成功删除报告为失败。
+        try:
+            tombstone.unlink(missing_ok=True)
+        except OSError:
+            pass
     return True
 
 

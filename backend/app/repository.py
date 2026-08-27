@@ -120,20 +120,24 @@ def replace_note_metadata(
     return old_block_ids
 
 
-def delete_note(note_id: str) -> list[str]:
+def delete_note(
+    note_id: str, *, conn: sqlite3.Connection | None = None
+) -> list[str]:
     """删除笔记及其 Block、FTS5 索引；返回被删除的 block_id 供向量层清理。"""
-    conn = connect()
+    owns = conn is None
+    conn = conn or connect()
     try:
         block_ids = [
             row["block_id"]
             for row in conn.execute("SELECT block_id FROM blocks WHERE note_id = ?", (note_id,))
         ]
-        with transaction(conn):
+        with transaction(conn) if owns else nullcontext():
             conn.execute("DELETE FROM blocks_fts WHERE note_id = ?", (note_id,))
             conn.execute("DELETE FROM notes WHERE note_id = ?", (note_id,))  # blocks 级联删除
         return block_ids
     finally:
-        conn.close()
+        if owns:
+            conn.close()
 
 
 def get_note_record(note_id: str) -> NoteRecord | None:
@@ -211,6 +215,81 @@ def fts_search(match: str, limit: int = 100) -> list[FtsHit]:
             (match, limit),
         ).fetchall()
         return [FtsHit(block_id=r["block_id"], note_id=r["note_id"], bm25=r["rank"]) for r in rows]
+    finally:
+        conn.close()
+
+
+def fts_search_page(
+    *,
+    match: str,
+    limit: int,
+    offset: int,
+    folders: list[str],
+    note_ids: list[str],
+    tags: list[str],
+    created_from: datetime | None,
+    created_to: datetime | None,
+    updated_from: datetime | None,
+    updated_to: datetime | None,
+) -> tuple[list[FtsHit], int]:
+    """执行带元数据过滤的 FTS 精确分页，并返回过滤后的完整命中数。"""
+    where = ["blocks_fts MATCH ?"]
+    params: list[object] = [match]
+
+    def add_in(column: str, values: list[str]) -> None:
+        if not values:
+            return
+        placeholders = ",".join("?" * len(values))
+        where.append(f"{column} IN ({placeholders})")
+        params.extend(values)
+
+    add_in("n.folder", folders)
+    add_in("n.note_id", note_ids)
+    if tags:
+        placeholders = ",".join("?" * len(tags))
+        where.append(
+            f"EXISTS (SELECT 1 FROM json_each(n.tags) AS tag WHERE tag.value IN ({placeholders}))"
+        )
+        params.extend(tags)
+
+    for column, lower, upper in (
+        ("n.created_at", created_from, created_to),
+        ("n.updated_at", updated_from, updated_to),
+    ):
+        if lower is not None:
+            where.append(f"julianday({column}) >= julianday(?)")
+            params.append(_iso(lower))
+        if upper is not None:
+            where.append(f"julianday({column}) <= julianday(?)")
+            params.append(_iso(upper))
+
+    from_sql = """
+        FROM blocks_fts
+        JOIN blocks AS b ON b.block_id = blocks_fts.block_id
+        JOIN notes AS n ON n.note_id = b.note_id
+    """
+    where_sql = " AND ".join(where)
+
+    conn = connect()
+    try:
+        total = conn.execute(
+            f"SELECT COUNT(*) {from_sql} WHERE {where_sql}", params
+        ).fetchone()[0]
+        rows = conn.execute(
+            f"""
+            SELECT blocks_fts.block_id, blocks_fts.note_id, bm25(blocks_fts) AS rank
+            {from_sql}
+            WHERE {where_sql}
+            ORDER BY rank
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+        return (
+            [FtsHit(block_id=row["block_id"], note_id=row["note_id"], bm25=row["rank"])
+             for row in rows],
+            total,
+        )
     finally:
         conn.close()
 
