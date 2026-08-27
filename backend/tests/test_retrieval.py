@@ -244,3 +244,80 @@ def test_note_crud_roundtrip(vault) -> None:
 
     assert asyncio.run(note_service.delete_note(note.note_id)) is True
     assert asyncio.run(note_service.get_note(note.note_id)) is None
+
+
+# --------------------------------------------------------------------------- #
+# 审阅回归：路径逃逸 / 部分提交回滚 / 失效向量 / 搜索分页
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("folder", ["../../outside", "..", "..\\..\\etc", "C:\\Windows", "a/../b"])
+def test_create_note_rejects_path_traversal(vault, folder) -> None:
+    from app.errors import ApiError
+    from app.services import note_service
+
+    with pytest.raises(ApiError) as exc:
+        asyncio.run(
+            note_service.create_note(title="逃逸", markdown="# 逃逸", folder=folder, tags=[])
+        )
+    assert exc.value.status_code == 400
+    assert exc.value.code == "INVALID_PATH"
+
+
+def test_update_note_rolls_back_file_on_index_error(vault, monkeypatch) -> None:
+    from app.services import note_service
+
+    note = asyncio.run(
+        note_service.create_note(title="回滚", markdown="# 原文\n\n旧内容。", folder="", tags=[])
+    )
+    path = vault / note.file_path
+    before = path.read_text(encoding="utf-8")
+
+    async def _boom(_contents):
+        raise RuntimeError("embedding down")
+
+    monkeypatch.setattr(note_service.embedding, "embed_documents", _boom)
+    with pytest.raises(RuntimeError):
+        asyncio.run(note_service.update_note(note.note_id, markdown="# 新文\n\n新内容。"))
+
+    assert path.read_text(encoding="utf-8") == before  # 文件已回滚，无部分提交
+
+
+def test_update_removes_stale_vectors(vault) -> None:
+    from app.database.db import connect
+    from app.services import note_service
+
+    def vec_count() -> int:
+        conn = connect()
+        try:
+            return conn.execute("SELECT COUNT(*) FROM vec_blocks").fetchone()[0]
+        finally:
+            conn.close()
+
+    note = asyncio.run(
+        note_service.create_note(
+            title="向量清理", markdown="# 标题\n\n段落一。\n\n段落二。", folder="", tags=[]
+        )
+    )
+    assert vec_count() == 3  # 标题 + 段落一 + 段落二
+
+    asyncio.run(note_service.update_note(note.note_id, markdown="# 标题\n\n段落一。"))
+    assert vec_count() == 2  # 段落二的旧向量被清理，不再残留
+
+
+def test_search_pagination_total_reflects_all_matches(vault) -> None:
+    from app.retrieval.engine import engine
+    from app.services import index_service
+
+    body = "\n\n".join(f"第{i}段 内容。" for i in range(60))
+    _write_vault(vault, {"多段.md": f"# 大量段落\n\n{body}"})
+    asyncio.run(index_service.rebuild(IndexRebuildRequest(scope="all")))
+
+    page1 = asyncio.run(
+        engine.search(SearchRequest(query="段", mode=SearchMode.fts, limit=10, offset=0))
+    )
+    assert page1.page.total >= 60  # total 反映真实命中数，而非候选池上限 50
+    assert len(page1.items) == 10
+
+    page2 = asyncio.run(
+        engine.search(SearchRequest(query="段", mode=SearchMode.fts, limit=10, offset=55))
+    )
+    assert page2.items  # 跨过旧候选池边界仍能取到结果

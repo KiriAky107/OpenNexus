@@ -71,11 +71,18 @@ def replace_note_metadata(
     created_at: datetime,
     updated_at: datetime,
     blocks: list[NoteBlock],
-) -> None:
-    """整体替换一条笔记的元数据、Block 与 FTS5 索引（单事务）。"""
+) -> list[str]:
+    """整体替换一条笔记的元数据、Block 与 FTS5 索引（单事务）。
+
+    返回替换前的旧 block_id 列表，供调用方清理 vec_blocks 中已失效的向量。
+    """
     conn = connect()
     try:
         with transaction(conn):
+            old_block_ids = [
+                row["block_id"]
+                for row in conn.execute("SELECT block_id FROM blocks WHERE note_id = ?", (note_id,))
+            ]
             conn.execute(
                 """
                 INSERT INTO notes (note_id, title, file_path, folder, tags, created_at, updated_at)
@@ -109,6 +116,7 @@ def replace_note_metadata(
                     "INSERT INTO blocks_fts (block_id, note_id, heading_path, content) VALUES (?, ?, ?, ?)",
                     (block.block_id, note_id, segment(" ".join(block.heading_path)), segment(block.content)),
                 )
+        return old_block_ids
     finally:
         conn.close()
 
@@ -204,6 +212,17 @@ def fts_search(match: str, limit: int = 100) -> list[FtsHit]:
             (match, limit),
         ).fetchall()
         return [FtsHit(block_id=r["block_id"], note_id=r["note_id"], bm25=r["rank"]) for r in rows]
+    finally:
+        conn.close()
+
+
+def fts_count(match: str) -> int:
+    """返回 FTS5 命中总数，用于分页 total（不受候选池截断影响）。"""
+    conn = connect()
+    try:
+        return conn.execute(
+            "SELECT COUNT(*) FROM blocks_fts WHERE blocks_fts MATCH ?", (match,)
+        ).fetchone()[0]
     finally:
         conn.close()
 
