@@ -112,3 +112,4 @@ pnpm build
 - 跨模块接口发生变化时，需要同步更新前后端类型和 `docs` 中的接口说明。
 - 当前前后端接口清单见 `docs/后端接口契约-开发版.md`，OpenAPI 以 `/openapi.json` 为准。
 - 前端页面、交互、状态管理和第一阶段验收要求见 `docs/前端页面需求说明-开发版.md`。
+- 分支、提交、Pull Request、Review 和冲突处理规范见 `docs/Git使用细则-团队开发版.md`。
