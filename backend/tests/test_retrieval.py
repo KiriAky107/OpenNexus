@@ -281,6 +281,49 @@ def test_update_note_rolls_back_file_on_index_error(vault, monkeypatch) -> None:
     assert path.read_text(encoding="utf-8") == before  # 文件已回滚，无部分提交
 
 
+def test_update_note_rolls_back_index_when_index_meta_fails(vault, monkeypatch) -> None:
+    """索引元信息失败时，Markdown 与完整索引都保持旧版本。"""
+    from app import repository
+    from app.services import note_service
+
+    note = asyncio.run(
+        note_service.create_note(title="原子更新", markdown="旧正文", folder="", tags=[])
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("index meta failed")
+
+    monkeypatch.setattr(repository, "set_index_meta", _boom)
+    with pytest.raises(RuntimeError):
+        asyncio.run(note_service.update_note(note.note_id, markdown="新正文"))
+
+    got = asyncio.run(note_service.get_note(note.note_id))
+    record = repository.get_note_record(note.note_id)
+    assert got is not None and got.markdown == "旧正文"
+    assert record is not None
+    assert [block.content for block in record.blocks] == ["旧正文"]
+
+
+def test_create_note_rejects_existing_path_without_overwrite(vault) -> None:
+    """POST 同目录同标题返回 409，且不改动已有 Markdown 和索引。"""
+    from app.errors import ApiError
+    from app.services import note_service
+
+    original = asyncio.run(
+        note_service.create_note(title="不能覆盖", markdown="原始正文", folder="测试", tags=[])
+    )
+
+    with pytest.raises(ApiError) as exc:
+        asyncio.run(
+            note_service.create_note(title="不能覆盖", markdown="替换正文", folder="测试", tags=[])
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.code == "RESOURCE_CONFLICT"
+    got = asyncio.run(note_service.get_note(original.note_id))
+    assert got is not None and got.markdown == "原始正文"
+
+
 def test_update_removes_stale_vectors(vault) -> None:
     from app.database.db import connect
     from app.services import note_service

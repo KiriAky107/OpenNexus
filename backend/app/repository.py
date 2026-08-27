@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -235,14 +236,19 @@ def get_block_hits(block_ids: list[str]) -> list[BlockHit]:
         conn.close()
 
 
-def set_index_meta(kv: dict[str, str]) -> None:
-    conn = connect()
+def set_index_meta(
+    kv: dict[str, str], *, conn: sqlite3.Connection | None = None
+) -> None:
+    """写入索引元信息；传入连接时加入调用方现有事务。"""
+    owns = conn is None
+    conn = conn or connect()
     try:
-        with transaction(conn):
+        with transaction(conn) if owns else nullcontext():
             for key, value in kv.items():
                 conn.execute("INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)", (key, value))
     finally:
-        conn.close()
+        if owns:
+            conn.close()
 
 
 def get_index_meta() -> dict[str, str]:
