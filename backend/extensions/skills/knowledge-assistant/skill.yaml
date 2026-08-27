@@ -1,0 +1,17 @@
+id: knowledge-assistant
+name: 知识库助手
+version: 1.0.0
+description: 检索本地笔记，并可调用示例 Plugin 处理文本。
+permissions:
+  - notes.search
+tools:
+  - notes.search
+  - text.uppercase
+retrieval:
+  top_k: 10
+  rerank: true
+  citation: true
+model:
+  required_capabilities:
+    - chat
+    - tool_calling
