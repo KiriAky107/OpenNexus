@@ -321,3 +321,115 @@ def test_search_pagination_total_reflects_all_matches(vault) -> None:
         engine.search(SearchRequest(query="段", mode=SearchMode.fts, limit=10, offset=55))
     )
     assert page2.items  # 跨过旧候选池边界仍能取到结果
+
+
+# --------------------------------------------------------------------------- #
+# 审阅回归：PATCH tags 语义 / 向量-块一致性 / 过滤漏召回 / rebuild 语义与回滚
+# --------------------------------------------------------------------------- #
+def test_patch_tags_semantics(vault) -> None:
+    """PATCH 省略 tags 保留、tags=[] 清空、非空替换（审阅 #5）。"""
+    from app.services import note_service
+
+    note = asyncio.run(
+        note_service.create_note(title="标签语义", markdown="# 标题\n\n正文。", folder="", tags=["a"])
+    )
+    assert note.tags == ["a"]
+
+    updated = asyncio.run(note_service.update_note(note.note_id, title="改名"))  # tags=None
+    assert updated.tags == ["a"]  # 省略 tags 保留原标签
+
+    updated = asyncio.run(note_service.update_note(note.note_id, tags=["b"]))
+    assert updated.tags == ["b"]  # 非空列表替换
+
+    updated = asyncio.run(note_service.update_note(note.note_id, tags=[]))
+    assert updated.tags == []  # 空列表清空
+
+
+def test_patch_partial_content_no_orphan_vectors(vault) -> None:
+    """修改正文只删部分 block 后，vec_blocks 与 blocks 的 ID 集合一致（审阅 #2/#3）。"""
+    from app.database.db import connect
+    from app.services import note_service
+
+    def ids(table: str) -> set[str]:
+        conn = connect()
+        try:
+            return {row[0] for row in conn.execute(f"SELECT block_id FROM {table}")}
+        finally:
+            conn.close()
+
+    note = asyncio.run(
+        note_service.create_note(
+            title="部分修改", markdown="# 标题\n\n段落一。\n\n段落二。", folder="", tags=[]
+        )
+    )
+    assert ids("vec_blocks") == ids("blocks")
+
+    asyncio.run(
+        note_service.update_note(note.note_id, markdown="# 标题\n\n段落一改了。\n\n新增段落。")
+    )
+    # 更新后不变量：向量集合与块集合一一对应，无残留、无缺失
+    assert ids("vec_blocks") == ids("blocks")
+
+
+def test_fts_metadata_filter_recalls_beyond_candidate_pool(vault) -> None:
+    """metadata 过滤不能受候选池截断影响：目标块排在 50 名之外也应被召回（审阅 #4）。"""
+    from app.retrieval.engine import engine
+    from app.services import index_service
+
+    files: dict[str, str] = {}
+    # 60 篇短填充笔记：bm25 高，占据 FTS 前 60 位
+    for i in range(60):
+        files[f"批量/填充{i}.md"] = f"---\ntitle: 填充{i}\ntags: 填充\n---\n\n检索\n"
+    # 目标笔记：长正文使 bm25 变低，排在候选池（50）之外
+    long_body = "检索 " + "甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥天地玄黄宇宙洪荒日月盈昃"
+    files["批量/目标.md"] = f"---\ntitle: 目标\ntags: 目标\n---\n\n{long_body}\n"
+
+    _write_vault(vault, files)
+    asyncio.run(index_service.rebuild(IndexRebuildRequest(scope="all")))
+
+    resp = asyncio.run(
+        engine.search(SearchRequest(query="检索", mode=SearchMode.fts, tags=["目标"]))
+    )
+    assert resp.page.total == 1
+    assert resp.items[0].title == "目标"
+
+
+def test_rebuild_rejects_unsupported_scope_and_note_ids(vault) -> None:
+    """增量 scope / note_ids 未实现时明确拒绝，而非静默全量重建（审阅 #6）。"""
+    from app.errors import ApiError
+    from app.services import index_service
+
+    with pytest.raises(ApiError) as exc:
+        asyncio.run(index_service.rebuild(IndexRebuildRequest(scope="notes")))
+    assert exc.value.status_code == 400
+    assert exc.value.code == "UNSUPPORTED_SCOPE"
+
+    with pytest.raises(ApiError) as exc:
+        asyncio.run(index_service.rebuild(IndexRebuildRequest(scope="all", note_ids=["note_x"])))
+    assert exc.value.code == "UNSUPPORTED_SCOPE"
+
+
+def test_rebuild_failure_restores_old_index(vault, monkeypatch) -> None:
+    """重建中途失败应恢复旧索引，不留下半成品（审阅 #6）。"""
+    from app import repository
+    from app.services import index_service
+    from app.services import note_service as ns
+
+    _write_vault(vault, SAMPLE_NOTES)
+    asyncio.run(index_service.rebuild(IndexRebuildRequest(scope="all")))
+    before = repository.stats()
+
+    real_embed = ns.embedding.embed_documents
+    call = {"n": 0}
+
+    async def _flaky(contents):
+        call["n"] += 1
+        if call["n"] > 1:
+            raise RuntimeError("embed down")
+        return await real_embed(contents)
+
+    monkeypatch.setattr(ns.embedding, "embed_documents", _flaky)
+    with pytest.raises(RuntimeError):
+        asyncio.run(index_service.rebuild(IndexRebuildRequest(scope="all")))
+
+    assert repository.stats() == before  # 旧索引已恢复，无半成品

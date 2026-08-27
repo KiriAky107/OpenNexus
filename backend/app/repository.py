@@ -8,6 +8,7 @@ app/retrieval/vectorstore.py）。本层只负责 notes / blocks / blocks_fts �
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -63,6 +64,7 @@ class FtsHit:
 
 def replace_note_metadata(
     *,
+    conn: sqlite3.Connection,
     note_id: str,
     title: str,
     file_path: str,
@@ -72,53 +74,49 @@ def replace_note_metadata(
     updated_at: datetime,
     blocks: list[NoteBlock],
 ) -> list[str]:
-    """整体替换一条笔记的元数据、Block 与 FTS5 索引（单事务）。
+    """整体替换一条笔记的元数据、Block 与 FTS5 索引。
 
-    返回替换前的旧 block_id 列表，供调用方清理 vec_blocks 中已失效的向量。
+    不在此处开启/提交事务：由调用方（index_note）在同一连接上把「元数据 + 向量」包进
+    单个事务，保证原子性。返回替换前的旧 block_id 列表，供调用方清理失效向量。
     """
-    conn = connect()
-    try:
-        with transaction(conn):
-            old_block_ids = [
-                row["block_id"]
-                for row in conn.execute("SELECT block_id FROM blocks WHERE note_id = ?", (note_id,))
-            ]
-            conn.execute(
-                """
-                INSERT INTO notes (note_id, title, file_path, folder, tags, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(note_id) DO UPDATE SET
-                    title = excluded.title,
-                    file_path = excluded.file_path,
-                    folder = excluded.folder,
-                    tags = excluded.tags,
-                    updated_at = excluded.updated_at
-                """,
-                (note_id, title, file_path, folder, json.dumps(tags, ensure_ascii=False),
-                 _iso(created_at), _iso(updated_at)),
-            )
-            conn.execute("DELETE FROM blocks WHERE note_id = ?", (note_id,))
-            conn.execute("DELETE FROM blocks_fts WHERE note_id = ?", (note_id,))
-            for position, block in enumerate(blocks):
-                conn.execute(
-                    """
-                    INSERT INTO blocks
-                        (block_id, note_id, heading_path, start_offset, end_offset,
-                         content, content_hash, token_count, position)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (block.block_id, note_id, json.dumps(block.heading_path, ensure_ascii=False),
-                     block.start_offset, block.end_offset, block.content,
-                     block.content_hash, block.token_count, position),
-                )
-                # FTS5 存分词后的可检索文本；原文仍由 blocks.content 保留用于展示
-                conn.execute(
-                    "INSERT INTO blocks_fts (block_id, note_id, heading_path, content) VALUES (?, ?, ?, ?)",
-                    (block.block_id, note_id, segment(" ".join(block.heading_path)), segment(block.content)),
-                )
-        return old_block_ids
-    finally:
-        conn.close()
+    old_block_ids = [
+        row["block_id"]
+        for row in conn.execute("SELECT block_id FROM blocks WHERE note_id = ?", (note_id,))
+    ]
+    conn.execute(
+        """
+        INSERT INTO notes (note_id, title, file_path, folder, tags, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(note_id) DO UPDATE SET
+            title = excluded.title,
+            file_path = excluded.file_path,
+            folder = excluded.folder,
+            tags = excluded.tags,
+            updated_at = excluded.updated_at
+        """,
+        (note_id, title, file_path, folder, json.dumps(tags, ensure_ascii=False),
+         _iso(created_at), _iso(updated_at)),
+    )
+    conn.execute("DELETE FROM blocks WHERE note_id = ?", (note_id,))
+    conn.execute("DELETE FROM blocks_fts WHERE note_id = ?", (note_id,))
+    for position, block in enumerate(blocks):
+        conn.execute(
+            """
+            INSERT INTO blocks
+                (block_id, note_id, heading_path, start_offset, end_offset,
+                 content, content_hash, token_count, position)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (block.block_id, note_id, json.dumps(block.heading_path, ensure_ascii=False),
+             block.start_offset, block.end_offset, block.content,
+             block.content_hash, block.token_count, position),
+        )
+        # FTS5 存分词后的可检索文本；原文仍由 blocks.content 保留用于展示
+        conn.execute(
+            "INSERT INTO blocks_fts (block_id, note_id, heading_path, content) VALUES (?, ?, ?, ?)",
+            (block.block_id, note_id, segment(" ".join(block.heading_path)), segment(block.content)),
+        )
+    return old_block_ids
 
 
 def delete_note(note_id: str) -> list[str]:
@@ -212,17 +210,6 @@ def fts_search(match: str, limit: int = 100) -> list[FtsHit]:
             (match, limit),
         ).fetchall()
         return [FtsHit(block_id=r["block_id"], note_id=r["note_id"], bm25=r["rank"]) for r in rows]
-    finally:
-        conn.close()
-
-
-def fts_count(match: str) -> int:
-    """返回 FTS5 命中总数，用于分页 total（不受候选池截断影响）。"""
-    conn = connect()
-    try:
-        return conn.execute(
-            "SELECT COUNT(*) FROM blocks_fts WHERE blocks_fts MATCH ?", (match,)
-        ).fetchone()[0]
     finally:
         conn.close()
 

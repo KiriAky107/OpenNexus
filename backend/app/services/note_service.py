@@ -13,6 +13,7 @@ from pathlib import Path
 from app import repository
 from app.config import get_settings
 from app.contracts import Note, NoteBlock, NoteSummary
+from app.database.db import connect, transaction
 from app.errors import ApiError
 from app.knowledge.parser import ParsedNote, parse_note
 from app.retrieval.embedding import HashEmbeddingProvider
@@ -89,34 +90,41 @@ def _delete_markdown(rel_path: str) -> None:
 
 
 async def index_note(parsed: ParsedNote) -> None:
-    """把解析结果写入元数据 + FTS5 + 向量（三层可重建索引）。
+    """把解析结果写入元数据 + FTS5 + 向量（三层可重建索引），单事务保证原子性。
 
-    替换元数据时拿到旧 block_id：清理已删除/内容变化的旧向量，只为新增 block 写向量，
-    避免失效向量残留（内容未变的 block 其向量仍有效，无需重复写入）。
+    元数据与向量在同一连接、同一事务内提交，避免「新元数据已提交、向量写入失败」的
+    半提交状态。替换元数据时拿到旧 block_id：清理已删除/内容变化的旧向量，只为新增
+    block 写向量（内容未变的 block 其向量仍有效，无需重复写入）。
     """
     vectors = await embedding.embed_documents([block.content for block in parsed.blocks])
-    old_block_ids = repository.replace_note_metadata(
-        note_id=parsed.note_id,
-        title=parsed.title,
-        file_path=parsed.file_path,
-        folder=parsed.folder,
-        tags=parsed.tags,
-        created_at=parsed.created_at,
-        updated_at=parsed.updated_at,
-        blocks=parsed.blocks,
-    )
-    old_ids = set(old_block_ids)
-    new_ids = {block.block_id for block in parsed.blocks}
-    stale_ids = [bid for bid in old_ids if bid not in new_ids]
-    if stale_ids:
-        await vector_store.delete(stale_ids)
-    missing_ids = [bid for bid in new_ids if bid not in old_ids]
-    records = [
-        VectorRecord(id=block.block_id, vector=vector)
-        for block, vector in zip(parsed.blocks, vectors)
-        if block.block_id in missing_ids
-    ]
-    await vector_store.upsert(records)
+    conn = connect()
+    try:
+        with transaction(conn):
+            old_block_ids = repository.replace_note_metadata(
+                conn=conn,
+                note_id=parsed.note_id,
+                title=parsed.title,
+                file_path=parsed.file_path,
+                folder=parsed.folder,
+                tags=parsed.tags,
+                created_at=parsed.created_at,
+                updated_at=parsed.updated_at,
+                blocks=parsed.blocks,
+            )
+            old_ids = set(old_block_ids)
+            new_ids = {block.block_id for block in parsed.blocks}
+            stale_ids = [bid for bid in old_ids if bid not in new_ids]
+            if stale_ids:
+                await vector_store.delete(stale_ids, conn=conn)
+            missing_ids = [bid for bid in new_ids if bid not in old_ids]
+            records = [
+                VectorRecord(id=block.block_id, vector=vector)
+                for block, vector in zip(parsed.blocks, vectors)
+                if block.block_id in missing_ids
+            ]
+            await vector_store.upsert(records, conn=conn)
+    finally:
+        conn.close()
     repository.set_index_meta({"embedding_model": embedding.model_id, "embedding_dim": str(embedding.dim)})
 
 
@@ -124,7 +132,8 @@ async def create_note(*, title: str, markdown: str, folder: str | None, tags: li
     rel_path, clean_folder = _rel_path(folder, title)
     now = datetime.now(timezone.utc)
     parsed = parse_note(
-        markdown=markdown, file_path=rel_path, folder=clean_folder, tags=tags,
+        # 创建时空标签视为「未显式指定」，由 frontmatter 推导（创建无「清空」语义）
+        markdown=markdown, file_path=rel_path, folder=clean_folder, tags=tags or None,
         created_at=now, updated_at=now,
     )
     parsed.title = title  # 显式传入的 title 优先于正文推导（与 update_note 保持一致）
@@ -156,12 +165,14 @@ async def update_note(
 
     old_md = _read_markdown(record.file_path)
     new_md = old_md if markdown is None else markdown
+    # PATCH 语义：tags=None 保持原标签；[] 清空；非空列表替换（区别于 create 的 frontmatter 推导）
+    effective_tags = record.tags if tags is None else tags
     _write_markdown(record.file_path, new_md)
 
     now = datetime.now(timezone.utc)
     try:
         parsed = parse_note(
-            markdown=new_md, file_path=record.file_path, folder=record.folder, tags=tags,
+            markdown=new_md, file_path=record.file_path, folder=record.folder, tags=effective_tags,
             created_at=record.created_at, updated_at=now,
         )
         if title is not None:

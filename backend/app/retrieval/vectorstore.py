@@ -6,6 +6,8 @@ vec0 虚拟表返回的 distance 是欧氏距离（非平方）。入库前向�
 
 from __future__ import annotations
 
+import sqlite3
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -38,30 +40,36 @@ class VectorStore(Protocol):
 class SqliteVecStore:
     """sqlite-vec 默认实现。"""
 
-    async def upsert(self, records: list[VectorRecord]) -> None:
+    async def upsert(self, records: list[VectorRecord], *, conn: sqlite3.Connection | None = None) -> None:
         if not records:
             return
-        conn = connect()
+        owns = conn is None
+        conn = conn or connect()
         try:
-            with transaction(conn):
+            with transaction(conn) if owns else nullcontext():
                 for record in records:
+                    # vec0 不支持 UPDATE，采用 delete-then-insert 实现幂等 upsert，避免主键冲突
+                    conn.execute("DELETE FROM vec_blocks WHERE block_id = ?", (record.id,))
                     conn.execute(
                         "INSERT INTO vec_blocks (block_id, embedding) VALUES (?, ?)",
                         (record.id, sqlite_vec.serialize_float32(record.vector)),
                     )
         finally:
-            conn.close()
+            if owns:
+                conn.close()
 
-    async def delete(self, ids: list[str]) -> None:
+    async def delete(self, ids: list[str], *, conn: sqlite3.Connection | None = None) -> None:
         if not ids:
             return
-        conn = connect()
+        owns = conn is None
+        conn = conn or connect()
         try:
-            with transaction(conn):
+            with transaction(conn) if owns else nullcontext():
                 for bid in ids:
                     conn.execute("DELETE FROM vec_blocks WHERE block_id = ?", (bid,))
         finally:
-            conn.close()
+            if owns:
+                conn.close()
 
     async def search(self, vector: list[float], *, top_k: int) -> list[VectorHit]:
         conn = connect()
