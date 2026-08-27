@@ -19,7 +19,7 @@ def test_service_status() -> None:
     assert response.status == "ok"
 
 
-def test_query_shells_are_empty_and_typed() -> None:
+def test_core_collections_are_typed() -> None:
     notes = asyncio.run(list_notes(limit=20, offset=0, folder=None, tag=None))
     skills = asyncio.run(list_skills())
     plugins = asyncio.run(list_plugins())
@@ -28,8 +28,10 @@ def test_query_shells_are_empty_and_typed() -> None:
 
     assert notes.items == []
     assert notes.page.limit == 20
-    assert skills.items == []
-    assert plugins.items == []
+    assert [skill.manifest.skill_id for skill in skills.items] == ["knowledge-assistant"]
+    assert skills.items[0].status == "ready"
+    assert [plugin.manifest.plugin_id for plugin in plugins.items] == ["text-tools"]
+    assert plugins.items[0].status == "ready"
     assert [provider.provider_id for provider in providers.items] == ["mock"]
     assert index.status == "idle"
 

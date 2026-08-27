@@ -49,6 +49,7 @@ from app.contracts import (
 from app.agent import AgentRunNotFoundError
 from app.container import container
 from app.errors import ApiError, not_implemented
+from app.extensions import ExtensionError
 from app.providers.registry import ProviderNotFoundError
 from app.providers.factory import UnsupportedProviderError
 from app.retrieval.engine import engine
@@ -100,6 +101,13 @@ def configurable_provider_or_404(provider_id: str):
             f"Provider is not registered: {provider_id}",
             {"provider_id": provider_id},
         ) from exc
+
+
+def extension_call(operation):
+    try:
+        return operation()
+    except ExtensionError as exc:
+        raise ApiError(exc.status_code, exc.code, exc.message, exc.details) from exc
 
 
 # Notes
@@ -203,18 +211,19 @@ async def list_agent_runs(
     "/agent/runs",
     response_model=AgentRun,
     status_code=202,
-    responses=not_implemented_response,
     tags=["Agent"],
 )
 async def create_agent_run(request: AgentRunCreateRequest) -> AgentRun:
     provider_or_404(request.provider_id)
-    return await container.agent.create_run(request)
+    try:
+        return await container.agent.create_run(request)
+    except ExtensionError as exc:
+        raise ApiError(exc.status_code, exc.code, exc.message, exc.details) from exc
 
 
 @router.get(
     "/agent/runs/{run_id}",
     response_model=AgentRun,
-    responses=not_implemented_response,
     tags=["Agent"],
 )
 async def get_agent_run(run_id: str) -> AgentRun:
@@ -224,7 +233,6 @@ async def get_agent_run(run_id: str) -> AgentRun:
 @router.post(
     "/agent/runs/{run_id}/cancel",
     response_model=OperationResponse,
-    responses=not_implemented_response,
     tags=["Agent"],
 )
 async def cancel_agent_run(run_id: str) -> OperationResponse:
@@ -261,7 +269,6 @@ async def agent_events(run_id: str) -> StreamingResponse:
 @router.post(
     "/agent/runs/{run_id}/permissions/{request_id}",
     response_model=OperationResponse,
-    responses=not_implemented_response,
     tags=["Agent"],
 )
 async def decide_agent_permission(
@@ -288,112 +295,107 @@ async def list_tools() -> ToolListResponse:
 # Skills
 @router.get("/skills", response_model=SkillListResponse, tags=["Skills"])
 async def list_skills() -> SkillListResponse:
-    return SkillListResponse()
+    return SkillListResponse(items=container.skills.list())
 
 
 @router.get(
-    "/skills/{skill_id}", response_model=Skill, responses=not_implemented_response, tags=["Skills"]
+    "/skills/{skill_id}", response_model=Skill, tags=["Skills"]
 )
 async def get_skill(skill_id: str) -> Skill:
-    not_implemented(f"skills.read:{skill_id}")
+    return extension_call(lambda: container.skills.get(skill_id))
 
 
 @router.post(
     "/skills/install",
     response_model=Skill,
     status_code=202,
-    responses=not_implemented_response,
     tags=["Skills"],
 )
-async def install_skill(_: ExtensionInstallRequest) -> Skill:
-    not_implemented("skills.install")
+async def install_skill(request: ExtensionInstallRequest) -> Skill:
+    return extension_call(lambda: container.skills.install(request.package_path))
 
 
 @router.post(
     "/skills/{skill_id}/enable",
     response_model=Skill,
-    responses=not_implemented_response,
     tags=["Skills"],
 )
 async def enable_skill(skill_id: str) -> Skill:
-    not_implemented(f"skills.enable:{skill_id}")
+    return extension_call(lambda: container.skills.enable(skill_id))
 
 
 @router.post(
     "/skills/{skill_id}/disable",
     response_model=Skill,
-    responses=not_implemented_response,
     tags=["Skills"],
 )
 async def disable_skill(skill_id: str) -> Skill:
-    not_implemented(f"skills.disable:{skill_id}")
+    return extension_call(lambda: container.skills.disable(skill_id))
 
 
 @router.delete(
     "/skills/{skill_id}",
     response_model=OperationResponse,
-    responses=not_implemented_response,
     tags=["Skills"],
 )
 async def uninstall_skill(skill_id: str) -> OperationResponse:
-    not_implemented(f"skills.uninstall:{skill_id}")
+    extension_call(lambda: container.skills.uninstall(skill_id))
+    return OperationResponse(status="completed", resource_id=skill_id, message="uninstalled")
 
 
 # Plugins
 @router.get("/plugins", response_model=PluginListResponse, tags=["Plugins"])
 async def list_plugins() -> PluginListResponse:
-    return PluginListResponse()
+    return PluginListResponse(items=container.plugins.list())
 
 
 @router.get(
     "/plugins/{plugin_id}",
     response_model=Plugin,
-    responses=not_implemented_response,
     tags=["Plugins"],
 )
 async def get_plugin(plugin_id: str) -> Plugin:
-    not_implemented(f"plugins.read:{plugin_id}")
+    return extension_call(lambda: container.plugins.get(plugin_id))
 
 
 @router.post(
     "/plugins/install",
     response_model=Plugin,
     status_code=202,
-    responses=not_implemented_response,
     tags=["Plugins"],
 )
-async def install_plugin(_: ExtensionInstallRequest) -> Plugin:
-    not_implemented("plugins.install")
+async def install_plugin(request: ExtensionInstallRequest) -> Plugin:
+    return extension_call(lambda: container.plugins.install(request.package_path))
 
 
 @router.post(
     "/plugins/{plugin_id}/enable",
     response_model=Plugin,
-    responses=not_implemented_response,
     tags=["Plugins"],
 )
 async def enable_plugin(plugin_id: str) -> Plugin:
-    not_implemented(f"plugins.enable:{plugin_id}")
+    return extension_call(lambda: container.plugins.enable(plugin_id))
 
 
 @router.post(
     "/plugins/{plugin_id}/disable",
     response_model=Plugin,
-    responses=not_implemented_response,
     tags=["Plugins"],
 )
 async def disable_plugin(plugin_id: str) -> Plugin:
-    not_implemented(f"plugins.disable:{plugin_id}")
+    return extension_call(lambda: container.plugins.disable(plugin_id))
 
 
 @router.delete(
     "/plugins/{plugin_id}",
     response_model=OperationResponse,
-    responses=not_implemented_response,
     tags=["Plugins"],
 )
 async def uninstall_plugin(plugin_id: str) -> OperationResponse:
-    not_implemented(f"plugins.uninstall:{plugin_id}")
+    plugin = extension_call(lambda: container.plugins.get(plugin_id))
+    dependent_skills = container.skills.depending_on_tools(plugin.manifest.contributes.tools)
+    extension_call(lambda: container.plugins.uninstall(plugin_id, dependent_skills))
+    return OperationResponse(status="completed", resource_id=plugin_id, message="uninstalled")
 
 
 # Providers
