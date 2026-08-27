@@ -13,7 +13,7 @@ settings = get_settings()
 app = FastAPI(
     title=settings.name,
     version=settings.version,
-    description="AI 笔记软件的本地 FastAPI 服务壳子。",
+    description="AI 笔记软件的本地 AI Core 与 Agent Core 服务。",
 )
 
 app.add_middleware(

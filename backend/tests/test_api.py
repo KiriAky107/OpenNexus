@@ -28,7 +28,7 @@ def test_query_shells_are_empty_and_typed() -> None:
     assert notes.page.limit == 20
     assert skills.items == []
     assert plugins.items == []
-    assert providers.items == []
+    assert [provider.provider_id for provider in providers.items] == ["mock"]
     assert index.status == "idle"
 
 

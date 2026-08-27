@@ -155,6 +155,22 @@ class ToolDefinition(Contract):
     source: Literal["builtin", "plugin"] = "builtin"
 
 
+class ToolCall(Contract):
+    tool_call_id: str
+    name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolResult(Contract):
+    tool_call_id: str
+    name: str
+    success: bool
+    output: Any | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    duration_ms: int | None = None
+
+
 class ToolListResponse(Contract):
     items: list[ToolDefinition] = Field(default_factory=list)
 
@@ -242,6 +258,11 @@ class AgentRun(Contract):
     max_steps: int
     token_budget: int | None = None
     cancelled: bool = False
+    output: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    token_usage: int = 0
+    tool_results: list[ToolResult] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -371,6 +392,7 @@ class PluginListResponse(Contract):
 
 # Providers
 class ProviderType(str, Enum):
+    mock = "mock"
     openai_responses = "openai_responses"
     openai_chat = "openai_chat"
     openai_compatible = "openai_compatible"

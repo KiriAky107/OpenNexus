@@ -5,8 +5,6 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from app.contracts import (
-    AgentEvent,
-    AgentEventType,
     AgentRun,
     AgentRunCreateRequest,
     AgentRunListResponse,
@@ -47,7 +45,10 @@ from app.contracts import (
     TranscriptionJob,
     TranscriptionRequest,
 )
-from app.errors import not_implemented
+from app.agent import AgentRunNotFoundError
+from app.container import container
+from app.errors import ApiError, not_implemented
+from app.providers.registry import ProviderNotFoundError
 
 router = APIRouter(prefix="/api")
 not_implemented_response = {501: {"model": ErrorResponse, "description": "业务服务尚未实现"}}
@@ -59,6 +60,30 @@ def utc_now() -> datetime:
 
 def as_sse(event: str, payload: str) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
+
+
+def provider_or_404(provider_id: str):
+    try:
+        return container.providers.get(provider_id)
+    except ProviderNotFoundError as exc:
+        raise ApiError(
+            404,
+            "PROVIDER_NOT_FOUND",
+            f"Provider is not registered or enabled: {provider_id}",
+            {"provider_id": provider_id},
+        ) from exc
+
+
+def agent_run_or_404(run_id: str) -> AgentRun:
+    try:
+        return container.agent.get_run(run_id)
+    except AgentRunNotFoundError as exc:
+        raise ApiError(
+            404,
+            "AGENT_RUN_NOT_FOUND",
+            f"Agent run does not exist: {run_id}",
+            {"run_id": run_id},
+        ) from exc
 
 
 # Notes
@@ -131,16 +156,22 @@ async def search_notes(request: SearchRequest) -> SearchResponse:
     },
     tags=["Chat"],
 )
-async def chat(_: ChatRequest) -> StreamingResponse:
+async def chat(request: ChatRequest) -> StreamingResponse:
+    provider = provider_or_404(request.provider_id)
+
     async def stream() -> AsyncIterator[str]:
-        error = ModelEvent(
-            event=ModelEventType.error,
-            data={"code": "NOT_IMPLEMENTED", "message": "Chat runtime is not implemented."},
-            timestamp=utc_now(),
-        )
-        done = ModelEvent(event=ModelEventType.done, sequence=1, timestamp=utc_now())
-        yield as_sse(error.event.value, error.model_dump_json())
-        yield as_sse(done.event.value, done.model_dump_json())
+        try:
+            async for event in provider.adapter.stream(request):
+                yield as_sse(event.event.value, event.model_dump_json())
+        except Exception as exc:
+            error = ModelEvent(
+                event=ModelEventType.error,
+                data={"code": "PROVIDER_ERROR", "message": str(exc)},
+                timestamp=utc_now(),
+            )
+            done = ModelEvent(event=ModelEventType.done, sequence=1, timestamp=utc_now())
+            yield as_sse(error.event.value, error.model_dump_json())
+            yield as_sse(done.event.value, done.model_dump_json())
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
@@ -150,7 +181,11 @@ async def chat(_: ChatRequest) -> StreamingResponse:
 async def list_agent_runs(
     limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0)
 ) -> AgentRunListResponse:
-    return AgentRunListResponse(page=PageMeta(limit=limit, offset=offset))
+    items, total = container.agent.list_runs(limit=limit, offset=offset)
+    return AgentRunListResponse(
+        items=items,
+        page=PageMeta(total=total, limit=limit, offset=offset),
+    )
 
 
 @router.post(
@@ -160,8 +195,9 @@ async def list_agent_runs(
     responses=not_implemented_response,
     tags=["Agent"],
 )
-async def create_agent_run(_: AgentRunCreateRequest) -> AgentRun:
-    not_implemented("agent.runs.create")
+async def create_agent_run(request: AgentRunCreateRequest) -> AgentRun:
+    provider_or_404(request.provider_id)
+    return await container.agent.create_run(request)
 
 
 @router.get(
@@ -171,7 +207,7 @@ async def create_agent_run(_: AgentRunCreateRequest) -> AgentRun:
     tags=["Agent"],
 )
 async def get_agent_run(run_id: str) -> AgentRun:
-    not_implemented(f"agent.runs.read:{run_id}")
+    return agent_run_or_404(run_id)
 
 
 @router.post(
@@ -181,7 +217,13 @@ async def get_agent_run(run_id: str) -> AgentRun:
     tags=["Agent"],
 )
 async def cancel_agent_run(run_id: str) -> OperationResponse:
-    not_implemented(f"agent.runs.cancel:{run_id}")
+    agent_run_or_404(run_id)
+    run = await container.agent.cancel(run_id)
+    return OperationResponse(
+        status="completed",
+        resource_id=run.run_id,
+        message=f"Agent run status: {run.status.value}",
+    )
 
 
 @router.get(
@@ -196,15 +238,11 @@ async def cancel_agent_run(run_id: str) -> OperationResponse:
     tags=["Agent"],
 )
 async def agent_events(run_id: str) -> StreamingResponse:
+    agent_run_or_404(run_id)
+
     async def stream() -> AsyncIterator[str]:
-        event = AgentEvent(
-            event=AgentEventType.run_failed,
-            run_id=run_id,
-            sequence=0,
-            data={"code": "NOT_IMPLEMENTED", "message": "Agent runtime is not implemented."},
-            timestamp=utc_now(),
-        )
-        yield as_sse(event.event.value, event.model_dump_json())
+        async for event in container.agent.events(run_id):
+            yield as_sse(event.event.value, event.model_dump_json())
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
@@ -216,14 +254,24 @@ async def agent_events(run_id: str) -> StreamingResponse:
     tags=["Agent"],
 )
 async def decide_agent_permission(
-    run_id: str, request_id: str, _: PermissionDecisionRequest
+    run_id: str, request_id: str, request: PermissionDecisionRequest
 ) -> OperationResponse:
-    not_implemented(f"agent.permissions:{run_id}:{request_id}")
+    agent_run_or_404(run_id)
+    if not container.agent.resolve_permission(run_id, request_id, request.decision):
+        raise ApiError(
+            404,
+            "PERMISSION_REQUEST_NOT_FOUND",
+            "Permission request does not exist or has already been resolved.",
+            {"run_id": run_id, "request_id": request_id},
+        )
+    return OperationResponse(
+        status="completed", resource_id=request_id, message=request.decision
+    )
 
 
 @router.get("/tools", response_model=ToolListResponse, tags=["Agent"])
 async def list_tools() -> ToolListResponse:
-    return ToolListResponse()
+    return ToolListResponse(items=container.tools.definitions())
 
 
 # Skills
@@ -340,7 +388,7 @@ async def uninstall_plugin(plugin_id: str) -> OperationResponse:
 # Providers
 @router.get("/providers", response_model=ProviderListResponse, tags=["Providers"])
 async def list_providers() -> ProviderListResponse:
-    return ProviderListResponse()
+    return ProviderListResponse(items=container.providers.list_configs())
 
 
 @router.get(
@@ -350,7 +398,7 @@ async def list_providers() -> ProviderListResponse:
     tags=["Providers"],
 )
 async def get_provider(provider_id: str) -> ProviderConfig:
-    not_implemented(f"providers.read:{provider_id}")
+    return provider_or_404(provider_id).config.model_copy(deep=True)
 
 
 @router.post(
@@ -390,7 +438,11 @@ async def delete_provider(provider_id: str) -> OperationResponse:
     tags=["Providers"],
 )
 async def list_provider_models(provider_id: str) -> ProviderModelsResponse:
-    not_implemented(f"providers.models:{provider_id}")
+    provider_or_404(provider_id)
+    return ProviderModelsResponse(
+        provider_id=provider_id,
+        items=await container.providers.list_models(provider_id),
+    )
 
 
 @router.post(
@@ -399,8 +451,9 @@ async def list_provider_models(provider_id: str) -> ProviderModelsResponse:
     responses=not_implemented_response,
     tags=["Providers"],
 )
-async def test_provider(_: ProviderTestRequest) -> ProviderTestResponse:
-    not_implemented("providers.test")
+async def test_provider(request: ProviderTestRequest) -> ProviderTestResponse:
+    provider_or_404(request.provider_id)
+    return await container.providers.test(request.provider_id, request.model)
 
 
 # Tasks
