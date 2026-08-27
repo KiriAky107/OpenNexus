@@ -55,7 +55,7 @@ def parse_note(
 
     fallback_title = Path(file_path).stem
     title = frontmatter.get("title") or _first_heading(markdown) or fallback_title
-    resolved_tags = list(tags) if tags else _parse_tags(frontmatter.get("tags"))
+    resolved_tags = list(tags) if tags is not None else _parse_tags(frontmatter.get("tags"))
 
     blocks = parse_blocks(markdown, note_id)
     return ParsedNote(

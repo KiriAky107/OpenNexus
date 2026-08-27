@@ -29,6 +29,10 @@ from app.textutils import make_snippet, match_query
 CANDIDATE_POOL = 50
 # 分页窗口上限：候选池至少覆盖 offset+limit，但设上限防止超大 offset 撑爆内存
 MAX_CANDIDATE_POOL = 200
+# 带 metadata 过滤时放大召回倍数，缓解「先截断候选池再过滤」造成的漏召回
+OVERSCAN_FACTOR = 4
+# FTS 一次性取全量命中上限：保证 fts 模式 total 准确、过滤不漏召回；超出则截断
+FTS_FETCH_LIMIT = 1000
 
 
 class RetrievalEngine:
@@ -43,30 +47,35 @@ class RetrievalEngine:
         self.vector_store = vector_store
 
     async def search(self, request: SearchRequest) -> SearchResponse:
+        has_filters = bool(
+            request.folders or request.note_ids or request.tags
+            or request.created_from or request.created_to
+            or request.updated_from or request.updated_to
+        )
         # 候选池至少覆盖本次请求的 offset+limit，保证分页能取到目标页；设上限防内存失控
         window = min(request.offset + request.limit, MAX_CANDIDATE_POOL)
         pool_size = max(CANDIDATE_POOL, window)
+        # 带过滤时放大召回；FTS 则一次性取全量命中（≤FTS_FETCH_LIMIT）避免截断漏召回
+        recall = min(pool_size * OVERSCAN_FACTOR, MAX_CANDIDATE_POOL) if has_filters else pool_size
 
         # 1. 按模式收集候选（FTS 与 Vector 各产出「按相关性降序」的 block_id 列表）
         fts_ranked: list[str] = []
         vec_ranked: list[str] = []
         fts_scores: dict[str, float] = {}
         vec_scores: dict[str, float] = {}
-        fts_total = 0
 
         if request.mode in (SearchMode.fts, SearchMode.hybrid):
             match = match_query(request.query)
             if match:
-                fts_hits = repository.fts_search(match, pool_size)
+                fts_limit = FTS_FETCH_LIMIT if request.mode == SearchMode.fts else recall
+                fts_hits = repository.fts_search(match, fts_limit)
                 fts_ranked = [h.block_id for h in fts_hits]
                 # bm25 越小越相关，取反后统一为「越大越相关」
                 fts_scores = {h.block_id: -h.bm25 for h in fts_hits}
-                if request.mode == SearchMode.fts:
-                    fts_total = repository.fts_count(match)
 
         if request.mode in (SearchMode.vector, SearchMode.hybrid):
             query_vec = await self.embedding.embed_query(request.query)
-            vec_hits = await self.vector_store.search(query_vec, top_k=pool_size)
+            vec_hits = await self.vector_store.search(query_vec, top_k=recall)
             vec_ranked = [v.id for v in vec_hits]
             vec_scores = {v.id: v.score for v in vec_hits}
 
@@ -104,11 +113,9 @@ class RetrievalEngine:
 
         ordered = normalize_scores(ordered)
 
-        # 5. 分页：fts 用真实命中总数；vector/hybrid 为 KNN 候选集，无全局 total
-        if request.mode == SearchMode.fts:
-            total = fts_total
-        else:
-            total = len(ordered)
+        # 5. 分页：total = 过滤后候选集大小。fts 已取全量（≤FTS_FETCH_LIMIT）故为真实命中数；
+        #    vector/hybrid 为 KNN 候选集，无全局 total。
+        total = len(ordered)
         page = ordered[request.offset : request.offset + request.limit]
         items = [self._build_result(hits[block_id], request, score) for block_id, score in page]
         return SearchResponse(
