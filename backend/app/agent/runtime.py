@@ -20,6 +20,7 @@ from app.contracts import (
     ToolResult,
 )
 from app.providers.registry import ProviderRegistry
+from app.providers.base import ProviderError
 
 
 class AgentRunNotFoundError(LookupError):
@@ -141,6 +142,8 @@ class AgentRuntime:
                 self._finish_cancelled(record)
         except TimeoutError:
             self._fail(record, "AGENT_TIMEOUT", "Agent run exceeded its timeout.")
+        except ProviderError as exc:
+            self._fail(record, exc.code, exc.message)
         except Exception as exc:
             self._fail(record, "AGENT_FAILED", str(exc))
 
@@ -183,12 +186,18 @@ class AgentRuntime:
                 return
 
             if turn.tool_calls:
-                for provider_call in turn.tool_calls:
-                    call = ToolCall(
-                        tool_call_id=provider_call.tool_call_id,
-                        name=provider_call.name,
-                        arguments=provider_call.arguments,
+                calls = [
+                    ToolCall(
+                        tool_call_id=item.tool_call_id,
+                        name=item.name,
+                        arguments=item.arguments,
                     )
+                    for item in turn.tool_calls
+                ]
+                messages.append(
+                    Message(role=MessageRole.assistant, content=turn.text or "", tool_calls=calls)
+                )
+                for call in calls:
                     result = await self._execute_tool(record, call)
                     record.run.tool_results.append(result)
                     messages.append(

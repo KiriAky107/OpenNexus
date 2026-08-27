@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
@@ -49,6 +50,7 @@ from app.agent import AgentRunNotFoundError
 from app.container import container
 from app.errors import ApiError, not_implemented
 from app.providers.registry import ProviderNotFoundError
+from app.providers.factory import UnsupportedProviderError
 
 router = APIRouter(prefix="/api")
 not_implemented_response = {501: {"model": ErrorResponse, "description": "业务服务尚未实现"}}
@@ -83,6 +85,18 @@ def agent_run_or_404(run_id: str) -> AgentRun:
             "AGENT_RUN_NOT_FOUND",
             f"Agent run does not exist: {run_id}",
             {"run_id": run_id},
+        ) from exc
+
+
+def configurable_provider_or_404(provider_id: str):
+    try:
+        return container.providers.get_any(provider_id)
+    except ProviderNotFoundError as exc:
+        raise ApiError(
+            404,
+            "PROVIDER_NOT_FOUND",
+            f"Provider is not registered: {provider_id}",
+            {"provider_id": provider_id},
         ) from exc
 
 
@@ -398,7 +412,7 @@ async def list_providers() -> ProviderListResponse:
     tags=["Providers"],
 )
 async def get_provider(provider_id: str) -> ProviderConfig:
-    return provider_or_404(provider_id).config.model_copy(deep=True)
+    return configurable_provider_or_404(provider_id).config.model_copy(deep=True)
 
 
 @router.post(
@@ -407,8 +421,27 @@ async def get_provider(provider_id: str) -> ProviderConfig:
     responses=not_implemented_response,
     tags=["Providers"],
 )
-async def create_provider(_: ProviderCreateRequest) -> ProviderConfig:
-    not_implemented("providers.create")
+async def create_provider(request: ProviderCreateRequest) -> ProviderConfig:
+    config = ProviderConfig(
+        provider_id=f"provider_{uuid4().hex}",
+        provider_type=request.provider_type,
+        name=request.name,
+        base_url=request.base_url,
+        default_model=request.default_model,
+        credential_id=request.credential_id,
+        enabled=request.enabled,
+        capabilities=container.provider_factory.capabilities(request.provider_type),
+    )
+    try:
+        adapter = container.provider_factory.build(config)
+    except UnsupportedProviderError as exc:
+        raise ApiError(
+            422,
+            "PROVIDER_TYPE_UNSUPPORTED",
+            f"Provider adapter is not implemented: {request.provider_type.value}",
+        ) from exc
+    container.providers.register(config, adapter)
+    return config
 
 
 @router.patch(
@@ -417,8 +450,16 @@ async def create_provider(_: ProviderCreateRequest) -> ProviderConfig:
     responses=not_implemented_response,
     tags=["Providers"],
 )
-async def update_provider(provider_id: str, _: ProviderUpdateRequest) -> ProviderConfig:
-    not_implemented(f"providers.update:{provider_id}")
+async def update_provider(
+    provider_id: str, request: ProviderUpdateRequest
+) -> ProviderConfig:
+    current = configurable_provider_or_404(provider_id).config
+    if provider_id == "mock":
+        raise ApiError(409, "BUILTIN_PROVIDER_IMMUTABLE", "Mock provider cannot be modified.")
+    config = current.model_copy(update=request.model_dump(exclude_none=True))
+    adapter = container.provider_factory.build(config)
+    container.providers.replace(config, adapter)
+    return config
 
 
 @router.delete(
@@ -428,7 +469,11 @@ async def update_provider(provider_id: str, _: ProviderUpdateRequest) -> Provide
     tags=["Providers"],
 )
 async def delete_provider(provider_id: str) -> OperationResponse:
-    not_implemented(f"providers.delete:{provider_id}")
+    configurable_provider_or_404(provider_id)
+    if provider_id == "mock":
+        raise ApiError(409, "BUILTIN_PROVIDER_IMMUTABLE", "Mock provider cannot be deleted.")
+    container.providers.unregister(provider_id)
+    return OperationResponse(status="completed", resource_id=provider_id)
 
 
 @router.get(
@@ -452,6 +497,18 @@ async def list_provider_models(provider_id: str) -> ProviderModelsResponse:
     tags=["Providers"],
 )
 async def test_provider(request: ProviderTestRequest) -> ProviderTestResponse:
+    registered = configurable_provider_or_404(request.provider_id)
+    if request.credential_context_id:
+        temporary_config = registered.config.model_copy(
+            update={"credential_id": request.credential_context_id, "enabled": True}
+        )
+        adapter = container.provider_factory.build(temporary_config)
+        success, message = await adapter.test_connection(request.model)
+        return ProviderTestResponse(
+            provider_id=request.provider_id,
+            success=success,
+            message=message,
+        )
     provider_or_404(request.provider_id)
     return await container.providers.test(request.provider_id, request.model)
 

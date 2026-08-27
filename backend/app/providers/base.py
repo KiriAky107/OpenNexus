@@ -5,6 +5,13 @@ from typing import Protocol
 from app.contracts import ModelEvent, ModelInfo, ModelRequest
 
 
+class ProviderError(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 @dataclass(slots=True)
 class ProviderToolCall:
     tool_call_id: str

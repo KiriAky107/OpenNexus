@@ -27,14 +27,22 @@ class ProviderRegistry:
     def unregister(self, provider_id: str) -> None:
         self._providers.pop(provider_id, None)
 
+    def replace(self, config: ProviderConfig, adapter: ModelProvider) -> None:
+        if config.provider_id not in self._providers:
+            raise ProviderNotFoundError(config.provider_id)
+        self._providers[config.provider_id] = RegisteredProvider(config=config, adapter=adapter)
+
     def get(self, provider_id: str) -> RegisteredProvider:
-        try:
-            provider = self._providers[provider_id]
-        except KeyError as exc:
-            raise ProviderNotFoundError(provider_id) from exc
+        provider = self.get_any(provider_id)
         if not provider.config.enabled:
             raise ProviderNotFoundError(provider_id)
         return provider
+
+    def get_any(self, provider_id: str) -> RegisteredProvider:
+        try:
+            return self._providers[provider_id]
+        except KeyError as exc:
+            raise ProviderNotFoundError(provider_id) from exc
 
     def list_configs(self) -> list[ProviderConfig]:
         return [item.config.model_copy(deep=True) for item in self._providers.values()]

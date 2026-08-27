@@ -145,6 +145,7 @@ class Message(Contract):
     content: str
     name: str | None = None
     tool_call_id: str | None = None
+    tool_calls: list["ToolCall"] = Field(default_factory=list)
 
 
 class ToolDefinition(Contract):

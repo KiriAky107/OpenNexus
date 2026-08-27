@@ -2,6 +2,8 @@ import asyncio
 
 from app.main import health, service_status
 from app.routes import get_index_status, list_notes, list_plugins, list_providers, list_skills
+from app.routes import create_provider, delete_provider, get_provider, update_provider
+from app.contracts import ProviderCreateRequest, ProviderType, ProviderUpdateRequest
 
 
 def test_health() -> None:
@@ -53,3 +55,25 @@ def test_openapi_contains_documented_frontend_interfaces() -> None:
     }
 
     assert expected_paths <= paths.keys()
+
+
+def test_provider_configuration_lifecycle() -> None:
+    created = asyncio.run(
+        create_provider(
+            ProviderCreateRequest(
+                provider_type=ProviderType.ollama,
+                name="Local Ollama",
+                base_url="http://127.0.0.1:11434",
+                default_model="qwen3:latest",
+            )
+        )
+    )
+    fetched = asyncio.run(get_provider(created.provider_id))
+    disabled = asyncio.run(
+        update_provider(created.provider_id, ProviderUpdateRequest(enabled=False))
+    )
+    deleted = asyncio.run(delete_provider(created.provider_id))
+
+    assert fetched.provider_type == ProviderType.ollama
+    assert disabled.enabled is False
+    assert deleted.resource_id == created.provider_id
