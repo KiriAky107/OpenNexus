@@ -83,6 +83,22 @@ def _write_markdown(rel_path: str, markdown: str) -> None:
     path.write_text(markdown, encoding="utf-8")
 
 
+def _create_markdown(rel_path: str, markdown: str) -> None:
+    """排他创建 Markdown；目标已存在时返回资源冲突，不覆盖用户文件。"""
+    path = _abs_path(rel_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x", encoding="utf-8") as handle:
+            handle.write(markdown)
+    except FileExistsError as exc:
+        raise ApiError(
+            409,
+            "RESOURCE_CONFLICT",
+            "a note already exists at this path",
+            {"file_path": rel_path},
+        ) from exc
+
+
 def _delete_markdown(rel_path: str) -> None:
     path = _abs_path(rel_path)
     if path.exists():
@@ -123,9 +139,12 @@ async def index_note(parsed: ParsedNote) -> None:
                 if block.block_id in missing_ids
             ]
             await vector_store.upsert(records, conn=conn)
+            repository.set_index_meta(
+                {"embedding_model": embedding.model_id, "embedding_dim": str(embedding.dim)},
+                conn=conn,
+            )
     finally:
         conn.close()
-    repository.set_index_meta({"embedding_model": embedding.model_id, "embedding_dim": str(embedding.dim)})
 
 
 async def create_note(*, title: str, markdown: str, folder: str | None, tags: list[str]) -> Note:
@@ -137,7 +156,14 @@ async def create_note(*, title: str, markdown: str, folder: str | None, tags: li
         created_at=now, updated_at=now,
     )
     parsed.title = title  # 显式传入的 title 优先于正文推导（与 update_note 保持一致）
-    _write_markdown(rel_path, markdown)
+    if repository.get_note_record(parsed.note_id) is not None:
+        raise ApiError(
+            409,
+            "RESOURCE_CONFLICT",
+            "a note already exists at this path",
+            {"note_id": parsed.note_id, "file_path": rel_path},
+        )
+    _create_markdown(rel_path, markdown)
     try:
         await index_note(parsed)
     except BaseException:
