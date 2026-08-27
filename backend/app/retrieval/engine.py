@@ -31,8 +31,6 @@ CANDIDATE_POOL = 50
 MAX_CANDIDATE_POOL = 200
 # 带 metadata 过滤时放大召回倍数，缓解「先截断候选池再过滤」造成的漏召回
 OVERSCAN_FACTOR = 4
-# FTS 一次性取全量命中上限：保证 fts 模式 total 准确、过滤不漏召回；超出则截断
-FTS_FETCH_LIMIT = 1000
 
 
 class RetrievalEngine:
@@ -47,6 +45,9 @@ class RetrievalEngine:
         self.vector_store = vector_store
 
     async def search(self, request: SearchRequest) -> SearchResponse:
+        if request.mode == SearchMode.fts:
+            return self._search_fts(request)
+
         has_filters = bool(
             request.folders or request.note_ids or request.tags
             or request.created_from or request.created_to
@@ -67,8 +68,7 @@ class RetrievalEngine:
         if request.mode in (SearchMode.fts, SearchMode.hybrid):
             match = match_query(request.query)
             if match:
-                fts_limit = FTS_FETCH_LIMIT if request.mode == SearchMode.fts else recall
-                fts_hits = repository.fts_search(match, fts_limit)
+                fts_hits = repository.fts_search(match, recall)
                 fts_ranked = [h.block_id for h in fts_hits]
                 # bm25 越小越相关，取反后统一为「越大越相关」
                 fts_scores = {h.block_id: -h.bm25 for h in fts_hits}
@@ -118,6 +118,43 @@ class RetrievalEngine:
         total = len(ordered)
         page = ordered[request.offset : request.offset + request.limit]
         items = [self._build_result(hits[block_id], request, score) for block_id, score in page]
+        return SearchResponse(
+            query=request.query,
+            mode=request.mode,
+            items=items,
+            page=PageMeta(total=total, limit=request.limit, offset=request.offset),
+        )
+
+    def _search_fts(self, request: SearchRequest) -> SearchResponse:
+        """FTS 专用路径：过滤、COUNT 与分页全部在 SQLite 中完成。"""
+        match = match_query(request.query)
+        if not match:
+            return self._empty(request)
+
+        fts_hits, total = repository.fts_search_page(
+            match=match,
+            limit=request.limit,
+            offset=request.offset,
+            folders=request.folders,
+            note_ids=request.note_ids,
+            tags=request.tags,
+            created_from=request.created_from,
+            created_to=request.created_to,
+            updated_from=request.updated_from,
+            updated_to=request.updated_to,
+        )
+        if not fts_hits:
+            return SearchResponse(
+                query=request.query,
+                mode=request.mode,
+                page=PageMeta(total=total, limit=request.limit, offset=request.offset),
+            )
+
+        hits = {h.block_id: h for h in repository.get_block_hits([hit.block_id for hit in fts_hits])}
+        ordered = normalize_scores(
+            [(hit.block_id, -hit.bm25) for hit in fts_hits if hit.block_id in hits]
+        )
+        items = [self._build_result(hits[block_id], request, score) for block_id, score in ordered]
         return SearchResponse(
             query=request.query,
             mode=request.mode,

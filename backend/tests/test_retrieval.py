@@ -324,6 +324,35 @@ def test_create_note_rejects_existing_path_without_overwrite(vault) -> None:
     assert got is not None and got.markdown == "原始正文"
 
 
+def test_delete_note_rolls_back_when_vector_delete_fails(vault, monkeypatch) -> None:
+    """向量删除失败时，笔记数据库记录和 Markdown 都恢复到删除前。"""
+    from app.database.db import connect
+    from app.services import note_service
+
+    note = asyncio.run(
+        note_service.create_note(title="删除回滚", markdown="待保留正文", folder="测试", tags=[])
+    )
+    path = vault / note.file_path
+
+    async def _boom(_ids, **_kwargs):
+        raise RuntimeError("vector delete failed")
+
+    monkeypatch.setattr(note_service.vector_store, "delete", _boom)
+    with pytest.raises(RuntimeError):
+        asyncio.run(note_service.delete_note(note.note_id))
+
+    got = asyncio.run(note_service.get_note(note.note_id))
+    assert got is not None and got.markdown == "待保留正文"
+    assert path.exists()
+    conn = connect()
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM vec_blocks WHERE block_id = ?", (note.blocks[0].block_id,)
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
 def test_update_removes_stale_vectors(vault) -> None:
     from app.database.db import connect
     from app.services import note_service
@@ -364,6 +393,25 @@ def test_search_pagination_total_reflects_all_matches(vault) -> None:
         engine.search(SearchRequest(query="段", mode=SearchMode.fts, limit=10, offset=55))
     )
     assert page2.items  # 跨过旧候选池边界仍能取到结果
+
+
+def test_fts_pagination_is_not_truncated_at_one_thousand(vault) -> None:
+    """FTS total 与分页由数据库计算，不在第 1000 个候选处截断。"""
+    from app.retrieval.engine import engine
+    from app.services import note_service
+
+    markdown = "\n\n".join(f"共同词 p{i}" for i in range(1010))
+    asyncio.run(
+        note_service.create_note(title="千条分页", markdown=markdown, folder="", tags=[])
+    )
+
+    response = asyncio.run(
+        engine.search(
+            SearchRequest(query="共同词", mode=SearchMode.fts, limit=10, offset=1000)
+        )
+    )
+    assert response.page.total == 1010
+    assert len(response.items) == 10
 
 
 # --------------------------------------------------------------------------- #
