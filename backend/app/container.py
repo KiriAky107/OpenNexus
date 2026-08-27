@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from app.agent import AgentRuntime, PermissionManager, PermissionPolicy, ToolRegistry
 from app.agent.builtin_tools import register_builtin_tools
 from app.contracts import ModelCapability, ProviderConfig, ProviderType
+from app.config import BACKEND_DIR
+from app.extensions import PluginRuntime, SkillRuntime
 from app.providers import MockProvider, ProviderFactory, ProviderRegistry
 from app.providers.credentials import EnvironmentCredentialResolver
 
@@ -13,6 +15,8 @@ class ApplicationContainer:
     provider_factory: ProviderFactory
     tools: ToolRegistry
     permissions: PermissionManager
+    skills: SkillRuntime
+    plugins: PluginRuntime
     agent: AgentRuntime
 
 
@@ -38,14 +42,29 @@ def build_container() -> ApplicationContainer:
     tools = ToolRegistry()
     register_builtin_tools(tools)
 
+    plugins = PluginRuntime(tools)
+    plugins.install(BACKEND_DIR / "extensions" / "plugins" / "text-tools")
+    plugins.enable("text-tools")
+
+    skills = SkillRuntime(tools)
+    skills.install(BACKEND_DIR / "extensions" / "skills" / "knowledge-assistant")
+    skills.enable("knowledge-assistant")
+
     policy = PermissionPolicy()
     permissions = PermissionManager(policy)
-    agent = AgentRuntime(providers=providers, tools=tools, permissions=permissions)
+    agent = AgentRuntime(
+        providers=providers,
+        tools=tools,
+        permissions=permissions,
+        skills=skills,
+    )
     return ApplicationContainer(
         providers=providers,
         provider_factory=provider_factory,
         tools=tools,
         permissions=permissions,
+        skills=skills,
+        plugins=plugins,
         agent=agent,
     )
 

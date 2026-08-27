@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from app.agent.permissions import PermissionManager, PermissionMode
@@ -13,6 +16,7 @@ from app.contracts import (
     AgentRun,
     AgentRunCreateRequest,
     AgentRunStatus,
+    Citation,
     Message,
     MessageRole,
     ModelRequest,
@@ -21,6 +25,9 @@ from app.contracts import (
 )
 from app.providers.registry import ProviderRegistry
 from app.providers.base import ProviderError
+
+if TYPE_CHECKING:
+    from app.extensions import AgentConfiguration, SkillRuntime
 
 
 class AgentRunNotFoundError(LookupError):
@@ -38,6 +45,8 @@ TERMINAL_STATUSES = {
 class RunRecord:
     run: AgentRun
     request: AgentRunCreateRequest
+    skill_config: AgentConfiguration | None = None
+    allowed_tools: list[str] = field(default_factory=list)
     events: list[AgentEvent] = field(default_factory=list)
     subscribers: set[asyncio.Queue[AgentEvent]] = field(default_factory=set)
     task: asyncio.Task[None] | None = None
@@ -49,14 +58,23 @@ class AgentRuntime:
         providers: ProviderRegistry,
         tools: ToolRegistry,
         permissions: PermissionManager,
+        skills: SkillRuntime | None = None,
     ) -> None:
         self.providers = providers
         self.tools = tools
         self.permissions = permissions
+        self.skills = skills
         self._records: dict[str, RunRecord] = {}
 
     async def create_run(self, request: AgentRunCreateRequest) -> AgentRun:
-        self.providers.get(request.provider_id)
+        provider = self.providers.get(request.provider_id)
+        skill_config = None
+        if request.skill_id:
+            if self.skills is None:
+                raise RuntimeError("Skill Runtime is not configured.")
+            skill_config = self.skills.build_agent_configuration(
+                request.skill_id, provider.config.capabilities
+            )
         now = datetime.now(timezone.utc)
         run = AgentRun(
             run_id=f"run_{uuid4().hex}",
@@ -70,7 +88,19 @@ class AgentRuntime:
             created_at=now,
             updated_at=now,
         )
-        record = RunRecord(run=run, request=request)
+        allowed_tools = list(request.allowed_tools)
+        if skill_config is not None:
+            allowed_tools = (
+                [name for name in skill_config.allowed_tools if name in allowed_tools]
+                if allowed_tools
+                else list(skill_config.allowed_tools)
+            )
+        record = RunRecord(
+            run=run,
+            request=request,
+            skill_config=skill_config,
+            allowed_tools=allowed_tools,
+        )
         self._records[run.run_id] = record
         record.task = asyncio.create_task(self._execute(record), name=run.run_id)
         return run.model_copy(deep=True)
@@ -157,7 +187,7 @@ class AgentRuntime:
         )
 
         messages = [Message(role=MessageRole.user, content=record.request.input)]
-        allowed_tools = self.tools.definitions(record.request.allowed_tools)
+        allowed_tools = self.tools.definitions(record.allowed_tools)
         provider = self.providers.get(record.request.provider_id).adapter
 
         for step in range(1, record.request.max_steps + 1):
@@ -167,9 +197,10 @@ class AgentRuntime:
                 ModelRequest(
                     provider_id=record.request.provider_id,
                     model=record.request.model,
+                    system=(record.skill_config.system_prompt if record.skill_config else None),
                     messages=messages,
                     tools=allowed_tools,
-                    metadata=record.request.metadata,
+                    metadata=self._request_metadata(record),
                 )
             )
             record.run.token_usage += turn.input_tokens + turn.output_tokens
@@ -197,9 +228,16 @@ class AgentRuntime:
                 messages.append(
                     Message(role=MessageRole.assistant, content=turn.text or "", tool_calls=calls)
                 )
-                for call in calls:
-                    result = await self._execute_tool(record, call)
+                semaphore = asyncio.Semaphore(record.request.max_concurrent_tools)
+
+                async def execute(call: ToolCall) -> ToolResult:
+                    async with semaphore:
+                        return await self._execute_tool(record, call)
+
+                results = await asyncio.gather(*(execute(call) for call in calls))
+                for call, result in zip(calls, results):
                     record.run.tool_results.append(result)
+                    self._collect_citations(record, result)
                     messages.append(
                         Message(
                             role=MessageRole.tool,
@@ -234,7 +272,7 @@ class AgentRuntime:
         except ToolNotFoundError:
             registered = None
 
-        if registered is not None and call.name not in record.request.allowed_tools:
+        if registered is not None and call.name not in record.allowed_tools:
             result = ToolResult(
                 tool_call_id=call.tool_call_id,
                 name=call.name,
@@ -246,6 +284,16 @@ class AgentRuntime:
             return result
 
         permission = registered.definition.permission if registered else None
+        if permission == "network.request" and not record.request.allow_network:
+            result = ToolResult(
+                tool_call_id=call.tool_call_id,
+                name=call.name,
+                success=False,
+                error_code="NETWORK_NOT_ALLOWED",
+                error_message="Agent run does not allow network tools.",
+            )
+            self._publish(record, AgentEventType.tool_result, result.model_dump(mode="json"))
+            return result
         mode = self.permissions.mode_for(permission)
         if mode == PermissionMode.deny:
             result = self._permission_denied(call)
@@ -347,6 +395,34 @@ class AgentRuntime:
         record.events.append(event)
         for queue in record.subscribers:
             queue.put_nowait(event)
+
+    @staticmethod
+    def _request_metadata(record: RunRecord) -> dict[str, object]:
+        metadata = dict(record.request.metadata)
+        if record.skill_config is not None:
+            metadata["skill_id"] = record.skill_config.skill_id
+            metadata["retrieval"] = record.skill_config.retrieval.model_dump(mode="json")
+        return metadata
+
+    def _collect_citations(self, record: RunRecord, result: ToolResult) -> None:
+        if not result.success or not isinstance(result.output, dict):
+            return
+        items = result.output.get("items")
+        if not isinstance(items, list):
+            return
+        known = {citation.citation_id for citation in record.run.citations}
+        for item in items:
+            if not isinstance(item, dict) or not isinstance(item.get("citation"), dict):
+                continue
+            try:
+                citation = Citation.model_validate(item["citation"])
+            except ValueError:
+                continue
+            if citation.citation_id in known:
+                continue
+            known.add(citation.citation_id)
+            record.run.citations.append(citation)
+            self._publish(record, AgentEventType.citation, citation.model_dump(mode="json"))
 
     def _get_record(self, run_id: str) -> RunRecord:
         try:
