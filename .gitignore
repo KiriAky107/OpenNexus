@@ -1,0 +1,18 @@
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+.pnpm-store/
+
+# Backend
+backend/.venv/
+backend/.uv-cache/
+backend/.pytest_cache/
+backend/**/__pycache__/
+backend/.env
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

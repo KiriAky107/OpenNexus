@@ -1,0 +1,19 @@
+[project]
+name = "notes-agent-backend"
+version = "0.1.0"
+description = "Notes Agent 的 FastAPI 基础壳子"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.116,<1.0",
+    "uvicorn[standard]>=0.35,<1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4,<9.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

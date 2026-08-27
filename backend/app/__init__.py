@@ -1,0 +1,1 @@
+"""Notes Agent AI Core."""

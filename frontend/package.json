@@ -1,0 +1,21 @@
+{
+  "name": "notes-agent-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@vitejs/plugin-vue": "latest",
+    "typescript": "~5.9.3",
+    "vite": "latest",
+    "vue-tsc": "latest"
+  }
+}
