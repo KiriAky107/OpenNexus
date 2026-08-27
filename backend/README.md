@@ -17,3 +17,5 @@ uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 团队接口清单见 `../docs/后端接口契约-开发版.md`，机器可读契约以运行时的 `/openapi.json` 为准。
 
 AI Core 与 Agent Core 的模块边界、Mock Provider 和 Tool Calling 调试方式见 `../docs/AI-Core与Agent-Core开发说明.md`。
+
+Knowledge Core 与 Retrieval Core 的模块边界、数据模型、接口与检索流程见 `../docs/Knowledge与Retrieval-Core开发说明.md`。
