@@ -11,6 +11,8 @@ backend/.pytest_cache/
 backend/*.egg-info/
 backend/**/__pycache__/
 backend/.env
+# 运行期生成的 SQLite 索引（vault 下的 Markdown 测试数据需提交）
+backend/data/*.db*
 
 # Editors and operating systems
 .idea/

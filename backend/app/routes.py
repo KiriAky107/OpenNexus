@@ -51,6 +51,8 @@ from app.container import container
 from app.errors import ApiError, not_implemented
 from app.providers.registry import ProviderNotFoundError
 from app.providers.factory import UnsupportedProviderError
+from app.retrieval.engine import engine
+from app.services import index_service, note_service
 
 router = APIRouter(prefix="/api")
 not_implemented_response = {501: {"model": ErrorResponse, "description": "业务服务尚未实现"}}
@@ -108,38 +110,37 @@ async def list_notes(
     folder: str | None = None,
     tag: str | None = None,
 ) -> NoteListResponse:
-    return NoteListResponse(page=PageMeta(limit=limit, offset=offset))
+    items, total = note_service.list_notes(limit=limit, offset=offset, folder=folder, tag=tag)
+    return NoteListResponse(items=items, page=PageMeta(total=total, limit=limit, offset=offset))
 
 
-@router.post(
-    "/notes", response_model=Note, responses=not_implemented_response, tags=["Notes"]
-)
-async def create_note(_: NoteCreateRequest) -> Note:
-    not_implemented("notes.create")
+@router.post("/notes", response_model=Note, tags=["Notes"])
+async def create_note(request: NoteCreateRequest) -> Note:
+    return await note_service.create_note(
+        title=request.title, markdown=request.markdown, folder=request.folder, tags=request.tags
+    )
 
 
-@router.get(
-    "/notes/{note_id}", response_model=Note, responses=not_implemented_response, tags=["Notes"]
-)
+@router.get("/notes/{note_id}", response_model=Note, tags=["Notes"])
 async def get_note(note_id: str) -> Note:
-    not_implemented(f"notes.read:{note_id}")
+    note = await note_service.get_note(note_id)
+    if note is None:
+        raise ApiError(404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id})
+    return note
 
 
-@router.patch(
-    "/notes/{note_id}", response_model=Note, responses=not_implemented_response, tags=["Notes"]
-)
-async def update_note(note_id: str, _: NoteUpdateRequest) -> Note:
-    not_implemented(f"notes.update:{note_id}")
+@router.patch("/notes/{note_id}", response_model=Note, tags=["Notes"])
+async def update_note(note_id: str, request: NoteUpdateRequest) -> Note:
+    return await note_service.update_note(
+        note_id, title=request.title, markdown=request.markdown, tags=request.tags
+    )
 
 
-@router.delete(
-    "/notes/{note_id}",
-    response_model=OperationResponse,
-    responses=not_implemented_response,
-    tags=["Notes"],
-)
+@router.delete("/notes/{note_id}", response_model=OperationResponse, tags=["Notes"])
 async def delete_note(note_id: str) -> OperationResponse:
-    not_implemented(f"notes.delete:{note_id}")
+    if not await note_service.delete_note(note_id):
+        raise ApiError(404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id})
+    return OperationResponse(status="completed", resource_id=note_id, message="deleted")
 
 
 @router.post(
@@ -152,11 +153,7 @@ async def move_note(note_id: str, _: NoteMoveRequest) -> Note:
 # Retrieval and chat
 @router.post("/search", response_model=SearchResponse, tags=["Search"])
 async def search_notes(request: SearchRequest) -> SearchResponse:
-    return SearchResponse(
-        query=request.query,
-        mode=request.mode,
-        page=PageMeta(limit=request.limit, offset=request.offset),
-    )
+    return await engine.search(request)
 
 
 @router.post(
@@ -576,25 +573,22 @@ async def get_transcription(job_id: str) -> TranscriptionJob:
 
 @router.get("/index/status", response_model=IndexStatus, tags=["Index"])
 async def get_index_status() -> IndexStatus:
-    return IndexStatus()
+    return index_service.get_status()
 
 
 @router.post(
     "/index/rebuild",
     response_model=IndexJob,
     status_code=202,
-    responses=not_implemented_response,
     tags=["Index"],
 )
-async def rebuild_index(_: IndexRebuildRequest) -> IndexJob:
-    not_implemented("index.rebuild")
+async def rebuild_index(request: IndexRebuildRequest) -> IndexJob:
+    return await index_service.rebuild(request)
 
 
-@router.get(
-    "/index/jobs/{job_id}",
-    response_model=IndexJob,
-    responses=not_implemented_response,
-    tags=["Index"],
-)
+@router.get("/index/jobs/{job_id}", response_model=IndexJob, tags=["Index"])
 async def get_index_job(job_id: str) -> IndexJob:
-    not_implemented(f"index.jobs.read:{job_id}")
+    job = index_service.get_job(job_id)
+    if job is None:
+        raise ApiError(404, "RESOURCE_NOT_FOUND", "index job not found", {"job_id": job_id})
+    return job
