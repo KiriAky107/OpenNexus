@@ -2,8 +2,25 @@ import asyncio
 
 from app.main import health, service_status
 from app.routes import get_index_status, list_notes, list_plugins, list_providers, list_skills
-from app.routes import create_provider, delete_provider, get_provider, update_provider
-from app.contracts import ProviderCreateRequest, ProviderType, ProviderUpdateRequest
+from app.routes import (
+    create_provider,
+    create_task,
+    delete_provider,
+    delete_task,
+    get_provider,
+    get_task,
+    list_tasks,
+    update_provider,
+    update_task,
+)
+from app.contracts import (
+    ProviderCreateRequest,
+    ProviderType,
+    ProviderUpdateRequest,
+    TaskCreateRequest,
+    TaskStatus,
+    TaskUpdateRequest,
+)
 
 
 def test_health() -> None:
@@ -79,3 +96,46 @@ def test_provider_configuration_lifecycle() -> None:
     assert fetched.provider_type == ProviderType.ollama
     assert disabled.enabled is False
     assert deleted.resource_id == created.provider_id
+
+
+def test_provider_patch_can_clear_nullable_fields() -> None:
+    created = asyncio.run(
+        create_provider(
+            ProviderCreateRequest(
+                provider_type=ProviderType.ollama,
+                name="Clearable",
+                base_url="http://127.0.0.1:11434",
+                default_model="qwen",
+                credential_id="unused",
+            )
+        )
+    )
+    try:
+        cleared = asyncio.run(
+            update_provider(
+                created.provider_id,
+                ProviderUpdateRequest(
+                    base_url=None, default_model=None, credential_id=None
+                ),
+            )
+        )
+        assert cleared.base_url is None
+        assert cleared.default_model is None
+        assert cleared.credential_id is None
+    finally:
+        asyncio.run(delete_provider(created.provider_id))
+
+
+def test_task_lifecycle_is_persistent() -> None:
+    created = asyncio.run(create_task(TaskCreateRequest(title="审阅修复")))
+    fetched = asyncio.run(get_task(created.task_id))
+    updated = asyncio.run(
+        update_task(created.task_id, TaskUpdateRequest(status=TaskStatus.done))
+    )
+    listed = asyncio.run(list_tasks(limit=20, offset=0))
+    deleted = asyncio.run(delete_task(created.task_id))
+
+    assert fetched.title == "审阅修复"
+    assert updated.status == TaskStatus.done
+    assert any(item.task_id == created.task_id for item in listed.items)
+    assert deleted.resource_id == created.task_id

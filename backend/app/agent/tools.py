@@ -4,6 +4,8 @@ from time import perf_counter
 from typing import Any, Awaitable, Callable
 
 from pydantic import BaseModel, ValidationError
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 
 from app.contracts import ToolCall, ToolDefinition, ToolResult
 
@@ -78,8 +80,9 @@ class ToolRegistry:
             )
 
         try:
+            Draft202012Validator(registered.definition.parameters).validate(call.arguments)
             arguments = registered.arguments_model.model_validate(call.arguments)
-        except ValidationError as exc:
+        except (ValidationError, JsonSchemaValidationError) as exc:
             return ToolResult(
                 tool_call_id=call.tool_call_id,
                 name=call.name,

@@ -19,6 +19,7 @@ from app.errors import ApiError
 from app.knowledge.parser import ParsedNote, parse_note
 from app.retrieval.embedding import HashEmbeddingProvider
 from app.retrieval.vectorstore import SqliteVecStore, VectorRecord
+from app.services.coordination import serialized_vault_mutation
 
 # 轻量实现实例（无状态，可直接复用）；接入真实模型后替换为对应 Provider
 embedding = HashEmbeddingProvider()
@@ -148,6 +149,7 @@ async def index_note(parsed: ParsedNote) -> None:
         conn.close()
 
 
+@serialized_vault_mutation
 async def create_note(*, title: str, markdown: str, folder: str | None, tags: list[str]) -> Note:
     rel_path, clean_folder = _rel_path(folder, title)
     now = datetime.now(timezone.utc)
@@ -183,6 +185,7 @@ async def get_note(note_id: str) -> Note | None:
                        record.created_at, record.updated_at, record.blocks, markdown)
 
 
+@serialized_vault_mutation
 async def update_note(
     note_id: str, *, title: str | None = None, markdown: str | None = None, tags: list[str] | None = None
 ) -> Note:
@@ -213,6 +216,58 @@ async def update_note(
                        parsed.created_at, parsed.updated_at, parsed.blocks, new_md)
 
 
+@serialized_vault_mutation
+async def move_note(note_id: str, *, folder: str) -> Note:
+    record = repository.get_note_record(note_id)
+    if record is None:
+        raise ApiError(404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id})
+
+    clean_folder = _normalize_folder(folder)
+    filename = Path(record.file_path).name
+    new_rel_path = f"{clean_folder}/{filename}" if clean_folder else filename
+    if new_rel_path == record.file_path:
+        note = await get_note(note_id)
+        assert note is not None
+        return note
+
+    source = _abs_path(record.file_path)
+    target = _abs_path(new_rel_path)
+    if not source.is_file():
+        raise ApiError(
+            409, "NOTE_FILE_MISSING", "note file is missing from the Vault",
+            {"note_id": note_id, "file_path": record.file_path},
+        )
+    if target.exists():
+        raise ApiError(
+            409, "RESOURCE_CONFLICT", "a note already exists at the target path",
+            {"note_id": note_id, "file_path": new_rel_path},
+        )
+
+    markdown = source.read_text(encoding="utf-8")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source.replace(target)
+    try:
+        parsed = parse_note(
+            markdown=markdown,
+            file_path=new_rel_path,
+            folder=clean_folder,
+            tags=record.tags,
+            created_at=record.created_at,
+            updated_at=datetime.now(timezone.utc),
+            note_id=record.note_id,
+        )
+        parsed.title = record.title
+        await index_note(parsed)
+    except BaseException:
+        target.replace(source)
+        raise
+    return _build_note(
+        parsed.note_id, parsed.title, parsed.file_path, parsed.tags,
+        parsed.created_at, parsed.updated_at, parsed.blocks, markdown,
+    )
+
+
+@serialized_vault_mutation
 async def delete_note(note_id: str) -> bool:
     record = repository.get_note_record(note_id)
     if record is None:

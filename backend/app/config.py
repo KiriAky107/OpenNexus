@@ -23,6 +23,7 @@ class Settings:
     data_dir: Path
     db_path: Path
     vault_path: Path
+    attachments_path: Path
 
 
 @lru_cache
@@ -37,4 +38,7 @@ def get_settings() -> Settings:
         data_dir=data_dir,
         db_path=Path(os.getenv("APP_DB_PATH", str(data_dir / "app.db"))),
         vault_path=Path(os.getenv("APP_VAULT_PATH", str(data_dir / "vault"))),
+        attachments_path=Path(
+            os.getenv("APP_ATTACHMENTS_PATH", str(data_dir / "attachments"))
+        ),
     )

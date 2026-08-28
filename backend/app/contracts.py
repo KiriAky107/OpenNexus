@@ -384,11 +384,16 @@ class Plugin(Contract):
     manifest: PluginManifest
     status: PluginStatus
     enabled: bool = False
+    granted_permissions: list[str] = Field(default_factory=list)
     error_message: str | None = None
 
 
 class PluginListResponse(Contract):
     items: list[Plugin] = Field(default_factory=list)
+
+
+class PluginPermissionGrantRequest(Contract):
+    permissions: list[str] = Field(default_factory=list)
 
 
 # Providers
@@ -506,6 +511,9 @@ class TranscriptionJob(Contract):
     job_id: str
     attachment_id: str
     status: Literal["queued", "processing", "completed", "failed"]
+    text: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
     created_at: datetime
 
 

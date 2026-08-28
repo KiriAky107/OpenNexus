@@ -10,13 +10,39 @@ class PermissionMode(str, Enum):
     deny = "deny"
 
 
+KNOWN_PERMISSIONS = frozenset(
+    {
+        "notes.read",
+        "notes.search",
+        "notes.write",
+        "notes.delete",
+        "tasks.read",
+        "tasks.write",
+        "attachments.read",
+        "network.request",
+        "secrets.use",
+        "ui.command",
+        "ui.settings",
+        "ui.sidebar",
+    }
+)
+
+
 class PermissionPolicy:
     def __init__(self) -> None:
         self._rules: dict[str, PermissionMode] = {
+            "notes.read": PermissionMode.allow,
+            "notes.search": PermissionMode.allow,
             "notes.delete": PermissionMode.confirm,
             "notes.write": PermissionMode.confirm,
+            "tasks.read": PermissionMode.allow,
+            "tasks.write": PermissionMode.confirm,
+            "attachments.read": PermissionMode.allow,
             "network.request": PermissionMode.confirm,
             "secrets.use": PermissionMode.confirm,
+            "ui.command": PermissionMode.allow,
+            "ui.settings": PermissionMode.allow,
+            "ui.sidebar": PermissionMode.allow,
         }
 
     def set_rule(self, permission: str, mode: PermissionMode) -> None:
@@ -25,7 +51,7 @@ class PermissionPolicy:
     def mode_for(self, permission: str | None) -> PermissionMode:
         if permission is None:
             return PermissionMode.allow
-        return self._rules.get(permission, PermissionMode.allow)
+        return self._rules.get(permission, PermissionMode.deny)
 
 
 @dataclass(slots=True)

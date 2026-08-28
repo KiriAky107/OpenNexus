@@ -17,6 +17,7 @@ class ApiError(Exception):
         message: str,
         details: dict[str, Any] | None = None,
     ) -> None:
+        super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message

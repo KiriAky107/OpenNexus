@@ -3,7 +3,14 @@ import json
 
 import httpx
 
-from app.contracts import Message, MessageRole, ModelRequest, ToolCall, ToolDefinition
+from app.contracts import (
+    Message,
+    MessageRole,
+    ModelEventType,
+    ModelRequest,
+    ToolCall,
+    ToolDefinition,
+)
 from app.providers.ollama import OllamaProvider
 from app.providers.openai_compatible import OpenAICompatibleProvider
 
@@ -15,6 +22,10 @@ class StaticCredentials:
 
 def run(coroutine):
     return asyncio.run(coroutine)
+
+
+async def collect(stream):
+    return [event async for event in stream]
 
 
 def test_openai_compatible_maps_tool_call_and_credentials() -> None:
@@ -152,3 +163,65 @@ def test_ollama_maps_models_and_completion() -> None:
     assert turn.text == "local answer"
     assert turn.input_tokens == 5
     assert turn.output_tokens == 2
+
+
+def test_openai_compatible_streams_incremental_sse() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["stream"] is True
+        body = "\n".join(
+            [
+                'data: {"choices":[{"delta":{"content":"hel"}}]}',
+                'data: {"choices":[{"delta":{"content":"lo"},"finish_reason":"stop"}]}',
+                'data: {"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1}}',
+                "data: [DONE]",
+                "",
+            ]
+        )
+        return httpx.Response(200, text=body)
+
+    provider = OpenAICompatibleProvider(
+        base_url="https://provider.test/v1",
+        credential_id=None,
+        credentials=StaticCredentials(),
+        transport=httpx.MockTransport(handler),
+    )
+    request = ModelRequest(
+        provider_id="test", model="model",
+        messages=[Message(role=MessageRole.user, content="hello")],
+    )
+    events = run(collect(provider.stream(request)))
+
+    assert [item.data["text"] for item in events if item.event == ModelEventType.text_delta] == [
+        "hel", "lo"
+    ]
+    assert events[-1].event == ModelEventType.done
+    assert [item.sequence for item in events] == list(range(len(events)))
+
+
+def test_ollama_streams_incremental_jsonl() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["stream"] is True
+        body = "\n".join(
+            [
+                '{"message":{"content":"本"},"done":false}',
+                '{"message":{"content":"地"},"done":false}',
+                '{"message":{"content":""},"done":true,"prompt_eval_count":3,"eval_count":2}',
+                "",
+            ]
+        )
+        return httpx.Response(200, text=body)
+
+    provider = OllamaProvider(transport=httpx.MockTransport(handler))
+    request = ModelRequest(
+        provider_id="ollama", model="qwen",
+        messages=[Message(role=MessageRole.user, content="hello")],
+    )
+    events = run(collect(provider.stream(request)))
+
+    assert [item.data["text"] for item in events if item.event == ModelEventType.text_delta] == [
+        "本", "地"
+    ]
+    assert events[-2].event == ModelEventType.usage
+    assert events[-1].event == ModelEventType.done

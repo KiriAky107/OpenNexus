@@ -1,9 +1,12 @@
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.tools import ToolExecutionContext, ToolRegistry
-from app.contracts import SearchMode, SearchRequest, ToolDefinition
+from app.contracts import SearchMode, SearchRequest, TaskStatus, ToolDefinition
 from app.retrieval.engine import engine
 from app.services import note_service
+from app.services import attachment_service, task_service, transcription_service
 
 
 class ToolArguments(BaseModel):
@@ -54,6 +57,42 @@ class NoteListArguments(ToolArguments):
     tag: str | None = None
 
 
+class NoteMoveArguments(ToolArguments):
+    note_id: str = Field(min_length=1)
+    folder: str
+
+
+class TaskCreateArguments(ToolArguments):
+    title: str = Field(min_length=1)
+    description: str = ""
+    note_id: str | None = None
+    due_at: datetime | None = None
+
+
+class TaskUpdateArguments(ToolArguments):
+    task_id: str = Field(min_length=1)
+    title: str | None = None
+    description: str | None = None
+    status: TaskStatus | None = None
+    note_id: str | None = None
+    due_at: datetime | None = None
+
+
+class TaskListArguments(ToolArguments):
+    limit: int = Field(default=50, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+
+
+class AttachmentReadArguments(ToolArguments):
+    attachment_id: str = Field(min_length=1)
+    max_chars: int = Field(default=100_000, ge=1, le=1_000_000)
+
+
+class AudioTranscribeArguments(ToolArguments):
+    attachment_id: str = Field(min_length=1)
+    language: str | None = None
+
+
 async def echo(arguments: EchoArguments, _: ToolExecutionContext) -> dict[str, str]:
     return {"text": arguments.text}
 
@@ -92,6 +131,39 @@ def list_notes(arguments: NoteListArguments, _: ToolExecutionContext) -> dict:
         "items": [item.model_dump(mode="json") for item in items],
         "page": {"total": total, "limit": arguments.limit, "offset": arguments.offset},
     }
+
+
+async def move_note(arguments: NoteMoveArguments, _: ToolExecutionContext) -> dict:
+    note = await note_service.move_note(arguments.note_id, folder=arguments.folder)
+    return note.model_dump(mode="json")
+
+
+def create_task(arguments: TaskCreateArguments, _: ToolExecutionContext) -> dict:
+    return task_service.create_task(**arguments.model_dump()).model_dump(mode="json")
+
+
+def update_task(arguments: TaskUpdateArguments, _: ToolExecutionContext) -> dict:
+    values = arguments.model_dump(exclude_unset=True)
+    task_id = values.pop("task_id")
+    return task_service.update_task(task_id, values).model_dump(mode="json")
+
+
+def list_tasks(arguments: TaskListArguments, _: ToolExecutionContext) -> dict:
+    items, total = task_service.list_tasks(**arguments.model_dump())
+    return {
+        "items": [item.model_dump(mode="json") for item in items],
+        "page": {"total": total, "limit": arguments.limit, "offset": arguments.offset},
+    }
+
+
+def read_attachment(arguments: AttachmentReadArguments, _: ToolExecutionContext) -> dict:
+    return attachment_service.read_attachment(**arguments.model_dump())
+
+
+def transcribe_audio(arguments: AudioTranscribeArguments, _: ToolExecutionContext) -> dict:
+    return transcription_service.create_transcription(
+        arguments.attachment_id, arguments.language
+    ).model_dump(mode="json")
 
 
 def _register(
@@ -177,4 +249,52 @@ def register_builtin_tools(registry: ToolRegistry) -> None:
         arguments_model=NoteListArguments,
         executor=list_notes,
         permission="notes.read",
+    )
+    _register(
+        registry,
+        name="notes.move",
+        description="Move a note to another folder while preserving note_id.",
+        arguments_model=NoteMoveArguments,
+        executor=move_note,
+        permission="notes.write",
+    )
+    _register(
+        registry,
+        name="tasks.create",
+        description="Create a persistent task.",
+        arguments_model=TaskCreateArguments,
+        executor=create_task,
+        permission="tasks.write",
+    )
+    _register(
+        registry,
+        name="tasks.update",
+        description="Update a persistent task.",
+        arguments_model=TaskUpdateArguments,
+        executor=update_task,
+        permission="tasks.write",
+    )
+    _register(
+        registry,
+        name="tasks.list",
+        description="List persistent tasks.",
+        arguments_model=TaskListArguments,
+        executor=list_tasks,
+        permission="tasks.read",
+    )
+    _register(
+        registry,
+        name="attachments.read",
+        description="Read a UTF-8 attachment from host-managed attachment storage.",
+        arguments_model=AttachmentReadArguments,
+        executor=read_attachment,
+        permission="attachments.read",
+    )
+    _register(
+        registry,
+        name="audio.transcribe",
+        description="Read a host-generated transcript for an audio attachment.",
+        arguments_model=AudioTranscribeArguments,
+        executor=transcribe_audio,
+        permission="attachments.read",
     )
