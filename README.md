@@ -109,6 +109,7 @@ pnpm build
 - 前端依赖统一使用 pnpm 安装，不要混用 npm 或 yarn。
 - `backend/.venv`、`frontend/node_modules`、`frontend/dist` 均为本地生成目录，不提交到 Git。
 - API 默认监听 `127.0.0.1:8000`，前端默认监听 `127.0.0.1:5173`。
+- 后端附件目录默认是 `backend/data/attachments`，可通过 `APP_ATTACHMENTS_PATH` 覆盖；该目录由桌面 Host 管理。
 - 跨模块接口发生变化时，需要同步更新前后端类型和 `docs` 中的接口说明。
 - 当前前后端接口清单见 `docs/后端接口契约-开发版.md`，OpenAPI 以 `/openapi.json` 为准。
 - 前端页面、交互、状态管理和第一阶段验收要求见 `docs/前端页面需求说明-开发版.md`。
