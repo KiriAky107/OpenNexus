@@ -6,9 +6,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
 from app.agent.tools import ToolExecutionContext, ToolRegistry
+from app.agent.permissions import KNOWN_PERMISSIONS
 from app.contracts import (
     ModelCapability,
     Plugin,
@@ -73,6 +76,7 @@ class SkillRuntime:
         except ValidationError as exc:
             raise _manifest_error("skill", exc) from exc
         _validate_id("skill", manifest.skill_id)
+        _validate_permissions("skill", manifest.permissions)
         if manifest.skill_id in self._records:
             raise ExtensionError(
                 "SKILL_ALREADY_INSTALLED",
@@ -257,6 +261,7 @@ class PluginRuntime:
         except ValidationError as exc:
             raise _manifest_error("plugin", exc) from exc
         _validate_id("plugin", manifest.plugin_id)
+        _validate_permissions("plugin", manifest.permissions)
         if manifest.plugin_id in self._records:
             raise ExtensionError(
                 "PLUGIN_ALREADY_INSTALLED",
@@ -275,6 +280,7 @@ class PluginRuntime:
             )
         for spec in specs:
             _validate_id("tool", spec.name)
+            _validate_tool_schema(spec)
             if spec.permission and spec.permission not in manifest.permissions:
                 raise ExtensionError(
                     "PLUGIN_PERMISSION_UNDECLARED",
@@ -283,7 +289,14 @@ class PluginRuntime:
                 )
 
         record = _PluginRecord(
-            plugin=Plugin(manifest=manifest, status=PluginStatus.installed),
+            plugin=Plugin(
+                manifest=manifest,
+                status=(
+                    PluginStatus.permission_required
+                    if manifest.permissions
+                    else PluginStatus.installed
+                ),
+            ),
             tools=specs,
             package_path=root,
             registered_tools=[],
@@ -308,6 +321,17 @@ class PluginRuntime:
                 "MCP Plugin Host is reserved for the second development phase.",
                 status_code=501,
                 details={"plugin_id": plugin_id, "backend": "mcp"},
+            )
+        missing_grants = sorted(
+            set(record.plugin.manifest.permissions) - set(record.plugin.granted_permissions)
+        )
+        if missing_grants:
+            record.plugin.status = PluginStatus.permission_required
+            raise ExtensionError(
+                "PLUGIN_PERMISSION_REQUIRED",
+                "Plugin permissions must be granted before it can be enabled.",
+                status_code=409,
+                details={"plugin_id": plugin_id, "permissions": missing_grants},
             )
         conflicts = [spec.name for spec in record.tools if self.registry.contains(spec.name)]
         if conflicts:
@@ -351,6 +375,27 @@ class PluginRuntime:
         record.plugin.enabled = True
         record.plugin.status = PluginStatus.ready
         record.plugin.error_message = None
+        return record.plugin.model_copy(deep=True)
+
+    def set_permissions(self, plugin_id: str, permissions: list[str]) -> Plugin:
+        record = self._record(plugin_id)
+        requested = set(permissions)
+        declared = set(record.plugin.manifest.permissions)
+        undeclared = sorted(requested - declared)
+        if undeclared:
+            raise ExtensionError(
+                "PLUGIN_PERMISSION_UNDECLARED",
+                "Cannot grant permissions that are not declared by the Plugin.",
+                details={"plugin_id": plugin_id, "permissions": undeclared},
+            )
+        record.plugin.granted_permissions = sorted(requested)
+        missing = declared - requested
+        if missing and record.plugin.enabled:
+            self.disable(plugin_id)
+        if missing:
+            record.plugin.status = PluginStatus.permission_required
+        elif not record.plugin.enabled:
+            record.plugin.status = PluginStatus.installed
         return record.plugin.model_copy(deep=True)
 
     def disable(self, plugin_id: str) -> Plugin:
@@ -429,6 +474,16 @@ def _validate_id(kind: str, value: str) -> None:
         )
 
 
+def _validate_permissions(kind: str, permissions: list[str]) -> None:
+    unknown = sorted(set(permissions) - KNOWN_PERMISSIONS)
+    if unknown:
+        raise ExtensionError(
+            "EXTENSION_PERMISSION_INVALID",
+            f"Invalid {kind} permissions: {', '.join(unknown)}",
+            details={"kind": kind, "permissions": unknown},
+        )
+
+
 def _manifest_error(kind: str, exc: ValidationError) -> ExtensionError:
     return ExtensionError(
         "EXTENSION_MANIFEST_INVALID",
@@ -457,3 +512,23 @@ def _arguments_model(spec: DeclarativeToolSpec) -> type[BaseModel]:
         fields[name] = (annotation, ... if name in required else None)
     model_name = "PluginArgs_" + re.sub(r"\W+", "_", spec.name)
     return create_model(model_name, __config__=ConfigDict(extra="forbid"), **fields)
+
+
+def _validate_tool_schema(spec: DeclarativeToolSpec) -> None:
+    schema = spec.parameters or {"type": "object", "properties": {}}
+    try:
+        Draft202012Validator.check_schema(schema)
+    except SchemaError as exc:
+        raise ExtensionError(
+            "PLUGIN_TOOL_SCHEMA_INVALID",
+            f"Invalid JSON Schema for tool {spec.name}: {exc.message}",
+            details={"tool": spec.name},
+        ) from exc
+    if schema.get("type", "object") != "object" or not isinstance(
+        schema.get("properties", {}), dict
+    ):
+        raise ExtensionError(
+            "PLUGIN_TOOL_SCHEMA_INVALID",
+            "Tool parameters must be an object schema with object properties.",
+            details={"tool": spec.name},
+        )

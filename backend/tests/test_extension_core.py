@@ -13,6 +13,7 @@ from app.contracts import (
 )
 from app.extensions import ExtensionError
 from app.services import note_service
+from app.config import get_settings
 
 
 def run(coroutine):
@@ -172,3 +173,127 @@ tools: [plugin.not-installed]
     with pytest.raises(ExtensionError) as exc:
         container.skills.enable("missing-tool")
     assert exc.value.code == "SKILL_DEPENDENCY_MISSING"
+
+
+def test_plugin_permissions_must_be_known_and_granted(tmp_path) -> None:
+    package = tmp_path / "write-plugin"
+    package.mkdir()
+    (package / "plugin.yaml").write_text(
+        """
+id: write-plugin
+name: Write Plugin
+version: 1.0.0
+permissions: [notes.write]
+contributes:
+  tools: [plugin.write]
+backend:
+  type: internal_rpc
+  transport: none
+""".strip(),
+        encoding="utf-8",
+    )
+    (package / "tools.yaml").write_text(
+        """
+tools:
+  - name: plugin.write
+    description: permission test
+    permission: notes.write
+    handler: echo
+    parameters:
+      type: object
+      properties: {text: {type: string}}
+      required: [text]
+""".strip(),
+        encoding="utf-8",
+    )
+    container = build_container()
+
+    installed = container.plugins.install(package)
+    assert installed.status == "permission_required"
+    with pytest.raises(ExtensionError) as exc:
+        container.plugins.enable("write-plugin")
+    assert exc.value.code == "PLUGIN_PERMISSION_REQUIRED"
+
+    granted = container.plugins.set_permissions("write-plugin", ["notes.write"])
+    enabled = container.plugins.enable("write-plugin")
+    assert granted.granted_permissions == ["notes.write"]
+    assert enabled.status == "ready"
+
+
+def test_plugin_rejects_unknown_permissions_and_invalid_schema(tmp_path) -> None:
+    unknown = tmp_path / "unknown-permission"
+    unknown.mkdir()
+    (unknown / "plugin.yaml").write_text(
+        """
+id: unknown-permission
+name: Unknown
+version: 1.0.0
+permissions: [notes.wirte]
+""".strip(),
+        encoding="utf-8",
+    )
+    container = build_container()
+    with pytest.raises(ExtensionError) as exc:
+        container.plugins.install(unknown)
+    assert exc.value.code == "EXTENSION_PERMISSION_INVALID"
+
+    malformed = tmp_path / "malformed-schema"
+    malformed.mkdir()
+    (malformed / "plugin.yaml").write_text(
+        """
+id: malformed-schema
+name: Malformed
+version: 1.0.0
+contributes:
+  tools: [bad.schema]
+""".strip(),
+        encoding="utf-8",
+    )
+    (malformed / "tools.yaml").write_text(
+        """
+tools:
+  - name: bad.schema
+    description: invalid schema
+    handler: echo
+    parameters:
+      type: object
+      properties: []
+""".strip(),
+        encoding="utf-8",
+    )
+    with pytest.raises(ExtensionError) as exc:
+        container.plugins.install(malformed)
+    assert exc.value.code == "PLUGIN_TOOL_SCHEMA_INVALID"
+
+
+def test_attachment_and_transcription_tools_use_host_storage() -> None:
+    async def scenario() -> None:
+        root = get_settings().attachments_path
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "meeting.txt").write_text("会议转写内容", encoding="utf-8")
+        container = build_container()
+
+        attachment = await container.tools.execute(
+            ToolCall(
+                tool_call_id="call_attachment",
+                name="attachments.read",
+                arguments={"attachment_id": "meeting.txt"},
+            ),
+            ToolExecutionContext(run_id="run_attachment"),
+        )
+        transcription = await container.tools.execute(
+            ToolCall(
+                tool_call_id="call_transcription",
+                name="audio.transcribe",
+                arguments={"attachment_id": "meeting.txt"},
+            ),
+            ToolExecutionContext(run_id="run_transcription"),
+        )
+
+        assert attachment.success is True
+        assert attachment.output["content"] == "会议转写内容"
+        assert transcription.success is True
+        assert transcription.output["status"] == "completed"
+        assert transcription.output["text"] == "会议转写内容"
+
+    run(scenario())

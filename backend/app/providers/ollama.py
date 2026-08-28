@@ -1,8 +1,11 @@
 from uuid import uuid4
+import json
+from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 
 import httpx
 
-from app.contracts import ModelCapability, ModelInfo, ModelRequest
+from app.contracts import ModelCapability, ModelEvent, ModelEventType, ModelInfo, ModelRequest
 from app.providers.base import ProviderError, ProviderToolCall, ProviderTurn
 from app.providers.http_base import TurnStreamingMixin, decode_tool_arguments
 
@@ -85,6 +88,115 @@ class OllamaProvider(TurnStreamingMixin):
             for item in data.get("models", [])
             if isinstance(item, dict) and item.get("name")
         ]
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        payload = self._chat_payload(request, stream=True)
+        sequence = 0
+
+        def event(kind: ModelEventType, data: dict | None = None) -> ModelEvent:
+            nonlocal sequence
+            item = ModelEvent(
+                event=kind, sequence=sequence, data=data or {},
+                timestamp=datetime.now(timezone.utc),
+            )
+            sequence += 1
+            return item
+
+        try:
+            async for data in self._stream_json(payload):
+                message = data.get("message") or {}
+                if message.get("thinking"):
+                    yield event(ModelEventType.thinking_delta, {"text": message["thinking"]})
+                if message.get("content"):
+                    yield event(ModelEventType.text_delta, {"text": message["content"]})
+                for raw_call in message.get("tool_calls") or []:
+                    function = raw_call.get("function") or {}
+                    call_id = raw_call.get("id") or f"call_{uuid4().hex}"
+                    yield event(
+                        ModelEventType.tool_call_start,
+                        {"tool_call_id": call_id, "name": function.get("name") or ""},
+                    )
+                    yield event(
+                        ModelEventType.tool_call_delta,
+                        {
+                            "tool_call_id": call_id,
+                            "arguments_delta": json.dumps(
+                                function.get("arguments") or {}, ensure_ascii=False
+                            ),
+                        },
+                    )
+                    yield event(ModelEventType.tool_call_end, {"tool_call_id": call_id})
+                if data.get("done"):
+                    yield event(
+                        ModelEventType.usage,
+                        {
+                            "input_tokens": int(data.get("prompt_eval_count") or 0),
+                            "output_tokens": int(data.get("eval_count") or 0),
+                        },
+                    )
+            yield event(ModelEventType.done)
+        except ProviderError as exc:
+            yield event(ModelEventType.error, {"code": exc.code, "message": exc.message})
+            yield event(ModelEventType.done)
+
+    def _chat_payload(self, request: ModelRequest, *, stream: bool) -> dict[str, object]:
+        messages = []
+        if request.system:
+            messages.append({"role": "system", "content": request.system})
+        for message in request.messages:
+            item: dict[str, object] = {"role": message.role.value, "content": message.content}
+            if message.tool_calls:
+                item["tool_calls"] = [
+                    {"function": {"name": call.name, "arguments": call.arguments}}
+                    for call in message.tool_calls
+                ]
+            messages.append(item)
+        payload: dict[str, object] = {
+            "model": request.model, "messages": messages, "stream": stream
+        }
+        if request.tools:
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.parameters,
+                    },
+                }
+                for tool in request.tools
+            ]
+        return payload
+
+    async def _stream_json(self, payload: dict[str, object]) -> AsyncIterator[dict]:
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout_seconds, transport=self.transport
+            ) as client:
+                async with client.stream(
+                    "POST", f"{self.base_url}/api/chat", json=payload
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line.strip():
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError as exc:
+                            raise ProviderError(
+                                "PROVIDER_INVALID_RESPONSE", "Ollama returned invalid JSONL."
+                            ) from exc
+                        if isinstance(data, dict):
+                            yield data
+        except httpx.TimeoutException as exc:
+            raise ProviderError("PROVIDER_TIMEOUT", "Ollama request timed out.") from exc
+        except httpx.HTTPStatusError as exc:
+            raise ProviderError(
+                "MODEL_NOT_FOUND" if exc.response.status_code == 404 else "PROVIDER_UNAVAILABLE",
+                f"Ollama returned HTTP {exc.response.status_code}.",
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError("PROVIDER_UNAVAILABLE", "Ollama is unavailable.") from exc
 
     async def test_connection(self, model: str | None = None) -> tuple[bool, str]:
         try:

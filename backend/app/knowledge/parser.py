@@ -18,6 +18,7 @@ from app.textutils import count_tokens
 
 _HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*?)\s*$")
 _FRONTMATTER_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*:\s*(.*)$")
+_FENCE_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(?:[^`]*)$")
 
 
 @dataclass
@@ -48,9 +49,10 @@ def parse_note(
     tags: list[str] | None = None,
     created_at: datetime,
     updated_at: datetime,
+    note_id: str | None = None,
 ) -> ParsedNote:
     """解析一篇 Markdown，生成 ParsedNote（元数据 + Block 列表）。"""
-    note_id = note_id_for_path(file_path)
+    note_id = note_id or note_id_for_path(file_path)
     frontmatter = _extract_frontmatter(markdown)
 
     fallback_title = Path(file_path).stem
@@ -79,13 +81,14 @@ def parse_blocks(markdown: str, note_id: str) -> list[NoteBlock]:
     heading_stack: list[str] = []
     body: list[tuple[str, int]] = []
     id_counters: dict[str, int] = {}
+    fence_marker: str | None = None
 
     def make_block(path: list[str], chunk: list[tuple[str, int]]) -> None:
         if not chunk:
             return
         content = "\n".join(line for line, _ in chunk)
         start = chunk[0][1]
-        end = chunk[-1][1] + len(chunk[-1][0])
+        end = chunk[-1][1] + _utf16_len(chunk[-1][0])
         block_id = _stable_block_id(note_id, path, content, id_counters)
         blocks.append(
             NoteBlock(
@@ -108,6 +111,20 @@ def parse_blocks(markdown: str, note_id: str) -> list[NoteBlock]:
     for line, offset in lines:
         if offset < content_start:
             continue  # 跳过 frontmatter 区域，但保留 offset 准确性
+
+        fence = _FENCE_RE.match(line)
+        if fence_marker is not None:
+            body.append((line, offset))
+            marker = fence.group(1) if fence else ""
+            if marker.startswith(fence_marker[0]) and len(marker) >= len(fence_marker):
+                fence_marker = None
+                flush_body()
+            continue
+        if fence:
+            flush_body()
+            fence_marker = fence.group(1)
+            body.append((line, offset))
+            continue
 
         heading = _HEADING_RE.match(line)
         if heading:
@@ -138,7 +155,7 @@ def _stable_block_id(note_id: str, path: list[str], content: str, counters: dict
 
 
 def _split_lines(text: str) -> list[tuple[str, int]]:
-    """按行拆分并记录每行在原文中的起始字符偏移。"""
+    """按行拆分并记录 UTF-16 code unit 偏移，直接兼容浏览器编辑器。"""
     result: list[tuple[str, int]] = []
     start = 0
     for raw in text.splitlines(keepends=True):
@@ -148,17 +165,21 @@ def _split_lines(text: str) -> list[tuple[str, int]]:
         elif line.endswith("\n") or line.endswith("\r"):
             line = line[:-1]
         result.append((line, start))
-        start += len(raw)
+        start += _utf16_len(raw)
     return result
 
 
 def _content_start(markdown: str) -> int:
-    """返回正文起始偏移：有 frontmatter 时跳过 --- 分隔块，否则为 0。"""
+    """返回正文起始 UTF-16 偏移：有 frontmatter 时跳过 --- 分隔块。"""
     if markdown.startswith("---"):
         end = markdown.find("\n---", 3)
         if end != -1:
-            return end + 4
+            return _utf16_len(markdown[: end + 4])
     return 0
+
+
+def _utf16_len(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
 
 
 def _extract_frontmatter(markdown: str) -> dict[str, str]:

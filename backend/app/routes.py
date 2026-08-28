@@ -10,7 +10,6 @@ from app.contracts import (
     AgentRunCreateRequest,
     AgentRunListResponse,
     ChatRequest,
-    ErrorResponse,
     ExtensionInstallRequest,
     IndexJob,
     IndexRebuildRequest,
@@ -27,6 +26,7 @@ from app.contracts import (
     PermissionDecisionRequest,
     Plugin,
     PluginListResponse,
+    PluginPermissionGrantRequest,
     ProviderConfig,
     ProviderCreateRequest,
     ProviderListResponse,
@@ -46,17 +46,16 @@ from app.contracts import (
     TranscriptionJob,
     TranscriptionRequest,
 )
-from app.agent import AgentRunNotFoundError
+from app.agent import AgentCapacityError, AgentRunNotFoundError
 from app.container import container
-from app.errors import ApiError, not_implemented
+from app.errors import ApiError
 from app.extensions import ExtensionError
 from app.providers.registry import ProviderNotFoundError
 from app.providers.factory import UnsupportedProviderError
 from app.retrieval.engine import engine
-from app.services import index_service, note_service
+from app.services import index_service, note_service, task_service, transcription_service
 
 router = APIRouter(prefix="/api")
-not_implemented_response = {501: {"model": ErrorResponse, "description": "业务服务尚未实现"}}
 
 
 def utc_now() -> datetime:
@@ -151,11 +150,9 @@ async def delete_note(note_id: str) -> OperationResponse:
     return OperationResponse(status="completed", resource_id=note_id, message="deleted")
 
 
-@router.post(
-    "/notes/{note_id}/move", response_model=Note, responses=not_implemented_response, tags=["Notes"]
-)
-async def move_note(note_id: str, _: NoteMoveRequest) -> Note:
-    not_implemented(f"notes.move:{note_id}")
+@router.post("/notes/{note_id}/move", response_model=Note, tags=["Notes"])
+async def move_note(note_id: str, request: NoteMoveRequest) -> Note:
+    return await note_service.move_note(note_id, folder=request.folder)
 
 
 # Retrieval and chat
@@ -219,6 +216,8 @@ async def create_agent_run(request: AgentRunCreateRequest) -> AgentRun:
         return await container.agent.create_run(request)
     except ExtensionError as exc:
         raise ApiError(exc.status_code, exc.code, exc.message, exc.details) from exc
+    except AgentCapacityError as exc:
+        raise ApiError(429, "AGENT_CAPACITY_EXCEEDED", str(exc)) from exc
 
 
 @router.get(
@@ -386,6 +385,19 @@ async def disable_plugin(plugin_id: str) -> Plugin:
     return extension_call(lambda: container.plugins.disable(plugin_id))
 
 
+@router.put(
+    "/plugins/{plugin_id}/permissions",
+    response_model=Plugin,
+    tags=["Plugins"],
+)
+async def set_plugin_permissions(
+    plugin_id: str, request: PluginPermissionGrantRequest
+) -> Plugin:
+    return extension_call(
+        lambda: container.plugins.set_permissions(plugin_id, request.permissions)
+    )
+
+
 @router.delete(
     "/plugins/{plugin_id}",
     response_model=OperationResponse,
@@ -407,7 +419,6 @@ async def list_providers() -> ProviderListResponse:
 @router.get(
     "/providers/{provider_id}",
     response_model=ProviderConfig,
-    responses=not_implemented_response,
     tags=["Providers"],
 )
 async def get_provider(provider_id: str) -> ProviderConfig:
@@ -417,7 +428,6 @@ async def get_provider(provider_id: str) -> ProviderConfig:
 @router.post(
     "/providers",
     response_model=ProviderConfig,
-    responses=not_implemented_response,
     tags=["Providers"],
 )
 async def create_provider(request: ProviderCreateRequest) -> ProviderConfig:
@@ -446,7 +456,6 @@ async def create_provider(request: ProviderCreateRequest) -> ProviderConfig:
 @router.patch(
     "/providers/{provider_id}",
     response_model=ProviderConfig,
-    responses=not_implemented_response,
     tags=["Providers"],
 )
 async def update_provider(
@@ -455,7 +464,19 @@ async def update_provider(
     current = configurable_provider_or_404(provider_id).config
     if provider_id == "mock":
         raise ApiError(409, "BUILTIN_PROVIDER_IMMUTABLE", "Mock provider cannot be modified.")
-    config = current.model_copy(update=request.model_dump(exclude_none=True))
+    fields = request.model_fields_set
+    if ("name" in fields and request.name is None) or (
+        "enabled" in fields and request.enabled is None
+    ):
+        raise ApiError(
+            422,
+            "VALIDATION_ERROR",
+            "name and enabled cannot be null when explicitly provided.",
+        )
+    updates = {name: getattr(request, name) for name in fields}
+    config = ProviderConfig.model_validate(
+        {**current.model_dump(mode="python"), **updates}
+    )
     adapter = container.provider_factory.build(config)
     container.providers.replace(config, adapter)
     return config
@@ -464,7 +485,6 @@ async def update_provider(
 @router.delete(
     "/providers/{provider_id}",
     response_model=OperationResponse,
-    responses=not_implemented_response,
     tags=["Providers"],
 )
 async def delete_provider(provider_id: str) -> OperationResponse:
@@ -478,7 +498,6 @@ async def delete_provider(provider_id: str) -> OperationResponse:
 @router.get(
     "/providers/{provider_id}/models",
     response_model=ProviderModelsResponse,
-    responses=not_implemented_response,
     tags=["Providers"],
 )
 async def list_provider_models(provider_id: str) -> ProviderModelsResponse:
@@ -492,7 +511,6 @@ async def list_provider_models(provider_id: str) -> ProviderModelsResponse:
 @router.post(
     "/providers/test",
     response_model=ProviderTestResponse,
-    responses=not_implemented_response,
     tags=["Providers"],
 )
 async def test_provider(request: ProviderTestRequest) -> ProviderTestResponse:
@@ -517,38 +535,39 @@ async def test_provider(request: ProviderTestRequest) -> ProviderTestResponse:
 async def list_tasks(
     limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0)
 ) -> TaskListResponse:
-    return TaskListResponse(page=PageMeta(limit=limit, offset=offset))
+    items, total = task_service.list_tasks(limit=limit, offset=offset)
+    return TaskListResponse(
+        items=items, page=PageMeta(total=total, limit=limit, offset=offset)
+    )
 
 
-@router.post(
-    "/tasks", response_model=Task, responses=not_implemented_response, tags=["Tasks"]
-)
-async def create_task(_: TaskCreateRequest) -> Task:
-    not_implemented("tasks.create")
+@router.post("/tasks", response_model=Task, tags=["Tasks"])
+async def create_task(request: TaskCreateRequest) -> Task:
+    return task_service.create_task(**request.model_dump())
 
 
-@router.get(
-    "/tasks/{task_id}", response_model=Task, responses=not_implemented_response, tags=["Tasks"]
-)
+@router.get("/tasks/{task_id}", response_model=Task, tags=["Tasks"])
 async def get_task(task_id: str) -> Task:
-    not_implemented(f"tasks.read:{task_id}")
+    task = task_service.get_task(task_id)
+    if task is None:
+        raise ApiError(404, "RESOURCE_NOT_FOUND", "task not found", {"task_id": task_id})
+    return task
 
 
-@router.patch(
-    "/tasks/{task_id}", response_model=Task, responses=not_implemented_response, tags=["Tasks"]
-)
-async def update_task(task_id: str, _: TaskUpdateRequest) -> Task:
-    not_implemented(f"tasks.update:{task_id}")
+@router.patch("/tasks/{task_id}", response_model=Task, tags=["Tasks"])
+async def update_task(task_id: str, request: TaskUpdateRequest) -> Task:
+    return task_service.update_task(task_id, request.model_dump(exclude_unset=True))
 
 
 @router.delete(
     "/tasks/{task_id}",
     response_model=OperationResponse,
-    responses=not_implemented_response,
     tags=["Tasks"],
 )
 async def delete_task(task_id: str) -> OperationResponse:
-    not_implemented(f"tasks.delete:{task_id}")
+    if not task_service.delete_task(task_id):
+        raise ApiError(404, "RESOURCE_NOT_FOUND", "task not found", {"task_id": task_id})
+    return OperationResponse(status="completed", resource_id=task_id, message="deleted")
 
 
 # Media and index
@@ -556,21 +575,26 @@ async def delete_task(task_id: str) -> OperationResponse:
     "/media/transcriptions",
     response_model=TranscriptionJob,
     status_code=202,
-    responses=not_implemented_response,
     tags=["Media"],
 )
-async def create_transcription(_: TranscriptionRequest) -> TranscriptionJob:
-    not_implemented("media.transcriptions.create")
+async def create_transcription(request: TranscriptionRequest) -> TranscriptionJob:
+    return transcription_service.create_transcription(
+        request.attachment_id, request.language
+    )
 
 
 @router.get(
     "/media/transcriptions/{job_id}",
     response_model=TranscriptionJob,
-    responses=not_implemented_response,
     tags=["Media"],
 )
 async def get_transcription(job_id: str) -> TranscriptionJob:
-    not_implemented(f"media.transcriptions.read:{job_id}")
+    job = transcription_service.get_transcription(job_id)
+    if job is None:
+        raise ApiError(
+            404, "RESOURCE_NOT_FOUND", "transcription job not found", {"job_id": job_id}
+        )
+    return job
 
 
 @router.get("/index/status", response_model=IndexStatus, tags=["Index"])

@@ -34,11 +34,18 @@ class AgentRunNotFoundError(LookupError):
     pass
 
 
+class AgentCapacityError(RuntimeError):
+    pass
+
+
 TERMINAL_STATUSES = {
     AgentRunStatus.completed,
     AgentRunStatus.failed,
     AgentRunStatus.cancelled,
 }
+MAX_RUN_RECORDS = 200
+MAX_EVENTS_PER_RUN = 2_000
+MAX_TOOL_CALLS_PER_TURN = 50
 
 
 @dataclass(slots=True)
@@ -67,6 +74,7 @@ class AgentRuntime:
         self._records: dict[str, RunRecord] = {}
 
     async def create_run(self, request: AgentRunCreateRequest) -> AgentRun:
+        self._prune_records()
         provider = self.providers.get(request.provider_id)
         skill_config = None
         if request.skill_id:
@@ -217,6 +225,13 @@ class AgentRuntime:
                 return
 
             if turn.tool_calls:
+                if len(turn.tool_calls) > MAX_TOOL_CALLS_PER_TURN:
+                    self._fail(
+                        record,
+                        "TOO_MANY_TOOL_CALLS",
+                        f"Provider requested more than {MAX_TOOL_CALLS_PER_TURN} tools in one turn.",
+                    )
+                    return
                 calls = [
                     ToolCall(
                         tool_call_id=item.tool_call_id,
@@ -393,6 +408,8 @@ class AgentRuntime:
             timestamp=datetime.now(timezone.utc),
         )
         record.events.append(event)
+        if len(record.events) > MAX_EVENTS_PER_RUN:
+            del record.events[: len(record.events) - MAX_EVENTS_PER_RUN]
         for queue in record.subscribers:
             queue.put_nowait(event)
 
@@ -429,3 +446,20 @@ class AgentRuntime:
             return self._records[run_id]
         except KeyError as exc:
             raise AgentRunNotFoundError(run_id) from exc
+
+    def _prune_records(self) -> None:
+        overflow = len(self._records) - MAX_RUN_RECORDS + 1
+        if overflow <= 0:
+            return
+        terminal = sorted(
+            (
+                record
+                for record in self._records.values()
+                if record.run.status in TERMINAL_STATUSES
+            ),
+            key=lambda record: record.run.updated_at,
+        )
+        for record in terminal[:overflow]:
+            self._records.pop(record.run.run_id, None)
+        if len(self._records) >= MAX_RUN_RECORDS:
+            raise AgentCapacityError("Too many active Agent runs.")

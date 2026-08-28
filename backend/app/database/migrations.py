@@ -55,6 +55,20 @@ MIGRATIONS: list[str] = [
         value TEXT NOT NULL
     );
     """,
+    # v2: 第一阶段 Task Core；正文仍归 Note/Vault，任务状态持久化到 SQLite。
+    """
+    CREATE TABLE IF NOT EXISTS tasks (
+        task_id      TEXT PRIMARY KEY,
+        title        TEXT NOT NULL,
+        description  TEXT NOT NULL DEFAULT '',
+        status       TEXT NOT NULL DEFAULT 'todo',
+        note_id      TEXT REFERENCES notes(note_id) ON DELETE SET NULL,
+        due_at       TEXT,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tasks_status_due ON tasks(status, due_at);
+    """,
 ]
 
 

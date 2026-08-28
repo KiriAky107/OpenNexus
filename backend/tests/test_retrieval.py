@@ -77,6 +77,28 @@ def test_block_ids_are_stable() -> None:
     assert all(b.block_id.startswith("blk_") for b in p1.blocks)
 
 
+def test_code_fence_does_not_create_fake_headings() -> None:
+    markdown = '# Real Heading\n\n```python\n# code comment\nprint("x")\n```\n'
+    parsed = parse_note(
+        markdown=markdown, file_path="code.md", folder="",
+        tags=None, created_at=_dt(), updated_at=_dt(),
+    )
+
+    assert all(block.heading_path == ["Real Heading"] for block in parsed.blocks)
+    assert any("# code comment" in block.content for block in parsed.blocks)
+
+
+def test_offsets_use_browser_compatible_utf16_units() -> None:
+    markdown = "# \U0001f600\n\nbody"
+    parsed = parse_note(
+        markdown=markdown, file_path="emoji.md", folder="",
+        tags=None, created_at=_dt(), updated_at=_dt(),
+    )
+    body = next(block for block in parsed.blocks if block.content == "body")
+
+    assert body.start_offset == len(markdown[: markdown.index("body")].encode("utf-16-le")) // 2
+
+
 def test_tokens_split_cjk_bigrams_and_match_query() -> None:
     toks = tokens("向量检索")
     assert "向" in toks and "量" in toks
@@ -454,13 +476,28 @@ def test_patch_partial_content_no_orphan_vectors(vault) -> None:
         )
     )
     assert ids("vec_blocks") == ids("blocks")
-
     asyncio.run(
         note_service.update_note(note.note_id, markdown="# 标题\n\n段落一改了。\n\n新增段落。")
     )
     # 更新后不变量：向量集合与块集合一一对应，无残留、无缺失
     assert ids("vec_blocks") == ids("blocks")
 
+
+def test_move_note_preserves_id_and_updates_indexed_path(vault) -> None:
+    from app.services import note_service
+
+    created = asyncio.run(
+        note_service.create_note(
+            title="可移动", markdown="# 标题\n\n正文", folder="原目录", tags=[]
+        )
+    )
+    moved = asyncio.run(note_service.move_note(created.note_id, folder="新目录"))
+
+    assert moved.note_id == created.note_id
+    assert moved.file_path == "新目录/可移动.md"
+    assert not (vault / "原目录" / "可移动.md").exists()
+    assert (vault / "新目录" / "可移动.md").exists()
+    assert asyncio.run(note_service.get_note(created.note_id)).file_path == moved.file_path
 
 def test_fts_metadata_filter_recalls_beyond_candidate_pool(vault) -> None:
     """metadata 过滤不能受候选池截断影响：目标块排在 50 名之外也应被召回（审阅 #4）。"""
@@ -524,3 +561,42 @@ def test_rebuild_failure_restores_old_index(vault, monkeypatch) -> None:
         asyncio.run(index_service.rebuild(IndexRebuildRequest(scope="all")))
 
     assert repository.stats() == before  # 旧索引已恢复，无半成品
+
+
+def test_first_rebuild_failure_removes_partial_database(vault, monkeypatch) -> None:
+    """首次启动没有旧库时，失败也不能留下已经写入的部分索引。"""
+    from app.services import index_service
+
+    _write_vault(
+        vault,
+        {"a.md": "# A\n\nfirst", "b.md": "# B\n\nsecond"},
+    )
+    real_index = index_service.index_note
+    calls = {"count": 0}
+
+    async def fail_on_second(parsed):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise RuntimeError("injected first-rebuild failure")
+        await real_index(parsed)
+
+    monkeypatch.setattr(index_service, "index_note", fail_on_second)
+    with pytest.raises(RuntimeError):
+        asyncio.run(index_service.rebuild(IndexRebuildRequest(scope="all")))
+
+    assert not get_settings().db_path.exists()
+
+
+def test_rebuild_preserves_task_note_links(vault) -> None:
+    from app.services import index_service, note_service, task_service
+
+    note = asyncio.run(
+        note_service.create_note(
+            title="任务关联", markdown="# 任务关联", folder="", tags=[]
+        )
+    )
+    task = task_service.create_task(title="跟进", note_id=note.note_id)
+
+    asyncio.run(index_service.rebuild(IndexRebuildRequest(scope="all")))
+
+    assert task_service.get_task(task.task_id).note_id == note.note_id
