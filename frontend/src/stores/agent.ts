@@ -48,6 +48,7 @@ export const useAgentStore = defineStore('agent', () => {
     else runs.value.unshift(run)
     events.value = []
     toolCalls.value = []
+    permissionRequest.value = null
     subscribe(runId)
   }
 
@@ -56,6 +57,8 @@ export const useAgentStore = defineStore('agent', () => {
     events.value.push(event)
     events.value.sort((a, b) => a.sequence - b.sequence)
     const data = event.data
+    const run = runs.value.find((item) => item.run_id === event.run_id)
+    if (event.event === 'RunStarted' && run) run.status = 'running'
     if (event.event === 'ToolCall') {
       toolCalls.value.push({
         tool_call_id: String(data.tool_call_id ?? ''),
@@ -73,6 +76,8 @@ export const useAgentStore = defineStore('agent', () => {
         toolCall.error_message = data.error_message == null ? undefined : String(data.error_message)
         toolCall.completed_at = event.timestamp
       }
+      permissionRequest.value = null
+      if (run?.status === 'waiting_permission') run.status = 'running'
     } else if (event.event === 'PermissionRequired') {
       const call = (data.tool_call ?? {}) as Record<string, unknown>
       permissionRequest.value = {
@@ -83,8 +88,14 @@ export const useAgentStore = defineStore('agent', () => {
         parameters: (call.arguments ?? {}) as Record<string, unknown>,
         impact: '该工具需要获得权限后才能继续执行。',
       }
+      if (run) run.status = 'waiting_permission'
     } else if (['RunCompleted', 'RunFailed', 'RunCancelled'].includes(event.event)) {
       isRunning.value = false
+      permissionRequest.value = null
+      if (run) {
+        run.status = event.event === 'RunCompleted' ? 'completed' : event.event === 'RunFailed' ? 'failed' : 'cancelled'
+        run.completed_at = event.timestamp
+      }
     }
   }
 
