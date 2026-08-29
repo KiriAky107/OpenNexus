@@ -30,9 +30,7 @@ export const useEditorStore = defineStore('editor', () => {
 
   function updateContent(newContent: string) {
     content.value = newContent
-    if (saveStatus.value === 'saved' || saveStatus.value === 'idle') {
-      saveStatus.value = 'dirty'
-    }
+    saveStatus.value = 'dirty'
   }
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -47,24 +45,34 @@ export const useEditorStore = defineStore('editor', () => {
   async function save() {
     if (!currentFilePath.value) return
     if (saveStatus.value === 'saving') return
+    const targetPath = currentFilePath.value
+    const snapshot = content.value
     saveStatus.value = 'saving'
     try {
-      await workspaceService.saveFileContent(currentFilePath.value, content.value)
-      saveStatus.value = 'saved'
-      lastSavedAt.value = new Date().toISOString()
+      await workspaceService.saveFileContent(targetPath, snapshot)
+      if (currentFilePath.value === targetPath) {
+        saveStatus.value = content.value === snapshot ? 'saved' : 'dirty'
+        lastSavedAt.value = new Date().toISOString()
+      }
     } catch {
       saveStatus.value = 'save_failed'
     }
   }
 
+  let loadVersion = 0
+
   async function loadFile(filePath: string) {
+    const version = ++loadVersion
     currentFilePath.value = filePath
     saveStatus.value = 'saving'
     try {
-      content.value = await workspaceService.readFileContent(filePath)
+      const loadedContent = await workspaceService.readFileContent(filePath)
+      if (version !== loadVersion || currentFilePath.value !== filePath) return
+      content.value = loadedContent
       saveStatus.value = 'saved'
       lastSavedAt.value = new Date().toISOString()
     } catch {
+      if (version !== loadVersion || currentFilePath.value !== filePath) return
       content.value = ''
       saveStatus.value = 'idle'
     }
@@ -89,6 +97,7 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function closeFile() {
+    loadVersion++
     if (saveTimer) clearTimeout(saveTimer)
     currentFilePath.value = null
     currentNoteId.value = null
@@ -96,6 +105,12 @@ export const useEditorStore = defineStore('editor', () => {
     saveStatus.value = 'idle'
     lastSavedAt.value = null
     highlightBlockId.value = null
+  }
+
+  function renameFilePath(oldPath: string, newPath: string) {
+    if (currentFilePath.value === oldPath || currentFilePath.value?.startsWith(`${oldPath}/`)) {
+      currentFilePath.value = `${newPath}${currentFilePath.value.slice(oldPath.length)}`
+    }
   }
 
   return {
@@ -118,5 +133,6 @@ export const useEditorStore = defineStore('editor', () => {
     highlightBlock,
     setExternalChanged,
     closeFile,
+    renameFilePath,
   }
 })

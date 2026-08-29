@@ -61,6 +61,13 @@ const MOCK_FILE_TREE: FileNode[] = [
   { id: 'n-welcome', name: '欢迎使用知笔知己.md', path: '/欢迎使用知笔知己.md', type: 'file' },
 ]
 
+const mockFileContents = new Map<string, string>()
+
+function rememberContent(path: string, content: string): Promise<string> {
+  mockFileContents.set(path, content)
+  return Promise.resolve(content)
+}
+
 export function getRecentVaults(): Promise<VaultInfo[]> {
   return Promise.resolve(MOCK_VAULTS)
 }
@@ -79,9 +86,11 @@ export function getFileTree(): Promise<FileNode[]> {
 }
 
 export function readFileContent(filePath: string): Promise<string> {
+  const saved = mockFileContents.get(filePath)
+  if (saved !== undefined) return Promise.resolve(saved)
   const name = filePath.split('/').pop() || 'Untitled'
   if (name === '欢迎使用知笔知己.md') {
-    return Promise.resolve(`# 欢迎使用知笔知己
+    return rememberContent(filePath, `# 欢迎使用知笔知己
 
 这是一款本地优先的 AI 笔记软件，支持 Markdown 编辑、智能检索、RAG 问答和 Agent 助手。
 
@@ -137,7 +146,7 @@ def quick_sort(arr):
 `)
   }
   if (name === '红黑树.md') {
-    return Promise.resolve(`# 红黑树
+    return rememberContent(filePath, `# 红黑树
 
 红黑树（Red-Black Tree）是一种自平衡二叉搜索树，每个节点带有颜色属性（红色或黑色）。
 
@@ -183,7 +192,7 @@ def quick_sort(arr):
 - Linux 内核的完全公平调度器
 `)
   }
-  return Promise.resolve(`# ${name.replace('.md', '')}
+  return rememberContent(filePath, `# ${name.replace('.md', '')}
 
 这是一篇示例笔记。
 
@@ -205,12 +214,14 @@ console.log('Hello, Notes Agent!');
 
 export function saveFileContent(filePath: string, content: string): Promise<void> {
   console.debug(`[workspaceService] Save ${filePath}, ${content.length} chars`)
+  mockFileContents.set(filePath, content)
   return Promise.resolve()
 }
 
 export function createFile(folderPath: string, name: string, content = ''): Promise<FileNode> {
   const path = `${folderPath === '/' ? '' : folderPath}/${name}`
   const id = `n-${Date.now()}`
+  mockFileContents.set(path, content)
   return Promise.resolve({ id, name, path, type: 'file' })
 }
 
@@ -221,10 +232,21 @@ export function createFolder(parentPath: string, name: string): Promise<FileNode
 }
 
 export function renameFile(oldPath: string, newName: string): Promise<void> {
+  const separator = oldPath.lastIndexOf('/')
+  const newPath = `${oldPath.slice(0, separator + 1)}${newName}`
+  for (const [path, content] of [...mockFileContents]) {
+    if (path === oldPath || path.startsWith(`${oldPath}/`)) {
+      mockFileContents.delete(path)
+      mockFileContents.set(`${newPath}${path.slice(oldPath.length)}`, content)
+    }
+  }
   return Promise.resolve()
 }
 
 export function deleteFile(path: string): Promise<void> {
+  for (const filePath of [...mockFileContents.keys()]) {
+    if (filePath === path || filePath.startsWith(`${path}/`)) mockFileContents.delete(filePath)
+  }
   return Promise.resolve()
 }
 

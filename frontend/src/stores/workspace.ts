@@ -69,6 +69,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       vaultName.value = info.name
       fileTree.value = await workspaceService.getFileTree()
       hasVault.value = true
+      localStorage.setItem('last-vault-path', info.path)
     } finally {
       isLoading.value = false
     }
@@ -82,6 +83,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       vaultName.value = info.name
       fileTree.value = await workspaceService.getFileTree()
       hasVault.value = true
+      localStorage.setItem('last-vault-path', info.path)
     } finally {
       isLoading.value = false
     }
@@ -113,6 +115,32 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     remove(fileTree.value)
   }
 
+  function renamePath(oldPath: string, newPath: string, newName: string) {
+    const node = findNodeByPath(fileTree.value, oldPath)
+    if (!node) return
+    const updateNodePath = (current: FileNode) => {
+      if (current.path === oldPath) current.name = newName
+      if (current.path === oldPath || current.path.startsWith(`${oldPath}/`)) {
+        current.path = `${newPath}${current.path.slice(oldPath.length)}`
+      }
+      current.children?.forEach(updateNodePath)
+    }
+    updateNodePath(node)
+    openFiles.value = openFiles.value.map((path) =>
+      path === oldPath || path.startsWith(`${oldPath}/`) ? `${newPath}${path.slice(oldPath.length)}` : path
+    )
+    if (activeFilePath.value && (activeFilePath.value === oldPath || activeFilePath.value.startsWith(`${oldPath}/`))) {
+      activeFilePath.value = `${newPath}${activeFilePath.value.slice(oldPath.length)}`
+    }
+  }
+
+  function closePath(path: string) {
+    const activeWasRemoved = Boolean(activeFilePath.value && (activeFilePath.value === path || activeFilePath.value.startsWith(`${path}/`)))
+    openFiles.value = openFiles.value.filter((openPath) => openPath !== path && !openPath.startsWith(`${path}/`))
+    if (activeWasRemoved) activeFilePath.value = openFiles.value.at(-1) ?? null
+    return activeWasRemoved
+  }
+
   return {
     vaultPath,
     vaultName,
@@ -132,5 +160,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     createVault,
     addFileToTree,
     removeFromTree,
+    renamePath,
+    closePath,
   }
 })
