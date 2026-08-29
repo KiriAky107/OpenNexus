@@ -39,12 +39,11 @@ export const useTaskStore = defineStore('task', () => {
 
   async function createTask(data: { title: string; description?: string; priority?: TaskPriority; due_date?: string; note_id?: string }) {
     const newTask = await createTaskRequest(data)
-    newTask.priority = data.priority || 'medium'
     tasks.value.unshift(newTask)
     return newTask
   }
 
-  async function updateTask(taskId: string, data: Partial<Pick<TaskItem, 'title' | 'description' | 'status' | 'priority' | 'due_date'>>) {
+  async function updateTask(taskId: string, data: Partial<Pick<TaskItem, 'title' | 'description' | 'status' | 'due_date'>> & { note_id?: string | null }) {
     const task = tasks.value.find((t) => t.task_id === taskId)
     if (task) {
       const updated = await updateTaskRequest(taskId, data)
