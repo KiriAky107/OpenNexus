@@ -1,5 +1,5 @@
 export { apiClient, ApiErrorClass } from './apiClient'
-export type { ApiError } from './apiClient'
+export type { ApiError } from '@/contracts'
 export { SseClient } from './sseClient'
 export type { SseClientOptions, SseEventHandler } from './sseClient'
 export * as noteService from './noteService'

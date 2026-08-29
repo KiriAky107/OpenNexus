@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
+import PlaceholderView from '@/features/common/PlaceholderView.vue'
 
 const routes = [
   {
@@ -17,59 +18,50 @@ const routes = [
   {
     path: '/search',
     name: 'search',
-    component: () => import('@/features/search/SearchView.vue'),
+    component: PlaceholderView,
     meta: { title: '搜索', requiresVault: true },
   },
   {
     path: '/chat',
     name: 'chat',
-    component: () => import('@/features/chat/ChatView.vue'),
+    component: PlaceholderView,
     meta: { title: 'AI 对话', requiresVault: true },
   },
   {
     path: '/agent/runs/:runId?',
     name: 'agent',
-    component: () => import('@/features/agent/AgentView.vue'),
+    component: PlaceholderView,
     meta: { title: 'Agent Trace', requiresVault: true },
   },
   {
     path: '/tasks',
     name: 'tasks',
-    component: () => import('@/features/tasks/TasksView.vue'),
+    component: PlaceholderView,
     meta: { title: '任务', requiresVault: true },
   },
   {
     path: '/extensions/skills',
     name: 'skills',
-    component: () => import('@/features/skills/SkillsView.vue'),
+    component: PlaceholderView,
     meta: { title: 'Skill 管理', requiresVault: true },
   },
   {
     path: '/extensions/plugins',
     name: 'plugins',
-    component: () => import('@/features/plugins/PluginsView.vue'),
+    component: PlaceholderView,
     meta: { title: 'Plugin 管理', requiresVault: true },
   },
   {
     path: '/themes',
     name: 'themes',
-    component: () => import('@/features/themes/ThemesView.vue'),
+    component: PlaceholderView,
     meta: { title: '主题管理', requiresVault: true },
   },
   {
     path: '/settings',
     name: 'settings',
-    component: () => import('@/features/settings/SettingsView.vue'),
+    component: PlaceholderView,
     meta: { title: '设置', requiresVault: true },
-    children: [
-      { path: '', redirect: '/settings/general' },
-      { path: 'general', component: () => import('@/features/settings/sections/GeneralSection.vue') },
-      { path: 'editor', component: () => import('@/features/settings/sections/EditorSection.vue') },
-      { path: 'providers', component: () => import('@/features/settings/sections/ProvidersSection.vue') },
-      { path: 'index', component: () => import('@/features/settings/sections/IndexSection.vue') },
-      { path: 'permissions', component: () => import('@/features/settings/sections/PermissionsSection.vue') },
-      { path: 'ai-core', component: () => import('@/features/settings/sections/AiCoreSection.vue') },
-    ],
   },
 ]
 

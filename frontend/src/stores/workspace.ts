@@ -88,6 +88,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function addFileToTree(parentPath: string, file: FileNode) {
+    if (parentPath === '/' || parentPath === '') {
+      fileTree.value.push(file)
+      return
+    }
     const parent = findNodeByPath(fileTree.value, parentPath)
     if (parent?.children) {
       parent.children.push(file)

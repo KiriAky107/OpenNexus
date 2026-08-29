@@ -1,46 +1,61 @@
 import apiClient from './apiClient'
 import { SseClient } from './sseClient'
-import type { AgentRun, AgentEvent, ToolDefinition, PermissionRequest } from '@/contracts'
+import type { AgentRun, AgentEvent, ApiAgentRun, OperationResponse, PageMeta, ToolDefinition, PermissionRequest } from '@/contracts'
+
+function toAgentRun(run: ApiAgentRun): AgentRun {
+  return {
+    run_id: run.run_id,
+    status: run.status,
+    current_step: run.current_step,
+    max_steps: run.max_steps,
+    token_usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: run.token_usage,
+    },
+    started_at: run.created_at,
+    completed_at: ['completed', 'failed', 'cancelled'].includes(run.status) ? run.updated_at : undefined,
+    error: run.error_message ?? undefined,
+  }
+}
 
 export async function listAgentRuns(params?: {
   limit?: number
   offset?: number
 }): Promise<{ items: AgentRun[]; total: number }> {
-  return apiClient.get('/api/agent/runs', { params })
+  const response = await apiClient.get<{ items: ApiAgentRun[]; page: PageMeta }>('/api/agent/runs', { params })
+  return { items: response.items.map(toAgentRun), total: response.page.total }
 }
 
 export async function getAgentRun(runId: string): Promise<AgentRun> {
-  return apiClient.get(`/api/agent/runs/${runId}`)
+  return toAgentRun(await apiClient.get<ApiAgentRun>(`/api/agent/runs/${runId}`))
 }
 
 export interface CreateAgentRunRequest {
-  task: string
-  provider_id?: string
-  model?: string
+  input: string
+  provider_id: string
+  model: string
   skill_id?: string
   allowed_tools?: string[]
   max_steps?: number
-  tool_timeout?: number
-  run_timeout?: number
+  tool_timeout_seconds?: number
+  run_timeout_seconds?: number
   token_budget?: number
   allow_network?: boolean
   max_concurrent_tools?: number
 }
 
 export async function createAgentRun(request: CreateAgentRunRequest): Promise<AgentRun> {
-  return apiClient.post('/api/agent/runs', request)
+  return toAgentRun(await apiClient.post<ApiAgentRun>('/api/agent/runs', request))
 }
 
-export async function cancelAgentRun(runId: string): Promise<void> {
+export async function cancelAgentRun(runId: string): Promise<OperationResponse> {
   return apiClient.post(`/api/agent/runs/${runId}/cancel`)
 }
 
 export async function listTools(): Promise<ToolDefinition[]> {
-  try {
-    return await apiClient.get('/api/tools')
-  } catch {
-    return mockTools
-  }
+  const response = await apiClient.get<{ items: ToolDefinition[] }>('/api/tools')
+  return response.items
 }
 
 export function streamAgentEvents(
@@ -75,12 +90,10 @@ export function streamAgentEvents(
 export async function respondToPermission(
   runId: string,
   requestId: string,
-  decision: 'allow' | 'deny',
-  scope?: 'once' | 'session' | 'always'
-): Promise<void> {
+  decision: 'allow_once' | 'allow_session' | 'deny'
+): Promise<OperationResponse> {
   return apiClient.post(`/api/agent/runs/${runId}/permissions/${requestId}`, {
     decision,
-    scope,
   })
 }
 

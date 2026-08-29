@@ -21,7 +21,7 @@ export const useSearchStore = defineStore('search', () => {
     error.value = null
 
     try {
-      const resp = await searchService.searchMock(request.query, request.mode || 'hybrid')
+      const resp = await searchService.search(request)
       results.value = resp.results
       total.value = resp.total
       selectedIndex.value = 0
