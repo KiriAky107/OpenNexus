@@ -246,6 +246,7 @@ export interface Plugin {
   status: PluginStatus
   enabled: boolean
   permissions: string[]
+  granted_permissions?: string[]
   contributions: PluginContribution[]
   backend_type?: 'mcp' | 'internal_rpc' | 'none'
   transport?: 'stdio' | 'http' | 'none'
