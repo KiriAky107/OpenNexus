@@ -1,24 +1,26 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import type { AiCoreStatus, IndexStatus } from '@/contracts'
 import { mockIndexStatus } from '@/services/indexService'
 import * as indexService from '@/services/indexService'
 import * as systemService from '@/services/systemService'
 
 export const useSettingsStore = defineStore('settings', () => {
+  const saved = (() => {
+    try { return JSON.parse(localStorage.getItem('app-settings') ?? '{}') as Record<string, unknown> }
+    catch { localStorage.removeItem('app-settings'); return {} }
+  })()
   // General
-  const restoreLastVault = ref(true)
-  const autoSaveInterval = ref(1500)
-  const language = ref<'zh-CN' | 'en'>('zh-CN')
+  const restoreLastVault = ref(saved.restoreLastVault !== false)
+  const autoSaveInterval = ref(typeof saved.autoSaveInterval === 'number' ? saved.autoSaveInterval : 1500)
+  const language = ref<'zh-CN' | 'en'>(saved.language === 'en' ? 'en' : 'zh-CN')
   const appVersion = ref('0.1.0')
   const aiCoreVersion = ref('0.1.0')
 
   // Editor
-  const defaultEditorMode = ref<'wysiwyg' | 'source'>('wysiwyg')
-  const editorFontSize = ref(15)
-  const editorLineHeight = ref(1.7)
-  const editorLineWidth = ref(80)
-  const spellCheck = ref(false)
+  const defaultEditorMode = ref<'wysiwyg' | 'source'>(saved.defaultEditorMode === 'source' ? 'source' : 'wysiwyg')
+  const editorLineWidth = ref(typeof saved.editorLineWidth === 'number' ? saved.editorLineWidth : 80)
+  const spellCheck = ref(saved.spellCheck === true)
 
   // AI Core
   const aiCoreStatus = ref<AiCoreStatus>('running')
@@ -40,6 +42,12 @@ export const useSettingsStore = defineStore('settings', () => {
     'secrets.use': 'confirm',
   })
   const diagnosticsError = ref<string | null>(null)
+
+  watch(() => ({
+    restoreLastVault: restoreLastVault.value, autoSaveInterval: autoSaveInterval.value,
+    language: language.value, defaultEditorMode: defaultEditorMode.value,
+    editorLineWidth: editorLineWidth.value, spellCheck: spellCheck.value,
+  }), (value) => localStorage.setItem('app-settings', JSON.stringify(value)), { deep: true })
 
   async function loadDiagnostics() {
     try {
@@ -97,8 +105,6 @@ export const useSettingsStore = defineStore('settings', () => {
     appVersion,
     aiCoreVersion,
     defaultEditorMode,
-    editorFontSize,
-    editorLineHeight,
     editorLineWidth,
     spellCheck,
     aiCoreStatus,

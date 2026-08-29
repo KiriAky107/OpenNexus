@@ -37,6 +37,15 @@ export const useThemeStore = defineStore('theme', () => {
   }
 
   function initTheme() {
+    const savedAppearance = localStorage.getItem('editor-appearance')
+    if (savedAppearance) {
+      try {
+        const value = JSON.parse(savedAppearance) as { size?: number; family?: string; lineHeight?: number }
+        if (value.size) fontEditorSize.value = value.size
+        if (value.family) fontEditorFamily.value = value.family
+        if (value.lineHeight) lineHeight.value = value.lineHeight
+      } catch { localStorage.removeItem('editor-appearance') }
+    }
     const saved = localStorage.getItem('theme')
     if (saved && themes.value.find((t) => t.theme_id === saved)) {
       applyTheme(saved)
@@ -57,13 +66,24 @@ export const useThemeStore = defineStore('theme', () => {
     lineHeight.value = 1.7
   }
 
+  const persistAppearance = () => localStorage.setItem('editor-appearance', JSON.stringify({
+    size: fontEditorSize.value, family: fontEditorFamily.value, lineHeight: lineHeight.value,
+  }))
+
   watch(fontEditorSize, (v) => {
     document.documentElement.style.setProperty('--font-editor-size', `${v}px`)
-  })
+    persistAppearance()
+  }, { immediate: true })
 
   watch(lineHeight, (v) => {
     document.documentElement.style.setProperty('--font-editor-line-height', String(v))
-  })
+    persistAppearance()
+  }, { immediate: true })
+
+  watch(fontEditorFamily, (v) => {
+    document.documentElement.style.setProperty('--font-editor-sans', v)
+    persistAppearance()
+  }, { immediate: true })
 
   return {
     themes,

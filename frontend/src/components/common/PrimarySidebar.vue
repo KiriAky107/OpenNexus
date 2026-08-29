@@ -19,9 +19,7 @@ const navItems = [
 ]
 
 const currentName = computed(() => {
-  const name = route.name as string
-  if (name === 'skills' || name === 'plugins') return 'skills'
-  return name
+  return route.name as string
 })
 
 function navigate(name: string) {
