@@ -209,13 +209,13 @@ export function saveFileContent(filePath: string, content: string): Promise<void
 }
 
 export function createFile(folderPath: string, name: string, content = ''): Promise<FileNode> {
-  const path = `${folderPath}/${name}`
+  const path = `${folderPath === '/' ? '' : folderPath}/${name}`
   const id = `n-${Date.now()}`
   return Promise.resolve({ id, name, path, type: 'file' })
 }
 
 export function createFolder(parentPath: string, name: string): Promise<FileNode> {
-  const path = `${parentPath}/${name}`
+  const path = `${parentPath === '/' ? '' : parentPath}/${name}`
   const id = `f-${Date.now()}`
   return Promise.resolve({ id, name, path, type: 'folder', is_open: true, children: [] })
 }

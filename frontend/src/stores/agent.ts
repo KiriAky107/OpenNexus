@@ -72,7 +72,7 @@ export const useAgentStore = defineStore('agent', () => {
         event: 'RunStarted',
         sequence: 1,
         run_id: run.run_id,
-        data: { task: request.task },
+        data: { input: request.input },
         timestamp: new Date().toISOString(),
       }]
       isRunning.value = true
@@ -112,9 +112,10 @@ export const useAgentStore = defineStore('agent', () => {
     isRunning.value = false
   }
 
-  async function respondPermission(decision: 'allow' | 'deny', scope: 'once' | 'session' | 'always' = 'once') {
+  async function respondPermission(decision: 'allow' | 'deny', scope: 'once' | 'session' = 'once') {
     if (!activeRunId.value || !permissionRequest.value) return
-    await agentService.respondToPermission(activeRunId.value, permissionRequest.value.request_id, decision, scope)
+    const apiDecision = decision === 'deny' ? 'deny' : scope === 'session' ? 'allow_session' : 'allow_once'
+    await agentService.respondToPermission(activeRunId.value, permissionRequest.value.request_id, apiDecision)
     permissionRequest.value = null
   }
 

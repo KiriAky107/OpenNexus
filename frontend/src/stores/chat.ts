@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { ChatMessage, Conversation, Citation } from '@/contracts'
-import { mockConversations, mockMessages } from '@/services/chatService'
+import type { ChatMessage, Conversation } from '@/contracts'
+import { mockConversations, mockMessages, streamChat } from '@/services/chatService'
 import type { SseClient } from '@/services/sseClient'
 
 export const useChatStore = defineStore('chat', () => {
@@ -12,7 +12,7 @@ export const useChatStore = defineStore('chat', () => {
   const inputText = ref('')
   const useRag = ref(true)
   const selectedSkillId = ref<string | null>(null)
-  const selectedProviderId = ref('mock-provider')
+  const selectedProviderId = ref('mock')
   const selectedModel = ref('mock-1')
   let sseClient: SseClient | null = null
 
@@ -35,7 +35,7 @@ export const useChatStore = defineStore('chat', () => {
 
     if (!activeConversationId.value) {
       const newConv: Conversation = {
-        conversation_id,
+        conversation_id: conversationId,
         title: text.slice(0, 30),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -67,31 +67,29 @@ export const useChatStore = defineStore('chat', () => {
     }
     messages.value.push(aiMsg)
 
-    // Mock streaming
-    const fullText =
-      '这是一个模拟的 AI 回复。在实际环境中，这里会通过 SSE 接收后端 AI Core 的流式输出，基于 RAG 引擎和你的知识库生成回答，并附带来源引用。\n\n**要点总结：**\n1. 这是演示用的流式输出\n2. 实际会调用 ModelEvent SSE\n3. 支持 Citation、Tool Call 等事件\n\n你可以在设置中配置真实的模型 Provider 来启用完整功能。'
-    const citations: Citation[] = [
-      {
-        note_id: 'n-rbt',
-        block_id: 'b1',
-        file_path: '/数据结构/红黑树.md',
-        heading_path: '数据结构 / 红黑树 / 概述',
-        content: '红黑树是一种自平衡二叉搜索树...',
+    sseClient = streamChat({
+      provider_id: selectedProviderId.value,
+      model: selectedModel.value,
+      conversation_id: conversationId,
+      use_rag: useRag.value,
+      messages: messages.value
+        .filter((message) => message !== aiMsg)
+        .map((message) => ({ role: message.role, content: message.content })),
+    }, {
+      onEvent(event) {
+        if (event.event === 'TextDelta') aiMsg.content += String(event.data.text ?? '')
+        if (event.event === 'Error') aiMsg.content += `\n\n生成失败：${String(event.data.message ?? '未知错误')}`
       },
-    ]
-
-    let i = 0
-    const interval = setInterval(() => {
-      if (i >= fullText.length) {
-        clearInterval(interval)
+      onError(error) {
+        aiMsg.content += `\n\n连接失败：${error.message}`
         isStreaming.value = false
-        aiMsg.citations = citations
-        return
-      }
-      const chunk = fullText.slice(i, i + 3)
-      aiMsg.content += chunk
-      i += 3
-    }, 20)
+        sseClient = null
+      },
+      onDone() {
+        isStreaming.value = false
+        sseClient = null
+      },
+    })
   }
 
   function stopGeneration() {

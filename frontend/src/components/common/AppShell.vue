@@ -26,7 +26,7 @@ const router = useRouter()
 const routeName = computed(() => route.name as string)
 
 const secondaryComponent = computed(() => {
-  switch (routeName) {
+  switch (routeName.value) {
     case 'workspace': return 'file-tree'
     case 'search': return 'search-filters'
     case 'chat': return 'conversation-list'

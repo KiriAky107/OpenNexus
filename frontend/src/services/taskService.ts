@@ -1,42 +1,62 @@
 import apiClient from './apiClient'
-import type { TaskItem, TaskStatus, TaskPriority } from '@/contracts'
+import type { ApiTask, OperationResponse, PageMeta, TaskItem, TaskStatus, TaskPriority } from '@/contracts'
 
-export async function listTasks(params?: {
-  status?: TaskStatus
-  priority?: TaskPriority
-  source?: 'user' | 'note' | 'agent'
-  limit?: number
-  offset?: number
-}): Promise<{ items: TaskItem[]; total: number }> {
-  try {
-    return await apiClient.get('/api/tasks', { params })
-  } catch {
-    return { items: mockTasks, total: mockTasks.length }
+function toTask(task: ApiTask): TaskItem {
+  return {
+    task_id: task.task_id,
+    title: task.title,
+    description: task.description,
+    status: task.status,
+    priority: 'medium',
+    due_date: task.due_at ?? undefined,
+    note_id: task.note_id ?? undefined,
+    source: 'user',
+    created_at: task.created_at,
+    updated_at: task.updated_at,
   }
 }
 
+export async function listTasks(params?: {
+  limit?: number
+  offset?: number
+}): Promise<{ items: TaskItem[]; total: number }> {
+  const response = await apiClient.get<{ items: ApiTask[]; page: PageMeta }>('/api/tasks', {
+    params: { limit: params?.limit, offset: params?.offset },
+  })
+  return { items: response.items.map(toTask), total: response.page.total }
+}
+
 export async function getTask(taskId: string): Promise<TaskItem> {
-  return apiClient.get(`/api/tasks/${taskId}`)
+  return toTask(await apiClient.get<ApiTask>(`/api/tasks/${taskId}`))
 }
 
 export async function createTask(data: {
   title: string
   description?: string
-  priority?: TaskPriority
   due_date?: string
   note_id?: string
 }): Promise<TaskItem> {
-  return apiClient.post('/api/tasks', data)
+  return toTask(await apiClient.post<ApiTask>('/api/tasks', {
+    title: data.title,
+    description: data.description ?? '',
+    due_at: data.due_date,
+    note_id: data.note_id,
+  }))
 }
 
 export async function updateTask(
   taskId: string,
   data: Partial<Pick<TaskItem, 'title' | 'description' | 'status' | 'priority' | 'due_date'>>
 ): Promise<TaskItem> {
-  return apiClient.patch(`/api/tasks/${taskId}`, data)
+  return toTask(await apiClient.patch<ApiTask>(`/api/tasks/${taskId}`, {
+    title: data.title,
+    description: data.description,
+    status: data.status,
+    due_at: data.due_date,
+  }))
 }
 
-export async function deleteTask(taskId: string): Promise<void> {
+export async function deleteTask(taskId: string): Promise<OperationResponse> {
   return apiClient.delete(`/api/tasks/${taskId}`)
 }
 

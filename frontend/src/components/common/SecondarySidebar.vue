@@ -1,11 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import FileTreePanel from '@/features/workspace/FileTreePanel.vue'
-import ConversationListPanel from '@/features/chat/ConversationListPanel.vue'
-import RunListPanel from '@/features/agent/RunListPanel.vue'
-import SearchFiltersPanel from '@/features/search/SearchFiltersPanel.vue'
-import TaskFiltersPanel from '@/features/tasks/TaskFiltersPanel.vue'
-import ExtensionListPanel from '@/components/common/ExtensionListPanel.vue'
 import { useRoute } from 'vue-router'
 
 const props = defineProps<{
@@ -27,7 +22,7 @@ const sidebarTitle = computed(() => {
   return titles[props.component || ''] || ''
 })
 
-const showSkillToggle = computed(() => routeName === 'skills' || routeName === 'plugins')
+const showSkillToggle = computed(() => routeName.value === 'skills' || routeName.value === 'plugins')
 </script>
 
 <template>
@@ -41,11 +36,7 @@ const showSkillToggle = computed(() => routeName === 'skills' || routeName === '
     </div>
     <div class="sidebar-content">
       <FileTreePanel v-if="component === 'file-tree'" />
-      <ConversationListPanel v-else-if="component === 'conversation-list'" />
-      <RunListPanel v-else-if="component === 'run-list'" />
-      <SearchFiltersPanel v-else-if="component === 'search-filters'" />
-      <TaskFiltersPanel v-else-if="component === 'task-filters'" />
-      <ExtensionListPanel v-else-if="component === 'extension-list'" />
+      <p v-else class="sidebar-placeholder">该功能将在对应页面实现时补充。</p>
     </div>
   </aside>
 </template>
@@ -108,5 +99,11 @@ const showSkillToggle = computed(() => routeName === 'skills' || routeName === '
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+.sidebar-placeholder {
+  padding: var(--space-lg);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
 }
 </style>

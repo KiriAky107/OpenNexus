@@ -1,12 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { ProviderConfig, ModelInfo } from '@/contracts'
-import { mockProviders, mockModels } from '@/services/providerService'
+import { listModels, listProviders, mockProviders, mockModels } from '@/services/providerService'
 
 export const useProviderStore = defineStore('provider', () => {
   const providers = ref<ProviderConfig[]>(mockProviders)
   const modelsByProvider = ref<Record<string, ModelInfo[]>>(mockModels)
-  const defaultProviderId = ref('mock-provider')
+  const defaultProviderId = ref('mock')
   const isLoading = ref(false)
 
   const enabledProviders = computed(() => providers.value.filter((p) => p.enabled))
@@ -17,7 +17,6 @@ export const useProviderStore = defineStore('provider', () => {
   async function loadProviders() {
     isLoading.value = true
     try {
-      const { listProviders } = await import('@/services/providerService')
       providers.value = await listProviders()
     } finally {
       isLoading.value = false
@@ -25,11 +24,10 @@ export const useProviderStore = defineStore('provider', () => {
   }
 
   async function loadModels(providerId: string) {
-    const { listModels } = await import('@/services/providerService')
     modelsByProvider.value[providerId] = await listModels(providerId)
   }
 
-  async function addProvider(data: Omit<ProviderConfig, 'provider_id'> & { api_key?: string }) {
+  async function addProvider(data: Omit<ProviderConfig, 'provider_id'>) {
     const newProvider: ProviderConfig = {
       ...data,
       provider_id: `prov-${Date.now()}`,

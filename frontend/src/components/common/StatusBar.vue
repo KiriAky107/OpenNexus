@@ -78,7 +78,7 @@ const showEditorInfo = computed(() => route.name === 'workspace')
         <span class="status-dot" style="background: var(--color-success)" />
         索引就绪
       </span>
-      <span class="status-item" :style="{ color: aiCoreColor }" @click>
+      <span class="status-item" :style="{ color: aiCoreColor }">
         <span class="status-dot" :style="{ background: aiCoreColor }" />
         {{ aiCoreStatusText }}
       </span>
