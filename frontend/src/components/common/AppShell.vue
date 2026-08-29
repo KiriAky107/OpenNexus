@@ -4,12 +4,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useThemeStore } from '@/stores/theme'
 import { useEditorStore } from '@/stores/editor'
-import { useSettingsStore } from '@/stores/settings'
-import { useAgentStore } from '@/stores/agent'
 import PrimarySidebar from './PrimarySidebar.vue'
 import SecondarySidebar from './SecondarySidebar.vue'
 import StatusBar from './StatusBar.vue'
 import TitleBar from './TitleBar.vue'
+import CommandPalette from './CommandPalette.vue'
 
 defineProps<{
   showSecondarySidebar?: boolean
@@ -18,8 +17,6 @@ defineProps<{
 const workspaceStore = useWorkspaceStore()
 const themeStore = useThemeStore()
 const editorStore = useEditorStore()
-const settingsStore = useSettingsStore()
-const agentStore = useAgentStore()
 const route = useRoute()
 const router = useRouter()
 
@@ -58,6 +55,7 @@ defineExpose({ openCitation })
       </main>
     </div>
     <StatusBar />
+    <CommandPalette />
   </div>
 </template>
 
