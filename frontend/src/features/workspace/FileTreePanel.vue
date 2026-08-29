@@ -61,8 +61,13 @@ async function renameTarget() {
   if (!node) return
   const newName = window.prompt('新名称', node.name)?.trim()
   if (newName && newName !== node.name) {
-    await workspaceService.renameFile(node.path, newName)
-    node.name = newName
+    const normalizedName = node.type === 'file' && !newName.toLowerCase().endsWith('.md') ? `${newName}.md` : newName
+    const oldPath = node.path
+    const separator = oldPath.lastIndexOf('/')
+    const newPath = `${oldPath.slice(0, separator + 1)}${normalizedName}`
+    await workspaceService.renameFile(oldPath, normalizedName)
+    workspaceStore.renamePath(oldPath, newPath, normalizedName)
+    editorStore.renameFilePath(oldPath, newPath)
   }
   closeContextMenu()
 }
@@ -72,8 +77,12 @@ async function deleteTarget() {
   if (!node) return
   if (!window.confirm(`确定要删除“${node.name}”吗？`)) return closeContextMenu()
   await workspaceService.deleteFile(node.path)
+  const activeWasRemoved = workspaceStore.closePath(node.path)
   workspaceStore.removeFromTree(node.path)
-  if (node.type === 'file') workspaceStore.closeFile(node.path)
+  if (activeWasRemoved) {
+    if (workspaceStore.activeFilePath) await editorStore.loadFile(workspaceStore.activeFilePath)
+    else editorStore.closeFile()
+  }
   closeContextMenu()
 }
 </script>
