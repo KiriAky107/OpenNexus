@@ -75,6 +75,8 @@ export interface ChatMessage {
   created_at: string
   citations?: Citation[]
   tool_calls?: ToolCall[]
+  thinking?: string
+  usage?: TokenUsage
 }
 
 export interface Citation {
@@ -99,6 +101,7 @@ export type ModelEventType =
   | 'ToolCallDelta'
   | 'ToolCallEnd'
   | 'Usage'
+  | 'Citation'
   | 'Error'
   | 'Done'
 
