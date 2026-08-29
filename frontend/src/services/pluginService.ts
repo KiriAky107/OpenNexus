@@ -1,31 +1,60 @@
 import apiClient from './apiClient'
-import type { Plugin } from '@/contracts'
+import type { ApiPlugin, OperationResponse, Plugin, PluginContribution } from '@/contracts'
 
-export async function listPlugins(): Promise<Plugin[]> {
-  try {
-    return await apiClient.get('/api/plugins')
-  } catch {
-    return mockPlugins
+function toPlugin(plugin: ApiPlugin): Plugin {
+  const { manifest } = plugin
+  const contributions: PluginContribution[] = []
+  const append = (type: PluginContribution['type'], values: string[]) => {
+    values.forEach((id) => contributions.push({ type, id, name: id }))
+  }
+  append('tool', manifest.contributes.tools)
+  append('command', manifest.contributes.commands)
+  append('importer', manifest.contributes.importers)
+  append('exporter', manifest.contributes.exporters)
+  append('sidebar_panel', manifest.contributes.panels)
+  append('settings_section', manifest.contributes.settings_sections)
+  return {
+    plugin_id: manifest.plugin_id,
+    name: manifest.name,
+    version: manifest.version,
+    description: manifest.description,
+    status: plugin.status,
+    enabled: plugin.enabled,
+    permissions: manifest.permissions,
+    granted_permissions: plugin.granted_permissions,
+    contributions,
+    backend_type: manifest.backend.type,
+    transport: manifest.backend.transport,
+    last_error: plugin.error_message ?? undefined,
   }
 }
 
-export async function getPlugin(pluginId: string): Promise<Plugin> {
-  return apiClient.get(`/api/plugins/${pluginId}`)
+export async function listPlugins(): Promise<Plugin[]> {
+  const response = await apiClient.get<{ items: ApiPlugin[] }>('/api/plugins')
+  return response.items.map(toPlugin)
 }
 
-export async function installPlugin(pluginId: string): Promise<Plugin> {
-  return apiClient.post('/api/plugins/install', { plugin_id: pluginId })
+export async function getPlugin(pluginId: string): Promise<Plugin> {
+  return toPlugin(await apiClient.get<ApiPlugin>(`/api/plugins/${pluginId}`))
+}
+
+export async function installPlugin(packagePath: string): Promise<Plugin> {
+  return toPlugin(await apiClient.post<ApiPlugin>('/api/plugins/install', { package_path: packagePath }))
 }
 
 export async function enablePlugin(pluginId: string): Promise<Plugin> {
-  return apiClient.post(`/api/plugins/${pluginId}/enable`)
+  return toPlugin(await apiClient.post<ApiPlugin>(`/api/plugins/${pluginId}/enable`))
 }
 
 export async function disablePlugin(pluginId: string): Promise<Plugin> {
-  return apiClient.post(`/api/plugins/${pluginId}/disable`)
+  return toPlugin(await apiClient.post<ApiPlugin>(`/api/plugins/${pluginId}/disable`))
 }
 
-export async function uninstallPlugin(pluginId: string): Promise<void> {
+export async function grantPluginPermissions(pluginId: string, permissions: string[]): Promise<Plugin> {
+  return toPlugin(await apiClient.put<ApiPlugin>(`/api/plugins/${pluginId}/permissions`, { permissions }))
+}
+
+export async function uninstallPlugin(pluginId: string): Promise<OperationResponse> {
   return apiClient.delete(`/api/plugins/${pluginId}`)
 }
 
@@ -80,7 +109,7 @@ export const mockPlugins: Plugin[] = [
     contributions: [
       { type: 'sidebar_panel', id: 'kanban.panel', name: '任务看板', description: '以看板方式查看和管理任务' },
     ],
-    backend_type: 'internal',
+    backend_type: 'internal_rpc',
   },
   {
     plugin_id: 'pdf-importer',
@@ -114,6 +143,6 @@ export const mockPlugins: Plugin[] = [
       { type: 'sidebar_panel', id: 'calendar.widget', name: '日历小部件', description: '侧边栏日历视图' },
     ],
     backend_type: 'mcp',
-    transport: 'websocket',
+    transport: 'http',
   },
 ]

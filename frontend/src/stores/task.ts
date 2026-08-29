@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { TaskItem, TaskStatus, TaskPriority, TaskSource } from '@/contracts'
-import { mockTasks } from '@/services/taskService'
+import { createTask as createTaskRequest, deleteTask as deleteTaskRequest, listTasks, mockTasks, updateTask as updateTaskRequest } from '@/services/taskService'
 
 export const useTaskStore = defineStore('task', () => {
   const tasks = ref<TaskItem[]>(mockTasks)
@@ -9,6 +9,7 @@ export const useTaskStore = defineStore('task', () => {
   const filterPriority = ref<TaskPriority | 'all'>('all')
   const filterSource = ref<TaskSource | 'all'>('all')
   const isLoading = ref(false)
+  const error = ref<string | null>(null)
 
   const filteredTasks = computed(() => {
     return tasks.value.filter((t) => {
@@ -26,40 +27,32 @@ export const useTaskStore = defineStore('task', () => {
   async function loadTasks() {
     isLoading.value = true
     try {
-      const { listTasks } = await import('@/services/taskService')
       const resp = await listTasks()
       tasks.value = resp.items
+      error.value = null
+    } catch (reason) {
+      error.value = reason instanceof Error ? reason.message : '任务加载失败'
     } finally {
       isLoading.value = false
     }
   }
 
   async function createTask(data: { title: string; description?: string; priority?: TaskPriority; due_date?: string; note_id?: string }) {
-    const newTask: TaskItem = {
-      task_id: `t-${Date.now()}`,
-      title: data.title,
-      description: data.description,
-      status: 'todo',
-      priority: data.priority || 'medium',
-      due_date: data.due_date,
-      note_id: data.note_id,
-      source: 'user',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }
+    const newTask = await createTaskRequest(data)
     tasks.value.unshift(newTask)
     return newTask
   }
 
-  async function updateTask(taskId: string, data: Partial<Pick<TaskItem, 'title' | 'description' | 'status' | 'priority' | 'due_date'>>) {
+  async function updateTask(taskId: string, data: Partial<Pick<TaskItem, 'title' | 'description' | 'status' | 'due_date'>> & { note_id?: string | null }) {
     const task = tasks.value.find((t) => t.task_id === taskId)
     if (task) {
-      Object.assign(task, data)
-      task.updated_at = new Date().toISOString()
+      const updated = await updateTaskRequest(taskId, data)
+      Object.assign(task, updated, data)
     }
   }
 
   async function deleteTask(taskId: string) {
+    await deleteTaskRequest(taskId)
     const idx = tasks.value.findIndex((t) => t.task_id === taskId)
     if (idx > -1) tasks.value.splice(idx, 1)
   }
@@ -78,6 +71,7 @@ export const useTaskStore = defineStore('task', () => {
     inProgressTasks,
     doneTasks,
     isLoading,
+    error,
     loadTasks,
     createTask,
     updateTask,

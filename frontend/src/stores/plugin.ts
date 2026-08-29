@@ -1,12 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Plugin } from '@/contracts'
-import { mockPlugins } from '@/services/pluginService'
+import * as pluginService from '@/services/pluginService'
 
 export const usePluginStore = defineStore('plugin', () => {
-  const plugins = ref<Plugin[]>(mockPlugins)
+  const plugins = ref<Plugin[]>(pluginService.mockPlugins)
   const selectedPluginId = ref<string | null>(null)
   const isLoading = ref(false)
+  const error = ref<string | null>(null)
 
   const selectedPlugin = computed(() =>
     plugins.value.find((p) => p.plugin_id === selectedPluginId.value) || null
@@ -19,8 +20,10 @@ export const usePluginStore = defineStore('plugin', () => {
   async function loadPlugins() {
     isLoading.value = true
     try {
-      const { listPlugins } = await import('@/services/pluginService')
-      plugins.value = await listPlugins()
+      plugins.value = await pluginService.listPlugins()
+      error.value = null
+    } catch (reason) {
+      error.value = reason instanceof Error ? reason.message : 'Plugin 加载失败'
     } finally {
       isLoading.value = false
     }
@@ -30,23 +33,34 @@ export const usePluginStore = defineStore('plugin', () => {
     selectedPluginId.value = pluginId
   }
 
+  async function installPlugin(packagePath: string) {
+    const installed = await pluginService.installPlugin(packagePath)
+    const index = plugins.value.findIndex((plugin) => plugin.plugin_id === installed.plugin_id)
+    if (index >= 0) plugins.value[index] = installed
+    else plugins.value.unshift(installed)
+    selectedPluginId.value = installed.plugin_id
+  }
+
+  async function grantPermissions(pluginId: string, permissions: string[]) {
+    const updated = await pluginService.grantPluginPermissions(pluginId, permissions)
+    const index = plugins.value.findIndex((plugin) => plugin.plugin_id === pluginId)
+    if (index >= 0) plugins.value[index] = updated
+  }
+
   async function enablePlugin(pluginId: string) {
-    const plugin = plugins.value.find((p) => p.plugin_id === pluginId)
-    if (plugin) {
-      plugin.enabled = true
-      plugin.status = 'ready'
-    }
+    const updated = await pluginService.enablePlugin(pluginId)
+    const index = plugins.value.findIndex((plugin) => plugin.plugin_id === pluginId)
+    if (index >= 0) plugins.value[index] = updated
   }
 
   async function disablePlugin(pluginId: string) {
-    const plugin = plugins.value.find((p) => p.plugin_id === pluginId)
-    if (plugin) {
-      plugin.enabled = false
-      plugin.status = 'disabled'
-    }
+    const updated = await pluginService.disablePlugin(pluginId)
+    const index = plugins.value.findIndex((plugin) => plugin.plugin_id === pluginId)
+    if (index >= 0) plugins.value[index] = updated
   }
 
   async function uninstallPlugin(pluginId: string) {
+    await pluginService.uninstallPlugin(pluginId)
     const idx = plugins.value.findIndex((p) => p.plugin_id === pluginId)
     if (idx > -1) plugins.value.splice(idx, 1)
     if (selectedPluginId.value === pluginId) selectedPluginId.value = null
@@ -60,8 +74,11 @@ export const usePluginStore = defineStore('plugin', () => {
     readyPlugins,
     errorPlugins,
     isLoading,
+    error,
     loadPlugins,
     selectPlugin,
+    installPlugin,
+    grantPermissions,
     enablePlugin,
     disablePlugin,
     uninstallPlugin,

@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useThemeStore } from '@/stores/theme'
 import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
-import { useAgentStore } from '@/stores/agent'
 import PrimarySidebar from './PrimarySidebar.vue'
 import SecondarySidebar from './SecondarySidebar.vue'
 import StatusBar from './StatusBar.vue'
 import TitleBar from './TitleBar.vue'
+import CommandPalette from './CommandPalette.vue'
 
 defineProps<{
   showSecondarySidebar?: boolean
@@ -19,14 +19,19 @@ const workspaceStore = useWorkspaceStore()
 const themeStore = useThemeStore()
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
-const agentStore = useAgentStore()
 const route = useRoute()
 const router = useRouter()
+
+onMounted(() => { void settingsStore.loadDiagnostics() })
+watch(() => settingsStore.defaultEditorMode, (mode) => editorStore.setMode(mode), { immediate: true })
+watch(() => settingsStore.editorLineWidth, (width) => {
+  document.documentElement.style.setProperty('--editor-line-width', `${width}ch`)
+}, { immediate: true })
 
 const routeName = computed(() => route.name as string)
 
 const secondaryComponent = computed(() => {
-  switch (routeName) {
+  switch (routeName.value) {
     case 'workspace': return 'file-tree'
     case 'search': return 'search-filters'
     case 'chat': return 'conversation-list'
@@ -58,6 +63,7 @@ defineExpose({ openCitation })
       </main>
     </div>
     <StatusBar />
+    <CommandPalette />
   </div>
 </template>
 

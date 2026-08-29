@@ -27,7 +27,7 @@ const sidebarTitle = computed(() => {
   return titles[props.component || ''] || ''
 })
 
-const showSkillToggle = computed(() => routeName === 'skills' || routeName === 'plugins')
+const showSkillToggle = computed(() => routeName.value === 'skills' || routeName.value === 'plugins')
 </script>
 
 <template>
@@ -109,4 +109,5 @@ const showSkillToggle = computed(() => routeName === 'skills' || routeName === '
   overflow-y: auto;
   overflow-x: hidden;
 }
+
 </style>

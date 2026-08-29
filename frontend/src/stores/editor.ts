@@ -30,41 +30,69 @@ export const useEditorStore = defineStore('editor', () => {
 
   function updateContent(newContent: string) {
     content.value = newContent
-    if (saveStatus.value === 'saved' || saveStatus.value === 'idle') {
-      saveStatus.value = 'dirty'
-    }
+    saveStatus.value = 'dirty'
   }
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null
+  let pendingSave: Promise<void> | null = null
 
   function scheduleAutoSave(delay = 1500) {
     if (saveTimer) clearTimeout(saveTimer)
     saveTimer = setTimeout(() => {
+      saveTimer = null
       void save()
     }, delay)
   }
 
   async function save() {
     if (!currentFilePath.value) return
-    if (saveStatus.value === 'saving') return
+    if (pendingSave) return pendingSave
+    const targetPath = currentFilePath.value
+    const snapshot = content.value
     saveStatus.value = 'saving'
-    try {
-      await workspaceService.saveFileContent(currentFilePath.value, content.value)
-      saveStatus.value = 'saved'
-      lastSavedAt.value = new Date().toISOString()
-    } catch {
-      saveStatus.value = 'save_failed'
-    }
+    pendingSave = (async () => {
+      try {
+        await workspaceService.saveFileContent(targetPath, snapshot)
+        if (currentFilePath.value === targetPath) {
+          saveStatus.value = content.value === snapshot ? 'saved' : 'dirty'
+          lastSavedAt.value = new Date().toISOString()
+        }
+      } catch {
+        if (currentFilePath.value === targetPath) saveStatus.value = 'save_failed'
+      } finally {
+        pendingSave = null
+      }
+    })()
+    return pendingSave
   }
 
+  let loadVersion = 0
+
   async function loadFile(filePath: string) {
+    if (currentFilePath.value === filePath) return
+    if (saveTimer) {
+      clearTimeout(saveTimer)
+      saveTimer = null
+    }
+    if (saveStatus.value === 'conflict') {
+      throw new Error('当前文件存在编辑冲突，请处理后再切换文件。')
+    }
+    if (pendingSave) await pendingSave
+    if (saveStatus.value === 'dirty' || saveStatus.value === 'save_failed') await save()
+    if (saveStatus.value === 'dirty' || saveStatus.value === 'save_failed') {
+      throw new Error('当前文件保存失败，已阻止切换以避免内容丢失。')
+    }
+    const version = ++loadVersion
     currentFilePath.value = filePath
     saveStatus.value = 'saving'
     try {
-      content.value = await workspaceService.readFileContent(filePath)
+      const loadedContent = await workspaceService.readFileContent(filePath)
+      if (version !== loadVersion || currentFilePath.value !== filePath) return
+      content.value = loadedContent
       saveStatus.value = 'saved'
       lastSavedAt.value = new Date().toISOString()
     } catch {
+      if (version !== loadVersion || currentFilePath.value !== filePath) return
       content.value = ''
       saveStatus.value = 'idle'
     }
@@ -89,6 +117,7 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function closeFile() {
+    loadVersion++
     if (saveTimer) clearTimeout(saveTimer)
     currentFilePath.value = null
     currentNoteId.value = null
@@ -96,6 +125,12 @@ export const useEditorStore = defineStore('editor', () => {
     saveStatus.value = 'idle'
     lastSavedAt.value = null
     highlightBlockId.value = null
+  }
+
+  function renameFilePath(oldPath: string, newPath: string) {
+    if (currentFilePath.value === oldPath || currentFilePath.value?.startsWith(`${oldPath}/`)) {
+      currentFilePath.value = `${newPath}${currentFilePath.value.slice(oldPath.length)}`
+    }
   }
 
   return {
@@ -118,5 +153,6 @@ export const useEditorStore = defineStore('editor', () => {
     highlightBlock,
     setExternalChanged,
     closeFile,
+    renameFilePath,
   }
 })

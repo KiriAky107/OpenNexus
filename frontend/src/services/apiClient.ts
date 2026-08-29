@@ -1,6 +1,11 @@
 import type { ApiError, ErrorResponse } from '@/contracts'
 
-const BASE_URL = import.meta.env.VITE_API_BASE || ''
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE ?? ''
+
+export function resolveApiUrl(path: string): string {
+  if (/^https?:\/\//i.test(path)) return path
+  return `${BASE_URL.replace(/\/$/, '')}/${path.replace(/^\//, '')}`
+}
 
 interface RequestOptions extends RequestInit {
   params?: Record<string, string | number | boolean | undefined>
@@ -22,7 +27,7 @@ export class ApiErrorClass extends Error {
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { params, token, headers, ...rest } = options
 
-  let url = path.startsWith('http') ? path : `${BASE_URL}${path}`
+  let url = resolveApiUrl(path)
 
   if (params) {
     const usp = new URLSearchParams()
@@ -91,6 +96,13 @@ export const apiClient = {
     return request<T>(path, {
       ...options,
       method: 'PATCH',
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+  },
+  put<T>(path: string, body?: unknown, options?: Omit<RequestOptions, 'method' | 'body'>) {
+    return request<T>(path, {
+      ...options,
+      method: 'PUT',
       body: body !== undefined ? JSON.stringify(body) : undefined,
     })
   },

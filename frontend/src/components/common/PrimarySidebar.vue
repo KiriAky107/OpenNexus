@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
 const route = useRoute()
 const router = useRouter()
+const expanded = ref(localStorage.getItem('primary-sidebar-expanded') === 'true')
 
 const navItems = [
   { name: 'workspace', icon: '📁', label: '工作区' },
@@ -18,18 +19,21 @@ const navItems = [
 ]
 
 const currentName = computed(() => {
-  const name = route.name as string
-  if (name === 'skills' || name === 'plugins') return 'skills'
-  return name
+  return route.name as string
 })
 
 function navigate(name: string) {
   router.push({ name })
 }
+
+function toggleExpanded() {
+  expanded.value = !expanded.value
+  localStorage.setItem('primary-sidebar-expanded', String(expanded.value))
+}
 </script>
 
 <template>
-  <aside class="primary-sidebar">
+  <aside class="primary-sidebar" :class="{ expanded }">
     <nav class="nav-list">
       <div
         v-for="item in navItems"
@@ -44,9 +48,10 @@ function navigate(name: string) {
       </div>
     </nav>
     <div class="sidebar-footer">
-      <div class="nav-item" @click="navigate('settings')" title="设置">
-        <span class="nav-icon">⚙️</span>
-      </div>
+      <button class="nav-item collapse-button" type="button" :title="expanded ? '收起导航' : '展开导航'" @click="toggleExpanded">
+        <span class="nav-icon">{{ expanded ? '«' : '»' }}</span>
+        <span class="nav-label">{{ expanded ? '收起' : '展开' }}</span>
+      </button>
     </div>
   </aside>
 </template>
@@ -61,6 +66,11 @@ function navigate(name: string) {
   flex-shrink: 0;
   z-index: var(--z-sidebar);
 }
+
+.primary-sidebar.expanded { width: var(--sidebar-primary-width-expanded); }
+.primary-sidebar.expanded .nav-item { flex-direction: row; justify-content: flex-start; gap: var(--space-md); padding: 0 var(--space-lg); }
+.primary-sidebar.expanded .nav-icon { margin-bottom: 0; }
+.primary-sidebar.expanded .nav-label { font-size: var(--font-size-sm); }
 
 .nav-list {
   flex: 1;
@@ -121,4 +131,6 @@ function navigate(name: string) {
   padding: var(--space-sm) 0;
   border-top: 1px solid var(--color-border-subtle);
 }
+
+.collapse-button { width: calc(100% - 8px); }
 </style>
