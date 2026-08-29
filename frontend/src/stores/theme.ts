@@ -14,6 +14,7 @@ export const useThemeStore = defineStore('theme', () => {
   const fontEditorSize = ref(15)
   const fontEditorFamily = ref('system-ui')
   const lineHeight = ref(1.7)
+  let appearanceHydrated = false
 
   const currentTheme = computed(() =>
     themes.value.find((t) => t.theme_id === currentThemeId.value) || themes.value[0]
@@ -47,6 +48,8 @@ export const useThemeStore = defineStore('theme', () => {
       } catch { localStorage.removeItem('editor-appearance') }
     }
     const saved = localStorage.getItem('theme')
+    appearanceHydrated = true
+    persistAppearance()
     if (saved && themes.value.find((t) => t.theme_id === saved)) {
       applyTheme(saved)
       return
@@ -72,17 +75,17 @@ export const useThemeStore = defineStore('theme', () => {
 
   watch(fontEditorSize, (v) => {
     document.documentElement.style.setProperty('--font-editor-size', `${v}px`)
-    persistAppearance()
+    if (appearanceHydrated) persistAppearance()
   }, { immediate: true })
 
   watch(lineHeight, (v) => {
     document.documentElement.style.setProperty('--font-editor-line-height', String(v))
-    persistAppearance()
+    if (appearanceHydrated) persistAppearance()
   }, { immediate: true })
 
   watch(fontEditorFamily, (v) => {
     document.documentElement.style.setProperty('--font-editor-sans', v)
-    persistAppearance()
+    if (appearanceHydrated) persistAppearance()
   }, { immediate: true })
 
   return {

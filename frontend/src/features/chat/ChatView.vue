@@ -41,8 +41,8 @@ watch(() => chatStore.selectedProviderId, async (providerId) => {
 function send() { void chatStore.sendMessage(chatStore.inputText) }
 
 async function openCitation(citation: Citation) {
-  workspaceStore.openFile(citation.file_path)
   await editorStore.loadFile(citation.file_path)
+  workspaceStore.openFile(citation.file_path)
   editorStore.highlightBlock(citation.block_id)
   await router.push('/workspace')
 }

@@ -23,8 +23,8 @@ function submitSearch() {
 }
 
 async function openResult(result: SearchResult) {
-  workspaceStore.openFile(result.file_path)
   await editorStore.loadFile(result.file_path)
+  workspaceStore.openFile(result.file_path)
   editorStore.highlightBlock(result.block_id)
   await router.push('/workspace')
 }
