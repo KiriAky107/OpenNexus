@@ -1,12 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Skill } from '@/contracts'
-import { mockSkills } from '@/services/skillService'
+import * as skillService from '@/services/skillService'
 
 export const useSkillStore = defineStore('skill', () => {
-  const skills = ref<Skill[]>(mockSkills)
+  const skills = ref<Skill[]>(skillService.mockSkills)
   const selectedSkillId = ref<string | null>(null)
   const isLoading = ref(false)
+  const error = ref<string | null>(null)
 
   const selectedSkill = computed(() =>
     skills.value.find((s) => s.skill_id === selectedSkillId.value) || null
@@ -19,8 +20,10 @@ export const useSkillStore = defineStore('skill', () => {
   async function loadSkills() {
     isLoading.value = true
     try {
-      const { listSkills } = await import('@/services/skillService')
-      skills.value = await listSkills()
+      skills.value = await skillService.listSkills()
+      error.value = null
+    } catch (reason) {
+      error.value = reason instanceof Error ? reason.message : 'Skill 加载失败'
     } finally {
       isLoading.value = false
     }
@@ -30,23 +33,28 @@ export const useSkillStore = defineStore('skill', () => {
     selectedSkillId.value = skillId
   }
 
+  async function installSkill(packagePath: string) {
+    const installed = await skillService.installSkill(packagePath)
+    const index = skills.value.findIndex((skill) => skill.skill_id === installed.skill_id)
+    if (index >= 0) skills.value[index] = installed
+    else skills.value.unshift(installed)
+    selectedSkillId.value = installed.skill_id
+  }
+
   async function enableSkill(skillId: string) {
-    const skill = skills.value.find((s) => s.skill_id === skillId)
-    if (skill) {
-      skill.enabled = true
-      skill.status = 'ready'
-    }
+    const updated = await skillService.enableSkill(skillId)
+    const index = skills.value.findIndex((skill) => skill.skill_id === skillId)
+    if (index >= 0) skills.value[index] = updated
   }
 
   async function disableSkill(skillId: string) {
-    const skill = skills.value.find((s) => s.skill_id === skillId)
-    if (skill) {
-      skill.enabled = false
-      skill.status = 'disabled'
-    }
+    const updated = await skillService.disableSkill(skillId)
+    const index = skills.value.findIndex((skill) => skill.skill_id === skillId)
+    if (index >= 0) skills.value[index] = updated
   }
 
   async function uninstallSkill(skillId: string) {
+    await skillService.uninstallSkill(skillId)
     const idx = skills.value.findIndex((s) => s.skill_id === skillId)
     if (idx > -1) skills.value.splice(idx, 1)
     if (selectedSkillId.value === skillId) selectedSkillId.value = null
@@ -60,8 +68,10 @@ export const useSkillStore = defineStore('skill', () => {
     installedSkills,
     readySkills,
     isLoading,
+    error,
     loadSkills,
     selectSkill,
+    installSkill,
     enableSkill,
     disableSkill,
     uninstallSkill,

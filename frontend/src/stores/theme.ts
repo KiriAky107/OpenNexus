@@ -14,6 +14,7 @@ export const useThemeStore = defineStore('theme', () => {
   const fontEditorSize = ref(15)
   const fontEditorFamily = ref('system-ui')
   const lineHeight = ref(1.7)
+  let appearanceHydrated = false
 
   const currentTheme = computed(() =>
     themes.value.find((t) => t.theme_id === currentThemeId.value) || themes.value[0]
@@ -37,7 +38,18 @@ export const useThemeStore = defineStore('theme', () => {
   }
 
   function initTheme() {
+    const savedAppearance = localStorage.getItem('editor-appearance')
+    if (savedAppearance) {
+      try {
+        const value = JSON.parse(savedAppearance) as { size?: number; family?: string; lineHeight?: number }
+        if (value.size) fontEditorSize.value = value.size
+        if (value.family) fontEditorFamily.value = value.family
+        if (value.lineHeight) lineHeight.value = value.lineHeight
+      } catch { localStorage.removeItem('editor-appearance') }
+    }
     const saved = localStorage.getItem('theme')
+    appearanceHydrated = true
+    persistAppearance()
     if (saved && themes.value.find((t) => t.theme_id === saved)) {
       applyTheme(saved)
       return
@@ -57,13 +69,24 @@ export const useThemeStore = defineStore('theme', () => {
     lineHeight.value = 1.7
   }
 
+  const persistAppearance = () => localStorage.setItem('editor-appearance', JSON.stringify({
+    size: fontEditorSize.value, family: fontEditorFamily.value, lineHeight: lineHeight.value,
+  }))
+
   watch(fontEditorSize, (v) => {
     document.documentElement.style.setProperty('--font-editor-size', `${v}px`)
-  })
+    if (appearanceHydrated) persistAppearance()
+  }, { immediate: true })
 
   watch(lineHeight, (v) => {
     document.documentElement.style.setProperty('--font-editor-line-height', String(v))
-  })
+    if (appearanceHydrated) persistAppearance()
+  }, { immediate: true })
+
+  watch(fontEditorFamily, (v) => {
+    document.documentElement.style.setProperty('--font-editor-sans', v)
+    if (appearanceHydrated) persistAppearance()
+  }, { immediate: true })
 
   return {
     themes,

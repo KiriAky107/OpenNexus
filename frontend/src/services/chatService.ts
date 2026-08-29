@@ -1,27 +1,21 @@
-import apiClient from './apiClient'
 import { SseClient } from './sseClient'
 import type { Conversation, ChatMessage, ModelEvent } from '@/contracts'
 
-export async function listConversations(): Promise<Conversation[]> {
-  return apiClient.get('/api/conversations')
-}
-
-export async function getConversation(conversationId: string): Promise<Conversation> {
-  return apiClient.get(`/api/conversations/${conversationId}`)
-}
-
-export async function getMessages(conversationId: string): Promise<ChatMessage[]> {
-  return apiClient.get(`/api/conversations/${conversationId}/messages`)
-}
-
 export interface ChatRequest {
+  provider_id: string
+  model: string
   conversation_id?: string
-  message: string
-  provider_id?: string
-  model?: string
+  system?: string
+  messages: Array<{
+    role: 'system' | 'user' | 'assistant' | 'tool'
+    content: string
+    name?: string
+    tool_call_id?: string
+  }>
   use_rag?: boolean
-  skill_id?: string
   attachments?: string[]
+  temperature?: number
+  max_tokens?: number
 }
 
 export function streamChat(

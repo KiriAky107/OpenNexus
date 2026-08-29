@@ -2,6 +2,12 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { SearchResult, SearchRequest } from '@/contracts'
 import * as searchService from '@/services/searchService'
+import { ApiErrorClass } from '@/services/apiClient'
+
+const VECTOR_ERROR_CODES = new Set([
+  'VECTOR_UNAVAILABLE', 'EMBEDDING_UNAVAILABLE', 'INDEX_UNAVAILABLE',
+  'MODEL_NOT_FOUND', 'MODEL_CAPABILITY_MISMATCH', 'PROVIDER_UNAVAILABLE',
+])
 
 export const useSearchStore = defineStore('search', () => {
   const query = ref('')
@@ -19,16 +25,33 @@ export const useSearchStore = defineStore('search', () => {
     mode.value = request.mode || 'hybrid'
     isSearching.value = true
     error.value = null
+    vectorUnavailable.value = false
 
     try {
-      const resp = await searchService.searchMock(request.query, request.mode || 'hybrid')
+      const resp = await searchService.search(request)
       results.value = resp.results
       total.value = resp.total
       selectedIndex.value = 0
-    } catch (e: any) {
-      error.value = e.message || '搜索失败'
-      results.value = []
-      total.value = 0
+    } catch (reason) {
+      const canFallback = mode.value !== 'fts' && reason instanceof ApiErrorClass && VECTOR_ERROR_CODES.has(reason.code)
+      if (canFallback) {
+        try {
+          const fallback = await searchService.search({ ...request, mode: 'fts' })
+          results.value = fallback.results
+          total.value = fallback.total
+          mode.value = 'fts'
+          vectorUnavailable.value = true
+          selectedIndex.value = 0
+        } catch (fallbackError) {
+          error.value = fallbackError instanceof Error ? fallbackError.message : '全文检索降级失败'
+          results.value = []
+          total.value = 0
+        }
+      } else {
+        error.value = reason instanceof Error ? reason.message : '搜索失败'
+        results.value = []
+        total.value = 0
+      }
     } finally {
       isSearching.value = false
     }

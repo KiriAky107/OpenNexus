@@ -75,10 +75,10 @@ const showEditorInfo = computed(() => route.name === 'workspace')
         {{ saveStatusText }}
       </span>
       <span class="status-item" :title="indexStatusText">
-        <span class="status-dot" style="background: var(--color-success)" />
-        索引就绪
+        <span class="status-dot" :style="{ background: settingsStore.indexStatus.status === 'error' ? 'var(--color-error)' : settingsStore.indexStatus.status === 'indexing' ? 'var(--color-warning)' : 'var(--color-success)' }" />
+        {{ indexStatusText }}
       </span>
-      <span class="status-item" :style="{ color: aiCoreColor }" @click>
+      <span class="status-item" :style="{ color: aiCoreColor }">
         <span class="status-dot" :style="{ background: aiCoreColor }" />
         {{ aiCoreStatusText }}
       </span>

@@ -13,8 +13,9 @@ onMounted(() => {
     // Already loaded
   }
   if (!workspaceStore.activeFilePath && workspaceStore.fileTree.length === 0) {
-    workspaceStore.openFile('/欢迎使用知笔知己.md')
-    editorStore.loadFile('/欢迎使用知笔知己.md')
+    void editorStore.loadFile('/欢迎使用知笔知己.md').then(() => {
+      workspaceStore.openFile('/欢迎使用知笔知己.md')
+    })
   }
 })
 </script>

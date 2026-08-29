@@ -61,15 +61,6 @@ const routes = [
     name: 'settings',
     component: () => import('@/features/settings/SettingsView.vue'),
     meta: { title: '设置', requiresVault: true },
-    children: [
-      { path: '', redirect: '/settings/general' },
-      { path: 'general', component: () => import('@/features/settings/sections/GeneralSection.vue') },
-      { path: 'editor', component: () => import('@/features/settings/sections/EditorSection.vue') },
-      { path: 'providers', component: () => import('@/features/settings/sections/ProvidersSection.vue') },
-      { path: 'index', component: () => import('@/features/settings/sections/IndexSection.vue') },
-      { path: 'permissions', component: () => import('@/features/settings/sections/PermissionsSection.vue') },
-      { path: 'ai-core', component: () => import('@/features/settings/sections/AiCoreSection.vue') },
-    ],
   },
 ]
 

@@ -75,6 +75,8 @@ export interface ChatMessage {
   created_at: string
   citations?: Citation[]
   tool_calls?: ToolCall[]
+  thinking?: string
+  usage?: TokenUsage
 }
 
 export interface Citation {
@@ -99,6 +101,7 @@ export type ModelEventType =
   | 'ToolCallDelta'
   | 'ToolCallEnd'
   | 'Usage'
+  | 'Citation'
   | 'Error'
   | 'Done'
 
@@ -246,16 +249,17 @@ export interface Plugin {
   status: PluginStatus
   enabled: boolean
   permissions: string[]
+  granted_permissions?: string[]
   contributions: PluginContribution[]
-  backend_type?: 'mcp' | 'internal'
-  transport?: 'stdio' | 'websocket'
+  backend_type?: 'mcp' | 'internal_rpc' | 'none'
+  transport?: 'stdio' | 'http' | 'none'
   last_error?: string
   dependent_skills?: string[]
 }
 
 // ============ Provider ============
 
-export type ProviderType = 'openai' | 'anthropic' | 'ollama' | 'openai-compatible' | 'mock'
+export type ProviderType = ApiProviderType
 
 export interface ModelCapability {
   chat: boolean
@@ -346,10 +350,10 @@ export interface ErrorResponse {
 }
 
 export interface SystemStatus {
+  status: 'ok'
   name: string
   version: string
-  environment: 'development' | 'production' | 'test'
-  ai_core_available: boolean
+  environment: string
 }
 
 export type SaveStatus =
@@ -362,3 +366,178 @@ export type SaveStatus =
   | 'conflict'
 
 export type AiCoreStatus = 'starting' | 'running' | 'stopped' | 'error'
+
+// ============ FastAPI wire contracts ============
+// UI view models above may contain presentation-only fields. Services must use
+// these DTOs at the HTTP boundary and explicitly map them to view models.
+
+export interface PageMeta {
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface OperationResponse {
+  status: 'accepted' | 'completed'
+  resource_id?: string | null
+  message?: string | null
+}
+
+export interface ApiNoteBlock {
+  block_id: string
+  note_id: string
+  heading_path: string[]
+  start_offset: number
+  end_offset: number
+  content: string
+  content_hash: string
+  token_count: number
+}
+
+export interface ApiNoteSummary {
+  note_id: string
+  title: string
+  file_path: string
+  tags: string[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ApiNote extends ApiNoteSummary {
+  markdown: string
+  blocks: ApiNoteBlock[]
+}
+
+export interface ApiSearchResult {
+  note_id: string
+  block_id: string
+  title: string
+  file_path: string
+  heading_path: string[]
+  snippet?: string | null
+  score: number
+  citation: ApiCitation
+}
+
+export interface ApiCitation {
+  citation_id: string
+  note_id: string
+  block_id: string
+  file_path: string
+  heading_path: string[]
+  start_offset?: number | null
+  end_offset?: number | null
+  source_audio?: string | null
+  start_time?: number | null
+  end_time?: number | null
+  speaker?: string | null
+}
+
+export interface ApiAgentRun {
+  run_id: string
+  status: AgentRunStatus
+  input: string
+  provider_id: string
+  model: string
+  skill_id?: string | null
+  current_step: number
+  max_steps: number
+  token_budget?: number | null
+  cancelled: boolean
+  output?: string | null
+  error_code?: string | null
+  error_message?: string | null
+  token_usage: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ApiSkill {
+  manifest: {
+    skill_id: string
+    name: string
+    version: string
+    description: string
+    permissions: string[]
+    tools: string[]
+    retrieval: { top_k: number; rerank: boolean; citation: boolean }
+    model: { required_capabilities: string[] }
+  }
+  status: SkillStatus
+  enabled: boolean
+  missing_dependencies: string[]
+}
+
+export interface ApiPlugin {
+  manifest: {
+    plugin_id: string
+    name: string
+    version: string
+    description: string
+    permissions: string[]
+    contributes: {
+      tools: string[]
+      commands: string[]
+      importers: string[]
+      exporters: string[]
+      panels: string[]
+      settings_sections: string[]
+    }
+    backend: { type: 'mcp' | 'internal_rpc' | 'none'; transport: 'stdio' | 'http' | 'none' }
+  }
+  status: PluginStatus
+  enabled: boolean
+  granted_permissions: string[]
+  error_message?: string | null
+}
+
+export type ApiProviderType =
+  | 'mock'
+  | 'openai_responses'
+  | 'openai_chat'
+  | 'openai_compatible'
+  | 'anthropic_messages'
+  | 'ollama'
+
+export interface ApiProviderConfig {
+  provider_id: string
+  provider_type: ApiProviderType
+  name: string
+  base_url?: string | null
+  default_model?: string | null
+  credential_id?: string | null
+  enabled: boolean
+  capabilities: string[]
+}
+
+export interface ApiModelInfo {
+  model: string
+  display_name: string
+  capabilities: string[]
+}
+
+export interface ApiTask {
+  task_id: string
+  title: string
+  description: string
+  status: TaskStatus
+  note_id?: string | null
+  due_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ApiIndexStatus {
+  status: 'idle' | 'queued' | 'running' | 'failed'
+  pending_jobs: number
+  active_job_id?: string | null
+  last_completed_at?: string | null
+  error_message?: string | null
+}
+
+export interface ApiIndexJob {
+  job_id: string
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  scope: 'all' | 'notes' | 'vectors'
+  created_at: string
+}
