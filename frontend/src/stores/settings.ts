@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { AiCoreStatus, IndexStatus } from '@/contracts'
 import { mockIndexStatus } from '@/services/indexService'
+import * as indexService from '@/services/indexService'
+import * as systemService from '@/services/systemService'
 
 export const useSettingsStore = defineStore('settings', () => {
   // General
@@ -37,6 +39,22 @@ export const useSettingsStore = defineStore('settings', () => {
     'network.request': 'confirm',
     'secrets.use': 'confirm',
   })
+  const diagnosticsError = ref<string | null>(null)
+
+  async function loadDiagnostics() {
+    try {
+      const [health, status, index] = await Promise.all([
+        systemService.healthCheck(), systemService.getStatus(), indexService.getIndexStatus(),
+      ])
+      aiCoreStatus.value = health.status === 'ok' ? 'running' : 'error'
+      aiCoreVersion.value = status.version
+      indexStatus.value = index
+      diagnosticsError.value = null
+    } catch (reason) {
+      aiCoreStatus.value = 'error'
+      diagnosticsError.value = reason instanceof Error ? reason.message : '诊断信息加载失败'
+    }
+  }
 
   function setAutoSaveInterval(ms: number) {
     autoSaveInterval.value = ms
@@ -63,9 +81,13 @@ export const useSettingsStore = defineStore('settings', () => {
 
   async function rebuildIndex(scope: 'full' | 'fts' | 'vector' = 'full') {
     indexStatus.value.status = 'indexing'
-    setTimeout(() => {
-      indexStatus.value.status = 'idle'
-    }, 3000)
+    try {
+      await indexService.rebuildIndex(scope)
+      indexStatus.value = await indexService.getIndexStatus()
+    } catch (reason) {
+      indexStatus.value.status = 'error'
+      indexStatus.value.error = reason instanceof Error ? reason.message : '索引重建失败'
+    }
   }
 
   return {
@@ -83,6 +105,8 @@ export const useSettingsStore = defineStore('settings', () => {
     aiCoreAddress,
     indexStatus,
     permissionPolicy,
+    diagnosticsError,
+    loadDiagnostics,
     setAutoSaveInterval,
     setDefaultEditorMode,
     setPermission,
