@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import type { AgentRun, AgentEvent, ToolDefinition, PermissionRequest, ToolCall } from '@/contracts'
 import { mockAgentRuns, mockAgentEvents, mockTools, mockPermissionRequest } from '@/services/agentService'
 import * as agentService from '@/services/agentService'
+import type { SseClient } from '@/services/sseClient'
 
 export const useAgentStore = defineStore('agent', () => {
   const runs = ref<AgentRun[]>(mockAgentRuns)
@@ -13,6 +14,8 @@ export const useAgentStore = defineStore('agent', () => {
   const isRunning = ref(false)
   const permissionRequest = ref<PermissionRequest | null>(null)
   const toolCalls = ref<ToolCall[]>([])
+  const error = ref<string | null>(null)
+  let eventStream: SseClient | null = null
 
   const activeRun = computed(() =>
     runs.value.find((r) => r.run_id === activeRunId.value) || null
@@ -37,29 +40,63 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   async function loadRun(runId: string) {
+    eventStream?.cancel()
     activeRunId.value = runId
-    events.value = mockAgentEvents.filter((e) => e.run_id === runId)
+    const run = await agentService.getAgentRun(runId)
+    const existingIndex = runs.value.findIndex((item) => item.run_id === runId)
+    if (existingIndex >= 0) runs.value[existingIndex] = run
+    else runs.value.unshift(run)
+    events.value = []
     toolCalls.value = []
-    for (const evt of events.value) {
-      if (evt.event === 'ToolCall') {
-        const data = evt.data as any
-        toolCalls.value.push({
-          tool_call_id: data.tool_call_id,
-          name: data.name,
-          parameters: data.parameters,
-          status: data.status || 'completed',
-          started_at: evt.timestamp,
-        })
-      } else if (evt.event === 'ToolResult') {
-        const data = evt.data as any
-        const tc = toolCalls.value.find((t) => t.tool_call_id === data.tool_call_id)
-        if (tc) {
-          tc.status = data.status
-          tc.result = data.result
-          tc.completed_at = evt.timestamp
-        }
+    subscribe(runId)
+  }
+
+  function processEvent(event: AgentEvent) {
+    if (events.value.some((item) => item.run_id === event.run_id && item.sequence === event.sequence)) return
+    events.value.push(event)
+    events.value.sort((a, b) => a.sequence - b.sequence)
+    const data = event.data
+    if (event.event === 'ToolCall') {
+      toolCalls.value.push({
+        tool_call_id: String(data.tool_call_id ?? ''),
+        name: String(data.name ?? 'unknown'),
+        parameters: (data.arguments ?? {}) as Record<string, unknown>,
+        status: 'running',
+        started_at: event.timestamp,
+      })
+    } else if (event.event === 'ToolResult') {
+      const toolCall = toolCalls.value.find((item) => item.tool_call_id === data.tool_call_id)
+      if (toolCall) {
+        toolCall.status = data.success ? 'completed' : 'error'
+        toolCall.result = data.output == null ? undefined : JSON.stringify(data.output)
+        toolCall.error_code = data.error_code == null ? undefined : String(data.error_code)
+        toolCall.error_message = data.error_message == null ? undefined : String(data.error_message)
+        toolCall.completed_at = event.timestamp
       }
+    } else if (event.event === 'PermissionRequired') {
+      const call = (data.tool_call ?? {}) as Record<string, unknown>
+      permissionRequest.value = {
+        request_id: String(data.request_id ?? ''),
+        run_id: event.run_id,
+        tool_name: String(call.name ?? 'unknown'),
+        permission: String(data.permission ?? ''),
+        parameters: (call.arguments ?? {}) as Record<string, unknown>,
+        impact: '该工具需要获得权限后才能继续执行。',
+      }
+    } else if (['RunCompleted', 'RunFailed', 'RunCancelled'].includes(event.event)) {
+      isRunning.value = false
     }
+  }
+
+  function subscribe(runId: string) {
+    eventStream?.cancel()
+    isRunning.value = true
+    error.value = null
+    eventStream = agentService.streamAgentEvents(runId, {
+      onEvent: processEvent,
+      onError(streamError) { error.value = streamError.message; isRunning.value = false },
+      onDone() { isRunning.value = false; eventStream = null },
+    })
   }
 
   async function createRun(request: agentService.CreateAgentRunRequest) {
@@ -68,41 +105,13 @@ export const useAgentStore = defineStore('agent', () => {
       const run = await agentService.createAgentRun(request)
       runs.value.unshift(run)
       activeRunId.value = run.run_id
-      events.value = [{
-        event: 'RunStarted',
-        sequence: 1,
-        run_id: run.run_id,
-        data: { input: request.input },
-        timestamp: new Date().toISOString(),
-      }]
-      isRunning.value = true
-      // Mock events streaming
-      simulateRun(run.run_id)
+      events.value = []
+      toolCalls.value = []
+      subscribe(run.run_id)
       return run
     } finally {
       isCreating.value = false
     }
-  }
-
-  function simulateRun(runId: string) {
-    const runEvents: AgentEvent[] = [
-      { event: 'ThinkingDelta', sequence: 2, run_id: runId, data: { text: '我需要先搜索相关笔记...' }, timestamp: new Date().toISOString() },
-      { event: 'ToolCall', sequence: 3, run_id: runId, data: { tool_call_id: 'tc-mock-1', name: 'notes.search', parameters: { query: '红黑树', limit: 5 }, status: 'running' }, timestamp: new Date().toISOString() },
-      { event: 'ToolResult', sequence: 4, run_id: runId, data: { tool_call_id: 'tc-mock-1', name: 'notes.search', status: 'completed', result: '找到 5 条相关结果' }, timestamp: new Date().toISOString() },
-      { event: 'TextDelta', sequence: 5, run_id: runId, data: { text: '根据你的笔记，以下是...' }, timestamp: new Date().toISOString() },
-      { event: 'RunCompleted', sequence: 6, run_id: runId, data: { message: 'Task completed successfully' }, timestamp: new Date().toISOString() },
-    ]
-    let idx = 0
-    const push = () => {
-      if (idx >= runEvents.length) {
-        isRunning.value = false
-        return
-      }
-      events.value.push(runEvents[idx])
-      idx++
-      setTimeout(push, 800)
-    }
-    setTimeout(push, 500)
   }
 
   async function cancelRun(runId: string) {
@@ -110,6 +119,8 @@ export const useAgentStore = defineStore('agent', () => {
     const run = runs.value.find((r) => r.run_id === runId)
     if (run) run.status = 'cancelled'
     isRunning.value = false
+    eventStream?.cancel()
+    eventStream = null
   }
 
   async function respondPermission(decision: 'allow' | 'deny', scope: 'once' | 'session' = 'once') {
@@ -134,6 +145,7 @@ export const useAgentStore = defineStore('agent', () => {
     isRunning,
     permissionRequest,
     toolCalls,
+    error,
     currentStep,
     loadTools,
     loadRuns,
