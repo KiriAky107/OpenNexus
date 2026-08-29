@@ -53,8 +53,8 @@ async function createNote() {
   const name = rawName.endsWith('.md') ? rawName : `${rawName}.md`
   const file = await workspaceService.createFile('/', name, `# ${rawName}\n\n`)
   workspaceStore.addFileToTree('/', file)
-  workspaceStore.openFile(file.path)
   await editorStore.loadFile(file.path)
+  workspaceStore.openFile(file.path)
   await router.push('/workspace')
 }
 

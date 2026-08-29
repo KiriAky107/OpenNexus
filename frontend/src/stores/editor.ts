@@ -34,34 +34,54 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null
+  let pendingSave: Promise<void> | null = null
 
   function scheduleAutoSave(delay = 1500) {
     if (saveTimer) clearTimeout(saveTimer)
     saveTimer = setTimeout(() => {
+      saveTimer = null
       void save()
     }, delay)
   }
 
   async function save() {
     if (!currentFilePath.value) return
-    if (saveStatus.value === 'saving') return
+    if (pendingSave) return pendingSave
     const targetPath = currentFilePath.value
     const snapshot = content.value
     saveStatus.value = 'saving'
-    try {
-      await workspaceService.saveFileContent(targetPath, snapshot)
-      if (currentFilePath.value === targetPath) {
-        saveStatus.value = content.value === snapshot ? 'saved' : 'dirty'
-        lastSavedAt.value = new Date().toISOString()
+    pendingSave = (async () => {
+      try {
+        await workspaceService.saveFileContent(targetPath, snapshot)
+        if (currentFilePath.value === targetPath) {
+          saveStatus.value = content.value === snapshot ? 'saved' : 'dirty'
+          lastSavedAt.value = new Date().toISOString()
+        }
+      } catch {
+        if (currentFilePath.value === targetPath) saveStatus.value = 'save_failed'
+      } finally {
+        pendingSave = null
       }
-    } catch {
-      saveStatus.value = 'save_failed'
-    }
+    })()
+    return pendingSave
   }
 
   let loadVersion = 0
 
   async function loadFile(filePath: string) {
+    if (currentFilePath.value === filePath) return
+    if (saveTimer) {
+      clearTimeout(saveTimer)
+      saveTimer = null
+    }
+    if (saveStatus.value === 'conflict') {
+      throw new Error('当前文件存在编辑冲突，请处理后再切换文件。')
+    }
+    if (pendingSave) await pendingSave
+    if (saveStatus.value === 'dirty' || saveStatus.value === 'save_failed') await save()
+    if (saveStatus.value === 'dirty' || saveStatus.value === 'save_failed') {
+      throw new Error('当前文件保存失败，已阻止切换以避免内容丢失。')
+    }
     const version = ++loadVersion
     currentFilePath.value = filePath
     saveStatus.value = 'saving'

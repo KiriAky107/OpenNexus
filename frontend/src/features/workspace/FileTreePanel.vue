@@ -29,8 +29,8 @@ async function createItem() {
     const name = rawName.endsWith('.md') ? rawName : `${rawName}.md`
     const file = await workspaceService.createFile(parentPath.value, name, `# ${rawName}\n\n`)
     workspaceStore.addFileToTree(parentPath.value, file)
-    workspaceStore.openFile(file.path)
     await editorStore.loadFile(file.path)
+    workspaceStore.openFile(file.path)
     await router.push('/workspace')
   } else {
     const folder = await workspaceService.createFolder(parentPath.value, rawName)
@@ -42,8 +42,8 @@ async function createItem() {
 
 async function openNode(node: FileNode) {
   if (node.type === 'folder') return workspaceStore.toggleFolder(node.path)
-  workspaceStore.openFile(node.path)
   await editorStore.loadFile(node.path)
+  workspaceStore.openFile(node.path)
   await router.push('/workspace')
 }
 
@@ -80,8 +80,8 @@ async function deleteTarget() {
   const activeWasRemoved = workspaceStore.closePath(node.path)
   workspaceStore.removeFromTree(node.path)
   if (activeWasRemoved) {
+    editorStore.closeFile()
     if (workspaceStore.activeFilePath) await editorStore.loadFile(workspaceStore.activeFilePath)
-    else editorStore.closeFile()
   }
   closeContextMenu()
 }
