@@ -1,6 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
-import PlaceholderView from '@/features/common/PlaceholderView.vue'
 
 const routes = [
   {
@@ -18,49 +17,49 @@ const routes = [
   {
     path: '/search',
     name: 'search',
-    component: PlaceholderView,
+    component: () => import('@/features/search/SearchView.vue'),
     meta: { title: '搜索', requiresVault: true },
   },
   {
     path: '/chat',
     name: 'chat',
-    component: PlaceholderView,
+    component: () => import('@/features/chat/ChatView.vue'),
     meta: { title: 'AI 对话', requiresVault: true },
   },
   {
     path: '/agent/runs/:runId?',
     name: 'agent',
-    component: PlaceholderView,
+    component: () => import('@/features/agent/AgentView.vue'),
     meta: { title: 'Agent Trace', requiresVault: true },
   },
   {
     path: '/tasks',
     name: 'tasks',
-    component: PlaceholderView,
+    component: () => import('@/features/tasks/TasksView.vue'),
     meta: { title: '任务', requiresVault: true },
   },
   {
     path: '/extensions/skills',
     name: 'skills',
-    component: PlaceholderView,
+    component: () => import('@/features/skills/SkillsView.vue'),
     meta: { title: 'Skill 管理', requiresVault: true },
   },
   {
     path: '/extensions/plugins',
     name: 'plugins',
-    component: PlaceholderView,
+    component: () => import('@/features/plugins/PluginsView.vue'),
     meta: { title: 'Plugin 管理', requiresVault: true },
   },
   {
     path: '/themes',
     name: 'themes',
-    component: PlaceholderView,
+    component: () => import('@/features/themes/ThemesView.vue'),
     meta: { title: '主题管理', requiresVault: true },
   },
   {
     path: '/settings',
     name: 'settings',
-    component: PlaceholderView,
+    component: () => import('@/features/settings/SettingsView.vue'),
     meta: { title: '设置', requiresVault: true },
   },
 ]
