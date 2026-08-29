@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useThemeStore } from '@/stores/theme'
 import { useEditorStore } from '@/stores/editor'
+import { useSettingsStore } from '@/stores/settings'
 import PrimarySidebar from './PrimarySidebar.vue'
 import SecondarySidebar from './SecondarySidebar.vue'
 import StatusBar from './StatusBar.vue'
@@ -17,8 +18,15 @@ defineProps<{
 const workspaceStore = useWorkspaceStore()
 const themeStore = useThemeStore()
 const editorStore = useEditorStore()
+const settingsStore = useSettingsStore()
 const route = useRoute()
 const router = useRouter()
+
+onMounted(() => { void settingsStore.loadDiagnostics() })
+watch(() => settingsStore.defaultEditorMode, (mode) => editorStore.setMode(mode), { immediate: true })
+watch(() => settingsStore.editorLineWidth, (width) => {
+  document.documentElement.style.setProperty('--editor-line-width', `${width}ch`)
+}, { immediate: true })
 
 const routeName = computed(() => route.name as string)
 

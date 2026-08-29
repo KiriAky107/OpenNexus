@@ -17,7 +17,12 @@ const newVaultPath = ref('')
 const aiCoreStatus = ref<'checking' | 'running' | 'stopped'>('checking')
 
 onMounted(async () => {
-  await workspaceStore.loadRecentVaults()
+  await Promise.all([workspaceStore.loadRecentVaults(), settingsStore.loadDiagnostics()])
+  const lastVaultPath = localStorage.getItem('last-vault-path')
+  if (settingsStore.restoreLastVault && lastVaultPath) {
+    await openVault(lastVaultPath)
+    return
+  }
   setTimeout(() => {
     aiCoreStatus.value = settingsStore.aiCoreStatus === 'running' ? 'running' : 'stopped'
   }, 800)
