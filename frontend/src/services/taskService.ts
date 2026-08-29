@@ -46,13 +46,14 @@ export async function createTask(data: {
 
 export async function updateTask(
   taskId: string,
-  data: Partial<Pick<TaskItem, 'title' | 'description' | 'status' | 'priority' | 'due_date'>>
+  data: Partial<Pick<TaskItem, 'title' | 'description' | 'status' | 'due_date'>> & { note_id?: string | null }
 ): Promise<TaskItem> {
   return toTask(await apiClient.patch<ApiTask>(`/api/tasks/${taskId}`, {
     title: data.title,
     description: data.description,
     status: data.status,
     due_at: data.due_date,
+    note_id: data.note_id,
   }))
 }
 
