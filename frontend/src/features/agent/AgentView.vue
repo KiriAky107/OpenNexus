@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAgentStore } from '@/stores/agent'
 import { useProviderStore } from '@/stores/provider'
 import { useSkillStore } from '@/stores/skill'
+import type { AgentEvent } from '@/contracts'
+import { eventLabel, localizeDetails, permissionLabel, runStatusLabel, toolDescription, toolLabel } from './labels'
 
 const route = useRoute()
 const router = useRouter()
@@ -24,12 +26,12 @@ onMounted(async () => {
   try {
     await Promise.all([providerStore.loadProviders(), skillStore.loadSkills(), agentStore.loadTools()])
     await providerStore.loadModels(form.provider_id)
-  } catch (error) { pageError.value = error instanceof Error ? error.message : 'Agent 配置加载失败' }
+  } catch (error) { pageError.value = error instanceof Error ? error.message : '智能体配置加载失败' }
 })
 
 watch(() => route.params.runId, async (runId) => {
   if (typeof runId !== 'string') return
-  try { await agentStore.loadRun(runId) } catch (error) { pageError.value = error instanceof Error ? error.message : 'Run 加载失败' }
+  try { await agentStore.loadRun(runId) } catch (error) { pageError.value = error instanceof Error ? error.message : '运行记录加载失败' }
 }, { immediate: true })
 
 watch(() => form.provider_id, async (providerId) => {
@@ -53,50 +55,54 @@ async function createRun() {
       allow_network: form.allow_network, max_concurrent_tools: form.max_concurrent_tools,
     })
     await router.replace({ name: 'agent', params: { runId: run.run_id } })
-  } catch (error) { pageError.value = error instanceof Error ? error.message : 'Run 创建失败' }
+  } catch (error) { pageError.value = error instanceof Error ? error.message : '运行创建失败' }
 }
 
-function eventText(data: Record<string, unknown>) {
-  return String(data.text ?? data.message ?? data.code ?? '')
+function eventText(event: AgentEvent) {
+  if (event.event === 'RunCompleted') return '任务已成功完成。'
+  if (event.event === 'RunCancelled') return '任务已取消。'
+  const text = event.data.text ?? event.data.message ?? event.data.code
+  if (text) return String(text)
+  return ''
 }
 </script>
 
 <template>
   <section class="feature-page agent-page">
-    <header class="feature-header"><div><h1>{{ isNewRun ? '创建 Agent Run' : 'Agent Trace' }}</h1><p>配置执行边界，并实时查看模型、工具和权限事件。</p></div>
-      <button v-if="!isNewRun" class="button-secondary" @click="router.push({ name: 'agent' })">新建 Run</button></header>
+    <header class="feature-header"><div><h1>{{ isNewRun ? '创建智能体运行' : '智能体执行轨迹' }}</h1><p>配置执行边界，并实时查看模型、工具和权限事件。</p></div>
+      <button v-if="!isNewRun" class="button-secondary" @click="router.push({ name: 'agent' })">新建运行</button></header>
     <div v-if="pageError || agentStore.error" class="error-banner">{{ pageError || agentStore.error }}</div>
     <form v-if="isNewRun" class="panel run-form" @submit.prevent="createRun">
-      <div class="field"><label>任务</label><textarea v-model="form.input" class="textarea" required placeholder="描述希望 Agent 完成的任务" /></div>
+      <div class="field"><label>任务</label><textarea v-model="form.input" class="textarea" required placeholder="描述希望智能体完成的任务" /></div>
       <div class="form-grid">
-        <div class="field"><label>Provider</label><select v-model="form.provider_id" class="select"><option v-for="p in providerStore.enabledProviders" :key="p.provider_id" :value="p.provider_id">{{ p.name }}</option></select></div>
-        <div class="field"><label>Model</label><select v-model="form.model" class="select"><option v-for="m in models" :key="m.model_id" :value="m.model_id">{{ m.name }}</option></select></div>
-        <div class="field"><label>Skill</label><select v-model="form.skill_id" class="select"><option value="">不使用 Skill</option><option v-for="s in skillStore.readySkills" :key="s.skill_id" :value="s.skill_id">{{ s.name }}</option></select></div>
+        <div class="field"><label>模型提供商</label><select v-model="form.provider_id" class="select"><option v-for="p in providerStore.enabledProviders" :key="p.provider_id" :value="p.provider_id">{{ p.name }}</option></select></div>
+        <div class="field"><label>模型</label><select v-model="form.model" class="select"><option v-for="m in models" :key="m.model_id" :value="m.model_id">{{ m.name }}</option></select></div>
+        <div class="field"><label>技能</label><select v-model="form.skill_id" class="select"><option value="">不使用技能</option><option v-for="s in skillStore.readySkills" :key="s.skill_id" :value="s.skill_id">{{ s.name }}</option></select></div>
         <div class="field"><label>最大步骤</label><input v-model.number="form.max_steps" class="input" type="number" min="1" max="100" /></div>
-        <div class="field"><label>Tool Timeout（秒）</label><input v-model.number="form.tool_timeout_seconds" class="input" type="number" min="1" /></div>
-        <div class="field"><label>Run Timeout（秒）</label><input v-model.number="form.run_timeout_seconds" class="input" type="number" min="1" /></div>
-        <div class="field"><label>Token Budget</label><input v-model.number="form.token_budget" class="input" type="number" min="1" /></div>
+        <div class="field"><label>工具超时（秒）</label><input v-model.number="form.tool_timeout_seconds" class="input" type="number" min="1" /></div>
+        <div class="field"><label>运行超时（秒）</label><input v-model.number="form.run_timeout_seconds" class="input" type="number" min="1" /></div>
+        <div class="field"><label>令牌预算</label><input v-model.number="form.token_budget" class="input" type="number" min="1" /></div>
         <div class="field"><label>最大并发工具</label><input v-model.number="form.max_concurrent_tools" class="input" type="number" min="1" /></div>
       </div>
-      <div class="field"><label>允许的 Tool</label><div class="tool-grid"><label v-for="tool in agentStore.tools" :key="tool.name" class="tool-option"><input type="checkbox" :checked="form.allowed_tools.includes(tool.name)" @change="toggleTool(tool.name)" /><span><strong>{{ tool.name }}</strong><small>{{ tool.description }}</small></span></label></div></div>
-      <label class="network"><input v-model="form.allow_network" type="checkbox" /> 允许本次 Run 调用网络工具</label>
+      <div class="field"><label>允许使用的工具</label><div class="tool-grid"><label v-for="tool in agentStore.tools" :key="tool.name" class="tool-option"><input type="checkbox" :checked="form.allowed_tools.includes(tool.name)" @change="toggleTool(tool.name)" /><span><strong>{{ toolLabel(tool.name) }}</strong><code>{{ tool.name }}</code><small>{{ toolDescription(tool.name, tool.description) }}</small></span></label></div></div>
+      <label class="network"><input v-model="form.allow_network" type="checkbox" /> 允许本次运行调用网络工具</label>
       <div class="inline-actions"><button class="button-primary" :disabled="agentStore.isCreating || !form.input.trim()">{{ agentStore.isCreating ? '创建中…' : '创建并运行' }}</button></div>
     </form>
 
     <div v-else class="trace-layout">
-      <div class="panel run-summary"><div><span class="badge info">{{ agentStore.activeRun?.status }}</span><h2>{{ agentStore.activeRunId }}</h2></div><div class="inline-actions"><span>步骤 {{ agentStore.currentStep }} / {{ agentStore.activeRun?.max_steps }}</span><button v-if="agentStore.isRunning" class="button-danger" @click="agentStore.cancelRun(agentStore.activeRunId!)">取消运行</button></div></div>
+      <div class="panel run-summary"><div><span class="badge info">{{ runStatusLabel(agentStore.activeRun?.status) }}</span><h2>{{ agentStore.activeRunId }}</h2></div><div class="inline-actions"><span>步骤 {{ agentStore.currentStep }} / {{ agentStore.activeRun?.max_steps }}</span><button v-if="agentStore.isRunning" class="button-danger" @click="agentStore.cancelRun(agentStore.activeRunId!)">取消运行</button></div></div>
       <div class="timeline">
         <article v-for="event in agentStore.events" :key="event.sequence" class="event-card item-card">
-          <div class="event-head"><span class="badge" :class="{ success: event.event === 'RunCompleted', error: event.event === 'RunFailed', warning: event.event === 'PermissionRequired' }">{{ event.event }}</span><span>#{{ event.sequence }} · {{ new Date(event.timestamp).toLocaleTimeString() }}</span></div>
-          <p v-if="eventText(event.data)" class="event-text">{{ eventText(event.data) }}</p>
-          <pre v-if="['ToolCall', 'ToolResult', 'Citation'].includes(event.event)">{{ JSON.stringify(event.data, null, 2) }}</pre>
+          <div class="event-head"><span class="badge" :class="{ success: event.event === 'RunCompleted', error: event.event === 'RunFailed', warning: event.event === 'PermissionRequired' }">{{ eventLabel(event.event) }}</span><span>第 {{ event.sequence }} 条 · {{ new Date(event.timestamp).toLocaleTimeString() }}</span></div>
+          <p v-if="eventText(event)" class="event-text">{{ eventText(event) }}</p>
+          <pre v-if="['ToolCall', 'ToolResult', 'Citation', 'Usage'].includes(event.event)">{{ JSON.stringify(localizeDetails(event.data), null, 2) }}</pre>
         </article>
-        <div v-if="!agentStore.events.length" class="empty-state"><div><strong>等待 Trace</strong><p>事件连接建立后将在这里实时显示。</p></div></div>
+        <div v-if="!agentStore.events.length" class="empty-state"><div><strong>等待执行轨迹</strong><p>事件连接建立后将在这里实时显示。</p></div></div>
       </div>
     </div>
 
     <div v-if="agentStore.permissionRequest" class="modal-backdrop">
-      <div class="modal"><span class="badge warning">权限确认</span><h2>{{ agentStore.permissionRequest.tool_name }}</h2><p>{{ agentStore.permissionRequest.impact }}</p><p class="subtle">权限：{{ agentStore.permissionRequest.permission }}</p><pre>{{ JSON.stringify(agentStore.permissionRequest.parameters, null, 2) }}</pre><div class="inline-actions permission-actions"><button class="button-primary" @click="agentStore.respondPermission('allow', 'once')">仅本次允许</button><button class="button-secondary" @click="agentStore.respondPermission('allow', 'session')">本次会话允许</button><button class="button-danger" @click="agentStore.respondPermission('deny')">拒绝</button></div></div>
+      <div class="modal"><span class="badge warning">权限确认</span><h2>{{ toolLabel(agentStore.permissionRequest.tool_name) }}</h2><p>{{ agentStore.permissionRequest.impact }}</p><p class="subtle">所需权限：{{ permissionLabel(agentStore.permissionRequest.permission) }}（{{ agentStore.permissionRequest.permission }}）</p><pre>{{ JSON.stringify(localizeDetails(agentStore.permissionRequest.parameters), null, 2) }}</pre><div class="inline-actions permission-actions"><button class="button-primary" @click="agentStore.respondPermission('allow', 'once')">仅本次允许</button><button class="button-secondary" @click="agentStore.respondPermission('allow', 'session')">本次会话允许</button><button class="button-danger" @click="agentStore.respondPermission('deny')">拒绝</button></div></div>
     </div>
   </section>
 </template>
@@ -106,6 +112,7 @@ function eventText(data: Record<string, unknown>) {
 .tool-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: var(--space-sm); }
 .tool-option { display: flex; gap: var(--space-sm); padding: var(--space-sm); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); }
 .tool-option small { display: block; color: var(--color-text-secondary); }
+.tool-option code { display: block; margin: 2px 0; color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 .network { display: flex; gap: var(--space-sm); }
 .trace-layout { display: grid; gap: var(--space-lg); }
 .run-summary, .event-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); }

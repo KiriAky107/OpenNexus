@@ -19,7 +19,7 @@ const sidebarTitle = computed(() => {
   const titles: Record<string, string> = {
     'file-tree': '文件',
     'conversation-list': '对话',
-    'run-list': 'Agent Run',
+    'run-list': '智能体运行',
     'search-filters': '搜索筛选',
     'task-filters': '任务筛选',
     'extension-list': '扩展',

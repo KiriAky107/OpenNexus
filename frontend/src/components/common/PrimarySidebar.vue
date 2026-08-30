@@ -12,7 +12,7 @@ const navItems = [
   { name: 'workspace', icon: FolderOpened, label: '工作区' },
   { name: 'search', icon: Search, label: '搜索' },
   { name: 'chat', icon: ChatDotRound, label: 'AI 对话' },
-  { name: 'agent', icon: Cpu, label: 'Agent' },
+  { name: 'agent', icon: Cpu, label: '智能体' },
   { name: 'tasks', icon: CircleCheck, label: '任务' },
   { name: 'skills', icon: Lightning, label: 'Skill' },
   { name: 'plugins', icon: Connection, label: 'Plugin' },
