@@ -1,3 +1,5 @@
+"""Provider 凭据解析及本地加密存储。"""
+
 import json
 import os
 import re
@@ -43,6 +45,8 @@ class EnvironmentCredentialResolver:
 class EncryptedCredentialStore:
     """将本地开发凭据作为 Fernet 密文存储，Provider 使用时按 ID 解密。"""
 
+    # TODO(security): 桌面 Host 接入后将主密钥迁移到系统钥匙串/凭据保险库。
+
     def __init__(self) -> None:
         self._lock = threading.RLock()
 
@@ -75,6 +79,7 @@ class EncryptedCredentialStore:
         key_path.parent.mkdir(parents=True, exist_ok=True)
         self._restrict(key_path.parent, 0o700)
         if not key_path.exists():
+            # 先写临时文件再原子替换，避免异常退出留下半截主密钥。
             temporary = key_path.with_suffix(".tmp")
             temporary.write_bytes(Fernet.generate_key())
             self._restrict(temporary, 0o600)
@@ -112,6 +117,7 @@ class EncryptedCredentialStore:
             encoding="utf-8",
         )
         self._restrict(temporary, 0o600)
+        # 凭据表同样使用原子替换，确保并发读取只会看到完整 JSON。
         temporary.replace(store_path)
         self._restrict(store_path, 0o600)
 
@@ -158,6 +164,7 @@ class ChainedCredentialResolver:
         self._resolvers = resolvers
 
     def resolve(self, credential_id: str | None) -> str | None:
+        # 顺序即优先级：调用方可让 Host 注入值覆盖本地开发凭据。
         for resolver in self._resolvers:
             value = resolver.resolve(credential_id)
             if value:
