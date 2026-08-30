@@ -39,6 +39,7 @@ type ToolbarCommand = 'bold' | 'italic' | 'ordered-list' | 'bullet-list' | 'inli
 function runCommand(command: ToolbarCommand) {
   const editor = crepe?.editor
   if (!editor) return
+  // 顶部工具栏复用 Milkdown 命令，因此选区与浮动工具栏共享同一文档事务。
   const actions = {
     bold: callCommand(toggleStrongCommand.key),
     italic: callCommand(toggleEmphasisCommand.key),
@@ -55,6 +56,7 @@ function runCommand(command: ToolbarCommand) {
 
 function applyLink() {
   if (!crepe) return
+  // TODO(editor): 用受控 Element Plus 对话框替换 prompt，补充 URL 校验和键盘焦点管理。
   const href = window.prompt('请输入链接地址', 'https://')?.trim()
   if (!href) return
 
@@ -162,6 +164,7 @@ onMounted(async () => {
   crepe.editor.use(fontSizeMarkdownPlugin)
   crepe.on((listener) => {
     listener.markdownUpdated((_ctx, markdown, previousMarkdown) => {
+      // 忽略编辑器初始化/回显事件，防止无内容变化时触发自动保存循环。
       if (markdown === previousMarkdown || markdown === editorStore.content) return
       editorStore.updateContent(markdown)
       editorStore.scheduleAutoSave(settingsStore.autoSaveInterval)

@@ -53,6 +53,7 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   function processEvent(event: AgentEvent) {
+    // 服务端会先回放历史再发送实时事件，以 run_id + sequence 去重保证幂等。
     if (events.value.some((item) => item.run_id === event.run_id && item.sequence === event.sequence)) return
     events.value.push(event)
     events.value.sort((a, b) => a.sequence - b.sequence)
@@ -100,6 +101,7 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   function subscribe(runId: string) {
+    // 任一时刻只保留当前运行的事件流，防止切换详情后旧事件污染新页面。
     eventStream?.cancel()
     isRunning.value = true
     error.value = null

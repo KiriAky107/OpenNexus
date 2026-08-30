@@ -3,6 +3,7 @@ import { SseClient } from './sseClient'
 import type { AgentRun, AgentEvent, ApiAgentRun, OperationResponse, PageMeta, ToolDefinition, PermissionRequest } from '@/contracts'
 
 function toAgentRun(run: ApiAgentRun): AgentRun {
+  // API 的 token_usage 是累计值，UI 模型预留了输入/输出拆分字段。
   return {
     run_id: run.run_id,
     status: run.status,
@@ -67,6 +68,7 @@ export function streamAgentEvents(
     onOpen?: () => void
   }
 ): SseClient {
+  // 将通用 SSE 包装成领域事件，Store 无需了解传输层 envelope。
   const client = new SseClient({
     url: `/api/agent/runs/${runId}/events`,
     method: 'GET',
