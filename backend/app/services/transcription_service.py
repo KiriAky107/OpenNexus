@@ -1,3 +1,5 @@
+"""转写适配层；第一阶段消费文本附件或桌面 Host 预生成的旁路文本。"""
+
 from __future__ import annotations
 
 from collections import OrderedDict
@@ -13,6 +15,7 @@ MAX_JOBS = 100
 
 
 def create_transcription(attachment_id: str, language: str | None = None) -> TranscriptionJob:
+    # TODO(ai-core): 第二阶段接入本地 ASR 队列后，保留相同 Job 契约替换此同步降级实现。
     del language  # 预生成 transcript 暂不需要语言识别。
     source = attachment_path(attachment_id)
     transcript = source if source.suffix.lower() in {".txt", ".md"} else Path(f"{source}.txt")

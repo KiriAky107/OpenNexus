@@ -1,7 +1,7 @@
 import type { FileNode } from '@/contracts'
 
-// Mock workspace service for web dev mode
-// In Tauri environment this will use Tauri IPC commands
+// Web 开发模式使用内存实现，服务签名保持与未来桌面文件系统适配器一致。
+// TODO(desktop): Tauri Host 就绪后通过 IPC 替换 Mock，并保留路径规范化与错误映射。
 
 export interface VaultInfo {
   path: string
@@ -251,5 +251,8 @@ export function deleteFile(path: string): Promise<void> {
 }
 
 export function moveFile(sourcePath: string, targetPath: string): Promise<void> {
+  // Mock 文件树由 Store 同步更新；真实实现必须在 Host 侧执行原子移动。
+  void sourcePath
+  void targetPath
   return Promise.resolve()
 }
