@@ -74,6 +74,14 @@ uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 - API 文档：<http://127.0.0.1:8000/docs>
 - OpenAPI JSON：<http://127.0.0.1:8000/openapi.json>
 
+#### 开发环境使用外部模型
+
+在“设置 → 模型提供商”中选择 DeepSeek 或 OpenAI 预设后，直接在密码输入框填写 API Key。前端只在提交期间持有该值，不写入 Pinia 或 localStorage；AI Core 将其加密保存到本机 `backend/data/credentials/`，Provider 配置只保留内部 Credential ID。
+
+该目录同时包含本地开发用主密钥和密文，并已加入 `.gitignore`。这提供本地静态加密和完整性校验，但不能替代操作系统凭据库。开始 Tauri 桌面集成后，应将存储实现迁移到 Stronghold，保留现有 Credential API 与 Provider 接口边界。
+
+无界面或自动化环境仍可使用 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY` 或 `AINOTE_CREDENTIAL_<ID>` 注入；设置页保存的本地密钥优先，环境变量仅在本地未保存对应 Credential ID 时作为回退。密钥不得写入仓库文件、README、Issue、提交信息或聊天记录。
+
 ### 终端二：启动前端
 
 ```powershell

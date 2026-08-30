@@ -10,6 +10,8 @@ from app.contracts import (
     AgentRunCreateRequest,
     AgentRunListResponse,
     ChatRequest,
+    CredentialStatus,
+    CredentialWriteRequest,
     ExtensionInstallRequest,
     IndexJob,
     IndexRebuildRequest,
@@ -31,6 +33,7 @@ from app.contracts import (
     ProviderCreateRequest,
     ProviderListResponse,
     ProviderModelsResponse,
+    ProviderPresetListResponse,
     ProviderTestRequest,
     ProviderTestResponse,
     ProviderUpdateRequest,
@@ -52,6 +55,8 @@ from app.errors import ApiError
 from app.extensions import ExtensionError
 from app.providers.registry import ProviderNotFoundError
 from app.providers.factory import UnsupportedProviderError
+from app.providers.base import ProviderError
+from app.providers.credentials import CredentialStoreError
 from app.retrieval.engine import engine
 from app.services import index_service, note_service, task_service, transcription_service
 
@@ -411,9 +416,59 @@ async def uninstall_plugin(plugin_id: str) -> OperationResponse:
 
 
 # Providers
+@router.get(
+    "/credentials/{credential_id}",
+    response_model=CredentialStatus,
+    tags=["Providers"],
+)
+async def get_credential_status(credential_id: str) -> CredentialStatus:
+    try:
+        configured = container.credentials.has(credential_id)
+    except CredentialStoreError as exc:
+        raise ApiError(422, "CREDENTIAL_INVALID", str(exc)) from exc
+    return CredentialStatus(credential_id=credential_id, configured=configured)
+
+
+@router.put(
+    "/credentials/{credential_id}",
+    response_model=CredentialStatus,
+    tags=["Providers"],
+)
+async def put_credential(
+    credential_id: str, request: CredentialWriteRequest
+) -> CredentialStatus:
+    try:
+        container.credentials.put(credential_id, request.api_key.get_secret_value())
+    except CredentialStoreError as exc:
+        raise ApiError(422, "CREDENTIAL_STORE_ERROR", str(exc)) from exc
+    return CredentialStatus(credential_id=credential_id, configured=True)
+
+
+@router.delete(
+    "/credentials/{credential_id}",
+    response_model=CredentialStatus,
+    tags=["Providers"],
+)
+async def delete_credential(credential_id: str) -> CredentialStatus:
+    try:
+        container.credentials.delete(credential_id)
+    except CredentialStoreError as exc:
+        raise ApiError(422, "CREDENTIAL_STORE_ERROR", str(exc)) from exc
+    return CredentialStatus(credential_id=credential_id, configured=False)
+
+
 @router.get("/providers", response_model=ProviderListResponse, tags=["Providers"])
 async def list_providers() -> ProviderListResponse:
     return ProviderListResponse(items=container.providers.list_configs())
+
+
+@router.get(
+    "/providers/presets",
+    response_model=ProviderPresetListResponse,
+    tags=["Providers"],
+)
+async def list_provider_presets() -> ProviderPresetListResponse:
+    return ProviderPresetListResponse(items=container.provider_factory.presets())
 
 
 @router.get(
@@ -502,9 +557,26 @@ async def delete_provider(provider_id: str) -> OperationResponse:
 )
 async def list_provider_models(provider_id: str) -> ProviderModelsResponse:
     provider_or_404(provider_id)
+    try:
+        models = await container.providers.list_models(provider_id)
+    except ProviderError as exc:
+        status_code = {
+            "PROVIDER_CREDENTIAL_MISSING": 422,
+            "PROVIDER_CREDENTIAL_UNAVAILABLE": 500,
+            "PROVIDER_AUTH_FAILED": 401,
+            "MODEL_NOT_FOUND": 404,
+            "PROVIDER_RATE_LIMITED": 429,
+            "PROVIDER_TIMEOUT": 504,
+        }.get(exc.code, 502)
+        raise ApiError(
+            status_code,
+            exc.code,
+            exc.message,
+            {"provider_id": provider_id},
+        ) from exc
     return ProviderModelsResponse(
         provider_id=provider_id,
-        items=await container.providers.list_models(provider_id),
+        items=models,
     )
 
 

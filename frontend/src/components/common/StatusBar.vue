@@ -84,7 +84,7 @@ const showEditorInfo = computed(() => route.name === 'workspace')
       </span>
       <span v-if="agentStore.isRunning" class="status-item agent-status">
         <span class="spinner" />
-        Agent 运行中
+        智能体运行中
       </span>
     </div>
     <div class="statusbar-right">

@@ -6,6 +6,8 @@ import * as workspaceService from '@/services/workspaceService'
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
 import FileTreeNode from './FileTreeNode.vue'
+import { DocumentAdd, FolderAdd } from '@element-plus/icons-vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 const workspaceStore = useWorkspaceStore()
 const editorStore = useEditorStore()
@@ -42,9 +44,18 @@ async function createItem() {
 
 async function openNode(node: FileNode) {
   if (node.type === 'folder') return workspaceStore.toggleFolder(node.path)
-  await editorStore.loadFile(node.path)
+  // 先同步活动文件，让真实点击立即生效；内容加载失败时再恢复原状态。
+  const previousPath = workspaceStore.activeFilePath
+  const wasOpen = workspaceStore.openFiles.includes(node.path)
   workspaceStore.openFile(node.path)
-  await router.push('/workspace')
+  try {
+    await editorStore.loadFile(node.path)
+    await router.push('/workspace')
+  } catch (error) {
+    if (!wasOpen) workspaceStore.closeFile(node.path)
+    workspaceStore.setActiveFile(previousPath)
+    console.error(`打开文件失败：${node.path}`, error)
+  }
 }
 
 function openContextMenu(event: MouseEvent, node: FileNode) {
@@ -90,8 +101,8 @@ async function deleteTarget() {
 <template>
   <section class="file-tree-panel" @click="closeContextMenu">
     <div class="toolbar">
-      <button type="button" title="新建笔记" @click.stop="beginCreate('file')">＋📄</button>
-      <button type="button" title="新建文件夹" @click.stop="beginCreate('folder')">＋📁</button>
+      <button type="button" title="新建笔记" aria-label="新建笔记" @click.stop="beginCreate('file')"><AppIcon :icon="DocumentAdd" /></button>
+      <button type="button" title="新建文件夹" aria-label="新建文件夹" @click.stop="beginCreate('folder')"><AppIcon :icon="FolderAdd" /></button>
     </div>
     <form v-if="newItemType" class="new-item" @submit.prevent="createItem">
       <input v-model="newItemName" :placeholder="newItemType === 'file' ? '笔记名称' : '文件夹名称'" autofocus />

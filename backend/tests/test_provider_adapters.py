@@ -12,6 +12,8 @@ from app.contracts import (
     ToolDefinition,
 )
 from app.providers.ollama import OllamaProvider
+from app.providers.base import ProviderError
+from app.providers.credentials import EnvironmentCredentialResolver
 from app.providers.openai_compatible import OpenAICompatibleProvider
 
 
@@ -132,6 +134,53 @@ def test_openai_compatible_preserves_tool_call_context() -> None:
     assert captured["messages"][1]["tool_calls"][0]["id"] == "call_1"
     assert captured["messages"][2]["tool_call_id"] == "call_1"
     assert turn.text == "done"
+
+
+def test_openai_compatible_fetches_and_maps_model_list() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1/models"
+        assert request.headers["Authorization"] == "Bearer secret-test-key"
+        return httpx.Response(
+            200,
+            json={"data": [{"id": "model-b"}, {"id": "model-a"}]},
+        )
+
+    provider = OpenAICompatibleProvider(
+        base_url="https://provider.test/v1",
+        credential_id="provider-test",
+        credentials=StaticCredentials(),
+        transport=httpx.MockTransport(handler),
+    )
+
+    models = run(provider.list_models())
+
+    assert [item.model for item in models] == ["model-b", "model-a"]
+
+
+def test_environment_credentials_support_deepseek_development_alias(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-test-key")
+
+    assert EnvironmentCredentialResolver().resolve("deepseek") == "secret-test-key"
+
+
+def test_openai_compatible_rejects_missing_named_credential_before_request() -> None:
+    class EmptyCredentials:
+        def resolve(self, credential_id: str | None) -> str | None:
+            return None
+
+    provider = OpenAICompatibleProvider(
+        base_url="https://provider.test/v1",
+        credential_id="deepseek",
+        credentials=EmptyCredentials(),
+    )
+
+    try:
+        run(provider.list_models())
+    except ProviderError as error:
+        assert error.code == "PROVIDER_CREDENTIAL_MISSING"
+    else:
+        raise AssertionError("Missing credential should fail before the provider request")
 
 
 def test_ollama_maps_models_and_completion() -> None:

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { Connection, Lightning } from '@element-plus/icons-vue'
+import AppIcon from './AppIcon.vue'
 import { computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePluginStore } from '@/stores/plugin'
@@ -17,13 +19,13 @@ onMounted(() => { if (isPlugin.value) void pluginStore.loadPlugins(); else void 
     <div v-if="isPlugin" class="sidebar-list">
       <button v-for="plugin in pluginStore.plugins" :key="plugin.plugin_id" class="sidebar-list-item extension-item"
         :class="{ active: pluginStore.selectedPluginId === plugin.plugin_id }" @click="pluginStore.selectPlugin(plugin.plugin_id)">
-        <span>{{ plugin.icon || '🧩' }}</span><span><strong>{{ plugin.name }}</strong><small>{{ plugin.status }}</small></span>
+        <AppIcon :icon="Connection" /><span><strong>{{ plugin.name }}</strong><small>{{ plugin.status }}</small></span>
       </button>
     </div>
     <div v-else class="sidebar-list">
       <button v-for="skill in skillStore.skills" :key="skill.skill_id" class="sidebar-list-item extension-item"
         :class="{ active: skillStore.selectedSkillId === skill.skill_id }" @click="skillStore.selectSkill(skill.skill_id)">
-        <span>{{ skill.icon || '⚡' }}</span><span><strong>{{ skill.name }}</strong><small>{{ skill.status }}</small></span>
+        <AppIcon :icon="Lightning" /><span><strong>{{ skill.name }}</strong><small>{{ skill.status }}</small></span>
       </button>
     </div>
   </div>

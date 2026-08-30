@@ -290,6 +290,15 @@ export interface ProviderConfig {
   has_credential: boolean
 }
 
+export interface ProviderPreset {
+  preset_id: string
+  name: string
+  provider_type: ProviderType
+  base_url: string
+  default_credential_id?: string | null
+  requires_credential: boolean
+}
+
 // ============ Tasks ============
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled'
@@ -508,6 +517,15 @@ export interface ApiProviderConfig {
   credential_id?: string | null
   enabled: boolean
   capabilities: string[]
+}
+
+export interface ApiProviderPreset {
+  preset_id: string
+  name: string
+  provider_type: ApiProviderType
+  base_url: string
+  default_credential_id?: string | null
+  requires_credential: boolean
 }
 
 export interface ApiModelInfo {
