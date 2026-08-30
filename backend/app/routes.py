@@ -517,6 +517,7 @@ async def list_provider_models(provider_id: str) -> ProviderModelsResponse:
         models = await container.providers.list_models(provider_id)
     except ProviderError as exc:
         status_code = {
+            "PROVIDER_CREDENTIAL_MISSING": 422,
             "PROVIDER_AUTH_FAILED": 401,
             "MODEL_NOT_FOUND": 404,
             "PROVIDER_RATE_LIMITED": 429,

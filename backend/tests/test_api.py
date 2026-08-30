@@ -67,6 +67,7 @@ def test_provider_presets_include_openai_and_deepseek() -> None:
     assert by_id["openai"].base_url == "https://api.openai.com/v1"
     assert by_id["deepseek"].base_url == "https://api.deepseek.com"
     assert by_id["deepseek"].provider_type == ProviderType.openai_compatible
+    assert by_id["deepseek"].default_credential_id == "deepseek"
 
 
 def test_provider_presets_static_route_precedes_provider_id_route() -> None:
