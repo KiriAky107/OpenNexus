@@ -8,6 +8,11 @@ const globalStyles = [
   new URL('./features.css', import.meta.url),
 ].map((path) => readFileSync(path, 'utf8')).join('\n')
 
+const markdownStyles = [
+  new URL('../features/editor/VisualMarkdownEditor.vue', import.meta.url),
+  new URL('../components/common/MarkdownContent.vue', import.meta.url),
+].map((path) => readFileSync(path, 'utf8')).join('\n')
+
 describe('轻量动效基线', () => {
   it('为减少动态效果偏好提供全局回退', () => {
     expect(globalStyles).toContain('@media (prefers-reduced-motion: reduce)')
@@ -23,5 +28,12 @@ describe('轻量动效基线', () => {
     expect(pageAnimation).toContain('opacity')
     expect(pageAnimation).toContain('transform')
     expect(pageAnimation).not.toMatch(/(?:width|height|margin|padding|top|left)\s*:/)
+  })
+
+  it('Markdown 序号和表格使用独立的高对比度主题变量', () => {
+    expect(globalStyles).toContain('--color-markdown-grid:')
+    expect(globalStyles).toContain('--color-markdown-marker:')
+    expect(markdownStyles).toContain('var(--color-markdown-grid)')
+    expect(markdownStyles).toContain('var(--color-markdown-marker)')
   })
 })

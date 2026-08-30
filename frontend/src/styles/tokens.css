@@ -44,6 +44,11 @@
   --color-border-focus: #5b67f1;
   --color-border-disabled: #eef0f3;
 
+  /* Markdown */
+  --color-markdown-grid: #8b949e;
+  --color-markdown-marker: #343b44;
+  --color-markdown-table-header: #eef0f3;
+
   /* Shadow */
   --shadow-sm: 0 1px 2px rgba(31, 35, 40, 0.05), 0 1px 5px rgba(31, 35, 40, 0.03);
   --shadow-md: 0 8px 22px rgba(31, 35, 40, 0.08), 0 2px 6px rgba(31, 35, 40, 0.04);
@@ -152,6 +157,10 @@
   --color-border-focus: #7d8bff;
   --color-border-disabled: #21262d;
 
+  --color-markdown-grid: #6e7681;
+  --color-markdown-marker: #c9d1d9;
+  --color-markdown-table-header: #21262d;
+
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
@@ -172,6 +181,9 @@
   --color-text-tertiary: #9a8a72;
   --color-border-default: #ddcfad;
   --color-border-subtle: #eadfc4;
+  --color-markdown-grid: #9c8353;
+  --color-markdown-marker: #554735;
+  --color-markdown-table-header: #eadbb8;
   --color-accent-primary: #8a5b32;
   --color-accent-primary-hover: #704724;
   --color-accent-soft: #edddbd;

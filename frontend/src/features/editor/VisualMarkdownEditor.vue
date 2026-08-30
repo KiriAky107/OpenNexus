@@ -250,7 +250,7 @@ defineExpose({ getEditor: () => crepe?.editor })
   --crepe-color-surface-low: var(--color-background-secondary);
   --crepe-color-on-surface: var(--color-text-primary);
   --crepe-color-on-surface-variant: var(--color-text-secondary);
-  --crepe-color-outline: var(--color-border-default);
+  --crepe-color-outline: var(--color-markdown-grid);
   --crepe-color-primary: var(--color-accent-primary);
   --crepe-color-secondary: var(--color-accent-soft);
   --crepe-color-on-secondary: var(--color-text-primary);
@@ -272,10 +272,11 @@ defineExpose({ getEditor: () => crepe?.editor })
 :global(.milkdown-toolbar) { border: 1px solid var(--color-border-default) !important; background: var(--color-surface-elevated) !important; box-shadow: var(--shadow-md) !important; }
 :global(.milkdown-toolbar .toolbar-item svg), :global(.milkdown-toolbar .toolbar-item.active svg) { color: var(--color-text-primary) !important; fill: var(--color-text-primary) !important; opacity: 1 !important; }
 :global(.milkdown-toolbar .toolbar-item:hover svg), :global(.milkdown-toolbar .toolbar-item.active svg) { color: var(--color-accent-primary) !important; fill: var(--color-accent-primary) !important; }
-:global([data-theme='light']) .milkdown-host :deep(.milkdown-table-block th),
-:global([data-theme='light']) .milkdown-host :deep(.milkdown-table-block td) { border-color: var(--color-text-tertiary); }
-:global([data-theme='light']) .milkdown-host :deep(.milkdown-list-item-block li .label-wrapper) { color: var(--color-text-secondary); font-weight: 600; }
-:global([data-theme='light']) .milkdown-host :deep(.milkdown-list-item-block li .label-wrapper svg) { fill: var(--color-text-secondary); }
+.milkdown-host :deep(.milkdown-table-block th),
+.milkdown-host :deep(.milkdown-table-block td) { border-color: var(--color-markdown-grid); }
+.milkdown-host :deep(.milkdown-table-block th) { background: var(--color-markdown-table-header); font-weight: 700; }
+.milkdown-host :deep(.milkdown-list-item-block li .label-wrapper) { color: var(--color-markdown-marker); font-weight: 700; }
+.milkdown-host :deep(.milkdown-list-item-block li .label-wrapper svg) { fill: var(--color-markdown-marker); }
 .milkdown-host :deep(code) { font-family: var(--font-editor-mono); }
 :global([data-theme='dark']) .milkdown-host :deep(.milkdown) { color-scheme: dark; }
 @media (max-width: 680px) { .toolbar-select select { min-width: 46px; width: 46px; } }
