@@ -74,6 +74,23 @@ uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 - API 文档：<http://127.0.0.1:8000/docs>
 - OpenAPI JSON：<http://127.0.0.1:8000/openapi.json>
 
+#### 开发环境使用外部模型
+
+当前仓库尚未包含 Tauri Host 与 Stronghold。需要联调外部模型时，应在启动后端的同一个终端会话中，通过进程环境注入密钥，再启动 AI Core：
+
+- DeepSeek 预设的 Credential ID 为 `deepseek`，开发环境读取 `DEEPSEEK_API_KEY`，也兼容 Host 约定的 `AINOTE_CREDENTIAL_DEEPSEEK`；
+- OpenAI 预设的 Credential ID 为 `openai`，开发环境读取 `OPENAI_API_KEY`，也兼容 `AINOTE_CREDENTIAL_OPENAI`。
+
+PowerShell 7 中可以在启动后端的同一终端安全输入 DeepSeek Key，输入内容不会回显，也不会进入命令历史：
+
+```powershell
+$env:DEEPSEEK_API_KEY = Read-Host "DeepSeek API Key" -MaskInput
+cd backend
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+环境变量只应配置在本机或当前进程中，不要写入仓库文件、README、Issue、提交信息或聊天记录。设置环境变量后必须重新启动后端进程，已经运行的进程无法读取之后才添加的变量。前端 Provider 表单中的 Credential ID 不是 API Key，不能把密钥明文粘贴到该字段。
+
 ### 终端二：启动前端
 
 ```powershell
