@@ -19,7 +19,6 @@ import { callCommand } from '@milkdown/kit/utils'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
-import { highlightCode } from '@/utils/markdown'
 import { applyMarkdownFontSize, fontSizeMarkdownPlugin } from './fontSizeMarkdown'
 import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/frame.css'
@@ -105,21 +104,10 @@ onMounted(async () => {
     featureConfigs: {
       [Crepe.Feature.Placeholder]: { text: '开始记录你的想法…' },
       [Crepe.Feature.CodeMirror]: {
-        previewOnlyByDefault: true,
-        previewLabel: 'Shiki 高亮预览',
-        previewLoading: '正在高亮…',
+        previewOnlyByDefault: false,
         searchPlaceholder: '搜索语言',
         noResultText: '没有匹配的语言',
         copyText: '复制',
-        previewToggleText: (previewOnlyMode) => previewOnlyMode ? '编辑代码' : '查看高亮',
-        renderPreview: (language, content, applyPreview) => {
-          void highlightCode(content, language).then((html) => {
-            const template = document.createElement('template')
-            template.innerHTML = html
-            applyPreview(template.content.firstElementChild as HTMLElement | null)
-          })
-          return null
-        },
       },
       [Crepe.Feature.Latex]: {
         inlineEditConfirm: '确认',
@@ -289,15 +277,6 @@ defineExpose({ getEditor: () => crepe?.editor })
 :global([data-theme='light']) .milkdown-host :deep(.milkdown-list-item-block li .label-wrapper) { color: var(--color-text-secondary); font-weight: 600; }
 :global([data-theme='light']) .milkdown-host :deep(.milkdown-list-item-block li .label-wrapper svg) { fill: var(--color-text-secondary); }
 .milkdown-host :deep(code) { font-family: var(--font-editor-mono); }
-.milkdown-host :deep(.shiki) { box-sizing: border-box; width: 100%; overflow: auto; padding: var(--space-md); border-radius: var(--radius-md); }
-:global([data-theme='dark']) .milkdown-host :deep(.shiki),
-:global([data-theme='dark']) .milkdown-host :deep(.shiki span) {
-  color: var(--shiki-dark) !important;
-  background-color: var(--shiki-dark-bg) !important;
-  font-style: var(--shiki-dark-font-style) !important;
-  font-weight: var(--shiki-dark-font-weight) !important;
-  text-decoration: var(--shiki-dark-text-decoration) !important;
-}
 :global([data-theme='dark']) .milkdown-host :deep(.milkdown) { color-scheme: dark; }
 @media (max-width: 680px) { .toolbar-select select { min-width: 46px; width: 46px; } }
 </style>
