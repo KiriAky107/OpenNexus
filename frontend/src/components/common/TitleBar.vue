@@ -4,6 +4,8 @@ import { useRoute } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useEditorStore } from '@/stores/editor'
 import { useThemeStore } from '@/stores/theme'
+import { Moon, Sunny } from '@element-plus/icons-vue'
+import AppIcon from './AppIcon.vue'
 
 const route = useRoute()
 const workspaceStore = useWorkspaceStore()
@@ -52,7 +54,7 @@ const isDirty = computed(() => editorStore.saveStatus === 'dirty' || editorStore
     </div>
     <div class="titlebar-right">
       <button class="icon-btn" @click="themeStore.toggleTheme()" :title="themeStore.isDark ? '切换浅色主题' : '切换深色主题'">
-        <span class="icon">{{ themeStore.isDark ? '☀️' : '🌙' }}</span>
+        <AppIcon :icon="themeStore.isDark ? Sunny : Moon" :size="16" />
       </button>
       <div class="window-controls">
         <span class="win-btn minimize">—</span>

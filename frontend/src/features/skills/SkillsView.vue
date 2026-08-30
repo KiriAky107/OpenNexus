@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { Lightning } from '@element-plus/icons-vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import { onMounted, ref } from 'vue'
 import { useSkillStore } from '@/stores/skill'
 
@@ -30,7 +32,7 @@ async function uninstall(skillId: string, name: string) {
       <div class="detail-grid"><div><h3>工具</h3><div class="tag-list"><span v-for="tool in skillStore.selectedSkill.tools" :key="tool" class="badge info">{{ tool }}</span></div></div><div><h3>权限</h3><div class="tag-list"><span v-for="permission in skillStore.selectedSkill.permissions" :key="permission" class="badge warning">{{ permission }}</span></div></div><div><h3>检索配置</h3><pre>{{ JSON.stringify(skillStore.selectedSkill.retrieval_config, null, 2) }}</pre></div><div><h3>模型能力</h3><div class="tag-list"><span v-for="cap in skillStore.selectedSkill.model_requirements?.capabilities" :key="cap" class="badge">{{ cap }}</span></div></div></div>
       <div v-if="skillStore.selectedSkill.missing_dependencies?.length" class="error-banner dependencies">缺失依赖：{{ skillStore.selectedSkill.missing_dependencies.join('、') }}</div>
     </div>
-    <div v-else class="feature-grid"><article v-for="skill in skillStore.skills" :key="skill.skill_id" class="item-card extension-card" @click="skillStore.selectSkill(skill.skill_id)"><div class="extension-title"><span class="icon">{{ skill.icon || '⚡' }}</span><div><strong>{{ skill.name }}</strong><p>v{{ skill.version }}</p></div><span class="badge" :class="{ success: skill.status === 'ready', warning: skill.status === 'dependency_missing' }">{{ skill.status }}</span></div><p class="muted">{{ skill.description }}</p><div class="tag-list"><span v-for="permission in skill.permissions.slice(0, 3)" :key="permission" class="badge">{{ permission }}</span></div></article></div>
+    <div v-else class="feature-grid"><article v-for="skill in skillStore.skills" :key="skill.skill_id" class="item-card extension-card" @click="skillStore.selectSkill(skill.skill_id)"><div class="extension-title"><AppIcon :icon="Lightning" :size="22" /><div><strong>{{ skill.name }}</strong><p>v{{ skill.version }}</p></div><span class="badge" :class="{ success: skill.status === 'ready', warning: skill.status === 'dependency_missing' }">{{ skill.status }}</span></div><p class="muted">{{ skill.description }}</p><div class="tag-list"><span v-for="permission in skill.permissions.slice(0, 3)" :key="permission" class="badge">{{ permission }}</span></div></article></div>
   </section>
 </template>
 
