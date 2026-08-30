@@ -76,20 +76,11 @@ uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 #### 开发环境使用外部模型
 
-当前仓库尚未包含 Tauri Host 与 Stronghold。需要联调外部模型时，应在启动后端的同一个终端会话中，通过进程环境注入密钥，再启动 AI Core：
+在“设置 → 模型提供商”中选择 DeepSeek 或 OpenAI 预设后，直接在密码输入框填写 API Key。前端只在提交期间持有该值，不写入 Pinia 或 localStorage；AI Core 将其加密保存到本机 `backend/data/credentials/`，Provider 配置只保留内部 Credential ID。
 
-- DeepSeek 预设的 Credential ID 为 `deepseek`，开发环境读取 `DEEPSEEK_API_KEY`，也兼容 Host 约定的 `AINOTE_CREDENTIAL_DEEPSEEK`；
-- OpenAI 预设的 Credential ID 为 `openai`，开发环境读取 `OPENAI_API_KEY`，也兼容 `AINOTE_CREDENTIAL_OPENAI`。
+该目录同时包含本地开发用主密钥和密文，并已加入 `.gitignore`。这提供本地静态加密和完整性校验，但不能替代操作系统凭据库。开始 Tauri 桌面集成后，应将存储实现迁移到 Stronghold，保留现有 Credential API 与 Provider 接口边界。
 
-PowerShell 7 中可以在启动后端的同一终端安全输入 DeepSeek Key，输入内容不会回显，也不会进入命令历史：
-
-```powershell
-$env:DEEPSEEK_API_KEY = Read-Host "DeepSeek API Key" -MaskInput
-cd backend
-uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-环境变量只应配置在本机或当前进程中，不要写入仓库文件、README、Issue、提交信息或聊天记录。设置环境变量后必须重新启动后端进程，已经运行的进程无法读取之后才添加的变量。前端 Provider 表单中的 Credential ID 不是 API Key，不能把密钥明文粘贴到该字段。
+无界面或自动化环境仍可使用 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY` 或 `AINOTE_CREDENTIAL_<ID>` 注入；设置页保存的本地密钥优先，环境变量仅在本地未保存对应 Credential ID 时作为回退。密钥不得写入仓库文件、README、Issue、提交信息或聊天记录。
 
 ### 终端二：启动前端
 
