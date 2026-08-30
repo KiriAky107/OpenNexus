@@ -20,7 +20,7 @@ const commands = computed<Command[]>(() => [
   { id: 'workspace', label: '打开工作区', hint: '导航', run: () => router.push('/workspace') },
   { id: 'search', label: '全局搜索', hint: '导航', run: () => router.push('/search') },
   { id: 'chat', label: '打开 AI 对话', hint: '导航', run: () => router.push('/chat') },
-  { id: 'agent', label: '创建 Agent Run', hint: '导航', run: () => router.push('/agent/runs') },
+  { id: 'agent', label: '创建智能体运行', hint: '导航', run: () => router.push('/agent/runs') },
   { id: 'settings', label: '打开设置', hint: '导航', run: () => router.push('/settings') },
   { id: 'mode', label: `切换为${editorStore.mode === 'source' ? '写作' : '源码'}模式`, hint: '编辑器', run: () => editorStore.toggleMode() },
   { id: 'save', label: '保存当前笔记', hint: '编辑器', run: () => editorStore.save() },

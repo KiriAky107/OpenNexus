@@ -18,7 +18,7 @@ const pageTitle = computed(() => {
     workspace: '工作区',
     search: '搜索',
     chat: 'AI 对话',
-    agent: 'Agent Trace',
+    agent: '智能体执行轨迹',
     tasks: '任务',
     skills: 'Skill 管理',
     plugins: 'Plugin 管理',
