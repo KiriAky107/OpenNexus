@@ -2,6 +2,8 @@
 
 > 本文件用于团队开发期间快速配置环境和启动项目，不是正式的项目 README。
 
+> 当前基线：2026-08-30。第一阶段 Web 联调版的前端页面、Knowledge/Retrieval Core、AI/Agent Core、Extension Core、Provider 预设与本地加密凭据链路均已实现；Tauri Host、Stronghold、真实桌面文件系统和 Sync Server 尚未接入。
+
 ## 当前目录
 
 ```text
@@ -14,7 +16,7 @@ NotesAgent/
 
 ## 开发环境
 
-当前前后端壳子需要：
+当前开发版需要：
 
 | 环境 | 要求 | 说明 |
 | --- | --- | --- |
@@ -34,7 +36,7 @@ python --version
 uv --version
 ```
 
-当前壳子暂不需要 Rust 和 Tauri。开始桌面端集成后，再按照 `docs/AI笔记软件技术栈说明-团队版-v2.2.md` 安装 Rust Toolchain 与 Tauri CLI。
+当前 Web 联调不需要 Rust 和 Tauri。开始桌面端集成后，再按照 `docs/AI笔记软件技术栈说明-团队版-v2.2.md` 安装 Rust Toolchain 与 Tauri CLI。
 
 ## 首次初始化
 
@@ -109,7 +111,34 @@ cd frontend
 pnpm build
 ```
 
+前端单元与组件测试：
+
+```powershell
+cd frontend
+pnpm test
+```
+
+当前回归基线为后端 71 项测试、前端 14 项测试，且生产构建通过。测试数量会随功能增长，以本地实际输出和 CI 为准。
+
 构建产物位于 `frontend/dist`，该目录不提交到 Git。
+
+## 文档导航
+
+| 文档 | 用途 |
+| --- | --- |
+| [技术栈说明](docs/AI笔记软件技术栈说明-团队版-v2.2.md) | 目标架构、当前实施边界与模块依赖 |
+| [第一阶段分工表](docs/第一阶段分工表.md) | 成员职责、协作关系与当前交付状态 |
+| [后端接口契约](docs/后端接口契约-开发版.md) | HTTP/SSE 接口、错误和当前实现状态 |
+| [AI Core 与 Agent Core](docs/AI-Core与Agent-Core开发说明.md) | Provider、Agent、Tool、Permission 与 Extension Core |
+| [Knowledge 与 Retrieval Core](docs/Knowledge与Retrieval-Core开发说明.md) | Block、索引、混合检索和 Citation |
+| [模型提供商与模型发现](docs/模型提供商与模型发现开发说明.md) | Provider 预设、模型发现和凭据边界 |
+| [前端页面需求](docs/前端页面需求说明-开发版.md) | 页面、交互、状态与验收基线 |
+| [前端实现说明](docs/前端壳子与接口层开发说明.md) | 当前前端目录、Service、SSE 和运行边界 |
+| [前端写作体验](docs/前端写作体验优化开发说明.md) | Milkdown、CodeMirror、格式栏和 Shiki |
+| [Git 使用细则](docs/Git使用细则-团队开发版.md) | 分支、提交、PR、Review 与合并流程 |
+| [后端审阅复盘](docs/后端全面审阅问题与修复复盘.md) | 后端问题原因、后果与修复方案 |
+| [Knowledge/Retrieval 复盘](docs/Knowledge与Retrieval-Core问题与修复复盘.md) | 检索与事务问题复盘 |
+| [前端审阅复盘](docs/前端合并审阅问题与修复复盘.md) | 前端工程、契约和交互问题复盘 |
 
 ## 日常开发注意事项
 
