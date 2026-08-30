@@ -66,13 +66,16 @@ async function openResult(result: SearchResult) {
 </template>
 
 <style scoped>
+.search-page > * { width: min(100%, 1040px); margin-inline: auto; }
 .search-form { display: grid; grid-template-columns: 1fr auto; gap: var(--space-md); margin-bottom: var(--space-lg); }
 .search-input { height: 44px; font-size: var(--font-size-lg); }
 .advanced { grid-column: 1 / -1; }
 .results-header, .result-title, .result-meta { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); }
 .results-header { margin: var(--space-xl) 0 var(--space-md); color: var(--color-text-secondary); }
 .result-list { display: grid; gap: var(--space-md); }
-.result-card { cursor: pointer; }
+.result-card { position: relative; cursor: pointer; overflow: hidden; }
+.result-card::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--color-accent-primary); opacity: 0; transform: scaleY(.45); transition: opacity var(--motion-fast), transform var(--motion-fast); }
+.result-card:hover::before { opacity: 1; transform: scaleY(1); }
 .snippet { margin: var(--space-md) 0; line-height: var(--line-height-relaxed); }
 .result-meta { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 @media (max-width: 700px) { .search-form { grid-template-columns: 1fr; } .advanced { grid-column: auto; } }

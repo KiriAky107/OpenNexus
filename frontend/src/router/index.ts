@@ -83,7 +83,7 @@ router.beforeEach((to, _from, next) => {
 })
 
 router.afterEach((to) => {
-  const baseTitle = '知笔知己'
+  const baseTitle = 'NotesAgent'
   const title = to.meta.title as string | undefined
   document.title = title ? `${title} · ${baseTitle}` : baseTitle
 })

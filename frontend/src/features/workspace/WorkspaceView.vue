@@ -15,10 +15,10 @@ onMounted(() => {
     // Already loaded
   }
   if (!workspaceStore.activeFilePath && workspaceStore.fileTree.length === 0) {
-    void editorStore.loadFile('/欢迎使用知笔知己.md').then(() => {
+    void editorStore.loadFile('/欢迎使用 NotesAgent.md').then(() => {
       // 默认文件加载期间用户可能已经点击了其他文件，不能覆盖用户的选择。
-      if (!workspaceStore.activeFilePath && editorStore.currentFilePath === '/欢迎使用知笔知己.md') {
-        workspaceStore.openFile('/欢迎使用知笔知己.md')
+      if (!workspaceStore.activeFilePath && editorStore.currentFilePath === '/欢迎使用 NotesAgent.md') {
+        workspaceStore.openFile('/欢迎使用 NotesAgent.md')
       }
     })
   }
@@ -59,6 +59,11 @@ onMounted(() => {
 
 .empty-content {
   text-align: center;
+  padding: var(--space-3xl);
+  border: 1px dashed var(--color-border-default);
+  border-radius: var(--radius-xl);
+  background: var(--color-background-secondary);
+  animation: workspace-empty-in var(--motion-normal) both;
 
   h2 {
     font-size: 18px;
@@ -75,4 +80,6 @@ onMounted(() => {
   font-size: 48px;
   opacity: 0.5;
 }
+
+@keyframes workspace-empty-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 </style>

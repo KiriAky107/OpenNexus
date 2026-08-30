@@ -329,6 +329,7 @@ export interface ThemeConfig {
   is_dark: boolean
   author?: string
   builtin: boolean
+  code_theme?: 'github-light' | 'github-dark'
 }
 
 // ============ Index ============

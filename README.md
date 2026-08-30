@@ -136,6 +136,7 @@ pnpm test
 | [前端页面需求](docs/前端页面需求说明-开发版.md) | 页面、交互、状态与验收基线 |
 | [前端实现说明](docs/前端壳子与接口层开发说明.md) | 当前前端目录、Service、SSE 和运行边界 |
 | [前端写作体验](docs/前端写作体验优化开发说明.md) | Milkdown、CodeMirror、格式栏和 Shiki |
+| [前端视觉与轻量动效](docs/前端视觉与轻量动效优化开发说明.md) | Design Token、页面美化、性能边界与主题注入约定 |
 | [Git 使用细则](docs/Git使用细则-团队开发版.md) | 分支、提交、PR、Review 与合并流程 |
 | [后端审阅复盘](docs/后端全面审阅问题与修复复盘.md) | 后端问题原因、后果与修复方案 |
 | [Knowledge/Retrieval 复盘](docs/Knowledge与Retrieval-Core问题与修复复盘.md) | 检索与事务问题复盘 |
