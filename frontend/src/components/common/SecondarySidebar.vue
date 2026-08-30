@@ -53,7 +53,7 @@ const showSkillToggle = computed(() => routeName.value === 'skills' || routeName
 <style scoped>
 .secondary-sidebar {
   width: var(--sidebar-secondary-width);
-  background: var(--color-background-primary);
+  background: var(--color-surface-secondary);
   border-right: 1px solid var(--color-border-default);
   display: flex;
   flex-direction: column;
@@ -62,36 +62,36 @@ const showSkillToggle = computed(() => routeName.value === 'skills' || routeName
 }
 
 .sidebar-header {
-  padding: var(--space-md) var(--space-lg);
+  padding: var(--space-lg);
   border-bottom: 1px solid var(--color-border-subtle);
   flex-shrink: 0;
 }
 
 .sidebar-title {
-  font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-size: var(--font-size-lg);
+  font-weight: 700;
   color: var(--color-text-primary);
-  margin: 0 0 var(--space-sm) 0;
+  margin: 0 0 var(--space-md) 0;
 }
 
 .sidebar-tabs {
   display: flex;
   gap: 2px;
   background: var(--color-background-secondary);
-  padding: 2px;
+  padding: 3px;
   border-radius: var(--radius-md);
 }
 
 .tab {
   flex: 1;
   text-align: center;
-  padding: 4px 8px;
+  padding: 6px 8px;
   font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
   border-radius: var(--radius-sm);
   cursor: pointer;
   text-decoration: none;
-  transition: all var(--motion-fast);
+  transition: color var(--motion-fast), background-color var(--motion-fast), box-shadow var(--motion-fast);
 
   &.active {
     background: var(--color-surface-primary);
@@ -108,6 +108,7 @@ const showSkillToggle = computed(() => routeName.value === 'skills' || routeName
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
+  scrollbar-gutter: stable;
 }
 
 </style>

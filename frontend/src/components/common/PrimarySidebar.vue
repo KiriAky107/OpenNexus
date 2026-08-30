@@ -60,13 +60,14 @@ function toggleExpanded() {
 
 <style scoped>
 .primary-sidebar {
-  width: 56px;
+  width: var(--sidebar-primary-width);
   background: var(--color-background-secondary);
   border-right: 1px solid var(--color-border-subtle);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
   z-index: var(--z-sidebar);
+  transition: width var(--motion-normal), background-color var(--motion-normal);
 }
 
 .primary-sidebar.expanded { width: var(--sidebar-primary-width-expanded); }
@@ -76,7 +77,7 @@ function toggleExpanded() {
 
 .nav-list {
   flex: 1;
-  padding: var(--space-sm) 0;
+  padding: var(--space-md) 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -87,31 +88,34 @@ function toggleExpanded() {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 50px;
-  margin: 0 4px;
+  height: 48px;
+  margin: 0 6px;
   border-radius: var(--radius-md);
   cursor: pointer;
   color: var(--color-text-secondary);
-  transition: all var(--motion-fast);
+  border: 1px solid transparent;
+  transition: color var(--motion-fast), background-color var(--motion-fast), border-color var(--motion-fast), transform var(--motion-fast);
   position: relative;
 
   &:hover {
     background: var(--color-background-hover);
     color: var(--color-text-primary);
+    transform: translateX(2px);
   }
 
   &.active {
     background: var(--color-accent-soft);
     color: var(--color-accent-primary);
+    border-color: color-mix(in srgb, var(--color-accent-primary) 16%, transparent);
 
     &::before {
       content: '';
       position: absolute;
-      left: -4px;
+      left: -7px;
       top: 50%;
       transform: translateY(-50%);
-      width: 3px;
-      height: 24px;
+      width: 4px;
+      height: 22px;
       border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
       background: var(--color-accent-primary);
     }
@@ -127,6 +131,7 @@ function toggleExpanded() {
 .nav-label {
   font-size: 10px;
   line-height: 1.2;
+  font-weight: 550;
 }
 
 .sidebar-footer {
@@ -134,5 +139,5 @@ function toggleExpanded() {
   border-top: 1px solid var(--color-border-subtle);
 }
 
-.collapse-button { width: calc(100% - 8px); }
+.collapse-button { width: calc(100% - 12px); }
 </style>

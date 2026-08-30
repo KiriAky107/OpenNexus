@@ -30,9 +30,9 @@ afterEach(() => {
 describe('EditorPane file switching', () => {
   it('recreates the visual editor with the newly loaded file content', async () => {
     const store = useEditorStore()
-    await store.loadFile('/欢迎使用知笔知己.md')
+    await store.loadFile('/欢迎使用 NotesAgent.md')
     wrapper = mount(EditorPane, { attachTo: document.body })
-    await waitForText('欢迎使用知笔知己')
+    await waitForText('欢迎使用 NotesAgent')
 
     await store.loadFile('/数据结构/红黑树.md')
     await nextTick()

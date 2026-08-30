@@ -1,6 +1,15 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import MarkdownContent from '@/components/common/MarkdownContent.vue'
 import { useThemeStore } from '@/stores/theme'
+
 const themeStore = useThemeStore()
+const shikiPreview = `\`\`\`typescript
+const notes = await search('本地优先')
+\`\`\``
+const codeThemeLabel = computed(() => themeStore.resolvedCodeBlockTheme === 'github-dark'
+  ? 'Shiki · GitHub Dark'
+  : 'Shiki · GitHub Light')
 </script>
 
 <template>
@@ -13,7 +22,20 @@ const themeStore = useThemeStore()
         <p class="subtle">v{{ theme.version }} · {{ theme.builtin ? '内置主题' : theme.author }}</p>
       </button>
     </div>
-    <div class="panel preference-panel"><h2 class="panel-title">编辑器外观</h2><div class="form-grid"><div class="field"><label>字号：{{ themeStore.fontEditorSize }}px</label><input v-model.number="themeStore.fontEditorSize" type="range" min="12" max="24" /></div><div class="field"><label>行高：{{ themeStore.lineHeight }}</label><input v-model.number="themeStore.lineHeight" type="range" min="1.2" max="2.2" step="0.1" /></div><div class="field"><label>字体</label><select v-model="themeStore.fontEditorFamily" class="select"><option value="system-ui">系统字体</option><option value="serif">衬线字体</option><option value="var(--font-ui-mono)">等宽字体</option></select></div></div><div class="editor-preview" :style="{ fontSize: `${themeStore.fontEditorSize}px`, lineHeight: themeStore.lineHeight, fontFamily: themeStore.fontEditorFamily }"><h3>主题预览</h3><p>知识的价值不只在于保存，更在于被重新发现和使用。</p><code>const notes = await search('本地优先')</code></div></div>
+    <div class="panel preference-panel">
+      <h2 class="panel-title">编辑器外观</h2>
+      <div class="form-grid">
+        <div class="field"><label>字号：{{ themeStore.fontEditorSize }}px</label><input v-model.number="themeStore.fontEditorSize" type="range" min="12" max="24" /></div>
+        <div class="field"><label>行高：{{ themeStore.lineHeight }}</label><input v-model.number="themeStore.lineHeight" type="range" min="1.2" max="2.2" step="0.1" /></div>
+        <div class="field"><label>字体</label><select v-model="themeStore.fontEditorFamily" class="select"><option value="system-ui">系统字体</option><option value="serif">衬线字体</option><option value="var(--font-ui-mono)">等宽字体</option></select></div>
+        <div class="field"><label>代码块样式</label><select v-model="themeStore.codeBlockTheme" class="select"><option value="auto">跟随主题</option><option value="github-light">GitHub Light</option><option value="github-dark">GitHub Dark</option></select><small>Markdown 渲染使用对应的 Shiki GitHub 主题</small></div>
+      </div>
+      <div class="editor-preview" :style="{ fontSize: `${themeStore.fontEditorSize}px`, lineHeight: themeStore.lineHeight, fontFamily: themeStore.fontEditorFamily }">
+        <div class="preview-heading"><h3>主题预览</h3><span class="badge info">{{ codeThemeLabel }}</span></div>
+        <p>知识的价值不只在于保存，更在于被重新发现和使用。</p>
+        <MarkdownContent class="code-theme-preview" :source="shikiPreview" />
+      </div>
+    </div>
   </section>
 </template>
 
@@ -28,5 +50,8 @@ const themeStore = useThemeStore()
 .theme-info { display: flex; justify-content: space-between; gap: var(--space-md); }
 .preference-panel { display: grid; gap: var(--space-xl); }
 .editor-preview { padding: var(--space-xl); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-background-secondary); }
-.editor-preview p { margin: var(--space-sm) 0; }.editor-preview code { color: var(--color-accent-primary); }
+.editor-preview p { margin: var(--space-sm) 0; }
+.preview-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); }
+.field small { color: var(--color-text-tertiary); }
+.code-theme-preview { margin-top: var(--space-md); }
 </style>

@@ -133,5 +133,5 @@ button:hover { background: var(--color-background-secondary); }
 .tree { padding: var(--space-xs); }
 .context-menu { position: fixed; z-index: 1000; display: grid; min-width: 130px; padding: var(--space-xs); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-background-primary); box-shadow: var(--shadow-md); }
 .context-menu button { text-align: left; }
-.context-menu .danger { color: var(--color-danger, #d33); }
+.context-menu .danger { color: var(--color-error); }
 </style>

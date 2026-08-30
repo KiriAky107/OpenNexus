@@ -58,7 +58,7 @@ const MOCK_FILE_TREE: FileNode[] = [
       { id: 'n-http', name: 'HTTP协议.md', path: '/计算机网络/HTTP协议.md', type: 'file' },
     ],
   },
-  { id: 'n-welcome', name: '欢迎使用知笔知己.md', path: '/欢迎使用知笔知己.md', type: 'file' },
+  { id: 'n-welcome', name: '欢迎使用 NotesAgent.md', path: '/欢迎使用 NotesAgent.md', type: 'file' },
 ]
 
 const mockFileContents = new Map<string, string>()
@@ -89,8 +89,8 @@ export function readFileContent(filePath: string): Promise<string> {
   const saved = mockFileContents.get(filePath)
   if (saved !== undefined) return Promise.resolve(saved)
   const name = filePath.split('/').pop() || 'Untitled'
-  if (name === '欢迎使用知笔知己.md') {
-    return rememberContent(filePath, `# 欢迎使用知笔知己
+  if (name === '欢迎使用 NotesAgent.md') {
+    return rememberContent(filePath, `# 欢迎使用 NotesAgent
 
 这是一款本地优先的 AI 笔记软件，支持 Markdown 编辑、智能检索、RAG 问答和 Agent 助手。
 
@@ -207,7 +207,7 @@ def quick_sort(arr):
 > 引用内容示例
 
 \`\`\`javascript
-console.log('Hello, Notes Agent!');
+console.log('Hello, NotesAgent!');
 \`\`\`
 `)
 }
