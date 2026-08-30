@@ -8,6 +8,7 @@ import {
   toggleInlineCodeCommand,
   toggleLinkCommand,
   toggleStrongCommand,
+  turnIntoTextCommand,
   wrapInBulletListCommand,
   wrapInHeadingCommand,
   wrapInOrderedListCommand,
@@ -28,6 +29,7 @@ const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
 const editorRoot = ref<HTMLElement | null>(null)
 const loading = ref(true)
+const fontSizeInput = ref(16)
 let crepe: Crepe | null = null
 
 type ToolbarCommand = 'bold' | 'italic' | 'ordered-list' | 'bullet-list' | 'inline-code' | 'code-block' | 'inline-math' | 'math-block'
@@ -70,9 +72,11 @@ function applyLink() {
 }
 
 function applyHeading(event: Event) {
-  const level = Number((event.target as HTMLSelectElement).value)
-  if (!level || !crepe) return
-  crepe.editor.action(callCommand(wrapInHeadingCommand.key, level))
+  const value = (event.target as HTMLSelectElement).value
+  if (!value || !crepe) return
+  crepe.editor.action(value === 'paragraph'
+    ? callCommand(turnIntoTextCommand.key)
+    : callCommand(wrapInHeadingCommand.key, Number(value)))
   editorRoot.value?.querySelector<HTMLElement>('.ProseMirror')?.focus()
   ;(event.target as HTMLSelectElement).value = ''
 }
@@ -80,8 +84,17 @@ function applyHeading(event: Event) {
 function applyFontSize(event: Event) {
   const size = Number((event.target as HTMLSelectElement).value)
   if (!size || !crepe) return
-  applyMarkdownFontSize(crepe.editor, size)
+  fontSizeInput.value = size
+  applyFontSizeValue()
   ;(event.target as HTMLSelectElement).value = ''
+}
+
+function applyFontSizeValue() {
+  if (!crepe) return
+  const size = Math.min(96, Math.max(8, Math.round(Number(fontSizeInput.value))))
+  if (!Number.isFinite(size)) return
+  fontSizeInput.value = size
+  applyMarkdownFontSize(crepe.editor, size)
 }
 
 onMounted(async () => {
@@ -116,6 +129,14 @@ onMounted(async () => {
         removeButton: '移除',
         confirmButton: '确认',
         inputPlaceholder: '粘贴链接地址…',
+      },
+      [Crepe.Feature.Toolbar]: {
+        boldLabel: '加粗',
+        italicLabel: '斜体',
+        strikethroughLabel: '删除线',
+        codeLabel: '行内代码',
+        latexLabel: '行内公式',
+        linkLabel: '链接',
       },
       [Crepe.Feature.BlockEdit]: {
         textGroup: {
@@ -159,6 +180,8 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => { void crepe?.destroy() })
+
+defineExpose({ getEditor: () => crepe?.editor })
 </script>
 
 <template>
@@ -168,28 +191,35 @@ onBeforeUnmount(() => { void crepe?.destroy() })
         <span class="format-glyph heading-glyph">H</span>
         <select aria-label="标题级别" @change="applyHeading">
           <option value="" selected>标题</option>
+          <option value="paragraph">正文</option>
           <option v-for="level in 6" :key="level" :value="level">H{{ level }}</option>
         </select>
       </label>
-      <button type="button" title="加粗 (Ctrl+B)" aria-label="加粗" @mousedown.prevent @click="runCommand('bold')"><strong class="format-glyph">B</strong></button>
-      <button type="button" title="斜体 (Ctrl+I)" aria-label="斜体" @mousedown.prevent @click="runCommand('italic')"><em class="format-glyph">I</em></button>
+      <button type="button" title="加粗 (Ctrl+B)" aria-label="加粗" @pointerdown.prevent="runCommand('bold')"><strong class="format-glyph">B</strong></button>
+      <button type="button" title="斜体 (Ctrl+I)" aria-label="斜体" @pointerdown.prevent="runCommand('italic')"><em class="format-glyph">I</em></button>
       <span class="toolbar-divider" />
-      <button type="button" class="list-glyph" title="有序列表" aria-label="有序列表" @mousedown.prevent @click="runCommand('ordered-list')"><span class="list-marker">1</span><span class="list-lines">☰</span></button>
-      <button type="button" class="list-glyph" title="无序列表" aria-label="无序列表" @mousedown.prevent @click="runCommand('bullet-list')"><span class="list-marker">•</span><span class="list-lines">☰</span></button>
+      <button type="button" class="list-glyph" title="有序列表" aria-label="有序列表" @pointerdown.prevent="runCommand('ordered-list')"><span class="list-marker">1</span><span class="list-lines">☰</span></button>
+      <button type="button" class="list-glyph" title="无序列表" aria-label="无序列表" @pointerdown.prevent="runCommand('bullet-list')"><span class="list-marker">•</span><span class="list-lines">☰</span></button>
       <span class="toolbar-divider" />
-      <label class="toolbar-select font-size-select" title="修改选中文字的字号">
+      <label class="toolbar-select font-size-select" title="选择预设字号">
         <span class="format-glyph font-size-glyph">A</span>
         <select aria-label="文字字号" @change="applyFontSize">
           <option value="" selected>字号</option>
           <option v-for="size in [12, 14, 16, 18, 20, 24, 28, 32]" :key="size" :value="size">{{ size }} px</option>
         </select>
       </label>
+      <div class="font-size-input" title="输入字号后按 Enter 或点击应用">
+        <input v-model.number="fontSizeInput" type="number" min="8" max="96" step="1" aria-label="自定义字号"
+          @keydown.enter.prevent="applyFontSizeValue" />
+        <span>px</span>
+        <button type="button" aria-label="应用自定义字号" @pointerdown.prevent="applyFontSizeValue">应用</button>
+      </div>
       <span class="toolbar-divider" />
-      <button type="button" title="行内代码" aria-label="行内代码" @mousedown.prevent @click="runCommand('inline-code')"><code class="code-glyph">&lt;/&gt;</code></button>
-      <button type="button" title="代码块" aria-label="代码块" @mousedown.prevent @click="runCommand('code-block')"><span class="block-glyph">{ }</span></button>
-      <button type="button" title="行内公式" aria-label="行内公式" @mousedown.prevent @click="runCommand('inline-math')"><span class="math-glyph">ƒx</span></button>
-      <button type="button" title="公式块" aria-label="公式块" @mousedown.prevent @click="runCommand('math-block')"><span class="math-glyph">∑</span></button>
-      <button type="button" title="插入链接" aria-label="插入链接" @mousedown.prevent @click="applyLink"><AppIcon :icon="Link" :size="17" /></button>
+      <button type="button" title="行内代码" aria-label="行内代码" @pointerdown.prevent="runCommand('inline-code')"><code class="code-glyph">&lt;/&gt;</code></button>
+      <button type="button" title="代码块" aria-label="代码块" @pointerdown.prevent="runCommand('code-block')"><span class="block-glyph">{ }</span></button>
+      <button type="button" title="行内公式" aria-label="行内公式" @pointerdown.prevent="runCommand('inline-math')"><span class="math-glyph">ƒx</span></button>
+      <button type="button" title="公式块" aria-label="公式块" @pointerdown.prevent="runCommand('math-block')"><span class="math-glyph">∑</span></button>
+      <button type="button" title="插入链接" aria-label="插入链接" @pointerdown.prevent="applyLink"><AppIcon :icon="Link" :size="17" /></button>
     </div>
     <div v-if="loading" class="editor-loading">正在加载编辑器…</div>
     <div ref="editorRoot" class="milkdown-host" :class="{ loading }" />
@@ -213,6 +243,11 @@ onBeforeUnmount(() => { void crepe?.destroy() })
 .toolbar-select { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 3px 5px 3px 8px; border-radius: var(--radius-sm); color: var(--color-text-primary); }
 .toolbar-select select { min-width: 58px; border: 0; outline: 0; background: transparent; color: inherit; cursor: pointer; font-size: var(--font-size-sm); }
 .font-size-select select { min-width: 62px; }
+.font-size-input { display: inline-flex; align-items: center; height: 30px; margin-left: 2px; overflow: hidden; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); color: var(--color-text-secondary); background: var(--color-background-primary); }
+.font-size-input:focus-within { border-color: var(--color-border-focus); box-shadow: 0 0 0 1px var(--color-border-focus); }
+.font-size-input input { width: 42px; height: 100%; padding-left: 7px; border: 0; outline: 0; background: transparent; color: var(--color-text-primary); }
+.font-size-input span { font-size: var(--font-size-xs); }
+.font-size-input button { min-width: auto; min-height: 100%; margin-left: 4px; padding: 3px 7px; border-left: 1px solid var(--color-border-default); border-radius: 0; font-size: var(--font-size-xs); }
 .toolbar-divider { width: 1px; height: 20px; margin: 0 var(--space-xs); background: var(--color-border-default); }
 .milkdown-host { flex: 1; min-height: 0; overflow: auto; color: var(--color-text-primary); }
 .milkdown-host.loading { visibility: hidden; }
@@ -243,11 +278,12 @@ onBeforeUnmount(() => { void crepe?.destroy() })
 }
 .milkdown-host :deep(.ProseMirror) { box-sizing: border-box; width: min(100%, var(--editor-line-width, 80ch)); min-height: 100%; margin: 0 auto; padding: var(--space-3xl) var(--space-xl); outline: none; font-family: var(--font-editor-sans); font-size: var(--font-editor-size); line-height: var(--font-editor-line-height); caret-color: var(--color-accent-primary); }
 .milkdown-host :deep(.ProseMirror-selectednode) { outline-color: var(--color-accent-primary); }
+.milkdown-host :deep(.ProseMirror p) { font-weight: 400; }
 .milkdown-host :deep(.ProseMirror h1), .milkdown-host :deep(.ProseMirror h2), .milkdown-host :deep(.ProseMirror h3), .milkdown-host :deep(.ProseMirror h4), .milkdown-host :deep(.ProseMirror h5), .milkdown-host :deep(.ProseMirror h6) { font-weight: 700; }
 .milkdown-host :deep(.font-size-marker) { display: none; }
-.milkdown-host :deep(.milkdown-toolbar) { border: 1px solid var(--color-border-default); background: var(--color-surface-elevated); box-shadow: var(--shadow-md); }
-.milkdown-host :deep(.milkdown-toolbar .toolbar-item svg), .milkdown-host :deep(.milkdown-toolbar .toolbar-item.active svg) { color: var(--color-text-primary); fill: var(--color-text-primary); stroke: currentColor; opacity: 1; }
-.milkdown-host :deep(.milkdown-toolbar .toolbar-item:hover svg) { color: var(--color-accent-primary); fill: var(--color-accent-primary); }
+:global(.milkdown-toolbar) { border: 1px solid var(--color-border-default) !important; background: var(--color-surface-elevated) !important; box-shadow: var(--shadow-md) !important; }
+:global(.milkdown-toolbar .toolbar-item svg), :global(.milkdown-toolbar .toolbar-item.active svg) { color: var(--color-text-primary) !important; fill: var(--color-text-primary) !important; opacity: 1 !important; }
+:global(.milkdown-toolbar .toolbar-item:hover svg), :global(.milkdown-toolbar .toolbar-item.active svg) { color: var(--color-accent-primary) !important; fill: var(--color-accent-primary) !important; }
 :global([data-theme='light']) .milkdown-host :deep(.milkdown-table-block th),
 :global([data-theme='light']) .milkdown-host :deep(.milkdown-table-block td) { border-color: var(--color-text-tertiary); }
 :global([data-theme='light']) .milkdown-host :deep(.milkdown-list-item-block li .label-wrapper) { color: var(--color-text-secondary); font-weight: 600; }
