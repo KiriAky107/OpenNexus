@@ -18,8 +18,10 @@ const showProviderForm = ref(false)
 const editingProviderId = ref<string | null>(null)
 const providerAction = ref('')
 const testResults = ref<Record<string, string>>({})
+const providerApiKey = ref('')
 const providerForm = reactive({ preset_id: '', provider_type: 'openai_compatible' as ProviderType, name: '', base_url: '', default_model: '', credential_id: '', enabled: true })
 const formModels = computed(() => editingProviderId.value ? providerStore.modelsByProvider[editingProviderId.value] ?? [] : [])
+const selectedPreset = computed(() => providerStore.presets.find((item) => item.preset_id === providerForm.preset_id) ?? null)
 
 onMounted(async () => {
   await Promise.all([providerStore.loadProviders(), providerStore.loadPresets(), settingsStore.loadDiagnostics()])
@@ -38,7 +40,9 @@ function openProvider(provider?: ProviderConfig) {
   const presetId = presetIdFor(provider)
   const preset = providerStore.presets.find((item) => item.preset_id === presetId)
   Object.assign(providerForm, { preset_id: presetId, provider_type: provider?.provider_type ?? 'openai_compatible', name: provider?.name ?? '', base_url: provider?.base_url ?? '', default_model: provider?.default_model ?? '', credential_id: provider?.credential_id ?? preset?.default_credential_id ?? '', enabled: provider?.enabled ?? true })
+  providerApiKey.value = ''
   showProviderForm.value = true
+  if (providerForm.credential_id) void providerStore.loadCredentialStatus(providerForm.credential_id).catch(() => undefined)
   if (provider) void providerStore.loadModels(provider.provider_id).catch(() => undefined)
 }
 
@@ -51,18 +55,33 @@ function applyProviderPreset() {
     base_url: preset.base_url,
     credential_id: preset.default_credential_id ?? '',
   })
+  providerApiKey.value = ''
+  if (providerForm.credential_id) void providerStore.loadCredentialStatus(providerForm.credential_id).catch(() => undefined)
+}
+
+function closeProvider() {
+  providerApiKey.value = ''
+  showProviderForm.value = false
 }
 
 async function saveProvider() {
   providerAction.value = ''
+  const credentialId = providerForm.credential_id.trim()
+  const requiresApiKey = Boolean(selectedPreset.value?.requires_credential)
+  if (requiresApiKey && !providerApiKey.value && !providerStore.credentialConfiguredById[credentialId]) {
+    providerAction.value = '请输入 API Key。密钥将由后端加密保存。'
+    return
+  }
   const data = { ...providerForm, base_url: providerForm.base_url || undefined, credential_id: providerForm.credential_id || undefined, capabilities: {}, has_credential: Boolean(providerForm.credential_id) }
   try {
+    if (providerApiKey.value) await providerStore.saveCredential(credentialId, providerApiKey.value)
     const saved = editingProviderId.value
       ? await providerStore.updateProvider(editingProviderId.value, data)
       : await providerStore.addProvider(data)
-    showProviderForm.value = false
+    closeProvider()
     if (saved.enabled) void providerStore.loadModels(saved.provider_id).catch(() => undefined)
   } catch (error) {
+    providerApiKey.value = ''
     providerAction.value = error instanceof Error ? error.message : 'Provider 保存失败'
   }
 }
@@ -125,7 +144,7 @@ async function chooseDefaultModel(provider: ProviderConfig, event: Event) {
 
     <div v-else class="panel settings-section"><h2>AI Core 诊断</h2><div v-if="settingsStore.diagnosticsError" class="error-banner">{{ settingsStore.diagnosticsError }}</div><div class="diagnostic-grid"><div class="item-card"><span class="badge" :class="{ success: settingsStore.aiCoreStatus === 'running', error: settingsStore.aiCoreStatus === 'error' }">{{ settingsStore.aiCoreStatus }}</span><h3>Sidecar 状态</h3><p class="subtle">AI Core 不可用时，Markdown 编辑仍可继续使用。</p></div><div class="item-card"><strong>{{ settingsStore.aiCoreAddress }}</strong><h3>开发 API 地址</h3><p class="subtle">正式桌面环境由 Sidecar Manager 动态提供。</p></div></div><div class="inline-actions diagnostic-actions"><button class="button-primary" @click="settingsStore.loadDiagnostics">重新检测</button><button class="button-secondary" @click="settingsStore.restartAiCore">重启 AI Core</button></div></div>
 
-    <div v-if="showProviderForm" class="modal-backdrop" @click.self="showProviderForm = false">
+    <div v-if="showProviderForm" class="modal-backdrop" @click.self="closeProvider">
       <div class="modal">
         <h2>{{ editingProviderId ? '编辑 Provider' : '新增 Provider' }}</h2>
         <form @submit.prevent="saveProvider">
@@ -144,9 +163,14 @@ async function chooseDefaultModel(provider: ProviderConfig, event: Event) {
             <input v-model="providerForm.default_model" class="input" :list="editingProviderId ? 'provider-model-options' : undefined" placeholder="保存后自动获取，也可以手动输入" />
             <datalist id="provider-model-options"><option v-for="model in formModels" :key="model.model_id" :value="model.model_id">{{ model.name }}</option></datalist>
           </div>
-          <div class="field"><label>Credential ID</label><input v-model="providerForm.credential_id" class="input" placeholder="例如 deepseek" /><small class="subtle">这里填写凭据标识，不是 API Key。DeepSeek 开发环境默认读取 DEEPSEEK_API_KEY，密钥明文不会保存到 Provider。</small></div>
+          <div v-if="selectedPreset?.requires_credential" class="field">
+            <label>API Key</label>
+            <input v-model="providerApiKey" class="input" type="password" autocomplete="new-password" spellcheck="false" :placeholder="providerStore.credentialConfiguredById[providerForm.credential_id] ? '已配置，留空表示不修改' : '请输入 API Key'" />
+            <small class="subtle">提交后由本地 AI Core 加密保存，页面不会回显已保存的密钥。</small>
+          </div>
+          <div v-else-if="!selectedPreset" class="field"><label>Credential ID</label><input v-model="providerForm.credential_id" class="input" placeholder="自定义凭据标识" /><small class="subtle">自定义服务可以引用 Host 注入或后端已保存的凭据。</small></div>
           <label class="inline-actions"><input v-model="providerForm.enabled" type="checkbox" /> 启用</label>
-          <div class="inline-actions"><button class="button-primary">保存并获取模型</button><button type="button" class="button-secondary" @click="showProviderForm = false">取消</button></div>
+          <div class="inline-actions"><button class="button-primary">保存并获取模型</button><button type="button" class="button-secondary" @click="closeProvider">取消</button></div>
         </form>
       </div>
     </div>
