@@ -10,6 +10,7 @@ const globalStyles = [
 
 const markdownStyles = [
   new URL('../features/editor/VisualMarkdownEditor.vue', import.meta.url),
+  new URL('../features/themes/ThemesView.vue', import.meta.url),
   new URL('../components/common/MarkdownContent.vue', import.meta.url),
 ].map((path) => readFileSync(path, 'utf8')).join('\n')
 
@@ -35,5 +36,9 @@ describe('轻量动效基线', () => {
     expect(globalStyles).toContain('--color-markdown-marker:')
     expect(markdownStyles).toContain('var(--color-markdown-grid)')
     expect(markdownStyles).toContain('var(--color-markdown-marker)')
+  })
+
+  it('不混用可能丢失后代选择器的 scoped global 写法', () => {
+    expect(markdownStyles).not.toMatch(/:global\([^\n]+\)\s+\./)
   })
 })
