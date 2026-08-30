@@ -44,9 +44,18 @@ async function createItem() {
 
 async function openNode(node: FileNode) {
   if (node.type === 'folder') return workspaceStore.toggleFolder(node.path)
-  await editorStore.loadFile(node.path)
+  // 先同步活动文件，让真实点击立即生效；内容加载失败时再恢复原状态。
+  const previousPath = workspaceStore.activeFilePath
+  const wasOpen = workspaceStore.openFiles.includes(node.path)
   workspaceStore.openFile(node.path)
-  await router.push('/workspace')
+  try {
+    await editorStore.loadFile(node.path)
+    await router.push('/workspace')
+  } catch (error) {
+    if (!wasOpen) workspaceStore.closeFile(node.path)
+    workspaceStore.setActiveFile(previousPath)
+    console.error(`打开文件失败：${node.path}`, error)
+  }
 }
 
 function openContextMenu(event: MouseEvent, node: FileNode) {
