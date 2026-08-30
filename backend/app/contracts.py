@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 
 class Contract(BaseModel):
@@ -449,6 +449,15 @@ class ProviderPreset(Contract):
 
 class ProviderPresetListResponse(Contract):
     items: list[ProviderPreset] = Field(default_factory=list)
+
+
+class CredentialWriteRequest(Contract):
+    api_key: SecretStr = Field(min_length=1, max_length=8192)
+
+
+class CredentialStatus(Contract):
+    credential_id: str
+    configured: bool
 
 
 class ModelInfo(Contract):

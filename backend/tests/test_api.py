@@ -96,6 +96,7 @@ def test_openapi_contains_documented_frontend_interfaces() -> None:
         "/api/plugins/{plugin_id}/disable",
         "/api/providers/test",
         "/api/providers/presets",
+        "/api/credentials/{credential_id}",
         "/api/index/rebuild",
     }
 
