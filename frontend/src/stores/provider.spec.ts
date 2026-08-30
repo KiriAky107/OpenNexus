@@ -17,6 +17,7 @@ vi.mock('@/services/providerService', () => ({
 
 import { useProviderStore } from './provider'
 import { listModels, listProviderPresets, listProviders } from '@/services/providerService'
+import { ApiErrorClass } from '@/services/apiClient'
 
 const providers: ProviderConfig[] = [
   {
@@ -27,6 +28,7 @@ const providers: ProviderConfig[] = [
     default_model: '',
     enabled: true,
     capabilities: { chat: true },
+    credential_id: 'deepseek',
     has_credential: true,
   },
 ]
@@ -37,6 +39,7 @@ const presets: ProviderPreset[] = [
     name: 'DeepSeek',
     provider_type: 'openai_compatible',
     base_url: 'https://api.deepseek.com',
+    default_credential_id: 'deepseek',
     requires_credential: true,
   },
 ]
@@ -75,5 +78,17 @@ describe('provider store model discovery', () => {
 
     expect(store.modelLoadingByProvider.openai).toBe(false)
     expect(store.modelErrorsByProvider.openai).toBe('认证失败')
+  })
+
+  it('explains how to inject a missing DeepSeek credential', async () => {
+    vi.mocked(listModels).mockRejectedValue(
+      new ApiErrorClass('PROVIDER_CREDENTIAL_MISSING', 'Credential is unavailable')
+    )
+    const store = useProviderStore()
+    await store.loadProviders()
+
+    await expect(store.loadModels('openai')).rejects.toThrow('Credential is unavailable')
+
+    expect(store.modelErrorsByProvider.openai).toContain('DEEPSEEK_API_KEY')
   })
 })

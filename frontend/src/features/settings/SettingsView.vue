@@ -35,7 +35,9 @@ function presetIdFor(provider?: ProviderConfig) {
 
 function openProvider(provider?: ProviderConfig) {
   editingProviderId.value = provider?.provider_id ?? null
-  Object.assign(providerForm, { preset_id: presetIdFor(provider), provider_type: provider?.provider_type ?? 'openai_compatible', name: provider?.name ?? '', base_url: provider?.base_url ?? '', default_model: provider?.default_model ?? '', credential_id: provider?.credential_id ?? '', enabled: provider?.enabled ?? true })
+  const presetId = presetIdFor(provider)
+  const preset = providerStore.presets.find((item) => item.preset_id === presetId)
+  Object.assign(providerForm, { preset_id: presetId, provider_type: provider?.provider_type ?? 'openai_compatible', name: provider?.name ?? '', base_url: provider?.base_url ?? '', default_model: provider?.default_model ?? '', credential_id: provider?.credential_id ?? preset?.default_credential_id ?? '', enabled: provider?.enabled ?? true })
   showProviderForm.value = true
   if (provider) void providerStore.loadModels(provider.provider_id).catch(() => undefined)
 }
@@ -47,6 +49,7 @@ function applyProviderPreset() {
     provider_type: preset.provider_type,
     name: preset.name,
     base_url: preset.base_url,
+    credential_id: preset.default_credential_id ?? '',
   })
 }
 
@@ -141,7 +144,7 @@ async function chooseDefaultModel(provider: ProviderConfig, event: Event) {
             <input v-model="providerForm.default_model" class="input" :list="editingProviderId ? 'provider-model-options' : undefined" placeholder="保存后自动获取，也可以手动输入" />
             <datalist id="provider-model-options"><option v-for="model in formModels" :key="model.model_id" :value="model.model_id">{{ model.name }}</option></datalist>
           </div>
-          <div class="field"><label>Credential ID</label><input v-model="providerForm.credential_id" class="input" placeholder="由桌面 Host 注入的凭据标识" /><small class="subtle">此处不输入或回显 API Key，密钥明文由 Stronghold 保存。</small></div>
+          <div class="field"><label>Credential ID</label><input v-model="providerForm.credential_id" class="input" placeholder="例如 deepseek" /><small class="subtle">这里填写凭据标识，不是 API Key。DeepSeek 开发环境默认读取 DEEPSEEK_API_KEY，密钥明文不会保存到 Provider。</small></div>
           <label class="inline-actions"><input v-model="providerForm.enabled" type="checkbox" /> 启用</label>
           <div class="inline-actions"><button class="button-primary">保存并获取模型</button><button type="button" class="button-secondary" @click="showProviderForm = false">取消</button></div>
         </form>
