@@ -190,6 +190,20 @@
   --color-text-link: #7b512e;
 }
 
+[data-code-theme='github-light'] {
+  --color-code-background: #f6f8fa;
+  --color-code-border: #d0d7de;
+  --color-code-text: #24292f;
+  --color-code-muted: #57606a;
+}
+
+[data-code-theme='github-dark'] {
+  --color-code-background: #161b22;
+  --color-code-border: #30363d;
+  --color-code-text: #c9d1d9;
+  --color-code-muted: #8b949e;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
