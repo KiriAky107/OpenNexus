@@ -6,13 +6,18 @@ from app.contracts import ModelCapability, ProviderConfig, ProviderType
 from app.config import BACKEND_DIR
 from app.extensions import PluginRuntime, SkillRuntime
 from app.providers import MockProvider, ProviderFactory, ProviderRegistry
-from app.providers.credentials import EnvironmentCredentialResolver
+from app.providers.credentials import (
+    ChainedCredentialResolver,
+    EncryptedCredentialStore,
+    EnvironmentCredentialResolver,
+)
 
 
 @dataclass(frozen=True)
 class ApplicationContainer:
     providers: ProviderRegistry
     provider_factory: ProviderFactory
+    credentials: EncryptedCredentialStore
     tools: ToolRegistry
     permissions: PermissionManager
     skills: SkillRuntime
@@ -21,7 +26,10 @@ class ApplicationContainer:
 
 
 def build_container() -> ApplicationContainer:
-    provider_factory = ProviderFactory(EnvironmentCredentialResolver())
+    credentials = EncryptedCredentialStore()
+    provider_factory = ProviderFactory(
+        ChainedCredentialResolver(credentials, EnvironmentCredentialResolver())
+    )
     providers = ProviderRegistry()
     providers.register(
         ProviderConfig(
@@ -61,6 +69,7 @@ def build_container() -> ApplicationContainer:
     return ApplicationContainer(
         providers=providers,
         provider_factory=provider_factory,
+        credentials=credentials,
         tools=tools,
         permissions=permissions,
         skills=skills,
