@@ -67,6 +67,7 @@ class SkillRuntime:
         self._records: dict[str, _SkillRecord] = {}
 
     def install(self, package_path: str | Path) -> Skill:
+        # TODO(extension): 将安装记录持久化，应用重启后从可信包目录恢复状态。
         root = _package_dir(package_path)
         raw = _read_yaml(root / "skill.yaml")
         if "id" in raw and "skill_id" not in raw:
@@ -252,6 +253,7 @@ class PluginRuntime:
         self._records: dict[str, _PluginRecord] = {}
 
     def install(self, package_path: str | Path) -> Plugin:
+        # 当前只加载声明式清单，不导入或执行插件包中的任意 Python 代码。
         root = _package_dir(package_path)
         raw = _read_yaml(root / "plugin.yaml")
         if "id" in raw and "plugin_id" not in raw:
@@ -315,6 +317,7 @@ class PluginRuntime:
         if record.plugin.enabled:
             return record.plugin.model_copy(deep=True)
         if record.plugin.manifest.backend.type == "mcp":
+            # TODO(extension): 第二阶段以隔离进程实现 MCP Host，并补充签名与来源校验。
             record.plugin.status = PluginStatus.dependency_missing
             raise ExtensionError(
                 "PLUGIN_HOST_UNAVAILABLE",
@@ -366,6 +369,7 @@ class PluginRuntime:
                 )
                 record.registered_tools.append(spec.name)
         except Exception as exc:
+            # 注册过程必须具备回滚语义，防止半启用插件污染全局工具表。
             for name in record.registered_tools:
                 self.registry.unregister(name)
             record.registered_tools.clear()

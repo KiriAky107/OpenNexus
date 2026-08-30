@@ -1,3 +1,5 @@
+"""Agent 工具注册与执行边界。"""
+
 import inspect
 from dataclasses import dataclass
 from time import perf_counter
@@ -29,6 +31,8 @@ class ToolNotFoundError(LookupError):
 
 
 class ToolRegistry:
+    """统一校验工具入参并隔离执行异常，避免单个工具击穿 Agent 主循环。"""
+
     def __init__(self) -> None:
         self._tools: dict[str, RegisteredTool] = {}
 
@@ -80,6 +84,7 @@ class ToolRegistry:
             )
 
         try:
+            # JSON Schema 约束模型可见的协议，Pydantic 再完成运行时类型转换。
             Draft202012Validator(registered.definition.parameters).validate(call.arguments)
             arguments = registered.arguments_model.model_validate(call.arguments)
         except (ValidationError, JsonSchemaValidationError) as exc:
@@ -103,7 +108,7 @@ class ToolRegistry:
                 output=output,
                 duration_ms=round((perf_counter() - started) * 1000),
             )
-        except Exception as exc:  # Tool failures are isolated from the Agent loop.
+        except Exception as exc:  # 工具失败转换成结构化结果，由模型决定是否降级或重试。
             return ToolResult(
                 tool_call_id=call.tool_call_id,
                 name=call.name,

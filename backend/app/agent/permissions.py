@@ -1,3 +1,5 @@
+"""Agent 工具权限策略与一次性确认票据。"""
+
 import asyncio
 from dataclasses import dataclass
 from enum import Enum
@@ -51,6 +53,7 @@ class PermissionPolicy:
     def mode_for(self, permission: str | None) -> PermissionMode:
         if permission is None:
             return PermissionMode.allow
+        # 未登记权限一律拒绝，防止扩展通过拼写错误或新权限绕过策略。
         return self._rules.get(permission, PermissionMode.deny)
 
 
@@ -63,6 +66,8 @@ class PermissionTicket:
 
 
 class PermissionManager:
+    """管理当前进程内的确认请求与会话级授权。"""
+
     def __init__(self, policy: PermissionPolicy) -> None:
         self.policy = policy
         self._pending: dict[tuple[str, str], PermissionTicket] = {}
@@ -94,6 +99,7 @@ class PermissionManager:
         if ticket is None or ticket.future.done():
             return False
         if decision == "allow_session":
+            # 会话授权只存在于进程内，应用重启后按默认策略重新确认。
             self._session_grants.add(ticket.permission)
         ticket.future.set_result(decision)
         return True
