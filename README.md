@@ -128,6 +128,7 @@ pnpm test
 | --- | --- |
 | [技术栈说明](docs/AI笔记软件技术栈说明-团队版-v2.2.md) | 目标架构、当前实施边界与模块依赖 |
 | [第一阶段分工表](docs/第一阶段分工表.md) | 成员职责、协作关系与当前交付状态 |
+| [第一阶段测试验证操作手册](docs/第一阶段测试验证操作手册.md) | 自动化测试、接口主链路、前端人工验收与记录模板 |
 | [后端接口契约](docs/后端接口契约-开发版.md) | HTTP/SSE 接口、错误和当前实现状态 |
 | [AI Core 与 Agent Core](docs/AI-Core与Agent-Core开发说明.md) | Provider、Agent、Tool、Permission 与 Extension Core |
 | [Knowledge 与 Retrieval Core](docs/Knowledge与Retrieval-Core开发说明.md) | Block、索引、混合检索和 Citation |
