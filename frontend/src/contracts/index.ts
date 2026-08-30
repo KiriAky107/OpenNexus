@@ -295,6 +295,7 @@ export interface ProviderPreset {
   name: string
   provider_type: ProviderType
   base_url: string
+  default_credential_id?: string | null
   requires_credential: boolean
 }
 
@@ -523,6 +524,7 @@ export interface ApiProviderPreset {
   name: string
   provider_type: ApiProviderType
   base_url: string
+  default_credential_id?: string | null
   requires_credential: boolean
 }
 

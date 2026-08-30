@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { ProviderConfig, ModelInfo, ProviderPreset } from '@/contracts'
 import { createProvider, deleteProvider as deleteProviderRequest, listModels, listProviderPresets, listProviders, mockProviders, mockModels, testProvider as testProviderRequest, updateProvider as updateProviderRequest } from '@/services/providerService'
+import { ApiErrorClass } from '@/services/apiClient'
 
 export const useProviderStore = defineStore('provider', () => {
   const providers = ref<ProviderConfig[]>(mockProviders)
@@ -48,7 +49,17 @@ export const useProviderStore = defineStore('provider', () => {
       modelsByProvider.value[providerId] = uniqueModels
       return uniqueModels
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : '模型列表获取失败'
+      const provider = providers.value.find((item) => item.provider_id === providerId)
+      const credentialId = provider?.credential_id
+      let message = reason instanceof Error ? reason.message : '模型列表获取失败'
+      if (reason instanceof ApiErrorClass && reason.code === 'PROVIDER_CREDENTIAL_MISSING') {
+        const environmentName = credentialId === 'deepseek'
+          ? 'DEEPSEEK_API_KEY'
+          : `AINOTE_CREDENTIAL_${credentialId?.replace(/[^A-Za-z0-9]/g, '_').toUpperCase() || '<ID>'}`
+        message = `未找到凭据“${credentialId || '未设置'}”，请在启动 AI Core 前设置 ${environmentName}。`
+      } else if (reason instanceof ApiErrorClass && reason.code === 'PROVIDER_AUTH_FAILED') {
+        message = `鉴权失败，请检查凭据“${credentialId || '未设置'}”对应的 API Key 是否有效。`
+      }
       modelErrorsByProvider.value[providerId] = message
       throw reason
     } finally {
