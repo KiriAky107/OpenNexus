@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { Link } from '@element-plus/icons-vue'
 import { Crepe } from '@milkdown/crepe'
+import { oneDark } from '@codemirror/theme-one-dark'
 import {
   createCodeBlockCommand,
   toggleEmphasisCommand,
@@ -19,6 +20,7 @@ import { callCommand } from '@milkdown/kit/utils'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
+import { useThemeStore } from '@/stores/theme'
 import { applyMarkdownFontSize, fontSizeMarkdownPlugin } from './fontSizeMarkdown'
 import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/frame.css'
@@ -26,6 +28,7 @@ import '@milkdown/crepe/theme/frame.css'
 const props = defineProps<{ initialContent: string }>()
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
+const themeStore = useThemeStore()
 const editorRoot = ref<HTMLElement | null>(null)
 const loading = ref(true)
 const fontSizeInput = ref(16)
@@ -104,6 +107,7 @@ onMounted(async () => {
     featureConfigs: {
       [Crepe.Feature.Placeholder]: { text: '开始记录你的想法…' },
       [Crepe.Feature.CodeMirror]: {
+        theme: themeStore.resolvedCodeBlockTheme === 'github-dark' ? oneDark : [],
         previewOnlyByDefault: false,
         searchPlaceholder: '搜索语言',
         noResultText: '没有匹配的语言',
@@ -269,6 +273,12 @@ defineExpose({ getEditor: () => crepe?.editor })
 .milkdown-host :deep(.ProseMirror p) { font-weight: 400; }
 .milkdown-host :deep(.ProseMirror h1), .milkdown-host :deep(.ProseMirror h2), .milkdown-host :deep(.ProseMirror h3), .milkdown-host :deep(.ProseMirror h4), .milkdown-host :deep(.ProseMirror h5), .milkdown-host :deep(.ProseMirror h6) { font-weight: 700; }
 .milkdown-host :deep(.font-size-marker) { display: none; }
+.milkdown-host :deep(.milkdown-code-block) { overflow: hidden; border: 1px solid var(--color-code-border); border-radius: 6px; background: var(--color-code-background); color: var(--color-code-text); }
+.milkdown-host :deep(.milkdown-code-block .cm-editor),
+.milkdown-host :deep(.milkdown-code-block .cm-gutters),
+.milkdown-host :deep(.milkdown-code-block .cm-panel) { background: var(--color-code-background); }
+.milkdown-host :deep(.milkdown-code-block .cm-content) { caret-color: var(--color-code-text); font-family: var(--font-editor-mono); }
+.milkdown-host :deep(.milkdown-code-block .language-button) { color: var(--color-code-muted); }
 :global(.milkdown-toolbar) { border: 1px solid var(--color-border-default) !important; background: var(--color-surface-elevated) !important; box-shadow: var(--shadow-md) !important; }
 :global(.milkdown-toolbar .toolbar-item svg), :global(.milkdown-toolbar .toolbar-item.active svg) { color: var(--color-text-primary) !important; fill: var(--color-text-primary) !important; opacity: 1 !important; }
 :global(.milkdown-toolbar .toolbar-item:hover svg), :global(.milkdown-toolbar .toolbar-item.active svg) { color: var(--color-accent-primary) !important; fill: var(--color-accent-primary) !important; }

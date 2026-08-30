@@ -3,10 +3,16 @@ import { ref, computed, watch } from 'vue'
 import type { ThemeConfig } from '@/contracts'
 
 const builtinThemes: ThemeConfig[] = [
-  { theme_id: 'light', name: '浅色', version: '1.0.0', description: '默认浅色主题', is_dark: false, builtin: true },
-  { theme_id: 'dark', name: '深色', version: '1.0.0', description: '默认深色主题', is_dark: true, builtin: true },
-  { theme_id: 'sepia', name: '护眼', version: '1.0.0', description: '护眼暖色调', is_dark: false, builtin: true },
+  { theme_id: 'light', name: '浅色', version: '1.0.0', description: '默认浅色主题', is_dark: false, builtin: true, code_theme: 'github-light' },
+  { theme_id: 'dark', name: '深色', version: '1.0.0', description: '默认深色主题', is_dark: true, builtin: true, code_theme: 'github-dark' },
+  { theme_id: 'sepia', name: '护眼', version: '1.0.0', description: '护眼暖色调', is_dark: false, builtin: true, code_theme: 'github-light' },
 ]
+
+export type CodeBlockThemePreference = 'auto' | 'github-light' | 'github-dark'
+
+function isCodeBlockThemePreference(value: unknown): value is CodeBlockThemePreference {
+  return value === 'auto' || value === 'github-light' || value === 'github-dark'
+}
 
 export const useThemeStore = defineStore('theme', () => {
   const themes = ref<ThemeConfig[]>(builtinThemes)
@@ -14,6 +20,7 @@ export const useThemeStore = defineStore('theme', () => {
   const fontEditorSize = ref(15)
   const fontEditorFamily = ref('system-ui')
   const lineHeight = ref(1.7)
+  const codeBlockTheme = ref<CodeBlockThemePreference>('auto')
   let appearanceHydrated = false
 
   const currentTheme = computed(() =>
@@ -21,6 +28,10 @@ export const useThemeStore = defineStore('theme', () => {
   )
 
   const isDark = computed(() => currentTheme.value?.is_dark || false)
+  const resolvedCodeBlockTheme = computed<'github-light' | 'github-dark'>(() => {
+    if (codeBlockTheme.value !== 'auto') return codeBlockTheme.value
+    return currentTheme.value?.code_theme ?? (isDark.value ? 'github-dark' : 'github-light')
+  })
 
   function applyTheme(themeId: string) {
     const theme = themes.value.find((t) => t.theme_id === themeId)
@@ -41,10 +52,11 @@ export const useThemeStore = defineStore('theme', () => {
     const savedAppearance = localStorage.getItem('editor-appearance')
     if (savedAppearance) {
       try {
-        const value = JSON.parse(savedAppearance) as { size?: number; family?: string; lineHeight?: number }
+        const value = JSON.parse(savedAppearance) as { size?: number; family?: string; lineHeight?: number; codeBlockTheme?: unknown }
         if (value.size) fontEditorSize.value = value.size
         if (value.family) fontEditorFamily.value = value.family
         if (value.lineHeight) lineHeight.value = value.lineHeight
+        if (isCodeBlockThemePreference(value.codeBlockTheme)) codeBlockTheme.value = value.codeBlockTheme
       } catch { localStorage.removeItem('editor-appearance') }
     }
     const saved = localStorage.getItem('theme')
@@ -67,11 +79,19 @@ export const useThemeStore = defineStore('theme', () => {
     fontEditorSize.value = 15
     fontEditorFamily.value = 'system-ui'
     lineHeight.value = 1.7
+    codeBlockTheme.value = 'auto'
   }
 
   const persistAppearance = () => localStorage.setItem('editor-appearance', JSON.stringify({
-    size: fontEditorSize.value, family: fontEditorFamily.value, lineHeight: lineHeight.value,
+    size: fontEditorSize.value,
+    family: fontEditorFamily.value,
+    lineHeight: lineHeight.value,
+    codeBlockTheme: codeBlockTheme.value,
   }))
+
+  watch(resolvedCodeBlockTheme, (theme) => {
+    document.documentElement.setAttribute('data-code-theme', theme)
+  }, { immediate: true })
 
   watch(fontEditorSize, (v) => {
     document.documentElement.style.setProperty('--font-editor-size', `${v}px`)
@@ -88,6 +108,10 @@ export const useThemeStore = defineStore('theme', () => {
     if (appearanceHydrated) persistAppearance()
   }, { immediate: true })
 
+  watch(codeBlockTheme, () => {
+    if (appearanceHydrated) persistAppearance()
+  })
+
   return {
     themes,
     currentThemeId,
@@ -96,6 +120,8 @@ export const useThemeStore = defineStore('theme', () => {
     fontEditorSize,
     fontEditorFamily,
     lineHeight,
+    codeBlockTheme,
+    resolvedCodeBlockTheme,
     applyTheme,
     initTheme,
     toggleTheme,
