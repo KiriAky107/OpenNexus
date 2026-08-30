@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useThemeStore } from '@/stores/theme'
 import { useSettingsStore } from '@/stores/settings'
+import { ArrowRight, Document, Folder, FolderOpened, Moon, Plus, Sunny } from '@element-plus/icons-vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 const router = useRouter()
 const workspaceStore = useWorkspaceStore()
@@ -65,7 +67,7 @@ async function createVault() {
     <div class="bg-decoration" />
     <div class="entry-container">
       <div class="brand-section">
-        <div class="logo">📝</div>
+        <div class="logo"><AppIcon :icon="Document" :size="56" /></div>
         <h1 class="app-title">知笔知己</h1>
         <p class="app-subtitle">本地优先的 AI 笔记软件</p>
       </div>
@@ -84,22 +86,22 @@ async function createVault() {
               @click="openVault(vault.path)"
               :disabled="isLoading"
             >
-              <span class="vault-icon">📁</span>
+              <AppIcon class="vault-icon" :icon="Folder" :size="20" />
               <div class="vault-info">
                 <div class="vault-name">{{ vault.name }}</div>
                 <div class="vault-path">{{ vault.path }}</div>
               </div>
-              <span class="vault-arrow">›</span>
+              <AppIcon class="vault-arrow" :icon="ArrowRight" :size="16" />
             </button>
           </div>
         </div>
 
         <div class="actions">
           <button class="btn btn-primary" @click="openFolderPicker" :disabled="isLoading">
-            <span>📂</span> 打开本地 Vault
+            <AppIcon :icon="FolderOpened" /> 打开本地 Vault
           </button>
           <button class="btn btn-secondary" @click="showCreateDialog = true" :disabled="isLoading">
-            <span>➕</span> 创建新 Vault
+            <AppIcon :icon="Plus" /> 创建新 Vault
           </button>
         </div>
 
@@ -114,7 +116,8 @@ async function createVault() {
       <div class="footer-info">
         <span>v0.1.0</span>
         <button class="theme-toggle" @click="themeStore.toggleTheme()">
-          {{ themeStore.isDark ? '☀️ 浅色' : '🌙 深色' }}
+          <AppIcon :icon="themeStore.isDark ? Sunny : Moon" :size="15" />
+          {{ themeStore.isDark ? '浅色' : '深色' }}
         </button>
       </div>
     </div>
@@ -374,6 +377,9 @@ async function createVault() {
 }
 
 .theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
   color: var(--color-text-secondary);
   background: none;
   border: none;

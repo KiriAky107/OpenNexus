@@ -6,6 +6,8 @@ import * as workspaceService from '@/services/workspaceService'
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
 import FileTreeNode from './FileTreeNode.vue'
+import { DocumentAdd, FolderAdd } from '@element-plus/icons-vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 const workspaceStore = useWorkspaceStore()
 const editorStore = useEditorStore()
@@ -90,8 +92,8 @@ async function deleteTarget() {
 <template>
   <section class="file-tree-panel" @click="closeContextMenu">
     <div class="toolbar">
-      <button type="button" title="新建笔记" @click.stop="beginCreate('file')">＋📄</button>
-      <button type="button" title="新建文件夹" @click.stop="beginCreate('folder')">＋📁</button>
+      <button type="button" title="新建笔记" aria-label="新建笔记" @click.stop="beginCreate('file')"><AppIcon :icon="DocumentAdd" /></button>
+      <button type="button" title="新建文件夹" aria-label="新建文件夹" @click.stop="beginCreate('folder')"><AppIcon :icon="FolderAdd" /></button>
     </div>
     <form v-if="newItemType" class="new-item" @submit.prevent="createItem">
       <input v-model="newItemName" :placeholder="newItemType === 'file' ? '笔记名称' : '文件夹名称'" autofocus />
