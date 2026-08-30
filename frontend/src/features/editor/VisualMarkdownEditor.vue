@@ -288,6 +288,6 @@ defineExpose({ getEditor: () => crepe?.editor })
 .milkdown-host :deep(.milkdown-list-item-block li .label-wrapper) { color: var(--color-markdown-marker); font-weight: 700; }
 .milkdown-host :deep(.milkdown-list-item-block li .label-wrapper svg) { fill: var(--color-markdown-marker); }
 .milkdown-host :deep(code) { font-family: var(--font-editor-mono); }
-:global([data-theme='dark']) .milkdown-host :deep(.milkdown) { color-scheme: dark; }
+:global([data-theme='dark'] .milkdown-host .milkdown) { color-scheme: dark; }
 @media (max-width: 680px) { .toolbar-select select { min-width: 46px; width: 46px; } }
 </style>
