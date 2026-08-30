@@ -15,10 +15,10 @@ onMounted(() => {
     // Already loaded
   }
   if (!workspaceStore.activeFilePath && workspaceStore.fileTree.length === 0) {
-    void editorStore.loadFile('/欢迎使用知笔知己.md').then(() => {
+    void editorStore.loadFile('/欢迎使用 NotesAgent.md').then(() => {
       // 默认文件加载期间用户可能已经点击了其他文件，不能覆盖用户的选择。
-      if (!workspaceStore.activeFilePath && editorStore.currentFilePath === '/欢迎使用知笔知己.md') {
-        workspaceStore.openFile('/欢迎使用知笔知己.md')
+      if (!workspaceStore.activeFilePath && editorStore.currentFilePath === '/欢迎使用 NotesAgent.md') {
+        workspaceStore.openFile('/欢迎使用 NotesAgent.md')
       }
     })
   }
