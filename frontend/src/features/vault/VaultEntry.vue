@@ -68,7 +68,7 @@ async function createVault() {
     <div class="entry-container">
       <div class="brand-section">
         <div class="logo"><AppIcon :icon="Document" :size="56" /></div>
-        <h1 class="app-title">知笔知己</h1>
+        <h1 class="app-title">NotesAgent</h1>
         <p class="app-subtitle">本地优先的 AI 笔记软件</p>
       </div>
 

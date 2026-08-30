@@ -25,7 +25,7 @@ const pageTitle = computed(() => {
     themes: '主题管理',
     settings: '设置',
   }
-  return titles[name] || '知笔知己'
+  return titles[name] || 'NotesAgent'
 })
 
 const currentFileName = computed(() => {
@@ -50,7 +50,7 @@ const isDirty = computed(() => editorStore.saveStatus === 'dirty' || editorStore
       </span>
     </div>
     <div class="titlebar-center">
-      <span class="app-name">知笔知己</span>
+      <span class="app-name">NotesAgent</span>
     </div>
     <div class="titlebar-right">
       <button class="icon-btn" @click="themeStore.toggleTheme()" :title="themeStore.isDark ? '切换浅色主题' : '切换深色主题'">
