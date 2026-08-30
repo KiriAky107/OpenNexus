@@ -7,7 +7,7 @@ import { useEditorStore } from '@/stores/editor'
 import { useProviderStore } from '@/stores/provider'
 import { useSkillStore } from '@/stores/skill'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { renderMarkdown } from '@/utils/markdown'
+import MarkdownContent from '@/components/common/MarkdownContent.vue'
 
 const chatStore = useChatStore()
 const providerStore = useProviderStore()
@@ -69,7 +69,7 @@ async function openCitation(citation: Citation) {
         <div class="avatar">{{ message.role === 'user' ? '你' : 'AI' }}</div>
         <div class="message-body">
           <details v-if="message.thinking" class="thinking"><summary>思考过程</summary><p>{{ message.thinking }}</p></details>
-          <div v-if="message.content" class="message-content markdown-content" v-html="renderMarkdown(message.content)" />
+          <MarkdownContent v-if="message.content" class="message-content" :source="message.content" />
           <div v-else-if="chatStore.isStreaming" class="message-content">正在思考…</div>
           <div v-if="message.tool_calls?.length" class="tool-calls"><div v-for="call in message.tool_calls" :key="call.tool_call_id" class="item-card"><span class="badge info">{{ call.status }}</span><strong>{{ call.name }}</strong><pre>{{ JSON.stringify(call.parameters, null, 2) }}</pre></div></div>
           <div v-if="message.citations?.length" class="citations">
@@ -104,15 +104,6 @@ async function openCitation(citation: Citation) {
 .avatar { display: grid; place-items: center; width: 34px; height: 34px; border-radius: var(--radius-full); background: var(--color-background-tertiary); font-weight: 700; }
 .assistant .avatar { background: var(--color-accent-soft); color: var(--color-accent-primary); }
 .message-content { white-space: pre-wrap; line-height: var(--line-height-relaxed); }
-.markdown-content { white-space: normal; user-select: text; }
-.markdown-content :deep(p), .markdown-content :deep(ul), .markdown-content :deep(ol), .markdown-content :deep(pre), .markdown-content :deep(blockquote) { margin: .65em 0; }
-.markdown-content :deep(h1), .markdown-content :deep(h2), .markdown-content :deep(h3) { margin: 1em 0 .5em; line-height: var(--line-height-tight); }
-.markdown-content :deep(ul) { padding-left: 1.5em; list-style: disc; }.markdown-content :deep(ol) { padding-left: 1.5em; list-style: decimal; }
-.markdown-content :deep(pre) { overflow: auto; padding: var(--space-md); border-radius: var(--radius-md); background: var(--color-background-secondary); }
-.markdown-content :deep(code) { padding: .1em .3em; border-radius: var(--radius-sm); background: var(--color-background-tertiary); font-family: var(--font-ui-mono); }.markdown-content :deep(pre code) { padding: 0; background: transparent; }
-.markdown-content :deep(blockquote) { padding-left: 1em; border-left: 3px solid var(--color-accent-primary); color: var(--color-text-secondary); }
-.markdown-content :deep(table) { width: 100%; margin: .65em 0; border-collapse: collapse; }.markdown-content :deep(th), .markdown-content :deep(td) { padding: .45em .65em; border: 1px solid var(--color-border-default); text-align: left; }
-.markdown-content :deep(img) { max-width: 100%; }.markdown-content :deep(hr) { margin: 1em 0; border: 0; border-top: 1px solid var(--color-border-default); }
 .thinking { margin-bottom: var(--space-sm); color: var(--color-text-secondary); }.thinking p { margin-top: var(--space-sm); white-space: pre-wrap; }
 .tool-calls { display: grid; gap: var(--space-sm); margin-top: var(--space-md); }.tool-calls .item-card { display: grid; gap: var(--space-xs); }.tool-calls pre { overflow: auto; font-size: var(--font-size-xs); }
 .usage { display: block; margin-top: var(--space-xs); color: var(--color-text-tertiary); }
