@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { ProviderConfig, ModelInfo, ProviderPreset } from '@/contracts'
-import { createProvider, deleteProvider as deleteProviderRequest, listModels, listProviderPresets, listProviders, mockProviders, mockModels, testProvider as testProviderRequest, updateProvider as updateProviderRequest } from '@/services/providerService'
+import { createProvider, deleteProvider as deleteProviderRequest, getCredentialStatus, listModels, listProviderPresets, listProviders, mockProviders, mockModels, putCredential, testProvider as testProviderRequest, updateProvider as updateProviderRequest } from '@/services/providerService'
 import { ApiErrorClass } from '@/services/apiClient'
 
 export const useProviderStore = defineStore('provider', () => {
@@ -10,6 +10,7 @@ export const useProviderStore = defineStore('provider', () => {
   const modelsByProvider = ref<Record<string, ModelInfo[]>>(mockModels)
   const modelLoadingByProvider = ref<Record<string, boolean>>({})
   const modelErrorsByProvider = ref<Record<string, string>>({})
+  const credentialConfiguredById = ref<Record<string, boolean>>({})
   const defaultProviderId = ref('mock')
   const isLoading = ref(false)
   const error = ref<string | null>(null)
@@ -53,10 +54,7 @@ export const useProviderStore = defineStore('provider', () => {
       const credentialId = provider?.credential_id
       let message = reason instanceof Error ? reason.message : '模型列表获取失败'
       if (reason instanceof ApiErrorClass && reason.code === 'PROVIDER_CREDENTIAL_MISSING') {
-        const environmentName = credentialId === 'deepseek'
-          ? 'DEEPSEEK_API_KEY'
-          : `AINOTE_CREDENTIAL_${credentialId?.replace(/[^A-Za-z0-9]/g, '_').toUpperCase() || '<ID>'}`
-        message = `未找到凭据“${credentialId || '未设置'}”，请在启动 AI Core 前设置 ${environmentName}。`
+        message = '尚未配置 API Key，请编辑该 Provider 后填写并保存。'
       } else if (reason instanceof ApiErrorClass && reason.code === 'PROVIDER_AUTH_FAILED') {
         message = `鉴权失败，请检查凭据“${credentialId || '未设置'}”对应的 API Key 是否有效。`
       }
@@ -71,6 +69,17 @@ export const useProviderStore = defineStore('provider', () => {
     await Promise.allSettled(
       providers.value.filter((provider) => provider.enabled).map((provider) => loadModels(provider.provider_id))
     )
+  }
+
+  async function loadCredentialStatus(credentialId: string): Promise<boolean> {
+    const configured = await getCredentialStatus(credentialId)
+    credentialConfiguredById.value[credentialId] = configured
+    return configured
+  }
+
+  async function saveCredential(credentialId: string, apiKey: string) {
+    await putCredential(credentialId, apiKey)
+    credentialConfiguredById.value[credentialId] = true
   }
 
   async function addProvider(data: Omit<ProviderConfig, 'provider_id'>) {
@@ -108,6 +117,7 @@ export const useProviderStore = defineStore('provider', () => {
     modelsByProvider,
     modelLoadingByProvider,
     modelErrorsByProvider,
+    credentialConfiguredById,
     defaultProviderId,
     enabledProviders,
     defaultProvider,
@@ -117,6 +127,8 @@ export const useProviderStore = defineStore('provider', () => {
     loadPresets,
     loadModels,
     refreshEnabledModels,
+    loadCredentialStatus,
+    saveCredential,
     addProvider,
     updateProvider,
     deleteProvider,

@@ -8,6 +8,8 @@ vi.mock('@/services/providerService', () => ({
   mockModels: {},
   listProviders: vi.fn(),
   listProviderPresets: vi.fn(),
+  getCredentialStatus: vi.fn(),
+  putCredential: vi.fn(),
   listModels: vi.fn(),
   createProvider: vi.fn(),
   updateProvider: vi.fn(),
@@ -16,7 +18,7 @@ vi.mock('@/services/providerService', () => ({
 }))
 
 import { useProviderStore } from './provider'
-import { listModels, listProviderPresets, listProviders } from '@/services/providerService'
+import { getCredentialStatus, listModels, listProviderPresets, listProviders, putCredential } from '@/services/providerService'
 import { ApiErrorClass } from '@/services/apiClient'
 
 const providers: ProviderConfig[] = [
@@ -49,6 +51,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(listProviders).mockResolvedValue(providers)
   vi.mocked(listProviderPresets).mockResolvedValue(presets)
+  vi.mocked(getCredentialStatus).mockResolvedValue(false)
+  vi.mocked(putCredential).mockResolvedValue(undefined)
 })
 
 describe('provider store model discovery', () => {
@@ -89,6 +93,16 @@ describe('provider store model discovery', () => {
 
     await expect(store.loadModels('openai')).rejects.toThrow('Credential is unavailable')
 
-    expect(store.modelErrorsByProvider.openai).toContain('DEEPSEEK_API_KEY')
+    expect(store.modelErrorsByProvider.openai).toContain('填写并保存')
+  })
+
+  it('sends an API key to the credential endpoint without storing it in Pinia', async () => {
+    const store = useProviderStore()
+
+    await store.saveCredential('deepseek', 'sk-test-sensitive-value')
+
+    expect(putCredential).toHaveBeenCalledWith('deepseek', 'sk-test-sensitive-value')
+    expect(store.credentialConfiguredById.deepseek).toBe(true)
+    expect(JSON.stringify(store.$state)).not.toContain('sk-test-sensitive-value')
   })
 })

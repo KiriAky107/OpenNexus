@@ -49,6 +49,18 @@ export async function listProviderPresets(): Promise<ProviderPreset[]> {
   return response.items
 }
 
+export async function getCredentialStatus(credentialId: string): Promise<boolean> {
+  const response = await apiClient.get<{ credential_id: string; configured: boolean }>(`/api/credentials/${encodeURIComponent(credentialId)}`)
+  return response.configured
+}
+
+export async function putCredential(credentialId: string, apiKey: string): Promise<void> {
+  await apiClient.put<{ credential_id: string; configured: boolean }>(
+    `/api/credentials/${encodeURIComponent(credentialId)}`,
+    { api_key: apiKey },
+  )
+}
+
 export async function updateProvider(providerId: string, data: Partial<ProviderConfig>): Promise<ProviderConfig> {
   const response = await apiClient.patch<ApiProviderConfig>(`/api/providers/${providerId}`, {
     name: data.name,
