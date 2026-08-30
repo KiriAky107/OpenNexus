@@ -12,6 +12,8 @@ from app.contracts import (
     ToolDefinition,
 )
 from app.providers.ollama import OllamaProvider
+from app.providers.base import ProviderError
+from app.providers.credentials import EnvironmentCredentialResolver
 from app.providers.openai_compatible import OpenAICompatibleProvider
 
 
@@ -154,6 +156,31 @@ def test_openai_compatible_fetches_and_maps_model_list() -> None:
     models = run(provider.list_models())
 
     assert [item.model for item in models] == ["model-b", "model-a"]
+
+
+def test_environment_credentials_support_deepseek_development_alias(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-test-key")
+
+    assert EnvironmentCredentialResolver().resolve("deepseek") == "secret-test-key"
+
+
+def test_openai_compatible_rejects_missing_named_credential_before_request() -> None:
+    class EmptyCredentials:
+        def resolve(self, credential_id: str | None) -> str | None:
+            return None
+
+    provider = OpenAICompatibleProvider(
+        base_url="https://provider.test/v1",
+        credential_id="deepseek",
+        credentials=EmptyCredentials(),
+    )
+
+    try:
+        run(provider.list_models())
+    except ProviderError as error:
+        assert error.code == "PROVIDER_CREDENTIAL_MISSING"
+    else:
+        raise AssertionError("Missing credential should fail before the provider request")
 
 
 def test_ollama_maps_models_and_completion() -> None:

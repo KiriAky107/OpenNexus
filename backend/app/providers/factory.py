@@ -35,12 +35,14 @@ class ProviderFactory:
                 name="OpenAI",
                 provider_type=ProviderType.openai_chat,
                 base_url="https://api.openai.com/v1",
+                default_credential_id="openai",
             ),
             ProviderPreset(
                 preset_id="deepseek",
                 name="DeepSeek",
                 provider_type=ProviderType.openai_compatible,
                 base_url="https://api.deepseek.com",
+                default_credential_id="deepseek",
             ),
             ProviderPreset(
                 preset_id="ollama",

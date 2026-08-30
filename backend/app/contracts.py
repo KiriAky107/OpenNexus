@@ -443,6 +443,7 @@ class ProviderPreset(Contract):
     name: str
     provider_type: ProviderType
     base_url: str
+    default_credential_id: str | None = None
     requires_credential: bool = True
 
 

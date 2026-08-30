@@ -264,6 +264,11 @@ class OpenAICompatibleProvider(TurnStreamingMixin):
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         api_key = self.credentials.resolve(self.credential_id)
+        if self.credential_id and not api_key:
+            raise ProviderError(
+                "PROVIDER_CREDENTIAL_MISSING",
+                f'Credential "{self.credential_id}" is not available in the AI Core process.',
+            )
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
