@@ -16,6 +16,8 @@ export const useChatStore = defineStore('chat', () => {
   const selectedModel = ref('mock-1')
   let sseClient: SseClient | null = null
 
+  // TODO(chat): 会话持久化接口完成后移除 mockConversations/mockMessages 数据源。
+
   const activeConversation = computed(() =>
     conversations.value.find((c) => c.conversation_id === activeConversationId.value) || null
   )
@@ -56,6 +58,7 @@ export const useChatStore = defineStore('chat', () => {
     inputText.value = ''
     isStreaming.value = true
 
+    // 先插入占位消息，随后将 SSE 增量原位合并，避免每个 token 重建消息列表。
     const aiMsg: ChatMessage = {
       message_id: `msg-${Date.now() + 1}`,
       conversation_id: conversationId,

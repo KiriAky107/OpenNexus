@@ -1,5 +1,6 @@
 import type { ApiError, ErrorResponse } from '@/contracts'
 
+// 所有 HTTP 请求都经过此边界，以统一地址、请求追踪和错误契约。
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE ?? ''
 
 export function resolveApiUrl(path: string): string {
@@ -63,6 +64,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       return resp as unknown as T
     }
 
+    // 后端约定返回 ErrorResponse；代理或网关的非 JSON 错误仍降级为 HTTP 状态码。
     let errBody: ErrorResponse | null = null
     try {
       errBody = (await resp.json()) as ErrorResponse

@@ -1,3 +1,5 @@
+"""Agent 运行时：负责模型轮次、工具调用、权限确认与事件发布。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -50,6 +52,8 @@ MAX_TOOL_CALLS_PER_TURN = 50
 
 @dataclass(slots=True)
 class RunRecord:
+    """单次运行的可变上下文，仅由 AgentRuntime 持有。"""
+
     run: AgentRun
     request: AgentRunCreateRequest
     skill_config: AgentConfiguration | None = None
@@ -60,6 +64,8 @@ class RunRecord:
 
 
 class AgentRuntime:
+    """进程内 Agent 编排器；对外返回深拷贝，避免调用方修改运行状态。"""
+
     def __init__(
         self,
         providers: ProviderRegistry,
@@ -98,6 +104,7 @@ class AgentRuntime:
         )
         allowed_tools = list(request.allowed_tools)
         if skill_config is not None:
+            # 同时指定 Skill 与工具白名单时取交集，避免 Skill 扩大调用权限。
             allowed_tools = (
                 [name for name in skill_config.allowed_tools if name in allowed_tools]
                 if allowed_tools
@@ -142,6 +149,8 @@ class AgentRuntime:
 
     async def events(self, run_id: str) -> AsyncIterator[AgentEvent]:
         record = self._get_record(run_id)
+        # 先回放快照再订阅实时事件，使晚加入的 SSE 客户端也能恢复界面状态。
+        # TODO(agent): 持久化事件并支持 Last-Event-ID，进程重启后仍可续传。
         queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
         record.subscribers.add(queue)
         history = [event.model_copy(deep=True) for event in record.events]
@@ -243,6 +252,7 @@ class AgentRuntime:
                 messages.append(
                     Message(role=MessageRole.assistant, content=turn.text or "", tool_calls=calls)
                 )
+                # 工具可以并发执行，但结果按模型原始调用顺序写回上下文，保证轮次可复现。
                 semaphore = asyncio.Semaphore(record.request.max_concurrent_tools)
 
                 async def execute(call: ToolCall) -> ToolResult:
@@ -313,6 +323,7 @@ class AgentRuntime:
         if mode == PermissionMode.deny:
             result = self._permission_denied(call)
         elif mode == PermissionMode.confirm and permission:
+            # 运行状态必须在等待期间可见，前端才能展示并处理权限确认卡片。
             ticket = self.permissions.create_ticket(record.run.run_id, permission)
             record.run.status = AgentRunStatus.waiting_permission
             self._publish(
@@ -408,6 +419,7 @@ class AgentRuntime:
             timestamp=datetime.now(timezone.utc),
         )
         record.events.append(event)
+        # 内存事件只保留最近窗口；完整审计轨迹应由后续持久化层承担。
         if len(record.events) > MAX_EVENTS_PER_RUN:
             del record.events[: len(record.events) - MAX_EVENTS_PER_RUN]
         for queue in record.subscribers:
@@ -448,6 +460,7 @@ class AgentRuntime:
             raise AgentRunNotFoundError(run_id) from exc
 
     def _prune_records(self) -> None:
+        # 只清理终态记录，绝不为了容量取消仍在执行或等待授权的任务。
         overflow = len(self._records) - MAX_RUN_RECORDS + 1
         if overflow <= 0:
             return
