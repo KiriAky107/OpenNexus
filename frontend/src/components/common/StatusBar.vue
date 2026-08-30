@@ -107,8 +107,8 @@ const showEditorInfo = computed(() => route.name === 'workspace')
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--space-md);
-  background: var(--color-background-secondary);
+  padding: 0 var(--space-lg);
+  background: var(--color-surface-secondary);
   border-top: 1px solid var(--color-border-subtle);
   font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
@@ -129,6 +129,7 @@ const showEditorInfo = computed(() => route.name === 'workspace')
   gap: 6px;
   white-space: nowrap;
   cursor: default;
+  transition: color var(--motion-fast);
 
   &:hover {
     color: var(--color-text-primary);
@@ -140,6 +141,7 @@ const showEditorInfo = computed(() => route.name === 'workspace')
   height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
+  box-shadow: 0 0 0 2px var(--color-surface-secondary);
 }
 
 .agent-status {
@@ -161,5 +163,10 @@ const showEditorInfo = computed(() => route.name === 'workspace')
 
 .provider-info {
   color: var(--color-text-tertiary);
+}
+
+@media (max-width: 760px) {
+  .statusbar-left, .statusbar-right { gap: var(--space-sm); }
+  .provider-info { display: none; }
 }
 </style>
