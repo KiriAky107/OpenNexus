@@ -438,6 +438,18 @@ class ProviderListResponse(Contract):
     items: list[ProviderConfig] = Field(default_factory=list)
 
 
+class ProviderPreset(Contract):
+    preset_id: str
+    name: str
+    provider_type: ProviderType
+    base_url: str
+    requires_credential: bool = True
+
+
+class ProviderPresetListResponse(Contract):
+    items: list[ProviderPreset] = Field(default_factory=list)
+
+
 class ModelInfo(Contract):
     model: str
     display_name: str

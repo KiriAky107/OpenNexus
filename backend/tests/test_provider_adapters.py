@@ -134,6 +134,28 @@ def test_openai_compatible_preserves_tool_call_context() -> None:
     assert turn.text == "done"
 
 
+def test_openai_compatible_fetches_and_maps_model_list() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1/models"
+        assert request.headers["Authorization"] == "Bearer secret-test-key"
+        return httpx.Response(
+            200,
+            json={"data": [{"id": "model-b"}, {"id": "model-a"}]},
+        )
+
+    provider = OpenAICompatibleProvider(
+        base_url="https://provider.test/v1",
+        credential_id="provider-test",
+        credentials=StaticCredentials(),
+        transport=httpx.MockTransport(handler),
+    )
+
+    models = run(provider.list_models())
+
+    assert [item.model for item in models] == ["model-b", "model-a"]
+
+
 def test_ollama_maps_models_and_completion() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/tags":

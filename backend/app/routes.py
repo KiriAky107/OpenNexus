@@ -31,6 +31,7 @@ from app.contracts import (
     ProviderCreateRequest,
     ProviderListResponse,
     ProviderModelsResponse,
+    ProviderPresetListResponse,
     ProviderTestRequest,
     ProviderTestResponse,
     ProviderUpdateRequest,
@@ -52,6 +53,7 @@ from app.errors import ApiError
 from app.extensions import ExtensionError
 from app.providers.registry import ProviderNotFoundError
 from app.providers.factory import UnsupportedProviderError
+from app.providers.base import ProviderError
 from app.retrieval.engine import engine
 from app.services import index_service, note_service, task_service, transcription_service
 
@@ -417,6 +419,15 @@ async def list_providers() -> ProviderListResponse:
 
 
 @router.get(
+    "/providers/presets",
+    response_model=ProviderPresetListResponse,
+    tags=["Providers"],
+)
+async def list_provider_presets() -> ProviderPresetListResponse:
+    return ProviderPresetListResponse(items=container.provider_factory.presets())
+
+
+@router.get(
     "/providers/{provider_id}",
     response_model=ProviderConfig,
     tags=["Providers"],
@@ -502,9 +513,24 @@ async def delete_provider(provider_id: str) -> OperationResponse:
 )
 async def list_provider_models(provider_id: str) -> ProviderModelsResponse:
     provider_or_404(provider_id)
+    try:
+        models = await container.providers.list_models(provider_id)
+    except ProviderError as exc:
+        status_code = {
+            "PROVIDER_AUTH_FAILED": 401,
+            "MODEL_NOT_FOUND": 404,
+            "PROVIDER_RATE_LIMITED": 429,
+            "PROVIDER_TIMEOUT": 504,
+        }.get(exc.code, 502)
+        raise ApiError(
+            status_code,
+            exc.code,
+            exc.message,
+            {"provider_id": provider_id},
+        ) from exc
     return ProviderModelsResponse(
         provider_id=provider_id,
-        items=await container.providers.list_models(provider_id),
+        items=models,
     )
 
 

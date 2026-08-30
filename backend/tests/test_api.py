@@ -1,7 +1,14 @@
 import asyncio
 
 from app.main import health, service_status
-from app.routes import get_index_status, list_notes, list_plugins, list_providers, list_skills
+from app.routes import (
+    get_index_status,
+    list_notes,
+    list_plugins,
+    list_provider_presets,
+    list_providers,
+    list_skills,
+)
 from app.routes import (
     create_provider,
     create_task,
@@ -53,6 +60,23 @@ def test_core_collections_are_typed() -> None:
     assert index.status == "idle"
 
 
+def test_provider_presets_include_openai_and_deepseek() -> None:
+    presets = asyncio.run(list_provider_presets())
+    by_id = {item.preset_id: item for item in presets.items}
+
+    assert by_id["openai"].base_url == "https://api.openai.com/v1"
+    assert by_id["deepseek"].base_url == "https://api.deepseek.com"
+    assert by_id["deepseek"].provider_type == ProviderType.openai_compatible
+
+
+def test_provider_presets_static_route_precedes_provider_id_route() -> None:
+    from app.routes import router
+
+    get_paths = [route.path for route in router.routes if "GET" in getattr(route, "methods", set())]
+
+    assert get_paths.index("/api/providers/presets") < get_paths.index("/api/providers/{provider_id}")
+
+
 def test_openapi_contains_documented_frontend_interfaces() -> None:
     from app.main import app
 
@@ -70,6 +94,7 @@ def test_openapi_contains_documented_frontend_interfaces() -> None:
         "/api/plugins/{plugin_id}/enable",
         "/api/plugins/{plugin_id}/disable",
         "/api/providers/test",
+        "/api/providers/presets",
         "/api/index/rebuild",
     }
 
