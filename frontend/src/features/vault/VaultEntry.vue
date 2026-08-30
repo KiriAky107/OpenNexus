@@ -161,7 +161,7 @@ async function createVault() {
   background:
     radial-gradient(circle at 20% 30%, var(--color-accent-soft) 0%, transparent 50%),
     radial-gradient(circle at 80% 70%, var(--color-info-soft) 0%, transparent 50%);
-  opacity: 0.5;
+  opacity: 0.62;
 }
 
 .entry-container {
@@ -173,6 +173,7 @@ async function createVault() {
   gap: 32px;
   max-width: 480px;
   width: 90%;
+  animation: entry-in var(--motion-slow) both;
 }
 
 .brand-section {
@@ -180,8 +181,16 @@ async function createVault() {
 }
 
 .logo {
-  font-size: 64px;
-  margin-bottom: 12px;
+  display: inline-grid;
+  place-items: center;
+  width: 84px;
+  height: 84px;
+  margin-bottom: 14px;
+  border: 1px solid color-mix(in srgb, var(--color-accent-primary) 18%, transparent);
+  border-radius: 24px;
+  background: var(--color-surface-primary);
+  color: var(--color-accent-primary);
+  box-shadow: var(--shadow-lg);
 }
 
 .app-title {
@@ -206,7 +215,7 @@ async function createVault() {
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-xl);
   padding: var(--space-2xl);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-xl);
 }
 
 .card-title {
@@ -247,11 +256,13 @@ async function createVault() {
   border-radius: var(--radius-md);
   cursor: pointer;
   text-align: left;
-  transition: all var(--motion-fast);
+  transition: background-color var(--motion-fast), border-color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
 
   &:hover {
     background: var(--color-accent-soft);
     border-color: var(--color-accent-secondary);
+    box-shadow: var(--shadow-sm);
+    transform: translateY(-1px);
   }
 
   &:disabled {
@@ -288,7 +299,10 @@ async function createVault() {
 .vault-arrow {
   color: var(--color-text-tertiary);
   font-size: 20px;
+  transition: color var(--motion-fast), transform var(--motion-fast);
 }
+
+.vault-item:hover .vault-arrow { color: var(--color-accent-primary); transform: translateX(3px); }
 
 .actions {
   display: flex;
@@ -307,7 +321,7 @@ async function createVault() {
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--motion-fast);
+  transition: background-color var(--motion-fast), border-color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
   border: 1px solid transparent;
 
   &:disabled {
@@ -321,6 +335,8 @@ async function createVault() {
 
     &:hover:not(:disabled) {
       background: var(--color-accent-primary-hover);
+      transform: translateY(-1px);
+      box-shadow: 0 7px 18px color-mix(in srgb, var(--color-accent-primary) 25%, transparent);
     }
   }
 
@@ -400,6 +416,7 @@ async function createVault() {
   align-items: center;
   justify-content: center;
   z-index: var(--z-modal);
+  animation: dialog-backdrop-in var(--motion-fast) both;
 }
 
 .dialog {
@@ -409,7 +426,12 @@ async function createVault() {
   width: 90%;
   max-width: 400px;
   box-shadow: var(--shadow-xl);
+  animation: dialog-in var(--motion-normal) both;
 }
+
+@keyframes entry-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes dialog-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dialog-in { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
 
 .dialog h3 {
   margin: 0 0 var(--space-lg) 0;

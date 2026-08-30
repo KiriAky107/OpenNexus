@@ -73,7 +73,7 @@ defineExpose({ openCitation })
   flex-direction: column;
   height: 100vh;
   width: 100vw;
-  background: var(--color-background-primary);
+  background: var(--color-background-secondary);
   color: var(--color-text-primary);
 }
 
@@ -89,5 +89,6 @@ defineExpose({ openCitation })
   min-width: 0;
   overflow: hidden;
   background: var(--color-background-primary);
+  isolation: isolate;
 }
 </style>

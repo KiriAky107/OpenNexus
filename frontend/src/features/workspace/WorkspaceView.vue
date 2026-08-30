@@ -59,6 +59,11 @@ onMounted(() => {
 
 .empty-content {
   text-align: center;
+  padding: var(--space-3xl);
+  border: 1px dashed var(--color-border-default);
+  border-radius: var(--radius-xl);
+  background: var(--color-background-secondary);
+  animation: workspace-empty-in var(--motion-normal) both;
 
   h2 {
     font-size: 18px;
@@ -75,4 +80,6 @@ onMounted(() => {
   font-size: 48px;
   opacity: 0.5;
 }
+
+@keyframes workspace-empty-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 </style>

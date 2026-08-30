@@ -71,8 +71,8 @@ const isDirty = computed(() => editorStore.saveStatus === 'dirty' || editorStore
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--space-md);
-  background: var(--color-background-secondary);
+  padding: 0 var(--space-lg);
+  background: var(--color-surface-secondary);
   border-bottom: 1px solid var(--color-border-subtle);
   font-size: var(--font-size-sm);
   flex-shrink: 0;
@@ -129,7 +129,13 @@ const isDirty = computed(() => editorStore.saveStatus === 'dirty' || editorStore
 }
 
 .app-name {
-  font-weight: 500;
+  padding: 3px 10px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-primary);
+  color: var(--color-text-secondary);
+  font-weight: 650;
+  letter-spacing: .04em;
 }
 
 .titlebar-right {
@@ -141,8 +147,8 @@ const isDirty = computed(() => editorStore.saveStatus === 'dirty' || editorStore
 }
 
 .icon-btn {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -150,11 +156,12 @@ const isDirty = computed(() => editorStore.saveStatus === 'dirty' || editorStore
   color: var(--color-text-secondary);
   font-size: 14px;
   -webkit-app-region: no-drag;
-  transition: background var(--motion-fast);
+  transition: background-color var(--motion-fast), color var(--motion-fast), transform var(--motion-fast);
 
   &:hover {
     background: var(--color-background-hover);
     color: var(--color-text-primary);
+    transform: rotate(8deg);
   }
 }
 
@@ -179,7 +186,7 @@ const isDirty = computed(() => editorStore.saveStatus === 'dirty' || editorStore
   color: var(--color-text-secondary);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background var(--motion-fast);
+  transition: background-color var(--motion-fast), color var(--motion-fast);
 
   &:hover {
     background: var(--color-background-hover);
@@ -189,5 +196,11 @@ const isDirty = computed(() => editorStore.saveStatus === 'dirty' || editorStore
     background: var(--color-error);
     color: white;
   }
+}
+
+@media (max-width: 760px) {
+  .titlebar-left, .titlebar-right { min-width: 0; }
+  .titlebar-center, .window-controls { display: none; }
+  .file-name { max-width: 42vw; }
 }
 </style>

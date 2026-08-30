@@ -89,13 +89,17 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown))
 </template>
 
 <style scoped>
-.command-backdrop { position: fixed; inset: 0; z-index: var(--z-modal); display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; background: var(--color-background-overlay); }
-.command-palette { width: min(600px, calc(100vw - 32px)); overflow: hidden; border: 1px solid var(--color-border-default); border-radius: var(--radius-lg); background: var(--color-surface-elevated); box-shadow: var(--shadow-xl); }
-.command-input { width: 100%; padding: var(--space-lg); border: 0; border-bottom: 1px solid var(--color-border-default); outline: 0; background: transparent; font-size: var(--font-size-xl); }
+.command-backdrop { position: fixed; inset: 0; z-index: var(--z-modal); display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; background: var(--color-background-overlay); animation: command-backdrop-in var(--motion-fast) both; }
+.command-palette { width: min(620px, calc(100vw - 32px)); overflow: hidden; border: 1px solid var(--color-border-default); border-radius: var(--radius-xl); background: var(--color-surface-elevated); box-shadow: var(--shadow-xl); animation: command-palette-in var(--motion-normal) both; }
+.command-input { width: 100%; padding: var(--space-xl); border: 0; border-bottom: 1px solid var(--color-border-default); outline: 0; background: transparent; color: var(--color-text-primary); font-size: var(--font-size-xl); }
 .command-list { max-height: 360px; overflow: auto; padding: var(--space-sm); }
-.command-list button { display: flex; justify-content: space-between; width: 100%; padding: var(--space-md); border-radius: var(--radius-md); text-align: left; }
+.command-list button { display: flex; justify-content: space-between; width: 100%; padding: var(--space-md) var(--space-lg); border-radius: var(--radius-md); text-align: left; transition: color var(--motion-fast), background-color var(--motion-fast), transform var(--motion-fast); }
 .command-list button:hover, .command-list button:focus { outline: 0; background: var(--color-accent-soft); color: var(--color-accent-primary); }
+.command-list button:hover { transform: translateX(2px); }
 .command-list small, .command-list p, footer { color: var(--color-text-tertiary); }
 .command-list p { padding: var(--space-xl); text-align: center; }
 footer { display: flex; gap: var(--space-lg); padding: var(--space-sm) var(--space-lg); border-top: 1px solid var(--color-border-subtle); font-size: var(--font-size-xs); }
+
+@keyframes command-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes command-palette-in { from { opacity: 0; transform: translateY(-8px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
 </style>
