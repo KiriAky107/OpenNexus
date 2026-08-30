@@ -1,21 +1,23 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
 import { computed, ref } from 'vue'
+import { ArrowLeftBold, ArrowRightBold, Brush, ChatDotRound, CircleCheck, Connection, Cpu, FolderOpened, Lightning, Search, Setting } from '@element-plus/icons-vue'
+import AppIcon from './AppIcon.vue'
 
 const route = useRoute()
 const router = useRouter()
 const expanded = ref(localStorage.getItem('primary-sidebar-expanded') === 'true')
 
 const navItems = [
-  { name: 'workspace', icon: '📁', label: '工作区' },
-  { name: 'search', icon: '🔍', label: '搜索' },
-  { name: 'chat', icon: '💬', label: 'AI 对话' },
-  { name: 'agent', icon: '🤖', label: 'Agent' },
-  { name: 'tasks', icon: '✅', label: '任务' },
-  { name: 'skills', icon: '⚡', label: 'Skill' },
-  { name: 'plugins', icon: '🧩', label: 'Plugin' },
-  { name: 'themes', icon: '🎨', label: '主题' },
-  { name: 'settings', icon: '⚙️', label: '设置' },
+  { name: 'workspace', icon: FolderOpened, label: '工作区' },
+  { name: 'search', icon: Search, label: '搜索' },
+  { name: 'chat', icon: ChatDotRound, label: 'AI 对话' },
+  { name: 'agent', icon: Cpu, label: '智能体' },
+  { name: 'tasks', icon: CircleCheck, label: '任务' },
+  { name: 'skills', icon: Lightning, label: 'Skill' },
+  { name: 'plugins', icon: Connection, label: 'Plugin' },
+  { name: 'themes', icon: Brush, label: '主题' },
+  { name: 'settings', icon: Setting, label: '设置' },
 ]
 
 const currentName = computed(() => {
@@ -43,13 +45,13 @@ function toggleExpanded() {
         @click="navigate(item.name)"
         :title="item.label"
       >
-        <span class="nav-icon">{{ item.icon }}</span>
+        <AppIcon class="nav-icon" :icon="item.icon" :size="20" />
         <span class="nav-label">{{ item.label }}</span>
       </div>
     </nav>
     <div class="sidebar-footer">
       <button class="nav-item collapse-button" type="button" :title="expanded ? '收起导航' : '展开导航'" @click="toggleExpanded">
-        <span class="nav-icon">{{ expanded ? '«' : '»' }}</span>
+        <AppIcon class="nav-icon" :icon="expanded ? ArrowLeftBold : ArrowRightBold" />
         <span class="nav-label">{{ expanded ? '收起' : '展开' }}</span>
       </button>
     </div>

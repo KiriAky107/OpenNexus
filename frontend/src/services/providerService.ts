@@ -1,5 +1,5 @@
 import apiClient from './apiClient'
-import type { ApiModelInfo, ApiProviderConfig, ModelCapability, ModelInfo, OperationResponse, ProviderConfig } from '@/contracts'
+import type { ApiModelInfo, ApiProviderConfig, ApiProviderPreset, ModelCapability, ModelInfo, OperationResponse, ProviderConfig, ProviderPreset } from '@/contracts'
 
 function capabilityMap(capabilities: string[]): Partial<ModelCapability> {
   return Object.fromEntries(capabilities.map((capability) => [capability, true])) as Partial<ModelCapability>
@@ -42,6 +42,23 @@ export async function createProvider(data: Omit<ProviderConfig, 'provider_id'>):
     enabled: data.enabled,
   })
   return toProvider(response)
+}
+
+export async function listProviderPresets(): Promise<ProviderPreset[]> {
+  const response = await apiClient.get<{ items: ApiProviderPreset[] }>('/api/providers/presets')
+  return response.items
+}
+
+export async function getCredentialStatus(credentialId: string): Promise<boolean> {
+  const response = await apiClient.get<{ credential_id: string; configured: boolean }>(`/api/credentials/${encodeURIComponent(credentialId)}`)
+  return response.configured
+}
+
+export async function putCredential(credentialId: string, apiKey: string): Promise<void> {
+  await apiClient.put<{ credential_id: string; configured: boolean }>(
+    `/api/credentials/${encodeURIComponent(credentialId)}`,
+    { api_key: apiKey },
+  )
 }
 
 export async function updateProvider(providerId: string, data: Partial<ProviderConfig>): Promise<ProviderConfig> {

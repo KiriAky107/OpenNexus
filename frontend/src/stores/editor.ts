@@ -83,18 +83,19 @@ export const useEditorStore = defineStore('editor', () => {
       throw new Error('当前文件保存失败，已阻止切换以避免内容丢失。')
     }
     const version = ++loadVersion
-    currentFilePath.value = filePath
+    const previousStatus = saveStatus.value
     saveStatus.value = 'saving'
     try {
       const loadedContent = await workspaceService.readFileContent(filePath)
-      if (version !== loadVersion || currentFilePath.value !== filePath) return
+      if (version !== loadVersion) return
+      currentFilePath.value = filePath
       content.value = loadedContent
       saveStatus.value = 'saved'
       lastSavedAt.value = new Date().toISOString()
-    } catch {
-      if (version !== loadVersion || currentFilePath.value !== filePath) return
-      content.value = ''
-      saveStatus.value = 'idle'
+    } catch (error) {
+      if (version !== loadVersion) return
+      saveStatus.value = previousStatus
+      throw error
     }
     highlightBlockId.value = null
   }
