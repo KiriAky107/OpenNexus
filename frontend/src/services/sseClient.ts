@@ -54,6 +54,7 @@ export class SseClient {
       this.connected = true
       onOpen?.()
 
+      // 一个 UTF-8 字符或 SSE 行可能横跨多个网络分片，必须累积后再按空行派发。
       const decoder = new TextDecoder('utf-8')
       let eventName = 'message'
       let dataLines: string[] = []
@@ -116,6 +117,8 @@ export class SseClient {
   cancel() {
     this.controller.abort()
   }
+
+  // TODO(streaming): Agent 事件持久化后，增加 Last-Event-ID 与指数退避重连。
 
   isConnected() {
     return this.connected

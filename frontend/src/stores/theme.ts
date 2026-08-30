@@ -49,6 +49,7 @@ export const useThemeStore = defineStore('theme', () => {
   }
 
   function initTheme() {
+    // 先恢复外观再开放 watch 持久化，避免 immediate watcher 覆盖本地设置。
     const savedAppearance = localStorage.getItem('editor-appearance')
     if (savedAppearance) {
       try {
@@ -90,6 +91,7 @@ export const useThemeStore = defineStore('theme', () => {
   }))
 
   watch(resolvedCodeBlockTheme, (theme) => {
+    // CSS 与 Shiki 共用该属性，确保代码块背景和 token 配色始终成套切换。
     document.documentElement.setAttribute('data-code-theme', theme)
   }, { immediate: true })
 

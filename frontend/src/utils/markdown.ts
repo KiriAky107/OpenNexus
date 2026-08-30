@@ -16,6 +16,7 @@ import githubLight from '@shikijs/themes/github-light'
 
 marked.setOptions({ gfm: true, breaks: true })
 
+// Highlighter 是昂贵的单例；复用初始化 Promise，避免每个代码块重复加载语法与主题。
 const highlighter = createHighlighterCore({
   themes: [githubLight, githubDark],
   langs: [markdown, html, css, javascript, typescript, json, python, shell, sql],
@@ -47,5 +48,8 @@ export async function renderMarkdown(source: string): Promise<string> {
     code.parentElement?.replaceWith(fragment)
   }
 
+  // Markdown 可能来自模型或外部笔记，高亮完成后仍必须在最终出口统一净化。
   return DOMPurify.sanitize(documentNode.body.innerHTML, { USE_PROFILES: { html: true } })
 }
+
+// TODO(performance): 编辑器首屏稳定后评估将 Shiki 延迟加载或迁移到 Web Worker。

@@ -47,6 +47,7 @@ export const useEditorStore = defineStore('editor', () => {
   async function save() {
     if (!currentFilePath.value) return
     if (pendingSave) return pendingSave
+    // 保存路径与正文都取快照；请求完成时用户可能已继续输入或切换文件。
     const targetPath = currentFilePath.value
     const snapshot = content.value
     saveStatus.value = 'saving'
@@ -82,6 +83,7 @@ export const useEditorStore = defineStore('editor', () => {
     if (saveStatus.value === 'dirty' || saveStatus.value === 'save_failed') {
       throw new Error('当前文件保存失败，已阻止切换以避免内容丢失。')
     }
+    // 版本号使较慢的旧读取不能覆盖用户后选择的新文件。
     const version = ++loadVersion
     const previousStatus = saveStatus.value
     saveStatus.value = 'saving'
@@ -116,6 +118,8 @@ export const useEditorStore = defineStore('editor', () => {
       saveStatus.value = 'external_changed'
     }
   }
+
+  // TODO(editor): 桌面文件监听接入后提供冲突对比/合并界面，而非只阻止切换。
 
   function closeFile() {
     loadVersion++
