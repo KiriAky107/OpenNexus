@@ -69,6 +69,33 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS idx_tasks_status_due ON tasks(status, due_at);
     """,
+    # v3: 第二阶段 Agent Trace；Run 与事件事实持久化，供 SSE 恢复和 Benchmark 复用。
+    """
+    CREATE TABLE IF NOT EXISTS agent_runs (
+        run_id               TEXT PRIMARY KEY,
+        status               TEXT NOT NULL,
+        run_json             TEXT NOT NULL,
+        request_json         TEXT NOT NULL,
+        config_snapshot_json TEXT NOT NULL DEFAULT '{}',
+        created_at           TEXT NOT NULL,
+        updated_at           TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_created
+        ON agent_runs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_status
+        ON agent_runs(status, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS agent_events (
+        run_id     TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
+        sequence   INTEGER NOT NULL,
+        event      TEXT NOT NULL,
+        data_json  TEXT NOT NULL DEFAULT '{}',
+        timestamp  TEXT NOT NULL,
+        PRIMARY KEY (run_id, sequence)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_events_type
+        ON agent_events(run_id, event, sequence);
+    """,
 ]
 
 

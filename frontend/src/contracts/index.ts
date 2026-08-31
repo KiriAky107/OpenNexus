@@ -143,6 +143,10 @@ export type AgentEventType =
   | 'PermissionRequired'
   | 'Usage'
   | 'Citation'
+  | 'ModelCallStarted'
+  | 'ModelCallCompleted'
+  | 'ModelCallFailed'
+  | 'PermissionResolved'
   | 'RunCompleted'
   | 'RunFailed'
   | 'RunCancelled'
@@ -153,6 +157,24 @@ export interface AgentEvent {
   run_id: string
   data: Record<string, unknown>
   timestamp: string
+}
+
+export interface AgentTraceSummary {
+  model_calls: number
+  tool_calls: number
+  duration_ms: number
+  token_usage: number
+  errors: number
+}
+
+export interface AgentTraceResponse {
+  run_id: string
+  status: AgentRunStatus
+  items: AgentEvent[]
+  next_sequence: number
+  has_more: boolean
+  summary: AgentTraceSummary
+  config_snapshot: Record<string, unknown>
 }
 
 export interface ToolCall {
