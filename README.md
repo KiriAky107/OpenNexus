@@ -142,6 +142,7 @@ pnpm test
 | [Git 使用细则](docs/Git使用细则-团队开发版.md) | 分支、提交、PR、Review 与合并流程 |
 | [代码注释与 TODO 约定](docs/代码注释与TODO约定.md) | 注释原则、TODO 格式、领域标签与当前待办索引 |
 | [后端审阅复盘](docs/后端全面审阅问题与修复复盘.md) | 后端问题原因、后果与修复方案 |
+| [Agent Trace 复盘](docs/Agent-Core第二阶段问题与修复复盘.md) | Agent 持久化、SSE 恢复、事件契约与脱敏问题复盘 |
 | [Knowledge/Retrieval 复盘](docs/Knowledge与Retrieval-Core问题与修复复盘.md) | 检索与事务问题复盘 |
 | [前端审阅复盘](docs/前端合并审阅问题与修复复盘.md) | 前端工程、契约和交互问题复盘 |
 
