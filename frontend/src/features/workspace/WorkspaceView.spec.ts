@@ -17,16 +17,16 @@ afterEach(() => {
   wrapper = null
 })
 
-describe('WorkspaceView initial file', () => {
-  it('does not overwrite a file selected while the welcome note is loading', async () => {
+describe('WorkspaceView empty state', () => {
+  it('does not fabricate a Mock welcome note when no backend file is selected', async () => {
     const workspaceStore = useWorkspaceStore()
     wrapper = mount(WorkspaceView, {
       global: { stubs: { EditorHeader: true, EditorPane: true } },
     })
 
-    workspaceStore.openFile('/数据结构/红黑树.md')
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(workspaceStore.activeFilePath).toBe('/数据结构/红黑树.md')
+    expect(workspaceStore.activeFilePath).toBeNull()
+    expect(wrapper.find('.empty-workspace').exists()).toBe(true)
   })
 })

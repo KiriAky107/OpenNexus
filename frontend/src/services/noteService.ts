@@ -37,3 +37,7 @@ export async function deleteNote(noteId: string): Promise<OperationResponse> {
 export async function moveNote(noteId: string, folder: string): Promise<ApiNote> {
   return apiClient.post(`/api/notes/${noteId}/move`, { folder })
 }
+
+export async function renameNote(noteId: string, fileName: string): Promise<ApiNote> {
+  return apiClient.post(`/api/notes/${noteId}/rename`, { file_name: fileName })
+}

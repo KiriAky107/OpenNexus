@@ -13,6 +13,9 @@ from app.contracts import (
     CredentialStatus,
     CredentialWriteRequest,
     ExtensionInstallRequest,
+    FolderCreateRequest,
+    FolderDeleteRequest,
+    FolderRenameRequest,
     IndexJob,
     IndexRebuildRequest,
     IndexStatus,
@@ -22,6 +25,7 @@ from app.contracts import (
     NoteCreateRequest,
     NoteListResponse,
     NoteMoveRequest,
+    NoteRenameRequest,
     NoteUpdateRequest,
     OperationResponse,
     PageMeta,
@@ -48,6 +52,10 @@ from app.contracts import (
     ToolListResponse,
     TranscriptionJob,
     TranscriptionRequest,
+    WorkspaceEntry,
+    WorkspaceInfo,
+    WorkspaceOpenRequest,
+    WorkspaceSnapshot,
 )
 from app.agent import AgentCapacityError, AgentRunNotFoundError
 from app.container import container
@@ -58,7 +66,13 @@ from app.providers.factory import UnsupportedProviderError
 from app.providers.base import ProviderError
 from app.providers.credentials import CredentialStoreError
 from app.retrieval.engine import engine
-from app.services import index_service, note_service, task_service, transcription_service
+from app.services import (
+    index_service,
+    note_service,
+    task_service,
+    transcription_service,
+    workspace_service,
+)
 
 router = APIRouter(prefix="/api")
 
@@ -114,6 +128,41 @@ def extension_call(operation):
         raise ApiError(exc.status_code, exc.code, exc.message, exc.details) from exc
 
 
+# Workspace (single configured Vault in Web development mode)
+@router.get("/workspace", response_model=WorkspaceInfo, tags=["Workspace"])
+async def get_workspace() -> WorkspaceInfo:
+    return workspace_service.get_workspace_info()
+
+
+@router.post("/workspace/open", response_model=WorkspaceSnapshot, tags=["Workspace"])
+async def open_workspace(request: WorkspaceOpenRequest) -> WorkspaceSnapshot:
+    return await workspace_service.open_workspace(request.path)
+
+
+@router.get("/workspace/tree", response_model=list[WorkspaceEntry], tags=["Workspace"])
+async def get_workspace_tree() -> list[WorkspaceEntry]:
+    return workspace_service.get_workspace_tree()
+
+
+@router.post("/workspace/folders", response_model=WorkspaceEntry, tags=["Workspace"])
+async def create_workspace_folder(request: FolderCreateRequest) -> WorkspaceEntry:
+    return await workspace_service.create_folder(request.parent, request.name)
+
+
+@router.post(
+    "/workspace/folders/rename", response_model=WorkspaceEntry, tags=["Workspace"]
+)
+async def rename_workspace_folder(request: FolderRenameRequest) -> WorkspaceEntry:
+    return await workspace_service.rename_folder(request.path, request.new_name)
+
+
+@router.post(
+    "/workspace/folders/delete", response_model=OperationResponse, tags=["Workspace"]
+)
+async def delete_workspace_folder(request: FolderDeleteRequest) -> OperationResponse:
+    return await workspace_service.delete_folder(request.path)
+
+
 # Notes
 @router.get("/notes", response_model=NoteListResponse, tags=["Notes"])
 async def list_notes(
@@ -158,6 +207,11 @@ async def delete_note(note_id: str) -> OperationResponse:
 @router.post("/notes/{note_id}/move", response_model=Note, tags=["Notes"])
 async def move_note(note_id: str, request: NoteMoveRequest) -> Note:
     return await note_service.move_note(note_id, folder=request.folder)
+
+
+@router.post("/notes/{note_id}/rename", response_model=Note, tags=["Notes"])
+async def rename_note(note_id: str, request: NoteRenameRequest) -> Note:
+    return await note_service.rename_note(note_id, file_name=request.file_name)
 
 
 # Retrieval and chat

@@ -1,28 +1,11 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { useEditorStore } from '@/stores/editor'
 import EditorHeader from '@/features/editor/EditorHeader.vue'
 import EditorPane from '@/features/editor/EditorPane.vue'
 import { EditPen } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 
 const workspaceStore = useWorkspaceStore()
-const editorStore = useEditorStore()
-
-onMounted(() => {
-  if (!workspaceStore.fileTree.length && workspaceStore.hasVault) {
-    // Already loaded
-  }
-  if (!workspaceStore.activeFilePath && workspaceStore.fileTree.length === 0) {
-    void editorStore.loadFile('/欢迎使用 NotesAgent.md').then(() => {
-      // 默认文件加载期间用户可能已经点击了其他文件，不能覆盖用户的选择。
-      if (!workspaceStore.activeFilePath && editorStore.currentFilePath === '/欢迎使用 NotesAgent.md') {
-        workspaceStore.openFile('/欢迎使用 NotesAgent.md')
-      }
-    })
-  }
-})
 </script>
 
 <template>
