@@ -131,6 +131,7 @@ pnpm test
 | [第二阶段分工表](docs/第二阶段团队分工表.md) | 第二阶段人员职责、任务顺序、协作关系与验收项 |
 | [第一阶段测试验证操作手册](docs/第一阶段测试验证操作手册.md) | 自动化测试、接口主链路、前端人工验收与记录模板 |
 | [后端接口契约](docs/后端接口契约-开发版.md) | HTTP/SSE 接口、错误和当前实现状态 |
+| [第二阶段接口契约](docs/第二阶段接口契约-开发版.md) | 第二阶段公共 DTO、计划接口、SSE、错误码与联调顺序 |
 | [AI Core 与 Agent Core](docs/AI-Core与Agent-Core开发说明.md) | Provider、Agent、Tool、Permission 与 Extension Core |
 | [Knowledge 与 Retrieval Core](docs/Knowledge与Retrieval-Core开发说明.md) | Block、索引、混合检索和 Citation |
 | [模型提供商与模型发现](docs/模型提供商与模型发现开发说明.md) | Provider 预设、模型发现和凭据边界 |
@@ -152,6 +153,6 @@ pnpm test
 - API 默认监听 `127.0.0.1:8000`，前端默认监听 `127.0.0.1:5173`。
 - 后端附件目录默认是 `backend/data/attachments`，可通过 `APP_ATTACHMENTS_PATH` 覆盖；该目录由桌面 Host 管理。
 - 跨模块接口发生变化时，需要同步更新前后端类型和 `docs` 中的接口说明。
-- 当前前后端接口清单见 `docs/后端接口契约-开发版.md`，OpenAPI 以 `/openapi.json` 为准。
+- 当前已实现接口见 `docs/后端接口契约-开发版.md`，第二阶段规划接口见 `docs/第二阶段接口契约-开发版.md`；已实现能力以 `/openapi.json` 为准。
 - 前端页面、交互、状态管理和第一阶段验收要求见 `docs/前端页面需求说明-开发版.md`。
 - 分支、提交、Pull Request、Review 和冲突处理规范见 `docs/Git使用细则-团队开发版.md`。
