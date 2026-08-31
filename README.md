@@ -36,7 +36,7 @@ python --version
 uv --version
 ```
 
-当前 Web 联调不需要 Rust 和 Tauri。开始桌面端集成后，再按照 `docs/AI笔记软件技术栈说明-团队版-v2.2.md` 安装 Rust Toolchain 与 Tauri CLI。
+当前 Web 联调不需要 Rust 和 Tauri。开始桌面端集成后，再按照 `docs/AI笔记软件技术栈说明-团队版-v2.3.md` 安装 Rust Toolchain 与 Tauri CLI。
 
 ## 首次初始化
 
@@ -126,8 +126,9 @@ pnpm test
 
 | 文档 | 用途 |
 | --- | --- |
-| [技术栈说明](docs/AI笔记软件技术栈说明-团队版-v2.2.md) | 目标架构、当前实施边界与模块依赖 |
+| [技术栈说明](docs/AI笔记软件技术栈说明-团队版-v2.3.md) | 目标架构、第二阶段技术边界与模块依赖 |
 | [第一阶段分工表](docs/第一阶段分工表.md) | 成员职责、协作关系与当前交付状态 |
+| [第二阶段分工表](docs/第二阶段团队分工表.md) | 第二阶段人员职责、任务顺序、协作关系与验收项 |
 | [第一阶段测试验证操作手册](docs/第一阶段测试验证操作手册.md) | 自动化测试、接口主链路、前端人工验收与记录模板 |
 | [后端接口契约](docs/后端接口契约-开发版.md) | HTTP/SSE 接口、错误和当前实现状态 |
 | [AI Core 与 Agent Core](docs/AI-Core与Agent-Core开发说明.md) | Provider、Agent、Tool、Permission 与 Extension Core |
