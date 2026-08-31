@@ -6,13 +6,11 @@ Markdown 文件是笔记正文的持久化载体（Vault），SQLite/FTS5/向量
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from app import repository
-from app.config import get_settings
 from app.contracts import Note, NoteBlock, NoteSummary
 from app.database.db import connect, transaction
 from app.errors import ApiError
@@ -20,74 +18,40 @@ from app.knowledge.parser import ParsedNote, parse_note
 from app.retrieval.embedding import HashEmbeddingProvider
 from app.retrieval.vectorstore import SqliteVecStore, VectorRecord
 from app.services.coordination import serialized_vault_mutation
+from app.services.vault_paths import (
+    normalize_entry_name,
+    normalize_folder,
+    resolve_in_vault,
+    safe_note_filename,
+)
 
 # 轻量实现实例（无状态，可直接复用）；接入真实模型后替换为对应 Provider
 embedding = HashEmbeddingProvider()
 vector_store = SqliteVecStore()
 
 
-def _vault() -> Path:
-    return get_settings().vault_path
-
-
-def _safe_name(title: str) -> str:
-    name = re.sub(r'[\\/:*?"<>|]', "_", title).strip()
-    return name or "untitled"
-
-
-def _normalize_folder(folder: str | None) -> str:
-    """清洗 folder 为安全的相对目录，拒绝 `..`/`.`/绝对路径/盘符/空字节，防路径逃逸。"""
-    if not folder:
-        return ""
-    if "\x00" in folder:
-        raise ApiError(400, "INVALID_PATH", "folder must not contain NUL bytes", {"folder": folder})
-    segments: list[str] = []
-    for part in re.split(r"[\\/]+", folder):
-        if part == "":
-            continue
-        if part in (".", ".."):
-            raise ApiError(400, "INVALID_PATH", "folder must not contain '.' or '..'", {"folder": folder})
-        if ":" in part:
-            raise ApiError(400, "INVALID_PATH", "folder must be a relative path", {"folder": folder})
-        segments.append(part)
-    return "/".join(segments)
-
-
 def _rel_path(folder: str | None, title: str) -> tuple[str, str]:
     """由 folder + title 生成安全的相对路径，返回 (rel_path, 清洗后的 folder)。"""
-    clean_folder = _normalize_folder(folder)
-    name = _safe_name(title)
-    if not name.endswith(".md"):
-        name += ".md"
+    clean_folder = normalize_folder(folder)
+    name = safe_note_filename(title)
     rel = f"{clean_folder}/{name}" if clean_folder else name
     return rel, clean_folder
 
 
-def _abs_path(rel_path: str) -> Path:
-    """把相对路径解析为 Vault 内的绝对路径；越界即报 400，杜绝路径逃逸。"""
-    if not rel_path or "\x00" in rel_path:
-        raise ApiError(400, "INVALID_PATH", "invalid file path", {"file_path": rel_path})
-    root = _vault().resolve()
-    candidate = (_vault() / rel_path).resolve()
-    if not candidate.is_relative_to(root):
-        raise ApiError(400, "INVALID_PATH", "path escapes vault", {"file_path": rel_path})
-    return candidate
-
-
 def _read_markdown(rel_path: str) -> str:
-    path = _abs_path(rel_path)
+    path = resolve_in_vault(rel_path)
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
 def _write_markdown(rel_path: str, markdown: str) -> None:
-    path = _abs_path(rel_path)
+    path = resolve_in_vault(rel_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(markdown, encoding="utf-8")
 
 
 def _create_markdown(rel_path: str, markdown: str) -> None:
     """排他创建 Markdown；目标已存在时返回资源冲突，不覆盖用户文件。"""
-    path = _abs_path(rel_path)
+    path = resolve_in_vault(rel_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with path.open("x", encoding="utf-8") as handle:
@@ -102,7 +66,7 @@ def _create_markdown(rel_path: str, markdown: str) -> None:
 
 
 def _delete_markdown(rel_path: str) -> None:
-    path = _abs_path(rel_path)
+    path = resolve_in_vault(rel_path)
     if path.exists():
         path.unlink()
 
@@ -222,7 +186,7 @@ async def move_note(note_id: str, *, folder: str) -> Note:
     if record is None:
         raise ApiError(404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id})
 
-    clean_folder = _normalize_folder(folder)
+    clean_folder = normalize_folder(folder)
     filename = Path(record.file_path).name
     new_rel_path = f"{clean_folder}/{filename}" if clean_folder else filename
     if new_rel_path == record.file_path:
@@ -230,8 +194,8 @@ async def move_note(note_id: str, *, folder: str) -> Note:
         assert note is not None
         return note
 
-    source = _abs_path(record.file_path)
-    target = _abs_path(new_rel_path)
+    source = resolve_in_vault(record.file_path)
+    target = resolve_in_vault(new_rel_path)
     if not source.is_file():
         raise ApiError(
             409, "NOTE_FILE_MISSING", "note file is missing from the Vault",
@@ -268,12 +232,68 @@ async def move_note(note_id: str, *, folder: str) -> Note:
 
 
 @serialized_vault_mutation
+async def rename_note(note_id: str, *, file_name: str) -> Note:
+    """重命名 Markdown 文件并保留 note_id、Block 与向量身份。"""
+
+    record = repository.get_note_record(note_id)
+    if record is None:
+        raise ApiError(404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id})
+
+    normalized = normalize_entry_name(file_name, markdown=True)
+    source = resolve_in_vault(record.file_path)
+    folder = normalize_folder(record.folder)
+    new_file_path = f"{folder}/{normalized}" if folder else normalized
+    target = resolve_in_vault(new_file_path)
+    if new_file_path == record.file_path:
+        note = await get_note(note_id)
+        assert note is not None
+        return note
+    if not source.is_file():
+        raise ApiError(
+            409,
+            "NOTE_FILE_MISSING",
+            "note file is missing from the Vault",
+            {"note_id": note_id, "file_path": record.file_path},
+        )
+    if target.exists():
+        raise ApiError(
+            409,
+            "RESOURCE_CONFLICT",
+            "a note already exists with the requested file name",
+            {"note_id": note_id, "file_path": new_file_path},
+        )
+
+    source.replace(target)
+    now = datetime.now(timezone.utc)
+    conn = connect()
+    try:
+        with transaction(conn):
+            repository.update_note_location(
+                conn=conn,
+                note_id=note_id,
+                title=Path(normalized).stem,
+                file_path=new_file_path,
+                folder=folder,
+                updated_at=now,
+            )
+    except BaseException:
+        target.replace(source)
+        raise
+    finally:
+        conn.close()
+
+    note = await get_note(note_id)
+    assert note is not None
+    return note
+
+
+@serialized_vault_mutation
 async def delete_note(note_id: str) -> bool:
     record = repository.get_note_record(note_id)
     if record is None:
         return False
 
-    path = _abs_path(record.file_path)
+    path = resolve_in_vault(record.file_path)
     tombstone = path.with_name(f".{path.name}.{uuid4().hex}.deleting") if path.exists() else None
     if tombstone is not None:
         path.replace(tombstone)

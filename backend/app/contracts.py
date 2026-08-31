@@ -31,6 +31,48 @@ class OperationResponse(Contract):
     message: str | None = None
 
 
+# Workspace boundary (single configured Vault in Web development mode)
+class WorkspaceInfo(Contract):
+    vault_id: str = "default"
+    name: str
+    path: str
+    file_count: int = 0
+    indexed_note_count: int = 0
+    requires_refresh: bool = False
+
+
+class WorkspaceEntry(Contract):
+    entry_id: str
+    name: str
+    path: str
+    type: Literal["file", "folder"]
+    note_id: str | None = None
+    children: list["WorkspaceEntry"] = Field(default_factory=list)
+
+
+class WorkspaceSnapshot(Contract):
+    workspace: WorkspaceInfo
+    items: list[WorkspaceEntry] = Field(default_factory=list)
+
+
+class WorkspaceOpenRequest(Contract):
+    path: str | None = None
+
+
+class FolderCreateRequest(Contract):
+    parent: str = ""
+    name: str = Field(min_length=1)
+
+
+class FolderRenameRequest(Contract):
+    path: str
+    new_name: str = Field(min_length=1)
+
+
+class FolderDeleteRequest(Contract):
+    path: str
+
+
 # Notes and retrieval
 class NoteBlock(Contract):
     block_id: str
@@ -77,6 +119,10 @@ class NoteUpdateRequest(Contract):
 
 class NoteMoveRequest(Contract):
     folder: str
+
+
+class NoteRenameRequest(Contract):
+    file_name: str = Field(min_length=1)
 
 
 class SearchMode(str, Enum):

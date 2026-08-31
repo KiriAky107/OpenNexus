@@ -1,10 +1,11 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 import EditorPane from './EditorPane.vue'
 import { useEditorStore } from '@/stores/editor'
+import * as workspaceService from '@/services/workspaceService'
 
 let wrapper: VueWrapper | null = null
 
@@ -19,12 +20,20 @@ async function waitForText(text: string) {
 beforeEach(() => {
   localStorage.clear()
   setActivePinia(createPinia())
+  vi.spyOn(workspaceService, 'readFileContent').mockImplementation(async (filePath) => {
+    if (filePath === '/欢迎使用 NotesAgent.md') {
+      return '# 欢迎使用 NotesAgent\n\n祝你写作愉快'
+    }
+    if (filePath === '/数据结构/红黑树.md') return '# 红黑树\n\n新的文件内容'
+    throw new Error(`Unexpected file path: ${filePath}`)
+  })
 })
 
 afterEach(() => {
   wrapper?.unmount()
   wrapper = null
   document.body.innerHTML = ''
+  vi.restoreAllMocks()
 })
 
 describe('EditorPane file switching', () => {

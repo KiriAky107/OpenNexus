@@ -63,6 +63,14 @@ class FtsHit:
     bm25: float
 
 
+@dataclass(frozen=True, slots=True)
+class NoteLocation:
+    note_id: str
+    title: str
+    file_path: str
+    folder: str
+
+
 def replace_note_metadata(
     *,
     conn: sqlite3.Connection,
@@ -217,6 +225,52 @@ def fts_search(match: str, limit: int = 100) -> list[FtsHit]:
         return [FtsHit(block_id=r["block_id"], note_id=r["note_id"], bm25=r["rank"]) for r in rows]
     finally:
         conn.close()
+
+
+def list_note_locations(*, conn: sqlite3.Connection | None = None) -> list[NoteLocation]:
+    """返回 Workspace 构树和目录事务所需的最小笔记位置集合。"""
+
+    owns = conn is None
+    conn = conn or connect()
+    try:
+        rows = conn.execute(
+            "SELECT note_id, title, file_path, folder FROM notes ORDER BY file_path"
+        ).fetchall()
+        return [
+            NoteLocation(
+                note_id=row["note_id"],
+                title=row["title"],
+                file_path=row["file_path"],
+                folder=row["folder"],
+            )
+            for row in rows
+        ]
+    finally:
+        if owns:
+            conn.close()
+
+
+def update_note_location(
+    *,
+    conn: sqlite3.Connection,
+    note_id: str,
+    title: str,
+    file_path: str,
+    folder: str,
+    updated_at: datetime,
+) -> None:
+    """更新文件位置和展示标题；Block/FTS/向量内容不变，无需重新生成。"""
+
+    cursor = conn.execute(
+        """
+        UPDATE notes
+        SET title = ?, file_path = ?, folder = ?, updated_at = ?
+        WHERE note_id = ?
+        """,
+        (title, file_path, folder, _iso(updated_at), note_id),
+    )
+    if cursor.rowcount != 1:
+        raise LookupError(note_id)
 
 
 def fts_search_page(

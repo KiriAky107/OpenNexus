@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useThemeStore } from '@/stores/theme'
 import { useSettingsStore } from '@/stores/settings'
-import { ArrowRight, Document, Folder, FolderOpened, Moon, Plus, Sunny } from '@element-plus/icons-vue'
+import { ArrowRight, Document, Folder, FolderOpened, Moon, Sunny } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 
 const router = useRouter()
@@ -13,17 +13,19 @@ const themeStore = useThemeStore()
 const settingsStore = useSettingsStore()
 
 const isLoading = ref(false)
-const showCreateDialog = ref(false)
-const newVaultName = ref('')
-const newVaultPath = ref('')
 const aiCoreStatus = ref<'checking' | 'running' | 'stopped'>('checking')
 
 onMounted(async () => {
-  await Promise.all([workspaceStore.loadRecentVaults(), settingsStore.loadDiagnostics()])
+  await Promise.allSettled([workspaceStore.loadRecentVaults(), settingsStore.loadDiagnostics()])
   const lastVaultPath = localStorage.getItem('last-vault-path')
   if (settingsStore.restoreLastVault && lastVaultPath) {
-    await openVault(lastVaultPath)
-    return
+    try {
+      await openVault(lastVaultPath)
+      return
+    } catch {
+      // Mock 阶段保存的旧路径可能与当前后端 Vault 不同，清除后让用户重新选择。
+      localStorage.removeItem('last-vault-path')
+    }
   }
   setTimeout(() => {
     aiCoreStatus.value = settingsStore.aiCoreStatus === 'running' ? 'running' : 'stopped'
@@ -41,24 +43,8 @@ async function openVault(path: string) {
 }
 
 async function openFolderPicker() {
-  // In Tauri this would use the native dialog
-  // For web dev, simulate
-  const path = prompt('请输入 Vault 路径（开发模式）', '/Users/demo/Documents/MyVault')
-  if (path) {
-    await openVault(path)
-  }
-}
-
-async function createVault() {
-  if (!newVaultName.value || !newVaultPath.value) return
-  isLoading.value = true
-  try {
-    await workspaceStore.createVault(newVaultPath.value, newVaultName.value)
-    router.push('/workspace')
-  } finally {
-    isLoading.value = false
-    showCreateDialog.value = false
-  }
+  const configured = workspaceStore.recentVaults[0]
+  if (configured) await openVault(configured.path)
 }
 </script>
 
@@ -74,7 +60,7 @@ async function createVault() {
 
       <div class="vault-card">
         <h2 class="card-title">选择知识库</h2>
-        <p class="card-desc">选择一个本地 Vault 开始你的知识之旅</p>
+        <p class="card-desc">Web 联调模式连接 AI Core 当前配置的 Vault</p>
 
         <div v-if="workspaceStore.recentVaults.length" class="recent-vaults">
           <div class="section-label">最近打开</div>
@@ -97,11 +83,8 @@ async function createVault() {
         </div>
 
         <div class="actions">
-          <button class="btn btn-primary" @click="openFolderPicker" :disabled="isLoading">
-            <AppIcon :icon="FolderOpened" /> 打开本地 Vault
-          </button>
-          <button class="btn btn-secondary" @click="showCreateDialog = true" :disabled="isLoading">
-            <AppIcon :icon="Plus" /> 创建新 Vault
+          <button class="btn btn-primary" @click="openFolderPicker" :disabled="isLoading || !workspaceStore.recentVaults.length">
+            <AppIcon :icon="FolderOpened" /> 打开后端 Vault
           </button>
         </div>
 
@@ -122,24 +105,6 @@ async function createVault() {
       </div>
     </div>
 
-    <!-- Create Vault Dialog -->
-    <div v-if="showCreateDialog" class="dialog-overlay" @click.self="showCreateDialog = false">
-      <div class="dialog">
-        <h3>创建新 Vault</h3>
-        <div class="form-group">
-          <label>Vault 名称</label>
-          <input v-model="newVaultName" type="text" placeholder="我的知识库" />
-        </div>
-        <div class="form-group">
-          <label>存储路径</label>
-          <input v-model="newVaultPath" type="text" placeholder="/path/to/vault" />
-        </div>
-        <div class="dialog-actions">
-          <button class="btn btn-secondary" @click="showCreateDialog = false">取消</button>
-          <button class="btn btn-primary" @click="createVault" :disabled="!newVaultName || !newVaultPath">创建</button>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -408,67 +373,5 @@ async function createVault() {
   }
 }
 
-.dialog-overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--color-background-overlay);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-modal);
-  animation: dialog-backdrop-in var(--motion-fast) both;
-}
-
-.dialog {
-  background: var(--color-surface-primary);
-  border-radius: var(--radius-lg);
-  padding: var(--space-xl);
-  width: 90%;
-  max-width: 400px;
-  box-shadow: var(--shadow-xl);
-  animation: dialog-in var(--motion-normal) both;
-}
-
 @keyframes entry-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes dialog-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes dialog-in { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
-
-.dialog h3 {
-  margin: 0 0 var(--space-lg) 0;
-  font-size: 18px;
-}
-
-.form-group {
-  margin-bottom: var(--space-md);
-
-  label {
-    display: block;
-    font-size: 13px;
-    color: var(--color-text-secondary);
-    margin-bottom: var(--space-xs);
-  }
-
-  input {
-    width: 100%;
-    padding: 8px 12px;
-    background: var(--color-background-secondary);
-    border: 1px solid var(--color-border-default);
-    border-radius: var(--radius-md);
-    font-size: 14px;
-    color: var(--color-text-primary);
-    outline: none;
-    transition: border-color var(--motion-fast);
-
-    &:focus {
-      border-color: var(--color-border-focus);
-    }
-  }
-}
-
-.dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-sm);
-  margin-top: var(--space-lg);
-}
 </style>

@@ -24,6 +24,7 @@ export interface NoteBlock {
 
 export interface FileNode {
   id: string
+  note_id?: string
   name: string
   path: string
   type: 'file' | 'folder'
@@ -385,6 +386,29 @@ export interface PageMeta {
   total: number
   limit: number
   offset: number
+}
+
+export interface ApiWorkspaceInfo {
+  vault_id: string
+  name: string
+  path: string
+  file_count: number
+  indexed_note_count: number
+  requires_refresh: boolean
+}
+
+export interface ApiWorkspaceEntry {
+  entry_id: string
+  name: string
+  path: string
+  type: 'file' | 'folder'
+  note_id?: string | null
+  children: ApiWorkspaceEntry[]
+}
+
+export interface ApiWorkspaceSnapshot {
+  workspace: ApiWorkspaceInfo
+  items: ApiWorkspaceEntry[]
 }
 
 export interface OperationResponse {
