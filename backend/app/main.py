@@ -1,19 +1,31 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHttpException
 
 from app.config import get_settings
+from app.container import container
 from app.errors import ApiError, api_error_handler, http_error_handler, validation_error_handler
 from app.routes import router as api_router
 from app.schemas import HealthResponse, ServiceStatusResponse
 
 settings = get_settings()
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    # 第三方 MCP Server 必须跟随 AI Core 退出，不能遗留孤儿进程。
+    container.plugins.shutdown()
+
+
 app = FastAPI(
     title=settings.name,
     version=settings.version,
     description="AI 笔记软件的本地 AI Core 与 Agent Core 服务。",
+    lifespan=lifespan,
 )
 
 app.add_middleware(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -16,6 +17,7 @@ from app.contracts import (
     ModelCapability,
     Plugin,
     PluginManifest,
+    PluginHostStatus,
     PluginStatus,
     RetrievalConfig,
     Skill,
@@ -23,6 +25,7 @@ from app.contracts import (
     SkillStatus,
     ToolDefinition,
 )
+from app.extensions.mcp import McpBridge, McpBridgeError, McpDiscoveredTool
 
 _EXTENSION_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
@@ -242,18 +245,26 @@ class _PluginRecord:
     tools: list[DeclarativeToolSpec]
     package_path: Path
     registered_tools: list[str]
+    mcp_remote_names: dict[str, str]
 
 
 class PluginRuntime:
     """Plugin Manifest、生命周期及 Tool Contribution 注册。"""
 
-    def __init__(self, tools: ToolRegistry, host: DeclarativePluginHost | None = None) -> None:
+    def __init__(
+        self,
+        tools: ToolRegistry,
+        host: DeclarativePluginHost | None = None,
+        mcp_bridge: McpBridge | None = None,
+    ) -> None:
         self.registry = tools
         self.host = host or DeclarativePluginHost()
+        self.mcp = mcp_bridge or McpBridge()
         self._records: dict[str, _PluginRecord] = {}
+        self._lock = threading.RLock()
 
     def install(self, package_path: str | Path) -> Plugin:
-        # 当前只加载声明式清单，不导入或执行插件包中的任意 Python 代码。
+        # 安装阶段只读取清单；MCP 子进程必须在权限授予后的 enable 阶段启动。
         root = _package_dir(package_path)
         raw = _read_yaml(root / "plugin.yaml")
         if "id" in raw and "plugin_id" not in raw:
@@ -271,15 +282,17 @@ class PluginRuntime:
                 status_code=409,
             )
 
-        specs = self._load_tools(root)
-        declared = set(manifest.contributes.tools)
-        actual = {spec.name for spec in specs}
-        if declared != actual:
-            raise ExtensionError(
-                "PLUGIN_CONTRIBUTION_INVALID",
-                "plugin.yaml tool contributions must exactly match tools.yaml",
-                details={"declared": sorted(declared), "actual": sorted(actual)},
-            )
+        _validate_backend(manifest)
+        specs = [] if manifest.backend.type == "mcp" else self._load_tools(root)
+        if manifest.backend.type != "mcp":
+            declared = set(manifest.contributes.tools)
+            actual = {spec.name for spec in specs}
+            if declared != actual:
+                raise ExtensionError(
+                    "PLUGIN_CONTRIBUTION_INVALID",
+                    "plugin.yaml tool contributions must exactly match tools.yaml",
+                    details={"declared": sorted(declared), "actual": sorted(actual)},
+                )
         for spec in specs:
             _validate_id("tool", spec.name)
             _validate_tool_schema(spec)
@@ -302,6 +315,7 @@ class PluginRuntime:
             tools=specs,
             package_path=root,
             registered_tools=[],
+            mcp_remote_names={},
         )
         self._records[manifest.plugin_id] = record
         return record.plugin.model_copy(deep=True)
@@ -313,18 +327,14 @@ class PluginRuntime:
         return self._record(plugin_id).plugin.model_copy(deep=True)
 
     def enable(self, plugin_id: str) -> Plugin:
+        # Host 启动和 Tool 批量注册必须串行，避免并发 enable 产生重复进程或半注册状态。
+        with self._lock:
+            return self._enable(plugin_id)
+
+    def _enable(self, plugin_id: str) -> Plugin:
         record = self._record(plugin_id)
         if record.plugin.enabled:
             return record.plugin.model_copy(deep=True)
-        if record.plugin.manifest.backend.type == "mcp":
-            # TODO(extension): 第二阶段以隔离进程实现 MCP Host，并补充签名与来源校验。
-            record.plugin.status = PluginStatus.dependency_missing
-            raise ExtensionError(
-                "PLUGIN_HOST_UNAVAILABLE",
-                "MCP Plugin Host is reserved for the second development phase.",
-                status_code=501,
-                details={"plugin_id": plugin_id, "backend": "mcp"},
-            )
         missing_grants = sorted(
             set(record.plugin.manifest.permissions) - set(record.plugin.granted_permissions)
         )
@@ -336,7 +346,8 @@ class PluginRuntime:
                 status_code=409,
                 details={"plugin_id": plugin_id, "permissions": missing_grants},
             )
-        conflicts = [spec.name for spec in record.tools if self.registry.contains(spec.name)]
+        declared_tools = list(record.plugin.manifest.contributes.tools)
+        conflicts = [name for name in declared_tools if self.registry.contains(name)]
         if conflicts:
             raise ExtensionError(
                 "PLUGIN_TOOL_CONFLICT",
@@ -346,42 +357,75 @@ class PluginRuntime:
             )
         record.plugin.status = PluginStatus.starting
         try:
-            for spec in record.tools:
-                arguments_model = _arguments_model(spec)
+            if record.plugin.manifest.backend.type == "mcp":
+                discovered = self._start_mcp(record)
+                actual = {item.definition.name for item in discovered}
+                declared = set(declared_tools)
+                if actual != declared:
+                    raise ExtensionError(
+                        "PLUGIN_CONTRIBUTION_INVALID",
+                        "Discovered MCP tools must exactly match Plugin contributions.",
+                        details={"declared": sorted(declared), "actual": sorted(actual)},
+                    )
+                for item in discovered:
+                    self._register_mcp_tool(record, item)
+            else:
+                for spec in record.tools:
+                    arguments_model = _arguments_model(spec)
 
-                async def executor(
-                    arguments: BaseModel,
-                    context: ToolExecutionContext,
-                    _handler: str = spec.handler,
-                ) -> Any:
-                    return await self.host.execute(_handler, arguments, context)
+                    async def executor(
+                        arguments: BaseModel,
+                        context: ToolExecutionContext,
+                        _handler: str = spec.handler,
+                    ) -> Any:
+                        return await self.host.execute(_handler, arguments, context)
 
-                self.registry.register(
-                    ToolDefinition(
-                        name=spec.name,
-                        description=spec.description,
-                        parameters=spec.parameters,
-                        permission=spec.permission,
-                        source="plugin",
-                    ),
-                    arguments_model,
-                    executor,
-                )
-                record.registered_tools.append(spec.name)
+                    self.registry.register(
+                        ToolDefinition(
+                            name=spec.name,
+                            description=spec.description,
+                            parameters=spec.parameters,
+                            permission=spec.permission,
+                            source="plugin",
+                        ),
+                        arguments_model,
+                        executor,
+                    )
+                    record.registered_tools.append(spec.name)
         except Exception as exc:
             # 注册过程必须具备回滚语义，防止半启用插件污染全局工具表。
             for name in record.registered_tools:
                 self.registry.unregister(name)
             record.registered_tools.clear()
+            record.mcp_remote_names.clear()
+            self.mcp.stop(plugin_id)
             record.plugin.status = PluginStatus.error
-            record.plugin.error_message = str(exc)
-            raise
+            record.plugin.error_message = _safe_extension_message(exc)
+            if isinstance(exc, ExtensionError):
+                raise
+            if isinstance(exc, McpBridgeError):
+                raise ExtensionError(
+                    exc.code,
+                    exc.message,
+                    status_code=exc.status_code,
+                    details={"plugin_id": plugin_id},
+                ) from exc
+            raise ExtensionError(
+                "PLUGIN_HOST_START_FAILED",
+                record.plugin.error_message,
+                status_code=503,
+                details={"plugin_id": plugin_id},
+            ) from exc
         record.plugin.enabled = True
         record.plugin.status = PluginStatus.ready
         record.plugin.error_message = None
         return record.plugin.model_copy(deep=True)
 
     def set_permissions(self, plugin_id: str, permissions: list[str]) -> Plugin:
+        with self._lock:
+            return self._set_permissions(plugin_id, permissions)
+
+    def _set_permissions(self, plugin_id: str, permissions: list[str]) -> Plugin:
         record = self._record(plugin_id)
         requested = set(permissions)
         declared = set(record.plugin.manifest.permissions)
@@ -403,15 +447,112 @@ class PluginRuntime:
         return record.plugin.model_copy(deep=True)
 
     def disable(self, plugin_id: str) -> Plugin:
+        with self._lock:
+            return self._disable(plugin_id)
+
+    def _disable(self, plugin_id: str) -> Plugin:
         record = self._record(plugin_id)
         for name in record.registered_tools:
             self.registry.unregister(name)
         record.registered_tools.clear()
+        record.mcp_remote_names.clear()
+        if record.plugin.manifest.backend.type == "mcp":
+            self.mcp.stop(plugin_id)
         record.plugin.enabled = False
         record.plugin.status = PluginStatus.disabled
         return record.plugin.model_copy(deep=True)
 
+    def get_host_status(self, plugin_id: str) -> PluginHostStatus:
+        record = self._record(plugin_id)
+        return self.mcp.status(plugin_id, record.plugin.manifest.backend)
+
+    def restart_host(self, plugin_id: str) -> PluginHostStatus:
+        with self._lock:
+            return self._restart_host(plugin_id)
+
+    def _restart_host(self, plugin_id: str) -> PluginHostStatus:
+        record = self._record(plugin_id)
+        if record.plugin.manifest.backend.type != "mcp":
+            raise ExtensionError(
+                "PLUGIN_HOST_UNAVAILABLE",
+                "Plugin does not use an MCP Host.",
+                status_code=409,
+                details={"plugin_id": plugin_id},
+            )
+        for name in record.registered_tools:
+            self.registry.unregister(name)
+        record.registered_tools.clear()
+        record.mcp_remote_names.clear()
+        self.mcp.stop(plugin_id)
+        record.plugin.enabled = False
+        record.plugin.status = PluginStatus.installed
+        record.plugin.error_message = None
+        self.enable(plugin_id)
+        return self.get_host_status(plugin_id)
+
+    def shutdown(self) -> None:
+        """关闭所有隔离 Host；用于 FastAPI lifespan 和测试清理。"""
+
+        with self._lock:
+            for plugin_id, record in list(self._records.items()):
+                if record.plugin.manifest.backend.type == "mcp":
+                    self.mcp.stop(plugin_id)
+
+    def _start_mcp(self, record: _PluginRecord) -> list[McpDiscoveredTool]:
+        manifest = record.plugin.manifest
+        return self.mcp.start(
+            manifest.plugin_id,
+            manifest.backend,
+            record.package_path,
+            manifest.permissions,
+            self._handle_mcp_unavailable,
+        )
+
+    def _register_mcp_tool(
+        self, record: _PluginRecord, discovered: McpDiscoveredTool
+    ) -> None:
+        definition = discovered.definition
+        arguments_model = _arguments_model_from_schema(
+            definition.name, definition.parameters
+        )
+        plugin_id = record.plugin.manifest.plugin_id
+        remote_name = discovered.remote_name
+
+        async def executor(
+            arguments: BaseModel,
+            context: ToolExecutionContext,
+        ) -> Any:
+            return await self.mcp.call_tool(
+                plugin_id,
+                remote_name,
+                arguments.model_dump(),
+                request_id=context.tool_call_id or f"{context.run_id}:{definition.name}",
+            )
+
+        self.registry.register(definition, arguments_model, executor)
+        record.registered_tools.append(definition.name)
+        record.mcp_remote_names[definition.name] = remote_name
+
+    def _handle_mcp_unavailable(self, plugin_id: str, message: str) -> None:
+        with self._lock:
+            record = self._records.get(plugin_id)
+            if record is None:
+                return
+            for name in record.registered_tools:
+                self.registry.unregister(name)
+            record.registered_tools.clear()
+            record.mcp_remote_names.clear()
+            record.plugin.enabled = False
+            record.plugin.status = PluginStatus.error
+            record.plugin.error_message = message
+
     def uninstall(self, plugin_id: str, dependent_skills: list[str] | None = None) -> None:
+        with self._lock:
+            self._uninstall(plugin_id, dependent_skills)
+
+    def _uninstall(
+        self, plugin_id: str, dependent_skills: list[str] | None = None
+    ) -> None:
         record = self._record(plugin_id)
         if dependent_skills:
             raise ExtensionError(
@@ -422,6 +563,8 @@ class PluginRuntime:
             )
         if record.plugin.enabled:
             self.disable(plugin_id)
+        elif record.plugin.manifest.backend.type == "mcp":
+            self.mcp.stop(plugin_id)
         del self._records[plugin_id]
 
     def _record(self, plugin_id: str) -> _PluginRecord:
@@ -498,6 +641,12 @@ def _manifest_error(kind: str, exc: ValidationError) -> ExtensionError:
 
 def _arguments_model(spec: DeclarativeToolSpec) -> type[BaseModel]:
     schema = spec.parameters or {"type": "object", "properties": {}}
+    return _arguments_model_from_schema(spec.name, schema)
+
+
+def _arguments_model_from_schema(
+    tool_name: str, schema: dict[str, Any]
+) -> type[BaseModel]:
     if schema.get("type", "object") != "object":
         raise ExtensionError("PLUGIN_TOOL_SCHEMA_INVALID", "Tool parameters must be an object schema.")
     properties = schema.get("properties", {})
@@ -514,7 +663,7 @@ def _arguments_model(spec: DeclarativeToolSpec) -> type[BaseModel]:
     for name, field_schema in properties.items():
         annotation = types.get(field_schema.get("type"), Any)
         fields[name] = (annotation, ... if name in required else None)
-    model_name = "PluginArgs_" + re.sub(r"\W+", "_", spec.name)
+    model_name = "PluginArgs_" + re.sub(r"\W+", "_", tool_name)
     return create_model(model_name, __config__=ConfigDict(extra="forbid"), **fields)
 
 
@@ -536,3 +685,30 @@ def _validate_tool_schema(spec: DeclarativeToolSpec) -> None:
             "Tool parameters must be an object schema with object properties.",
             details={"tool": spec.name},
         )
+
+
+def _validate_backend(manifest: PluginManifest) -> None:
+    backend = manifest.backend
+    if backend.type == "mcp":
+        if backend.transport != "stdio":
+            raise ExtensionError(
+                "MCP_CAPABILITY_UNSUPPORTED",
+                "Phase C MCP Plugins must use stdio transport.",
+                status_code=501,
+            )
+        if not backend.command or not backend.command.strip():
+            raise ExtensionError(
+                "EXTENSION_MANIFEST_INVALID",
+                "MCP stdio backend requires a command.",
+            )
+    elif backend.command is not None or backend.args:
+        raise ExtensionError(
+            "EXTENSION_MANIFEST_INVALID",
+            "Only MCP stdio backends may declare command or args.",
+        )
+
+
+def _safe_extension_message(exc: Exception) -> str:
+    if isinstance(exc, (ExtensionError, McpBridgeError)):
+        return exc.message
+    return f"Plugin Host operation failed: {type(exc).__name__}."

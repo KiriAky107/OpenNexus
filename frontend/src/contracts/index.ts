@@ -255,6 +255,22 @@ export type PluginStatus =
   | 'dependency_missing'
   | 'permission_required'
 
+export type PluginHostState = 'stopped' | 'starting' | 'ready' | 'unhealthy' | 'error'
+
+export interface PluginHostStatus {
+  plugin_id: string
+  backend_type: 'mcp' | 'internal_rpc' | 'none'
+  transport: 'stdio' | 'http' | 'none'
+  status: PluginHostState
+  tools_count: number
+  started_at?: string | null
+  last_seen_at?: string | null
+  protocol_version?: string | null
+  server_name?: string | null
+  server_version?: string | null
+  error?: string | null
+}
+
 export interface PluginContribution {
   type: 'tool' | 'command' | 'importer' | 'exporter' | 'sidebar_panel' | 'settings_section'
   id: string
@@ -539,7 +555,14 @@ export interface ApiPlugin {
       panels: string[]
       settings_sections: string[]
     }
-    backend: { type: 'mcp' | 'internal_rpc' | 'none'; transport: 'stdio' | 'http' | 'none' }
+    backend: {
+      type: 'mcp' | 'internal_rpc' | 'none'
+      transport: 'stdio' | 'http' | 'none'
+      command?: string | null
+      args?: string[]
+      startup_timeout_seconds?: number
+      tool_timeout_seconds?: number
+    }
   }
   status: PluginStatus
   enabled: boolean
