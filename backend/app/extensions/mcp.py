@@ -188,7 +188,7 @@ class McpStdioClient:
         result = response.get("result")
         if not isinstance(result, dict):
             raise McpBridgeError(
-                "MCP_TOOL_CALL_FAILED", "MCP response result must be an object."
+                response_error_code, "MCP response result must be an object."
             )
         return result
 
@@ -207,9 +207,18 @@ class McpStdioClient:
         except McpBridgeError:
             pass
 
-    def abandon(self, request_id: int) -> None:
+    def abandon(
+        self, request_id: int, wake_error: BaseException | None = None
+    ) -> None:
         with self._pending_lock:
-            self._pending.pop(request_id, None)
+            pending = self._pending.pop(request_id, None)
+        # asyncio.to_thread 被取消时不会停止底层线程；主动唤醒 Queue，避免线程
+        # 一直占用默认线程池直至远端超时。
+        if pending is not None and wake_error is not None:
+            try:
+                pending.response.put_nowait(wake_error)
+            except queue.Full:
+                pass
 
     def stop(self) -> None:
         process = self.process
@@ -258,7 +267,15 @@ class McpStdioClient:
         assert process is not None and process.stdout is not None
         failure: str | None = None
         try:
-            for raw_line in process.stdout:
+            while True:
+                # readline(size) 在换行缺失时仍有硬上限，不能先把任意大的
+                # 第三方 stdout 行完整读入宿主内存再检查。
+                raw_line = process.stdout.readline(MAX_MCP_MESSAGE_BYTES + 1)
+                if raw_line == "":
+                    break
+                if not raw_line.endswith("\n"):
+                    failure = "MCP server emitted an oversized or unterminated message."
+                    break
                 if len(raw_line.encode("utf-8")) > MAX_MCP_MESSAGE_BYTES:
                     failure = "MCP server emitted an oversized protocol message."
                     break
@@ -313,7 +330,12 @@ class McpStdioClient:
         process = self.process
         assert process is not None and process.stderr is not None
         try:
-            for line in process.stderr:
+            while True:
+                # stderr 不是协议通道，但同样按块读取，避免无换行日志造成
+                # 宿主侧的无界字符串分配。
+                line = process.stderr.readline(1025)
+                if line == "":
+                    break
                 self._stderr_tail.append(line.rstrip()[:1024])
         except (OSError, ValueError):
             return
@@ -489,7 +511,12 @@ class McpBridge:
             )
         except asyncio.CancelledError:
             host.client.cancel(rpc_id)
-            host.client.abandon(rpc_id)
+            host.client.abandon(
+                rpc_id,
+                McpBridgeError(
+                    "MCP_TOOL_CALL_FAILED", "MCP request was cancelled."
+                ),
+            )
             raise
         except McpBridgeError as exc:
             raise ToolExecutionError(exc.code, exc.message) from exc

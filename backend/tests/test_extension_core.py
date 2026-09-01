@@ -1,5 +1,6 @@
 import asyncio
 import shutil
+import threading
 import time
 
 import pytest
@@ -14,6 +15,8 @@ from app.contracts import (
     ToolCall,
 )
 from app.extensions import ExtensionError
+from app.extensions.mcp import McpStdioClient
+from app.extensions.runtime import _arguments_model_from_schema
 from app.services import note_service
 from app.config import BACKEND_DIR, get_settings
 
@@ -362,6 +365,11 @@ def test_mcp_stdio_host_discovers_namespaced_tools_and_maps_results(
         assert disabled.status == "disabled"
         assert mcp_container.plugins.get_host_status("mcp-fixture").status == "stopped"
         assert not mcp_container.tools.contains("mcp-fixture.echo")
+        with pytest.raises(ExtensionError) as exc:
+            mcp_container.plugins.restart_host("mcp-fixture")
+        assert exc.value.code == "PLUGIN_HOST_UNAVAILABLE"
+        assert mcp_container.plugins.get("mcp-fixture").status == "disabled"
+        assert not mcp_container.tools.contains("mcp-fixture.echo")
 
     run(scenario())
 
@@ -438,6 +446,56 @@ def test_mcp_business_error_size_limit_and_timeout_are_structured(mcp_container)
     run(scenario())
 
 
+def test_mcp_cancel_releases_blocking_response_thread(
+    mcp_container, monkeypatch
+) -> None:
+    async def scenario() -> None:
+        mcp_container.plugins.enable("mcp-fixture")
+        released = threading.Event()
+        original_wait = McpStdioClient.wait_response
+
+        def tracked_wait(self, *args, **kwargs):
+            try:
+                return original_wait(self, *args, **kwargs)
+            finally:
+                released.set()
+
+        monkeypatch.setattr(McpStdioClient, "wait_response", tracked_wait)
+        task = asyncio.create_task(
+            mcp_container.plugins.mcp.call_tool(
+                "mcp-fixture",
+                "sleep",
+                {"seconds": 5},
+                request_id="call_cancel_release",
+            )
+        )
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        deadline = time.monotonic() + 0.5
+        while not released.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert released.is_set(), "cancelled MCP wait must not occupy a worker until timeout"
+
+    run(scenario())
+
+
+def test_mcp_argument_model_preserves_json_schema_additional_properties() -> None:
+    arguments_model = _arguments_model_from_schema(
+        "mcp-fixture.dynamic",
+        {
+            "type": "object",
+            "additionalProperties": {"type": "string"},
+        },
+    )
+
+    arguments = arguments_model.model_validate({"dynamic_key": "value"})
+
+    assert arguments.model_dump() == {"dynamic_key": "value"}
+
+
 def test_mcp_abnormal_exit_unregisters_tools_and_restart_recovers(mcp_container) -> None:
     async def scenario() -> None:
         mcp_container.plugins.enable("mcp-fixture")
@@ -471,9 +529,11 @@ def test_mcp_abnormal_exit_unregisters_tools_and_restart_recovers(mcp_container)
     [
         ("no-tools", "[]", "MCP_CAPABILITY_UNSUPPORTED"),
         ("invalid-schema", "[mcp-invalid.broken]", "MCP_TOOL_SCHEMA_INVALID"),
+        ("invalid-result", "[]", "MCP_INITIALIZE_FAILED"),
+        ("oversized-stdout", "[]", "PLUGIN_HOST_UNAVAILABLE"),
     ],
 )
-def test_mcp_rejects_missing_capability_and_invalid_discovery(
+def test_mcp_rejects_invalid_initialization_and_discovery(
     tmp_path, mode, contributions, expected_code
 ) -> None:
     package = tmp_path / f"mcp-{mode}"
