@@ -7,17 +7,20 @@ import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from time import perf_counter
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from app.agent.permissions import PermissionManager, PermissionMode
 from app.agent.tools import ToolExecutionContext, ToolNotFoundError, ToolRegistry
+from app.agent.trace_repository import AgentTraceRepository, sanitize_trace_value
 from app.contracts import (
     AgentEvent,
     AgentEventType,
     AgentRun,
     AgentRunCreateRequest,
     AgentRunStatus,
+    AgentTraceResponse,
     Citation,
     Message,
     MessageRole,
@@ -61,6 +64,7 @@ class RunRecord:
     events: list[AgentEvent] = field(default_factory=list)
     subscribers: set[asyncio.Queue[AgentEvent]] = field(default_factory=set)
     task: asyncio.Task[None] | None = None
+    next_sequence: int = 0
 
 
 class AgentRuntime:
@@ -72,11 +76,13 @@ class AgentRuntime:
         tools: ToolRegistry,
         permissions: PermissionManager,
         skills: SkillRuntime | None = None,
+        trace_repository: AgentTraceRepository | None = None,
     ) -> None:
         self.providers = providers
         self.tools = tools
         self.permissions = permissions
         self.skills = skills
+        self.trace_repository = trace_repository or AgentTraceRepository()
         self._records: dict[str, RunRecord] = {}
 
     async def create_run(self, request: AgentRunCreateRequest) -> AgentRun:
@@ -116,22 +122,38 @@ class AgentRuntime:
             skill_config=skill_config,
             allowed_tools=allowed_tools,
         )
+        self.trace_repository.create_run(
+            run,
+            request,
+            self._config_snapshot(record),
+        )
         self._records[run.run_id] = record
         record.task = asyncio.create_task(self._execute(record), name=run.run_id)
         return run.model_copy(deep=True)
 
     def get_run(self, run_id: str) -> AgentRun:
-        return self._get_record(run_id).run.model_copy(deep=True)
+        record = self._records.get(run_id)
+        if record is not None:
+            return record.run.model_copy(deep=True)
+        run = self.trace_repository.recover_interrupted(run_id)
+        if run is None:
+            raise AgentRunNotFoundError(run_id)
+        return run.model_copy(deep=True)
 
     def list_runs(self, limit: int, offset: int) -> tuple[list[AgentRun], int]:
-        records = sorted(
-            self._records.values(), key=lambda item: item.run.created_at, reverse=True
-        )
-        items = [item.run.model_copy(deep=True) for item in records[offset : offset + limit]]
-        return items, len(records)
+        items, total = self.trace_repository.list_runs(limit=limit, offset=offset)
+        recovered = [
+            self.trace_repository.recover_interrupted(item.run_id) or item
+            if item.run_id not in self._records
+            else self._records[item.run_id].run.model_copy(deep=True)
+            for item in items
+        ]
+        return recovered, total
 
     async def cancel(self, run_id: str) -> AgentRun:
-        record = self._get_record(run_id)
+        record = self._records.get(run_id)
+        if record is None:
+            return self.get_run(run_id)
         if record.run.status in TERMINAL_STATUSES:
             return record.run.model_copy(deep=True)
         record.run.cancelled = True
@@ -144,23 +166,53 @@ class AgentRuntime:
         return record.run.model_copy(deep=True)
 
     def resolve_permission(self, run_id: str, request_id: str, decision: str) -> bool:
-        self._get_record(run_id)
-        return self.permissions.resolve(run_id, request_id, decision)
+        record = self._records.get(run_id)
+        if record is None:
+            return False
+        ticket = self.permissions.get_ticket(run_id, request_id)
+        resolved = self.permissions.resolve(run_id, request_id, decision)
+        if resolved:
+            self._publish(
+                record,
+                AgentEventType.permission_resolved,
+                {
+                    "request_id": request_id,
+                    "permission": ticket.permission if ticket else None,
+                    "decision": decision,
+                },
+            )
+        return resolved
 
-    async def events(self, run_id: str) -> AsyncIterator[AgentEvent]:
-        record = self._get_record(run_id)
-        # 先回放快照再订阅实时事件，使晚加入的 SSE 客户端也能恢复界面状态。
-        # TODO(agent): 持久化事件并支持 Last-Event-ID，进程重启后仍可续传。
+    async def events(
+        self, run_id: str, *, after_sequence: int = -1
+    ) -> AsyncIterator[AgentEvent]:
+        record = self._records.get(run_id)
+        run = self.get_run(run_id)
+        if record is None:
+            for event in self.trace_repository.list_events(
+                run_id, after_sequence=after_sequence
+            ):
+                yield event
+            return
+
+        # 先注册订阅再读持久化历史；同一事件循环内没有 await，不会丢失交界事件。
         queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
         record.subscribers.add(queue)
-        history = [event.model_copy(deep=True) for event in record.events]
+        history = self.trace_repository.list_events(
+            run_id, after_sequence=after_sequence
+        )
+        last_sequence = after_sequence
         try:
             for event in history:
+                last_sequence = event.sequence
                 yield event
-            if record.run.status in TERMINAL_STATUSES:
+            if run.status in TERMINAL_STATUSES:
                 return
             while True:
                 event = await queue.get()
+                if event.sequence <= last_sequence:
+                    continue
+                last_sequence = event.sequence
                 yield event.model_copy(deep=True)
                 if event.event in {
                     AgentEventType.run_completed,
@@ -172,13 +224,26 @@ class AgentRuntime:
             record.subscribers.discard(queue)
 
     async def wait(self, run_id: str) -> AgentRun:
-        record = self._get_record(run_id)
+        record = self._records.get(run_id)
+        if record is None:
+            return self.get_run(run_id)
         if record.task:
             try:
                 await asyncio.shield(record.task)
             except asyncio.CancelledError:
                 pass
         return record.run.model_copy(deep=True)
+
+    def get_trace(
+        self, run_id: str, *, after_sequence: int, limit: int
+    ) -> AgentTraceResponse:
+        self.get_run(run_id)
+        trace = self.trace_repository.get_trace(
+            run_id, after_sequence=after_sequence, limit=limit
+        )
+        if trace is None:
+            raise AgentRunNotFoundError(run_id)
+        return trace
 
     async def _execute(self, record: RunRecord) -> None:
         try:
@@ -210,15 +275,51 @@ class AgentRuntime:
         for step in range(1, record.request.max_steps + 1):
             record.run.current_step = step
             record.run.updated_at = datetime.now(timezone.utc)
-            turn = await provider.complete(
-                ModelRequest(
-                    provider_id=record.request.provider_id,
-                    model=record.request.model,
-                    system=(record.skill_config.system_prompt if record.skill_config else None),
-                    messages=messages,
-                    tools=allowed_tools,
-                    metadata=self._request_metadata(record),
+            model_call_id = f"model_call_{uuid4().hex}"
+            started_at = perf_counter()
+            self._publish(
+                record,
+                AgentEventType.model_call_started,
+                {
+                    "model_call_id": model_call_id,
+                    "step": step,
+                    "provider_id": record.request.provider_id,
+                    "model": record.request.model,
+                },
+            )
+            try:
+                turn = await provider.complete(
+                    ModelRequest(
+                        provider_id=record.request.provider_id,
+                        model=record.request.model,
+                        system=(record.skill_config.system_prompt if record.skill_config else None),
+                        messages=messages,
+                        tools=allowed_tools,
+                        metadata=self._request_metadata(record),
+                    )
                 )
+            except Exception as exc:
+                self._publish(
+                    record,
+                    AgentEventType.model_call_failed,
+                    {
+                        "model_call_id": model_call_id,
+                        "duration_ms": int((perf_counter() - started_at) * 1000),
+                        "error_code": getattr(exc, "code", type(exc).__name__),
+                    },
+                )
+                raise
+            self._publish(
+                record,
+                AgentEventType.model_call_completed,
+                {
+                    "model_call_id": model_call_id,
+                    "duration_ms": int((perf_counter() - started_at) * 1000),
+                    "finish_reason": "tool_calls" if turn.tool_calls else "stop",
+                    "input_tokens": turn.input_tokens,
+                    "output_tokens": turn.output_tokens,
+                    "tool_call_count": len(turn.tool_calls),
+                },
             )
             record.run.token_usage += turn.input_tokens + turn.output_tokens
             self._publish(
@@ -257,7 +358,7 @@ class AgentRuntime:
 
                 async def execute(call: ToolCall) -> ToolResult:
                     async with semaphore:
-                        return await self._execute_tool(record, call)
+                        return await self._execute_tool(record, call, model_call_id)
 
                 results = await asyncio.gather(*(execute(call) for call in calls))
                 for call, result in zip(calls, results):
@@ -290,8 +391,13 @@ class AgentRuntime:
 
         self._fail(record, "MAX_STEPS_EXCEEDED", "Agent reached its maximum step count.")
 
-    async def _execute_tool(self, record: RunRecord, call: ToolCall) -> ToolResult:
-        self._publish(record, AgentEventType.tool_call, call.model_dump(mode="json"))
+    async def _execute_tool(
+        self, record: RunRecord, call: ToolCall, parent_model_call_id: str
+    ) -> ToolResult:
+        started_at = perf_counter()
+        call_data = call.model_dump(mode="json")
+        call_data["parent_model_call_id"] = parent_model_call_id
+        self._publish(record, AgentEventType.tool_call, call_data)
         try:
             registered = self.tools.get(call.name)
         except ToolNotFoundError:
@@ -305,7 +411,9 @@ class AgentRuntime:
                 error_code="TOOL_NOT_ALLOWED",
                 error_message="Tool is not included in allowed_tools.",
             )
-            self._publish(record, AgentEventType.tool_result, result.model_dump(mode="json"))
+            self._publish_tool_result(
+                record, result, parent_model_call_id, started_at
+            )
             return result
 
         permission = registered.definition.permission if registered else None
@@ -317,7 +425,9 @@ class AgentRuntime:
                 error_code="NETWORK_NOT_ALLOWED",
                 error_message="Agent run does not allow network tools.",
             )
-            self._publish(record, AgentEventType.tool_result, result.model_dump(mode="json"))
+            self._publish_tool_result(
+                record, result, parent_model_call_id, started_at
+            )
             return result
         mode = self.permissions.mode_for(permission)
         if mode == PermissionMode.deny:
@@ -348,11 +458,13 @@ class AgentRuntime:
                     error_code="PERMISSION_TIMEOUT",
                     error_message="Tool permission confirmation timed out.",
                 )
-                self._publish(
-                    record, AgentEventType.tool_result, result.model_dump(mode="json")
+                self._publish_tool_result(
+                    record, result, parent_model_call_id, started_at
                 )
                 return result
             record.run.status = AgentRunStatus.running
+            record.run.updated_at = datetime.now(timezone.utc)
+            self.trace_repository.save_run(record.run)
             result = (
                 await self._invoke_tool(record, call)
                 if decision in {"allow_once", "allow_session"}
@@ -361,8 +473,20 @@ class AgentRuntime:
         else:
             result = await self._invoke_tool(record, call)
 
-        self._publish(record, AgentEventType.tool_result, result.model_dump(mode="json"))
+        self._publish_tool_result(record, result, parent_model_call_id, started_at)
         return result
+
+    def _publish_tool_result(
+        self,
+        record: RunRecord,
+        result: ToolResult,
+        parent_model_call_id: str,
+        started_at: float,
+    ) -> None:
+        data = result.model_dump(mode="json")
+        data["parent_model_call_id"] = parent_model_call_id
+        data["duration_ms"] = int((perf_counter() - started_at) * 1000)
+        self._publish(record, AgentEventType.tool_result, data)
 
     async def _invoke_tool(self, record: RunRecord, call: ToolCall) -> ToolResult:
         try:
@@ -411,15 +535,19 @@ class AgentRuntime:
     def _publish(
         self, record: RunRecord, event_type: AgentEventType, data: dict[str, object]
     ) -> None:
+        sanitized = sanitize_trace_value(data)
+        assert isinstance(sanitized, dict)
         event = AgentEvent(
             event=event_type,
             run_id=record.run.run_id,
-            sequence=len(record.events),
-            data=data,
+            sequence=record.next_sequence,
+            data=sanitized,
             timestamp=datetime.now(timezone.utc),
         )
+        record.next_sequence += 1
         record.events.append(event)
-        # 内存事件只保留最近窗口；完整审计轨迹应由后续持久化层承担。
+        self.trace_repository.append_event(record.run, event)
+        # 内存只保留实时订阅窗口；完整审计轨迹由 SQLite 保存。
         if len(record.events) > MAX_EVENTS_PER_RUN:
             del record.events[: len(record.events) - MAX_EVENTS_PER_RUN]
         for queue in record.subscribers:
@@ -432,6 +560,21 @@ class AgentRuntime:
             metadata["skill_id"] = record.skill_config.skill_id
             metadata["retrieval"] = record.skill_config.retrieval.model_dump(mode="json")
         return metadata
+
+    def _config_snapshot(self, record: RunRecord) -> dict[str, object]:
+        provider = self.providers.get(record.request.provider_id).config
+        return {
+            "provider_id": record.request.provider_id,
+            "provider_type": provider.provider_type.value,
+            "model": record.request.model,
+            "capabilities": [item.value for item in provider.capabilities],
+            "skill_id": record.request.skill_id,
+            "allowed_tools": list(record.allowed_tools),
+            "max_steps": record.request.max_steps,
+            "token_budget": record.request.token_budget,
+            "allow_network": record.request.allow_network,
+            "metadata": record.request.metadata,
+        }
 
     def _collect_citations(self, record: RunRecord, result: ToolResult) -> None:
         if not result.success or not isinstance(result.output, dict):

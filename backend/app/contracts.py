@@ -329,6 +329,10 @@ class AgentEventType(str, Enum):
     permission_required = "PermissionRequired"
     usage = "Usage"
     citation = "Citation"
+    model_call_started = "ModelCallStarted"
+    model_call_completed = "ModelCallCompleted"
+    model_call_failed = "ModelCallFailed"
+    permission_resolved = "PermissionResolved"
     run_completed = "RunCompleted"
     run_failed = "RunFailed"
     run_cancelled = "RunCancelled"
@@ -340,6 +344,24 @@ class AgentEvent(Contract):
     sequence: int
     data: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime
+
+
+class AgentTraceSummary(Contract):
+    model_calls: int = 0
+    tool_calls: int = 0
+    duration_ms: int = 0
+    token_usage: int = 0
+    errors: int = 0
+
+
+class AgentTraceResponse(Contract):
+    run_id: str
+    status: AgentRunStatus
+    items: list[AgentEvent] = Field(default_factory=list)
+    next_sequence: int
+    has_more: bool = False
+    summary: AgentTraceSummary = Field(default_factory=AgentTraceSummary)
+    config_snapshot: dict[str, Any] = Field(default_factory=dict)
 
 
 class PermissionDecisionRequest(Contract):

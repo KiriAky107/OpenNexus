@@ -18,6 +18,10 @@ const eventLabels: Record<AgentEventType, string> = {
   PermissionRequired: '请求权限',
   Usage: '用量统计',
   Citation: '引用来源',
+  ModelCallStarted: '模型调用开始',
+  ModelCallCompleted: '模型调用完成',
+  ModelCallFailed: '模型调用失败',
+  PermissionResolved: '权限已处理',
   RunCompleted: '运行完成',
   RunFailed: '运行失败',
   RunCancelled: '运行取消',
@@ -86,6 +90,10 @@ const detailLabels: Record<string, string> = {
   total_tokens: '令牌总数',
   status: '状态',
   duration_ms: '耗时（毫秒）',
+  model_call_id: '模型调用 ID',
+  parent_model_call_id: '上级模型调用 ID',
+  finish_reason: '结束原因',
+  decision: '授权决定',
 }
 
 export function runStatusLabel(status?: AgentRunStatus): string {

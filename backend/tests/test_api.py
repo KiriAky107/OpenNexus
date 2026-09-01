@@ -89,6 +89,7 @@ def test_openapi_contains_documented_frontend_interfaces() -> None:
         "/api/agent/runs",
         "/api/agent/runs/{run_id}/cancel",
         "/api/agent/runs/{run_id}/events",
+        "/api/agent/runs/{run_id}/trace",
         "/api/skills",
         "/api/plugins",
         "/api/plugins/install",

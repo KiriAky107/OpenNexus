@@ -104,6 +104,11 @@ class PermissionManager:
         ticket.future.set_result(decision)
         return True
 
+    def get_ticket(self, run_id: str, request_id: str) -> PermissionTicket | None:
+        """只读返回待确认票据，供 Trace 记录权限类型；不暴露 Future 给接口层。"""
+
+        return self._pending.get((run_id, request_id))
+
     def cancel_run(self, run_id: str) -> None:
         for key, ticket in list(self._pending.items()):
             if ticket.run_id == run_id:
