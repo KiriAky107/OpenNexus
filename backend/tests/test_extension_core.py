@@ -509,13 +509,38 @@ def test_mcp_argument_model_preserves_json_schema_additional_properties() -> Non
         "mcp-fixture.dynamic",
         {
             "type": "object",
+            "properties": {"model_dump": {"type": "string"}},
+            "required": ["model_dump"],
             "additionalProperties": {"type": "string"},
         },
     )
 
-    arguments = arguments_model.model_validate({"dynamic_key": "value"})
+    arguments = arguments_model.model_validate(
+        {"model_dump": "method name remains data", "dynamic-key": "value"}
+    )
 
-    assert arguments.model_dump() == {"dynamic_key": "value"}
+    assert arguments.model_dump() == {
+        "model_dump": "method name remains data",
+        "dynamic-key": "value",
+    }
+
+
+def test_production_rejects_unsandboxed_mcp_host(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENVIRONMENT", "production")
+    get_settings.cache_clear()
+    container = build_container()
+    installed = container.plugins.install(MCP_FIXTURE)
+    assert installed.status == "permission_required"
+    container.plugins.set_permissions("mcp-fixture", ["notes.read"])
+    try:
+        with pytest.raises(ExtensionError) as exc:
+            container.plugins.enable("mcp-fixture")
+        assert exc.value.code == "MCP_TRUST_APPROVAL_REQUIRED"
+        assert container.plugins.get_host_status("mcp-fixture").status == "stopped"
+        assert not container.tools.contains("mcp-fixture.echo")
+    finally:
+        container.plugins.shutdown()
+        get_settings.cache_clear()
 
 
 def test_mcp_abnormal_exit_unregisters_tools_and_restart_recovers(mcp_container) -> None:
