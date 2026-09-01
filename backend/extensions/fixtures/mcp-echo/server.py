@@ -39,7 +39,14 @@ def tool(name: str, description: str, properties: dict[str, Any] | None = None) 
 
 TOOLS = {
     "echo": {
-        **tool("echo", "Return the provided text.", {"text": {"type": "string"}}),
+        **tool(
+            "echo",
+            "Return the provided text.",
+            {
+                "text": {"type": "string"},
+                "suffix": {"type": ["string", "null"]},
+            },
+        ),
         "_meta": {"notesagent/permission": "notes.read"},
     },
     "fail": tool("fail", "Return an MCP business error."),
@@ -48,6 +55,8 @@ TOOLS = {
     "environment": tool("environment", "Report whether host secrets leaked into the process."),
     "exit": tool("exit", "Terminate the fixture process."),
 }
+# suffix 是可选字段，用于验证 Host 不会把缺省值擅自补成 null。
+TOOLS["echo"]["inputSchema"]["required"] = ["text"]
 
 
 def call_tool(request_id: int, params: dict[str, Any]) -> None:
@@ -55,11 +64,14 @@ def call_tool(request_id: int, params: dict[str, Any]) -> None:
     arguments = params.get("arguments") or {}
     if name == "echo":
         text = str(arguments.get("text", ""))
+        structured_content = {"echo": text}
+        if "suffix" in arguments:
+            structured_content["suffix"] = arguments["suffix"]
         respond(
             request_id,
             {
                 "content": [{"type": "text", "text": text}],
-                "structuredContent": {"echo": text},
+                "structuredContent": structured_content,
                 "isError": False,
             },
         )

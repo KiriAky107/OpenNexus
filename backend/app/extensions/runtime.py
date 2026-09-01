@@ -536,7 +536,9 @@ class PluginRuntime:
             return await self.mcp.call_tool(
                 plugin_id,
                 remote_name,
-                arguments.model_dump(),
+                # 省略的可选字段不能被补成 null；显式传入的 null 仍由
+                # model_fields_set 保留并交给 MCP Server。
+                arguments.model_dump(exclude_unset=True),
                 request_id=context.tool_call_id or f"{context.run_id}:{definition.name}",
             )
 
@@ -572,10 +574,13 @@ class PluginRuntime:
                 status_code=409,
                 details={"plugin_id": plugin_id, "skills": dependent_skills},
             )
+        is_mcp = record.plugin.manifest.backend.type == "mcp"
         if record.plugin.enabled:
             self.disable(plugin_id)
-        elif record.plugin.manifest.backend.type == "mcp":
-            self.mcp.stop(plugin_id)
+        if is_mcp:
+            # stop 只结束本次进程并保留状态供故障诊断；真正卸载时必须连同
+            # 历史状态一起遗忘，避免同 ID 重装继承旧协商信息。
+            self.mcp.remove(plugin_id)
         del self._records[plugin_id]
 
     def _record(self, plugin_id: str) -> _PluginRecord:
@@ -672,7 +677,10 @@ def _arguments_model_from_schema(
         "object": dict[str, Any],
     }
     for name, field_schema in properties.items():
-        annotation = types.get(field_schema.get("type"), Any)
+        schema_type = field_schema.get("type")
+        # JSON Schema 允许联合类型数组；复杂类型继续由 Draft Validator
+        # 精确校验，Pydantic 在这里只承担参数载体职责。
+        annotation = types.get(schema_type, Any) if isinstance(schema_type, str) else Any
         fields[name] = (annotation, ... if name in required else None)
     model_name = "PluginArgs_" + re.sub(r"\W+", "_", tool_name)
     # 完整 JSON Schema 已在 ToolRegistry 中先行校验。这里允许额外字段，避免

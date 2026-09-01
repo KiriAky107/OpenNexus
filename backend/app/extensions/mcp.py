@@ -91,6 +91,8 @@ class McpStdioClient:
     def start(self) -> None:
         if self.process is not None and self.process.poll() is None:
             return
+        # TODO(extension-security): 社区 Plugin 开放前迁移到 Tauri/Rust Host 的
+        # 平台级沙箱启动器；uvx 只隔离 Python 依赖，不能替代系统权限限制。
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         environment = _subprocess_environment()
         environment.setdefault("PYTHONUNBUFFERED", "1")
@@ -566,6 +568,16 @@ class McpBridge:
             host.status.status = PluginHostState.stopped
             host.status.tools_count = 0
             host.status.error = None
+
+    def remove(self, plugin_id: str) -> None:
+        """停止 Host，并清除卸载后不应跨安装保留的状态与调用索引。"""
+
+        self.stop(plugin_id)
+        with self._lock:
+            self._statuses.pop(plugin_id, None)
+            stale_calls = [key for key in self._calls if key[0] == plugin_id]
+            for key in stale_calls:
+                self._calls.pop(key, None)
 
     def status(self, plugin_id: str, backend: PluginBackend) -> PluginHostStatus:
         with self._lock:
