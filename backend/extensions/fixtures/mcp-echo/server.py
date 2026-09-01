@@ -135,6 +135,15 @@ def main() -> None:
         request_id = message.get("id")
         params = message.get("params") or {}
         if method == "initialize" and isinstance(request_id, int):
+            if MODE == "invalid-result":
+                send({"jsonrpc": "2.0", "id": request_id, "result": None})
+                continue
+            if MODE == "oversized-stdout":
+                # 不带换行，验证 Host 在读取完整内容前执行硬上限。
+                sys.stdout.write("x" * (2 * 1024 * 1024 + 1))
+                sys.stdout.flush()
+                time.sleep(10)
+                return
             respond(
                 request_id,
                 {

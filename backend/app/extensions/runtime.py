@@ -479,6 +479,17 @@ class PluginRuntime:
                 status_code=409,
                 details={"plugin_id": plugin_id},
             )
+        if record.plugin.status in {
+            PluginStatus.installed,
+            PluginStatus.disabled,
+            PluginStatus.permission_required,
+        }:
+            raise ExtensionError(
+                "PLUGIN_HOST_UNAVAILABLE",
+                "Disabled or inactive MCP Plugins must be started with Enable.",
+                status_code=409,
+                details={"plugin_id": plugin_id, "status": record.plugin.status.value},
+            )
         for name in record.registered_tools:
             self.registry.unregister(name)
         record.registered_tools.clear()
@@ -664,7 +675,9 @@ def _arguments_model_from_schema(
         annotation = types.get(field_schema.get("type"), Any)
         fields[name] = (annotation, ... if name in required else None)
     model_name = "PluginArgs_" + re.sub(r"\W+", "_", tool_name)
-    return create_model(model_name, __config__=ConfigDict(extra="forbid"), **fields)
+    # 完整 JSON Schema 已在 ToolRegistry 中先行校验。这里允许额外字段，避免
+    # Pydantic 再次拒绝 additionalProperties/patternProperties 接受的合法参数。
+    return create_model(model_name, __config__=ConfigDict(extra="allow"), **fields)
 
 
 def _validate_tool_schema(spec: DeclarativeToolSpec) -> None:
