@@ -46,15 +46,17 @@ _BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+[^\s,;]+")
 _API_KEY_PATTERN = re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b")
 
 
-def sanitize_trace_value(value: Any, *, depth: int = 0) -> Any:
-    """递归净化 Trace 数据；键名疑似 Secret 时不保留原值。"""
+def sanitize_trace_value(
+    value: Any, *, depth: int = 0, apply_limits: bool = True
+) -> Any:
+    """递归净化持久化数据；可按审计用途限制体积，Secret 始终脱敏。"""
 
-    if depth >= MAX_TRACE_DEPTH:
+    if apply_limits and depth >= MAX_TRACE_DEPTH:
         return "[MAX_DEPTH]"
     if isinstance(value, dict):
         sanitized: dict[str, Any] = {}
         for index, (key, item) in enumerate(value.items()):
-            if index >= MAX_TRACE_COLLECTION:
+            if apply_limits and index >= MAX_TRACE_COLLECTION:
                 sanitized["__truncated__"] = True
                 break
             normalized = str(key).casefold().replace("-", "_")
@@ -62,26 +64,33 @@ def sanitize_trace_value(value: Any, *, depth: int = 0) -> Any:
                 "[REDACTED]"
                 if normalized in _SECRET_KEYS
                 or normalized.endswith(_SECRET_KEY_SUFFIXES)
-                else sanitize_trace_value(item, depth=depth + 1)
+                else sanitize_trace_value(
+                    item, depth=depth + 1, apply_limits=apply_limits
+                )
             )
         return sanitized
     if isinstance(value, (list, tuple)):
+        source_items = value[:MAX_TRACE_COLLECTION] if apply_limits else value
         items = [
-            sanitize_trace_value(item, depth=depth + 1)
-            for item in value[:MAX_TRACE_COLLECTION]
+            sanitize_trace_value(
+                item, depth=depth + 1, apply_limits=apply_limits
+            )
+            for item in source_items
         ]
-        if len(value) > MAX_TRACE_COLLECTION:
+        if apply_limits and len(value) > MAX_TRACE_COLLECTION:
             items.append("[TRUNCATED]")
         return items
     if isinstance(value, str):
         value = _BEARER_PATTERN.sub("Bearer [REDACTED]", value)
         value = _API_KEY_PATTERN.sub("[REDACTED]", value)
-        if len(value) > MAX_TRACE_STRING:
+        if apply_limits and len(value) > MAX_TRACE_STRING:
             return f"{value[:MAX_TRACE_STRING]}...[TRUNCATED]"
         return value
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
-    return sanitize_trace_value(str(value), depth=depth + 1)
+    return sanitize_trace_value(
+        str(value), depth=depth + 1, apply_limits=apply_limits
+    )
 
 
 class AgentTraceRepository:
@@ -354,6 +363,10 @@ class AgentTraceRepository:
 
     @staticmethod
     def _serialize_run(run: AgentRun) -> str:
+        # Run 是重启后 GET/list 的完整事实；只做 Secret 脱敏，不套用 Trace 摘要限长。
         return json.dumps(
-            sanitize_trace_value(run.model_dump(mode="json")), ensure_ascii=False
+            sanitize_trace_value(
+                run.model_dump(mode="json"), apply_limits=False
+            ),
+            ensure_ascii=False,
         )
