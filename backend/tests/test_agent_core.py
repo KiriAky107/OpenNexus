@@ -242,6 +242,38 @@ def test_trace_redacts_secrets_and_truncates_large_values() -> None:
     run(scenario())
 
 
+def test_persisted_agent_run_preserves_long_input_and_output() -> None:
+    """审计事件可以限长，但重启后读取的 AgentRun 不能丢失正文。"""
+
+    now = datetime.now(timezone.utc)
+    long_input = "输入" * 2_500
+    long_output = "输出" * 2_500
+    request = AgentRunCreateRequest(
+        input=long_input,
+        provider_id="mock",
+        model="mock-1",
+    )
+    persisted = AgentRun(
+        run_id="run_long_content",
+        status=AgentRunStatus.completed,
+        input=long_input,
+        output=long_output,
+        provider_id=request.provider_id,
+        model=request.model,
+        max_steps=request.max_steps,
+        created_at=now,
+        updated_at=now,
+    )
+    repository = AgentTraceRepository()
+    repository.create_run(persisted, request, {"model": request.model})
+
+    restored = repository.get_run(persisted.run_id)
+
+    assert restored is not None
+    assert restored.input == long_input
+    assert restored.output == long_output
+
+
 async def _collect_events(iterator):
     return [event async for event in iterator]
 
