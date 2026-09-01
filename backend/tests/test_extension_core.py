@@ -1,4 +1,7 @@
 import asyncio
+import shutil
+import threading
+import time
 
 import pytest
 
@@ -12,12 +15,29 @@ from app.contracts import (
     ToolCall,
 )
 from app.extensions import ExtensionError
+from app.extensions.mcp import McpStdioClient
+from app.extensions.runtime import _arguments_model_from_schema
 from app.services import note_service
-from app.config import get_settings
+from app.config import BACKEND_DIR, get_settings
+
+
+MCP_FIXTURE = BACKEND_DIR / "extensions" / "fixtures" / "mcp-echo"
 
 
 def run(coroutine):
     return asyncio.run(coroutine)
+
+
+@pytest.fixture
+def mcp_container():
+    container = build_container()
+    installed = container.plugins.install(MCP_FIXTURE)
+    assert installed.status == "permission_required"
+    container.plugins.set_permissions("mcp-fixture", ["notes.read"])
+    try:
+        yield container
+    finally:
+        container.plugins.shutdown()
 
 
 def test_bundled_plugin_registers_tool_and_skill_is_ready() -> None:
@@ -297,3 +317,300 @@ def test_attachment_and_transcription_tools_use_host_storage() -> None:
         assert transcription.output["text"] == "会议转写内容"
 
     run(scenario())
+
+
+def test_mcp_stdio_host_discovers_namespaced_tools_and_maps_results(
+    mcp_container, monkeypatch
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "must-not-enter-plugin-host")
+        enabled = mcp_container.plugins.enable("mcp-fixture")
+        status = mcp_container.plugins.get_host_status("mcp-fixture")
+        definition = mcp_container.tools.get("mcp-fixture.echo").definition
+        result = await mcp_container.tools.execute(
+            ToolCall(
+                tool_call_id="call_mcp_echo",
+                name="mcp-fixture.echo",
+                arguments={"text": "hello mcp"},
+            ),
+            ToolExecutionContext(
+                run_id="run_mcp_fixture", tool_call_id="call_mcp_echo"
+            ),
+        )
+
+        assert enabled.status == "ready" and enabled.enabled is True
+        assert status.status == "ready"
+        environment = await mcp_container.tools.execute(
+            ToolCall(
+                tool_call_id="call_mcp_environment",
+                name="mcp-fixture.environment",
+                arguments={},
+            ),
+            ToolExecutionContext(run_id="run_mcp_fixture"),
+        )
+
+        assert status.tools_count == 6
+        assert status.protocol_version == "2025-11-25"
+        assert status.server_name == "notesagent-mcp-fixture"
+        assert definition.permission == "notes.read"
+        assert result.success is True
+        assert result.output == {"echo": "hello mcp"}
+        explicit_null = await mcp_container.tools.execute(
+            ToolCall(
+                tool_call_id="call_mcp_explicit_null",
+                name="mcp-fixture.echo",
+                arguments={"text": "null stays explicit", "suffix": None},
+            ),
+            ToolExecutionContext(run_id="run_mcp_fixture"),
+        )
+        assert explicit_null.success is True
+        assert explicit_null.output == {
+            "echo": "null stays explicit",
+            "suffix": None,
+        }
+        assert environment.success is True
+        assert environment.output == {
+            "has_openai_key": False,
+            "has_app_db_path": False,
+        }
+
+        disabled = mcp_container.plugins.disable("mcp-fixture")
+        assert disabled.status == "disabled"
+        assert mcp_container.plugins.get_host_status("mcp-fixture").status == "stopped"
+        assert not mcp_container.tools.contains("mcp-fixture.echo")
+        with pytest.raises(ExtensionError) as exc:
+            mcp_container.plugins.restart_host("mcp-fixture")
+        assert exc.value.code == "PLUGIN_HOST_UNAVAILABLE"
+        assert mcp_container.plugins.get("mcp-fixture").status == "disabled"
+        assert not mcp_container.tools.contains("mcp-fixture.echo")
+
+        mcp_container.plugins.uninstall("mcp-fixture")
+        reinstalled = mcp_container.plugins.install(MCP_FIXTURE)
+        fresh_status = mcp_container.plugins.get_host_status("mcp-fixture")
+        assert reinstalled.status == "permission_required"
+        assert fresh_status.status == "stopped"
+        assert fresh_status.started_at is None
+        assert fresh_status.protocol_version is None
+        assert fresh_status.server_name is None
+
+    run(scenario())
+
+
+def test_agent_calls_mcp_tool_through_registry_and_writes_trace(mcp_container) -> None:
+    async def scenario() -> None:
+        mcp_container.plugins.enable("mcp-fixture")
+        created = await mcp_container.agent.create_run(
+            AgentRunCreateRequest(
+                input='/tool mcp-fixture.echo {"text":"agent mcp"}',
+                provider_id="mock",
+                model="mock-1",
+                allowed_tools=["mcp-fixture.echo"],
+            )
+        )
+        completed = await mcp_container.agent.wait(created.run_id)
+        trace = mcp_container.agent.get_trace(
+            created.run_id, after_sequence=-1, limit=100
+        )
+
+        assert completed.status == AgentRunStatus.completed
+        assert completed.tool_results[0].success is True
+        assert completed.tool_results[0].output == {"echo": "agent mcp"}
+        assert any(
+            item.event == "ToolCall" and item.data.get("name") == "mcp-fixture.echo"
+            for item in trace.items
+        )
+
+    run(scenario())
+
+
+def test_mcp_business_error_size_limit_and_timeout_are_structured(mcp_container) -> None:
+    async def scenario() -> None:
+        mcp_container.plugins.enable("mcp-fixture")
+        context = ToolExecutionContext(run_id="run_mcp_errors")
+
+        failed = await mcp_container.tools.execute(
+            ToolCall(tool_call_id="call_fail", name="mcp-fixture.fail", arguments={}),
+            context,
+        )
+        oversized = await mcp_container.tools.execute(
+            ToolCall(tool_call_id="call_large", name="mcp-fixture.large", arguments={}),
+            context,
+        )
+        timed_out = await mcp_container.tools.execute(
+            ToolCall(
+                tool_call_id="call_sleep",
+                name="mcp-fixture.sleep",
+                arguments={"seconds": 5},
+            ),
+            ToolExecutionContext(
+                run_id="run_mcp_errors", tool_call_id="call_sleep"
+            ),
+        )
+        recovered = await mcp_container.tools.execute(
+            ToolCall(
+                tool_call_id="call_after_timeout",
+                name="mcp-fixture.echo",
+                arguments={"text": "still ready"},
+            ),
+            context,
+        )
+
+        assert failed.success is False
+        assert failed.error_code == "MCP_TOOL_CALL_FAILED"
+        assert failed.error_message == "fixture failure"
+        assert oversized.success is False
+        assert oversized.error_code == "MCP_TOOL_RESULT_TOO_LARGE"
+        assert timed_out.success is False
+        assert timed_out.error_code == "MCP_TOOL_CALL_FAILED"
+        assert recovered.success is True
+        assert mcp_container.plugins.get_host_status("mcp-fixture").status == "ready"
+
+    run(scenario())
+
+
+def test_mcp_cancel_releases_blocking_response_thread(
+    mcp_container, monkeypatch
+) -> None:
+    async def scenario() -> None:
+        mcp_container.plugins.enable("mcp-fixture")
+        released = threading.Event()
+        original_wait = McpStdioClient.wait_response
+
+        def tracked_wait(self, *args, **kwargs):
+            try:
+                return original_wait(self, *args, **kwargs)
+            finally:
+                released.set()
+
+        monkeypatch.setattr(McpStdioClient, "wait_response", tracked_wait)
+        task = asyncio.create_task(
+            mcp_container.plugins.mcp.call_tool(
+                "mcp-fixture",
+                "sleep",
+                {"seconds": 5},
+                request_id="call_cancel_release",
+            )
+        )
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        deadline = time.monotonic() + 0.5
+        while not released.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert released.is_set(), "cancelled MCP wait must not occupy a worker until timeout"
+
+    run(scenario())
+
+
+def test_mcp_argument_model_preserves_json_schema_additional_properties() -> None:
+    arguments_model = _arguments_model_from_schema(
+        "mcp-fixture.dynamic",
+        {
+            "type": "object",
+            "properties": {"model_dump": {"type": "string"}},
+            "required": ["model_dump"],
+            "additionalProperties": {"type": "string"},
+        },
+    )
+
+    arguments = arguments_model.model_validate(
+        {"model_dump": "method name remains data", "dynamic-key": "value"}
+    )
+
+    assert arguments.model_dump() == {
+        "model_dump": "method name remains data",
+        "dynamic-key": "value",
+    }
+
+
+def test_production_rejects_unsandboxed_mcp_host(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENVIRONMENT", "production")
+    get_settings.cache_clear()
+    container = build_container()
+    installed = container.plugins.install(MCP_FIXTURE)
+    assert installed.status == "permission_required"
+    container.plugins.set_permissions("mcp-fixture", ["notes.read"])
+    try:
+        with pytest.raises(ExtensionError) as exc:
+            container.plugins.enable("mcp-fixture")
+        assert exc.value.code == "MCP_TRUST_APPROVAL_REQUIRED"
+        assert container.plugins.get_host_status("mcp-fixture").status == "stopped"
+        assert not container.tools.contains("mcp-fixture.echo")
+    finally:
+        container.plugins.shutdown()
+        get_settings.cache_clear()
+
+
+def test_mcp_abnormal_exit_unregisters_tools_and_restart_recovers(mcp_container) -> None:
+    async def scenario() -> None:
+        mcp_container.plugins.enable("mcp-fixture")
+        crashed = await mcp_container.tools.execute(
+            ToolCall(tool_call_id="call_exit", name="mcp-fixture.exit", arguments={}),
+            ToolExecutionContext(run_id="run_mcp_exit", tool_call_id="call_exit"),
+        )
+
+        deadline = time.monotonic() + 2
+        while mcp_container.tools.contains("mcp-fixture.echo") and time.monotonic() < deadline:
+            await asyncio.sleep(0.02)
+
+        plugin = mcp_container.plugins.get("mcp-fixture")
+        status = mcp_container.plugins.get_host_status("mcp-fixture")
+        assert crashed.success is False
+        assert crashed.error_code == "PLUGIN_HOST_UNAVAILABLE"
+        assert plugin.status == "error" and plugin.enabled is False
+        assert status.status == "unhealthy"
+        assert not mcp_container.tools.contains("mcp-fixture.echo")
+
+        restarted = mcp_container.plugins.restart_host("mcp-fixture")
+        assert restarted.status == "ready"
+        assert restarted.tools_count == 6
+        assert mcp_container.tools.contains("mcp-fixture.echo")
+
+    run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("mode", "contributions", "expected_code"),
+    [
+        ("no-tools", "[]", "MCP_CAPABILITY_UNSUPPORTED"),
+        ("invalid-schema", "[mcp-invalid.broken]", "MCP_TOOL_SCHEMA_INVALID"),
+        ("invalid-result", "[]", "MCP_INITIALIZE_FAILED"),
+        ("oversized-stdout", "[]", "PLUGIN_HOST_UNAVAILABLE"),
+    ],
+)
+def test_mcp_rejects_invalid_initialization_and_discovery(
+    tmp_path, mode, contributions, expected_code
+) -> None:
+    package = tmp_path / f"mcp-{mode}"
+    package.mkdir()
+    shutil.copyfile(MCP_FIXTURE / "server.py", package / "server.py")
+    (package / "plugin.yaml").write_text(
+        f"""
+id: mcp-invalid
+name: Invalid MCP Fixture
+version: 1.0.0
+contributes:
+  tools: {contributions}
+backend:
+  type: mcp
+  transport: stdio
+  command: python
+  args: [server.py, {mode}]
+  startup_timeout_seconds: 5
+  tool_timeout_seconds: 1
+""".strip(),
+        encoding="utf-8",
+    )
+    container = build_container()
+    container.plugins.install(package)
+    try:
+        with pytest.raises(ExtensionError) as exc:
+            container.plugins.enable("mcp-invalid")
+        assert exc.value.code == expected_code
+        assert container.plugins.get("mcp-invalid").status == "error"
+        assert container.plugins.get_host_status("mcp-invalid").status == "error"
+        assert not container.tools.contains("mcp-invalid.broken")
+    finally:
+        container.plugins.shutdown()

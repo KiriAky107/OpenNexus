@@ -93,6 +93,8 @@ def test_openapi_contains_documented_frontend_interfaces() -> None:
         "/api/skills",
         "/api/plugins",
         "/api/plugins/install",
+        "/api/plugins/{plugin_id}/host",
+        "/api/plugins/{plugin_id}/host/restart",
         "/api/plugins/{plugin_id}/enable",
         "/api/plugins/{plugin_id}/disable",
         "/api/providers/test",

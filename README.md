@@ -118,7 +118,7 @@ cd frontend
 pnpm test
 ```
 
-当前回归基线为后端 81 项测试、前端 27 项测试，且生产构建通过。测试数量会随功能增长，以本地实际输出和 CI 为准。
+当前回归基线为后端 92 项测试、前端 27 项测试，且生产构建通过。测试数量会随功能增长，以本地实际输出和 CI 为准。
 
 构建产物位于 `frontend/dist`，该目录不提交到 Git。
 
@@ -132,6 +132,7 @@ pnpm test
 | [后端接口契约](docs/contracts/后端接口契约-开发版.md) | HTTP/SSE 接口、错误和当前实现状态 |
 | [第二阶段接口契约](docs/contracts/第二阶段接口契约-开发版.md) | 第二阶段公共 DTO、计划接口、SSE、错误码与联调顺序 |
 | [AI Core 与 Agent Core](docs/development/AI-Core与Agent-Core开发说明.md) | Provider、Agent、Tool、Permission 与 Extension Core |
+| [MCP Bridge 与 Plugin Host](docs/development/MCP-Bridge与Plugin-Host开发说明.md) | stdio MCP、隔离进程、Tool 映射、状态与错误边界 |
 | [Git 使用细则](docs/guides/Git使用细则-团队开发版.md) | 分支、提交、PR、Review 与合并流程 |
 | [CI/CD 细则](docs/guides/CI-CD细则-团队开发版.md) | Gitea 流水线、质量门禁、产物、发布与回滚规则 |
 | [Agent Trace 复盘](docs/retrospectives/Agent-Core第二阶段问题与修复复盘.md) | Agent 持久化、SSE 恢复、事件契约与脱敏问题复盘 |
