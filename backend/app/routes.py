@@ -2,13 +2,14 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Header, Query
 from fastapi.responses import StreamingResponse
 
 from app.contracts import (
     AgentRun,
     AgentRunCreateRequest,
     AgentRunListResponse,
+    AgentTraceResponse,
     ChatRequest,
     CredentialStatus,
     CredentialWriteRequest,
@@ -81,8 +82,9 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def as_sse(event: str, payload: str) -> str:
-    return f"event: {event}\ndata: {payload}\n\n"
+def as_sse(event: str, payload: str, *, event_id: int | None = None) -> str:
+    id_line = f"id: {event_id}\n" if event_id is not None else ""
+    return f"{id_line}event: {event}\ndata: {payload}\n\n"
 
 
 def provider_or_404(provider_id: str):
@@ -314,14 +316,63 @@ async def cancel_agent_run(run_id: str) -> OperationResponse:
     },
     tags=["Agent"],
 )
-async def agent_events(run_id: str) -> StreamingResponse:
+async def agent_events(
+    run_id: str,
+    after_sequence: int | None = Query(default=None, ge=-1),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+) -> StreamingResponse:
     agent_run_or_404(run_id)
+    cursor = after_sequence
+    if cursor is None and last_event_id is not None:
+        try:
+            cursor = int(last_event_id)
+        except ValueError as exc:
+            raise ApiError(
+                400,
+                "TRACE_CURSOR_INVALID",
+                "Last-Event-ID must be an integer sequence.",
+                {"last_event_id": last_event_id},
+            ) from exc
+        if cursor < -1:
+            raise ApiError(
+                400,
+                "TRACE_CURSOR_INVALID",
+                "Last-Event-ID must be greater than or equal to -1.",
+            )
+    cursor = cursor if cursor is not None else -1
 
     async def stream() -> AsyncIterator[str]:
-        async for event in container.agent.events(run_id):
-            yield as_sse(event.event.value, event.model_dump_json())
+        async for event in container.agent.events(run_id, after_sequence=cursor):
+            yield as_sse(
+                event.event.value,
+                event.model_dump_json(),
+                event_id=event.sequence,
+            )
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@router.get(
+    "/agent/runs/{run_id}/trace",
+    response_model=AgentTraceResponse,
+    tags=["Agent"],
+)
+async def get_agent_trace(
+    run_id: str,
+    after_sequence: int = Query(default=-1, ge=-1),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> AgentTraceResponse:
+    try:
+        return container.agent.get_trace(
+            run_id, after_sequence=after_sequence, limit=limit
+        )
+    except AgentRunNotFoundError as exc:
+        raise ApiError(
+            404,
+            "AGENT_RUN_NOT_FOUND",
+            f"Agent run does not exist: {run_id}",
+            {"run_id": run_id},
+        ) from exc
 
 
 @router.post(

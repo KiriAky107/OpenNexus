@@ -10,7 +10,7 @@
 NotesAgent/
 ├── frontend/      Vue 3 + TypeScript + Vite 前端
 ├── backend/       FastAPI + Pydantic 后端
-├── docs/          分工与技术栈说明
+├── docs/          架构、契约、开发说明、协作规范与问题复盘
 └── server sync/   云同步服务预留目录，当前未实现
 ```
 
@@ -36,7 +36,7 @@ python --version
 uv --version
 ```
 
-当前 Web 联调不需要 Rust 和 Tauri。开始桌面端集成后，再按照 `docs/AI笔记软件技术栈说明-团队版-v2.3.md` 安装 Rust Toolchain 与 Tauri CLI。
+当前 Web 联调不需要 Rust 和 Tauri。开始桌面端集成后，再按照 `docs/architecture/AI笔记软件技术栈说明-团队版-v2.3.md` 安装 Rust Toolchain 与 Tauri CLI。
 
 ## 首次初始化
 
@@ -118,7 +118,7 @@ cd frontend
 pnpm test
 ```
 
-当前回归基线为后端 76 项测试、前端 26 项测试，且生产构建通过。测试数量会随功能增长，以本地实际输出和 CI 为准。
+当前回归基线为后端 81 项测试、前端 27 项测试，且生产构建通过。测试数量会随功能增长，以本地实际输出和 CI 为准。
 
 构建产物位于 `frontend/dist`，该目录不提交到 Git。
 
@@ -126,24 +126,15 @@ pnpm test
 
 | 文档 | 用途 |
 | --- | --- |
-| [技术栈说明](docs/AI笔记软件技术栈说明-团队版-v2.3.md) | 目标架构、第二阶段技术边界与模块依赖 |
-| [第一阶段分工表](docs/第一阶段分工表.md) | 成员职责、协作关系与当前交付状态 |
-| [第二阶段分工表](docs/第二阶段团队分工表.md) | 第二阶段人员职责、任务顺序、协作关系与验收项 |
-| [第一阶段测试验证操作手册](docs/第一阶段测试验证操作手册.md) | 自动化测试、接口主链路、前端人工验收与记录模板 |
-| [后端接口契约](docs/后端接口契约-开发版.md) | HTTP/SSE 接口、错误和当前实现状态 |
-| [第二阶段接口契约](docs/第二阶段接口契约-开发版.md) | 第二阶段公共 DTO、计划接口、SSE、错误码与联调顺序 |
-| [AI Core 与 Agent Core](docs/AI-Core与Agent-Core开发说明.md) | Provider、Agent、Tool、Permission 与 Extension Core |
-| [Knowledge 与 Retrieval Core](docs/Knowledge与Retrieval-Core开发说明.md) | Block、索引、混合检索和 Citation |
-| [模型提供商与模型发现](docs/模型提供商与模型发现开发说明.md) | Provider 预设、模型发现和凭据边界 |
-| [前端页面需求](docs/前端页面需求说明-开发版.md) | 页面、交互、状态与验收基线 |
-| [前端实现说明](docs/前端壳子与接口层开发说明.md) | 当前前端目录、Service、SSE 和运行边界 |
-| [前端写作体验](docs/前端写作体验优化开发说明.md) | Milkdown、CodeMirror、格式栏和 Shiki |
-| [前端视觉与轻量动效](docs/前端视觉与轻量动效优化开发说明.md) | Design Token、页面美化、性能边界与主题注入约定 |
-| [Git 使用细则](docs/Git使用细则-团队开发版.md) | 分支、提交、PR、Review 与合并流程 |
-| [代码注释与 TODO 约定](docs/代码注释与TODO约定.md) | 注释原则、TODO 格式、领域标签与当前待办索引 |
-| [后端审阅复盘](docs/后端全面审阅问题与修复复盘.md) | 后端问题原因、后果与修复方案 |
-| [Knowledge/Retrieval 复盘](docs/Knowledge与Retrieval-Core问题与修复复盘.md) | 检索与事务问题复盘 |
-| [前端审阅复盘](docs/前端合并审阅问题与修复复盘.md) | 前端工程、契约和交互问题复盘 |
+| [文档总索引](docs/README.md) | 文档分类、阅读顺序和维护规则 |
+| [技术栈说明](docs/architecture/AI笔记软件技术栈说明-团队版-v2.3.md) | 目标架构、第二阶段技术边界与模块依赖 |
+| [第二阶段分工表](docs/architecture/第二阶段团队分工表.md) | 第二阶段人员职责、任务顺序、协作关系与验收项 |
+| [后端接口契约](docs/contracts/后端接口契约-开发版.md) | HTTP/SSE 接口、错误和当前实现状态 |
+| [第二阶段接口契约](docs/contracts/第二阶段接口契约-开发版.md) | 第二阶段公共 DTO、计划接口、SSE、错误码与联调顺序 |
+| [AI Core 与 Agent Core](docs/development/AI-Core与Agent-Core开发说明.md) | Provider、Agent、Tool、Permission 与 Extension Core |
+| [Git 使用细则](docs/guides/Git使用细则-团队开发版.md) | 分支、提交、PR、Review 与合并流程 |
+| [CI/CD 细则](docs/guides/CI-CD细则-团队开发版.md) | Gitea 流水线、质量门禁、产物、发布与回滚规则 |
+| [Agent Trace 复盘](docs/retrospectives/Agent-Core第二阶段问题与修复复盘.md) | Agent 持久化、SSE 恢复、事件契约与脱敏问题复盘 |
 
 ## 日常开发注意事项
 
@@ -153,6 +144,7 @@ pnpm test
 - API 默认监听 `127.0.0.1:8000`，前端默认监听 `127.0.0.1:5173`。
 - 后端附件目录默认是 `backend/data/attachments`，可通过 `APP_ATTACHMENTS_PATH` 覆盖；该目录由桌面 Host 管理。
 - 跨模块接口发生变化时，需要同步更新前后端类型和 `docs` 中的接口说明。
-- 当前已实现接口见 `docs/后端接口契约-开发版.md`，第二阶段规划接口见 `docs/第二阶段接口契约-开发版.md`；已实现能力以 `/openapi.json` 为准。
-- 前端页面、交互、状态管理和第一阶段验收要求见 `docs/前端页面需求说明-开发版.md`。
-- 分支、提交、Pull Request、Review 和冲突处理规范见 `docs/Git使用细则-团队开发版.md`。
+- 当前已实现接口见 `docs/contracts/后端接口契约-开发版.md`，第二阶段规划接口见 `docs/contracts/第二阶段接口契约-开发版.md`；已实现能力以 `/openapi.json` 为准。
+- 前端页面、交互、状态管理和第一阶段验收要求见 `docs/contracts/前端页面需求说明-开发版.md`。
+- 分支、提交、Pull Request、Review 和冲突处理规范见 `docs/guides/Git使用细则-团队开发版.md`。
+- CI 检查、产物、发布和回滚规范见 `docs/guides/CI-CD细则-团队开发版.md`。

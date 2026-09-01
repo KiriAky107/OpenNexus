@@ -1,12 +1,17 @@
 import { resolveApiUrl } from './apiClient'
 
-export type SseEventHandler = (event: string, data: Record<string, unknown>) => void
+export type SseEventHandler = (
+  event: string,
+  data: Record<string, unknown>,
+  eventId?: string,
+) => void
 
 export interface SseClientOptions {
   url: string
   method?: string
   body?: unknown
   token?: string
+  lastEventId?: string
   onEvent?: SseEventHandler
   onError?: (error: Error) => void
   onOpen?: () => void
@@ -26,7 +31,7 @@ export class SseClient {
   }
 
   async connect() {
-    const { url, method = 'POST', body, token, onEvent, onError, onOpen, onDone } = this.options
+    const { url, method = 'POST', body, token, lastEventId, onEvent, onError, onOpen, onDone } = this.options
 
     try {
       const headers: Record<string, string> = {
@@ -37,6 +42,9 @@ export class SseClient {
       }
       if (token) {
         headers['Authorization'] = `Bearer ${token}`
+      }
+      if (lastEventId !== undefined) {
+        headers['Last-Event-ID'] = lastEventId
       }
 
       const resp = await fetch(resolveApiUrl(url), {
@@ -57,17 +65,19 @@ export class SseClient {
       // 一个 UTF-8 字符或 SSE 行可能横跨多个网络分片，必须累积后再按空行派发。
       const decoder = new TextDecoder('utf-8')
       let eventName = 'message'
+      let eventId: string | undefined
       let dataLines: string[] = []
       let doneNotified = false
 
       const dispatchEvent = () => {
         if (!dataLines.length) {
           eventName = 'message'
+          eventId = undefined
           return
         }
         try {
           const data = JSON.parse(dataLines.join('\n')) as Record<string, unknown>
-          onEvent?.(eventName, data)
+          onEvent?.(eventName, data, eventId)
           if (!doneNotified && ['Done', 'RunCompleted', 'RunFailed', 'RunCancelled'].includes(eventName)) {
             doneNotified = true
             onDone?.()
@@ -76,6 +86,7 @@ export class SseClient {
           onError?.(error instanceof Error ? error : new Error('Malformed SSE data'))
         }
         eventName = 'message'
+        eventId = undefined
         dataLines = []
       }
 
@@ -87,6 +98,7 @@ export class SseClient {
         let fieldValue = separator === -1 ? '' : line.slice(separator + 1)
         if (fieldValue.startsWith(' ')) fieldValue = fieldValue.slice(1)
         if (field === 'event') eventName = fieldValue
+        if (field === 'id') eventId = fieldValue
         if (field === 'data') dataLines.push(fieldValue)
       }
 
@@ -118,7 +130,7 @@ export class SseClient {
     this.controller.abort()
   }
 
-  // TODO(streaming): Agent 事件持久化后，增加 Last-Event-ID 与指数退避重连。
+  // TODO(streaming): 桌面网络策略确定后，在 Store 层增加有上限的指数退避重连。
 
   isConnected() {
     return this.connected
