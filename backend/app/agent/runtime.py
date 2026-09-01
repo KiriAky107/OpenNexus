@@ -491,7 +491,13 @@ class AgentRuntime:
     async def _invoke_tool(self, record: RunRecord, call: ToolCall) -> ToolResult:
         try:
             return await asyncio.wait_for(
-                self.tools.execute(call, ToolExecutionContext(run_id=record.run.run_id)),
+                self.tools.execute(
+                    call,
+                    ToolExecutionContext(
+                        run_id=record.run.run_id,
+                        tool_call_id=call.tool_call_id,
+                    ),
+                ),
                 timeout=record.request.tool_timeout_seconds,
             )
         except TimeoutError:

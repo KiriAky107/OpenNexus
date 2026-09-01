@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -39,6 +40,7 @@ from app.contracts import (
     PageMeta,
     PermissionDecisionRequest,
     Plugin,
+    PluginHostStatus,
     PluginListResponse,
     PluginPermissionGrantRequest,
     ProviderConfig,
@@ -135,6 +137,15 @@ def configurable_provider_or_404(provider_id: str):
 def extension_call(operation):
     try:
         return operation()
+    except ExtensionError as exc:
+        raise ApiError(exc.status_code, exc.code, exc.message, exc.details) from exc
+
+
+async def extension_call_async(operation):
+    """进程启动/关闭可能等待 stdio Host，移出 FastAPI 事件循环。"""
+
+    try:
+        return await asyncio.to_thread(operation)
     except ExtensionError as exc:
         raise ApiError(exc.status_code, exc.code, exc.message, exc.details) from exc
 
@@ -492,7 +503,7 @@ async def install_plugin(request: ExtensionInstallRequest) -> Plugin:
     tags=["Plugins"],
 )
 async def enable_plugin(plugin_id: str) -> Plugin:
-    return extension_call(lambda: container.plugins.enable(plugin_id))
+    return await extension_call_async(lambda: container.plugins.enable(plugin_id))
 
 
 @router.post(
@@ -501,7 +512,7 @@ async def enable_plugin(plugin_id: str) -> Plugin:
     tags=["Plugins"],
 )
 async def disable_plugin(plugin_id: str) -> Plugin:
-    return extension_call(lambda: container.plugins.disable(plugin_id))
+    return await extension_call_async(lambda: container.plugins.disable(plugin_id))
 
 
 @router.put(
@@ -512,8 +523,34 @@ async def disable_plugin(plugin_id: str) -> Plugin:
 async def set_plugin_permissions(
     plugin_id: str, request: PluginPermissionGrantRequest
 ) -> Plugin:
-    return extension_call(
+    return await extension_call_async(
         lambda: container.plugins.set_permissions(plugin_id, request.permissions)
+    )
+
+
+@router.get(
+    "/plugins/{plugin_id}/host",
+    response_model=PluginHostStatus,
+    tags=["Plugins"],
+)
+async def get_plugin_host_status(plugin_id: str) -> PluginHostStatus:
+    return extension_call(lambda: container.plugins.get_host_status(plugin_id))
+
+
+@router.post(
+    "/plugins/{plugin_id}/host/restart",
+    response_model=OperationResponse,
+    status_code=202,
+    tags=["Plugins"],
+)
+async def restart_plugin_host(plugin_id: str) -> OperationResponse:
+    status = await extension_call_async(
+        lambda: container.plugins.restart_host(plugin_id)
+    )
+    return OperationResponse(
+        status="accepted",
+        resource_id=plugin_id,
+        message=f"Plugin Host status: {status.status.value}",
     )
 
 
@@ -525,7 +562,9 @@ async def set_plugin_permissions(
 async def uninstall_plugin(plugin_id: str) -> OperationResponse:
     plugin = extension_call(lambda: container.plugins.get(plugin_id))
     dependent_skills = container.skills.depending_on_tools(plugin.manifest.contributes.tools)
-    extension_call(lambda: container.plugins.uninstall(plugin_id, dependent_skills))
+    await extension_call_async(
+        lambda: container.plugins.uninstall(plugin_id, dependent_skills)
+    )
     return OperationResponse(status="completed", resource_id=plugin_id, message="uninstalled")
 
 

@@ -4,5 +4,13 @@ from app.extensions.runtime import (
     PluginRuntime,
     SkillRuntime,
 )
+from app.extensions.mcp import McpBridge, McpBridgeError
 
-__all__ = ["AgentConfiguration", "ExtensionError", "PluginRuntime", "SkillRuntime"]
+__all__ = [
+    "AgentConfiguration",
+    "ExtensionError",
+    "McpBridge",
+    "McpBridgeError",
+    "PluginRuntime",
+    "SkillRuntime",
+]
