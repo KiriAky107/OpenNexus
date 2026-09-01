@@ -355,6 +355,19 @@ def test_mcp_stdio_host_discovers_namespaced_tools_and_maps_results(
         assert definition.permission == "notes.read"
         assert result.success is True
         assert result.output == {"echo": "hello mcp"}
+        explicit_null = await mcp_container.tools.execute(
+            ToolCall(
+                tool_call_id="call_mcp_explicit_null",
+                name="mcp-fixture.echo",
+                arguments={"text": "null stays explicit", "suffix": None},
+            ),
+            ToolExecutionContext(run_id="run_mcp_fixture"),
+        )
+        assert explicit_null.success is True
+        assert explicit_null.output == {
+            "echo": "null stays explicit",
+            "suffix": None,
+        }
         assert environment.success is True
         assert environment.output == {
             "has_openai_key": False,
@@ -370,6 +383,15 @@ def test_mcp_stdio_host_discovers_namespaced_tools_and_maps_results(
         assert exc.value.code == "PLUGIN_HOST_UNAVAILABLE"
         assert mcp_container.plugins.get("mcp-fixture").status == "disabled"
         assert not mcp_container.tools.contains("mcp-fixture.echo")
+
+        mcp_container.plugins.uninstall("mcp-fixture")
+        reinstalled = mcp_container.plugins.install(MCP_FIXTURE)
+        fresh_status = mcp_container.plugins.get_host_status("mcp-fixture")
+        assert reinstalled.status == "permission_required"
+        assert fresh_status.status == "stopped"
+        assert fresh_status.started_at is None
+        assert fresh_status.protocol_version is None
+        assert fresh_status.server_name is None
 
     run(scenario())
 
