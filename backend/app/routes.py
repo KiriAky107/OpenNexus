@@ -11,6 +11,13 @@ from app.contracts import (
     AgentRunListResponse,
     AgentTraceResponse,
     ChatRequest,
+    BenchmarkDatasetListResponse,
+    BenchmarkKind,
+    BenchmarkReport,
+    BenchmarkRun,
+    BenchmarkRunListResponse,
+    BenchmarkStatus,
+    RAGRunRequest,
     CredentialStatus,
     CredentialWriteRequest,
     ExtensionInstallRequest,
@@ -59,8 +66,10 @@ from app.contracts import (
     WorkspaceSnapshot,
 )
 from app.agent import AgentCapacityError, AgentRunNotFoundError
+from app.benchmarks import datasets as benchmark_datasets
+from app.benchmarks import service as benchmark_service
 from app.container import container
-from app.errors import ApiError
+from app.errors import ApiError, not_implemented
 from app.extensions import ExtensionError
 from app.providers.registry import ProviderNotFoundError
 from app.providers.factory import UnsupportedProviderError
@@ -795,3 +804,131 @@ async def get_index_job(job_id: str) -> IndexJob:
     if job is None:
         raise ApiError(404, "RESOURCE_NOT_FOUND", "index job not found", {"job_id": job_id})
     return job
+
+
+# Benchmark
+@router.get(
+    "/benchmarks/datasets",
+    response_model=BenchmarkDatasetListResponse,
+    tags=["Benchmark"],
+)
+async def list_benchmark_datasets(
+    kind: BenchmarkKind = Query(default=BenchmarkKind.rag),
+) -> BenchmarkDatasetListResponse:
+    return BenchmarkDatasetListResponse(items=benchmark_datasets.list_datasets(kind))
+
+
+@router.post(
+    "/benchmarks/rag/runs",
+    response_model=BenchmarkRun,
+    status_code=202,
+    tags=["Benchmark"],
+)
+async def create_rag_benchmark(request: RAGRunRequest) -> BenchmarkRun:
+    return await benchmark_service.create_rag_run(request)
+
+
+@router.post(
+    "/benchmarks/agent/runs",
+    response_model=BenchmarkRun,
+    status_code=202,
+    tags=["Benchmark"],
+)
+async def create_agent_benchmark() -> BenchmarkRun:
+    # Agent Benchmark 基础设施在 RAG Benchmark 之后单独交付，先占位契约
+    not_implemented("Agent Benchmark")
+    raise AssertionError("unreachable")
+
+
+@router.get(
+    "/benchmarks/runs",
+    response_model=BenchmarkRunListResponse,
+    tags=["Benchmark"],
+)
+async def list_benchmark_runs(
+    kind: BenchmarkKind | None = Query(default=None),
+    status: BenchmarkStatus | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> BenchmarkRunListResponse:
+    items, total = benchmark_service.list_runs(
+        kind=kind, status=status, limit=limit, offset=offset
+    )
+    return BenchmarkRunListResponse(
+        items=items, page=PageMeta(total=total, limit=limit, offset=offset)
+    )
+
+
+@router.get(
+    "/benchmarks/runs/{run_id}",
+    response_model=BenchmarkRun,
+    tags=["Benchmark"],
+)
+async def get_benchmark_run(run_id: str) -> BenchmarkRun:
+    run = benchmark_service.get_run(run_id)
+    if run is None:
+        raise ApiError(
+            404, "BENCHMARK_RUN_NOT_FOUND", "benchmark run not found", {"run_id": run_id}
+        )
+    return run
+
+
+@router.post(
+    "/benchmarks/runs/{run_id}/cancel",
+    response_model=OperationResponse,
+    tags=["Benchmark"],
+)
+async def cancel_benchmark_run(run_id: str) -> OperationResponse:
+    run = benchmark_service.cancel_run(run_id)
+    if run is None:
+        raise ApiError(
+            404, "BENCHMARK_RUN_NOT_FOUND", "benchmark run not found", {"run_id": run_id}
+        )
+    return OperationResponse(
+        status="completed",
+        resource_id=run_id,
+        message=f"Benchmark run status: {run.status.value}",
+    )
+
+
+@router.get(
+    "/benchmarks/runs/{run_id}/events",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "BenchmarkEvent Server-Sent Events stream",
+            "content": {"text/event-stream": {}},
+        }
+    },
+    tags=["Benchmark"],
+)
+async def benchmark_events(
+    run_id: str,
+    after_sequence: int = Query(default=-1, ge=-1),
+) -> StreamingResponse:
+    if benchmark_service.get_run(run_id) is None:
+        raise ApiError(
+            404, "BENCHMARK_RUN_NOT_FOUND", "benchmark run not found", {"run_id": run_id}
+        )
+
+    async def stream() -> AsyncIterator[str]:
+        for event in benchmark_service.get_events(run_id):
+            if event.sequence <= after_sequence:
+                continue
+            yield as_sse(event.event.value, event.model_dump_json(), event_id=event.sequence)
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@router.get(
+    "/benchmarks/runs/{run_id}/report",
+    response_model=BenchmarkReport,
+    tags=["Benchmark"],
+)
+async def get_benchmark_report(run_id: str) -> BenchmarkReport:
+    report = benchmark_service.get_report(run_id)
+    if report is None:
+        raise ApiError(
+            404, "BENCHMARK_RUN_NOT_FOUND", "benchmark report not found", {"run_id": run_id}
+        )
+    return report
