@@ -417,6 +417,10 @@ class ExtensionInstallRequest(Contract):
 class PluginBackend(Contract):
     type: Literal["mcp", "internal_rpc", "none"] = "none"
     transport: Literal["stdio", "http", "none"] = "none"
+    command: str | None = None
+    args: list[str] = Field(default_factory=list)
+    startup_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    tool_timeout_seconds: int = Field(default=30, ge=1, le=600)
 
 
 class PluginContribution(Contract):
@@ -458,6 +462,28 @@ class Plugin(Contract):
 
 class PluginListResponse(Contract):
     items: list[Plugin] = Field(default_factory=list)
+
+
+class PluginHostState(str, Enum):
+    stopped = "stopped"
+    starting = "starting"
+    ready = "ready"
+    unhealthy = "unhealthy"
+    error = "error"
+
+
+class PluginHostStatus(Contract):
+    plugin_id: str
+    backend_type: Literal["mcp", "internal_rpc", "none"]
+    transport: Literal["stdio", "http", "none"]
+    status: PluginHostState
+    tools_count: int = 0
+    started_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    protocol_version: str | None = None
+    server_name: str | None = None
+    server_version: str | None = None
+    error: str | None = None
 
 
 class PluginPermissionGrantRequest(Contract):
