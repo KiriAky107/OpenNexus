@@ -256,10 +256,13 @@ class PluginRuntime:
         tools: ToolRegistry,
         host: DeclarativePluginHost | None = None,
         mcp_bridge: McpBridge | None = None,
+        *,
+        allow_unsandboxed_mcp: bool = False,
     ) -> None:
         self.registry = tools
         self.host = host or DeclarativePluginHost()
         self.mcp = mcp_bridge or McpBridge()
+        self.allow_unsandboxed_mcp = allow_unsandboxed_mcp
         self._records: dict[str, _PluginRecord] = {}
         self._lock = threading.RLock()
 
@@ -345,6 +348,16 @@ class PluginRuntime:
                 "Plugin permissions must be granted before it can be enabled.",
                 status_code=409,
                 details={"plugin_id": plugin_id, "permissions": missing_grants},
+            )
+        if (
+            record.plugin.manifest.backend.type == "mcp"
+            and not self.allow_unsandboxed_mcp
+        ):
+            raise ExtensionError(
+                "MCP_TRUST_APPROVAL_REQUIRED",
+                "Unsandboxed MCP Hosts are disabled outside development mode.",
+                status_code=403,
+                details={"plugin_id": plugin_id},
             )
         declared_tools = list(record.plugin.manifest.contributes.tools)
         conflicts = [name for name in declared_tools if self.registry.contains(name)]
@@ -665,27 +678,10 @@ def _arguments_model_from_schema(
 ) -> type[BaseModel]:
     if schema.get("type", "object") != "object":
         raise ExtensionError("PLUGIN_TOOL_SCHEMA_INVALID", "Tool parameters must be an object schema.")
-    properties = schema.get("properties", {})
-    required = set(schema.get("required", []))
-    fields: dict[str, tuple[Any, Any]] = {}
-    types = {
-        "string": str,
-        "number": float,
-        "integer": int,
-        "boolean": bool,
-        "array": list[Any],
-        "object": dict[str, Any],
-    }
-    for name, field_schema in properties.items():
-        schema_type = field_schema.get("type")
-        # JSON Schema 允许联合类型数组；复杂类型继续由 Draft Validator
-        # 精确校验，Pydantic 在这里只承担参数载体职责。
-        annotation = types.get(schema_type, Any) if isinstance(schema_type, str) else Any
-        fields[name] = (annotation, ... if name in required else None)
     model_name = "PluginArgs_" + re.sub(r"\W+", "_", tool_name)
-    # 完整 JSON Schema 已在 ToolRegistry 中先行校验。这里允许额外字段，避免
-    # Pydantic 再次拒绝 additionalProperties/patternProperties 接受的合法参数。
-    return create_model(model_name, __config__=ConfigDict(extra="allow"), **fields)
+    # 完整 JSON Schema 已在 ToolRegistry 中先行校验。参数载体不重复声明字段，
+    # 从而完整保留 model_dump、连字符键、联合类型和动态属性等合法 JSON 键值。
+    return create_model(model_name, __config__=ConfigDict(extra="allow"))
 
 
 def _validate_tool_schema(spec: DeclarativeToolSpec) -> None:
