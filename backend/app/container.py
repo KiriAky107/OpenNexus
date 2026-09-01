@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from app.agent import AgentRuntime, PermissionManager, PermissionPolicy, ToolRegistry
 from app.agent.builtin_tools import register_builtin_tools
 from app.contracts import ModelCapability, ProviderConfig, ProviderType
-from app.config import BACKEND_DIR
+from app.config import BACKEND_DIR, get_settings
 from app.extensions import PluginRuntime, SkillRuntime
 from app.providers import MockProvider, ProviderFactory, ProviderRegistry
 from app.providers.credentials import (
@@ -26,6 +26,7 @@ class ApplicationContainer:
 
 
 def build_container() -> ApplicationContainer:
+    settings = get_settings()
     credentials = EncryptedCredentialStore()
     provider_factory = ProviderFactory(
         ChainedCredentialResolver(credentials, EnvironmentCredentialResolver())
@@ -50,7 +51,12 @@ def build_container() -> ApplicationContainer:
     tools = ToolRegistry()
     register_builtin_tools(tools)
 
-    plugins = PluginRuntime(tools)
+    plugins = PluginRuntime(
+        tools,
+        # 当前 Python Host 尚无 OS 沙箱。生产构建必须保持关闭，直到
+        # Tauri/Rust Host 能签发绑定命令摘要的可信启动许可。
+        allow_unsandboxed_mcp=settings.environment == "development",
+    )
     plugins.install(BACKEND_DIR / "extensions" / "plugins" / "text-tools")
     plugins.enable("text-tools")
 

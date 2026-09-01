@@ -1,5 +1,5 @@
 import apiClient from './apiClient'
-import type { ApiPlugin, OperationResponse, Plugin, PluginContribution } from '@/contracts'
+import type { ApiPlugin, OperationResponse, Plugin, PluginContribution, PluginHostStatus } from '@/contracts'
 
 function toPlugin(plugin: ApiPlugin): Plugin {
   const { manifest } = plugin
@@ -52,6 +52,14 @@ export async function disablePlugin(pluginId: string): Promise<Plugin> {
 
 export async function grantPluginPermissions(pluginId: string, permissions: string[]): Promise<Plugin> {
   return toPlugin(await apiClient.put<ApiPlugin>(`/api/plugins/${pluginId}/permissions`, { permissions }))
+}
+
+export async function getPluginHostStatus(pluginId: string): Promise<PluginHostStatus> {
+  return apiClient.get(`/api/plugins/${pluginId}/host`)
+}
+
+export async function restartPluginHost(pluginId: string): Promise<OperationResponse> {
+  return apiClient.post(`/api/plugins/${pluginId}/host/restart`)
 }
 
 export async function uninstallPlugin(pluginId: string): Promise<OperationResponse> {
