@@ -13,6 +13,7 @@ from app.contracts import (
     PluginSettingType,
 )
 from app.extensions import ExtensionError, PluginRuntime
+from app.extensions.contributions import _secret_reference
 from app.extensions.runtime import DeclarativePluginHost
 
 TEXT_TOOLS = BACKEND_DIR / "extensions" / "plugins" / "text-tools"
@@ -260,24 +261,39 @@ def test_secret_roundtrip_never_enters_plain_settings_storage() -> None:
     assert "api_key" not in schema.values
     assert plaintext not in settings_path.read_text(encoding="utf-8")
     assert plaintext not in credentials_path.read_text(encoding="utf-8")
-    assert container.credentials.resolve("plugin.text-tools.api_key") == plaintext
+    stored_settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    reference = stored_settings["text-tools"]["secret_refs"]["api_key"]
+    assert reference.startswith("plugin.")
+    assert len(reference) == 71
+    assert "text-tools" not in reference and "api_key" not in reference
+    assert container.credentials.resolve(reference) == plaintext
 
     deleted = container.plugins.delete_setting_secret("text-tools", "api_key")
     assert deleted.configured is False
-    assert container.credentials.resolve("plugin.text-tools.api_key") is None
+    assert container.credentials.resolve(reference) is None
 
 
 def test_uninstall_removes_plugin_settings_and_secret_namespace() -> None:
     container = build_container()
     container.plugins.update_settings("text-tools", 1, {"result_limit": 12})
     container.plugins.put_setting_secret("text-tools", "api_key", "temporary")
+    settings_path = get_settings().data_dir / "plugins" / "settings.json"
+    reference = json.loads(settings_path.read_text(encoding="utf-8"))[
+        "text-tools"
+    ]["secret_refs"]["api_key"]
 
     container.plugins.uninstall("text-tools")
 
-    settings_path = get_settings().data_dir / "plugins" / "settings.json"
     stored = json.loads(settings_path.read_text(encoding="utf-8"))
     assert "text-tools" not in stored
-    assert container.credentials.resolve("plugin.text-tools.api_key") is None
+    assert container.credentials.resolve(reference) is None
+
+
+def test_plugin_secret_reference_has_fixed_credential_safe_length() -> None:
+    reference = _secret_reference("p" * 512, "k" * 128)
+
+    assert reference.startswith("plugin.")
+    assert len(reference) <= 128
 
 
 def test_invalid_command_and_settings_manifest_are_rejected(tmp_path: Path) -> None:
@@ -363,6 +379,42 @@ backend:
     assert exc.value.code == "EXTENSION_MANIFEST_INVALID"
 
 
+def test_external_command_schema_reference_is_rejected(tmp_path: Path) -> None:
+    package = tmp_path / "external-ref"
+    package.mkdir()
+    (package / "plugin.yaml").write_text(
+        """
+id: external-ref
+name: External Ref
+version: 1.0.0
+contributes:
+  commands: [external-ref.run]
+backend:
+  type: internal_rpc
+  transport: none
+""".strip(),
+        encoding="utf-8",
+    )
+    (package / "commands.yaml").write_text(
+        """
+commands:
+  - command_id: external-ref.run
+    title: External Ref
+    locations: [command_palette]
+    handler: echo
+    parameters:
+      $ref: file:///host/private-schema.json
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ExtensionError) as exc:
+        PluginRuntime(ToolRegistry()).install(package)
+
+    assert exc.value.code == "PLUGIN_COMMAND_INVALID"
+    assert "External JSON Schema reference" in exc.value.message
+
+
 def test_settings_missing_and_secret_field_errors_are_stable() -> None:
     container = build_container()
 
@@ -394,4 +446,10 @@ def test_corrupted_plugin_settings_namespace_returns_stable_error() -> None:
         container.plugins.put_setting_secret("text-tools", "api_key", "must-not-orphan")
 
     assert secret_exc.value.code == "PLUGIN_STORAGE_ERROR"
-    assert container.credentials.resolve("plugin.text-tools.api_key") is None
+    credentials_path = get_settings().data_dir / "credentials" / "credentials.json"
+    credential_ids = (
+        json.loads(credentials_path.read_text(encoding="utf-8")).keys()
+        if credentials_path.exists()
+        else []
+    )
+    assert not any(item.startswith("plugin.") for item in credential_ids)
