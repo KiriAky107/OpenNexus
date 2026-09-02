@@ -1,9 +1,10 @@
 id: mcp-fixture
 name: MCP Fixture
 version: 1.0.0
-description: 阶段 C 离线联调 Fixture，覆盖 MCP Tool 生命周期与错误边界。
+description: 阶段 C/D 离线联调 Fixture，覆盖 MCP Tool、Command 与错误边界。
 permissions:
   - notes.read
+  - secrets.use
 contributes:
   tools:
     - mcp-fixture.echo
@@ -12,6 +13,10 @@ contributes:
     - mcp-fixture.large
     - mcp-fixture.environment
     - mcp-fixture.exit
+  commands:
+    - mcp-fixture.notify
+  settings_sections:
+    - mcp-fixture.general
 backend:
   type: mcp
   transport: stdio

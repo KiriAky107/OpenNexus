@@ -11,6 +11,7 @@ from app.container import build_container
 from app.contracts import (
     AgentRunCreateRequest,
     AgentRunStatus,
+    PluginCommandContext,
     SkillStatus,
     ToolCall,
 )
@@ -33,7 +34,7 @@ def mcp_container():
     container = build_container()
     installed = container.plugins.install(MCP_FIXTURE)
     assert installed.status == "permission_required"
-    container.plugins.set_permissions("mcp-fixture", ["notes.read"])
+    container.plugins.set_permissions("mcp-fixture", ["notes.read", "secrets.use"])
     try:
         yield container
     finally:
@@ -349,7 +350,7 @@ def test_mcp_stdio_host_discovers_namespaced_tools_and_maps_results(
             ToolExecutionContext(run_id="run_mcp_fixture"),
         )
 
-        assert status.tools_count == 6
+        assert status.tools_count == 7
         assert status.protocol_version == "2025-11-25"
         assert status.server_name == "notesagent-mcp-fixture"
         assert definition.permission == "notes.read"
@@ -392,6 +393,46 @@ def test_mcp_stdio_host_discovers_namespaced_tools_and_maps_results(
         assert fresh_status.started_at is None
         assert fresh_status.protocol_version is None
         assert fresh_status.server_name is None
+
+    run(scenario())
+
+
+def test_mcp_command_target_receives_scoped_context_and_declared_secret(
+    mcp_container,
+) -> None:
+    async def scenario() -> None:
+        mcp_container.plugins.enable("mcp-fixture")
+
+        assert not mcp_container.tools.contains("mcp-fixture.command")
+        with pytest.raises(ExtensionError) as missing:
+            await mcp_container.plugins.execute_command(
+                "mcp-fixture.notify",
+                {},
+                PluginCommandContext(selection="来自选区"),
+            )
+        assert missing.value.code == "PLUGIN_SECRET_REQUIRED"
+
+        mcp_container.plugins.put_setting_secret(
+            "mcp-fixture", "api_key", "mcp-command-secret"
+        )
+        result = await mcp_container.plugins.execute_command(
+            "mcp-fixture.notify",
+            {},
+            PluginCommandContext(
+                note_id="must-not-enter-envelope",
+                selection="来自选区",
+            ),
+        )
+
+        assert result.effect.type == "notification"
+        assert result.effect.payload == {
+            "level": "success",
+            "message": "来自选区",
+            "secret_configured": True,
+        }
+        assert "mcp-command-secret" not in repr(
+            mcp_container.plugins.commands.audit_events()
+        )
 
     run(scenario())
 
@@ -531,7 +572,7 @@ def test_production_rejects_unsandboxed_mcp_host(monkeypatch) -> None:
     container = build_container()
     installed = container.plugins.install(MCP_FIXTURE)
     assert installed.status == "permission_required"
-    container.plugins.set_permissions("mcp-fixture", ["notes.read"])
+    container.plugins.set_permissions("mcp-fixture", ["notes.read", "secrets.use"])
     try:
         with pytest.raises(ExtensionError) as exc:
             container.plugins.enable("mcp-fixture")
@@ -565,7 +606,7 @@ def test_mcp_abnormal_exit_unregisters_tools_and_restart_recovers(mcp_container)
 
         restarted = mcp_container.plugins.restart_host("mcp-fixture")
         assert restarted.status == "ready"
-        assert restarted.tools_count == 6
+        assert restarted.tools_count == 7
         assert mcp_container.tools.contains("mcp-fixture.echo")
 
     run(scenario())

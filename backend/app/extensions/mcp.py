@@ -29,6 +29,10 @@ from app.contracts import (
     PluginHostStatus,
     ToolDefinition,
 )
+from app.schema_security import (
+    SchemaReferenceError,
+    reject_external_schema_references,
+)
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
 SUPPORTED_PROTOCOL_VERSIONS = {
@@ -676,11 +680,13 @@ class McpBridge:
                 f"MCP tool inputSchema must be an object schema: {remote_name}",
             )
         try:
+            reject_external_schema_references(schema)
             Draft202012Validator.check_schema(schema)
-        except SchemaError as exc:
+        except (SchemaReferenceError, SchemaError) as exc:
+            message = exc.message if isinstance(exc, SchemaError) else str(exc)
             raise McpBridgeError(
                 "MCP_TOOL_SCHEMA_INVALID",
-                f"Invalid MCP tool schema for {remote_name}: {exc.message}",
+                f"Invalid MCP tool schema for {remote_name}: {message}",
             ) from exc
         metadata = raw.get("_meta")
         permission = (

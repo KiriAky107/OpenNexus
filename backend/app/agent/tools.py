@@ -11,6 +11,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 
 from app.contracts import ToolCall, ToolDefinition, ToolResult
+from app.schema_security import reject_external_schema_references
 
 ToolExecutor = Callable[[BaseModel, "ToolExecutionContext"], Any | Awaitable[Any]]
 
@@ -54,6 +55,7 @@ class ToolRegistry:
         arguments_model: type[BaseModel],
         executor: ToolExecutor,
     ) -> None:
+        reject_external_schema_references(definition.parameters)
         with self._lock:
             if definition.name in self._tools:
                 raise ValueError(f"Tool already registered: {definition.name}")

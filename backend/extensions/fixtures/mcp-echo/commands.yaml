@@ -1,0 +1,20 @@
+commands:
+  - command_id: mcp-fixture.notify
+    title: MCP 通知
+    description: 通过隔离 MCP Host 返回宿主白名单通知 effect。
+    icon: bolt
+    locations:
+      - command_palette
+    when:
+      - editor.has_selection
+    context:
+      - selection
+    secrets:
+      - api_key
+    mcp_tool: mcp-fixture.command
+    parameters:
+      type: object
+      properties:
+        message:
+          type: string
+      additionalProperties: false

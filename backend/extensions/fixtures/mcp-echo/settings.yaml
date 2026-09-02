@@ -1,0 +1,7 @@
+section_id: mcp-fixture.general
+schema_version: 1
+fields:
+  - key: api_key
+    label: Fixture API Key
+    type: secret
+    required: true
