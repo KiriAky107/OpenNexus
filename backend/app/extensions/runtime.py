@@ -633,6 +633,7 @@ class PluginRuntime:
                                         "command_id": _spec.command_id,
                                         "arguments": arguments,
                                         "context": context,
+                                        "settings": settings,
                                         "secrets": secret_values,
                                     }
                                 },

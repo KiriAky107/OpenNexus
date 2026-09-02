@@ -415,6 +415,9 @@ def test_mcp_command_target_receives_scoped_context_and_declared_secret(
         mcp_container.plugins.put_setting_secret(
             "mcp-fixture", "api_key", "mcp-command-secret"
         )
+        mcp_container.plugins.update_settings(
+            "mcp-fixture", 1, {"message_prefix": "Fixture: "}
+        )
         result = await mcp_container.plugins.execute_command(
             "mcp-fixture.notify",
             {},
@@ -427,7 +430,7 @@ def test_mcp_command_target_receives_scoped_context_and_declared_secret(
         assert result.effect.type == "notification"
         assert result.effect.payload == {
             "level": "success",
-            "message": "来自选区",
+            "message": "Fixture: 来自选区",
             "secret_configured": True,
         }
         assert "mcp-command-secret" not in repr(
