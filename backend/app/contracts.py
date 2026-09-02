@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
@@ -484,6 +484,172 @@ class PluginHostStatus(Contract):
     server_name: str | None = None
     server_version: str | None = None
     error: str | None = None
+
+
+class PluginCommandLocation(str, Enum):
+    command_palette = "command_palette"
+    context_menu = "context_menu"
+    toolbar = "toolbar"
+
+
+class PluginCommand(Contract):
+    command_id: str
+    plugin_id: str
+    title: str
+    description: str = ""
+    icon: str | None = None
+    locations: list[PluginCommandLocation] = Field(default_factory=list)
+    when: list[str] = Field(default_factory=list)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class PluginCommandListResponse(Contract):
+    items: list[PluginCommand] = Field(default_factory=list)
+
+
+class PluginCommandContext(Contract):
+    vault_id: str | None = None
+    note_id: str | None = None
+    file_path: str | None = None
+    selection: str | None = None
+
+
+class PluginCommandExecuteRequest(Contract):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    context: PluginCommandContext = Field(default_factory=PluginCommandContext)
+
+
+class PluginNotificationEffectPayload(Contract):
+    level: Literal["info", "success", "warning", "error"] = "info"
+    message: str = Field(min_length=1, max_length=4096)
+
+
+class PluginNavigateEffectPayload(Contract):
+    route: Literal[
+        "vault-entry",
+        "workspace",
+        "search",
+        "chat",
+        "agent",
+        "tasks",
+        "skills",
+        "plugins",
+        "themes",
+        "settings",
+    ]
+
+
+class PluginRefreshEffectPayload(Contract):
+    scope: Literal["workspace", "commands", "settings", "plugins"]
+
+
+class PluginJobEffectPayload(Contract):
+    job_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+
+
+class PluginNoEffectPayload(Contract):
+    pass
+
+
+class PluginNoEffect(Contract):
+    type: Literal["none"] = "none"
+    payload: PluginNoEffectPayload = Field(default_factory=PluginNoEffectPayload)
+
+
+class PluginNotificationEffect(Contract):
+    type: Literal["notification"] = "notification"
+    payload: PluginNotificationEffectPayload
+
+
+class PluginNavigateEffect(Contract):
+    type: Literal["navigate"] = "navigate"
+    payload: PluginNavigateEffectPayload
+
+
+class PluginRefreshEffect(Contract):
+    type: Literal["refresh"] = "refresh"
+    payload: PluginRefreshEffectPayload
+
+
+class PluginJobEffect(Contract):
+    type: Literal["job"] = "job"
+    payload: PluginJobEffectPayload
+
+
+PluginCommandEffect = Annotated[
+    PluginNoEffect
+    | PluginNotificationEffect
+    | PluginNavigateEffect
+    | PluginRefreshEffect
+    | PluginJobEffect,
+    Field(discriminator="type"),
+]
+
+PLUGIN_COMMAND_EFFECT_TYPES = (
+    PluginNoEffect,
+    PluginNotificationEffect,
+    PluginNavigateEffect,
+    PluginRefreshEffect,
+    PluginJobEffect,
+)
+
+
+class PluginCommandResult(Contract):
+    command_id: str
+    status: Literal["completed"] = "completed"
+    effect: PluginCommandEffect = Field(default_factory=PluginNoEffect)
+
+
+class PluginSettingType(str, Enum):
+    string = "string"
+    number = "number"
+    boolean = "boolean"
+    select = "select"
+    secret = "secret"
+
+
+class PluginSettingField(Contract):
+    key: str
+    label: str
+    description: str = ""
+    type: PluginSettingType
+    required: bool = False
+    default: Any | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    options: list[str] = Field(default_factory=list)
+
+
+class PluginSecretState(Contract):
+    configured: bool = False
+
+
+class PluginSettingsSchema(Contract):
+    plugin_id: str
+    schema_version: int = Field(ge=1)
+    fields: list[PluginSettingField] = Field(default_factory=list)
+    values: dict[str, Any] = Field(default_factory=dict)
+    secrets: dict[str, PluginSecretState] = Field(default_factory=dict)
+
+
+class PluginSettingsUpdateRequest(Contract):
+    schema_version: int = Field(ge=1)
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+class PluginSecretWriteRequest(Contract):
+    secret: SecretStr
+
+
+class PluginSecretStatus(Contract):
+    plugin_id: str
+    key: str
+    configured: bool
 
 
 class PluginPermissionGrantRequest(Contract):

@@ -33,9 +33,17 @@ from app.contracts import (
     PageMeta,
     PermissionDecisionRequest,
     Plugin,
+    PluginCommandExecuteRequest,
+    PluginCommandListResponse,
+    PluginCommandLocation,
+    PluginCommandResult,
     PluginHostStatus,
     PluginListResponse,
     PluginPermissionGrantRequest,
+    PluginSecretStatus,
+    PluginSecretWriteRequest,
+    PluginSettingsSchema,
+    PluginSettingsUpdateRequest,
     ProviderConfig,
     ProviderCreateRequest,
     ProviderListResponse,
@@ -67,7 +75,10 @@ from app.extensions import ExtensionError
 from app.providers.registry import ProviderNotFoundError
 from app.providers.factory import UnsupportedProviderError
 from app.providers.base import ProviderError
-from app.providers.credentials import CredentialStoreError
+from app.providers.credentials import (
+    CredentialStoreError,
+    validate_provider_credential_id,
+)
 from app.retrieval.engine import engine
 from app.services import (
     index_service,
@@ -82,6 +93,13 @@ router = APIRouter(prefix="/api")
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def validate_public_credential_id(credential_id: str | None) -> None:
+    try:
+        validate_provider_credential_id(credential_id)
+    except CredentialStoreError as exc:
+        raise ApiError(422, "CREDENTIAL_NAMESPACE_RESERVED", str(exc)) from exc
 
 
 def as_sse(event: str, payload: str, *, event_id: int | None = None) -> str:
@@ -559,6 +577,86 @@ async def uninstall_plugin(plugin_id: str) -> OperationResponse:
     return OperationResponse(status="completed", resource_id=plugin_id, message="uninstalled")
 
 
+# Plugin Command / Settings Contributions
+@router.get(
+    "/plugin-contributions/commands",
+    response_model=PluginCommandListResponse,
+    tags=["Plugins"],
+)
+async def list_plugin_commands(
+    location: PluginCommandLocation | None = Query(default=None),
+) -> PluginCommandListResponse:
+    return PluginCommandListResponse(items=container.plugins.list_commands(location))
+
+
+@router.post(
+    "/plugin-contributions/commands/{command_id}/execute",
+    response_model=PluginCommandResult,
+    tags=["Plugins"],
+)
+async def execute_plugin_command(
+    command_id: str, request: PluginCommandExecuteRequest
+) -> PluginCommandResult:
+    try:
+        return await container.plugins.execute_command(
+            command_id, request.arguments, request.context
+        )
+    except ExtensionError as exc:
+        raise ApiError(exc.status_code, exc.code, exc.message, exc.details) from exc
+
+
+@router.get(
+    "/plugins/{plugin_id}/settings",
+    response_model=PluginSettingsSchema,
+    tags=["Plugins"],
+)
+async def get_plugin_settings(plugin_id: str) -> PluginSettingsSchema:
+    return extension_call(lambda: container.plugins.get_settings(plugin_id))
+
+
+@router.put(
+    "/plugins/{plugin_id}/settings",
+    response_model=PluginSettingsSchema,
+    tags=["Plugins"],
+)
+async def update_plugin_settings(
+    plugin_id: str, request: PluginSettingsUpdateRequest
+) -> PluginSettingsSchema:
+    return extension_call(
+        lambda: container.plugins.update_settings(
+            plugin_id, request.schema_version, request.values
+        )
+    )
+
+
+@router.put(
+    "/plugins/{plugin_id}/settings/{key}/secret",
+    response_model=PluginSecretStatus,
+    tags=["Plugins"],
+)
+async def put_plugin_setting_secret(
+    plugin_id: str, key: str, request: PluginSecretWriteRequest
+) -> PluginSecretStatus:
+    return extension_call(
+        lambda: container.plugins.put_setting_secret(
+            plugin_id, key, request.secret.get_secret_value()
+        )
+    )
+
+
+@router.delete(
+    "/plugins/{plugin_id}/settings/{key}/secret",
+    response_model=PluginSecretStatus,
+    tags=["Plugins"],
+)
+async def delete_plugin_setting_secret(
+    plugin_id: str, key: str
+) -> PluginSecretStatus:
+    return extension_call(
+        lambda: container.plugins.delete_setting_secret(plugin_id, key)
+    )
+
+
 # Providers
 @router.get(
     "/credentials/{credential_id}",
@@ -566,6 +664,7 @@ async def uninstall_plugin(plugin_id: str) -> OperationResponse:
     tags=["Providers"],
 )
 async def get_credential_status(credential_id: str) -> CredentialStatus:
+    validate_public_credential_id(credential_id)
     try:
         configured = container.credentials.has(credential_id)
     except CredentialStoreError as exc:
@@ -581,6 +680,7 @@ async def get_credential_status(credential_id: str) -> CredentialStatus:
 async def put_credential(
     credential_id: str, request: CredentialWriteRequest
 ) -> CredentialStatus:
+    validate_public_credential_id(credential_id)
     try:
         container.credentials.put(credential_id, request.api_key.get_secret_value())
     except CredentialStoreError as exc:
@@ -594,6 +694,7 @@ async def put_credential(
     tags=["Providers"],
 )
 async def delete_credential(credential_id: str) -> CredentialStatus:
+    validate_public_credential_id(credential_id)
     try:
         container.credentials.delete(credential_id)
     except CredentialStoreError as exc:
@@ -630,6 +731,7 @@ async def get_provider(provider_id: str) -> ProviderConfig:
     tags=["Providers"],
 )
 async def create_provider(request: ProviderCreateRequest) -> ProviderConfig:
+    validate_public_credential_id(request.credential_id)
     config = ProviderConfig(
         provider_id=f"provider_{uuid4().hex}",
         provider_type=request.provider_type,
@@ -673,6 +775,8 @@ async def update_provider(
             "name and enabled cannot be null when explicitly provided.",
         )
     updates = {name: getattr(request, name) for name in fields}
+    if "credential_id" in fields:
+        validate_public_credential_id(request.credential_id)
     config = ProviderConfig.model_validate(
         {**current.model_dump(mode="python"), **updates}
     )
@@ -732,6 +836,7 @@ async def list_provider_models(provider_id: str) -> ProviderModelsResponse:
 async def test_provider(request: ProviderTestRequest) -> ProviderTestResponse:
     registered = configurable_provider_or_404(request.provider_id)
     if request.credential_context_id:
+        validate_public_credential_id(request.credential_context_id)
         temporary_config = registered.config.model_copy(
             update={"credential_id": request.credential_context_id, "enabled": True}
         )
