@@ -53,6 +53,7 @@ def build_container() -> ApplicationContainer:
 
     plugins = PluginRuntime(
         tools,
+        credentials=credentials,
         # 当前 Python Host 尚无 OS 沙箱。生产构建必须保持关闭，直到
         # Tauri/Rust Host 能签发绑定命令摘要的可信启动许可。
         allow_unsandboxed_mcp=settings.environment == "development",

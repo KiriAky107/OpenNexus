@@ -374,6 +374,7 @@ dependencies = [
     { name = "httpx" },
     { name = "jsonschema" },
     { name = "pyyaml" },
+    { name = "referencing" },
     { name = "sqlite-vec" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -390,6 +391,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28,<1.0" },
     { name = "jsonschema", specifier = ">=4.25,<5.0" },
     { name = "pyyaml", specifier = ">=6.0,<7.0" },
+    { name = "referencing", specifier = ">=0.36,<1.0" },
     { name = "sqlite-vec", specifier = ">=0.1.9" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.35,<1.0" },
 ]
