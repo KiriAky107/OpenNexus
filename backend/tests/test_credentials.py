@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 import httpx
 import pytest
@@ -33,6 +34,33 @@ def test_encrypted_credential_store_round_trip_without_plaintext_on_disk() -> No
     assert store.has("deepseek") is True
     assert store.delete("deepseek") is True
     assert store.resolve("deepseek") is None
+
+
+def test_encrypted_credential_store_deletes_multiple_credentials_atomically() -> None:
+    store = EncryptedCredentialStore()
+    store.put("plugin.first", "first")
+    store.put("plugin.second", "second")
+    store.put("openai", "keep")
+
+    removed = store.delete_many(["plugin.first", "plugin.second"])
+
+    assert removed == {"plugin.first", "plugin.second"}
+    assert store.resolve("plugin.first") is None
+    assert store.resolve("plugin.second") is None
+    assert store.resolve("openai") == "keep"
+
+
+def test_credential_write_os_error_uses_stable_store_error(monkeypatch) -> None:
+    store = EncryptedCredentialStore()
+    store.put("existing", "value")
+
+    def fail_replace(_path: Path, _target: Path) -> Path:
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+
+    with pytest.raises(CredentialStoreError, match="cannot be written"):
+        store.put("new", "value")
 
 
 def test_credential_api_never_returns_secret() -> None:

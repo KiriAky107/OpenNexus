@@ -15,6 +15,7 @@ from app.contracts import (
 from app.extensions import ExtensionError, PluginRuntime
 from app.extensions.contributions import _secret_reference
 from app.extensions.runtime import DeclarativePluginHost
+from app.providers.credentials import CredentialStoreError
 
 TEXT_TOOLS = BACKEND_DIR / "extensions" / "plugins" / "text-tools"
 
@@ -294,6 +295,80 @@ def test_plugin_secret_reference_has_fixed_credential_safe_length() -> None:
 
     assert reference.startswith("plugin.")
     assert len(reference) <= 128
+
+
+def test_tampered_secret_reference_cannot_cross_credential_namespace() -> None:
+    container = build_container()
+    container.credentials.put("openai", "provider-private-secret")
+    settings_path = get_settings().data_dir / "plugins" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        json.dumps(
+            {
+                "text-tools": {
+                    "schema_version": 1,
+                    "values": {},
+                    "secret_refs": {"api_key": "openai"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ExtensionError) as read_error:
+        container.plugins.get_settings("text-tools")
+    with pytest.raises(ExtensionError) as uninstall_error:
+        container.plugins.uninstall("text-tools")
+
+    assert read_error.value.code == "PLUGIN_STORAGE_ERROR"
+    assert uninstall_error.value.code == "PLUGIN_STORAGE_ERROR"
+    assert container.credentials.resolve("openai") == "provider-private-secret"
+
+
+def test_secret_delete_restores_reference_when_credential_delete_fails(
+    monkeypatch,
+) -> None:
+    container = build_container()
+    container.plugins.put_setting_secret("text-tools", "api_key", "keep-me")
+    settings_path = get_settings().data_dir / "plugins" / "settings.json"
+    original = settings_path.read_text(encoding="utf-8")
+    reference = _secret_reference("text-tools", "api_key")
+
+    def fail_delete(_credential_id: str) -> bool:
+        raise CredentialStoreError("injected delete failure")
+
+    monkeypatch.setattr(container.credentials, "delete", fail_delete)
+
+    with pytest.raises(ExtensionError) as exc:
+        container.plugins.delete_setting_secret("text-tools", "api_key")
+
+    assert exc.value.code == "PLUGIN_SECRET_STORE_ERROR"
+    assert settings_path.read_text(encoding="utf-8") == original
+    assert container.credentials.resolve(reference) == "keep-me"
+
+
+def test_uninstall_restores_settings_when_atomic_secret_delete_fails(
+    monkeypatch,
+) -> None:
+    container = build_container()
+    container.plugins.update_settings("text-tools", 1, {"result_limit": 12})
+    container.plugins.put_setting_secret("text-tools", "api_key", "keep-me")
+    settings_path = get_settings().data_dir / "plugins" / "settings.json"
+    original = settings_path.read_text(encoding="utf-8")
+    reference = _secret_reference("text-tools", "api_key")
+
+    def fail_delete_many(_credential_ids: list[str]) -> set[str]:
+        raise CredentialStoreError("injected batch delete failure")
+
+    monkeypatch.setattr(container.credentials, "delete_many", fail_delete_many)
+
+    with pytest.raises(ExtensionError) as exc:
+        container.plugins.uninstall("text-tools")
+
+    assert exc.value.code == "PLUGIN_SECRET_STORE_ERROR"
+    assert settings_path.read_text(encoding="utf-8") == original
+    assert container.credentials.resolve(reference) == "keep-me"
+    assert container.plugins.get("text-tools").manifest.plugin_id == "text-tools"
 
 
 def test_invalid_command_and_settings_manifest_are_rejected(tmp_path: Path) -> None:
