@@ -680,8 +680,8 @@ class McpBridge:
                 f"MCP tool inputSchema must be an object schema: {remote_name}",
             )
         try:
-            reject_external_schema_references(schema)
             Draft202012Validator.check_schema(schema)
+            reject_external_schema_references(schema)
         except (SchemaReferenceError, SchemaError) as exc:
             message = exc.message if isinstance(exc, SchemaError) else str(exc)
             raise McpBridgeError(

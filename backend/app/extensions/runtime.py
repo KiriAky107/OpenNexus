@@ -1043,8 +1043,8 @@ def _arguments_model_from_schema(
 def _validate_tool_schema(spec: DeclarativeToolSpec) -> None:
     schema = spec.parameters or {"type": "object", "properties": {}}
     try:
-        reject_external_schema_references(schema)
         Draft202012Validator.check_schema(schema)
+        reject_external_schema_references(schema)
     except (SchemaReferenceError, SchemaError) as exc:
         message = exc.message if isinstance(exc, SchemaError) else str(exc)
         raise ExtensionError(

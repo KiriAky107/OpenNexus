@@ -55,6 +55,7 @@ class ToolRegistry:
         arguments_model: type[BaseModel],
         executor: ToolExecutor,
     ) -> None:
+        Draft202012Validator.check_schema(definition.parameters)
         reject_external_schema_references(definition.parameters)
         with self._lock:
             if definition.name in self._tools:
