@@ -326,6 +326,7 @@ class PluginSettingsStore:
             secret_refs = entry.get("secret_refs", {})
             if not isinstance(stored_values, dict) or not isinstance(secret_refs, dict):
                 raise self._storage_format_error(plugin_id)
+            validated_refs = self._validate_secret_refs(plugin_id, secret_refs)
             values = {
                 field.key: field.default
                 for field in definition.fields
@@ -349,7 +350,7 @@ class PluginSettingsStore:
             for field in definition.fields:
                 if field.type != PluginSettingType.secret:
                     continue
-                reference = secret_refs.get(field.key)
+                reference = validated_refs.get(field.key)
                 secrets[field.key] = PluginSecretState(
                     configured=isinstance(reference, str) and self._has_secret(reference)
                 )
@@ -457,6 +458,7 @@ class PluginSettingsStore:
             refs = entry.get("secret_refs", {})
             if not isinstance(refs, dict):
                 raise self._storage_format_error(plugin_id)
+            self._validate_secret_refs(plugin_id, refs)
             entry["secret_refs"] = refs
             try:
                 previous = self.credentials.resolve(reference)
@@ -494,16 +496,28 @@ class PluginSettingsStore:
             refs = entry.get("secret_refs", {})
             if not isinstance(refs, dict):
                 raise self._storage_format_error(plugin_id)
-            reference = refs.pop(key, None)
-            if reference:
-                try:
-                    self.credentials.delete(reference)
-                except CredentialStoreError as exc:
-                    raise ExtensionError(
-                        "PLUGIN_SECRET_STORE_ERROR", str(exc), status_code=500
-                    ) from exc
-            if plugin_id in data:
+            self._validate_secret_refs(plugin_id, refs)
+            reference = _secret_reference(plugin_id, key)
+            had_reference = refs.pop(key, None) is not None
+            if plugin_id in data and had_reference:
                 self._write(data)
+            try:
+                self.credentials.delete(reference)
+            except CredentialStoreError as exc:
+                if had_reference:
+                    refs[key] = reference
+                    try:
+                        self._write(data)
+                    except ExtensionError as rollback_exc:
+                        raise ExtensionError(
+                            "PLUGIN_STORAGE_ERROR",
+                            "Plugin Secret deletion failed and its reference could not be restored.",
+                            status_code=500,
+                            details={"plugin_id": plugin_id, "key": key},
+                        ) from rollback_exc
+                raise ExtensionError(
+                    "PLUGIN_SECRET_STORE_ERROR", str(exc), status_code=500
+                ) from exc
         return PluginSecretStatus(plugin_id=plugin_id, key=key, configured=False)
 
     def resolve_secret(
@@ -515,7 +529,7 @@ class PluginSettingsStore:
             refs = entry.get("secret_refs", {})
             if not isinstance(refs, dict):
                 raise self._storage_format_error(plugin_id)
-            reference = refs.get(key)
+            reference = self._validate_secret_refs(plugin_id, refs).get(key)
         try:
             return self.credentials.resolve(reference) if isinstance(reference, str) else None
         except CredentialStoreError as exc:
@@ -527,21 +541,48 @@ class PluginSettingsStore:
         with self._lock:
             data = self._read()
             entry = data.pop(plugin_id, None)
-            if isinstance(entry, dict):
+            references: list[str] = []
+            if entry is not None and not isinstance(entry, dict):
+                raise self._storage_format_error(plugin_id)
+            if entry is not None:
                 refs = entry.get("secret_refs", {})
-                if isinstance(refs, dict):
-                    for reference in refs.values():
-                        if isinstance(reference, str):
-                            try:
-                                self.credentials.delete(reference)
-                            except CredentialStoreError as exc:
-                                raise ExtensionError(
-                                    "PLUGIN_SECRET_STORE_ERROR",
-                                    str(exc),
-                                    status_code=500,
-                                ) from exc
+                if not isinstance(refs, dict):
+                    raise self._storage_format_error(plugin_id)
+                references = list(self._validate_secret_refs(plugin_id, refs).values())
             if entry is not None:
                 self._write(data)
+            try:
+                self.credentials.delete_many(references)
+            except CredentialStoreError as exc:
+                if entry is not None:
+                    data[plugin_id] = entry
+                    try:
+                        self._write(data)
+                    except ExtensionError as rollback_exc:
+                        raise ExtensionError(
+                            "PLUGIN_STORAGE_ERROR",
+                            "Plugin uninstall failed and its Settings namespace could not be restored.",
+                            status_code=500,
+                            details={"plugin_id": plugin_id},
+                        ) from rollback_exc
+                raise ExtensionError(
+                    "PLUGIN_SECRET_STORE_ERROR", str(exc), status_code=500
+                ) from exc
+
+    def _validate_secret_refs(
+        self, plugin_id: str, refs: dict[Any, Any]
+    ) -> dict[str, str]:
+        validated: dict[str, str] = {}
+        for key, reference in refs.items():
+            if (
+                not isinstance(key, str)
+                or not _SETTING_KEY.fullmatch(key)
+                or not isinstance(reference, str)
+                or reference != _secret_reference(plugin_id, key)
+            ):
+                raise self._storage_format_error(plugin_id)
+            validated[key] = reference
+        return validated
 
     def _has_secret(self, reference: str) -> bool:
         try:
@@ -599,15 +640,19 @@ class PluginSettingsStore:
 
     def _write(self, value: dict[str, dict[str, Any]]) -> None:
         path = self._path()
-        path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".tmp")
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
             temporary.write_text(
                 json.dumps(value, ensure_ascii=False, sort_keys=True),
                 encoding="utf-8",
             )
             temporary.replace(path)
         except OSError as exc:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
             raise ExtensionError(
                 "PLUGIN_STORAGE_ERROR",
                 "Plugin settings storage cannot be written.",

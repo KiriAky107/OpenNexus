@@ -23,7 +23,7 @@ uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 uv run pytest
 ```
 
-当前基线为 116 项测试通过。Provider API Key 可通过前端设置页写入，也可用 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY` 或 `AINOTE_CREDENTIAL_<ID>` 注入；不要把真实密钥写入仓库。`plugin.*` 是 Plugin Settings 的保留凭据命名空间，通用 Provider 凭据接口不能读写。
+当前基线为 121 项测试通过。Provider API Key 可通过前端设置页写入，也可用 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY` 或 `AINOTE_CREDENTIAL_<ID>` 注入；不要把真实密钥写入仓库。`plugin.*` 是 Plugin Settings 的保留凭据命名空间，通用 Provider 凭据接口不能读写。
 
 团队接口清单见 `../docs/contracts/后端接口契约-开发版.md`，机器可读契约以运行时的 `/openapi.json` 为准。
 

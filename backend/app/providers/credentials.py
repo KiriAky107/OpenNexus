@@ -119,17 +119,26 @@ class EncryptedCredentialStore:
 
     def _write_tokens(self, tokens: dict[str, str]) -> None:
         _, store_path = self._paths()
-        store_path.parent.mkdir(parents=True, exist_ok=True)
-        self._restrict(store_path.parent, 0o700)
         temporary = store_path.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps(tokens, ensure_ascii=True, sort_keys=True),
-            encoding="utf-8",
-        )
-        self._restrict(temporary, 0o600)
-        # 凭据表同样使用原子替换，确保并发读取只会看到完整 JSON。
-        temporary.replace(store_path)
-        self._restrict(store_path, 0o600)
+        try:
+            store_path.parent.mkdir(parents=True, exist_ok=True)
+            self._restrict(store_path.parent, 0o700)
+            temporary.write_text(
+                json.dumps(tokens, ensure_ascii=True, sort_keys=True),
+                encoding="utf-8",
+            )
+            self._restrict(temporary, 0o600)
+            # 凭据表同样使用原子替换，确保并发读取只会看到完整 JSON。
+            temporary.replace(store_path)
+            self._restrict(store_path, 0o600)
+        except OSError as exc:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise CredentialStoreError(
+                "Encrypted credential store cannot be written."
+            ) from exc
 
     def put(self, credential_id: str, secret: str) -> None:
         self._validate_id(credential_id)
@@ -165,6 +174,24 @@ class EncryptedCredentialStore:
             tokens = self._read_tokens()
             removed = tokens.pop(credential_id, None) is not None
             if removed:
+                self._write_tokens(tokens)
+            return removed
+
+    def delete_many(self, credential_ids: list[str]) -> set[str]:
+        """用一次原子替换删除多个凭据，避免插件卸载只删除部分 Secret。"""
+
+        for credential_id in credential_ids:
+            self._validate_id(credential_id)
+        with self._lock:
+            tokens = self._read_tokens()
+            removed = {
+                credential_id
+                for credential_id in credential_ids
+                if credential_id in tokens
+            }
+            if removed:
+                for credential_id in removed:
+                    del tokens[credential_id]
                 self._write_tokens(tokens)
             return removed
 
