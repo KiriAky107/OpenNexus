@@ -17,7 +17,10 @@ from app.contracts import (
 )
 from app.extensions import ExtensionError
 from app.extensions.mcp import McpStdioClient
-from app.extensions.runtime import _arguments_model_from_schema
+from app.extensions.runtime import (
+    _arguments_model_from_schema,
+    _validate_mcp_command_target_schema,
+)
 from app.services import note_service
 from app.config import BACKEND_DIR, get_settings
 
@@ -428,16 +431,129 @@ def test_mcp_command_target_receives_scoped_context_and_declared_secret(
         )
 
         assert result.effect.type == "notification"
-        assert result.effect.payload == {
+        assert result.effect.payload.model_dump() == {
             "level": "success",
             "message": "Fixture: 来自选区",
-            "secret_configured": True,
         }
         assert "mcp-command-secret" not in repr(
             mcp_container.plugins.commands.audit_events()
         )
 
     run(scenario())
+
+
+def test_mcp_command_target_rejects_incompatible_envelope_schema(tmp_path) -> None:
+    package = tmp_path / "mcp-bad-command"
+    shutil.copytree(MCP_FIXTURE, package)
+    for filename in ("plugin.yaml", "commands.yaml", "settings.yaml"):
+        path = package / filename
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "mcp-fixture", "mcp-bad-command"
+            ),
+            encoding="utf-8",
+        )
+    server_path = package / "server.py"
+    server_path.write_text(
+        server_path.read_text(encoding="utf-8").replace(
+            '{"_notesagent": {"type": "object"}}',
+            '{"unexpected": {"type": "string"}}',
+        ),
+        encoding="utf-8",
+    )
+    container = build_container()
+    container.plugins.install(package)
+    container.plugins.set_permissions(
+        "mcp-bad-command", ["notes.read", "secrets.use"]
+    )
+    try:
+        with pytest.raises(ExtensionError) as exc:
+            container.plugins.enable("mcp-bad-command")
+        assert exc.value.code == "PLUGIN_CONTRIBUTION_INVALID"
+        assert container.plugins.get("mcp-bad-command").status == "error"
+    finally:
+        container.plugins.shutdown()
+
+
+def test_mcp_command_target_enable_check_only_requires_protocol_marker() -> None:
+    # `not`/`oneOf` 等完整语义由实际调用前的官方 Validator 处理；启用检查
+    # 只确认不可被引用或组合隐藏的稳定宿主入口，避免维护不完整的求解器。
+    _validate_mcp_command_target_schema(
+        {
+            "type": "object",
+            "properties": {
+                "_notesagent": {
+                    "type": "object",
+                    "not": {"type": "object"},
+                }
+            },
+        },
+        "marker.run",
+    )
+
+    invalid_markers = [
+        {
+            "$defs": {"envelope": {"type": "object"}},
+            "properties": {"_notesagent": {"$ref": "#/$defs/envelope"}},
+        },
+        {
+            "allOf": [
+                {"properties": {"_notesagent": {"type": "object"}}},
+            ]
+        },
+    ]
+    for schema in invalid_markers:
+        with pytest.raises(ExtensionError) as exc:
+            _validate_mcp_command_target_schema(schema, "marker.run")
+        assert exc.value.code == "PLUGIN_CONTRIBUTION_INVALID"
+
+
+def test_mcp_command_validates_actual_envelope_before_call(tmp_path) -> None:
+    package = tmp_path / "mcp-runtime-schema"
+    shutil.copytree(MCP_FIXTURE, package)
+    for filename in ("plugin.yaml", "commands.yaml", "settings.yaml"):
+        path = package / filename
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "mcp-fixture", "mcp-runtime-schema"
+            ),
+            encoding="utf-8",
+        )
+    server_path = package / "server.py"
+    server_path.write_text(
+        server_path.read_text(encoding="utf-8").replace(
+            '{"_notesagent": {"type": "object"}}',
+            '{"_notesagent": {"type": "object", "properties": '
+            '{"arguments": {"type": "object", "maxProperties": 0}, '
+            '"context": {"type": "object", "properties": '
+            '{"selection": {"type": "string"}}, "required": ["selection"]}}, '
+            '"required": ["arguments", "context"]}}',
+        ),
+        encoding="utf-8",
+    )
+    container = build_container()
+    container.plugins.install(package)
+    container.plugins.set_permissions(
+        "mcp-runtime-schema", ["notes.read", "secrets.use"]
+    )
+    try:
+        # context.selection 是 Command 的 when/context 契约保证的真实字段；
+        # 启用期结构检查不得因没有伪造该业务值而拒绝目标 Schema。
+        container.plugins.enable("mcp-runtime-schema")
+        container.plugins.put_setting_secret(
+            "mcp-runtime-schema", "api_key", "configured"
+        )
+        with pytest.raises(ExtensionError) as exc:
+            run(
+                container.plugins.execute_command(
+                    "mcp-runtime-schema.notify",
+                    {"message": "must be rejected locally"},
+                    PluginCommandContext(selection="visible"),
+                )
+            )
+        assert exc.value.code == "PLUGIN_COMMAND_TARGET_SCHEMA_MISMATCH"
+    finally:
+        container.plugins.shutdown()
 
 
 def test_agent_calls_mcp_tool_through_registry_and_writes_trace(mcp_container) -> None:

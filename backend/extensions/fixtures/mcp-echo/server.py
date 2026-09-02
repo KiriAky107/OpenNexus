@@ -73,6 +73,15 @@ def call_tool(request_id: int, params: dict[str, Any]) -> None:
         context = envelope.get("context") or {}
         settings = envelope.get("settings") or {}
         secrets = envelope.get("secrets") or {}
+        if not isinstance(secrets.get("api_key"), str):
+            respond(
+                request_id,
+                {
+                    "content": [{"type": "text", "text": "declared secret missing"}],
+                    "isError": True,
+                },
+            )
+            return
         message = command_arguments.get("message") or context.get("selection") or ""
         message = f"{settings.get('message_prefix', '')}{message}"
         respond(
@@ -84,7 +93,6 @@ def call_tool(request_id: int, params: dict[str, Any]) -> None:
                     "payload": {
                         "level": "success",
                         "message": str(message),
-                        "secret_configured": isinstance(secrets.get("api_key"), str),
                     },
                 },
                 "isError": False,
