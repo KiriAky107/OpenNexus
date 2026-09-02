@@ -1,0 +1,296 @@
+import asyncio
+import json
+from pathlib import Path
+
+import pytest
+
+from app.agent import ToolRegistry
+from app.config import BACKEND_DIR, get_settings
+from app.container import build_container
+from app.contracts import (
+    PluginCommandContext,
+    PluginCommandEffect,
+    PluginSettingType,
+)
+from app.extensions import ExtensionError, PluginRuntime
+from app.extensions.runtime import DeclarativePluginHost
+
+TEXT_TOOLS = BACKEND_DIR / "extensions" / "plugins" / "text-tools"
+
+
+def run(coroutine):
+    return asyncio.run(coroutine)
+
+
+def test_command_list_filter_and_lifecycle() -> None:
+    container = build_container()
+
+    commands = container.plugins.list_commands()
+    palette = container.plugins.list_commands(location="command_palette")
+
+    assert [item.command_id for item in commands] == ["text-tools.uppercase-selection"]
+    assert palette[0].plugin_id == "text-tools"
+    assert palette[0].icon == "edit"
+    assert palette[0].when == ["editor.has_selection"]
+
+    container.plugins.disable("text-tools")
+    assert container.plugins.list_commands() == []
+    with pytest.raises(ExtensionError) as exc:
+        run(
+            container.plugins.execute_command(
+                "text-tools.uppercase-selection",
+                {},
+                PluginCommandContext(selection="hello"),
+            )
+        )
+    assert exc.value.code == "PLUGIN_COMMAND_NOT_FOUND"
+
+    container.plugins.enable("text-tools")
+    assert len(container.plugins.list_commands()) == 1
+
+
+def test_command_executes_with_scoped_context_and_settings() -> None:
+    container = build_container()
+    container.plugins.update_settings("text-tools", 1, {"result_limit": 4})
+
+    result = run(
+        container.plugins.execute_command(
+            "text-tools.uppercase-selection",
+            {},
+            PluginCommandContext(
+                vault_id="default",
+                note_id="note_private",
+                file_path="private.md",
+                selection="abcdef",
+            ),
+        )
+    )
+
+    assert result.status == "completed"
+    assert result.effect.type == "notification"
+    assert result.effect.payload == {"level": "success", "message": "ABCD"}
+
+
+def test_command_rejects_missing_context_and_invalid_arguments() -> None:
+    container = build_container()
+
+    with pytest.raises(ExtensionError) as context_error:
+        run(
+            container.plugins.execute_command(
+                "text-tools.uppercase-selection", {}, PluginCommandContext()
+            )
+        )
+    assert context_error.value.code == "PLUGIN_COMMAND_CONTEXT_INVALID"
+
+    with pytest.raises(ExtensionError) as argument_error:
+        run(
+            container.plugins.execute_command(
+                "text-tools.uppercase-selection",
+                {"unknown": True},
+                PluginCommandContext(selection="hello"),
+            )
+        )
+    assert argument_error.value.code == "PLUGIN_COMMAND_ARGUMENT_INVALID"
+
+    audit = container.plugins.commands.audit_events()
+    assert [event.error_code for event in audit[-2:]] == [
+        "PLUGIN_COMMAND_CONTEXT_INVALID",
+        "PLUGIN_COMMAND_ARGUMENT_INVALID",
+    ]
+    # 审计事件不得携带参数、正文选区或返回 effect。
+    assert "hello" not in repr(audit)
+
+
+def test_command_only_receives_declared_context() -> None:
+    class CapturingHost(DeclarativePluginHost):
+        def __init__(self) -> None:
+            self.context = None
+
+        async def execute_command(self, handler, arguments, context, settings):
+            self.context = context
+            return PluginCommandEffect(type="none")
+
+    host = CapturingHost()
+    runtime = PluginRuntime(ToolRegistry(), host=host)
+    runtime.install(TEXT_TOOLS)
+    runtime.enable("text-tools")
+
+    run(
+        runtime.execute_command(
+            "text-tools.uppercase-selection",
+            {},
+            PluginCommandContext(
+                vault_id="default", note_id="note_private", selection="visible"
+            ),
+        )
+    )
+
+    assert host.context == {"selection": "visible"}
+
+
+def test_settings_schema_contains_defaults_and_hides_secret() -> None:
+    container = build_container()
+
+    schema = container.plugins.get_settings("text-tools")
+    by_key = {field.key: field for field in schema.fields}
+
+    assert schema.schema_version == 1
+    assert schema.values == {
+        "result_limit": 100,
+        "label_prefix": "",
+        "output_style": "notification",
+        "enabled_hint": True,
+    }
+    assert "api_key" not in schema.values
+    assert schema.secrets["api_key"].configured is False
+    assert by_key["api_key"].type == PluginSettingType.secret
+
+
+def test_settings_update_validates_version_type_bounds_and_secret_boundary() -> None:
+    container = build_container()
+
+    updated = container.plugins.update_settings(
+        "text-tools", 1, {"result_limit": 20, "output_style": "compact"}
+    )
+    assert updated.values["result_limit"] == 20
+    assert updated.values["output_style"] == "compact"
+
+    cases = [
+        (2, {}, "PLUGIN_SETTINGS_VERSION_CONFLICT"),
+        (1, {"result_limit": 0}, "PLUGIN_SETTINGS_FIELD_INVALID"),
+        (1, {"enabled_hint": "yes"}, "PLUGIN_SETTINGS_FIELD_INVALID"),
+        (1, {"output_style": "unknown"}, "PLUGIN_SETTINGS_FIELD_INVALID"),
+        (1, {"api_key": "plaintext"}, "PLUGIN_SETTINGS_FIELD_INVALID"),
+        (1, {"unknown": True}, "PLUGIN_SETTINGS_FIELD_INVALID"),
+    ]
+    for version, values, code in cases:
+        with pytest.raises(ExtensionError) as exc:
+            container.plugins.update_settings("text-tools", version, values)
+        assert exc.value.code == code
+
+
+def test_secret_roundtrip_never_enters_plain_settings_storage() -> None:
+    container = build_container()
+    plaintext = "stage-d-secret-value"
+
+    status = container.plugins.put_setting_secret("text-tools", "api_key", plaintext)
+    schema = container.plugins.get_settings("text-tools")
+    settings_path = get_settings().data_dir / "plugins" / "settings.json"
+    credentials_path = get_settings().data_dir / "credentials" / "credentials.json"
+
+    assert status.configured is True
+    assert schema.secrets["api_key"].configured is True
+    assert "api_key" not in schema.values
+    assert plaintext not in settings_path.read_text(encoding="utf-8")
+    assert plaintext not in credentials_path.read_text(encoding="utf-8")
+    assert container.credentials.resolve("plugin.text-tools.api_key") == plaintext
+
+    deleted = container.plugins.delete_setting_secret("text-tools", "api_key")
+    assert deleted.configured is False
+    assert container.credentials.resolve("plugin.text-tools.api_key") is None
+
+
+def test_uninstall_removes_plugin_settings_and_secret_namespace() -> None:
+    container = build_container()
+    container.plugins.update_settings("text-tools", 1, {"result_limit": 12})
+    container.plugins.put_setting_secret("text-tools", "api_key", "temporary")
+
+    container.plugins.uninstall("text-tools")
+
+    settings_path = get_settings().data_dir / "plugins" / "settings.json"
+    stored = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert "text-tools" not in stored
+    assert container.credentials.resolve("plugin.text-tools.api_key") is None
+
+
+def test_invalid_command_and_settings_manifest_are_rejected(tmp_path: Path) -> None:
+    invalid_command = tmp_path / "invalid-command"
+    invalid_command.mkdir()
+    (invalid_command / "plugin.yaml").write_text(
+        """
+id: invalid-command
+name: Invalid Command
+version: 1.0.0
+contributes:
+  commands: [other.run]
+""".strip(),
+        encoding="utf-8",
+    )
+    (invalid_command / "commands.yaml").write_text(
+        """
+commands:
+  - command_id: other.run
+    title: Invalid
+    locations: [command_palette]
+    handler: echo
+""".strip(),
+        encoding="utf-8",
+    )
+
+    invalid_settings = tmp_path / "invalid-settings"
+    invalid_settings.mkdir()
+    (invalid_settings / "plugin.yaml").write_text(
+        """
+id: invalid-settings
+name: Invalid Settings
+version: 1.0.0
+contributes:
+  settings_sections: [invalid-settings.general]
+""".strip(),
+        encoding="utf-8",
+    )
+    (invalid_settings / "settings.yaml").write_text(
+        """
+section_id: invalid-settings.general
+schema_version: 1
+fields:
+  - key: token
+    label: Token
+    type: secret
+    default: leaked-default
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runtime = PluginRuntime(ToolRegistry())
+    with pytest.raises(ExtensionError) as command_error:
+        runtime.install(invalid_command)
+    assert command_error.value.code == "PLUGIN_COMMAND_INVALID"
+
+    with pytest.raises(ExtensionError) as settings_error:
+        runtime.install(invalid_settings)
+    assert settings_error.value.code == "PLUGIN_SETTINGS_SCHEMA_INVALID"
+
+
+def test_settings_missing_and_secret_field_errors_are_stable() -> None:
+    container = build_container()
+
+    with pytest.raises(ExtensionError) as missing:
+        container.plugins.get_settings("does-not-exist")
+    assert missing.value.code == "PLUGIN_NOT_FOUND"
+
+    with pytest.raises(ExtensionError) as field:
+        container.plugins.put_setting_secret("text-tools", "result_limit", "secret")
+    assert field.value.code == "PLUGIN_SECRET_FIELD_NOT_FOUND"
+
+    with pytest.raises(ExtensionError) as empty:
+        container.plugins.put_setting_secret("text-tools", "api_key", "")
+    assert empty.value.code == "PLUGIN_SECRET_VALUE_INVALID"
+
+
+def test_corrupted_plugin_settings_namespace_returns_stable_error() -> None:
+    container = build_container()
+    settings_path = get_settings().data_dir / "plugins" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text('{"text-tools": []}', encoding="utf-8")
+
+    with pytest.raises(ExtensionError) as exc:
+        container.plugins.get_settings("text-tools")
+
+    assert exc.value.code == "PLUGIN_STORAGE_ERROR"
+
+    with pytest.raises(ExtensionError) as secret_exc:
+        container.plugins.put_setting_secret("text-tools", "api_key", "must-not-orphan")
+
+    assert secret_exc.value.code == "PLUGIN_STORAGE_ERROR"
+    assert container.credentials.resolve("plugin.text-tools.api_key") is None

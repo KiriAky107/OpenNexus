@@ -33,9 +33,17 @@ from app.contracts import (
     PageMeta,
     PermissionDecisionRequest,
     Plugin,
+    PluginCommandExecuteRequest,
+    PluginCommandListResponse,
+    PluginCommandLocation,
+    PluginCommandResult,
     PluginHostStatus,
     PluginListResponse,
     PluginPermissionGrantRequest,
+    PluginSecretStatus,
+    PluginSecretWriteRequest,
+    PluginSettingsSchema,
+    PluginSettingsUpdateRequest,
     ProviderConfig,
     ProviderCreateRequest,
     ProviderListResponse,
@@ -557,6 +565,86 @@ async def uninstall_plugin(plugin_id: str) -> OperationResponse:
         lambda: container.plugins.uninstall(plugin_id, dependent_skills)
     )
     return OperationResponse(status="completed", resource_id=plugin_id, message="uninstalled")
+
+
+# Plugin Command / Settings Contributions
+@router.get(
+    "/plugin-contributions/commands",
+    response_model=PluginCommandListResponse,
+    tags=["Plugins"],
+)
+async def list_plugin_commands(
+    location: PluginCommandLocation | None = Query(default=None),
+) -> PluginCommandListResponse:
+    return PluginCommandListResponse(items=container.plugins.list_commands(location))
+
+
+@router.post(
+    "/plugin-contributions/commands/{command_id}/execute",
+    response_model=PluginCommandResult,
+    tags=["Plugins"],
+)
+async def execute_plugin_command(
+    command_id: str, request: PluginCommandExecuteRequest
+) -> PluginCommandResult:
+    try:
+        return await container.plugins.execute_command(
+            command_id, request.arguments, request.context
+        )
+    except ExtensionError as exc:
+        raise ApiError(exc.status_code, exc.code, exc.message, exc.details) from exc
+
+
+@router.get(
+    "/plugins/{plugin_id}/settings",
+    response_model=PluginSettingsSchema,
+    tags=["Plugins"],
+)
+async def get_plugin_settings(plugin_id: str) -> PluginSettingsSchema:
+    return extension_call(lambda: container.plugins.get_settings(plugin_id))
+
+
+@router.put(
+    "/plugins/{plugin_id}/settings",
+    response_model=PluginSettingsSchema,
+    tags=["Plugins"],
+)
+async def update_plugin_settings(
+    plugin_id: str, request: PluginSettingsUpdateRequest
+) -> PluginSettingsSchema:
+    return extension_call(
+        lambda: container.plugins.update_settings(
+            plugin_id, request.schema_version, request.values
+        )
+    )
+
+
+@router.put(
+    "/plugins/{plugin_id}/settings/{key}/secret",
+    response_model=PluginSecretStatus,
+    tags=["Plugins"],
+)
+async def put_plugin_setting_secret(
+    plugin_id: str, key: str, request: PluginSecretWriteRequest
+) -> PluginSecretStatus:
+    return extension_call(
+        lambda: container.plugins.put_setting_secret(
+            plugin_id, key, request.secret.get_secret_value()
+        )
+    )
+
+
+@router.delete(
+    "/plugins/{plugin_id}/settings/{key}/secret",
+    response_model=PluginSecretStatus,
+    tags=["Plugins"],
+)
+async def delete_plugin_setting_secret(
+    plugin_id: str, key: str
+) -> PluginSecretStatus:
+    return extension_call(
+        lambda: container.plugins.delete_setting_secret(plugin_id, key)
+    )
 
 
 # Providers

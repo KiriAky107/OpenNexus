@@ -486,6 +486,98 @@ class PluginHostStatus(Contract):
     error: str | None = None
 
 
+class PluginCommandLocation(str, Enum):
+    command_palette = "command_palette"
+    context_menu = "context_menu"
+    toolbar = "toolbar"
+
+
+class PluginCommand(Contract):
+    command_id: str
+    plugin_id: str
+    title: str
+    description: str = ""
+    icon: str | None = None
+    locations: list[PluginCommandLocation] = Field(default_factory=list)
+    when: list[str] = Field(default_factory=list)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class PluginCommandListResponse(Contract):
+    items: list[PluginCommand] = Field(default_factory=list)
+
+
+class PluginCommandContext(Contract):
+    vault_id: str | None = None
+    note_id: str | None = None
+    file_path: str | None = None
+    selection: str | None = None
+
+
+class PluginCommandExecuteRequest(Contract):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    context: PluginCommandContext = Field(default_factory=PluginCommandContext)
+
+
+class PluginCommandEffect(Contract):
+    type: Literal["none", "notification", "navigate", "refresh", "job"] = "none"
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class PluginCommandResult(Contract):
+    command_id: str
+    status: Literal["completed"] = "completed"
+    effect: PluginCommandEffect = Field(default_factory=PluginCommandEffect)
+
+
+class PluginSettingType(str, Enum):
+    string = "string"
+    number = "number"
+    boolean = "boolean"
+    select = "select"
+    secret = "secret"
+
+
+class PluginSettingField(Contract):
+    key: str
+    label: str
+    description: str = ""
+    type: PluginSettingType
+    required: bool = False
+    default: Any | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    options: list[str] = Field(default_factory=list)
+
+
+class PluginSecretState(Contract):
+    configured: bool = False
+
+
+class PluginSettingsSchema(Contract):
+    plugin_id: str
+    schema_version: int = Field(ge=1)
+    fields: list[PluginSettingField] = Field(default_factory=list)
+    values: dict[str, Any] = Field(default_factory=dict)
+    secrets: dict[str, PluginSecretState] = Field(default_factory=dict)
+
+
+class PluginSettingsUpdateRequest(Contract):
+    schema_version: int = Field(ge=1)
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+class PluginSecretWriteRequest(Contract):
+    secret: SecretStr
+
+
+class PluginSecretStatus(Contract):
+    plugin_id: str
+    key: str
+    configured: bool
+
+
 class PluginPermissionGrantRequest(Contract):
     permissions: list[str] = Field(default_factory=list)
 

@@ -16,8 +16,15 @@ from app.agent.permissions import KNOWN_PERMISSIONS
 from app.contracts import (
     ModelCapability,
     Plugin,
+    PluginCommand,
+    PluginCommandContext,
+    PluginCommandEffect,
+    PluginCommandLocation,
+    PluginCommandResult,
     PluginManifest,
     PluginHostStatus,
+    PluginSecretStatus,
+    PluginSettingsSchema,
     PluginStatus,
     RetrievalConfig,
     Skill,
@@ -25,25 +32,19 @@ from app.contracts import (
     SkillStatus,
     ToolDefinition,
 )
+from app.extensions.contributions import (
+    CommandRegistry,
+    PluginCommandSpec,
+    PluginSettingsDefinition,
+    PluginSettingsStore,
+    validate_command_spec,
+    validate_settings_definition,
+)
+from app.extensions.errors import ExtensionError
 from app.extensions.mcp import McpBridge, McpBridgeError, McpDiscoveredTool
+from app.providers.credentials import EncryptedCredentialStore
 
 _EXTENSION_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
-
-
-class ExtensionError(RuntimeError):
-    def __init__(
-        self,
-        code: str,
-        message: str,
-        *,
-        status_code: int = 422,
-        details: dict[str, Any] | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.status_code = status_code
-        self.details = details or {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,13 +239,42 @@ class DeclarativePluginHost:
             return {"text": str(values.get("text", "")).upper()}
         raise ExtensionError("PLUGIN_HANDLER_UNSUPPORTED", f"Unsupported handler: {handler}")
 
+    async def execute_command(
+        self,
+        handler: str,
+        arguments: dict[str, Any],
+        context: dict[str, Any],
+        settings: dict[str, Any],
+    ) -> PluginCommandEffect:
+        """执行宿主内置的白名单 Command handler，不导入 Plugin Python 代码。"""
+
+        if handler == "echo":
+            message = str(arguments.get("message", context.get("selection", "")))
+            return PluginCommandEffect(
+                type="notification",
+                payload={"level": "info", "message": message},
+            )
+        if handler == "uppercase_selection":
+            text = str(arguments.get("text", context.get("selection", "")))
+            limit = int(settings.get("result_limit", 100))
+            return PluginCommandEffect(
+                type="notification",
+                payload={"level": "success", "message": text[:limit].upper()},
+            )
+        raise ExtensionError(
+            "PLUGIN_HANDLER_UNSUPPORTED", f"Unsupported command handler: {handler}"
+        )
+
 
 @dataclass(slots=True)
 class _PluginRecord:
     plugin: Plugin
     tools: list[DeclarativeToolSpec]
+    commands: list[PluginCommandSpec]
+    settings_definition: PluginSettingsDefinition | None
     package_path: Path
     registered_tools: list[str]
+    registered_commands: list[str]
     mcp_remote_names: dict[str, str]
 
 
@@ -256,12 +286,15 @@ class PluginRuntime:
         tools: ToolRegistry,
         host: DeclarativePluginHost | None = None,
         mcp_bridge: McpBridge | None = None,
+        credentials: EncryptedCredentialStore | None = None,
         *,
         allow_unsandboxed_mcp: bool = False,
     ) -> None:
         self.registry = tools
         self.host = host or DeclarativePluginHost()
         self.mcp = mcp_bridge or McpBridge()
+        self.commands = CommandRegistry()
+        self.settings = PluginSettingsStore(credentials or EncryptedCredentialStore())
         self.allow_unsandboxed_mcp = allow_unsandboxed_mcp
         self._records: dict[str, _PluginRecord] = {}
         self._lock = threading.RLock()
@@ -287,6 +320,8 @@ class PluginRuntime:
 
         _validate_backend(manifest)
         specs = [] if manifest.backend.type == "mcp" else self._load_tools(root)
+        command_specs = self._load_commands(root)
+        settings_definition = self._load_settings(root)
         if manifest.backend.type != "mcp":
             declared = set(manifest.contributes.tools)
             actual = {spec.name for spec in specs}
@@ -305,6 +340,47 @@ class PluginRuntime:
                     f"Tool permission is not declared by Plugin: {spec.permission}",
                     details={"tool": spec.name, "permission": spec.permission},
                 )
+        declared_commands = set(manifest.contributes.commands)
+        actual_commands = {spec.command_id for spec in command_specs}
+        if (
+            declared_commands != actual_commands
+            or len(manifest.contributes.commands) != len(declared_commands)
+            or len(command_specs) != len(actual_commands)
+        ):
+            raise ExtensionError(
+                "PLUGIN_CONTRIBUTION_INVALID",
+                "plugin.yaml command contributions must exactly match commands.yaml",
+                details={
+                    "declared": sorted(declared_commands),
+                    "actual": sorted(actual_commands),
+                },
+            )
+        for spec in command_specs:
+            validate_command_spec(manifest.plugin_id, spec)
+            if spec.permission and spec.permission not in manifest.permissions:
+                raise ExtensionError(
+                    "PLUGIN_PERMISSION_UNDECLARED",
+                    f"Command permission is not declared by Plugin: {spec.permission}",
+                    details={"command": spec.command_id, "permission": spec.permission},
+                )
+        declared_sections = set(manifest.contributes.settings_sections)
+        actual_sections = (
+            {settings_definition.section_id} if settings_definition is not None else set()
+        )
+        if (
+            declared_sections != actual_sections
+            or len(manifest.contributes.settings_sections) != len(declared_sections)
+        ):
+            raise ExtensionError(
+                "PLUGIN_CONTRIBUTION_INVALID",
+                "plugin.yaml settings contributions must exactly match settings.yaml",
+                details={
+                    "declared": sorted(declared_sections),
+                    "actual": sorted(actual_sections),
+                },
+            )
+        if settings_definition is not None:
+            validate_settings_definition(manifest.plugin_id, settings_definition)
 
         record = _PluginRecord(
             plugin=Plugin(
@@ -316,8 +392,11 @@ class PluginRuntime:
                 ),
             ),
             tools=specs,
+            commands=command_specs,
+            settings_definition=settings_definition,
             package_path=root,
             registered_tools=[],
+            registered_commands=[],
             mcp_remote_names={},
         )
         self._records[manifest.plugin_id] = record
@@ -368,6 +447,16 @@ class PluginRuntime:
                 status_code=409,
                 details={"plugin_id": plugin_id, "tools": conflicts},
             )
+        command_conflicts = [
+            spec.command_id for spec in record.commands if self.commands.contains(spec.command_id)
+        ]
+        if command_conflicts:
+            raise ExtensionError(
+                "PLUGIN_COMMAND_CONFLICT",
+                "Plugin commands are already registered.",
+                status_code=409,
+                details={"plugin_id": plugin_id, "commands": command_conflicts},
+            )
         record.plugin.status = PluginStatus.starting
         try:
             if record.plugin.manifest.backend.type == "mcp":
@@ -405,11 +494,36 @@ class PluginRuntime:
                         executor,
                     )
                     record.registered_tools.append(spec.name)
+            for spec in record.commands:
+
+                async def command_executor(
+                    arguments: dict[str, Any],
+                    context: dict[str, Any],
+                    _spec: PluginCommandSpec = spec,
+                    _record: _PluginRecord = record,
+                ) -> PluginCommandEffect:
+                    settings = (
+                        self.settings.get(
+                            _record.plugin.manifest.plugin_id,
+                            _record.settings_definition,
+                        ).values
+                        if _record.settings_definition is not None
+                        else {}
+                    )
+                    return await self.host.execute_command(
+                        _spec.handler, arguments, context, settings
+                    )
+
+                self.commands.register(plugin_id, spec, command_executor)
+                record.registered_commands.append(spec.command_id)
         except Exception as exc:
             # 注册过程必须具备回滚语义，防止半启用插件污染全局工具表。
             for name in record.registered_tools:
                 self.registry.unregister(name)
             record.registered_tools.clear()
+            for command_id in record.registered_commands:
+                self.commands.unregister(command_id)
+            record.registered_commands.clear()
             record.mcp_remote_names.clear()
             self.mcp.stop(plugin_id)
             record.plugin.status = PluginStatus.error
@@ -468,6 +582,9 @@ class PluginRuntime:
         for name in record.registered_tools:
             self.registry.unregister(name)
         record.registered_tools.clear()
+        for command_id in record.registered_commands:
+            self.commands.unregister(command_id)
+        record.registered_commands.clear()
         record.mcp_remote_names.clear()
         if record.plugin.manifest.backend.type == "mcp":
             self.mcp.stop(plugin_id)
@@ -478,6 +595,43 @@ class PluginRuntime:
     def get_host_status(self, plugin_id: str) -> PluginHostStatus:
         record = self._record(plugin_id)
         return self.mcp.status(plugin_id, record.plugin.manifest.backend)
+
+    def list_commands(
+        self, location: PluginCommandLocation | None = None
+    ) -> list[PluginCommand]:
+        return self.commands.list(location)
+
+    async def execute_command(
+        self,
+        command_id: str,
+        arguments: dict[str, Any],
+        context: PluginCommandContext,
+    ) -> PluginCommandResult:
+        return await self.commands.execute(command_id, arguments, context)
+
+    def get_settings(self, plugin_id: str) -> PluginSettingsSchema:
+        record = self._record(plugin_id)
+        definition = self._settings_definition(record)
+        return self.settings.get(plugin_id, definition)
+
+    def update_settings(
+        self, plugin_id: str, schema_version: int, values: dict[str, Any]
+    ) -> PluginSettingsSchema:
+        record = self._record(plugin_id)
+        definition = self._settings_definition(record)
+        return self.settings.update(plugin_id, definition, schema_version, values)
+
+    def put_setting_secret(
+        self, plugin_id: str, key: str, secret: str
+    ) -> PluginSecretStatus:
+        record = self._record(plugin_id)
+        definition = self._settings_definition(record)
+        return self.settings.put_secret(plugin_id, definition, key, secret)
+
+    def delete_setting_secret(self, plugin_id: str, key: str) -> PluginSecretStatus:
+        record = self._record(plugin_id)
+        definition = self._settings_definition(record)
+        return self.settings.delete_secret(plugin_id, definition, key)
 
     def restart_host(self, plugin_id: str) -> PluginHostStatus:
         with self._lock:
@@ -506,6 +660,9 @@ class PluginRuntime:
         for name in record.registered_tools:
             self.registry.unregister(name)
         record.registered_tools.clear()
+        for command_id in record.registered_commands:
+            self.commands.unregister(command_id)
+        record.registered_commands.clear()
         record.mcp_remote_names.clear()
         self.mcp.stop(plugin_id)
         record.plugin.enabled = False
@@ -567,6 +724,9 @@ class PluginRuntime:
             for name in record.registered_tools:
                 self.registry.unregister(name)
             record.registered_tools.clear()
+            for command_id in record.registered_commands:
+                self.commands.unregister(command_id)
+            record.registered_commands.clear()
             record.mcp_remote_names.clear()
             record.plugin.enabled = False
             record.plugin.status = PluginStatus.error
@@ -594,6 +754,7 @@ class PluginRuntime:
             # stop 只结束本次进程并保留状态供故障诊断；真正卸载时必须连同
             # 历史状态一起遗忘，避免同 ID 重装继承旧协商信息。
             self.mcp.remove(plugin_id)
+        self.settings.remove_plugin(plugin_id)
         del self._records[plugin_id]
 
     def _record(self, plugin_id: str) -> _PluginRecord:
@@ -614,6 +775,46 @@ class PluginRuntime:
             return [DeclarativeToolSpec.model_validate(item) for item in raw.get("tools", [])]
         except ValidationError as exc:
             raise _manifest_error("plugin tool", exc) from exc
+
+    @staticmethod
+    def _load_commands(root: Path) -> list[PluginCommandSpec]:
+        path = root / "commands.yaml"
+        if not path.exists():
+            return []
+        raw = _read_yaml(path)
+        try:
+            return [
+                PluginCommandSpec.model_validate(item)
+                for item in raw.get("commands", [])
+            ]
+        except ValidationError as exc:
+            raise _manifest_error("plugin command", exc) from exc
+
+    @staticmethod
+    def _load_settings(root: Path) -> PluginSettingsDefinition | None:
+        path = root / "settings.yaml"
+        if not path.exists():
+            return None
+        raw = _read_yaml(path)
+        try:
+            return PluginSettingsDefinition.model_validate(raw)
+        except ValidationError as exc:
+            raise ExtensionError(
+                "PLUGIN_SETTINGS_SCHEMA_INVALID",
+                "Invalid Plugin settings schema.",
+                details={"errors": exc.errors(include_url=False)},
+            ) from exc
+
+    @staticmethod
+    def _settings_definition(record: _PluginRecord) -> PluginSettingsDefinition:
+        if record.settings_definition is None:
+            raise ExtensionError(
+                "PLUGIN_SETTINGS_NOT_FOUND",
+                "Plugin does not contribute a Settings section.",
+                status_code=404,
+                details={"plugin_id": record.plugin.manifest.plugin_id},
+            )
+        return record.settings_definition
 
 
 def _package_dir(package_path: str | Path) -> Path:

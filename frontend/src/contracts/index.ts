@@ -271,6 +271,66 @@ export interface PluginHostStatus {
   error?: string | null
 }
 
+export type PluginCommandLocation = 'command_palette' | 'context_menu' | 'toolbar'
+
+export interface PluginCommand {
+  command_id: string
+  plugin_id: string
+  title: string
+  description: string
+  icon?: string | null
+  locations: PluginCommandLocation[]
+  when: string[]
+  parameters: Record<string, unknown>
+  enabled: boolean
+}
+
+export interface PluginCommandContext {
+  vault_id?: string | null
+  note_id?: string | null
+  file_path?: string | null
+  selection?: string | null
+}
+
+export interface PluginCommandEffect {
+  type: 'none' | 'notification' | 'navigate' | 'refresh' | 'job'
+  payload: Record<string, unknown>
+}
+
+export interface PluginCommandResult {
+  command_id: string
+  status: 'completed'
+  effect: PluginCommandEffect
+}
+
+export type PluginSettingType = 'string' | 'number' | 'boolean' | 'select' | 'secret'
+
+export interface PluginSettingField {
+  key: string
+  label: string
+  description: string
+  type: PluginSettingType
+  required: boolean
+  default?: unknown
+  minimum?: number | null
+  maximum?: number | null
+  options: string[]
+}
+
+export interface PluginSettingsSchema {
+  plugin_id: string
+  schema_version: number
+  fields: PluginSettingField[]
+  values: Record<string, unknown>
+  secrets: Record<string, { configured: boolean }>
+}
+
+export interface PluginSecretStatus {
+  plugin_id: string
+  key: string
+  configured: boolean
+}
+
 export interface PluginContribution {
   type: 'tool' | 'command' | 'importer' | 'exporter' | 'sidebar_panel' | 'settings_section'
   id: string
