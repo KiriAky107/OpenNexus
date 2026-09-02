@@ -682,6 +682,13 @@ def validate_settings_definition(
             field.minimum is not None or field.maximum is not None
         ):
             raise _settings_schema_error(plugin_id, f"Only number settings accept bounds: {field.key}")
+        if any(
+            bound is not None and not math.isfinite(bound)
+            for bound in (field.minimum, field.maximum)
+        ):
+            raise _settings_schema_error(
+                plugin_id, f"Number setting bounds must be finite: {field.key}"
+            )
         if field.minimum is not None and field.maximum is not None and field.minimum > field.maximum:
             raise _settings_schema_error(plugin_id, f"Setting bounds are reversed: {field.key}")
         if field.type == PluginSettingType.secret and field.default is not None:
@@ -746,8 +753,8 @@ def validate_command_spec(plugin_id: str, spec: PluginCommandSpec) -> None:
     if spec.parameters.get("type", "object") != "object":
         raise ExtensionError("PLUGIN_COMMAND_INVALID", "Command parameters must be an object schema.")
     try:
-        reject_external_schema_references(spec.parameters)
         Draft202012Validator.check_schema(spec.parameters)
+        reject_external_schema_references(spec.parameters)
     except (SchemaReferenceError, SchemaError) as exc:
         message = exc.message if isinstance(exc, SchemaError) else str(exc)
         raise ExtensionError(

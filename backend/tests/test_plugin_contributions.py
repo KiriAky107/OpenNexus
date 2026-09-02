@@ -430,6 +430,43 @@ fields:
     assert settings_error.value.code == "PLUGIN_SETTINGS_SCHEMA_INVALID"
 
 
+@pytest.mark.parametrize("bound", [".nan", ".inf", "-.inf"])
+def test_non_finite_setting_bounds_are_rejected(tmp_path: Path, bound: str) -> None:
+    package = tmp_path / f"invalid-bound-{bound.replace('.', 'dot').replace('-', 'neg')}"
+    package.mkdir()
+    (package / "plugin.yaml").write_text(
+        """
+id: invalid-bound
+name: Invalid Bound
+version: 1.0.0
+contributes:
+  settings_sections: [invalid-bound.general]
+backend:
+  type: none
+  transport: none
+""".strip(),
+        encoding="utf-8",
+    )
+    (package / "settings.yaml").write_text(
+        f"""
+section_id: invalid-bound.general
+schema_version: 1
+fields:
+  - key: limit
+    label: Limit
+    type: number
+    minimum: {bound}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ExtensionError) as exc:
+        PluginRuntime(ToolRegistry()).install(package)
+
+    assert exc.value.code == "PLUGIN_SETTINGS_SCHEMA_INVALID"
+    assert "must be finite" in exc.value.message
+
+
 def test_null_command_list_returns_stable_manifest_error(tmp_path: Path) -> None:
     package = tmp_path / "null-commands"
     package.mkdir()

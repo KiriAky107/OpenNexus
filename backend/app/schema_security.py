@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import urljoin
+
+from referencing import Registry
+from referencing.exceptions import Unresolvable
+from referencing.jsonschema import DRAFT202012
+
+_SCHEMA_BASE_URI = "https://notesagent.invalid/local-schema"
 
 
 class SchemaReferenceError(ValueError):
@@ -24,47 +30,31 @@ class UnresolvableLocalSchemaReferenceError(SchemaReferenceError):
 
 
 def reject_external_schema_references(schema: Any) -> None:
-    """只允许可解析的文档内 Fragment，禁止文件和网络检索。"""
+    """只允许可解析的文档内 Fragment，并按 JSON Schema Resource 作用域解析。"""
 
-    pending = [schema]
-    local_references: list[str] = []
-    anchors: set[str] = set()
-    while pending:
-        value = pending.pop()
-        if isinstance(value, dict):
-            for key, child in value.items():
-                if key in {"$ref", "$dynamicRef"}:
-                    if not isinstance(child, str) or not child.startswith("#"):
-                        raise ExternalSchemaReferenceError(key, child)
-                    local_references.append(child)
-                elif key in {"$anchor", "$dynamicAnchor"} and isinstance(child, str):
-                    anchors.add(child)
-                pending.append(child)
-        elif isinstance(value, list):
-            pending.extend(value)
-
-    for reference in local_references:
-        if not _local_reference_exists(schema, reference, anchors):
-            raise UnresolvableLocalSchemaReferenceError(reference)
+    root = DRAFT202012.create_resource(schema)
+    root_uri = urljoin(_SCHEMA_BASE_URI, root.id() or "")
+    registry = Registry().with_resource(_SCHEMA_BASE_URI, root).crawl()
+    resolver = registry.resolver(root_uri)
+    _validate_resource_references(root, resolver)
 
 
-def _local_reference_exists(schema: Any, reference: str, anchors: set[str]) -> bool:
-    fragment = unquote(reference[1:])
-    if not fragment:
-        return True
-    if not fragment.startswith("/"):
-        return fragment in anchors
+def _validate_resource_references(resource, resolver: Any) -> None:
+    contents = resource.contents
+    if isinstance(contents, dict):
+        for keyword in ("$ref", "$dynamicRef"):
+            if keyword not in contents:
+                continue
+            reference = contents[keyword]
+            if not isinstance(reference, str) or not reference.startswith("#"):
+                raise ExternalSchemaReferenceError(keyword, reference)
+            try:
+                resolver.lookup(reference)
+            except Unresolvable as exc:
+                raise UnresolvableLocalSchemaReferenceError(reference) from exc
 
-    current = schema
-    for encoded_segment in fragment[1:].split("/"):
-        segment = encoded_segment.replace("~1", "/").replace("~0", "~")
-        if isinstance(current, dict) and segment in current:
-            current = current[segment]
-        elif isinstance(current, list) and segment.isdecimal():
-            index = int(segment)
-            if index >= len(current):
-                return False
-            current = current[index]
-        else:
-            return False
-    return True
+    for subresource in resource.subresources():
+        _validate_resource_references(
+            subresource,
+            resolver.in_subresource(subresource),
+        )
