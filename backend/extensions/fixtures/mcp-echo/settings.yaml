@@ -1,6 +1,10 @@
 section_id: mcp-fixture.general
 schema_version: 1
 fields:
+  - key: message_prefix
+    label: Message Prefix
+    type: string
+    default: ""
   - key: api_key
     label: Fixture API Key
     type: secret

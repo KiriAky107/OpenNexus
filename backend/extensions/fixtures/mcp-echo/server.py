@@ -71,8 +71,10 @@ def call_tool(request_id: int, params: dict[str, Any]) -> None:
         envelope = arguments.get("_notesagent") or {}
         command_arguments = envelope.get("arguments") or {}
         context = envelope.get("context") or {}
+        settings = envelope.get("settings") or {}
         secrets = envelope.get("secrets") or {}
         message = command_arguments.get("message") or context.get("selection") or ""
+        message = f"{settings.get('message_prefix', '')}{message}"
         respond(
             request_id,
             {
