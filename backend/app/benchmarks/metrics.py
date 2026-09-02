@@ -13,11 +13,14 @@ def hit_at_k(retrieved: list[str], expected: set[str], k: int) -> bool:
 
 
 def recall_at_k(retrieved: list[str], expected: set[str], k: int) -> float:
-    """前 k 个结果召回的期望 id 占比；期望为空时视为 0。"""
+    """前 k 个结果召回的期望 id 占比；期望为空时视为 0。
+
+    结果先去重：检索结果是 Block 级，同一 Note 可能经多个 Block 重复出现，
+    直接逐项计数会把同一 Note 算多次、导致 Recall 超过 1。
+    """
     if not expected:
         return 0.0
-    hits = sum(1 for item in retrieved[:k] if item in expected)
-    return hits / len(expected)
+    return len(set(retrieved[:k]) & expected) / len(expected)
 
 
 def reciprocal_rank(retrieved: list[str], expected: set[str]) -> float:

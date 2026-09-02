@@ -84,7 +84,7 @@ class RetrievalEngine:
         elif request.mode == SearchMode.vector:
             candidate_scores = vec_scores
         else:  # hybrid：RRF 融合
-            candidate_scores = rrf_fuse([fts_ranked, vec_ranked])
+            candidate_scores = rrf_fuse([fts_ranked, vec_ranked], k=request.rrf_k)
 
         if not candidate_scores:
             return self._empty(request)
@@ -97,14 +97,23 @@ class RetrievalEngine:
         if not filtered:
             return self._empty(request)
 
-        # 4. 排序 / 精排
+        # 4. 排序 / 精排：hybrid 先按融合分预排序，再对前 rerank_candidates 个候选做精排，
+        #    剩余候选按融合分排在精排结果之后；rerank=False 时跳过精排直接按融合分排序。
         if request.mode == SearchMode.hybrid:
-            candidates = [
-                RankedCandidate(block_id=h.block_id, score=candidate_scores[h.block_id], text=h.content)
-                for h in filtered
-            ]
-            ranked = await self.reranker.rerank(request.query, candidates)
-            ordered = [(c.block_id, c.score) for c in ranked]
+            pre_sorted = sorted(filtered, key=lambda h: -candidate_scores[h.block_id])
+            if request.rerank:
+                limit = request.rerank_candidates
+                pool = pre_sorted if limit is None else pre_sorted[:limit]
+                rest = [] if limit is None else pre_sorted[limit:]
+                candidates = [
+                    RankedCandidate(block_id=h.block_id, score=candidate_scores[h.block_id], text=h.content)
+                    for h in pool
+                ]
+                ranked = await self.reranker.rerank(request.query, candidates)
+                ordered = [(c.block_id, c.score) for c in ranked]
+                ordered += [(h.block_id, candidate_scores[h.block_id]) for h in rest]
+            else:
+                ordered = [(h.block_id, candidate_scores[h.block_id]) for h in pre_sorted]
         else:
             ordered = sorted(
                 ((h.block_id, candidate_scores[h.block_id]) for h in filtered),
@@ -112,6 +121,8 @@ class RetrievalEngine:
             )
 
         ordered = normalize_scores(ordered)
+        # score_threshold：归一化后过滤低分结果（默认 0 不过滤）
+        ordered = [(bid, score) for bid, score in ordered if score >= request.score_threshold]
 
         # 5. 分页：total = 过滤后候选集大小。fts 已取全量（≤FTS_FETCH_LIMIT）故为真实命中数；
         #    vector/hybrid 为 KNN 候选集，无全局 total。
@@ -154,6 +165,7 @@ class RetrievalEngine:
         ordered = normalize_scores(
             [(hit.block_id, -hit.bm25) for hit in fts_hits if hit.block_id in hits]
         )
+        ordered = [(bid, score) for bid, score in ordered if score >= request.score_threshold]
         items = [self._build_result(hits[block_id], request, score) for block_id, score in ordered]
         return SearchResponse(
             query=request.query,

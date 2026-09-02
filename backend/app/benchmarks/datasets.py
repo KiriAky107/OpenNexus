@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from app.config import get_settings
 from app.contracts import (
@@ -32,6 +32,20 @@ class RAGDataset:
     description: str
     cases: list[RAGDatasetCase] = field(default_factory=list)
     content_hash: str = ""
+
+
+class _DatasetMeta(BaseModel):
+    """Dataset 元数据的最小校验模型。
+
+    list_datasets 用它逐文件校验元信息字段结构，把「合法 JSON 但字段类型错误」
+    （如 cases: 42）这类损坏文件隔离掉，而不是让 len() 抛 TypeError 拖垮整个列表。
+    """
+
+    dataset_id: str = Field(min_length=1)
+    kind: str = ""
+    version: str = ""
+    description: str = ""
+    cases: list = Field(default_factory=list)
 
 
 def _datasets_dir() -> Path:
@@ -109,6 +123,14 @@ def _dataset_from_raw(raw: dict, raw_bytes: bytes, kind: BenchmarkKind) -> RAGDa
                 f"Dataset case '{parsed.case_id}' must declare expected_note_ids or expected_block_ids.",
                 {"dataset_id": dataset_id, "case_id": parsed.case_id},
             )
+        # citation_required=true 时必须声明 expected_block_ids，否则无法计算 Citation Hit Rate
+        if parsed.citation_required and not parsed.expected_block_ids:
+            raise ApiError(
+                422,
+                "BENCHMARK_DATASET_INVALID",
+                f"Dataset case '{parsed.case_id}' requires expected_block_ids when citation_required is true.",
+                {"dataset_id": dataset_id, "case_id": parsed.case_id},
+            )
         cases.append(parsed)
 
     return RAGDataset(
@@ -124,23 +146,25 @@ def _dataset_from_raw(raw: dict, raw_bytes: bytes, kind: BenchmarkKind) -> RAGDa
 def list_datasets(kind: BenchmarkKind) -> list[BenchmarkDatasetInfo]:
     """枚举受控目录下指定 kind 的数据集元信息（不含 Case 内容）。
 
-    个别文件损坏时跳过而非整体失败，保证列表接口健壮；损坏细节由 load_dataset 抛出。
+    逐文件用 _DatasetMeta 校验元信息字段结构，单个损坏文件隔离跳过而非整体失败，
+    保证列表接口健壮；损坏细节由 load_dataset 抛出。
     """
     infos: list[BenchmarkDatasetInfo] = []
     for path in _dataset_files():
         try:
             raw, raw_bytes = _read_json(path)
-        except ApiError:
+            meta = _DatasetMeta.model_validate(raw)
+        except (ApiError, ValidationError):
             continue
-        if raw.get("kind", kind.value) != kind.value:
+        if meta.kind not in ("", kind.value):
             continue
         infos.append(
             BenchmarkDatasetInfo(
-                dataset_id=raw.get("dataset_id", path.stem),
+                dataset_id=meta.dataset_id,
                 kind=kind,
-                version=str(raw.get("version", "")),
-                description=str(raw.get("description", "")),
-                case_count=len(raw.get("cases", [])),
+                version=meta.version,
+                description=meta.description,
+                case_count=len(meta.cases),
                 content_hash=_content_hash(raw_bytes),
             )
         )

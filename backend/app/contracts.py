@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 
 class Contract(BaseModel):
@@ -144,6 +144,12 @@ class SearchRequest(Contract):
     limit: int = Field(default=20, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
     include_snippet: bool = True
+    # 检索调优参数（Benchmark 与 Skill 共用）：控制 RRF / 精排 / 候选池 / 分数阈值。
+    # rerank_candidates=None 表示对全部候选精排（保留原有行为），Benchmark 传显式值。
+    rrf_k: int = Field(default=60, ge=1)
+    rerank: bool = True
+    rerank_candidates: int | None = Field(default=None, ge=1)
+    score_threshold: float = Field(default=0.0, ge=0.0)
 
 
 class Citation(Contract):
@@ -678,8 +684,8 @@ class RAGDatasetCase(Contract):
 
 
 class RAGRetrievalConfig(Contract):
-    """RAG Benchmark 的检索参数。top_k 映射到 SearchRequest.limit，其余参数当前
-    记录进 config_snapshot，由 RetrievalProfile 共享（§9.9）落地后再接入引擎。"""
+    """RAG Benchmark 的检索参数。top_k 映射到 SearchRequest.limit，
+    其余参数透传到 SearchRequest，由检索引擎实际执行。"""
 
     top_k: int = Field(default=10, ge=1, le=100)
     rrf_k: int = Field(default=60, ge=1)
@@ -691,11 +697,19 @@ class RAGRetrievalConfig(Contract):
 class RAGRunRequest(Contract):
     dataset_id: str = Field(min_length=1)
     modes: list[SearchMode] = Field(
-        default_factory=lambda: [SearchMode.fts, SearchMode.vector, SearchMode.hybrid]
+        default_factory=lambda: [SearchMode.fts, SearchMode.vector, SearchMode.hybrid],
+        min_length=1,
     )
     retrieval: RAGRetrievalConfig = Field(default_factory=RAGRetrievalConfig)
     repeat: int = Field(default=1, ge=1, le=10)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("modes")
+    @classmethod
+    def _no_duplicate_modes(cls, value: list[SearchMode]) -> list[SearchMode]:
+        if len(value) != len(set(value)):
+            raise ValueError("modes must not contain duplicates")
+        return value
 
 
 class RAGMetrics(Contract):

@@ -13,6 +13,7 @@ from app.contracts import (
     AgentTraceResponse,
     ChatRequest,
     BenchmarkDatasetListResponse,
+    BenchmarkEventType,
     BenchmarkKind,
     BenchmarkReport,
     BenchmarkRun,
@@ -924,7 +925,7 @@ async def cancel_benchmark_run(run_id: str) -> OperationResponse:
             404, "BENCHMARK_RUN_NOT_FOUND", "benchmark run not found", {"run_id": run_id}
         )
     return OperationResponse(
-        status="completed",
+        status="accepted",
         resource_id=run_id,
         message=f"Benchmark run status: {run.status.value}",
     )
@@ -951,10 +952,27 @@ async def benchmark_events(
         )
 
     async def stream() -> AsyncIterator[str]:
+        # 先订阅（保证订阅之后产生的事件也能收到），再回放历史事件，最后实时输出新事件
+        queue = benchmark_service.subscribe(run_id)
+        last_sequence = after_sequence
         for event in benchmark_service.get_events(run_id):
             if event.sequence <= after_sequence:
                 continue
             yield as_sse(event.event.value, event.model_dump_json(), event_id=event.sequence)
+            last_sequence = event.sequence
+        if queue is None:
+            return
+        try:
+            while True:
+                event = await queue.get()
+                if event.sequence <= last_sequence:
+                    continue
+                yield as_sse(event.event.value, event.model_dump_json(), event_id=event.sequence)
+                last_sequence = event.sequence
+                if event.event in (BenchmarkEventType.run_completed, BenchmarkEventType.run_failed):
+                    break
+        finally:
+            benchmark_service.unsubscribe(run_id, queue)
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 

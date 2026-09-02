@@ -2,6 +2,9 @@
 
 沿用 conftest 的隔离机制：APP_DATA_DIR / DB / Vault 都指向临时目录，benchmark
 数据集也落在临时目录（settings.benchmark_datasets_path），不读写真实数据。
+
+运行采用「创建即 queued + 后台 Task 执行」的异步模型，测试通过 _run 在同一事件循环内
+创建并等待后台任务结束，得到终态 BenchmarkRun 后再断言。
 """
 
 from __future__ import annotations
@@ -10,6 +13,7 @@ import asyncio
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from app.benchmarks import datasets, metrics as m, service
 from app.config import get_settings
@@ -32,6 +36,25 @@ def _write_dataset(dataset_id: str, cases: list[dict], *, kind: str = "rag") -> 
     )
 
 
+def _write_raw(dataset_id: str, raw: dict) -> None:
+    directory = get_settings().benchmark_datasets_path
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{dataset_id}.json").write_text(
+        json.dumps(raw, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def _run(request: RAGRunRequest):
+    """创建运行并在同一事件循环内等待后台任务结束，返回终态 BenchmarkRun。"""
+    from app.contracts import BenchmarkRun
+
+    async def _execute() -> BenchmarkRun:
+        run = await service.create_rag_run(request)
+        return await service.wait_for_run(run.run_id)
+
+    return asyncio.run(_execute())
+
+
 # --------------------------------------------------------------------------- #
 # 指标纯函数
 # --------------------------------------------------------------------------- #
@@ -42,6 +65,12 @@ def test_hit_at_k_and_recall() -> None:
     assert m.hit_at_k(retrieved, expected, 1) is False
     assert m.hit_at_k(retrieved, expected, 2) is True
     assert m.recall_at_k(retrieved, expected, 5) == 0.5  # 只召回 b
+
+
+def test_recall_at_k_dedups_duplicate_notes() -> None:
+    # 同一 Note 经多个 Block 重复出现，去重后 Recall 不应超过 1
+    assert m.recall_at_k(["note-a", "note-a"], {"note-a"}, 2) == 1.0
+    assert m.recall_at_k(["note-a", "note-a", "note-b"], {"note-a"}, 3) == 1.0
 
 
 def test_reciprocal_rank_and_citation_hit() -> None:
@@ -86,6 +115,41 @@ def test_dataset_kind_mismatch_is_invalid() -> None:
     assert exc.value.code == "BENCHMARK_DATASET_INVALID"
 
 
+def test_citation_required_requires_expected_block_ids() -> None:
+    # citation_required=true 却没有 expected_block_ids，无法计算 Citation Hit Rate，应拒绝
+    _write_dataset(
+        "cit-req-v1",
+        [{"case_id": "x", "query": "q", "expected_note_ids": ["n"], "citation_required": True}],
+    )
+    with pytest.raises(ApiError) as exc:
+        datasets.load_dataset("cit-req-v1", BenchmarkKind.rag)
+    assert exc.value.code == "BENCHMARK_DATASET_INVALID"
+
+
+def test_list_datasets_skips_corrupted_structure() -> None:
+    # 合法 JSON 但字段结构错误（cases: 42），列表接口应隔离该文件而非整体 500
+    _write_raw("bad-structure", {"dataset_id": "bad-structure", "kind": "rag", "cases": 42})
+    _write_dataset("good-v1", [{"case_id": "x", "query": "q", "expected_note_ids": ["n"]}])
+
+    infos = datasets.list_datasets(BenchmarkKind.rag)
+    ids = {info.dataset_id for info in infos}
+    assert "good-v1" in ids
+    assert "bad-structure" not in ids
+
+
+# --------------------------------------------------------------------------- #
+# 请求校验（空 / 重复 modes）
+# --------------------------------------------------------------------------- #
+def test_empty_modes_rejected() -> None:
+    with pytest.raises(ValidationError):
+        RAGRunRequest(dataset_id="x", modes=[])
+
+
+def test_duplicate_modes_rejected() -> None:
+    with pytest.raises(ValidationError):
+        RAGRunRequest(dataset_id="x", modes=[SearchMode.fts, SearchMode.fts])
+
+
 # --------------------------------------------------------------------------- #
 # RAG Benchmark 端到端
 # --------------------------------------------------------------------------- #
@@ -115,9 +179,7 @@ def test_rag_benchmark_end_to_end() -> None:
     _, _, case = _single_note_case()
     _write_dataset("e2e-v1", [case])
 
-    run = asyncio.run(
-        service.create_rag_run(RAGRunRequest(dataset_id="e2e-v1", modes=[SearchMode.fts]))
-    )
+    run = _run(RAGRunRequest(dataset_id="e2e-v1", modes=[SearchMode.fts]))
 
     assert run.status.value == "completed"
     assert run.dataset_hash.startswith("sha256:")
@@ -136,7 +198,7 @@ def test_rag_benchmark_all_modes_produce_metrics() -> None:
     _, _, case = _single_note_case()
     _write_dataset("e2e-modes-v1", [case])
 
-    run = asyncio.run(service.create_rag_run(RAGRunRequest(dataset_id="e2e-modes-v1")))
+    run = _run(RAGRunRequest(dataset_id="e2e-modes-v1"))
     assert run.status.value == "completed"
 
     for mode in ("fts", "vector", "hybrid"):
@@ -145,11 +207,25 @@ def test_rag_benchmark_all_modes_produce_metrics() -> None:
             assert 0.0 <= run.metrics[mode][key] <= 1.0
 
 
+def test_config_snapshot_records_index_and_models() -> None:
+    _, _, case = _single_note_case()
+    _write_dataset("snapshot-v1", [case])
+
+    run = _run(RAGRunRequest(dataset_id="snapshot-v1", modes=[SearchMode.fts]))
+
+    snapshot = run.config_snapshot
+    assert snapshot["index_meta"] is not None
+    assert snapshot["embedding"]["version"]
+    assert snapshot["embedding"]["dim"]
+    assert snapshot["reranker"]["version"]
+    assert snapshot["retrieval"]["rrf_k"] == 60
+
+
 def test_benchmark_report_and_events() -> None:
     _, _, case = _single_note_case()
     _write_dataset("report-v1", [case])
 
-    run = asyncio.run(service.create_rag_run(RAGRunRequest(dataset_id="report-v1", modes=[SearchMode.fts])))
+    run = _run(RAGRunRequest(dataset_id="report-v1", modes=[SearchMode.fts]))
     report = service.get_report(run.run_id)
     events = service.get_events(run.run_id)
 
@@ -168,9 +244,48 @@ def test_cancel_completed_run_keeps_status() -> None:
     _, _, case = _single_note_case()
     _write_dataset("cancel-v1", [case])
 
-    run = asyncio.run(service.create_rag_run(RAGRunRequest(dataset_id="cancel-v1", modes=[SearchMode.fts])))
+    run = _run(RAGRunRequest(dataset_id="cancel-v1", modes=[SearchMode.fts]))
+    assert run.status.value == "completed"
+
     cancelled = service.cancel_run(run.run_id)
-    assert cancelled.status.value == "completed"  # 同步运行已结束，不再变 cancelled
+    assert cancelled.status.value == "completed"  # 已结束，不再变 cancelled
+
+
+def test_cancel_queued_run_marks_cancelled() -> None:
+    _, _, case = _single_note_case()
+    _write_dataset("cancel-queued-v1", [case])
+
+    async def _scenario():
+        run = await service.create_rag_run(
+            RAGRunRequest(dataset_id="cancel-queued-v1", modes=[SearchMode.fts])
+        )
+        service.cancel_run(run.run_id)
+        return await service.wait_for_run(run.run_id)
+
+    run = asyncio.run(_scenario())
+    assert run.status.value == "cancelled"
+
+
+# --------------------------------------------------------------------------- #
+# 指标聚合：Citation Hit Rate 只统计 citation_required 样本
+# --------------------------------------------------------------------------- #
+def test_citation_hit_rate_only_counts_citation_required() -> None:
+    from app.benchmarks import rag as rag_module
+    from app.contracts import RAGCaseResult
+
+    cases = [
+        RAGCaseResult(
+            case_id="a", mode=SearchMode.fts, repeat=0, latency_ms=1.0,
+            citation_hit=True, citation_applicable=True,
+        ),
+        RAGCaseResult(
+            case_id="b", mode=SearchMode.fts, repeat=0, latency_ms=1.0,
+            citation_hit=False, citation_applicable=False,
+        ),
+    ]
+    metrics = rag_module._aggregate(cases, SearchMode.fts)
+    # 只有 citation_applicable（citation_required=true）的样本计入分母
+    assert metrics.citation_hit_rate == 1.0
 
 
 # --------------------------------------------------------------------------- #
@@ -182,12 +297,17 @@ def test_benchmark_routes_wired() -> None:
     _, _, case = _single_note_case()
     _write_dataset("route-v1", [case])
 
-    listed = asyncio.run(routes.list_benchmark_datasets(BenchmarkKind.rag))
-    assert any(item.dataset_id == "route-v1" for item in listed.items)
+    async def _scenario():
+        listed = await routes.list_benchmark_datasets(BenchmarkKind.rag)
+        assert any(item.dataset_id == "route-v1" for item in listed.items)
 
-    run = asyncio.run(
-        routes.create_rag_benchmark(RAGRunRequest(dataset_id="route-v1", modes=[SearchMode.fts]))
-    )
+        run = await routes.create_rag_benchmark(
+            RAGRunRequest(dataset_id="route-v1", modes=[SearchMode.fts])
+        )
+        assert run.status.value == "queued"
+        return await service.wait_for_run(run.run_id)
+
+    run = asyncio.run(_scenario())
     assert run.status.value == "completed"
 
     got = asyncio.run(routes.get_benchmark_run(run.run_id))
