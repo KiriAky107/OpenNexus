@@ -23,14 +23,20 @@ from app.contracts import (
 from app.retrieval.engine import engine
 
 
+class BenchmarkCancelled(Exception):
+    """运行在 Case 之间被取消时抛出，用于中断后台执行并标记 cancelled。"""
+
+
 async def run_rag(
     dataset: RAGDataset,
     request: RAGRunRequest,
     on_case: Callable[[RAGCaseResult, int, int], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[dict[str, RAGMetrics], list[RAGCaseResult]]:
     """执行 RAG Benchmark，返回 (按 mode 聚合的指标, 全部逐样本结果)。
 
     on_case 在每个样本求值完成后回调 (result, done, total)，供上层更新进度与事件。
+    should_cancel 在每个样本开始前被检查；返回 True 时抛出 BenchmarkCancelled 中断运行。
     """
     total = len(request.modes) * len(dataset.cases) * request.repeat
     done = 0
@@ -39,6 +45,8 @@ async def run_rag(
     for mode in request.modes:
         for case in dataset.cases:
             for repeat in range(request.repeat):
+                if should_cancel is not None and should_cancel():
+                    raise BenchmarkCancelled()
                 result = await _evaluate_one(case, mode, request, repeat)
                 results.append(result)
                 done += 1
@@ -57,6 +65,10 @@ async def _evaluate_one(
         mode=mode,
         limit=request.retrieval.top_k,
         include_snippet=False,
+        rrf_k=request.retrieval.rrf_k,
+        rerank=request.retrieval.rerank,
+        rerank_candidates=request.retrieval.rerank_candidates,
+        score_threshold=request.retrieval.score_threshold,
     )
     start = time.perf_counter()
     try:
@@ -89,7 +101,7 @@ async def _evaluate_one(
         recall=m.recall_at_k(retrieved_note_ids, expected_notes, k),
         reciprocal_rank=m.reciprocal_rank(retrieved_note_ids, expected_notes),
         citation_hit=m.citation_hit(retrieved_block_ids, expected_blocks),
-        citation_applicable=bool(case.expected_block_ids),
+        citation_applicable=case.citation_required,
     )
 
 
