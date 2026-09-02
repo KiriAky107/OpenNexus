@@ -106,7 +106,9 @@ def test_command_only_receives_declared_context() -> None:
         def __init__(self) -> None:
             self.context = None
 
-        async def execute_command(self, handler, arguments, context, settings):
+        async def execute_command(
+            self, handler, arguments, context, settings, resolve_secret
+        ):
             self.context = context
             return PluginCommandEffect(type="none")
 
@@ -126,6 +128,81 @@ def test_command_only_receives_declared_context() -> None:
     )
 
     assert host.context == {"selection": "visible"}
+
+
+def test_command_resolves_only_declared_plugin_secrets(tmp_path: Path) -> None:
+    class SecretHost(DeclarativePluginHost):
+        def __init__(self) -> None:
+            self.secret = None
+            self.denied_code = None
+
+        async def execute_command(
+            self, handler, arguments, context, settings, resolve_secret
+        ):
+            self.secret = resolve_secret("api_key")
+            try:
+                resolve_secret("undeclared")
+            except ExtensionError as exc:
+                self.denied_code = exc.code
+            return PluginCommandEffect(type="none")
+
+    host = SecretHost()
+    runtime = PluginRuntime(ToolRegistry(), host=host)
+    package = tmp_path / "secret-command"
+    package.mkdir()
+    (package / "plugin.yaml").write_text(
+        """
+id: secret-command
+name: Secret Command
+version: 1.0.0
+permissions: [secrets.use]
+contributes:
+  commands: [secret-command.run]
+  settings_sections: [secret-command.general]
+backend:
+  type: internal_rpc
+  transport: none
+""".strip(),
+        encoding="utf-8",
+    )
+    (package / "commands.yaml").write_text(
+        """
+commands:
+  - command_id: secret-command.run
+    title: Secret Command
+    locations: [command_palette]
+    secrets: [api_key]
+    handler: echo
+""".strip(),
+        encoding="utf-8",
+    )
+    (package / "settings.yaml").write_text(
+        """
+section_id: secret-command.general
+schema_version: 1
+fields:
+  - key: api_key
+    label: API Key
+    type: secret
+""".strip(),
+        encoding="utf-8",
+    )
+    runtime.install(package)
+    runtime.set_permissions("secret-command", ["secrets.use"])
+    runtime.enable("secret-command")
+    runtime.put_setting_secret("secret-command", "api_key", "runtime-only-secret")
+
+    run(
+        runtime.execute_command(
+            "secret-command.run",
+            {},
+            PluginCommandContext(selection="visible"),
+        )
+    )
+
+    assert host.secret == "runtime-only-secret"
+    assert host.denied_code == "PLUGIN_SECRET_ACCESS_DENIED"
+    assert "runtime-only-secret" not in repr(runtime.commands.audit_events())
 
 
 def test_settings_schema_contains_defaults_and_hides_secret() -> None:
@@ -260,6 +337,30 @@ fields:
     with pytest.raises(ExtensionError) as settings_error:
         runtime.install(invalid_settings)
     assert settings_error.value.code == "PLUGIN_SETTINGS_SCHEMA_INVALID"
+
+
+def test_null_command_list_returns_stable_manifest_error(tmp_path: Path) -> None:
+    package = tmp_path / "null-commands"
+    package.mkdir()
+    (package / "plugin.yaml").write_text(
+        """
+id: null-commands
+name: Null Commands
+version: 1.0.0
+contributes:
+  commands: []
+backend:
+  type: internal_rpc
+  transport: none
+""".strip(),
+        encoding="utf-8",
+    )
+    (package / "commands.yaml").write_text("commands:\n", encoding="utf-8")
+
+    with pytest.raises(ExtensionError) as exc:
+        PluginRuntime(ToolRegistry()).install(package)
+
+    assert exc.value.code == "EXTENSION_MANIFEST_INVALID"
 
 
 def test_settings_missing_and_secret_field_errors_are_stable() -> None:

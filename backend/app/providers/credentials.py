@@ -13,6 +13,7 @@ from app.config import get_settings
 
 
 _CREDENTIAL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_PLUGIN_CREDENTIAL_PREFIX = "plugin."
 
 
 class CredentialStoreError(RuntimeError):
@@ -21,6 +22,15 @@ class CredentialStoreError(RuntimeError):
 
 class CredentialResolver(Protocol):
     def resolve(self, credential_id: str | None) -> str | None: ...
+
+
+def validate_provider_credential_id(credential_id: str | None) -> None:
+    """阻止 Provider 和通用凭据 API 跨入 Plugin 私有命名空间。"""
+
+    if credential_id and credential_id.casefold().startswith(
+        _PLUGIN_CREDENTIAL_PREFIX
+    ):
+        raise CredentialStoreError("Credential namespace is reserved for Plugin settings.")
 
 
 class EnvironmentCredentialResolver:
@@ -170,3 +180,14 @@ class ChainedCredentialResolver:
             if value:
                 return value
         return None
+
+
+class ProviderCredentialResolver:
+    """Provider 专用防御层，避免配置绕过 HTTP 校验读取 Plugin Secret。"""
+
+    def __init__(self, delegate: CredentialResolver) -> None:
+        self._delegate = delegate
+
+    def resolve(self, credential_id: str | None) -> str | None:
+        validate_provider_credential_id(credential_id)
+        return self._delegate.resolve(credential_id)
