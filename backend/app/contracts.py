@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
@@ -520,15 +520,89 @@ class PluginCommandExecuteRequest(Contract):
     context: PluginCommandContext = Field(default_factory=PluginCommandContext)
 
 
-class PluginCommandEffect(Contract):
-    type: Literal["none", "notification", "navigate", "refresh", "job"] = "none"
-    payload: dict[str, Any] = Field(default_factory=dict)
+class PluginNotificationEffectPayload(Contract):
+    level: Literal["info", "success", "warning", "error"] = "info"
+    message: str = Field(min_length=1, max_length=4096)
+
+
+class PluginNavigateEffectPayload(Contract):
+    route: Literal[
+        "vault-entry",
+        "workspace",
+        "search",
+        "chat",
+        "agent",
+        "tasks",
+        "skills",
+        "plugins",
+        "themes",
+        "settings",
+    ]
+
+
+class PluginRefreshEffectPayload(Contract):
+    scope: Literal["workspace", "commands", "settings", "plugins"]
+
+
+class PluginJobEffectPayload(Contract):
+    job_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+
+
+class PluginNoEffectPayload(Contract):
+    pass
+
+
+class PluginNoEffect(Contract):
+    type: Literal["none"] = "none"
+    payload: PluginNoEffectPayload = Field(default_factory=PluginNoEffectPayload)
+
+
+class PluginNotificationEffect(Contract):
+    type: Literal["notification"] = "notification"
+    payload: PluginNotificationEffectPayload
+
+
+class PluginNavigateEffect(Contract):
+    type: Literal["navigate"] = "navigate"
+    payload: PluginNavigateEffectPayload
+
+
+class PluginRefreshEffect(Contract):
+    type: Literal["refresh"] = "refresh"
+    payload: PluginRefreshEffectPayload
+
+
+class PluginJobEffect(Contract):
+    type: Literal["job"] = "job"
+    payload: PluginJobEffectPayload
+
+
+PluginCommandEffect = Annotated[
+    PluginNoEffect
+    | PluginNotificationEffect
+    | PluginNavigateEffect
+    | PluginRefreshEffect
+    | PluginJobEffect,
+    Field(discriminator="type"),
+]
+
+PLUGIN_COMMAND_EFFECT_TYPES = (
+    PluginNoEffect,
+    PluginNotificationEffect,
+    PluginNavigateEffect,
+    PluginRefreshEffect,
+    PluginJobEffect,
+)
 
 
 class PluginCommandResult(Contract):
     command_id: str
     status: Literal["completed"] = "completed"
-    effect: PluginCommandEffect = Field(default_factory=PluginCommandEffect)
+    effect: PluginCommandEffect = Field(default_factory=PluginNoEffect)
 
 
 class PluginSettingType(str, Enum):

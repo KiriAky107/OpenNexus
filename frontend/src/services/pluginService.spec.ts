@@ -26,7 +26,7 @@ describe('pluginService contribution adapter', () => {
       .mockResolvedValueOnce(jsonResponse({
         command_id: 'text-tools.uppercase-selection',
         status: 'completed',
-        effect: { type: 'notification', payload: { message: 'HELLO' } },
+        effect: { type: 'notification', payload: { level: 'success', message: 'HELLO' } },
       }))
 
     const commands = await pluginService.listPluginCommands('command_palette')
@@ -37,6 +37,7 @@ describe('pluginService contribution adapter', () => {
     )
 
     expect(commands[0].command_id).toBe('text-tools.uppercase-selection')
+    if (result.effect.type !== 'notification') throw new Error('expected notification effect')
     expect(result.effect.payload.message).toBe('HELLO')
     expect(fetchMock.mock.calls[0][0]).toBe(
       '/api/plugin-contributions/commands?location=command_palette',

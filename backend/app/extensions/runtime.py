@@ -9,8 +9,18 @@ from uuid import uuid4
 
 import yaml
 from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
+from jsonschema.exceptions import (
+    SchemaError,
+    ValidationError as JsonSchemaValidationError,
+)
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    create_model,
+)
 
 from app.agent.tools import ToolExecutionContext, ToolExecutionError, ToolRegistry
 from app.agent.permissions import KNOWN_PERMISSIONS
@@ -20,6 +30,8 @@ from app.contracts import (
     PluginCommand,
     PluginCommandContext,
     PluginCommandEffect,
+    PluginNoEffect,
+    PluginNotificationEffect,
     PluginCommandLocation,
     PluginCommandResult,
     PluginManifest,
@@ -258,15 +270,15 @@ class DeclarativePluginHost:
 
         if handler == "echo":
             message = str(arguments.get("message", context.get("selection", "")))
-            return PluginCommandEffect(
-                type="notification",
+            if not message:
+                return PluginNoEffect()
+            return PluginNotificationEffect(
                 payload={"level": "info", "message": message},
             )
         if handler == "uppercase_selection":
             text = str(arguments.get("text", context.get("selection", "")))
             limit = int(settings.get("result_limit", 100))
-            return PluginCommandEffect(
-                type="notification",
+            return PluginNotificationEffect(
                 payload={"level": "success", "message": text[:limit].upper()},
             )
         raise ExtensionError(
@@ -284,6 +296,7 @@ class _PluginRecord:
     registered_tools: list[str]
     registered_commands: list[str]
     mcp_remote_names: dict[str, str]
+    mcp_command_schemas: dict[str, dict[str, Any]]
 
 
 class PluginRuntime:
@@ -448,6 +461,7 @@ class PluginRuntime:
             registered_tools=[],
             registered_commands=[],
             mcp_remote_names={},
+            mcp_command_schemas={},
         )
         self._records[manifest.plugin_id] = record
         return record.plugin.model_copy(deep=True)
@@ -488,6 +502,8 @@ class PluginRuntime:
                 status_code=403,
                 details={"plugin_id": plugin_id},
             )
+        if record.settings_definition is not None:
+            self.settings.runtime_values(plugin_id, record.settings_definition)
         declared_tools = list(record.plugin.manifest.contributes.tools)
         conflicts = [name for name in declared_tools if self.registry.contains(name)]
         if conflicts:
@@ -528,6 +544,18 @@ class PluginRuntime:
                         self._register_mcp_tool(record, item)
                     else:
                         record.mcp_remote_names[item.definition.name] = item.remote_name
+                        record.mcp_command_schemas[item.definition.name] = (
+                            item.definition.parameters
+                        )
+                        for spec in (
+                            command
+                            for command in record.commands
+                            if command.mcp_tool == item.definition.name
+                        ):
+                            _validate_mcp_command_target_schema(
+                                item.definition.parameters,
+                                spec.command_id,
+                            )
             else:
                 for spec in record.tools:
                     arguments_model = _arguments_model(spec)
@@ -570,10 +598,10 @@ class PluginRuntime:
                             details={"command_id": _spec.command_id},
                         )
                     settings = (
-                        self.settings.get(
+                        self.settings.runtime_values(
                             _record.plugin.manifest.plugin_id,
                             _record.settings_definition,
-                        ).values
+                        )
                         if _record.settings_definition is not None
                         else {}
                     )
@@ -624,19 +652,23 @@ class PluginRuntime:
                             for key in _spec.secrets
                             if (value := resolve_secret(key)) is not None
                         }
+                        envelope = _mcp_command_envelope(
+                            _spec,
+                            arguments=arguments,
+                            context=context,
+                            settings=settings,
+                            secrets=secret_values,
+                        )
+                        _validate_mcp_command_envelope(
+                            _record.mcp_command_schemas[_spec.mcp_tool],
+                            envelope,
+                            _spec.command_id,
+                        )
                         try:
                             effect = await self.mcp.call_tool(
                                 _record.plugin.manifest.plugin_id,
                                 remote_name,
-                                {
-                                    "_notesagent": {
-                                        "command_id": _spec.command_id,
-                                        "arguments": arguments,
-                                        "context": context,
-                                        "settings": settings,
-                                        "secrets": secret_values,
-                                    }
-                                },
+                                envelope,
                                 request_id=f"command:{uuid4().hex}",
                             )
                         except ToolExecutionError as exc:
@@ -647,7 +679,7 @@ class PluginRuntime:
                                 details={"command_id": _spec.command_id},
                             ) from exc
                         try:
-                            return PluginCommandEffect.model_validate(effect)
+                            return TypeAdapter(PluginCommandEffect).validate_python(effect)
                         except ValidationError as exc:
                             raise ExtensionError(
                                 "PLUGIN_COMMAND_RESULT_INVALID",
@@ -675,6 +707,7 @@ class PluginRuntime:
                 self.commands.unregister(command_id)
             record.registered_commands.clear()
             record.mcp_remote_names.clear()
+            record.mcp_command_schemas.clear()
             self.mcp.stop(plugin_id)
             record.plugin.status = PluginStatus.error
             record.plugin.error_message = _safe_extension_message(exc)
@@ -736,6 +769,7 @@ class PluginRuntime:
             self.commands.unregister(command_id)
         record.registered_commands.clear()
         record.mcp_remote_names.clear()
+        record.mcp_command_schemas.clear()
         if record.plugin.manifest.backend.type == "mcp":
             self.mcp.stop(plugin_id)
         record.plugin.enabled = False
@@ -814,6 +848,7 @@ class PluginRuntime:
             self.commands.unregister(command_id)
         record.registered_commands.clear()
         record.mcp_remote_names.clear()
+        record.mcp_command_schemas.clear()
         self.mcp.stop(plugin_id)
         record.plugin.enabled = False
         record.plugin.status = PluginStatus.installed
@@ -878,6 +913,7 @@ class PluginRuntime:
                 self.commands.unregister(command_id)
             record.registered_commands.clear()
             record.mcp_remote_names.clear()
+            record.mcp_command_schemas.clear()
             record.plugin.enabled = False
             record.plugin.status = PluginStatus.error
             record.plugin.error_message = message
@@ -1028,6 +1064,61 @@ def _manifest_error(kind: str, exc: ValidationError) -> ExtensionError:
 def _arguments_model(spec: DeclarativeToolSpec) -> type[BaseModel]:
     schema = spec.parameters or {"type": "object", "properties": {}}
     return _arguments_model_from_schema(spec.name, schema)
+
+
+def _mcp_command_envelope(
+    spec: PluginCommandSpec,
+    *,
+    arguments: dict[str, Any],
+    context: dict[str, Any],
+    settings: dict[str, Any],
+    secrets: dict[str, str],
+) -> dict[str, Any]:
+    return {
+        "_notesagent": {
+            "command_id": spec.command_id,
+            "arguments": arguments,
+            "context": context,
+            "settings": settings,
+            "secrets": secrets,
+        }
+    }
+
+
+def _validate_mcp_command_envelope(
+    schema: dict[str, Any],
+    envelope: dict[str, Any],
+    command_id: str,
+) -> None:
+    """执行前用目标 Tool Schema 校验包含真实业务数据的宿主信封。"""
+
+    try:
+        Draft202012Validator(schema).validate(envelope)
+    except JsonSchemaValidationError as exc:
+        raise ExtensionError(
+            "PLUGIN_COMMAND_TARGET_SCHEMA_MISMATCH",
+            "MCP Command envelope does not match the target inputSchema.",
+            status_code=502,
+            details={"command_id": command_id, "path": list(exc.path)},
+        ) from exc
+
+
+def _validate_mcp_command_target_schema(
+    schema: dict[str, Any], command_id: str
+) -> None:
+    """启用时只检查稳定信封入口，避免用伪造业务值误判合法 Schema。"""
+
+    properties = schema.get("properties")
+    envelope_schema = (
+        properties.get("_notesagent") if isinstance(properties, dict) else None
+    )
+    if not isinstance(envelope_schema, dict) or envelope_schema.get("type") != "object":
+        raise ExtensionError(
+            "PLUGIN_CONTRIBUTION_INVALID",
+            "MCP Command target inputSchema must directly declare "
+            "_notesagent with type object.",
+            details={"command_id": command_id},
+        )
 
 
 def _arguments_model_from_schema(

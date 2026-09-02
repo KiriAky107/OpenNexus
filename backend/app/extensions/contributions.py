@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import get_settings
 from app.contracts import (
+    PLUGIN_COMMAND_EFFECT_TYPES,
     PluginCommand,
     PluginCommandContext,
     PluginCommandEffect,
@@ -248,7 +249,7 @@ class CommandRegistry:
             )
             self._record_audit(registered, started_at, error.code)
             raise error from exc
-        if not isinstance(effect, PluginCommandEffect):
+        if not isinstance(effect, PLUGIN_COMMAND_EFFECT_TYPES):
             error = ExtensionError(
                 "PLUGIN_COMMAND_RESULT_INVALID",
                 "Plugin command returned an invalid effect.",
@@ -361,6 +362,28 @@ class PluginSettingsStore:
                 values=values,
                 secrets=secrets,
             )
+
+    def runtime_values(
+        self, plugin_id: str, definition: PluginSettingsDefinition
+    ) -> dict[str, Any]:
+        """返回可供 Command 使用的完整普通设置，并拦截未配置的必填项。"""
+
+        schema = self.get(plugin_id, definition)
+        missing = [
+            field.key
+            for field in definition.fields
+            if field.required
+            and field.type != PluginSettingType.secret
+            and field.key not in schema.values
+        ]
+        if missing:
+            raise ExtensionError(
+                "PLUGIN_SETTINGS_REQUIRED",
+                "Required Plugin settings have not been configured.",
+                status_code=409,
+                details={"plugin_id": plugin_id, "fields": missing},
+            )
+        return schema.values
 
     def update(
         self,

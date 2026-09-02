@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import TypeAdapter, ValidationError
 
 from app.agent import ToolRegistry
 from app.config import BACKEND_DIR, get_settings
@@ -10,6 +11,7 @@ from app.container import build_container
 from app.contracts import (
     PluginCommandContext,
     PluginCommandEffect,
+    PluginNoEffect,
     PluginSettingType,
 )
 from app.extensions import ExtensionError, PluginRuntime
@@ -70,7 +72,40 @@ def test_command_executes_with_scoped_context_and_settings() -> None:
 
     assert result.status == "completed"
     assert result.effect.type == "notification"
-    assert result.effect.payload == {"level": "success", "message": "ABCD"}
+    assert result.effect.payload.model_dump() == {
+        "level": "success",
+        "message": "ABCD",
+    }
+
+
+def test_echo_command_returns_none_for_empty_message() -> None:
+    host = DeclarativePluginHost()
+
+    empty = run(host.execute_command("echo", {}, {}, {}, lambda _: None))
+    populated = run(
+        host.execute_command("echo", {"message": "hello"}, {}, {}, lambda _: None)
+    )
+
+    assert isinstance(empty, PluginNoEffect)
+    assert populated.type == "notification"
+    assert populated.payload.message == "hello"
+
+
+@pytest.mark.parametrize(
+    ("effect_type", "payload"),
+    [
+        ("none", {"unexpected": True}),
+        ("notification", {"level": "debug", "message": "invalid"}),
+        ("navigate", {"route": "https://example.com"}),
+        ("refresh", {"scope": "everything"}),
+        ("job", {"job_id": "invalid job id"}),
+    ],
+)
+def test_command_effect_rejects_untrusted_payloads(effect_type, payload) -> None:
+    with pytest.raises(ValidationError):
+        TypeAdapter(PluginCommandEffect).validate_python(
+            {"type": effect_type, "payload": payload}
+        )
 
 
 def test_command_rejects_missing_context_and_invalid_arguments() -> None:
@@ -112,7 +147,7 @@ def test_command_only_receives_declared_context() -> None:
             self, handler, arguments, context, settings, resolve_secret
         ):
             self.context = context
-            return PluginCommandEffect(type="none")
+            return PluginNoEffect()
 
     host = CapturingHost()
     runtime = PluginRuntime(ToolRegistry(), host=host)
@@ -146,7 +181,7 @@ def test_command_resolves_only_declared_plugin_secrets(tmp_path: Path) -> None:
                 resolve_secret("undeclared")
             except ExtensionError as exc:
                 self.denied_code = exc.code
-            return PluginCommandEffect(type="none")
+            return PluginNoEffect()
 
     host = SecretHost()
     runtime = PluginRuntime(ToolRegistry(), host=host)
@@ -246,6 +281,57 @@ def test_settings_update_validates_version_type_bounds_and_secret_boundary() -> 
         with pytest.raises(ExtensionError) as exc:
             container.plugins.update_settings("text-tools", version, values)
         assert exc.value.code == code
+
+
+def test_required_plain_setting_blocks_enable_until_configured(tmp_path: Path) -> None:
+    package = tmp_path / "required-setting"
+    package.mkdir()
+    (package / "plugin.yaml").write_text(
+        """
+id: required-setting
+name: Required Setting
+version: 1.0.0
+contributes:
+  commands: [required-setting.run]
+  settings_sections: [required-setting.general]
+backend:
+  type: internal_rpc
+  transport: none
+""".strip(),
+        encoding="utf-8",
+    )
+    (package / "commands.yaml").write_text(
+        """
+commands:
+  - command_id: required-setting.run
+    title: Required Setting
+    locations: [command_palette]
+    handler: echo
+""".strip(),
+        encoding="utf-8",
+    )
+    (package / "settings.yaml").write_text(
+        """
+section_id: required-setting.general
+schema_version: 1
+fields:
+  - key: endpoint
+    label: Endpoint
+    type: string
+    required: true
+""".strip(),
+        encoding="utf-8",
+    )
+    runtime = PluginRuntime(ToolRegistry())
+    runtime.install(package)
+
+    with pytest.raises(ExtensionError) as exc:
+        runtime.enable("required-setting")
+    assert exc.value.code == "PLUGIN_SETTINGS_REQUIRED"
+    assert runtime.get("required-setting").status == "installed"
+
+    runtime.update_settings("required-setting", 1, {"endpoint": "local"})
+    assert runtime.enable("required-setting").status == "ready"
 
 
 def test_secret_roundtrip_never_enters_plain_settings_storage() -> None:

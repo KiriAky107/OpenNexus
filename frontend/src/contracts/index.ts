@@ -292,10 +292,30 @@ export interface PluginCommandContext {
   selection?: string | null
 }
 
-export interface PluginCommandEffect {
-  type: 'none' | 'notification' | 'navigate' | 'refresh' | 'job'
-  payload: Record<string, unknown>
-}
+export type PluginCommandEffect =
+  | { type: 'none'; payload: Record<string, never> }
+  | {
+      type: 'notification'
+      payload: { level: 'info' | 'success' | 'warning' | 'error'; message: string }
+    }
+  | {
+      type: 'navigate'
+      payload: {
+        route:
+          | 'vault-entry'
+          | 'workspace'
+          | 'search'
+          | 'chat'
+          | 'agent'
+          | 'tasks'
+          | 'skills'
+          | 'plugins'
+          | 'themes'
+          | 'settings'
+      }
+    }
+  | { type: 'refresh'; payload: { scope: 'workspace' | 'commands' | 'settings' | 'plugins' } }
+  | { type: 'job'; payload: { job_id: string } }
 
 export interface PluginCommandResult {
   command_id: string
