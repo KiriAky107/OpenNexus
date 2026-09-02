@@ -1,6 +1,6 @@
 from app.contracts import ModelCapability, ProviderConfig, ProviderPreset, ProviderType
 from app.providers.base import ModelProvider
-from app.providers.credentials import CredentialResolver
+from app.providers.credentials import CredentialResolver, ProviderCredentialResolver
 from app.providers.ollama import OllamaProvider
 from app.providers.openai_compatible import OpenAICompatibleProvider
 
@@ -11,7 +11,9 @@ class UnsupportedProviderError(ValueError):
 
 class ProviderFactory:
     def __init__(self, credentials: CredentialResolver) -> None:
-        self.credentials = credentials
+        # ProviderFactory 是所有可配置 Provider 的创建边界，在此统一禁止
+        # Provider 借用 Plugin Secret 引用，避免调用方漏包安全 Resolver。
+        self.credentials = ProviderCredentialResolver(credentials)
 
     def build(self, config: ProviderConfig) -> ModelProvider:
         if config.provider_type in {

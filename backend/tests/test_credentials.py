@@ -1,16 +1,20 @@
 import asyncio
 
 import httpx
+import pytest
 
 from app.config import get_settings
 from app.contracts import CredentialWriteRequest
+from app.errors import ApiError
 from app.providers.credentials import (
     ChainedCredentialResolver,
+    CredentialStoreError,
     EncryptedCredentialStore,
     EnvironmentCredentialResolver,
 )
+from app.providers.factory import ProviderFactory
 from app.providers.openai_compatible import OpenAICompatibleProvider
-from app.routes import get_credential_status, put_credential
+from app.routes import delete_credential, get_credential_status, put_credential
 
 
 def test_encrypted_credential_store_round_trip_without_plaintext_on_disk() -> None:
@@ -72,3 +76,29 @@ def test_saved_credential_takes_precedence_over_environment_fallback(monkeypatch
     resolver = ChainedCredentialResolver(store, EnvironmentCredentialResolver())
 
     assert resolver.resolve("deepseek") == "saved-key"
+
+
+def test_public_credential_api_rejects_plugin_namespace() -> None:
+    operations = [
+        get_credential_status("plugin.text-tools.api_key"),
+        put_credential(
+            "plugin.text-tools.api_key",
+            CredentialWriteRequest(api_key="must-not-write"),
+        ),
+        delete_credential("plugin.text-tools.api_key"),
+    ]
+    for operation in operations:
+        with pytest.raises(ApiError) as exc:
+            asyncio.run(operation)
+        assert exc.value.code == "CREDENTIAL_NAMESPACE_RESERVED"
+
+    assert EncryptedCredentialStore().resolve("plugin.text-tools.api_key") is None
+
+
+def test_provider_resolver_cannot_read_plugin_secret() -> None:
+    store = EncryptedCredentialStore()
+    store.put("plugin.text-tools.api_key", "private-plugin-secret")
+    resolver = ProviderFactory(store).credentials
+
+    with pytest.raises(CredentialStoreError, match="reserved for Plugin settings"):
+        resolver.resolve("plugin.text-tools.api_key")

@@ -73,6 +73,7 @@ class PluginCommandSpec(BaseModel):
         }
     )
     permission: str | None = None
+    secrets: list[str] = Field(default_factory=list)
     handler: Literal["echo", "uppercase_selection"]
     timeout_seconds: int = Field(default=30, ge=1, le=120)
 
@@ -81,6 +82,7 @@ CommandExecutor = Callable[
     [dict[str, Any], dict[str, Any]],
     PluginCommandEffect | Awaitable[PluginCommandEffect],
 ]
+PluginSecretResolver = Callable[[str], str | None]
 
 
 @dataclass(slots=True)
@@ -655,6 +657,12 @@ def validate_command_spec(plugin_id: str, spec: PluginCommandSpec) -> None:
         raise ExtensionError(
             "PLUGIN_COMMAND_INVALID",
             "Plugin command when/context entries must be unique.",
+        )
+    if len(spec.secrets) != len(set(spec.secrets)):
+        raise ExtensionError(
+            "PLUGIN_COMMAND_INVALID",
+            "Plugin command Secret entries must be unique.",
+            details={"command_id": spec.command_id},
         )
     unknown_when = sorted(set(spec.when) - _WHEN_TOKENS)
     if unknown_when:

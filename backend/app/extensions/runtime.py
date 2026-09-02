@@ -24,6 +24,7 @@ from app.contracts import (
     PluginManifest,
     PluginHostStatus,
     PluginSecretStatus,
+    PluginSettingType,
     PluginSettingsSchema,
     PluginStatus,
     RetrievalConfig,
@@ -35,6 +36,7 @@ from app.contracts import (
 from app.extensions.contributions import (
     CommandRegistry,
     PluginCommandSpec,
+    PluginSecretResolver,
     PluginSettingsDefinition,
     PluginSettingsStore,
     validate_command_spec,
@@ -245,6 +247,7 @@ class DeclarativePluginHost:
         arguments: dict[str, Any],
         context: dict[str, Any],
         settings: dict[str, Any],
+        resolve_secret: PluginSecretResolver,
     ) -> PluginCommandEffect:
         """执行宿主内置的白名单 Command handler，不导入 Plugin Python 代码。"""
 
@@ -381,6 +384,32 @@ class PluginRuntime:
             )
         if settings_definition is not None:
             validate_settings_definition(manifest.plugin_id, settings_definition)
+        secret_fields = (
+            {
+                field.key
+                for field in settings_definition.fields
+                if field.type == PluginSettingType.secret
+            }
+            if settings_definition is not None
+            else set()
+        )
+        for spec in command_specs:
+            unknown_secrets = sorted(set(spec.secrets) - secret_fields)
+            if unknown_secrets:
+                raise ExtensionError(
+                    "PLUGIN_COMMAND_INVALID",
+                    "Plugin command references undeclared Secret settings.",
+                    details={
+                        "command_id": spec.command_id,
+                        "secrets": unknown_secrets,
+                    },
+                )
+            if spec.secrets and "secrets.use" not in manifest.permissions:
+                raise ExtensionError(
+                    "PLUGIN_PERMISSION_UNDECLARED",
+                    "Commands using Secret settings require the secrets.use permission.",
+                    details={"command_id": spec.command_id},
+                )
 
         record = _PluginRecord(
             plugin=Plugin(
@@ -502,6 +531,16 @@ class PluginRuntime:
                     _spec: PluginCommandSpec = spec,
                     _record: _PluginRecord = record,
                 ) -> PluginCommandEffect:
+                    if (
+                        not _record.plugin.enabled
+                        or _record.plugin.status != PluginStatus.ready
+                    ):
+                        raise ExtensionError(
+                            "PLUGIN_COMMAND_NOT_FOUND",
+                            "Plugin command is not available while its Plugin is inactive.",
+                            status_code=404,
+                            details={"command_id": _spec.command_id},
+                        )
                     settings = (
                         self.settings.get(
                             _record.plugin.manifest.plugin_id,
@@ -510,8 +549,38 @@ class PluginRuntime:
                         if _record.settings_definition is not None
                         else {}
                     )
+                    def resolve_secret(key: str) -> str | None:
+                        if key not in _spec.secrets:
+                            raise ExtensionError(
+                                "PLUGIN_SECRET_ACCESS_DENIED",
+                                "Command cannot access an undeclared Plugin Secret.",
+                                status_code=403,
+                                details={
+                                    "command_id": _spec.command_id,
+                                    "key": key,
+                                },
+                            )
+                        if "secrets.use" not in _record.plugin.granted_permissions:
+                            raise ExtensionError(
+                                "PLUGIN_SECRET_ACCESS_DENIED",
+                                "Plugin no longer has permission to access Secret settings.",
+                                status_code=403,
+                                details={"command_id": _spec.command_id, "key": key},
+                            )
+                        if _record.settings_definition is None:
+                            return None
+                        return self.settings.resolve_secret(
+                            _record.plugin.manifest.plugin_id,
+                            _record.settings_definition,
+                            key,
+                        )
+
                     return await self.host.execute_command(
-                        _spec.handler, arguments, context, settings
+                        _spec.handler,
+                        arguments,
+                        context,
+                        settings,
+                        resolve_secret,
                     )
 
                 self.commands.register(plugin_id, spec, command_executor)
@@ -782,10 +851,16 @@ class PluginRuntime:
         if not path.exists():
             return []
         raw = _read_yaml(path)
+        items = raw.get("commands", [])
+        if not isinstance(items, list):
+            raise ExtensionError(
+                "EXTENSION_MANIFEST_INVALID",
+                "Invalid plugin command manifest: commands must be an array.",
+            )
         try:
             return [
                 PluginCommandSpec.model_validate(item)
-                for item in raw.get("commands", [])
+                for item in items
             ]
         except ValidationError as exc:
             raise _manifest_error("plugin command", exc) from exc
