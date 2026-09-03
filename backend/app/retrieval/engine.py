@@ -23,6 +23,7 @@ from app.retrieval.embedding import EmbeddingProvider, HashEmbeddingProvider
 from app.retrieval.hybrid import normalize_scores, rrf_fuse
 from app.retrieval.reranker import LexicalReranker, RankedCandidate, RerankerProvider
 from app.retrieval import routed_vectors
+from app.retrieval.provenance import record_embedding
 from app.retrieval.vectorstore import SqliteVecStore, VectorStore
 from app.textutils import make_snippet, match_query
 
@@ -80,6 +81,7 @@ class RetrievalEngine:
                 fts_scores = {h.block_id: -h.bm25 for h in fts_hits}
 
         if request.mode in (SearchMode.vector, SearchMode.hybrid):
+            record_embedding(source="unavailable")
             vec_hits = None
             if (
                 self._routed_defaults is not None
@@ -90,6 +92,8 @@ class RetrievalEngine:
             if vec_hits is None:
                 query_vec = await self.embedding.embed_query(request.query)
                 vec_hits = await self.vector_store.search(query_vec, top_k=recall)
+                record_embedding(source="local", model_id=self.embedding.model_id,
+                                 dimensions=self.embedding.dim, version=self.embedding.version)
             vec_ranked = [v.id for v in vec_hits]
             vec_scores = {v.id: v.score for v in vec_hits}
 

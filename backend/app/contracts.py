@@ -1131,6 +1131,7 @@ class BenchmarkEvent(Contract):
 
 
 class RAGCaseResult(Contract):
+    embedding: dict[str, Any] = Field(default_factory=dict)
     case_id: str
     mode: SearchMode
     repeat: int
