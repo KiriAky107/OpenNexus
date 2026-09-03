@@ -23,13 +23,13 @@ onMounted(async () => {
       await openVault(lastVaultPath)
       return
     } catch {
-      // Mock 阶段保存的旧路径可能与当前后端 Vault 不同，清除后让用户重新选择。
+      // 历史保存的旧路径可能与当前后端 Vault 不同，清除后让用户重新选择。
       localStorage.removeItem('last-vault-path')
     }
   }
-  setTimeout(() => {
+  {
     aiCoreStatus.value = settingsStore.aiCoreStatus === 'running' ? 'running' : 'stopped'
-  }, 800)
+  }
 })
 
 async function openVault(path: string) {
