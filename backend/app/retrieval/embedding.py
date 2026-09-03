@@ -19,6 +19,7 @@ class EmbeddingProvider(Protocol):
     """统一 Embedding 接口（与文档一致）。"""
 
     model_id: str
+    version: str
     dim: int
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]]: ...
@@ -33,6 +34,7 @@ class HashEmbeddingProvider:
     """
 
     model_id = "hash-v1"
+    version = "1"
     dim = EMBEDDING_DIM
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:

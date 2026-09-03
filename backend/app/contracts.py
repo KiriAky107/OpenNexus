@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 
 class Contract(BaseModel):
@@ -144,6 +144,12 @@ class SearchRequest(Contract):
     limit: int = Field(default=20, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
     include_snippet: bool = True
+    # 检索调优参数（Benchmark 与 Skill 共用）：控制 RRF / 精排 / 候选池 / 分数阈值。
+    # rerank_candidates=None 表示对全部候选精排（保留原有行为），Benchmark 传显式值。
+    rrf_k: int = Field(default=60, ge=1)
+    rerank: bool = True
+    rerank_candidates: int | None = Field(default=None, ge=1)
+    score_threshold: float = Field(default=0.0, ge=0.0)
 
 
 class Citation(Contract):
@@ -909,3 +915,151 @@ class IndexJob(Contract):
     status: Literal["queued", "running", "completed", "failed"]
     scope: Literal["all", "notes", "vectors"]
     created_at: datetime
+
+
+# Benchmark
+class BenchmarkKind(str, Enum):
+    rag = "rag"
+    agent = "agent"
+
+
+class BenchmarkStatus(str, Enum):
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class RAGDatasetCase(Contract):
+    case_id: str
+    query: str = Field(min_length=1)
+    expected_note_ids: list[str] = Field(default_factory=list)
+    expected_block_ids: list[str] = Field(default_factory=list)
+    citation_required: bool = False
+    tags: list[str] = Field(default_factory=list)
+
+
+class RAGRetrievalConfig(Contract):
+    """RAG Benchmark 的检索参数。top_k 映射到 SearchRequest.limit，
+    其余参数透传到 SearchRequest，由检索引擎实际执行。"""
+
+    top_k: int = Field(default=10, ge=1, le=100)
+    rrf_k: int = Field(default=60, ge=1)
+    rerank: bool = True
+    rerank_candidates: int = Field(default=20, ge=1)
+    score_threshold: float = Field(default=0.0, ge=0.0)
+
+
+class RAGRunRequest(Contract):
+    dataset_id: str = Field(min_length=1)
+    modes: list[SearchMode] = Field(
+        default_factory=lambda: [SearchMode.fts, SearchMode.vector, SearchMode.hybrid],
+        min_length=1,
+    )
+    retrieval: RAGRetrievalConfig = Field(default_factory=RAGRetrievalConfig)
+    repeat: int = Field(default=1, ge=1, le=10)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("modes")
+    @classmethod
+    def _no_duplicate_modes(cls, value: list[SearchMode]) -> list[SearchMode]:
+        if len(value) != len(set(value)):
+            raise ValueError("modes must not contain duplicates")
+        return value
+
+
+class RAGMetrics(Contract):
+    hit_at_1: float = 0.0
+    hit_at_5: float = 0.0
+    recall_at_k: float = 0.0
+    mrr: float = 0.0
+    citation_hit_rate: float = 0.0
+    p50_latency_ms: float = 0.0
+    p95_latency_ms: float = 0.0
+    # 样本构成：失败样本按零分计入质量指标，汇总不虚高；报告据此可知实际分母
+    total_cases: int = 0
+    successful_cases: int = 0
+    failed_cases: int = 0
+    failure_rate: float = 0.0
+
+
+class BenchmarkDatasetInfo(Contract):
+    dataset_id: str
+    kind: BenchmarkKind
+    version: str
+    description: str = ""
+    case_count: int
+    content_hash: str
+
+
+class BenchmarkDatasetListResponse(Contract):
+    items: list[BenchmarkDatasetInfo] = Field(default_factory=list)
+
+
+class BenchmarkRun(Contract):
+    run_id: str
+    kind: BenchmarkKind
+    dataset_id: str
+    dataset_hash: str
+    status: BenchmarkStatus
+    progress: float | None = None
+    metrics: dict[str, Any] | None = None
+    config_snapshot: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+    error_code: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class BenchmarkRunListResponse(Contract):
+    items: list[BenchmarkRun] = Field(default_factory=list)
+    page: PageMeta = Field(default_factory=PageMeta)
+
+
+class BenchmarkEventType(str, Enum):
+    run_started = "RunStarted"
+    case_completed = "CaseCompleted"
+    run_completed = "RunCompleted"
+    run_failed = "RunFailed"
+    run_cancelled = "RunCancelled"
+
+
+class BenchmarkEvent(Contract):
+    event: BenchmarkEventType
+    run_id: str
+    sequence: int
+    data: dict[str, Any] = Field(default_factory=dict)
+    timestamp: datetime
+
+
+class RAGCaseResult(Contract):
+    case_id: str
+    mode: SearchMode
+    repeat: int
+    latency_ms: float
+    retrieved_note_ids: list[str] = Field(default_factory=list)
+    retrieved_block_ids: list[str] = Field(default_factory=list)
+    hit_at_1: bool = False
+    hit_at_5: bool = False
+    recall: float = 0.0
+    reciprocal_rank: float = 0.0
+    citation_hit: bool = False
+    # 该 Case 是否声明了 expected_block_ids（决定是否计入 citation_hit_rate 分母）
+    citation_applicable: bool = False
+    error: str | None = None
+    error_code: str | None = None
+
+
+class BenchmarkReport(Contract):
+    run_id: str
+    kind: BenchmarkKind
+    dataset_id: str
+    dataset_hash: str
+    status: BenchmarkStatus
+    config_snapshot: dict[str, Any] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    cases: list[RAGCaseResult] = Field(default_factory=list)
+    error: str | None = None
+    error_code: str | None = None
