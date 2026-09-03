@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import type { ProviderConfig, ProviderType } from '@/contracts'
+import { onMounted, ref } from 'vue'
+import type { ProviderConfig } from '@/contracts'
+import ProviderForm from './ProviderForm.vue'
+import ProviderLogo from './ProviderLogo.vue'
+import ModelRoutingSettings from './ModelRoutingSettings.vue'
 import { useProviderStore } from '@/stores/provider'
 import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore } from '@/stores/theme'
@@ -15,14 +18,9 @@ const settingsStore = useSettingsStore()
 const providerStore = useProviderStore()
 const themeStore = useThemeStore()
 const showProviderForm = ref(false)
-const editingProviderId = ref<string | null>(null)
+const editingProvider = ref<ProviderConfig>()
 const providerAction = ref('')
 const testResults = ref<Record<string, string>>({})
-const providerApiKey = ref('')
-const providerForm = reactive({ preset_id: '', provider_type: 'openai_compatible' as ProviderType, name: '', base_url: '', default_model: '', credential_id: '', enabled: true })
-const formModels = computed(() => editingProviderId.value ? providerStore.modelsByProvider[editingProviderId.value] ?? [] : [])
-const selectedPreset = computed(() => providerStore.presets.find((item) => item.preset_id === providerForm.preset_id) ?? null)
-
 onMounted(async () => {
   await Promise.all([providerStore.loadProviders(), providerStore.loadPresets(), settingsStore.loadDiagnostics()])
   await providerStore.refreshEnabledModels()
@@ -36,54 +34,15 @@ function presetIdFor(provider?: ProviderConfig) {
 }
 
 function openProvider(provider?: ProviderConfig) {
-  editingProviderId.value = provider?.provider_id ?? null
-  const presetId = presetIdFor(provider)
-  const preset = providerStore.presets.find((item) => item.preset_id === presetId)
-  Object.assign(providerForm, { preset_id: presetId, provider_type: provider?.provider_type ?? 'openai_compatible', name: provider?.name ?? '', base_url: provider?.base_url ?? '', default_model: provider?.default_model ?? '', credential_id: provider?.credential_id ?? preset?.default_credential_id ?? '', enabled: provider?.enabled ?? true })
-  providerApiKey.value = ''
+  editingProvider.value = provider
+  providerAction.value = ''
   showProviderForm.value = true
-  if (providerForm.credential_id) void providerStore.loadCredentialStatus(providerForm.credential_id).catch(() => undefined)
   if (provider) void providerStore.loadModels(provider.provider_id).catch(() => undefined)
 }
 
-function applyProviderPreset() {
-  const preset = providerStore.presets.find((item) => item.preset_id === providerForm.preset_id)
-  if (!preset) return
-  Object.assign(providerForm, {
-    provider_type: preset.provider_type,
-    name: preset.name,
-    base_url: preset.base_url,
-    credential_id: preset.default_credential_id ?? '',
-  })
-  providerApiKey.value = ''
-  if (providerForm.credential_id) void providerStore.loadCredentialStatus(providerForm.credential_id).catch(() => undefined)
-}
-
-function closeProvider() {
-  providerApiKey.value = ''
-  showProviderForm.value = false
-}
-
-async function saveProvider() {
-  providerAction.value = ''
-  const credentialId = providerForm.credential_id.trim()
-  const requiresApiKey = Boolean(selectedPreset.value?.requires_credential)
-  if (requiresApiKey && !providerApiKey.value && !providerStore.credentialConfiguredById[credentialId]) {
-    providerAction.value = '请输入 API Key。密钥将由后端加密保存。'
-    return
-  }
-  const data = { ...providerForm, base_url: providerForm.base_url || undefined, credential_id: providerForm.credential_id || undefined, capabilities: {}, has_credential: Boolean(providerForm.credential_id) }
-  try {
-    if (providerApiKey.value) await providerStore.saveCredential(credentialId, providerApiKey.value)
-    const saved = editingProviderId.value
-      ? await providerStore.updateProvider(editingProviderId.value, data)
-      : await providerStore.addProvider(data)
-    closeProvider()
-    if (saved.enabled) void providerStore.loadModels(saved.provider_id).catch(() => undefined)
-  } catch (error) {
-    providerApiKey.value = ''
-    providerAction.value = error instanceof Error ? error.message : 'Provider 保存失败'
-  }
+async function providerSaved(provider: ProviderConfig) {
+  await providerStore.loadProviders()
+  if (provider.enabled) void providerStore.loadModels(provider.provider_id).catch(() => undefined)
 }
 
 async function removeProvider(provider: ProviderConfig) { if (!confirm(`确定删除 Provider“${provider.name}”吗？`)) return; try { await providerStore.deleteProvider(provider.provider_id) } catch (error) { providerAction.value = error instanceof Error ? error.message : '删除失败' } }
@@ -107,14 +66,14 @@ async function chooseDefaultModel(provider: ProviderConfig, event: Event) {
 
     <div v-else-if="activeSection === 'providers'" class="settings-section">
       <div class="section-head">
-        <div><h2>模型提供商</h2><p class="subtle">支持 OpenAI、DeepSeek、Ollama 和自定义兼容服务。</p></div>
+        <div><h2>模型提供商</h2><p class="subtle">选择国内外提供商预设，或配置自定义 API 与独立密钥。</p></div>
         <button class="button-primary" @click="openProvider()">新增 Provider</button>
       </div>
       <div v-if="providerStore.error || providerAction" class="error-banner">{{ providerStore.error || providerAction }}</div>
       <div class="provider-list">
         <article v-for="provider in providerStore.providers" :key="provider.provider_id" class="item-card provider-card">
           <div class="provider-main">
-            <div class="inline-actions"><strong>{{ provider.name }}</strong><span class="badge" :class="{ success: provider.enabled }">{{ provider.provider_type }}</span></div>
+            <div class="inline-actions"><ProviderLogo :logo-id="providerStore.presets.find(preset => preset.preset_id === presetIdFor(provider))?.logo_id || presetIdFor(provider)" /><strong>{{ provider.name }}</strong><span class="badge" :class="{ success: provider.enabled }">{{ provider.provider_type }}</span></div>
             <p class="subtle">{{ provider.base_url || '本地内置' }} · 默认模型 {{ provider.default_model || '未设置' }}</p>
             <div class="tag-list"><span v-for="(_, capability) in provider.capabilities" :key="capability" class="badge">{{ capability }}</span></div>
             <div v-if="providerStore.modelsByProvider[provider.provider_id]?.length" class="model-picker">
@@ -138,42 +97,13 @@ async function chooseDefaultModel(provider: ProviderConfig, event: Event) {
       </div>
     </div>
 
-    <div v-else-if="activeSection === 'index'" class="panel settings-section"><h2>索引与模型</h2><div class="index-summary"><div><span class="badge" :class="{ success: settingsStore.indexStatus.status === 'idle', error: settingsStore.indexStatus.status === 'error' }">{{ settingsStore.indexStatus.status }}</span><p>待处理任务 {{ settingsStore.indexStatus.pending_jobs }}</p></div><div><strong>{{ settingsStore.indexStatus.total_notes }}</strong><small>笔记</small></div><div><strong>{{ settingsStore.indexStatus.total_blocks }}</strong><small>Block</small></div></div><div v-if="settingsStore.indexStatus.error" class="error-banner">{{ settingsStore.indexStatus.error }}</div><div class="inline-actions"><button class="button-primary" @click="settingsStore.rebuildIndex('full')">重建全部</button><button class="button-secondary" @click="settingsStore.rebuildIndex('fts')">重建文本索引</button><button class="button-secondary" @click="settingsStore.rebuildIndex('vector')">重建向量索引</button></div></div>
+    <div v-else-if="activeSection === 'index'" class="panel settings-section"><h2>索引与模型</h2><div class="index-summary"><div><span class="badge" :class="{ success: settingsStore.indexStatus.status === 'idle', error: settingsStore.indexStatus.status === 'error' }">{{ settingsStore.indexStatus.status }}</span><p>待处理任务 {{ settingsStore.indexStatus.pending_jobs }}</p></div><div><strong>{{ settingsStore.indexStatus.total_notes }}</strong><small>笔记</small></div><div><strong>{{ settingsStore.indexStatus.total_blocks }}</strong><small>Block</small></div></div><div v-if="settingsStore.indexStatus.error" class="error-banner">{{ settingsStore.indexStatus.error }}</div><div class="inline-actions"><button class="button-primary" @click="settingsStore.rebuildIndex('full')">重建全部</button><button class="button-secondary" @click="settingsStore.rebuildIndex('fts')">重建文本索引</button><button class="button-secondary" @click="settingsStore.rebuildIndex('vector')">重建向量索引</button></div><ModelRoutingSettings /></div>
 
     <div v-else-if="activeSection === 'permissions'" class="panel settings-section"><h2>权限策略</h2><p class="muted section-description">高影响能力默认需要确认。未知权限由后端拒绝。</p><div class="permission-list"><div v-for="(policy, permission) in settingsStore.permissionPolicy" :key="permission" class="setting-row"><span><strong>{{ permission }}</strong></span><select :value="policy" class="select short" @change="settingsStore.setPermission(String(permission), ($event.target as HTMLSelectElement).value as 'allow' | 'confirm' | 'deny')"><option value="allow">允许</option><option value="confirm">每次确认</option><option value="deny">拒绝</option></select></div></div></div>
 
     <div v-else class="panel settings-section"><h2>AI Core 诊断</h2><div v-if="settingsStore.diagnosticsError" class="error-banner">{{ settingsStore.diagnosticsError }}</div><div class="diagnostic-grid"><div class="item-card"><span class="badge" :class="{ success: settingsStore.aiCoreStatus === 'running', error: settingsStore.aiCoreStatus === 'error' }">{{ settingsStore.aiCoreStatus }}</span><h3>Sidecar 状态</h3><p class="subtle">AI Core 不可用时，Markdown 编辑仍可继续使用。</p></div><div class="item-card"><strong>{{ settingsStore.aiCoreAddress }}</strong><h3>开发 API 地址</h3><p class="subtle">正式桌面环境由 Sidecar Manager 动态提供。</p></div></div><div class="inline-actions diagnostic-actions"><button class="button-primary" @click="settingsStore.loadDiagnostics">重新检测</button><button class="button-secondary" @click="settingsStore.restartAiCore">重启 AI Core</button></div></div>
 
-    <div v-if="showProviderForm" class="modal-backdrop" @click.self="closeProvider">
-      <div class="modal">
-        <h2>{{ editingProviderId ? '编辑 Provider' : '新增 Provider' }}</h2>
-        <form @submit.prevent="saveProvider">
-          <div class="field">
-            <label>提供商预设</label>
-            <select v-model="providerForm.preset_id" class="select" @change="applyProviderPreset">
-              <option value="">自定义</option>
-              <option v-for="preset in providerStore.presets" :key="preset.preset_id" :value="preset.preset_id">{{ preset.name }}</option>
-            </select>
-          </div>
-          <div class="field"><label>接入协议</label><select v-model="providerForm.provider_type" class="select"><option value="openai_compatible">OpenAI Compatible</option><option value="openai_chat">OpenAI Chat</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option><option value="ollama">Ollama</option></select></div>
-          <div class="field"><label>名称</label><input v-model="providerForm.name" class="input" required /></div>
-          <div class="field"><label>Base URL</label><input v-model="providerForm.base_url" class="input" placeholder="https://api.example.com/v1" required /></div>
-          <div class="field">
-            <label>默认模型</label>
-            <input v-model="providerForm.default_model" class="input" :list="editingProviderId ? 'provider-model-options' : undefined" placeholder="保存后自动获取，也可以手动输入" />
-            <datalist id="provider-model-options"><option v-for="model in formModels" :key="model.model_id" :value="model.model_id">{{ model.name }}</option></datalist>
-          </div>
-          <div v-if="selectedPreset?.requires_credential" class="field">
-            <label>API Key</label>
-            <input v-model="providerApiKey" class="input" type="password" autocomplete="new-password" spellcheck="false" :placeholder="providerStore.credentialConfiguredById[providerForm.credential_id] ? '已配置，留空表示不修改' : '请输入 API Key'" />
-            <small class="subtle">提交后由本地 AI Core 加密保存，页面不会回显已保存的密钥。</small>
-          </div>
-          <div v-else-if="!selectedPreset" class="field"><label>Credential ID</label><input v-model="providerForm.credential_id" class="input" placeholder="自定义凭据标识" /><small class="subtle">自定义服务可以引用 Host 注入或后端已保存的凭据。</small></div>
-          <label class="inline-actions"><input v-model="providerForm.enabled" type="checkbox" /> 启用</label>
-          <div class="inline-actions"><button class="button-primary">保存并获取模型</button><button type="button" class="button-secondary" @click="closeProvider">取消</button></div>
-        </form>
-      </div>
-    </div>
+    <ProviderForm v-if="showProviderForm" :provider="editingProvider" :models="editingProvider ? providerStore.modelsByProvider[editingProvider.provider_id] : []" @close="showProviderForm = false" @saved="providerSaved" />
   </section>
 </template>
 

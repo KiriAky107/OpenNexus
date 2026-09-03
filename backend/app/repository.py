@@ -460,16 +460,18 @@ def get_index_meta() -> dict[str, str]:
         conn.close()
 
 
-def clear_all() -> None:
-    """清空元数据、Block 与 FTS5（重建索引用，向量由 VectorStore.clear 处理）。"""
-    conn = connect()
+def clear_all(*, conn: sqlite3.Connection | None = None) -> None:
+    """Clear rebuildable metadata using the caller's transaction when provided."""
+    owns = conn is None
+    conn = conn or connect()
     try:
-        with transaction(conn):
+        with transaction(conn) if owns else nullcontext():
             conn.execute("DELETE FROM blocks_fts")
             conn.execute("DELETE FROM blocks")
             conn.execute("DELETE FROM notes")
     finally:
-        conn.close()
+        if owns:
+            conn.close()
 
 
 def stats() -> dict[str, int]:

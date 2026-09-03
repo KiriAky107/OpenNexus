@@ -86,13 +86,15 @@ class SqliteVecStore:
         finally:
             conn.close()
 
-    async def clear(self) -> None:
-        conn = connect()
+    async def clear(self, *, conn: sqlite3.Connection | None = None) -> None:
+        owns = conn is None
+        conn = conn or connect()
         try:
-            with transaction(conn):
+            with transaction(conn) if owns else nullcontext():
                 conn.execute("DELETE FROM vec_blocks")
         finally:
-            conn.close()
+            if owns:
+                conn.close()
 
     async def count(self) -> int:
         conn = connect()

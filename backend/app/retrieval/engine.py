@@ -22,6 +22,8 @@ from app.repository import BlockHit
 from app.retrieval.embedding import EmbeddingProvider, HashEmbeddingProvider
 from app.retrieval.hybrid import normalize_scores, rrf_fuse
 from app.retrieval.reranker import LexicalReranker, RankedCandidate, RerankerProvider
+from app.retrieval import routed_vectors
+from app.retrieval.provenance import record_embedding
 from app.retrieval.vectorstore import SqliteVecStore, VectorStore
 from app.textutils import make_snippet, match_query
 
@@ -39,10 +41,15 @@ class RetrievalEngine:
         embedding: EmbeddingProvider,
         reranker: RerankerProvider,
         vector_store: VectorStore,
+        *,
+        route_embeddings: bool = False,
     ) -> None:
         self.embedding = embedding
         self.reranker = reranker
         self.vector_store = vector_store
+        # Only the production instance opts in. Replaced test dependencies must
+        # remain authoritative, including monkeypatches on the singleton.
+        self._routed_defaults = (embedding, vector_store) if route_embeddings else None
 
     async def search(self, request: SearchRequest) -> SearchResponse:
         if request.mode == SearchMode.fts:
@@ -74,8 +81,19 @@ class RetrievalEngine:
                 fts_scores = {h.block_id: -h.bm25 for h in fts_hits}
 
         if request.mode in (SearchMode.vector, SearchMode.hybrid):
-            query_vec = await self.embedding.embed_query(request.query)
-            vec_hits = await self.vector_store.search(query_vec, top_k=recall)
+            record_embedding(source="unavailable")
+            vec_hits = None
+            if (
+                self._routed_defaults is not None
+                and self.embedding is self._routed_defaults[0]
+                and self.vector_store is self._routed_defaults[1]
+            ):
+                vec_hits = await routed_vectors.search_remote(request.query, top_k=recall)
+            if vec_hits is None:
+                query_vec = await self.embedding.embed_query(request.query)
+                vec_hits = await self.vector_store.search(query_vec, top_k=recall)
+                record_embedding(source="local", model_id=self.embedding.model_id,
+                                 dimensions=self.embedding.dim, version=self.embedding.version)
             vec_ranked = [v.id for v in vec_hits]
             vec_scores = {v.id: v.score for v in vec_hits}
 
@@ -268,4 +286,6 @@ def _utc(dt: datetime) -> datetime:
 
 
 # 默认引擎实例：轻量实现跑通链路，后续可替换真实模型实现
-engine = RetrievalEngine(HashEmbeddingProvider(), LexicalReranker(), SqliteVecStore())
+engine = RetrievalEngine(
+    HashEmbeddingProvider(), LexicalReranker(), SqliteVecStore(), route_embeddings=True,
+)

@@ -160,10 +160,11 @@ def read_attachment(arguments: AttachmentReadArguments, _: ToolExecutionContext)
     return attachment_service.read_attachment(**arguments.model_dump())
 
 
-def transcribe_audio(arguments: AudioTranscribeArguments, _: ToolExecutionContext) -> dict:
-    return transcription_service.create_transcription(
+async def transcribe_audio(arguments: AudioTranscribeArguments, _: ToolExecutionContext) -> dict:
+    job = await transcription_service.create_transcription(
         arguments.attachment_id, arguments.language
-    ).model_dump(mode="json")
+    )
+    return job.model_dump(mode="json")
 
 
 def _register(

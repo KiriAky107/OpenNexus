@@ -640,9 +640,10 @@ def test_rebuild_failure_restores_old_index(vault, monkeypatch) -> None:
     assert repository.stats() == before  # 旧索引已恢复，无半成品
 
 
-def test_first_rebuild_failure_removes_partial_database(vault, monkeypatch) -> None:
+def test_first_rebuild_failure_leaves_no_partial_index(vault, monkeypatch) -> None:
     """首次启动没有旧库时，失败也不能留下已经写入的部分索引。"""
     from app.services import index_service
+    from app import repository
 
     _write_vault(
         vault,
@@ -651,17 +652,17 @@ def test_first_rebuild_failure_removes_partial_database(vault, monkeypatch) -> N
     real_index = index_service.index_note
     calls = {"count": 0}
 
-    async def fail_on_second(parsed):
+    async def fail_on_second(parsed, **kwargs):
         calls["count"] += 1
         if calls["count"] == 2:
             raise RuntimeError("injected first-rebuild failure")
-        await real_index(parsed)
+        await real_index(parsed, **kwargs)
 
     monkeypatch.setattr(index_service, "index_note", fail_on_second)
     with pytest.raises(RuntimeError):
         asyncio.run(index_service.rebuild(IndexRebuildRequest(scope="all")))
 
-    assert not get_settings().db_path.exists()
+    assert repository.stats() == {"notes": 0, "blocks": 0}
 
 
 def test_rebuild_preserves_task_note_links(vault) -> None:

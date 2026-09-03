@@ -24,6 +24,7 @@ from app.contracts import (
     SearchRequest,
 )
 from app.retrieval.engine import engine
+from app.retrieval.provenance import capture_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +91,10 @@ async def _evaluate_one(
         score_threshold=request.retrieval.score_threshold,
     )
     start = time.perf_counter()
+    embedding = {}
     try:
-        response = await engine.search(search_request)
+        with capture_embedding() as embedding:
+            response = await engine.search(search_request)
         latency_ms = (time.perf_counter() - start) * 1000.0
     except Exception as exc:  # 单个样本失败不中断整个 Benchmark
         # 详细异常只进日志，公开响应只带项目错误码与安全消息，避免泄露路径/SQL 等敏感信息
@@ -100,6 +103,7 @@ async def _evaluate_one(
             exc_info=exc,
         )
         return RAGCaseResult(
+            embedding=embedding,
             case_id=case.case_id,
             mode=mode,
             repeat=repeat,
@@ -115,6 +119,7 @@ async def _evaluate_one(
     k = request.retrieval.top_k
 
     return RAGCaseResult(
+        embedding=embedding,
         case_id=case.case_id,
         mode=mode,
         repeat=repeat,

@@ -86,7 +86,8 @@ def _config_snapshot(request: RAGRunRequest, dataset: RAGDataset) -> dict:
         "modes": [m.value for m in request.modes],
         "retrieval": request.retrieval.model_dump(),
         "repeat": request.repeat,
-        "embedding": {
+        "embedding": {"policy": "per_case", "details": "cases[].embedding"},
+        "local_embedding": {
             "model_id": engine.embedding.model_id,
             "version": engine.embedding.version,
             "dim": engine.embedding.dim,
