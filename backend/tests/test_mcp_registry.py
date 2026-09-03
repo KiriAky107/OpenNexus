@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import sys
 import threading
@@ -111,7 +112,9 @@ def test_update_disables_server_and_revokes_command_trust() -> None:
     service.shutdown()
 
 
-def test_update_remains_retryable_when_removed_secret_cleanup_fails(monkeypatch) -> None:
+def test_update_remains_retryable_when_removed_secret_cleanup_fails(
+    monkeypatch,
+) -> None:
     service = registry()
     created = service.create(request())
     service.put_secret(created.server_id, "TEST_MCP_SECRET", "keep-until-retry")
@@ -166,13 +169,189 @@ def test_unavailable_server_removes_bridge_host(monkeypatch) -> None:
     removed: list[str] = []
     monkeypatch.setattr(service.bridge, "remove", removed.append)
 
-    service._unavailable(created.server_id, "connection lost")
+    generation = object()
+    service._generations[created.server_id] = generation
+    service._unavailable(created.server_id, generation, "connection lost")
 
     current = service.get(created.server_id)
     assert removed == [f"mcp.{created.server_id}"]
     assert current.enabled is False
     assert current.status == "unhealthy"
     service.shutdown()
+
+
+def test_old_failure_callback_cannot_stop_replacement_host(monkeypatch) -> None:
+    service = registry()
+    callbacks = []
+    original_start = service.bridge.start
+
+    def capture_callback(*args, **kwargs):
+        callbacks.append(args[4])
+        return original_start(*args, **kwargs)
+
+    monkeypatch.setattr(service.bridge, "start", capture_callback)
+    created = service.create(request(secret_environment_keys=[]))
+    service.trust(created.server_id, created.command_digest)
+    callback_thread = None
+    try:
+        service.test(created.server_id)
+        service.enable(created.server_id)
+        old_callback = callbacks[-1]
+        callback_started = threading.Event()
+        callback_finished = threading.Event()
+
+        def delayed_failure():
+            callback_started.set()
+            old_callback(f"mcp.{created.server_id}", "delayed old failure")
+            callback_finished.set()
+
+        # Queue the old callback while a replacement owns the lifecycle lock.
+        with service._lifecycle_lock:
+            callback_thread = threading.Thread(target=delayed_failure, daemon=True)
+            callback_thread.start()
+            assert callback_started.wait(timeout=2)
+            service.disable(created.server_id)
+            service.enable(created.server_id)
+        assert callback_finished.wait(timeout=2)
+        assert service.get(created.server_id).enabled is True
+        assert service.get(created.server_id).status == "ready"
+        assert service.tools.definitions()
+        callbacks[-1](f"mcp.{created.server_id}", "current failure")
+        assert service.get(created.server_id).enabled is False
+        assert service.get(created.server_id).status == "unhealthy"
+    finally:
+        service.shutdown()
+        if callback_thread is not None:
+            callback_thread.join(timeout=2)
+
+
+def test_header_case_only_rename_preserves_secret() -> None:
+    service = registry()
+    config = {
+        "name": "HTTP",
+        "transport": "streamable_http",
+        "url": "https://example.test/mcp",
+        "secret_header_keys": ["Authorization"],
+    }
+    created = service.create(McpServerCreateRequest(**config))
+    service.put_secret(created.server_id, "Authorization", "synthetic", kind="header")
+    config["secret_header_keys"] = ["authorization"]
+    updated = service.update(
+        created.server_id, McpServerUpdateRequest(**config, version=created.version)
+    )
+    assert updated.secret_headers == {"authorization": True}
+    assert (
+        service.credentials.resolve(
+            service._secret_id(created.server_id, "authorization", "header")
+        )
+        == "synthetic"
+    )
+
+
+def test_environment_secrets_are_case_sensitive_and_delete_independently() -> None:
+    service = registry()
+    created = service.create(request(secret_environment_keys=["TOKEN", "token"]))
+    service.put_secret(created.server_id, "TOKEN", "upper")
+    service.put_secret(created.server_id, "token", "lower")
+    assert (
+        service.credentials.resolve(service._secret_id(created.server_id, "TOKEN"))
+        == "upper"
+    )
+    assert (
+        service.credentials.resolve(service._secret_id(created.server_id, "token"))
+        == "lower"
+    )
+    service.delete_secret(created.server_id, "TOKEN")
+    assert service.get(created.server_id).secret_environment == {
+        "TOKEN": False,
+        "token": True,
+    }
+
+
+def test_legacy_environment_credential_migration_is_idempotent() -> None:
+    service = registry()
+    created = service.create(request(secret_environment_keys=["TOKEN"]))
+    suffix = hashlib.sha256(b"environment\0token").hexdigest()[:20]
+    legacy_id = f"mcp.{created.server_id}.{suffix}"
+    service.credentials.put(legacy_id, "legacy-value")
+    service._records[created.server_id]["secret_environment_version"] = 1
+    service._write()
+    migrated = registry()
+    assert migrated.get(created.server_id).secret_environment == {"TOKEN": True}
+    assert (
+        migrated.credentials.resolve(migrated._secret_id(created.server_id, "TOKEN"))
+        == "legacy-value"
+    )
+    assert not migrated.credentials.has(legacy_id)
+    migrated.put_secret(created.server_id, "TOKEN", "new-value")
+    assert (
+        registry().credentials.resolve(migrated._secret_id(created.server_id, "TOKEN"))
+        == "new-value"
+    )
+
+
+def test_ambiguous_legacy_credentials_are_not_assigned_to_two_variables() -> None:
+    service = registry()
+    created = service.create(request(secret_environment_keys=["TOKEN", "token"]))
+    suffix = hashlib.sha256(b"environment\0token").hexdigest()[:20]
+    legacy_id = f"mcp.{created.server_id}.{suffix}"
+    service.credentials.put(legacy_id, "cannot-reconstruct-originals")
+    service._records[created.server_id]["secret_environment_version"] = 1
+    service._write()
+    migrated = registry()
+    current = migrated.get(created.server_id)
+    assert current.secret_environment == {"TOKEN": False, "token": False}
+    assert current.enabled is False
+    assert current.last_test_succeeded is None
+    assert migrated.credentials.has(
+        legacy_id
+    )  # Keep the original ciphertext recoverable.
+    migrated.put_secret(created.server_id, "TOKEN", "upper")
+    migrated.put_secret(created.server_id, "token", "lower")
+    assert registry().get(created.server_id).secret_environment == {
+        "TOKEN": True,
+        "token": True,
+    }
+    migrated.delete(created.server_id)
+    assert not migrated.credentials.has(legacy_id)
+
+
+def test_credential_id_migration_keeps_new_values_and_is_atomic(monkeypatch) -> None:
+    credentials = EncryptedCredentialStore()
+    credentials.put("mcp.old", "old-value")
+    credentials.put("mcp.new", "new-value")
+    original_write = credentials._write_tokens
+
+    def fail_write(_tokens):
+        raise CredentialStoreError("synthetic failure")
+
+    monkeypatch.setattr(credentials, "_write_tokens", fail_write)
+    with pytest.raises(CredentialStoreError):
+        credentials.move_many({"mcp.old": "mcp.new"})
+    assert credentials.resolve("mcp.old") == "old-value"
+    assert credentials.resolve("mcp.new") == "new-value"
+    monkeypatch.setattr(credentials, "_write_tokens", original_write)
+    credentials.move_many({"mcp.old": "mcp.new"})
+    assert credentials.resolve("mcp.old") is None
+    assert credentials.resolve("mcp.new") == "new-value"
+
+
+def test_ambiguous_legacy_secret_is_not_resurrected_after_removing_a_key() -> None:
+    service = registry()
+    created = service.create(request(secret_environment_keys=["TOKEN", "token"]))
+    legacy_id = service._legacy_environment_secret_id(created.server_id, "TOKEN")
+    service.credentials.put(legacy_id, "ambiguous-old-value")
+    service._records[created.server_id]["secret_environment_version"] = 1
+    service._write()
+    migrated = registry()
+    migrated.update(
+        created.server_id,
+        McpServerUpdateRequest(
+            **request(secret_environment_keys=["token"]).model_dump(),
+            version=created.version,
+        ),
+    )
+    assert registry().get(created.server_id).secret_environment == {"token": False}
 
 
 def test_production_rejects_process_launch_even_after_approval() -> None:
@@ -182,6 +361,29 @@ def test_production_rejects_process_launch_even_after_approval() -> None:
     with pytest.raises(McpRegistryError) as error:
         service.enable(created.server_id)
     assert error.value.code == "MCP_SANDBOX_REQUIRED"
+
+
+@pytest.mark.parametrize("startup,tool", [(120, 300), (1.5, 2.5)])
+def test_server_timeouts_survive_bridge_adaptation_and_reload(startup, tool) -> None:
+    service = registry()
+    created = service.create(
+        request(
+            secret_environment_keys=[],
+            startup_timeout_seconds=startup,
+            tool_timeout_seconds=tool,
+        )
+    )
+    service.trust(created.server_id, created.command_digest)
+    try:
+        tested = service.test(created.server_id)
+        assert tested.last_test_succeeded is True
+        assert tested.startup_timeout_seconds == startup
+        assert tested.tool_timeout_seconds == tool
+        restored = registry().get(created.server_id)
+        assert restored.startup_timeout_seconds == startup
+        assert restored.tool_timeout_seconds == tool
+    finally:
+        service.shutdown()
 
 
 def test_enable_requires_successful_test_and_update_checks_version() -> None:
@@ -307,15 +509,18 @@ def test_lifecycle_operations_are_serialized_and_tool_names_are_isolated() -> No
         service.test(server.server_id)
 
     with ThreadPoolExecutor(max_workers=4) as pool:
-        enabled = list(pool.map(lambda item: service.enable(item.server_id), servers * 2))
+        enabled = list(
+            pool.map(lambda item: service.enable(item.server_id), servers * 2)
+        )
     assert all(item.enabled for item in enabled)
     names = [
-        item.name
-        for item in service.tools.definitions()
-        if item.source == "mcp_server"
+        item.name for item in service.tools.definitions() if item.source == "mcp_server"
     ]
     assert len(names) == len(set(names))
-    assert all(any(name.startswith(f"mcp.{item.server_id}.") for name in names) for item in servers)
+    assert all(
+        any(name.startswith(f"mcp.{item.server_id}.") for name in names)
+        for item in servers
+    )
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda item: service.disable(item.server_id), servers * 2))

@@ -100,15 +100,8 @@ from app.services import (
 router = APIRouter(prefix="/api")
 
 
-def mcp_call(operation):
-    try:
-        return operation()
-    except McpRegistryError as exc:
-        raise ApiError(exc.status_code, exc.code, exc.message) from exc
-
-
 async def mcp_call_async(operation):
-    """MCP process operations wait on stdio and must not block the API event loop."""
+    """Even registry reads can wait on lifecycle locks; keep all MCP work off the event loop."""
     try:
         return await asyncio.to_thread(operation)
     except McpRegistryError as exc:
@@ -521,19 +514,19 @@ async def uninstall_skill(skill_id: str) -> OperationResponse:
 # Independent MCP Server Registry
 @router.get("/mcp/servers", response_model=McpServerListResponse, tags=["MCP Servers"])
 async def list_mcp_servers() -> McpServerListResponse:
-    return McpServerListResponse(items=mcp_call(container.mcp_servers.list))
+    return McpServerListResponse(items=await mcp_call_async(container.mcp_servers.list))
 
 
 @router.post(
     "/mcp/servers", response_model=McpServer, status_code=201, tags=["MCP Servers"]
 )
 async def create_mcp_server(request: McpServerCreateRequest) -> McpServer:
-    return mcp_call(lambda: container.mcp_servers.create(request))
+    return await mcp_call_async(lambda: container.mcp_servers.create(request))
 
 
 @router.get("/mcp/servers/{server_id}", response_model=McpServer, tags=["MCP Servers"])
 async def get_mcp_server(server_id: str) -> McpServer:
-    return mcp_call(lambda: container.mcp_servers.get(server_id))
+    return await mcp_call_async(lambda: container.mcp_servers.get(server_id))
 
 
 @router.get(
@@ -543,7 +536,7 @@ async def get_mcp_server(server_id: str) -> McpServer:
 )
 async def list_mcp_server_tools(server_id: str) -> McpToolSummaryListResponse:
     return McpToolSummaryListResponse(
-        items=mcp_call(lambda: container.mcp_servers.list_tools(server_id))
+        items=await mcp_call_async(lambda: container.mcp_servers.list_tools(server_id))
     )
 
 
@@ -570,7 +563,7 @@ async def delete_mcp_server(server_id: str) -> OperationResponse:
     "/mcp/servers/{server_id}/trust", response_model=McpServer, tags=["MCP Servers"]
 )
 async def trust_mcp_server(server_id: str, request: McpServerTrustRequest) -> McpServer:
-    return mcp_call(
+    return await mcp_call_async(
         lambda: container.mcp_servers.trust(server_id, request.command_digest)
     )
 

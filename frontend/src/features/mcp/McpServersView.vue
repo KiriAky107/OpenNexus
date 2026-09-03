@@ -4,8 +4,7 @@ import { Connection, Delete, EditPen, Plus, Refresh, VideoPlay } from '@element-
 import AppIcon from '@/components/common/AppIcon.vue'
 import type { McpServer, McpServerInput, McpServerTransport } from '@/contracts'
 import * as service from '@/services/mcpServerService'
-
-type SecretKind = 'environment' | 'header'
+import { emptyMcpConfig, mergeImportedSecrets, normalizeMcpConfig, parseMcpJson, type ImportedSecret, type SecretKind } from './configuration'
 
 const servers = ref<McpServer[]>([])
 const busy = ref('')
@@ -22,17 +21,10 @@ const secretHeaderKeysText = ref('')
 const permissionsText = ref('')
 const rawConfig = ref('')
 const secretDrafts = reactive<Record<string, string>>({})
-const form = reactive<McpServerInput>(emptyForm())
+const form = reactive<McpServerInput>(emptyMcpConfig())
+const importedSecrets = ref<ImportedSecret[]>([])
 
 const dialogTitle = computed(() => editingId.value ? '编辑 MCP 服务器' : '新增 MCP 服务器')
-
-function emptyForm(): McpServerInput {
-  return {
-    name: '', transport: 'stdio', command: '', args: [], url: null, headers: {},
-    environment: {}, secret_environment_keys: [], secret_header_keys: [], permissions: [],
-    startup_timeout_seconds: 15, tool_timeout_seconds: 30,
-  }
-}
 
 async function load() {
   error.value = ''
@@ -41,7 +33,7 @@ async function load() {
 }
 
 function resetEditor(input: McpServerInput) {
-  Object.assign(form, input)
+  Object.assign(form, emptyMcpConfig(), { version: undefined }, input)
   argsText.value = input.args.join('\n')
   environmentText.value = JSON.stringify(input.environment, null, 2)
   headersText.value = JSON.stringify(input.headers, null, 2)
@@ -53,13 +45,19 @@ function resetEditor(input: McpServerInput) {
 }
 
 function openCreate() {
+  if (busy.value) return
+  error.value = ''
+  importedSecrets.value = []
   editingId.value = null
   editingOriginal.value = null
-  resetEditor(emptyForm())
+  resetEditor(emptyMcpConfig())
   dialogOpen.value = true
 }
 
 function openEdit(server: McpServer) {
+  if (busy.value) return
+  error.value = ''
+  importedSecrets.value = []
   editingId.value = server.server_id
   editingOriginal.value = server
   resetEditor({
@@ -109,36 +107,67 @@ function formPayload(): McpServerInput {
   }
 }
 
-function payload(): McpServerInput {
-  if (editorMode.value === 'form') return formPayload()
-  let parsed: unknown
-  try { parsed = JSON.parse(rawConfig.value) } catch { throw new Error('服务器配置不是有效 JSON') }
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('服务器配置必须是 JSON 对象')
-  const value = parsed as McpServerInput
-  if (editingId.value) value.version = form.version
-  return value
+function payload(requireConnection = true): McpServerInput {
+  const { config, secrets } = editorMode.value === 'form'
+    ? normalizeMcpConfig(formPayload(), '', requireConnection) : parseMcpJson(rawConfig.value, form.name, requireConnection)
+  // Keep only still-declared drafts. A mode switch must not discard imported keys,
+  // and editing the declaration must not later send a removed key to the Secret API.
+  importedSecrets.value = mergeImportedSecrets(config, importedSecrets.value, secrets)
+  if (editingId.value) config.version = form.version
+  if (editorMode.value === 'json') rawConfig.value = JSON.stringify(config, null, 2)
+  else {
+    environmentText.value = JSON.stringify(config.environment, null, 2)
+    headersText.value = JSON.stringify(config.headers, null, 2)
+    secretKeysText.value = config.secret_environment_keys.join('\n')
+    secretHeaderKeysText.value = config.secret_header_keys.join('\n')
+  }
+  return config
 }
 
 function switchMode(mode: 'form' | 'json') {
   try {
     if (mode === editorMode.value) return
-    if (mode === 'json') rawConfig.value = JSON.stringify(formPayload(), null, 2)
-    else resetEditor(payload())
+    error.value = ''
+    if (mode === 'json') rawConfig.value = JSON.stringify(payload(false), null, 2)
+    else resetEditor(payload(false))
     editorMode.value = mode
   } catch (cause) { error.value = message(cause, '配置转换失败') }
 }
 
 async function save() {
+  if (busy.value) return
+  let saved: McpServer | undefined
   try {
+    error.value = ''
     const input = payload()
     if (!input.name || (input.transport === 'stdio' ? !input.command : !input.url)) throw new Error('请填写服务器名称和连接地址')
     if (editingOriginal.value && executionChanged(editingOriginal.value, input) && !confirm('连接命令、地址或认证配置已变化，保存后旧测试与授权会失效。是否保存？')) return
     busy.value = 'save'
-    editingId.value ? await service.updateMcpServer(editingId.value, input) : await service.createMcpServer(input)
-    dialogOpen.value = false
+    saved = editingId.value ? await service.updateMcpServer(editingId.value, input) : await service.createMcpServer(input)
+    // Commit the returned ID/version before saving secrets so a partial failure can
+    // retry this server instead of creating a duplicate or sending a stale version.
+    editingId.value = saved.server_id
+    editingOriginal.value = saved
+    resetEditor({ ...input, version: saved.version })
+    for (const item of [...importedSecrets.value]) {
+      await service.putMcpServerSecret(saved.server_id, item.key, item.value, item.kind)
+      importedSecrets.value = importedSecrets.value.filter(candidate => candidate !== item)
+    }
+    closeEditor()
     await load()
-  } catch (cause) { error.value = message(cause, '保存失败') }
+  } catch (cause) {
+    if (saved) await load()
+    error.value = `${saved ? '服务器配置已保存，但密钥保存失败；可点击保存重试。' : ''}${message(cause, '保存失败')}`
+  }
   finally { busy.value = '' }
+}
+
+function closeEditor() {
+  importedSecrets.value = []
+  rawConfig.value = ''
+  environmentText.value = '{}'
+  headersText.value = '{}'
+  dialogOpen.value = false
 }
 
 function executionChanged(server: McpServer, input: McpServerInput) {
@@ -212,9 +241,12 @@ onMounted(load)
       </article>
     </div>
 
-    <div v-if="dialogOpen" class="modal-backdrop" @click.self="dialogOpen = false">
+    <div v-if="dialogOpen" class="modal-backdrop" @click.self="!busy && closeEditor()">
       <form class="modal-card" @submit.prevent="save">
-        <header><h2><AppIcon :icon="Plus" /> {{ dialogTitle }}</h2><button type="button" class="close" @click="dialogOpen = false">×</button></header>
+        <fieldset :disabled="!!busy" class="editor-fields">
+        <header><h2><AppIcon :icon="Plus" /> {{ dialogTitle }}</h2><button type="button" class="close" @click="closeEditor">×</button></header>
+        <div v-if="error" class="error-banner" role="alert">{{ error }}</div>
+        <div v-if="importedSecrets.length" class="notice-banner">已识别 {{ importedSecrets.length }} 项密钥，保存时将单独加密，不会写入普通服务器配置；取消将清除未保存密钥。</div>
         <div class="mode-tabs"><button type="button" :class="{ active: editorMode === 'form' }" @click="switchMode('form')">表单配置</button><button type="button" :class="{ active: editorMode === 'json' }" @click="switchMode('json')">JSON 配置</button></div>
         <template v-if="editorMode === 'form'">
           <label>服务器名称<input v-model="form.name" maxlength="80" placeholder="例如：文件系统工具"></label>
@@ -224,14 +256,16 @@ onMounted(load)
           <label>声明权限（逗号分隔，可选）<input v-model="permissionsText" placeholder="network.request, notes.read"></label>
           <div class="two-columns"><label>启动超时（秒）<input v-model.number="form.startup_timeout_seconds" type="number" min="1" max="120"></label><label>工具超时（秒）<input v-model.number="form.tool_timeout_seconds" type="number" min="1" max="300"></label></div>
         </template>
-        <label v-else>服务器 JSON 配置<textarea v-model="rawConfig" class="json-editor" rows="22" spellcheck="false"></textarea><small>Secret 只填写键名，明文请在保存后的服务器卡片中单独录入。</small></label>
-        <footer><button type="button" class="button-secondary" @click="dialogOpen = false">取消</button><button class="button-primary" :disabled="busy === 'save'">保存</button></footer>
+        <label v-else>服务器 JSON 配置<textarea v-model="rawConfig" class="json-editor" rows="22" spellcheck="false"></textarea><small>支持 NotesAgent 配置、command/args/env 和单服务器 mcpServers 配置。已声明的 Secret 及常见 API Key、Token、Authorization 会拆分后加密保存。其他敏感值请显式声明；不要把密钥放入命令或参数。</small><small>兼容导入 timeout 为启动超时，sse_read_timeout 为工具等待上限（不保留 SSE 读取超时语义）。</small></label>
+        <footer><button type="button" class="button-secondary" @click="closeEditor">取消</button><button class="button-primary" :disabled="busy === 'save'">保存</button></footer>
+        </fieldset>
       </form>
     </div>
   </section>
 </template>
 
 <style scoped>
+.editor-fields { display: grid; gap: var(--space-lg); border: 0; padding: 0; margin: 0; min-width: 0; }
 .mcp-page { overflow: auto; }.notice-banner,.error-banner { margin-bottom: var(--space-lg); }.server-list { display: grid; gap: var(--space-lg); }.server-card { display: grid; gap: var(--space-md); }
 .server-main,.server-title,.metadata,.card-actions,.inline-actions,.template-row,.modal-card header,.modal-card footer { display: flex; align-items: center; gap: var(--space-sm); }.server-main { justify-content: space-between; }.server-title { align-items: flex-start; }.server-title h2 { margin-bottom: 4px; }.server-title code { color: var(--color-text-secondary); overflow-wrap: anywhere; }.metadata { flex-wrap: wrap; color: var(--color-text-tertiary); font-size: var(--font-size-sm); }.metadata span + span::before { content: '·'; margin-right: var(--space-sm); }.compact { margin: 0; }
 .card-actions { justify-content: flex-end; border-top: 1px solid var(--color-border-subtle); padding-top: var(--space-md); }.empty { text-align: center; place-items: center; display: grid; gap: var(--space-md); padding: 64px; }.secrets { border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); padding: var(--space-md); display: grid; gap: var(--space-sm); }.secrets label { display: grid; grid-template-columns: minmax(220px,.7fr) 1fr; align-items: center; gap: var(--space-md); }.secrets small,.modal-card small { color: var(--color-text-tertiary); }.secret-input { display: flex; gap: var(--space-sm); }.secret-input input { flex: 1; }
