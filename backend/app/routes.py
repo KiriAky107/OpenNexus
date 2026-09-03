@@ -14,6 +14,14 @@ from app.contracts import (
     AgentRunListResponse,
     AgentTraceResponse,
     ChatRequest,
+    BenchmarkDatasetListResponse,
+    BenchmarkEventType,
+    BenchmarkKind,
+    BenchmarkReport,
+    BenchmarkRun,
+    BenchmarkRunListResponse,
+    BenchmarkStatus,
+    RAGRunRequest,
     CredentialStatus,
     CredentialWriteRequest,
     ExtensionInstallRequest,
@@ -78,6 +86,10 @@ from app.contracts import (
     WorkspaceOpenRequest,
     WorkspaceSnapshot,
 )
+from app.agent import AgentCapacityError, AgentRunNotFoundError
+from app.benchmarks import datasets as benchmark_datasets
+from app.benchmarks import service as benchmark_service
+from app.container import container
 from app.errors import ApiError
 from app.extensions import ExtensionError
 from app.extensions.mcp_registry import McpRegistryError
@@ -1092,3 +1104,168 @@ async def get_index_job(job_id: str) -> IndexJob:
             404, "RESOURCE_NOT_FOUND", "index job not found", {"job_id": job_id}
         )
     return job
+
+
+# Benchmark
+@router.get(
+    "/benchmarks/datasets",
+    response_model=BenchmarkDatasetListResponse,
+    tags=["Benchmark"],
+)
+async def list_benchmark_datasets(
+    kind: BenchmarkKind = Query(default=BenchmarkKind.rag),
+) -> BenchmarkDatasetListResponse:
+    return BenchmarkDatasetListResponse(items=benchmark_datasets.list_datasets(kind))
+
+
+@router.post(
+    "/benchmarks/rag/runs",
+    response_model=BenchmarkRun,
+    status_code=202,
+    tags=["Benchmark"],
+)
+async def create_rag_benchmark(request: RAGRunRequest) -> BenchmarkRun:
+    return await benchmark_service.create_rag_run(request)
+
+
+@router.get(
+    "/benchmarks/runs",
+    response_model=BenchmarkRunListResponse,
+    tags=["Benchmark"],
+)
+async def list_benchmark_runs(
+    kind: BenchmarkKind | None = Query(default=None),
+    status: BenchmarkStatus | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> BenchmarkRunListResponse:
+    items, total = benchmark_service.list_runs(
+        kind=kind, status=status, limit=limit, offset=offset
+    )
+    return BenchmarkRunListResponse(
+        items=items, page=PageMeta(total=total, limit=limit, offset=offset)
+    )
+
+
+@router.get(
+    "/benchmarks/runs/{run_id}",
+    response_model=BenchmarkRun,
+    tags=["Benchmark"],
+)
+async def get_benchmark_run(run_id: str) -> BenchmarkRun:
+    run = benchmark_service.get_run(run_id)
+    if run is None:
+        raise ApiError(
+            404, "BENCHMARK_RUN_NOT_FOUND", "benchmark run not found", {"run_id": run_id}
+        )
+    return run
+
+
+@router.post(
+    "/benchmarks/runs/{run_id}/cancel",
+    response_model=OperationResponse,
+    tags=["Benchmark"],
+)
+async def cancel_benchmark_run(run_id: str) -> OperationResponse:
+    run = benchmark_service.cancel_run(run_id)
+    if run is None:
+        raise ApiError(
+            404, "BENCHMARK_RUN_NOT_FOUND", "benchmark run not found", {"run_id": run_id}
+        )
+    return OperationResponse(
+        status="accepted",
+        resource_id=run_id,
+        message=f"Benchmark run status: {run.status.value}",
+    )
+
+
+@router.get(
+    "/benchmarks/runs/{run_id}/events",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "BenchmarkEvent Server-Sent Events stream",
+            "content": {"text/event-stream": {}},
+        }
+    },
+    tags=["Benchmark"],
+)
+async def benchmark_events(
+    run_id: str,
+    after_sequence: int = Query(default=-1, ge=-1),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+) -> StreamingResponse:
+    if benchmark_service.get_run(run_id) is None:
+        raise ApiError(
+            404, "BENCHMARK_RUN_NOT_FOUND", "benchmark run not found", {"run_id": run_id}
+        )
+
+    # SSE 断线重连：Last-Event-ID 优先于 after_sequence，用于从上次收到的事件继续
+    cursor = after_sequence
+    if last_event_id is not None:
+        try:
+            cursor = int(last_event_id)
+        except ValueError as exc:
+            raise ApiError(
+                400,
+                "BENCHMARK_EVENT_CURSOR_INVALID",
+                "Last-Event-ID must be an integer sequence.",
+                {"last_event_id": last_event_id},
+            ) from exc
+        if cursor < -1:
+            raise ApiError(
+                400,
+                "BENCHMARK_EVENT_CURSOR_INVALID",
+                "Last-Event-ID must be greater than or equal to -1.",
+            )
+
+    async def stream() -> AsyncIterator[str]:
+        # 先订阅（保证订阅之后产生的事件也能收到），再回放历史事件，最后实时输出新事件
+        terminal = (
+            BenchmarkEventType.run_completed,
+            BenchmarkEventType.run_failed,
+            BenchmarkEventType.run_cancelled,
+        )
+        queue = benchmark_service.subscribe(run_id)
+        try:
+            last_sequence = cursor
+            # 回放按订阅时刻的快照长度遍历，避免列表在回放期间被追加；终止事件同样要结束流，
+            # 防止回放完成后进入实时队列却因序号去重跳过同一终止事件而永久等待。
+            history = benchmark_service.get_events(run_id)
+            for index in range(len(history)):
+                event = history[index]
+                if event.sequence <= cursor:
+                    continue
+                yield as_sse(event.event.value, event.model_dump_json(), event_id=event.sequence)
+                last_sequence = event.sequence
+                if event.event in terminal:
+                    return
+            if queue is None:
+                return
+            while True:
+                event = await queue.get()
+                if event.sequence <= last_sequence:
+                    continue
+                yield as_sse(event.event.value, event.model_dump_json(), event_id=event.sequence)
+                last_sequence = event.sequence
+                if event.event in terminal:
+                    return
+        finally:
+            if queue is not None:
+                benchmark_service.unsubscribe(run_id, queue)
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@router.get(
+    "/benchmarks/runs/{run_id}/report",
+    response_model=BenchmarkReport,
+    tags=["Benchmark"],
+)
+async def get_benchmark_report(run_id: str) -> BenchmarkReport:
+    report = benchmark_service.get_report(run_id)
+    if report is None:
+        raise ApiError(
+            404, "BENCHMARK_RUN_NOT_FOUND", "benchmark report not found", {"run_id": run_id}
+        )
+    return report

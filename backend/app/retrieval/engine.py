@@ -56,7 +56,7 @@ class RetrievalEngine:
         # 候选池至少覆盖本次请求的 offset+limit，保证分页能取到目标页；设上限防内存失控
         window = min(request.offset + request.limit, MAX_CANDIDATE_POOL)
         pool_size = max(CANDIDATE_POOL, window)
-        # 带过滤时放大召回；FTS 则一次性取全量命中（≤FTS_FETCH_LIMIT）避免截断漏召回
+        # 带过滤时放大召回，缓解「先截断候选池再过滤」造成的漏召回
         recall = min(pool_size * OVERSCAN_FACTOR, MAX_CANDIDATE_POOL) if has_filters else pool_size
 
         # 1. 按模式收集候选（FTS 与 Vector 各产出「按相关性降序」的 block_id 列表）
@@ -84,7 +84,7 @@ class RetrievalEngine:
         elif request.mode == SearchMode.vector:
             candidate_scores = vec_scores
         else:  # hybrid：RRF 融合
-            candidate_scores = rrf_fuse([fts_ranked, vec_ranked])
+            candidate_scores = rrf_fuse([fts_ranked, vec_ranked], k=request.rrf_k)
 
         if not candidate_scores:
             return self._empty(request)
@@ -97,14 +97,23 @@ class RetrievalEngine:
         if not filtered:
             return self._empty(request)
 
-        # 4. 排序 / 精排
+        # 4. 排序 / 精排：hybrid 先按融合分预排序，再对前 rerank_candidates 个候选做精排，
+        #    剩余候选按融合分排在精排结果之后；rerank=False 时跳过精排直接按融合分排序。
         if request.mode == SearchMode.hybrid:
-            candidates = [
-                RankedCandidate(block_id=h.block_id, score=candidate_scores[h.block_id], text=h.content)
-                for h in filtered
-            ]
-            ranked = await self.reranker.rerank(request.query, candidates)
-            ordered = [(c.block_id, c.score) for c in ranked]
+            pre_sorted = sorted(filtered, key=lambda h: -candidate_scores[h.block_id])
+            if request.rerank:
+                limit = request.rerank_candidates
+                pool = pre_sorted if limit is None else pre_sorted[:limit]
+                rest = [] if limit is None else pre_sorted[limit:]
+                candidates = [
+                    RankedCandidate(block_id=h.block_id, score=candidate_scores[h.block_id], text=h.content)
+                    for h in pool
+                ]
+                ranked = await self.reranker.rerank(request.query, candidates)
+                ordered = [(c.block_id, c.score) for c in ranked]
+                ordered += [(h.block_id, candidate_scores[h.block_id]) for h in rest]
+            else:
+                ordered = [(h.block_id, candidate_scores[h.block_id]) for h in pre_sorted]
         else:
             ordered = sorted(
                 ((h.block_id, candidate_scores[h.block_id]) for h in filtered),
@@ -112,8 +121,10 @@ class RetrievalEngine:
             )
 
         ordered = normalize_scores(ordered)
+        # score_threshold：归一化后过滤低分结果（默认 0 不过滤）
+        ordered = [(bid, score) for bid, score in ordered if score >= request.score_threshold]
 
-        # 5. 分页：total = 过滤后候选集大小。fts 已取全量（≤FTS_FETCH_LIMIT）故为真实命中数；
+        # 5. 分页：total = 过滤后候选集大小。fts 走数据库精确分页，total 为真实命中数；
         #    vector/hybrid 为 KNN 候选集，无全局 total。
         total = len(ordered)
         page = ordered[request.offset : request.offset + request.limit]
@@ -126,10 +137,40 @@ class RetrievalEngine:
         )
 
     def _search_fts(self, request: SearchRequest) -> SearchResponse:
-        """FTS 专用路径：过滤、COUNT 与分页全部在 SQLite 中完成。"""
+        """FTS 专用路径：在数据库侧完成过滤、计数与分页，不取全量后再截断。
+
+        阈值过滤时，min-max 归一化是 bm25 的线性函数，据此把 score_threshold 换算为
+        bm25 截止值（bm25_max），使过滤、计数与分页口径一致；无阈值时走数据库原生分页，
+        total 始终为过滤后的真实命中数，不再受固定截断影响。
+        """
         match = match_query(request.query)
         if not match:
             return self._empty(request)
+
+        bounds = repository.fts_score_bounds(
+            match=match,
+            folders=request.folders,
+            note_ids=request.note_ids,
+            tags=request.tags,
+            created_from=request.created_from,
+            created_to=request.created_to,
+            updated_from=request.updated_from,
+            updated_to=request.updated_to,
+        )
+        if bounds is None:
+            return self._empty(request)
+
+        lo, hi = bounds
+        span = hi - lo
+        bm25_max: float | None = None
+        if request.score_threshold > 0:
+            if span == 0:
+                # 全部命中 bm25 相同，归一化后皆为 1.0；阈值超过 1.0 时无命中
+                if request.score_threshold > 1.0:
+                    return self._empty(request)
+            else:
+                # norm = (hi - bm25) / span；norm >= threshold ⟺ bm25 <= hi - threshold * span
+                bm25_max = hi - request.score_threshold * span
 
         fts_hits, total = repository.fts_search_page(
             match=match,
@@ -142,19 +183,29 @@ class RetrievalEngine:
             created_to=request.created_to,
             updated_from=request.updated_from,
             updated_to=request.updated_to,
+            bm25_max=bm25_max,
         )
         if not fts_hits:
+            # 本页无结果：offset 越过末页时 total 仍为真实命中数（>0），需保留而非归零
             return SearchResponse(
                 query=request.query,
                 mode=request.mode,
+                items=[],
                 page=PageMeta(total=total, limit=request.limit, offset=request.offset),
             )
 
-        hits = {h.block_id: h for h in repository.get_block_hits([hit.block_id for hit in fts_hits])}
-        ordered = normalize_scores(
-            [(hit.block_id, -hit.bm25) for hit in fts_hits if hit.block_id in hits]
-        )
-        items = [self._build_result(hits[block_id], request, score) for block_id, score in ordered]
+        # 分数按全局 bm25 上下界归一化（与取全量后 normalize_scores 等价），保证跨页一致
+        span = hi - lo
+        if span == 0:
+            ordered = [(hit.block_id, 1.0) for hit in fts_hits]
+        else:
+            ordered = [(hit.block_id, round((hi - hit.bm25) / span, 6)) for hit in fts_hits]
+        hits = {h.block_id: h for h in repository.get_block_hits([bid for bid, _ in ordered])}
+        items = [
+            self._build_result(hits[block_id], request, score)
+            for block_id, score in ordered
+            if block_id in hits
+        ]
         return SearchResponse(
             query=request.query,
             mode=request.mode,
