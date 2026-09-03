@@ -81,4 +81,15 @@ describe('McpServersView', () => {
     expect(confirm).toHaveBeenCalled()
     expect(service.deleteMcpServer).toHaveBeenCalledWith('server-1')
   })
+
+  it('confirms permission changes before updating an existing server', async () => {
+    const wrapper = await render([server])
+    vi.mocked(service.updateMcpServer).mockResolvedValue(server)
+    await wrapper.findAll('button').find(button => button.text().includes('编辑'))!.trigger('click')
+    await wrapper.get('input[placeholder="network.request, notes.read"]').setValue('notes.read')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('旧测试与授权会失效'))
+    expect(service.updateMcpServer).toHaveBeenCalled()
+  })
 })

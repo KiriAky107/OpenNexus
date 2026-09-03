@@ -142,7 +142,20 @@ async function save() {
 }
 
 function executionChanged(server: McpServer, input: McpServerInput) {
-  return JSON.stringify([server.transport, server.command, server.args, server.url, server.headers, Object.keys(server.secret_headers)]) !== JSON.stringify([input.transport, input.command, input.args, input.url, input.headers, input.secret_header_keys])
+  const sortedEntries = (value: Record<string, string>) => Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
+  const current = [
+    server.transport, server.command, server.args, server.url,
+    sortedEntries(server.headers), sortedEntries(server.environment),
+    Object.keys(server.secret_headers).sort(), Object.keys(server.secret_environment).sort(),
+    [...server.permissions].sort(), server.startup_timeout_seconds, server.tool_timeout_seconds,
+  ]
+  const next = [
+    input.transport, input.command, input.args, input.url,
+    sortedEntries(input.headers), sortedEntries(input.environment),
+    [...input.secret_header_keys].sort(), [...input.secret_environment_keys].sort(),
+    [...input.permissions].sort(), input.startup_timeout_seconds, input.tool_timeout_seconds,
+  ]
+  return JSON.stringify(current) !== JSON.stringify(next)
 }
 
 async function approve(server: McpServer): Promise<McpServer | null> {

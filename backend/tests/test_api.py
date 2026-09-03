@@ -1,26 +1,10 @@
 import asyncio
+import threading
+from types import SimpleNamespace
 
-from app.main import health, service_status
-from app.routes import (
-    get_index_status,
-    list_notes,
-    list_plugins,
-    list_provider_presets,
-    list_providers,
-    list_skills,
-)
-from app.routes import (
-    create_provider,
-    create_task,
-    delete_provider,
-    delete_task,
-    get_provider,
-    get_task,
-    list_tasks,
-    update_provider,
-    update_task,
-)
 from app.contracts import (
+    McpServerSecretStatus,
+    McpServerSecretWriteRequest,
     ProviderCreateRequest,
     ProviderType,
     ProviderUpdateRequest,
@@ -28,6 +12,63 @@ from app.contracts import (
     TaskStatus,
     TaskUpdateRequest,
 )
+from app.main import health, service_status
+from app.routes import (
+    create_provider,
+    create_task,
+    delete_provider,
+    delete_task,
+    get_index_status,
+    get_provider,
+    get_task,
+    list_notes,
+    list_plugins,
+    list_provider_presets,
+    list_providers,
+    list_skills,
+    list_tasks,
+    update_provider,
+    update_task,
+)
+
+
+def test_mcp_secret_routes_offload_blocking_lifecycle_work(monkeypatch) -> None:
+    from app import routes
+
+    caller_thread = threading.get_ident()
+    worker_threads: list[int] = []
+
+    class FakeMcpRegistry:
+        def put_secret(self, server_id, key, secret, *, kind):
+            worker_threads.append(threading.get_ident())
+            return McpServerSecretStatus(key=key, configured=True)
+
+        def delete_secret(self, server_id, key, *, kind):
+            worker_threads.append(threading.get_ident())
+            return McpServerSecretStatus(key=key, configured=False)
+
+    monkeypatch.setattr(
+        routes,
+        "container",
+        SimpleNamespace(mcp_servers=FakeMcpRegistry()),
+    )
+    written = asyncio.run(
+        routes.put_mcp_server_secret(
+            "server-1",
+            "TOKEN",
+            McpServerSecretWriteRequest(secret="hidden"),
+            kind="environment",
+        )
+    )
+    deleted = asyncio.run(
+        routes.delete_mcp_server_secret(
+            "server-1", "TOKEN", kind="environment"
+        )
+    )
+
+    assert written.configured is True
+    assert deleted.configured is False
+    assert worker_threads and all(item != caller_thread for item in worker_threads)
 
 
 def test_health() -> None:
@@ -101,6 +142,14 @@ def test_openapi_contains_documented_frontend_interfaces() -> None:
         "/api/plugins/{plugin_id}/settings/{key}/secret",
         "/api/plugins/{plugin_id}/enable",
         "/api/plugins/{plugin_id}/disable",
+        "/api/mcp/servers",
+        "/api/mcp/servers/{server_id}",
+        "/api/mcp/servers/{server_id}/tools",
+        "/api/mcp/servers/{server_id}/trust",
+        "/api/mcp/servers/{server_id}/test",
+        "/api/mcp/servers/{server_id}/enable",
+        "/api/mcp/servers/{server_id}/disable",
+        "/api/mcp/servers/{server_id}/secrets/{key}",
         "/api/providers/test",
         "/api/providers/presets",
         "/api/credentials/{credential_id}",

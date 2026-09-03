@@ -13,12 +13,13 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, create_model
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
 from app.agent.permissions import KNOWN_PERMISSIONS
 from app.agent.tools import ToolExecutionContext, ToolRegistry
 from app.contracts import (
     McpServer,
+    McpServerConfig,
     McpServerCreateRequest,
     McpServerSecretStatus,
     McpServerTransport,
@@ -40,6 +41,23 @@ _RESERVED_HEADERS = {
     "mcp-protocol-version",
     "mcp-session-id",
 }
+_SERVER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_MAX_MCP_SERVERS = 256
+
+
+class _McpServerRecord(McpServerConfig):
+    """Validated on-disk representation with defaults for older C.1 records."""
+
+    version: int = Field(default=1, ge=1)
+    enabled: bool = False
+    approved_digest: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    tested_digest: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    last_tested_at: datetime | None = None
+    last_test_succeeded: bool | None = None
 
 
 class McpRegistryError(RuntimeError):
@@ -105,6 +123,13 @@ class McpServerRegistry:
     @_serialized_lifecycle
     def create(self, request: McpServerCreateRequest) -> McpServer:
         self._validate(request)
+        with self._lock:
+            if len(self._records) >= _MAX_MCP_SERVERS:
+                raise McpRegistryError(
+                    "MCP_SERVER_LIMIT_REACHED",
+                    f"At most {_MAX_MCP_SERVERS} MCP servers can be configured.",
+                    status_code=409,
+                )
         server_id = uuid4().hex[:12]
         record = request.model_dump(mode="json")
         record["name"] = request.name.strip()
@@ -137,8 +162,8 @@ class McpServerRegistry:
         self.disable(server_id)
         with self._lock:
             previous = self._record(server_id)
-            removed = [
-                (kind, key)
+            removed_secret_ids = [
+                self._secret_id(server_id, key, kind)
                 for kind, old_keys, new_keys in (
                     (
                         "environment",
@@ -153,6 +178,13 @@ class McpServerRegistry:
                 )
                 for key in set(old_keys) - set(new_keys)
             ]
+        try:
+            self.credentials.delete_many(removed_secret_ids)
+        except CredentialStoreError as exc:
+            raise McpRegistryError(
+                "MCP_SECRET_STORE_ERROR", str(exc), status_code=500
+            ) from exc
+        with self._lock:
             record = request.model_dump(mode="json", exclude={"version"})
             record["name"] = request.name.strip()
             record["command"] = request.command.strip() if request.command else None
@@ -170,13 +202,6 @@ class McpServerRegistry:
             self._records = updated
             self._last_status.pop(server_id, None)
             self._summaries.pop(server_id, None)
-        for kind, key in removed:
-            try:
-                self.credentials.delete(self._secret_id(server_id, key, kind))
-            except CredentialStoreError as exc:
-                raise McpRegistryError(
-                    "MCP_SECRET_STORE_ERROR", str(exc), status_code=500
-                ) from exc
         return self.get(server_id)
 
     @_serialized_lifecycle
@@ -192,18 +217,19 @@ class McpServerRegistry:
                 )
                 for key in keys
             ]
-            updated = dict(self._records)
-            del updated[server_id]
-            self._write(updated)
-            self._records = updated
-            self._last_status.pop(server_id, None)
-            self._summaries.pop(server_id, None)
         try:
             self.credentials.delete_many(secret_ids)
         except CredentialStoreError as exc:
             raise McpRegistryError(
                 "MCP_SECRET_STORE_ERROR", str(exc), status_code=500
             ) from exc
+        with self._lock:
+            updated = dict(self._records)
+            del updated[server_id]
+            self._write(updated)
+            self._records = updated
+            self._last_status.pop(server_id, None)
+            self._summaries.pop(server_id, None)
         self.bridge.remove(self._host_id(server_id))
 
     @_serialized_lifecycle
@@ -236,6 +262,9 @@ class McpServerRegistry:
                     "MCP_SECRET_NOT_DECLARED",
                     "Secret environment key is not declared in this server configuration.",
                 )
+        if record.get("enabled"):
+            self.disable(server_id)
+        self._invalidate_test(server_id)
         try:
             self.credentials.put(self._secret_id(server_id, key, kind), secret)
         except CredentialStoreError as exc:
@@ -254,6 +283,9 @@ class McpServerRegistry:
                 "MCP_SECRET_NOT_DECLARED",
                 "Secret environment key is not declared in this server configuration.",
             )
+        if record.get("enabled"):
+            self.disable(server_id)
+        self._invalidate_test(server_id)
         try:
             self.credentials.delete(self._secret_id(server_id, key, kind))
         except CredentialStoreError as exc:
@@ -465,17 +497,27 @@ class McpServerRegistry:
         self.tools.register(definition, arguments_model, executor)
 
     def _unavailable(self, server_id: str, message: str) -> None:
-        with self._lock:
-            for name in self._registered.pop(server_id, []):
-                self.tools.unregister(name)
-            record = self._records.get(server_id)
-            if record is not None:
-                self._records[server_id] = {**record, "enabled": False}
-                self._last_status[server_id] = {
-                    "status": PluginHostState.unhealthy,
-                    "error": message,
-                }
-                self._write()
+        # A failure may race with enable(). Waiting for the lifecycle mutation makes
+        # sure tools registered immediately before the callback are also removed.
+        with self._lifecycle_lock:
+            try:
+                with self._lock:
+                    record = self._records.get(server_id)
+                    registered = self._registered.pop(server_id, [])
+                    for name in registered:
+                        self.tools.unregister(name)
+                    if record is not None and (record.get("enabled") or registered):
+                        self._records[server_id] = {**record, "enabled": False}
+                        self._last_status[server_id] = {
+                            "status": PluginHostState.unhealthy,
+                            "error": message,
+                        }
+                        self._write()
+            finally:
+                # broken() can run on the client's reader/event thread. stop() does
+                # not join that thread, and setting _stopping before closing the
+                # transport prevents the close itself from reporting another failure.
+                self.bridge.remove(self._host_id(server_id))
 
     def _require_launch_allowed(
         self, record: dict[str, Any], *, require_test: bool
@@ -767,6 +809,23 @@ class McpServerRegistry:
                 status_code=404,
             ) from exc
 
+    def _invalidate_test(self, server_id: str) -> None:
+        """Make credential changes safe before touching the encrypted store."""
+
+        with self._lock:
+            record = self._record(server_id)
+            invalidated = {
+                **record,
+                "tested_digest": None,
+                "last_tested_at": None,
+                "last_test_succeeded": None,
+            }
+            updated = {**self._records, server_id: invalidated}
+            self._write(updated)
+            self._records = updated
+            self._last_status.pop(server_id, None)
+            self._summaries.pop(server_id, None)
+
     @property
     def _path(self) -> Path:
         return self.data_dir / "mcp" / "servers.json"
@@ -788,7 +847,29 @@ class McpServerRegistry:
                 "MCP server registry has an invalid format.",
                 status_code=500,
             )
-        return value
+        if len(value) > _MAX_MCP_SERVERS:
+            raise McpRegistryError(
+                "MCP_REGISTRY_INVALID",
+                "MCP server registry contains too many records.",
+                status_code=500,
+            )
+        normalized: dict[str, dict[str, Any]] = {}
+        config_fields = set(McpServerConfig.model_fields)
+        try:
+            for server_id, raw in value.items():
+                if not isinstance(server_id, str) or not _SERVER_ID.fullmatch(server_id):
+                    raise ValueError("invalid server id")
+                record = _McpServerRecord.model_validate(raw)
+                config = record.model_dump(mode="json", include=config_fields)
+                self._validate(McpServerCreateRequest.model_validate(config))
+                normalized[server_id] = record.model_dump(mode="json")
+        except (McpRegistryError, ValidationError, ValueError, TypeError) as exc:
+            raise McpRegistryError(
+                "MCP_REGISTRY_INVALID",
+                "MCP server registry contains an invalid record.",
+                status_code=500,
+            ) from exc
+        return normalized
 
     def _write(self, records: dict[str, dict[str, Any]] | None = None) -> None:
         temporary = self._path.with_suffix(".tmp")

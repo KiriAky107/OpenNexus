@@ -146,7 +146,7 @@ class McpStdioClient:
         timeout_code: str,
         response_error_code: str = "MCP_TOOL_CALL_FAILED",
     ) -> dict[str, Any]:
-        request_id, pending = self.begin_request(method, params)
+        request_id, pending = self.begin_request(method, params, timeout=timeout)
         return self.wait_response(
             request_id,
             pending,
@@ -156,7 +156,7 @@ class McpStdioClient:
         )
 
     def begin_request(
-        self, method: str, params: dict[str, Any]
+        self, method: str, params: dict[str, Any], *, timeout: float | None = None
     ) -> tuple[int, _PendingRequest]:
         self._ensure_running()
         with self._pending_lock:
@@ -388,6 +388,7 @@ class McpHttpClient:
         url: str,
         *,
         headers: dict[str, str],
+        startup_timeout_seconds: float = 15,
         on_seen: Callable[[], None],
         on_broken: Callable[[str], None],
         on_tools_changed: Callable[[], None],
@@ -407,6 +408,7 @@ class McpHttpClient:
         self._stream_started = False
         self._last_event_id: str | None = None
         self._stop_event = threading.Event()
+        self._startup_timeout_seconds = startup_timeout_seconds
 
     def start(self) -> None:
         return
@@ -429,7 +431,7 @@ class McpHttpClient:
         timeout_code: str,
         response_error_code: str = "MCP_TOOL_CALL_FAILED",
     ) -> dict[str, Any]:
-        request_id, pending = self.begin_request(method, params)
+        request_id, pending = self.begin_request(method, params, timeout=timeout)
         return self.wait_response(
             request_id,
             pending,
@@ -439,7 +441,7 @@ class McpHttpClient:
         )
 
     def begin_request(
-        self, method: str, params: dict[str, Any]
+        self, method: str, params: dict[str, Any], *, timeout: float | None = None
     ) -> tuple[int, _PendingRequest]:
         with self._pending_lock:
             request_id = self._next_id
@@ -454,7 +456,7 @@ class McpHttpClient:
         }
         threading.Thread(
             target=self._dispatch_request,
-            args=(request_id, message),
+            args=(request_id, message, timeout),
             daemon=True,
         ).start()
         return request_id, pending
@@ -526,7 +528,10 @@ class McpHttpClient:
         if self._session_id:
             try:
                 request = self._client.build_request(
-                    "DELETE", self.url, headers=self._request_headers()
+                    "DELETE",
+                    self.url,
+                    headers=self._request_headers(),
+                    timeout=min(self._startup_timeout_seconds, 5),
                 )
                 response = self._client.send(request, stream=True)
                 response.close()
@@ -539,9 +544,14 @@ class McpHttpClient:
             )
         )
 
-    def _dispatch_request(self, request_id: int, message: dict[str, Any]) -> None:
+    def _dispatch_request(
+        self,
+        request_id: int,
+        message: dict[str, Any],
+        timeout: float | None,
+    ) -> None:
         try:
-            response = self._post(message, timeout=None)
+            response = self._post(message, timeout=timeout)
             try:
                 self._capture_session(response)
                 content_type = response.headers.get("content-type", "").lower()
@@ -588,7 +598,12 @@ class McpHttpClient:
 
     def _post_notification(self, message: dict[str, Any]) -> None:
         try:
-            response = self._post(message, timeout=10)
+            timeout = (
+                self._startup_timeout_seconds
+                if message.get("method") == "notifications/initialized"
+                else 10
+            )
+            response = self._post(message, timeout=timeout)
         except httpx.HTTPError as exc:
             raise McpBridgeError(
                 "MCP_HTTP_REQUEST_FAILED",
@@ -616,6 +631,7 @@ class McpHttpClient:
             self.url,
             content=encoded.encode("utf-8"),
             headers=self._request_headers(),
+            timeout=timeout,
         )
         return self._client.send(request, stream=True)
 
@@ -714,7 +730,7 @@ class McpLegacySseClient(McpHttpClient):
     def start(self) -> None:
         threading.Thread(target=self._event_loop, daemon=True).start()
         try:
-            endpoint = self._endpoint_ready.get(timeout=15)
+            endpoint = self._endpoint_ready.get(timeout=self._startup_timeout_seconds)
         except queue.Empty as exc:
             raise McpBridgeError(
                 "MCP_INITIALIZE_FAILED",
@@ -730,9 +746,14 @@ class McpLegacySseClient(McpHttpClient):
 
         return
 
-    def _dispatch_request(self, request_id: int, message: dict[str, Any]) -> None:
+    def _dispatch_request(
+        self,
+        request_id: int,
+        message: dict[str, Any],
+        timeout: float | None,
+    ) -> None:
         try:
-            response = self._post(message, timeout=10)
+            response = self._post(message, timeout=timeout)
             try:
                 if response.status_code not in {200, 202, 204}:
                     raise McpBridgeError(
@@ -761,6 +782,8 @@ class McpLegacySseClient(McpHttpClient):
                 "MCP_INITIALIZE_FAILED", "Legacy MCP endpoint is not ready."
             )
         encoded = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) > MAX_MCP_MESSAGE_BYTES:
+            raise McpBridgeError("MCP_TOOL_CALL_FAILED", "MCP request is too large.")
         request = self._client.build_request(
             "POST",
             self._endpoint,
@@ -770,6 +793,7 @@ class McpLegacySseClient(McpHttpClient):
                 "Accept": "application/json, text/event-stream",
                 "Content-Type": "application/json",
             },
+            timeout=timeout,
         )
         return self._client.send(request, stream=True)
 
@@ -801,6 +825,8 @@ class McpLegacySseClient(McpHttpClient):
                         self._endpoint = endpoint
                         continue
                     self._handle_message(_json_rpc_message(data))
+            if not self._stopping:
+                self.on_broken("Legacy MCP SSE stream ended unexpectedly.")
         except (McpBridgeError, httpx.HTTPError) as exc:
             if self._endpoint is None:
                 self._endpoint_ready.put(exc)
@@ -827,7 +853,7 @@ class _McpClient(Protocol):
         response_error_code: str = "MCP_TOOL_CALL_FAILED",
     ) -> dict[str, Any]: ...
     def begin_request(
-        self, method: str, params: dict[str, Any]
+        self, method: str, params: dict[str, Any], *, timeout: float | None = None
     ) -> tuple[int, _PendingRequest]: ...
     def wait_response(
         self,
@@ -931,6 +957,7 @@ class McpBridge:
             client = client_type(
                 url,
                 headers=headers or {},
+                startup_timeout_seconds=backend.startup_timeout_seconds,
                 on_seen=seen,
                 on_broken=broken,
                 on_tools_changed=tools_changed,
@@ -989,6 +1016,12 @@ class McpBridge:
             discovered = self._discover_tools(
                 plugin_id, client, backend, declared_permissions, tool_source
             )
+            if status.status == PluginHostState.unhealthy:
+                raise McpBridgeError(
+                    "PLUGIN_HOST_UNAVAILABLE",
+                    status.error or "MCP event stream became unavailable during startup.",
+                    status_code=503,
+                )
             status.status = PluginHostState.ready
             status.tools_count = len(discovered)
             status.last_seen_at = datetime.now(UTC)
@@ -1019,7 +1052,9 @@ class McpBridge:
     ) -> Any:
         host = self._host(plugin_id)
         rpc_id, pending = host.client.begin_request(
-            "tools/call", {"name": remote_name, "arguments": arguments}
+            "tools/call",
+            {"name": remote_name, "arguments": arguments},
+            timeout=host.backend.tool_timeout_seconds,
         )
         call_key = (plugin_id, request_id)
         with self._lock:
