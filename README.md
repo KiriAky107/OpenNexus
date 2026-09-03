@@ -2,7 +2,7 @@
 
 > 本文件用于团队开发期间快速配置环境和启动项目，不是正式的项目 README。
 
-> 当前基线：2026-09-02。第一阶段 Web 联调前后端已经完成；第二阶段已完成 Workspace 去 Mock、Agent Trace 持久化与 SSE 恢复、stdio MCP Bridge、隔离 Plugin Host，以及 Plugin Command/Settings 后端 Contract 和前端 Service。真实音频、Provider 协议增强、Benchmark、导出、主题包、Trace 可视化、Mermaid 与函数图像仍在后续开发；Tauri Host、Stronghold、原生多 Vault 文件系统和 Sync Server 尚未接入。
+> 当前基线：2026-09-03。第一阶段 Web 联调前后端已经完成；第二阶段已完成 Workspace 去 Mock、Agent Trace 持久化与 SSE 恢复、stdio MCP Bridge、隔离 Plugin Host、Plugin Command/Settings，以及独立 MCP Server 配置中心 C.1（stdio、Streamable HTTP 与旧 SSE 兼容）。真实音频、Provider 协议增强、Benchmark、导出、主题包、Trace 可视化、Mermaid 与函数图像仍在后续开发；Tauri Host、Stronghold、原生多 Vault 文件系统和 Sync Server 尚未接入。
 
 ## 当前目录
 

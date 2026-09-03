@@ -74,4 +74,33 @@ describe('FileTreePanel file switching', () => {
     expect(editorStore.content).toContain('# 二叉搜索树')
     expect(editorStore.currentNoteId).toBe('note-bst')
   })
+
+  it('creates a Markdown note inside the selected folder', async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/workspace', component: { template: '<div />' } }],
+    })
+    await router.push('/workspace')
+    await router.isReady()
+
+    const workspaceStore = useWorkspaceStore()
+    await workspaceStore.openVault('C:/vault')
+    const createFile = vi.spyOn(workspaceService, 'createFile').mockResolvedValue({
+      id: 'note-new', note_id: 'note-new', name: '新笔记.md',
+      path: '/数据结构/新笔记.md', type: 'file',
+    })
+    wrapper = mount(FileTreePanel, { attachTo: document.body, global: { plugins: [router] } })
+
+    await wrapper.findAll('.tree-node').find((node) => node.text().includes('数据结构'))!.trigger('click')
+    await wrapper.get('button[aria-label="新建笔记"]').trigger('click')
+    await wrapper.get('.new-item input').setValue('新笔记')
+    await wrapper.get('.new-item').trigger('submit')
+    await waitForPath('/数据结构/新笔记.md')
+    await vi.waitFor(() => {
+      expect(workspaceStore.activeFilePath).toBe('/数据结构/新笔记.md')
+    })
+
+    expect(createFile).toHaveBeenCalledWith('/数据结构', '新笔记.md', '# 新笔记\n\n')
+    expect(wrapper.findAll('.tree-node').some((node) => node.classes().includes('active') && node.text().includes('新笔记.md'))).toBe(true)
+  })
 })

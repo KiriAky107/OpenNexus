@@ -199,7 +199,7 @@ class ToolDefinition(Contract):
     description: str
     parameters: dict[str, Any] = Field(default_factory=dict)
     permission: str | None = None
-    source: Literal["builtin", "plugin"] = "builtin"
+    source: Literal["builtin", "plugin", "mcp_server"] = "builtin"
 
 
 class ToolCall(Contract):
@@ -484,6 +484,97 @@ class PluginHostStatus(Contract):
     server_name: str | None = None
     server_version: str | None = None
     error: str | None = None
+
+
+# Independent user-managed MCP Server Registry. This is deliberately separate
+# from Plugin manifests: a server can contribute tools without being a Plugin.
+class McpServerTransport(str, Enum):
+    stdio = "stdio"
+    streamable_http = "streamable_http"
+    sse = "sse"
+
+
+class McpServerConfig(Contract):
+    name: str = Field(min_length=1, max_length=80)
+    transport: McpServerTransport = McpServerTransport.stdio
+    command: str | None = Field(default=None, max_length=1024)
+    args: list[str] = Field(default_factory=list, max_length=64)
+    url: str | None = Field(default=None, max_length=4096)
+    headers: dict[str, str] = Field(default_factory=dict)
+    environment: dict[str, str] = Field(default_factory=dict)
+    secret_environment_keys: list[str] = Field(default_factory=list)
+    secret_header_keys: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+    startup_timeout_seconds: float = Field(default=15, ge=1, le=120)
+    tool_timeout_seconds: float = Field(default=30, ge=1, le=300)
+
+
+class McpServerCreateRequest(McpServerConfig):
+    pass
+
+
+class McpServerUpdateRequest(McpServerConfig):
+    version: int = Field(ge=1)
+
+
+class McpServerSecretWriteRequest(Contract):
+    secret: SecretStr = Field(min_length=1, max_length=32768)
+
+
+class McpServerSecretStatus(Contract):
+    key: str
+    configured: bool
+
+
+class McpServerTrustRequest(Contract):
+    command_digest: str = Field(min_length=64, max_length=64)
+
+
+class McpServerStatus(Contract):
+    enabled: bool = False
+    status: PluginHostState = PluginHostState.stopped
+    tools_count: int = 0
+    protocol_version: str | None = None
+    remote_server_name: str | None = None
+    remote_server_version: str | None = None
+    error: str | None = None
+    last_tested_at: datetime | None = None
+    last_test_succeeded: bool | None = None
+
+
+class McpServer(McpServerStatus):
+    server_id: str
+    version: int
+    name: str
+    transport: McpServerTransport
+    command: str | None = None
+    args: list[str] = Field(default_factory=list)
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    environment: dict[str, str] = Field(default_factory=dict)
+    permissions: list[str] = Field(default_factory=list)
+    startup_timeout_seconds: float
+    tool_timeout_seconds: float
+    secret_environment: dict[str, bool] = Field(default_factory=dict)
+    secret_headers: dict[str, bool] = Field(default_factory=dict)
+    trusted: bool = False
+    command_digest: str
+    command_summary: str
+
+
+class McpServerListResponse(Contract):
+    items: list[McpServer] = Field(default_factory=list)
+
+
+class McpToolSummary(Contract):
+    name: str
+    remote_name: str
+    description: str
+    permission: str | None = None
+
+
+class McpToolSummaryListResponse(Contract):
+    items: list[McpToolSummary] = Field(default_factory=list)
 
 
 class PluginCommandLocation(str, Enum):
