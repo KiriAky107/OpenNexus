@@ -961,30 +961,38 @@ async def benchmark_events(
 
     async def stream() -> AsyncIterator[str]:
         # 先订阅（保证订阅之后产生的事件也能收到），再回放历史事件，最后实时输出新事件
+        terminal = (
+            BenchmarkEventType.run_completed,
+            BenchmarkEventType.run_failed,
+            BenchmarkEventType.run_cancelled,
+        )
         queue = benchmark_service.subscribe(run_id)
-        last_sequence = cursor
-        for event in benchmark_service.get_events(run_id):
-            if event.sequence <= cursor:
-                continue
-            yield as_sse(event.event.value, event.model_dump_json(), event_id=event.sequence)
-            last_sequence = event.sequence
-        if queue is None:
-            return
         try:
+            last_sequence = cursor
+            # 回放按订阅时刻的快照长度遍历，避免列表在回放期间被追加；终止事件同样要结束流，
+            # 防止回放完成后进入实时队列却因序号去重跳过同一终止事件而永久等待。
+            history = benchmark_service.get_events(run_id)
+            for index in range(len(history)):
+                event = history[index]
+                if event.sequence <= cursor:
+                    continue
+                yield as_sse(event.event.value, event.model_dump_json(), event_id=event.sequence)
+                last_sequence = event.sequence
+                if event.event in terminal:
+                    return
+            if queue is None:
+                return
             while True:
                 event = await queue.get()
                 if event.sequence <= last_sequence:
                     continue
                 yield as_sse(event.event.value, event.model_dump_json(), event_id=event.sequence)
                 last_sequence = event.sequence
-                if event.event in (
-                    BenchmarkEventType.run_completed,
-                    BenchmarkEventType.run_failed,
-                    BenchmarkEventType.run_cancelled,
-                ):
-                    break
+                if event.event in terminal:
+                    return
         finally:
-            benchmark_service.unsubscribe(run_id, queue)
+            if queue is not None:
+                benchmark_service.unsubscribe(run_id, queue)
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
