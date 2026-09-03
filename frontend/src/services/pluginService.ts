@@ -1,5 +1,17 @@
 import apiClient from './apiClient'
-import type { ApiPlugin, OperationResponse, Plugin, PluginContribution, PluginHostStatus } from '@/contracts'
+import type {
+  ApiPlugin,
+  OperationResponse,
+  Plugin,
+  PluginCommand,
+  PluginCommandContext,
+  PluginCommandLocation,
+  PluginCommandResult,
+  PluginContribution,
+  PluginHostStatus,
+  PluginSecretStatus,
+  PluginSettingsSchema,
+} from '@/contracts'
 
 function toPlugin(plugin: ApiPlugin): Plugin {
   const { manifest } = plugin
@@ -60,6 +72,55 @@ export async function getPluginHostStatus(pluginId: string): Promise<PluginHostS
 
 export async function restartPluginHost(pluginId: string): Promise<OperationResponse> {
   return apiClient.post(`/api/plugins/${pluginId}/host/restart`)
+}
+
+export async function listPluginCommands(location?: PluginCommandLocation): Promise<PluginCommand[]> {
+  const query = location ? `?location=${encodeURIComponent(location)}` : ''
+  const response = await apiClient.get<{ items: PluginCommand[] }>(`/api/plugin-contributions/commands${query}`)
+  return response.items
+}
+
+export async function executePluginCommand(
+  commandId: string,
+  argumentsValue: Record<string, unknown> = {},
+  context: PluginCommandContext = {},
+): Promise<PluginCommandResult> {
+  return apiClient.post(`/api/plugin-contributions/commands/${encodeURIComponent(commandId)}/execute`, {
+    arguments: argumentsValue,
+    context,
+  })
+}
+
+export async function getPluginSettings(pluginId: string): Promise<PluginSettingsSchema> {
+  return apiClient.get(`/api/plugins/${encodeURIComponent(pluginId)}/settings`)
+}
+
+export async function updatePluginSettings(
+  pluginId: string,
+  schemaVersion: number,
+  values: Record<string, unknown>,
+): Promise<PluginSettingsSchema> {
+  return apiClient.put(`/api/plugins/${encodeURIComponent(pluginId)}/settings`, {
+    schema_version: schemaVersion,
+    values,
+  })
+}
+
+export async function putPluginSecret(
+  pluginId: string,
+  key: string,
+  secret: string,
+): Promise<PluginSecretStatus> {
+  return apiClient.put(
+    `/api/plugins/${encodeURIComponent(pluginId)}/settings/${encodeURIComponent(key)}/secret`,
+    { secret },
+  )
+}
+
+export async function deletePluginSecret(pluginId: string, key: string): Promise<PluginSecretStatus> {
+  return apiClient.delete(
+    `/api/plugins/${encodeURIComponent(pluginId)}/settings/${encodeURIComponent(key)}/secret`,
+  )
 }
 
 export async function uninstallPlugin(pluginId: string): Promise<OperationResponse> {

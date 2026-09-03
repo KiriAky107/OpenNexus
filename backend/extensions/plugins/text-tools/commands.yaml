@@ -1,0 +1,19 @@
+commands:
+  - command_id: text-tools.uppercase-selection
+    title: 转为大写
+    description: 将当前选区或传入文本转换为大写并显示通知。
+    icon: edit
+    locations:
+      - command_palette
+      - context_menu
+    when:
+      - editor.has_selection
+    context:
+      - selection
+    handler: uppercase_selection
+    parameters:
+      type: object
+      properties:
+        text:
+          type: string
+      additionalProperties: false

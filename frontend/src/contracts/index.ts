@@ -193,7 +193,7 @@ export interface ToolDefinition {
   name: string
   description: string
   parameters: Record<string, unknown>
-  source?: 'builtin' | 'plugin'
+  source?: 'builtin' | 'plugin' | 'mcp_server'
   plugin_id?: string
 }
 
@@ -269,6 +269,86 @@ export interface PluginHostStatus {
   server_name?: string | null
   server_version?: string | null
   error?: string | null
+}
+
+export type PluginCommandLocation = 'command_palette' | 'context_menu' | 'toolbar'
+
+export interface PluginCommand {
+  command_id: string
+  plugin_id: string
+  title: string
+  description: string
+  icon?: string | null
+  locations: PluginCommandLocation[]
+  when: string[]
+  parameters: Record<string, unknown>
+  enabled: boolean
+}
+
+export interface PluginCommandContext {
+  vault_id?: string | null
+  note_id?: string | null
+  file_path?: string | null
+  selection?: string | null
+}
+
+export type PluginCommandEffect =
+  | { type: 'none'; payload: Record<string, never> }
+  | {
+      type: 'notification'
+      payload: { level: 'info' | 'success' | 'warning' | 'error'; message: string }
+    }
+  | {
+      type: 'navigate'
+      payload: {
+        route:
+          | 'vault-entry'
+          | 'workspace'
+          | 'search'
+          | 'chat'
+          | 'agent'
+          | 'tasks'
+          | 'skills'
+          | 'plugins'
+          | 'themes'
+          | 'settings'
+      }
+    }
+  | { type: 'refresh'; payload: { scope: 'workspace' | 'commands' | 'settings' | 'plugins' } }
+  | { type: 'job'; payload: { job_id: string } }
+
+export interface PluginCommandResult {
+  command_id: string
+  status: 'completed'
+  effect: PluginCommandEffect
+}
+
+export type PluginSettingType = 'string' | 'number' | 'boolean' | 'select' | 'secret'
+
+export interface PluginSettingField {
+  key: string
+  label: string
+  description: string
+  type: PluginSettingType
+  required: boolean
+  default?: unknown
+  minimum?: number | null
+  maximum?: number | null
+  options: string[]
+}
+
+export interface PluginSettingsSchema {
+  plugin_id: string
+  schema_version: number
+  fields: PluginSettingField[]
+  values: Record<string, unknown>
+  secrets: Record<string, { configured: boolean }>
+}
+
+export interface PluginSecretStatus {
+  plugin_id: string
+  key: string
+  configured: boolean
 }
 
 export interface PluginContribution {
@@ -453,6 +533,51 @@ export interface OperationResponse {
   status: 'accepted' | 'completed'
   resource_id?: string | null
   message?: string | null
+}
+
+export type McpServerTransport = 'stdio' | 'streamable_http' | 'sse'
+export type McpServerState = 'stopped' | 'starting' | 'ready' | 'unhealthy' | 'error'
+
+export interface McpServerInput {
+  version?: number
+  name: string
+  transport: McpServerTransport
+  command?: string | null
+  args: string[]
+  url?: string | null
+  headers: Record<string, string>
+  environment: Record<string, string>
+  secret_environment_keys: string[]
+  secret_header_keys: string[]
+  permissions: string[]
+  startup_timeout_seconds: number
+  tool_timeout_seconds: number
+}
+
+export interface McpServer extends Omit<McpServerInput, 'secret_environment_keys' | 'secret_header_keys'> {
+  server_id: string
+  version: number
+  secret_environment: Record<string, boolean>
+  secret_headers: Record<string, boolean>
+  enabled: boolean
+  trusted: boolean
+  command_digest: string
+  command_summary: string
+  status: McpServerState
+  tools_count: number
+  protocol_version?: string | null
+  remote_server_name?: string | null
+  remote_server_version?: string | null
+  error?: string | null
+  last_tested_at?: string | null
+  last_test_succeeded?: boolean | null
+}
+
+export interface McpToolSummary {
+  name: string
+  remote_name: string
+  description: string
+  permission?: string | null
 }
 
 export interface ApiNoteBlock {

@@ -27,6 +27,9 @@ beforeEach(() => {
     if (filePath === '/数据结构/红黑树.md') return '# 红黑树\n\n新的文件内容'
     throw new Error(`Unexpected file path: ${filePath}`)
   })
+  vi.spyOn(workspaceService, 'getNoteId').mockImplementation(async (filePath) =>
+    filePath.includes('红黑树') ? 'note-rbt' : 'note-welcome'
+  )
 })
 
 afterEach(() => {

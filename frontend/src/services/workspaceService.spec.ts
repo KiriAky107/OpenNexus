@@ -73,7 +73,7 @@ describe('workspaceService backend adapter', () => {
     const markdown = await workspaceService.readFileContent('/课程/操作系统.md')
     await workspaceService.saveFileContent('/课程/操作系统.md', '# 已更新\n')
 
-    expect(vault).toEqual({ path: 'C:\\data\\vault', name: 'vault' })
+    expect(vault).toEqual({ vault_id: 'default', path: 'C:\\data\\vault', name: 'vault' })
     expect(tree[0].children?.[0]).toMatchObject({
       id: 'note-os', note_id: 'note-os', path: '/课程/操作系统.md', type: 'file',
     })

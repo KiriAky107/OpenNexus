@@ -5,6 +5,7 @@ from app.agent.builtin_tools import register_builtin_tools
 from app.contracts import ModelCapability, ProviderConfig, ProviderType
 from app.config import BACKEND_DIR, get_settings
 from app.extensions import PluginRuntime, SkillRuntime
+from app.extensions.mcp_registry import McpServerRegistry
 from app.providers import MockProvider, ProviderFactory, ProviderRegistry
 from app.providers.credentials import (
     ChainedCredentialResolver,
@@ -22,6 +23,7 @@ class ApplicationContainer:
     permissions: PermissionManager
     skills: SkillRuntime
     plugins: PluginRuntime
+    mcp_servers: McpServerRegistry
     agent: AgentRuntime
 
 
@@ -53,12 +55,21 @@ def build_container() -> ApplicationContainer:
 
     plugins = PluginRuntime(
         tools,
+        credentials=credentials,
         # 当前 Python Host 尚无 OS 沙箱。生产构建必须保持关闭，直到
         # Tauri/Rust Host 能签发绑定命令摘要的可信启动许可。
         allow_unsandboxed_mcp=settings.environment == "development",
     )
     plugins.install(BACKEND_DIR / "extensions" / "plugins" / "text-tools")
     plugins.enable("text-tools")
+
+    mcp_servers = McpServerRegistry(
+        tools,
+        credentials,
+        settings.data_dir,
+        allow_process_launch=settings.environment == "development",
+    )
+    mcp_servers.restore_enabled()
 
     skills = SkillRuntime(tools)
     skills.install(BACKEND_DIR / "extensions" / "skills" / "knowledge-assistant")
@@ -80,6 +91,7 @@ def build_container() -> ApplicationContainer:
         permissions=permissions,
         skills=skills,
         plugins=plugins,
+        mcp_servers=mcp_servers,
         agent=agent,
     )
 

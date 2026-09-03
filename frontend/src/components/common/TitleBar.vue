@@ -21,7 +21,7 @@ const pageTitle = computed(() => {
     agent: '智能体执行轨迹',
     tasks: '任务',
     skills: 'Skill 管理',
-    plugins: 'Plugin 管理',
+    plugins: 'Plugin 与 MCP',
     themes: '主题管理',
     settings: '设置',
   }

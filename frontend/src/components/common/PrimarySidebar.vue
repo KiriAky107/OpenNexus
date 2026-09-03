@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
 import { computed, ref } from 'vue'
-import { ArrowLeftBold, ArrowRightBold, Brush, ChatDotRound, CircleCheck, Connection, Cpu, FolderOpened, Lightning, Search, Setting } from '@element-plus/icons-vue'
+import { ArrowLeftBold, ArrowRightBold, Brush, ChatDotRound, CircleCheck, Connection, Cpu, FolderOpened, Lightning, Monitor, Search, Setting } from '@element-plus/icons-vue'
 import AppIcon from './AppIcon.vue'
 
 const route = useRoute()
@@ -16,6 +16,7 @@ const navItems = [
   { name: 'tasks', icon: CircleCheck, label: '任务' },
   { name: 'skills', icon: Lightning, label: 'Skill' },
   { name: 'plugins', icon: Connection, label: 'Plugin' },
+  { name: 'mcp-servers', icon: Monitor, label: 'MCP' },
   { name: 'themes', icon: Brush, label: '主题' },
   { name: 'settings', icon: Setting, label: '设置' },
 ]

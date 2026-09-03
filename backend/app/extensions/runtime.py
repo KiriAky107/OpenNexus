@@ -5,19 +5,40 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 import yaml
 from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
+from jsonschema.exceptions import (
+    SchemaError,
+    ValidationError as JsonSchemaValidationError,
+)
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    create_model,
+)
 
-from app.agent.tools import ToolExecutionContext, ToolRegistry
+from app.agent.tools import ToolExecutionContext, ToolExecutionError, ToolRegistry
 from app.agent.permissions import KNOWN_PERMISSIONS
 from app.contracts import (
     ModelCapability,
     Plugin,
+    PluginCommand,
+    PluginCommandContext,
+    PluginCommandEffect,
+    PluginNoEffect,
+    PluginNotificationEffect,
+    PluginCommandLocation,
+    PluginCommandResult,
     PluginManifest,
     PluginHostStatus,
+    PluginSecretStatus,
+    PluginSettingType,
+    PluginSettingsSchema,
     PluginStatus,
     RetrievalConfig,
     Skill,
@@ -25,25 +46,24 @@ from app.contracts import (
     SkillStatus,
     ToolDefinition,
 )
+from app.extensions.contributions import (
+    CommandRegistry,
+    PluginCommandSpec,
+    PluginSecretResolver,
+    PluginSettingsDefinition,
+    PluginSettingsStore,
+    validate_command_spec,
+    validate_settings_definition,
+)
+from app.extensions.errors import ExtensionError
 from app.extensions.mcp import McpBridge, McpBridgeError, McpDiscoveredTool
+from app.providers.credentials import EncryptedCredentialStore
+from app.schema_security import (
+    SchemaReferenceError,
+    reject_external_schema_references,
+)
 
 _EXTENSION_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
-
-
-class ExtensionError(RuntimeError):
-    def __init__(
-        self,
-        code: str,
-        message: str,
-        *,
-        status_code: int = 422,
-        details: dict[str, Any] | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.status_code = status_code
-        self.details = details or {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,14 +258,45 @@ class DeclarativePluginHost:
             return {"text": str(values.get("text", "")).upper()}
         raise ExtensionError("PLUGIN_HANDLER_UNSUPPORTED", f"Unsupported handler: {handler}")
 
+    async def execute_command(
+        self,
+        handler: str,
+        arguments: dict[str, Any],
+        context: dict[str, Any],
+        settings: dict[str, Any],
+        resolve_secret: PluginSecretResolver,
+    ) -> PluginCommandEffect:
+        """执行宿主内置的白名单 Command handler，不导入 Plugin Python 代码。"""
+
+        if handler == "echo":
+            message = str(arguments.get("message", context.get("selection", "")))
+            if not message:
+                return PluginNoEffect()
+            return PluginNotificationEffect(
+                payload={"level": "info", "message": message},
+            )
+        if handler == "uppercase_selection":
+            text = str(arguments.get("text", context.get("selection", "")))
+            limit = int(settings.get("result_limit", 100))
+            return PluginNotificationEffect(
+                payload={"level": "success", "message": text[:limit].upper()},
+            )
+        raise ExtensionError(
+            "PLUGIN_HANDLER_UNSUPPORTED", f"Unsupported command handler: {handler}"
+        )
+
 
 @dataclass(slots=True)
 class _PluginRecord:
     plugin: Plugin
     tools: list[DeclarativeToolSpec]
+    commands: list[PluginCommandSpec]
+    settings_definition: PluginSettingsDefinition | None
     package_path: Path
     registered_tools: list[str]
+    registered_commands: list[str]
     mcp_remote_names: dict[str, str]
+    mcp_command_schemas: dict[str, dict[str, Any]]
 
 
 class PluginRuntime:
@@ -256,12 +307,15 @@ class PluginRuntime:
         tools: ToolRegistry,
         host: DeclarativePluginHost | None = None,
         mcp_bridge: McpBridge | None = None,
+        credentials: EncryptedCredentialStore | None = None,
         *,
         allow_unsandboxed_mcp: bool = False,
     ) -> None:
         self.registry = tools
         self.host = host or DeclarativePluginHost()
         self.mcp = mcp_bridge or McpBridge()
+        self.commands = CommandRegistry()
+        self.settings = PluginSettingsStore(credentials or EncryptedCredentialStore())
         self.allow_unsandboxed_mcp = allow_unsandboxed_mcp
         self._records: dict[str, _PluginRecord] = {}
         self._lock = threading.RLock()
@@ -287,6 +341,8 @@ class PluginRuntime:
 
         _validate_backend(manifest)
         specs = [] if manifest.backend.type == "mcp" else self._load_tools(root)
+        command_specs = self._load_commands(root)
+        settings_definition = self._load_settings(root)
         if manifest.backend.type != "mcp":
             declared = set(manifest.contributes.tools)
             actual = {spec.name for spec in specs}
@@ -305,6 +361,89 @@ class PluginRuntime:
                     f"Tool permission is not declared by Plugin: {spec.permission}",
                     details={"tool": spec.name, "permission": spec.permission},
                 )
+        declared_commands = set(manifest.contributes.commands)
+        actual_commands = {spec.command_id for spec in command_specs}
+        if (
+            declared_commands != actual_commands
+            or len(manifest.contributes.commands) != len(declared_commands)
+            or len(command_specs) != len(actual_commands)
+        ):
+            raise ExtensionError(
+                "PLUGIN_CONTRIBUTION_INVALID",
+                "plugin.yaml command contributions must exactly match commands.yaml",
+                details={
+                    "declared": sorted(declared_commands),
+                    "actual": sorted(actual_commands),
+                },
+            )
+        for spec in command_specs:
+            validate_command_spec(manifest.plugin_id, spec)
+            if spec.permission and spec.permission not in manifest.permissions:
+                raise ExtensionError(
+                    "PLUGIN_PERMISSION_UNDECLARED",
+                    f"Command permission is not declared by Plugin: {spec.permission}",
+                    details={"command": spec.command_id, "permission": spec.permission},
+                )
+        declared_sections = set(manifest.contributes.settings_sections)
+        actual_sections = (
+            {settings_definition.section_id} if settings_definition is not None else set()
+        )
+        if (
+            declared_sections != actual_sections
+            or len(manifest.contributes.settings_sections) != len(declared_sections)
+        ):
+            raise ExtensionError(
+                "PLUGIN_CONTRIBUTION_INVALID",
+                "plugin.yaml settings contributions must exactly match settings.yaml",
+                details={
+                    "declared": sorted(declared_sections),
+                    "actual": sorted(actual_sections),
+                },
+            )
+        if settings_definition is not None:
+            validate_settings_definition(manifest.plugin_id, settings_definition)
+        secret_fields = (
+            {
+                field.key
+                for field in settings_definition.fields
+                if field.type == PluginSettingType.secret
+            }
+            if settings_definition is not None
+            else set()
+        )
+        for spec in command_specs:
+            unknown_secrets = sorted(set(spec.secrets) - secret_fields)
+            if unknown_secrets:
+                raise ExtensionError(
+                    "PLUGIN_COMMAND_INVALID",
+                    "Plugin command references undeclared Secret settings.",
+                    details={
+                        "command_id": spec.command_id,
+                        "secrets": unknown_secrets,
+                    },
+                )
+            if spec.secrets and "secrets.use" not in manifest.permissions:
+                raise ExtensionError(
+                    "PLUGIN_PERMISSION_UNDECLARED",
+                    "Commands using Secret settings require the secrets.use permission.",
+                    details={"command_id": spec.command_id},
+                )
+            if spec.mcp_tool is not None:
+                _validate_id("MCP command target", spec.mcp_tool)
+                if manifest.backend.type != "mcp" or not spec.mcp_tool.startswith(
+                    f"{manifest.plugin_id}."
+                ):
+                    raise ExtensionError(
+                        "PLUGIN_COMMAND_INVALID",
+                        "MCP Command target must use the current Plugin namespace.",
+                        details={"command_id": spec.command_id},
+                    )
+                if spec.mcp_tool in manifest.contributes.tools:
+                    raise ExtensionError(
+                        "PLUGIN_COMMAND_INVALID",
+                        "MCP Command target cannot also be exposed as an Agent Tool.",
+                        details={"command_id": spec.command_id},
+                    )
 
         record = _PluginRecord(
             plugin=Plugin(
@@ -316,9 +455,13 @@ class PluginRuntime:
                 ),
             ),
             tools=specs,
+            commands=command_specs,
+            settings_definition=settings_definition,
             package_path=root,
             registered_tools=[],
+            registered_commands=[],
             mcp_remote_names={},
+            mcp_command_schemas={},
         )
         self._records[manifest.plugin_id] = record
         return record.plugin.model_copy(deep=True)
@@ -359,6 +502,8 @@ class PluginRuntime:
                 status_code=403,
                 details={"plugin_id": plugin_id},
             )
+        if record.settings_definition is not None:
+            self.settings.runtime_values(plugin_id, record.settings_definition)
         declared_tools = list(record.plugin.manifest.contributes.tools)
         conflicts = [name for name in declared_tools if self.registry.contains(name)]
         if conflicts:
@@ -368,20 +513,49 @@ class PluginRuntime:
                 status_code=409,
                 details={"plugin_id": plugin_id, "tools": conflicts},
             )
+        command_conflicts = [
+            spec.command_id for spec in record.commands if self.commands.contains(spec.command_id)
+        ]
+        if command_conflicts:
+            raise ExtensionError(
+                "PLUGIN_COMMAND_CONFLICT",
+                "Plugin commands are already registered.",
+                status_code=409,
+                details={"plugin_id": plugin_id, "commands": command_conflicts},
+            )
         record.plugin.status = PluginStatus.starting
         try:
             if record.plugin.manifest.backend.type == "mcp":
                 discovered = self._start_mcp(record)
                 actual = {item.definition.name for item in discovered}
                 declared = set(declared_tools)
-                if actual != declared:
+                command_targets = {
+                    spec.mcp_tool for spec in record.commands if spec.mcp_tool is not None
+                }
+                expected = declared | command_targets
+                if actual != expected:
                     raise ExtensionError(
                         "PLUGIN_CONTRIBUTION_INVALID",
-                        "Discovered MCP tools must exactly match Plugin contributions.",
-                        details={"declared": sorted(declared), "actual": sorted(actual)},
+                        "Discovered MCP tools must exactly match Tool and Command targets.",
+                        details={"declared": sorted(expected), "actual": sorted(actual)},
                     )
                 for item in discovered:
-                    self._register_mcp_tool(record, item)
+                    if item.definition.name in declared:
+                        self._register_mcp_tool(record, item)
+                    else:
+                        record.mcp_remote_names[item.definition.name] = item.remote_name
+                        record.mcp_command_schemas[item.definition.name] = (
+                            item.definition.parameters
+                        )
+                        for spec in (
+                            command
+                            for command in record.commands
+                            if command.mcp_tool == item.definition.name
+                        ):
+                            _validate_mcp_command_target_schema(
+                                item.definition.parameters,
+                                spec.command_id,
+                            )
             else:
                 for spec in record.tools:
                     arguments_model = _arguments_model(spec)
@@ -405,12 +579,135 @@ class PluginRuntime:
                         executor,
                     )
                     record.registered_tools.append(spec.name)
+            for spec in record.commands:
+
+                async def command_executor(
+                    arguments: dict[str, Any],
+                    context: dict[str, Any],
+                    _spec: PluginCommandSpec = spec,
+                    _record: _PluginRecord = record,
+                ) -> PluginCommandEffect:
+                    if (
+                        not _record.plugin.enabled
+                        or _record.plugin.status != PluginStatus.ready
+                    ):
+                        raise ExtensionError(
+                            "PLUGIN_COMMAND_NOT_FOUND",
+                            "Plugin command is not available while its Plugin is inactive.",
+                            status_code=404,
+                            details={"command_id": _spec.command_id},
+                        )
+                    settings = (
+                        self.settings.runtime_values(
+                            _record.plugin.manifest.plugin_id,
+                            _record.settings_definition,
+                        )
+                        if _record.settings_definition is not None
+                        else {}
+                    )
+
+                    def resolve_secret(key: str) -> str | None:
+                        if key not in _spec.secrets:
+                            raise ExtensionError(
+                                "PLUGIN_SECRET_ACCESS_DENIED",
+                                "Command cannot access an undeclared Plugin Secret.",
+                                status_code=403,
+                                details={
+                                    "command_id": _spec.command_id,
+                                    "key": key,
+                                },
+                            )
+                        if "secrets.use" not in _record.plugin.granted_permissions:
+                            raise ExtensionError(
+                                "PLUGIN_SECRET_ACCESS_DENIED",
+                                "Plugin no longer has permission to access Secret settings.",
+                                status_code=403,
+                                details={"command_id": _spec.command_id, "key": key},
+                            )
+                        if _record.settings_definition is None:
+                            return None
+                        value = self.settings.resolve_secret(
+                            _record.plugin.manifest.plugin_id,
+                            _record.settings_definition,
+                            key,
+                        )
+                        field = next(
+                            item
+                            for item in _record.settings_definition.fields
+                            if item.key == key
+                        )
+                        if field.required and value is None:
+                            raise ExtensionError(
+                                "PLUGIN_SECRET_REQUIRED",
+                                "A required Plugin Secret has not been configured.",
+                                status_code=409,
+                                details={"command_id": _spec.command_id, "key": key},
+                            )
+                        return value
+
+                    if _spec.mcp_tool is not None:
+                        remote_name = _record.mcp_remote_names[_spec.mcp_tool]
+                        secret_values = {
+                            key: value
+                            for key in _spec.secrets
+                            if (value := resolve_secret(key)) is not None
+                        }
+                        envelope = _mcp_command_envelope(
+                            _spec,
+                            arguments=arguments,
+                            context=context,
+                            settings=settings,
+                            secrets=secret_values,
+                        )
+                        _validate_mcp_command_envelope(
+                            _record.mcp_command_schemas[_spec.mcp_tool],
+                            envelope,
+                            _spec.command_id,
+                        )
+                        try:
+                            effect = await self.mcp.call_tool(
+                                _record.plugin.manifest.plugin_id,
+                                remote_name,
+                                envelope,
+                                request_id=f"command:{uuid4().hex}",
+                            )
+                        except ToolExecutionError as exc:
+                            raise ExtensionError(
+                                exc.code,
+                                "MCP Command target execution failed.",
+                                status_code=502,
+                                details={"command_id": _spec.command_id},
+                            ) from exc
+                        try:
+                            return TypeAdapter(PluginCommandEffect).validate_python(effect)
+                        except ValidationError as exc:
+                            raise ExtensionError(
+                                "PLUGIN_COMMAND_RESULT_INVALID",
+                                "MCP Command target returned an invalid effect.",
+                                status_code=502,
+                                details={"command_id": _spec.command_id},
+                            ) from exc
+
+                    return await self.host.execute_command(
+                        _spec.handler,
+                        arguments,
+                        context,
+                        settings,
+                        resolve_secret,
+                    )
+
+                self.commands.register(plugin_id, spec, command_executor)
+                record.registered_commands.append(spec.command_id)
         except Exception as exc:
             # 注册过程必须具备回滚语义，防止半启用插件污染全局工具表。
             for name in record.registered_tools:
                 self.registry.unregister(name)
             record.registered_tools.clear()
+            for command_id in record.registered_commands:
+                self.commands.unregister(command_id)
+            record.registered_commands.clear()
             record.mcp_remote_names.clear()
+            record.mcp_command_schemas.clear()
             self.mcp.stop(plugin_id)
             record.plugin.status = PluginStatus.error
             record.plugin.error_message = _safe_extension_message(exc)
@@ -468,7 +765,11 @@ class PluginRuntime:
         for name in record.registered_tools:
             self.registry.unregister(name)
         record.registered_tools.clear()
+        for command_id in record.registered_commands:
+            self.commands.unregister(command_id)
+        record.registered_commands.clear()
         record.mcp_remote_names.clear()
+        record.mcp_command_schemas.clear()
         if record.plugin.manifest.backend.type == "mcp":
             self.mcp.stop(plugin_id)
         record.plugin.enabled = False
@@ -478,6 +779,43 @@ class PluginRuntime:
     def get_host_status(self, plugin_id: str) -> PluginHostStatus:
         record = self._record(plugin_id)
         return self.mcp.status(plugin_id, record.plugin.manifest.backend)
+
+    def list_commands(
+        self, location: PluginCommandLocation | None = None
+    ) -> list[PluginCommand]:
+        return self.commands.list(location)
+
+    async def execute_command(
+        self,
+        command_id: str,
+        arguments: dict[str, Any],
+        context: PluginCommandContext,
+    ) -> PluginCommandResult:
+        return await self.commands.execute(command_id, arguments, context)
+
+    def get_settings(self, plugin_id: str) -> PluginSettingsSchema:
+        record = self._record(plugin_id)
+        definition = self._settings_definition(record)
+        return self.settings.get(plugin_id, definition)
+
+    def update_settings(
+        self, plugin_id: str, schema_version: int, values: dict[str, Any]
+    ) -> PluginSettingsSchema:
+        record = self._record(plugin_id)
+        definition = self._settings_definition(record)
+        return self.settings.update(plugin_id, definition, schema_version, values)
+
+    def put_setting_secret(
+        self, plugin_id: str, key: str, secret: str
+    ) -> PluginSecretStatus:
+        record = self._record(plugin_id)
+        definition = self._settings_definition(record)
+        return self.settings.put_secret(plugin_id, definition, key, secret)
+
+    def delete_setting_secret(self, plugin_id: str, key: str) -> PluginSecretStatus:
+        record = self._record(plugin_id)
+        definition = self._settings_definition(record)
+        return self.settings.delete_secret(plugin_id, definition, key)
 
     def restart_host(self, plugin_id: str) -> PluginHostStatus:
         with self._lock:
@@ -506,7 +844,11 @@ class PluginRuntime:
         for name in record.registered_tools:
             self.registry.unregister(name)
         record.registered_tools.clear()
+        for command_id in record.registered_commands:
+            self.commands.unregister(command_id)
+        record.registered_commands.clear()
         record.mcp_remote_names.clear()
+        record.mcp_command_schemas.clear()
         self.mcp.stop(plugin_id)
         record.plugin.enabled = False
         record.plugin.status = PluginStatus.installed
@@ -567,7 +909,11 @@ class PluginRuntime:
             for name in record.registered_tools:
                 self.registry.unregister(name)
             record.registered_tools.clear()
+            for command_id in record.registered_commands:
+                self.commands.unregister(command_id)
+            record.registered_commands.clear()
             record.mcp_remote_names.clear()
+            record.mcp_command_schemas.clear()
             record.plugin.enabled = False
             record.plugin.status = PluginStatus.error
             record.plugin.error_message = message
@@ -594,6 +940,7 @@ class PluginRuntime:
             # stop 只结束本次进程并保留状态供故障诊断；真正卸载时必须连同
             # 历史状态一起遗忘，避免同 ID 重装继承旧协商信息。
             self.mcp.remove(plugin_id)
+        self.settings.remove_plugin(plugin_id)
         del self._records[plugin_id]
 
     def _record(self, plugin_id: str) -> _PluginRecord:
@@ -614,6 +961,52 @@ class PluginRuntime:
             return [DeclarativeToolSpec.model_validate(item) for item in raw.get("tools", [])]
         except ValidationError as exc:
             raise _manifest_error("plugin tool", exc) from exc
+
+    @staticmethod
+    def _load_commands(root: Path) -> list[PluginCommandSpec]:
+        path = root / "commands.yaml"
+        if not path.exists():
+            return []
+        raw = _read_yaml(path)
+        items = raw.get("commands", [])
+        if not isinstance(items, list):
+            raise ExtensionError(
+                "EXTENSION_MANIFEST_INVALID",
+                "Invalid plugin command manifest: commands must be an array.",
+            )
+        try:
+            return [
+                PluginCommandSpec.model_validate(item)
+                for item in items
+            ]
+        except ValidationError as exc:
+            raise _manifest_error("plugin command", exc) from exc
+
+    @staticmethod
+    def _load_settings(root: Path) -> PluginSettingsDefinition | None:
+        path = root / "settings.yaml"
+        if not path.exists():
+            return None
+        raw = _read_yaml(path)
+        try:
+            return PluginSettingsDefinition.model_validate(raw)
+        except ValidationError as exc:
+            raise ExtensionError(
+                "PLUGIN_SETTINGS_SCHEMA_INVALID",
+                "Invalid Plugin settings schema.",
+                details={"errors": exc.errors(include_url=False)},
+            ) from exc
+
+    @staticmethod
+    def _settings_definition(record: _PluginRecord) -> PluginSettingsDefinition:
+        if record.settings_definition is None:
+            raise ExtensionError(
+                "PLUGIN_SETTINGS_NOT_FOUND",
+                "Plugin does not contribute a Settings section.",
+                status_code=404,
+                details={"plugin_id": record.plugin.manifest.plugin_id},
+            )
+        return record.settings_definition
 
 
 def _package_dir(package_path: str | Path) -> Path:
@@ -673,6 +1066,61 @@ def _arguments_model(spec: DeclarativeToolSpec) -> type[BaseModel]:
     return _arguments_model_from_schema(spec.name, schema)
 
 
+def _mcp_command_envelope(
+    spec: PluginCommandSpec,
+    *,
+    arguments: dict[str, Any],
+    context: dict[str, Any],
+    settings: dict[str, Any],
+    secrets: dict[str, str],
+) -> dict[str, Any]:
+    return {
+        "_notesagent": {
+            "command_id": spec.command_id,
+            "arguments": arguments,
+            "context": context,
+            "settings": settings,
+            "secrets": secrets,
+        }
+    }
+
+
+def _validate_mcp_command_envelope(
+    schema: dict[str, Any],
+    envelope: dict[str, Any],
+    command_id: str,
+) -> None:
+    """执行前用目标 Tool Schema 校验包含真实业务数据的宿主信封。"""
+
+    try:
+        Draft202012Validator(schema).validate(envelope)
+    except JsonSchemaValidationError as exc:
+        raise ExtensionError(
+            "PLUGIN_COMMAND_TARGET_SCHEMA_MISMATCH",
+            "MCP Command envelope does not match the target inputSchema.",
+            status_code=502,
+            details={"command_id": command_id, "path": list(exc.path)},
+        ) from exc
+
+
+def _validate_mcp_command_target_schema(
+    schema: dict[str, Any], command_id: str
+) -> None:
+    """启用时只检查稳定信封入口，避免用伪造业务值误判合法 Schema。"""
+
+    properties = schema.get("properties")
+    envelope_schema = (
+        properties.get("_notesagent") if isinstance(properties, dict) else None
+    )
+    if not isinstance(envelope_schema, dict) or envelope_schema.get("type") != "object":
+        raise ExtensionError(
+            "PLUGIN_CONTRIBUTION_INVALID",
+            "MCP Command target inputSchema must directly declare "
+            "_notesagent with type object.",
+            details={"command_id": command_id},
+        )
+
+
 def _arguments_model_from_schema(
     tool_name: str, schema: dict[str, Any]
 ) -> type[BaseModel]:
@@ -688,10 +1136,12 @@ def _validate_tool_schema(spec: DeclarativeToolSpec) -> None:
     schema = spec.parameters or {"type": "object", "properties": {}}
     try:
         Draft202012Validator.check_schema(schema)
-    except SchemaError as exc:
+        reject_external_schema_references(schema)
+    except (SchemaReferenceError, SchemaError) as exc:
+        message = exc.message if isinstance(exc, SchemaError) else str(exc)
         raise ExtensionError(
             "PLUGIN_TOOL_SCHEMA_INVALID",
-            f"Invalid JSON Schema for tool {spec.name}: {exc.message}",
+            f"Invalid JSON Schema for tool {spec.name}: {message}",
             details={"tool": spec.name},
         ) from exc
     if schema.get("type", "object") != "object" or not isinstance(

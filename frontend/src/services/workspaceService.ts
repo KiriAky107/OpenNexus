@@ -11,6 +11,7 @@ import * as noteService from './noteService'
 
 /** Web 联调只连接 AI Core 配置的单一 Vault；多 Vault 选择由 Tauri Host 接管。 */
 export interface VaultInfo {
+  vault_id: string
   path: string
   name: string
 }
@@ -81,13 +82,17 @@ export async function getWorkspaceInfo(): Promise<ApiWorkspaceInfo> {
 
 export async function getRecentVaults(): Promise<VaultInfo[]> {
   const workspace = await getWorkspaceInfo()
-  return [{ path: workspace.path, name: workspace.name }]
+  return [{ vault_id: workspace.vault_id, path: workspace.path, name: workspace.name }]
 }
 
 export async function openVault(path: string): Promise<VaultInfo> {
   const snapshot = await apiClient.post<ApiWorkspaceSnapshot>('/api/workspace/open', { path })
   cacheEntries(snapshot.items)
-  return { path: snapshot.workspace.path, name: snapshot.workspace.name }
+  return {
+    vault_id: snapshot.workspace.vault_id,
+    path: snapshot.workspace.path,
+    name: snapshot.workspace.name,
+  }
 }
 
 export async function createVault(path: string, name: string): Promise<VaultInfo> {
@@ -108,6 +113,11 @@ export async function getFileTree(): Promise<FileNode[]> {
 export async function readFileContent(filePath: string): Promise<string> {
   const note = await noteService.getNote(await requireNoteId(filePath))
   return note.markdown
+}
+
+/** Resolve the backend note identity already associated with a workspace path. */
+export async function getNoteId(filePath: string): Promise<string> {
+  return requireNoteId(filePath)
 }
 
 export async function saveFileContent(filePath: string, content: string): Promise<void> {
