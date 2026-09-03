@@ -161,10 +161,16 @@ class RetrievalEngine:
             return self._empty(request)
 
         lo, hi = bounds
+        span = hi - lo
         bm25_max: float | None = None
         if request.score_threshold > 0:
-            # norm = (hi - bm25) / (hi - lo)；norm >= threshold ⟺ bm25 <= hi - threshold*(hi - lo)
-            bm25_max = hi - request.score_threshold * (hi - lo)
+            if span == 0:
+                # 全部命中 bm25 相同，归一化后皆为 1.0；阈值超过 1.0 时无命中
+                if request.score_threshold > 1.0:
+                    return self._empty(request)
+            else:
+                # norm = (hi - bm25) / span；norm >= threshold ⟺ bm25 <= hi - threshold * span
+                bm25_max = hi - request.score_threshold * span
 
         fts_hits, total = repository.fts_search_page(
             match=match,
