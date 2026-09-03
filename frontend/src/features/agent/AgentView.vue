@@ -5,7 +5,8 @@ import { useAgentStore } from '@/stores/agent'
 import { useProviderStore } from '@/stores/provider'
 import { useSkillStore } from '@/stores/skill'
 import type { AgentEvent } from '@/contracts'
-import { eventLabel, localizeDetails, permissionLabel, runStatusLabel, toolDescription, toolLabel } from './labels'
+import { eventLabel, localizeDetails, permissionLabel, runStatusLabel, toolLabel } from './labels'
+import ToolOption from './ToolOption.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -88,7 +89,7 @@ function eventText(event: AgentEvent) {
         <div class="field"><label>令牌预算</label><input v-model.number="form.token_budget" class="input" type="number" min="1" /></div>
         <div class="field"><label>最大并发工具</label><input v-model.number="form.max_concurrent_tools" class="input" type="number" min="1" /></div>
       </div>
-      <div class="field"><label>允许使用的工具</label><div class="tool-grid"><label v-for="tool in agentStore.tools" :key="tool.name" class="tool-option"><input type="checkbox" :checked="form.allowed_tools.includes(tool.name)" @change="toggleTool(tool.name)" /><span><strong>{{ toolLabel(tool.name) }}</strong><code>{{ tool.name }}</code><small>{{ toolDescription(tool.name, tool.description) }}</small></span></label></div></div>
+      <div class="field"><label>允许使用的工具</label><div class="tool-grid"><ToolOption v-for="tool in agentStore.tools" :key="tool.name" :name="tool.name" :description="tool.description" :selected="form.allowed_tools.includes(tool.name)" @toggle="toggleTool" /></div></div>
       <label class="network"><input v-model="form.allow_network" type="checkbox" /> 允许本次运行调用网络工具</label>
       <div class="inline-actions"><button class="button-primary" :disabled="agentStore.isCreating || !form.input.trim() || !form.provider_id || !form.model.trim()">{{ agentStore.isCreating ? '创建中…' : '创建并运行' }}</button></div>
     </form>
@@ -114,12 +115,7 @@ function eventText(event: AgentEvent) {
 <style scoped>
 .agent-page > * { width: min(100%, 1080px); margin-inline: auto; }
 .run-form { display: grid; gap: var(--space-xl); }
-.tool-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: var(--space-sm); }
-.tool-option { display: flex; gap: var(--space-sm); padding: var(--space-md); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-surface-primary); cursor: pointer; transition: border-color var(--motion-fast), background-color var(--motion-fast), transform var(--motion-fast), box-shadow var(--motion-fast); }
-.tool-option:hover { border-color: var(--color-accent-secondary); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
-.tool-option:has(input:checked) { border-color: var(--color-accent-primary); background: var(--color-accent-soft); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent-primary) 10%, transparent); }
-.tool-option small { display: block; color: var(--color-text-secondary); }
-.tool-option code { display: block; margin: 2px 0; color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
+.tool-grid { display: grid; align-items: start; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: var(--space-sm); }
 .network { display: flex; gap: var(--space-sm); }
 .trace-layout { display: grid; gap: var(--space-lg); }
 .run-summary, .event-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); }
