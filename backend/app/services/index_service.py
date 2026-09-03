@@ -6,7 +6,6 @@ MVP 阶段重建是同步的（数据量小），完成后直接返回 completed
 
 from __future__ import annotations
 
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -16,8 +15,8 @@ from app.config import get_settings
 from app.contracts import IndexJob, IndexRebuildRequest, IndexStatus
 from app.errors import ApiError
 from app.knowledge.parser import parse_note
-from app.services.note_service import index_note
-from app.services import task_service
+from app.services.note_service import index_note, prepare_note_index
+from app.database.db import connect, transaction
 from app.services.coordination import serialized_vault_mutation
 from app.retrieval.vectorstore import SqliteVecStore
 
@@ -74,18 +73,7 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
             {"scope": request.scope, "note_ids": request.note_ids},
         )
 
-    # 先扫描到内存（失败不会清旧索引），再快照旧库用于失败回滚
     docs = _scan_vault()
-    settings = get_settings()
-    database_existed = settings.db_path.exists()
-    task_note_links = task_service.note_links() if database_existed else {}
-    backup_path = (
-        settings.db_path.with_name(f"{settings.db_path.name}.{job_id}.bak")
-        if database_existed
-        else None
-    )
-    if backup_path is not None:
-        shutil.copy2(settings.db_path, backup_path)
 
     _active_job_id = job_id
     _last_error = None
@@ -94,23 +82,34 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
         created_at=datetime.now(timezone.utc),
     ))
     try:
-        # Deleting blocks also cascades every space in routed_block_vectors;
-        # index_note repopulates only the currently successful API space.
-        repository.clear_all()
-        await vector_store.clear()
+        prepared_notes = []
         for rel, folder, markdown, created, updated in docs:
             parsed = parse_note(
                 markdown=markdown, file_path=rel, folder=folder, tags=None,
                 created_at=created, updated_at=updated,
             )
-            await index_note(parsed)
-        task_service.restore_note_links(task_note_links)
+            prepared_notes.append((parsed, await prepare_note_index(parsed)))
+        # All network/model awaits precede the transaction. The concrete SQLite
+        # methods below complete synchronously despite their async interfaces.
+        conn = connect()
+        try:
+            with transaction(conn):
+                task_note_links = dict(conn.execute(
+                    "SELECT task_id, note_id FROM tasks WHERE note_id IS NOT NULL"
+                ).fetchall())
+                repository.clear_all(conn=conn)
+                await vector_store.clear(conn=conn)
+                for parsed, prepared in prepared_notes:
+                    await index_note(parsed, prepared=prepared, conn=conn)
+                for task_id, note_id in task_note_links.items():
+                    conn.execute(
+                        "UPDATE tasks SET note_id = ? WHERE task_id = ? "
+                        "AND EXISTS (SELECT 1 FROM notes WHERE note_id = ?)",
+                        (note_id, task_id, note_id),
+                    )
+        finally:
+            conn.close()
     except BaseException as exc:
-        # 重建失败：恢复旧索引，避免留下半成品；记录 failed 任务后向上抛
-        if backup_path is not None and backup_path.exists():
-            shutil.copy2(backup_path, settings.db_path)
-        elif not database_existed:
-            settings.db_path.unlink(missing_ok=True)
         _remember_job(IndexJob(
             job_id=job_id, status="failed", scope=request.scope,
             created_at=datetime.now(timezone.utc),
@@ -119,8 +118,6 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
         raise
     finally:
         _active_job_id = None
-        if backup_path is not None:
-            backup_path.unlink(missing_ok=True)
 
     job = IndexJob(job_id=job_id, status="completed", scope=request.scope, created_at=datetime.now(timezone.utc))
     _remember_job(job)

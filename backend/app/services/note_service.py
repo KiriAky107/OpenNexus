@@ -6,6 +6,8 @@ Markdown 文件是笔记正文的持久化载体（Vault），SQLite/FTS5/向量
 
 from __future__ import annotations
 
+import sqlite3
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -72,21 +74,34 @@ def _delete_markdown(rel_path: str) -> None:
         path.unlink()
 
 
-async def index_note(parsed: ParsedNote) -> None:
+PreparedIndex = tuple[list[list[float]], routed_vectors.RemoteEmbeddings | None]
+
+
+async def prepare_note_index(parsed: ParsedNote) -> PreparedIndex:
+    """Compute vectors before opening a write transaction (including API I/O)."""
+    texts = [block.content for block in parsed.blocks]
+    vectors = await embedding.embed_documents(texts)
+    remote = await routed_vectors.embed_remote(texts)
+    return vectors, remote
+
+
+async def index_note(
+    parsed: ParsedNote, *, prepared: PreparedIndex | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> None:
     """把解析结果写入元数据 + FTS5 + 向量（三层可重建索引），单事务保证原子性。
 
     元数据与向量在同一连接、同一事务内提交，避免「新元数据已提交、向量写入失败」的
     半提交状态。替换元数据时拿到旧 block_id：清理已删除/内容变化的旧向量，只为新增
     block 写向量（内容未变的 block 其向量仍有效，无需重复写入）。
     """
-    texts = [block.content for block in parsed.blocks]
-    vectors = await embedding.embed_documents(texts)
-    # Network I/O stays outside the write transaction. The hash index remains
-    # complete even when the optional API route fails or changes vector spaces.
-    remote = await routed_vectors.embed_remote(texts)
-    conn = connect()
+    if conn is not None and prepared is None:
+        raise ValueError("Prepare embeddings before supplying a write connection")
+    vectors, remote = prepared if prepared is not None else await prepare_note_index(parsed)
+    owns = conn is None
+    conn = conn or connect()
     try:
-        with transaction(conn):
+        with transaction(conn) if owns else nullcontext():
             old_block_ids = repository.replace_note_metadata(
                 conn=conn,
                 note_id=parsed.note_id,
@@ -116,7 +131,8 @@ async def index_note(parsed: ParsedNote) -> None:
                 conn=conn,
             )
     finally:
-        conn.close()
+        if owns:
+            conn.close()
 
 
 @serialized_vault_mutation

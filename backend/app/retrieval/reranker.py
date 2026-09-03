@@ -24,6 +24,7 @@ class RerankerProvider(Protocol):
     """统一 Reranker 接口：输入候选块，输出按相关性重排后的候选块。"""
 
     model_id: str
+    version: str
 
     async def rerank(self, query: str, candidates: list[RankedCandidate]) -> list[RankedCandidate]: ...
 
@@ -32,6 +33,7 @@ class LexicalReranker:
     """轻量精排：query 与块正文的词面重叠度，与归一化后的原始分数加权求和。"""
 
     model_id = "lexical-v1"
+    version = "1"
 
     def __init__(self, lexical_weight: float = 0.5) -> None:
         self.lexical_weight = lexical_weight

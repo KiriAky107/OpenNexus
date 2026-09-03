@@ -82,6 +82,31 @@ async def collect(iterator):
     return [event async for event in iterator]
 
 
+@pytest.mark.parametrize("name", ["lookup", "notes.search"])
+def test_compatible_split_tool_name_preserves_identity(name):
+    from app.providers.tool_names import prepare_tool_names
+    req = request()
+    req.tools[0].name = name
+    wire, _ = prepare_tool_names(req)
+    alias = wire.tools[0].name
+
+    def handler(_):
+        return httpx.Response(200, content=sse(
+            {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_1",
+                "function": {"name": alias[:3], "arguments": ""}}]}}]},
+            {"choices": [{"delta": {"tool_calls": [{"index": 0,
+                "function": {"name": alias[3:], "arguments": '{"query":"x"}'}}]},
+                "finish_reason": "tool_calls"}]},
+            {"type": "[DONE]"},
+        ))
+
+    events = asyncio.run(collect(provider("compatible", handler).stream(req)))
+    assert [e.data["name"] for e in events if e.event == E.tool_call_start] == [name]
+    assert json.loads("".join(e.data["arguments_delta"] for e in events
+                             if e.event == E.tool_call_delta)) == {"query": "x"}
+    assert events[-1].data["status"] == "completed"
+
+
 def sse(*events):
     return "".join(
         f"event: {event.get('type', 'message')}\r\ndata: {json.dumps(event, ensure_ascii=False)}\r\n\r\n"
