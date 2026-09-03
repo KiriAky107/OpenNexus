@@ -436,6 +436,83 @@ def test_fts_pagination_is_not_truncated_at_one_thousand(vault) -> None:
     assert len(response.items) == 10
 
 
+def test_fts_score_threshold_filters_before_total(vault) -> None:
+    """score_threshold 先于计数与分页生效：total 反映过滤后数量，与 items 一致。
+
+    高阈值过滤掉全部结果时 total==0 且 items 为空，杜绝「空页但 total>0」的
+    不一致（审阅 P2-7）。
+    """
+    from app.retrieval.engine import engine
+    from app.services import note_service
+
+    # 10 个 block，含「目标」次数递增，bm25 分数各异，min-max 归一化后分数落在 [0,1]
+    markdown = "\n\n".join(f"{'目标' * i} 分隔内容" for i in range(1, 11))
+    asyncio.run(
+        note_service.create_note(title="阈值过滤", markdown=markdown, folder="", tags=[])
+    )
+
+    all_hits = asyncio.run(
+        engine.search(
+            SearchRequest(query="目标", mode=SearchMode.fts, limit=20, score_threshold=0.0)
+        )
+    )
+    filtered = asyncio.run(
+        engine.search(
+            SearchRequest(query="目标", mode=SearchMode.fts, limit=20, score_threshold=0.5)
+        )
+    )
+    none = asyncio.run(
+        engine.search(
+            SearchRequest(query="目标", mode=SearchMode.fts, limit=20, score_threshold=2.0)
+        )
+    )
+
+    assert all_hits.page.total >= 10
+    assert 0 < filtered.page.total < all_hits.page.total  # 阈值过滤掉部分而非全部
+    assert filtered.page.total == len(filtered.items)
+    assert none.page.total == 0
+    assert none.items == []
+
+
+def test_fts_offset_beyond_end_reports_real_total(vault) -> None:
+    """offset 越过末页时 items 为空，但 total 仍为真实命中数而非归零。"""
+    from app.retrieval.engine import engine
+    from app.services import note_service
+
+    asyncio.run(
+        note_service.create_note(title="越界分页", markdown="检索 检索 检索 检索", folder="", tags=[])
+    )
+
+    resp = asyncio.run(
+        engine.search(SearchRequest(query="检索", mode=SearchMode.fts, limit=10, offset=100))
+    )
+    assert resp.page.total >= 1
+    assert resp.items == []
+
+
+def test_fts_not_truncated_at_five_thousand(vault) -> None:
+    """FTS 结果不再被 5000 条上限截断：>5000 命中时 total 为真实计数，末页仍可访问。"""
+    from app.retrieval.engine import engine
+    from app.services import note_service
+
+    markdown = "\n\n".join(f"共同词 q{i}" for i in range(5010))
+    asyncio.run(
+        note_service.create_note(title="五千条分页", markdown=markdown, folder="", tags=[])
+    )
+
+    first = asyncio.run(
+        engine.search(SearchRequest(query="共同词", mode=SearchMode.fts, limit=10, offset=0))
+    )
+    assert first.page.total == 5010
+    assert len(first.items) == 10
+
+    last = asyncio.run(
+        engine.search(SearchRequest(query="共同词", mode=SearchMode.fts, limit=10, offset=5005))
+    )
+    assert last.page.total == 5010
+    assert len(last.items) == 5
+
+
 # --------------------------------------------------------------------------- #
 # 审阅回归：PATCH tags 语义 / 向量-块一致性 / 过滤漏召回 / rebuild 语义与回滚
 # --------------------------------------------------------------------------- #
@@ -563,9 +640,10 @@ def test_rebuild_failure_restores_old_index(vault, monkeypatch) -> None:
     assert repository.stats() == before  # 旧索引已恢复，无半成品
 
 
-def test_first_rebuild_failure_removes_partial_database(vault, monkeypatch) -> None:
+def test_first_rebuild_failure_leaves_no_partial_index(vault, monkeypatch) -> None:
     """首次启动没有旧库时，失败也不能留下已经写入的部分索引。"""
     from app.services import index_service
+    from app import repository
 
     _write_vault(
         vault,
@@ -574,17 +652,17 @@ def test_first_rebuild_failure_removes_partial_database(vault, monkeypatch) -> N
     real_index = index_service.index_note
     calls = {"count": 0}
 
-    async def fail_on_second(parsed):
+    async def fail_on_second(parsed, **kwargs):
         calls["count"] += 1
         if calls["count"] == 2:
             raise RuntimeError("injected first-rebuild failure")
-        await real_index(parsed)
+        await real_index(parsed, **kwargs)
 
     monkeypatch.setattr(index_service, "index_note", fail_on_second)
     with pytest.raises(RuntimeError):
         asyncio.run(index_service.rebuild(IndexRebuildRequest(scope="all")))
 
-    assert not get_settings().db_path.exists()
+    assert repository.stats() == {"notes": 0, "blocks": 0}
 
 
 def test_rebuild_preserves_task_note_links(vault) -> None:

@@ -35,6 +35,7 @@ class VectorStore(Protocol):
     async def upsert(self, records: list[VectorRecord]) -> None: ...
     async def delete(self, ids: list[str]) -> None: ...
     async def search(self, vector: list[float], *, top_k: int) -> list[VectorHit]: ...
+    async def count(self) -> int: ...
 
 
 class SqliteVecStore:
@@ -85,10 +86,19 @@ class SqliteVecStore:
         finally:
             conn.close()
 
-    async def clear(self) -> None:
+    async def clear(self, *, conn: sqlite3.Connection | None = None) -> None:
+        owns = conn is None
+        conn = conn or connect()
+        try:
+            with transaction(conn) if owns else nullcontext():
+                conn.execute("DELETE FROM vec_blocks")
+        finally:
+            if owns:
+                conn.close()
+
+    async def count(self) -> int:
         conn = connect()
         try:
-            with transaction(conn):
-                conn.execute("DELETE FROM vec_blocks")
+            return conn.execute("SELECT COUNT(*) FROM vec_blocks").fetchone()[0]
         finally:
             conn.close()

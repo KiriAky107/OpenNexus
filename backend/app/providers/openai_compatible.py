@@ -99,28 +99,25 @@ class OpenAICompatibleProvider(EventStreamingMixin, HTTPProviderMixin):
                     raw = object_value(raw)
                     index = token_count(raw.get("index", 0))
                     function = object_value(raw.get("function") or {})
-                    call = calls.setdefault(index, {"id": "", "name": "", "arguments": "", "started": False})
+                    call = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
                     if raw.get("id"):
                         call["id"] = string_value(raw["id"])
                     if function.get("name"):
                         call["name"] += string_value(function["name"])
                     fragment = string_value(function.get("arguments", ""))
                     call["arguments"] += fragment
-                    if not call["started"] and call["name"]:
-                        call["id"] = call["id"] or f"call_{uuid4().hex}"
-                        call["started"] = True
-                        yield ModelEventType.tool_call_start, {"tool_call_id": call["id"], "name": call["name"]}
-                        fragment = call["arguments"]
-                    if call["started"] and fragment:
-                        yield ModelEventType.tool_call_delta, {"tool_call_id": call["id"], "arguments_delta": fragment}
                 if choice.get("finish_reason"):
                     finished = True
         if not finished:
             raise truncated_stream()
         for call in calls.values():
-            if not call["started"]:
+            if not call["name"]:
                 raise invalid_response()
             decode_tool_arguments(call["arguments"] or "{}")
+            # A name can span multiple chunks; publish only the complete identity.
+            call["id"] = call["id"] or f"call_{uuid4().hex}"
+            yield ModelEventType.tool_call_start, {"tool_call_id": call["id"], "name": call["name"]}
+            yield ModelEventType.tool_call_delta, {"tool_call_id": call["id"], "arguments_delta": call["arguments"] or "{}"}
             yield ModelEventType.tool_call_end, {"tool_call_id": call["id"]}
 
     async def list_models(self) -> list[ModelInfo]:

@@ -273,11 +273,15 @@ def update_note_location(
         raise LookupError(note_id)
 
 
-def fts_search_page(
-    *,
+_FTS_FROM = """
+        FROM blocks_fts
+        JOIN blocks AS b ON b.block_id = blocks_fts.block_id
+        JOIN notes AS n ON n.note_id = b.note_id
+    """
+
+
+def _fts_where(
     match: str,
-    limit: int,
-    offset: int,
     folders: list[str],
     note_ids: list[str],
     tags: list[str],
@@ -285,8 +289,11 @@ def fts_search_page(
     created_to: datetime | None,
     updated_from: datetime | None,
     updated_to: datetime | None,
-) -> tuple[list[FtsHit], int]:
-    """执行带元数据过滤的 FTS 精确分页，并返回过滤后的完整命中数。"""
+) -> tuple[str, list[object]]:
+    """构建 FTS 过滤 WHERE 子句（不含 WHERE 关键字），返回 (where_sql, params)。
+
+    fts_search_page 与 fts_score_bounds 共用，保证计数与取数口径一致。
+    """
     where = ["blocks_fts MATCH ?"]
     params: list[object] = [match]
 
@@ -317,22 +324,44 @@ def fts_search_page(
             where.append(f"julianday({column}) <= julianday(?)")
             params.append(_iso(upper))
 
-    from_sql = """
-        FROM blocks_fts
-        JOIN blocks AS b ON b.block_id = blocks_fts.block_id
-        JOIN notes AS n ON n.note_id = b.note_id
+    return " AND ".join(where), params
+
+
+def fts_search_page(
+    *,
+    match: str,
+    limit: int,
+    offset: int,
+    folders: list[str],
+    note_ids: list[str],
+    tags: list[str],
+    created_from: datetime | None,
+    created_to: datetime | None,
+    updated_from: datetime | None,
+    updated_to: datetime | None,
+    bm25_max: float | None = None,
+) -> tuple[list[FtsHit], int]:
+    """执行带元数据过滤的 FTS 精确分页，并返回过滤后的完整命中数。
+
+    bm25_max 非空时按 bm25 截止值过滤（用于阈值过滤的精确分页），计数与取数同口径。
     """
-    where_sql = " AND ".join(where)
+    where_sql, params = _fts_where(
+        match, folders, note_ids, tags,
+        created_from, created_to, updated_from, updated_to,
+    )
+    if bm25_max is not None:
+        where_sql += " AND bm25(blocks_fts) <= ?"
+        params.append(bm25_max)
 
     conn = connect()
     try:
         total = conn.execute(
-            f"SELECT COUNT(*) {from_sql} WHERE {where_sql}", params
+            f"SELECT COUNT(*) {_FTS_FROM} WHERE {where_sql}", params
         ).fetchone()[0]
         rows = conn.execute(
             f"""
             SELECT blocks_fts.block_id, blocks_fts.note_id, bm25(blocks_fts) AS rank
-            {from_sql}
+            {_FTS_FROM}
             WHERE {where_sql}
             ORDER BY rank
             LIMIT ? OFFSET ?
@@ -344,6 +373,45 @@ def fts_search_page(
              for row in rows],
             total,
         )
+    finally:
+        conn.close()
+
+
+def fts_score_bounds(
+    *,
+    match: str,
+    folders: list[str],
+    note_ids: list[str],
+    tags: list[str],
+    created_from: datetime | None,
+    created_to: datetime | None,
+    updated_from: datetime | None,
+    updated_to: datetime | None,
+) -> tuple[float, float] | None:
+    """返回 metadata 过滤后的 FTS 命中集里 bm25 的 (min, max)，无命中时返回 None。
+
+    用于阈值过滤：min-max 归一化是 bm25 的线性函数，据此可把阈值换算为 bm25 截止值。
+    """
+    where_sql, params = _fts_where(
+        match, folders, note_ids, tags,
+        created_from, created_to, updated_from, updated_to,
+    )
+    conn = connect()
+    try:
+        # bm25() 不能作为聚合函数参数，也不能用在被聚合的子查询里；改用 ORDER BY 取首尾两行
+        lo_row = conn.execute(
+            f"SELECT bm25(blocks_fts) AS rank {_FTS_FROM} WHERE {where_sql}"
+            " ORDER BY rank ASC LIMIT 1",
+            params,
+        ).fetchone()
+        if lo_row is None or lo_row["rank"] is None:
+            return None
+        hi_row = conn.execute(
+            f"SELECT bm25(blocks_fts) AS rank {_FTS_FROM} WHERE {where_sql}"
+            " ORDER BY rank DESC LIMIT 1",
+            params,
+        ).fetchone()
+        return (float(lo_row["rank"]), float(hi_row["rank"]))
     finally:
         conn.close()
 
@@ -392,16 +460,18 @@ def get_index_meta() -> dict[str, str]:
         conn.close()
 
 
-def clear_all() -> None:
-    """清空元数据、Block 与 FTS5（重建索引用，向量由 VectorStore.clear 处理）。"""
-    conn = connect()
+def clear_all(*, conn: sqlite3.Connection | None = None) -> None:
+    """Clear rebuildable metadata using the caller's transaction when provided."""
+    owns = conn is None
+    conn = conn or connect()
     try:
-        with transaction(conn):
+        with transaction(conn) if owns else nullcontext():
             conn.execute("DELETE FROM blocks_fts")
             conn.execute("DELETE FROM blocks")
             conn.execute("DELETE FROM notes")
     finally:
-        conn.close()
+        if owns:
+            conn.close()
 
 
 def stats() -> dict[str, int]:

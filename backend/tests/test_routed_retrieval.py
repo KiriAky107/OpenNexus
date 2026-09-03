@@ -66,6 +66,67 @@ async def seed():
     return apple, banana
 
 
+@pytest.mark.parametrize("failure", ["cancel", "write"])
+def test_rebuild_failure_preserves_concurrent_configuration_and_all_indexes(runtime, monkeypatch, failure):
+    from app.container import container
+    from app.contracts import ModelRoutingConfig, ProviderConfig, ProviderType
+    from app.services import task_service
+
+    async def scenario():
+        apple, _ = await seed()
+        task = task_service.create_task(title="before", note_id=apple.note_id)
+        before = {table: [tuple(row) for row in rows(f"SELECT * FROM {table}")]
+                  for table in ("notes", "blocks", "blocks_fts", "vec_blocks", "index_meta", "routed_block_vectors")}
+        container.model_routing.update(ModelRoutingConfig())
+        entered, release = asyncio.Event(), asyncio.Event()
+        original_embed = runtime.embed
+
+        async def pending_embed(texts):
+            entered.set()
+            await release.wait()
+            return await original_embed(texts)
+
+        monkeypatch.setattr(runtime, "embed", pending_embed)
+        original_index = index_service.index_note
+        writes = 0
+
+        async def fail_write(parsed, **kwargs):
+            nonlocal writes
+            await original_index(parsed, **kwargs)
+            writes += 1
+            if writes == 2:
+                raise RuntimeError("injected write failure")
+
+        if failure == "write":
+            monkeypatch.setattr(index_service, "index_note", fail_write)
+        rebuilding = asyncio.create_task(index_service.rebuild(IndexRebuildRequest()))
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        saved = container.model_routing.update(container.model_routing.configuration())
+        config = ProviderConfig(provider_id="concurrent", provider_type=ProviderType.openai_compatible,
+                                name="saved during rebuild", base_url="https://unused.invalid/v1")
+        container.providers.register(config, container.provider_factory.build(config))
+        task_service.update_task(task.task_id, {"title": "saved during rebuild"})
+        # Preparation keeps the old searchable index intact while API I/O is pending.
+        assert repository.stats()["notes"] == 2
+        if failure == "cancel":
+            rebuilding.cancel()
+            expected = asyncio.CancelledError
+        else:
+            release.set()
+            expected = RuntimeError
+        with pytest.raises(expected):
+            await rebuilding
+        assert container.model_routing.configuration().version == saved.config.version
+        assert rows("SELECT provider_id FROM provider_configs")[-1][0] == "concurrent"
+        restored = task_service.get_task(task.task_id)
+        assert restored.title == "saved during rebuild"
+        assert restored.note_id == apple.note_id
+        for table, values in before.items():
+            assert [tuple(row) for row in rows(f"SELECT * FROM {table}")] == values
+
+    asyncio.run(scenario())
+
+
 def local_engine():
     return RetrievalEngine(HashEmbeddingProvider(), LexicalReranker(), SqliteVecStore())
 
