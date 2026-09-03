@@ -720,6 +720,11 @@ class RAGMetrics(Contract):
     citation_hit_rate: float = 0.0
     p50_latency_ms: float = 0.0
     p95_latency_ms: float = 0.0
+    # 样本构成：失败样本按零分计入质量指标，汇总不虚高；报告据此可知实际分母
+    total_cases: int = 0
+    successful_cases: int = 0
+    failed_cases: int = 0
+    failure_rate: float = 0.0
 
 
 class BenchmarkDatasetInfo(Contract):
@@ -745,6 +750,7 @@ class BenchmarkRun(Contract):
     metrics: dict[str, Any] | None = None
     config_snapshot: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
+    error_code: str | None = None
     created_at: datetime
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -760,6 +766,7 @@ class BenchmarkEventType(str, Enum):
     case_completed = "CaseCompleted"
     run_completed = "RunCompleted"
     run_failed = "RunFailed"
+    run_cancelled = "RunCancelled"
 
 
 class BenchmarkEvent(Contract):
@@ -785,6 +792,7 @@ class RAGCaseResult(Contract):
     # 该 Case 是否声明了 expected_block_ids（决定是否计入 citation_hit_rate 分母）
     citation_applicable: bool = False
     error: str | None = None
+    error_code: str | None = None
 
 
 class BenchmarkReport(Contract):
@@ -797,3 +805,4 @@ class BenchmarkReport(Contract):
     metrics: dict[str, Any] = Field(default_factory=dict)
     cases: list[RAGCaseResult] = Field(default_factory=list)
     error: str | None = None
+    error_code: str | None = None

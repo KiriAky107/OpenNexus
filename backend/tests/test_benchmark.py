@@ -17,7 +17,13 @@ from pydantic import ValidationError
 
 from app.benchmarks import datasets, metrics as m, service
 from app.config import get_settings
-from app.contracts import BenchmarkKind, RAGRunRequest, SearchMode
+from app.contracts import (
+    BenchmarkKind,
+    BenchmarkRun,
+    BenchmarkStatus,
+    RAGRunRequest,
+    SearchMode,
+)
 from app.errors import ApiError
 
 
@@ -323,3 +329,113 @@ def test_benchmark_run_not_found_raises() -> None:
     with pytest.raises(ApiError) as exc:
         asyncio.run(routes.get_benchmark_run("benchmark_missing"))
     assert exc.value.code == "BENCHMARK_RUN_NOT_FOUND"
+
+
+# --------------------------------------------------------------------------- #
+# 审阅回归：索引兼容 / 容量 / 失败样本 / 取消事件 / 数据集隔离
+# --------------------------------------------------------------------------- #
+def test_create_rag_run_requires_built_index() -> None:
+    # 空索引（无已索引 block）会让所有模式得到全 0 指标，应在创建时拒绝而非跑出误导结果
+    _write_dataset("empty-index-v1", [{"case_id": "x", "query": "q", "expected_note_ids": ["n"]}])
+    with pytest.raises(ApiError) as exc:
+        asyncio.run(
+            service.create_rag_run(
+                RAGRunRequest(dataset_id="empty-index-v1", modes=[SearchMode.fts])
+            )
+        )
+    assert exc.value.status_code == 409
+    assert exc.value.code == "BENCHMARK_INDEX_INCOMPATIBLE"
+
+
+def test_capacity_exceeded_when_all_runs_active(monkeypatch) -> None:
+    # 满容量且全为活动（非终态）run 时，无法淘汰，应拒绝创建而非删掉正在运行的 run
+    _, _, case = _single_note_case()
+    _write_dataset("capacity-v1", [case])
+
+    monkeypatch.setattr(service, "MAX_RUNS", 1)
+    fake_id = "benchmark_fake_active"
+    service._runs[fake_id] = BenchmarkRun(
+        run_id=fake_id,
+        kind=BenchmarkKind.rag,
+        dataset_id="capacity-v1",
+        dataset_hash="sha256:fake",
+        status=BenchmarkStatus.queued,
+        created_at=service._now(),
+    )
+    try:
+        with pytest.raises(ApiError) as exc:
+            asyncio.run(
+                service.create_rag_run(
+                    RAGRunRequest(dataset_id="capacity-v1", modes=[SearchMode.fts])
+                )
+            )
+        assert exc.value.status_code == 429
+        assert exc.value.code == "BENCHMARK_CAPACITY_EXCEEDED"
+    finally:
+        service._runs.pop(fake_id, None)
+
+
+def test_failed_samples_counted_as_zero_in_aggregate() -> None:
+    from app.benchmarks import rag as rag_module
+    from app.contracts import RAGCaseResult
+
+    cases = [
+        RAGCaseResult(
+            case_id="ok", mode=SearchMode.fts, repeat=0, latency_ms=10.0,
+            hit_at_1=True, recall=1.0, reciprocal_rank=1.0,
+            citation_hit=True, citation_applicable=True,
+        ),
+        RAGCaseResult(
+            case_id="boom", mode=SearchMode.fts, repeat=0, latency_ms=0.0,
+            error="RAG case evaluation failed.",
+            error_code="BENCHMARK_CASE_EVALUATION_FAILED",
+        ),
+    ]
+    metrics = rag_module._aggregate(cases, SearchMode.fts)
+
+    assert metrics.total_cases == 2
+    assert metrics.successful_cases == 1
+    assert metrics.failed_cases == 1
+    assert metrics.failure_rate == 0.5
+    # 失败样本按零分计入质量指标分母，汇总不虚高
+    assert metrics.hit_at_1 == 0.5
+    assert metrics.recall_at_k == 0.5
+    # 延迟只统计成功样本
+    assert metrics.p50_latency_ms == 10.0
+
+
+def test_cancel_emits_run_cancelled_event() -> None:
+    _, _, case = _single_note_case()
+    _write_dataset("cancel-event-v1", [case])
+
+    async def _scenario():
+        run = await service.create_rag_run(
+            RAGRunRequest(dataset_id="cancel-event-v1", modes=[SearchMode.fts])
+        )
+        service.cancel_run(run.run_id)
+        return await service.wait_for_run(run.run_id)
+
+    run = asyncio.run(_scenario())
+    assert run.status.value == "cancelled"
+    events = service.get_events(run.run_id)
+    assert events[-1].event.value == "RunCancelled"
+
+
+def test_load_dataset_ignores_corrupted_unrelated_files() -> None:
+    # 无关文件损坏（非法 JSON / 顶层非对象）不应阻断目标数据集加载
+    directory = get_settings().benchmark_datasets_path
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "broken.json").write_text("{ not valid json", encoding="utf-8")
+    (directory / "array.json").write_text('["a", "b"]', encoding="utf-8")
+    _write_dataset("ok-v1", [{"case_id": "x", "query": "q", "expected_note_ids": ["n"]}])
+
+    dataset = datasets.load_dataset("ok-v1", BenchmarkKind.rag)
+    assert dataset.dataset_id == "ok-v1"
+    assert len(dataset.cases) == 1
+
+
+def test_load_dataset_top_level_must_be_object() -> None:
+    _write_raw("array-top", ["a", "b"])
+    with pytest.raises(ApiError) as exc:
+        datasets.load_dataset("array-top", BenchmarkKind.rag)
+    assert exc.value.code == "BENCHMARK_DATASET_INVALID"

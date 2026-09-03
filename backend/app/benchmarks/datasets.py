@@ -172,11 +172,23 @@ def list_datasets(kind: BenchmarkKind) -> list[BenchmarkDatasetInfo]:
 
 
 def load_dataset(dataset_id: str, kind: BenchmarkKind) -> RAGDataset:
-    """按 id 加载并校验数据集；找不到抛 BENCHMARK_DATASET_NOT_FOUND。"""
+    """按文件名加载并校验数据集；找不到抛 BENCHMARK_DATASET_NOT_FOUND。
+
+    只读取与请求 dataset_id 同名的文件（{dataset_id}.json），无关文件的损坏（JSON 语法
+    错误、UTF-8 解码错误、顶层非对象）不会阻断目标数据集加载；只有目标文件本身损坏
+    才抛 BENCHMARK_DATASET_INVALID。按现有文件 stem 精确匹配，不拼接调用方传入的路径。
+    """
     for path in _dataset_files():
-        raw, raw_bytes = _read_json(path)
-        if raw.get("dataset_id") != dataset_id:
+        if path.stem != dataset_id:
             continue
+        raw, raw_bytes = _read_json(path)
+        if not isinstance(raw, dict):
+            raise ApiError(
+                422,
+                "BENCHMARK_DATASET_INVALID",
+                "Dataset top-level must be a JSON object.",
+                {"dataset_id": dataset_id, "path": path.name},
+            )
         return _dataset_from_raw(raw, raw_bytes, kind)
     raise ApiError(
         404,

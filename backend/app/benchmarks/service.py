@@ -9,6 +9,7 @@ RAG Benchmark 采用「创建即返回 queued、后台 Task 异步执行」的�
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -28,9 +29,12 @@ from app.contracts import (
     RAGCaseResult,
     RAGMetrics,
     RAGRunRequest,
+    SearchMode,
 )
 from app.errors import ApiError
 from app.retrieval.engine import engine
+
+logger = logging.getLogger(__name__)
 
 _runs: dict[str, BenchmarkRun] = {}
 _events: dict[str, list[BenchmarkEvent]] = {}
@@ -45,16 +49,31 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _remember(run: BenchmarkRun) -> None:
-    _runs[run.run_id] = run
-    while len(_runs) > MAX_RUNS:
-        oldest = next(iter(_runs))
-        _runs.pop(oldest, None)
-        _events.pop(oldest, None)
-        _reports.pop(oldest, None)
-        _tasks.pop(oldest, None)
-        _subscribers.pop(oldest, None)
-        _cancel_flags.pop(oldest, None)
+def _forget(run_id: str) -> None:
+    """移除一条 run 的全部内存态；仅在 run 处于终态时调用，避免打断活动任务。"""
+    _runs.pop(run_id, None)
+    _events.pop(run_id, None)
+    _reports.pop(run_id, None)
+    _tasks.pop(run_id, None)
+    _subscribers.pop(run_id, None)
+    _cancel_flags.pop(run_id, None)
+
+
+def _evict_terminal() -> bool:
+    """超过容量时淘汰最旧的终态 run；全部为活动 run 无法淘汰时返回 False。
+
+    绝不能删除仍在运行（queued/running）的 run：那会连带移除其 _cancel_flags 与
+    _subscribers，使后台 Task 访问时抛出 KeyError。
+    """
+    terminal = (BenchmarkStatus.completed, BenchmarkStatus.failed, BenchmarkStatus.cancelled)
+    while len(_runs) >= MAX_RUNS:
+        victim = next(
+            (rid for rid, run in _runs.items() if run.status in terminal), None
+        )
+        if victim is None:
+            return False
+        _forget(victim)
+    return True
 
 
 def _config_snapshot(request: RAGRunRequest, dataset: RAGDataset) -> dict:
@@ -83,12 +102,57 @@ def _config_snapshot(request: RAGRunRequest, dataset: RAGDataset) -> dict:
     }
 
 
+async def _validate_index_compatibility(request: RAGRunRequest) -> None:
+    """创建 RAG Run 前校验索引已建立且与当前 Embedding 模型/维度兼容。
+
+    空索引或不兼容索引会让所有模式得到全 0 指标，把环境/索引错误误判为检索质量差，
+    故在创建时即拒绝，返回 BENCHMARK_INDEX_INCOMPATIBLE。
+    """
+    stats = repository.stats()
+    meta = repository.get_index_meta()
+    needs_vector = any(m in (SearchMode.vector, SearchMode.hybrid) for m in request.modes)
+
+    reasons: list[str] = []
+    if stats["blocks"] == 0:
+        reasons.append("index is empty (no indexed blocks; run /api/index/rebuild first)")
+    if needs_vector:
+        if meta.get("embedding_model") != engine.embedding.model_id:
+            reasons.append(
+                f"embedding model mismatch: index={meta.get('embedding_model')!r}, "
+                f"engine={engine.embedding.model_id!r}"
+            )
+        if meta.get("embedding_dim") != str(engine.embedding.dim):
+            reasons.append(
+                f"embedding dimension mismatch: index={meta.get('embedding_dim')!r}, "
+                f"engine={engine.embedding.dim}"
+            )
+        if await engine.vector_store.count() == 0:
+            reasons.append("vector index is empty")
+    if reasons:
+        raise ApiError(
+            409,
+            "BENCHMARK_INDEX_INCOMPATIBLE",
+            "Benchmark index is not built or is incompatible with the current retrieval engine.",
+            {"reasons": reasons},
+        )
+
+
 async def create_rag_run(request: RAGRunRequest) -> BenchmarkRun:
     """创建一次 RAG Benchmark，立即返回 queued 的 BenchmarkRun，由后台 Task 执行。"""
     dataset = datasets.load_dataset(request.dataset_id, BenchmarkKind.rag)
+    await _validate_index_compatibility(request)
+
+    # 容量检查：先淘汰终态 run 腾空间；满容量且全为活动 run 时拒绝创建
+    if not _evict_terminal():
+        raise ApiError(
+            429,
+            "BENCHMARK_CAPACITY_EXCEEDED",
+            "Benchmark run capacity exceeded; wait for active runs to finish.",
+            {},
+        )
+
     run_id = "benchmark_" + uuid4().hex[:12]
     snapshot = _config_snapshot(request, dataset)
-
     run = BenchmarkRun(
         run_id=run_id,
         kind=BenchmarkKind.rag,
@@ -99,7 +163,7 @@ async def create_rag_run(request: RAGRunRequest) -> BenchmarkRun:
         config_snapshot=snapshot,
         created_at=_now(),
     )
-    _remember(run)
+    _runs[run_id] = run
     _events[run_id] = []
     _subscribers[run_id] = []
     _cancel_flags[run_id] = asyncio.Event()
@@ -155,6 +219,7 @@ async def _execute_rag(
                 "completed_at": _now(),
             }
         )
+        emit(BenchmarkEventType.run_cancelled, {"status": BenchmarkStatus.cancelled.value})
         _reports[run_id] = BenchmarkReport(
             run_id=run_id,
             kind=BenchmarkKind.rag,
@@ -166,15 +231,21 @@ async def _execute_rag(
         finish()
         return
     except Exception as exc:  # 单次运行失败不拖垮服务，记录错误后结束
+        # 详细异常只进日志，公开响应仅带项目错误码与安全消息，避免泄露路径/SQL 等敏感信息
+        logger.exception("Benchmark run failed: run_id=%s", run_id)
         _runs[run_id] = _runs[run_id].model_copy(
             update={
                 "status": BenchmarkStatus.failed,
                 "progress": 1.0,
-                "error": str(exc),
+                "error": "Benchmark run failed.",
+                "error_code": "BENCHMARK_RUN_FAILED",
                 "completed_at": _now(),
             }
         )
-        emit(BenchmarkEventType.run_failed, {"error": str(exc)})
+        emit(
+            BenchmarkEventType.run_failed,
+            {"error": "Benchmark run failed.", "error_code": "BENCHMARK_RUN_FAILED"},
+        )
         _reports[run_id] = BenchmarkReport(
             run_id=run_id,
             kind=BenchmarkKind.rag,
@@ -182,7 +253,8 @@ async def _execute_rag(
             dataset_hash=dataset.content_hash,
             status=BenchmarkStatus.failed,
             config_snapshot=snapshot,
-            error=str(exc),
+            error="Benchmark run failed.",
+            error_code="BENCHMARK_RUN_FAILED",
         )
         finish()
         return

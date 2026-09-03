@@ -1,12 +1,13 @@
 """RAG Benchmark Runner：调用检索引擎对数据集逐 Case 求值并聚合指标。
 
 只读操作，直接复用 app.retrieval.engine 的 search()，不旁路检索链路。指标按
-(mode, case, repeat) 逐样本计算，再按 mode 聚合；失败样本保留在报告中但不计入汇总，
-避免异常样本污染指标。
+(mode, case, repeat) 逐样本计算，再按 mode 聚合；失败样本按零分计入质量指标分母，
+避免把执行失败误判为检索质量（同时保留 total/successful/failed/failure_rate）。
 """
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 
@@ -21,6 +22,8 @@ from app.contracts import (
     SearchRequest,
 )
 from app.retrieval.engine import engine
+
+logger = logging.getLogger(__name__)
 
 
 class BenchmarkCancelled(Exception):
@@ -75,12 +78,19 @@ async def _evaluate_one(
         response = await engine.search(search_request)
         latency_ms = (time.perf_counter() - start) * 1000.0
     except Exception as exc:  # 单个样本失败不中断整个 Benchmark
+        # 详细异常只进日志，公开响应只带项目错误码与安全消息，避免泄露路径/SQL 等敏感信息
+        logger.warning(
+            "RAG case evaluation failed: case=%s mode=%s", case.case_id, mode.value,
+            exc_info=exc,
+        )
         return RAGCaseResult(
             case_id=case.case_id,
             mode=mode,
             repeat=repeat,
             latency_ms=(time.perf_counter() - start) * 1000.0,
-            error=str(exc),
+            citation_applicable=case.citation_required,
+            error="RAG case evaluation failed.",
+            error_code="BENCHMARK_CASE_EVALUATION_FAILED",
         )
 
     retrieved_note_ids = [item.note_id for item in response.items]
@@ -107,19 +117,27 @@ async def _evaluate_one(
 
 def _aggregate(cases: list[RAGCaseResult], mode: SearchMode) -> RAGMetrics:
     samples = [c for c in cases if c.mode == mode]
-    ok = [c for c in samples if c.error is None]
-    if not ok:
+    total = len(samples)
+    failed = sum(1 for c in samples if c.error is not None)
+    successful = total - failed
+    if total == 0:
         return RAGMetrics()
 
-    latencies = [c.latency_ms for c in ok]
-    # citation_hit_rate 只统计声明了 expected_block_ids 的样本
-    citation_samples = [c for c in ok if c.citation_applicable]
+    # 延迟只统计成功样本；失败样本按零分计入质量指标分母，避免汇总虚高
+    latencies = [c.latency_ms for c in samples if c.error is None]
+    citation_samples = [c for c in samples if c.citation_applicable]
     return RAGMetrics(
-        hit_at_1=m.mean([1.0 if c.hit_at_1 else 0.0 for c in ok]),
-        hit_at_5=m.mean([1.0 if c.hit_at_5 else 0.0 for c in ok]),
-        recall_at_k=m.mean([c.recall for c in ok]),
-        mrr=m.mean([c.reciprocal_rank for c in ok]),
-        citation_hit_rate=m.mean([1.0 if c.citation_hit else 0.0 for c in citation_samples]),
+        hit_at_1=m.mean([1.0 if (c.error is None and c.hit_at_1) else 0.0 for c in samples]),
+        hit_at_5=m.mean([1.0 if (c.error is None and c.hit_at_5) else 0.0 for c in samples]),
+        recall_at_k=m.mean([c.recall if c.error is None else 0.0 for c in samples]),
+        mrr=m.mean([c.reciprocal_rank if c.error is None else 0.0 for c in samples]),
+        citation_hit_rate=m.mean(
+            [1.0 if (c.error is None and c.citation_hit) else 0.0 for c in citation_samples]
+        ),
         p50_latency_ms=m.percentile(latencies, 50.0),
         p95_latency_ms=m.percentile(latencies, 95.0),
+        total_cases=total,
+        successful_cases=successful,
+        failed_cases=failed,
+        failure_rate=failed / total,
     )
