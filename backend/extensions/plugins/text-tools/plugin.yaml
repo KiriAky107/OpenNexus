@@ -6,6 +6,10 @@ permissions: []
 contributes:
   tools:
     - text.uppercase
+  commands:
+    - text-tools.uppercase-selection
+  settings_sections:
+    - text-tools.general
 backend:
   type: internal_rpc
   transport: none

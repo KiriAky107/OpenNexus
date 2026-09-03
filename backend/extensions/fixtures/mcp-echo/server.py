@@ -54,6 +54,11 @@ TOOLS = {
     "large": tool("large", "Return a result larger than the host limit."),
     "environment": tool("environment", "Report whether host secrets leaked into the process."),
     "exit": tool("exit", "Terminate the fixture process."),
+    "command": tool(
+        "command",
+        "Execute a NotesAgent Plugin Command envelope.",
+        {"_notesagent": {"type": "object"}},
+    ),
 }
 # suffix 是可选字段，用于验证 Host 不会把缺省值擅自补成 null。
 TOOLS["echo"]["inputSchema"]["required"] = ["text"]
@@ -62,6 +67,38 @@ TOOLS["echo"]["inputSchema"]["required"] = ["text"]
 def call_tool(request_id: int, params: dict[str, Any]) -> None:
     name = params.get("name")
     arguments = params.get("arguments") or {}
+    if name == "command":
+        envelope = arguments.get("_notesagent") or {}
+        command_arguments = envelope.get("arguments") or {}
+        context = envelope.get("context") or {}
+        settings = envelope.get("settings") or {}
+        secrets = envelope.get("secrets") or {}
+        if not isinstance(secrets.get("api_key"), str):
+            respond(
+                request_id,
+                {
+                    "content": [{"type": "text", "text": "declared secret missing"}],
+                    "isError": True,
+                },
+            )
+            return
+        message = command_arguments.get("message") or context.get("selection") or ""
+        message = f"{settings.get('message_prefix', '')}{message}"
+        respond(
+            request_id,
+            {
+                "content": [{"type": "text", "text": "command completed"}],
+                "structuredContent": {
+                    "type": "notification",
+                    "payload": {
+                        "level": "success",
+                        "message": str(message),
+                    },
+                },
+                "isError": False,
+            },
+        )
+        return
     if name == "echo":
         text = str(arguments.get("text", ""))
         structured_content = {"echo": text}
@@ -183,7 +220,14 @@ def main() -> None:
             elif params.get("cursor") == "page-2":
                 respond(
                     request_id,
-                    {"tools": [TOOLS["large"], TOOLS["environment"], TOOLS["exit"]]},
+                    {
+                        "tools": [
+                            TOOLS["large"],
+                            TOOLS["environment"],
+                            TOOLS["exit"],
+                            TOOLS["command"],
+                        ]
+                    },
                 )
             else:
                 respond(

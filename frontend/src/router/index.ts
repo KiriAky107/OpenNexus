@@ -45,10 +45,16 @@ const routes = [
     meta: { title: 'Skill 管理', requiresVault: true },
   },
   {
+    path: '/extensions/mcp',
+    name: 'mcp-servers',
+    component: () => import('@/features/mcp/McpServersView.vue'),
+    meta: { title: 'MCP 服务器', requiresVault: true },
+  },
+  {
     path: '/extensions/plugins',
     name: 'plugins',
     component: () => import('@/features/plugins/PluginsView.vue'),
-    meta: { title: 'Plugin 管理', requiresVault: true },
+    meta: { title: 'Plugin 与 MCP', requiresVault: true },
   },
   {
     path: '/themes',
@@ -69,17 +75,15 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach((to) => {
   const workspaceStore = useWorkspaceStore()
   if (to.meta.requiresVault && !workspaceStore.hasVault) {
-    next({ path: '/' })
-    return
+    return { path: '/' }
   }
   if (to.path === '/' && workspaceStore.hasVault) {
-    next({ path: '/workspace' })
-    return
+    return { path: '/workspace' }
   }
-  next()
+  return true
 })
 
 router.afterEach((to) => {

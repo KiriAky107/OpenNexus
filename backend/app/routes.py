@@ -6,6 +6,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Header, Query
 from fastapi.responses import StreamingResponse
 
+from app.agent import AgentCapacityError, AgentRunNotFoundError
+from app.container import container
 from app.contracts import (
     AgentRun,
     AgentRunCreateRequest,
@@ -29,6 +31,14 @@ from app.contracts import (
     IndexJob,
     IndexRebuildRequest,
     IndexStatus,
+    McpServer,
+    McpServerCreateRequest,
+    McpServerListResponse,
+    McpServerSecretStatus,
+    McpServerSecretWriteRequest,
+    McpServerTrustRequest,
+    McpServerUpdateRequest,
+    McpToolSummaryListResponse,
     ModelEvent,
     ModelEventType,
     Note,
@@ -41,9 +51,17 @@ from app.contracts import (
     PageMeta,
     PermissionDecisionRequest,
     Plugin,
+    PluginCommandExecuteRequest,
+    PluginCommandListResponse,
+    PluginCommandLocation,
+    PluginCommandResult,
     PluginHostStatus,
     PluginListResponse,
     PluginPermissionGrantRequest,
+    PluginSecretStatus,
+    PluginSecretWriteRequest,
+    PluginSettingsSchema,
+    PluginSettingsUpdateRequest,
     ProviderConfig,
     ProviderCreateRequest,
     ProviderListResponse,
@@ -74,10 +92,14 @@ from app.benchmarks import service as benchmark_service
 from app.container import container
 from app.errors import ApiError
 from app.extensions import ExtensionError
-from app.providers.registry import ProviderNotFoundError
-from app.providers.factory import UnsupportedProviderError
+from app.extensions.mcp_registry import McpRegistryError
 from app.providers.base import ProviderError
-from app.providers.credentials import CredentialStoreError
+from app.providers.credentials import (
+    CredentialStoreError,
+    validate_provider_credential_id,
+)
+from app.providers.factory import UnsupportedProviderError
+from app.providers.registry import ProviderNotFoundError
 from app.retrieval.engine import engine
 from app.services import (
     index_service,
@@ -90,8 +112,23 @@ from app.services import (
 router = APIRouter(prefix="/api")
 
 
+async def mcp_call_async(operation):
+    """Even registry reads can wait on lifecycle locks; keep all MCP work off the event loop."""
+    try:
+        return await asyncio.to_thread(operation)
+    except McpRegistryError as exc:
+        raise ApiError(exc.status_code, exc.code, exc.message) from exc
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def validate_public_credential_id(credential_id: str | None) -> None:
+    try:
+        validate_provider_credential_id(credential_id)
+    except CredentialStoreError as exc:
+        raise ApiError(422, "CREDENTIAL_NAMESPACE_RESERVED", str(exc)) from exc
 
 
 def as_sse(event: str, payload: str, *, event_id: int | None = None) -> str:
@@ -194,14 +231,21 @@ async def list_notes(
     folder: str | None = None,
     tag: str | None = None,
 ) -> NoteListResponse:
-    items, total = note_service.list_notes(limit=limit, offset=offset, folder=folder, tag=tag)
-    return NoteListResponse(items=items, page=PageMeta(total=total, limit=limit, offset=offset))
+    items, total = note_service.list_notes(
+        limit=limit, offset=offset, folder=folder, tag=tag
+    )
+    return NoteListResponse(
+        items=items, page=PageMeta(total=total, limit=limit, offset=offset)
+    )
 
 
 @router.post("/notes", response_model=Note, tags=["Notes"])
 async def create_note(request: NoteCreateRequest) -> Note:
     return await note_service.create_note(
-        title=request.title, markdown=request.markdown, folder=request.folder, tags=request.tags
+        title=request.title,
+        markdown=request.markdown,
+        folder=request.folder,
+        tags=request.tags,
     )
 
 
@@ -209,7 +253,9 @@ async def create_note(request: NoteCreateRequest) -> Note:
 async def get_note(note_id: str) -> Note:
     note = await note_service.get_note(note_id)
     if note is None:
-        raise ApiError(404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id})
+        raise ApiError(
+            404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id}
+        )
     return note
 
 
@@ -223,7 +269,9 @@ async def update_note(note_id: str, request: NoteUpdateRequest) -> Note:
 @router.delete("/notes/{note_id}", response_model=OperationResponse, tags=["Notes"])
 async def delete_note(note_id: str) -> OperationResponse:
     if not await note_service.delete_note(note_id):
-        raise ApiError(404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id})
+        raise ApiError(
+            404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id}
+        )
     return OperationResponse(status="completed", resource_id=note_id, message="deleted")
 
 
@@ -267,7 +315,9 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                 data={"code": "PROVIDER_ERROR", "message": str(exc)},
                 timestamp=utc_now(),
             )
-            done = ModelEvent(event=ModelEventType.done, sequence=1, timestamp=utc_now())
+            done = ModelEvent(
+                event=ModelEventType.done, sequence=1, timestamp=utc_now()
+            )
             yield as_sse(error.event.value, error.model_dump_json())
             yield as_sse(done.event.value, done.model_dump_json())
 
@@ -428,9 +478,7 @@ async def list_skills() -> SkillListResponse:
     return SkillListResponse(items=container.skills.list())
 
 
-@router.get(
-    "/skills/{skill_id}", response_model=Skill, tags=["Skills"]
-)
+@router.get("/skills/{skill_id}", response_model=Skill, tags=["Skills"])
 async def get_skill(skill_id: str) -> Skill:
     return extension_call(lambda: container.skills.get(skill_id))
 
@@ -470,7 +518,120 @@ async def disable_skill(skill_id: str) -> Skill:
 )
 async def uninstall_skill(skill_id: str) -> OperationResponse:
     extension_call(lambda: container.skills.uninstall(skill_id))
-    return OperationResponse(status="completed", resource_id=skill_id, message="uninstalled")
+    return OperationResponse(
+        status="completed", resource_id=skill_id, message="uninstalled"
+    )
+
+
+# Independent MCP Server Registry
+@router.get("/mcp/servers", response_model=McpServerListResponse, tags=["MCP Servers"])
+async def list_mcp_servers() -> McpServerListResponse:
+    return McpServerListResponse(items=await mcp_call_async(container.mcp_servers.list))
+
+
+@router.post(
+    "/mcp/servers", response_model=McpServer, status_code=201, tags=["MCP Servers"]
+)
+async def create_mcp_server(request: McpServerCreateRequest) -> McpServer:
+    return await mcp_call_async(lambda: container.mcp_servers.create(request))
+
+
+@router.get("/mcp/servers/{server_id}", response_model=McpServer, tags=["MCP Servers"])
+async def get_mcp_server(server_id: str) -> McpServer:
+    return await mcp_call_async(lambda: container.mcp_servers.get(server_id))
+
+
+@router.get(
+    "/mcp/servers/{server_id}/tools",
+    response_model=McpToolSummaryListResponse,
+    tags=["MCP Servers"],
+)
+async def list_mcp_server_tools(server_id: str) -> McpToolSummaryListResponse:
+    return McpToolSummaryListResponse(
+        items=await mcp_call_async(lambda: container.mcp_servers.list_tools(server_id))
+    )
+
+
+@router.put("/mcp/servers/{server_id}", response_model=McpServer, tags=["MCP Servers"])
+async def update_mcp_server(
+    server_id: str, request: McpServerUpdateRequest
+) -> McpServer:
+    return await mcp_call_async(
+        lambda: container.mcp_servers.update(server_id, request)
+    )
+
+
+@router.delete(
+    "/mcp/servers/{server_id}", response_model=OperationResponse, tags=["MCP Servers"]
+)
+async def delete_mcp_server(server_id: str) -> OperationResponse:
+    await mcp_call_async(lambda: container.mcp_servers.delete(server_id))
+    return OperationResponse(
+        status="completed", resource_id=server_id, message="deleted"
+    )
+
+
+@router.post(
+    "/mcp/servers/{server_id}/trust", response_model=McpServer, tags=["MCP Servers"]
+)
+async def trust_mcp_server(server_id: str, request: McpServerTrustRequest) -> McpServer:
+    return await mcp_call_async(
+        lambda: container.mcp_servers.trust(server_id, request.command_digest)
+    )
+
+
+@router.post(
+    "/mcp/servers/{server_id}/test", response_model=McpServer, tags=["MCP Servers"]
+)
+async def test_mcp_server(server_id: str) -> McpServer:
+    return await mcp_call_async(lambda: container.mcp_servers.test(server_id))
+
+
+@router.post(
+    "/mcp/servers/{server_id}/enable", response_model=McpServer, tags=["MCP Servers"]
+)
+async def enable_mcp_server(server_id: str) -> McpServer:
+    return await mcp_call_async(lambda: container.mcp_servers.enable(server_id))
+
+
+@router.post(
+    "/mcp/servers/{server_id}/disable", response_model=McpServer, tags=["MCP Servers"]
+)
+async def disable_mcp_server(server_id: str) -> McpServer:
+    return await mcp_call_async(lambda: container.mcp_servers.disable(server_id))
+
+
+@router.put(
+    "/mcp/servers/{server_id}/secrets/{key}",
+    response_model=McpServerSecretStatus,
+    tags=["MCP Servers"],
+)
+async def put_mcp_server_secret(
+    server_id: str,
+    key: str,
+    request: McpServerSecretWriteRequest,
+    kind: str = Query(default="environment", pattern="^(environment|header)$"),
+) -> McpServerSecretStatus:
+    return await mcp_call_async(
+        lambda: container.mcp_servers.put_secret(
+            server_id, key, request.secret.get_secret_value(), kind=kind
+        )
+    )
+
+
+@router.delete(
+    "/mcp/servers/{server_id}/secrets/{key}",
+    response_model=McpServerSecretStatus,
+    tags=["MCP Servers"],
+)
+async def delete_mcp_server_secret(
+    server_id: str,
+    key: str,
+    kind: str = Query(default="environment", pattern="^(environment|header)$"),
+) -> McpServerSecretStatus:
+    return await mcp_call_async(
+        lambda: container.mcp_servers.delete_secret(server_id, key, kind=kind)
+    )
 
 
 # Plugins
@@ -562,11 +723,93 @@ async def restart_plugin_host(plugin_id: str) -> OperationResponse:
 )
 async def uninstall_plugin(plugin_id: str) -> OperationResponse:
     plugin = extension_call(lambda: container.plugins.get(plugin_id))
-    dependent_skills = container.skills.depending_on_tools(plugin.manifest.contributes.tools)
+    dependent_skills = container.skills.depending_on_tools(
+        plugin.manifest.contributes.tools
+    )
     await extension_call_async(
         lambda: container.plugins.uninstall(plugin_id, dependent_skills)
     )
-    return OperationResponse(status="completed", resource_id=plugin_id, message="uninstalled")
+    return OperationResponse(
+        status="completed", resource_id=plugin_id, message="uninstalled"
+    )
+
+
+# Plugin Command / Settings Contributions
+@router.get(
+    "/plugin-contributions/commands",
+    response_model=PluginCommandListResponse,
+    tags=["Plugins"],
+)
+async def list_plugin_commands(
+    location: PluginCommandLocation | None = Query(default=None),
+) -> PluginCommandListResponse:
+    return PluginCommandListResponse(items=container.plugins.list_commands(location))
+
+
+@router.post(
+    "/plugin-contributions/commands/{command_id}/execute",
+    response_model=PluginCommandResult,
+    tags=["Plugins"],
+)
+async def execute_plugin_command(
+    command_id: str, request: PluginCommandExecuteRequest
+) -> PluginCommandResult:
+    try:
+        return await container.plugins.execute_command(
+            command_id, request.arguments, request.context
+        )
+    except ExtensionError as exc:
+        raise ApiError(exc.status_code, exc.code, exc.message, exc.details) from exc
+
+
+@router.get(
+    "/plugins/{plugin_id}/settings",
+    response_model=PluginSettingsSchema,
+    tags=["Plugins"],
+)
+async def get_plugin_settings(plugin_id: str) -> PluginSettingsSchema:
+    return extension_call(lambda: container.plugins.get_settings(plugin_id))
+
+
+@router.put(
+    "/plugins/{plugin_id}/settings",
+    response_model=PluginSettingsSchema,
+    tags=["Plugins"],
+)
+async def update_plugin_settings(
+    plugin_id: str, request: PluginSettingsUpdateRequest
+) -> PluginSettingsSchema:
+    return extension_call(
+        lambda: container.plugins.update_settings(
+            plugin_id, request.schema_version, request.values
+        )
+    )
+
+
+@router.put(
+    "/plugins/{plugin_id}/settings/{key}/secret",
+    response_model=PluginSecretStatus,
+    tags=["Plugins"],
+)
+async def put_plugin_setting_secret(
+    plugin_id: str, key: str, request: PluginSecretWriteRequest
+) -> PluginSecretStatus:
+    return extension_call(
+        lambda: container.plugins.put_setting_secret(
+            plugin_id, key, request.secret.get_secret_value()
+        )
+    )
+
+
+@router.delete(
+    "/plugins/{plugin_id}/settings/{key}/secret",
+    response_model=PluginSecretStatus,
+    tags=["Plugins"],
+)
+async def delete_plugin_setting_secret(plugin_id: str, key: str) -> PluginSecretStatus:
+    return extension_call(
+        lambda: container.plugins.delete_setting_secret(plugin_id, key)
+    )
 
 
 # Providers
@@ -576,6 +819,7 @@ async def uninstall_plugin(plugin_id: str) -> OperationResponse:
     tags=["Providers"],
 )
 async def get_credential_status(credential_id: str) -> CredentialStatus:
+    validate_public_credential_id(credential_id)
     try:
         configured = container.credentials.has(credential_id)
     except CredentialStoreError as exc:
@@ -591,6 +835,7 @@ async def get_credential_status(credential_id: str) -> CredentialStatus:
 async def put_credential(
     credential_id: str, request: CredentialWriteRequest
 ) -> CredentialStatus:
+    validate_public_credential_id(credential_id)
     try:
         container.credentials.put(credential_id, request.api_key.get_secret_value())
     except CredentialStoreError as exc:
@@ -604,6 +849,7 @@ async def put_credential(
     tags=["Providers"],
 )
 async def delete_credential(credential_id: str) -> CredentialStatus:
+    validate_public_credential_id(credential_id)
     try:
         container.credentials.delete(credential_id)
     except CredentialStoreError as exc:
@@ -640,6 +886,7 @@ async def get_provider(provider_id: str) -> ProviderConfig:
     tags=["Providers"],
 )
 async def create_provider(request: ProviderCreateRequest) -> ProviderConfig:
+    validate_public_credential_id(request.credential_id)
     config = ProviderConfig(
         provider_id=f"provider_{uuid4().hex}",
         provider_type=request.provider_type,
@@ -672,7 +919,9 @@ async def update_provider(
 ) -> ProviderConfig:
     current = configurable_provider_or_404(provider_id).config
     if provider_id == "mock":
-        raise ApiError(409, "BUILTIN_PROVIDER_IMMUTABLE", "Mock provider cannot be modified.")
+        raise ApiError(
+            409, "BUILTIN_PROVIDER_IMMUTABLE", "Mock provider cannot be modified."
+        )
     fields = request.model_fields_set
     if ("name" in fields and request.name is None) or (
         "enabled" in fields and request.enabled is None
@@ -683,6 +932,8 @@ async def update_provider(
             "name and enabled cannot be null when explicitly provided.",
         )
     updates = {name: getattr(request, name) for name in fields}
+    if "credential_id" in fields:
+        validate_public_credential_id(request.credential_id)
     config = ProviderConfig.model_validate(
         {**current.model_dump(mode="python"), **updates}
     )
@@ -699,7 +950,9 @@ async def update_provider(
 async def delete_provider(provider_id: str) -> OperationResponse:
     configurable_provider_or_404(provider_id)
     if provider_id == "mock":
-        raise ApiError(409, "BUILTIN_PROVIDER_IMMUTABLE", "Mock provider cannot be deleted.")
+        raise ApiError(
+            409, "BUILTIN_PROVIDER_IMMUTABLE", "Mock provider cannot be deleted."
+        )
     container.providers.unregister(provider_id)
     return OperationResponse(status="completed", resource_id=provider_id)
 
@@ -742,6 +995,7 @@ async def list_provider_models(provider_id: str) -> ProviderModelsResponse:
 async def test_provider(request: ProviderTestRequest) -> ProviderTestResponse:
     registered = configurable_provider_or_404(request.provider_id)
     if request.credential_context_id:
+        validate_public_credential_id(request.credential_context_id)
         temporary_config = registered.config.model_copy(
             update={"credential_id": request.credential_context_id, "enabled": True}
         )
@@ -776,7 +1030,9 @@ async def create_task(request: TaskCreateRequest) -> Task:
 async def get_task(task_id: str) -> Task:
     task = task_service.get_task(task_id)
     if task is None:
-        raise ApiError(404, "RESOURCE_NOT_FOUND", "task not found", {"task_id": task_id})
+        raise ApiError(
+            404, "RESOURCE_NOT_FOUND", "task not found", {"task_id": task_id}
+        )
     return task
 
 
@@ -792,7 +1048,9 @@ async def update_task(task_id: str, request: TaskUpdateRequest) -> Task:
 )
 async def delete_task(task_id: str) -> OperationResponse:
     if not task_service.delete_task(task_id):
-        raise ApiError(404, "RESOURCE_NOT_FOUND", "task not found", {"task_id": task_id})
+        raise ApiError(
+            404, "RESOURCE_NOT_FOUND", "task not found", {"task_id": task_id}
+        )
     return OperationResponse(status="completed", resource_id=task_id, message="deleted")
 
 
@@ -842,7 +1100,9 @@ async def rebuild_index(request: IndexRebuildRequest) -> IndexJob:
 async def get_index_job(job_id: str) -> IndexJob:
     job = index_service.get_job(job_id)
     if job is None:
-        raise ApiError(404, "RESOURCE_NOT_FOUND", "index job not found", {"job_id": job_id})
+        raise ApiError(
+            404, "RESOURCE_NOT_FOUND", "index job not found", {"job_id": job_id}
+        )
     return job
 
 

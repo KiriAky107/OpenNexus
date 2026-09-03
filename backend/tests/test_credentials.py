@@ -1,16 +1,21 @@
 import asyncio
+from pathlib import Path
 
 import httpx
+import pytest
 
 from app.config import get_settings
 from app.contracts import CredentialWriteRequest
+from app.errors import ApiError
 from app.providers.credentials import (
     ChainedCredentialResolver,
+    CredentialStoreError,
     EncryptedCredentialStore,
     EnvironmentCredentialResolver,
 )
+from app.providers.factory import ProviderFactory
 from app.providers.openai_compatible import OpenAICompatibleProvider
-from app.routes import get_credential_status, put_credential
+from app.routes import delete_credential, get_credential_status, put_credential
 
 
 def test_encrypted_credential_store_round_trip_without_plaintext_on_disk() -> None:
@@ -29,6 +34,33 @@ def test_encrypted_credential_store_round_trip_without_plaintext_on_disk() -> No
     assert store.has("deepseek") is True
     assert store.delete("deepseek") is True
     assert store.resolve("deepseek") is None
+
+
+def test_encrypted_credential_store_deletes_multiple_credentials_atomically() -> None:
+    store = EncryptedCredentialStore()
+    store.put("plugin.first", "first")
+    store.put("plugin.second", "second")
+    store.put("openai", "keep")
+
+    removed = store.delete_many(["plugin.first", "plugin.second"])
+
+    assert removed == {"plugin.first", "plugin.second"}
+    assert store.resolve("plugin.first") is None
+    assert store.resolve("plugin.second") is None
+    assert store.resolve("openai") == "keep"
+
+
+def test_credential_write_os_error_uses_stable_store_error(monkeypatch) -> None:
+    store = EncryptedCredentialStore()
+    store.put("existing", "value")
+
+    def fail_replace(_path: Path, _target: Path) -> Path:
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+
+    with pytest.raises(CredentialStoreError, match="cannot be written"):
+        store.put("new", "value")
 
 
 def test_credential_api_never_returns_secret() -> None:
@@ -72,3 +104,29 @@ def test_saved_credential_takes_precedence_over_environment_fallback(monkeypatch
     resolver = ChainedCredentialResolver(store, EnvironmentCredentialResolver())
 
     assert resolver.resolve("deepseek") == "saved-key"
+
+
+def test_public_credential_api_rejects_plugin_namespace() -> None:
+    operations = [
+        get_credential_status("plugin.text-tools.api_key"),
+        put_credential(
+            "plugin.text-tools.api_key",
+            CredentialWriteRequest(api_key="must-not-write"),
+        ),
+        delete_credential("plugin.text-tools.api_key"),
+    ]
+    for operation in operations:
+        with pytest.raises(ApiError) as exc:
+            asyncio.run(operation)
+        assert exc.value.code == "CREDENTIAL_NAMESPACE_RESERVED"
+
+    assert EncryptedCredentialStore().resolve("plugin.text-tools.api_key") is None
+
+
+def test_provider_resolver_cannot_read_plugin_secret() -> None:
+    store = EncryptedCredentialStore()
+    store.put("plugin.text-tools.api_key", "private-plugin-secret")
+    resolver = ProviderFactory(store).credentials
+
+    with pytest.raises(CredentialStoreError, match="reserved for Plugin settings"):
+        resolver.resolve("plugin.text-tools.api_key")

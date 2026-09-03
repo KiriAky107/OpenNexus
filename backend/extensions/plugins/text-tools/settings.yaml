@@ -1,0 +1,31 @@
+section_id: text-tools.general
+schema_version: 1
+fields:
+  - key: result_limit
+    label: 结果字符数
+    description: Command 通知中最多保留的字符数。
+    type: number
+    required: true
+    default: 100
+    minimum: 1
+    maximum: 1000
+  - key: label_prefix
+    label: 标签前缀
+    type: string
+    default: ""
+  - key: output_style
+    label: 输出样式
+    type: select
+    default: notification
+    options:
+      - notification
+      - compact
+  - key: enabled_hint
+    label: 显示提示
+    type: boolean
+    default: true
+  - key: api_key
+    label: API Key
+    description: Secret 示例字段；普通 Settings API 永不返回明文。
+    type: secret
+    required: false

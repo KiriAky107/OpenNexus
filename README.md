@@ -2,7 +2,7 @@
 
 > 本文件用于团队开发期间快速配置环境和启动项目，不是正式的项目 README。
 
-> 当前基线：2026-08-30。第一阶段 Web 联调版的前端页面、Knowledge/Retrieval Core、AI/Agent Core、Extension Core、Provider 预设与本地加密凭据链路均已实现；Tauri Host、Stronghold、真实桌面文件系统和 Sync Server 尚未接入。
+> 当前基线：2026-09-03。第一阶段 Web 联调前后端已经完成；第二阶段已完成 Workspace 去 Mock、Agent Trace 持久化与 SSE 恢复、stdio MCP Bridge、隔离 Plugin Host、Plugin Command/Settings，以及独立 MCP Server 配置中心 C.1（stdio、Streamable HTTP 与旧 SSE 兼容）。真实音频、Provider 协议增强、Benchmark、导出、主题包、Trace 可视化、Mermaid 与函数图像仍在后续开发；Tauri Host、Stronghold、原生多 Vault 文件系统和 Sync Server 尚未接入。
 
 ## 当前目录
 
@@ -118,7 +118,7 @@ cd frontend
 pnpm test
 ```
 
-当前回归基线为后端 157 项测试、前端 29 项测试，且生产构建通过。测试数量会随功能增长，以本地实际输出和 CI 为准。
+当前回归基线为后端 218 项测试、前端 32 项测试，且 TypeScript 类型检查和生产构建通过。测试数量会随功能增长，以本地实际输出和 CI 为准。
 
 构建产物位于 `frontend/dist`，该目录不提交到 Git。
 
@@ -133,6 +133,8 @@ pnpm test
 | [第二阶段接口契约](docs/contracts/第二阶段接口契约-开发版.md) | 第二阶段公共 DTO、计划接口、SSE、错误码与联调顺序 |
 | [AI Core 与 Agent Core](docs/development/AI-Core与Agent-Core开发说明.md) | Provider、Agent、Tool、Permission 与 Extension Core |
 | [MCP Bridge 与 Plugin Host](docs/development/MCP-Bridge与Plugin-Host开发说明.md) | stdio MCP、隔离进程、Tool 映射、状态与错误边界 |
+| [Plugin Command 与 Settings](docs/development/Plugin-Command与Settings开发说明.md) | Command Registry、Settings Schema、Secret 引用与联调边界 |
+| [Plugin Command 与 Settings 复盘](docs/retrospectives/Plugin-Command与Settings问题与修复复盘.md) | 阶段 D 连续审阅发现的安全、事务、Schema 与运行时契约问题 |
 | [Git 使用细则](docs/guides/Git使用细则-团队开发版.md) | 分支、提交、PR、Review 与合并流程 |
 | [CI/CD 细则](docs/guides/CI-CD细则-团队开发版.md) | Gitea 流水线、质量门禁、产物、发布与回滚规则 |
 | [Agent Trace 复盘](docs/retrospectives/Agent-Core第二阶段问题与修复复盘.md) | Agent 持久化、SSE 恢复、事件契约与脱敏问题复盘 |
@@ -146,6 +148,6 @@ pnpm test
 - 后端附件目录默认是 `backend/data/attachments`，可通过 `APP_ATTACHMENTS_PATH` 覆盖；该目录由桌面 Host 管理。
 - 跨模块接口发生变化时，需要同步更新前后端类型和 `docs` 中的接口说明。
 - 当前已实现接口见 `docs/contracts/后端接口契约-开发版.md`，第二阶段规划接口见 `docs/contracts/第二阶段接口契约-开发版.md`；已实现能力以 `/openapi.json` 为准。
-- 前端页面、交互、状态管理和第一阶段验收要求见 `docs/contracts/前端页面需求说明-开发版.md`。
+- 前端页面、交互、状态管理及当前阶段后续页面需求见 `docs/contracts/前端页面需求说明-开发版.md`。
 - 分支、提交、Pull Request、Review 和冲突处理规范见 `docs/guides/Git使用细则-团队开发版.md`。
 - CI 检查、产物、发布和回滚规范见 `docs/guides/CI-CD细则-团队开发版.md`。
