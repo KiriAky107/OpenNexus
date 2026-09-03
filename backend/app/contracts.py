@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 
 class Contract(BaseModel):
@@ -230,6 +230,8 @@ class ModelCapability(str, Enum):
     streaming = "streaming"
     structured_output = "structured_output"
     embedding = "embedding"
+    transcription = "transcription"
+    speaker_matching = "speaker_matching"
 
 
 class ModelRequest(Contract):
@@ -757,7 +759,24 @@ class ProviderType(str, Enum):
     ollama = "ollama"
 
 
-class ProviderConfig(Contract):
+class ProviderConnectionFields(Contract):
+    base_url: str | None = None
+    credential_id: str | None = None
+
+    @field_validator("base_url")
+    @classmethod
+    def provider_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        from urllib.parse import urlsplit
+        parsed = urlsplit(value)
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname or
+                parsed.username or parsed.password or parsed.query or parsed.fragment):
+            raise ValueError("Base URL requires HTTP(S), without credentials, query or fragment")
+        return value.rstrip("/")
+
+
+class ProviderConfig(ProviderConnectionFields):
     provider_id: str
     provider_type: ProviderType
     name: str
@@ -768,7 +787,7 @@ class ProviderConfig(Contract):
     capabilities: list[ModelCapability] = Field(default_factory=list)
 
 
-class ProviderCreateRequest(Contract):
+class ProviderCreateRequest(ProviderConnectionFields):
     provider_type: ProviderType
     name: str
     base_url: str | None = None
@@ -777,7 +796,8 @@ class ProviderCreateRequest(Contract):
     enabled: bool = True
 
 
-class ProviderUpdateRequest(Contract):
+class ProviderUpdateRequest(ProviderConnectionFields):
+    provider_type: ProviderType | None = None
     name: str | None = None
     base_url: str | None = None
     default_model: str | None = None
@@ -796,6 +816,80 @@ class ProviderPreset(Contract):
     base_url: str
     default_credential_id: str | None = None
     requires_credential: bool = True
+    logo_id: str = "custom"
+    description: str = ""
+    capabilities: list[ModelCapability] = Field(default_factory=list)
+
+
+class ModelBinding(Contract):
+    provider_id: str = Field(min_length=1, max_length=128)
+    model: str = Field(min_length=1, max_length=256)
+    endpoint: str = Field(min_length=1, max_length=256)
+    dimensions: int | None = Field(default=None, ge=1, le=16384)
+
+    @field_validator("endpoint")
+    @classmethod
+    def relative_endpoint(cls, value: str) -> str:
+        # An endpoint is a path on the selected provider, never a second origin.
+        import re
+        if not re.fullmatch(r"/[A-Za-z0-9_/-]+", value) or value.startswith("//"):
+            raise ValueError("endpoint must be an absolute API path on the provider")
+        return value
+
+    @field_validator("model", "provider_id")
+    @classmethod
+    def non_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be blank")
+        return value.strip()
+
+
+class ModelRoutingConfig(Contract):
+    version: int = Field(default=0, ge=0)
+    embedding: ModelBinding | None = None
+    transcription: ModelBinding | None = None
+    speaker_matching: ModelBinding | None = None
+
+
+class LocalBackendStatus(Contract):
+    capability: Literal["embedding", "transcription", "speaker_matching"]
+    status: Literal["placeholder", "not_installed", "ready"]
+    message: str
+
+
+class ModelRoutingResponse(Contract):
+    config: ModelRoutingConfig
+    local_backends: list[LocalBackendStatus]
+
+
+class EmbeddingRequest(Contract):
+    texts: list[str] = Field(min_length=1, max_length=256)
+
+    @field_validator("texts")
+    @classmethod
+    def bound_texts(cls, value: list[str]) -> list[str]:
+        if sum(len(text) for text in value) > 200_000:
+            raise ValueError("embedding input is too large")
+        return value
+
+
+class EmbeddingResult(Contract):
+    vectors: list[list[float]]
+    source: Literal["api", "local"]
+    model_id: str
+    dimensions: int
+    fallback_reason: str | None = None
+
+
+class SpeakerMatchRequest(Contract):
+    attachment_id: str
+    reference_attachment_id: str
+
+
+class SpeakerMatchResult(Contract):
+    score: float = Field(ge=0, le=1, allow_inf_nan=False)
+    source: Literal["api", "local"]
+    fallback_reason: str | None = None
 
 
 class ProviderPresetListResponse(Contract):
@@ -888,6 +982,8 @@ class TranscriptionJob(Contract):
     error_code: str | None = None
     error_message: str | None = None
     created_at: datetime
+    source: Literal["api", "local", "sidecar"] | None = None
+    fallback_reason: str | None = None
 
 
 class IndexStatus(Contract):

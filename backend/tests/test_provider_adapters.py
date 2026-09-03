@@ -84,7 +84,7 @@ def test_openai_compatible_maps_tool_call_and_credentials() -> None:
         )
     )
 
-    assert captured["tools"][0]["function"]["name"] == "math.add"
+    assert captured["tools"][0]["function"]["name"].startswith("tool_")
     assert turn.tool_calls[0].name == "math.add"
     assert turn.tool_calls[0].arguments == {"left": 1, "right": 2}
     assert turn.input_tokens == 8

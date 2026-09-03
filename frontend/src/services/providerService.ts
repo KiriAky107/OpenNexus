@@ -1,5 +1,5 @@
 import apiClient from './apiClient'
-import type { ApiModelInfo, ApiProviderConfig, ApiProviderPreset, ModelCapability, ModelInfo, OperationResponse, ProviderConfig, ProviderPreset } from '@/contracts'
+import type { ApiModelInfo, ApiProviderConfig, ApiProviderPreset, ModelCapability, ModelInfo, OperationResponse, ProviderConfig, ProviderPreset, ProviderUpdateRequest } from '@/contracts'
 
 function capabilityMap(capabilities: string[]): Partial<ModelCapability> {
   return Object.fromEntries(capabilities.map((capability) => [capability, true])) as Partial<ModelCapability>
@@ -61,8 +61,9 @@ export async function putCredential(credentialId: string, apiKey: string): Promi
   )
 }
 
-export async function updateProvider(providerId: string, data: Partial<ProviderConfig>): Promise<ProviderConfig> {
+export async function updateProvider(providerId: string, data: ProviderUpdateRequest): Promise<ProviderConfig> {
   const response = await apiClient.patch<ApiProviderConfig>(`/api/providers/${providerId}`, {
+    provider_type: data.provider_type,
     name: data.name,
     base_url: data.base_url,
     default_model: data.default_model,

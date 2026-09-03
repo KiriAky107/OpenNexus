@@ -16,6 +16,7 @@ from app.database.db import connect, transaction
 from app.errors import ApiError
 from app.knowledge.parser import ParsedNote, parse_note
 from app.retrieval.embedding import HashEmbeddingProvider
+from app.retrieval import routed_vectors
 from app.retrieval.vectorstore import SqliteVecStore, VectorRecord
 from app.services.coordination import serialized_vault_mutation
 from app.services.vault_paths import (
@@ -78,7 +79,11 @@ async def index_note(parsed: ParsedNote) -> None:
     半提交状态。替换元数据时拿到旧 block_id：清理已删除/内容变化的旧向量，只为新增
     block 写向量（内容未变的 block 其向量仍有效，无需重复写入）。
     """
-    vectors = await embedding.embed_documents([block.content for block in parsed.blocks])
+    texts = [block.content for block in parsed.blocks]
+    vectors = await embedding.embed_documents(texts)
+    # Network I/O stays outside the write transaction. The hash index remains
+    # complete even when the optional API route fails or changes vector spaces.
+    remote = await routed_vectors.embed_remote(texts)
     conn = connect()
     try:
         with transaction(conn):
@@ -105,6 +110,7 @@ async def index_note(parsed: ParsedNote) -> None:
                 if block.block_id in missing_ids
             ]
             await vector_store.upsert(records, conn=conn)
+            routed_vectors.store_remote(conn, [block.block_id for block in parsed.blocks], remote)
             repository.set_index_meta(
                 {"embedding_model": embedding.model_id, "embedding_dim": str(embedding.dim)},
                 conn=conn,
