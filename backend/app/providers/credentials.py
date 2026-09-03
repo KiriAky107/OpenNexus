@@ -14,6 +14,7 @@ from app.config import get_settings
 
 _CREDENTIAL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _PLUGIN_CREDENTIAL_PREFIX = "plugin."
+_MCP_CREDENTIAL_PREFIX = "mcp."
 
 
 class CredentialStoreError(RuntimeError):
@@ -27,10 +28,10 @@ class CredentialResolver(Protocol):
 def validate_provider_credential_id(credential_id: str | None) -> None:
     """阻止 Provider 和通用凭据 API 跨入 Plugin 私有命名空间。"""
 
-    if credential_id and credential_id.casefold().startswith(
-        _PLUGIN_CREDENTIAL_PREFIX
-    ):
+    if credential_id and credential_id.casefold().startswith(_PLUGIN_CREDENTIAL_PREFIX):
         raise CredentialStoreError("Credential namespace is reserved for Plugin settings.")
+    if credential_id and credential_id.casefold().startswith(_MCP_CREDENTIAL_PREFIX):
+        raise CredentialStoreError("Credential namespace is reserved for MCP settings.")
 
 
 class EnvironmentCredentialResolver:

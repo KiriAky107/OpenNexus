@@ -21,6 +21,13 @@ from app.contracts import (
     IndexJob,
     IndexRebuildRequest,
     IndexStatus,
+    McpServer,
+    McpServerCreateRequest,
+    McpServerListResponse,
+    McpServerSecretStatus,
+    McpServerSecretWriteRequest,
+    McpServerTrustRequest,
+    McpServerUpdateRequest,
     ModelEvent,
     ModelEventType,
     Note,
@@ -72,6 +79,7 @@ from app.agent import AgentCapacityError, AgentRunNotFoundError
 from app.container import container
 from app.errors import ApiError
 from app.extensions import ExtensionError
+from app.extensions.mcp_registry import McpRegistryError
 from app.providers.registry import ProviderNotFoundError
 from app.providers.factory import UnsupportedProviderError
 from app.providers.base import ProviderError
@@ -89,6 +97,21 @@ from app.services import (
 )
 
 router = APIRouter(prefix="/api")
+
+
+def mcp_call(operation):
+    try:
+        return operation()
+    except McpRegistryError as exc:
+        raise ApiError(exc.status_code, exc.code, exc.message) from exc
+
+
+async def mcp_call_async(operation):
+    """MCP process operations wait on stdio and must not block the API event loop."""
+    try:
+        return await asyncio.to_thread(operation)
+    except McpRegistryError as exc:
+        raise ApiError(exc.status_code, exc.code, exc.message) from exc
 
 
 def utc_now() -> datetime:
@@ -479,6 +502,63 @@ async def disable_skill(skill_id: str) -> Skill:
 async def uninstall_skill(skill_id: str) -> OperationResponse:
     extension_call(lambda: container.skills.uninstall(skill_id))
     return OperationResponse(status="completed", resource_id=skill_id, message="uninstalled")
+
+
+# Independent MCP Server Registry
+@router.get("/mcp/servers", response_model=McpServerListResponse, tags=["MCP Servers"])
+async def list_mcp_servers() -> McpServerListResponse:
+    return McpServerListResponse(items=mcp_call(container.mcp_servers.list))
+
+
+@router.post("/mcp/servers", response_model=McpServer, status_code=201, tags=["MCP Servers"])
+async def create_mcp_server(request: McpServerCreateRequest) -> McpServer:
+    return mcp_call(lambda: container.mcp_servers.create(request))
+
+
+@router.get("/mcp/servers/{server_id}", response_model=McpServer, tags=["MCP Servers"])
+async def get_mcp_server(server_id: str) -> McpServer:
+    return mcp_call(lambda: container.mcp_servers.get(server_id))
+
+
+@router.put("/mcp/servers/{server_id}", response_model=McpServer, tags=["MCP Servers"])
+async def update_mcp_server(server_id: str, request: McpServerUpdateRequest) -> McpServer:
+    return await mcp_call_async(lambda: container.mcp_servers.update(server_id, request))
+
+
+@router.delete("/mcp/servers/{server_id}", response_model=OperationResponse, tags=["MCP Servers"])
+async def delete_mcp_server(server_id: str) -> OperationResponse:
+    await mcp_call_async(lambda: container.mcp_servers.delete(server_id))
+    return OperationResponse(status="completed", resource_id=server_id, message="deleted")
+
+
+@router.post("/mcp/servers/{server_id}/trust", response_model=McpServer, tags=["MCP Servers"])
+async def trust_mcp_server(server_id: str, request: McpServerTrustRequest) -> McpServer:
+    return mcp_call(lambda: container.mcp_servers.trust(server_id, request.command_digest))
+
+
+@router.post("/mcp/servers/{server_id}/test", response_model=McpServer, tags=["MCP Servers"])
+async def test_mcp_server(server_id: str) -> McpServer:
+    return await mcp_call_async(lambda: container.mcp_servers.test(server_id))
+
+
+@router.post("/mcp/servers/{server_id}/enable", response_model=McpServer, tags=["MCP Servers"])
+async def enable_mcp_server(server_id: str) -> McpServer:
+    return await mcp_call_async(lambda: container.mcp_servers.enable(server_id))
+
+
+@router.post("/mcp/servers/{server_id}/disable", response_model=McpServer, tags=["MCP Servers"])
+async def disable_mcp_server(server_id: str) -> McpServer:
+    return await mcp_call_async(lambda: container.mcp_servers.disable(server_id))
+
+
+@router.put("/mcp/servers/{server_id}/secrets/{key}", response_model=McpServerSecretStatus, tags=["MCP Servers"])
+async def put_mcp_server_secret(server_id: str, key: str, request: McpServerSecretWriteRequest) -> McpServerSecretStatus:
+    return mcp_call(lambda: container.mcp_servers.put_secret(server_id, key, request.secret.get_secret_value()))
+
+
+@router.delete("/mcp/servers/{server_id}/secrets/{key}", response_model=McpServerSecretStatus, tags=["MCP Servers"])
+async def delete_mcp_server_secret(server_id: str, key: str) -> McpServerSecretStatus:
+    return mcp_call(lambda: container.mcp_servers.delete_secret(server_id, key))
 
 
 # Plugins

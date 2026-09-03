@@ -193,7 +193,7 @@ export interface ToolDefinition {
   name: string
   description: string
   parameters: Record<string, unknown>
-  source?: 'builtin' | 'plugin'
+  source?: 'builtin' | 'plugin' | 'mcp_server'
   plugin_id?: string
 }
 
@@ -533,6 +533,38 @@ export interface OperationResponse {
   status: 'accepted' | 'completed'
   resource_id?: string | null
   message?: string | null
+}
+
+export type McpServerTransport = 'stdio' | 'streamable_http' | 'sse'
+export type McpServerState = 'stopped' | 'starting' | 'ready' | 'unhealthy' | 'error'
+
+export interface McpServerInput {
+  name: string
+  transport: McpServerTransport
+  command: string
+  args: string[]
+  environment: Record<string, string>
+  secret_environment_keys: string[]
+  permissions: string[]
+  startup_timeout_seconds: number
+  tool_timeout_seconds: number
+}
+
+export interface McpServer extends Omit<McpServerInput, 'secret_environment_keys'> {
+  server_id: string
+  secret_environment: Record<string, boolean>
+  enabled: boolean
+  trusted: boolean
+  command_digest: string
+  command_summary: string
+  status: McpServerState
+  tools_count: number
+  protocol_version?: string | null
+  remote_server_name?: string | null
+  remote_server_version?: string | null
+  error?: string | null
+  last_tested_at?: string | null
+  last_test_succeeded?: boolean | null
 }
 
 export interface ApiNoteBlock {
