@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -10,8 +11,9 @@ import pytest
 from app.agent.tools import ToolExecutionContext, ToolRegistry
 from app.config import BACKEND_DIR, get_settings
 from app.contracts import McpServerCreateRequest, McpServerUpdateRequest, ToolCall
+from app.extensions.mcp import McpLegacySseClient
 from app.extensions.mcp_registry import McpRegistryError, McpServerRegistry
-from app.providers.credentials import EncryptedCredentialStore
+from app.providers.credentials import CredentialStoreError, EncryptedCredentialStore
 
 SERVER = BACKEND_DIR / "extensions" / "fixtures" / "mcp-echo" / "server.py"
 
@@ -59,6 +61,28 @@ def test_registry_requires_current_trust_and_never_returns_secret() -> None:
     service.shutdown()
 
 
+def test_secret_change_disables_server_and_requires_a_new_connection_test() -> None:
+    service = registry()
+    created = service.create(request())
+    service.put_secret(created.server_id, "TEST_MCP_SECRET", "first")
+    service.trust(created.server_id, created.command_digest)
+    service.test(created.server_id)
+    service.enable(created.server_id)
+
+    service.put_secret(created.server_id, "TEST_MCP_SECRET", "second")
+    current = service.get(created.server_id)
+    assert current.enabled is False
+    assert current.last_test_succeeded is None
+    assert not any(
+        item.name.startswith(f"mcp.{created.server_id}.")
+        for item in service.tools.definitions()
+    )
+    with pytest.raises(McpRegistryError) as error:
+        service.enable(created.server_id)
+    assert error.value.code == "MCP_CONNECTION_TEST_REQUIRED"
+    service.shutdown()
+
+
 def test_update_disables_server_and_revokes_command_trust() -> None:
     service = registry()
     created = service.create(request(secret_environment_keys=[]))
@@ -84,6 +108,70 @@ def test_update_disables_server_and_revokes_command_trust() -> None:
         item.name.startswith(f"mcp.{created.server_id}.")
         for item in service.tools.definitions()
     )
+    service.shutdown()
+
+
+def test_update_remains_retryable_when_removed_secret_cleanup_fails(monkeypatch) -> None:
+    service = registry()
+    created = service.create(request())
+    service.put_secret(created.server_id, "TEST_MCP_SECRET", "keep-until-retry")
+
+    def fail_delete_many(_secret_ids: list[str]) -> set[str]:
+        raise CredentialStoreError("credential store unavailable")
+
+    monkeypatch.setattr(service.credentials, "delete_many", fail_delete_many)
+    with pytest.raises(McpRegistryError) as error:
+        service.update(
+            created.server_id,
+            McpServerUpdateRequest(
+                **request(secret_environment_keys=[]).model_dump(),
+                version=created.version,
+            ),
+        )
+
+    current = service.get(created.server_id)
+    assert error.value.code == "MCP_SECRET_STORE_ERROR"
+    assert current.version == created.version
+    assert current.secret_environment == {"TEST_MCP_SECRET": True}
+    service.shutdown()
+
+
+def test_delete_keeps_server_retryable_when_secret_cleanup_fails(monkeypatch) -> None:
+    service = registry()
+    created = service.create(request())
+    service.put_secret(created.server_id, "TEST_MCP_SECRET", "keep-until-retry")
+
+    def fail_delete_many(_secret_ids: list[str]) -> set[str]:
+        raise CredentialStoreError("credential store unavailable")
+
+    monkeypatch.setattr(service.credentials, "delete_many", fail_delete_many)
+    with pytest.raises(McpRegistryError) as error:
+        service.delete(created.server_id)
+
+    current = service.get(created.server_id)
+    assert error.value.code == "MCP_SECRET_STORE_ERROR"
+    assert current.server_id == created.server_id
+    assert current.secret_environment == {"TEST_MCP_SECRET": True}
+    service.shutdown()
+
+
+def test_unavailable_server_removes_bridge_host(monkeypatch) -> None:
+    service = registry()
+    created = service.create(request(secret_environment_keys=[]))
+    with service._lock:
+        service._records[created.server_id] = {
+            **service._records[created.server_id],
+            "enabled": True,
+        }
+    removed: list[str] = []
+    monkeypatch.setattr(service.bridge, "remove", removed.append)
+
+    service._unavailable(created.server_id, "connection lost")
+
+    current = service.get(created.server_id)
+    assert removed == [f"mcp.{created.server_id}"]
+    assert current.enabled is False
+    assert current.status == "unhealthy"
     service.shutdown()
 
 
@@ -139,6 +227,36 @@ def test_registry_rejects_corrupt_persisted_json(tmp_path) -> None:
             allow_process_launch=True,
         )
     assert error.value.code == "MCP_REGISTRY_INVALID"
+
+
+def test_registry_rejects_structurally_invalid_record(tmp_path) -> None:
+    path = tmp_path / "mcp"
+    path.mkdir()
+    (path / "servers.json").write_text(
+        json.dumps({"server-1": {"name": "Broken", "transport": "stdio"}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(McpRegistryError) as error:
+        McpServerRegistry(
+            ToolRegistry(),
+            EncryptedCredentialStore(),
+            tmp_path,
+            allow_process_launch=True,
+        )
+    assert error.value.code == "MCP_REGISTRY_INVALID"
+
+
+def test_registry_rejects_create_before_exceeding_persisted_limit(
+    monkeypatch,
+) -> None:
+    service = registry()
+    service.create(request(name="Only server"))
+    monkeypatch.setattr("app.extensions.mcp_registry._MAX_MCP_SERVERS", 1)
+    with pytest.raises(McpRegistryError) as error:
+        service.create(request(name="One too many"))
+    assert error.value.code == "MCP_SERVER_LIMIT_REACHED"
+    assert len(service.list()) == 1
+    service.shutdown()
 
 
 def test_stdio_command_is_not_parsed_as_a_shell_string() -> None:
@@ -217,6 +335,7 @@ def test_streamable_http_supports_session_headers_secrets_and_tool_summary(
     monkeypatch,
 ) -> None:
     requests: list[httpx.Request] = []
+    request_timeouts: dict[str, float] = {}
 
     def handler(request_value: httpx.Request) -> httpx.Response:
         requests.append(request_value)
@@ -225,6 +344,9 @@ def test_streamable_http_supports_session_headers_secrets_and_tool_summary(
         if request_value.method == "DELETE":
             return httpx.Response(405)
         payload = json.loads(request_value.content)
+        timeout = request_value.extensions.get("timeout", {}).get("read")
+        if isinstance(timeout, (int, float)):
+            request_timeouts[payload.get("method", "notification")] = float(timeout)
         if payload.get("method") == "initialize":
             response = _http_result(
                 payload["id"],
@@ -290,6 +412,9 @@ def test_streamable_http_supports_session_headers_secrets_and_tool_summary(
     assert all(
         request.headers.get("authorization") == "Bearer hidden" for request in requests
     )
+    assert request_timeouts["initialize"] == 15
+    assert request_timeouts["notifications/initialized"] == 15
+    assert request_timeouts["tools/list"] == 15
     enabled = service.enable(created.server_id)
     tool_name = service.list_tools(created.server_id)[0].name
     result = asyncio.run(
@@ -301,11 +426,15 @@ def test_streamable_http_supports_session_headers_secrets_and_tool_summary(
     assert enabled.enabled is True
     assert result.success is True
     assert result.output == {"transport": "http"}
+    assert request_timeouts["tools/call"] == 30
     service.disable(created.server_id)
     service.shutdown()
 
 
 class _LegacyEventStream(httpx.SyncByteStream):
+    def __init__(self) -> None:
+        self.closed = threading.Event()
+
     def __iter__(self):
         yield b"event: endpoint\ndata: /messages\n\n"
         time.sleep(0.1)
@@ -326,17 +455,22 @@ class _LegacyEventStream(httpx.SyncByteStream):
             "result": {"tools": []},
         }
         yield f"data: {json.dumps(tools)}\n\n".encode()
+        self.closed.wait()
+
+    def close(self) -> None:
+        self.closed.set()
 
 
 def test_legacy_sse_uses_same_origin_endpoint(monkeypatch) -> None:
     posted_urls: list[str] = []
+    event_stream = _LegacyEventStream()
 
     def handler(request_value: httpx.Request) -> httpx.Response:
         if request_value.method == "GET":
             return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
-                stream=_LegacyEventStream(),
+                stream=event_stream,
             )
         posted_urls.append(str(request_value.url))
         return httpx.Response(202)
@@ -361,6 +495,39 @@ def test_legacy_sse_uses_same_origin_endpoint(monkeypatch) -> None:
         url == "https://legacy.example.test/messages" for url in posted_urls
     )
     service.shutdown()
+    event_stream.close()
+
+
+class _EndingLegacyEventStream(httpx.SyncByteStream):
+    def __iter__(self):
+        yield b"event: endpoint\ndata: /messages\n\n"
+
+
+def test_legacy_sse_eof_marks_client_unavailable(monkeypatch) -> None:
+    def handler(_request_value: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_EndingLegacyEventStream(),
+        )
+
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        "app.extensions.mcp.httpx.Client",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    broken = threading.Event()
+    client = McpLegacySseClient(
+        "https://legacy.example.test/sse",
+        headers={},
+        startup_timeout_seconds=1,
+        on_seen=lambda: None,
+        on_broken=lambda _message: broken.set(),
+        on_tools_changed=lambda: None,
+    )
+    client.start()
+    assert broken.wait(timeout=1)
+    client.stop()
 
 
 class _CrossOriginLegacyEventStream(httpx.SyncByteStream):

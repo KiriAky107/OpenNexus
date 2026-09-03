@@ -607,7 +607,7 @@ async def put_mcp_server_secret(
     request: McpServerSecretWriteRequest,
     kind: str = Query(default="environment", pattern="^(environment|header)$"),
 ) -> McpServerSecretStatus:
-    return mcp_call(
+    return await mcp_call_async(
         lambda: container.mcp_servers.put_secret(
             server_id, key, request.secret.get_secret_value(), kind=kind
         )
@@ -624,7 +624,7 @@ async def delete_mcp_server_secret(
     key: str,
     kind: str = Query(default="environment", pattern="^(environment|header)$"),
 ) -> McpServerSecretStatus:
-    return mcp_call(
+    return await mcp_call_async(
         lambda: container.mcp_servers.delete_secret(server_id, key, kind=kind)
     )
 
