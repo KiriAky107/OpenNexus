@@ -88,9 +88,13 @@ export const useEditorStore = defineStore('editor', () => {
     const previousStatus = saveStatus.value
     saveStatus.value = 'saving'
     try {
-      const loadedContent = await workspaceService.readFileContent(filePath)
+      const [loadedContent, loadedNoteId] = await Promise.all([
+        workspaceService.readFileContent(filePath),
+        workspaceService.getNoteId(filePath),
+      ])
       if (version !== loadVersion) return
       currentFilePath.value = filePath
+      currentNoteId.value = loadedNoteId
       content.value = loadedContent
       saveStatus.value = 'saved'
       lastSavedAt.value = new Date().toISOString()

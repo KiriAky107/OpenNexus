@@ -5,13 +5,14 @@ import * as workspaceService from '@/services/workspaceService'
 
 export const useWorkspaceStore = defineStore('workspace', () => {
   const vaultPath = ref('')
+  const vaultId = ref('')
   const vaultName = ref('')
   const fileTree = ref<FileNode[]>([])
   const openFiles = ref<string[]>([])
   const activeFilePath = ref<string | null>(null)
   const isLoading = ref(false)
   const hasVault = ref(false)
-  const recentVaults = ref<{ path: string; name: string }[]>([])
+  const recentVaults = ref<workspaceService.VaultInfo[]>([])
 
   const activeFile = computed(() => {
     if (!activeFilePath.value) return null
@@ -66,6 +67,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     try {
       const info = await workspaceService.openVault(path)
       vaultPath.value = info.path
+      vaultId.value = info.vault_id
       vaultName.value = info.name
       fileTree.value = await workspaceService.getFileTree()
       hasVault.value = true
@@ -80,6 +82,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     try {
       const info = await workspaceService.createVault(path, name)
       vaultPath.value = info.path
+      vaultId.value = info.vault_id
       vaultName.value = info.name
       fileTree.value = await workspaceService.getFileTree()
       hasVault.value = true
@@ -144,6 +147,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   return {
     vaultPath,
+    vaultId,
     vaultName,
     fileTree,
     openFiles,
