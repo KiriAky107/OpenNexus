@@ -539,20 +539,26 @@ export type McpServerTransport = 'stdio' | 'streamable_http' | 'sse'
 export type McpServerState = 'stopped' | 'starting' | 'ready' | 'unhealthy' | 'error'
 
 export interface McpServerInput {
+  version?: number
   name: string
   transport: McpServerTransport
-  command: string
+  command?: string | null
   args: string[]
+  url?: string | null
+  headers: Record<string, string>
   environment: Record<string, string>
   secret_environment_keys: string[]
+  secret_header_keys: string[]
   permissions: string[]
   startup_timeout_seconds: number
   tool_timeout_seconds: number
 }
 
-export interface McpServer extends Omit<McpServerInput, 'secret_environment_keys'> {
+export interface McpServer extends Omit<McpServerInput, 'secret_environment_keys' | 'secret_header_keys'> {
   server_id: string
+  version: number
   secret_environment: Record<string, boolean>
+  secret_headers: Record<string, boolean>
   enabled: boolean
   trusted: boolean
   command_digest: string
@@ -565,6 +571,13 @@ export interface McpServer extends Omit<McpServerInput, 'secret_environment_keys
   error?: string | null
   last_tested_at?: string | null
   last_test_succeeded?: boolean | null
+}
+
+export interface McpToolSummary {
+  name: string
+  remote_name: string
+  description: string
+  permission?: string | null
 }
 
 export interface ApiNoteBlock {

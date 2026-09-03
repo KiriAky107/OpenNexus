@@ -10,14 +10,18 @@ import asyncio
 import json
 import os
 import queue
+import signal
 import subprocess
 import threading
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Protocol
+from urllib.parse import urljoin, urlsplit
 
+import httpx
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
@@ -99,7 +103,12 @@ class McpStdioClient:
             return
         # TODO(extension-security): 社区 Plugin 开放前迁移到 Tauri/Rust Host 的
         # 平台级沙箱启动器；uvx 只隔离 Python 依赖，不能替代系统权限限制。
-        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        creation_flags = (
+            getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if os.name == "nt"
+            else 0
+        )
         environment = _subprocess_environment()
         environment.update(self.environment)
         environment.setdefault("PYTHONUNBUFFERED", "1")
@@ -117,6 +126,7 @@ class McpStdioClient:
                 shell=False,
                 env=environment,
                 creationflags=creation_flags,
+                start_new_session=os.name != "nt",
             )
         except OSError as exc:
             raise McpBridgeError(
@@ -183,7 +193,9 @@ class McpStdioClient:
         except queue.Empty as exc:
             self.cancel(request_id, "Request timed out.")
             self.abandon(request_id)
-            raise McpBridgeError(timeout_code, "MCP request timed out.", status_code=504) from exc
+            raise McpBridgeError(
+                timeout_code, "MCP request timed out.", status_code=504
+            ) from exc
         if isinstance(response, BaseException):
             raise response
         if "error" in response:
@@ -216,9 +228,7 @@ class McpStdioClient:
         except McpBridgeError:
             pass
 
-    def abandon(
-        self, request_id: int, wake_error: BaseException | None = None
-    ) -> None:
+    def abandon(self, request_id: int, wake_error: BaseException | None = None) -> None:
         with self._pending_lock:
             pending = self._pending.pop(request_id, None)
         # asyncio.to_thread 被取消时不会停止底层线程；主动唤醒 Queue，避免线程
@@ -243,15 +253,17 @@ class McpStdioClient:
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                process.terminate()
+                _terminate_process_tree(process)
                 try:
                     process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    process.kill()
+                    _kill_process_tree(process)
                     process.wait(timeout=2)
         finally:
             self._fail_pending(
-                McpBridgeError("PLUGIN_HOST_UNAVAILABLE", "MCP host stopped.", status_code=503)
+                McpBridgeError(
+                    "PLUGIN_HOST_UNAVAILABLE", "MCP host stopped.", status_code=503
+                )
             )
             self.process = None
 
@@ -313,14 +325,17 @@ class McpStdioClient:
                         {
                             "jsonrpc": "2.0",
                             "id": message["id"],
-                            "error": {"code": -32601, "message": "Method not supported."},
+                            "error": {
+                                "code": -32601,
+                                "message": "Method not supported.",
+                            },
                         }
                     )
         except (McpBridgeError, OSError, ValueError) as exc:
             failure = f"MCP stdout closed unexpectedly: {type(exc).__name__}."
         finally:
             if failure and process.poll() is None:
-                process.terminate()
+                _terminate_process_tree(process)
             exit_code = process.poll()
             if exit_code is None:
                 try:
@@ -328,7 +343,9 @@ class McpStdioClient:
                 except subprocess.TimeoutExpired:
                     exit_code = None
             if not self._stopping:
-                message = failure or f"MCP host exited unexpectedly with code {exit_code}."
+                message = (
+                    failure or f"MCP host exited unexpectedly with code {exit_code}."
+                )
                 error = McpBridgeError(
                     "PLUGIN_HOST_UNAVAILABLE", message, status_code=503
                 )
@@ -363,11 +380,470 @@ class McpStdioClient:
             item.response.put(error)
 
 
+class McpHttpClient:
+    """MCP Streamable HTTP client supporting JSON and SSE POST responses."""
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        on_seen: Callable[[], None],
+        on_broken: Callable[[str], None],
+        on_tools_changed: Callable[[], None],
+    ) -> None:
+        self.url = url
+        self.headers = headers
+        self.on_seen = on_seen
+        self.on_broken = on_broken
+        self.on_tools_changed = on_tools_changed
+        self._client = httpx.Client(follow_redirects=False, timeout=30)
+        self._pending_lock = threading.Lock()
+        self._pending: dict[int, _PendingRequest] = {}
+        self._next_id = 1
+        self._session_id: str | None = None
+        self._protocol_version: str | None = None
+        self._stopping = False
+        self._stream_started = False
+        self._last_event_id: str | None = None
+        self._stop_event = threading.Event()
+
+    def start(self) -> None:
+        return
+
+    def set_protocol_version(self, version: str) -> None:
+        self._protocol_version = version
+
+    def start_event_stream(self) -> None:
+        if self._stream_started:
+            return
+        self._stream_started = True
+        threading.Thread(target=self._event_stream_loop, daemon=True).start()
+
+    def request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout: float,
+        timeout_code: str,
+        response_error_code: str = "MCP_TOOL_CALL_FAILED",
+    ) -> dict[str, Any]:
+        request_id, pending = self.begin_request(method, params)
+        return self.wait_response(
+            request_id,
+            pending,
+            timeout=timeout,
+            timeout_code=timeout_code,
+            response_error_code=response_error_code,
+        )
+
+    def begin_request(
+        self, method: str, params: dict[str, Any]
+    ) -> tuple[int, _PendingRequest]:
+        with self._pending_lock:
+            request_id = self._next_id
+            self._next_id += 1
+            pending = _PendingRequest(response=queue.Queue(maxsize=1))
+            self._pending[request_id] = pending
+        message = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": params,
+        }
+        threading.Thread(
+            target=self._dispatch_request,
+            args=(request_id, message),
+            daemon=True,
+        ).start()
+        return request_id, pending
+
+    def wait_response(
+        self,
+        request_id: int,
+        pending: _PendingRequest,
+        *,
+        timeout: float,
+        timeout_code: str,
+        response_error_code: str = "MCP_TOOL_CALL_FAILED",
+    ) -> dict[str, Any]:
+        try:
+            response = pending.response.get(timeout=timeout)
+        except queue.Empty as exc:
+            self.cancel(request_id, "Request timed out.")
+            self.abandon(request_id)
+            raise McpBridgeError(
+                timeout_code, "MCP request timed out.", status_code=504
+            ) from exc
+        if isinstance(response, BaseException):
+            raise response
+        if "error" in response:
+            error = response.get("error")
+            message = (
+                str(error.get("message", "MCP JSON-RPC error."))
+                if isinstance(error, dict)
+                else "MCP JSON-RPC error."
+            )
+            raise McpBridgeError(response_error_code, message)
+        result = response.get("result")
+        if not isinstance(result, dict):
+            raise McpBridgeError(
+                response_error_code, "MCP response result must be an object."
+            )
+        return result
+
+    def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
+        message: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            message["params"] = params
+        self._post_notification(message)
+
+    def cancel(self, request_id: int, reason: str = "Cancelled by host.") -> None:
+        def send() -> None:
+            try:
+                self.notify(
+                    "notifications/cancelled",
+                    {"requestId": request_id, "reason": reason},
+                )
+            except McpBridgeError:
+                pass
+
+        threading.Thread(target=send, daemon=True).start()
+
+    def abandon(self, request_id: int, wake_error: BaseException | None = None) -> None:
+        with self._pending_lock:
+            pending = self._pending.pop(request_id, None)
+        if pending is not None and wake_error is not None:
+            try:
+                pending.response.put_nowait(wake_error)
+            except queue.Full:
+                pass
+
+    def stop(self) -> None:
+        self._stopping = True
+        self._stop_event.set()
+        if self._session_id:
+            try:
+                request = self._client.build_request(
+                    "DELETE", self.url, headers=self._request_headers()
+                )
+                response = self._client.send(request, stream=True)
+                response.close()
+            except httpx.HTTPError:
+                pass
+        self._client.close()
+        self._fail_pending(
+            McpBridgeError(
+                "PLUGIN_HOST_UNAVAILABLE", "MCP HTTP client stopped.", status_code=503
+            )
+        )
+
+    def _dispatch_request(self, request_id: int, message: dict[str, Any]) -> None:
+        try:
+            response = self._post(message, timeout=None)
+            try:
+                self._capture_session(response)
+                content_type = response.headers.get("content-type", "").lower()
+                if response.status_code >= 400:
+                    raise McpBridgeError(
+                        "MCP_HTTP_REQUEST_FAILED",
+                        f"MCP HTTP server returned status {response.status_code}.",
+                        status_code=502,
+                    )
+                if "application/json" in content_type:
+                    payload = _bounded_json_response(response)
+                    self._deliver(payload)
+                elif "text/event-stream" in content_type:
+                    delivered = False
+                    for _event, _event_id, data in _iter_sse(response):
+                        payload = _json_rpc_message(data)
+                        self._handle_message(payload)
+                        if payload.get("id") == request_id:
+                            delivered = True
+                            break
+                    if not delivered:
+                        raise McpBridgeError(
+                            "MCP_HTTP_RESPONSE_INVALID",
+                            "MCP SSE response ended before the matching JSON-RPC response.",
+                        )
+                else:
+                    raise McpBridgeError(
+                        "MCP_HTTP_RESPONSE_INVALID",
+                        "MCP HTTP response has an unsupported Content-Type.",
+                    )
+            finally:
+                response.close()
+        except (McpBridgeError, httpx.HTTPError) as exc:
+            error = (
+                exc
+                if isinstance(exc, McpBridgeError)
+                else McpBridgeError(
+                    "MCP_HTTP_REQUEST_FAILED",
+                    f"MCP HTTP request failed: {type(exc).__name__}.",
+                    status_code=503,
+                )
+            )
+            self.abandon(request_id, error)
+
+    def _post_notification(self, message: dict[str, Any]) -> None:
+        try:
+            response = self._post(message, timeout=10)
+        except httpx.HTTPError as exc:
+            raise McpBridgeError(
+                "MCP_HTTP_REQUEST_FAILED",
+                f"MCP HTTP notification failed: {type(exc).__name__}.",
+                status_code=503,
+            ) from exc
+        try:
+            self._capture_session(response)
+            if response.status_code not in {200, 202, 204}:
+                raise McpBridgeError(
+                    "MCP_HTTP_REQUEST_FAILED",
+                    f"MCP HTTP server rejected a notification with status {response.status_code}.",
+                )
+        finally:
+            response.close()
+
+    def _post(
+        self, message: dict[str, Any], *, timeout: float | None
+    ) -> httpx.Response:
+        encoded = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) > MAX_MCP_MESSAGE_BYTES:
+            raise McpBridgeError("MCP_TOOL_CALL_FAILED", "MCP request is too large.")
+        request = self._client.build_request(
+            "POST",
+            self.url,
+            content=encoded.encode("utf-8"),
+            headers=self._request_headers(),
+        )
+        return self._client.send(request, stream=True)
+
+    def _request_headers(self) -> dict[str, str]:
+        headers = {
+            **self.headers,
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+        }
+        if self._session_id:
+            headers["MCP-Session-Id"] = self._session_id
+        if self._protocol_version:
+            headers["MCP-Protocol-Version"] = self._protocol_version
+        return headers
+
+    def _capture_session(self, response: httpx.Response) -> None:
+        session_id = response.headers.get("mcp-session-id")
+        if session_id is not None:
+            if (
+                not session_id.isascii()
+                or not session_id.isprintable()
+                or len(session_id) > 1024
+            ):
+                raise McpBridgeError(
+                    "MCP_HTTP_RESPONSE_INVALID", "MCP session id is invalid."
+                )
+            self._session_id = session_id
+
+    def _handle_message(self, message: dict[str, Any]) -> None:
+        self.on_seen()
+        if "id" in message and ("result" in message or "error" in message):
+            self._deliver(message)
+        elif message.get("method") == "notifications/tools/list_changed":
+            self.on_tools_changed()
+
+    def _deliver(self, message: dict[str, Any]) -> None:
+        request_id = message.get("id")
+        if not isinstance(request_id, int):
+            return
+        with self._pending_lock:
+            pending = self._pending.pop(request_id, None)
+        if pending:
+            pending.response.put(message)
+
+    def _fail_pending(self, error: BaseException) -> None:
+        with self._pending_lock:
+            pending = list(self._pending.values())
+            self._pending.clear()
+        for item in pending:
+            item.response.put(error)
+
+    def _event_stream_loop(self) -> None:
+        while not self._stop_event.is_set():
+            headers = {**self._request_headers(), "Accept": "text/event-stream"}
+            headers.pop("Content-Type", None)
+            if self._last_event_id:
+                headers["Last-Event-ID"] = self._last_event_id
+            try:
+                with self._client.stream(
+                    "GET", self.url, headers=headers, timeout=None
+                ) as response:
+                    if response.status_code == 405:
+                        return
+                    if response.status_code >= 400:
+                        self.on_broken(
+                            f"MCP HTTP event stream returned status {response.status_code}."
+                        )
+                        return
+                    if (
+                        "text/event-stream"
+                        not in response.headers.get("content-type", "").lower()
+                    ):
+                        self.on_broken("MCP HTTP GET response is not an event stream.")
+                        return
+                    self._capture_session(response)
+                    for _event, event_id, data in _iter_sse(response):
+                        if event_id:
+                            self._last_event_id = event_id
+                        self._handle_message(_json_rpc_message(data))
+                        if self._stop_event.is_set():
+                            return
+            except (McpBridgeError, httpx.HTTPError):
+                if self._stopping:
+                    return
+            self._stop_event.wait(0.25)
+
+
+class McpLegacySseClient(McpHttpClient):
+    """Compatibility client for the deprecated 2024-11-05 HTTP+SSE transport."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._endpoint: str | None = None
+        self._endpoint_ready: queue.Queue[str | BaseException] = queue.Queue(maxsize=1)
+
+    def start(self) -> None:
+        threading.Thread(target=self._event_loop, daemon=True).start()
+        try:
+            endpoint = self._endpoint_ready.get(timeout=15)
+        except queue.Empty as exc:
+            raise McpBridgeError(
+                "MCP_INITIALIZE_FAILED",
+                "Legacy MCP SSE endpoint event timed out.",
+                status_code=504,
+            ) from exc
+        if isinstance(endpoint, BaseException):
+            raise endpoint
+        self._endpoint = endpoint
+
+    def start_event_stream(self) -> None:
+        """The legacy client already owns its single GET event stream."""
+
+        return
+
+    def _dispatch_request(self, request_id: int, message: dict[str, Any]) -> None:
+        try:
+            response = self._post(message, timeout=10)
+            try:
+                if response.status_code not in {200, 202, 204}:
+                    raise McpBridgeError(
+                        "MCP_HTTP_REQUEST_FAILED",
+                        f"Legacy MCP endpoint returned status {response.status_code}.",
+                    )
+            finally:
+                response.close()
+        except (McpBridgeError, httpx.HTTPError) as exc:
+            error = (
+                exc
+                if isinstance(exc, McpBridgeError)
+                else McpBridgeError(
+                    "MCP_HTTP_REQUEST_FAILED",
+                    f"Legacy MCP request failed: {type(exc).__name__}.",
+                    status_code=503,
+                )
+            )
+            self.abandon(request_id, error)
+
+    def _post(
+        self, message: dict[str, Any], *, timeout: float | None
+    ) -> httpx.Response:
+        if self._endpoint is None:
+            raise McpBridgeError(
+                "MCP_INITIALIZE_FAILED", "Legacy MCP endpoint is not ready."
+            )
+        encoded = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+        request = self._client.build_request(
+            "POST",
+            self._endpoint,
+            content=encoded.encode("utf-8"),
+            headers={
+                **self.headers,
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "application/json",
+            },
+        )
+        return self._client.send(request, stream=True)
+
+    def _event_loop(self) -> None:
+        try:
+            with self._client.stream(
+                "GET",
+                self.url,
+                headers={**self.headers, "Accept": "text/event-stream"},
+                timeout=None,
+            ) as response:
+                if response.status_code >= 400:
+                    raise McpBridgeError(
+                        "MCP_HTTP_REQUEST_FAILED",
+                        f"Legacy MCP SSE server returned status {response.status_code}.",
+                    )
+                if (
+                    "text/event-stream"
+                    not in response.headers.get("content-type", "").lower()
+                ):
+                    raise McpBridgeError(
+                        "MCP_HTTP_RESPONSE_INVALID",
+                        "Legacy MCP GET response is not an event stream.",
+                    )
+                for event, _event_id, data in _iter_sse(response):
+                    if self._endpoint is None and event == "endpoint":
+                        endpoint = _legacy_endpoint_url(self.url, data)
+                        self._endpoint_ready.put(endpoint)
+                        self._endpoint = endpoint
+                        continue
+                    self._handle_message(_json_rpc_message(data))
+        except (McpBridgeError, httpx.HTTPError) as exc:
+            if self._endpoint is None:
+                self._endpoint_ready.put(exc)
+            elif not self._stopping:
+                self.on_broken(f"Legacy MCP SSE stream failed: {type(exc).__name__}.")
+
+
 @dataclass(slots=True)
 class _McpHost:
     backend: PluginBackend
-    client: McpStdioClient
+    client: _McpClient
     status: PluginHostStatus
+
+
+class _McpClient(Protocol):
+    def start(self) -> None: ...
+    def request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout: float,
+        timeout_code: str,
+        response_error_code: str = "MCP_TOOL_CALL_FAILED",
+    ) -> dict[str, Any]: ...
+    def begin_request(
+        self, method: str, params: dict[str, Any]
+    ) -> tuple[int, _PendingRequest]: ...
+    def wait_response(
+        self,
+        request_id: int,
+        pending: _PendingRequest,
+        *,
+        timeout: float,
+        timeout_code: str,
+        response_error_code: str = "MCP_TOOL_CALL_FAILED",
+    ) -> dict[str, Any]: ...
+    def notify(self, method: str, params: dict[str, Any] | None = None) -> None: ...
+    def cancel(self, request_id: int, reason: str = "Cancelled by host.") -> None: ...
+    def abandon(
+        self, request_id: int, wake_error: BaseException | None = None
+    ) -> None: ...
+    def stop(self) -> None: ...
 
 
 class McpBridge:
@@ -390,19 +866,27 @@ class McpBridge:
         command_override: list[str] | None = None,
         environment: dict[str, str] | None = None,
         tool_source: str = "plugin",
+        transport_kind: str | None = None,
+        url: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> list[McpDiscoveredTool]:
-        if backend.transport != "stdio":
+        transport = transport_kind or backend.transport
+        if transport not in {"stdio", "streamable_http", "sse"}:
             raise McpBridgeError(
                 "MCP_CAPABILITY_UNSUPPORTED",
-                "Phase C only supports the MCP stdio transport.",
+                f"Unsupported MCP transport: {transport}",
                 status_code=501,
             )
-        command = command_override or self._resolve_command(package_path, backend)
-        now = datetime.now(timezone.utc)
+        command = (
+            command_override or self._resolve_command(package_path, backend)
+            if transport == "stdio"
+            else None
+        )
+        now = datetime.now(UTC)
         status = PluginHostStatus(
             plugin_id=plugin_id,
             backend_type="mcp",
-            transport="stdio",
+            transport="stdio" if transport == "stdio" else "http",
             status=PluginHostState.starting,
             started_at=now,
             last_seen_at=now,
@@ -412,7 +896,7 @@ class McpBridge:
         def seen() -> None:
             host = host_ref.get("host")
             if host:
-                host.status.last_seen_at = datetime.now(timezone.utc)
+                host.status.last_seen_at = datetime.now(UTC)
 
         def broken(message: str) -> None:
             host = host_ref.get("host")
@@ -422,16 +906,35 @@ class McpBridge:
             on_unavailable(plugin_id, message)
 
         def tools_changed() -> None:
-            broken("MCP tool list changed; restart the Plugin Host to revalidate tools.")
+            broken(
+                "MCP tool list changed; restart the Plugin Host to revalidate tools."
+            )
 
-        client = McpStdioClient(
-            command,
-            cwd=package_path,
-            environment=environment,
-            on_seen=seen,
-            on_broken=broken,
-            on_tools_changed=tools_changed,
-        )
+        if transport == "stdio":
+            assert command is not None
+            client: _McpClient = McpStdioClient(
+                command,
+                cwd=package_path,
+                environment=environment,
+                on_seen=seen,
+                on_broken=broken,
+                on_tools_changed=tools_changed,
+            )
+        else:
+            if not url:
+                raise McpBridgeError(
+                    "MCP_HOST_START_FAILED", "MCP HTTP transport requires a URL."
+                )
+            client_type = (
+                McpHttpClient if transport == "streamable_http" else McpLegacySseClient
+            )
+            client = client_type(
+                url,
+                headers=headers or {},
+                on_seen=seen,
+                on_broken=broken,
+                on_tools_changed=tools_changed,
+            )
         host = _McpHost(backend=backend, client=client, status=status)
         host_ref["host"] = host
         with self._lock:
@@ -474,15 +977,21 @@ class McpBridge:
             if not isinstance(server_info, dict):
                 server_info = {}
             status.protocol_version = str(version)
+            set_protocol_version = getattr(client, "set_protocol_version", None)
+            if callable(set_protocol_version):
+                set_protocol_version(str(version))
             status.server_name = _optional_string(server_info.get("name"))
             status.server_version = _optional_string(server_info.get("version"))
             client.notify("notifications/initialized")
+            start_event_stream = getattr(client, "start_event_stream", None)
+            if callable(start_event_stream):
+                start_event_stream()
             discovered = self._discover_tools(
                 plugin_id, client, backend, declared_permissions, tool_source
             )
             status.status = PluginHostState.ready
             status.tools_count = len(discovered)
-            status.last_seen_at = datetime.now(timezone.utc)
+            status.last_seen_at = datetime.now(UTC)
             status.error = None
             return discovered
         except McpBridgeError as exc:
@@ -527,9 +1036,7 @@ class McpBridge:
             host.client.cancel(rpc_id)
             host.client.abandon(
                 rpc_id,
-                McpBridgeError(
-                    "MCP_TOOL_CALL_FAILED", "MCP request was cancelled."
-                ),
+                McpBridgeError("MCP_TOOL_CALL_FAILED", "MCP request was cancelled."),
             )
             raise
         except McpBridgeError as exc:
@@ -539,7 +1046,9 @@ class McpBridge:
                 self._calls.pop(call_key, None)
 
         encoded_size = len(
-            json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode(
+                "utf-8"
+            )
         )
         if encoded_size > MAX_MCP_TOOL_RESULT_BYTES:
             raise ToolExecutionError(
@@ -606,7 +1115,7 @@ class McpBridge:
     def _discover_tools(
         self,
         plugin_id: str,
-        client: McpStdioClient,
+        client: _McpClient,
         backend: PluginBackend,
         declared_permissions: list[str],
         tool_source: str,
@@ -625,7 +1134,8 @@ class McpBridge:
             raw_tools = result.get("tools")
             if not isinstance(raw_tools, list):
                 raise McpBridgeError(
-                    "MCP_TOOL_SCHEMA_INVALID", "MCP tools/list must return a tools array."
+                    "MCP_TOOL_SCHEMA_INVALID",
+                    "MCP tools/list must return a tools array.",
                 )
             for raw in raw_tools:
                 discovered.append(
@@ -641,7 +1151,8 @@ class McpBridge:
                 break
             if not isinstance(next_cursor, str) or not next_cursor:
                 raise McpBridgeError(
-                    "MCP_TOOL_SCHEMA_INVALID", "MCP nextCursor must be a non-empty string."
+                    "MCP_TOOL_SCHEMA_INVALID",
+                    "MCP nextCursor must be a non-empty string.",
                 )
             cursor = next_cursor
         else:
@@ -675,9 +1186,7 @@ class McpBridge:
             len(remote_name) > 128
             or not remote_name[0].isalnum()
             or not all(
-                character.islower()
-                or character.isdigit()
-                or character in "._-"
+                character.islower() or character.isdigit() or character in "._-"
                 for character in remote_name
             )
         ):
@@ -702,7 +1211,9 @@ class McpBridge:
             ) from exc
         metadata = raw.get("_meta")
         permission = (
-            metadata.get("notesagent/permission") if isinstance(metadata, dict) else None
+            metadata.get("notesagent/permission")
+            if isinstance(metadata, dict)
+            else None
         )
         if permission is not None and (
             not isinstance(permission, str) or permission not in KNOWN_PERMISSIONS
@@ -721,7 +1232,9 @@ class McpBridge:
             remote_name=remote_name,
             definition=ToolDefinition(
                 name=f"{plugin_id}.{remote_name}",
-                description=description if isinstance(description, str) else remote_name,
+                description=description
+                if isinstance(description, str)
+                else remote_name,
                 parameters=schema,
                 permission=permission,
                 source=tool_source,
@@ -801,3 +1314,133 @@ def _subprocess_environment() -> dict[str, str]:
     environment["PYTHONUNBUFFERED"] = "1"
     environment["PYTHONIOENCODING"] = "utf-8"
     return environment
+
+
+def _bounded_json_response(response: httpx.Response) -> dict[str, Any]:
+    content_length = response.headers.get("content-length")
+    if (
+        content_length
+        and content_length.isdigit()
+        and int(content_length) > MAX_MCP_MESSAGE_BYTES
+    ):
+        raise McpBridgeError(
+            "MCP_HTTP_RESPONSE_INVALID", "MCP HTTP response is too large."
+        )
+    chunks: list[bytes] = []
+    size = 0
+    for chunk in response.iter_bytes():
+        size += len(chunk)
+        if size > MAX_MCP_MESSAGE_BYTES:
+            raise McpBridgeError(
+                "MCP_HTTP_RESPONSE_INVALID", "MCP HTTP response is too large."
+            )
+        chunks.append(chunk)
+    try:
+        payload = json.loads(b"".join(chunks))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise McpBridgeError(
+            "MCP_HTTP_RESPONSE_INVALID", "MCP HTTP response is not valid JSON."
+        ) from exc
+    if not isinstance(payload, dict) or payload.get("jsonrpc") != "2.0":
+        raise McpBridgeError(
+            "MCP_HTTP_RESPONSE_INVALID", "MCP HTTP response is not a JSON-RPC message."
+        )
+    return payload
+
+
+def _iter_sse(response: httpx.Response):
+    event = "message"
+    event_id: str | None = None
+    data_lines: list[str] = []
+    size = 0
+    for line in response.iter_lines():
+        size += len(line.encode("utf-8")) + 1
+        if size > MAX_MCP_MESSAGE_BYTES:
+            raise McpBridgeError(
+                "MCP_HTTP_RESPONSE_INVALID", "MCP SSE event is too large."
+            )
+        if line == "":
+            if data_lines:
+                yield event, event_id, "\n".join(data_lines)
+            event, event_id, data_lines, size = "message", None, [], 0
+            continue
+        if line.startswith(":"):
+            continue
+        field, _, value = line.partition(":")
+        value = value.removeprefix(" ")
+        if field == "event":
+            event = value
+        elif field == "id" and "\x00" not in value:
+            event_id = value
+        elif field == "data":
+            data_lines.append(value)
+    if data_lines:
+        yield event, event_id, "\n".join(data_lines)
+
+
+def _json_rpc_message(data: str) -> dict[str, Any]:
+    try:
+        message = json.loads(data)
+    except json.JSONDecodeError as exc:
+        raise McpBridgeError(
+            "MCP_HTTP_RESPONSE_INVALID", "MCP SSE data is not valid JSON."
+        ) from exc
+    if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
+        raise McpBridgeError(
+            "MCP_HTTP_RESPONSE_INVALID", "MCP SSE data is not a JSON-RPC message."
+        )
+    return message
+
+
+def _legacy_endpoint_url(source_url: str, endpoint: str) -> str:
+    target = urljoin(source_url, endpoint.strip())
+    source_parts = urlsplit(source_url)
+    target_parts = urlsplit(target)
+    if (
+        target_parts.scheme not in {"http", "https"}
+        or target_parts.username is not None
+        or target_parts.password is not None
+        or (source_parts.scheme, source_parts.hostname, source_parts.port)
+        != (target_parts.scheme, target_parts.hostname, target_parts.port)
+    ):
+        raise McpBridgeError(
+            "MCP_HTTP_RESPONSE_INVALID",
+            "Legacy MCP endpoint must use the same origin as the configured SSE URL.",
+        )
+    return target
+
+
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill.exe", "/PID", str(process.pid), "/T"],
+                check=False,
+                capture_output=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                timeout=2,
+            )
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
+    except (OSError, subprocess.SubprocessError):
+        process.terminate()
+
+
+def _kill_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+                check=False,
+                capture_output=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                timeout=2,
+            )
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        process.kill()
