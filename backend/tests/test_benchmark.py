@@ -439,3 +439,128 @@ def test_load_dataset_top_level_must_be_object() -> None:
     with pytest.raises(ApiError) as exc:
         datasets.load_dataset("array-top", BenchmarkKind.rag)
     assert exc.value.code == "BENCHMARK_DATASET_INVALID"
+
+
+# --------------------------------------------------------------------------- #
+# 审阅回归：运行中取消 / 仅块标注 / SSE 终止事件
+# --------------------------------------------------------------------------- #
+def test_cancel_running_benchmark_stops_early() -> None:
+    """运行中取消应在样本边界及时生效，而非跑完全部样本（审阅 P1）。"""
+    from app.benchmarks import service
+    from app.services import note_service
+
+    note = asyncio.run(
+        note_service.create_note(
+            title="取消回归", markdown="向量数据库用于存储高维向量。", folder="", tags=["向量"]
+        )
+    )
+    cases = [
+        {
+            "case_id": f"c{i}",
+            "query": "向量数据库",
+            "expected_note_ids": [note.note_id],
+            "expected_block_ids": [note.blocks[0].block_id],
+            "citation_required": True,
+        }
+        for i in range(50)
+    ]
+    _write_dataset("cancel-running-v1", cases)
+
+    async def _scenario():
+        run = await service.create_rag_run(
+            RAGRunRequest(dataset_id="cancel-running-v1", modes=[SearchMode.fts])
+        )
+
+        async def _cancel_after_start():
+            # 取消通过事件循环调度（独立 Task），而非同步直调，才能复现事件循环饥饿
+            while service.get_run(run.run_id).status == BenchmarkStatus.queued:
+                await asyncio.sleep(0)
+            service.cancel_run(run.run_id)
+
+        cancel_task = asyncio.create_task(_cancel_after_start())
+        finished = await service.wait_for_run(run.run_id)
+        await cancel_task
+        return finished
+
+    run = asyncio.run(_scenario())
+    assert run.status.value == "cancelled"
+    completed = sum(
+        1 for e in service.get_events(run.run_id) if e.event.value == "CaseCompleted"
+    )
+    assert completed < 50  # 未跑完全部样本，证明取消在样本边界生效
+
+
+def test_block_only_annotation_resolves_note_and_scores() -> None:
+    """仅标注 expected_block_ids 的样本应按块反查笔记评分，而非零分（审阅 P2）。"""
+    from app.services import note_service
+
+    note = asyncio.run(
+        note_service.create_note(
+            title="仅块标注", markdown="向量数据库存储高维向量。", folder="", tags=["向量"]
+        )
+    )
+    _write_dataset("block-only-v1", [{
+        "case_id": "c1",
+        "query": "向量数据库",
+        "expected_block_ids": [note.blocks[0].block_id],
+        "citation_required": False,
+    }])
+
+    run = _run(RAGRunRequest(dataset_id="block-only-v1", modes=[SearchMode.fts]))
+
+    assert run.status.value == "completed"
+    fts = run.metrics["fts"]
+    assert fts["hit_at_1"] == 1.0
+    assert fts["recall_at_k"] == 1.0
+    assert fts["mrr"] == 1.0
+
+
+def test_sse_stream_ends_on_terminal_event_in_replay() -> None:
+    """历史回放期间遇到终止事件时流应立即结束，而非进入实时队列永久等待（审阅 P2）。"""
+    from app import routes
+    from app.benchmarks import service
+    from app.contracts import BenchmarkEvent, BenchmarkEventType
+
+    run_id = "benchmark_sse_replay"
+    now = service._now()
+    # 模拟「回放期间运行完成」：run 仍为 running（subscribe 返回非空队列），
+    # 但历史事件里已含 RunCompleted 终止事件。
+    service._runs[run_id] = BenchmarkRun(
+        run_id=run_id,
+        kind=BenchmarkKind.rag,
+        dataset_id="d",
+        dataset_hash="sha256:x",
+        status=BenchmarkStatus.running,
+        created_at=now,
+    )
+    service._events[run_id] = [
+        BenchmarkEvent(
+            event=BenchmarkEventType.run_started, run_id=run_id, sequence=0,
+            data={}, timestamp=now,
+        ),
+        BenchmarkEvent(
+            event=BenchmarkEventType.run_completed, run_id=run_id, sequence=1,
+            data={}, timestamp=now,
+        ),
+    ]
+    try:
+        # 直调路由函数时 FastAPI 不解析 Query/Header 默认值，需显式传 None 覆盖 Header 哨兵
+        response = asyncio.run(
+            routes.benchmark_events(run_id, after_sequence=-1, last_event_id=None)
+        )
+
+        async def _collect() -> list[str]:
+            out: list[str] = []
+            async for chunk in response.body_iterator:
+                out.append(chunk)
+            return out
+
+        # 加超时防止回归（旧实现会永久挂起）
+        chunks = asyncio.run(asyncio.wait_for(_collect(), timeout=5))
+    finally:
+        service._forget(run_id)
+
+    events = [
+        line for chunk in chunks for line in chunk.splitlines() if line.startswith("event: ")
+    ]
+    assert events == ["event: RunStarted", "event: RunCompleted"]

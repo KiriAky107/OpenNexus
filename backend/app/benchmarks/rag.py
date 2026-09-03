@@ -7,10 +7,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Callable
 
+from app import repository
 from app.benchmarks import metrics as m
 from app.benchmarks.datasets import RAGDataset
 from app.contracts import (
@@ -47,10 +49,13 @@ async def run_rag(
 
     for mode in request.modes:
         for case in dataset.cases:
+            expected_notes = _expected_notes(case)
             for repeat in range(request.repeat):
+                # 让出事件循环：使运行中取消、SSE 进度与并发 API 请求能及时得到调度
+                await asyncio.sleep(0)
                 if should_cancel is not None and should_cancel():
                     raise BenchmarkCancelled()
-                result = await _evaluate_one(case, mode, request, repeat)
+                result = await _evaluate_one(case, mode, request, repeat, expected_notes)
                 results.append(result)
                 done += 1
                 if on_case is not None:
@@ -60,8 +65,19 @@ async def run_rag(
     return metrics_by_mode, results
 
 
+def _expected_notes(case: RAGDatasetCase) -> set[str]:
+    """返回笔记级期望 id；仅标注块 ID 时从块反查所属笔记，避免把标注缺失误判为检索失败。"""
+    if case.expected_note_ids:
+        return set(case.expected_note_ids)
+    return {hit.note_id for hit in repository.get_block_hits(case.expected_block_ids)}
+
+
 async def _evaluate_one(
-    case: RAGDatasetCase, mode: SearchMode, request: RAGRunRequest, repeat: int
+    case: RAGDatasetCase,
+    mode: SearchMode,
+    request: RAGRunRequest,
+    repeat: int,
+    expected_notes: set[str],
 ) -> RAGCaseResult:
     search_request = SearchRequest(
         query=case.query,
@@ -95,7 +111,6 @@ async def _evaluate_one(
 
     retrieved_note_ids = [item.note_id for item in response.items]
     retrieved_block_ids = [item.block_id for item in response.items]
-    expected_notes = set(case.expected_note_ids)
     expected_blocks = set(case.expected_block_ids)
     k = request.retrieval.top_k
 

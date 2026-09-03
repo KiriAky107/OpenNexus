@@ -474,6 +474,45 @@ def test_fts_score_threshold_filters_before_total(vault) -> None:
     assert none.items == []
 
 
+def test_fts_offset_beyond_end_reports_real_total(vault) -> None:
+    """offset 越过末页时 items 为空，但 total 仍为真实命中数而非归零。"""
+    from app.retrieval.engine import engine
+    from app.services import note_service
+
+    asyncio.run(
+        note_service.create_note(title="越界分页", markdown="检索 检索 检索 检索", folder="", tags=[])
+    )
+
+    resp = asyncio.run(
+        engine.search(SearchRequest(query="检索", mode=SearchMode.fts, limit=10, offset=100))
+    )
+    assert resp.page.total >= 1
+    assert resp.items == []
+
+
+def test_fts_not_truncated_at_five_thousand(vault) -> None:
+    """FTS 结果不再被 5000 条上限截断：>5000 命中时 total 为真实计数，末页仍可访问。"""
+    from app.retrieval.engine import engine
+    from app.services import note_service
+
+    markdown = "\n\n".join(f"共同词 q{i}" for i in range(5010))
+    asyncio.run(
+        note_service.create_note(title="五千条分页", markdown=markdown, folder="", tags=[])
+    )
+
+    first = asyncio.run(
+        engine.search(SearchRequest(query="共同词", mode=SearchMode.fts, limit=10, offset=0))
+    )
+    assert first.page.total == 5010
+    assert len(first.items) == 10
+
+    last = asyncio.run(
+        engine.search(SearchRequest(query="共同词", mode=SearchMode.fts, limit=10, offset=5005))
+    )
+    assert last.page.total == 5010
+    assert len(last.items) == 5
+
+
 # --------------------------------------------------------------------------- #
 # 审阅回归：PATCH tags 语义 / 向量-块一致性 / 过滤漏召回 / rebuild 语义与回滚
 # --------------------------------------------------------------------------- #
