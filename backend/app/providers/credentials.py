@@ -5,12 +5,11 @@ import os
 import re
 import threading
 from pathlib import Path
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import get_settings
-
 
 _CREDENTIAL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _PLUGIN_CREDENTIAL_PREFIX = "plugin."
@@ -29,7 +28,9 @@ def validate_provider_credential_id(credential_id: str | None) -> None:
     """阻止 Provider 和通用凭据 API 跨入 Plugin 私有命名空间。"""
 
     if credential_id and credential_id.casefold().startswith(_PLUGIN_CREDENTIAL_PREFIX):
-        raise CredentialStoreError("Credential namespace is reserved for Plugin settings.")
+        raise CredentialStoreError(
+            "Credential namespace is reserved for Plugin settings."
+        )
     if credential_id and credential_id.casefold().startswith(_MCP_CREDENTIAL_PREFIX):
         raise CredentialStoreError("Credential namespace is reserved for MCP settings.")
 
@@ -37,7 +38,7 @@ def validate_provider_credential_id(credential_id: str | None) -> None:
 class EnvironmentCredentialResolver:
     """解析由桌面 Host 注入 Sidecar 进程的临时凭证上下文。"""
 
-    _development_aliases = {
+    _development_aliases: ClassVar[dict[str, str]] = {
         "openai": "OPENAI_API_KEY",
         "deepseek": "DEEPSEEK_API_KEY",
     }
@@ -85,7 +86,9 @@ class EncryptedCredentialStore:
             try:
                 return Fernet(environment_key.encode("ascii"))
             except (ValueError, UnicodeEncodeError) as exc:
-                raise CredentialStoreError("APP_CREDENTIAL_MASTER_KEY is invalid.") from exc
+                raise CredentialStoreError(
+                    "APP_CREDENTIAL_MASTER_KEY is invalid."
+                ) from exc
 
         key_path.parent.mkdir(parents=True, exist_ok=True)
         self._restrict(key_path.parent, 0o700)
@@ -102,7 +105,9 @@ class EncryptedCredentialStore:
         try:
             return Fernet(key_path.read_bytes().strip())
         except (OSError, ValueError) as exc:
-            raise CredentialStoreError("Credential master key cannot be loaded.") from exc
+            raise CredentialStoreError(
+                "Credential master key cannot be loaded."
+            ) from exc
 
     def _read_tokens(self) -> dict[str, str]:
         _, store_path = self._paths()
@@ -111,11 +116,16 @@ class EncryptedCredentialStore:
         try:
             data = json.loads(store_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise CredentialStoreError("Encrypted credential store cannot be loaded.") from exc
+            raise CredentialStoreError(
+                "Encrypted credential store cannot be loaded."
+            ) from exc
         if not isinstance(data, dict) or not all(
-            isinstance(key, str) and isinstance(value, str) for key, value in data.items()
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in data.items()
         ):
-            raise CredentialStoreError("Encrypted credential store has an invalid format.")
+            raise CredentialStoreError(
+                "Encrypted credential store has an invalid format."
+            )
         return data
 
     def _write_tokens(self, tokens: dict[str, str]) -> None:
@@ -195,6 +205,22 @@ class EncryptedCredentialStore:
                     del tokens[credential_id]
                 self._write_tokens(tokens)
             return removed
+
+    def move_many(self, replacements: dict[str, str]) -> None:
+        """原子迁移凭据 ID，直接移动密文且不覆盖已经写入的新凭据。"""
+
+        for old_id, new_id in replacements.items():
+            self._validate_id(old_id)
+            self._validate_id(new_id)
+        with self._lock:
+            tokens = self._read_tokens()
+            changed = False
+            for old_id, new_id in replacements.items():
+                if old_id != new_id and old_id in tokens:
+                    tokens.setdefault(new_id, tokens.pop(old_id))
+                    changed = True
+            if changed:
+                self._write_tokens(tokens)
 
 
 class ChainedCredentialResolver:

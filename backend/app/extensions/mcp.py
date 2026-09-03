@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import queue
+import re
 import signal
 import subprocess
 import threading
@@ -49,6 +50,7 @@ MAX_MCP_MESSAGE_BYTES = 2 * 1024 * 1024
 MAX_MCP_TOOL_RESULT_BYTES = 256 * 1024
 MAX_MCP_TOOLS = 500
 MAX_MCP_LIST_PAGES = 100
+_SSE_NEWLINE = re.compile(rb"\r\n?|\n")
 
 
 class McpBridgeError(RuntimeError):
@@ -1019,7 +1021,8 @@ class McpBridge:
             if status.status == PluginHostState.unhealthy:
                 raise McpBridgeError(
                     "PLUGIN_HOST_UNAVAILABLE",
-                    status.error or "MCP event stream became unavailable during startup.",
+                    status.error
+                    or "MCP event stream became unavailable during startup.",
                     status_code=503,
                 )
             status.status = PluginHostState.ready
@@ -1383,12 +1386,58 @@ def _bounded_json_response(response: httpx.Response) -> dict[str, Any]:
     return payload
 
 
+def _bounded_sse_lines(response: httpx.Response):
+    """Split UTF-8 lines without httpx.iter_lines()'s unbounded line buffer.
+
+    Check each segment before appending it, including partial/no-newline input.
+    SSE allows LF, CR and CRLF; a CRLF pair can span network chunks.
+    """
+
+    pending = bytearray()
+    event_size = 0
+    skip_lf = False
+    first_line = True
+    for chunk in response.iter_bytes():
+        offset = 0
+        if skip_lf and chunk:
+            offset = int(chunk.startswith(b"\n"))
+            skip_lf = False
+        for match in _SSE_NEWLINE.finditer(chunk, offset):
+            start, end = match.span()
+            segment = memoryview(chunk)[offset:start]
+            if event_size + len(pending) + len(segment) + 1 > MAX_MCP_MESSAGE_BYTES:
+                raise McpBridgeError(
+                    "MCP_HTTP_RESPONSE_INVALID", "MCP SSE event is too large."
+                )
+            pending.extend(segment)
+            line = pending.decode("utf-8", errors="replace")
+            event_size += len(pending) + 1
+            pending.clear()
+            if first_line:
+                line = line.removeprefix("\ufeff")
+                first_line = False
+            if not line:
+                event_size = 0
+            yield line
+            skip_lf = chunk[end - 1 : end] == b"\r" and end == len(chunk)
+            offset = end
+        tail = memoryview(chunk)[offset:]
+        if event_size + len(pending) + len(tail) > MAX_MCP_MESSAGE_BYTES:
+            raise McpBridgeError(
+                "MCP_HTTP_RESPONSE_INVALID", "MCP SSE event is too large."
+            )
+        pending.extend(tail)
+    if pending:
+        line = pending.decode("utf-8", errors="replace")
+        yield line.removeprefix("\ufeff") if first_line else line
+
+
 def _iter_sse(response: httpx.Response):
     event = "message"
     event_id: str | None = None
     data_lines: list[str] = []
     size = 0
-    for line in response.iter_lines():
+    for line in _bounded_sse_lines(response):
         size += len(line.encode("utf-8")) + 1
         if size > MAX_MCP_MESSAGE_BYTES:
             raise McpBridgeError(
