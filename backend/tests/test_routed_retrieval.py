@@ -66,6 +66,83 @@ async def seed():
     return apple, banana
 
 
+@pytest.mark.parametrize("outcome", ["api", "api_failure", "missing_space"])
+def test_benchmark_reports_actual_embedding_and_fallback(runtime, outcome):
+    from app.benchmarks import service
+    from app.contracts import RAGRunRequest
+
+    async def scenario():
+        apple, banana = await seed()
+        if outcome == "api_failure":
+            runtime.result_override = SimpleNamespace(source="local", fallback_reason="PROVIDER_TIMEOUT")
+        elif outcome == "missing_space":
+            runtime.model_id = "space-without-index"
+        directory = get_settings().benchmark_datasets_path
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "routing.json").write_text(json.dumps({
+            "dataset_id": "routing", "kind": "rag", "version": "1",
+            "cases": [{"case_id": "query", "query": "apple", "expected_note_ids": [banana.note_id]}],
+        }), encoding="utf-8")
+        run = await service.create_rag_run(RAGRunRequest(
+            dataset_id="routing", modes=[SearchMode.fts, SearchMode.vector],
+        ))
+        await service.wait_for_run(run.run_id)
+        report = service.get_report(run.run_id)
+        assert report.config_snapshot["embedding"]["policy"] == "per_case"
+        fts, vector = report.cases
+        assert fts.embedding == {"source": "not_used"}
+        if outcome == "api":
+            assert vector.embedding["source"] == "api"
+            assert vector.embedding["model_id"] == "space-a"
+            assert vector.embedding["dimensions"] == 3
+            assert vector.retrieved_note_ids[0] == banana.note_id
+        else:
+            assert vector.embedding["source"] == "local"
+            assert vector.embedding["model_id"] == "hash-v1"
+            assert vector.embedding["dimensions"] == 128
+            assert vector.retrieved_note_ids[0] == apple.note_id
+            if outcome == "api_failure":
+                assert vector.embedding["fallback_reason"] == "PROVIDER_TIMEOUT"
+            if outcome == "missing_space":
+                assert vector.embedding["fallback_reason"] == "REMOTE_INDEX_UNAVAILABLE"
+                assert vector.embedding["attempted_space"]["model_id"] == "space-without-index"
+        events = service.get_events(run.run_id)
+        case_events = [e for e in events if e.event.value == "CaseCompleted"]
+        assert case_events[-1].data["embedding"] == vector.embedding
+
+    asyncio.run(scenario())
+
+
+def test_embedding_observations_are_isolated_between_concurrent_searches(runtime, monkeypatch):
+    from app.retrieval.provenance import capture_embedding
+
+    async def scenario():
+        await seed()
+        original = runtime.embed
+
+        async def embed(texts):
+            await asyncio.sleep(0)
+            if texts == ["offline"]:
+                raise RuntimeError("private upstream details")
+            return await original(texts)
+
+        monkeypatch.setattr(runtime, "embed", embed)
+
+        async def query(text):
+            with capture_embedding() as observation:
+                await engine.search(SearchRequest(query=text, mode=SearchMode.vector))
+            return observation
+
+        remote, local, another = await asyncio.gather(query("apple"), query("offline"), query("apple"))
+        assert remote["source"] == another["source"] == "api"
+        assert local["source"] == "local"
+        assert local["fallback_reason"] == "REMOTE_EMBEDDING_UNAVAILABLE"
+        assert "fallback_reason" not in remote or remote["fallback_reason"] is None
+        assert "private upstream" not in json.dumps(local)
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("failure", ["cancel", "write"])
 def test_rebuild_failure_preserves_concurrent_configuration_and_all_indexes(runtime, monkeypatch, failure):
     from app.container import container

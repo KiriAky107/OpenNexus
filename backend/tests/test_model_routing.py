@@ -150,6 +150,27 @@ def assert_local(rig, result, texts, reason):
     assert rig.embedding.calls == [texts]
 
 
+def test_embedding_observation_keeps_request_binding_when_config_changes(rig):
+    from app.retrieval.provenance import capture_embedding
+    initial = bind(rig, model="original-model")
+
+    def handler(request):
+        assert json.loads(request.content)["model"] == "original-model"
+        bind(rig, model="next-model")
+        return response({"data": [{"index": 0, "embedding": [1, 0, 0]}]})
+
+    rig.http.handler = handler
+    with capture_embedding() as observation:
+        result = run(rig.service.embed(["query"]))
+    assert result.source == "api"
+    assert observation["route_version"] == initial.config.version
+    assert observation["requested_route"]["model"] == "original-model"
+    assert observation["requested_route"]["provider_id"] == "test-provider"
+    assert rig.service.configuration().embedding.model == "next-model"
+    assert rig.credentials.value not in json.dumps(observation)
+    assert "credential_id" not in json.dumps(observation)
+
+
 @pytest.fixture
 def audio(tmp_path):
     source, reference = tmp_path / "audio.wav", tmp_path / "reference.wav"

@@ -20,6 +20,7 @@ from typing import Protocol
 
 from app.database.db import connect, transaction
 from app.retrieval.vectorstore import VectorHit
+from app.retrieval.provenance import record_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,7 @@ async def embed_remote(texts: list[str]) -> RemoteEmbeddings | None:
             return None
         result = await runtime.embed(texts)
         if result.source != "api":
+            record_embedding(fallback_reason=result.fallback_reason)
             return None
         if not isinstance(result.model_id, str) or not result.model_id or result.model_id == "hash-v1":
             raise ValueError("API embedding needs a distinct space ID")
@@ -94,6 +96,7 @@ async def embed_remote(texts: list[str]) -> RemoteEmbeddings | None:
         )
     except Exception as exc:
         # Avoid logging provider exceptions containing credentials or note text.
+        record_embedding(fallback_reason="REMOTE_EMBEDDING_UNAVAILABLE")
         logger.warning("Remote embedding unavailable (%s); using local index", type(exc).__name__)
         return None
 
@@ -158,6 +161,7 @@ async def search_remote(query: str, *, top_k: int) -> list[VectorHit] | None:
     batch = await embed_remote([query])
     if batch is None:
         return None
+    record_embedding(attempted_space={"model_id": batch.space_id, "dimensions": batch.dimensions})
     try:
         conn = connect()
         try:
@@ -166,6 +170,7 @@ async def search_remote(query: str, *, top_k: int) -> list[VectorHit] | None:
                     "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'routed_block_vectors'"
                 ).fetchone()
                 if exists is None:
+                    record_embedding(fallback_reason="REMOTE_INDEX_MISSING")
                     return None
                 rows = conn.execute(
                     """SELECT b.block_id, r.vector
@@ -184,9 +189,13 @@ async def search_remote(query: str, *, top_k: int) -> list[VectorHit] | None:
                         score = math.fsum(a * b for a, b in zip(batch.vectors[0], vector))
                         yield VectorHit(id=row["block_id"], score=max(0.0, min(1.0, score)))
 
-                return heapq.nlargest(top_k, hits(), key=lambda hit: hit.score)
+                result = heapq.nlargest(top_k, hits(), key=lambda hit: hit.score)
+                record_embedding(source="api", model_id=batch.space_id,
+                                 dimensions=batch.dimensions, fallback_reason=None)
+                return result
         finally:
             conn.close()
     except Exception as exc:
+        record_embedding(fallback_reason="REMOTE_INDEX_UNAVAILABLE")
         logger.debug("Remote vector search unavailable (%s); using local index", type(exc).__name__)
         return None

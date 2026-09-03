@@ -24,6 +24,7 @@ from app.providers.base import ProviderError
 from app.providers.credentials import CredentialResolver, CredentialStoreError
 from app.providers.registry import ProviderNotFoundError, ProviderRegistry
 from app.retrieval.embedding import EmbeddingProvider, HashEmbeddingProvider
+from app.retrieval.provenance import record_embedding
 
 CAPABILITIES = ("embedding", "transcription", "speaker_matching")
 HTTP_TYPES = {ProviderType.openai_chat, ProviderType.openai_compatible}
@@ -175,7 +176,10 @@ class ModelRoutingService:
         return data, url
 
     async def embed(self, texts: list[str]) -> EmbeddingResult:
-        binding = self.configuration().embedding
+        config = self.configuration()
+        binding = config.embedding
+        record_embedding(route_version=config.version,
+                         requested_route=binding.model_dump() if binding else None)
         reason = None
         if binding and texts:
             try:
