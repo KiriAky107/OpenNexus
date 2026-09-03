@@ -207,8 +207,8 @@ export interface PermissionRequest {
 }
 
 export interface TokenUsage {
-  input_tokens: number
-  output_tokens: number
+  input_tokens?: number
+  output_tokens?: number
   total_tokens: number
 }
 
@@ -462,11 +462,11 @@ export interface TaskItem {
   title: string
   description?: string
   status: TaskStatus
-  priority: TaskPriority
+  priority?: TaskPriority
   due_date?: string
   note_id?: string
   note_title?: string
-  source: TaskSource
+  source?: TaskSource
   created_at: string
   updated_at: string
 }
@@ -487,12 +487,12 @@ export interface ThemeConfig {
 // ============ Index ============
 
 export interface IndexStatus {
-  status: 'idle' | 'indexing' | 'error'
+  status: 'unknown' | 'idle' | 'indexing' | 'error'
   pending_jobs: number
-  total_notes: number
-  total_blocks: number
-  fts_enabled: boolean
-  vector_enabled: boolean
+  total_notes: number | null
+  total_blocks: number | null
+  fts_enabled?: boolean
+  vector_enabled?: boolean
   embedding_model?: string
   reranker_model?: string
   last_indexed_at?: string
@@ -527,7 +527,7 @@ export type SaveStatus =
   | 'external_changed'
   | 'conflict'
 
-export type AiCoreStatus = 'starting' | 'running' | 'stopped' | 'error'
+export type AiCoreStatus = 'unknown' | 'starting' | 'running' | 'stopped' | 'error'
 
 // ============ FastAPI wire contracts ============
 // UI view models above may contain presentation-only fields. Services must use
@@ -777,6 +777,8 @@ export interface ApiTask {
 }
 
 export interface ApiIndexStatus {
+  total_notes: number
+  total_blocks: number
   status: 'idle' | 'queued' | 'running' | 'failed'
   pending_jobs: number
   active_job_id?: string | null

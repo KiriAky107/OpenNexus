@@ -22,20 +22,18 @@ const availableModels = computed(() => providerStore.modelsByProvider[chatStore.
 onMounted(async () => {
   try {
     await Promise.all([providerStore.loadProviders(), skillStore.loadSkills()])
-    await providerStore.loadModels(chatStore.selectedProviderId)
+    chatStore.selectedProviderId = providerStore.defaultProviderId
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : '无法加载 AI 配置，当前展示本地数据。'
+    loadError.value = error instanceof Error ? error.message : '无法加载 AI 配置，请检查后端连接。'
   }
 })
 
 watch(() => chatStore.selectedProviderId, async (providerId) => {
-  try {
-    await providerStore.loadModels(providerId)
-    const firstModel = providerStore.modelsByProvider[providerId]?.[0]
-    if (firstModel) chatStore.selectedModel = firstModel.model_id
-  } catch (error) {
-    loadError.value = error instanceof Error ? error.message : '模型列表加载失败'
-  }
+  chatStore.selectedModel = providerStore.providers.find(p => p.provider_id === providerId)?.default_model ?? ''
+  loadError.value = ''
+  if (!providerId) return
+  try { await providerStore.loadModels(providerId) }
+  catch (error) { if (chatStore.selectedProviderId === providerId) loadError.value = error instanceof Error ? error.message : '模型列表加载失败，请手动填写模型 ID。' }
 })
 
 function send() { void chatStore.sendMessage(chatStore.inputText) }
@@ -54,17 +52,12 @@ async function openCitation(citation: Citation) {
       <div class="field compact"><label>Provider</label><select v-model="chatStore.selectedProviderId" class="select">
         <option v-for="provider in providerStore.enabledProviders" :key="provider.provider_id" :value="provider.provider_id">{{ provider.name }}</option>
       </select></div>
-      <div class="field compact"><label>Model</label><select v-model="chatStore.selectedModel" class="select">
-        <option v-for="model in availableModels" :key="model.model_id" :value="model.model_id">{{ model.name }}</option>
-      </select></div>
-      <div class="field compact"><label>Skill</label><select v-model="chatStore.selectedSkillId" class="select">
-        <option :value="null">不使用 Skill</option><option v-for="skill in skillStore.enabledSkills" :key="skill.skill_id" :value="skill.skill_id">{{ skill.name }}</option>
-      </select></div>
-      <label class="rag-toggle"><input v-model="chatStore.useRag" type="checkbox" /> 使用知识库</label>
+      <div class="field compact"><label>模型 ID</label><input v-model="chatStore.selectedModel" class="input" list="chat-models" placeholder="填写模型 ID" /><datalist id="chat-models"><option v-for="model in availableModels" :key="model.model_id" :value="model.model_id">{{ model.name }}</option></datalist></div>
+      <span class="subtle">知识库问答与技能请使用智能体；普通聊天尚未接入这些能力。</span>
     </header>
-    <div v-if="loadError" class="error-banner chat-error">{{ loadError }}</div>
+    <div v-if="loadError || providerStore.error" class="error-banner chat-error">{{ loadError || providerStore.error }}</div>
     <main class="message-timeline">
-      <div v-if="!chatStore.messages.length" class="empty-state"><div><strong>开始一段知识对话</strong><p>可以直接提问，也可以打开 RAG 让模型基于当前 Vault 回答。</p></div></div>
+      <div v-if="!chatStore.messages.length" class="empty-state"><div><strong>开始一段知识对话</strong><p>请先配置模型提供商。聊天记录仅保留在本次页面会话中。</p></div></div>
       <article v-for="message in chatStore.messages" :key="message.message_id" class="message" :class="message.role">
         <div class="avatar">{{ message.role === 'user' ? '你' : 'AI' }}</div>
         <div class="message-body">
@@ -78,7 +71,7 @@ async function openCitation(citation: Citation) {
             </button>
           </div>
           <time>{{ new Date(message.created_at).toLocaleTimeString() }}</time>
-          <small v-if="message.usage" class="usage">Token {{ message.usage.total_tokens }}（输入 {{ message.usage.input_tokens }} / 输出 {{ message.usage.output_tokens }}）</small>
+          <small v-if="message.usage" class="usage">Token {{ message.usage.total_tokens }}<span v-if="message.usage.input_tokens !== undefined && message.usage.output_tokens !== undefined">（输入 {{ message.usage.input_tokens }} / 输出 {{ message.usage.output_tokens }}）</span></small>
         </div>
       </article>
     </main>
@@ -87,7 +80,7 @@ async function openCitation(citation: Citation) {
         @keydown.ctrl.enter.prevent="send" />
       <div class="composer-actions"><span class="subtle">回答可能包含错误，请核对 Citation。</span>
         <button v-if="chatStore.isStreaming" class="button-danger" @click="chatStore.stopGeneration">停止</button>
-        <button v-else class="button-primary" :disabled="!chatStore.inputText.trim()" @click="send">发送</button>
+        <button v-else class="button-primary" :disabled="!chatStore.inputText.trim() || !chatStore.selectedProviderId || !chatStore.selectedModel.trim()" @click="send">发送</button>
       </div>
     </footer>
   </section>

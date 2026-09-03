@@ -14,7 +14,7 @@ const providerStore = useProviderStore()
 const skillStore = useSkillStore()
 const pageError = ref('')
 const form = reactive({
-  input: '', provider_id: 'mock', model: 'mock-1', skill_id: '', max_steps: 10,
+  input: '', provider_id: '', model: '', skill_id: '', max_steps: 10,
   tool_timeout_seconds: 30, run_timeout_seconds: 300, token_budget: 8000,
   allow_network: false, max_concurrent_tools: 1, allowed_tools: [] as string[],
 })
@@ -25,7 +25,7 @@ const isNewRun = computed(() => !route.params.runId)
 onMounted(async () => {
   try {
     await Promise.all([providerStore.loadProviders(), skillStore.loadSkills(), agentStore.loadTools()])
-    await providerStore.loadModels(form.provider_id)
+    form.provider_id = providerStore.defaultProviderId
   } catch (error) { pageError.value = error instanceof Error ? error.message : '智能体配置加载失败' }
 })
 
@@ -35,7 +35,10 @@ watch(() => route.params.runId, async (runId) => {
 }, { immediate: true })
 
 watch(() => form.provider_id, async (providerId) => {
-  try { await providerStore.loadModels(providerId); form.model = models.value[0]?.model_id ?? '' } catch { /* page keeps current selection */ }
+  form.model = providerStore.providers.find(p => p.provider_id === providerId)?.default_model ?? ''
+  if (!providerId) return
+  try { await providerStore.loadModels(providerId) }
+  catch (error) { if (form.provider_id === providerId) pageError.value = error instanceof Error ? error.message : '模型列表加载失败，请手动填写模型 ID。' }
 })
 
 function toggleTool(name: string) {
@@ -47,6 +50,7 @@ function toggleTool(name: string) {
 async function createRun() {
   pageError.value = ''
   try {
+    if (!form.provider_id || !form.model.trim()) throw new Error('请选择提供商并填写模型 ID。')
     const run = await agentStore.createRun({
       input: form.input, provider_id: form.provider_id, model: form.model,
       skill_id: form.skill_id || undefined, allowed_tools: form.allowed_tools,
@@ -71,12 +75,12 @@ function eventText(event: AgentEvent) {
   <section class="feature-page agent-page">
     <header class="feature-header"><div><h1>{{ isNewRun ? '创建智能体运行' : '智能体执行轨迹' }}</h1><p>配置执行边界，并实时查看模型、工具和权限事件。</p></div>
       <button v-if="!isNewRun" class="button-secondary" @click="router.push({ name: 'agent' })">新建运行</button></header>
-    <div v-if="pageError || agentStore.error" class="error-banner">{{ pageError || agentStore.error }}</div>
+    <div v-if="pageError || agentStore.error || providerStore.error" class="error-banner">{{ pageError || agentStore.error || providerStore.error }}</div>
     <form v-if="isNewRun" class="panel run-form" @submit.prevent="createRun">
       <div class="field"><label>任务</label><textarea v-model="form.input" class="textarea" required placeholder="描述希望智能体完成的任务" /></div>
       <div class="form-grid">
         <div class="field"><label>模型提供商</label><select v-model="form.provider_id" class="select"><option v-for="p in providerStore.enabledProviders" :key="p.provider_id" :value="p.provider_id">{{ p.name }}</option></select></div>
-        <div class="field"><label>模型</label><select v-model="form.model" class="select"><option v-for="m in models" :key="m.model_id" :value="m.model_id">{{ m.name }}</option></select></div>
+        <div class="field"><label>模型</label><input v-model="form.model" class="input" list="agent-models" placeholder="填写模型 ID" required /><datalist id="agent-models"><option v-for="m in models" :key="m.model_id" :value="m.model_id">{{ m.name }}</option></datalist></div>
         <div class="field"><label>技能</label><select v-model="form.skill_id" class="select"><option value="">不使用技能</option><option v-for="s in skillStore.readySkills" :key="s.skill_id" :value="s.skill_id">{{ s.name }}</option></select></div>
         <div class="field"><label>最大步骤</label><input v-model.number="form.max_steps" class="input" type="number" min="1" max="100" /></div>
         <div class="field"><label>工具超时（秒）</label><input v-model.number="form.tool_timeout_seconds" class="input" type="number" min="1" /></div>
@@ -86,7 +90,7 @@ function eventText(event: AgentEvent) {
       </div>
       <div class="field"><label>允许使用的工具</label><div class="tool-grid"><label v-for="tool in agentStore.tools" :key="tool.name" class="tool-option"><input type="checkbox" :checked="form.allowed_tools.includes(tool.name)" @change="toggleTool(tool.name)" /><span><strong>{{ toolLabel(tool.name) }}</strong><code>{{ tool.name }}</code><small>{{ toolDescription(tool.name, tool.description) }}</small></span></label></div></div>
       <label class="network"><input v-model="form.allow_network" type="checkbox" /> 允许本次运行调用网络工具</label>
-      <div class="inline-actions"><button class="button-primary" :disabled="agentStore.isCreating || !form.input.trim()">{{ agentStore.isCreating ? '创建中…' : '创建并运行' }}</button></div>
+      <div class="inline-actions"><button class="button-primary" :disabled="agentStore.isCreating || !form.input.trim() || !form.provider_id || !form.model.trim()">{{ agentStore.isCreating ? '创建中…' : '创建并运行' }}</button></div>
     </form>
 
     <div v-else class="trace-layout">

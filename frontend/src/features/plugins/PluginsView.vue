@@ -27,6 +27,7 @@ async function uninstall(id: string, name: string) { if (!confirm(`卸载“${na
       <div v-if="pluginStore.selectedPlugin.dependent_skills?.length" class="notice-banner last-error">依赖此插件的 Skill：{{ pluginStore.selectedPlugin.dependent_skills.join('、') }}</div>
       <PluginMcpPanel :plugin="pluginStore.selectedPlugin" />
     </div>
+    <div v-else-if="!pluginStore.plugins.length" class="empty-state"><div><strong>{{ pluginStore.isLoading ? '正在加载…' : pluginStore.error ? '加载失败' : '尚未安装' }}</strong><button class="button-secondary" @click="pluginStore.loadPlugins">重新加载</button></div></div>
     <div v-else class="feature-grid"><article v-for="plugin in pluginStore.plugins" :key="plugin.plugin_id" class="item-card extension-card" @click="pluginStore.selectPlugin(plugin.plugin_id)"><div class="extension-title"><AppIcon :icon="Connection" :size="22" /><div><strong>{{ plugin.name }}</strong><p>v{{ plugin.version }}</p></div><span class="badge" :class="{ success: plugin.status === 'ready', error: plugin.status === 'error', warning: plugin.status === 'permission_required' }">{{ plugin.status }}</span></div><p class="muted">{{ plugin.description }}</p><p class="subtle">{{ plugin.permissions.length }} 项权限 · {{ plugin.contributions.length }} 项 Contribution</p></article></div>
   </section>
 </template>

@@ -39,11 +39,12 @@ const saveStatusColor = computed(() => {
 
 const indexStatusText = computed(() => {
   const s = settingsStore.indexStatus.status
-  return s === 'idle' ? '索引就绪' : s === 'indexing' ? `索引中 (${settingsStore.indexStatus.pending_jobs})` : '索引错误'
+  return s === 'unknown' ? '索引状态未获取' : s === 'idle' ? '索引就绪' : s === 'indexing' ? `索引中 (${settingsStore.indexStatus.pending_jobs})` : '索引错误'
 })
 
 const aiCoreStatusText = computed(() => {
   const map: Record<string, string> = {
+    unknown: 'AI Core 状态未获取',
     starting: 'AI Core 启动中',
     running: 'AI Core 运行中',
     stopped: 'AI Core 已停止',
