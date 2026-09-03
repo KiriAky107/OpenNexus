@@ -436,6 +436,44 @@ def test_fts_pagination_is_not_truncated_at_one_thousand(vault) -> None:
     assert len(response.items) == 10
 
 
+def test_fts_score_threshold_filters_before_total(vault) -> None:
+    """score_threshold 先于计数与分页生效：total 反映过滤后数量，与 items 一致。
+
+    高阈值过滤掉全部结果时 total==0 且 items 为空，杜绝「空页但 total>0」的
+    不一致（审阅 P2-7）。
+    """
+    from app.retrieval.engine import engine
+    from app.services import note_service
+
+    # 10 个 block，含「目标」次数递增，bm25 分数各异，min-max 归一化后分数落在 [0,1]
+    markdown = "\n\n".join(f"{'目标' * i} 分隔内容" for i in range(1, 11))
+    asyncio.run(
+        note_service.create_note(title="阈值过滤", markdown=markdown, folder="", tags=[])
+    )
+
+    all_hits = asyncio.run(
+        engine.search(
+            SearchRequest(query="目标", mode=SearchMode.fts, limit=20, score_threshold=0.0)
+        )
+    )
+    filtered = asyncio.run(
+        engine.search(
+            SearchRequest(query="目标", mode=SearchMode.fts, limit=20, score_threshold=0.5)
+        )
+    )
+    none = asyncio.run(
+        engine.search(
+            SearchRequest(query="目标", mode=SearchMode.fts, limit=20, score_threshold=2.0)
+        )
+    )
+
+    assert all_hits.page.total >= 10
+    assert 0 < filtered.page.total < all_hits.page.total  # 阈值过滤掉部分而非全部
+    assert filtered.page.total == len(filtered.items)
+    assert none.page.total == 0
+    assert none.items == []
+
+
 # --------------------------------------------------------------------------- #
 # 审阅回归：PATCH tags 语义 / 向量-块一致性 / 过滤漏召回 / rebuild 语义与回滚
 # --------------------------------------------------------------------------- #

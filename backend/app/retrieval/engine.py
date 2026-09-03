@@ -29,6 +29,8 @@ from app.textutils import make_snippet, match_query
 CANDIDATE_POOL = 50
 # 分页窗口上限：候选池至少覆盖 offset+limit，但设上限防止超大 offset 撑爆内存
 MAX_CANDIDATE_POOL = 200
+# FTS 全量取回上限：统一归一化 + 阈值过滤后再分页，保证阈值语义跨页一致
+FTS_FETCH_LIMIT = 5000
 # 带 metadata 过滤时放大召回倍数，缓解「先截断候选池再过滤」造成的漏召回
 OVERSCAN_FACTOR = 4
 
@@ -137,15 +139,18 @@ class RetrievalEngine:
         )
 
     def _search_fts(self, request: SearchRequest) -> SearchResponse:
-        """FTS 专用路径：过滤、COUNT 与分页全部在 SQLite 中完成。"""
+        """FTS 专用路径：先取全量命中（≤FTS_FETCH_LIMIT），统一归一化 + 阈值过滤后再分页。
+
+        阈值过滤必须在计数与分页之前完成，否则 score_threshold 只作用于当前页，
+        且返回的 total 与 items 数量不一致（如 items 为空但 total 非零）。"""
         match = match_query(request.query)
         if not match:
             return self._empty(request)
 
-        fts_hits, total = repository.fts_search_page(
+        fts_hits, _ = repository.fts_search_page(
             match=match,
-            limit=request.limit,
-            offset=request.offset,
+            limit=FTS_FETCH_LIMIT,
+            offset=0,
             folders=request.folders,
             note_ids=request.note_ids,
             tags=request.tags,
@@ -155,18 +160,18 @@ class RetrievalEngine:
             updated_to=request.updated_to,
         )
         if not fts_hits:
-            return SearchResponse(
-                query=request.query,
-                mode=request.mode,
-                page=PageMeta(total=total, limit=request.limit, offset=request.offset),
-            )
+            return self._empty(request)
 
-        hits = {h.block_id: h for h in repository.get_block_hits([hit.block_id for hit in fts_hits])}
-        ordered = normalize_scores(
-            [(hit.block_id, -hit.bm25) for hit in fts_hits if hit.block_id in hits]
-        )
+        ordered = normalize_scores([(hit.block_id, -hit.bm25) for hit in fts_hits])
         ordered = [(bid, score) for bid, score in ordered if score >= request.score_threshold]
-        items = [self._build_result(hits[block_id], request, score) for block_id, score in ordered]
+        total = len(ordered)
+        page = ordered[request.offset : request.offset + request.limit]
+        hits = {h.block_id: h for h in repository.get_block_hits([bid for bid, _ in page])}
+        items = [
+            self._build_result(hits[block_id], request, score)
+            for block_id, score in page
+            if block_id in hits
+        ]
         return SearchResponse(
             query=request.query,
             mode=request.mode,

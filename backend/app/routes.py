@@ -72,7 +72,7 @@ from app.agent import AgentCapacityError, AgentRunNotFoundError
 from app.benchmarks import datasets as benchmark_datasets
 from app.benchmarks import service as benchmark_service
 from app.container import container
-from app.errors import ApiError, not_implemented
+from app.errors import ApiError
 from app.extensions import ExtensionError
 from app.providers.registry import ProviderNotFoundError
 from app.providers.factory import UnsupportedProviderError
@@ -868,18 +868,6 @@ async def create_rag_benchmark(request: RAGRunRequest) -> BenchmarkRun:
     return await benchmark_service.create_rag_run(request)
 
 
-@router.post(
-    "/benchmarks/agent/runs",
-    response_model=BenchmarkRun,
-    status_code=202,
-    tags=["Benchmark"],
-)
-async def create_agent_benchmark() -> BenchmarkRun:
-    # Agent Benchmark 基础设施在 RAG Benchmark 之后单独交付，先占位契约
-    not_implemented("Agent Benchmark")
-    raise AssertionError("unreachable")
-
-
 @router.get(
     "/benchmarks/runs",
     response_model=BenchmarkRunListResponse,
@@ -945,18 +933,38 @@ async def cancel_benchmark_run(run_id: str) -> OperationResponse:
 async def benchmark_events(
     run_id: str,
     after_sequence: int = Query(default=-1, ge=-1),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
 ) -> StreamingResponse:
     if benchmark_service.get_run(run_id) is None:
         raise ApiError(
             404, "BENCHMARK_RUN_NOT_FOUND", "benchmark run not found", {"run_id": run_id}
         )
 
+    # SSE 断线重连：Last-Event-ID 优先于 after_sequence，用于从上次收到的事件继续
+    cursor = after_sequence
+    if last_event_id is not None:
+        try:
+            cursor = int(last_event_id)
+        except ValueError as exc:
+            raise ApiError(
+                400,
+                "BENCHMARK_EVENT_CURSOR_INVALID",
+                "Last-Event-ID must be an integer sequence.",
+                {"last_event_id": last_event_id},
+            ) from exc
+        if cursor < -1:
+            raise ApiError(
+                400,
+                "BENCHMARK_EVENT_CURSOR_INVALID",
+                "Last-Event-ID must be greater than or equal to -1.",
+            )
+
     async def stream() -> AsyncIterator[str]:
         # 先订阅（保证订阅之后产生的事件也能收到），再回放历史事件，最后实时输出新事件
         queue = benchmark_service.subscribe(run_id)
-        last_sequence = after_sequence
+        last_sequence = cursor
         for event in benchmark_service.get_events(run_id):
-            if event.sequence <= after_sequence:
+            if event.sequence <= cursor:
                 continue
             yield as_sse(event.event.value, event.model_dump_json(), event_id=event.sequence)
             last_sequence = event.sequence
@@ -969,7 +977,11 @@ async def benchmark_events(
                     continue
                 yield as_sse(event.event.value, event.model_dump_json(), event_id=event.sequence)
                 last_sequence = event.sequence
-                if event.event in (BenchmarkEventType.run_completed, BenchmarkEventType.run_failed):
+                if event.event in (
+                    BenchmarkEventType.run_completed,
+                    BenchmarkEventType.run_failed,
+                    BenchmarkEventType.run_cancelled,
+                ):
                     break
         finally:
             benchmark_service.unsubscribe(run_id, queue)
