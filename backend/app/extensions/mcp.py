@@ -74,12 +74,14 @@ class McpStdioClient:
         command: list[str],
         *,
         cwd: Path,
+        environment: dict[str, str] | None = None,
         on_seen: Callable[[], None],
         on_broken: Callable[[str], None],
         on_tools_changed: Callable[[], None],
     ) -> None:
         self.command = command
         self.cwd = cwd
+        self.environment = environment or {}
         self.on_seen = on_seen
         self.on_broken = on_broken
         self.on_tools_changed = on_tools_changed
@@ -99,6 +101,7 @@ class McpStdioClient:
         # 平台级沙箱启动器；uvx 只隔离 Python 依赖，不能替代系统权限限制。
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         environment = _subprocess_environment()
+        environment.update(self.environment)
         environment.setdefault("PYTHONUNBUFFERED", "1")
         try:
             self.process = subprocess.Popen(
@@ -383,6 +386,10 @@ class McpBridge:
         package_path: Path,
         declared_permissions: list[str],
         on_unavailable: Callable[[str, str], None],
+        *,
+        command_override: list[str] | None = None,
+        environment: dict[str, str] | None = None,
+        tool_source: str = "plugin",
     ) -> list[McpDiscoveredTool]:
         if backend.transport != "stdio":
             raise McpBridgeError(
@@ -390,7 +397,7 @@ class McpBridge:
                 "Phase C only supports the MCP stdio transport.",
                 status_code=501,
             )
-        command = self._resolve_command(package_path, backend)
+        command = command_override or self._resolve_command(package_path, backend)
         now = datetime.now(timezone.utc)
         status = PluginHostStatus(
             plugin_id=plugin_id,
@@ -420,6 +427,7 @@ class McpBridge:
         client = McpStdioClient(
             command,
             cwd=package_path,
+            environment=environment,
             on_seen=seen,
             on_broken=broken,
             on_tools_changed=tools_changed,
@@ -470,7 +478,7 @@ class McpBridge:
             status.server_version = _optional_string(server_info.get("version"))
             client.notify("notifications/initialized")
             discovered = self._discover_tools(
-                plugin_id, client, backend, declared_permissions
+                plugin_id, client, backend, declared_permissions, tool_source
             )
             status.status = PluginHostState.ready
             status.tools_count = len(discovered)
@@ -601,6 +609,7 @@ class McpBridge:
         client: McpStdioClient,
         backend: PluginBackend,
         declared_permissions: list[str],
+        tool_source: str,
     ) -> list[McpDiscoveredTool]:
         discovered: list[McpDiscoveredTool] = []
         cursor: str | None = None
@@ -620,7 +629,7 @@ class McpBridge:
                 )
             for raw in raw_tools:
                 discovered.append(
-                    self._map_tool(plugin_id, raw, declared_permissions)
+                    self._map_tool(plugin_id, raw, declared_permissions, tool_source)
                 )
                 if len(discovered) > MAX_MCP_TOOLS:
                     raise McpBridgeError(
@@ -648,7 +657,10 @@ class McpBridge:
 
     @staticmethod
     def _map_tool(
-        plugin_id: str, raw: Any, declared_permissions: list[str]
+        plugin_id: str,
+        raw: Any,
+        declared_permissions: list[str],
+        tool_source: str = "plugin",
     ) -> McpDiscoveredTool:
         if not isinstance(raw, dict):
             raise McpBridgeError(
@@ -712,7 +724,7 @@ class McpBridge:
                 description=description if isinstance(description, str) else remote_name,
                 parameters=schema,
                 permission=permission,
-                source="plugin",
+                source=tool_source,
             ),
         )
 

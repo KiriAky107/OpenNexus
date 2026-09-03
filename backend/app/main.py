@@ -19,6 +19,7 @@ async def lifespan(_: FastAPI):
     yield
     # 第三方 MCP Server 必须跟随 AI Core 退出，不能遗留孤儿进程。
     container.plugins.shutdown()
+    container.mcp_servers.shutdown()
 
 
 app = FastAPI(
