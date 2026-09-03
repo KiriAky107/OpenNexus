@@ -416,6 +416,39 @@ export interface ProviderPreset {
   base_url: string
   default_credential_id?: string | null
   requires_credential: boolean
+  logo_id?: string
+  description?: string
+  capabilities?: string[]
+}
+
+export type ProviderUpdateRequest = Partial<Omit<ProviderConfig, 'provider_id' | 'credential_id' | 'base_url'>> & {
+  credential_id?: string | null
+  base_url?: string | null
+}
+
+export type RoutingCapability = 'embedding' | 'transcription' | 'speaker_matching'
+
+export interface ModelBinding {
+  provider_id: string
+  model: string
+  endpoint: string
+  dimensions?: number | null
+}
+
+export interface ModelRoutingConfig {
+  version: number
+  embedding: ModelBinding | null
+  transcription: ModelBinding | null
+  speaker_matching: ModelBinding | null
+}
+
+export interface ModelRoutingResponse {
+  config: ModelRoutingConfig
+  local_backends: Array<{
+    capability: RoutingCapability
+    status: 'placeholder' | 'not_installed' | 'ready'
+    message: string
+  }>
 }
 
 // ============ Tasks ============
@@ -721,6 +754,9 @@ export interface ApiProviderPreset {
   base_url: string
   default_credential_id?: string | null
   requires_credential: boolean
+  logo_id?: string
+  description?: string
+  capabilities?: string[]
 }
 
 export interface ApiModelInfo {

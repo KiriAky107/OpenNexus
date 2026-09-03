@@ -94,6 +94,8 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
         created_at=datetime.now(timezone.utc),
     ))
     try:
+        # Deleting blocks also cascades every space in routed_block_vectors;
+        # index_note repopulates only the currently successful API space.
         repository.clear_all()
         await vector_store.clear()
         for rel, folder, markdown, created, updated in docs:

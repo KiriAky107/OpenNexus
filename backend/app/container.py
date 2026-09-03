@@ -7,6 +7,7 @@ from app.config import BACKEND_DIR, get_settings
 from app.extensions import PluginRuntime, SkillRuntime
 from app.extensions.mcp_registry import McpServerRegistry
 from app.providers import MockProvider, ProviderFactory, ProviderRegistry
+from app.providers.routing import ModelRoutingService
 from app.providers.credentials import (
     ChainedCredentialResolver,
     EncryptedCredentialStore,
@@ -18,6 +19,7 @@ from app.providers.credentials import (
 class ApplicationContainer:
     providers: ProviderRegistry
     provider_factory: ProviderFactory
+    model_routing: ModelRoutingService
     credentials: EncryptedCredentialStore
     tools: ToolRegistry
     permissions: PermissionManager
@@ -33,7 +35,7 @@ def build_container() -> ApplicationContainer:
     provider_factory = ProviderFactory(
         ChainedCredentialResolver(credentials, EnvironmentCredentialResolver())
     )
-    providers = ProviderRegistry()
+    providers = ProviderRegistry(provider_factory)
     providers.register(
         ProviderConfig(
             provider_id="mock",
@@ -86,6 +88,7 @@ def build_container() -> ApplicationContainer:
     return ApplicationContainer(
         providers=providers,
         provider_factory=provider_factory,
+        model_routing=ModelRoutingService(providers, provider_factory.credentials),
         credentials=credentials,
         tools=tools,
         permissions=permissions,
