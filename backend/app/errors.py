@@ -36,7 +36,11 @@ async def validation_error_handler(_: Request, exc: RequestValidationError) -> J
         error=ErrorDetail(
             code="VALIDATION_ERROR",
             message="Request validation failed.",
-            details={"errors": exc.errors()},
+            # Pydantic ctx can contain exception objects; input may contain API keys.
+            details={"errors": [
+                {key: error[key] for key in ("type", "loc", "msg") if key in error}
+                for error in exc.errors()
+            ]},
         )
     )
     return JSONResponse(status_code=422, content=jsonable_encoder(body))

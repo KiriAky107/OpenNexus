@@ -221,8 +221,9 @@ def test_config_snapshot_records_index_and_models() -> None:
 
     snapshot = run.config_snapshot
     assert snapshot["index_meta"] is not None
-    assert snapshot["embedding"]["version"]
-    assert snapshot["embedding"]["dim"]
+    assert snapshot["embedding"]["policy"] == "per_case"
+    assert snapshot["local_embedding"]["version"]
+    assert snapshot["local_embedding"]["dim"]
     assert snapshot["reranker"]["version"]
     assert snapshot["retrieval"]["rrf_k"] == 60
 

@@ -1,0 +1,19 @@
+Lobe Icons — Copyright (c) 2023 LobeHub. MIT license; see LICENSE.
+Source: https://github.com/lobehub/lobe-icons
+Revision: 4aaf4ee1fb2678a7f989ea570f0f6ce14a9abf75
+Source directory: packages/static-svg/icons/
+Assets are bundled locally. Brand trademarks belong to their respective owners.
+File mapping (local: upstream):
+anthropic.svg: anthropic.svg
+baidu.svg: baidu-color.svg
+deepseek.svg: deepseek-color.svg
+hunyuan.svg: hunyuan-color.svg
+kimi.svg: kimi-color.svg
+minimax.svg: minimax-color.svg
+ollama.svg: ollama.svg
+openai.svg: openai.svg
+qwen.svg: qwen-color.svg
+siliconflow.svg: siliconcloud-color.svg
+stepfun.svg: stepfun-color.svg
+volcengine.svg: volcengine-color.svg
+zhipu.svg: zhipu-color.svg
