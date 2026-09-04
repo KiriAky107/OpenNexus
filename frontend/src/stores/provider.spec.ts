@@ -4,8 +4,6 @@ import { createPinia, setActivePinia } from 'pinia'
 import type { ProviderConfig, ProviderPreset } from '@/contracts'
 
 vi.mock('@/services/providerService', () => ({
-  mockProviders: [],
-  mockModels: {},
   listProviders: vi.fn(),
   listProviderPresets: vi.fn(),
   getCredentialStatus: vi.fn(),

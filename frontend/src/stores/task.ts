@@ -1,10 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { TaskItem, TaskStatus, TaskPriority, TaskSource } from '@/contracts'
-import { createTask as createTaskRequest, deleteTask as deleteTaskRequest, listTasks, mockTasks, updateTask as updateTaskRequest } from '@/services/taskService'
+import { createTask as createTaskRequest, deleteTask as deleteTaskRequest, listTasks, updateTask as updateTaskRequest } from '@/services/taskService'
 
 export const useTaskStore = defineStore('task', () => {
-  const tasks = ref<TaskItem[]>(mockTasks)
+  const tasks = ref<TaskItem[]>([])
   const filterStatus = ref<TaskStatus | 'all'>('all')
   const filterPriority = ref<TaskPriority | 'all'>('all')
   const filterSource = ref<TaskSource | 'all'>('all')
@@ -47,7 +47,7 @@ export const useTaskStore = defineStore('task', () => {
     const task = tasks.value.find((t) => t.task_id === taskId)
     if (task) {
       const updated = await updateTaskRequest(taskId, data)
-      Object.assign(task, updated, data)
+      Object.assign(task, updated)
     }
   }
 

@@ -126,9 +126,12 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
 
 
 def get_status() -> IndexStatus:
+    counts = repository.stats()
     if _active_job_id is not None:
-        return IndexStatus(status="running", pending_jobs=0, active_job_id=_active_job_id)
+        return IndexStatus(status="running", pending_jobs=0, active_job_id=_active_job_id,
+                           total_notes=counts["notes"], total_blocks=counts["blocks"])
     return IndexStatus(
+        total_notes=counts["notes"], total_blocks=counts["blocks"],
         status="failed" if _last_error else "idle",
         pending_jobs=0,
         last_completed_at=_last_completed_at,

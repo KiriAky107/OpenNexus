@@ -109,7 +109,7 @@ async function save() {
   error.value = ''
   saving.value = true
   try {
-    if (!form.name.trim() || (form.provider_type !== 'mock' && !form.base_url.trim())) throw new Error('请填写名称和 Base URL。')
+    if (!form.name.trim() || !form.base_url.trim()) throw new Error('请填写名称和 Base URL。')
     if (selectedPreset.value?.requires_credential && !apiKey.value.trim() && !configured.value) throw new Error('请输入 API Key。密钥将由后端加密保存。')
     // Snapshot before awaiting: closing/unmounting must never create a provider with a changed draft.
     const data = { provider_type: form.provider_type, name: form.name.trim(), base_url: form.base_url.trim() || undefined, default_model: form.default_model.trim(), enabled: form.enabled, capabilities: {}, has_credential: false }
@@ -147,9 +147,9 @@ async function save() {
           <ProviderPresetSelector :presets="presets" :model-value="form.preset_id" @update:model-value="applyPreset" />
           <p v-if="selectedPreset?.description" class="subtle">{{ selectedPreset.description }}</p>
           <div class="form-grid">
-            <label class="field"><span>接入协议</span><select v-model="form.provider_type" class="select" data-field="protocol" @change="changeConnection"><option value="openai_compatible">OpenAI Compatible</option><option value="openai_chat">OpenAI Chat</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option><option value="ollama">Ollama</option><option v-if="provider?.provider_type === 'mock'" value="mock">Mock</option></select></label>
+            <label class="field"><span>接入协议</span><select v-model="form.provider_type" class="select" data-field="protocol" @change="changeConnection"><option value="openai_compatible">OpenAI Compatible</option><option value="openai_chat">OpenAI Chat</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option><option value="ollama">Ollama</option></select></label>
             <label class="field"><span>名称</span><input v-model="form.name" class="input" data-field="name" required /></label>
-            <label class="field wide"><span>Base URL</span><input v-model="form.base_url" class="input" data-field="base-url" placeholder="https://api.example.com/v1" :required="form.provider_type !== 'mock'" @change="changeConnection" /></label>
+            <label class="field wide"><span>Base URL</span><input v-model="form.base_url" class="input" data-field="base-url" placeholder="https://api.example.com/v1" required @change="changeConnection" /></label>
             <label class="field wide"><span>API Key</span><input v-model="apiKey" class="input" type="password" autocomplete="new-password" spellcheck="false" :placeholder="configured ? '已配置，留空表示不修改' : '请输入 API Key（无鉴权服务可留空）'" /><small class="subtle">密钥由本地 AI Core 加密保存；提供商配置仅保存独立的凭据引用。</small></label>
             <p v-if="credentialLoading" class="subtle wide" role="status">正在检查凭据状态…</p>
             <p v-if="credentialError" class="error-text wide" role="alert">{{ credentialError }}</p>

@@ -42,6 +42,7 @@ const toolLabels: Record<string, string> = {
   'tasks.list': '列出任务',
   'attachments.read': '读取附件',
   'audio.transcribe': '音频转写',
+  'text.uppercase': '文本转大写',
 }
 
 const toolDescriptions: Record<string, string> = {
@@ -58,7 +59,25 @@ const toolDescriptions: Record<string, string> = {
   'tasks.update': '更新已有任务。',
   'tasks.list': '列出已持久化的任务。',
   'attachments.read': '读取由宿主管理的 UTF-8 附件。',
-  'audio.transcribe': '读取音频附件已有的宿主转写结果。',
+  'audio.transcribe': '将音频转写为文本，按模型路由使用 API 或本地后端。',
+  'text.uppercase': '将输入文本中的字母转换为大写。',
+}
+
+// MCP IDs contain a server-specific namespace. Localize the remote tool name
+// for presentation only; requests must keep using the complete original ID.
+const mcpTools: Record<string, { label: string; description: string }> = {
+  web_search: {
+    label: '网页搜索',
+    description: '搜索实时或外部网页信息。输入搜索关键词；结果包含标题、链接、摘要等信息。时效性问题可在关键词中加入日期，完整参数以服务原文为准。',
+  },
+  understand_image: {
+    label: '图像理解',
+    description: '根据提示词分析图片、描述内容或提取信息。输入分析要求和图片地址或本地路径；支持的格式与路径规则请查看服务原文。',
+  },
+}
+
+function mcpName(name: string): string | undefined {
+  return /^mcp\.[^.]+\.(.+)$/.exec(name)?.[1]
 }
 
 const permissionLabels: Record<string, string> = {
@@ -105,10 +124,17 @@ export function eventLabel(event: AgentEventType): string {
 }
 
 export function toolLabel(name: string): string {
+  const remote = mcpName(name)
+  if (remote) return mcpTools[remote]?.label ?? `MCP 工具 · ${remote}`
   return toolLabels[name] ?? name
 }
 
 export function toolDescription(name: string, fallback: string): string {
+  const remote = mcpName(name)
+  if (remote) {
+    if (/\p{Script=Han}/u.test(fallback)) return fallback
+    return mcpTools[remote]?.description ?? '暂无中文说明，请展开查看服务原文。'
+  }
   return toolDescriptions[name] ?? fallback
 }
 
