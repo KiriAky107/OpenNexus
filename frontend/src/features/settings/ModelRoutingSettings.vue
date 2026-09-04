@@ -116,7 +116,7 @@ async function save() {
       <fieldset :disabled="loading || saving || conflict">
         <article v-for="capability in capabilities" :key="capability.id" class="routing-card" :data-capability="capability.id">
           <h3>{{ capability.name }}</h3>
-          <p v-if="capability.id === 'embedding'" class="embedding-notice">更换模型或接口后，请重建全部索引。重建完成前继续使用本地检索。</p>
+          <p v-if="capability.id === 'embedding'" class="embedding-notice">保存配置或更换模型、接口后，请重建全部索引。配置成功不代表已有笔记的向量索引已更新；重建完成前可使用全文检索，混合检索会回退到全文检索。</p>
           <div class="protocols" aria-label="协议可用性">
             <span v-for="protocol in protocols" :key="protocol.id" class="badge" :class="{ 'protocol-unavailable': !['openai_chat', 'openai_compatible'].includes(protocol.id) }">{{ protocol.label }}{{ ['openai_chat', 'openai_compatible'].includes(protocol.id) ? ' · 可用' : ' · 不可用' }}</span>
           </div>

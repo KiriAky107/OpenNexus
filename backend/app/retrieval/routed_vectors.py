@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from app.database.db import connect, transaction
+from app.errors import ApiError
 from app.retrieval.vectorstore import VectorHit
 from app.retrieval.provenance import record_embedding
 
@@ -68,7 +69,7 @@ def _unit_vector(vector: list[float], dimensions: int) -> list[float]:
     return [value / norm for value in scaled]
 
 
-async def embed_remote(texts: list[str], *, accept_local=False) -> RemoteEmbeddings | None:
+async def embed_remote(texts: list[str], *, accept_local=False, strict=False) -> RemoteEmbeddings | None:
     """Return validated API vectors, or None to use the caller's local baseline.
 
     Do not use the runtime's local result: the caller may have injected its own
@@ -79,6 +80,8 @@ async def embed_remote(texts: list[str], *, accept_local=False) -> RemoteEmbeddi
     try:
         runtime = get_model_routing()
         if runtime is None:
+            if strict:
+                raise ApiError(503, "EMBEDDING_UNAVAILABLE", "Embedding 服务未就绪，请检查模型路由和本地运行环境。")
             return None
         result = await runtime.embed(texts)
         if result.source != "api" and not accept_local:
@@ -100,6 +103,10 @@ async def embed_remote(texts: list[str], *, accept_local=False) -> RemoteEmbeddi
         # Avoid logging provider exceptions containing credentials or note text.
         record_embedding(fallback_reason="REMOTE_EMBEDDING_UNAVAILABLE")
         logger.warning("Remote embedding unavailable (%s); using local index", type(exc).__name__)
+        if strict:
+            if isinstance(exc, ApiError):
+                raise
+            raise ApiError(503, "EMBEDDING_UNAVAILABLE", "Embedding 调用失败或返回无效，请检查模型路由、API 和本地模型运行状态。") from exc
         return None
 
 
@@ -154,13 +161,13 @@ def store_remote(
         logger.warning("Remote vector storage unavailable (%s); local index retained", type(exc).__name__)
 
 
-async def search_remote(query: str, *, top_k: int, accept_local=False) -> list[VectorHit] | None:
+async def search_remote(query: str, *, top_k: int, accept_local=False, strict=False) -> list[VectorHit] | None:
     """None means fallback, including any missing/invalid current-block vector.
 
     Read coverage and vectors together so concurrent note updates cannot produce
     an apparently complete subset. Never fill missing remote hits with local hits.
     """
-    batch = await embed_remote([query], accept_local=accept_local)
+    batch = await embed_remote([query], accept_local=accept_local, strict=strict)
     if batch is None:
         return None
     record_embedding(attempted_space={"model_id": batch.space_id, "dimensions": batch.dimensions})
@@ -173,6 +180,10 @@ async def search_remote(query: str, *, top_k: int, accept_local=False) -> list[V
                 ).fetchone()
                 if exists is None:
                     record_embedding(fallback_reason="REMOTE_INDEX_MISSING")
+                    if not conn.execute("SELECT 1 FROM blocks LIMIT 1").fetchone():
+                        return []
+                    if strict:
+                        raise ValueError("semantic index missing")
                     return None
                 rows = conn.execute(
                     """SELECT b.block_id, r.vector
@@ -191,7 +202,12 @@ async def search_remote(query: str, *, top_k: int, accept_local=False) -> list[V
                         score = math.fsum(a * b for a, b in zip(batch.vectors[0], vector))
                         yield VectorHit(id=row["block_id"], score=max(0.0, min(1.0, score)))
 
-                result = heapq.nlargest(top_k, hits(), key=lambda hit: hit.score)
+                try:
+                    result = heapq.nlargest(top_k, hits(), key=lambda hit: hit.score)
+                finally:
+                    # Exceptions may retain the generator/traceback; finalize its
+                    # cursor now so a subsequent rebuild can acquire a write lock.
+                    rows.close()
                 record_embedding(source=batch.source, model_id=batch.space_id,
                                  dimensions=batch.dimensions, fallback_reason=None)
                 return result
@@ -200,4 +216,8 @@ async def search_remote(query: str, *, top_k: int, accept_local=False) -> list[V
     except Exception as exc:
         record_embedding(fallback_reason="REMOTE_INDEX_UNAVAILABLE")
         logger.debug("Remote vector search unavailable (%s); using local index", type(exc).__name__)
+        if strict:
+            raise ApiError(409, "SEMANTIC_INDEX_UNAVAILABLE",
+                           "Embedding 已可用，但当前模型的向量索引缺失、不完整或已失效。请在「设置 → 索引与模型」中重建全部索引。",
+                           {"model_id": batch.space_id, "dimensions": batch.dimensions, "source": batch.source}) from exc
         return None

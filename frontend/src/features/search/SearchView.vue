@@ -46,6 +46,12 @@ async function openResult(result: SearchResult) {
       </div>
     </form>
     <div v-if="searchStore.error" class="error-banner">{{ searchStore.error }}</div>
+    <div v-if="searchStore.historyError" class="notice-banner">{{ searchStore.historyError }}</div>
+    <div v-if="searchStore.recentQueries.length" class="search-history">
+      <span class="subtle">最近搜索（保存在当前浏览器）</span>
+      <button v-for="item in searchStore.recentQueries" :key="item" class="button-secondary" @click="searchStore.query = item; submitSearch()">{{ item }}</button>
+      <button class="button-secondary" @click="searchStore.clearHistory">清空记录</button>
+    </div>
     <div v-if="searchStore.vectorUnavailable" class="notice-banner">向量索引不可用，已保留全文检索能力。</div>
     <div v-if="searchStore.results.length" class="results-header">
       <span>找到 {{ searchStore.total }} 条结果</span><span class="badge info">{{ searchStore.mode }}</span>
@@ -69,6 +75,7 @@ async function openResult(result: SearchResult) {
 .search-page > * { width: min(100%, 1040px); margin-inline: auto; }
 .search-form { display: grid; grid-template-columns: 1fr auto; gap: var(--space-md); margin-bottom: var(--space-lg); }
 .search-input { height: 44px; font-size: var(--font-size-lg); }
+.search-history { display: flex; flex-wrap: wrap; gap: var(--space-sm); margin-bottom: var(--space-md); }
 .advanced { grid-column: 1 / -1; }
 .results-header, .result-title, .result-meta { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); }
 .results-header { margin: var(--space-xl) 0 var(--space-md); color: var(--color-text-secondary); }

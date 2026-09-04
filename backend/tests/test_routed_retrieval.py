@@ -464,3 +464,76 @@ def test_missing_runtime_uses_unchanged_local_retrieval(runtime, monkeypatch):
         assert runtime.calls == []
 
     asyncio.run(scenario())
+
+
+@pytest.fixture
+def production_engine(monkeypatch):
+    from app.local_models.runtime import LocalEmbedding
+    embedding = LocalEmbedding()
+    monkeypatch.setattr(note_service, "embedding", embedding)
+    return RetrievalEngine(embedding, LexicalReranker(), SqliteVecStore(), route_embeddings=True)
+
+
+@pytest.mark.parametrize("source", ["api", "local"])
+def test_real_embedding_route_rebuilds_missing_space(runtime, production_engine, source):
+    from app.errors import ApiError
+    runtime.source = source
+
+    async def scenario():
+        await seed()
+        runtime.model_id = "new-configured-space"
+        with pytest.raises(ApiError) as error:
+            await production_engine.search(request())
+        assert error.value.code == "SEMANTIC_INDEX_UNAVAILABLE"
+        assert "Embedding 已可用" in error.value.message
+        assert error.value.details["source"] == source
+        await index_service.rebuild(IndexRebuildRequest())
+        assert (await production_engine.search(request())).items
+
+    asyncio.run(scenario())
+
+
+def test_real_embedding_failure_is_not_reported_as_missing_configuration(runtime, production_engine):
+    from app.errors import ApiError
+
+    async def scenario():
+        await seed()
+        runtime.error = ApiError(503, "LOCAL_MODEL_TIMEOUT", "本地模型推理超时。", {"fallback_reason": "PROVIDER_TIMEOUT"})
+        with pytest.raises(ApiError) as error:
+            await production_engine.search(request())
+        assert error.value.code == "LOCAL_MODEL_TIMEOUT"
+        assert error.value.details["fallback_reason"] == "PROVIDER_TIMEOUT"
+        assert (await production_engine.search(SearchRequest(query="apple", mode=SearchMode.hybrid))).items
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["inference", "storage", "space_change"])
+def test_real_embedding_rebuild_failure_preserves_index(runtime, production_engine, monkeypatch, failure):
+    from app.errors import ApiError
+
+    async def scenario():
+        await seed()
+        tables = ("notes", "blocks", "blocks_fts", "index_meta", "routed_block_vectors")
+        before = {table: [tuple(r) for r in rows(f"SELECT * FROM {table}")] for table in tables}
+        if failure == "inference":
+            runtime.error = ApiError(503, "LOCAL_MODEL_TIMEOUT", "本地模型推理超时。")
+        elif failure == "storage":
+            monkeypatch.setattr(routed_vectors, "store_remote", lambda *args: None)
+        else:
+            original = runtime.embed
+            async def changing(texts):
+                runtime.model_id += "x"
+                return await original(texts)
+            monkeypatch.setattr(runtime, "embed", changing)
+        with pytest.raises(ApiError):
+            await index_service.rebuild(IndexRebuildRequest())
+        assert index_service.get_status().status == "failed"
+        after = {table: [tuple(r) for r in rows(f"SELECT * FROM {table}")] for table in tables}
+        assert before == after
+
+    asyncio.run(scenario())
+
+
+def test_empty_vault_vector_search_returns_empty(runtime, production_engine):
+    assert asyncio.run(production_engine.search(request())).items == []

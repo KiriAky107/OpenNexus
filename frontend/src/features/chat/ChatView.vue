@@ -66,7 +66,8 @@ async function openCitation(citation: Citation) {
         <option v-for="provider in providerStore.enabledProviders" :key="provider.provider_id" :value="provider.provider_id">{{ provider.name }}</option>
       </select></div>
       <div class="field compact"><label>模型 ID</label><input v-model="chatStore.selectedModel" class="input" list="chat-models" placeholder="填写模型 ID" /><datalist id="chat-models"><option v-for="model in availableModels" :key="model.model_id" :value="model.model_id">{{ model.name }}</option></datalist></div>
-      <span class="subtle">知识库问答与技能请使用智能体；普通聊天尚未接入这些能力。</span>
+      <label class="rag-toggle"><input v-model="chatStore.useRag" type="checkbox" :disabled="chatStore.isStreaming" />检索知识库</label>
+      <span class="subtle">开启后，将相关笔记片段发送给所选模型，并显示来源。技能调用请使用智能体。</span>
     </header>
     <div v-if="loadError || providerStore.error" class="error-banner chat-error">{{ loadError || providerStore.error }}</div>
     <main class="message-timeline">

@@ -261,6 +261,7 @@ class ChatRequest(ModelRequest):
 
 
 class ModelEventType(str, Enum):
+    citation = "Citation"
     text_delta = "TextDelta"
     thinking_delta = "ThinkingDelta"
     tool_call_start = "ToolCallStart"
