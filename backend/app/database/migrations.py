@@ -120,6 +120,13 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY(job_id, revision, options_hash)
     );
     """,
+    # v5: application-owned search history, shared by web and desktop clients.
+    """
+    CREATE TABLE IF NOT EXISTS search_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        query TEXT NOT NULL UNIQUE
+    );
+    """,
 ]
 
 
