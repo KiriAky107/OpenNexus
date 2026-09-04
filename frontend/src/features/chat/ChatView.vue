@@ -22,18 +22,28 @@ const availableModels = computed(() => providerStore.modelsByProvider[chatStore.
 onMounted(async () => {
   try {
     await Promise.all([providerStore.loadProviders(), skillStore.loadSkills()])
-    chatStore.selectedProviderId = providerStore.defaultProviderId
+    if (providerStore.error) return
+    const selected = providerStore.enabledProviders.find(p => p.provider_id === chatStore.selectedProviderId)
+    if (!selected) {
+      chatStore.selectedProviderId = providerStore.defaultProviderId
+    } else {
+      await refreshModels(selected.provider_id)
+    }
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : '无法加载 AI 配置，请检查后端连接。'
   }
 })
 
-watch(() => chatStore.selectedProviderId, async (providerId) => {
-  chatStore.selectedModel = providerStore.providers.find(p => p.provider_id === providerId)?.default_model ?? ''
+async function refreshModels(providerId: string) {
   loadError.value = ''
   if (!providerId) return
   try { await providerStore.loadModels(providerId) }
   catch (error) { if (chatStore.selectedProviderId === providerId) loadError.value = error instanceof Error ? error.message : '模型列表加载失败，请手动填写模型 ID。' }
+}
+
+watch(() => chatStore.selectedProviderId, async (providerId) => {
+  chatStore.selectedModel = providerStore.providers.find(p => p.provider_id === providerId)?.default_model ?? ''
+  await refreshModels(providerId)
 })
 
 function send() { void chatStore.sendMessage(chatStore.inputText) }
