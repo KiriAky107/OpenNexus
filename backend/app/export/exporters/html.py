@@ -1,7 +1,8 @@
 """HtmlExporter：Document AST → 完整 HTML5 文档（内嵌基础 CSS）。
 
-对无法静态表达的节点（mermaid / function_plot）渲染为占位代码块并记 warning，不静默丢失；
-严重内容缺失由 service 层以 EXPORT_UNSUPPORTED_CONTENT 判定，本层只负责逐节点渲染。
+mermaid 等无法静态表达的节点渲染为占位代码块并记 warning，不静默丢失；function_plot
+解析为静态 SVG 内嵌（解析失败回退占位并转诊断）；严重内容缺失由 service 层以
+EXPORT_UNSUPPORTED_CONTENT 判定，本层只负责逐节点渲染。
 """
 
 from __future__ import annotations
@@ -12,9 +13,10 @@ from urllib.parse import urlparse
 
 from app.contracts import ExportOptions
 from app.export.document import Document, DocumentNode, ExportResult
+from app.plot.parser import parse_source
+from app.plot.render import render_svg
 
 _MERMAID_WARNING = "mermaid 需前端渲染，已保留为占位代码块"
-_FUNCTION_PLOT_WARNING = "函数图像渲染将在后续版本提供，已保留为占位代码块"
 _RAW_HTML_WARNING = "原始 HTML 已按纯文本转义保留"
 
 # 链接/图片地址允许的协议；无 scheme 的相对地址视为安全，其余协议一律降级
@@ -44,6 +46,8 @@ pre { background: #f6f8fa; padding: 14px 16px; border-radius: 6px; overflow-x: a
 pre.code-theme-github-dark { background: #0d1117; color: #c9d1d9; }
 pre code { background: none; padding: 0; }
 pre.mermaid, pre.function-plot { border: 1px dashed #d0d7de; }
+figure.function-plot { margin: 1em 0; text-align: center; }
+figure.function-plot svg { max-width: 100%; height: auto; }
 blockquote { margin: 0.8em 0; padding: 0.2em 1em; border-left: 4px solid #d0d7de; color: #57606a; }
 img { max-width: 100%; }
 table { border-collapse: collapse; margin: 0.8em 0; }
@@ -193,9 +197,21 @@ class HtmlExporter:
         warnings.append(_MERMAID_WARNING)
         return f'<pre class="mermaid">{html.escape(node.text)}</pre>'
 
+    @staticmethod
+    def _format_plot_diagnostic(diag) -> str:
+        loc = f"（第 {diag.line} 行）" if diag.line else ""
+        return f"函数图像：{diag.message}{loc}"
+
     def _render_function_plot(self, node: DocumentNode, warnings: list[str]) -> str:
-        warnings.append(_FUNCTION_PLOT_WARNING)
-        return f'<pre class="function-plot">{html.escape(node.text)}</pre>'
+        # 解析 fenced 源码：有合法 plot 且无 error → 内嵌静态 SVG；否则回退占位并转诊断
+        parsed = parse_source(node.text)
+        for diag in parsed.diagnostics:
+            warnings.append(self._format_plot_diagnostic(diag))
+        if parsed.plot is None:
+            return f'<pre class="function-plot">{html.escape(node.text)}</pre>'
+        rendered = render_svg(parsed.plot)
+        warnings.extend(rendered.warnings)
+        return f'<figure class="function-plot">{rendered.content}</figure>'
 
     def _render_math_block(self, node: DocumentNode, warnings: list[str]) -> str:
         return f'<div class="math-block">$${html.escape(node.text)}$$</div>'
