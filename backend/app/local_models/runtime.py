@@ -70,9 +70,6 @@ def configure(request):
 
 
 def interpreter():
-    from app.local_models import components
-    if not os.getenv("APP_MODEL_PYTHON") and configuration().device == "cuda" and components.ready():
-        return components.ROOT / "Scripts/python.exe"
     return Path(os.getenv("APP_MODEL_PYTHON", str(BACKEND_DIR / ".venv-models" / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))))
 
 
