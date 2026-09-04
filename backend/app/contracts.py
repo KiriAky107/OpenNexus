@@ -2,7 +2,14 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 
 class Contract(BaseModel):
@@ -1160,3 +1167,88 @@ class BenchmarkReport(Contract):
     cases: list[RAGCaseResult] = Field(default_factory=list)
     error: str | None = None
     error_code: str | None = None
+
+
+# Export（多格式文档导出）
+class ExportStatus(str, Enum):
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class ExportFormat(str, Enum):
+    html = "html"
+    pdf = "pdf"
+    docx = "docx"
+
+
+class ExportSourceType(str, Enum):
+    note = "note"
+    markdown = "markdown"
+
+
+class ExportSource(Contract):
+    """导出源：note 引用已索引笔记，markdown 用于未保存预览（不持久化）。"""
+
+    type: ExportSourceType
+    note_id: str | None = None
+    markdown: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_source(self) -> "ExportSource":
+        if self.type == ExportSourceType.note and not self.note_id:
+            raise ValueError("note source requires note_id")
+        if self.type == ExportSourceType.markdown and not self.markdown:
+            raise ValueError("markdown source requires markdown")
+        return self
+
+
+class ExportOptions(Contract):
+    theme_id: str = "light"
+    include_title: bool = True
+    include_metadata: bool = False
+    page_size: str = "A4"
+    code_theme: str = "github-light"
+
+
+class ExportRequest(Contract):
+    source: ExportSource
+    format: ExportFormat
+    options: ExportOptions = Field(default_factory=ExportOptions)
+
+
+class ExportProgress(Contract):
+    phase: str
+    current: int
+    total: int
+    percent: float | None = None
+    message: str | None = None
+
+
+class ExportFile(Contract):
+    file_name: str
+    mime_type: str
+    size: int
+    sha256: str
+    expires_at: datetime
+
+
+class ExportJob(Contract):
+    job_id: str
+    status: ExportStatus
+    format: ExportFormat
+    progress: ExportProgress | None = None
+    file: ExportFile | None = None
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+    error_code: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class ExportJobListResponse(Contract):
+    items: list[ExportJob] = Field(default_factory=list)
+    page: PageMeta = Field(default_factory=PageMeta)

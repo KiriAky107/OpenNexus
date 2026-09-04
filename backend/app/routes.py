@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Header, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.agent import AgentCapacityError, AgentRunNotFoundError
 from app.container import container
@@ -48,6 +48,11 @@ from app.contracts import (
     ModelRoutingResponse,
     SpeakerMatchRequest,
     SpeakerMatchResult,
+    ExportFormat,
+    ExportJob,
+    ExportJobListResponse,
+    ExportRequest,
+    ExportStatus,
     Note,
     NoteCreateRequest,
     NoteListResponse,
@@ -96,8 +101,10 @@ from app.contracts import (
 from app.agent import AgentCapacityError, AgentRunNotFoundError
 from app.benchmarks import datasets as benchmark_datasets
 from app.benchmarks import service as benchmark_service
+from app.config import get_settings
 from app.container import container
 from app.errors import ApiError
+from app.export import service as export_service
 from app.extensions import ExtensionError
 from app.extensions.mcp_registry import McpRegistryError
 from app.providers.base import ProviderError
@@ -1310,3 +1317,80 @@ async def get_benchmark_report(run_id: str) -> BenchmarkReport:
             404, "BENCHMARK_RUN_NOT_FOUND", "benchmark report not found", {"run_id": run_id}
         )
     return report
+
+
+@router.post(
+    "/exports",
+    response_model=ExportJob,
+    status_code=202,
+    tags=["Export"],
+)
+async def create_export(request: ExportRequest) -> ExportJob:
+    return await export_service.create_export(request)
+
+
+@router.get(
+    "/exports",
+    response_model=ExportJobListResponse,
+    tags=["Export"],
+)
+async def list_exports(
+    status: ExportStatus | None = Query(default=None),
+    format: ExportFormat | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> ExportJobListResponse:
+    items, total = export_service.list_exports(
+        status=status, format=format, limit=limit, offset=offset
+    )
+    return ExportJobListResponse(
+        items=items, page=PageMeta(total=total, limit=limit, offset=offset)
+    )
+
+
+@router.get(
+    "/exports/{job_id}",
+    response_model=ExportJob,
+    tags=["Export"],
+)
+async def get_export(job_id: str) -> ExportJob:
+    job = export_service.get_export(job_id)
+    if job is None:
+        raise ApiError(
+            404, "EXPORT_JOB_NOT_FOUND", "export job not found", {"job_id": job_id}
+        )
+    return job
+
+
+@router.get(
+    "/exports/{job_id}/file",
+    tags=["Export"],
+)
+async def get_export_file(job_id: str) -> FileResponse:
+    path = export_service.get_export_file(job_id)  # 未完成/过期分别抛 404/410
+    job = export_service.get_export(job_id)
+    if job is None or job.file is None:
+        raise ApiError(
+            404, "EXPORT_JOB_NOT_FOUND", "export file not ready", {"job_id": job_id}
+        )
+    return FileResponse(
+        path=path,
+        media_type=job.file.mime_type,
+        filename=job.file.file_name,
+    )
+
+
+@router.post(
+    "/exports/{job_id}/cancel",
+    response_model=OperationResponse,
+    tags=["Export"],
+)
+async def cancel_export(job_id: str) -> OperationResponse:
+    job = export_service.cancel_export(job_id)
+    if job is None:
+        raise ApiError(
+            404, "EXPORT_JOB_NOT_FOUND", "export job not found", {"job_id": job_id}
+        )
+    return OperationResponse(
+        status="accepted", resource_id=job_id, message="Export cancellation accepted."
+    )
