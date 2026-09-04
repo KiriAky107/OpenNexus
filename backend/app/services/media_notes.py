@@ -19,10 +19,8 @@ async def create_transcript_note(job_id, options):
         job = require_job(job_id)
         if job.status != "completed":
             raise ApiError(409, "TRANSCRIPT_NOT_READY", "Only completed transcripts can become notes.")
-        options_hash = hashlib.sha256(options.model_copy(update={"update_existing": False}).model_dump_json(exclude={"update_existing"}).encode()).hexdigest()
+        options_hash = hashlib.sha256(options.model_dump_json().encode()).hexdigest()
         with closing(connect()) as conn:
-            conn.execute("CREATE TABLE IF NOT EXISTS media_note_baselines (note_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL)")
-            previous = conn.execute("SELECT m.note_id,b.content_hash FROM media_notes m LEFT JOIN media_note_baselines b ON b.note_id=m.note_id WHERE m.job_id=? AND m.options_hash=? ORDER BY m.revision DESC LIMIT 1", (job_id, options_hash)).fetchone()
             row = conn.execute("SELECT note_id FROM media_notes WHERE job_id=? AND revision=? AND options_hash=?",
                                (job_id, job.revision, options_hash)).fetchone()
         if row:
@@ -46,34 +44,15 @@ async def create_transcript_note(job_id, options):
         if job.local_only:
             # Persist the indexing policy in the Vault, including later rebuilds.
             lines = ["---", "embedding_local_only: true", "---", "", *lines]
-        markdown = "\n".join(lines)
-        if options.update_existing:
-            if previous is None or previous[1] is None:
-                raise ApiError(409, "NOTE_UPDATE_BASELINE_MISSING", "没有可安全更新的导出记录，请先创建新笔记。")
-            current = await note_service.get_note(previous[0])
-            if current is None:
-                raise ApiError(404, "RESOURCE_NOT_FOUND", "已导出笔记不存在。")
-            # Recover a successful update if linking failed after the Vault write.
-            if current.markdown == markdown:
-                note = current
-            else:
-                note = await note_service.update_note(previous[0], markdown=markdown, expected_content_hash=previous[1])
-        else:
-            note = await _create_note(title, markdown, options, marker)
+        try:
+            note = await note_service.create_note(title=title, markdown="\n".join(lines), folder=options.folder, tags=["转写"])
+        except ApiError as exc:
+            if exc.code != "RESOURCE_CONFLICT" or "note_id" not in exc.details:
+                raise
+            # Recover a crash between successful note creation and linking the job.
+            note = await note_service.get_note(exc.details["note_id"])
+            if note is None or marker not in note.markdown:
+                raise
         with closing(connect()) as conn, transaction(conn):
             conn.execute("INSERT OR IGNORE INTO media_notes VALUES (?,?,?,?)", (job_id, job.revision, options_hash, note.note_id))
-            conn.execute("INSERT OR REPLACE INTO media_note_baselines VALUES (?,?)", (note.note_id, hashlib.sha256(markdown.encode()).hexdigest()))
         return note
-
-
-async def _create_note(title, markdown, options, marker):
-    try:
-        note = await note_service.create_note(title=title, markdown=markdown, folder=options.folder, tags=["转写"])
-    except ApiError as exc:
-        if exc.code != "RESOURCE_CONFLICT" or "note_id" not in exc.details:
-            raise
-        # Recover a crash between successful note creation and linking the job.
-        note = await note_service.get_note(exc.details["note_id"])
-        if note is None or marker not in note.markdown:
-            raise
-    return note

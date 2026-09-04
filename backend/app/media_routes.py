@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import hashlib
 from contextlib import closing
 from pathlib import Path
 from uuid import uuid4
@@ -23,17 +22,14 @@ MEDIA_SUFFIXES = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".mp4", ".webm", ".tx
 
 
 @router.post("/attachments", status_code=201)
-async def upload_attachment(request: Request, filename: str = Query(min_length=1, max_length=255),
-                            idempotency_key: str | None = Header(None, min_length=16, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")):
+async def upload_attachment(request: Request, filename: str = Query(min_length=1, max_length=255)):
     suffix = Path(filename).suffix.lower()
     if suffix not in MEDIA_SUFFIXES:
         raise ApiError(422, "UNSUPPORTED_MEDIA", "Unsupported attachment extension.")
-    identity = hashlib.sha256(idempotency_key.encode()).hexdigest() if idempotency_key else uuid4().hex
-    attachment_id = f"media_{identity}{suffix}"
+    attachment_id = f"media_{uuid4().hex}{suffix}"
     destination = attachment_path(attachment_id)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_suffix(destination.suffix + f".{uuid4().hex}.upload")
-    digest = hashlib.sha256()
+    temporary = destination.with_suffix(destination.suffix + ".upload")
     size = 0
     try:
         with temporary.open("xb") as stream:
@@ -41,15 +37,10 @@ async def upload_attachment(request: Request, filename: str = Query(min_length=1
                 size += len(chunk)
                 if size > MAX_UPLOAD_BYTES:
                     raise ApiError(413, "ATTACHMENT_TOO_LARGE", "Attachment exceeds 25 MiB.")
-                digest.update(chunk)
                 stream.write(chunk)
         if not size:
             raise ApiError(422, "EMPTY_ATTACHMENT", "Attachment is empty.")
-        if destination.exists():
-            if hashlib.sha256(destination.read_bytes()).digest() != digest.digest():
-                raise ApiError(409, "IDEMPOTENCY_CONFLICT", "同一上传标识不能用于不同附件。")
-        else:
-            temporary.replace(destination)
+        temporary.replace(destination)
     finally:
         temporary.unlink(missing_ok=True)
     return {"attachment_id": attachment_id, "filename": Path(filename).name, "size": size}

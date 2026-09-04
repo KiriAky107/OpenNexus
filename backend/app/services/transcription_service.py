@@ -134,10 +134,6 @@ async def _execute(job_id, request, routing=None):
     from app.contracts import TranscriptSegment
     token = runtime_context.set(RuntimeConfig.model_validate(job.model_snapshot.get("local_runtime", {})))
     def progress(message):
-        if message.get("reset"):
-            job.segments = []; job.progress = 0
-            save(job, "AttemptRestarted")
-            return
         job.progress = max(0.0, min(0.99, message["progress"]))
         job.segments.append(TranscriptSegment.model_validate(message["segment"]))
         save(job, "SegmentReady")

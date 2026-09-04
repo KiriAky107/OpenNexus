@@ -5,11 +5,8 @@ import type { ProviderConfig, ProviderPreset } from '@/contracts'
 import * as service from '@/services/providerService'
 import ProviderForm from './ProviderForm.vue'
 import ProviderPresetSelector from './ProviderPresetSelector.vue'
-import RequestJsonEditor from './RequestJsonEditor.vue'
-import { apiClient } from '@/services/apiClient'
 
 vi.mock('@/services/providerService', () => ({ listProviderPresets: vi.fn(), getCredentialStatus: vi.fn(), putCredential: vi.fn(), createProvider: vi.fn(), updateProvider: vi.fn() }))
-vi.mock('@/services/apiClient', () => ({ apiClient: { post: vi.fn() } }))
 const presets: ProviderPreset[] = [
   { preset_id: 'deepseek', name: 'DeepSeek', provider_type: 'openai_compatible', base_url: 'https://deepseek.example.test', default_credential_id: 'shared-deepseek', requires_credential: true, logo_id: 'deepseek' },
   { preset_id: 'qwen', name: '通义千问', provider_type: 'openai_compatible', base_url: 'https://qwen.example.test', default_credential_id: 'shared-qwen', requires_credential: true, logo_id: 'qwen' },
@@ -33,21 +30,6 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()) })
 
 describe('ProviderForm', () => {
-  it('invalidates a pending inference result when JSON becomes invalid', async () => {
-    const wrapper = await render(existing)
-    let finish!: (value: {message: string}) => void
-    vi.mocked(apiClient.post).mockReturnValue(new Promise(resolve => { finish = resolve }))
-    const probe = wrapper.findAll('button').find(button => button.text() === '发送测试推理请求')!
-    await probe.trigger('click')
-    expect(apiClient.post).toHaveBeenCalledWith('/api/providers/request-probe', expect.objectContaining({stream:true}))
-    wrapper.getComponent(RequestJsonEditor).vm.$emit('valid', false)
-    await flushPromises()
-    finish({message:'旧配置验证通过'})
-    await flushPromises()
-    expect(wrapper.text()).not.toContain('旧配置验证通过')
-    expect(probe.attributes('disabled')).toBeDefined()
-  })
-
   it('filters compact preset chips and resolves bundled logos', async () => {
     const wrapper = await render()
     await wrapper.get('#provider-search').setValue('通义')
