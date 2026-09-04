@@ -20,6 +20,7 @@ from app.contracts import (
 )
 from app.repository import BlockHit
 from app.retrieval.embedding import EmbeddingProvider, HashEmbeddingProvider
+from app.local_models.runtime import LocalEmbedding
 from app.retrieval.hybrid import normalize_scores, rrf_fuse
 from app.retrieval.reranker import LexicalReranker, RankedCandidate, RerankerProvider
 from app.retrieval import routed_vectors
@@ -88,8 +89,13 @@ class RetrievalEngine:
                 and self.embedding is self._routed_defaults[0]
                 and self.vector_store is self._routed_defaults[1]
             ):
-                vec_hits = await routed_vectors.search_remote(request.query, top_k=recall)
+                vec_hits = await routed_vectors.search_remote(request.query, top_k=recall, accept_local=isinstance(self.embedding, LocalEmbedding))
             if vec_hits is None:
+                if isinstance(self.embedding, LocalEmbedding):
+                    if request.mode == SearchMode.hybrid:
+                        return self._search_fts(request)
+                    from app.errors import ApiError
+                    raise ApiError(409, "SEMANTIC_INDEX_UNAVAILABLE", "语义索引未就绪。请配置 Embedding 或下载本地模型后重建索引。")
                 query_vec = await self.embedding.embed_query(request.query)
                 vec_hits = await self.vector_store.search(query_vec, top_k=recall)
                 record_embedding(source="local", model_id=self.embedding.model_id,
@@ -287,5 +293,5 @@ def _utc(dt: datetime) -> datetime:
 
 # 默认引擎实例：轻量实现跑通链路，后续可替换真实模型实现
 engine = RetrievalEngine(
-    HashEmbeddingProvider(), LexicalReranker(), SqliteVecStore(), route_embeddings=True,
+    LocalEmbedding(), LexicalReranker(), SqliteVecStore(), route_embeddings=True,
 )

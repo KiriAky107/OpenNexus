@@ -915,6 +915,7 @@ async def create_provider(request: ProviderCreateRequest) -> ProviderConfig:
         default_model=request.default_model,
         credential_id=request.credential_id,
         enabled=request.enabled,
+        request_overrides=request.request_overrides,
         capabilities=container.provider_factory.capabilities(request.provider_type),
     )
     try:
@@ -943,8 +944,12 @@ async def update_provider(
             409, "BUILTIN_PROVIDER_IMMUTABLE", "Mock provider cannot be modified."
         )
     fields = request.model_fields_set
+    if request.version is not None and request.version != current.version:
+        raise ApiError(409, "PROVIDER_VERSION_CONFLICT", "提供商配置已变更，请重新加载后保存。")
     if ("provider_type" in fields and request.provider_type is None) or ("name" in fields and request.name is None) or (
         "enabled" in fields and request.enabled is None
+    ) or (
+        "request_overrides" in fields and request.request_overrides is None
     ):
         raise ApiError(
             422,
@@ -952,6 +957,7 @@ async def update_provider(
             "provider_type, name and enabled cannot be null when explicitly provided.",
         )
     updates = {name: getattr(request, name) for name in fields}
+    updates["version"] = current.version + 1
     if "credential_id" in fields:
         validate_public_credential_id(request.credential_id)
     config = ProviderConfig.model_validate(
@@ -1100,6 +1106,7 @@ async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResult:
 async def match_speakers(request: SpeakerMatchRequest) -> SpeakerMatchResult:
     return await container.model_routing.match_speakers(
         attachment_path(request.attachment_id), attachment_path(request.reference_attachment_id),
+        local_only=request.local_only,
     )
 
 
@@ -1111,7 +1118,7 @@ async def match_speakers(request: SpeakerMatchRequest) -> SpeakerMatchResult:
 )
 async def create_transcription(request: TranscriptionRequest) -> TranscriptionJob:
     return await transcription_service.create_transcription(
-        request.attachment_id, request.language, diarization=request.diarization
+        **request.model_dump(), wait=False
     )
 
 

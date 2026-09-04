@@ -641,9 +641,14 @@ def test_api_speech_failure_reports_reason_in_503_and_transcription_job(api):
     assert match.status_code == 503
     assert match.json()["error"]["code"] == "LOCAL_MODEL_NOT_INSTALLED"
     assert match.json()["error"]["details"] == {"fallback_reason": "PROVIDER_UNAVAILABLE"}
-    transcript = api.client.post("/api/media/transcriptions", json={"attachment_id": source.name, "language": "zh"})
-    assert transcript.status_code == 202
-    job = transcript.json()
+    with api.client:
+        transcript = api.client.post("/api/media/transcriptions", json={"attachment_id": source.name, "language": "zh"})
+        assert transcript.status_code == 202
+        job = transcript.json()
+        assert job["status"] == "queued"
+        stream = api.client.get(f"/api/media/transcriptions/{job['job_id']}/events")
+        assert "event: Failed" in stream.text
+        job = api.client.get(f"/api/media/transcriptions/{job['job_id']}").json()
     assert job["status"] == "failed" and job["error_code"] == "LOCAL_MODEL_NOT_INSTALLED"
     assert job["fallback_reason"] == "PROVIDER_UNAVAILABLE"
     assert api.client.get(f"/api/media/transcriptions/{job['job_id']}").json() == job
@@ -661,3 +666,15 @@ def test_out_of_float_range_json_number_is_invalid_remote_and_falls_back(rig, au
         result = run(media_call(rig, capability, audio))
         assert result.source == "local" and result.score == rig.speech.score
         assert result.fallback_reason == "PROVIDER_INVALID_RESPONSE"
+
+
+def test_remote_segments_are_validated_and_local_only_skips_api(rig, audio):
+    bind(rig, "transcription")
+    rig.http.handler = lambda request: response({"text":"内容", "segments":[{"start":0,"end":1.5,"text":"内容"}]})
+    result = run(rig.service.transcribe(audio[0], "zh"))
+    assert result.source == "api" and result.segments[0].end_time == 1.5
+    rig.http.handler = lambda request: response({"text":"内容", "segments":[{"start":2,"end":1,"text":"内容"}]})
+    assert run(rig.service.transcribe(audio[0], "zh")).fallback_reason == "PROVIDER_INVALID_RESPONSE"
+    count = len(rig.requests)
+    result = run(rig.service.transcribe(audio[0], "zh", local_only=True))
+    assert result.source == "local" and len(rig.requests) == count

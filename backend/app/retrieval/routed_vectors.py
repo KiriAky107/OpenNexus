@@ -42,6 +42,7 @@ class RemoteEmbeddings:
     space_id: str
     dimensions: int
     vectors: list[list[float]]
+    source: str = "api"
 
 
 def get_model_routing() -> EmbeddingRuntime | None:
@@ -67,7 +68,7 @@ def _unit_vector(vector: list[float], dimensions: int) -> list[float]:
     return [value / norm for value in scaled]
 
 
-async def embed_remote(texts: list[str]) -> RemoteEmbeddings | None:
+async def embed_remote(texts: list[str], *, accept_local=False) -> RemoteEmbeddings | None:
     """Return validated API vectors, or None to use the caller's local baseline.
 
     Do not use the runtime's local result: the caller may have injected its own
@@ -80,7 +81,7 @@ async def embed_remote(texts: list[str]) -> RemoteEmbeddings | None:
         if runtime is None:
             return None
         result = await runtime.embed(texts)
-        if result.source != "api":
+        if result.source != "api" and not accept_local:
             record_embedding(fallback_reason=result.fallback_reason)
             return None
         if not isinstance(result.model_id, str) or not result.model_id or result.model_id == "hash-v1":
@@ -93,6 +94,7 @@ async def embed_remote(texts: list[str]) -> RemoteEmbeddings | None:
             space_id=result.model_id,
             dimensions=result.dimensions,
             vectors=[_unit_vector(vector, result.dimensions) for vector in result.vectors],
+            source=result.source,
         )
     except Exception as exc:
         # Avoid logging provider exceptions containing credentials or note text.
@@ -152,13 +154,13 @@ def store_remote(
         logger.warning("Remote vector storage unavailable (%s); local index retained", type(exc).__name__)
 
 
-async def search_remote(query: str, *, top_k: int) -> list[VectorHit] | None:
+async def search_remote(query: str, *, top_k: int, accept_local=False) -> list[VectorHit] | None:
     """None means fallback, including any missing/invalid current-block vector.
 
     Read coverage and vectors together so concurrent note updates cannot produce
     an apparently complete subset. Never fill missing remote hits with local hits.
     """
-    batch = await embed_remote([query])
+    batch = await embed_remote([query], accept_local=accept_local)
     if batch is None:
         return None
     record_embedding(attempted_space={"model_id": batch.space_id, "dimensions": batch.dimensions})
@@ -190,7 +192,7 @@ async def search_remote(query: str, *, top_k: int) -> list[VectorHit] | None:
                         yield VectorHit(id=row["block_id"], score=max(0.0, min(1.0, score)))
 
                 result = heapq.nlargest(top_k, hits(), key=lambda hit: hit.score)
-                record_embedding(source="api", model_id=batch.space_id,
+                record_embedding(source=batch.source, model_id=batch.space_id,
                                  dimensions=batch.dimensions, fallback_reason=None)
                 return result
         finally:
