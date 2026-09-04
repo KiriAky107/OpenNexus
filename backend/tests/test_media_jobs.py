@@ -125,6 +125,8 @@ def test_local_only_export_and_rebuild_keep_local_embedding_policy(monkeypatch):
         job = await jobs.create_transcription('lecture.txt', local_only=True)
         note = await create_transcript_note(job.job_id, TranscriptNoteRequest(title='Private'))
         assert note.markdown.startswith('---\nembedding_local_only: true\n---')
+        await note_service.update_note(note.note_id, markdown=note.markdown.replace(
+            'embedding_local_only: true', 'embedding_local_only: true # keep local'))
         await index_service.rebuild(IndexRebuildRequest())
-        assert len(calls) >= 2 and all(calls)
+        assert len(calls) >= 3 and all(calls)
     asyncio.run(scenario())

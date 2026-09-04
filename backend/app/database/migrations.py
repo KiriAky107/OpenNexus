@@ -6,6 +6,7 @@
 """
 
 from datetime import datetime, timezone
+import sqlite3
 
 from app.constants import EMBEDDING_DIM
 
@@ -134,6 +135,18 @@ MIGRATIONS: list[str] = [
 ]
 
 
+def _statements(script: str):
+    """Split complete SQLite statements without executescript's implicit COMMIT."""
+    pending = ""
+    for char in script:
+        pending += char
+        if char == ";" and sqlite3.complete_statement(pending):
+            yield pending
+            pending = ""
+    if pending.strip():
+        yield pending
+
+
 def migrate(conn) -> None:
     """把尚未应用的迁移脚本按序应用到给定连接。"""
     conn.execute(
@@ -145,9 +158,28 @@ def migrate(conn) -> None:
     for idx, script in enumerate(MIGRATIONS, start=1):
         if idx in applied:
             continue
-        conn.executescript(script)
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-            (idx, datetime.now(timezone.utc).isoformat()),
-        )
-        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Another connection may have migrated while this one waited.
+            if not conn.execute("SELECT 1 FROM schema_migrations WHERE version=?", (idx,)).fetchone():
+                recovered_v6 = False
+                if idx == 6:
+                    column = next((row for row in conn.execute("PRAGMA table_info(blocks)")
+                                   if row["name"] == "embedding_local_only"), None)
+                    if column is not None:
+                        # Recover the precise partial state left by the old v6 runner.
+                        if column["type"].upper() != "INTEGER" or column["notnull"] != 1 or column["dflt_value"] != "0":
+                            raise sqlite3.DatabaseError("Unexpected embedding_local_only column schema")
+                        recovered_v6 = True
+                if not recovered_v6:
+                    for statement in _statements(script):
+                        conn.execute(statement)
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                    (idx, datetime.now(timezone.utc).isoformat()),
+                )
+            conn.execute("COMMIT")
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
