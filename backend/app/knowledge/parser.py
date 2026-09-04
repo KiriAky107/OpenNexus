@@ -13,7 +13,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import yaml
+
 from app.contracts import NoteBlock
+from app.errors import ApiError
 from app.textutils import count_tokens
 
 _HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*?)\s*$")
@@ -70,7 +73,7 @@ def parse_note(
         created_at=created_at,
         updated_at=updated_at,
         blocks=blocks,
-        embedding_local_only=str(frontmatter.get("embedding_local_only", "")).lower() == "true",
+        embedding_local_only=_embedding_policy(markdown),
     )
 
 
@@ -182,6 +185,35 @@ def _content_start(markdown: str) -> int:
 
 def _utf16_len(text: str) -> int:
     return len(text.encode("utf-16-le")) // 2
+
+
+def _embedding_policy(markdown: str) -> bool:
+    end = markdown.find("\n---", 3) if markdown.startswith("---") else -1
+    if end == -1:
+        return False
+    try:
+        # Compose nodes without constructing objects. This accepts YAML comments,
+        # quoted keys and indentation while retaining duplicate-key information.
+        node = yaml.compose(markdown[3:end], Loader=yaml.SafeLoader)
+    except yaml.YAMLError as exc:
+        raise ApiError(422, "INVALID_EMBEDDING_POLICY", "Frontmatter YAML 无效，无法确认本地索引策略。") from exc
+    if node is None:
+        return False
+    if not isinstance(node, yaml.MappingNode):
+        raise ApiError(422, "INVALID_EMBEDDING_POLICY", "Frontmatter 必须是 YAML 键值映射。")
+    if any(key.tag == "tag:yaml.org,2002:merge" for key, _ in node.value):
+        raise ApiError(422, "INVALID_EMBEDDING_POLICY", "Frontmatter 不支持 YAML 合并键，请显式声明索引策略。")
+    values = [value for key, value in node.value
+              if isinstance(key, yaml.ScalarNode) and key.value.lower() == "embedding_local_only"]
+    if not values:
+        return False
+    if len(values) > 1:
+        raise ApiError(422, "INVALID_EMBEDDING_POLICY", "embedding_local_only 不能重复声明。")
+    value = values[0]
+    if (not isinstance(value, yaml.ScalarNode) or value.tag != "tag:yaml.org,2002:bool"
+            or value.value.lower() not in {"true", "false", "yes", "no", "on", "off"}):
+        raise ApiError(422, "INVALID_EMBEDDING_POLICY", "embedding_local_only 必须是 YAML 布尔值 true 或 false。")
+    return value.value.lower() in {"true", "yes", "on"}
 
 
 def _extract_frontmatter(markdown: str) -> dict[str, str]:
