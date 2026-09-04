@@ -13,6 +13,7 @@ import sql from '@shikijs/langs/sql'
 import typescript from '@shikijs/langs/typescript'
 import githubDark from '@shikijs/themes/github-dark'
 import githubLight from '@shikijs/themes/github-light'
+import { renderMermaid } from '@/services/mermaidService'
 
 marked.setOptions({ gfm: true, breaks: true })
 
@@ -38,18 +39,51 @@ export async function highlightCode(source: string, requestedLanguage = 'text'):
   })
 }
 
-export async function renderMarkdown(source: string): Promise<string> {
+export async function renderMarkdown(source: string, options?: { theme?: 'light' | 'dark' }): Promise<string> {
   const html = marked.parse(source, { async: false }) as string
   const documentNode = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html')
+
+  const mermaidBlocks: { pre: Element; source: string }[] = []
+
   for (const code of documentNode.querySelectorAll('pre > code')) {
     const requestedLanguage = [...code.classList].find((name) => name.startsWith('language-'))?.slice(9) || 'text'
+    if (requestedLanguage === 'mermaid') {
+      mermaidBlocks.push({ pre: code.parentElement!, source: code.textContent ?? '' })
+      continue
+    }
     const highlighted = await highlightCode(code.textContent ?? '', requestedLanguage)
     const fragment = document.createRange().createContextualFragment(highlighted)
     code.parentElement?.replaceWith(fragment)
   }
 
-  // Markdown 可能来自模型或外部笔记，高亮完成后仍必须在最终出口统一净化。
-  return DOMPurify.sanitize(documentNode.body.innerHTML, { USE_PROFILES: { html: true } })
+  for (const { pre, source } of mermaidBlocks) {
+    try {
+      const result = await renderMermaid(source, { theme: options?.theme, mode: 'static' })
+      const container = document.createElement('div')
+      container.className = 'markdown-mermaid'
+      container.innerHTML = result.svg
+      pre.replaceWith(container)
+    } catch {
+      const fallback = document.createElement('pre')
+      fallback.className = 'mermaid-error'
+      fallback.textContent = source
+      pre.replaceWith(fallback)
+    }
+  }
+
+  return DOMPurify.sanitize(documentNode.body.innerHTML, {
+    USE_PROFILES: { html: true },
+    ADD_TAGS: ['svg', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon',
+      'text', 'tspan', 'textPath', 'g', 'defs', 'marker', 'style', 'clipPath', 'foreignObject',
+      'title', 'desc', 'use', 'image', 'linearGradient', 'stop', 'radialGradient'],
+    ADD_ATTR: ['viewBox', 'd', 'cx', 'cy', 'r', 'rx', 'ry', 'x', 'y', 'width', 'height',
+      'fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin',
+      'transform', 'points', 'x1', 'y1', 'x2', 'y2', 'class', 'id', 'style', 'text-anchor',
+      'dominant-baseline', 'font-size', 'font-family', 'font-weight', 'opacity', 'orient',
+      'marker-end', 'marker-start', 'marker-mid', 'refX', 'refY', 'viewBox', 'preserveAspectRatio',
+      'xlink:href', 'href', 'clip-path', 'gradientUnits', 'gradientTransform', 'stop-color',
+      'stop-opacity', 'offset', 'patternUnits', 'patternTransform', 'target'],
+  })
 }
 
 // TODO(performance): 编辑器首屏稳定后评估将 Shiki 延迟加载或迁移到 Web Worker。

@@ -29,7 +29,9 @@ const builtinCommands = computed<Command[]>(() => [
   { id: 'search', label: '全局搜索', hint: '导航', run: () => router.push('/search') },
   { id: 'chat', label: '打开 AI 对话', hint: '导航', run: () => router.push('/chat') },
   { id: 'agent', label: '创建智能体运行', hint: '导航', run: () => router.push('/agent/runs') },
+  { id: 'themes', label: '主题管理', hint: '导航', run: () => router.push('/themes') },
   { id: 'settings', label: '打开设置', hint: '导航', run: () => router.push('/settings') },
+  { id: 'tasks', label: '任务列表', hint: '导航', run: () => router.push('/tasks') },
   { id: 'mode', label: `切换为${editorStore.mode === 'source' ? '写作' : '源码'}模式`, hint: '编辑器', run: () => editorStore.toggleMode() },
   { id: 'save', label: '保存当前笔记', hint: '编辑器', run: () => editorStore.save() },
   { id: 'theme', label: `切换为${themeStore.isDark ? '浅色' : '深色'}主题`, hint: '外观', run: () => themeStore.toggleTheme() },
@@ -60,6 +62,7 @@ const filteredCommands = computed(() => {
   const value = query.value.trim().toLocaleLowerCase()
   return value ? commands.value.filter((command) => `${command.label} ${command.hint}`.toLocaleLowerCase().includes(value)) : commands.value
 })
+
 
 function show() {
   selectionSnapshot.value = window.getSelection()?.toString() || null

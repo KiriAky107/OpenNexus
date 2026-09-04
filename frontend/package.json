@@ -32,6 +32,7 @@
     "codemirror": "^6.0.0",
     "dompurify": "^3.4.14",
     "marked": "^15.0.0",
+    "mermaid": "^11.17.2",
     "pinia": "^4.0.0",
     "shiki": "^4.4.3",
     "vue": "^3.5.0",
