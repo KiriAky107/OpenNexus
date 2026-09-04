@@ -15,7 +15,7 @@ function toProvider(provider: ApiProviderConfig): ProviderConfig {
     enabled: provider.enabled,
     capabilities: capabilityMap(provider.capabilities),
     credential_id: provider.credential_id ?? undefined,
-    has_credential: Boolean(provider.credential_id) || provider.provider_type === 'mock',
+    has_credential: Boolean(provider.credential_id),
   }
 }
 
@@ -25,7 +25,7 @@ function toModel(model: ApiModelInfo): ModelInfo {
 
 export async function listProviders(): Promise<ProviderConfig[]> {
   const response = await apiClient.get<{ items: ApiProviderConfig[] }>('/api/providers')
-  return response.items.map(toProvider)
+  return response.items.filter(provider => provider.provider_type !== 'mock').map(toProvider)
 }
 
 export async function getProvider(providerId: string): Promise<ProviderConfig> {
@@ -96,103 +96,4 @@ export async function testProvider(providerId: string): Promise<TestResult> {
   } catch (e: any) {
     return { success: false, error_code: e.code || 'TEST_FAILED', error_message: e.message }
   }
-}
-
-export const mockProviders: ProviderConfig[] = [
-  {
-    provider_id: 'mock',
-    provider_type: 'mock',
-    name: 'Mock Provider (测试)',
-    default_model: 'mock-1',
-    enabled: true,
-    has_credential: true,
-    capabilities: {
-      chat: true,
-      tool_calling: true,
-      streaming: true,
-      vision: false,
-      reasoning: false,
-      structured_output: true,
-      embedding: false,
-    },
-  },
-  {
-    provider_id: 'openai-compat-1',
-    provider_type: 'openai_compatible',
-    name: 'OpenAI 兼容服务',
-    base_url: 'https://api.openai.com/v1',
-    default_model: 'gpt-4o-mini',
-    enabled: true,
-    has_credential: true,
-    capabilities: {
-      chat: true,
-      tool_calling: true,
-      streaming: true,
-      vision: true,
-      reasoning: false,
-      structured_output: true,
-      embedding: true,
-    },
-  },
-  {
-    provider_id: 'ollama-local',
-    provider_type: 'ollama',
-    name: 'Ollama (本地)',
-    base_url: 'http://127.0.0.1:11434',
-    default_model: 'qwen2.5:7b',
-    enabled: false,
-    has_credential: false,
-    capabilities: {
-      chat: true,
-      tool_calling: false,
-      streaming: true,
-      vision: false,
-      reasoning: false,
-      structured_output: false,
-      embedding: true,
-    },
-  },
-]
-
-export const mockModels: Record<string, ModelInfo[]> = {
-  mock: [
-    {
-      model_id: 'mock-1',
-      name: 'Mock Model v1',
-      capabilities: { chat: true, tool_calling: true, streaming: true, structured_output: true },
-      context_window: 8192,
-    },
-  ],
-  'openai-compat-1': [
-    {
-      model_id: 'gpt-4o-mini',
-      name: 'GPT-4o Mini',
-      capabilities: { chat: true, tool_calling: true, streaming: true, vision: true, structured_output: true },
-      context_window: 128000,
-    },
-    {
-      model_id: 'gpt-4o',
-      name: 'GPT-4o',
-      capabilities: { chat: true, tool_calling: true, streaming: true, vision: true, structured_output: true, reasoning: true },
-      context_window: 128000,
-    },
-    {
-      model_id: 'text-embedding-3-small',
-      name: 'Text Embedding 3 Small',
-      capabilities: { embedding: true },
-    },
-  ],
-  'ollama-local': [
-    {
-      model_id: 'qwen2.5:7b',
-      name: 'Qwen 2.5 7B',
-      capabilities: { chat: true, streaming: true },
-      context_window: 32768,
-    },
-    {
-      model_id: 'bge-m3',
-      name: 'BGE M3',
-      capabilities: { embedding: true },
-    },
-  ],
 }

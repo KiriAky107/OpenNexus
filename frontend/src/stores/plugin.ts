@@ -4,7 +4,7 @@ import type { Plugin } from '@/contracts'
 import * as pluginService from '@/services/pluginService'
 
 export const usePluginStore = defineStore('plugin', () => {
-  const plugins = ref<Plugin[]>(pluginService.mockPlugins)
+  const plugins = ref<Plugin[]>([])
   const selectedPluginId = ref<string | null>(null)
   const isLoading = ref(false)
   const error = ref<string | null>(null)
