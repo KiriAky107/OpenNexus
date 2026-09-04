@@ -77,12 +77,12 @@ def _delete_markdown(rel_path: str) -> None:
 PreparedIndex = tuple[list[list[float]], routed_vectors.RemoteEmbeddings | None]
 
 
-async def prepare_note_index(parsed: ParsedNote) -> PreparedIndex:
+async def prepare_note_index(parsed: ParsedNote, *, strict=False) -> PreparedIndex:
     """Compute vectors before opening a write transaction (including API I/O)."""
     texts = [block.content for block in parsed.blocks]
     if isinstance(embedding, LocalEmbedding):
         # One routed invocation: API first, validated local fallback. No hash vectors.
-        remote = await routed_vectors.embed_remote(texts, accept_local=True)
+        remote = await routed_vectors.embed_remote(texts, accept_local=True, strict=strict)
         return [], remote
     vectors = await embedding.embed_documents(texts)
     remote = await routed_vectors.embed_remote(texts)

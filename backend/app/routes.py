@@ -323,15 +323,24 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     async def stream() -> AsyncIterator[str]:
         sequence = 0
         try:
-            async with aclosing(provider.adapter.stream(request)) as events:
+            from app.services.chat_context import prepare
+            grounded_request, citations = await prepare(request)
+            for citation in citations:
+                event = ModelEvent(event=ModelEventType.citation, sequence=sequence,
+                                   data=citation, timestamp=utc_now())
+                sequence += 1
+                yield as_sse(event.event.value, event.model_dump_json())
+            async with aclosing(provider.adapter.stream(grounded_request)) as events:
                 async for event in events:
-                    sequence = event.sequence + 1
+                    event = event.model_copy(update={"sequence": sequence})
+                    sequence += 1
                     yield as_sse(event.event.value, event.model_dump_json())
-        except Exception:
+        except Exception as exc:
             error = ModelEvent(
                 event=ModelEventType.error,
                 sequence=sequence,
-                data={"code": "PROVIDER_ERROR", "message": "Provider could not complete the request."},
+                data={"code": exc.code if isinstance(exc, ApiError) else "CHAT_FAILED",
+                      "message": exc.message if isinstance(exc, ApiError) else "知识库检索或模型生成失败，请检查服务状态。"},
                 timestamp=utc_now(),
             )
             done = ModelEvent(

@@ -89,13 +89,17 @@ class RetrievalEngine:
                 and self.embedding is self._routed_defaults[0]
                 and self.vector_store is self._routed_defaults[1]
             ):
-                vec_hits = await routed_vectors.search_remote(request.query, top_k=recall, accept_local=isinstance(self.embedding, LocalEmbedding))
+                vec_hits = await routed_vectors.search_remote(
+                    request.query, top_k=recall,
+                    accept_local=isinstance(self.embedding, LocalEmbedding),
+                    strict=isinstance(self.embedding, LocalEmbedding) and request.mode == SearchMode.vector,
+                )
             if vec_hits is None:
                 if isinstance(self.embedding, LocalEmbedding):
                     if request.mode == SearchMode.hybrid:
                         return self._search_fts(request)
                     from app.errors import ApiError
-                    raise ApiError(409, "SEMANTIC_INDEX_UNAVAILABLE", "语义索引未就绪。请配置 Embedding 或下载本地模型后重建索引。")
+                    raise ApiError(503, "EMBEDDING_UNAVAILABLE", "Embedding 服务未就绪，请检查模型路由和本地运行环境。")
                 query_vec = await self.embedding.embed_query(request.query)
                 vec_hits = await self.vector_store.search(query_vec, top_k=recall)
                 record_embedding(source="local", model_id=self.embedding.model_id,

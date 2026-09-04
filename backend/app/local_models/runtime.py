@@ -100,9 +100,16 @@ class Runtime:
             env = {**os.environ, "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
                    "HF_HUB_DISABLE_TELEMETRY": "1", "OMP_NUM_THREADS": str(config.cpu_threads),
                    "PYTHONIOENCODING": "utf-8"}
-            process = await asyncio.create_subprocess_exec(str(interpreter()), str(Path(__file__).with_name("worker.py")),
-                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-                env=env, limit=16 * 1024 * 1024, **({"creationflags": 0x08000000} if os.name == "nt" else {}))
+            args = (str(interpreter()), str(Path(__file__).with_name("worker.py")))
+            options = {"env": env, "limit": 16 * 1024 * 1024,
+                       **({"creationflags": 0x08000000} if os.name == "nt" else {})}
+            try:
+                process = await asyncio.create_subprocess_exec(*args,
+                    stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL, **options)
+            except NotImplementedError:
+                from app.local_models.process import ThreadedProcess
+                process = ThreadedProcess(args, **options)
             request = {"key": key, "operation": operation, "model_path": str(model_path(key).resolve()),
                        "config": config.model_dump(), "payload": payload}
             async def receive():
@@ -144,6 +151,8 @@ class Runtime:
             if process is not None and process.returncode is None:
                 process.kill()
                 await process.wait()
+            if process is not None and hasattr(process, "close"):
+                await process.close()
             self.active.pop(ticket, None)
             self.active_files.pop(ticket, None)
             if attempt:

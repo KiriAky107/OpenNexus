@@ -84,3 +84,56 @@ def test_cancel_reaps_active_model_process(monkeypatch):
             await task
         assert process.killed and not runtime.active
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_subprocess_fallback_runs_and_reaps_real_worker(monkeypatch, tmp_path, cancel):
+    import app.local_models.runtime as module
+    import app.local_models.process as process_module
+
+    monkeypatch.setattr(module, 'read_state', lambda key: {'status': 'installed'})
+    monkeypatch.setattr(module, 'interpreter', lambda: Path(sys.executable))
+    worker = tmp_path / 'worker.py'
+    worker.write_text(
+        'import json,sys,time\n'
+        'request=json.load(sys.stdin)\n'
+        'print(json.dumps({"progress": 1}),flush=True)\n'
+        + ('time.sleep(60)\n' if cancel else '')
+        + 'print(json.dumps({"result": [[1.0,0.0]], "usage": {"input_tokens": 2}}),flush=True)\n',
+        encoding='utf-8',
+    )
+    processes = []
+    original = process_module.ThreadedProcess
+
+    def spawn(args, **kwargs):
+        process = original((sys.executable, str(worker)), **kwargs)
+        processes.append(process)
+        return process
+
+    async def unsupported(*args, **kwargs):
+        raise NotImplementedError
+
+    monkeypatch.setattr(module.asyncio, 'create_subprocess_exec', unsupported)
+    monkeypatch.setattr(process_module, 'ThreadedProcess', spawn)
+
+    async def scenario():
+        runtime = Runtime()
+        started = asyncio.Event()
+        token = module.runtime_progress.set(lambda message: started.set())
+        try:
+            task = asyncio.create_task(runtime.infer('bekko', 'embedding', {'texts': ['test']}))
+            await asyncio.wait_for(started.wait(), 10)
+            if cancel:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                assert await task == [[1.0, 0.0]]
+            assert not runtime.active and not runtime.active_files and not runtime.waiters
+            assert processes[0].returncode is not None
+            assert processes[0].process.stdin.closed
+            assert processes[0].process.stdout.closed
+        finally:
+            module.runtime_progress.reset(token)
+
+    asyncio.run(scenario())

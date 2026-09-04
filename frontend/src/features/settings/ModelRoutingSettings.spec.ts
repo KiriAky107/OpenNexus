@@ -45,7 +45,7 @@ describe('ModelRoutingSettings', () => {
     expect(wrapper.text()).toContain('本地采用 Qwen3-ASR')
     expect(wrapper.text()).toContain('本地采用 ERes2NetV2')
     expect(wrapper.text()).toContain('重建全部')
-    expect(wrapper.text()).toContain('重建完成前继续使用本地检索')
+    expect(wrapper.text()).toContain('重建完成前可使用全文检索')
     expect(wrapper.text()).toContain('不是 OpenAI 标准接口')
     for (const id of ['responses', 'anthropic', 'ollama', 'disabled']) expect(wrapper.get(`option[value="${id}"]`).attributes()).toHaveProperty('disabled')
     expect(wrapper.get('option[value="p1"]').attributes()).not.toHaveProperty('disabled')
