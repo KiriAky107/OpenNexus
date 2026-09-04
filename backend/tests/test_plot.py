@@ -1,0 +1,139 @@
+"""Function Plot 的解析与静态 SVG 渲染测试。
+
+覆盖 parser 的白名单表达式（幂/隐式乘法/函数/常量）、拒绝项（属性访问、任意调用等）、
+parse_source 指令与回退，以及 render 的 SVG 输出与 HTML 导出链路集成。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import math
+
+import pytest
+
+from app.contracts import ExportOptions
+from app.export.exporters.html import HtmlExporter
+from app.export.markdown import parse_document
+from app.plot.parser import PlotParseError, evaluate, parse_expression, parse_source
+from app.plot.render import render_svg
+
+
+# --------------------------------------------------------------------------- #
+# 表达式解析
+# --------------------------------------------------------------------------- #
+def test_parse_expression_power_and_implicit_multiplication() -> None:
+    assert evaluate(parse_expression("x^2"), 3) == 9.0
+    assert evaluate(parse_expression("2^3"), 0) == 8.0
+    assert evaluate(parse_expression("2x+1"), 3) == 7.0
+    assert evaluate(parse_expression("2(x+1)"), 3) == 8.0
+    assert evaluate(parse_expression("(x+1)(x-1)"), 3) == 8.0
+
+
+def test_parse_expression_functions_and_constants() -> None:
+    assert evaluate(parse_expression("sin(0)"), 0) == 0.0
+    assert math.isclose(evaluate(parse_expression("sin(pi/2)"), 0), 1.0)
+    assert math.isclose(evaluate(parse_expression("ln(e)"), 0), 1.0)
+    assert evaluate(parse_expression("abs(-3)"), 0) == 3.0
+
+
+def test_parse_expression_rejects_unsafe() -> None:
+    unsafe = [
+        "os.system('x')",
+        "__import__('os')",
+        "foo(x)",
+        "eval('x')",
+        "x[0]",
+        "x.attr",
+        "lambda: 1",
+    ]
+    for expr in unsafe:
+        with pytest.raises(PlotParseError) as exc:
+            parse_expression(expr)
+        assert exc.value.diagnostic.code == "FUNCTION_PLOT_EXPRESSION_UNSAFE", expr
+
+
+def test_parse_expression_syntax_error() -> None:
+    with pytest.raises(PlotParseError) as exc:
+        parse_expression("x +")
+    assert exc.value.diagnostic.code == "FUNCTION_PLOT_PARSE_FAILED"
+
+
+# --------------------------------------------------------------------------- #
+# fenced 源码解析
+# --------------------------------------------------------------------------- #
+def test_parse_source_directives() -> None:
+    result = parse_source("domain: 0, 10\nrange: -1, 1\nxlabel: x\ngrid: false\ny = x^2")
+    assert result.plot is not None
+    assert result.plot.domain == (0.0, 10.0)
+    assert result.plot.range == (-1.0, 1.0)
+    assert result.plot.axes.xlabel == "x"
+    assert result.plot.axes.grid is False
+    assert len(result.plot.expressions) == 1
+    assert result.plot.expressions[0].expression == "x^2"
+
+
+def test_parse_source_bare_and_multi_expression() -> None:
+    result = parse_source("x^2\nsin(x)")
+    assert result.plot is not None
+    assert [e.expression for e in result.plot.expressions] == ["x^2", "sin(x)"]
+
+
+def test_parse_source_unknown_directive_warns() -> None:
+    result = parse_source("foo: bar\ny = x")
+    assert result.plot is not None  # 未知指令仅 warning，不阻断
+    assert any(d.severity == "warning" for d in result.diagnostics)
+
+
+def test_parse_source_error_returns_no_plot() -> None:
+    result = parse_source("y = os.system('x')")
+    assert result.plot is None
+    assert any(d.severity == "error" for d in result.diagnostics)
+
+
+# --------------------------------------------------------------------------- #
+# SVG 渲染
+# --------------------------------------------------------------------------- #
+def test_render_svg_contains_polyline_and_axes() -> None:
+    plot = parse_source("y = x^2").plot
+    rendered = render_svg(plot)
+    svg = rendered.content
+    assert "<svg" in svg
+    assert "<polyline" in svg
+    assert "<line" in svg  # 坐标轴/网格
+    assert "<script" not in svg
+    assert rendered.width == 640
+    assert rendered.height == 480
+
+
+def test_render_svg_multiple_functions() -> None:
+    plot = parse_source("y = x^2\ny = sin(x)").plot
+    rendered = render_svg(plot)
+    assert rendered.content.count("<polyline") >= 2
+
+
+def test_render_svg_labels() -> None:
+    plot = parse_source("xlabel: 时间\nylabel: 数值\ny = x").plot
+    rendered = render_svg(plot)
+    assert "时间" in rendered.content
+    assert "数值" in rendered.content
+
+
+# --------------------------------------------------------------------------- #
+# HTML 导出链路集成
+# --------------------------------------------------------------------------- #
+def test_html_exporter_embeds_function_plot_svg() -> None:
+    md = "```function-plot\ny = x^2\n```"
+    result = asyncio.run(HtmlExporter().export(parse_document(md), ExportOptions()))
+    html = result.content.decode("utf-8")
+    assert '<figure class="function-plot">' in html
+    assert "<svg" in html
+    assert "<polyline" in html
+
+
+def test_html_exporter_function_plot_fallback_on_error() -> None:
+    md = "```function-plot\ny = os.system('x')\n```"
+    result = asyncio.run(HtmlExporter().export(parse_document(md), ExportOptions()))
+    html = result.content.decode("utf-8")
+    assert '<pre class="function-plot">' in html
+    assert "<svg" not in html
+    assert any("函数图像" in w for w in result.warnings)
