@@ -1,10 +1,65 @@
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.contracts import ProviderCreateRequest, ProviderConfig, ModelRequest, Message, MessageRole
 from app.providers.factory import ProviderFactory
-from app.request_overrides import apply_overrides
+from app.request_overrides import RequestOverride, apply_overrides
 
 router = APIRouter(prefix="/api/providers", tags=["Providers"])
+
+
+class RulesTransfer(BaseModel):
+    version: int = Field(default=1, ge=1, le=1)
+    request_overrides: list[RequestOverride] = Field(max_length=100)
+
+
+@router.post("/request-rules/validate")
+async def validate_rules(request: RulesTransfer):
+    return request
+
+
+class ProbeRequest(BaseModel):
+    provider: ProviderCreateRequest
+    stream: bool = True
+
+
+@router.post("/request-probe")
+async def probe(request: ProbeRequest):
+    """Explicit user-triggered inference; no vault context, tools or media uploads."""
+    import asyncio
+    from contextlib import aclosing
+    from app.container import container
+    from app.errors import ApiError
+    from app.providers.base import ProviderError
+    from app.providers.factory import UnsupportedProviderError
+    config = ProviderConfig(provider_id="request-probe", **request.provider.model_dump())
+    if not config.default_model:
+        raise ApiError(422, "MODEL_REQUIRED", "请填写要验证的模型 ID。")
+    try:
+        adapter = container.provider_factory.build(config)
+        model_request = ModelRequest(provider_id=config.provider_id, model=config.default_model,
+            messages=[Message(role=MessageRole.user, content="Reply with OK.")], max_tokens=32)
+        received = False
+        async with asyncio.timeout(45):
+            if request.stream:
+                async with aclosing(adapter.stream(model_request)) as events:
+                    async for event in events:
+                        if event.event.value in {"TextDelta", "ThinkingDelta"}:
+                            received = received or bool(str(event.data.get("text") or "").strip())
+                        if event.event.value == "Error":
+                            raise ProviderError("PROVIDER_PROBE_FAILED", "模型返回了错误事件。")
+            else:
+                response = await adapter.complete(model_request)
+                received = bool(response.text and response.text.strip())
+        if not received:
+            raise ApiError(422, "PROVIDER_EMPTY_RESPONSE", "请求未返回有效文本，不能标记验证通过。")
+    except ProviderError as exc:
+        raise ApiError(502, exc.code, "推理验证失败，请检查模型、凭据和自定义参数。") from exc
+    except TimeoutError as exc:
+        raise ApiError(504, "PROVIDER_TIMEOUT", "推理验证超时。") from exc
+    except UnsupportedProviderError as exc:
+        raise ApiError(422, "PROVIDER_TYPE_UNSUPPORTED", "该协议不支持推理验证。") from exc
+    return {"success": True, "stream": request.stream, "model": config.default_model,
+            "message": "当前请求配置已通过实际推理验证。"}
 
 
 class PreviewRequest(BaseModel):

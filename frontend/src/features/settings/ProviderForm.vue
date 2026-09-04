@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, watch, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import type { ModelInfo, ProviderConfig, ProviderPreset, ProviderType, RequestOverride } from '@/contracts'
 import * as service from '@/services/providerService'
 import ProviderPresetSelector from './ProviderPresetSelector.vue'
@@ -27,16 +27,39 @@ const error = ref('')
 const requestOverrides = ref<RequestOverride[]>(JSON.parse(JSON.stringify(props.provider?.request_overrides || [])))
 const requestJsonValid = ref(true)
 const requestPreview = ref('')
+const probeResult = ref('')
+const probing = ref(false)
+const previewCapability = ref('chat')
+const previewStream = ref(true)
+let draftGeneration = 0
+watch([form, requestOverrides, requestJsonValid, apiKey, previewStream, previewCapability], () => { draftGeneration++; requestPreview.value = ''; probeResult.value = '' }, {deep:true, flush:'sync'})
 async function previewRequest() {
+  const generation = draftGeneration
   error.value = ''
   try {
     if (!requestJsonValid.value) throw new Error('请先修正 JSON。')
     const response = await apiClient.post<{body:Record<string,unknown>}>('/api/providers/request-preview', {
       provider: {provider_type:form.provider_type,name:form.name || '预览',base_url:form.base_url || null,
-        default_model:form.default_model || null,request_overrides:requestOverrides.value}, stream:true,
+        default_model:form.default_model || null,request_overrides:requestOverrides.value}, stream:previewStream.value, capability:previewCapability.value,
     })
-    requestPreview.value = JSON.stringify(response.body, null, 2)
-  } catch(e) { error.value = (e as Error).message }
+    if (active && generation === draftGeneration) requestPreview.value = JSON.stringify(response.body, null, 2)
+  } catch(e) { if (active && generation === draftGeneration) error.value = (e as Error).message }
+}
+async function probeRequest() {
+  if (probing.value) return
+  error.value = ''; probeResult.value = ''; probing.value = true
+  const generation = draftGeneration
+  try {
+    if (!requestJsonValid.value) throw new Error('请先修正 JSON。')
+    if (apiKey.value.trim()) throw new Error('请先保存新的 API Key，再进行推理验证。')
+    const result = await apiClient.post<{message:string}>('/api/providers/request-probe', {
+      provider: {provider_type:form.provider_type,name:form.name || '推理验证',base_url:form.base_url || null,
+        default_model:form.default_model || null,request_overrides:JSON.parse(JSON.stringify(requestOverrides.value)),
+        credential_id:configured.value ? credentialId.value : null}, stream:previewStream.value,
+    })
+    if (active && generation === draftGeneration) probeResult.value = result.message
+  } catch(e) { if (active && generation === draftGeneration) error.value = (e as Error).message }
+  finally { probing.value = false }
 }
 const contextChanged = ref(false)
 const dialog = ref<HTMLElement>()
@@ -174,7 +197,10 @@ async function save() {
           </div>
           <label class="inline-actions"><input v-model="form.enabled" type="checkbox" /> 启用</label>
           <RequestJsonEditor v-model="requestOverrides" @valid="requestJsonValid = $event" />
-          <button type="button" class="button-secondary" @click="previewRequest">预览最终流式请求（隐藏正文）</button>
+          <div class="inline-actions"><label>预览能力<select v-model="previewCapability" class="select"><option value="chat">聊天</option><option value="embedding">Embedding</option><option value="transcription">转写</option><option value="speaker_matching">声纹</option></select></label><label><input v-model="previewStream" type="checkbox" />流式聊天</label></div>
+          <button type="button" class="button-secondary" @click="previewRequest">预览最终请求（隐藏正文）</button>
+          <button v-if="previewCapability === 'chat'" type="button" class="button-secondary" :disabled="probing || credentialLoading || !requestJsonValid" @click="probeRequest">{{ probing ? '推理验证中…' : '发送测试推理请求' }}</button>
+          <p class="subtle">推理验证会向当前模型发送固定短消息，并计入实际用量。媒体参数请通过真实转写或声纹操作验证。</p><p v-if="probeResult" role="status">{{ probeResult }}</p>
           <pre v-if="requestPreview" class="request-preview">{{ requestPreview }}</pre>
         </fieldset>
         <div v-if="error" class="error-banner" role="alert">{{ error }}</div>
