@@ -1,4 +1,6 @@
-# NotesAgent
+# Notes Agent（暂命名） 团队开发说明
+
+> 本文件用于团队开发期间快速配置环境、启动项目并了解当前实现状态，不是正式的项目 README。
 
 NotesAgent 是本地优先的 AI 笔记与知识库项目。当前可运行形态为 Vue/Vite Web 前端与 FastAPI AI Core：Markdown 和附件保存在本地 Vault，SQLite 管理元数据、全文索引、向量空间、搜索历史、会话、任务、Agent Trace、多模态任务及运行诊断。
 
