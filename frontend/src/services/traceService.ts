@@ -1,74 +1,121 @@
 import type { AgentEvent, TraceNode, TraceNodeType } from '@/contracts'
 
+/**
+ * 把扁平事件流折叠成调用树。
+ *
+ * 归属关系一律走 id，不依赖事件相邻顺序 —— 后端的真实顺序是
+ * ModelCallStarted → ModelCallCompleted → Usage → ToolCall/ToolResult，
+ * 工具在模型调用「完成」之后才执行，并且多个工具是并发跑的
+ * （runtime.py 里 asyncio.gather + Semaphore），事件会交错到达。
+ * 因此工具事件用 data.parent_model_call_id 找父节点，
+ * ToolResult 用 data.tool_call_id 回填对应 ToolCall 的状态。
+ */
 export function buildTraceNodes(events: AgentEvent[]): TraceNode[] {
-  const nodes: TraceNode[] = []
-  let currentModelCallId: string | null = null
+  const roots: TraceNode[] = []
+  /** model_call_id -> 模型调用节点 */
+  const modelCalls = new Map<string, TraceNode>()
+  /** tool_call_id -> 工具调用节点，供 ToolResult 回填状态 */
+  const toolCalls = new Map<string, TraceNode>()
 
   for (const event of events) {
-    const type = mapEventType(event.event)
-    const id = `seq-${event.sequence}`
-    const title = getNodeTitle(event)
-    const subtitle = getNodeSubtitle(event)
-    const status = getNodeStatus(event)
-
     const node: TraceNode = {
-      id,
+      id: `seq-${event.sequence}`,
       sequence: event.sequence,
-      type,
-      title,
-      subtitle,
-      status,
+      type: mapEventType(event.event),
+      title: getNodeTitle(event),
+      subtitle: getNodeSubtitle(event),
+      status: getNodeStatus(event),
       data: event.data,
       timestamp: event.timestamp,
       children: [],
     }
+    const modelCallId = asId(event.data.model_call_id)
+    const parentModelCallId = asId(event.data.parent_model_call_id)
+    const toolCallId = asId(event.data.tool_call_id)
 
-    if (event.event === 'ModelCallStarted') {
-      currentModelCallId = id
-      node.children = []
-      nodes.push(node)
-      continue
-    }
-
-    if (event.event === 'ModelCallCompleted' || event.event === 'ModelCallFailed') {
-      if (currentModelCallId) {
-        const modelCall = findNodeById(nodes, currentModelCallId)
-        if (modelCall) {
-          modelCall.status = event.event === 'ModelCallCompleted' ? 'completed' : 'error'
-          if (event.data.duration_ms != null) {
-            modelCall.duration_ms = event.data.duration_ms as number
-          }
-          if (event.data.finish_reason) {
-            modelCall.subtitle = `${modelCall.subtitle ?? ''} · ${String(event.data.finish_reason)}`
-          }
-        }
-        currentModelCallId = null
+    switch (event.event) {
+      case 'ModelCallStarted': {
+        if (modelCallId) modelCalls.set(modelCallId, node)
+        roots.push(node)
+        continue
       }
-      continue
-    }
 
-    if (currentModelCallId && type !== 'run' && type !== 'complete' && type !== 'error') {
-      const parent = findNodeById(nodes, currentModelCallId)
-      if (parent) {
-        node.parent_id = currentModelCallId
-        parent.children.push(node)
+      // 完成/失败事件不单独成节点，只更新对应模型调用的状态。
+      case 'ModelCallCompleted':
+      case 'ModelCallFailed': {
+        const target = modelCallId ? modelCalls.get(modelCallId) : undefined
+        if (!target) {
+          // 找不到配对的 Started（例如 SSE 断点恢复后只拿到后半段），保留为顶层节点。
+          roots.push(node)
+          continue
+        }
+        target.status = event.event === 'ModelCallCompleted' ? 'completed' : 'error'
+        const duration = asNumber(event.data.duration_ms)
+        if (duration != null) target.duration_ms = duration
+        const extra = event.event === 'ModelCallCompleted'
+          ? asText(event.data.finish_reason)
+          : asText(event.data.error_code)
+        if (extra) target.subtitle = target.subtitle ? `${target.subtitle} · ${extra}` : extra
+        continue
+      }
+
+      // ToolResult 只回填对应 ToolCall，避免工具结束后仍显示 running。
+      case 'ToolResult': {
+        const target = toolCallId ? toolCalls.get(toolCallId) : undefined
+        if (!target) {
+          attach(node, parentModelCallId, modelCalls, roots)
+          continue
+        }
+        target.status = event.data.success === false ? 'error' : 'completed'
+        const duration = asNumber(event.data.duration_ms)
+        if (duration != null) target.duration_ms = duration
+        const detail = event.data.success === false
+          ? asText(event.data.error_code) ?? '失败'
+          : undefined
+        if (detail) target.subtitle = target.subtitle ? `${target.subtitle} · ${detail}` : detail
+        // 结果数据合并到调用节点，展开详情时才能看到 output。
+        target.data = { ...target.data, result: event.data }
+        continue
+      }
+
+      case 'ToolCall': {
+        if (toolCallId) toolCalls.set(toolCallId, node)
+        attach(node, parentModelCallId, modelCalls, roots)
+        continue
+      }
+
+      default: {
+        attach(node, parentModelCallId, modelCalls, roots)
         continue
       }
     }
-
-    nodes.push(node)
   }
 
-  return nodes
+  return roots
 }
 
-function findNodeById(nodes: TraceNode[], id: string): TraceNode | null {
-  for (const node of nodes) {
-    if (node.id === id) return node
-    const found = findNodeById(node.children, id)
-    if (found) return found
+/** 有已知父模型调用就挂进去，否则留在顶层。 */
+function attach(
+  node: TraceNode,
+  parentModelCallId: string | null,
+  modelCalls: Map<string, TraceNode>,
+  roots: TraceNode[],
+) {
+  const parent = parentModelCallId ? modelCalls.get(parentModelCallId) : undefined
+  if (parent) {
+    node.parent_id = parent.id
+    parent.children.push(node)
+    return
   }
-  return null
+  roots.push(node)
+}
+
+function asId(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
+function asText(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined
 }
 
 function mapEventType(eventType: AgentEvent['event']): TraceNodeType {
@@ -132,12 +179,12 @@ function getNodeSubtitle(event: AgentEvent): string | undefined {
     case 'Citation':
       return data.heading_path ? String(data.heading_path) : undefined
     case 'Usage': {
-      // total_tokens 优先；缺失时回退到 input+output 之和。
-      const total = asNumber(data.total_tokens)
-      if (total != null) return `${total} tokens`
+      // 后端发的是累计 token_usage（runtime.py），其余字段仅作兼容回退。
+      const usage = asNumber(data.token_usage) ?? asNumber(data.total_tokens)
+      if (usage != null) return `${usage} tokens`
       const input = asNumber(data.input_tokens)
       const output = asNumber(data.output_tokens)
-      if (input == null && output == null) return '- tokens'
+      if (input == null && output == null) return undefined
       return `${(input ?? 0) + (output ?? 0)} tokens`
     }
     case 'PermissionRequired':
@@ -154,14 +201,19 @@ function getNodeStatus(event: AgentEvent): TraceNode['status'] {
     case 'RunFailed':
     case 'ModelCallFailed':
       return 'error'
+    case 'ToolResult':
+      // 只在 ToolResult 没配上 ToolCall 时（SSE 断点恢复）才成为独立节点，
+      // 那时也要按 success 显示，不能一律算成功。
+      return event.data.success === false ? 'error' : 'completed'
     case 'RunCompleted':
     case 'RunCancelled':
     case 'ModelCallCompleted':
-    case 'ToolResult':
     case 'Usage':
     case 'PermissionResolved':
       return 'completed'
     case 'ToolCall':
+      // 后端的 ToolCall 事件不带 status，起始一律 running，
+      // 由后到的 ToolResult 回填最终状态。
       if (event.data.status === 'completed') return 'completed'
       if (event.data.status === 'error') return 'error'
       return 'running'

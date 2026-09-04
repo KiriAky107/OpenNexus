@@ -25,28 +25,34 @@ const communityThemes = computed(() => mockCommunityThemes)
 function handleFileImport(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
+  input.value = ''
   if (!file) return
+  actionError.value = ''
   const reader = new FileReader()
   reader.onload = async () => {
-    const content = reader.result as string
     try {
-      const result = await themeStore.inspectThemePackage(content)
+      const result = await themeStore.inspectThemePackage(String(reader.result ?? ''))
       if (result.compatible) {
         previewThemeId.value = result.manifest.theme_id
+      } else {
+        actionError.value = result.warnings[0] ?? '主题包无法解析'
       }
     } catch (error) {
       actionError.value = error instanceof Error ? error.message : '导入失败'
     }
   }
+  reader.onerror = () => { actionError.value = '文件读取失败' }
+  // 主题包是文本格式（YAML 清单 + --- + CSS），二进制包在解析阶段会被拒绝。
   reader.readAsText(file)
-  input.value = ''
 }
 
 async function confirmInstall(inspection: ThemePackageInspection) {
+  actionError.value = ''
   try {
-    // Web Mock 模式：使用社区主题的 CSS 作为演示
-    const cssText = generateThemeCss(inspection.manifest.theme_id, inspection.manifest.is_dark)
-    await themeStore.installThemeFromInspection(inspection.manifest, cssText)
+    // 装的必须是包里那份 CSS —— 之前这里是现场生成的假样式，
+    // 用户提供的内容被整份丢掉了。
+    if (!inspection.css.trim()) throw new Error('主题包内没有 CSS 内容，无法安装。')
+    await themeStore.installThemeFromInspection(inspection.manifest, inspection.css)
     showImportDialog.value = false
     previewThemeId.value = null
   } catch (error) {
@@ -61,59 +67,6 @@ async function installFromCommunity(themeId: string) {
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '安装失败'
   }
-}
-
-function generateThemeCss(themeId: string, isDark: boolean): string {
-  if (isDark) {
-    return `[data-theme="${themeId}"] {
-  --color-background-primary: #1a1b26;
-  --color-background-secondary: #24283b;
-  --color-background-tertiary: #2f334d;
-  --color-background-hover: #2d2f45;
-  --color-background-active: #3d4261;
-  --color-surface-primary: #24283b;
-  --color-surface-secondary: #1a1b26;
-  --color-surface-elevated: #2f334d;
-  --color-text-primary: #c0caf5;
-  --color-text-secondary: #9aa5ce;
-  --color-text-tertiary: #565f89;
-  --color-text-link: #7aa2f7;
-  --color-accent-primary: #7aa2f7;
-  --color-accent-primary-hover: #89b4fa;
-  --color-accent-soft: #1e2352;
-  --color-border-default: #3b3f5c;
-  --color-border-subtle: #2f334d;
-  --color-border-focus: #7aa2f7;
-  --color-success: #9ece6a;
-  --color-success-soft: #1f2a1a;
-  --color-warning: #e0af68;
-  --color-warning-soft: #2d2418;
-  --color-error: #f7768e;
-  --color-error-soft: #2d1a1f;
-  --color-info: #7aa2f7;
-  --color-info-soft: #1a2030;
-}`
-  }
-  return `[data-theme="${themeId}"] {
-  --color-background-primary: #ffffff;
-  --color-background-secondary: #f8fafc;
-  --color-background-tertiary: #eef2f7;
-  --color-background-hover: #f1f5f9;
-  --color-background-active: #e2e8f0;
-  --color-surface-primary: #ffffff;
-  --color-surface-secondary: #fafbfc;
-  --color-surface-elevated: #ffffff;
-  --color-text-primary: #1e293b;
-  --color-text-secondary: #64748b;
-  --color-text-tertiary: #94a3b8;
-  --color-text-link: #3b82f6;
-  --color-accent-primary: #3b82f6;
-  --color-accent-primary-hover: #2563eb;
-  --color-accent-soft: #dbeafe;
-  --color-border-default: #e2e8f0;
-  --color-border-subtle: #f1f5f9;
-  --color-border-focus: #3b82f6;
-}`
 }
 
 function previewCommunity(themeId: string) {
@@ -143,6 +96,10 @@ onMounted(() => {
 
     <div v-if="actionError || themeStore.importError" class="error-banner">
       {{ actionError || themeStore.importError }}
+    </div>
+
+    <div v-if="themeStore.themeLoadWarning" class="warning-banner">
+      {{ themeStore.themeLoadWarning }}
     </div>
 
     <div class="tabs">
@@ -270,7 +227,7 @@ onMounted(() => {
       <div class="modal import-modal">
         <span class="badge info">主题导入</span>
         <h2>导入主题包</h2>
-        <p class="subtle">支持 YAML Manifest + CSS 主题包。主题将在安全沙箱中验证后安装。</p>
+        <p class="subtle">单文件主题包：YAML 清单 + 一行 <code>---</code> + 主题 CSS。安装前会校验清单与 CSS 安全性。</p>
 
         <div v-if="themeStore.pendingInspection?.compatible" class="inspection-result">
           <div class="inspect-head">
@@ -288,12 +245,16 @@ onMounted(() => {
           <div v-if="themeStore.pendingInspection.warnings.length" class="warnings">
             <p v-for="w in themeStore.pendingInspection.warnings" :key="w" class="warning-text">⚠ {{ w }}</p>
           </div>
+          <details class="css-preview">
+            <summary>将要安装的 CSS（{{ themeStore.pendingInspection.css.length }} 字符）</summary>
+            <pre>{{ themeStore.pendingInspection.css }}</pre>
+          </details>
         </div>
 
         <div v-else class="upload-area">
-          <input type="file" accept=".yaml,.yml,.css,.zip" @change="handleFileImport" />
-          <p>拖放主题包或点击选择文件</p>
-          <p class="subtle">支持 .yaml / .yml / .css / .zip</p>
+          <input type="file" accept=".yaml,.yml,.theme" @change="handleFileImport" />
+          <p>点击选择主题包文件</p>
+          <p class="subtle">支持 .yaml / .yml / .theme；ZIP 需要 Host 端解压，暂不支持。</p>
         </div>
 
         <div class="inline-actions">
@@ -455,6 +416,36 @@ onMounted(() => {
 .warning-text {
   color: var(--color-warning);
   font-size: var(--font-size-sm);
+}
+
+.warning-banner {
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+  font-size: var(--font-size-sm);
+}
+
+.css-preview {
+  margin-top: var(--space-md);
+}
+.css-preview summary {
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.css-preview pre {
+  margin-top: var(--space-sm);
+  max-height: 220px;
+  overflow: auto;
+  padding: var(--space-sm);
+  border-radius: var(--radius-sm);
+  background: var(--color-background-secondary);
+  font-family: var(--font-ui-mono);
+  font-size: var(--font-size-xs);
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .inline-actions { margin-top: var(--space-lg); justify-content: flex-end; gap: var(--space-sm); }
