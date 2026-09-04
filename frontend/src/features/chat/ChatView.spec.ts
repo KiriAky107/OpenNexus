@@ -64,3 +64,26 @@ it('preserves the selection when provider discovery fails', async () => {
   expect(wrapper.get('.error-banner').text()).toBe('offline')
   wrapper.unmount()
 })
+
+it.each(['providers', 'skills'])('ignores initialization after unmount while %s are loading', async source => {
+  const chat = useChatStore()
+  let finish!: () => void
+  const pending = new Promise<void>(resolve => { finish = resolve })
+  if (source === 'providers') vi.mocked(useProviderStore().loadProviders).mockReturnValueOnce(pending)
+  else vi.mocked(useSkillStore().loadSkills).mockReturnValueOnce(pending)
+  const first = mount(ChatView)
+  first.unmount()
+  finish()
+  await flushPromises()
+  expect(chat.selectedProviderId).toBe('')
+  expect(chat.selectedModel).toBe('')
+  expect(useProviderStore().loadModels).not.toHaveBeenCalled()
+
+  const returned = mount(ChatView)
+  await flushPromises()
+  expect(chat.selectedProviderId).toBe('a')
+  expect(chat.selectedModel).toBe('a-default')
+  await returned.get('textarea').setValue('hello')
+  expect(returned.get('button.button-primary').attributes('disabled')).toBeUndefined()
+  returned.unmount()
+})
