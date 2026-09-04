@@ -18,3 +18,16 @@ it('validates object JSON and prevents host-owned fields from being saved', asyn
   expect(wrapper.emitted('valid')?.at(-1)).toEqual([false])
   wrapper.unmount()
 })
+
+it('restores defaults even from an invalid draft and reflects replacement configurations', async () => {
+  const wrapper = mount(RequestJsonEditor, {props:{modelValue:[{capability:'chat', body:{enable_thinking:false}}]}})
+  await wrapper.get('textarea').setValue('{invalid')
+  expect(wrapper.emitted('valid')?.at(-1)).toEqual([false])
+  await wrapper.findAll('button').find(button => button.text() === '恢复默认请求')!.trigger('click')
+  expect(wrapper.findAll('textarea')).toHaveLength(0)
+  expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual([[]])
+  await wrapper.setProps({modelValue:[{capability:'embedding', body:{dimensions:384}}]})
+  expect(wrapper.get('textarea').element.value).toContain('384')
+  expect(wrapper.emitted('valid')?.at(-1)).toEqual([true])
+  wrapper.unmount()
+})

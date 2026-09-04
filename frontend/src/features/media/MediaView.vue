@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { mediaService, type MediaJob } from '@/services/mediaService'
+import { mediaService, createMediaSubmission, type MediaJob } from '@/services/mediaService'
 
 const route = useRoute()
+const submission = createMediaSubmission()
+const updateExisting = ref(false)
 const jobs = ref<MediaJob[]>([])
 const selected = ref<MediaJob | null>(null)
 const file = ref<File | null>(null)
@@ -40,6 +42,7 @@ async function choose(job: MediaJob) {
   selected.value = JSON.parse(JSON.stringify(job)); dirty.value = false; history.value = []
 }
 async function action(work: () => Promise<void>) {
+  if (busy.value) return
   busy.value = true; error.value = ''; notice.value = ''
   try { await work() } catch (e) { error.value = (e as Error).message } finally { busy.value = false }
 }
@@ -51,11 +54,10 @@ async function submit() {
       terms = JSON.parse(terminology.value)
       if (!terms || typeof terms !== 'object' || Array.isArray(terms) || Object.values(terms).some(v => typeof v !== 'string')) throw new Error('术语表需要 JSON 对象，值为替换后的文本。')
     }
-    const uploaded = await mediaService.upload(file.value!)
-    selected.value = await mediaService.create({attachment_id: uploaded.attachment_id, local_only: localOnly.value,
-      diarization: diarization.value, idempotency_key: crypto.randomUUID(), terminology: terms})
+    selected.value = await submission.submit(file.value!, {local_only: localOnly.value,
+      diarization: diarization.value, terminology: terms})
     dirty.value = false
-    jobs.value.unshift(selected.value)
+    jobs.value = [selected.value, ...jobs.value.filter(job => job.job_id !== selected.value?.job_id)]
   })
 }
 function seek(seconds: number) { if (player.value) { player.value.currentTime = seconds; position.value = seconds } }
@@ -104,7 +106,7 @@ onUnmounted(() => { stopped = true; clearTimeout(timer) })
       <label><input v-model="diarization" type="checkbox" />识别不同说话人</label>
       <p class="subtle">{{ localOnly ? '本次任务不调用远程模型 API，模型需预先下载。' : '若配置了转写 API，将上传所选附件；API 失败后回退到本地模型。' }}</p>
       <details><summary>术语校对</summary><p class="subtle">在识别完成后替换文本，原始识别结果会保留。</p><textarea v-model="terminology" class="input" rows="3" placeholder='{"错误术语": "正确术语"}' /></details>
-      <button class="button-primary" :disabled="busy || !file">{{ busy ? '处理中…' : '上传并转写' }}</button>
+      <button type="button" class="button-secondary" :disabled="busy" @click="submission.reset(); notice = '下一次提交将作为新任务处理'">重新处理为新任务</button><button class="button-primary" :disabled="busy || !file">{{ busy ? '处理中…' : '上传并转写' }}</button>
       <details><summary>声纹参考比对</summary><p class="subtle">将所选附件与参考音频比对。至少各含 1 秒语音；分数是相似度，不是身份认证概率。临时参考文件在比对后清理。</p>
         <input type="file" accept=".wav,.mp3,.flac,.ogg,.m4a" aria-label="声纹参考音频" @change="reference = ($event.target as HTMLInputElement).files?.[0] || null" />
         <button type="button" class="button-secondary" :disabled="busy || !file || !reference" @click="compareSpeaker">比对声纹</button><p v-if="matchResult">{{ matchResult }}</p></details>
@@ -138,7 +140,7 @@ onUnmounted(() => { stopped = true; clearTimeout(timer) })
             <button class="button-secondary" @click="action(async () => { history = (await mediaService.revisions(selected!.job_id)).items })">修订历史</button></div>
           <details><summary>原始识别文本</summary><pre>{{ selected.original_text }}</pre></details>
           <details v-for="revision in history" :key="revision.revision"><summary>修订 {{ revision.revision }}</summary><pre>{{ revision.text }}</pre></details>
-          <div class="inline-actions"><input v-model="title" class="input" aria-label="笔记标题" /><button class="button-primary" :disabled="busy || dirty || !title.trim()" @click="action(async () => { const note = await mediaService.note(selected!.job_id, title); notice = `已保存笔记：${note.title}` })">保存为笔记</button></div>
+          <div class="inline-actions"><label><input v-model="updateExisting" type="checkbox" />更新上次导出的笔记（已手动修改则拒绝）</label><input v-model="title" class="input" aria-label="笔记标题" /><button class="button-primary" :disabled="busy || dirty || !title.trim()" @click="action(async () => { const note = await mediaService.note(selected!.job_id, title, updateExisting); notice = `已保存笔记：${note.title}` })">保存为笔记</button></div>
         </template>
       </article>
       <div v-else class="panel subtle">选择任务查看转写结果。</div>

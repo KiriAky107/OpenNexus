@@ -1,4 +1,6 @@
+import asyncio
 from fastapi import APIRouter
+from app.services import model_diagnostics
 from app.local_models import manager
 from app.local_models.runtime import RuntimeConfig, configuration, configure, interpreter, runtime
 
@@ -7,9 +9,10 @@ router = APIRouter(prefix="/api/local-models", tags=["Local models"])
 
 @router.get("")
 async def list_models():
-    return {**manager.describe(), "runtime_installed": interpreter().is_file(), "config": configuration(),
+    items, diagnostics = await asyncio.gather(asyncio.to_thread(manager.describe), asyncio.to_thread(model_diagnostics.recent))
+    return {**items, "runtime_installed": interpreter().is_file(), "config": configuration(),
             "active_models": list(runtime.active.values()), "queued_requests": len(runtime.waiters),
-            "last_inference": runtime.diagnostics[-1] if runtime.diagnostics else None}
+            "last_inference": diagnostics[-1] if diagnostics else None}
 
 
 @router.put("/config")
@@ -34,5 +37,5 @@ async def delete(key: str):
 
 @router.get("/diagnostics")
 async def diagnostics():
-    return {"items": runtime.diagnostics, "config": configuration(), "scope": "current_process",
+    return {"items": await asyncio.to_thread(model_diagnostics.recent), "config": configuration(), "scope": "application_last_200_attempts",
             "contains": "model_revision_device_timing_resources_only"}
