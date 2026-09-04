@@ -537,3 +537,85 @@ def test_real_embedding_rebuild_failure_preserves_index(runtime, production_engi
 
 def test_empty_vault_vector_search_returns_empty(runtime, production_engine):
     assert asyncio.run(production_engine.search(request())).items == []
+
+
+@pytest.fixture
+def policy_runtime(monkeypatch):
+    class PolicyRuntime:
+        fallback = False
+        calls = []
+        async def embed(self, texts, *, local_only=False):
+            self.calls.append((list(texts), local_only))
+            local = local_only or self.fallback
+            dim = 3 if local else 2
+            return SimpleNamespace(source='local' if local else 'api', model_id='local-space' if local else 'api-space',
+                                   dimensions=dim, vectors=[[1.0] + [0.0] * (dim - 1) for _ in texts],
+                                   fallback_reason='PROVIDER_TIMEOUT' if self.fallback and not local_only else None)
+    runtime = PolicyRuntime()
+    monkeypatch.setattr(routed_vectors, 'get_model_routing', lambda: runtime)
+    return runtime
+
+
+async def seed_policies():
+    normal = await note_service.create_note(title='Normal', markdown='apple public', folder=None, tags=[])
+    private = await note_service.create_note(title='Private', markdown='---\nembedding_local_only: true\n---\napple private', folder=None, tags=[])
+    return normal, private
+
+
+@pytest.mark.parametrize('fallback', [False, True])
+def test_mixed_policy_rebuild_and_retrieval(policy_runtime, production_engine, fallback):
+    policy_runtime.fallback = fallback
+    async def scenario():
+        notes = await seed_policies()
+        await index_service.rebuild(IndexRebuildRequest())
+        for mode in (SearchMode.vector, SearchMode.hybrid):
+            result = await production_engine.search(SearchRequest(query='apple', mode=mode))
+            assert {item.note_id for item in result.items} == {note.note_id for note in notes}
+        for texts, local_only in policy_runtime.calls:
+            if any('private' in text for text in texts):
+                assert local_only
+        if not fallback:
+            assert {r[0] for r in rows('SELECT DISTINCT space_id FROM routed_block_vectors')} == {'api-space', 'local-space'}
+    asyncio.run(scenario())
+
+
+def test_local_only_vault_never_requests_api_for_search(policy_runtime, production_engine):
+    async def scenario():
+        await note_service.create_note(title='Private', markdown='---\nembedding_local_only: true\n---\napple private', folder=None, tags=[])
+        await index_service.rebuild(IndexRebuildRequest())
+        assert (await production_engine.search(request())).items
+        assert all(local_only for _, local_only in policy_runtime.calls)
+    asyncio.run(scenario())
+
+
+def test_partition_storage_failure_rolls_back_all_partitions(policy_runtime, production_engine, monkeypatch):
+    from app.errors import ApiError
+    async def scenario():
+        await seed_policies()
+        before = [tuple(row) for row in rows('SELECT * FROM routed_block_vectors ORDER BY block_id')]
+        original = routed_vectors.store_remote
+        def fail_local(conn, ids, batch):
+            if batch.source != 'local':
+                original(conn, ids, batch)
+        monkeypatch.setattr(routed_vectors, 'store_remote', fail_local)
+        with pytest.raises(ApiError) as error:
+            await index_service.rebuild(IndexRebuildRequest())
+        assert error.value.code == 'SEMANTIC_INDEX_WRITE_FAILED'
+        assert [tuple(row) for row in rows('SELECT * FROM routed_block_vectors ORDER BY block_id')] == before
+    asyncio.run(scenario())
+
+
+def test_missing_partition_does_not_silently_return_partial_hits(policy_runtime, production_engine):
+    from app.errors import ApiError
+    async def scenario():
+        await seed_policies()
+        conn = connect()
+        try:
+            conn.execute("DELETE FROM routed_block_vectors WHERE space_id='local-space'")
+        finally:
+            conn.close()
+        with pytest.raises(ApiError) as error:
+            await production_engine.search(request())
+        assert error.value.code == 'SEMANTIC_INDEX_UNAVAILABLE'
+        assert (await production_engine.search(request(SearchMode.hybrid))).items
+    asyncio.run(scenario())
