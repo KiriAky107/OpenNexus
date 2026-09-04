@@ -1,22 +1,24 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import type { ChatMessage, Conversation } from '@/contracts'
-import { mockConversations, mockMessages, streamChat } from '@/services/chatService'
+import { streamChat } from '@/services/chatService'
 import type { SseClient } from '@/services/sseClient'
 
 export const useChatStore = defineStore('chat', () => {
-  const conversations = ref<Conversation[]>(mockConversations)
-  const activeConversationId = ref<string | null>('conv-1')
-  const messages = ref<ChatMessage[]>(mockMessages['conv-1'] || [])
+  const conversations = ref<Conversation[]>([])
+  const activeConversationId = ref<string | null>(null)
+  const messages = ref<ChatMessage[]>([])
   const isStreaming = ref(false)
   const inputText = ref('')
-  const useRag = ref(true)
+  const useRag = ref(false)
   const selectedSkillId = ref<string | null>(null)
-  const selectedProviderId = ref('mock')
-  const selectedModel = ref('mock-1')
+  const selectedProviderId = ref('')
+  const selectedModel = ref('')
   let sseClient: SseClient | null = null
+  let streamVersion = 0
 
-  // TODO(chat): 会话持久化接口完成后移除 mockConversations/mockMessages 数据源。
+  // User-created conversations live in this browser session; no fabricated history.
+  const history = reactive<Record<string, ChatMessage[]>>({})
 
   const activeConversation = computed(() =>
     conversations.value.find((c) => c.conversation_id === activeConversationId.value) || null
@@ -27,13 +29,14 @@ export const useChatStore = defineStore('chat', () => {
   )
 
   async function setActiveConversation(id: string) {
+    stopGeneration()
     activeConversationId.value = id
-    messages.value = mockMessages[id] || []
+    messages.value = history[id] ?? []
   }
 
   async function sendMessage(text: string) {
-    if (!text.trim() || isStreaming.value) return
-    const conversationId = activeConversationId.value || `conv-${Date.now()}`
+    if (!text.trim() || isStreaming.value || !selectedProviderId.value || !selectedModel.value) return
+    const conversationId = activeConversationId.value || crypto.randomUUID()
 
     if (!activeConversationId.value) {
       const newConv: Conversation = {
@@ -47,8 +50,10 @@ export const useChatStore = defineStore('chat', () => {
       activeConversationId.value = conversationId
     }
 
+    history[conversationId] = messages.value
+    const conversationMessages = messages.value
     const userMsg: ChatMessage = {
-      message_id: `msg-${Date.now()}`,
+      message_id: crypto.randomUUID(),
       conversation_id: conversationId,
       role: 'user',
       content: text,
@@ -57,29 +62,34 @@ export const useChatStore = defineStore('chat', () => {
     messages.value.push(userMsg)
     inputText.value = ''
     isStreaming.value = true
+    const conversation = conversations.value.find(c => c.conversation_id === conversationId)
+    if (conversation) { conversation.updated_at = new Date().toISOString(); conversation.message_count = messages.value.length }
 
     // 先插入占位消息，随后将 SSE 增量原位合并，避免每个 token 重建消息列表。
-    const aiMsg: ChatMessage = {
-      message_id: `msg-${Date.now() + 1}`,
+    const aiMsg = reactive<ChatMessage>({
+      message_id: crypto.randomUUID(),
       conversation_id: conversationId,
       role: 'assistant',
       content: '',
       created_at: new Date().toISOString(),
       citations: [],
       tool_calls: [],
-    }
+    })
     messages.value.push(aiMsg)
 
+    const version = ++streamVersion
+    const argumentBuffers = new Map<string, string>()
     sseClient = streamChat({
       provider_id: selectedProviderId.value,
       model: selectedModel.value,
       conversation_id: conversationId,
       use_rag: useRag.value,
       messages: messages.value
-        .filter((message) => message !== aiMsg)
+        .filter((message) => message.message_id !== aiMsg.message_id)
         .map((message) => ({ role: message.role, content: message.content })),
     }, {
       onEvent(event) {
+        if (version !== streamVersion) return
         if (event.event === 'TextDelta') aiMsg.content += String(event.data.text ?? '')
         if (event.event === 'ThinkingDelta') aiMsg.thinking = `${aiMsg.thinking ?? ''}${String(event.data.text ?? '')}`
         if (event.event === 'ToolCallStart') {
@@ -92,6 +102,11 @@ export const useChatStore = defineStore('chat', () => {
         }
         if (event.event === 'ToolCallDelta') {
           const call = aiMsg.tool_calls?.find((item) => item.tool_call_id === event.data.tool_call_id)
+          if (call && typeof event.data.arguments_delta === 'string') {
+            const buffer = (argumentBuffers.get(call.tool_call_id) ?? '') + event.data.arguments_delta
+            argumentBuffers.set(call.tool_call_id, buffer)
+            try { call.parameters = JSON.parse(buffer) } catch { /* incomplete JSON fragment */ }
+          }
           if (call && event.data.arguments && typeof event.data.arguments === 'object') {
             Object.assign(call.parameters, event.data.arguments)
           }
@@ -116,14 +131,16 @@ export const useChatStore = defineStore('chat', () => {
         if (event.event === 'Error') aiMsg.content += `\n\n生成失败：${String(event.data.message ?? '未知错误')}`
       },
       onError(error) {
+        if (version !== streamVersion) return
         aiMsg.content += `\n\n连接失败：${error.message}`
         isStreaming.value = false
         sseClient = null
       },
       onDone() {
+        if (version !== streamVersion) return
         const conversation = conversations.value.find((item) => item.conversation_id === conversationId)
         if (conversation) {
-          conversation.message_count = messages.value.length
+          conversation.message_count = conversationMessages.length
           conversation.updated_at = new Date().toISOString()
         }
         isStreaming.value = false
@@ -133,6 +150,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function stopGeneration() {
+    streamVersion++
     if (sseClient) {
       sseClient.cancel()
       sseClient = null
@@ -141,8 +159,9 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function createNewConversation() {
+    stopGeneration()
     const newConv: Conversation = {
-      conversation_id: `conv-${Date.now()}`,
+      conversation_id: crypto.randomUUID(),
       title: '新对话',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -150,16 +169,19 @@ export const useChatStore = defineStore('chat', () => {
     }
     conversations.value.unshift(newConv)
     activeConversationId.value = newConv.conversation_id
-    messages.value = []
+    history[newConv.conversation_id] = []
+    messages.value = history[newConv.conversation_id]
   }
 
   function deleteConversation(id: string) {
+    if (activeConversationId.value === id) stopGeneration()
+    delete history[id]
     const idx = conversations.value.findIndex((c) => c.conversation_id === id)
     if (idx > -1) {
       conversations.value.splice(idx, 1)
       if (activeConversationId.value === id) {
         activeConversationId.value = conversations.value[0]?.conversation_id || null
-        messages.value = conversations.value[0] ? mockMessages[conversations.value[0].conversation_id] || [] : []
+        messages.value = conversations.value[0] ? history[conversations.value[0].conversation_id] || [] : []
       }
     }
   }

@@ -127,6 +127,13 @@ from app.services.attachment_service import attachment_path
 router = APIRouter(prefix="/api")
 
 
+@router.get("/permissions/policy", tags=["Permissions"])
+async def get_permission_policy() -> dict[str, str]:
+    from app.agent.permissions import KNOWN_PERMISSIONS
+    return {permission: container.permissions.policy.mode_for(permission).value
+            for permission in sorted(KNOWN_PERMISSIONS)}
+
+
 async def mcp_call_async(operation):
     """Even registry reads can wait on lifecycle locks; keep all MCP work off the event loop."""
     try:

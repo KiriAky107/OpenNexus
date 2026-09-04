@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import type { AiCoreStatus, IndexStatus } from '@/contracts'
-import { mockIndexStatus } from '@/services/indexService'
+import { resolveApiUrl } from '@/services/apiClient'
+import packageInfo from '../../package.json'
 import * as indexService from '@/services/indexService'
 import * as systemService from '@/services/systemService'
 
@@ -14,8 +15,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const restoreLastVault = ref(saved.restoreLastVault !== false)
   const autoSaveInterval = ref(typeof saved.autoSaveInterval === 'number' ? saved.autoSaveInterval : 1500)
   const language = ref<'zh-CN' | 'en'>(saved.language === 'en' ? 'en' : 'zh-CN')
-  const appVersion = ref('0.1.0')
-  const aiCoreVersion = ref('0.1.0')
+  const appVersion = ref(packageInfo.version)
+  const aiCoreVersion = ref('未获取')
 
   // Editor
   const defaultEditorMode = ref<'wysiwyg' | 'source'>(saved.defaultEditorMode === 'source' ? 'source' : 'wysiwyg')
@@ -23,24 +24,15 @@ export const useSettingsStore = defineStore('settings', () => {
   const spellCheck = ref(saved.spellCheck === true)
 
   // AI Core
-  const aiCoreStatus = ref<AiCoreStatus>('running')
-  const aiCoreAddress = ref('http://127.0.0.1:8000')
+  const aiCoreStatus = ref<AiCoreStatus>('unknown')
+  const aiCoreAddress = ref(resolveApiUrl('/api') || '/api')
 
   // Index
-  const indexStatus = ref<IndexStatus>(mockIndexStatus)
+  const emptyIndex = (): IndexStatus => ({ status: 'unknown', pending_jobs: 0, total_notes: null, total_blocks: null })
+  const indexStatus = ref<IndexStatus>(emptyIndex())
 
   // Permissions
-  const permissionPolicy = ref<Record<string, 'allow' | 'confirm' | 'deny'>>({
-    'notes.read': 'allow',
-    'notes.search': 'allow',
-    'notes.write': 'confirm',
-    'notes.delete': 'confirm',
-    'tasks.read': 'allow',
-    'tasks.write': 'confirm',
-    'attachments.read': 'confirm',
-    'network.request': 'confirm',
-    'secrets.use': 'confirm',
-  })
+  const permissionPolicy = ref<Record<string, 'allow' | 'confirm' | 'deny'>>({})
   const diagnosticsError = ref<string | null>(null)
 
   watch(() => ({
@@ -50,18 +42,15 @@ export const useSettingsStore = defineStore('settings', () => {
   }), (value) => localStorage.setItem('app-settings', JSON.stringify(value)), { deep: true })
 
   async function loadDiagnostics() {
-    try {
-      const [health, status, index] = await Promise.all([
-        systemService.healthCheck(), systemService.getStatus(), indexService.getIndexStatus(),
-      ])
-      aiCoreStatus.value = health.status === 'ok' ? 'running' : 'error'
-      aiCoreVersion.value = status.version
-      indexStatus.value = index
-      diagnosticsError.value = null
-    } catch (reason) {
-      aiCoreStatus.value = 'error'
-      diagnosticsError.value = reason instanceof Error ? reason.message : '诊断信息加载失败'
-    }
+    const results = await Promise.allSettled([
+      systemService.healthCheck(), systemService.getStatus(), indexService.getIndexStatus(), systemService.getPermissionPolicy(),
+    ])
+    const [health, status, index, policy] = results
+    aiCoreStatus.value = health.status === 'fulfilled' && health.value.status === 'ok' ? 'running' : 'error'
+    aiCoreVersion.value = status.status === 'fulfilled' ? status.value.version : '未获取'
+    indexStatus.value = index.status === 'fulfilled' ? index.value : emptyIndex()
+    permissionPolicy.value = policy.status === 'fulfilled' ? policy.value : {}
+    diagnosticsError.value = results.filter(item => item.status === 'rejected').map(item => item.reason instanceof Error ? item.reason.message : '后端请求失败').join('；') || null
   }
 
   function setAutoSaveInterval(ms: number) {
@@ -70,21 +59,6 @@ export const useSettingsStore = defineStore('settings', () => {
 
   function setDefaultEditorMode(mode: 'wysiwyg' | 'source') {
     defaultEditorMode.value = mode
-  }
-
-  function setPermission(permission: string, policy: 'allow' | 'confirm' | 'deny') {
-    permissionPolicy.value[permission] = policy
-  }
-
-  function setAiCoreStatus(status: AiCoreStatus) {
-    aiCoreStatus.value = status
-  }
-
-  async function restartAiCore(): Promise<boolean> {
-    aiCoreStatus.value = 'starting'
-    await new Promise((r) => setTimeout(r, 1500))
-    aiCoreStatus.value = 'running'
-    return true
   }
 
   async function rebuildIndex(scope: 'full' | 'fts' | 'vector' = 'full') {
@@ -115,9 +89,6 @@ export const useSettingsStore = defineStore('settings', () => {
     loadDiagnostics,
     setAutoSaveInterval,
     setDefaultEditorMode,
-    setPermission,
-    setAiCoreStatus,
-    restartAiCore,
     rebuildIndex,
   }
 })
