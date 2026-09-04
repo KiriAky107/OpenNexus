@@ -678,3 +678,43 @@ def test_remote_segments_are_validated_and_local_only_skips_api(rig, audio):
     count = len(rig.requests)
     result = run(rig.service.transcribe(audio[0], "zh", local_only=True))
     assert result.source == "local" and len(rig.requests) == count
+
+
+def test_embedding_local_only_does_not_change_normal_api_fallback(rig):
+    bind(rig)
+    result = run(rig.service.embed(['private'], local_only=True))
+    assert result.source == 'local' and result.fallback_reason is None
+    assert rig.requests == [] and rig.credentials.calls == []
+    rig.http.handler = lambda request: response({'data': [{'index': 0, 'embedding': [1, 0, 0]}]})
+    assert run(rig.service.embed(['normal'])).source == 'api'
+    rig.http.handler = lambda request: response({}, status=503)
+    result = run(rig.service.embed(['fallback']))
+    assert result.source == 'local' and result.fallback_reason
+
+
+@pytest.mark.parametrize('api_failure', [False, True])
+def test_local_embedding_identity_and_device_are_frozen_during_inference(rig, monkeypatch, api_failure):
+    import app.local_models.runtime as module
+    config = module.RuntimeConfig(embedding_model='bekko')
+    monkeypatch.setattr(module, 'configuration', lambda: module.runtime_context.get() or config)
+    calls = []
+    async def infer(key, *args, **kwargs):
+        calls.append(key)
+        config.embedding_model = 'granite'
+        config.device = 'cuda'
+        await asyncio.sleep(0)
+        assert module.configuration().embedding_model == key
+        assert module.configuration().device == ('cpu' if len(calls) == 1 else 'cuda')
+        return [[1.0] + [0.0] * 383]
+    monkeypatch.setattr(module.runtime, 'infer', infer)
+    rig.service.local_embedding = module.LocalEmbedding()
+    if api_failure:
+        bind(rig)
+        rig.http.handler = lambda request: response({}, status=503)
+    first = run(rig.service.embed(['first']))
+    assert 'bekko' in first.model_id
+    assert module.runtime_context.get() is None
+    second = run(rig.service.embed(['second']))
+    assert 'granite' in second.model_id
+    assert calls == ['bekko', 'granite']
+    assert bool(first.fallback_reason) == api_failure

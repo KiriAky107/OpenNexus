@@ -31,6 +31,7 @@ class ParsedNote:
     created_at: datetime
     updated_at: datetime
     blocks: list[NoteBlock] = field(default_factory=list)
+    embedding_local_only: bool = False
 
 
 def note_id_for_path(rel_path: str) -> str:
@@ -69,6 +70,7 @@ def parse_note(
         created_at=created_at,
         updated_at=updated_at,
         blocks=blocks,
+        embedding_local_only=str(frontmatter.get("embedding_local_only", "")).lower() == "true",
     )
 
 

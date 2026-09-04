@@ -206,9 +206,9 @@ class ModelRoutingService:
             raise invalid_response()
         return data, url
 
-    async def embed(self, texts: list[str]) -> EmbeddingResult:
+    async def embed(self, texts: list[str], *, local_only=False) -> EmbeddingResult:
         config = self.configuration()
-        binding = config.embedding
+        binding = None if local_only else config.embedding
         record_embedding(route_version=config.version,
                          requested_route=binding.model_dump() if binding else None)
         reason = None
@@ -255,12 +255,14 @@ class ModelRoutingService:
                                        model_id="api-" + hashlib.sha256(identity.encode()).hexdigest())
             except ProviderError as exc:
                 reason = exc.code
+        from app.local_models.runtime import LocalEmbedding
+        local_embedding = self.local_embedding.snapshot() if isinstance(self.local_embedding, LocalEmbedding) else self.local_embedding
         try:
-            vectors = await self.local_embedding.embed_documents(texts)
+            vectors = await local_embedding.embed_documents(texts)
         except ProviderError as exc:
             raise ApiError(503, exc.code, exc.message, {"fallback_reason": reason}) from exc
-        return EmbeddingResult(vectors=vectors, source="local", model_id=self.local_embedding.model_id,
-                               dimensions=self.local_embedding.dim, fallback_reason=reason)
+        return EmbeddingResult(vectors=vectors, source="local", model_id=local_embedding.model_id,
+                               dimensions=local_embedding.dim, fallback_reason=reason)
 
     @staticmethod
     def _media_file(path: Path):

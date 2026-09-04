@@ -41,6 +41,9 @@ async def create_transcript_note(job_id, options):
                 lines.append("")
         else:
             lines.append(job.text or "")
+        if job.local_only:
+            # Persist the indexing policy in the Vault, including later rebuilds.
+            lines = ["---", "embedding_local_only: true", "---", "", *lines]
         try:
             note = await note_service.create_note(title=title, markdown="\n".join(lines), folder=options.folder, tags=["转写"])
         except ApiError as exc:

@@ -35,7 +35,7 @@ class EmbeddingResult(Protocol):
 
 
 class EmbeddingRuntime(Protocol):
-    async def embed(self, texts: list[str]) -> EmbeddingResult: ...
+    async def embed(self, texts: list[str], *, local_only=False) -> EmbeddingResult: ...
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,7 @@ def _unit_vector(vector: list[float], dimensions: int) -> list[float]:
     return [value / norm for value in scaled]
 
 
-async def embed_remote(texts: list[str], *, accept_local=False, strict=False) -> RemoteEmbeddings | None:
+async def embed_remote(texts: list[str], *, accept_local=False, strict=False, local_only=False) -> RemoteEmbeddings | None:
     """Return validated API vectors, or None to use the caller's local baseline.
 
     Do not use the runtime's local result: the caller may have injected its own
@@ -83,7 +83,7 @@ async def embed_remote(texts: list[str], *, accept_local=False, strict=False) ->
             if strict:
                 raise ApiError(503, "EMBEDDING_UNAVAILABLE", "Embedding 服务未就绪，请检查模型路由和本地运行环境。")
             return None
-        result = await runtime.embed(texts)
+        result = await runtime.embed(texts, local_only=True) if local_only else await runtime.embed(texts)
         if result.source != "api" and not accept_local:
             record_embedding(fallback_reason=result.fallback_reason)
             return None
