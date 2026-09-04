@@ -69,9 +69,10 @@ def configure(request):
     return request
 
 
-def interpreter():
+def interpreter(config=None):
     from app.local_models import components
-    if not os.getenv("APP_MODEL_PYTHON") and configuration().device == "cuda" and components.ready():
+    requested_device = (config or configuration()).device
+    if not os.getenv("APP_MODEL_PYTHON") and requested_device == "cuda" and components.ready():
         return components.ROOT / "Scripts/python.exe"
     return Path(os.getenv("APP_MODEL_PYTHON", str(BACKEND_DIR / ".venv-models" / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))))
 
@@ -160,7 +161,8 @@ class Runtime:
     async def _execute(self, key, operation, payload, config, diagnostics):
         if read_state(key)["status"] != "installed":
             raise ProviderError("LOCAL_MODEL_NOT_INSTALLED", "请先下载本地模型。")
-        if not interpreter().is_file():
+        executable = interpreter(config)
+        if not executable.is_file():
             raise ProviderError("LOCAL_RUNTIME_NOT_INSTALLED", "请先安装本地模型运行环境。")
         from app.services.usage_service import UsageAttempt
         attempt = UsageAttempt("local-models", CATALOG[key].repository, "local", operation, source="local")
@@ -170,7 +172,7 @@ class Runtime:
             env = {**os.environ, "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
                    "HF_HUB_DISABLE_TELEMETRY": "1", "OMP_NUM_THREADS": str(config.cpu_threads),
                    "PYTHONIOENCODING": "utf-8"}
-            args = (str(interpreter()), str(Path(__file__).with_name("worker.py")))
+            args = (str(executable), str(Path(__file__).with_name("worker.py")))
             options = {"env": env, "limit": 16 * 1024 * 1024,
                        **({"creationflags": 0x08000000} if os.name == "nt" else {})}
             try:
