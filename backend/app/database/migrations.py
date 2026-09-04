@@ -6,6 +6,7 @@
 """
 
 from datetime import datetime, timezone
+import sqlite3
 
 from app.constants import EMBEDDING_DIM
 
@@ -96,7 +97,54 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_agent_events_type
         ON agent_events(run_id, event, sequence);
     """,
+    # v4: durable media jobs, replayable events and revisions.
+    """
+    CREATE TABLE media_jobs (
+        job_id TEXT PRIMARY KEY, status TEXT NOT NULL, job_json TEXT NOT NULL,
+        request_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        idempotency_key TEXT UNIQUE, fingerprint TEXT NOT NULL
+    );
+    CREATE INDEX media_jobs_created ON media_jobs(created_at DESC);
+    CREATE TABLE media_events (
+        job_id TEXT NOT NULL REFERENCES media_jobs(job_id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL, event TEXT NOT NULL, data_json TEXT NOT NULL,
+        timestamp TEXT NOT NULL, PRIMARY KEY(job_id, sequence)
+    );
+    CREATE TABLE media_revisions (
+        job_id TEXT NOT NULL REFERENCES media_jobs(job_id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL, job_json TEXT NOT NULL,
+        PRIMARY KEY(job_id, revision)
+    );
+    CREATE TABLE media_notes (
+        job_id TEXT NOT NULL REFERENCES media_jobs(job_id), revision INTEGER NOT NULL,
+        options_hash TEXT NOT NULL, note_id TEXT NOT NULL REFERENCES notes(note_id) ON DELETE CASCADE,
+        PRIMARY KEY(job_id, revision, options_hash)
+    );
+    """,
+    # v5: application-owned search history, shared by web and desktop clients.
+    """
+    CREATE TABLE IF NOT EXISTS search_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        query TEXT NOT NULL UNIQUE
+    );
+    """,
+    # v6: persist each block's embedding policy for partitioned retrieval.
+    """
+    ALTER TABLE blocks ADD COLUMN embedding_local_only INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
+
+
+def _statements(script: str):
+    """Split complete SQLite statements without executescript's implicit COMMIT."""
+    pending = ""
+    for char in script:
+        pending += char
+        if char == ";" and sqlite3.complete_statement(pending):
+            yield pending
+            pending = ""
+    if pending.strip():
+        yield pending
 
 
 def migrate(conn) -> None:
@@ -110,9 +158,28 @@ def migrate(conn) -> None:
     for idx, script in enumerate(MIGRATIONS, start=1):
         if idx in applied:
             continue
-        conn.executescript(script)
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-            (idx, datetime.now(timezone.utc).isoformat()),
-        )
-        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Another connection may have migrated while this one waited.
+            if not conn.execute("SELECT 1 FROM schema_migrations WHERE version=?", (idx,)).fetchone():
+                recovered_v6 = False
+                if idx == 6:
+                    column = next((row for row in conn.execute("PRAGMA table_info(blocks)")
+                                   if row["name"] == "embedding_local_only"), None)
+                    if column is not None:
+                        # Recover the precise partial state left by the old v6 runner.
+                        if column["type"].upper() != "INTEGER" or column["notnull"] != 1 or column["dflt_value"] != "0":
+                            raise sqlite3.DatabaseError("Unexpected embedding_local_only column schema")
+                        recovered_v6 = True
+                if not recovered_v6:
+                    for statement in _statements(script):
+                        conn.execute(statement)
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                    (idx, datetime.now(timezone.utc).isoformat()),
+                )
+            conn.execute("COMMIT")
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise

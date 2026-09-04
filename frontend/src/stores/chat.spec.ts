@@ -16,6 +16,9 @@ it('sends real user history, applies streaming changes, and restores it when swi
   store.selectedModel = 'configured-model'
   await store.sendMessage('user input')
   const [request, handlers] = vi.mocked(streamChat).mock.calls[0]!
+  expect(request.use_rag).toBe(true)
+  handlers.onEvent?.({ event: 'Citation', sequence: 0, timestamp: '', data: { note_id: 'note', block_id: 'block', file_path: 'note.md', content: 'real evidence' } })
+  expect(store.messages[1]?.citations?.[0]?.content).toBe('real evidence')
   expect(request.messages).toEqual([{ role: 'user', content: 'user input' }])
   handlers.onEvent?.({ event: 'TextDelta', sequence: 0, timestamp: '', data: { text: 'real response' } })
   expect(store.messages[1]?.content).toBe('real response')

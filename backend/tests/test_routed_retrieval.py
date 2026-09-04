@@ -464,3 +464,158 @@ def test_missing_runtime_uses_unchanged_local_retrieval(runtime, monkeypatch):
         assert runtime.calls == []
 
     asyncio.run(scenario())
+
+
+@pytest.fixture
+def production_engine(monkeypatch):
+    from app.local_models.runtime import LocalEmbedding
+    embedding = LocalEmbedding()
+    monkeypatch.setattr(note_service, "embedding", embedding)
+    return RetrievalEngine(embedding, LexicalReranker(), SqliteVecStore(), route_embeddings=True)
+
+
+@pytest.mark.parametrize("source", ["api", "local"])
+def test_real_embedding_route_rebuilds_missing_space(runtime, production_engine, source):
+    from app.errors import ApiError
+    runtime.source = source
+
+    async def scenario():
+        await seed()
+        runtime.model_id = "new-configured-space"
+        with pytest.raises(ApiError) as error:
+            await production_engine.search(request())
+        assert error.value.code == "SEMANTIC_INDEX_UNAVAILABLE"
+        assert "Embedding 已可用" in error.value.message
+        assert error.value.details["source"] == source
+        await index_service.rebuild(IndexRebuildRequest())
+        assert (await production_engine.search(request())).items
+
+    asyncio.run(scenario())
+
+
+def test_real_embedding_failure_is_not_reported_as_missing_configuration(runtime, production_engine):
+    from app.errors import ApiError
+
+    async def scenario():
+        await seed()
+        runtime.error = ApiError(503, "LOCAL_MODEL_TIMEOUT", "本地模型推理超时。", {"fallback_reason": "PROVIDER_TIMEOUT"})
+        with pytest.raises(ApiError) as error:
+            await production_engine.search(request())
+        assert error.value.code == "LOCAL_MODEL_TIMEOUT"
+        assert error.value.details["fallback_reason"] == "PROVIDER_TIMEOUT"
+        assert (await production_engine.search(SearchRequest(query="apple", mode=SearchMode.hybrid))).items
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["inference", "storage", "space_change"])
+def test_real_embedding_rebuild_failure_preserves_index(runtime, production_engine, monkeypatch, failure):
+    from app.errors import ApiError
+
+    async def scenario():
+        await seed()
+        tables = ("notes", "blocks", "blocks_fts", "index_meta", "routed_block_vectors")
+        before = {table: [tuple(r) for r in rows(f"SELECT * FROM {table}")] for table in tables}
+        if failure == "inference":
+            runtime.error = ApiError(503, "LOCAL_MODEL_TIMEOUT", "本地模型推理超时。")
+        elif failure == "storage":
+            monkeypatch.setattr(routed_vectors, "store_remote", lambda *args: None)
+        else:
+            original = runtime.embed
+            async def changing(texts):
+                runtime.model_id += "x"
+                return await original(texts)
+            monkeypatch.setattr(runtime, "embed", changing)
+        with pytest.raises(ApiError):
+            await index_service.rebuild(IndexRebuildRequest())
+        assert index_service.get_status().status == "failed"
+        after = {table: [tuple(r) for r in rows(f"SELECT * FROM {table}")] for table in tables}
+        assert before == after
+
+    asyncio.run(scenario())
+
+
+def test_empty_vault_vector_search_returns_empty(runtime, production_engine):
+    assert asyncio.run(production_engine.search(request())).items == []
+
+
+@pytest.fixture
+def policy_runtime(monkeypatch):
+    class PolicyRuntime:
+        fallback = False
+        calls = []
+        async def embed(self, texts, *, local_only=False):
+            self.calls.append((list(texts), local_only))
+            local = local_only or self.fallback
+            dim = 3 if local else 2
+            return SimpleNamespace(source='local' if local else 'api', model_id='local-space' if local else 'api-space',
+                                   dimensions=dim, vectors=[[1.0] + [0.0] * (dim - 1) for _ in texts],
+                                   fallback_reason='PROVIDER_TIMEOUT' if self.fallback and not local_only else None)
+    runtime = PolicyRuntime()
+    monkeypatch.setattr(routed_vectors, 'get_model_routing', lambda: runtime)
+    return runtime
+
+
+async def seed_policies():
+    normal = await note_service.create_note(title='Normal', markdown='apple public', folder=None, tags=[])
+    private = await note_service.create_note(title='Private', markdown='---\nembedding_local_only: true\n---\napple private', folder=None, tags=[])
+    return normal, private
+
+
+@pytest.mark.parametrize('fallback', [False, True])
+def test_mixed_policy_rebuild_and_retrieval(policy_runtime, production_engine, fallback):
+    policy_runtime.fallback = fallback
+    async def scenario():
+        notes = await seed_policies()
+        await index_service.rebuild(IndexRebuildRequest())
+        for mode in (SearchMode.vector, SearchMode.hybrid):
+            result = await production_engine.search(SearchRequest(query='apple', mode=mode))
+            assert {item.note_id for item in result.items} == {note.note_id for note in notes}
+        for texts, local_only in policy_runtime.calls:
+            if any('private' in text for text in texts):
+                assert local_only
+        if not fallback:
+            assert {r[0] for r in rows('SELECT DISTINCT space_id FROM routed_block_vectors')} == {'api-space', 'local-space'}
+    asyncio.run(scenario())
+
+
+def test_local_only_vault_never_requests_api_for_search(policy_runtime, production_engine):
+    async def scenario():
+        await note_service.create_note(title='Private', markdown='---\nembedding_local_only: true\n---\napple private', folder=None, tags=[])
+        await index_service.rebuild(IndexRebuildRequest())
+        assert (await production_engine.search(request())).items
+        assert all(local_only for _, local_only in policy_runtime.calls)
+    asyncio.run(scenario())
+
+
+def test_partition_storage_failure_rolls_back_all_partitions(policy_runtime, production_engine, monkeypatch):
+    from app.errors import ApiError
+    async def scenario():
+        await seed_policies()
+        before = [tuple(row) for row in rows('SELECT * FROM routed_block_vectors ORDER BY block_id')]
+        original = routed_vectors.store_remote
+        def fail_local(conn, ids, batch):
+            if batch.source != 'local':
+                original(conn, ids, batch)
+        monkeypatch.setattr(routed_vectors, 'store_remote', fail_local)
+        with pytest.raises(ApiError) as error:
+            await index_service.rebuild(IndexRebuildRequest())
+        assert error.value.code == 'SEMANTIC_INDEX_WRITE_FAILED'
+        assert [tuple(row) for row in rows('SELECT * FROM routed_block_vectors ORDER BY block_id')] == before
+    asyncio.run(scenario())
+
+
+def test_missing_partition_does_not_silently_return_partial_hits(policy_runtime, production_engine):
+    from app.errors import ApiError
+    async def scenario():
+        await seed_policies()
+        conn = connect()
+        try:
+            conn.execute("DELETE FROM routed_block_vectors WHERE space_id='local-space'")
+        finally:
+            conn.close()
+        with pytest.raises(ApiError) as error:
+            await production_engine.search(request())
+        assert error.value.code == 'SEMANTIC_INDEX_UNAVAILABLE'
+        assert (await production_engine.search(request(SearchMode.hybrid))).items
+    asyncio.run(scenario())

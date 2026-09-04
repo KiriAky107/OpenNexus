@@ -303,7 +303,22 @@ async def rename_note(note_id: str, request: NoteRenameRequest) -> Note:
 # Retrieval and chat
 @router.post("/search", response_model=SearchResponse, tags=["Search"])
 async def search_notes(request: SearchRequest) -> SearchResponse:
+    from app.services import search_history
+    search_history.record(request.query)
     return await engine.search(request)
+
+
+@router.get("/search/history", tags=["Search"])
+async def get_search_history() -> dict[str, list[str]]:
+    from app.services import search_history
+    return {"queries": search_history.list_queries()}
+
+
+@router.delete("/search/history", tags=["Search"])
+async def clear_search_history() -> dict[str, list[str]]:
+    from app.services import search_history
+    search_history.clear()
+    return {"queries": []}
 
 
 @router.post(
@@ -323,15 +338,24 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     async def stream() -> AsyncIterator[str]:
         sequence = 0
         try:
-            async with aclosing(provider.adapter.stream(request)) as events:
+            from app.services.chat_context import prepare
+            grounded_request, citations = await prepare(request)
+            for citation in citations:
+                event = ModelEvent(event=ModelEventType.citation, sequence=sequence,
+                                   data=citation, timestamp=utc_now())
+                sequence += 1
+                yield as_sse(event.event.value, event.model_dump_json())
+            async with aclosing(provider.adapter.stream(grounded_request)) as events:
                 async for event in events:
-                    sequence = event.sequence + 1
+                    event = event.model_copy(update={"sequence": sequence})
+                    sequence += 1
                     yield as_sse(event.event.value, event.model_dump_json())
-        except Exception:
+        except Exception as exc:
             error = ModelEvent(
                 event=ModelEventType.error,
                 sequence=sequence,
-                data={"code": "PROVIDER_ERROR", "message": "Provider could not complete the request."},
+                data={"code": exc.code if isinstance(exc, ApiError) else "CHAT_FAILED",
+                      "message": exc.message if isinstance(exc, ApiError) else "知识库检索或模型生成失败，请检查服务状态。"},
                 timestamp=utc_now(),
             )
             done = ModelEvent(
@@ -915,6 +939,7 @@ async def create_provider(request: ProviderCreateRequest) -> ProviderConfig:
         default_model=request.default_model,
         credential_id=request.credential_id,
         enabled=request.enabled,
+        request_overrides=request.request_overrides,
         capabilities=container.provider_factory.capabilities(request.provider_type),
     )
     try:
@@ -943,8 +968,12 @@ async def update_provider(
             409, "BUILTIN_PROVIDER_IMMUTABLE", "Mock provider cannot be modified."
         )
     fields = request.model_fields_set
+    if request.version is not None and request.version != current.version:
+        raise ApiError(409, "PROVIDER_VERSION_CONFLICT", "提供商配置已变更，请重新加载后保存。")
     if ("provider_type" in fields and request.provider_type is None) or ("name" in fields and request.name is None) or (
         "enabled" in fields and request.enabled is None
+    ) or (
+        "request_overrides" in fields and request.request_overrides is None
     ):
         raise ApiError(
             422,
@@ -952,6 +981,7 @@ async def update_provider(
             "provider_type, name and enabled cannot be null when explicitly provided.",
         )
     updates = {name: getattr(request, name) for name in fields}
+    updates["version"] = current.version + 1
     if "credential_id" in fields:
         validate_public_credential_id(request.credential_id)
     config = ProviderConfig.model_validate(
@@ -1100,6 +1130,7 @@ async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResult:
 async def match_speakers(request: SpeakerMatchRequest) -> SpeakerMatchResult:
     return await container.model_routing.match_speakers(
         attachment_path(request.attachment_id), attachment_path(request.reference_attachment_id),
+        local_only=request.local_only,
     )
 
 
@@ -1111,7 +1142,7 @@ async def match_speakers(request: SpeakerMatchRequest) -> SpeakerMatchResult:
 )
 async def create_transcription(request: TranscriptionRequest) -> TranscriptionJob:
     return await transcription_service.create_transcription(
-        request.attachment_id, request.language, diarization=request.diarization
+        **request.model_dump(), wait=False
     )
 
 

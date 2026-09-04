@@ -17,7 +17,7 @@ from app.contracts import Note, NoteBlock, NoteSummary
 from app.database.db import connect, transaction
 from app.errors import ApiError
 from app.knowledge.parser import ParsedNote, parse_note
-from app.retrieval.embedding import HashEmbeddingProvider
+from app.local_models.runtime import LocalEmbedding
 from app.retrieval import routed_vectors
 from app.retrieval.vectorstore import SqliteVecStore, VectorRecord
 from app.services.coordination import serialized_vault_mutation
@@ -28,8 +28,8 @@ from app.services.vault_paths import (
     safe_note_filename,
 )
 
-# 轻量实现实例（无状态，可直接复用）；接入真实模型后替换为对应 Provider
-embedding = HashEmbeddingProvider()
+# 真实模型接口不在 API 进程加载权重；测试可显式替换该实例。
+embedding = LocalEmbedding()
 vector_store = SqliteVecStore()
 
 
@@ -77,11 +77,15 @@ def _delete_markdown(rel_path: str) -> None:
 PreparedIndex = tuple[list[list[float]], routed_vectors.RemoteEmbeddings | None]
 
 
-async def prepare_note_index(parsed: ParsedNote) -> PreparedIndex:
+async def prepare_note_index(parsed: ParsedNote, *, strict=False) -> PreparedIndex:
     """Compute vectors before opening a write transaction (including API I/O)."""
     texts = [block.content for block in parsed.blocks]
+    if isinstance(embedding, LocalEmbedding):
+        # One routed invocation: API first, validated local fallback. No hash vectors.
+        remote = await routed_vectors.embed_remote(texts, accept_local=True, strict=strict, local_only=parsed.embedding_local_only)
+        return [], remote
     vectors = await embedding.embed_documents(texts)
-    remote = await routed_vectors.embed_remote(texts)
+    remote = await routed_vectors.embed_remote(texts, local_only=parsed.embedding_local_only)
     return vectors, remote
 
 
@@ -114,6 +118,8 @@ async def index_note(
                 blocks=parsed.blocks,
             )
             old_ids = set(old_block_ids)
+            conn.execute("UPDATE blocks SET embedding_local_only=? WHERE note_id=?",
+                         (int(parsed.embedding_local_only), parsed.note_id))
             new_ids = {block.block_id for block in parsed.blocks}
             stale_ids = [bid for bid in old_ids if bid not in new_ids]
             if stale_ids:
@@ -127,7 +133,8 @@ async def index_note(
             await vector_store.upsert(records, conn=conn)
             routed_vectors.store_remote(conn, [block.block_id for block in parsed.blocks], remote)
             repository.set_index_meta(
-                {"embedding_model": embedding.model_id, "embedding_dim": str(embedding.dim)},
+                {"embedding_model": remote.space_id if remote and isinstance(embedding, LocalEmbedding) else embedding.model_id,
+                 "embedding_dim": str(remote.dimensions if remote and isinstance(embedding, LocalEmbedding) else embedding.dim)},
                 conn=conn,
             )
     finally:

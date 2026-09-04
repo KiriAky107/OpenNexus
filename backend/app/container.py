@@ -88,7 +88,7 @@ def build_container() -> ApplicationContainer:
     return ApplicationContainer(
         providers=providers,
         provider_factory=provider_factory,
-        model_routing=ModelRoutingService(providers, provider_factory.credentials),
+        model_routing=_local_model_routing(providers, provider_factory.credentials),
         credentials=credentials,
         tools=tools,
         permissions=permissions,
@@ -97,6 +97,11 @@ def build_container() -> ApplicationContainer:
         mcp_servers=mcp_servers,
         agent=agent,
     )
+
+
+def _local_model_routing(providers, credentials):
+    from app.local_models.runtime import LocalEmbedding, LocalSpeech
+    return ModelRoutingService(providers, credentials, local_embedding=LocalEmbedding(), local_speech=LocalSpeech())
 
 
 container = build_container()

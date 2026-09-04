@@ -19,6 +19,8 @@ from app.services.note_service import index_note, prepare_note_index
 from app.database.db import connect, transaction
 from app.services.coordination import serialized_vault_mutation
 from app.retrieval.vectorstore import SqliteVecStore
+from app.local_models.runtime import LocalEmbedding
+from app.services import note_service
 
 vector_store = SqliteVecStore()
 
@@ -83,12 +85,23 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
     ))
     try:
         prepared_notes = []
+        semantic_spaces = {}
         for rel, folder, markdown, created, updated in docs:
             parsed = parse_note(
                 markdown=markdown, file_path=rel, folder=folder, tags=None,
                 created_at=created, updated_at=updated,
             )
-            prepared_notes.append((parsed, await prepare_note_index(parsed)))
+            prepared = await prepare_note_index(parsed, strict=True) if isinstance(note_service.embedding, LocalEmbedding) else await prepare_note_index(parsed)
+            if isinstance(note_service.embedding, LocalEmbedding) and parsed.blocks:
+                batch = prepared[1]
+                if batch is None:
+                    raise ApiError(503, "EMBEDDING_UNAVAILABLE", "Embedding 未生成向量，重建已停止，原索引已保留。")
+                space = (batch.space_id, batch.dimensions)
+                policy = parsed.embedding_local_only
+                if policy in semantic_spaces and semantic_spaces[policy] != space:
+                    raise ApiError(409, "EMBEDDING_SPACE_CHANGED", "重建期间 Embedding 模型发生切换，原索引已保留，请待模型服务稳定后重试。")
+                semantic_spaces[policy] = space
+            prepared_notes.append((parsed, prepared))
         # All network/model awaits precede the transaction. The concrete SQLite
         # methods below complete synchronously despite their async interfaces.
         conn = connect()
@@ -97,16 +110,29 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
                 task_note_links = dict(conn.execute(
                     "SELECT task_id, note_id FROM tasks WHERE note_id IS NOT NULL"
                 ).fetchall())
+                media_links = conn.execute("SELECT job_id,revision,options_hash,note_id FROM media_notes").fetchall()
                 repository.clear_all(conn=conn)
                 await vector_store.clear(conn=conn)
                 for parsed, prepared in prepared_notes:
                     await index_note(parsed, prepared=prepared, conn=conn)
+                for policy, space in semantic_spaces.items():
+                    exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='routed_block_vectors'").fetchone()
+                    missing = not exists or conn.execute(
+                        "SELECT 1 FROM blocks b LEFT JOIN routed_block_vectors r "
+                        "ON r.block_id=b.block_id AND r.space_id=? AND r.dimensions=? "
+                        "WHERE b.embedding_local_only=? AND r.block_id IS NULL LIMIT 1", (*space, int(policy)),
+                    ).fetchone()
+                    if missing:
+                        raise ApiError(500, "SEMANTIC_INDEX_WRITE_FAILED", "向量索引写入失败，原索引已保留，请检查数据库和磁盘状态。")
                 for task_id, note_id in task_note_links.items():
                     conn.execute(
                         "UPDATE tasks SET note_id = ? WHERE task_id = ? "
                         "AND EXISTS (SELECT 1 FROM notes WHERE note_id = ?)",
                         (note_id, task_id, note_id),
                     )
+                for link in media_links:
+                    conn.execute("INSERT OR IGNORE INTO media_notes SELECT ?,?,?,? WHERE EXISTS (SELECT 1 FROM notes WHERE note_id=?)",
+                                 (*link, link["note_id"]))
         finally:
             conn.close()
     except BaseException as exc:
