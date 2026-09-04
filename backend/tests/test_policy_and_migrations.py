@@ -165,3 +165,41 @@ def test_bom_save_and_invalid_update_never_use_remote(monkeypatch):
         assert (get_settings().vault_path/note.file_path).read_text(encoding='utf-8')==markdown
         assert (await note_service.get_note(note.note_id)).markdown==markdown
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('markdown', ['---', '---\n\n# Title\n\nNormal body', '---\n\nNormal body\n\n---\n\nLast paragraph', '---\n\n```python\nprint(1)\n```\n---'])
+def test_thematic_breaks_are_not_frontmatter(markdown):
+    note = parse_note(markdown=markdown,file_path='ordinary.md',folder='',created_at=datetime.now(timezone.utc),updated_at=datetime.now(timezone.utc))
+    assert not note.embedding_local_only
+    assert note.blocks[0].content == '---'
+    assert any(block.content == markdown.split('\n\n')[-1] for block in note.blocks) or '```' in markdown
+
+
+@pytest.mark.parametrize('header', ['title: Sample\nembedding_local_only: true', '"embedding_local_only": true', 'title: [broken\nembedding_local_only: true', '{embedding_local_only: true'])
+def test_unclosed_metadata_still_fails_closed(header):
+    with pytest.raises(ApiError) as error:
+        parse_note(markdown='---\n'+header,file_path='private.md',folder='',created_at=datetime.now(timezone.utc),updated_at=datetime.now(timezone.utc))
+    assert error.value.code == 'INVALID_EMBEDDING_POLICY'
+
+
+def test_thematic_break_note_can_save_and_rebuild():
+    import asyncio
+    from app.services import note_service, index_service
+    from app.contracts import IndexRebuildRequest
+    async def scenario():
+        markdown='---\n\n# Title\n\nNormal body'
+        note=await note_service.create_note(title='Divider',markdown=markdown,folder=None,tags=[])
+        assert note.blocks[0].content == '---'
+        assert (await index_service.rebuild(IndexRebuildRequest())).status == 'completed'
+        loaded=await note_service.get_note(note.note_id)
+        assert loaded.markdown == markdown
+        assert [b.content for b in loaded.blocks] == [b.content for b in note.blocks]
+    asyncio.run(scenario())
+
+
+def test_thematic_break_with_policy_example_is_ordinary_markdown():
+    markdown='---\n\n```yaml\nembedding_local_only: true\n```\n\n---\n\nExplanation'
+    note=parse_note(markdown=markdown,file_path='example.md',folder='',created_at=datetime.now(timezone.utc),updated_at=datetime.now(timezone.utc))
+    assert not note.embedding_local_only
+    assert any('embedding_local_only: true' in block.content for block in note.blocks)
+    assert note.blocks[0].content=='---'

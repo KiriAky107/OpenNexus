@@ -190,9 +190,42 @@ def _frontmatter(markdown: str) -> tuple[str, int] | None:
     offset = content_start
     for raw in markdown[content_start:].splitlines(keepends=True):
         if re.fullmatch(r"(?:---|\.\.\.)[ \t]*", raw.rstrip("\r\n")):
-            return markdown[content_start:offset], offset + len(raw)
+            candidate = markdown[content_start:offset]
+            if not candidate.strip() or _metadata_intent(candidate):
+                return candidate, offset + len(raw)
+            return None  # Ordinary Markdown between thematic breaks.
         offset += len(raw)
+    if not _metadata_intent(markdown[content_start:]):
+        return None
     raise ApiError(422, "INVALID_EMBEDDING_POLICY", "Frontmatter 未闭合，请补全独立一行的结束分隔符后再保存。")
+
+
+def _metadata_intent(content: str) -> bool:
+    """A thematic break alone is not a declaration of YAML metadata."""
+    # An explicit policy must fail closed even when other header lines are broken.
+    fence_marker = None
+    for line in content.splitlines():
+        fence = _FENCE_RE.match(line)
+        if fence_marker is not None:
+            marker = fence.group(1) if fence else ""
+            if marker.startswith(fence_marker[0]) and len(marker) >= len(fence_marker):
+                fence_marker = None
+            continue
+        if fence:
+            fence_marker = fence.group(1)
+            continue
+        if re.match(r"(?i)^[ \t]*[\"']?embedding_local_only[\"']?[ \t]*:", line):
+            return True
+    try:
+        if isinstance(yaml.compose(content, Loader=yaml.SafeLoader), yaml.MappingNode):
+            return True
+    except yaml.YAMLError:
+        pass
+    first = next((line.strip() for line in content.splitlines()
+                  if line.strip() and not line.lstrip().startswith("#")), "")
+    # Preserve errors for incomplete key/value headers, including flow mappings.
+    return bool(re.match(r"(?:[\w.-]+|[\"'][^\"']+[\"'])\s*:(?:\s|$)", first)
+                or (first.startswith("{") and ":" in first))
 
 
 def _utf16_len(text: str) -> int:
