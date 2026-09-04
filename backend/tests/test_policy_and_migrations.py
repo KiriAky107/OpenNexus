@@ -108,3 +108,60 @@ def test_merge_policy_is_rejected_instead_of_ignored():
         parsed('true\n<<: {embedding_local_only: false}')
     with pytest.raises(ApiError):
         parsed('!!bool invalid')
+
+
+@pytest.mark.parametrize('bom', ['', '\ufeff'])
+@pytest.mark.parametrize('newline', ['\n', '\r\n', '\r'])
+@pytest.mark.parametrize('closing', ['---', '...'])
+def test_frontmatter_boundaries_preserve_policy_and_utf16_offsets(bom, newline, closing):
+    markdown = bom + newline.join(['---  ', 'title: Sample', 'embedding_local_only: true # local', closing+'  ', '# Heading', '', 'private \U0001f600'])
+    note = parse_note(markdown=markdown, file_path='note.md', folder='', created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc))
+    assert note.embedding_local_only and note.title == 'Sample'
+    assert all('embedding_local_only' not in block.content for block in note.blocks)
+    block = next(block for block in note.blocks if block.content == 'private \U0001f600')
+    original = markdown.encode('utf-16-le')[block.start_offset*2:block.end_offset*2].decode('utf-16-le')
+    assert original == block.content
+
+
+@pytest.mark.parametrize('ending', ['', '\n---not-a-delimiter', '\n----'])
+def test_unclosed_frontmatter_is_rejected_even_with_bom(ending):
+    for bom in ['', '\ufeff']:
+        markdown = bom+'---\nembedding_local_only: true'+ending
+        with pytest.raises(ApiError) as error:
+            parse_note(markdown=markdown, file_path='note.md', folder='', created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc))
+        assert error.value.code == 'INVALID_EMBEDDING_POLICY'
+
+
+def test_boundary_matching_does_not_truncate_yaml_keys():
+    markdown = '---\n---metadata: value\nembedding_local_only: true\n---\nbody'
+    note = parse_note(markdown=markdown,file_path='note.md',folder='',created_at=datetime.now(timezone.utc),updated_at=datetime.now(timezone.utc))
+    assert note.embedding_local_only
+
+
+def test_bom_save_and_invalid_update_never_use_remote(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from app.local_models.runtime import LocalEmbedding
+    from app.retrieval import routed_vectors
+    from app.services import note_service, index_service
+    from app.contracts import IndexRebuildRequest
+    from app.config import get_settings
+    calls=[]
+    class Routing:
+        async def embed(self, texts, *, local_only=False):
+            calls.append(local_only)
+            assert local_only
+            return SimpleNamespace(source='local', model_id='local-test', dimensions=2, vectors=[[1.0,0.0] for _ in texts], fallback_reason=None)
+    monkeypatch.setattr(routed_vectors, 'get_model_routing', lambda: Routing())
+    monkeypatch.setattr(note_service, 'embedding', LocalEmbedding())
+    async def scenario():
+        markdown='\ufeff---\nembedding_local_only: true\n---\nprivate text'
+        note=await note_service.create_note(title='Private',markdown=markdown,folder=None,tags=[])
+        await index_service.rebuild(IndexRebuildRequest())
+        count=len(calls)
+        with pytest.raises(ApiError):
+            await note_service.update_note(note.note_id,markdown='\ufeff---\nembedding_local_only: true\nprivate text')
+        assert len(calls)==count
+        assert (get_settings().vault_path/note.file_path).read_text(encoding='utf-8')==markdown
+        assert (await note_service.get_note(note.note_id)).markdown==markdown
+    asyncio.run(scenario())

@@ -176,11 +176,23 @@ def _split_lines(text: str) -> list[tuple[str, int]]:
 
 def _content_start(markdown: str) -> int:
     """返回正文起始 UTF-16 偏移：有 frontmatter 时跳过 --- 分隔块。"""
-    if markdown.startswith("---"):
-        end = markdown.find("\n---", 3)
-        if end != -1:
-            return _utf16_len(markdown[: end + 4])
-    return 0
+    header = _frontmatter(markdown)
+    return _utf16_len(markdown[:header[1]]) if header else 0
+
+
+def _frontmatter(markdown: str) -> tuple[str, int] | None:
+    """Return YAML text and body character offset without changing original text."""
+    start = 1 if markdown.startswith("\ufeff") else 0
+    opening = re.match(r"---[ \t]*(?:\r\n|\n|\r|\Z)", markdown[start:])
+    if opening is None:
+        return None
+    content_start = start + opening.end()
+    offset = content_start
+    for raw in markdown[content_start:].splitlines(keepends=True):
+        if re.fullmatch(r"(?:---|\.\.\.)[ \t]*", raw.rstrip("\r\n")):
+            return markdown[content_start:offset], offset + len(raw)
+        offset += len(raw)
+    raise ApiError(422, "INVALID_EMBEDDING_POLICY", "Frontmatter 未闭合，请补全独立一行的结束分隔符后再保存。")
 
 
 def _utf16_len(text: str) -> int:
@@ -188,13 +200,13 @@ def _utf16_len(text: str) -> int:
 
 
 def _embedding_policy(markdown: str) -> bool:
-    end = markdown.find("\n---", 3) if markdown.startswith("---") else -1
-    if end == -1:
+    header = _frontmatter(markdown)
+    if header is None:
         return False
     try:
         # Compose nodes without constructing objects. This accepts YAML comments,
         # quoted keys and indentation while retaining duplicate-key information.
-        node = yaml.compose(markdown[3:end], Loader=yaml.SafeLoader)
+        node = yaml.compose(header[0], Loader=yaml.SafeLoader)
     except yaml.YAMLError as exc:
         raise ApiError(422, "INVALID_EMBEDDING_POLICY", "Frontmatter YAML 无效，无法确认本地索引策略。") from exc
     if node is None:
@@ -218,13 +230,11 @@ def _embedding_policy(markdown: str) -> bool:
 
 def _extract_frontmatter(markdown: str) -> dict[str, str]:
     """极简 frontmatter 解析，只提取 key: value 行。"""
-    if not markdown.startswith("---"):
-        return {}
-    end = markdown.find("\n---", 3)
-    if end == -1:
+    header = _frontmatter(markdown)
+    if header is None:
         return {}
     meta: dict[str, str] = {}
-    for line in markdown[3:end].splitlines():
+    for line in header[0].splitlines():
         m = _FRONTMATTER_KEY_RE.match(line)
         if m:
             meta[m.group(1).lower()] = m.group(2).strip()
