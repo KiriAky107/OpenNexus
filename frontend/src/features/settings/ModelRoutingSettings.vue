@@ -6,9 +6,9 @@ import { listProviders } from '@/services/providerService'
 import { ApiErrorClass } from '@/services/apiClient'
 
 const capabilities: Array<{ id: RoutingCapability; name: string; endpoint: string; placeholder: string; local: string }> = [
-  { id: 'embedding', name: '向量嵌入 · Embedding', endpoint: '/embeddings', placeholder: '例如 text-embedding-3-small', local: '当前为占位实现，尚未接入真实本地嵌入模型。' },
-  { id: 'transcription', name: '语音转写 · Transcription', endpoint: '/audio/transcriptions', placeholder: '输入转写模型 ID', local: '真实本地 ASR 尚未接入，等待阶段 F；当前无法进行本地语音识别。' },
-  { id: 'speaker_matching', name: '说话人匹配 · Speaker matching', endpoint: '/audio/speaker-matches', placeholder: '输入说话人匹配模型 ID', local: '真实本地说话人匹配尚未接入，等待阶段 F；当前无法进行本地声纹匹配。' },
+  { id: 'embedding', name: '向量嵌入 · Embedding', endpoint: '/embeddings', placeholder: '例如 text-embedding-3-small', local: '本地支持 Bekko / Granite，安装权重后可离线运行。' },
+  { id: 'transcription', name: '语音转写 · Transcription', endpoint: '/audio/transcriptions', placeholder: '输入转写模型 ID', local: '本地采用 Qwen3-ASR 0.6B，默认 CPU。' },
+  { id: 'speaker_matching', name: '说话人匹配 · Speaker matching', endpoint: '/audio/speaker-matches', placeholder: '输入说话人匹配模型 ID', local: '本地采用 ERes2NetV2，比对结果是相似度。' },
 ]
 type Draft = { provider_id: string; model: string; endpoint: string; dimensions: string | number }
 const drafts = reactive(Object.fromEntries(capabilities.map(item => [item.id, { provider_id: '', model: '', endpoint: item.endpoint, dimensions: '' }])) as Record<RoutingCapability, Draft>)
@@ -26,7 +26,7 @@ const unavailable = computed(() => providers.value.filter(provider => !eligible(
 const localBackend = (capability: RoutingCapability) => response.value?.local_backends.find(item => item.capability === capability)
 const localLabel = (capability: RoutingCapability) => {
   const status = localBackend(capability)?.status
-  return status === 'ready' ? '已就绪' : status === 'placeholder' ? '占位实现' : '尚未接入'
+  return status === 'ready' ? '已安装' : status === 'placeholder' ? '测试占位实现' : '未安装'
 }
 const protocols = [
   { id: 'openai_chat', label: 'OpenAI Chat' }, { id: 'openai_compatible', label: 'OpenAI Compatible' },
@@ -108,7 +108,7 @@ async function save() {
 <template>
   <section class="routing-settings" aria-labelledby="routing-title" :aria-busy="loading || saving">
     <div><h2 id="routing-title">能力模型路由</h2><p class="subtle">向量嵌入、语音转写和说话人匹配分别选择提供商与模型，独立于默认聊天模型。API Key 在「模型提供商」中管理。</p></div>
-    <p class="subtle">未选择提供商即使用本地路径。API 请求失败、配置不可用或响应无效时，服务端会回退到当前本地处理；本地占位不代表真实模型已接入。</p>
+    <p class="subtle">未选择提供商即使用本地模型。API 请求失败、配置不可用或响应无效时回退到本地；使用前请下载对应权重并安装运行环境。</p>
     <p v-if="loading" role="status">正在加载模型路由…</p>
     <div v-if="error" class="error-banner" role="alert">{{ error }}</div>
     <div class="inline-actions"><button type="button" class="button-secondary" :disabled="loading || saving" @click="load">{{ conflict ? '放弃当前输入并加载最新配置' : response ? '重新加载（放弃未保存更改）' : '重试加载' }}</button><span v-if="response" class="subtle">配置版本 {{ response.config.version }}</span></div>

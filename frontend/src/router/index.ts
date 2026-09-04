@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const routes = [
+  { path: '/media', name: 'media', component: () => import('@/features/media/MediaView.vue'), meta: { title: '音视频转写', requiresVault: true } },
   {
     path: '/',
     name: 'vault-entry',

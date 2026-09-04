@@ -397,7 +397,16 @@ export interface ModelInfo {
   context_window?: number
 }
 
+export interface RequestOverride {
+  capability: 'chat' | 'embedding' | 'transcription' | 'speaker_matching'
+  model?: string | null
+  stream?: boolean | null
+  body: Record<string, unknown>
+}
+
 export interface ProviderConfig {
+  version?: number
+  request_overrides?: RequestOverride[]
   provider_id: string
   provider_type: ProviderType
   name: string
@@ -737,6 +746,8 @@ export type ApiProviderType =
   | 'ollama'
 
 export interface ApiProviderConfig {
+  version?: number
+  request_overrides?: RequestOverride[]
   provider_id: string
   provider_type: ApiProviderType
   name: string
