@@ -165,21 +165,32 @@ runtime = Runtime()
 class LocalEmbedding:
     dim = 384
 
+    def __init__(self, config=None):
+        self._config = config
+
+    def snapshot(self):
+        return LocalEmbedding((self._config or configuration()).model_copy(deep=True))
+
     @property
     def model_id(self):
-        spec = CATALOG[configuration().embedding_model]
+        spec = CATALOG[(self._config or configuration()).embedding_model]
         return f"{spec.repository}@{spec.revision}"
 
     @property
     def version(self):
-        return CATALOG[configuration().embedding_model].revision
+        return CATALOG[(self._config or configuration()).embedding_model].revision
 
     @property
     def available(self):
         return read_state(configuration().embedding_model)["status"] == "installed" and interpreter().is_file()
 
     async def embed_documents(self, texts):
-        return await runtime.infer(configuration().embedding_model, "embedding", {"texts": texts}, priority=0)
+        config = (self._config or configuration()).model_copy(deep=True)
+        token = runtime_context.set(config)
+        try:
+            return await runtime.infer(config.embedding_model, "embedding", {"texts": texts}, priority=0)
+        finally:
+            runtime_context.reset(token)
 
     async def embed_query(self, query):
         return (await self.embed_documents([query]))[0]

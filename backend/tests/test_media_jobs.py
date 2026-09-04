@@ -102,3 +102,29 @@ def test_terminology_export_and_privacy_cleanup():
         assert cleaned['text'] is None and cleaned['original_text'] is None and cleaned['corrections'] == []
         assert client.post(f'/api/media/transcriptions/{job_id}/retry').status_code == 409
         assert client.get('/api/media/attachments/lecture.txt').status_code == 404
+
+
+def test_local_only_export_and_rebuild_keep_local_embedding_policy(monkeypatch):
+    from types import SimpleNamespace
+    from app.contracts import TranscriptNoteRequest, IndexRebuildRequest
+    from app.local_models.runtime import LocalEmbedding
+    from app.retrieval import routed_vectors
+    from app.services import note_service, index_service
+    from app.services.media_notes import create_transcript_note
+    calls = []
+    class Routing:
+        async def embed(self, texts, *, local_only=False):
+            calls.append(local_only)
+            assert local_only
+            return SimpleNamespace(source='local', model_id='local-test', dimensions=2,
+                                   vectors=[[1.0, 0.0] for _ in texts], fallback_reason=None)
+    monkeypatch.setattr(routed_vectors, 'get_model_routing', lambda: Routing())
+    monkeypatch.setattr(note_service, 'embedding', LocalEmbedding())
+    text_attachment()
+    async def scenario():
+        job = await jobs.create_transcription('lecture.txt', local_only=True)
+        note = await create_transcript_note(job.job_id, TranscriptNoteRequest(title='Private'))
+        assert note.markdown.startswith('---\nembedding_local_only: true\n---')
+        await index_service.rebuild(IndexRebuildRequest())
+        assert len(calls) >= 2 and all(calls)
+    asyncio.run(scenario())

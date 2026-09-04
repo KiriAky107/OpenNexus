@@ -82,10 +82,10 @@ async def prepare_note_index(parsed: ParsedNote, *, strict=False) -> PreparedInd
     texts = [block.content for block in parsed.blocks]
     if isinstance(embedding, LocalEmbedding):
         # One routed invocation: API first, validated local fallback. No hash vectors.
-        remote = await routed_vectors.embed_remote(texts, accept_local=True, strict=strict)
+        remote = await routed_vectors.embed_remote(texts, accept_local=True, strict=strict, local_only=parsed.embedding_local_only)
         return [], remote
     vectors = await embedding.embed_documents(texts)
-    remote = await routed_vectors.embed_remote(texts)
+    remote = await routed_vectors.embed_remote(texts, local_only=parsed.embedding_local_only)
     return vectors, remote
 
 
