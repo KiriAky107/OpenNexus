@@ -15,7 +15,7 @@ _PLUGINS = ["table", "math", "url", "task_lists"]
 
 # fenced code 语言分流：命中则转为专用节点，其余按普通代码块
 _MERMAID_LANG = "mermaid"
-_FUNCTION_PLOT_LANGS = {"function_plot", "functionplot"}
+_FUNCTION_PLOT_LANGS = {"function-plot", "function_plot", "functionplot"}
 
 
 def parse_document(markdown: str) -> Document:
@@ -85,10 +85,19 @@ class _AstMapper:
             return DocumentNode(type="thematic_break", node_id=self.next_id())
         if kind == "blank_line":
             return None
-        # 未知块级 token（如 block_html）保守保留原文，避免静默丢失
+        if kind == "block_html":
+            # 原始 HTML 块降级为纯文本节点，由 HtmlExporter 转义并记 warning，避免静默丢失正文
+            return DocumentNode(
+                type="html_block", node_id=self.next_id(), text=token.get("raw", "")
+            )
+        # 未知块级 token 保守保留原文；映射为带 text 子节点的 paragraph，避免被渲染层丢弃
         raw = token.get("raw", "")
         if raw:
-            return DocumentNode(type="paragraph", node_id=self.next_id(), text=raw)
+            return DocumentNode(
+                type="paragraph",
+                node_id=self.next_id(),
+                children=[DocumentNode(type="text", node_id=self.next_id(), text=raw)],
+            )
         return None
 
     def map_list_item(self, token: dict) -> DocumentNode:
@@ -144,10 +153,16 @@ class _AstMapper:
         if kind == "codespan":
             return DocumentNode(type="codespan", node_id=self.next_id(), text=token.get("raw", ""))
         if kind == "image":
+            # mistune 图片 token：src 在 attrs.url，alt 来自 children 的文本，title 在 attrs.title
             attrs = token.get("attrs", {})
-            attributes = {"src": attrs.get("src", "")}
-            if attrs.get("alt"):
-                attributes["alt"] = attrs["alt"]
+            alt = "".join(
+                child.get("raw", "")
+                for child in token.get("children", [])
+                if child.get("type") == "text"
+            )
+            attributes = {"src": attrs.get("url", "")}
+            if alt:
+                attributes["alt"] = alt
             if attrs.get("title"):
                 attributes["title"] = attrs["title"]
             return DocumentNode(type="image", node_id=self.next_id(), attributes=attributes)

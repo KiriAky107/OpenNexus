@@ -8,12 +8,28 @@ from __future__ import annotations
 
 import html
 from datetime import datetime
+from urllib.parse import urlparse
 
 from app.contracts import ExportOptions
 from app.export.document import Document, DocumentNode, ExportResult
 
 _MERMAID_WARNING = "mermaid 需前端渲染，已保留为占位代码块"
 _FUNCTION_PLOT_WARNING = "函数图像渲染将在后续版本提供，已保留为占位代码块"
+_RAW_HTML_WARNING = "原始 HTML 已按纯文本转义保留"
+
+# 链接/图片地址允许的协议；无 scheme 的相对地址视为安全，其余协议一律降级
+_ALLOWED_URL_SCHEMES = frozenset({"http", "https", "mailto"})
+
+
+def _safe_url(url: str) -> str | None:
+    """校验 URL 协议；安全返回原串，不安全返回 None。"""
+    url = url.strip()
+    if not url:
+        return None
+    scheme = urlparse(url).scheme.lower()
+    if scheme and scheme not in _ALLOWED_URL_SCHEMES:
+        return None
+    return url
 
 _BASE_CSS = """
 body { margin: 0; background: #f6f7f9; color: #1f2328; font: 15px/1.7 -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif; }
@@ -46,7 +62,8 @@ hr { border: none; border-top: 1px solid #d0d7de; margin: 1.4em 0; }
 class HtmlExporter:
     """实现 DocumentExporter：递归渲染 Document AST 为完整 HTML5 文档。"""
 
-    async def export(self, document: Document, options: ExportOptions) -> ExportResult:
+    def render(self, document: Document, options: ExportOptions) -> ExportResult:
+        """同步渲染；CPU 密集，调用方应放入线程执行，避免阻塞事件循环。"""
         self._options = options
         warnings: list[str] = []
         body = self._render_children(document.children, warnings)
@@ -54,6 +71,10 @@ class HtmlExporter:
         return ExportResult(
             content=content.encode("utf-8"), mime_type="text/html", warnings=warnings
         )
+
+    async def export(self, document: Document, options: ExportOptions) -> ExportResult:
+        """契约要求的 async 接口；渲染本身同步，直接转发到 render。"""
+        return self.render(document, options)
 
     def _assemble(
         self, document: Document, options: ExportOptions, body: str, warnings: list[str]
@@ -179,6 +200,11 @@ class HtmlExporter:
     def _render_math_block(self, node: DocumentNode, warnings: list[str]) -> str:
         return f'<div class="math-block">$${html.escape(node.text)}$$</div>'
 
+    def _render_html_block(self, node: DocumentNode, warnings: list[str]) -> str:
+        # 原始 HTML 不可信，转义为纯文本展示，保证正文不丢且无注入风险
+        warnings.append(_RAW_HTML_WARNING)
+        return f'<div class="raw-html">{html.escape(node.text)}</div>'
+
     # --- 行内 ---
     def _render_text(self, node: DocumentNode, warnings: list[str]) -> str:
         return html.escape(node.text)
@@ -190,21 +216,32 @@ class HtmlExporter:
         return f"<strong>{self._render_children(node.children, warnings)}</strong>"
 
     def _render_link(self, node: DocumentNode, warnings: list[str]) -> str:
-        href = html.escape(str(node.attributes.get("href") or ""))
+        inner = self._render_children(node.children, warnings)
+        href = str(node.attributes.get("href") or "")
+        safe_href = _safe_url(href)
+        if safe_href is None:
+            # 危险协议（如 javascript:）降级为纯文本，不输出可点击链接
+            warnings.append(f"链接协议不安全，已降级为纯文本：{href!r}")
+            return inner
         title = str(node.attributes.get("title") or "")
-        attrs = [f'href="{href}"']
+        attrs = [f'href="{html.escape(safe_href)}"']
         if title:
             attrs.append(f'title="{html.escape(title)}"')
-        return f"<a {' '.join(attrs)}>{self._render_children(node.children, warnings)}</a>"
+        return f"<a {' '.join(attrs)}>{inner}</a>"
 
     def _render_codespan(self, node: DocumentNode, warnings: list[str]) -> str:
         return f"<code>{html.escape(node.text)}</code>"
 
     def _render_image(self, node: DocumentNode, warnings: list[str]) -> str:
-        src = html.escape(str(node.attributes.get("src") or ""))
-        alt = html.escape(str(node.attributes.get("alt") or ""))
+        src = str(node.attributes.get("src") or "")
+        alt = str(node.attributes.get("alt") or "")
+        safe_src = _safe_url(src)
+        if safe_src is None:
+            # 危险协议（如 data:/javascript:）跳过图片，仅输出 alt 文本
+            warnings.append(f"图片地址不安全，已跳过：{src!r}")
+            return html.escape(alt) if alt else ""
         title = str(node.attributes.get("title") or "")
-        attrs = [f'src="{src}"', f'alt="{alt}"']
+        attrs = [f'src="{html.escape(safe_src)}"', f'alt="{html.escape(alt)}"']
         if title:
             attrs.append(f'title="{html.escape(title)}"')
         return f"<img {' '.join(attrs)}>"

@@ -8,6 +8,7 @@ from starlette.exceptions import HTTPException as StarletteHttpException
 from app.config import get_settings
 from app.container import container
 from app.errors import ApiError, api_error_handler, http_error_handler, validation_error_handler
+from app.export import service as export_service
 from app.routes import router as api_router
 from app.schemas import HealthResponse, ServiceStatusResponse
 
@@ -16,6 +17,8 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # 重启后内存注册表为空，清理上一次运行遗留的导出产物，避免磁盘垃圾堆积。
+    export_service.cleanup_orphan_files()
     yield
     # 第三方 MCP Server 必须跟随 AI Core 退出，不能遗留孤儿进程。
     container.plugins.shutdown()
