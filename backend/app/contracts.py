@@ -1050,7 +1050,6 @@ class TranscriptEditRequest(Contract):
 
 
 class TranscriptNoteRequest(Contract):
-    update_existing: bool = False
     title: str = Field(min_length=1, max_length=200)
     folder: str | None = None
     include_timestamps: bool = True

@@ -49,20 +49,8 @@ def task_key(key):
     return str(model_path(key)), key
 
 
-def disk_bytes(key):
-    total = 0
-    try:
-        root = model_path(key).resolve()
-        for path in root.rglob("*"):
-            if not path.is_symlink() and path.is_file() and path.resolve().is_relative_to(root):
-                total += path.stat().st_size
-    except OSError:
-        return None
-    return total
-
-
 def describe():
-    return {"items": [{**spec.public(), **read_state(key), "disk_bytes": disk_bytes(key)} for key, spec in CATALOG.items()]}
+    return {"items": [{**spec.public(), **read_state(key)} for key, spec in CATALOG.items()]}
 
 
 async def download(key):

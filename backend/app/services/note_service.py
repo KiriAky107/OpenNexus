@@ -17,7 +17,7 @@ from app.contracts import Note, NoteBlock, NoteSummary
 from app.database.db import connect, transaction
 from app.errors import ApiError
 from app.knowledge.parser import ParsedNote, parse_note
-from app.local_models.runtime import LocalEmbedding, background_embeddings
+from app.local_models.runtime import LocalEmbedding
 from app.retrieval import routed_vectors
 from app.retrieval.vectorstore import SqliteVecStore, VectorRecord
 from app.services.coordination import serialized_vault_mutation
@@ -77,7 +77,6 @@ def _delete_markdown(rel_path: str) -> None:
 PreparedIndex = tuple[list[list[float]], routed_vectors.RemoteEmbeddings | None]
 
 
-@background_embeddings
 async def prepare_note_index(parsed: ParsedNote, *, strict=False) -> PreparedIndex:
     """Compute vectors before opening a write transaction (including API I/O)."""
     texts = [block.content for block in parsed.blocks]
@@ -181,18 +180,13 @@ async def get_note(note_id: str) -> Note | None:
 
 @serialized_vault_mutation
 async def update_note(
-    note_id: str, *, title: str | None = None, markdown: str | None = None, tags: list[str] | None = None, expected_content_hash: str | None = None
+    note_id: str, *, title: str | None = None, markdown: str | None = None, tags: list[str] | None = None
 ) -> Note:
     record = repository.get_note_record(note_id)
     if record is None:
         raise ApiError(404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id})
 
     old_md = _read_markdown(record.file_path)
-    if expected_content_hash is not None:
-        import hashlib
-        if hashlib.sha256(old_md.encode()).hexdigest() != expected_content_hash:
-            raise ApiError(409, "NOTE_CONTENT_CONFLICT", "笔记已被编辑，请保留现有内容或导出为新笔记。")
-
     new_md = old_md if markdown is None else markdown
     # PATCH 语义：tags=None 保持原标签；[] 清空；非空列表替换（区别于 create 的 frontmatter 推导）
     effective_tags = record.tags if tags is None else tags
