@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from app.config import get_settings
 from app.contracts import (
     ExportFormat,
+    ExportJob,
     ExportOptions,
     ExportRequest,
     ExportSource,
@@ -133,6 +134,21 @@ def test_parse_document_table_and_math() -> None:
     assert "math_block" in kinds
 
 
+def test_parse_document_image_maps_src_alt_title() -> None:
+    doc = parse_document('![替代文本](https://a.b/img.png "标题")')
+    img = doc.children[0].children[0]
+    assert img.type == "image"
+    assert img.attributes["src"] == "https://a.b/img.png"
+    assert img.attributes["alt"] == "替代文本"
+    assert img.attributes["title"] == "标题"
+
+
+def test_parse_document_function_plot_dash_alias() -> None:
+    doc = parse_document("```function-plot\ny = x^2\n```")
+    assert doc.children[0].type == "function_plot"
+    assert doc.children[0].text == "y = x^2"
+
+
 # --------------------------------------------------------------------------- #
 # HtmlExporter
 # --------------------------------------------------------------------------- #
@@ -160,6 +176,38 @@ def test_html_exporter_marks_mermaid_and_function_plot() -> None:
     html = result.content.decode("utf-8")
     assert '<pre class="mermaid">graph LR</pre>' in html
     assert any("mermaid" in w for w in result.warnings)
+
+
+def test_html_exporter_rejects_unsafe_link_protocol() -> None:
+    result = asyncio.run(
+        HtmlExporter().export(parse_document("[点我](javascript:alert(1))"), ExportOptions())
+    )
+    html = result.content.decode("utf-8")
+    assert "javascript:" not in html
+    assert "点我" in html
+    assert any("不安全" in w for w in result.warnings)
+
+
+def test_html_exporter_rejects_unsafe_image_protocol() -> None:
+    result = asyncio.run(
+        HtmlExporter().export(parse_document("![alt](data:text/html,<script>)"), ExportOptions())
+    )
+    html = result.content.decode("utf-8")
+    assert "data:" not in html
+    assert "<img" not in html
+    assert "alt" in html
+    assert any("不安全" in w for w in result.warnings)
+
+
+def test_html_exporter_preserves_raw_html_block() -> None:
+    result = asyncio.run(
+        HtmlExporter().export(parse_document("<div>重要正文</div>"), ExportOptions())
+    )
+    html = result.content.decode("utf-8")
+    assert "重要正文" in html
+    assert "<div>" not in html
+    assert "&lt;div&gt;重要正文&lt;/div&gt;" in html
+    assert any("原始 HTML" in w for w in result.warnings)
 
 
 def test_html_exporter_include_title_and_metadata() -> None:
@@ -274,10 +322,73 @@ def test_export_file_expired_410() -> None:
         return job.job_id
 
     job_id = asyncio.run(_go())
+    path = get_settings().exports_path / f"{job_id}.html"
     with pytest.raises(ApiError) as exc:
         export_service.get_export_file(job_id)
     assert exc.value.status_code == 410
     assert exc.value.code == "EXPORT_FILE_EXPIRED"
+    assert not path.exists()  # 过期即清理产物文件
+    assert export_service.get_export(job_id) is None  # 内存记录一并清理
+
+
+def test_export_eviction_deletes_file() -> None:
+    finished = _create_and_wait(_markdown_request("# 淘汰"))
+    victim_path = get_settings().exports_path / f"{finished.job_id}.html"
+    assert victim_path.exists()
+
+    # 塞满 MAX_JOBS 个终态任务，下一次 create 会淘汰最旧的终态（finished 最先插入）
+    for i in range(export_service.MAX_JOBS):
+        export_service._jobs[f"export_fake_{i}"] = ExportJob(
+            job_id=f"export_fake_{i}",
+            status=ExportStatus.completed,
+            format=ExportFormat.html,
+            created_at=datetime.now(timezone.utc),
+        )
+    _create_and_wait(_markdown_request("# 触发淘汰"))
+    assert not victim_path.exists()
+
+
+def test_cleanup_orphan_files() -> None:
+    exports_dir = get_settings().exports_path
+    exports_dir.mkdir(parents=True, exist_ok=True)
+    orphan = exports_dir / "export_orphan.html"
+    orphan.write_text("stale", encoding="utf-8")
+
+    finished = _create_and_wait(_markdown_request("# 保留"))
+    keep_path = exports_dir / f"{finished.job_id}.html"
+    assert keep_path.exists()
+
+    removed = export_service.cleanup_orphan_files()
+    assert removed >= 1
+    assert not orphan.exists()
+    assert keep_path.exists()  # 仍在注册表中的任务文件保留
+
+
+def test_export_cancel_during_running(monkeypatch) -> None:
+    import threading
+    import time
+
+    real_parse = parse_document
+    started = threading.Event()
+
+    def slow_parse(markdown: str):
+        started.set()
+        time.sleep(0.1)
+        return real_parse(markdown)
+
+    monkeypatch.setattr(export_service, "parse_document", slow_parse)
+
+    async def _go():
+        job = await export_service.create_export(_markdown_request("# 运行中取消"))
+        while not started.is_set():
+            await asyncio.sleep(0)
+        export_service.cancel_export(job.job_id)
+        return await export_service.wait_for_export(job.job_id)
+
+    finished = asyncio.run(_go())
+    assert finished.status == ExportStatus.cancelled
+    assert finished.file is None
+    assert not (get_settings().exports_path / f"{finished.job_id}.html").exists()
 
 
 def test_export_list_and_get() -> None:

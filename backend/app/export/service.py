@@ -28,7 +28,7 @@ from app.contracts import (
     ExportStatus,
 )
 from app.errors import ApiError
-from app.export.document import Document
+from app.export.document import Document, ExportResult
 from app.export.exporters.html import HtmlExporter
 from app.export.markdown import parse_document
 from app.services import note_service
@@ -61,10 +61,44 @@ def _safe_download_name(title: str) -> str:
     return name[:80]
 
 
+def _export_path(job_id: str) -> Path:
+    return get_settings().exports_path / f"{job_id}.html"
+
+
+def _delete_file(job_id: str) -> None:
+    """删除导出产物文件；文件不存在时忽略。"""
+    try:
+        _export_path(job_id).unlink(missing_ok=True)
+    except OSError:
+        logger.warning("Failed to delete export file: %s", job_id)
+
+
+def cleanup_orphan_files() -> int:
+    """清理 exports 目录下无对应内存任务的孤立产物（服务重启后调用）。"""
+    exports_dir = get_settings().exports_path
+    if not exports_dir.is_dir():
+        return 0
+    removed = 0
+    for path in exports_dir.glob("*.html"):
+        if path.stem not in _jobs:
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                logger.warning("Failed to delete orphan export file: %s", path)
+    return removed
+
+
+def _render_document(document: Document, options: ExportOptions) -> ExportResult:
+    """同步渲染辅助，供 asyncio.to_thread 调用；每次新建实例避免跨线程复用。"""
+    return HtmlExporter().render(document, options)
+
+
 def _forget(job_id: str) -> None:
     _jobs.pop(job_id, None)
     _tasks.pop(job_id, None)
     _cancel_flags.pop(job_id, None)
+    _delete_file(job_id)
 
 
 def _evict_terminal() -> bool:
@@ -166,19 +200,20 @@ async def _execute(
         if cancel_event.is_set():
             raise ExportCancelled()
 
-        document = parse_document(markdown)
+        # 解析与渲染都是 CPU 密集的同步工作，放入线程执行避免阻塞事件循环，
+        # 使运行中的取消能在渲染边界生效；写文件前再次检查取消。
+        document = await asyncio.to_thread(parse_document, markdown)
         document.attributes["title"] = title
         if metadata:
             document.attributes["metadata"] = metadata
 
-        exporter = HtmlExporter()
-        result = await exporter.export(document, options)
+        result = await asyncio.to_thread(_render_document, document, options)
         if cancel_event.is_set():
             raise ExportCancelled()
 
         out_dir = get_settings().exports_path
         out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"{job_id}.html"
+        path = _export_path(job_id)
         path.write_bytes(result.content)
 
         completed_at = _now()
@@ -260,8 +295,9 @@ def get_export_file(job_id: str) -> Path:
             404, "EXPORT_JOB_NOT_FOUND", "export file not ready", {"job_id": job_id}
         )
     if job.file.expires_at <= _now():
+        _forget(job_id)  # 过期即清理内存记录与产物文件
         raise ApiError(410, "EXPORT_FILE_EXPIRED", "export file has expired", {"job_id": job_id})
-    return get_settings().exports_path / f"{job_id}.html"
+    return _export_path(job_id)
 
 
 async def wait_for_export(job_id: str) -> ExportJob | None:
