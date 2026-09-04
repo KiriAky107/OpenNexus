@@ -7,6 +7,18 @@ from app.local_models.runtime import RuntimeConfig, configuration, configure, in
 router = APIRouter(prefix="/api/local-models", tags=["Local models"])
 
 
+@router.get("/runtime-components/cuda")
+async def cuda_status():
+    from app.local_models import components
+    return await components.status()
+
+
+@router.post("/runtime-components/cuda", status_code=202)
+async def install_cuda():
+    from app.local_models import components
+    return await components.install()
+
+
 @router.get("")
 async def list_models():
     items, diagnostics = await asyncio.gather(asyncio.to_thread(manager.describe), asyncio.to_thread(model_diagnostics.recent))
