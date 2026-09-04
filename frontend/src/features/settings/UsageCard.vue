@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { apiClient } from '@/services/apiClient'
-interface Usage {totals: Record<string,number|null>;coverage:Record<string,number>;request_count:number;complete_requests:number;cache_hit_rate:number|null;cache_covered_requests:number;options:{provider_id:string;model:string;source:string}[]}
+interface Usage {audio_request_count:number;audio_seconds:number|null;audio_covered_requests:number;totals: Record<string,number|null>;coverage:Record<string,number>;request_count:number;complete_requests:number;cache_hit_rate:number|null;cache_covered_requests:number;options:{provider_id:string;model:string;source:string}[]}
 const data = ref<Usage | null>(null)
 const period = ref('7')
 const provider = ref('')
@@ -37,6 +37,7 @@ onMounted(load)
     <template v-if="data"><p v-if="!data.request_count" class="subtle">该时间段没有已记录的模型请求。</p>
       <div class="usage-grid"><div v-for="(label,key) in metrics" :key="key"><small>{{ label }}</small><strong>{{ data.totals[key] === null ? '未提供' : data.totals[key]?.toLocaleString() }}</strong><small>覆盖 {{ data.coverage[key] }} / {{ data.request_count }} 次</small></div>
       <div><small>缓存命中率</small><strong>{{ data.cache_hit_rate === null ? '未提供' : `${(data.cache_hit_rate * 100).toFixed(1)}%` }}</strong><small>覆盖 {{ data.cache_covered_requests }} 次</small></div></div>
+      <p class="subtle">音频调用 {{ data.audio_request_count ?? 0 }} 次 · 时长 {{ data.audio_seconds == null ? '未提供' : `${data.audio_seconds.toFixed(2)} 秒` }}（覆盖 {{ data.audio_covered_requests ?? 0 }} 次；重试分别计数）</p>
       <p class="subtle">请求 {{ data.request_count }} 次，其中完整结束 {{ data.complete_requests }} 次。输入总量包含厂商已报告的缓存，推理 Token 不重复加入输出。</p>
     </template><p class="subtle">统计为本应用观测值，不是厂商账户账单。缺失指标显示“未提供”，历史未记录的数据不补估。</p>
   </section>
