@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import type { ModelInfo, ProviderConfig, ProviderPreset, ProviderType } from '@/contracts'
+import type { ModelInfo, ProviderConfig, ProviderPreset, ProviderType, RequestOverride } from '@/contracts'
 import * as service from '@/services/providerService'
 import ProviderPresetSelector from './ProviderPresetSelector.vue'
+import RequestJsonEditor from './RequestJsonEditor.vue'
+import { apiClient } from '@/services/apiClient'
 
 const props = defineProps<{ provider?: ProviderConfig; models?: ModelInfo[] }>()
 const emit = defineEmits<{ close: []; saved: [provider: ProviderConfig] }>()
@@ -22,6 +24,20 @@ const presetsLoading = ref(false)
 const presetsError = ref('')
 const saving = ref(false)
 const error = ref('')
+const requestOverrides = ref<RequestOverride[]>(JSON.parse(JSON.stringify(props.provider?.request_overrides || [])))
+const requestJsonValid = ref(true)
+const requestPreview = ref('')
+async function previewRequest() {
+  error.value = ''
+  try {
+    if (!requestJsonValid.value) throw new Error('请先修正 JSON。')
+    const response = await apiClient.post<{body:Record<string,unknown>}>('/api/providers/request-preview', {
+      provider: {provider_type:form.provider_type,name:form.name || '预览',base_url:form.base_url || null,
+        default_model:form.default_model || null,request_overrides:requestOverrides.value}, stream:true,
+    })
+    requestPreview.value = JSON.stringify(response.body, null, 2)
+  } catch(e) { error.value = (e as Error).message }
+}
 const contextChanged = ref(false)
 const dialog = ref<HTMLElement>()
 const previousFocus = document.activeElement as HTMLElement | null
@@ -110,9 +126,10 @@ async function save() {
   saving.value = true
   try {
     if (!form.name.trim() || !form.base_url.trim()) throw new Error('请填写名称和 Base URL。')
+    if (!requestJsonValid.value) throw new Error('请先修正自定义请求 JSON。')
     if (selectedPreset.value?.requires_credential && !apiKey.value.trim() && !configured.value) throw new Error('请输入 API Key。密钥将由后端加密保存。')
     // Snapshot before awaiting: closing/unmounting must never create a provider with a changed draft.
-    const data = { provider_type: form.provider_type, name: form.name.trim(), base_url: form.base_url.trim() || undefined, default_model: form.default_model.trim(), enabled: form.enabled, capabilities: {}, has_credential: false }
+    const data = { provider_type: form.provider_type, name: form.name.trim(), base_url: form.base_url.trim() || undefined, default_model: form.default_model.trim(), enabled: form.enabled, capabilities: {}, has_credential: false, request_overrides: requestOverrides.value }
     if (apiKey.value.trim()) {
       // Rotate even an existing reference: older installations may share preset credential IDs.
       const nextId = newCredentialId()
@@ -127,7 +144,7 @@ async function save() {
     // A failed status check must not silently unlink the provider's existing credential.
     if (credentialError.value && !reference) throw new Error(credentialError.value)
     const saved = props.provider
-      ? await service.updateProvider(props.provider.provider_id, { ...data, credential_id: reference ?? null })
+      ? await service.updateProvider(props.provider.provider_id, { ...data, version: props.provider.version, credential_id: reference ?? null })
       : await service.createProvider({ ...data, credential_id: reference })
     if (active) { emit('saved', saved); close() }
   } catch (reason) {
@@ -142,7 +159,7 @@ async function save() {
       <div class="form-heading"><h2 id="provider-form-title">{{ provider ? '编辑 Provider' : '新增 Provider' }}</h2><button type="button" class="button-secondary" aria-label="关闭提供商表单" @click="close">关闭</button></div>
       <p v-if="presetsLoading" class="subtle" role="status">正在加载提供商预设…</p>
       <div v-if="presetsError" class="error-banner" role="alert">{{ presetsError }} <button type="button" class="button-secondary" :disabled="presetsLoading || saving" @click="loadPresets">重试</button></div>
-      <form @submit.prevent="save">
+      <form @submit.prevent="save" @input="requestPreview = ''" @change="requestPreview = ''">
         <fieldset :disabled="saving">
           <ProviderPresetSelector :presets="presets" :model-value="form.preset_id" @update:model-value="applyPreset" />
           <p v-if="selectedPreset?.description" class="subtle">{{ selectedPreset.description }}</p>
@@ -156,6 +173,9 @@ async function save() {
             <label class="field wide"><span>默认聊天模型</span><input v-model="form.default_model" class="input" data-field="model" list="provider-model-options" placeholder="输入模型 ID，或保存后获取模型列表" /><datalist id="provider-model-options"><option v-for="model in modelOptions" :key="model.model_id" :value="model.model_id">{{ model.name }}</option></datalist></label>
           </div>
           <label class="inline-actions"><input v-model="form.enabled" type="checkbox" /> 启用</label>
+          <RequestJsonEditor v-model="requestOverrides" @valid="requestJsonValid = $event" />
+          <button type="button" class="button-secondary" @click="previewRequest">预览最终流式请求（隐藏正文）</button>
+          <pre v-if="requestPreview" class="request-preview">{{ requestPreview }}</pre>
         </fieldset>
         <div v-if="error" class="error-banner" role="alert">{{ error }}</div>
         <div class="inline-actions form-footer"><button class="button-primary" type="submit" :disabled="saving || credentialLoading">{{ saving ? '保存中…' : '保存提供商' }}</button><button type="button" class="button-secondary" @click="close">取消</button></div>
@@ -172,6 +192,7 @@ fieldset { display: grid; gap: var(--space-md); border: 0; padding: 0; margin: 0
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md); }
 .wide { grid-column: 1 / -1; }
 .error-text { color: var(--color-error); }
+.request-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; }
 .form-footer { padding-top: var(--space-sm); }
 @media (max-width: 600px) { .provider-backdrop { padding: 12px; }.provider-modal { padding: var(--space-lg); max-height: 94dvh; }.form-grid { grid-template-columns: 1fr; } }
 </style>

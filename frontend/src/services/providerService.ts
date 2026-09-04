@@ -8,6 +8,8 @@ function capabilityMap(capabilities: string[]): Partial<ModelCapability> {
 function toProvider(provider: ApiProviderConfig): ProviderConfig {
   return {
     provider_id: provider.provider_id,
+    version: provider.version,
+    request_overrides: provider.request_overrides || [],
     provider_type: provider.provider_type,
     name: provider.name,
     base_url: provider.base_url ?? undefined,
@@ -35,6 +37,7 @@ export async function getProvider(providerId: string): Promise<ProviderConfig> {
 export async function createProvider(data: Omit<ProviderConfig, 'provider_id'>): Promise<ProviderConfig> {
   const response = await apiClient.post<ApiProviderConfig>('/api/providers', {
     provider_type: data.provider_type,
+    request_overrides: data.request_overrides,
     name: data.name,
     base_url: data.base_url,
     default_model: data.default_model || null,
@@ -64,6 +67,8 @@ export async function putCredential(credentialId: string, apiKey: string): Promi
 export async function updateProvider(providerId: string, data: ProviderUpdateRequest): Promise<ProviderConfig> {
   const response = await apiClient.patch<ApiProviderConfig>(`/api/providers/${providerId}`, {
     provider_type: data.provider_type,
+    version: data.version,
+    request_overrides: data.request_overrides,
     name: data.name,
     base_url: data.base_url,
     default_model: data.default_model,
