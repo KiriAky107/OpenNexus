@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import type { SearchResult } from '@/contracts'
 import { useEditorStore } from '@/stores/editor'
@@ -7,6 +7,7 @@ import { useSearchStore } from '@/stores/search'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const searchStore = useSearchStore()
+onMounted(() => { void searchStore.loadHistory() })
 const workspaceStore = useWorkspaceStore()
 const editorStore = useEditorStore()
 const router = useRouter()
@@ -48,7 +49,7 @@ async function openResult(result: SearchResult) {
     <div v-if="searchStore.error" class="error-banner">{{ searchStore.error }}</div>
     <div v-if="searchStore.historyError" class="notice-banner">{{ searchStore.historyError }}</div>
     <div v-if="searchStore.recentQueries.length" class="search-history">
-      <span class="subtle">最近搜索（保存在当前浏览器）</span>
+      <span class="subtle">最近搜索（保存在应用数据中）</span>
       <button v-for="item in searchStore.recentQueries" :key="item" class="button-secondary" @click="searchStore.query = item; submitSearch()">{{ item }}</button>
       <button class="button-secondary" @click="searchStore.clearHistory">清空记录</button>
     </div>

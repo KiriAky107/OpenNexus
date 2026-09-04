@@ -10,14 +10,6 @@ const VECTOR_ERROR_CODES = new Set([
   'MODEL_NOT_FOUND', 'MODEL_CAPABILITY_MISMATCH', 'PROVIDER_UNAVAILABLE',
 ])
 
-const HISTORY_KEY = 'notes-agent.search-history.v1'
-function readHistory(): string[] {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]')
-    return Array.isArray(value) ? [...new Set(value.filter((item): item is string => typeof item === 'string').map(item => item.trim()).filter(Boolean))].slice(0, 10) : []
-  } catch { return [] }
-}
-
 export const useSearchStore = defineStore('search', () => {
   const query = ref('')
   const mode = ref<'fts' | 'vector' | 'hybrid'>('hybrid')
@@ -25,14 +17,27 @@ export const useSearchStore = defineStore('search', () => {
   const total = ref(0)
   const isSearching = ref(false)
   const selectedIndex = ref(0)
-  const recentQueries = ref<string[]>(readHistory())
+  const recentQueries = ref<string[]>([])
   const historyError = ref('')
   let searchVersion = 0
-  function persistHistory() {
-    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(recentQueries.value)); historyError.value = '' }
-    catch { historyError.value = '浏览器无法保存搜索记录，本次记录仅保留到页面关闭。' }
+  let historyVersion = 0
+  async function loadHistory() {
+    const version = ++historyVersion
+    try {
+      const response = await searchService.getHistory()
+      if (version !== historyVersion) return
+      recentQueries.value = response.queries
+      historyError.value = ''
+    } catch { if (version === historyVersion) historyError.value = '无法读取应用搜索记录，请检查后端连接。' }
   }
-  function clearHistory() { recentQueries.value = []; persistHistory() }
+  async function clearHistory() {
+    const version = ++historyVersion
+    try {
+      await searchService.clearHistory()
+      if (version !== historyVersion) return
+      recentQueries.value = []; historyError.value = ''
+    } catch { if (version === historyVersion) historyError.value = '清空搜索记录失败，请重试。' }
+  }
   const error = ref<string | null>(null)
   const vectorUnavailable = ref(false)
 
@@ -40,8 +45,6 @@ export const useSearchStore = defineStore('search', () => {
     request = { ...request, query: request.query.trim() }
     if (!request.query) return
     const version = ++searchVersion
-    recentQueries.value = [request.query, ...recentQueries.value.filter(item => item !== request.query)].slice(0, 10)
-    persistHistory()
     query.value = request.query
     mode.value = request.mode || 'hybrid'
     isSearching.value = true
@@ -78,7 +81,7 @@ export const useSearchStore = defineStore('search', () => {
         total.value = 0
       }
     } finally {
-      if (version === searchVersion) isSearching.value = false
+      if (version === searchVersion) { isSearching.value = false; await loadHistory() }
     }
 
   }
@@ -115,6 +118,7 @@ export const useSearchStore = defineStore('search', () => {
     recentQueries,
     historyError,
     clearHistory,
+    loadHistory,
     error,
     vectorUnavailable,
     doSearch,

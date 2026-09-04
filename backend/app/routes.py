@@ -303,7 +303,22 @@ async def rename_note(note_id: str, request: NoteRenameRequest) -> Note:
 # Retrieval and chat
 @router.post("/search", response_model=SearchResponse, tags=["Search"])
 async def search_notes(request: SearchRequest) -> SearchResponse:
+    from app.services import search_history
+    search_history.record(request.query)
     return await engine.search(request)
+
+
+@router.get("/search/history", tags=["Search"])
+async def get_search_history() -> dict[str, list[str]]:
+    from app.services import search_history
+    return {"queries": search_history.list_queries()}
+
+
+@router.delete("/search/history", tags=["Search"])
+async def clear_search_history() -> dict[str, list[str]]:
+    from app.services import search_history
+    search_history.clear()
+    return {"queries": []}
 
 
 @router.post(
