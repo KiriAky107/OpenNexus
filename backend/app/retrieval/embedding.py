@@ -1,7 +1,6 @@
 """Embedding 统一接口与轻量实现。
 
-真实默认是本地 BGE-M3 类模型，但第一阶段先跑通链路，这里用确定性的特征哈希向量代替。
-后续接入真实模型时实现同样的 EmbeddingProvider 接口替换即可，上层检索逻辑不变。
+生产环境使用 local_models 的真实模型。特征哈希实现仅供测试显式注入。
 """
 
 from __future__ import annotations

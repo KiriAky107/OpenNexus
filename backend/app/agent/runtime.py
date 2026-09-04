@@ -562,6 +562,7 @@ class AgentRuntime:
     @staticmethod
     def _request_metadata(record: RunRecord) -> dict[str, object]:
         metadata = dict(record.request.metadata)
+        metadata["run_id"] = record.run.run_id
         if record.skill_config is not None:
             metadata["skill_id"] = record.skill_config.skill_id
             metadata["retrieval"] = record.skill_config.retrieval.model_dump(mode="json")

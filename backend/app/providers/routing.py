@@ -1,14 +1,14 @@
 """Capability routing: validated remote results, then an explicit local backend.
 
-Phase E supplies HTTP adapters and injectable local contracts. Hash embeddings are
-still a development placeholder; speech models are installed in phase F.
+Production injects installed CPU/CUDA backends. Deterministic embeddings remain
+available only for explicitly injected tests and protocol fixtures.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -55,6 +55,7 @@ class RoutedTranscript:
     text: str
     source: str
     fallback_reason: str | None = None
+    segments: list = field(default_factory=list)
 
 
 def invalid_response() -> ProviderError:
@@ -87,6 +88,19 @@ class ModelRoutingService:
         conn.execute("CREATE TABLE IF NOT EXISTS model_routing (id INTEGER PRIMARY KEY CHECK(id=1), config_json TEXT NOT NULL)")
         return conn
 
+    def snapshot(self):
+        from copy import copy
+        from app.providers.registry import RegisteredProvider
+        frozen = copy(self)
+        config = self.configuration().model_copy(deep=True)
+        providers = ProviderRegistry()
+        for item in self.providers.list_configs():
+            original = self.providers.get_any(item.provider_id)
+            providers._providers[item.provider_id] = RegisteredProvider(item, original.adapter)
+        frozen.providers = providers
+        frozen.configuration = lambda: config
+        return frozen
+
     def configuration(self) -> ModelRoutingConfig:
         conn = self._connection()
         try:
@@ -98,11 +112,16 @@ class ModelRoutingService:
             conn.close()
 
     def describe(self) -> ModelRoutingResponse:
+        is_hash = isinstance(self.local_embedding, HashEmbeddingProvider)
+        embedding_available = getattr(self.local_embedding, "available", True)
+        def speech_available(capability):
+            check = getattr(self.local_speech, "available_for", None)
+            return check(capability) if check else self.local_speech.available
         return ModelRoutingResponse(config=self.configuration(), local_backends=[
-            LocalBackendStatus(capability="embedding", status="placeholder" if isinstance(self.local_embedding, HashEmbeddingProvider) else "ready",
-                               message="当前为 hash-v1 确定性占位向量，真实本地语义模型尚未集成。" if isinstance(self.local_embedding, HashEmbeddingProvider) else "本地 Embedding 模型已就绪。"),
-            *[LocalBackendStatus(capability=capability, status="ready" if self.local_speech.available else "not_installed",
-                                 message="本地模型已就绪。" if self.local_speech.available else "阶段 F 接入本地模型；当前保留回退接口。")
+            LocalBackendStatus(capability="embedding", status="placeholder" if is_hash else ("ready" if embedding_available else "not_installed"),
+                               message="测试占位向量。" if is_hash else ("本地 Embedding 文件和运行环境已安装。" if embedding_available else "请安装本地模型运行环境并下载 Embedding 权重。")),
+            *[LocalBackendStatus(capability=capability, status="ready" if speech_available(capability) else "not_installed",
+                                 message="本地模型文件和运行环境已安装。" if speech_available(capability) else "请安装运行环境并下载对应本地模型。")
               for capability in ("transcription", "speaker_matching")],
         ])
 
@@ -150,8 +169,16 @@ class ModelRoutingService:
         url = (provider.base_url or "https://api.openai.com/v1").rstrip("/") + binding.endpoint
         return url, {"Authorization": f"Bearer {key}"} if key else {}
 
-    async def _request(self, binding: ModelBinding, *, remote: tuple[str, dict[str, str]] | None = None, **kwargs) -> tuple[dict, str]:
+    async def _request(self, binding: ModelBinding, *, remote: tuple[str, dict[str, str]] | None = None, provider_config=None, **kwargs) -> tuple[dict, str]:
         url, headers = remote or self._remote(binding)
+        from app.request_overrides import apply_overrides
+        from app.services.usage_service import UsageAttempt
+        capability = "embedding" if "json" in kwargs else ("speaker_matching" if "reference_file" in kwargs.get("files", {}) else "transcription")
+        provider = provider_config or self.providers.get(binding.provider_id).config
+        field = "json" if capability == "embedding" else "data"
+        payload = apply_overrides(kwargs.get(field, {}), provider.request_overrides, capability)
+        kwargs[field] = payload if field == "json" else {key: json.dumps(value) if isinstance(value, (dict, list, bool)) or value is None else value for key, value in payload.items()}
+        attempt = UsageAttempt(binding.provider_id, binding.model, provider.provider_type.value, capability)
         try:
             async with httpx.AsyncClient(timeout=30, transport=self.transport) as client:
                 async with client.stream("POST", url, headers=headers, **kwargs) as response:
@@ -162,6 +189,8 @@ class ModelRoutingService:
                         if len(body) > MAX_RESPONSE_BYTES:
                             raise invalid_response()
                     data = json.loads(body)
+                    attempt.observe(data)
+                    attempt.completed = True
         except httpx.TimeoutException as exc:
             raise ProviderError("PROVIDER_TIMEOUT", "Model API timed out.") from exc
         except httpx.HTTPStatusError as exc:
@@ -171,6 +200,8 @@ class ModelRoutingService:
             raise ProviderError("PROVIDER_UNAVAILABLE", "Model API is unavailable.") from exc
         except (ValueError, UnicodeError) as exc:
             raise invalid_response() from exc
+        finally:
+            attempt.persist()
         if not isinstance(data, dict) or data.get("error"):
             raise invalid_response()
         return data, url
@@ -187,12 +218,13 @@ class ModelRoutingService:
                 dimension = binding.dimensions
                 # Freeze the origin across batches, even if the user edits the provider.
                 remote = self._remote(binding)
+                provider_config = self.providers.get(binding.provider_id).config.model_copy(deep=True)
                 for start in range(0, len(texts), 32):
                     batch = texts[start:start + 32]
                     payload = {"model": binding.model, "input": batch, "encoding_format": "float"}
                     if binding.dimensions is not None:
                         payload["dimensions"] = binding.dimensions
-                    data, url = await self._request(binding, remote=remote, json=payload)
+                    data, url = await self._request(binding, remote=remote, provider_config=provider_config, json=payload)
                     items = data.get("data")
                     if not isinstance(items, list) or len(items) != len(batch):
                         raise invalid_response()
@@ -213,12 +245,20 @@ class ModelRoutingService:
                             raise invalid_response()
                         indexed[index] = [value / norm for value in vector]
                     vectors.extend(indexed[index] for index in range(len(batch)))
-                identity = json.dumps([url, binding.model, dimension], separators=(",", ":"))
+                identity_parts = [url, binding.model, dimension]
+                extensions = [rule.model_dump() for rule in provider_config.request_overrides
+                              if rule.capability == "embedding" and rule.model in (None, binding.model)]
+                if extensions:
+                    identity_parts.append(extensions)
+                identity = json.dumps(identity_parts, separators=(",", ":"))
                 return EmbeddingResult(vectors=vectors, source="api", dimensions=dimension,
                                        model_id="api-" + hashlib.sha256(identity.encode()).hexdigest())
             except ProviderError as exc:
                 reason = exc.code
-        vectors = await self.local_embedding.embed_documents(texts)
+        try:
+            vectors = await self.local_embedding.embed_documents(texts)
+        except ProviderError as exc:
+            raise ApiError(503, exc.code, exc.message, {"fallback_reason": reason}) from exc
         return EmbeddingResult(vectors=vectors, source="local", model_id=self.local_embedding.model_id,
                                dimensions=self.local_embedding.dim, fallback_reason=reason)
 
@@ -234,8 +274,8 @@ class ModelRoutingService:
             raise ApiError(413, "ATTACHMENT_TOO_LARGE", "Audio attachment must be between 1 byte and 25 MiB.")
         return handle
 
-    async def transcribe(self, source: Path, language: str | None) -> RoutedTranscript:
-        binding = self.configuration().transcription
+    async def transcribe(self, source: Path, language: str | None, *, local_only: bool = False) -> RoutedTranscript:
+        binding = None if local_only else self.configuration().transcription
         if binding is None:
             with self._media_file(source):
                 pass
@@ -251,19 +291,41 @@ class ModelRoutingService:
                 text = data.get("text")
                 if not isinstance(text, str) or not text.strip():
                     raise invalid_response()
-                return RoutedTranscript(text=text, source="api")
+                segments = []
+                raw_segments = data.get("segments", [])
+                if not isinstance(raw_segments, list) or len(raw_segments) > 10000:
+                    raise invalid_response()
+                from app.contracts import TranscriptSegment
+                for index, raw in enumerate(raw_segments):
+                    if not isinstance(raw, dict):
+                        raise invalid_response()
+                    start, end = raw.get("start", raw.get("start_time")), raw.get("end", raw.get("end_time"))
+                    if not finite_number(start) or not finite_number(end) or not isinstance(raw.get("text"), str):
+                        raise invalid_response()
+                    try:
+                        segments.append(TranscriptSegment(segment_id=f"segment_{index + 1}", start_time=start,
+                            end_time=end, text=raw["text"], speaker=raw.get("speaker")))
+                    except ValueError as exc:
+                        raise invalid_response() from exc
+                if segments != sorted(segments, key=lambda segment: segment.start_time):
+                    raise invalid_response()
+                return RoutedTranscript(text=text, source="api", segments=segments)
             except ProviderError as exc:
                 reason = exc.code
         try:
             text = await self.local_speech.transcribe(source, language)
+            if isinstance(text, RoutedTranscript):
+                if not text.text.strip():
+                    raise ProviderError("LOCAL_MODEL_INVALID_RESPONSE", "Local transcription was empty.")
+                return replace(text, source="local", fallback_reason=reason)
             if not isinstance(text, str) or not text.strip():
                 raise ProviderError("LOCAL_MODEL_INVALID_RESPONSE", "Local transcription was empty.")
             return RoutedTranscript(text=text, source="local", fallback_reason=reason)
         except ProviderError as exc:
             raise ApiError(503, exc.code, exc.message, {"fallback_reason": reason}) from exc
 
-    async def match_speakers(self, source: Path, reference: Path) -> SpeakerMatchResult:
-        binding = self.configuration().speaker_matching
+    async def match_speakers(self, source: Path, reference: Path, *, local_only: bool = False) -> SpeakerMatchResult:
+        binding = None if local_only else self.configuration().speaker_matching
         if binding is None:
             with self._media_file(source), self._media_file(reference):
                 pass

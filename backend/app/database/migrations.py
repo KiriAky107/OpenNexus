@@ -96,6 +96,30 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_agent_events_type
         ON agent_events(run_id, event, sequence);
     """,
+    # v4: durable media jobs, replayable events and revisions.
+    """
+    CREATE TABLE media_jobs (
+        job_id TEXT PRIMARY KEY, status TEXT NOT NULL, job_json TEXT NOT NULL,
+        request_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        idempotency_key TEXT UNIQUE, fingerprint TEXT NOT NULL
+    );
+    CREATE INDEX media_jobs_created ON media_jobs(created_at DESC);
+    CREATE TABLE media_events (
+        job_id TEXT NOT NULL REFERENCES media_jobs(job_id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL, event TEXT NOT NULL, data_json TEXT NOT NULL,
+        timestamp TEXT NOT NULL, PRIMARY KEY(job_id, sequence)
+    );
+    CREATE TABLE media_revisions (
+        job_id TEXT NOT NULL REFERENCES media_jobs(job_id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL, job_json TEXT NOT NULL,
+        PRIMARY KEY(job_id, revision)
+    );
+    CREATE TABLE media_notes (
+        job_id TEXT NOT NULL REFERENCES media_jobs(job_id), revision INTEGER NOT NULL,
+        options_hash TEXT NOT NULL, note_id TEXT NOT NULL REFERENCES notes(note_id) ON DELETE CASCADE,
+        PRIMARY KEY(job_id, revision, options_hash)
+    );
+    """,
 ]
 
 

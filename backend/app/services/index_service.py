@@ -97,6 +97,7 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
                 task_note_links = dict(conn.execute(
                     "SELECT task_id, note_id FROM tasks WHERE note_id IS NOT NULL"
                 ).fetchall())
+                media_links = conn.execute("SELECT job_id,revision,options_hash,note_id FROM media_notes").fetchall()
                 repository.clear_all(conn=conn)
                 await vector_store.clear(conn=conn)
                 for parsed, prepared in prepared_notes:
@@ -107,6 +108,9 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
                         "AND EXISTS (SELECT 1 FROM notes WHERE note_id = ?)",
                         (note_id, task_id, note_id),
                     )
+                for link in media_links:
+                    conn.execute("INSERT OR IGNORE INTO media_notes SELECT ?,?,?,? WHERE EXISTS (SELECT 1 FROM notes WHERE note_id=?)",
+                                 (*link, link["note_id"]))
         finally:
             conn.close()
     except BaseException as exc:
