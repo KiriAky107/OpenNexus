@@ -7,7 +7,6 @@ frontend/*.tsbuildinfo
 # Backend
 backend/.venv/
 backend/.venv-models/
-backend/.venv-models-cuda/
 backend/data/models/
 backend/data/attachments/
 backend/.uv-cache/

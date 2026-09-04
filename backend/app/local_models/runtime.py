@@ -4,10 +4,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import time
 from contextlib import closing
 from contextvars import ContextVar
-from functools import wraps
 from pathlib import Path
 from typing import Literal
 
@@ -33,18 +31,6 @@ class RuntimeConfig(BaseModel):
 
 runtime_context = ContextVar("runtime_config", default=None)
 runtime_progress = ContextVar("runtime_progress", default=None)
-embedding_priority = ContextVar("embedding_priority", default=0)
-
-
-def background_embeddings(operation):
-    @wraps(operation)
-    async def wrapped(*args, **kwargs):
-        token = embedding_priority.set(20)
-        try:
-            return await operation(*args, **kwargs)
-        finally:
-            embedding_priority.reset(token)
-    return wrapped
 
 
 def configuration():
@@ -89,81 +75,28 @@ class Runtime:
         return any(target in paths for paths in self.active_files.values())
 
     async def infer(self, key, operation, payload, *, priority=10):
-        from app.services import model_diagnostics
-        config = configuration().model_copy(deep=True)
+        if read_state(key)["status"] != "installed":
+            raise ProviderError("LOCAL_MODEL_NOT_INSTALLED", "请先在模型配置中下载本地模型。")
+        if not interpreter().is_file():
+            raise ProviderError("LOCAL_RUNTIME_NOT_INSTALLED", "请先运行本地模型 CPU/CUDA 安装脚本。")
+        config = configuration()
         self.counter += 1
         ticket = (priority, self.counter)
         self.waiters.append(ticket)
-        queued_at = time.monotonic()
-        reason = None
-        from app.services.usage_service import usage_context
-        from uuid import uuid4
-        context = dict(usage_context.get() or {})
-        context.setdefault("request_id", uuid4().hex)
-        usage_token = usage_context.set(context)
+        process = None
+        attempt = None
         try:
+            # One resident model at a time prevents overlapping CPU/GPU allocations.
             while self.active or ticket != min(self.waiters):
                 await asyncio.sleep(0.05)
             self.waiters.remove(ticket)
             self.active[ticket] = key
             self.active_files[ticket] = {str(Path(payload[name]).resolve()) for name in ("source", "reference") if payload.get(name)}
-            queue_seconds = time.monotonic() - queued_at
-            # Keep the reservation while replacing a failed CUDA process with CPU.
-            for device in (["cuda", "cpu"] if config.device == "cuda" else ["cpu"]):
-                started = time.monotonic()
-                diagnostics = dict(model=CATALOG[key].repository, revision=CATALOG[key].revision,
-                    operation=operation, source="local", requested_device=config.device,
-                    attempted_device=device, queue_seconds=queue_seconds, fallback_reason=reason, request_id=context["request_id"])
-                try:
-                    result = await self._execute(key, operation, payload, config.model_copy(update={"device": device}), diagnostics)
-                    diagnostics.update(result.get("diagnostics", {}))
-                    diagnostics.update(requested_device=config.device, status="completed")
-                    if reason:
-                        diagnostics["fallback_reason"] = reason
-                    return result["result"]
-                except asyncio.CancelledError:
-                    diagnostics.update(status="cancelled", error_code="LOCAL_MODEL_CANCELLED")
-                    raise
-                except ProviderError as exc:
-                    diagnostics.update(status="failed", error_code=exc.code)
-                    if device == "cuda" and exc.code in {"LOCAL_CUDA_INIT_FAILED", "LOCAL_CUDA_OOM"}:
-                        reason = exc.code
-                        callback = runtime_progress.get()
-                        if callback:
-                            callback({"reset": True, "progress": 0})
-                        continue
-                    raise
-                except Exception:
-                    diagnostics.update(status="failed", error_code="LOCAL_MODEL_INVALID_RESPONSE")
-                    raise ProviderError("LOCAL_MODEL_INVALID_RESPONSE", "本地模型返回无效数据。") from None
-                finally:
-                    diagnostics["requested_device"] = config.device
-                    diagnostics["elapsed_seconds"] = time.monotonic() - started
-                    self.diagnostics.append(model_diagnostics.record(**diagnostics))
-                    self.diagnostics = self.diagnostics[-100:]
-        except asyncio.CancelledError:
-            if ticket not in self.active:
-                model_diagnostics.record(model=CATALOG[key].repository, operation=operation,
-                    source="local", status="cancelled", error_code="LOCAL_QUEUE_CANCELLED",
-                    requested_device=config.device, queue_seconds=time.monotonic() - queued_at)
-            raise
-        finally:
-            if ticket in self.waiters:
-                self.waiters.remove(ticket)
-            self.active.pop(ticket, None)
-            self.active_files.pop(ticket, None)
-            usage_context.reset(usage_token)
-
-    async def _execute(self, key, operation, payload, config, diagnostics):
-        if read_state(key)["status"] != "installed":
-            raise ProviderError("LOCAL_MODEL_NOT_INSTALLED", "请先下载本地模型。")
-        if not interpreter().is_file():
-            raise ProviderError("LOCAL_RUNTIME_NOT_INSTALLED", "请先安装本地模型运行环境。")
-        from app.services.usage_service import UsageAttempt
-        attempt = UsageAttempt("local-models", CATALOG[key].repository, "local", operation, source="local")
-        diagnostics.update(attempt_id=attempt.attempt_id, request_id=attempt.request_id)
-        process = None
-        try:
+            # Deletion may have occurred while this request was queued.
+            if read_state(key)["status"] != "installed":
+                raise ProviderError("LOCAL_MODEL_NOT_INSTALLED", "模型文件已被删除。")
+            from app.services.usage_service import UsageAttempt
+            attempt = UsageAttempt("local-models", CATALOG[key].repository, "local", operation, source="local")
             env = {**os.environ, "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
                    "HF_HUB_DISABLE_TELEMETRY": "1", "OMP_NUM_THREADS": str(config.cpu_threads),
                    "PYTHONIOENCODING": "utf-8"}
@@ -185,6 +118,8 @@ class Runtime:
                 process.stdin.close()
                 final = None
                 while line := await process.stdout.readline():
+                    if len(line) > 16 * 1024 * 1024:
+                        raise ProviderError("LOCAL_MODEL_INVALID_RESPONSE", "本地模型输出超限。")
                     message = json.loads(line)
                     if "progress" in message:
                         callback = runtime_progress.get()
@@ -202,19 +137,26 @@ class Runtime:
                 raise ProviderError("LOCAL_MODEL_PROCESS_FAILED", "本地模型进程退出，请检查依赖与资源预算。")
             if not isinstance(result, dict):
                 raise ProviderError("LOCAL_MODEL_INVALID_RESPONSE", "本地模型进程未返回有效结果。")
-            diagnostics.update(result.get("diagnostics", {}))
             if "error_code" in result:
                 raise ProviderError(result["error_code"], result.get("message", "本地推理失败。"))
             attempt.observe(result)
             attempt.completed = True
-            return result
+            self.diagnostics.append({"model": CATALOG[key].repository, "revision": CATALOG[key].revision,
+                                     **result.get("diagnostics", {})})
+            self.diagnostics = self.diagnostics[-100:]
+            return result["result"]
         finally:
+            if ticket in self.waiters:
+                self.waiters.remove(ticket)
             if process is not None and process.returncode is None:
                 process.kill()
                 await process.wait()
             if process is not None and hasattr(process, "close"):
                 await process.close()
-            attempt.persist()
+            self.active.pop(ticket, None)
+            self.active_files.pop(ticket, None)
+            if attempt:
+                attempt.persist()
 
 
 runtime = Runtime()
@@ -246,7 +188,7 @@ class LocalEmbedding:
         config = (self._config or configuration()).model_copy(deep=True)
         token = runtime_context.set(config)
         try:
-            return await runtime.infer(config.embedding_model, "embedding", {"texts": texts}, priority=embedding_priority.get())
+            return await runtime.infer(config.embedding_model, "embedding", {"texts": texts}, priority=0)
         finally:
             runtime_context.reset(token)
 
