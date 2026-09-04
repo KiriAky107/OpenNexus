@@ -13,7 +13,11 @@ const emit = defineEmits<{
   (e: 'open-citation', data: Record<string, unknown>): void
 }>()
 
+// 子树展开与「查看本节点数据」是两件事：
+// 叶子节点没有子树，但依然需要能看自己的 data，
+// 所以两个状态集合分开维护，不能共用一个 expanded。
 const expandedNodes = ref<Set<string>>(new Set())
+const detailNodes = ref<Set<string>>(new Set())
 const viewMode = ref<'timeline' | 'tree'>('timeline')
 const showDetails = ref(true)
 
@@ -32,16 +36,30 @@ const summaryStats = computed(() => {
   }
 })
 
-function toggleExpand(nodeId: string) {
-  if (expandedNodes.value.has(nodeId)) {
-    expandedNodes.value.delete(nodeId)
+function toggle(set: Set<string>, nodeId: string) {
+  if (set.has(nodeId)) {
+    set.delete(nodeId)
   } else {
-    expandedNodes.value.add(nodeId)
+    set.add(nodeId)
   }
+}
+
+/** 展开/收起子树，只对有 children 的节点有意义。 */
+function toggleExpand(nodeId: string) {
+  toggle(expandedNodes.value, nodeId)
 }
 
 function isExpanded(nodeId: string): boolean {
   return expandedNodes.value.has(nodeId)
+}
+
+/** 查看/隐藏本节点自身的数据，任何节点（含叶子）都可用。 */
+function toggleDetail(nodeId: string) {
+  toggle(detailNodes.value, nodeId)
+}
+
+function isDetailOpen(nodeId: string): boolean {
+  return detailNodes.value.has(nodeId)
 }
 
 function formatTime(iso: string): string {
@@ -81,6 +99,11 @@ function getNodeStatusClass(node: TraceNode): string {
     case 'cancelled': return 'status-cancelled'
     default: return 'status-completed'
   }
+}
+
+/** 引用节点带 file_path 才能定位到笔记块。 */
+function isCitationNode(node: TraceNode): boolean {
+  return node.type === 'citation' && typeof node.data.file_path === 'string'
 }
 
 function prettyData(data: Record<string, unknown>): string {
@@ -147,10 +170,10 @@ const flatTrace = computed(() => flatNodes(traceNodes.value))
           v-for="event in events"
           :key="event.sequence"
           class="event-card"
-          :class="{ expanded: isExpanded(`event-${event.sequence}`) }"
+          :class="{ expanded: isDetailOpen(`event-${event.sequence}`) }"
         >
           <div class="event-dot" :class="`dot-${event.event}`"></div>
-          <div class="event-content" @click="toggleExpand(`event-${event.sequence}`)">
+          <div class="event-content" @click="toggleDetail(`event-${event.sequence}`)">
             <div class="event-header">
               <span class="event-badge" :class="{
                 success: event.event === 'RunCompleted' || event.event === 'ModelCallCompleted',
@@ -170,9 +193,7 @@ const flatTrace = computed(() => flatNodes(traceNodes.value))
               </span>
             </div>
             <div v-if="event.event === 'Usage'" class="event-usage">
-              <span>输入: {{ event.data.input_tokens ?? '-' }} tokens</span>
-              <span>输出: {{ event.data.output_tokens ?? '-' }} tokens</span>
-              <span class="total">总计: {{ event.data.total_tokens ?? '-' }} tokens</span>
+              <span class="total">累计: {{ event.data.token_usage ?? '-' }} tokens</span>
             </div>
             <div v-if="event.event === 'Citation'" class="event-citation" @click.stop="emit('open-citation', event.data)">
               <span class="cite-icon">📎</span>
@@ -183,7 +204,7 @@ const flatTrace = computed(() => flatNodes(traceNodes.value))
               <code>{{ event.data.permission as string }}</code>
             </div>
           </div>
-          <div v-if="isExpanded(`event-${event.sequence}`) && showDetails" class="event-detail">
+          <div v-if="isDetailOpen(`event-${event.sequence}`) && showDetails" class="event-detail">
             <details open>
               <summary>完整数据</summary>
               <pre>{{ prettyData(event.data) }}</pre>
@@ -199,10 +220,25 @@ const flatTrace = computed(() => flatNodes(traceNodes.value))
 
     <div v-else class="tree-view">
       <div v-for="item in flatTrace" :key="item.node.id" class="tree-node" :style="{ paddingLeft: `${item.depth * 24 + 8}px` }">
-        <div class="node-row" :class="getNodeStatusClass(item.node)" @click="item.node.children.length && toggleExpand(item.node.id)">
-          <span v-if="item.node.children.length" class="expand-icon">
+        <div
+          class="node-row"
+          :class="[getNodeStatusClass(item.node), { 'detail-open': isDetailOpen(item.node.id) }]"
+          role="button"
+          tabindex="0"
+          :aria-expanded="isDetailOpen(item.node.id)"
+          @click="toggleDetail(item.node.id)"
+          @keydown.enter.prevent="toggleDetail(item.node.id)"
+          @keydown.space.prevent="toggleDetail(item.node.id)"
+        >
+          <button
+            v-if="item.node.children.length"
+            type="button"
+            class="expand-icon"
+            :aria-label="isExpanded(item.node.id) ? '收起子调用' : `展开 ${item.node.children.length} 个子调用`"
+            @click.stop="toggleExpand(item.node.id)"
+          >
             {{ isExpanded(item.node.id) ? '▼' : '▶' }}
-          </span>
+          </button>
           <span v-else class="expand-icon placeholder"></span>
           <span class="node-icon">{{ getNodeIcon(item.node.type) }}</span>
           <span class="node-title">{{ item.node.title }}</span>
@@ -210,8 +246,16 @@ const flatTrace = computed(() => flatNodes(traceNodes.value))
           <span v-if="item.node.duration_ms != null" class="node-duration">
             {{ formatDuration(item.node.duration_ms) }}
           </span>
+          <button
+            v-if="isCitationNode(item.node)"
+            type="button"
+            class="node-locate"
+            @click.stop="emit('open-citation', item.node.data)"
+          >
+            定位
+          </button>
         </div>
-        <div v-if="isExpanded(item.node.id) && item.node.children.length === 0 && showDetails" class="node-detail">
+        <div v-if="isDetailOpen(item.node.id) && showDetails" class="node-detail">
           <pre>{{ prettyData(item.node.data) }}</pre>
         </div>
       </div>
@@ -533,12 +577,18 @@ const flatTrace = computed(() => flatNodes(traceNodes.value))
   align-items: center;
   gap: var(--space-xs);
   padding: 8px 12px;
-  cursor: default;
+  cursor: pointer;
   font-size: var(--font-size-sm);
   transition: background-color var(--motion-fast);
 }
 
 .node-row:hover { background: var(--color-background-hover); }
+.node-row:focus-visible {
+  outline: 2px solid var(--color-accent-primary);
+  outline-offset: -2px;
+}
+
+.node-row.detail-open { background: var(--color-background-secondary); }
 
 .node-row.status-running {
   background: var(--color-info-soft);
@@ -550,6 +600,9 @@ const flatTrace = computed(() => flatNodes(traceNodes.value))
 
 .expand-icon {
   width: 16px;
+  padding: 0;
+  background: none;
+  border: none;
   font-size: 10px;
   color: var(--color-text-tertiary);
   cursor: pointer;
@@ -557,6 +610,19 @@ const flatTrace = computed(() => flatNodes(traceNodes.value))
 }
 
 .expand-icon.placeholder { visibility: hidden; }
+
+.node-locate {
+  padding: 1px 8px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-primary);
+  color: var(--color-accent-primary);
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.node-locate:hover { border-color: var(--color-accent-primary); }
 
 .node-icon {
   font-size: 14px;

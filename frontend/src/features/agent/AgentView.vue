@@ -8,12 +8,14 @@ import TraceTimeline from './TraceTimeline.vue'
 import type { AgentEvent } from '@/contracts'
 import { localizeDetails, permissionLabel, runStatusLabel, toolLabel } from './labels'
 import ToolOption from './ToolOption.vue'
+import { useCitationNavigation } from '@/composables/useCitationNavigation'
 
 const route = useRoute()
 const router = useRouter()
 const agentStore = useAgentStore()
 const providerStore = useProviderStore()
 const skillStore = useSkillStore()
+const { openCitation } = useCitationNavigation()
 const pageError = ref('')
 const form = reactive({
   input: '', provider_id: '', model: '', skill_id: '', max_steps: 10,
@@ -71,6 +73,16 @@ function eventText(event: AgentEvent) {
   if (text) return String(text)
   return ''
 }
+
+/** Trace 里点引用 → 打开对应笔记块。失败原因要让用户看到，不能静默。 */
+async function handleOpenCitation(data: Record<string, unknown>) {
+  pageError.value = ''
+  try {
+    await openCitation(data)
+  } catch (error) {
+    pageError.value = error instanceof Error ? error.message : '引用定位失败'
+  }
+}
 </script>
 
 <template>
@@ -118,7 +130,11 @@ function eventText(event: AgentEvent) {
           <button class="button-secondary" @click="agentStore.loadRun(agentStore.activeRunId!)">重新加载</button>
         </div>
       </div>
-      <TraceTimeline :events="agentStore.events" :run-status="agentStore.activeRun?.status" />
+      <TraceTimeline
+        :events="agentStore.events"
+        :run-status="agentStore.activeRun?.status"
+        @open-citation="handleOpenCitation"
+      />
     </div>
 
     <div v-if="agentStore.permissionRequest" class="modal-backdrop">

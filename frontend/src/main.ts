@@ -13,6 +13,7 @@ app.use(pinia)
 app.use(router)
 
 const themeStore = useThemeStore()
-themeStore.initTheme()
+// initTheme 先同步落内置主题兜底，自定义主题恢复是异步的，不阻塞挂载。
+void themeStore.initTheme()
 
 app.mount('#app')

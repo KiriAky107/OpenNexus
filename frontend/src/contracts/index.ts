@@ -842,12 +842,16 @@ export interface ThemePackageInspection {
   warnings: string[]
   compatible: boolean
   error_code?: string
+  /** 包内实际的主题 CSS。安装时必须用这份内容，不能另行生成。 */
+  css: string
 }
 
 export type ThemeErrorCode =
   | 'THEME_PACKAGE_NOT_FOUND'
   | 'THEME_MANIFEST_INVALID'
   | 'THEME_PACKAGE_INCOMPATIBLE'
+  | 'THEME_PACKAGE_UNSUPPORTED_FORMAT'
+  | 'THEME_PACKAGE_INVALID'
   | 'THEME_CSS_INVALID'
   | 'THEME_SECURITY_VIOLATION'
   | 'THEME_INSTALL_FAILED'

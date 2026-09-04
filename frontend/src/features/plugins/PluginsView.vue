@@ -2,18 +2,17 @@
 import { Connection } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import PluginMcpPanel from './PluginMcpPanel.vue'
+import PluginCommandPanel from './PluginCommandPanel.vue'
 import PluginSettingsPanel from './PluginSettingsPanel.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { usePluginStore } from '@/stores/plugin'
 import * as pluginService from '@/services/pluginService'
-import type { PluginCommand, PluginCommandEffect } from '@/contracts'
+import type { PluginCommand } from '@/contracts'
 
 const pluginStore = usePluginStore()
 const actionError = ref('')
 const activeTab = ref<'info' | 'settings' | 'commands'>('info')
 const pluginCommands = ref<PluginCommand[]>([])
-const commandOutput = ref<Record<string, string>>({})
-const isExecutingCommand = ref<string | null>(null)
 
 onMounted(() => { void pluginStore.loadPlugins() })
 
@@ -21,8 +20,8 @@ watch(() => pluginStore.selectedPluginId, async (pluginId) => {
   if (pluginId) {
     activeTab.value = 'info'
     pluginCommands.value = []
-    commandOutput.value = {}
     try {
+      // 只为了标签上的命令数；执行逻辑在 PluginCommandPanel 里。
       const allCommands = await pluginService.listPluginCommands()
       pluginCommands.value = allCommands.filter((c) => c.plugin_id === pluginId)
     } catch { /* 命令加载失败时忽略 */ }
@@ -52,36 +51,6 @@ async function uninstall(id: string, name: string) {
   if (!confirm(`卸载"${name}"将移除其全部 Contribution，是否继续？`)) return
   try { await pluginStore.uninstallPlugin(id) }
   catch (error) { actionError.value = error instanceof Error ? error.message : '卸载失败' }
-}
-
-async function runCommand(command: PluginCommand) {
-  isExecutingCommand.value = command.command_id
-  commandOutput.value[command.command_id] = ''
-  try {
-    // Plugin 详情页没有笔记/选区上下文，按契约传空上下文。
-    const result = await pluginService.executePluginCommand(command.command_id, {}, {})
-    commandOutput.value[command.command_id] = describeEffect(result.effect)
-  } catch (error) {
-    commandOutput.value[command.command_id] = error instanceof Error ? error.message : '执行失败'
-  } finally {
-    isExecutingCommand.value = null
-  }
-}
-
-/** 效果白名单：只渲染契约允许的类型，未知类型统一按“已完成”处理。 */
-function describeEffect(effect: PluginCommandEffect): string {
-  switch (effect.type) {
-    case 'notification':
-      return effect.payload.message
-    case 'navigate':
-      return `命令请求跳转到「${effect.payload.route}」`
-    case 'refresh':
-      return `命令请求刷新「${effect.payload.scope}」`
-    case 'job':
-      return `已创建后台任务：${effect.payload.job_id}`
-    default:
-      return '命令执行成功'
-  }
 }
 
 const hasSettingsContribution = computed(() =>
@@ -195,35 +164,7 @@ const hasCommandContribution = computed(() =>
         </div>
 
         <div v-else-if="activeTab === 'commands'" class="tab-content">
-          <div v-if="pluginCommands.length === 0" class="empty-hint">
-            <p>此插件暂无可执行命令。</p>
-          </div>
-          <div v-else class="command-list">
-            <div v-for="cmd in pluginCommands" :key="cmd.command_id" class="command-item">
-              <div class="command-info">
-                <strong>{{ cmd.title }}</strong>
-                <p class="subtle">{{ cmd.description }}</p>
-                <div class="command-meta">
-                  <code>{{ cmd.command_id }}</code>
-                  <span class="locations">
-                    挂载于: {{ cmd.locations.join(', ') }}
-                  </span>
-                </div>
-              </div>
-              <div class="command-action">
-                <button
-                  class="button-secondary"
-                  :disabled="!cmd.enabled || isExecutingCommand === cmd.command_id"
-                  @click="runCommand(cmd)"
-                >
-                  {{ isExecutingCommand === cmd.command_id ? '执行中…' : '运行' }}
-                </button>
-              </div>
-              <div v-if="commandOutput[cmd.command_id]" class="command-output">
-                {{ commandOutput[cmd.command_id] }}
-              </div>
-            </div>
-          </div>
+          <PluginCommandPanel :plugin="pluginStore.selectedPlugin" />
         </div>
 
         <div v-else-if="activeTab === 'settings'" class="tab-content">
@@ -347,46 +288,6 @@ const hasCommandContribution = computed(() =>
 .extension-title div { flex: 1; }
 .extension-title p { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 
-.command-list { display: grid; gap: var(--space-sm); }
-.command-item {
-  padding: var(--space-md);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-primary);
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: var(--space-sm) var(--space-md);
-  align-items: start;
-}
-.command-info strong { display: block; margin-bottom: 2px; }
-.command-info .subtle {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  margin-bottom: var(--space-xs);
-}
-.command-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.command-meta code {
-  padding: 1px 6px;
-  background: var(--color-background-secondary);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-ui-mono);
-}
-.command-output {
-  grid-column: 1 / -1;
-  padding: var(--space-sm) var(--space-md);
-  background: var(--color-background-secondary);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  white-space: pre-wrap;
-}
-
 .empty-hint {
   padding: var(--space-2xl);
   text-align: center;
@@ -396,6 +297,5 @@ const hasCommandContribution = computed(() =>
 
 @media (max-width: 800px) {
   .detail-grid { grid-template-columns: 1fr; }
-  .command-item { grid-template-columns: 1fr; }
 }
 </style>

@@ -1,20 +1,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import type { Citation } from '@/contracts'
 import { useChatStore } from '@/stores/chat'
-import { useEditorStore } from '@/stores/editor'
 import { useProviderStore } from '@/stores/provider'
 import { useSkillStore } from '@/stores/skill'
-import { useWorkspaceStore } from '@/stores/workspace'
 import MarkdownContent from '@/components/common/MarkdownContent.vue'
+import { useCitationNavigation } from '@/composables/useCitationNavigation'
 
 const chatStore = useChatStore()
 const providerStore = useProviderStore()
 const skillStore = useSkillStore()
-const workspaceStore = useWorkspaceStore()
-const editorStore = useEditorStore()
-const router = useRouter()
+const { openCitation } = useCitationNavigation()
 const loadError = ref('')
 let disposed = false
 onBeforeUnmount(() => { disposed = true })
@@ -51,11 +47,13 @@ watch(() => chatStore.selectedProviderId, async (providerId) => {
 
 function send() { void chatStore.sendMessage(chatStore.inputText) }
 
-async function openCitation(citation: Citation) {
-  await editorStore.loadFile(citation.file_path)
-  workspaceStore.openFile(citation.file_path)
-  editorStore.highlightBlock(citation.block_id)
-  await router.push('/workspace')
+async function openCitationCard(citation: Citation) {
+  loadError.value = ''
+  try {
+    await openCitation(citation)
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : '引用定位失败'
+  }
 }
 </script>
 
@@ -80,7 +78,7 @@ async function openCitation(citation: Citation) {
           <div v-else-if="chatStore.isStreaming" class="message-content">正在思考…</div>
           <div v-if="message.tool_calls?.length" class="tool-calls"><div v-for="call in message.tool_calls" :key="call.tool_call_id" class="item-card"><span class="badge info">{{ call.status }}</span><strong>{{ call.name }}</strong><pre>{{ JSON.stringify(call.parameters, null, 2) }}</pre></div></div>
           <div v-if="message.citations?.length" class="citations">
-            <button v-for="(citation, index) in message.citations" :key="citation.block_id" class="citation-card" @click="openCitation(citation)">
+            <button v-for="(citation, index) in message.citations" :key="citation.block_id" class="citation-card" @click="openCitationCard(citation)">
               <span class="badge info">{{ index + 1 }}</span><span><strong>{{ citation.heading_path || citation.file_path }}</strong><small>{{ citation.content }}</small></span>
             </button>
           </div>

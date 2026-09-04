@@ -1,27 +1,20 @@
 <script setup lang="ts">
-import { Key, Refresh, VideoPlay } from '@element-plus/icons-vue'
+import { Key, Refresh } from '@element-plus/icons-vue'
 import { computed, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import AppIcon from '@/components/common/AppIcon.vue'
-import type { Plugin, PluginCommand, PluginHostStatus, PluginSettingField, PluginSettingsSchema } from '@/contracts'
+import PluginCommandPanel from './PluginCommandPanel.vue'
+import type { Plugin, PluginHostStatus, PluginSettingField, PluginSettingsSchema } from '@/contracts'
 import * as pluginService from '@/services/pluginService'
-import { useEditorStore } from '@/stores/editor'
 import { usePluginStore } from '@/stores/plugin'
-import { useWorkspaceStore } from '@/stores/workspace'
 
 const props = defineProps<{ plugin: Plugin }>()
 const pluginStore = usePluginStore()
-const editorStore = useEditorStore()
-const workspaceStore = useWorkspaceStore()
-const router = useRouter()
 const activeTab = ref<'host' | 'settings' | 'commands'>('host')
 const host = ref<PluginHostStatus | null>(null)
 const schema = ref<PluginSettingsSchema | null>(null)
 const values = ref<Record<string, unknown>>({})
 // 明文只停留在组件内存，提交后立即清空。
 const secrets = ref<Record<string, string>>({})
-const commands = ref<PluginCommand[]>([])
-const argumentsByCommand = ref<Record<string, Record<string, unknown>>>({})
 const loading = ref(false)
 const busy = ref('')
 const error = ref('')
@@ -42,7 +35,6 @@ watch(() => props.plugin.plugin_id, () => {
   schema.value = null
   values.value = {}
   secrets.value = {}
-  commands.value = []
   void loadActive()
 }, { immediate: true })
 
@@ -72,18 +64,19 @@ async function loadActive() {
         values.value = { ...loadedSchema.values }
       }
     }
-    if (tab === 'commands') {
-      const loadedCommands = (await pluginService.listPluginCommands()).filter((command) => command.plugin_id === pluginId)
-      if (version === loadVersion) {
-        commands.value = loadedCommands
-        for (const command of loadedCommands) argumentsByCommand.value[command.command_id] = {}
-      }
-    }
+    // commands 由 PluginCommandPanel 自己加载。
   } catch (reason) {
     if (version === loadVersion) feedback(message(reason, 'MCP 数据加载失败'))
   } finally {
     if (version === loadVersion) loading.value = false
   }
+}
+
+/** 命令返回 refresh:settings 时重新拉设置。 */
+async function reloadSettings() {
+  const loadedSchema = await pluginService.getPluginSettings(props.plugin.plugin_id)
+  schema.value = loadedSchema
+  values.value = { ...loadedSchema.values }
 }
 async function restartHost() {
   busy.value = 'host'
@@ -131,54 +124,6 @@ async function deleteSecret(field: PluginSettingField) {
     notice.value = field.label + '已删除。'
   } catch (reason) { feedback(message(reason, '密钥删除失败')) } finally { busy.value = '' }
 }
-function properties(command: PluginCommand): Record<string, Record<string, unknown>> {
-  const result = command.parameters.properties
-  return result && typeof result === 'object' && !Array.isArray(result) ? result as Record<string, Record<string, unknown>> : {}
-}
-function required(command: PluginCommand, key: string) {
-  return Array.isArray(command.parameters.required) && command.parameters.required.includes(key)
-}
-function commandAvailable(command: PluginCommand) {
-  if (!command.enabled) return false
-  return command.when.every((condition) => {
-    if (condition === 'workspace.has_vault') return Boolean(workspaceStore.vaultId)
-    if (condition === 'editor.has_note') return Boolean(editorStore.currentNoteId)
-    // Plugin 详情页不冒充编辑器选区；选区命令应从命令面板或编辑器挂载点执行。
-    if (condition === 'editor.has_selection') return false
-    return false
-  })
-}
-function updateArgument(commandId: string, key: string, raw: string, definition: Record<string, unknown>) {
-  const target = argumentsByCommand.value[commandId] ??= {}
-  if (definition.type === 'number' || definition.type === 'integer') target[key] = raw === '' ? undefined : Number(raw)
-  else if (definition.type === 'boolean') target[key] = raw === 'true'
-  else target[key] = raw
-}
-async function execute(command: PluginCommand) {
-  busy.value = command.command_id
-  feedback()
-  try {
-    const result = await pluginService.executePluginCommand(command.command_id, argumentsByCommand.value[command.command_id] ?? {}, {
-      vault_id: workspaceStore.hasVault ? workspaceStore.vaultId : null,
-      note_id: editorStore.currentNoteId,
-      file_path: editorStore.currentFilePath,
-      selection: null,
-    })
-    if (result.effect.type === 'notification') notice.value = result.effect.payload.message
-    else if (result.effect.type === 'job') notice.value = '后台任务已创建：' + result.effect.payload.job_id
-    else if (result.effect.type === 'navigate') {
-      const routes: Record<string, string> = {
-        'vault-entry': '/', workspace: '/workspace', search: '/search', chat: '/chat',
-        agent: '/agent/runs', tasks: '/tasks', skills: '/extensions/skills',
-        plugins: '/extensions/plugins', themes: '/themes', settings: '/settings',
-      }
-      await router.push(routes[result.effect.payload.route])
-    } else if (result.effect.type === 'refresh') {
-      await loadActive()
-      notice.value = '相关数据已刷新。'
-    } else notice.value = '命令执行完成。'
-  } catch (reason) { feedback(message(reason, '命令执行失败')) } finally { busy.value = '' }
-}
 </script>
 
 <template>
@@ -222,17 +167,7 @@ async function execute(command: PluginCommand) {
     </div>
 
     <div v-else class="mcp-section">
-      <div class="section-head"><div><h3>Plugin 命令</h3><p>执行该 Plugin 注册的受控 Command Contribution。</p></div><button class="button-secondary" :disabled="loading" @click="loadActive"><AppIcon :icon="Refresh" :size="15" />刷新</button></div>
-      <div v-if="commands.length" class="command-list">
-        <article v-for="command in commands" :key="command.command_id" class="item-card command-card">
-          <div class="command-head"><div><strong>{{ command.title }}</strong><p>{{ command.description || command.command_id }}</p></div><span class="badge" :class="{ success: commandAvailable(command), warning: command.enabled && !commandAvailable(command) }">{{ commandAvailable(command) ? '可执行' : command.enabled ? '缺少上下文' : '不可用' }}</span></div>
-          <div v-if="Object.keys(properties(command)).length" class="command-fields">
-            <label v-for="(definition, key) in properties(command)" :key="key" class="field"><span>{{ String(definition.title || key) }}<em v-if="required(command, key)">必填</em></span><select v-if="Array.isArray(definition.enum)" class="select" @change="updateArgument(command.command_id, key, ($event.target as HTMLSelectElement).value, definition)"><option value="">请选择</option><option v-for="option in definition.enum" :key="String(option)" :value="String(option)">{{ option }}</option></select><select v-else-if="definition.type === 'boolean'" class="select" @change="updateArgument(command.command_id, key, ($event.target as HTMLSelectElement).value, definition)"><option value="false">否</option><option value="true">是</option></select><input v-else class="input" :type="definition.type === 'number' || definition.type === 'integer' ? 'number' : 'text'" @input="updateArgument(command.command_id, key, ($event.target as HTMLInputElement).value, definition)"></label>
-          </div>
-          <button class="button-primary command-run" :disabled="!commandAvailable(command) || busy === command.command_id" @click="execute(command)"><AppIcon :icon="VideoPlay" :size="15" />{{ busy === command.command_id ? '执行中…' : '执行命令' }}</button>
-        </article>
-      </div>
-      <div v-else-if="!loading" class="empty-state"><div><strong>没有可用命令</strong><p>启用 Plugin 后，已注册的命令会出现在这里。</p></div></div>
+      <PluginCommandPanel :plugin="plugin" @refresh-settings="reloadSettings" />
     </div>
   </section>
 </template>

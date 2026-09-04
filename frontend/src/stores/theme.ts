@@ -47,6 +47,8 @@ export const useThemeStore = defineStore('theme', () => {
   const codeBlockTheme = ref<CodeBlockThemePreference>('auto')
   const isImporting = ref(false)
   const importError = ref<string | null>(null)
+  // 主题恢复阶段的提示（保存的主题已卸载、主题列表加载失败等），与导入错误分开。
+  const themeLoadWarning = ref<string | null>(null)
   const pendingInspection = ref<ThemePackageInspection | null>(null)
   let appearanceHydrated = false
 
@@ -66,9 +68,10 @@ export const useThemeStore = defineStore('theme', () => {
     return currentTheme.value?.code_theme ?? (isDark.value ? 'github-dark' : 'github-light')
   })
 
-  function applyTheme(themeId: string) {
+  /** 应用主题；返回 false 表示该主题当前不存在（未安装或还没加载完）。 */
+  function applyTheme(themeId: string, options: { persist?: boolean } = {}): boolean {
     const theme = allThemes.value.find((t) => t.theme_id === themeId)
-    if (!theme) return
+    if (!theme) return false
     currentThemeId.value = themeId
     const root = document.documentElement
     if (theme.builtin) {
@@ -82,10 +85,28 @@ export const useThemeStore = defineStore('theme', () => {
     } else {
       root.setAttribute('data-theme', themeId)
     }
-    localStorage.setItem('theme', themeId)
+    if (options.persist !== false) localStorage.setItem('theme', themeId)
+    return true
   }
 
-  function initTheme() {
+  function isBuiltinThemeId(themeId: string): boolean {
+    return builtinThemes.some((t) => t.theme_id === themeId)
+  }
+
+  function systemThemeId(): string {
+    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  }
+
+  /**
+   * 恢复外观与主题。
+   *
+   * 自定义主题要等 listInstalledThemes 回来才存在于 allThemes 里，
+   * 所以恢复已保存主题必须在 loadCustomThemes 之后 —— 否则 applyTheme
+   * 找不到主题直接 return，页面会停在没有 data-theme 的裸状态。
+   * 首屏也不能干等接口：先同步落一个内置主题兜底（不写 localStorage，
+   * 以免把用户存的自定义主题 id 冲掉），加载完成后再切到真正保存的那个。
+   */
+  async function initTheme(): Promise<void> {
     const savedAppearance = localStorage.getItem('editor-appearance')
     if (savedAppearance) {
       try {
@@ -96,16 +117,25 @@ export const useThemeStore = defineStore('theme', () => {
         if (isCodeBlockThemePreference(value.codeBlockTheme)) codeBlockTheme.value = value.codeBlockTheme
       } catch { localStorage.removeItem('editor-appearance') }
     }
-    void loadCustomThemes()
-    const saved = localStorage.getItem('theme')
     appearanceHydrated = true
     persistAppearance()
-    if (saved) {
-      applyTheme(saved)
+
+    const saved = localStorage.getItem('theme')
+    const fallback = systemThemeId()
+    applyTheme(saved && isBuiltinThemeId(saved) ? saved : fallback, { persist: false })
+
+    await loadCustomThemes()
+
+    if (!saved) {
+      applyTheme(fallback)
       return
     }
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-    applyTheme(prefersDark ? 'dark' : 'light')
+    if (applyTheme(saved)) return
+
+    // 保存的主题已被卸载，或主题列表加载失败：回退并清掉失效记录。
+    themeLoadWarning.value = `主题「${saved}」已不可用，已回退到默认主题。`
+    localStorage.removeItem('theme')
+    applyTheme(fallback)
   }
 
   async function loadCustomThemes() {
@@ -122,7 +152,13 @@ export const useThemeStore = defineStore('theme', () => {
         author: t.author,
         code_theme: t.code_theme,
       }))]
-    } catch { /* keep builtin only */ }
+      themeLoadWarning.value = null
+    } catch (error) {
+      // 只保留内置主题，但要让用户知道自定义主题这次没加载上。
+      themeLoadWarning.value = error instanceof Error
+        ? `自定义主题加载失败：${error.message}`
+        : '自定义主题加载失败。'
+    }
   }
 
   function toggleTheme() {
@@ -272,6 +308,7 @@ export const useThemeStore = defineStore('theme', () => {
     resolvedCodeBlockTheme,
     isImporting,
     importError,
+    themeLoadWarning,
     pendingInspection,
     allThemes,
     applyTheme,

@@ -66,18 +66,6 @@ function validateCssSafety(css: string): string[] {
   return warnings
 }
 
-function buildCssVarsFromManifest(manifest: ThemeManifest, rawValues: Record<string, string>): string {
-  const lines: string[] = []
-  lines.push(`[data-theme="${manifest.theme_id}"] {`)
-  for (const [key, value] of Object.entries(rawValues)) {
-    if (key.startsWith('--')) {
-      lines.push(`  ${key}: ${value};`)
-    }
-  }
-  lines.push('}')
-  return lines.join('\n')
-}
-
 function applyThemeCss(themeId: string, css: string) {
   let styleEl = document.getElementById(`theme-style-${themeId}`) as HTMLStyleElement | null
   if (!styleEl) {
@@ -116,27 +104,61 @@ function inspectYamlContent(yamlText: string): ThemeManifest {
   return manifest
 }
 
+/**
+ * 主题包是单文件文本格式：YAML 清单 + 一行 `---` + 主题 CSS。
+ *
+ *   theme_id: my-theme
+ *   name: My Theme
+ *   ...
+ *   ---
+ *   [data-theme="my-theme"] { --color-... }
+ *
+ * 浏览器端没有解压能力，所以不支持 ZIP —— 与其把二进制当文本解析出
+ * 一堆乱码再报「清单无效」，不如直接告诉用户格式不支持。
+ */
+export function parseThemePackage(packageData: string): { manifestText: string; css: string } {
+  if (looksLikeZip(packageData)) {
+    throw new Error(
+      'THEME_PACKAGE_UNSUPPORTED_FORMAT: 暂不支持 ZIP 主题包，请提供「YAML 清单 + --- + CSS」的单文件主题。',
+    )
+  }
+
+  const lines = packageData.split(/\r?\n/)
+  const separatorIndex = lines.findIndex((line) => line.trim() === '---')
+  if (separatorIndex < 0) {
+    throw new Error(
+      'THEME_PACKAGE_INVALID: 主题包缺少 `---` 分隔行，无法区分清单与 CSS。',
+    )
+  }
+
+  const manifestText = lines.slice(0, separatorIndex).join('\n')
+  const css = lines.slice(separatorIndex + 1).join('\n').trim()
+  if (!css) {
+    throw new Error('THEME_CSS_INVALID: 主题包内没有 CSS 内容。')
+  }
+  return { manifestText, css }
+}
+
+/** ZIP 的魔数是 PK\x03\x04；base64 形式（readAsDataURL）开头是 UEsDB。 */
+function looksLikeZip(data: string): boolean {
+  if (data.startsWith('PK')) return true
+  return /^data:.*;base64,UEsDB/.test(data) || data.startsWith('UEsDB')
+}
+
 export async function selectThemePackage(): Promise<string | null> {
   return new Promise((resolve) => {
     const input = document.createElement('input')
     input.type = 'file'
-    input.accept = '.zip,.yaml,.yml,.css'
+    // 只接受能在浏览器里解析的单文件主题；ZIP 需要 Host 端解压，暂不支持。
+    input.accept = '.yaml,.yml,.theme'
     input.multiple = false
     input.onchange = () => {
       const file = input.files?.[0]
       if (!file) { resolve(null); return }
       const reader = new FileReader()
-      reader.onload = () => {
-        resolve(reader.result as string)
-      }
+      reader.onload = () => resolve(reader.result as string)
       reader.onerror = () => resolve(null)
-      if (file.name.endsWith('.yaml') || file.name.endsWith('.yml')) {
-        reader.readAsText(file)
-      } else if (file.name.endsWith('.css')) {
-        reader.readAsText(file)
-      } else {
-        reader.readAsDataURL(file)
-      }
+      reader.readAsText(file)
     }
     input.oncancel = () => resolve(null)
     input.click()
@@ -146,10 +168,13 @@ export async function selectThemePackage(): Promise<string | null> {
 export async function inspectThemePackage(packageData: string): Promise<ThemePackageInspection> {
   const package_id = `theme_pkg_${Date.now()}`
   try {
-    const manifest = inspectYamlContent(packageData)
-    const warnings: string[] = []
-    if (manifest.css_entry && manifest.css_entry.includes('theme.css')) {
-      // 示意：Web Mock 假设 CSS 入口存在，真实 Host 会检查包内文件
+    const { manifestText, css } = parseThemePackage(packageData)
+    const manifest = inspectYamlContent(manifestText)
+    // CSS 的安全校验放在这里，不合规的包在「预览」阶段就该被拒，
+    // 而不是等到用户点安装。
+    const warnings = validateCssSafety(css)
+    if (!css.includes(`[data-theme="${manifest.theme_id}"]`)) {
+      warnings.push(`CSS 未包含 [data-theme="${manifest.theme_id}"] 选择器，主题可能不会生效。`)
     }
     return {
       package_id,
@@ -157,6 +182,7 @@ export async function inspectThemePackage(packageData: string): Promise<ThemePac
       preview_url: '',
       warnings,
       compatible: true,
+      css,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误'
@@ -168,6 +194,7 @@ export async function inspectThemePackage(packageData: string): Promise<ThemePac
       warnings: [message],
       compatible: false,
       error_code,
+      css: '',
     }
   }
 }
@@ -176,6 +203,8 @@ export async function installTheme(
   manifest: ThemeManifest,
   cssContent: string,
 ): Promise<InstalledTheme> {
+  // validateCssSafety 会对 @import / expression() / javascript: 抛错，
+  // 必须在 applyThemeCss 之前调用 —— 未校验的 CSS 一律不许进入页面。
   const warnings = validateCssSafety(cssContent)
   if (warnings.length > 0) {
     console.warn('[theme] CSS validation warnings:', warnings)
