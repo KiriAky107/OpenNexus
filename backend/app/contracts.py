@@ -1000,6 +1000,8 @@ class TranscriptionJob(Contract):
 
 
 class IndexStatus(Contract):
+    total_notes: int = 0
+    total_blocks: int = 0
     status: Literal["idle", "queued", "running", "failed"] = "idle"
     pending_jobs: int = 0
     active_job_id: str | None = None

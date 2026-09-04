@@ -1,23 +1,14 @@
 import apiClient from './apiClient'
 import type { SystemStatus } from '@/contracts'
 
-export async function healthCheck(): Promise<{ status: string }> {
-  try {
-    return await apiClient.get<{ status: string }>('/health')
-  } catch {
-    return { status: 'unavailable' }
-  }
+export function healthCheck(): Promise<{ status: string }> {
+  return apiClient.get('/health')
 }
 
-export async function getStatus(): Promise<SystemStatus> {
-  try {
-    return await apiClient.get<SystemStatus>('/api/status')
-  } catch {
-    return {
-      status: 'ok',
-      name: 'notes-agent',
-      version: '0.1.0',
-      environment: import.meta.env.DEV ? 'development' : 'production',
-    }
-  }
+export function getStatus(): Promise<SystemStatus> {
+  return apiClient.get('/api/status')
+}
+
+export function getPermissionPolicy(): Promise<Record<string, 'allow' | 'confirm' | 'deny'>> {
+  return apiClient.get('/api/permissions/policy')
 }

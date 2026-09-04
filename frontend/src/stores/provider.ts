@@ -1,17 +1,17 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { ProviderConfig, ModelInfo, ProviderPreset } from '@/contracts'
-import { createProvider, deleteProvider as deleteProviderRequest, getCredentialStatus, listModels, listProviderPresets, listProviders, mockProviders, mockModels, putCredential, testProvider as testProviderRequest, updateProvider as updateProviderRequest } from '@/services/providerService'
+import { createProvider, deleteProvider as deleteProviderRequest, getCredentialStatus, listModels, listProviderPresets, listProviders, putCredential, testProvider as testProviderRequest, updateProvider as updateProviderRequest } from '@/services/providerService'
 import { ApiErrorClass } from '@/services/apiClient'
 
 export const useProviderStore = defineStore('provider', () => {
-  const providers = ref<ProviderConfig[]>(mockProviders)
+  const providers = ref<ProviderConfig[]>([])
   const presets = ref<ProviderPreset[]>([])
-  const modelsByProvider = ref<Record<string, ModelInfo[]>>(mockModels)
+  const modelsByProvider = ref<Record<string, ModelInfo[]>>({})
   const modelLoadingByProvider = ref<Record<string, boolean>>({})
   const modelErrorsByProvider = ref<Record<string, string>>({})
   const credentialConfiguredById = ref<Record<string, boolean>>({})
-  const defaultProviderId = ref('mock')
+  const defaultProviderId = ref('')
   const isLoading = ref(false)
   const error = ref<string | null>(null)
 
@@ -24,6 +24,9 @@ export const useProviderStore = defineStore('provider', () => {
     isLoading.value = true
     try {
       providers.value = await listProviders()
+      if (!enabledProviders.value.some(p => p.provider_id === defaultProviderId.value)) {
+        defaultProviderId.value = enabledProviders.value[0]?.provider_id ?? ''
+      }
       error.value = null
     } catch (reason) {
       error.value = reason instanceof Error ? reason.message : 'Provider 加载失败'

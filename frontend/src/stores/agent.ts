@@ -1,21 +1,21 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { AgentRun, AgentEvent, ToolDefinition, PermissionRequest, ToolCall } from '@/contracts'
-import { mockAgentRuns, mockAgentEvents, mockTools, mockPermissionRequest } from '@/services/agentService'
 import * as agentService from '@/services/agentService'
 import type { SseClient } from '@/services/sseClient'
 
 export const useAgentStore = defineStore('agent', () => {
-  const runs = ref<AgentRun[]>(mockAgentRuns)
-  const activeRunId = ref<string | null>('run-1')
-  const events = ref<AgentEvent[]>(mockAgentEvents.filter((e) => e.run_id === 'run-1'))
-  const tools = ref<ToolDefinition[]>(mockTools)
+  const runs = ref<AgentRun[]>([])
+  const activeRunId = ref<string | null>(null)
+  const events = ref<AgentEvent[]>([])
+  const tools = ref<ToolDefinition[]>([])
   const isCreating = ref(false)
   const isRunning = ref(false)
   const permissionRequest = ref<PermissionRequest | null>(null)
   const toolCalls = ref<ToolCall[]>([])
   const error = ref<string | null>(null)
   let eventStream: SseClient | null = null
+  let selectionVersion = 0
 
   const activeRun = computed(() =>
     runs.value.find((r) => r.run_id === activeRunId.value) || null
@@ -40,9 +40,15 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   async function loadRun(runId: string) {
+    const version = ++selectionVersion
     eventStream?.cancel()
     activeRunId.value = runId
+    events.value = []
+    toolCalls.value = []
+    permissionRequest.value = null
+    isRunning.value = false
     const run = await agentService.getAgentRun(runId)
+    if (version !== selectionVersion) return
     const existingIndex = runs.value.findIndex((item) => item.run_id === runId)
     if (existingIndex >= 0) runs.value[existingIndex] = run
     else runs.value.unshift(run)
@@ -106,9 +112,9 @@ export const useAgentStore = defineStore('agent', () => {
     isRunning.value = true
     error.value = null
     eventStream = agentService.streamAgentEvents(runId, {
-      onEvent: processEvent,
-      onError(streamError) { error.value = streamError.message; isRunning.value = false },
-      onDone() { isRunning.value = false; eventStream = null },
+      onEvent(event) { if (activeRunId.value === runId) processEvent(event) },
+      onError(streamError) { if (activeRunId.value === runId) { error.value = streamError.message; isRunning.value = false } },
+      onDone() { if (activeRunId.value === runId) { isRunning.value = false; eventStream = null } },
     })
   }
 
@@ -116,6 +122,7 @@ export const useAgentStore = defineStore('agent', () => {
     isCreating.value = true
     try {
       const run = await agentService.createAgentRun(request)
+      selectionVersion++
       runs.value.unshift(run)
       activeRunId.value = run.run_id
       events.value = []
@@ -143,10 +150,6 @@ export const useAgentStore = defineStore('agent', () => {
     permissionRequest.value = null
   }
 
-  function showPermissionDemo() {
-    permissionRequest.value = mockPermissionRequest
-  }
-
   return {
     runs,
     activeRunId,
@@ -166,6 +169,5 @@ export const useAgentStore = defineStore('agent', () => {
     createRun,
     cancelRun,
     respondPermission,
-    showPermissionDemo,
   }
 })

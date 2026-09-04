@@ -4,7 +4,7 @@ import type { Skill } from '@/contracts'
 import * as skillService from '@/services/skillService'
 
 export const useSkillStore = defineStore('skill', () => {
-  const skills = ref<Skill[]>(skillService.mockSkills)
+  const skills = ref<Skill[]>([])
   const selectedSkillId = ref<string | null>(null)
   const isLoading = ref(false)
   const error = ref<string | null>(null)
