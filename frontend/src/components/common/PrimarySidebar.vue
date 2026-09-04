@@ -14,6 +14,7 @@ const navItems = [
   { name: 'chat', icon: ChatDotRound, label: 'AI 对话' },
   { name: 'agent', icon: Cpu, label: '智能体' },
   { name: 'tasks', icon: CircleCheck, label: '任务' },
+  { name: 'media', icon: Monitor, label: '音视频' },
   { name: 'skills', icon: Lightning, label: 'Skill' },
   { name: 'plugins', icon: Connection, label: 'Plugin' },
   { name: 'mcp-servers', icon: Monitor, label: 'MCP' },

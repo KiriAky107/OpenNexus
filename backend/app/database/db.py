@@ -32,8 +32,12 @@ def connect() -> sqlite3.Connection:
     # 关闭 Python sqlite3 的隐式事务，提交时机由 transaction() 或显式 commit 控制。
     conn.isolation_level = None
     conn.execute("PRAGMA foreign_keys = ON")
-    _load_extension(conn)
-    migrate(conn)
+    try:
+        _load_extension(conn)
+        migrate(conn)
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 

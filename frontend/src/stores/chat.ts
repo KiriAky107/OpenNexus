@@ -10,7 +10,7 @@ export const useChatStore = defineStore('chat', () => {
   const messages = ref<ChatMessage[]>([])
   const isStreaming = ref(false)
   const inputText = ref('')
-  const useRag = ref(false)
+  const useRag = ref(true)
   const selectedSkillId = ref<string | null>(null)
   const selectedProviderId = ref('')
   const selectedModel = ref('')

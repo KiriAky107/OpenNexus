@@ -2,7 +2,7 @@
 
 FastAPI + Pydantic 的本地 AI Core / Agent Core。项目使用 uv 管理依赖和虚拟环境。
 
-当前实现包含 Knowledge/Retrieval、Chat、Agent Runtime、Tool/Permission、Skill/Plugin、stdio MCP Host、Plugin Command/Settings、Provider Adapter、任务、索引和开发阶段凭据加密存储。Provider 支持 Mock、OpenAI Chat/OpenAI-Compatible 与 Ollama；OpenAI Responses、Anthropic Messages、操作系统级 Plugin 沙箱和真实语音模型仍属于后续阶段。
+当前实现包含 Knowledge/Retrieval、Chat、Agent、Tool/Permission、Skill/Plugin、MCP、模型提供商与多模态任务。支持 OpenAI Chat/Compatible、Responses、Anthropic Messages 和 Ollama；真实本地 Embedding、ASR、声纹模型默认 CPU，CUDA 显式选装。操作系统级 Plugin 沙箱仍属于后续阶段。
 
 ```powershell
 uv sync
@@ -23,7 +23,9 @@ uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 uv run pytest
 ```
 
-当前基线为 136 项测试通过。Provider API Key 可通过前端设置页写入，也可用 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY` 或 `AINOTE_CREDENTIAL_<ID>` 注入；不要把真实密钥写入仓库。`plugin.*` 是 Plugin Settings 的保留凭据命名空间，通用 Provider 凭据接口不能读写。
+阶段 F 后端基线为 472 项测试通过。Provider API Key 可通过前端设置页写入，也可用 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY` 或 `AINOTE_CREDENTIAL_<ID>` 注入；不要把真实密钥写入仓库。`plugin.*` 是 Plugin Settings 的保留凭据命名空间，通用 Provider 凭据接口不能读写。
+
+本地模型 CPU/CUDA 安装、多模态任务、Token 用量与自定义 JSON 见 [多模态管线与模型运行开发说明](../docs/development/多模态管线与模型运行开发说明.md)。
 
 团队接口清单见 `../docs/contracts/后端接口契约-开发版.md`，机器可读契约以运行时的 `/openapi.json` 为准。
 

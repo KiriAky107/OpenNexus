@@ -4,6 +4,8 @@ import type { ProviderConfig } from '@/contracts'
 import ProviderForm from './ProviderForm.vue'
 import ProviderLogo from './ProviderLogo.vue'
 import ModelRoutingSettings from './ModelRoutingSettings.vue'
+import LocalModelSettings from './LocalModelSettings.vue'
+import UsageCard from './UsageCard.vue'
 import { useProviderStore } from '@/stores/provider'
 import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore } from '@/stores/theme'
@@ -70,6 +72,8 @@ async function chooseDefaultModel(provider: ProviderConfig, event: Event) {
         <button class="button-primary" @click="openProvider()">新增 Provider</button>
       </div>
       <div v-if="providerStore.error || providerAction" class="error-banner">{{ providerStore.error || providerAction }}</div>
+      <LocalModelSettings />
+      <UsageCard />
       <p v-if="!providerStore.providers.length" class="subtle">{{ providerStore.isLoading ? '正在加载提供商…' : '尚无可用提供商，请添加真实 API 或本地 Ollama 配置。' }}</p>
       <div class="provider-list">
         <article v-for="provider in providerStore.providers" :key="provider.provider_id" class="item-card provider-card">

@@ -116,7 +116,12 @@ async def _validate_index_compatibility(request: RAGRunRequest) -> None:
     reasons: list[str] = []
     if stats["blocks"] == 0:
         reasons.append("index is empty (no indexed blocks; run /api/index/rebuild first)")
-    if needs_vector:
+    from app.local_models.runtime import LocalEmbedding
+    if needs_vector and isinstance(engine.embedding, LocalEmbedding):
+        from app.retrieval import routed_vectors
+        if await routed_vectors.search_remote("索引可用性检查", top_k=1, accept_local=True) is None:
+            reasons.append("current semantic model space has no complete index")
+    elif needs_vector:
         if meta.get("embedding_model") != engine.embedding.model_id:
             reasons.append(
                 f"embedding model mismatch: index={meta.get('embedding_model')!r}, "

@@ -19,5 +19,19 @@ def _isolate_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_VAULT_PATH", str(tmp_path / "vault"))
     # 清除 lru 缓存，让本次测试内的 get_settings() 读到临时目录
     get_settings.cache_clear()
+    # Unit tests explicitly inject deterministic embeddings. Production uses real models.
+    from app import container as container_module
+    from app.services import note_service
+    from app.retrieval.engine import engine
+    from app.retrieval.embedding import HashEmbeddingProvider
+    from app.providers.routing import ModelRoutingService
+    def test_routing(providers, credentials):
+        return ModelRoutingService(providers, credentials, local_embedding=HashEmbeddingProvider())
+    monkeypatch.setattr(container_module, "_local_model_routing", test_routing)
+    monkeypatch.setattr(container_module.container.model_routing, "local_embedding", HashEmbeddingProvider())
+    monkeypatch.setattr(note_service, "embedding", HashEmbeddingProvider())
+    test_embedding = HashEmbeddingProvider()
+    monkeypatch.setattr(engine, "embedding", test_embedding)
+    monkeypatch.setattr(engine, "_routed_defaults", (test_embedding, engine.vector_store))
     yield
     get_settings.cache_clear()
