@@ -6,6 +6,8 @@ available only for explicitly injected tests and protocol fixtures.
 from __future__ import annotations
 
 import hashlib
+import asyncio
+import time
 import json
 import math
 from dataclasses import dataclass, field, replace
@@ -179,6 +181,7 @@ class ModelRoutingService:
         payload = apply_overrides(kwargs.get(field, {}), provider.request_overrides, capability)
         kwargs[field] = payload if field == "json" else {key: json.dumps(value) if isinstance(value, (dict, list, bool)) or value is None else value for key, value in payload.items()}
         attempt = UsageAttempt(binding.provider_id, binding.model, provider.provider_type.value, capability)
+        started = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=30, transport=self.transport) as client:
                 async with client.stream("POST", url, headers=headers, **kwargs) as response:
@@ -202,6 +205,11 @@ class ModelRoutingService:
             raise invalid_response() from exc
         finally:
             attempt.persist()
+            from app.services.model_diagnostics import record
+            task = asyncio.current_task()
+            status = "completed" if attempt.completed else ("cancelled" if task and task.cancelling() else "failed")
+            record(model=binding.model, operation=capability, source="api", status=status,
+                   attempt_id=attempt.attempt_id, request_id=attempt.request_id, elapsed_seconds=time.monotonic() - started)
         if not isinstance(data, dict) or data.get("error"):
             raise invalid_response()
         return data, url
@@ -255,6 +263,9 @@ class ModelRoutingService:
                                        model_id="api-" + hashlib.sha256(identity.encode()).hexdigest())
             except ProviderError as exc:
                 reason = exc.code
+                from app.services.model_diagnostics import record
+                record(model=binding.model, source="api", status="fallback", error_code=reason,
+                       fallback_reason=reason, operation="model_routing")
         from app.local_models.runtime import LocalEmbedding
         local_embedding = self.local_embedding.snapshot() if isinstance(self.local_embedding, LocalEmbedding) else self.local_embedding
         try:
@@ -314,6 +325,9 @@ class ModelRoutingService:
                 return RoutedTranscript(text=text, source="api", segments=segments)
             except ProviderError as exc:
                 reason = exc.code
+                from app.services.model_diagnostics import record
+                record(model=binding.model, source="api", status="fallback", error_code=reason,
+                       fallback_reason=reason, operation="model_routing")
         try:
             text = await self.local_speech.transcribe(source, language)
             if isinstance(text, RoutedTranscript):
@@ -346,6 +360,9 @@ class ModelRoutingService:
                 return SpeakerMatchResult(score=score, source="api")
             except ProviderError as exc:
                 reason = exc.code
+                from app.services.model_diagnostics import record
+                record(model=binding.model, source="api", status="fallback", error_code=reason,
+                       fallback_reason=reason, operation="model_routing")
         try:
             score = await self.local_speech.match(source, reference)
             if not finite_number(score) or not 0 <= score <= 1:

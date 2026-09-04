@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { apiClient } from '@/services/apiClient'
 import type { RequestOverride } from '@/contracts'
 const props = defineProps<{modelValue: RequestOverride[]}>()
 const emit = defineEmits<{ 'update:modelValue': [value:RequestOverride[]]; valid:[value:boolean] }>()
+const transferError = ref('')
+let published = JSON.stringify(props.modelValue)
 const rules = ref(props.modelValue.map(rule => ({...rule, draft: JSON.stringify(rule.body, null, 2), error: ''})))
 const protectedFields = new Set(['model','messages','input','system','instructions','tools','tool_choice','parallel_tool_calls','functions','function_call','file','audio','reference_file','stream','previous_response_id','conversation','background','store'])
 function publish() {
@@ -19,11 +22,44 @@ function publish() {
     } catch(e) { rule.error = (e as Error).message; valid = false }
   }
   emit('valid', valid)
-  if(valid) emit('update:modelValue', result)
+  if(valid) { published = JSON.stringify(result); emit('update:modelValue', result) }
 }
 function add() { rules.value.push({capability:'chat',model:null,stream:null,body:{},draft:'{}',error:''}); publish() }
 function format(index:number) { try { rules.value[index].draft = JSON.stringify(JSON.parse(rules.value[index].draft), null, 2); publish() } catch { publish() } }
-watch(() => props.modelValue.length, length => { if (length === 0 && rules.value.length && rules.value.every(r => !r.error)) rules.value = [] })
+watch(() => props.modelValue, value => {
+  if (JSON.stringify(value) !== published) {
+    rules.value = value.map(rule => ({...rule, draft: JSON.stringify(rule.body, null, 2), error: ''}))
+    published = JSON.stringify(value)
+    emit('valid', true)
+  }
+}, {deep: true})
+function reset() { rules.value = []; transferError.value = ''; publish() }
+async function importRules(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  transferError.value = ''
+  try {
+    if (file.size > 1024 * 1024) throw new Error('配置文件不得超过 1 MiB')
+    const parsed = JSON.parse(await file.text())
+    const validated = await apiClient.post<{request_overrides: RequestOverride[]}>('/api/providers/request-rules/validate', parsed)
+    rules.value = validated.request_overrides.map(rule => ({...rule, draft: JSON.stringify(rule.body, null, 2), error: ''}))
+    publish()
+  } catch(e) { transferError.value = (e as Error).message }
+}
+async function exportRules() {
+  transferError.value = ''
+  try {
+    publish()
+    if (rules.value.some(rule => rule.error)) throw new Error('请先修正 JSON')
+    const validated = await apiClient.post('/api/providers/request-rules/validate', {version:1, request_overrides:JSON.parse(published)})
+    const url = URL.createObjectURL(new Blob([JSON.stringify(validated, null, 2)], {type:'application/json'}))
+    const link = document.createElement('a'); link.href = url; link.download = 'model-request-rules.json'; link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch(e) { transferError.value = (e as Error).message }
+}
+
 </script>
 <template>
   <details class="request-json"><summary>高级：自定义请求 JSON</summary>
@@ -37,6 +73,9 @@ watch(() => props.modelValue.length, length => { if (length === 0 && rules.value
       <div class="inline-actions"><button type="button" class="button-secondary" @click="format(index)">格式化</button><button type="button" class="button-danger" @click="rules.splice(index,1); publish()">删除规则</button></div>
     </div>
     <button type="button" class="button-secondary" @click="add">添加请求规则</button>
+    <div class="inline-actions"><button type="button" class="button-secondary" @click="reset">恢复默认请求</button><button type="button" class="button-secondary" @click="exportRules">导出请求配置</button><label>导入请求配置<input type="file" accept=".json" @change="importRules" /></label></div>
+    <p v-if="transferError" class="error-text" role="alert">{{ transferError }}</p>
+    <p class="subtle">导入替换当前请求规则，保存提供商后生效。导出仅包含请求规则，不包含凭据引用和 API Key。</p>
   </details>
 </template>
 <style scoped>.request-json{display:grid;gap:12px}.rule{padding:12px;border:1px solid var(--border-color);border-radius:8px;margin:12px 0}.rule-selectors{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}.rule-selectors label{display:grid;gap:5px}.json-body{font-family:monospace;width:100%}</style>

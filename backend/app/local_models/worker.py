@@ -76,16 +76,25 @@ def voice_embedding(model, audio, device):
         return torch.nn.functional.normalize(vector, dim=0)
 
 
+class CudaInitializationError(RuntimeError):
+    pass
+
+
 def run(request):
     import torch
     import psutil
     config, payload = request["config"], request["payload"]
     torch.set_num_threads(config["cpu_threads"])
     requested = config["device"]
-    device = "cuda:0" if requested == "cuda" and torch.cuda.is_available() else "cpu"
-    if device != "cpu":
-        total = torch.cuda.get_device_properties(0).total_memory
-        torch.cuda.set_per_process_memory_fraction(min(1.0, config["gpu_memory_limit_mb"] * 1024 ** 2 / total))
+    try:
+        device = "cuda:0" if requested == "cuda" and torch.cuda.is_available() else "cpu"
+        if device != "cpu":
+            torch.cuda.init()
+            total = torch.cuda.get_device_properties(0).total_memory
+            torch.cuda.set_per_process_memory_fraction(min(1.0, config["gpu_memory_limit_mb"] * 1024 ** 2 / total))
+    except Exception as exc:
+        raise CudaInitializationError() from exc
+    request["_actual_device"] = device
     process = psutil.Process()
     peak = [0]
     stop = threading.Event()
@@ -102,6 +111,7 @@ def run(request):
     path, operation = request["model_path"], request["operation"]
     try:
         usage = {}
+        audio_seconds = None
         if operation == "embedding":
             from sentence_transformers import SentenceTransformer
             model = SentenceTransformer(path, device=device, local_files_only=True, trust_remote_code=False,
@@ -116,6 +126,7 @@ def run(request):
                 device_map=device, attn_implementation="sdpa", max_inference_batch_size=1, max_new_tokens=512)
             loaded = time.monotonic()
             audio = decode(payload["source"])
+            audio_seconds = len(audio) / 16000
             regions = speech_regions(audio)
             language = {"zh": "Chinese", "en": "English", "ja": "Japanese", "yue": "Cantonese"}.get(payload.get("language"), payload.get("language"))
             segments = []
@@ -154,7 +165,7 @@ def run(request):
             result = {"speakers": speakers}
         else:
             raise ValueError("Unknown inference operation")
-        return {"result": result, "usage": usage, "diagnostics": {"requested_device": requested, "actual_device": device,
+        return {"result": result, "usage": usage, "audio_seconds": audio_seconds, "diagnostics": {"requested_device": requested, "actual_device": device,
                 "fallback_reason": "CUDA_UNAVAILABLE" if requested == "cuda" and device == "cpu" else None,
                 "load_seconds": loaded - started, "inference_seconds": time.monotonic() - loaded,
                 "peak_memory_bytes": max(peak[0], process.memory_info().rss), "operation": operation}}
@@ -170,6 +181,16 @@ if __name__ == "__main__":
             response = run(request)
         except (ImportError, ModuleNotFoundError):
             response = {"error_code": "LOCAL_RUNTIME_DEPENDENCY_MISSING", "message": "本地模型运行依赖不完整，请重新运行安装脚本。"}
-        except Exception:
-            response = {"error_code": "LOCAL_INFERENCE_FAILED", "message": "本地推理失败，请检查媒体格式、模型和设备配置。"}
+        except Exception as exc:
+            # Only device failures allow the host to retry once in a fresh CPU process.
+            import torch
+            cuda_failure = isinstance(exc, CudaInitializationError)
+            cuda_oom = request.get("_actual_device") == "cuda:0" and isinstance(exc, torch.cuda.OutOfMemoryError)
+            if cuda_failure or cuda_oom:
+                response = {"error_code": "LOCAL_CUDA_OOM" if cuda_oom else "LOCAL_CUDA_INIT_FAILED",
+                            "message": "CUDA 运行失败，将释放进程并重试 CPU。"}
+            else:
+                response = {"error_code": "LOCAL_INFERENCE_FAILED", "message": "本地推理失败，请检查媒体格式、模型和设备配置。"}
+    if "error_code" in response:
+        response["diagnostics"] = {"requested_device": request["config"]["device"], "actual_device": request.get("_actual_device", "unknown")}
     sys.stdout.buffer.write((json.dumps(response, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8"))
