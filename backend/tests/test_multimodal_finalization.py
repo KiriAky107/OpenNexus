@@ -21,7 +21,7 @@ def test_cuda_retries_only_device_failures_in_reaped_process(monkeypatch, code, 
     from app.services.usage_service import connection
     monkeypatch.setattr(module, 'configuration', lambda: module.RuntimeConfig(device='cuda'))
     monkeypatch.setattr(module, 'read_state', lambda key: {'status': 'installed'})
-    monkeypatch.setattr(module, 'interpreter', lambda: Path(sys.executable))
+    monkeypatch.setattr(module, 'interpreter', lambda *_: Path(sys.executable))
     events = []
 
     class Process:

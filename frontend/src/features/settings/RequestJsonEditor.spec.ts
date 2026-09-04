@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { expect, it, vi } from 'vitest'
 import RequestJsonEditor from './RequestJsonEditor.vue'
 import { apiClient } from '@/services/apiClient'
@@ -35,6 +35,21 @@ it('ignores an imported configuration that finishes after a newer edit', async (
   await Promise.resolve(); await Promise.resolve()
   expect(wrapper.findAll('textarea')).toHaveLength(1)
   expect(wrapper.get('textarea').element.value).toBe('{}')
+  wrapper.unmount()
+})
+
+it('ignores an old import failure after a newer edit', async () => {
+  let fail!: (reason: Error) => void
+  vi.mocked(apiClient.post).mockReturnValue(new Promise((_resolve, reject) => { fail = reject }))
+  const wrapper = mount(RequestJsonEditor, {props:{modelValue:[]}})
+  const input = wrapper.get('input[type="file"]')
+  Object.defineProperty(input.element, 'files', {value:[new File(['{}'], 'old.json')], configurable:true})
+  await input.trigger('change')
+  await wrapper.findAll('button').find(button => button.text() === '添加请求规则')!.trigger('click')
+  fail(new Error('旧导入失败'))
+  await flushPromises()
+  expect(wrapper.text()).not.toContain('旧导入失败')
+  expect(wrapper.findAll('textarea')).toHaveLength(1)
   wrapper.unmount()
 })
 

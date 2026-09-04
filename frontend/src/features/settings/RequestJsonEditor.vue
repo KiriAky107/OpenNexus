@@ -51,7 +51,7 @@ async function importRules(event: Event) {
     if (current !== generation) return
     rules.value = validated.request_overrides.map(rule => ({...rule, draft: JSON.stringify(rule.body, null, 2), error: ''}))
     publish()
-  } catch(e) { transferError.value = (e as Error).message }
+  } catch(e) { if (current === generation) transferError.value = (e as Error).message }
 }
 async function exportRules() {
   transferError.value = ''
