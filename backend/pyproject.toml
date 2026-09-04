@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.116,<1.0",
     "httpx>=0.28,<1.0",
     "jsonschema>=4.25,<5.0",
+    "mistune>=3.0,<4.0",
     "pyyaml>=6.0,<7.0",
     "referencing>=0.36,<1.0",
     "sqlite-vec>=0.1.9",

@@ -2,7 +2,7 @@
 
 > 本文件用于团队开发期间快速配置环境和启动项目，不是正式的项目 README。
 
-> 当前基线：2026-09-03。第一阶段 Web 联调前后端已经完成；第二阶段已完成 Workspace 去 Mock、Agent Trace 持久化与 SSE 恢复、stdio MCP Bridge、隔离 Plugin Host、Plugin Command/Settings，以及独立 MCP Server 配置中心 C.1（stdio、Streamable HTTP 与旧 SSE 兼容）。真实音频、Provider 协议增强、Benchmark、导出、主题包、Trace 可视化、Mermaid 与函数图像仍在后续开发；Tauri Host、Stronghold、原生多 Vault 文件系统和 Sync Server 尚未接入。
+> 当前基线：2026-09-03。第一阶段 Web 联调前后端已经完成；第二阶段已完成 Workspace 去 Mock、Agent Trace 持久化与 SSE 恢复、stdio MCP Bridge、隔离 Plugin Host、Plugin Command/Settings，以及独立 MCP Server 配置中心 C.1（stdio、Streamable HTTP 与旧 SSE 兼容）、RAG Benchmark 与 Markdown → HTML 导出。真实音频、Provider 协议增强、Agent Benchmark、PDF/DOCX 导出、主题包、Trace 可视化、Mermaid 与函数图像仍在后续开发；Tauri Host、Stronghold、原生多 Vault 文件系统和 Sync Server 尚未接入。
 
 ## 当前目录
 
@@ -118,7 +118,7 @@ cd frontend
 pnpm test
 ```
 
-当前回归基线为后端 218 项测试、前端 32 项测试，且 TypeScript 类型检查和生产构建通过。测试数量会随功能增长，以本地实际输出和 CI 为准。
+当前回归基线为后端 467 项测试、前端 32 项测试，且 TypeScript 类型检查和生产构建通过。测试数量会随功能增长，以本地实际输出和 CI 为准。
 
 构建产物位于 `frontend/dist`，该目录不提交到 Git。
 
