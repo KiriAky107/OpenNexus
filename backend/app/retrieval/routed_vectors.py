@@ -22,6 +22,7 @@ from app.database.db import connect, transaction
 from app.errors import ApiError
 from app.retrieval.vectorstore import VectorHit
 from app.retrieval.provenance import record_embedding
+from app.retrieval.hybrid import rrf_fuse
 
 logger = logging.getLogger(__name__)
 
@@ -167,9 +168,18 @@ async def search_remote(query: str, *, top_k: int, accept_local=False, strict=Fa
     Read coverage and vectors together so concurrent note updates cannot produce
     an apparently complete subset. Never fill missing remote hits with local hits.
     """
+    if accept_local:
+        conn = connect()
+        try:
+            policies = {bool(row[0]) for row in conn.execute("SELECT DISTINCT embedding_local_only FROM blocks")}
+        finally:
+            conn.close()
+        if True in policies:
+            return await _search_partitioned(query, policies, top_k=top_k, strict=strict)
     batch = await embed_remote([query], accept_local=accept_local, strict=strict)
     if batch is None:
         return None
+
     record_embedding(attempted_space={"model_id": batch.space_id, "dimensions": batch.dimensions})
     try:
         conn = connect()
@@ -221,3 +231,55 @@ async def search_remote(query: str, *, top_k: int, accept_local=False, strict=Fa
                            "Embedding 已可用，但当前模型的向量索引缺失、不完整或已失效。请在「设置 → 索引与模型」中重建全部索引。",
                            {"model_id": batch.space_id, "dimensions": batch.dimensions, "source": batch.source}) from exc
         return None
+
+
+async def _search_partitioned(query: str, policies: set[bool], *, top_k: int, strict: bool):
+    """Embed per policy; rank each space independently and fuse ranks, not vectors."""
+    batches = {}
+    for policy in sorted(policies):
+        batch = await embed_remote([query], accept_local=True, strict=strict, local_only=policy)
+        if batch is None:
+            return None
+        batches[policy] = batch
+    conn = connect()
+    try:
+        with transaction(conn):
+            # Query vectors are ready before opening the single read snapshot.
+            current = {bool(row[0]) for row in conn.execute("SELECT DISTINCT embedding_local_only FROM blocks")}
+            if current != policies:
+                raise ValueError("embedding policies changed while querying")
+            ranked = []
+            for policy, batch in batches.items():
+                rows = conn.execute(
+                    "SELECT b.block_id,r.vector FROM blocks b LEFT JOIN routed_block_vectors r "
+                    "ON r.block_id=b.block_id AND r.space_id=? AND r.dimensions=? "
+                    "WHERE b.embedding_local_only=? ORDER BY b.block_id",
+                    (batch.space_id, batch.dimensions, int(policy)),
+                )
+                def hits():
+                    for row in rows:
+                        if row['vector'] is None:
+                            raise ValueError("incomplete policy coverage")
+                        vector = _unit_vector(json.loads(row['vector']), batch.dimensions)
+                        score = math.fsum(a * b for a, b in zip(batch.vectors[0], vector))
+                        yield VectorHit(id=row['block_id'], score=max(0.0, min(1.0, score)))
+                try:
+                    ranked.append(heapq.nlargest(top_k, hits(), key=lambda hit: hit.score))
+                finally:
+                    rows.close()
+            spaces = [{"source": b.source, "model_id": b.space_id, "dimensions": b.dimensions,
+                       "local_only": policy} for policy, b in batches.items()]
+            record_embedding(source="mixed" if len({b.source for b in batches.values()}) > 1 else batch.source,
+                             spaces=spaces, fallback_reason=None)
+            if len(ranked) == 1:
+                return ranked[0]
+            fused = rrf_fuse([[hit.id for hit in group] for group in ranked])
+            return [VectorHit(id=key, score=score) for key, score in
+                    sorted(fused.items(), key=lambda item: (-item[1], item[0]))[:top_k]]
+    except Exception as exc:
+        record_embedding(source="unavailable", fallback_reason="REMOTE_INDEX_UNAVAILABLE")
+        if strict:
+            raise ApiError(409, "SEMANTIC_INDEX_UNAVAILABLE", "部分索引分区缺失或已失效，请重建全部索引。") from exc
+        return None
+    finally:
+        conn.close()

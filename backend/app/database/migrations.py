@@ -127,6 +127,10 @@ MIGRATIONS: list[str] = [
         query TEXT NOT NULL UNIQUE
     );
     """,
+    # v6: persist each block's embedding policy for partitioned retrieval.
+    """
+    ALTER TABLE blocks ADD COLUMN embedding_local_only INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 

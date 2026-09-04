@@ -85,7 +85,7 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
     ))
     try:
         prepared_notes = []
-        semantic_space = None
+        semantic_spaces = {}
         for rel, folder, markdown, created, updated in docs:
             parsed = parse_note(
                 markdown=markdown, file_path=rel, folder=folder, tags=None,
@@ -97,9 +97,10 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
                 if batch is None:
                     raise ApiError(503, "EMBEDDING_UNAVAILABLE", "Embedding 未生成向量，重建已停止，原索引已保留。")
                 space = (batch.space_id, batch.dimensions)
-                if semantic_space is not None and semantic_space != space:
+                policy = parsed.embedding_local_only
+                if policy in semantic_spaces and semantic_spaces[policy] != space:
                     raise ApiError(409, "EMBEDDING_SPACE_CHANGED", "重建期间 Embedding 模型发生切换，原索引已保留，请待模型服务稳定后重试。")
-                semantic_space = space
+                semantic_spaces[policy] = space
             prepared_notes.append((parsed, prepared))
         # All network/model awaits precede the transaction. The concrete SQLite
         # methods below complete synchronously despite their async interfaces.
@@ -114,12 +115,12 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
                 await vector_store.clear(conn=conn)
                 for parsed, prepared in prepared_notes:
                     await index_note(parsed, prepared=prepared, conn=conn)
-                if semantic_space is not None:
+                for policy, space in semantic_spaces.items():
                     exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='routed_block_vectors'").fetchone()
                     missing = not exists or conn.execute(
                         "SELECT 1 FROM blocks b LEFT JOIN routed_block_vectors r "
                         "ON r.block_id=b.block_id AND r.space_id=? AND r.dimensions=? "
-                        "WHERE r.block_id IS NULL LIMIT 1", semantic_space,
+                        "WHERE b.embedding_local_only=? AND r.block_id IS NULL LIMIT 1", (*space, int(policy)),
                     ).fetchone()
                     if missing:
                         raise ApiError(500, "SEMANTIC_INDEX_WRITE_FAILED", "向量索引写入失败，原索引已保留，请检查数据库和磁盘状态。")

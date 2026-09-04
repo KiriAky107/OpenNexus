@@ -118,6 +118,8 @@ async def index_note(
                 blocks=parsed.blocks,
             )
             old_ids = set(old_block_ids)
+            conn.execute("UPDATE blocks SET embedding_local_only=? WHERE note_id=?",
+                         (int(parsed.embedding_local_only), parsed.note_id))
             new_ids = {block.block_id for block in parsed.blocks}
             stale_ids = [bid for bid in old_ids if bid not in new_ids]
             if stale_ids:
