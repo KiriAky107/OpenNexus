@@ -36,6 +36,8 @@ def _fmt_num(v: float) -> str:
 
 def _nice_step(span: float, target_ticks: int = 6) -> float:
     raw = abs(span) / target_ticks
+    if not math.isfinite(raw) or raw <= 0:
+        return 1.0  # 兜底步长，避免 span 为 0/inf 时产生非法刻度
     mag = 10 ** math.floor(math.log10(raw))
     for m in (1, 2, 5, 10):
         if raw <= m * mag:
@@ -44,34 +46,40 @@ def _nice_step(span: float, target_ticks: int = 6) -> float:
 
 
 def _ticks(lo: float, hi: float, step: float) -> list[float]:
+    # 防御：非法步长直接返回空，避免除零
+    if not math.isfinite(step) or step <= 0:
+        return []
     first = math.ceil(lo / step) * step
     values: list[float] = []
     v = first
-    while v <= hi + step * 1e-9:
+    # 有上限的整数索引推进 + 步长推进校验，防止浮点精度导致 v+step==v 的死循环
+    for _ in range(1000):
+        if v > hi + step * 1e-9:
+            break
         values.append(v)
-        v += step
+        nxt = v + step
+        if nxt <= v:
+            break  # 步长小于当前数值的浮点精度，已无法推进
+        v = nxt
     return values
 
 
 def _compute_range(
-    plot: FunctionPlot,
     fns: list[tuple[object, object]],
     xmin: float,
     xmax: float,
 ) -> tuple[float, float]:
-    """采样确定 y 范围；指定 range 则优先，否则取有限样本的 min/max 加 5% 余量。"""
-    if plot.range is not None:
-        return float(plot.range[0]), float(plot.range[1])
-
+    """采样确定 y 范围；取有限样本的 min/max 加 5% 余量。"""
     ys: list[float] = []
     for _expr, tree in fns:
         for i in range(_SAMPLES + 1):
             x = xmin + (xmax - xmin) * i / _SAMPLES
             try:
                 y = evaluate(tree, x)  # type: ignore[arg-type]
-            except (ValueError, ZeroDivisionError, OverflowError):
+            except (ValueError, ZeroDivisionError, OverflowError, TypeError):
                 continue
-            if math.isfinite(y):
+            # 复数等非实数结果直接跳过，不参与范围统计
+            if isinstance(y, (int, float)) and math.isfinite(y):
                 ys.append(y)
 
     if not ys:
@@ -99,9 +107,9 @@ def _polyline(
         x = xmin + (xmax - xmin) * i / _SAMPLES
         try:
             y = evaluate(tree, x)  # type: ignore[arg-type]
-        except (ValueError, ZeroDivisionError, OverflowError):
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
             y = math.nan
-        if not math.isfinite(y):
+        if not isinstance(y, (int, float)) or not math.isfinite(y):
             if points:
                 segments.append(f'<polyline points="{" ".join(points)}" fill="none" stroke="{color}"/>')
                 points = []
@@ -178,7 +186,7 @@ def render_svg(plot: FunctionPlot) -> StaticRenderResult:
     """把已解析的 FunctionPlot 渲染为内嵌 SVG。"""
     warnings: list[str] = []
     xmin, xmax = plot.domain
-    if xmin >= xmax:
+    if not (math.isfinite(xmin) and math.isfinite(xmax)) or xmin >= xmax:
         warnings.append("domain 无效，回退到 [-10, 10]")
         xmin, xmax = -10.0, 10.0
 
@@ -192,10 +200,16 @@ def render_svg(plot: FunctionPlot) -> StaticRenderResult:
             continue
         fns.append((expr, tree))
 
-    ymin, ymax = _compute_range(plot, fns, xmin, xmax)
-    if plot.range is not None and plot.range[0] >= plot.range[1]:
-        warnings.append("range 无效，改用自动范围")
-        ymin, ymax = _compute_range(plot, fns, xmin, xmax)
+    # 纵轴范围：显式 range 有效则用之；无效（退化/非有限）丢弃并自动采样重算
+    if plot.range is not None:
+        lo, hi = float(plot.range[0]), float(plot.range[1])
+        if math.isfinite(lo) and math.isfinite(hi) and lo < hi:
+            ymin, ymax = lo, hi
+        else:
+            warnings.append("range 无效，改用自动范围")
+            ymin, ymax = _compute_range(fns, xmin, xmax)
+    else:
+        ymin, ymax = _compute_range(fns, xmin, xmax)
 
     def sx(x: float) -> float:
         return _MARGIN + (x - xmin) / (xmax - xmin) * (_WIDTH - 2 * _MARGIN)

@@ -137,3 +137,58 @@ def test_html_exporter_function_plot_fallback_on_error() -> None:
     assert '<pre class="function-plot">' in html
     assert "<svg" not in html
     assert any("函数图像" in w for w in result.warnings)
+
+
+# --------------------------------------------------------------------------- #
+# 审阅回归：浮点刻度 / 求值异常 / 无效范围
+# --------------------------------------------------------------------------- #
+def test_render_svg_huge_domain_ticks_bounded() -> None:
+    # P1：巨大 domain 下步长受浮点精度限制无法推进，刻度应有限而非死循环
+    plot = parse_source("domain: 10000000000000000, 10000000000000002\nrange: -1, 1\ny = 0").plot
+    rendered = render_svg(plot)
+    assert "<svg" in rendered.content
+
+
+def test_parse_expression_rejects_wrong_arg_count() -> None:
+    # P2：sin() / sin(1, 2) 应在解析期拒绝，而非求值期 TypeError
+    with pytest.raises(PlotParseError):
+        parse_expression("sin()")
+    with pytest.raises(PlotParseError):
+        parse_expression("sin(1, 2)")
+
+
+def test_render_svg_nonreal_samples_are_break_points() -> None:
+    # P2：x^0.5 在负数域产生复数，应作为断点处理，正半轴仍可绘制
+    plot = parse_source("domain: -4, 4\ny = x^0.5").plot
+    rendered = render_svg(plot)
+    assert "<polyline" in rendered.content
+
+
+def test_render_svg_invalid_range_falls_back() -> None:
+    # P2：退化 range（1, 1）应丢弃并自动采样，而非 ZeroDivisionError
+    plot = parse_source("range: 1, 1\ny = x").plot
+    rendered = render_svg(plot)
+    assert "<polyline" in rendered.content
+    assert any("range" in w for w in rendered.warnings)
+
+
+def test_render_svg_nonfinite_range_falls_back() -> None:
+    # P2：非有限 range 端点应丢弃并自动采样
+    plot = parse_source("range: nan, 1\ny = x").plot
+    rendered = render_svg(plot)
+    assert "<polyline" in rendered.content
+
+
+def test_html_exporter_function_plot_render_error_falls_back(monkeypatch) -> None:
+    # P2：渲染异常不阻断整篇导出，回退占位并记 warning
+    import app.export.exporters.html as html_mod
+
+    def boom(plot):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(html_mod, "render_svg", boom)
+    md = "```function-plot\ny = x\n```"
+    result = asyncio.run(HtmlExporter().export(parse_document(md), ExportOptions()))
+    html = result.content.decode("utf-8")
+    assert '<pre class="function-plot">' in html
+    assert any("渲染失败" in w for w in result.warnings)
