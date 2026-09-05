@@ -114,3 +114,19 @@ def test_usage_calendar_series_splits_sources_and_preserves_missing_counters():
     filtered = aggregate(start, start + timedelta(days=2), source='local', timezone_offset=480)
     assert all(b['api']['requests'] == 0 for b in filtered['series'])
     assert len(aggregate(start, start + timedelta(days=3660))['series']) <= 90
+
+
+def test_model_series_partitions_match_source_totals_and_cache_rate():
+    start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    for model, count in [('model-a', 100), ('model-b', 200)]:
+        attempt = UsageAttempt('p', model, 'openai_compatible')
+        attempt.started_at = start.isoformat()
+        attempt.observe({'usage': {'prompt_tokens': count, 'completion_tokens': 0, 'prompt_cache_hit_tokens': 20, 'prompt_cache_miss_tokens': count - 20}})
+        attempt.persist()
+    result = aggregate(start, start + timedelta(days=1))
+    api = result['series'][0]['api']
+    assert [part['model'] for part in api['models']] == ['model-a', 'model-b']
+    assert sum(part['totals']['input_tokens'] for part in api['models']) == api['totals']['input_tokens'] == 300
+    assert result['totals']['cache_hit_tokens'] == 40
+    assert result['totals']['cache_miss_tokens'] == 260
+    assert result['cache_hit_rate'] == pytest.approx(40/300)

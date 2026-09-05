@@ -91,3 +91,21 @@ it.each(['providers', 'skills'])('ignores initialization after unmount while %s 
   expect(returned.get('button.button-primary').attributes('disabled')).toBeUndefined()
   returned.unmount()
 })
+
+
+it('sends on Enter but preserves Shift+Enter and IME confirmation', async () => {
+  const chat = useChatStore()
+  const send = vi.spyOn(chat, 'sendMessage').mockResolvedValue(undefined)
+  const wrapper = mount(ChatView)
+  await flushPromises()
+  const input = wrapper.get('textarea')
+  await input.setValue('问题')
+  await input.trigger('keydown', { key: 'Enter', isComposing: true })
+  await input.trigger('keydown', { key: 'Enter', shiftKey: true })
+  expect(send).not.toHaveBeenCalled()
+  await input.trigger('keydown', { key: 'Enter' })
+  expect(send).toHaveBeenCalledWith('问题')
+  await input.trigger('keydown', { key: 'Enter', repeat: true })
+  expect(send).toHaveBeenCalledTimes(1)
+  wrapper.unmount()
+})

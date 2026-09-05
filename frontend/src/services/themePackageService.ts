@@ -361,7 +361,7 @@ export const mockCommunityThemes: ThemeManifest[] = [
   {
     theme_id: 'ocean-blue',
     name: 'Ocean Blue',
-    version: '1.2.0',
+    version: '1.3.1',
     author: 'community',
     description: '宁静的海洋蓝色主题，适合长时间阅读',
     min_app_version: '0.2.0',
@@ -373,7 +373,7 @@ export const mockCommunityThemes: ThemeManifest[] = [
   {
     theme_id: 'midnight-purple',
     name: 'Midnight Purple',
-    version: '2.0.0',
+    version: '2.1.1',
     author: 'night-owl',
     description: '深紫色暗夜主题，适合编码',
     min_app_version: '0.2.0',
@@ -461,5 +461,18 @@ export function getCommunityThemePreviewCss(themeId: string): string {
   if (themeId === 'paper-moments') return paperMoments.css
   const t = mockCommunityThemes.find((m) => m.theme_id === themeId)
   if (!t) return ''
-  return buildCommunityThemeCss(themeId, t.is_dark)
+  return buildCommunityThemeCss(themeId, t.is_dark) + `
+[data-theme="${themeId}"] {
+  color-scheme: ${t.is_dark ? 'dark' : 'light'};
+  --color-text-inverse: ${t.is_dark ? '#1a1b26' : '#ffffff'};
+  --color-text-disabled: color-mix(in srgb, var(--color-text-primary) 45%, var(--color-surface-primary));
+  --color-background-overlay: ${t.is_dark ? '#000000a6' : '#00000073'};
+  --color-accent-primary-active: color-mix(in srgb, var(--color-accent-primary) 80%, var(--color-text-primary));
+  --color-accent-secondary: var(--color-accent-primary);
+  --color-accent-soft-hover: color-mix(in srgb, var(--color-accent-soft) 80%, var(--color-accent-primary));
+  --color-border-disabled: var(--color-border-subtle);
+  --color-markdown-grid: var(--color-border-default);
+  --color-markdown-marker: var(--color-text-secondary);
+  --color-markdown-table-header: var(--color-background-tertiary);
+}`
 }

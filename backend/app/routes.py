@@ -1060,6 +1060,7 @@ async def create_provider(request: ProviderCreateRequest) -> ProviderConfig:
         credential_id=request.credential_id,
         enabled=request.enabled,
         request_overrides=request.request_overrides,
+        context_policies=request.context_policies,
         capabilities=container.provider_factory.capabilities(request.provider_type),
     )
     try:
@@ -1093,7 +1094,7 @@ async def update_provider(
     if ("provider_type" in fields and request.provider_type is None) or ("name" in fields and request.name is None) or (
         "enabled" in fields and request.enabled is None
     ) or (
-        "request_overrides" in fields and request.request_overrides is None
+        ("request_overrides" in fields and request.request_overrides is None) or ("context_policies" in fields and request.context_policies is None)
     ):
         raise ApiError(
             422,

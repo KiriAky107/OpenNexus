@@ -4,6 +4,8 @@ import type { ModelInfo, ProviderConfig, ProviderPreset, ProviderType, RequestOv
 import * as service from '@/services/providerService'
 import ProviderPresetSelector from './ProviderPresetSelector.vue'
 import RequestJsonEditor from './RequestJsonEditor.vue'
+import ProviderContextSettings from './ProviderContextSettings.vue'
+import type { ModelContextPolicy } from '@/contracts'
 import { apiClient } from '@/services/apiClient'
 import { t } from '@/i18n'
 
@@ -26,6 +28,7 @@ const presetsError = ref('')
 const saving = ref(false)
 const error = ref('')
 const requestOverrides = ref<RequestOverride[]>(JSON.parse(JSON.stringify(props.provider?.request_overrides || [])))
+const contextPolicies = ref<ModelContextPolicy[]>(JSON.parse(JSON.stringify(props.provider?.context_policies || [])))
 const requestJsonValid = ref(true)
 const requestPreview = ref('')
 const probeResult = ref('')
@@ -33,7 +36,7 @@ const probing = ref(false)
 const previewCapability = ref('chat')
 const previewStream = ref(true)
 let draftGeneration = 0
-watch([form, requestOverrides, requestJsonValid, apiKey, previewStream, previewCapability], () => { draftGeneration++; requestPreview.value = ''; probeResult.value = '' }, {deep:true, flush:'sync'})
+watch([form, contextPolicies, requestOverrides, requestJsonValid, apiKey, previewStream, previewCapability], () => { draftGeneration++; requestPreview.value = ''; probeResult.value = '' }, {deep:true, flush:'sync'})
 async function previewRequest() {
   const generation = draftGeneration
   error.value = ''
@@ -41,7 +44,7 @@ async function previewRequest() {
     if (!requestJsonValid.value) throw new Error(t('请先修正 JSON。', 'Fix the JSON first.'))
     const response = await apiClient.post<{body:Record<string,unknown>}>('/api/providers/request-preview', {
       provider: {provider_type:form.provider_type,name:form.name || t('预览', 'Preview'),base_url:form.base_url || null,
-        default_model:form.default_model || null,request_overrides:requestOverrides.value}, stream:previewStream.value, capability:previewCapability.value,
+        default_model:form.default_model || null,context_policies:JSON.parse(JSON.stringify(contextPolicies.value)),request_overrides:requestOverrides.value}, stream:previewStream.value, capability:previewCapability.value,
     })
     if (active && generation === draftGeneration) requestPreview.value = JSON.stringify(response.body, null, 2)
   } catch(e) { if (active && generation === draftGeneration) error.value = (e as Error).message }
@@ -55,7 +58,7 @@ async function probeRequest() {
     if (apiKey.value.trim()) throw new Error(t('请先保存新的 API Key，再进行推理验证。', 'Save the new API key before testing inference.'))
     const result = await apiClient.post<{message:string}>('/api/providers/request-probe', {
       provider: {provider_type:form.provider_type,name:form.name || t('推理验证', 'Inference test'),base_url:form.base_url || null,
-        default_model:form.default_model || null,request_overrides:JSON.parse(JSON.stringify(requestOverrides.value)),
+        default_model:form.default_model || null,context_policies:JSON.parse(JSON.stringify(contextPolicies.value)),request_overrides:JSON.parse(JSON.stringify(requestOverrides.value)),
         credential_id:configured.value ? credentialId.value : null}, stream:previewStream.value,
     })
     if (active && generation === draftGeneration) probeResult.value = result.message
@@ -106,6 +109,7 @@ function detachCredential() {
   credentialLoading.value = false
   credentialError.value = ''
   form.default_model = ''
+  contextPolicies.value = []
   contextChanged.value = true
   error.value = ''
 }
@@ -138,7 +142,7 @@ onBeforeUnmount(() => {
 function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') { event.preventDefault(); close() }
   if (event.key !== 'Tab') return
-  const elements = Array.from(dialog.value?.querySelectorAll<HTMLElement>('button, input, select, [tabindex="0"]') ?? []).filter(element => !element.matches(':disabled'))
+  const elements = Array.from(dialog.value?.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex="0"]') ?? []).filter(element => !element.matches(':disabled'))
   const first = elements[0], last = elements[elements.length - 1]
   if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
@@ -153,7 +157,7 @@ async function save() {
     if (!requestJsonValid.value) throw new Error(t('请先修正自定义请求 JSON。', 'Fix the custom request JSON first.'))
     if (selectedPreset.value?.requires_credential && !apiKey.value.trim() && !configured.value) throw new Error(t('请输入 API Key。密钥将由后端加密保存。', 'Enter an API key. It will be encrypted by the backend.'))
     // Snapshot before awaiting: closing/unmounting must never create a provider with a changed draft.
-    const data = { provider_type: form.provider_type, name: form.name.trim(), base_url: form.base_url.trim() || undefined, default_model: form.default_model.trim(), enabled: form.enabled, capabilities: {}, has_credential: false, request_overrides: requestOverrides.value }
+    const data = { provider_type: form.provider_type, name: form.name.trim(), base_url: form.base_url.trim() || undefined, default_model: form.default_model.trim(), enabled: form.enabled, capabilities: {}, has_credential: false, request_overrides: requestOverrides.value, context_policies: JSON.parse(JSON.stringify(contextPolicies.value)) }
     if (apiKey.value.trim()) {
       // Rotate even an existing reference: older installations may share preset credential IDs.
       const nextId = newCredentialId()
@@ -197,6 +201,7 @@ async function save() {
             <label class="field wide"><span>{{ t('默认聊天模型', 'Default chat model') }}</span><input v-model="form.default_model" class="input" data-field="model" list="provider-model-options" :placeholder="t('输入模型 ID，或保存后获取模型列表', 'Enter a model ID, or save to fetch the model list')" /><datalist id="provider-model-options"><option v-for="model in modelOptions" :key="model.model_id" :value="model.model_id">{{ model.name }}</option></datalist></label>
           </div>
           <label class="inline-actions"><input v-model="form.enabled" type="checkbox" /> {{ t('启用', 'Enabled') }}</label>
+          <ProviderContextSettings v-model="contextPolicies" :model="form.default_model" :preset="form.preset_id" />
           <RequestJsonEditor v-model="requestOverrides" @valid="requestJsonValid = $event" />
           <div class="inline-actions"><label>{{ t('预览能力', 'Preview capability') }}<select v-model="previewCapability" class="select"><option value="chat">{{ t('聊天', 'Chat') }}</option><option value="embedding">Embedding</option><option value="transcription">{{ t('转写', 'Transcription') }}</option><option value="speaker_matching">{{ t('声纹', 'Speaker') }}</option></select></label><label><input v-model="previewStream" type="checkbox" />{{ t('流式聊天', 'Streaming chat') }}</label></div>
           <button type="button" class="button-secondary" @click="previewRequest">{{ t('预览最终请求（隐藏正文）', 'Preview final request (content hidden)') }}</button>

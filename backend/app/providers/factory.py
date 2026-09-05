@@ -21,19 +21,34 @@ class ProviderFactory:
         from app.services.usage_service import usage_context
         from contextlib import aclosing
         from uuid import uuid4
+        from app.providers.context_budget import prepare_context
+        from app.providers.base import ProviderError
+        from app.contracts import ModelEvent, ModelEventType
+        from datetime import datetime, timezone
         complete, stream = adapter.complete, adapter.stream
         async def complete_with_trace(request):
             token = usage_context.set({"request_id": uuid4().hex, "run_id": request.metadata.get("run_id")})
             try:
+                request = await prepare_context(request, config, complete)
                 return await complete(request)
             finally:
                 usage_context.reset(token)
         async def stream_with_trace(request):
+            sequence = 0
             token = usage_context.set({"request_id": uuid4().hex, "run_id": request.metadata.get("run_id")})
             try:
+                original = request
+                request = await prepare_context(request, config, complete, stream=True)
+                if request.messages != original.messages:
+                    yield ModelEvent(event=ModelEventType.context_status, sequence=sequence, timestamp=datetime.now(timezone.utc), data={"message": "本次请求已压缩旧对话；原始记录保留，摘要生成计入用量。"})
+                    sequence += 1
                 async with aclosing(stream(request)) as events:
                     async for event in events:
-                        yield event
+                        yield event.model_copy(update={"sequence": sequence})
+                        sequence += 1
+            except ProviderError as exc:
+                yield ModelEvent(event=ModelEventType.error, sequence=sequence, timestamp=datetime.now(timezone.utc), data={"code": exc.code, "message": exc.message})
+                yield ModelEvent(event=ModelEventType.done, timestamp=datetime.now(timezone.utc), sequence=sequence + 1, data={"status": "failed"})
             finally:
                 usage_context.reset(token)
         adapter.complete, adapter.stream = complete_with_trace, stream_with_trace

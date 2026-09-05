@@ -47,6 +47,11 @@ watch(() => chatStore.selectedProviderId, async (providerId) => {
 })
 
 function send() { void chatStore.sendMessage(chatStore.inputText) }
+function composerKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return
+  event.preventDefault()
+  if (!event.repeat) send()
+}
 
 async function openCitationCard(citation: Citation) {
   loadError.value = ''
@@ -68,6 +73,7 @@ async function openCitationCard(citation: Citation) {
       <label class="rag-toggle"><input v-model="chatStore.useRag" type="checkbox" :disabled="chatStore.isStreaming" />{{ t('检索知识库', 'Search knowledge base') }}</label>
       <span class="subtle">{{ t('开启后，将相关笔记片段发送给所选模型，并显示来源。技能调用请使用智能体。', 'When enabled, relevant note excerpts are sent to the selected model and citations are shown. Use Agent for skills.') }}</span>
     </header>
+    <div v-if="chatStore.contextNotice" class="notice-banner" role="status">{{ chatStore.contextNotice }}</div>
     <div v-if="loadError || providerStore.error || chatStore.historyError" class="error-banner chat-error">{{ loadError || providerStore.error || chatStore.historyError }}</div>
     <main class="message-timeline">
       <div v-if="!chatStore.messages.length" class="empty-state"><div><strong>{{ t('开始一段知识对话', 'Start a knowledge conversation') }}</strong><p>{{ t('请先配置模型提供商。聊天记录保存在本地数据库中。', 'Configure a model provider first. Messages are saved in the local database.') }}</p></div></div>
@@ -89,8 +95,8 @@ async function openCitationCard(citation: Citation) {
       </article>
     </main>
     <footer class="composer">
-      <textarea v-model="chatStore.inputText" class="textarea" :placeholder="t('输入问题，Ctrl + Enter 发送', 'Enter a question; press Ctrl + Enter to send')"
-        @keydown.ctrl.enter.prevent="send" />
+      <textarea v-model="chatStore.inputText" class="textarea" :placeholder="t('输入问题，Enter 发送，Shift + Enter 换行', 'Enter to send; Shift + Enter for a new line')"
+        @keydown="composerKeydown" />
       <div class="composer-actions"><span class="subtle">{{ t('回答可能包含错误，请核对 Citation。', 'Answers may contain errors. Verify the citations.') }}</span>
         <button v-if="chatStore.isStreaming || chatStore.isPreparing" class="button-danger" @click="chatStore.stopGeneration">{{ t('停止', 'Stop') }}</button>
         <button v-else class="button-primary" :disabled="!chatStore.canSend || !chatStore.inputText.trim() || !chatStore.selectedProviderId || !chatStore.selectedModel.trim()" @click="send">{{ t('发送', 'Send') }}</button>
