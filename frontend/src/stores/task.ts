@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { TaskItem, TaskStatus, TaskPriority, TaskSource } from '@/contracts'
 import { createTask as createTaskRequest, deleteTask as deleteTaskRequest, listTasks, updateTask as updateTaskRequest } from '@/services/taskService'
+import { t } from '@/i18n'
 
 export const useTaskStore = defineStore('task', () => {
   const tasks = ref<TaskItem[]>([])
@@ -31,7 +32,7 @@ export const useTaskStore = defineStore('task', () => {
       tasks.value = resp.items
       error.value = null
     } catch (reason) {
-      error.value = reason instanceof Error ? reason.message : '任务加载失败'
+      error.value = reason instanceof Error ? reason.message : t('任务加载失败', 'Failed to load tasks')
     } finally {
       isLoading.value = false
     }

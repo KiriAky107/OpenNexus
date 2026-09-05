@@ -25,7 +25,7 @@ pnpm dev
 | `/extensions/mcp` | stdio、Streamable HTTP、旧 SSE Server 配置与工具发现 |
 | `/extensions/plugins` | Plugin Host、Command、Settings、Secret 与 MCP 状态 |
 | `/themes` | 内置 Design Token 主题和编辑器显示偏好 |
-| `/settings` | Provider、模型路由、本地模型、CPU/CUDA 组件、请求 JSON、用量与诊断 |
+| `/settings` | Provider、模型路由、本地模型、CPU/CUDA 组件、请求 JSON、用量与诊断；全局中英文和拼写检查设置 |
 
 ## 技术结构
 
@@ -41,9 +41,12 @@ pnpm dev
 
 编辑器使用 Milkdown/Crepe 与 CodeMirror 6；Markdown 展示使用 marked、DOMPurify 和 Shiki。Provider logo 位于 `src/assets/providers`，授权与来源说明随目录保存。
 
+语言设置会即时更新主导航、页面标题和各功能页面，并同步更新文档与编辑器的 `lang`。拼写检查使用浏览器或桌面 WebView 提供的本地词典，开关会即时作用于可视化 Markdown、源码编辑器以及普通文本输入；JSON、密码等结构化或敏感输入保持关闭。
+
 ## 数据边界
 
-- 笔记、附件、搜索历史、会话、任务、Trace、模型配置和多模态结果都通过 FastAPI 读写。
+- 笔记、附件、搜索历史、任务、Trace、模型配置和多模态结果都通过 FastAPI 读写。
+- AI 对话生成和知识库检索通过 FastAPI；会话列表、用户消息、流式助手结果、引用和 Token 用量保存在后端 SQLite，刷新页面后可恢复。
 - API Key 只存在于密码输入和提交请求期间，不进入 Pinia 或 `localStorage`。
 - 页面内存可以保存尚未提交的临时状态；后端已经接收的任务和结果由 SQLite/Vault 持久化。
 - 主题、编辑器偏好、侧栏状态和最近 Vault 路径目前保存在浏览器 `localStorage`；它们是设备界面偏好，不作为笔记或模型业务数据。Tauri 集成时由桌面配置存储接管。
@@ -66,7 +69,7 @@ pnpm type-check
 pnpm build
 ```
 
-阶段 F 合并基线为 29 个测试文件、103 项测试通过，TypeScript 类型检查与 Vite 生产构建通过；构建仍有既有大 bundle 提示。产物位于 `dist`，不提交 Git。
+当前基线为 30 个测试文件、106 项测试通过，TypeScript 类型检查与 Vite 生产构建通过；构建仍有既有大 bundle 提示。产物位于 `dist`，不提交 Git。
 
 ## 开发约定
 

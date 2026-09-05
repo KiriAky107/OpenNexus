@@ -11,6 +11,10 @@ vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('@/stores/editor', () => ({ useEditorStore: () => ({}) }))
 vi.mock('@/stores/workspace', () => ({ useWorkspaceStore: () => ({}) }))
 vi.mock('@/components/common/MarkdownContent.vue', () => ({ default: { template: '<div />' } }))
+vi.mock('@/services/chatService', () => ({
+  listConversations: vi.fn().mockResolvedValue({ items: [], page: { total: 0, limit: 100, offset: 0 } }),
+  listConversationMessages: vi.fn(), createConversation: vi.fn(), removeConversation: vi.fn(), streamChat: vi.fn(),
+}))
 
 beforeEach(() => {
   setActivePinia(createPinia())

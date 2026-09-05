@@ -8,6 +8,7 @@ import * as pluginService from '@/services/pluginService'
 import { useEditorStore } from '@/stores/editor'
 import { usePluginStore } from '@/stores/plugin'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { t, localeTag } from '@/i18n'
 
 const props = defineProps<{ plugin: Plugin }>()
 const pluginStore = usePluginStore()
@@ -31,8 +32,8 @@ let loadVersion = 0
 const hasSettings = computed(() => props.plugin.contributions.some((item) => item.type === 'settings_section'))
 const tabs = computed(() => [
   ...(props.plugin.backend_type === 'mcp' ? [{ id: 'host' as const, label: 'MCP Host' }] : []),
-  ...(hasSettings.value ? [{ id: 'settings' as const, label: '设置与密钥' }] : []),
-  { id: 'commands' as const, label: '插件命令' },
+  ...(hasSettings.value ? [{ id: 'settings' as const, label: t('设置与密钥', 'Settings and secrets') }] : []),
+  { id: 'commands' as const, label: t('插件命令', 'Plugin commands') },
 ])
 
 watch(() => props.plugin.plugin_id, () => {
@@ -48,7 +49,7 @@ watch(() => props.plugin.plugin_id, () => {
 
 function feedback(message = '') { error.value = message; notice.value = '' }
 function message(reason: unknown, fallback: string) { return reason instanceof Error ? reason.message : fallback }
-function formatTime(value?: string | null) { return value ? new Date(value).toLocaleString() : '—' }
+function formatTime(value?: string | null) { return value ? new Date(value).toLocaleString(localeTag()) : '—' }
 
 async function selectTab(tab: typeof activeTab.value) {
   activeTab.value = tab
@@ -80,7 +81,7 @@ async function loadActive() {
       }
     }
   } catch (reason) {
-    if (version === loadVersion) feedback(message(reason, 'MCP 数据加载失败'))
+    if (version === loadVersion) feedback(message(reason, t('MCP 数据加载失败', 'Failed to load MCP data')))
   } finally {
     if (version === loadVersion) loading.value = false
   }
@@ -92,8 +93,8 @@ async function restartHost() {
     await pluginService.restartPluginHost(props.plugin.plugin_id)
     host.value = await pluginService.getPluginHostStatus(props.plugin.plugin_id)
     await pluginStore.loadPlugins()
-    notice.value = 'MCP Host 已重启。'
-  } catch (reason) { feedback(message(reason, 'MCP Host 重启失败')) } finally { busy.value = '' }
+    notice.value = t('MCP Host 已重启。', 'MCP Host restarted.')
+  } catch (reason) { feedback(message(reason, t('MCP Host 重启失败', 'Failed to restart MCP Host'))) } finally { busy.value = '' }
 }
 function updateValue(field: PluginSettingField, raw: string | boolean) {
   values.value[field.key] = field.type === 'number' && typeof raw === 'string' ? (raw === '' ? null : Number(raw)) : raw
@@ -105,31 +106,31 @@ async function saveSettings() {
   try {
     schema.value = await pluginService.updatePluginSettings(props.plugin.plugin_id, schema.value.schema_version, values.value)
     values.value = { ...schema.value.values }
-    notice.value = '普通设置已保存。'
-  } catch (reason) { feedback(message(reason, '设置保存失败')) } finally { busy.value = '' }
+    notice.value = t('普通设置已保存。', 'Settings saved.')
+  } catch (reason) { feedback(message(reason, t('设置保存失败', 'Failed to save settings'))) } finally { busy.value = '' }
 }
 async function saveSecret(field: PluginSettingField) {
   const secret = secrets.value[field.key]?.trim()
-  if (!secret) { feedback('请输入' + field.label); return }
+  if (!secret) { feedback(t('请输入', 'Enter ') + field.label); return }
   busy.value = 'secret:' + field.key
   feedback()
   try {
     const state = await pluginService.putPluginSecret(props.plugin.plugin_id, field.key, secret)
     if (schema.value) schema.value.secrets[field.key] = { configured: state.configured }
     secrets.value[field.key] = ''
-    notice.value = field.label + '已加密保存。'
-  } catch (reason) { feedback(message(reason, '密钥保存失败')) } finally { busy.value = '' }
+    notice.value = field.label + t('已加密保存。', ' encrypted and saved.')
+  } catch (reason) { feedback(message(reason, t('密钥保存失败', 'Failed to save secret'))) } finally { busy.value = '' }
 }
 async function deleteSecret(field: PluginSettingField) {
-  if (!confirm('删除已保存的' + field.label + '？')) return
+  if (!confirm(t('删除已保存的', 'Delete saved ') + field.label + '？')) return
   busy.value = 'secret:' + field.key
   feedback()
   try {
     const state = await pluginService.deletePluginSecret(props.plugin.plugin_id, field.key)
     if (schema.value) schema.value.secrets[field.key] = { configured: state.configured }
     secrets.value[field.key] = ''
-    notice.value = field.label + '已删除。'
-  } catch (reason) { feedback(message(reason, '密钥删除失败')) } finally { busy.value = '' }
+    notice.value = field.label + t('已删除。', ' deleted.')
+  } catch (reason) { feedback(message(reason, t('密钥删除失败', 'Failed to delete secret'))) } finally { busy.value = '' }
 }
 function properties(command: PluginCommand): Record<string, Record<string, unknown>> {
   const result = command.parameters.properties
@@ -165,7 +166,7 @@ async function execute(command: PluginCommand) {
       selection: null,
     })
     if (result.effect.type === 'notification') notice.value = result.effect.payload.message
-    else if (result.effect.type === 'job') notice.value = '后台任务已创建：' + result.effect.payload.job_id
+    else if (result.effect.type === 'job') notice.value = t('后台任务已创建：', 'Background job created: ') + result.effect.payload.job_id
     else if (result.effect.type === 'navigate') {
       const routes: Record<string, string> = {
         'vault-entry': '/', workspace: '/workspace', search: '/search', chat: '/chat',
@@ -175,64 +176,64 @@ async function execute(command: PluginCommand) {
       await router.push(routes[result.effect.payload.route])
     } else if (result.effect.type === 'refresh') {
       await loadActive()
-      notice.value = '相关数据已刷新。'
-    } else notice.value = '命令执行完成。'
-  } catch (reason) { feedback(message(reason, '命令执行失败')) } finally { busy.value = '' }
+      notice.value = t('相关数据已刷新。', 'Related data refreshed.')
+    } else notice.value = t('命令执行完成。', 'Command completed.')
+  } catch (reason) { feedback(message(reason, t('命令执行失败', 'Command failed'))) } finally { busy.value = '' }
 }
 </script>
 
 <template>
   <section class="mcp-panel">
-    <nav class="mcp-tabs" aria-label="MCP 与 Plugin 配置">
+    <nav class="mcp-tabs" :aria-label="t('MCP 与 Plugin 配置', 'MCP and Plugin settings')">
       <button v-for="tab in tabs" :key="tab.id" :class="{ active: activeTab === tab.id }" @click="selectTab(tab.id)">{{ tab.label }}</button>
     </nav>
     <div v-if="error" class="error-banner">{{ error }}</div>
     <div v-if="notice" class="notice-banner">{{ notice }}</div>
 
     <div v-if="activeTab === 'host'" class="mcp-section">
-      <div class="section-head"><div><h3>MCP Host 状态</h3><p>查看协议协商、运行状态与 Host 错误。</p></div><div class="inline-actions"><button class="button-secondary" :disabled="loading" @click="loadActive"><AppIcon :icon="Refresh" :size="15" />刷新</button><button class="button-primary" :disabled="busy === 'host' || !plugin.enabled" @click="restartHost">{{ busy === 'host' ? '重启中…' : '重启 Host' }}</button></div></div>
+      <div class="section-head"><div><h3>{{ t('MCP Host 状态', 'MCP Host status') }}</h3><p>{{ t('查看协议协商、运行状态与 Host 错误。', 'Inspect protocol negotiation, runtime status, and Host errors.') }}</p></div><div class="inline-actions"><button class="button-secondary" :disabled="loading" @click="loadActive"><AppIcon :icon="Refresh" :size="15" />{{ t('刷新', 'Refresh') }}</button><button class="button-primary" :disabled="busy === 'host' || !plugin.enabled" @click="restartHost">{{ busy === 'host' ? t('重启中…', 'Restarting…') : t('重启 Host', 'Restart Host') }}</button></div></div>
       <div v-if="host" class="status-grid">
-        <div><span>状态</span><strong><i class="status-dot" :class="host.status"></i>{{ host.status }}</strong></div>
-        <div><span>服务</span><strong>{{ host.server_name || '—' }} {{ host.server_version || '' }}</strong></div>
-        <div><span>协议版本</span><strong>{{ host.protocol_version || '—' }}</strong></div>
-        <div><span>工具数量</span><strong>{{ host.tools_count }}</strong></div>
-        <div><span>启动时间</span><strong>{{ formatTime(host.started_at) }}</strong></div>
-        <div><span>最后心跳</span><strong>{{ formatTime(host.last_seen_at) }}</strong></div>
+        <div><span>{{ t('状态', 'Status') }}</span><strong><i class="status-dot" :class="host.status"></i>{{ host.status }}</strong></div>
+        <div><span>{{ t('服务', 'Server') }}</span><strong>{{ host.server_name || '—' }} {{ host.server_version || '' }}</strong></div>
+        <div><span>{{ t('协议版本', 'Protocol version') }}</span><strong>{{ host.protocol_version || '—' }}</strong></div>
+        <div><span>{{ t('工具数量', 'Tools') }}</span><strong>{{ host.tools_count }}</strong></div>
+        <div><span>{{ t('启动时间', 'Started') }}</span><strong>{{ formatTime(host.started_at) }}</strong></div>
+        <div><span>{{ t('最后心跳', 'Last heartbeat') }}</span><strong>{{ formatTime(host.last_seen_at) }}</strong></div>
       </div>
-      <div v-else-if="loading" class="empty-state">正在读取 Host 状态…</div>
+      <div v-else-if="loading" class="empty-state">{{ t('正在读取 Host 状态…', 'Loading Host status…') }}</div>
       <div v-if="host?.error" class="error-banner host-error">{{ host.error }}</div>
-      <p class="security-hint">当前仅运行插件清单声明的 stdio MCP Server，不开放任意 Shell 命令和环境变量编辑。</p>
+      <p class="security-hint">{{ t('当前仅运行插件清单声明的 stdio MCP Server，不开放任意 Shell 命令和环境变量编辑。', 'Only stdio MCP servers declared by the plugin manifest can run. Arbitrary shell commands and environment variable editing are unavailable.') }}</p>
     </div>
 
     <div v-else-if="activeTab === 'settings'" class="mcp-section">
-      <div class="section-head"><div><h3>设置与密钥</h3><p>表单由后端 Schema 生成；密钥不会被读取或回显。</p></div><button class="button-primary" :disabled="!schema || busy === 'settings'" @click="saveSettings">{{ busy === 'settings' ? '保存中…' : '保存普通设置' }}</button></div>
+      <div class="section-head"><div><h3>{{ t('设置与密钥', 'Settings and secrets') }}</h3><p>{{ t('表单由后端 Schema 生成；密钥不会被读取或回显。', 'The backend schema generates this form. Secrets are never read back or displayed.') }}</p></div><button class="button-primary" :disabled="!schema || busy === 'settings'" @click="saveSettings">{{ busy === 'settings' ? t('保存中…', 'Saving…') : t('保存普通设置', 'Save settings') }}</button></div>
       <div v-if="schema" class="settings-list">
         <div v-for="field in schema.fields" :key="field.key" class="setting-row">
-          <div class="field-copy"><label :for="'plugin-setting-' + field.key"><AppIcon v-if="field.type === 'secret'" :icon="Key" :size="15" />{{ field.label }}<em v-if="field.required">必填</em></label><p>{{ field.description || (field.type === 'secret' ? '加密保存，不在页面回显。' : '') }}</p></div>
+          <div class="field-copy"><label :for="'plugin-setting-' + field.key"><AppIcon v-if="field.type === 'secret'" :icon="Key" :size="15" />{{ field.label }}<em v-if="field.required">{{ t('必填', 'Required') }}</em></label><p>{{ field.description || (field.type === 'secret' ? t('加密保存，不在页面回显。', 'Encrypted and never displayed.') : '') }}</p></div>
           <template v-if="field.type === 'secret'">
-            <div class="secret-control"><input :id="'plugin-setting-' + field.key" :value="secrets[field.key] || ''" class="input" type="password" autocomplete="new-password" :placeholder="schema.secrets[field.key]?.configured ? '已配置；输入新值可替换' : '输入密钥'" @input="secrets[field.key] = ($event.target as HTMLInputElement).value"><button class="button-secondary" :disabled="!secrets[field.key]?.trim() || busy === 'secret:' + field.key" @click="saveSecret(field)">安全保存</button><button v-if="schema.secrets[field.key]?.configured" class="button-danger" @click="deleteSecret(field)">删除</button></div>
-            <span class="secret-state" :class="{ configured: schema.secrets[field.key]?.configured }">{{ schema.secrets[field.key]?.configured ? '已配置' : '未配置' }}</span>
+            <div class="secret-control"><input :id="'plugin-setting-' + field.key" :value="secrets[field.key] || ''" class="input" type="password" autocomplete="new-password" :placeholder="schema.secrets[field.key]?.configured ? t('已配置；输入新值可替换', 'Configured; enter a new value to replace') : t('输入密钥', 'Enter secret')" @input="secrets[field.key] = ($event.target as HTMLInputElement).value"><button class="button-secondary" :disabled="!secrets[field.key]?.trim() || busy === 'secret:' + field.key" @click="saveSecret(field)">{{ t('安全保存', 'Save securely') }}</button><button v-if="schema.secrets[field.key]?.configured" class="button-danger" @click="deleteSecret(field)">{{ t('删除', 'Delete') }}</button></div>
+            <span class="secret-state" :class="{ configured: schema.secrets[field.key]?.configured }">{{ schema.secrets[field.key]?.configured ? t('已配置', 'Configured') : t('未配置', 'Not configured') }}</span>
           </template>
-          <template v-else-if="field.type === 'boolean'"><label class="check-control"><input :id="'plugin-setting-' + field.key" type="checkbox" :checked="Boolean(values[field.key])" @change="updateValue(field, ($event.target as HTMLInputElement).checked)">{{ values[field.key] ? '开启' : '关闭' }}</label></template>
+          <template v-else-if="field.type === 'boolean'"><label class="check-control"><input :id="'plugin-setting-' + field.key" type="checkbox" :checked="Boolean(values[field.key])" @change="updateValue(field, ($event.target as HTMLInputElement).checked)">{{ values[field.key] ? t('开启', 'On') : t('关闭', 'Off') }}</label></template>
           <template v-else-if="field.type === 'select'"><select :id="'plugin-setting-' + field.key" class="select" :value="values[field.key]" @change="updateValue(field, ($event.target as HTMLSelectElement).value)"><option v-for="option in field.options" :key="option" :value="option">{{ option }}</option></select></template>
           <template v-else><input :id="'plugin-setting-' + field.key" class="input" :type="field.type === 'number' ? 'number' : 'text'" :min="field.minimum ?? undefined" :max="field.maximum ?? undefined" :required="field.required" :value="values[field.key] ?? ''" @input="updateValue(field, ($event.target as HTMLInputElement).value)"></template>
         </div>
       </div>
-      <div v-else-if="loading" class="empty-state">正在读取 Plugin 设置…</div>
+      <div v-else-if="loading" class="empty-state">{{ t('正在读取 Plugin 设置…', 'Loading Plugin settings…') }}</div>
     </div>
 
     <div v-else class="mcp-section">
-      <div class="section-head"><div><h3>Plugin 命令</h3><p>执行该 Plugin 注册的受控 Command Contribution。</p></div><button class="button-secondary" :disabled="loading" @click="loadActive"><AppIcon :icon="Refresh" :size="15" />刷新</button></div>
+      <div class="section-head"><div><h3>{{ t('Plugin 命令', 'Plugin commands') }}</h3><p>{{ t('执行该 Plugin 注册的受控 Command Contribution。', 'Run controlled command contributions registered by this Plugin.') }}</p></div><button class="button-secondary" :disabled="loading" @click="loadActive"><AppIcon :icon="Refresh" :size="15" />{{ t('刷新', 'Refresh') }}</button></div>
       <div v-if="commands.length" class="command-list">
         <article v-for="command in commands" :key="command.command_id" class="item-card command-card">
-          <div class="command-head"><div><strong>{{ command.title }}</strong><p>{{ command.description || command.command_id }}</p></div><span class="badge" :class="{ success: commandAvailable(command), warning: command.enabled && !commandAvailable(command) }">{{ commandAvailable(command) ? '可执行' : command.enabled ? '缺少上下文' : '不可用' }}</span></div>
+          <div class="command-head"><div><strong>{{ command.title }}</strong><p>{{ command.description || command.command_id }}</p></div><span class="badge" :class="{ success: commandAvailable(command), warning: command.enabled && !commandAvailable(command) }">{{ commandAvailable(command) ? t('可执行', 'Available') : command.enabled ? t('缺少上下文', 'Missing context') : t('不可用', 'Unavailable') }}</span></div>
           <div v-if="Object.keys(properties(command)).length" class="command-fields">
-            <label v-for="(definition, key) in properties(command)" :key="key" class="field"><span>{{ String(definition.title || key) }}<em v-if="required(command, key)">必填</em></span><select v-if="Array.isArray(definition.enum)" class="select" @change="updateArgument(command.command_id, key, ($event.target as HTMLSelectElement).value, definition)"><option value="">请选择</option><option v-for="option in definition.enum" :key="String(option)" :value="String(option)">{{ option }}</option></select><select v-else-if="definition.type === 'boolean'" class="select" @change="updateArgument(command.command_id, key, ($event.target as HTMLSelectElement).value, definition)"><option value="false">否</option><option value="true">是</option></select><input v-else class="input" :type="definition.type === 'number' || definition.type === 'integer' ? 'number' : 'text'" @input="updateArgument(command.command_id, key, ($event.target as HTMLInputElement).value, definition)"></label>
+            <label v-for="(definition, key) in properties(command)" :key="key" class="field"><span>{{ String(definition.title || key) }}<em v-if="required(command, key)">{{ t('必填', 'Required') }}</em></span><select v-if="Array.isArray(definition.enum)" class="select" @change="updateArgument(command.command_id, key, ($event.target as HTMLSelectElement).value, definition)"><option value="">{{ t('请选择', 'Select') }}</option><option v-for="option in definition.enum" :key="String(option)" :value="String(option)">{{ option }}</option></select><select v-else-if="definition.type === 'boolean'" class="select" @change="updateArgument(command.command_id, key, ($event.target as HTMLSelectElement).value, definition)"><option value="false">{{ t('否', 'No') }}</option><option value="true">{{ t('是', 'Yes') }}</option></select><input v-else class="input" :type="definition.type === 'number' || definition.type === 'integer' ? 'number' : 'text'" @input="updateArgument(command.command_id, key, ($event.target as HTMLInputElement).value, definition)"></label>
           </div>
-          <button class="button-primary command-run" :disabled="!commandAvailable(command) || busy === command.command_id" @click="execute(command)"><AppIcon :icon="VideoPlay" :size="15" />{{ busy === command.command_id ? '执行中…' : '执行命令' }}</button>
+          <button class="button-primary command-run" :disabled="!commandAvailable(command) || busy === command.command_id" @click="execute(command)"><AppIcon :icon="VideoPlay" :size="15" />{{ busy === command.command_id ? t('执行中…', 'Running…') : t('执行命令', 'Run command') }}</button>
         </article>
       </div>
-      <div v-else-if="!loading" class="empty-state"><div><strong>没有可用命令</strong><p>启用 Plugin 后，已注册的命令会出现在这里。</p></div></div>
+      <div v-else-if="!loading" class="empty-state"><div><strong>{{ t('没有可用命令', 'No available commands') }}</strong><p>{{ t('启用 Plugin 后，已注册的命令会出现在这里。', 'Registered commands appear here after the Plugin is enabled.') }}</p></div></div>
     </div>
   </section>
 </template>

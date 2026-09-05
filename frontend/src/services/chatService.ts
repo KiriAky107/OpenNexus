@@ -1,10 +1,14 @@
 import { SseClient } from './sseClient'
-import type { ModelEvent } from '@/contracts'
+import { apiClient } from './apiClient'
+import type { ChatMessage, Conversation, ModelEvent, PageMeta } from '@/contracts'
 
 export interface ChatRequest {
   provider_id: string
   model: string
   conversation_id?: string
+  user_message_id?: string
+  assistant_message_id?: string
+  conversation_title?: string
   system?: string
   messages: Array<{
     role: 'system' | 'user' | 'assistant' | 'tool'
@@ -16,6 +20,25 @@ export interface ChatRequest {
   attachments?: string[]
   temperature?: number
   max_tokens?: number
+}
+
+export function listConversations(offset = 0, limit = 100) {
+  return apiClient.get<{ items: Conversation[]; page: PageMeta }>('/api/chat/conversations', { params: { limit, offset } })
+}
+
+export function createConversation(conversation: Pick<Conversation, 'conversation_id' | 'title'>) {
+  return apiClient.post<Conversation>('/api/chat/conversations', {
+    conversation_id: conversation.conversation_id,
+    title: conversation.title,
+  })
+}
+
+export function listConversationMessages(conversationId: string, offset = 0, limit = 500) {
+  return apiClient.get<{ items: ChatMessage[]; page: PageMeta }>(`/api/chat/conversations/${encodeURIComponent(conversationId)}/messages`, { params: { limit, offset } })
+}
+
+export function removeConversation(conversationId: string) {
+  return apiClient.delete(`/api/chat/conversations/${encodeURIComponent(conversationId)}`)
 }
 
 export function streamChat(

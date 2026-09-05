@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Link } from '@element-plus/icons-vue'
 import { Crepe } from '@milkdown/crepe'
 import { oneDark } from '@codemirror/theme-one-dark'
@@ -22,6 +22,7 @@ import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore } from '@/stores/theme'
 import { applyMarkdownFontSize, fontSizeMarkdownPlugin } from './fontSizeMarkdown'
+import { t } from '@/i18n'
 import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/frame.css'
 
@@ -33,6 +34,14 @@ const editorRoot = ref<HTMLElement | null>(null)
 const loading = ref(true)
 const fontSizeInput = ref(16)
 let crepe: Crepe | null = null
+
+function applyProofingPreferences() {
+  const editable = editorRoot.value?.querySelector<HTMLElement>('.ProseMirror')
+  if (!editable) return
+  editable.spellcheck = settingsStore.spellCheck
+  editable.setAttribute('spellcheck', String(settingsStore.spellCheck))
+  editable.lang = settingsStore.language
+}
 
 type ToolbarCommand = 'bold' | 'italic' | 'ordered-list' | 'bullet-list' | 'inline-code' | 'code-block' | 'inline-math' | 'math-block'
 
@@ -57,14 +66,14 @@ function runCommand(command: ToolbarCommand) {
 function applyLink() {
   if (!crepe) return
   // TODO(editor): 用受控 Element Plus 对话框替换 prompt，补充 URL 校验和键盘焦点管理。
-  const href = window.prompt('请输入链接地址', 'https://')?.trim()
+  const href = window.prompt(t('请输入链接地址', 'Enter link address'), 'https://')?.trim()
   if (!href) return
 
   crepe.editor.action((ctx) => {
     const view = ctx.get(editorViewCtx)
     const commands = ctx.get(commandsCtx)
     if (view.state.selection.empty) {
-      const label = window.prompt('请输入链接文字', href)?.trim() || href
+      const label = window.prompt(t('请输入链接文字', 'Enter link text'), href)?.trim() || href
       const from = view.state.selection.from
       const transaction = view.state.tr.insertText(label, from)
       transaction.setSelection(TextSelection.create(transaction.doc, from, from + label.length))
@@ -107,56 +116,56 @@ onMounted(async () => {
     defaultValue: props.initialContent,
     features: { [Crepe.Feature.TopBar]: false },
     featureConfigs: {
-      [Crepe.Feature.Placeholder]: { text: '开始记录你的想法…' },
+      [Crepe.Feature.Placeholder]: { text: t('开始记录你的想法…', 'Start writing your thoughts…') },
       [Crepe.Feature.CodeMirror]: {
         theme: themeStore.resolvedCodeBlockTheme === 'github-dark' ? oneDark : [],
         previewOnlyByDefault: false,
-        searchPlaceholder: '搜索语言',
-        noResultText: '没有匹配的语言',
-        copyText: '复制',
+        searchPlaceholder: t('搜索语言', 'Search languages'),
+        noResultText: t('没有匹配的语言', 'No matching language'),
+        copyText: t('复制', 'Copy'),
       },
       [Crepe.Feature.Latex]: {
-        inlineEditConfirm: '确认',
+        inlineEditConfirm: t('确认', 'Confirm'),
       },
       [Crepe.Feature.LinkTooltip]: {
-        editButton: '编辑',
-        removeButton: '移除',
-        confirmButton: '确认',
-        inputPlaceholder: '粘贴链接地址…',
+        editButton: t('编辑', 'Edit'),
+        removeButton: t('移除', 'Remove'),
+        confirmButton: t('确认', 'Confirm'),
+        inputPlaceholder: t('粘贴链接地址…', 'Paste link address…'),
       },
       [Crepe.Feature.Toolbar]: {
-        boldLabel: '加粗',
-        italicLabel: '斜体',
-        strikethroughLabel: '删除线',
-        codeLabel: '行内代码',
-        latexLabel: '行内公式',
-        linkLabel: '链接',
+        boldLabel: t('加粗', 'Bold'),
+        italicLabel: t('斜体', 'Italic'),
+        strikethroughLabel: t('删除线', 'Strikethrough'),
+        codeLabel: t('行内代码', 'Inline code'),
+        latexLabel: t('行内公式', 'Inline formula'),
+        linkLabel: t('链接', 'Link'),
       },
       [Crepe.Feature.BlockEdit]: {
         textGroup: {
-          label: '文本',
-          text: { label: '正文' },
-          h1: { label: '一级标题' },
-          h2: { label: '二级标题' },
-          h3: { label: '三级标题' },
-          h4: { label: '四级标题' },
-          h5: { label: '五级标题' },
-          h6: { label: '六级标题' },
-          quote: { label: '引用' },
-          divider: { label: '分割线' },
+          label: t('文本', 'Text'),
+          text: { label: t('正文', 'Paragraph') },
+          h1: { label: t('一级标题', 'Heading 1') },
+          h2: { label: t('二级标题', 'Heading 2') },
+          h3: { label: t('三级标题', 'Heading 3') },
+          h4: { label: t('四级标题', 'Heading 4') },
+          h5: { label: t('五级标题', 'Heading 5') },
+          h6: { label: t('六级标题', 'Heading 6') },
+          quote: { label: t('引用', 'Quote') },
+          divider: { label: t('分割线', 'Divider') },
         },
         listGroup: {
-          label: '列表',
-          bulletList: { label: '无序列表' },
-          orderedList: { label: '有序列表' },
-          taskList: { label: '任务列表' },
+          label: t('列表', 'Lists'),
+          bulletList: { label: t('无序列表', 'Bullet list') },
+          orderedList: { label: t('有序列表', 'Ordered list') },
+          taskList: { label: t('任务列表', 'Task list') },
         },
         advancedGroup: {
-          label: '插入',
-          image: { label: '图片' },
-          codeBlock: { label: '代码块' },
-          table: { label: '表格' },
-          math: { label: '公式块' },
+          label: t('插入', 'Insert'),
+          image: { label: t('图片', 'Image') },
+          codeBlock: { label: t('代码块', 'Code block') },
+          table: { label: t('表格', 'Table') },
+          math: { label: t('公式块', 'Formula block') },
         },
       },
     },
@@ -171,8 +180,11 @@ onMounted(async () => {
     })
   })
   await crepe.create()
+  applyProofingPreferences()
   loading.value = false
 })
+
+watch([() => settingsStore.spellCheck, () => settingsStore.language], applyProofingPreferences)
 
 onBeforeUnmount(() => { void crepe?.destroy() })
 
@@ -181,42 +193,42 @@ defineExpose({ getEditor: () => crepe?.editor })
 
 <template>
   <div class="visual-editor">
-    <div class="markdown-toolbar" role="toolbar" aria-label="Markdown 格式工具栏">
-      <label class="toolbar-select heading-select" title="设置标题级别">
+    <div class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
+      <label class="toolbar-select heading-select" :title="t('设置标题级别', 'Set heading level')">
         <span class="format-glyph heading-glyph">H</span>
-        <select aria-label="标题级别" @change="applyHeading">
-          <option value="" selected>标题</option>
-          <option value="paragraph">正文</option>
+        <select :aria-label="t('标题级别', 'Heading level')" @change="applyHeading">
+          <option value="" selected>{{ t('标题', 'Heading') }}</option>
+          <option value="paragraph">{{ t('正文', 'Paragraph') }}</option>
           <option v-for="level in 6" :key="level" :value="level">H{{ level }}</option>
         </select>
       </label>
-      <button type="button" title="加粗 (Ctrl+B)" aria-label="加粗" @pointerdown.prevent="runCommand('bold')"><strong class="format-glyph">B</strong></button>
-      <button type="button" title="斜体 (Ctrl+I)" aria-label="斜体" @pointerdown.prevent="runCommand('italic')"><em class="format-glyph">I</em></button>
+      <button type="button" :title="t('加粗 (Ctrl+B)', 'Bold (Ctrl+B)')" :aria-label="t('加粗', 'Bold')" @pointerdown.prevent="runCommand('bold')"><strong class="format-glyph">B</strong></button>
+      <button type="button" :title="t('斜体 (Ctrl+I)', 'Italic (Ctrl+I)')" :aria-label="t('斜体', 'Italic')" @pointerdown.prevent="runCommand('italic')"><em class="format-glyph">I</em></button>
       <span class="toolbar-divider" />
-      <button type="button" class="list-glyph" title="有序列表" aria-label="有序列表" @pointerdown.prevent="runCommand('ordered-list')"><span class="list-marker">1</span><span class="list-lines">☰</span></button>
-      <button type="button" class="list-glyph" title="无序列表" aria-label="无序列表" @pointerdown.prevent="runCommand('bullet-list')"><span class="list-marker">•</span><span class="list-lines">☰</span></button>
+      <button type="button" class="list-glyph" :title="t('有序列表', 'Ordered list')" :aria-label="t('有序列表', 'Ordered list')" @pointerdown.prevent="runCommand('ordered-list')"><span class="list-marker">1</span><span class="list-lines">☰</span></button>
+      <button type="button" class="list-glyph" :title="t('无序列表', 'Bullet list')" :aria-label="t('无序列表', 'Bullet list')" @pointerdown.prevent="runCommand('bullet-list')"><span class="list-marker">•</span><span class="list-lines">☰</span></button>
       <span class="toolbar-divider" />
-      <label class="toolbar-select font-size-select" title="选择预设字号">
+      <label class="toolbar-select font-size-select" :title="t('选择预设字号', 'Choose a preset font size')">
         <span class="format-glyph font-size-glyph">A</span>
-        <select aria-label="文字字号" @change="applyFontSize">
-          <option value="" selected>字号</option>
+        <select :aria-label="t('文字字号', 'Font size')" @change="applyFontSize">
+          <option value="" selected>{{ t('字号', 'Size') }}</option>
           <option v-for="size in [12, 14, 16, 18, 20, 24, 28, 32]" :key="size" :value="size">{{ size }} px</option>
         </select>
       </label>
-      <div class="font-size-input" title="输入字号后按 Enter 或点击应用">
-        <input v-model.number="fontSizeInput" type="number" min="8" max="96" step="1" aria-label="自定义字号"
+      <div class="font-size-input" :title="t('输入字号后按 Enter 或点击应用', 'Enter a font size, then press Enter or Apply')">
+        <input v-model.number="fontSizeInput" type="number" min="8" max="96" step="1" :aria-label="t('自定义字号', 'Custom font size')"
           @keydown.enter.prevent="applyFontSizeValue" />
         <span>px</span>
-        <button type="button" aria-label="应用自定义字号" @pointerdown.prevent="applyFontSizeValue">应用</button>
+        <button type="button" :aria-label="t('应用自定义字号', 'Apply custom font size')" @pointerdown.prevent="applyFontSizeValue">{{ t('应用', 'Apply') }}</button>
       </div>
       <span class="toolbar-divider" />
-      <button type="button" title="行内代码" aria-label="行内代码" @pointerdown.prevent="runCommand('inline-code')"><code class="code-glyph">&lt;/&gt;</code></button>
-      <button type="button" title="代码块" aria-label="代码块" @pointerdown.prevent="runCommand('code-block')"><span class="block-glyph">{ }</span></button>
-      <button type="button" title="行内公式" aria-label="行内公式" @pointerdown.prevent="runCommand('inline-math')"><span class="math-glyph">ƒx</span></button>
-      <button type="button" title="公式块" aria-label="公式块" @pointerdown.prevent="runCommand('math-block')"><span class="math-glyph">∑</span></button>
-      <button type="button" title="插入链接" aria-label="插入链接" @pointerdown.prevent="applyLink"><AppIcon :icon="Link" :size="17" /></button>
+      <button type="button" :title="t('行内代码', 'Inline code')" :aria-label="t('行内代码', 'Inline code')" @pointerdown.prevent="runCommand('inline-code')"><code class="code-glyph">&lt;/&gt;</code></button>
+      <button type="button" :title="t('代码块', 'Code block')" :aria-label="t('代码块', 'Code block')" @pointerdown.prevent="runCommand('code-block')"><span class="block-glyph">{ }</span></button>
+      <button type="button" :title="t('行内公式', 'Inline formula')" :aria-label="t('行内公式', 'Inline formula')" @pointerdown.prevent="runCommand('inline-math')"><span class="math-glyph">ƒx</span></button>
+      <button type="button" :title="t('公式块', 'Formula block')" :aria-label="t('公式块', 'Formula block')" @pointerdown.prevent="runCommand('math-block')"><span class="math-glyph">∑</span></button>
+      <button type="button" :title="t('插入链接', 'Insert link')" :aria-label="t('插入链接', 'Insert link')" @pointerdown.prevent="applyLink"><AppIcon :icon="Link" :size="17" /></button>
     </div>
-    <div v-if="loading" class="editor-loading">正在加载编辑器…</div>
+    <div v-if="loading" class="editor-loading">{{ t('正在加载编辑器…', 'Loading editor…') }}</div>
     <div ref="editorRoot" class="milkdown-host" :class="{ loading }" />
   </div>
 </template>

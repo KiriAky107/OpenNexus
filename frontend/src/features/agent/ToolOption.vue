@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { toolDescription, toolLabel } from './labels'
+import { t } from '@/i18n'
 
 const props = defineProps<{ name: string; description: string; selected: boolean }>()
 const emit = defineEmits<{ toggle: [name: string] }>()
@@ -19,7 +20,7 @@ const showOriginal = computed(() => props.description.length > 0)
       </span>
     </label>
     <details v-if="showOriginal" class="tool-original">
-      <summary>查看服务原文与参数</summary>
+      <summary>{{ t('查看服务原文与参数', 'View original service description and parameters') }}</summary>
       <p>{{ description }}</p>
     </details>
   </article>

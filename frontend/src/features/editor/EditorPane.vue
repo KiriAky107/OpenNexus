@@ -14,10 +14,10 @@ function updateContent(event: Event) {
 </script>
 
 <template>
-  <VisualMarkdownEditor v-if="editorStore.mode === 'wysiwyg'" :key="`${editorStore.currentFilePath ?? 'empty'}:${themeStore.resolvedCodeBlockTheme}`"
+  <VisualMarkdownEditor v-if="editorStore.mode === 'wysiwyg'" :key="`${editorStore.currentFilePath ?? 'empty'}:${themeStore.resolvedCodeBlockTheme}:${settingsStore.language}`"
     :initial-content="editorStore.content" />
-  <textarea v-else class="editor-pane source" :value="editorStore.content" :spellcheck="false"
-    aria-label="Markdown 源码编辑器" @input="updateContent" />
+  <textarea v-else class="editor-pane source" :value="editorStore.content" :spellcheck="settingsStore.spellCheck"
+    :lang="settingsStore.language" :aria-label="settingsStore.language === 'en' ? 'Markdown source editor' : 'Markdown 源码编辑器'" @input="updateContent" />
 </template>
 
 <style scoped>

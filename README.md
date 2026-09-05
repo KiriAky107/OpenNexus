@@ -2,7 +2,7 @@
 
 > 本文件用于团队开发期间快速配置环境、启动项目并了解当前实现状态，不是正式的项目 README。
 
-NotesAgent 是本地优先的 AI 笔记与知识库项目。当前可运行形态为 Vue/Vite Web 前端与 FastAPI AI Core：Markdown 和附件保存在本地 Vault，SQLite 管理元数据、全文索引、向量空间、搜索历史、会话、任务、Agent Trace、多模态任务及运行诊断。
+NotesAgent 是本地优先的 AI 笔记与知识库项目。当前可运行形态为 Vue/Vite Web 前端与 FastAPI AI Core：Markdown 和附件保存在本地 Vault，SQLite 管理元数据、全文索引、向量空间、搜索历史、AI 会话、任务、Agent Trace、多模态任务及运行诊断。AI 对话已接入知识库检索，会话与消息由后端持久化并供 Web 和桌面客户端共用。
 
 截至 2026-09-05，第一阶段及第二阶段 A～F 的工程范围已经合并到 `main`。当前已完成真实 Workspace、混合检索与知识库问答、Agent/Tool/Permission、Skill/Plugin、MCP 配置与调用、模型提供商与路由、RAG Benchmark，以及本地 Embedding、音频转写和片段级声纹聚类。Tauri/Rust Host、Stronghold、原生多 Vault 文件系统、生产级 MCP 沙箱和 Sync Server 尚未接入。
 
@@ -26,6 +26,7 @@ NotesAgent/
 - 多模态：API 优先，未配置或响应无效时回退本地；`local_only` 禁止远程调用。任务、修订、事件、来源和回退原因写入 SQLite。
 - 模型运行：默认 CPU，可选 CUDA 12.8 组件；固定模型 revision，按需启动独立子进程，交互检索优先排队，CUDA 初始化或显存失败时用同一冻结配置在 CPU 重试一次。
 - 可观测性：输入、输出、缓存命中、推理 Token 与音频用量卡片；本地运行诊断保留最近 200 条，不保存正文、文件路径、密钥或异常全文。
+- 界面偏好：设置页可即时切换全局中文/英文界面，并控制由系统词典提供的编辑器拼写检查；偏好目前保存于 Web 端设备配置，后续由 Tauri 配置存储接管。
 
 ## 本地模型
 
@@ -110,7 +111,7 @@ pnpm test
 pnpm build
 ```
 
-阶段 F 合并时的回归基线为后端 559 项、前端 103 项测试通过，TypeScript 类型检查与生产构建通过。存在一条既有 Starlette/httpx 弃用提示和 Vite 大 bundle 提示；测试数量以当前分支实际输出和 CI 为准。
+当前回归基线为后端 559 项、前端 106 项测试通过，TypeScript 类型检查与生产构建通过。存在一条既有 Starlette/httpx 弃用提示和 Vite 大 bundle 提示；测试数量以当前分支实际输出和 CI 为准。
 
 ## 文档
 

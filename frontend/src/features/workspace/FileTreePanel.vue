@@ -8,6 +8,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import FileTreeNode from './FileTreeNode.vue'
 import { DocumentAdd, FolderAdd } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
+import { t } from '@/i18n'
 
 const workspaceStore = useWorkspaceStore()
 const editorStore = useEditorStore()
@@ -91,7 +92,7 @@ function closeContextMenu() { contextTarget.value = null }
 async function renameTarget() {
   const node = contextTarget.value
   if (!node) return
-  const newName = window.prompt('新名称', node.name)?.trim()
+  const newName = window.prompt(t('新名称', 'New name'), node.name)?.trim()
   if (newName && newName !== node.name) {
     const normalizedName = node.type === 'file' && !newName.toLowerCase().endsWith('.md') ? `${newName}.md` : newName
     const oldPath = node.path
@@ -113,7 +114,7 @@ async function renameTarget() {
 async function deleteTarget() {
   const node = contextTarget.value
   if (!node) return
-  if (!window.confirm(`确定要删除“${node.name}”吗？`)) return closeContextMenu()
+  if (!window.confirm(`${t('确定要删除', 'Delete')} “${node.name}”?`)) return closeContextMenu()
   await workspaceService.deleteFile(node.path)
   const activeWasRemoved = workspaceStore.closePath(node.path)
   workspaceStore.removeFromTree(node.path)
@@ -137,13 +138,13 @@ function containingFolder(path: string): string {
 <template>
   <section class="file-tree-panel" @click="closeContextMenu">
     <div class="toolbar">
-      <button type="button" title="新建笔记" aria-label="新建笔记" @click.stop="beginCreate('file', selectedFolderPath)"><AppIcon :icon="DocumentAdd" /></button>
-      <button type="button" title="新建文件夹" aria-label="新建文件夹" @click.stop="beginCreate('folder', selectedFolderPath)"><AppIcon :icon="FolderAdd" /></button>
+      <button type="button" :title="t('新建笔记', 'New note')" :aria-label="t('新建笔记', 'New note')" @click.stop="beginCreate('file', selectedFolderPath)"><AppIcon :icon="DocumentAdd" /></button>
+      <button type="button" :title="t('新建文件夹', 'New folder')" :aria-label="t('新建文件夹', 'New folder')" @click.stop="beginCreate('folder', selectedFolderPath)"><AppIcon :icon="FolderAdd" /></button>
     </div>
     <form v-if="newItemType" class="new-item" @submit.prevent="createItem">
-      <input v-model="newItemName" :placeholder="newItemType === 'file' ? '笔记名称' : '文件夹名称'" autofocus />
-      <button type="submit">创建</button>
-      <button type="button" @click="newItemType = null">取消</button>
+      <input v-model="newItemName" :placeholder="newItemType === 'file' ? t('笔记名称', 'Note name') : t('文件夹名称', 'Folder name')" autofocus />
+      <button type="submit">{{ t('创建', 'Create') }}</button>
+      <button type="button" @click="newItemType = null">{{ t('取消', 'Cancel') }}</button>
     </form>
     <div class="tree">
       <FileTreeNode v-for="node in workspaceStore.fileTree" :key="node.id" :node="node"
@@ -152,8 +153,8 @@ function containingFolder(path: string): string {
     <Teleport to="body">
       <div v-if="contextTarget" class="context-menu"
         :style="{ left: `${contextMenuPosition.x}px`, top: `${contextMenuPosition.y}px` }" @click.stop>
-        <button @click="renameTarget">重命名</button>
-        <button class="danger" @click="deleteTarget">删除</button>
+        <button @click="renameTarget">{{ t('重命名', 'Rename') }}</button>
+        <button class="danger" @click="deleteTarget">{{ t('删除', 'Delete') }}</button>
       </div>
     </Teleport>
   </section>

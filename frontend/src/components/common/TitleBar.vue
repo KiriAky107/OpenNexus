@@ -6,6 +6,7 @@ import { useEditorStore } from '@/stores/editor'
 import { useThemeStore } from '@/stores/theme'
 import { Moon, Sunny } from '@element-plus/icons-vue'
 import AppIcon from './AppIcon.vue'
+import { t } from '@/i18n'
 
 const route = useRoute()
 const workspaceStore = useWorkspaceStore()
@@ -15,15 +16,15 @@ const themeStore = useThemeStore()
 const pageTitle = computed(() => {
   const name = route.name as string
   const titles: Record<string, string> = {
-    workspace: '工作区',
-    search: '搜索',
-    chat: 'AI 对话',
-    agent: '智能体执行轨迹',
-    tasks: '任务',
-    skills: 'Skill 管理',
-    plugins: 'Plugin 与 MCP',
-    themes: '主题管理',
-    settings: '设置',
+    workspace: t('工作区', 'Workspace'),
+    search: t('搜索', 'Search'),
+    chat: t('AI 对话', 'AI Chat'),
+    agent: t('智能体执行轨迹', 'Agent Trace'),
+    tasks: t('任务', 'Tasks'),
+    skills: t('Skill 管理', 'Skill Management'),
+    plugins: t('Plugin 与 MCP', 'Plugins and MCP'),
+    themes: t('主题管理', 'Theme Management'),
+    settings: t('设置', 'Settings'),
   }
   return titles[name] || 'NotesAgent'
 })
@@ -53,7 +54,7 @@ const isDirty = computed(() => editorStore.saveStatus === 'dirty' || editorStore
       <span class="app-name">NotesAgent</span>
     </div>
     <div class="titlebar-right">
-      <button class="icon-btn" @click="themeStore.toggleTheme()" :title="themeStore.isDark ? '切换浅色主题' : '切换深色主题'">
+      <button class="icon-btn" @click="themeStore.toggleTheme()" :title="themeStore.isDark ? t('切换浅色主题', 'Switch to light theme') : t('切换深色主题', 'Switch to dark theme')">
         <AppIcon :icon="themeStore.isDark ? Sunny : Moon" :size="16" />
       </button>
       <div class="window-controls">

@@ -132,6 +132,33 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE blocks ADD COLUMN embedding_local_only INTEGER NOT NULL DEFAULT 0;
     """,
+    # v7: application-owned chat conversations and messages, shared by web and desktop clients.
+    """
+    CREATE TABLE IF NOT EXISTS chat_conversations (
+        conversation_id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_conversations_updated
+        ON chat_conversations(updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        message_id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES chat_conversations(conversation_id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '',
+        thinking TEXT,
+        citations_json TEXT NOT NULL DEFAULT '[]',
+        tool_calls_json TEXT NOT NULL DEFAULT '[]',
+        usage_json TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(conversation_id, sequence)
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation
+        ON chat_messages(conversation_id, sequence);
+    """,
 ]
 
 
