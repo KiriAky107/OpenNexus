@@ -322,7 +322,7 @@ onMounted(() => {
 .preview-paper span:nth-child(2) { background: #d8e7e8; }
 .preview-paper span:nth-child(3) { background: #f6e9b8; }
 .preview-paper div { border: 1px solid #b5a693; background: repeating-linear-gradient(#fffef8 0 14px, #dce4db 14px 15px); }
-.theme-actions a { text-decoration: none; }
+.theme-actions a { display: inline-flex; align-items: center; justify-content: center; text-align: center; text-decoration: none; }
 
 .theme-info { display: flex; justify-content: space-between; gap: var(--space-md); align-items: flex-start; }
 .theme-info strong { display: block; margin-bottom: 2px; }

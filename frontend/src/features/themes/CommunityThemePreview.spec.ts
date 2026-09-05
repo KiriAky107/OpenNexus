@@ -19,5 +19,13 @@ it.each(themes)('previews shared component states safely for $theme_id', theme =
     for (const selector of ['input.input','input:disabled','textarea.textarea','select.select','.ui-disclosure[open]','.ui-disclosure:not([open])','.button-primary:disabled','.badge.success','.error-banner','.specimen-markdown code','.specimen-markdown table','.specimen-chart','.specimen-long']) expect(doc.querySelector(selector), selector).not.toBeNull()
     expect(doc.querySelector('style')!.textContent).toContain('.button-primary:hover')
     expect(doc.querySelector('style')!.textContent).not.toContain('color:white')
+    const rules = Array.from(doc.styleSheets[0]!.cssRules) as CSSStyleRule[]
+    const rootRule = rules.filter(rule => rule.selectorText === 'html').pop()!
+    const bodyRule = rules.filter(rule => rule.selectorText === 'body').pop()!
+    // The embedded document must override the app-shell overflow lock.
+    expect(rootRule.style.getPropertyValue('overflow-y')).toBe('auto')
+    expect(rootRule.style.getPropertyPriority('overflow-y')).toBe('important')
+    expect(bodyRule.style.getPropertyValue('height')).toBe('auto')
+    expect(bodyRule.style.getPropertyValue('overflow')).toBe('visible')
   } finally { w.unmount() }
 })
