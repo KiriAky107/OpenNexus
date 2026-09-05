@@ -5,6 +5,7 @@ from app.agent.builtin_tools import register_builtin_tools
 from app.contracts import ModelCapability, ProviderConfig, ProviderType
 from app.config import BACKEND_DIR, get_settings
 from app.extensions import PluginRuntime, SkillRuntime
+from app.extensions.installed import InstalledRuntime
 from app.extensions.mcp_registry import McpServerRegistry
 from app.providers import MockProvider, ProviderFactory, ProviderRegistry
 from app.providers.routing import ModelRoutingService
@@ -64,6 +65,8 @@ def build_container() -> ApplicationContainer:
     )
     plugins.install(BACKEND_DIR / "extensions" / "plugins" / "text-tools")
     plugins.enable("text-tools")
+    plugins = InstalledRuntime(plugins, 'plugin', settings.data_dir)
+    plugins.restore()
 
     mcp_servers = McpServerRegistry(
         tools,
@@ -75,7 +78,10 @@ def build_container() -> ApplicationContainer:
 
     skills = SkillRuntime(tools)
     skills.install(BACKEND_DIR / "extensions" / "skills" / "knowledge-assistant")
-    skills.enable("knowledge-assistant")
+    if not skills.get("knowledge-assistant").missing_dependencies:
+        skills.enable("knowledge-assistant")
+    skills = InstalledRuntime(skills, 'skill', settings.data_dir)
+    skills.restore()
 
     policy = PermissionPolicy()
     permissions = PermissionManager(policy)

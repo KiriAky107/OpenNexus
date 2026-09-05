@@ -123,9 +123,11 @@ function close() { disarm(); viewer.value?.close(); svgHtml.value = ''; opener?.
 .diagram-controls button:hover { border-color: var(--color-accent-primary); }
 .diagram-controls button:focus-visible { outline: 2px solid var(--color-accent-primary); }
 .diagram-viewer { width: min(1200px, 94vw); max-width: 94vw; height: 85vh; padding: 16px; color: var(--color-text-primary); background: var(--color-background-primary); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); }
-.diagram-viewer::backdrop { background: #0008; }
-.diagram-viewer header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.diagram-viewer-scroll { height: calc(100% - 64px); overflow: auto; }
+.diagram-viewer[open] { display: flex; flex-direction: column; gap: var(--space-md); overflow: hidden; }
+.diagram-viewer::backdrop { background: var(--color-background-overlay); }
+.diagram-viewer header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-sm); flex-shrink: 0; }
+.diagram-viewer header .diagram-controls { flex-wrap: wrap; }
+.diagram-viewer-scroll { flex: 1; min-height: 0; overflow: auto; }
 .diagram-viewer-image { margin: auto; transition: width 180ms ease-out; }
 .diagram-viewer-image svg { width: 100% !important; max-width: none !important; height: auto !important; }
 </style>

@@ -32,11 +32,12 @@ marked.use({extensions:[
 marked.setOptions({ gfm: true, breaks: true })
 
 // Highlighter 是昂贵的单例；复用初始化 Promise，避免每个代码块重复加载语法与主题。
-const highlighter = createHighlighterCore({
+let highlighter: ReturnType<typeof createHighlighterCore> | undefined
+function getHighlighter() { return highlighter ??= createHighlighterCore({
   themes: [githubLight, githubDark],
   langs: [],
   engine: createOnigurumaEngine(import('shiki/wasm')),
-})
+}).catch(error => { highlighter = undefined; throw error }) }
 
 const languageAliases = new Map(bundledLanguagesInfo.flatMap(info =>
   [info.id, info.name, ...(info.aliases ?? [])].map(alias => [alias.toLowerCase(), info.id] as const),
@@ -45,7 +46,7 @@ const languageLoads = new Map<string, Promise<void>>()
 const languageLoaders = new Map(bundledLanguagesInfo.map(info => [info.id, info.import]))
 
 async function loadCodeLanguage(requestedLanguage: string) {
-  const shiki = await highlighter
+  const shiki = await getHighlighter()
   const language = languageAliases.get(requestedLanguage.toLowerCase())
   if (!language) return { shiki, language: 'text' as const }
   let loading = languageLoads.get(language)
@@ -133,4 +134,4 @@ export async function renderMarkdown(source: string, options?: { theme?: 'light'
   })
 }
 
-// TODO(performance): 编辑器首屏稳定后评估将 Shiki 延迟加载或迁移到 Web Worker。
+// 高亮器首次需要代码高亮时才创建；语法保持按语言加载。Worker 可在性能测量后进一步引入。

@@ -6,6 +6,7 @@ commands:
     locations:
       - command_palette
       - context_menu
+      - toolbar
     when:
       - editor.has_selection
     context:

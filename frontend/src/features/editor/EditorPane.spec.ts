@@ -52,7 +52,7 @@ describe('EditorPane file switching', () => {
 
     expect(store.currentFilePath).toBe('/数据结构/红黑树.md')
     expect(wrapper.text()).not.toContain('祝你写作愉快')
-  })
+  }, 15000) // Real Milkdown is now imported lazily; cold module transforms count toward this integration test.
 
   it('applies the saved spell-check and language settings to source mode', async () => {
     const editor = useEditorStore()
