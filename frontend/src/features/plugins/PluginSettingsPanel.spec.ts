@@ -9,7 +9,69 @@ vi.mock('@/services/pluginService', () => ({ getPluginSettings: vi.fn(), updateP
 const schema = (value = ''): PluginSettingsSchema => ({ plugin_id: 'demo', schema_version: 1, fields: [{ key: 'name', label: 'Name', type: 'string', description: '', required: false, options: [] }], values: { name: value }, secrets: {} })
 let wrapper: VueWrapper
 beforeEach(() => { vi.resetAllMocks(); vi.mocked(service.getPluginSettings).mockResolvedValue(schema()) })
-afterEach(() => wrapper?.unmount())
+afterEach(() => { wrapper?.unmount(); vi.unstubAllGlobals() })
+
+function secretSchema(configured = false): PluginSettingsSchema {
+  return { ...schema(), fields: [{ key: 'token', label: 'Token', type: 'secret', description: '', required: false, options: [] }], secrets: { token: { configured } } }
+}
+
+it('preserves new secret input during a pending save and allows saving it next', async () => {
+  vi.mocked(service.getPluginSettings).mockResolvedValue(secretSchema())
+  let finish!: (value: Awaited<ReturnType<typeof service.putPluginSecret>>) => void
+  vi.mocked(service.putPluginSecret).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  wrapper = mount(PluginSettingsPanel, { props: { pluginId: 'demo' } })
+  await flushPromises()
+  await wrapper.get('input[type="password"]').setValue('first-fixture-value')
+  await wrapper.get('.secret-row button').trigger('click')
+  await wrapper.get('input[type="password"]').setValue('second-fixture-value')
+  await wrapper.get('.secret-row button').trigger('click')
+  expect(service.putPluginSecret).toHaveBeenCalledTimes(1)
+  finish({ plugin_id: 'demo', key: 'token', configured: true })
+  await flushPromises()
+  expect((wrapper.get('input[type="password"]').element as HTMLInputElement).value).toBe('second-fixture-value')
+  vi.mocked(service.putPluginSecret).mockResolvedValueOnce({ plugin_id: 'demo', key: 'token', configured: true })
+  await wrapper.get('.secret-row button').trigger('click')
+  await flushPromises()
+  expect(service.putPluginSecret).toHaveBeenLastCalledWith('demo', 'token', 'second-fixture-value')
+  expect((wrapper.get('input[type="password"]').element as HTMLInputElement).value).toBe('')
+})
+
+it('retains a secret draft on failure and allows retry', async () => {
+  vi.mocked(service.getPluginSettings).mockResolvedValue(secretSchema())
+  vi.mocked(service.putPluginSecret).mockRejectedValueOnce(new Error('Save failed'))
+  wrapper = mount(PluginSettingsPanel, { props: { pluginId: 'demo' } })
+  await flushPromises()
+  await wrapper.get('input[type="password"]').setValue('retry-fixture-value')
+  await wrapper.get('.secret-row button').trigger('click')
+  await flushPromises()
+  expect((wrapper.get('input[type="password"]').element as HTMLInputElement).value).toBe('retry-fixture-value')
+  expect(wrapper.get('.secret-row button').attributes('disabled')).toBeUndefined()
+  expect(wrapper.text()).toContain('Save failed')
+})
+
+it.each(['save', 'delete'] as const)('ignores old secret %s responses after switching plugins', async action => {
+  vi.mocked(service.getPluginSettings).mockResolvedValue(secretSchema(true))
+  let finish!: () => void
+  vi.mocked(service.putPluginSecret).mockReturnValue(new Promise(resolve => { finish = () => resolve({ plugin_id: 'demo', key: 'token', configured: true }) }))
+  if (action === 'delete') {
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    vi.mocked(service.deletePluginSecret).mockReturnValue(new Promise(resolve => { finish = () => resolve({ plugin_id: 'demo', key: 'token', configured: false }) }))
+  }
+  wrapper = mount(PluginSettingsPanel, { props: { pluginId: 'demo' } })
+  await flushPromises()
+  await wrapper.get('input[type="password"]').setValue('old-fixture-value')
+  await wrapper.get(action === 'save' ? '.secret-row button' : '.secret-row .danger').trigger('click')
+  vi.mocked(service.getPluginSettings).mockResolvedValue(secretSchema(false))
+  await wrapper.setProps({ pluginId: 'other' })
+  await flushPromises()
+  await wrapper.get('input[type="password"]').setValue('new-fixture-value')
+  finish()
+  await flushPromises()
+  expect((wrapper.get('input[type="password"]').element as HTMLInputElement).value).toBe('new-fixture-value')
+  expect(wrapper.find('.secret-status').classes()).toContain('not-configured')
+  expect(wrapper.emitted('saved')).toBeUndefined()
+  vi.restoreAllMocks()
+})
 
 it('retains edits made during a save and submits them on the next save', async () => {
   let resolveSave!: (value: PluginSettingsSchema) => void

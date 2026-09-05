@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { PluginSettingsSchema, PluginSettingField } from '@/contracts'
 import {
   getPluginSettings,
@@ -83,33 +83,45 @@ async function save() {
 }
 
 async function saveSecret(key: string) {
-  if (!secrets[key]) return
+  if (!schema.value || !secrets[key] || isSaving.value) return
+  const version = loadVersion
+  const pluginId = props.pluginId
+  const submittedSecret = secrets[key]
   isSaving.value = true
   saveError.value = ''
   try {
-    const result = await putPluginSecret(props.pluginId, key, secrets[key])
+    const result = await putPluginSecret(pluginId, key, submittedSecret)
+    if (version !== loadVersion || pluginId !== props.pluginId) return
     if (schema.value) {
       schema.value.secrets[key] = { configured: result.configured }
     }
-    secrets[key] = ''
+    if (secrets[key] === submittedSecret) secrets[key] = ''
     emit('saved')
   } catch (error) {
-    saveError.value = error instanceof Error ? error.message : '密钥保存失败'
+    if (version === loadVersion && pluginId === props.pluginId) saveError.value = error instanceof Error ? error.message : '密钥保存失败'
   } finally {
-    isSaving.value = false
+    if (version === loadVersion && pluginId === props.pluginId) isSaving.value = false
   }
 }
 
 async function clearSecret(key: string) {
+  if (!schema.value || isSaving.value) return
   if (!confirm(`确认删除 " ${key} " 的配置？`)) return
+  const version = loadVersion
+  const pluginId = props.pluginId
+  isSaving.value = true
+  saveError.value = ''
   try {
-    await deletePluginSecret(props.pluginId, key)
+    await deletePluginSecret(pluginId, key)
+    if (version !== loadVersion || pluginId !== props.pluginId) return
     if (schema.value) {
       schema.value.secrets[key] = { configured: false }
     }
     emit('saved')
   } catch (error) {
-    saveError.value = error instanceof Error ? error.message : '删除失败'
+    if (version === loadVersion && pluginId === props.pluginId) saveError.value = error instanceof Error ? error.message : '删除失败'
+  } finally {
+    if (version === loadVersion && pluginId === props.pluginId) isSaving.value = false
   }
 }
 
@@ -127,6 +139,7 @@ function setFieldValue(key: string, value: unknown, field: PluginSettingField) {
 }
 
 onMounted(load)
+onBeforeUnmount(() => { loadVersion++ })
 watch(() => props.pluginId, load)
 </script>
 
@@ -220,10 +233,10 @@ watch(() => props.pluginId, load)
                   placeholder="重新输入以更新"
                   class="input"
                 />
-                <button class="button-secondary" :disabled="!secrets[field.key]" @click="saveSecret(field.key)">
+                <button class="button-secondary" :disabled="!secrets[field.key] || isSaving" @click="saveSecret(field.key)">
                   更新
                 </button>
-                <button class="link-btn danger" @click="clearSecret(field.key)">清除</button>
+                <button class="link-btn danger" :disabled="isSaving" @click="clearSecret(field.key)">清除</button>
               </template>
               <template v-else>
                 <input
@@ -234,7 +247,7 @@ watch(() => props.pluginId, load)
                 />
                 <button
                   class="button-primary"
-                  :disabled="!secrets[field.key]"
+                  :disabled="!secrets[field.key] || isSaving"
                   @click="saveSecret(field.key)"
                 >保存</button>
               </template>
