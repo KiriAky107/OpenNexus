@@ -33,6 +33,18 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()) })
 
 describe('ProviderForm', () => {
+  it('uses a top-layer dialog and restores the underlying scroll container', async () => {
+    const host = document.createElement('div')
+    host.style.overflow = 'auto'
+    document.body.appendChild(host)
+    const wrapper = mount(ProviderForm, {attachTo:host})
+    await flushPromises()
+    expect(wrapper.get('dialog').element.open).toBe(true)
+    expect(host.style.overflow).toBe('hidden')
+    wrapper.unmount()
+    expect(host.style.overflow).toBe('auto')
+    host.remove()
+  })
   it('saves model-scoped context settings and restores them on edit', async () => {
     const policy = {model:'old-model',context_window:65536,output_reserve:8192,threshold:0.8,mode:'detect' as const,prompt:'保留已确认事实'}
     const wrapper = await render({...existing,context_policies:[policy]})

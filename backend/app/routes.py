@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from app.agent import AgentCapacityError, AgentRunNotFoundError
 from app.container import container
+from app.services.persona_settings import PersonaSettings, load_persona, save_persona
 from app.contracts import (
     AgentRun,
     AgentRunCreateRequest,
@@ -102,6 +103,7 @@ from app.agent import AgentCapacityError, AgentRunNotFoundError
 from app.benchmarks import datasets as benchmark_datasets
 from app.benchmarks import service as benchmark_service
 from app.container import container
+from app.services.persona_settings import PersonaSettings, load_persona, save_persona
 from app.errors import ApiError
 from app.extensions import ExtensionError
 from app.extensions.mcp_registry import McpRegistryError
@@ -1469,3 +1471,15 @@ async def get_benchmark_report(run_id: str) -> BenchmarkReport:
             404, "BENCHMARK_RUN_NOT_FOUND", "benchmark report not found", {"run_id": run_id}
         )
     return report
+
+
+
+
+@router.get("/settings/persona", response_model=PersonaSettings, tags=["Settings"])
+async def get_global_persona():
+    return load_persona()
+
+
+@router.put("/settings/persona", response_model=PersonaSettings, tags=["Settings"])
+async def put_global_persona(request: PersonaSettings):
+    return save_persona(request)

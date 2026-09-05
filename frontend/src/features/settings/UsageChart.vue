@@ -25,9 +25,13 @@ function value(bucket: UsageBucket, source: 'local' | 'api') {
   return metric.value === 'requests' ? item.requests : item.requests === 0 ? 0 : item.totals[metric.value] ?? null
 }
 const modelLegend = computed(() => sources.flatMap(source => {
-  const entries = new Map<string, ModelUsage>()
-  for (const bucket of props.buckets) for (const item of bucket[source].models ?? []) entries.set(item.key, item)
-  return [...entries.values()].sort((a, b) => a.key.localeCompare(b.key)).map((item, index, all) => ({ ...item, source, shade: all.length === 1 ? 85 : 40 + index / (all.length - 1) * 55 }))
+  const entries = new Map<string, ModelUsage & { consumed: number }>()
+  for (const bucket of props.buckets) for (const item of bucket[source].models ?? []) {
+    const previous = entries.get(item.key)
+    entries.set(item.key, {...item, consumed: (previous?.consumed ?? 0) + modelValue(item)})
+  }
+  const peak = Math.max(1, ...[...entries.values()].map(item => item.consumed))
+  return [...entries.values()].sort((a, b) => b.consumed - a.consumed || a.key.localeCompare(b.key)).map(item => ({ ...item, source, shade: 40 + item.consumed / peak * 55 }))
 }))
 function modelColor(key: string, source: 'local' | 'api') {
   const shade = modelLegend.value.find(item => item.key === key && item.source === source)?.shade ?? 85
@@ -76,6 +80,7 @@ const maximum = computed(() => Math.max(1, ...props.buckets.flatMap(bucket => so
       <div v-for="item in sums" :key="item.source" class="pie-value" :class="item.source"><AppIcon :icon="item.source === 'local' ? Cpu : Connection" :size="16" /><span>{{ labels[item.source] }}</span><strong>{{ item.coverage ? item.value.toLocaleString() : item.requests ? t('未提供', 'Unavailable') : '0' }} · {{ total ? (item.value / total * 100).toFixed(1) + '%' : '—' }}</strong><small>{{ t('覆盖', 'Coverage') }} {{ item.coverage }}/{{ item.requests }}</small></div>
       <p class="subtle">{{ t('占比仅基于已报告值；缺失指标不计入分母。', 'Shares use reported values only; missing counters are excluded.') }}</p>
     </aside></div>
+    <p v-if="modelLegend.length" class="subtle">{{ t('同一来源内，颜色越深表示所选时段该模型的累计消耗越多。', 'Within each source, darker shades indicate greater model usage over the selected period.') }}</p>
     <div class="model-legend"><span v-for="item in modelLegend" :key="`${item.source}:${item.key}`" :title="item.provider_id"><i :style="{ background: modelColor(item.key, item.source) }" />{{ item.model }}</span></div>
     <p class="subtle">{{ t('按本机时区分组；柱高仅汇总已报告值，悬停可查看覆盖请求数。虚线表示有请求但未提供该指标，不作为零消耗。', 'Grouped by your local UTC offset. Bars sum reported values; hover for coverage. Dashed markers mean requests with unavailable counters, not zero usage.') }}</p>
     <details class="ui-disclosure"><summary>{{ t('查看图表数据', 'View chart data') }}</summary><div class="chart-scroll"><table><thead><tr><th>{{ t('日期', 'Date') }}</th><th>{{ labels.local }}</th><th>{{ labels.api }}</th></tr></thead><tbody><tr v-for="bucket in buckets" :key="bucket.date"><th>{{ bucket.date }}<template v-if="bucket.date !== bucket.end_date"> – {{ bucket.end_date }}</template></th><td v-for="source in sources" :key="source">{{ description(bucket, source) }}</td></tr></tbody></table></div></details>

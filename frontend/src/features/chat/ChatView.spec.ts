@@ -29,12 +29,23 @@ beforeEach(() => {
   vi.spyOn(useSkillStore(), 'loadSkills').mockResolvedValue(undefined)
 })
 
+it('reuses the settings model cache and renders the shared select style', async () => {
+  const providers = useProviderStore()
+  providers.modelsByProvider.a = [{model_id:'a-default',name:'A model',capabilities:{chat:true}}]
+  const wrapper = mount(ChatView)
+  await flushPromises()
+  expect(providers.loadModels).not.toHaveBeenCalled()
+  expect(wrapper.get('select#chat-model-select').classes()).toContain('select')
+  expect(wrapper.get('select#chat-model-select').text()).toContain('A model')
+  wrapper.unmount()
+})
+
 it('preserves the selected provider and manual model after leaving and returning to chat', async () => {
   const chat = useChatStore()
   const first = mount(ChatView)
   await flushPromises()
   await first.get('select').setValue('b')
-  await first.get('input[list="chat-models"]').setValue('b-manual')
+  await first.get('input[data-field="manual-model"]').setValue('b-manual')
   first.unmount()
   const returned = mount(ChatView)
   await flushPromises()
