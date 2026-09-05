@@ -1,18 +1,21 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import { useChatStore } from '@/stores/chat'
+import { t } from '@/i18n'
 
 const chatStore = useChatStore()
+onMounted(() => { void chatStore.loadConversations() })
 </script>
 
 <template>
   <div class="sidebar-panel">
-    <button class="button-primary new-button" @click="chatStore.createNewConversation">＋ 新对话</button>
+    <button class="button-primary new-button" @click="chatStore.createNewConversation">＋ {{ t('新对话', 'New conversation') }}</button>
     <div class="sidebar-list conversation-list">
       <div v-for="conversation in chatStore.sortedConversations" :key="conversation.conversation_id"
         class="sidebar-list-item conversation" :class="{ active: chatStore.activeConversationId === conversation.conversation_id }"
         @click="chatStore.setActiveConversation(conversation.conversation_id)">
-        <div><strong>{{ conversation.title }}</strong><p>{{ conversation.message_count }} 条消息</p></div>
-        <button class="delete" title="删除会话" @click.stop="chatStore.deleteConversation(conversation.conversation_id)">×</button>
+        <div><strong>{{ conversation.title }}</strong><p>{{ conversation.message_count }} {{ t('条消息', 'messages') }}</p></div>
+        <button class="delete" :title="t('删除会话', 'Delete conversation')" @click.stop="chatStore.deleteConversation(conversation.conversation_id)">×</button>
       </div>
     </div>
   </div>

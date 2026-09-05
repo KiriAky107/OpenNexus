@@ -1,4 +1,5 @@
 import { apiClient, resolveApiUrl } from './apiClient'
+import { t } from '@/i18n'
 
 export interface Segment { segment_id: string; start_time: number; end_time: number; text: string; speaker: string | null; language?: string }
 export interface MediaJob {
@@ -26,7 +27,7 @@ export const mediaService = {
     const response = await fetch(resolveApiUrl(`/api/media/attachments?filename=${encodeURIComponent(file.name)}`), {
       method: 'POST', headers: {'Content-Type': 'application/octet-stream', ...(idempotencyKey ? {'Idempotency-Key': idempotencyKey} : {})}, body: file,
     })
-    if (!response.ok) throw new Error((await response.json())?.error?.message || '附件上传失败')
+  if (!response.ok) throw new Error((await response.json())?.error?.message || t('附件上传失败', 'Attachment upload failed'))
     return await response.json() as {attachment_id: string}
   },
 }

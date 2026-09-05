@@ -7,6 +7,7 @@ import SearchFiltersPanel from '@/features/search/SearchFiltersPanel.vue'
 import TaskFiltersPanel from '@/features/tasks/TaskFiltersPanel.vue'
 import ExtensionListPanel from '@/components/common/ExtensionListPanel.vue'
 import { useRoute } from 'vue-router'
+import { t } from '@/i18n'
 
 const props = defineProps<{
   component: string | null
@@ -17,12 +18,12 @@ const routeName = computed(() => route.name as string)
 
 const sidebarTitle = computed(() => {
   const titles: Record<string, string> = {
-    'file-tree': '文件',
-    'conversation-list': '对话',
-    'run-list': '智能体运行',
-    'search-filters': '搜索筛选',
-    'task-filters': '任务筛选',
-    'extension-list': '扩展',
+    'file-tree': t('文件', 'Files'),
+    'conversation-list': t('对话', 'Conversations'),
+    'run-list': t('智能体运行', 'Agent Runs'),
+    'search-filters': t('搜索筛选', 'Search Filters'),
+    'task-filters': t('任务筛选', 'Task Filters'),
+    'extension-list': t('扩展', 'Extensions'),
   }
   return titles[props.component || ''] || ''
 })

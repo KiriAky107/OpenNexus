@@ -6,6 +6,7 @@ import { editorViewCtx, type Editor } from '@milkdown/kit/core'
 import { TextSelection } from '@milkdown/kit/prose/state'
 import { getMarkdown } from '@milkdown/kit/utils'
 import VisualMarkdownEditor from './VisualMarkdownEditor.vue'
+import { useSettingsStore } from '@/stores/settings'
 
 type EditorComponent = { getEditor: () => Editor | undefined }
 
@@ -89,5 +90,20 @@ describe('VisualMarkdownEditor formatting toolbars', () => {
     await wrapper.get('[aria-label="标题级别"]').setValue('paragraph')
 
     expect(editor.action(getMarkdown()).trim()).toBe('alpha')
+  })
+
+  it('updates native spell checking on the ProseMirror editor', async () => {
+    const settings = useSettingsStore()
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: 'mispelled word' }, attachTo: document.body })
+    mounted.push(wrapper)
+    await waitForEditor(wrapper)
+
+    settings.spellCheck = true
+    settings.language = 'en'
+    await wrapper.vm.$nextTick()
+
+    const editable = wrapper.get('.ProseMirror')
+    expect(editable.attributes('spellcheck')).toBe('true')
+    expect(editable.attributes('lang')).toBe('en')
   })
 })
