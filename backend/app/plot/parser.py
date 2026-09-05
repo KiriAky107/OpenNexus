@@ -51,6 +51,8 @@ _NUMBER_RE = re.compile(r"^(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
 # 用白名单校验提前拦截，保证失败走正常诊断路径而不是异常逃逸出导出链路。
 _MAX_AST_DEPTH = 200
 _MAX_AST_NODES = 1000
+# 单块 function-plot 允许的表达式数量上限，防止海量表达式导致超大 SVG 与海量采样求值
+_MAX_EXPRESSIONS = 16
 
 
 class PlotParseError(Exception):
@@ -368,6 +370,16 @@ def parse_source(source: str) -> FunctionPlotParseResult:
             has_error = True
             continue
         expressions.append(FunctionPlotExpression(expression=expr_text))
+        # 表达式数量超限：整块回退并提前终止，避免对海量表达式做采样求值
+        if len(expressions) > _MAX_EXPRESSIONS:
+            diagnostics.append(
+                PlotDiagnostic(
+                    severity="error",
+                    code="FUNCTION_PLOT_TOO_MANY_EXPRESSIONS",
+                    message=f"表达式数量超过上限 {_MAX_EXPRESSIONS}，已回退为源码占位",
+                )
+            )
+            return FunctionPlotParseResult(plot=None, diagnostics=diagnostics)
 
     if has_error:
         return FunctionPlotParseResult(plot=None, diagnostics=diagnostics)

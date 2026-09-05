@@ -412,3 +412,40 @@ def test_export_source_requires_matching_field() -> None:
         ExportSource(type=ExportSourceType.note, note_id=None)
     with pytest.raises(ValidationError):
         ExportSource(type=ExportSourceType.markdown, markdown=None)
+
+
+# --------------------------------------------------------------------------- #
+# 审阅回归：资源上限
+# --------------------------------------------------------------------------- #
+def test_export_note_source_size_limit(monkeypatch) -> None:
+    # P1：note 源超出 MAX_MARKDOWN_CHARS 应在创建期拒绝，不进入后台渲染
+    from app.services import note_service
+
+    monkeypatch.setattr(export_service, "MAX_MARKDOWN_CHARS", 10)
+
+    async def _go():
+        note = await note_service.create_note(
+            title="超长笔记", markdown="a" * 20, folder="导出", tags=[]
+        )
+        return await export_service.create_export(
+            ExportRequest(
+                source=ExportSource(type=ExportSourceType.note, note_id=note.note_id),
+                format=ExportFormat.html,
+            )
+        )
+
+    with pytest.raises(ApiError) as exc:
+        asyncio.run(_go())
+    assert exc.value.status_code == 400
+    assert exc.value.code == "EXPORT_OPTIONS_INVALID"
+
+
+def test_export_output_too_large(monkeypatch) -> None:
+    # P1：产物超出 MAX_EXPORT_BYTES 应标记 failed 且不落盘
+    monkeypatch.setattr(export_service, "MAX_EXPORT_BYTES", 10)
+
+    finished = _create_and_wait(_markdown_request("# 产物超限"))
+    assert finished.status == ExportStatus.failed
+    assert finished.error_code == "EXPORT_OUTPUT_TOO_LARGE"
+    assert finished.file is None
+    assert not (get_settings().exports_path / f"{finished.job_id}.html").exists()
