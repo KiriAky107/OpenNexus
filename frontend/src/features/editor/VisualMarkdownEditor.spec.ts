@@ -7,6 +7,9 @@ import { TextSelection } from '@milkdown/kit/prose/state'
 import { getMarkdown } from '@milkdown/kit/utils'
 import VisualMarkdownEditor from './VisualMarkdownEditor.vue'
 import { useSettingsStore } from '@/stores/settings'
+import { useThemeStore } from '@/stores/theme'
+import { codeBlockConfig } from '@milkdown/kit/component/code-block'
+import { EditorView as CodeMirror } from '@codemirror/view'
 
 type EditorComponent = { getEditor: () => Editor | undefined }
 
@@ -45,6 +48,20 @@ afterEach(() => {
 })
 
 describe('VisualMarkdownEditor formatting toolbars', () => {
+  it.each(['github-light', 'github-dark'] as const)('keeps Shiki %s mappings after Crepe merges its defaults', async theme => {
+    useThemeStore().codeBlockTheme = theme
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: '```python\nprint("Hello")\n```' }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    const config = editor.action(ctx => ctx.get(codeBlockConfig.key))
+    const matching = config.languages.filter(item => item.alias.includes('python'))
+    expect(matching).toHaveLength(1)
+    const cm = new CodeMirror({ doc: 'print("Hello")', extensions: [...config.extensions, await matching[0]!.load()] })
+    try {
+      const string = [...cm.dom.querySelectorAll<HTMLElement>('.shiki-token')].find(el => el.textContent?.includes('Hello'))
+      expect(string?.style.color.toUpperCase()).toBe(theme === 'github-dark' ? '#9ECBFF' : '#032F62')
+    } finally { cm.destroy() }
+  })
   it('applies bold from the top toolbar to the selected text', async () => {
     const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: 'alpha beta' }, attachTo: document.body })
     mounted.push(wrapper)

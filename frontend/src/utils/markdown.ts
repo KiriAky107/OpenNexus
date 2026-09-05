@@ -3,6 +3,8 @@ import { marked } from 'marked'
 import { createHighlighterCore } from 'shiki/core'
 import { createJavaScriptRegexEngine } from '@shikijs/engine-javascript'
 import css from '@shikijs/langs/css'
+import c from '@shikijs/langs/c'
+import cpp from '@shikijs/langs/cpp'
 import html from '@shikijs/langs/html'
 import javascript from '@shikijs/langs/javascript'
 import json from '@shikijs/langs/json'
@@ -19,7 +21,7 @@ marked.setOptions({ gfm: true, breaks: true })
 // Highlighter 是昂贵的单例；复用初始化 Promise，避免每个代码块重复加载语法与主题。
 const highlighter = createHighlighterCore({
   themes: [githubLight, githubDark],
-  langs: [markdown, html, css, javascript, typescript, json, python, shell, sql],
+  langs: [markdown, html, css, javascript, typescript, json, python, shell, sql, c, cpp],
   engine: createJavaScriptRegexEngine(),
 })
 
@@ -36,6 +38,18 @@ export async function highlightCode(source: string, requestedLanguage = 'text'):
     themes: { light: 'github-light', dark: 'github-dark' },
     defaultColor: false,
   })
+}
+
+/** Share the initialized grammar/theme registry with editable code blocks. */
+export async function getCodeTokenizer(theme: 'github-light' | 'github-dark') {
+  const shiki = await highlighter
+  return (source: string, requestedLanguage: string) => {
+    const language = languageAliases[requestedLanguage] ?? requestedLanguage
+    return shiki.codeToTokens(source, {
+      lang: shiki.getLoadedLanguages().includes(language as never) ? language : 'text',
+      theme,
+    }).tokens
+  }
 }
 
 export async function renderMarkdown(source: string): Promise<string> {
