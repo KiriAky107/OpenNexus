@@ -1,0 +1,13 @@
+commands:
+  - command_id: markdown-workbench.inspect-selection
+    title: 检查选中 Markdown
+    description: 对当前选区生成标题、任务和格式问题统计，不修改原文。
+    icon: document
+    locations: [command_palette, context_menu]
+    when: [editor.has_selection]
+    context: [selection]
+    mcp_tool: markdown-workbench.selection_report
+    parameters:
+      type: object
+      properties: {}
+      additionalProperties: false

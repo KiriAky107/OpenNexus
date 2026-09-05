@@ -191,6 +191,10 @@ css_entry: styles/theme.css
 
 ## Skill / Plugin ZIP 安装（临时规范）
 
+第三阶段完整规划见[桌面容器、扩展社区与多设备同步](docs/architecture/第三阶段实施规划.md)，包含 Tauri/Rust、各社区、Sync Server、迁移、建议分工和验收门禁；该文档是计划，不代表相关服务已经实现。
+
+可运行的社区准备包见 [`backend/extensions/community/README.md`](backend/extensions/community/README.md)：包含 Markdown 检查 Plugin、配套笔记检查 Skill、可重复构建脚本和带 SHA-256 的包索引。
+
 安装弹窗支持 ZIP 文件和 AI Core 主机上的本地目录。ZIP 根目录须包含 `skill.yaml` 或 `plugin.yaml`；也支持整个包放在唯一的顶层文件夹中。每个 ZIP 安装一个扩展，清单字段沿用现有 Skill / Plugin 契约。
 
 ```text
