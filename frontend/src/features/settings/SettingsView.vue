@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import type { ProviderConfig } from '@/contracts'
 import ProviderForm from './ProviderForm.vue'
+import ChatPersonaDialog from '@/features/chat/ChatPersonaDialog.vue'
 import ProviderLogo from './ProviderLogo.vue'
 import ModelRoutingSettings from './ModelRoutingSettings.vue'
 import LocalModelSettings from './LocalModelSettings.vue'
@@ -17,6 +18,7 @@ const sections = computed<Array<{ id: Section; label: string }>>(() => [
   { id: 'index', label: t('索引与模型', 'Index and Models') }, { id: 'permissions', label: t('权限', 'Permissions') }, { id: 'ai-core', label: t('AI Core 诊断', 'AI Core Diagnostics') },
 ])
 const activeSection = ref<Section>('general')
+const showPersona = ref(false)
 const settingsStore = useSettingsStore()
 const providerStore = useProviderStore()
 const themeStore = useThemeStore()
@@ -75,6 +77,8 @@ async function chooseDefaultModel(provider: ProviderConfig, event: Event) {
     <header class="feature-header"><div><h1>{{ t('设置', 'Settings') }}</h1><p>{{ t('管理应用偏好、模型、索引、权限和本地 AI Core。', 'Manage application preferences, models, indexing, permissions, and the local AI Core.') }}</p></div></header>
     <nav class="settings-nav"><button v-for="section in sections" :key="section.id" :class="{ active: activeSection === section.id }" @click="activeSection = section.id">{{ section.label }}</button></nav>
 
+    <section v-if="activeSection === 'general'" class="panel settings-section"><div class="setting-row"><span><strong>{{ t('全局人设', 'Global persona') }}</strong><small>{{ t('统一设置所有 AI 对话和智能体的系统人设与对话示例', 'System persona and examples for all AI chats and agents') }}</small></span><button class="button-secondary" @click="showPersona = true">{{ t('编辑人设与头像', 'Edit persona and avatars') }}</button></div></section>
+    <ChatPersonaDialog v-if="showPersona" @close="showPersona = false" />
     <div v-if="activeSection === 'general'" class="panel settings-section"><h2>{{ t('通用', 'General') }}</h2><label class="setting-row"><span><strong>{{ t('恢复上次 Vault', 'Restore last Vault') }}</strong><small>{{ t('启动后自动打开最近使用的知识库', 'Open the most recently used knowledge base at startup') }}</small></span><input v-model="settingsStore.restoreLastVault" type="checkbox" /></label><div class="setting-row"><span><strong>{{ t('自动保存间隔', 'Autosave interval') }}</strong><small>{{ t('编辑停止后等待多久写入文件', 'How long to wait after editing before saving') }}</small></span><select v-model.number="settingsStore.autoSaveInterval" class="select short"><option :value="500">0.5 {{ t('秒', 'sec') }}</option><option :value="1500">1.5 {{ t('秒', 'sec') }}</option><option :value="3000">3 {{ t('秒', 'sec') }}</option></select></div><div class="setting-row"><span><strong>{{ t('界面语言', 'Interface language') }}</strong><small>{{ t('切换后立即应用到界面', 'Applied to the interface immediately') }}</small></span><select v-model="settingsStore.language" class="select short"><option value="zh-CN">简体中文</option><option value="en">English</option></select></div><div class="setting-row"><span><strong>{{ t('版本', 'Version') }}</strong><small>Desktop / AI Core</small></span><span>{{ settingsStore.appVersion }} / {{ settingsStore.aiCoreVersion }}</span></div></div>
 
     <div v-else-if="activeSection === 'editor'" class="panel settings-section"><h2>{{ t('编辑器', 'Editor') }}</h2><div class="setting-row"><span><strong>{{ t('默认模式', 'Default mode') }}</strong><small>{{ t('新打开文件使用的编辑器模式', 'Editor mode used for newly opened files') }}</small></span><select v-model="settingsStore.defaultEditorMode" class="select short"><option value="wysiwyg">{{ t('写作与预览', 'Writing and preview') }}</option><option value="source">{{ t('Markdown 源码', 'Markdown source') }}</option></select></div><div class="setting-row"><span><strong>{{ t('字号', 'Font size') }}</strong></span><input v-model.number="themeStore.fontEditorSize" class="input short" type="number" min="12" max="32" /></div><div class="setting-row"><span><strong>{{ t('行高', 'Line height') }}</strong></span><input v-model.number="themeStore.lineHeight" class="input short" type="number" min="1.2" max="2.4" step="0.1" /></div><div class="setting-row"><span><strong>{{ t('行宽', 'Line width') }}</strong><small>{{ t('Markdown 预览最大字符宽度', 'Maximum character width for Markdown preview') }}</small></span><input v-model.number="settingsStore.editorLineWidth" class="input short" type="number" min="40" max="140" /></div><label class="setting-row"><span><strong>{{ t('拼写检查', 'Spell check') }}</strong><small>{{ t('在写作与源码编辑器中使用系统拼写检查', 'Use system spell checking in visual and source editors') }}</small></span><input v-model="settingsStore.spellCheck" type="checkbox" /></label></div>

@@ -67,6 +67,8 @@ async function probeRequest() {
 }
 const contextChanged = ref(false)
 const dialog = ref<HTMLElement>()
+const backdrop = ref<HTMLDialogElement>()
+const scrollLocks: Array<{element: HTMLElement; overflow: string}> = []
 const previousFocus = document.activeElement as HTMLElement | null
 let active = true
 let credentialGeneration = 0
@@ -84,6 +86,11 @@ async function loadPresets() {
 }
 
 onMounted(async () => {
+  backdrop.value?.showModal()
+  for (let element = backdrop.value?.parentElement; element; element = element.parentElement) {
+    scrollLocks.push({element, overflow: element.style.overflow})
+    element.style.overflow = 'hidden'
+  }
   void loadPresets()
   if (props.provider?.credential_id) {
     const generation = credentialGeneration
@@ -134,6 +141,8 @@ function close() {
 }
 
 onBeforeUnmount(() => {
+  backdrop.value?.close()
+  for (const lock of scrollLocks) lock.element.style.overflow = lock.overflow
   active = false
   apiKey.value = ''
   previousFocus?.focus()
@@ -182,7 +191,7 @@ async function save() {
 </script>
 
 <template>
-  <div class="modal-backdrop provider-backdrop" @click.self="close" @keydown="handleKeydown">
+  <dialog ref="backdrop" class="provider-backdrop" @click.self="close" @keydown="handleKeydown" @cancel.prevent="close">
     <div ref="dialog" class="modal provider-modal" role="dialog" aria-modal="true" aria-labelledby="provider-form-title" :aria-busy="saving">
       <div class="form-heading"><h2 id="provider-form-title">{{ provider ? t('编辑 Provider', 'Edit Provider') : t('新增 Provider', 'Add Provider') }}</h2><button type="button" class="button-secondary" :aria-label="t('关闭提供商表单', 'Close provider form')" @click="close">{{ t('关闭', 'Close') }}</button></div>
       <p v-if="presetsLoading" class="subtle" role="status">{{ t('正在加载提供商预设…', 'Loading provider presets…') }}</p>
@@ -213,10 +222,14 @@ async function save() {
         <div class="inline-actions form-footer"><button class="button-primary" type="submit" :disabled="saving || credentialLoading">{{ saving ? t('保存中…', 'Saving…') : t('保存提供商', 'Save provider') }}</button><button type="button" class="button-secondary" @click="close">{{ t('取消', 'Cancel') }}</button></div>
       </form>
     </div>
-  </div>
+  </dialog>
 </template>
 
 <style scoped>
+.provider-backdrop { position: fixed; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: 24px; border: 0; box-sizing: border-box; background: transparent; overflow: hidden; overscroll-behavior: contain; }
+.provider-backdrop[open] { display: grid; place-items: center; }
+.provider-backdrop::backdrop { background: var(--color-background-overlay); }
+.provider-modal { overflow-y: auto; overscroll-behavior: contain; }
 .provider-modal { width: min(820px, 100%); max-height: 90dvh; }
 .form-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); margin-bottom: var(--space-md); }
 .form-heading h2 { margin: 0; }

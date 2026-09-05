@@ -22,6 +22,7 @@ class ProviderFactory:
         from contextlib import aclosing
         from uuid import uuid4
         from app.providers.context_budget import prepare_context
+        from app.services.persona_settings import apply_global_persona
         from app.providers.base import ProviderError
         from app.contracts import ModelEvent, ModelEventType
         from datetime import datetime, timezone
@@ -29,7 +30,7 @@ class ProviderFactory:
         async def complete_with_trace(request):
             token = usage_context.set({"request_id": uuid4().hex, "run_id": request.metadata.get("run_id")})
             try:
-                request = await prepare_context(request, config, complete)
+                request = await prepare_context(apply_global_persona(request), config, complete)
                 return await complete(request)
             finally:
                 usage_context.reset(token)
@@ -38,7 +39,7 @@ class ProviderFactory:
             token = usage_context.set({"request_id": uuid4().hex, "run_id": request.metadata.get("run_id")})
             try:
                 original = request
-                request = await prepare_context(request, config, complete, stream=True)
+                request = await prepare_context(apply_global_persona(request), config, complete, stream=True)
                 if request.messages != original.messages:
                     yield ModelEvent(event=ModelEventType.context_status, sequence=sequence, timestamp=datetime.now(timezone.utc), data={"message": "本次请求已压缩旧对话；原始记录保留，摘要生成计入用量。"})
                     sequence += 1
