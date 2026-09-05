@@ -110,14 +110,14 @@ onUnmounted(() => { stopped = true; clearTimeout(timer) })
 
 <template>
   <section class="media-page">
-    <header><h1>{{ t('音视频转写', 'Media Transcription') }}</h1><p class="subtle">{{ t('上传音频或视频音轨，转写、校对后保存到知识库。最多 128 MiB；超过 25 MiB 请启用仅本地处理。音轨最长 1 小时。', 'Upload audio or a video soundtrack, transcribe and correct it, then save it to the knowledge base. Up to 128 MiB; enable local-only processing above 25 MiB. Audio duration is limited to one hour.') }}</p></header>
+    <header class="feature-header"><div><h1>{{ t('音视频转写', 'Media Transcription') }}</h1><p class="subtle">{{ t('上传音频或视频音轨，转写、校对后保存到知识库。最多 128 MiB；超过 25 MiB 请启用仅本地处理。音轨最长 1 小时。', 'Upload audio or a video soundtrack, transcribe and correct it, then save it to the knowledge base. Up to 128 MiB; enable local-only processing above 25 MiB. Audio duration is limited to one hour.') }}</p></div></header>
     <div v-if="error" class="error-banner" role="alert">{{ error }}</div><p v-if="notice" role="status">{{ notice }}</p>
     <form class="panel upload" @submit.prevent="submit">
       <FilePicker :file="file" :label="t('选择附件', 'Choose attachment')" :empty-label="t('尚未选择文件', 'No file selected')" accept=".wav,.mp3,.flac,.ogg,.m4a,.mp4,.webm,.txt,.md" @select="file = $event" />
       <div class="upload-options"><label><input v-model="localOnly" type="checkbox" />{{ t('仅本地处理', 'Process locally only') }}</label>
       <label><input v-model="diarization" type="checkbox" />{{ t('识别不同说话人', 'Identify different speakers') }}</label></div>
       <p class="subtle">{{ localOnly ? t('本次任务不调用远程模型 API，模型需预先下载。', 'This job will not call a remote model API; models must already be downloaded.') : t('若配置了转写 API，将上传所选附件；API 失败后回退到本地模型。', 'When a transcription API is configured, the selected file is uploaded; failures fall back to the local model.') }}</p>
-      <details class="ui-disclosure"><summary>{{ t('术语校对', 'Terminology corrections') }}</summary><p class="subtle">{{ t('在识别完成后替换文本，原始识别结果会保留。', 'Replace text after recognition while retaining the original result.') }}</p><textarea v-model="terminology" class="input" rows="3" :placeholder="terminologyPlaceholder" /></details>
+      <details class="ui-disclosure"><summary>{{ t('术语校对', 'Terminology corrections') }}</summary><p class="subtle">{{ t('在识别完成后替换文本，原始识别结果会保留。', 'Replace text after recognition while retaining the original result.') }}</p><textarea v-model="terminology" class="textarea" rows="3" :placeholder="terminologyPlaceholder" /></details>
       <div class="inline-actions upload-actions"><button type="button" class="button-secondary" :disabled="busy" @click="submission.reset(); notice = t('下一次提交将作为新任务处理', 'The next submission will be processed as a new job')">{{ t('重新处理为新任务', 'Process as new job') }}</button><button class="button-primary" :disabled="busy || !file">{{ busy ? t('处理中…', 'Processing…') : t('上传并转写', 'Upload and transcribe') }}</button></div>
       <details class="ui-disclosure"><summary>{{ t('声纹参考比对', 'Speaker reference comparison') }}</summary><p class="subtle">{{ t('将所选附件与参考音频比对。至少各含 1 秒语音；分数是相似度，不是身份认证概率。临时参考文件在比对后清理。', 'Compare the selected file with reference audio. Each must contain at least one second of speech. The score is similarity, not an identity probability. Temporary files are removed afterward.') }}</p>
         <FilePicker :file="reference" :label="t('选择参考音频', 'Choose reference audio')" :empty-label="t('尚未选择参考音频', 'No reference audio selected')" accept=".wav,.mp3,.flac,.ogg,.m4a" @select="reference = $event" />
@@ -145,9 +145,9 @@ onUnmounted(() => { stopped = true; clearTimeout(timer) })
           <p v-if="selected.segments.length" class="subtle">{{ t('时间戳对应音频分段边界，可点击定位播放。', 'Timestamps mark segment boundaries; click one to seek playback.') }}</p>
           <div v-for="segment in selected.segments" :key="segment.segment_id" class="segment" :class="{ current: position >= segment.start_time && position < segment.end_time }">
             <button class="button-secondary" @click="seek(segment.start_time)">{{ stamp(segment.start_time) }}</button><small>{{ selected.speaker_names[segment.speaker || ''] || segment.speaker }}</small>
-            <textarea v-model="segment.text" class="input" rows="2" @input="dirty = true; selected.text = selected.segments.map(s => s.text).join('\n')" />
+            <textarea v-model="segment.text" class="textarea" rows="2" @input="dirty = true; selected.text = selected.segments.map(s => s.text).join('\n')" />
           </div>
-          <textarea v-if="!selected.segments.length" v-model="selected.text" class="input" rows="12" @input="dirty = true" />
+          <textarea v-if="!selected.segments.length" v-model="selected.text" class="textarea" rows="12" @input="dirty = true" />
           <div class="inline-actions"><button class="button-primary" :disabled="busy || !dirty" @click="action(async () => { selected = await mediaService.save(selected!); dirty = false; notice = t('校对已保存', 'Corrections saved') })">{{ t('保存校对', 'Save corrections') }}</button>
             <button class="button-secondary" @click="action(async () => { history = (await mediaService.revisions(selected!.job_id)).items })">{{ t('修订历史', 'Revision history') }}</button></div>
           <details class="ui-disclosure"><summary>{{ t('原始识别文本', 'Original recognition text') }}</summary><pre>{{ selected.original_text }}</pre></details>
@@ -161,5 +161,6 @@ onUnmounted(() => { stopped = true; clearTimeout(timer) })
 </template>
 
 <style scoped>
+.media-page > :is(.feature-header, .panel, .media-columns, .error-banner) { width: 100%; max-width: 1180px; margin-inline: auto; }
 .media-page{padding:28px;overflow:auto;height:100%;display:flex;flex-direction:column;gap:20px}.upload{display:grid;gap:12px;padding:20px}.upload-options{display:flex;flex-wrap:wrap;gap:16px}.upload-actions{justify-content:flex-end}.media-columns{display:grid;grid-template-columns:260px minmax(0,1fr);gap:20px}.panel{padding:20px}.job-row{display:flex;flex-direction:column;gap:6px;width:100%;text-align:left;padding:12px;background:transparent;border:1px solid var(--color-border-default);border-radius:10px;margin-bottom:8px;cursor:pointer;color:inherit}.job-row small{overflow:hidden;text-overflow:ellipsis;max-width:100%}.selected,.current{background:var(--color-background-hover);outline:1px solid var(--color-accent-primary)}.transcript{display:flex;flex-direction:column;gap:16px}.transcript header,.segment{display:flex;gap:12px;align-items:center}.transcript>.button-danger{align-self:flex-start}.transcript>label{white-space:nowrap}.transcript>label select{width:160px}.segment textarea{flex:1}.speaker-names{display:flex;flex-wrap:wrap;gap:10px}audio{width:100%;border-radius:var(--radius-md);accent-color:var(--color-accent-primary)}pre{white-space:pre-wrap;word-break:break-word}label{display:flex;gap:8px;align-items:center}@media(max-width:850px){.media-columns{grid-template-columns:1fr}.segment{flex-wrap:wrap}}@media(max-width:560px){.upload-actions>*{flex:1}.upload-options{flex-direction:column}}
 </style>

@@ -79,8 +79,8 @@ button:disabled { cursor: not-allowed; opacity: .55; box-shadow: none; transform
   color: var(--color-text-primary);
   transition: border-color var(--motion-fast), box-shadow var(--motion-fast), background-color var(--motion-fast);
 }
-.input, .select { height: 38px; padding: 0 var(--space-md); }
-.textarea { min-height: 100px; padding: var(--space-md); resize: vertical; }
+input.input, .select { height: 38px; padding: 0 var(--space-md); }
+.textarea { min-height: 100px; height: auto; padding: var(--space-md); resize: vertical; line-height: var(--line-height-normal, 1.5); }
 .input:hover, .select:hover, .textarea:hover { border-color: var(--color-text-tertiary); }
 .input:focus, .select:focus, .textarea:focus { border-color: var(--color-border-focus); box-shadow: 0 0 0 3px var(--color-accent-soft); background: var(--color-surface-primary); }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-md); }
@@ -115,7 +115,7 @@ progress::-webkit-progress-bar { border-radius: var(--radius-full); background: 
 progress::-webkit-progress-value { border-radius: var(--radius-full); background: linear-gradient(90deg, var(--color-accent-primary), var(--color-accent-secondary)); }
 progress:not([value]) { background: linear-gradient(90deg, var(--color-background-tertiary) 25%, var(--color-accent-secondary) 50%, var(--color-background-tertiary) 75%); background-size: 200% 100%; animation: progress-pulse 1.2s linear infinite; }
 
-.ui-disclosure { padding: var(--space-md); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-background-secondary); }
+.ui-disclosure { padding: var(--space-md); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-surface-primary); overflow-wrap: anywhere; }
 .ui-disclosure > summary { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); list-style: none; color: var(--color-text-secondary); font-weight: 600; cursor: pointer; }
 .ui-disclosure > summary::-webkit-details-marker { display: none; }
 .ui-disclosure > summary::after { content: ''; width: 8px; height: 8px; flex: 0 0 auto; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg); transition: transform var(--motion-fast); }
@@ -154,7 +154,7 @@ progress:not([value]) { background: linear-gradient(90deg, var(--color-backgroun
 .sidebar-list-item:hover { background: var(--color-background-hover); transform: translateX(2px); }
 .sidebar-list-item.active { border-color: color-mix(in srgb, var(--color-accent-primary) 18%, transparent); background: var(--color-accent-soft); color: var(--color-accent-primary); }
 
-.modal-backdrop { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: var(--space-xl); background: var(--color-background-overlay); animation: backdrop-in var(--motion-fast) both; }
+
 .modal { width: min(560px, 100%); max-height: 85vh; overflow: auto; padding: var(--space-2xl); border: 1px solid var(--color-border-default); border-radius: var(--radius-xl); background: var(--color-surface-elevated); box-shadow: var(--shadow-xl); animation: modal-in var(--motion-normal) both; }
 .modal h2 { margin-bottom: var(--space-lg); }
 .modal form { display: grid; gap: var(--space-md); }
@@ -219,7 +219,6 @@ progress:not([value]) { background: linear-gradient(90deg, var(--color-backgroun
   select option:checked { color: var(--color-accent-primary); background: var(--color-accent-soft); }
   select option::checkmark { color: var(--color-accent-primary); }
 }
-.ui-disclosure { border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-surface-primary); overflow-wrap: anywhere; }
 .ui-disclosure > summary { min-height: 38px; box-sizing: border-box; line-height: 1.5; border-radius: var(--radius-sm); padding: 6px 8px; }
 .ui-disclosure > summary:hover { background: var(--color-background-hover); color: var(--color-accent-primary); }
 .ui-disclosure[open] > summary { border-bottom: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm) var(--radius-sm) 0 0; }

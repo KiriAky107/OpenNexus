@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppDialog from '@/components/common/AppDialog.vue'
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import MarkdownContent from '@/components/common/MarkdownContent.vue'
 import { useThemeStore } from '@/stores/theme'
@@ -228,7 +229,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <div v-if="showImportDialog" class="modal-backdrop" @click.self="closeImport">
+    <AppDialog v-if="showImportDialog" label="导入主题包" :dismissible="!importing" @close="closeImport">
       <div class="modal import-modal">
         <span class="badge info">主题导入</span>
         <h2>导入主题包</h2>
@@ -281,7 +282,7 @@ onMounted(() => {
           >安装主题</button>
         </div>
       </div>
-    </div>
+    </AppDialog>
   </section>
   <CommunityThemePreview v-if="previewImport && themeStore.pendingInspection?.compatible" :theme-id="themeStore.pendingInspection.manifest.theme_id" :name="themeStore.pendingInspection.manifest.name" :css="themeStore.pendingInspection.css" @close="previewImport = false" />
 </template>

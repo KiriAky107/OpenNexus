@@ -241,7 +241,7 @@ const flatTrace = computed(() => flatNodes(filteredTree.value))
             </div>
           </div>
           <div v-if="isDetailOpen(`event-${event.sequence}`) && showDetails" class="event-detail">
-            <details open>
+            <details open class="ui-disclosure">
               <summary>完整数据</summary>
               <pre>{{ prettyData(event.data) }}</pre>
             </details>
