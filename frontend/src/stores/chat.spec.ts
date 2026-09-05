@@ -23,8 +23,9 @@ const page = { total: 0, limit: 100, offset: 0 }
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>(done => { resolve = done })
-  return { promise, resolve }
+  let reject!: (reason: Error) => void
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
+  return { promise, resolve, reject }
 }
 
 beforeEach(() => {
@@ -223,4 +224,60 @@ it('ignores old history after switching to a new conversation and sending', asyn
   await loading
   expect(store.messages.map(m => m.content)).toEqual(['new question', ''])
   expect(store.isStreaming).toBe(true)
+})
+
+it.each(['success', 'failure'])('blocks sends and duplicate deletes until deletion ends with %s', async outcome => {
+  const store = useChatStore()
+  store.selectedProviderId = 'real'
+  store.selectedModel = 'model'
+  await store.createNewConversation()
+  const id = store.activeConversationId!
+  const removal = deferred<Awaited<ReturnType<typeof removeConversation>>>()
+  vi.mocked(removeConversation).mockReturnValueOnce(removal.promise)
+  const deleting = store.deleteConversation(id)
+  store.inputText = 'keep this draft'
+  expect(store.canSend).toBe(false)
+  await store.sendMessage(store.inputText)
+  await store.deleteConversation(id)
+  expect(streamChat).not.toHaveBeenCalled()
+  expect(removeConversation).toHaveBeenCalledTimes(1)
+  expect(store.inputText).toBe('keep this draft')
+  if (outcome === 'success') removal.resolve(undefined)
+  else removal.reject(new Error('offline'))
+  await deleting
+  expect(store.isStreaming).toBe(false)
+  expect(store.canSend).toBe(true)
+  expect(store.activeConversationId).toBe(outcome === 'success' ? null : id)
+  await store.sendMessage(store.inputText)
+  expect(streamChat).toHaveBeenCalledTimes(1)
+  const request = vi.mocked(streamChat).mock.calls[0]![0]
+  if (outcome === 'success') expect(request.conversation_id).not.toBe(id)
+  else expect(request.conversation_id).toBe(id)
+})
+
+it('keeps a deleting conversation blocked after reselecting it without blocking other conversations', async () => {
+  const store = useChatStore()
+  store.selectedProviderId = 'real'
+  store.selectedModel = 'model'
+  await store.createNewConversation()
+  const a = store.activeConversationId!
+  await store.createNewConversation()
+  const b = store.activeConversationId!
+  const removal = deferred<Awaited<ReturnType<typeof removeConversation>>>()
+  vi.mocked(removeConversation).mockReturnValueOnce(removal.promise)
+  const deleting = store.deleteConversation(a)
+  await store.setActiveConversation(a)
+  expect(store.canSend).toBe(false)
+  await store.sendMessage('blocked')
+  expect(streamChat).not.toHaveBeenCalled()
+  await store.setActiveConversation(b)
+  expect(store.canSend).toBe(true)
+  await store.sendMessage('belongs to b')
+  const client = vi.mocked(streamChat).mock.results[0]!.value as SseClient
+  removal.resolve(undefined)
+  await deleting
+  expect(store.activeConversationId).toBe(b)
+  expect(store.messages[0]?.content).toBe('belongs to b')
+  expect(store.isStreaming).toBe(true)
+  expect(client.cancel).not.toHaveBeenCalled()
 })
