@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from datetime import datetime, timezone
@@ -15,6 +16,10 @@ from app.contracts import (
     AgentRunListResponse,
     AgentTraceResponse,
     ChatRequest,
+    ChatMessageListResponse,
+    Conversation,
+    ConversationCreateRequest,
+    ConversationListResponse,
     BenchmarkDatasetListResponse,
     BenchmarkEventType,
     BenchmarkKind,
@@ -321,6 +326,40 @@ async def clear_search_history() -> dict[str, list[str]]:
     return {"queries": []}
 
 
+@router.get("/chat/conversations", response_model=ConversationListResponse, tags=["Chat"])
+async def list_chat_conversations(
+    limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0)
+) -> ConversationListResponse:
+    from app.services import chat_history
+    items, total = chat_history.list_conversations(limit, offset)
+    return ConversationListResponse(items=items, page=PageMeta(total=total, limit=limit, offset=offset))
+
+
+@router.post("/chat/conversations", response_model=Conversation, status_code=201, tags=["Chat"])
+async def create_chat_conversation(request: ConversationCreateRequest) -> Conversation:
+    from app.services import chat_history
+    return chat_history.create(request.title, request.conversation_id)
+
+
+@router.get("/chat/conversations/{conversation_id}/messages", response_model=ChatMessageListResponse, tags=["Chat"])
+async def list_chat_messages(
+    conversation_id: str,
+    limit: int = Query(default=500, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> ChatMessageListResponse:
+    from app.services import chat_history
+    items, total = chat_history.list_messages(conversation_id, limit, offset)
+    return ChatMessageListResponse(items=items, page=PageMeta(total=total, limit=limit, offset=offset))
+
+
+@router.delete("/chat/conversations/{conversation_id}", response_model=OperationResponse, tags=["Chat"])
+async def delete_chat_conversation(conversation_id: str) -> OperationResponse:
+    from app.services import chat_history
+    if not chat_history.delete(conversation_id):
+        raise ApiError(404, "CONVERSATION_NOT_FOUND", "conversation not found", {"conversation_id": conversation_id})
+    return OperationResponse(status="completed", resource_id=conversation_id, message="deleted")
+
+
 @router.post(
     "/chat",
     response_class=StreamingResponse,
@@ -333,14 +372,38 @@ async def clear_search_history() -> dict[str, list[str]]:
     tags=["Chat"],
 )
 async def chat(request: ChatRequest) -> StreamingResponse:
+    from app.services import chat_history
+
+    conversation_id = request.conversation_id
+    assistant_message_id = request.assistant_message_id or f"message_{uuid4().hex}"
+    if conversation_id:
+        user_message = next(
+            (message for message in reversed(request.messages) if message.role.value == "user" and message.content.strip()),
+            None,
+        )
+        if user_message is not None:
+            chat_history.append_message(
+                conversation_id,
+                message_id=request.user_message_id or f"message_{uuid4().hex}",
+                role="user",
+                content=user_message.content,
+                title=request.conversation_title or user_message.content[:30],
+            )
     provider = provider_or_404(request.provider_id)
 
     async def stream() -> AsyncIterator[str]:
         sequence = 0
+        assistant_content = ""
+        assistant_thinking = ""
+        citations: list[dict] = []
+        tool_calls: list[dict] = []
+        argument_buffers: dict[str, str] = {}
+        usage: dict | None = None
         try:
             from app.services.chat_context import prepare
-            grounded_request, citations = await prepare(request)
-            for citation in citations:
+            grounded_request, grounded_citations = await prepare(request)
+            for citation in grounded_citations:
+                citations.append(citation)
                 event = ModelEvent(event=ModelEventType.citation, sequence=sequence,
                                    data=citation, timestamp=utc_now())
                 sequence += 1
@@ -349,13 +412,58 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                 async for event in events:
                     event = event.model_copy(update={"sequence": sequence})
                     sequence += 1
+                    if event.event == ModelEventType.text_delta:
+                        assistant_content += str(event.data.get("text", ""))
+                    elif event.event == ModelEventType.thinking_delta:
+                        assistant_thinking += str(event.data.get("text", ""))
+                    elif event.event == ModelEventType.tool_call_start:
+                        tool_calls.append({
+                            "tool_call_id": str(event.data.get("tool_call_id", "")),
+                            "name": str(event.data.get("name", "unknown")),
+                            "parameters": event.data.get("arguments") if isinstance(event.data.get("arguments"), dict) else {},
+                            "status": "running",
+                        })
+                    elif event.event == ModelEventType.tool_call_delta:
+                        call_id = str(event.data.get("tool_call_id", ""))
+                        call = next((item for item in tool_calls if item["tool_call_id"] == call_id), None)
+                        if call is not None:
+                            delta = event.data.get("arguments_delta")
+                            if isinstance(delta, str):
+                                argument_buffers[call_id] = argument_buffers.get(call_id, "") + delta
+                                try:
+                                    parsed_arguments = json.loads(argument_buffers[call_id])
+                                    if isinstance(parsed_arguments, dict):
+                                        call["parameters"] = parsed_arguments
+                                except ValueError:
+                                    pass
+                            arguments = event.data.get("arguments")
+                            if isinstance(arguments, dict):
+                                call["parameters"].update(arguments)
+                    elif event.event == ModelEventType.tool_call_end:
+                        call_id = str(event.data.get("tool_call_id", ""))
+                        call = next((item for item in tool_calls if item["tool_call_id"] == call_id), None)
+                        if call is not None:
+                            call["status"] = "completed"
+                    elif event.event == ModelEventType.usage:
+                        input_tokens = int(event.data.get("input_tokens", 0))
+                        output_tokens = int(event.data.get("output_tokens", 0))
+                        usage = {"input_tokens": input_tokens, "output_tokens": output_tokens,
+                                 "total_tokens": input_tokens + output_tokens}
+                    elif event.event == ModelEventType.error:
+                        if assistant_content:
+                            assistant_content += "\n\n"
+                        assistant_content += str(event.data.get("message", "Model generation failed."))
                     yield as_sse(event.event.value, event.model_dump_json())
         except Exception as exc:
+            failure_message = exc.message if isinstance(exc, ApiError) else "知识库检索或模型生成失败，请检查服务状态。"
+            if assistant_content:
+                assistant_content += "\n\n"
+            assistant_content += failure_message
             error = ModelEvent(
                 event=ModelEventType.error,
                 sequence=sequence,
                 data={"code": exc.code if isinstance(exc, ApiError) else "CHAT_FAILED",
-                      "message": exc.message if isinstance(exc, ApiError) else "知识库检索或模型生成失败，请检查服务状态。"},
+                      "message": failure_message},
                 timestamp=utc_now(),
             )
             done = ModelEvent(
@@ -364,6 +472,18 @@ async def chat(request: ChatRequest) -> StreamingResponse:
             )
             yield as_sse(error.event.value, error.model_dump_json())
             yield as_sse(done.event.value, done.model_dump_json())
+        finally:
+            if conversation_id and (assistant_content or assistant_thinking or citations or tool_calls):
+                chat_history.append_message(
+                    conversation_id,
+                    message_id=assistant_message_id,
+                    role="assistant",
+                    content=assistant_content,
+                    thinking=assistant_thinking or None,
+                    citations=citations,
+                    tool_calls=tool_calls,
+                    usage=usage,
+                )
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
