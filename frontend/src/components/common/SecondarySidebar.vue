@@ -33,14 +33,14 @@ const showSkillToggle = computed(() => routeName.value === 'skills' || routeName
 
 <template>
   <aside class="secondary-sidebar">
-    <div class="sidebar-header">
+    <div v-if="component !== 'file-tree'" class="sidebar-header">
       <h3 class="sidebar-title">{{ sidebarTitle }}</h3>
       <div v-if="showSkillToggle" class="sidebar-tabs">
         <router-link to="/extensions/skills" class="tab" :class="{ active: routeName === 'skills' }">Skill</router-link>
         <router-link to="/extensions/plugins" class="tab" :class="{ active: routeName === 'plugins' }">Plugin</router-link>
       </div>
     </div>
-    <div class="sidebar-content">
+    <div class="sidebar-content" :class="{ 'file-sidebar-content': component === 'file-tree' }">
       <FileTreePanel v-if="component === 'file-tree'" />
       <ConversationListPanel v-else-if="component === 'conversation-list'" />
       <RunListPanel v-else-if="component === 'run-list'" />
@@ -111,5 +111,6 @@ const showSkillToggle = computed(() => routeName.value === 'skills' || routeName
   overflow-x: hidden;
   scrollbar-gutter: stable;
 }
+.file-sidebar-content { min-height: 0; overflow: hidden; scrollbar-gutter: auto; }
 
 </style>

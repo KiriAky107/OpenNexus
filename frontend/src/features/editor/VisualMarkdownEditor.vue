@@ -11,6 +11,8 @@ import './language-icons.css'
 import { installLanguagePickerPopover } from './languagePickerPopover'
 import { installCodeBlockLabels } from './codeBlockLabels'
 import { createMermaidPreview } from './mermaidPreview'
+import { splitNoteMetadata, updateMetadataTags } from './noteMetadata'
+import { getMarkdown } from '@milkdown/kit/utils'
 import {
   createCodeBlockCommand,
   toggleEmphasisCommand,
@@ -35,6 +37,22 @@ import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/frame.css'
 
 const props = defineProps<{ initialContent: string }>()
+const metadata = ref(splitNoteMetadata(props.initialContent))
+const tagDraft = ref('')
+function setTags(tags: string[]) {
+  if (!metadata.value || !crepe) return
+  const prefix = updateMetadataTags(metadata.value, tags)
+  const body = crepe.editor.action(getMarkdown())
+  metadata.value = splitNoteMetadata(prefix + body)
+  editorStore.updateContent(prefix + body)
+  editorStore.scheduleAutoSave(settingsStore.autoSaveInterval)
+}
+function addTags() {
+  const tags = tagDraft.value.split(/[,，]/).map(tag => tag.trim()).filter(tag => tag && !/[\r\n"\\]/.test(tag))
+  if (!tags.length || !metadata.value) return
+  setTags([...metadata.value.tags, ...tags])
+  tagDraft.value = ''
+}
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
 const themeStore = useThemeStore()
@@ -123,7 +141,7 @@ function applyFontSizeValue() {
 onMounted(async () => {
   crepe = new Crepe({
     root: editorRoot.value,
-    defaultValue: props.initialContent,
+    defaultValue: metadata.value?.body ?? props.initialContent,
     features: { [Crepe.Feature.TopBar]: false },
     featureConfigs: {
       [Crepe.Feature.Placeholder]: { text: t('开始记录你的想法…', 'Start writing your thoughts…') },
@@ -196,8 +214,9 @@ onMounted(async () => {
   crepe.on((listener) => {
     listener.markdownUpdated((_ctx, markdown, previousMarkdown) => {
       // 忽略编辑器初始化/回显事件，防止无内容变化时触发自动保存循环。
-      if (markdown === previousMarkdown || markdown === editorStore.content) return
-      editorStore.updateContent(markdown)
+      const fullMarkdown = (metadata.value?.prefix ?? '') + markdown
+      if (markdown === previousMarkdown || fullMarkdown === editorStore.content) return
+      editorStore.updateContent(fullMarkdown)
       editorStore.scheduleAutoSave(settingsStore.autoSaveInterval)
     })
   })
@@ -209,6 +228,19 @@ onMounted(async () => {
 })
 
 watch([() => settingsStore.spellCheck, () => settingsStore.language], applyProofingPreferences)
+watch(() => editorStore.headingRequest, request => {
+  if (!request || request.path !== editorStore.currentFilePath || !crepe) return
+  crepe.editor.action(ctx => {
+    const view = ctx.get(editorViewCtx)
+    let index = 0
+    view.state.doc.forEach((node, offset) => {
+      if (node.type.name !== 'heading') return
+      if (index++ !== request.index) return
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, offset + 1)).scrollIntoView())
+      view.focus()
+    })
+  })
+})
 
 onBeforeUnmount(() => { disposeCodeLabels?.(); disposeLanguagePicker?.(); void crepe?.destroy() })
 
@@ -253,7 +285,18 @@ defineExpose({ getEditor: () => crepe?.editor })
       <button type="button" :title="t('插入链接', 'Insert link')" :aria-label="t('插入链接', 'Insert link')" @pointerdown.prevent="applyLink"><AppIcon :icon="Link" :size="17" /></button>
     </div>
     <div v-if="loading" class="editor-loading">{{ t('正在加载编辑器…', 'Loading editor…') }}</div>
-    <div ref="editorRoot" class="milkdown-host" :class="{ loading }" />
+    <div class="milkdown-host" :class="{ loading }">
+      <section v-if="metadata" class="note-metadata" :aria-label="t('笔记属性', 'Note properties')">
+        <span class="metadata-caption">{{ t('笔记属性', 'Note properties') }}</span>
+        <h1 v-if="metadata.title">{{ metadata.title }}</h1>
+        <div class="metadata-tags">
+          <span class="metadata-label">{{ t('标签', 'Tags') }}</span>
+          <span v-for="tag in metadata.tags" :key="tag" class="metadata-tag"><span>{{ tag }}</span><button type="button" :aria-label="`${t('移除标签', 'Remove tag')} ${tag}`" @click="setTags(metadata.tags.filter(item => item !== tag))">×</button></span>
+          <form @submit.prevent="addTags"><input v-model="tagDraft" :aria-label="t('添加标签', 'Add tag')" :placeholder="t('+ 添加标签', '+ Add tag')" /><button v-if="tagDraft.trim()" type="submit">{{ t('添加', 'Add') }}</button></form>
+        </div>
+      </section>
+      <div ref="editorRoot" />
+    </div>
   </div>
 </template>
 
@@ -282,6 +325,17 @@ defineExpose({ getEditor: () => crepe?.editor })
 .toolbar-divider { width: 1px; height: 20px; margin: 0 var(--space-xs); background: var(--color-border-default); }
 .milkdown-host { flex: 1; min-height: 0; overflow: auto; color: var(--color-text-primary); }
 .milkdown-host.loading { visibility: hidden; }
+.note-metadata { box-sizing: border-box; width: 90%; margin: 0 auto 20px; padding: 20px 24px; border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-surface-primary); }
+.metadata-caption { color: var(--color-text-secondary); font-size: var(--font-size-xs); }
+.note-metadata h1 { margin: 10px 0 16px; font-size: 24px; color: var(--color-text-primary); overflow-wrap: anywhere; }
+.metadata-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.metadata-label { margin-right: 4px; color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+.metadata-tag { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 8px; border-radius: var(--radius-full); background: var(--color-accent-soft); color: var(--color-accent-primary); font-size: var(--font-size-sm); }
+.metadata-tag > span { overflow-wrap: anywhere; min-width: 0; }
+.metadata-tag button { color: inherit; padding: 0 3px; }
+.metadata-tags form { display: flex; gap: 6px; }
+.metadata-tags input { width: 110px; padding: 5px 8px; border: 1px dashed var(--color-border-default); border-radius: var(--radius-sm); background: transparent; color: var(--color-text-primary); }
+.metadata-tags input:focus { outline: 2px solid var(--color-border-focus); }
 .milkdown-host :deep(.editor-mermaid-preview) { padding: 20px; overflow: auto; background: var(--color-surface-primary); color: var(--color-text-primary); }
 .milkdown-host :deep(.editor-mermaid-preview svg) { display: block; max-width: 100%; height: auto; margin: auto; }
 .milkdown-host :deep(.editor-mermaid-preview.has-error) { color: var(--color-error); white-space: pre-wrap; }

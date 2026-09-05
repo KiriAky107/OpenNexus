@@ -1,6 +1,6 @@
 theme_id: paper-moments
 name: 纸间时光 · Paper Moments
-version: 1.2.0
+version: 1.4.0
 author: NotesAgent
 description: 奶油纸张、手帐虚线与粉蓝胶带，把每天的灵感好好收藏。
 min_app_version: 0.2.0
@@ -131,6 +131,10 @@ license: MIT
   border-right: 1px dashed #b5a693;
 }
 [data-theme="paper-moments"] .primary-sidebar { background: #f1e9dc; }
+[data-theme="paper-moments"] .file-tree-panel { background: #fff9e9; }
+[data-theme="paper-moments"] .workspace-tabs { background: #e5eeee; border-bottom: 1px dashed #b5a693; }
+[data-theme="paper-moments"] .workspace-tabs button[aria-selected="true"] { background: #f8e9e3; color: #875343; box-shadow: inset 0 -2px #a77a67; }
+[data-theme="paper-moments"] .outline-filename { border-bottom: 1px dashed #b5a693; }
 [data-theme="paper-moments"] .file-tree-panel .toolbar,
 [data-theme="paper-moments"] .sidebar-header { background: #e5eeee; border-bottom: 1px dashed #b5a693; }
 [data-theme="paper-moments"] .editor-header { background: #f8e9e3; border-bottom: 1px solid #b5a693; }
@@ -219,3 +223,46 @@ license: MIT
 [data-theme="paper-moments"] .milkdown-code-block .tools { margin-left: 72px; }
 [data-theme="paper-moments"] .milkdown-code-block .cm-activeLine,
 [data-theme="paper-moments"] .milkdown-code-block .cm-activeLineGutter { background: color-mix(in srgb, var(--color-code-text) 7%, transparent); }
+
+[data-theme="paper-moments"] .note-metadata {
+  position: relative;
+  width: 90%;
+  margin: 8px auto 30px;
+  padding: 24px 30px;
+  border: 1px solid #887460;
+  border-radius: 8px 14px 8px 8px;
+  outline: 1px dashed #c5b9a7;
+  outline-offset: -8px;
+  background: linear-gradient(110deg, #fffdf5, #fbf5e4);
+  box-shadow: 4px 5px 0 #d8e6e2, 8px 9px 0 #f0d8cf;
+}
+[data-theme="paper-moments"] .note-metadata::before {
+  content: '';
+  position: absolute;
+  top: -10px;
+  right: 36px;
+  width: 78px;
+  height: 22px;
+  background: repeating-linear-gradient(45deg, #c5dfe0c0 0 8px, #daecebb0 8px 16px);
+  transform: rotate(3deg);
+  pointer-events: none;
+}
+[data-theme="paper-moments"] .metadata-caption { color: #806b58; letter-spacing: .12em; }
+[data-theme="paper-moments"] .note-metadata h1 {
+  margin: 12px 0 18px;
+  color: #875343;
+  font-family: Georgia, 'Noto Serif SC', 'Songti SC', SimSun, serif;
+  font-size: clamp(20px, 2vw, 28px);
+  line-height: 1.4;
+}
+[data-theme="paper-moments"] .metadata-tags { padding-top: 14px; border-top: 1px dashed #c5b9a7; gap: 8px; }
+[data-theme="paper-moments"] .metadata-tag { border: 1px solid #d6b5a8; border-radius: 5px; background: #f5e3da; color: #704b3d; }
+[data-theme="paper-moments"] .metadata-tag:nth-of-type(2n + 1) { border-color: #b5cdcf; background: #e5eeee; color: #456671; }
+[data-theme="paper-moments"] .metadata-tag button { border-radius: 3px; cursor: pointer; }
+[data-theme="paper-moments"] .metadata-tag button:hover { background: #ffffff80; }
+[data-theme="paper-moments"] .metadata-tags input { border-color: #b5a693; background: #fffdf580; }
+[data-theme="paper-moments"] .metadata-tags form button { padding: 4px 10px; border: 1px solid #b5a693; border-radius: 5px; background: #f7edce; color: #704b3d; cursor: pointer; }
+[data-theme="paper-moments"] .metadata-tags button:focus-visible { outline: 2px solid #875343; outline-offset: 2px; }
+@media (max-width: 720px) {
+  [data-theme="paper-moments"] .note-metadata { width: 100%; padding: 22px 18px; }
+}
