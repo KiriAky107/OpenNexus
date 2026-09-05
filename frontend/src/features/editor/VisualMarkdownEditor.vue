@@ -62,6 +62,22 @@ const fontSizeInput = ref(16)
 let crepe: Crepe | null = null
 let disposeLanguagePicker: (() => void) | undefined
 let disposeCodeLabels: (() => void) | undefined
+const diagramPreviews = new Map<string, { source: string; apply: (value: HTMLElement) => void }>()
+function renderDiagram(source: string, apply: (value: HTMLElement) => void) {
+  for (const [id, entry] of diagramPreviews) {
+    if (entry.apply === apply) diagramPreviews.delete(id)
+  }
+  const element = createMermaidPreview(source, themeStore.isDark, apply)
+  diagramPreviews.set(element.id, { source, apply })
+  return element
+}
+watch(() => themeStore.currentThemeId, () => {
+  const current = [...diagramPreviews.entries()]
+  diagramPreviews.clear()
+  for (const [id, entry] of current) {
+    if (editorRoot.value?.querySelector(`[id="${id}"]`)) entry.apply(renderDiagram(entry.source, entry.apply))
+  }
+}, { flush: 'post' })
 
 function applyProofingPreferences() {
   const editable = editorRoot.value?.querySelector<HTMLElement>('.ProseMirror')
@@ -206,7 +222,7 @@ onMounted(async () => {
     languages: shikiLanguages(themeStore.resolvedCodeBlockTheme),
     renderLanguage: renderCodeLanguage,
     renderPreview: (language, content, applyPreview) => language.trim().toLowerCase() === 'mermaid'
-      ? createMermaidPreview(content, themeStore.isDark, applyPreview)
+      ? renderDiagram(content, applyPreview)
       : config.renderPreview(language, content, applyPreview),
     extensions: [basicSetup, keymap.of([indentWithTab]), shikiEditorTheme(themeStore.resolvedCodeBlockTheme)],
   })))
@@ -242,7 +258,7 @@ watch(() => editorStore.headingRequest, request => {
   })
 })
 
-onBeforeUnmount(() => { disposeCodeLabels?.(); disposeLanguagePicker?.(); void crepe?.destroy() })
+onBeforeUnmount(() => { diagramPreviews.clear(); disposeCodeLabels?.(); disposeLanguagePicker?.(); void crepe?.destroy() })
 
 defineExpose({ getEditor: () => crepe?.editor })
 </script>

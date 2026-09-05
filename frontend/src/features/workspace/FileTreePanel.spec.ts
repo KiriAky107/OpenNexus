@@ -48,6 +48,16 @@ afterEach(() => {
 })
 
 describe('FileTreePanel file switching', () => {
+  it('expands every nested folder from the toolbar', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workspace', component: { template: '<div />' } }] })
+    await router.push('/workspace')
+    const store = useWorkspaceStore()
+    store.fileTree = [{ id: 'a', name: 'A', path: '/a', type: 'folder', is_open: false, children: [{ id: 'b', name: 'B', path: '/a/b', type: 'folder', is_open: false }] }]
+    wrapper = mount(FileTreePanel, { global: { plugins: [router] } })
+    await wrapper.get('[aria-label="全部展开文件夹"]').trigger('click')
+    expect(store.fileTree[0]!.is_open).toBe(true)
+    expect(store.fileTree[0]!.children![0]!.is_open).toBe(true)
+  })
   it('switches full-height panels using tabs and preserves the file search', async () => {
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workspace', component: { template: '<div />' } }] })
     await router.push('/workspace')
