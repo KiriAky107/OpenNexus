@@ -1,6 +1,6 @@
 theme_id: paper-moments
 name: 纸间时光 · Paper Moments
-version: 1.5.0
+version: 1.6.1
 author: NotesAgent
 description: 奶油纸张、手帐虚线与粉蓝胶带，把每天的灵感好好收藏。
 min_app_version: 0.2.0
@@ -299,3 +299,22 @@ license: MIT
 }
 [data-theme="paper-moments"] .usage-chart { background-color: #fbf7ea; }
 [data-theme="paper-moments"] .usage-grid > div { padding: 12px; border: 1px dashed #d5c8b5; border-radius: 5px; background: #fffdf580; }
+
+[data-theme="paper-moments"] .chart-readout,
+[data-theme="paper-moments"] .pie-pane,
+[data-theme="paper-moments"] .cache-explanation {
+  background-color: #fffdf5;
+  border-color: #c5b9a7;
+}
+[data-theme="paper-moments"] .cache-explanation { padding: 12px; border: 1px dashed #c5b9a7; border-radius: 6px; }
+[data-theme="paper-moments"] .cache-explanation summary { color: #875343; cursor: pointer; }
+[data-theme="paper-moments"] .chart-column.highlighted { background: #f3e1d8; }
+[data-theme="paper-moments"] .diagram-viewer { box-shadow: var(--shadow-lg); }
+
+[data-theme="paper-moments"] .ui-disclosure { border: 1px dashed #c5b9a7; background: #fffdf5; border-radius: 6px; }
+[data-theme="paper-moments"] .ui-disclosure > summary { color: #875343; }
+[data-theme="paper-moments"] .ui-disclosure[open] > summary { border-bottom: 1px dashed #c5b9a7; background: #f7eddb; }
+[data-theme="paper-moments"] select { border-color: #b5a693; }
+@supports (appearance: base-select) {
+  [data-theme="paper-moments"] ::picker(select) { border: 1px solid #b5a693; outline: 1px dashed #d5c8b5; outline-offset: -4px; background: #fffdf5; box-shadow: var(--shadow-md); }
+}

@@ -137,7 +137,7 @@ onMounted(() => {
       {{ themeStore.themeLoadWarning }}
     </div>
 
-    <div class="tabs">
+    <div class="tabs theme-tabs">
       <button
         class="tab-btn"
         :class="{ active: activeTab === 'installed' }"
@@ -215,7 +215,7 @@ onMounted(() => {
 
     <div class="panel preference-panel">
       <h2 class="panel-title">{{ t('编辑器外观', 'Editor Appearance') }}</h2>
-      <div class="form-grid">
+      <div class="form-grid appearance-fields">
         <div class="field"><label>{{ t('字号', 'Font size') }}: {{ themeStore.fontEditorSize }}px</label><input v-model.number="themeStore.fontEditorSize" type="range" min="12" max="24" /></div>
         <div class="field"><label>{{ t('行高', 'Line height') }}: {{ themeStore.lineHeight }}</label><input v-model.number="themeStore.lineHeight" type="range" min="1.2" max="2.2" step="0.1" /></div>
         <div class="field"><label>{{ t('字体', 'Font') }}</label><select v-model="themeStore.fontEditorFamily" class="select"><option value="system-ui">{{ t('系统字体', 'System font') }}</option><option value="serif">{{ t('衬线字体', 'Serif') }}</option><option value="var(--font-ui-mono)">{{ t('等宽字体', 'Monospace') }}</option></select></div>
@@ -251,7 +251,7 @@ onMounted(() => {
           <div v-if="themeStore.pendingInspection.warnings.length" class="warnings">
             <p v-for="w in themeStore.pendingInspection.warnings" :key="w" class="warning-text">⚠ {{ w }}</p>
           </div>
-          <details class="css-preview">
+          <details class="css-preview ui-disclosure">
             <summary>将要安装的 CSS（{{ themeStore.pendingInspection.css.length }} 字符）</summary>
             <pre>{{ themeStore.pendingInspection.css }}</pre>
           </details>
@@ -287,6 +287,14 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.theme-tabs { width: 100%; max-width: 1180px; margin-inline: auto; box-sizing: border-box; }
+.theme-tabs button { min-height: 38px; padding-inline: 20px; }
+.appearance-fields { align-items: start; }
+.appearance-fields .field { min-width: 0; grid-template-rows: minmax(22px, auto) 38px auto; align-content: start; }
+.appearance-fields .field > :is(input, select) { box-sizing: border-box; height: 38px; width: 100%; margin: 0; align-self: center; }
+.appearance-fields .field > label { margin: 0; line-height: 22px; }
+.appearance-fields .field > small { line-height: 1.5; }
+
 .themes { margin-bottom: var(--space-xl); }
 .theme-card { display: grid; gap: var(--space-md); text-align: left; position: relative; }
 .theme-preview {

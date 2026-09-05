@@ -33,6 +33,22 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()) })
 
 describe('ProviderForm', () => {
+  it('saves model-scoped context settings and restores them on edit', async () => {
+    const policy = {model:'old-model',context_window:65536,output_reserve:8192,threshold:0.8,mode:'detect' as const,prompt:'保留已确认事实'}
+    const wrapper = await render({...existing,context_policies:[policy]})
+    expect(wrapper.get('textarea').element.value).toBe(policy.prompt)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(service.updateProvider).toHaveBeenCalledWith('p1', expect.objectContaining({context_policies:[policy]}))
+  })
+
+  it('does not reuse another endpoint context settings', async () => {
+    const wrapper = await render({...existing,context_policies:[{model:'old-model',context_window:65536,output_reserve:8192,threshold:0.8,mode:'detect',prompt:'摘要'}]})
+    await wrapper.get('[data-field="base-url"]').setValue('https://new.example.test/v1')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(service.updateProvider).toHaveBeenCalledWith('p1', expect.objectContaining({context_policies:[]}))
+  })
   it('invalidates a pending inference result when JSON becomes invalid', async () => {
     const wrapper = await render(existing)
     let finish!: (value: {message: string}) => void

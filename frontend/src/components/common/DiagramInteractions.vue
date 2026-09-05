@@ -12,6 +12,18 @@ let opener: HTMLElement | null = null
 let wheelTarget: HTMLElement | null = null
 let anchor = { x: 0, y: 0 }
 const wheelActive = ref(false)
+let lastWheel = 0
+function wheelFactor(event: WheelEvent) {
+  const now = performance.now()
+  const elapsed = lastWheel ? Math.min(100, Math.max(0, now - lastWheel)) : 80
+  lastWheel = now
+  const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1)
+  return Math.exp(-Math.sign(delta) * Math.min(Math.abs(delta) * .0005, elapsed * .0005))
+}
+function viewerWheel(event: WheelEvent) {
+  event.preventDefault(); event.stopPropagation()
+  scale.value = Math.max(.2, Math.min(5, scale.value * wheelFactor(event)))
+}
 function disarm() {
   wheelTarget?.removeAttribute('data-wheel-zoom')
   wheelTarget = null; wheelActive.value = false
@@ -23,7 +35,7 @@ function moved(event: MouseEvent) { if (event.clientX !== anchor.x || event.clie
 function arm(event: MouseEvent) {
   if (event.button !== 1 || !(event.target instanceof Element) || !event.target.closest('svg') || event.target.closest('.diagram-controls')) return
   const target = event.target.closest<HTMLElement>('.editor-mermaid-preview, .markdown-mermaid, .diagram-viewer-image')
-  if (!target) return
+  if (!target || target.classList.contains('diagram-viewer-image')) return
   event.preventDefault(); event.stopPropagation(); disarm()
   wheelTarget = target; wheelActive.value = true; anchor = { x: event.clientX, y: event.clientY }
   target.dataset.wheelZoom = 'true'
@@ -34,8 +46,7 @@ function arm(event: MouseEvent) {
 function wheel(event: WheelEvent) {
   if (!wheelTarget?.isConnected || !(event.target instanceof Node) || !wheelTarget.contains(event.target)) { disarm(); return }
   event.preventDefault(); event.stopPropagation()
-  const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1)
-  const factor = Math.exp(-Math.max(-200, Math.min(200, delta)) * .002)
+  const factor = wheelFactor(event)
   if (wheelTarget.classList.contains('diagram-viewer-image')) scale.value = Math.max(.2, Math.min(5, scale.value * factor))
   else zoom(wheelTarget, Math.max(.2, Math.min(5, Number(wheelTarget.dataset.diagramScale || 1) * factor)))
 }
@@ -99,7 +110,7 @@ function close() { disarm(); viewer.value?.close(); svgHtml.value = ''; opener?.
           <button type="button" @click="scale = 1"><AppIcon :icon="Refresh" :size="16" />重置</button>
           <button type="button" autofocus @click="close"><AppIcon :icon="Close" :size="16" />关闭</button>
         </div></header>
-        <div class="diagram-viewer-scroll"><div class="diagram-viewer-image" :style="{ width: `${baseWidth * scale}px` }" v-html="svgHtml" /></div>
+        <div class="diagram-viewer-scroll" @wheel="viewerWheel"><div class="diagram-viewer-image" :style="{ width: `${baseWidth * scale}px` }" v-html="svgHtml" /></div>
       </dialog>
     </Teleport>
   </div>
@@ -124,4 +135,10 @@ function close() { disarm(); viewer.value?.close(); svgHtml.value = ''; opener?.
 [data-wheel-zoom="true"] { outline: 2px solid var(--color-accent-primary); outline-offset: -2px; cursor: zoom-in; }
 .wheel-zoom-hint { position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%); z-index: 2000; padding: 8px 14px; border-radius: var(--radius-md); background: var(--color-surface-elevated); color: var(--color-text-primary); border: 1px solid var(--color-border-default); pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .editor-mermaid-preview > svg, .markdown-mermaid > svg, .diagram-viewer-image { transition: none; } }
+</style>
+
+<style>
+:is(.editor-mermaid-preview, .markdown-mermaid) > .diagram-controls { opacity: 0; pointer-events: none; transition: opacity 160ms ease; }
+:is(.editor-mermaid-preview, .markdown-mermaid):is(:hover, :focus-within) > .diagram-controls { opacity: 1; pointer-events: auto; }
+@media (hover: none) { :is(.editor-mermaid-preview, .markdown-mermaid) > .diagram-controls { opacity: 1; pointer-events: auto; } }
 </style>

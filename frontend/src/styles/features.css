@@ -187,3 +187,39 @@ progress:not([value]) { background: linear-gradient(90deg, var(--color-backgroun
   .feature-page { padding: var(--space-lg); }
   .split-view { grid-template-columns: 1fr; }
 }
+
+
+/* Shared select and disclosure chrome, including the expanded surface. */
+:where(select:not([multiple]):not([size])), .select:not([multiple]):not([size]) {
+  appearance: none;
+  box-sizing: border-box;
+  min-height: 38px;
+  padding: 0 32px 0 12px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  background-color: var(--color-surface-primary);
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+.select { padding-right: 32px; }
+:where(select option, select optgroup) { color: var(--color-text-primary); background: var(--color-surface-elevated); font: inherit; }
+:where(select:disabled) { color: var(--color-text-disabled); cursor: not-allowed; }
+@supports (appearance: base-select) {
+  :where(select:not([multiple]):not([size])), .select:not([multiple]):not([size]), ::picker(select) { appearance: base-select; }
+  :where(select:not([multiple]):not([size])), .select:not([multiple]):not([size]) { background-image: none; align-items: center; }
+  select::picker-icon { color: var(--color-text-secondary); transition: transform var(--motion-fast); }
+  select:open::picker-icon { transform: rotate(180deg); }
+  ::picker(select) { color: var(--color-text-primary); background: var(--color-surface-elevated); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); padding: 6px; box-shadow: var(--shadow-md); max-height: min(320px, 60vh); overflow: auto; }
+  select option { padding: 8px 12px; min-height: 34px; border-radius: var(--radius-sm); }
+  select option:is(:hover, :focus-visible) { background: var(--color-background-hover); }
+  select option:checked { color: var(--color-accent-primary); background: var(--color-accent-soft); }
+  select option::checkmark { color: var(--color-accent-primary); }
+}
+.ui-disclosure { border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-surface-primary); overflow-wrap: anywhere; }
+.ui-disclosure > summary { min-height: 38px; box-sizing: border-box; line-height: 1.5; border-radius: var(--radius-sm); padding: 6px 8px; }
+.ui-disclosure > summary:hover { background: var(--color-background-hover); color: var(--color-accent-primary); }
+.ui-disclosure[open] > summary { border-bottom: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm) var(--radius-sm) 0 0; }

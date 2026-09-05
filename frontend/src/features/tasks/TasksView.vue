@@ -35,7 +35,7 @@ async function remove(task: TaskItem) {
 </script>
 
 <template>
-  <section class="feature-page">
+  <section class="feature-page tasks-page">
     <header class="feature-header"><div><h1>{{ t('任务', 'Tasks') }}</h1><p>{{ t('管理用户、笔记和 Agent 产生的行动项。', 'Manage action items created by users, notes, and agents.') }}</p></div><button class="button-primary" @click="resetForm(); showForm = true">＋ {{ t('新建任务', 'New task') }}</button></header>
     <div v-if="taskStore.error || actionError" class="error-banner">{{ taskStore.error || actionError }}</div>
     <div v-if="taskStore.filteredTasks.length" class="task-list">
@@ -51,7 +51,9 @@ async function remove(task: TaskItem) {
 </template>
 
 <style scoped>
-.task-list { display: grid; gap: var(--space-md); width: min(100%, 980px); margin-inline: auto; }
+.tasks-page > :is(.feature-header, .task-list, .empty-state, .error-banner) { width: 100%; max-width: 1180px; margin-inline: auto; box-sizing: border-box; }
+.task-content { min-width: 0; overflow-wrap: anywhere; }
+.task-list { display: grid; gap: var(--space-md); width: min(100%, 1180px); margin-inline: auto; }
 .task-card { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: var(--space-md); }
 .status-check { width: 28px; height: 28px; border: 2px solid var(--color-border-default); border-radius: var(--radius-full); transition: border-color var(--motion-fast), background-color var(--motion-fast), color var(--motion-fast), transform var(--motion-fast); }
 .status-check:hover { border-color: var(--color-success); transform: scale(1.06); }

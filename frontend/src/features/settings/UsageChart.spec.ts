@@ -19,3 +19,15 @@ it('distinguishes unreported tokens from zero and switches to request counts', a
   expect(wrapper.get('.usage-bar.api').attributes('style')).toContain('160px')
   wrapper.unmount()
 })
+
+
+it('stacks models inside the source column and keeps their shades distinct', () => {
+  const models = [100, 200].map((count, index) => ({ key: `m${index}`, provider_id: 'p', model: `model-${index}`, requests: 1, totals: { input_tokens: count }, coverage: { input_tokens: 1 } }))
+  const wrapper = mount(UsageChart, { props: { buckets: [{ date: '2026-09-05', end_date: '2026-09-05', local: { requests: 0, totals: {}, coverage: {} }, api: { requests: 2, totals: { input_tokens: 300 }, coverage: { input_tokens: 2 }, models } }] } })
+  const segments = wrapper.findAll('.model-segment')
+  expect(segments).toHaveLength(2)
+  expect(segments[0]!.attributes('style')).not.toBe(segments[1]!.attributes('style'))
+  expect(wrapper.get('.model-legend').text()).toContain('model-1')
+  expect(segments[0]!.attributes('title')).toContain('100')
+  wrapper.unmount()
+})

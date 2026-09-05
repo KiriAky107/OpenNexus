@@ -63,3 +63,22 @@ it('preserves Mermaid HTML node and edge labels in the viewer while removing act
   expect(dialog.querySelector('[onclick], [onerror], script')).toBeNull()
   wrapper.unmount()
 })
+
+
+it('zooms directly in the viewer with bounded speed even for a large wheel delta', async () => {
+  const container = document.createElement('div')
+  container.className = 'markdown-mermaid'
+  container.innerHTML = '<svg viewBox="0 0 400 200"><text>Chart</text></svg>'
+  appendDiagramControls(container)
+  const wrapper = mount(DiagramInteractions, { slots: { default: container.outerHTML }, attachTo: document.body })
+  const dialog = document.querySelector('dialog')!
+  dialog.showModal = vi.fn()
+  await wrapper.get('[data-diagram-action="view"]').trigger('click')
+  const event = new WheelEvent('wheel', { deltaY: -10000, bubbles: true, cancelable: true })
+  dialog.querySelector('.diagram-viewer-scroll')!.dispatchEvent(event)
+  await flushPromises()
+  expect(event.defaultPrevented).toBe(true)
+  expect(Number(dialog.querySelector('output')!.textContent!.replace('%', ''))).toBeGreaterThan(100)
+  expect(Number(dialog.querySelector('output')!.textContent!.replace('%', ''))).toBeLessThanOrEqual(105)
+  wrapper.unmount()
+})
