@@ -1,0 +1,426 @@
+import type { InstalledTheme, ThemeManifest, ThemePackageInspection } from '@/contracts'
+
+const STORAGE_KEY = 'installed-themes'
+const ACTIVE_CUSTOM_KEY = 'active-custom-theme'
+
+function loadStoredThemes(): InstalledTheme[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as InstalledTheme[]) : []
+  } catch {
+    return []
+  }
+}
+
+function saveThemes(themes: InstalledTheme[]) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(themes))
+}
+
+function validateManifest(raw: Record<string, unknown>): { manifest: ThemeManifest; warnings: string[] } {
+  const warnings: string[] = []
+  const required = ['theme_id', 'name', 'version', 'author', 'min_app_version', 'css_entry']
+  for (const field of required) {
+    if (!raw[field]) {
+      throw new Error(`THEME_MANIFEST_INVALID: missing required field '${field}'`)
+    }
+  }
+  if (!/^[a-z0-9_-]+$/.test(String(raw.theme_id))) {
+    throw new Error('THEME_MANIFEST_INVALID: theme_id must match [a-z0-9_-]+')
+  }
+  if (!/^\d+\.\d+\.\d+/.test(String(raw.version))) {
+    warnings.push('版本号格式建议使用 semver（如 1.0.0）')
+  }
+  const cssEntry = String(raw.css_entry)
+  if (cssEntry.includes('://') || cssEntry.startsWith('data:')) {
+    throw new Error('THEME_SECURITY_VIOLATION: css_entry must be a relative path within the package')
+  }
+  const manifest: ThemeManifest = {
+    theme_id: String(raw.theme_id),
+    name: String(raw.name),
+    version: String(raw.version),
+    author: String(raw.author),
+    description: raw.description ? String(raw.description) : undefined,
+    min_app_version: String(raw.min_app_version),
+    is_dark: Boolean(raw.is_dark ?? false),
+    css_entry: cssEntry,
+    preview: raw.preview ? String(raw.preview) : undefined,
+    tags: Array.isArray(raw.tags) ? raw.tags.map(String) : undefined,
+    homepage: raw.homepage ? String(raw.homepage) : undefined,
+    license: raw.license ? String(raw.license) : undefined,
+  }
+  return { manifest, warnings }
+}
+
+function validateCssSafety(css: string): string[] {
+  const warnings: string[] = []
+  const lower = css.toLowerCase()
+  if (lower.includes('@import')) {
+    throw new Error('THEME_SECURITY_VIOLATION: @import is not allowed in theme CSS')
+  }
+  if (lower.includes('url(') && !lower.includes('url(data:')) {
+    warnings.push('CSS 包含远程资源引用，预览时可能无法加载')
+  }
+  if (lower.includes('expression(') || lower.includes('javascript:')) {
+    throw new Error('THEME_SECURITY_VIOLATION: CSS expressions are not allowed')
+  }
+  return warnings
+}
+
+function applyThemeCss(themeId: string, css: string) {
+  let styleEl = document.getElementById(`theme-style-${themeId}`) as HTMLStyleElement | null
+  if (!styleEl) {
+    styleEl = document.createElement('style')
+    styleEl.id = `theme-style-${themeId}`
+    document.head.appendChild(styleEl)
+  }
+  styleEl.textContent = css
+}
+
+function removeThemeCss(themeId: string) {
+  const styleEl = document.getElementById(`theme-style-${themeId}`)
+  if (styleEl) styleEl.remove()
+}
+
+function inspectYamlContent(yamlText: string): ThemeManifest {
+  const lines = yamlText.split('\n')
+  const result: Record<string, unknown> = {}
+  let currentKey: string | null = null
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const match = trimmed.match(/^([a-z_]+):\s*(.*)$/i)
+    if (match) {
+      currentKey = match[1]
+      let value = match[2].trim()
+      if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1)
+      else if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1)
+      else if (value === 'true') result[currentKey] = true
+      else if (value === 'false') result[currentKey] = false
+      else if (/^\d+$/.test(value)) result[currentKey] = Number(value)
+      if (currentKey && !(currentKey in result)) result[currentKey] = value
+    }
+  }
+  const { manifest } = validateManifest(result)
+  return manifest
+}
+
+/**
+ * 主题包是单文件文本格式：YAML 清单 + 一行 `---` + 主题 CSS。
+ *
+ *   theme_id: my-theme
+ *   name: My Theme
+ *   ...
+ *   ---
+ *   [data-theme="my-theme"] { --color-... }
+ *
+ * 浏览器端没有解压能力，所以不支持 ZIP —— 与其把二进制当文本解析出
+ * 一堆乱码再报「清单无效」，不如直接告诉用户格式不支持。
+ */
+export function parseThemePackage(packageData: string): { manifestText: string; css: string } {
+  if (looksLikeZip(packageData)) {
+    throw new Error(
+      'THEME_PACKAGE_UNSUPPORTED_FORMAT: 暂不支持 ZIP 主题包，请提供「YAML 清单 + --- + CSS」的单文件主题。',
+    )
+  }
+
+  const lines = packageData.split(/\r?\n/)
+  const separatorIndex = lines.findIndex((line) => line.trim() === '---')
+  if (separatorIndex < 0) {
+    throw new Error(
+      'THEME_PACKAGE_INVALID: 主题包缺少 `---` 分隔行，无法区分清单与 CSS。',
+    )
+  }
+
+  const manifestText = lines.slice(0, separatorIndex).join('\n')
+  const css = lines.slice(separatorIndex + 1).join('\n').trim()
+  if (!css) {
+    throw new Error('THEME_CSS_INVALID: 主题包内没有 CSS 内容。')
+  }
+  return { manifestText, css }
+}
+
+/** ZIP 的魔数是 PK\x03\x04；base64 形式（readAsDataURL）开头是 UEsDB。 */
+function looksLikeZip(data: string): boolean {
+  if (data.startsWith('PK')) return true
+  return /^data:.*;base64,UEsDB/.test(data) || data.startsWith('UEsDB')
+}
+
+export async function selectThemePackage(): Promise<string | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    // 只接受能在浏览器里解析的单文件主题；ZIP 需要 Host 端解压，暂不支持。
+    input.accept = '.yaml,.yml,.theme'
+    input.multiple = false
+    input.onchange = () => {
+      const file = input.files?.[0]
+      if (!file) { resolve(null); return }
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result as string)
+      reader.onerror = () => resolve(null)
+      reader.readAsText(file)
+    }
+    input.oncancel = () => resolve(null)
+    input.click()
+  })
+}
+
+export async function inspectThemePackage(packageData: string): Promise<ThemePackageInspection> {
+  const package_id = `theme_pkg_${Date.now()}`
+  try {
+    const { manifestText, css } = parseThemePackage(packageData)
+    const manifest = inspectYamlContent(manifestText)
+    // CSS 的安全校验放在这里，不合规的包在「预览」阶段就该被拒，
+    // 而不是等到用户点安装。
+    const warnings = validateCssSafety(css)
+    if (!css.includes(`[data-theme="${manifest.theme_id}"]`)) {
+      warnings.push(`CSS 未包含 [data-theme="${manifest.theme_id}"] 选择器，主题可能不会生效。`)
+    }
+    return {
+      package_id,
+      manifest,
+      preview_url: '',
+      warnings,
+      compatible: true,
+      css,
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误'
+    const error_code = message.startsWith('THEME_') ? message.split(':')[0] : 'THEME_MANIFEST_INVALID'
+    return {
+      package_id,
+      manifest: {} as ThemeManifest,
+      preview_url: '',
+      warnings: [message],
+      compatible: false,
+      error_code,
+      css: '',
+    }
+  }
+}
+
+export async function installTheme(
+  manifest: ThemeManifest,
+  cssContent: string,
+): Promise<InstalledTheme> {
+  // validateCssSafety 会对 @import / expression() / javascript: 抛错，
+  // 必须在 applyThemeCss 之前调用 —— 未校验的 CSS 一律不许进入页面。
+  const warnings = validateCssSafety(cssContent)
+  if (warnings.length > 0) {
+    console.warn('[theme] CSS validation warnings:', warnings)
+  }
+  const installed: InstalledTheme = {
+    theme_id: manifest.theme_id,
+    name: manifest.name,
+    version: manifest.version,
+    author: manifest.author,
+    description: manifest.description,
+    is_dark: manifest.is_dark,
+    builtin: false,
+    enabled: false,
+    installed_at: new Date().toISOString(),
+    manifest,
+    code_theme: manifest.is_dark ? 'github-dark' : 'github-light',
+  }
+  const existing = loadStoredThemes()
+  const idx = existing.findIndex((t) => t.theme_id === manifest.theme_id)
+  if (idx >= 0) existing[idx] = installed
+  else existing.push(installed)
+  localStorage.setItem(`${STORAGE_KEY}-css-${manifest.theme_id}`, cssContent)
+  saveThemes(existing)
+  return installed
+}
+
+export async function listInstalledThemes(): Promise<InstalledTheme[]> {
+  return loadStoredThemes()
+}
+
+export async function enableTheme(themeId: string): Promise<InstalledTheme> {
+  const themes = loadStoredThemes()
+  const theme = themes.find((t) => t.theme_id === themeId)
+  if (!theme) throw new Error('THEME_PACKAGE_NOT_FOUND')
+  theme.enabled = true
+  saveThemes(themes)
+  return theme
+}
+
+export async function disableTheme(themeId: string): Promise<void> {
+  const themes = loadStoredThemes()
+  const theme = themes.find((t) => t.theme_id === themeId)
+  if (theme) {
+    theme.enabled = false
+    saveThemes(themes)
+  }
+}
+
+export async function uninstallTheme(themeId: string): Promise<void> {
+  const themes = loadStoredThemes()
+  const idx = themes.findIndex((t) => t.theme_id === themeId)
+  if (idx >= 0) {
+    themes.splice(idx, 1)
+    saveThemes(themes)
+  }
+  removeThemeCss(themeId)
+  localStorage.removeItem(`${STORAGE_KEY}-css-${themeId}`)
+  const active = localStorage.getItem(ACTIVE_CUSTOM_KEY)
+  if (active === themeId) localStorage.removeItem(ACTIVE_CUSTOM_KEY)
+}
+
+export function getActiveCustomTheme(): string | null {
+  return localStorage.getItem(ACTIVE_CUSTOM_KEY)
+}
+
+export function setActiveCustomTheme(themeId: string | null) {
+  const css = themeId ? localStorage.getItem(`${STORAGE_KEY}-css-${themeId}`) : null
+  // Validate before changing the current page. Only the selected theme owns a style node.
+  if (css) validateCssSafety(css)
+  document.head.querySelectorAll('style[id^="theme-style-"]').forEach(style => style.remove())
+  if (themeId && css) applyThemeCss(themeId, css)
+  if (themeId) localStorage.setItem(ACTIVE_CUSTOM_KEY, themeId)
+  else localStorage.removeItem(ACTIVE_CUSTOM_KEY)
+}
+
+export const mockCommunityThemes: ThemeManifest[] = [
+  {
+    theme_id: 'ocean-blue',
+    name: 'Ocean Blue',
+    version: '1.2.0',
+    author: 'community',
+    description: '宁静的海洋蓝色主题，适合长时间阅读',
+    min_app_version: '0.2.0',
+    is_dark: false,
+    css_entry: 'theme.css',
+    tags: ['浅色', '蓝色', '阅读'],
+    license: 'MIT',
+  },
+  {
+    theme_id: 'forest-green',
+    name: 'Forest Green',
+    version: '1.0.1',
+    author: 'nature-collection',
+    description: '森林绿色护眼主题',
+    min_app_version: '0.2.0',
+    is_dark: false,
+    css_entry: 'theme.css',
+    tags: ['浅色', '绿色', '护眼'],
+    license: 'MIT',
+  },
+  {
+    theme_id: 'midnight-purple',
+    name: 'Midnight Purple',
+    version: '2.0.0',
+    author: 'night-owl',
+    description: '深紫色暗夜主题，适合编码',
+    min_app_version: '0.2.0',
+    is_dark: true,
+    css_entry: 'theme.css',
+    tags: ['深色', '紫色', '极客'],
+    license: 'Apache-2.0',
+  },
+  {
+    theme_id: 'solarized-light',
+    name: 'Solarized Light',
+    version: '1.1.0',
+    author: 'solarized',
+    description: '经典 Solarized 浅色主题',
+    min_app_version: '0.1.0',
+    is_dark: false,
+    css_entry: 'theme.css',
+    tags: ['浅色', '经典', '阅读'],
+    license: 'MIT',
+  },
+  {
+    theme_id: 'dracula',
+    name: 'Dracula',
+    version: '3.0.0',
+    author: 'dracula-theme',
+    description: '流行的 Dracula 暗色主题',
+    min_app_version: '0.2.0',
+    is_dark: true,
+    css_entry: 'theme.css',
+    tags: ['深色', '紫色', '高对比'],
+    license: 'MIT',
+  },
+]
+
+function buildCommunityThemeCss(themeId: string, isDark: boolean, accent: string): string {
+  const palettes: Record<string, { primary: string; soft: string; hover: string }> = {
+    'ocean-blue': { primary: '#0077b6', soft: '#e0f0fa', hover: '#005f92' },
+    'forest-green': { primary: '#2d6a4f', soft: '#e8f5ec', hover: '#1b4332' },
+    'midnight-purple': { primary: '#9d4edd', soft: '#2b1a3e', hover: '#7b2cbf' },
+    'solarized-light': { primary: '#b58900', soft: '#fdf6e3', hover: '#8a6d0b' },
+    'dracula': { primary: '#bd93f9', soft: '#2d2a3e', hover: '#a77bf5' },
+  }
+  const p = palettes[themeId] ?? palettes['ocean-blue']
+  if (isDark) {
+    return `[data-theme="${themeId}"] {
+  --color-background-primary: #1a1b26;
+  --color-background-secondary: #24283b;
+  --color-background-tertiary: #2f334d;
+  --color-background-hover: #2d2f45;
+  --color-background-active: #3d4261;
+  --color-surface-primary: #24283b;
+  --color-surface-secondary: #1a1b26;
+  --color-surface-elevated: #2f334d;
+  --color-text-primary: #c0caf5;
+  --color-text-secondary: #9aa5ce;
+  --color-text-tertiary: #565f89;
+  --color-text-link: ${p.primary};
+  --color-accent-primary: ${p.primary};
+  --color-accent-primary-hover: ${p.hover};
+  --color-accent-soft: ${p.soft};
+  --color-border-default: #3b3f5c;
+  --color-border-subtle: #2f334d;
+  --color-border-focus: ${p.primary};
+  --color-success: #9ece6a;
+  --color-success-soft: #1f2a1a;
+  --color-warning: #e0af68;
+  --color-warning-soft: #2d2418;
+  --color-error: #f7768e;
+  --color-error-soft: #2d1a1f;
+  --color-info: #7aa2f7;
+  --color-info-soft: #1a2030;
+}`
+  }
+  return `[data-theme="${themeId}"] {
+  --color-background-primary: #ffffff;
+  --color-background-secondary: #f8fafc;
+  --color-background-tertiary: #eef2f7;
+  --color-background-hover: #f1f5f9;
+  --color-background-active: #e2e8f0;
+  --color-surface-primary: #ffffff;
+  --color-surface-secondary: #fafbfc;
+  --color-surface-elevated: #ffffff;
+  --color-text-primary: #1e293b;
+  --color-text-secondary: #64748b;
+  --color-text-tertiary: #94a3b8;
+  --color-text-link: ${p.primary};
+  --color-accent-primary: ${p.primary};
+  --color-accent-primary-hover: ${p.hover};
+  --color-accent-soft: ${p.soft};
+  --color-border-default: #e2e8f0;
+  --color-border-subtle: #f1f5f9;
+  --color-border-focus: ${p.primary};
+  --color-success: #10b981;
+  --color-success-soft: #d1fae5;
+  --color-warning: #f59e0b;
+  --color-warning-soft: #fef3c7;
+  --color-error: #ef4444;
+  --color-error-soft: #fee2e2;
+  --color-info: #3b82f6;
+  --color-info-soft: #dbeafe;
+}`
+}
+
+export async function installCommunityTheme(themeId: string): Promise<InstalledTheme> {
+  const themeManifest = mockCommunityThemes.find((t) => t.theme_id === themeId)
+  if (!themeManifest) throw new Error('THEME_PACKAGE_NOT_FOUND')
+  const css = buildCommunityThemeCss(themeId, themeManifest.is_dark, themeManifest.theme_id)
+  return installTheme(themeManifest, css)
+}
+
+export function getCommunityThemePreviewCss(themeId: string): string {
+  const t = mockCommunityThemes.find((m) => m.theme_id === themeId)
+  if (!t) return ''
+  return buildCommunityThemeCss(themeId, t.is_dark, themeId)
+}

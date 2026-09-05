@@ -62,6 +62,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     recentVaults.value = await workspaceService.getRecentVaults()
   }
 
+  /** 重新拉取文件树。插件命令返回 refresh:workspace 时需要。 */
+  async function refreshFileTree() {
+    if (!hasVault.value) return
+    fileTree.value = await workspaceService.getFileTree()
+  }
+
   async function openVault(path: string) {
     isLoading.value = true
     try {
@@ -161,6 +167,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     closeFile,
     setActiveFile,
     loadRecentVaults,
+    refreshFileTree,
     openVault,
     createVault,
     addFileToTree,

@@ -26,6 +26,8 @@ const selectionSnapshot = ref<string | null>(null)
 interface Command { id: string; label: string; hint: string; run: () => void | Promise<void> }
 
 const builtinCommands = computed<Command[]>(() => [
+  { id: 'themes', label: t('主题管理', 'Manage themes'), hint: t('导航', 'Navigation'), run: () => router.push('/themes') },
+  { id: 'tasks', label: t('任务列表', 'Tasks'), hint: t('导航', 'Navigation'), run: () => router.push('/tasks') },
   { id: 'workspace', label: t('打开工作区', 'Open workspace'), hint: t('导航', 'Navigation'), run: () => router.push('/workspace') },
   { id: 'search', label: t('全局搜索', 'Global search'), hint: t('导航', 'Navigation'), run: () => router.push('/search') },
   { id: 'chat', label: t('打开 AI 对话', 'Open AI chat'), hint: t('导航', 'Navigation'), run: () => router.push('/chat') },
@@ -61,6 +63,7 @@ const filteredCommands = computed(() => {
   const value = query.value.trim().toLocaleLowerCase()
   return value ? commands.value.filter((command) => `${command.label} ${command.hint}`.toLocaleLowerCase().includes(value)) : commands.value
 })
+
 
 function show() {
   selectionSnapshot.value = window.getSelection()?.toString() || null

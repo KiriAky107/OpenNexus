@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { renderMarkdown } from '@/utils/markdown'
+import { useThemeStore } from '@/stores/theme'
 
 const props = defineProps<{ source: string }>()
+const themeStore = useThemeStore()
 const html = ref('')
 let renderVersion = 0
 
-watch(() => props.source, async (source) => {
+const diagramTheme = computed<'light' | 'dark'>(() => (themeStore.isDark ? 'dark' : 'light'))
+
+// 主题切换需要重渲染：Mermaid SVG 的配色在渲染时烘焙，无法靠 CSS 变量事后调整。
+watch([() => props.source, diagramTheme], async ([source, theme]) => {
   const version = ++renderVersion
-  const result = await renderMarkdown(source)
+  const result = await renderMarkdown(source, { theme })
   if (version === renderVersion) html.value = result
 }, { immediate: true })
 </script>
@@ -47,5 +52,28 @@ watch(() => props.source, async (source) => {
   font-style: var(--shiki-dark-font-style) !important;
   font-weight: var(--shiki-dark-font-weight) !important;
   text-decoration: var(--shiki-dark-text-decoration) !important;
+}
+.markdown-content .markdown-mermaid {
+  overflow: auto;
+  margin: .85em 0;
+  padding: 16px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  background: var(--color-surface-primary);
+  text-align: center;
+}
+.markdown-content .markdown-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+.markdown-content pre.mermaid-error {
+  padding: 12px 16px;
+  border: 1px solid var(--color-error);
+  border-radius: 6px;
+  background: var(--color-error-soft);
+  color: var(--color-error);
+  white-space: pre-wrap;
+  font-family: var(--font-ui-mono);
+  font-size: .875em;
 }
 </style>

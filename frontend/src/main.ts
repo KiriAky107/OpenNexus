@@ -18,7 +18,7 @@ app.use(router)
 
 const themeStore = useThemeStore()
 const settingsStore = useSettingsStore()
-themeStore.initTheme()
+void themeStore.initTheme()
 watch(appLocale, () => updateDocumentTitle())
 watch(() => settingsStore.spellCheck, (enabled) => {
   document.body.spellcheck = enabled

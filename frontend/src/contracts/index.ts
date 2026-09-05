@@ -803,3 +803,109 @@ export interface ApiIndexJob {
   scope: 'all' | 'notes' | 'vectors'
   created_at: string
 }
+
+// ============ Theme Package (Phase 2) ============
+
+export interface ThemeManifest {
+  theme_id: string
+  name: string
+  version: string
+  author: string
+  description?: string
+  min_app_version: string
+  is_dark: boolean
+  css_entry: string
+  preview?: string
+  tags?: string[]
+  homepage?: string
+  license?: string
+}
+
+export interface InstalledTheme {
+  theme_id: string
+  name: string
+  version: string
+  author: string
+  description?: string
+  is_dark: boolean
+  builtin: boolean
+  enabled: boolean
+  installed_at?: string
+  manifest: ThemeManifest
+  code_theme?: 'github-light' | 'github-dark'
+}
+
+export interface ThemePackageInspection {
+  package_id: string
+  manifest: ThemeManifest
+  preview_url: string
+  warnings: string[]
+  compatible: boolean
+  error_code?: string
+  /** 包内实际的主题 CSS。安装时必须用这份内容，不能另行生成。 */
+  css: string
+}
+
+export type ThemeErrorCode =
+  | 'THEME_PACKAGE_NOT_FOUND'
+  | 'THEME_MANIFEST_INVALID'
+  | 'THEME_PACKAGE_INCOMPATIBLE'
+  | 'THEME_PACKAGE_UNSUPPORTED_FORMAT'
+  | 'THEME_PACKAGE_INVALID'
+  | 'THEME_CSS_INVALID'
+  | 'THEME_SECURITY_VIOLATION'
+  | 'THEME_INSTALL_FAILED'
+  | 'THEME_UNINSTALL_FAILED'
+
+// ============ Mermaid Renderer (Phase 2) ============
+
+export interface MermaidRenderResult {
+  svg: string
+  width: number
+  height: number
+  warnings: string[]
+}
+
+export interface MermaidParseError {
+  message: string
+  line?: number
+  column?: number
+}
+
+// ============ Agent Trace Node (Phase 2 visualization) ============
+
+export type TraceNodeType =
+  | 'run'
+  | 'model_call'
+  | 'tool_call'
+  | 'tool_result'
+  | 'text'
+  | 'thinking'
+  | 'citation'
+  | 'usage'
+  | 'permission'
+  | 'error'
+  | 'complete'
+
+export interface TraceNode {
+  id: string
+  sequence: number
+  type: TraceNodeType
+  title: string
+  subtitle?: string
+  status: 'pending' | 'running' | 'completed' | 'error' | 'cancelled'
+  duration_ms?: number
+  children: TraceNode[]
+  data: Record<string, unknown>
+  timestamp: string
+  parent_id?: string
+}
+
+export interface TraceTimelineGroup {
+  group_id: string
+  label: string
+  start_sequence: number
+  end_sequence: number
+  duration_ms?: number
+  nodes: TraceNode[]
+}
