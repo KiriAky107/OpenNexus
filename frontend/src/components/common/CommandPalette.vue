@@ -8,6 +8,7 @@ import * as workspaceService from '@/services/workspaceService'
 import * as pluginService from '@/services/pluginService'
 import type { PluginCommand, PluginCommandEffect } from '@/contracts'
 import { usePluginStore } from '@/stores/plugin'
+import { t } from '@/i18n'
 
 const router = useRouter()
 const editorStore = useEditorStore()
@@ -25,15 +26,15 @@ const selectionSnapshot = ref<string | null>(null)
 interface Command { id: string; label: string; hint: string; run: () => void | Promise<void> }
 
 const builtinCommands = computed<Command[]>(() => [
-  { id: 'workspace', label: '打开工作区', hint: '导航', run: () => router.push('/workspace') },
-  { id: 'search', label: '全局搜索', hint: '导航', run: () => router.push('/search') },
-  { id: 'chat', label: '打开 AI 对话', hint: '导航', run: () => router.push('/chat') },
-  { id: 'agent', label: '创建智能体运行', hint: '导航', run: () => router.push('/agent/runs') },
-  { id: 'settings', label: '打开设置', hint: '导航', run: () => router.push('/settings') },
-  { id: 'mode', label: `切换为${editorStore.mode === 'source' ? '写作' : '源码'}模式`, hint: '编辑器', run: () => editorStore.toggleMode() },
-  { id: 'save', label: '保存当前笔记', hint: '编辑器', run: () => editorStore.save() },
-  { id: 'theme', label: `切换为${themeStore.isDark ? '浅色' : '深色'}主题`, hint: '外观', run: () => themeStore.toggleTheme() },
-  { id: 'new-note', label: '创建笔记', hint: '工作区', run: createNote },
+  { id: 'workspace', label: t('打开工作区', 'Open workspace'), hint: t('导航', 'Navigation'), run: () => router.push('/workspace') },
+  { id: 'search', label: t('全局搜索', 'Global search'), hint: t('导航', 'Navigation'), run: () => router.push('/search') },
+  { id: 'chat', label: t('打开 AI 对话', 'Open AI chat'), hint: t('导航', 'Navigation'), run: () => router.push('/chat') },
+  { id: 'agent', label: t('创建智能体运行', 'Create agent run'), hint: t('导航', 'Navigation'), run: () => router.push('/agent/runs') },
+  { id: 'settings', label: t('打开设置', 'Open settings'), hint: t('导航', 'Navigation'), run: () => router.push('/settings') },
+  { id: 'mode', label: editorStore.mode === 'source' ? t('切换为写作模式', 'Switch to writing mode') : t('切换为源码模式', 'Switch to source mode'), hint: t('编辑器', 'Editor'), run: () => editorStore.toggleMode() },
+  { id: 'save', label: t('保存当前笔记', 'Save current note'), hint: t('编辑器', 'Editor'), run: () => editorStore.save() },
+  { id: 'theme', label: themeStore.isDark ? t('切换为浅色主题', 'Switch to light theme') : t('切换为深色主题', 'Switch to dark theme'), hint: t('外观', 'Appearance'), run: () => themeStore.toggleTheme() },
+  { id: 'new-note', label: t('创建笔记', 'Create note'), hint: t('工作区', 'Workspace'), run: createNote },
 ])
 
 const commands = computed<Command[]>(() => [
@@ -78,12 +79,12 @@ async function execute(command: Command | undefined) {
   try {
     await command.run()
   } catch (error) {
-    commandNotice.value = error instanceof Error ? error.message : '命令执行失败'
+    commandNotice.value = error instanceof Error ? error.message : t('命令执行失败', 'Command failed')
   }
 }
 
 async function createNote() {
-  const rawName = window.prompt('笔记名称')?.trim()
+  const rawName = window.prompt(t('笔记名称', 'Note name'))?.trim()
   if (!rawName) return
   const name = rawName.endsWith('.md') ? rawName : `${rawName}.md`
   const file = await workspaceService.createFile('/', name, `# ${rawName}\n\n`)
@@ -97,7 +98,7 @@ async function loadPluginCommands() {
   try {
     pluginCommands.value = await pluginService.listPluginCommands('command_palette')
   } catch (error) {
-    commandError.value = error instanceof Error ? error.message : 'Plugin 命令加载失败'
+    commandError.value = error instanceof Error ? error.message : t('Plugin 命令加载失败', 'Failed to load plugin commands')
   }
 }
 
@@ -109,7 +110,7 @@ async function executePluginCommand(command: PluginCommand) {
   if (hasRequiredArguments(command)) {
     pluginStore.selectPlugin(command.plugin_id)
     await router.push('/extensions/plugins')
-    commandNotice.value = '请在 Plugin 详情页填写参数后执行“' + command.title + '”。'
+    commandNotice.value = `${t('请在 Plugin 详情页填写参数后执行', 'Enter parameters on the Plugin details page, then run')} “${command.title}”.`
     return
   }
   const result = await pluginService.executePluginCommand(command.command_id, {}, {
@@ -135,11 +136,11 @@ async function applyPluginEffect(effect: PluginCommandEffect) {
   if (effect.type === 'refresh') {
     if (effect.payload.scope === 'plugins') await pluginStore.loadPlugins()
     if (effect.payload.scope === 'commands') await loadPluginCommands()
-    commandNotice.value = '相关数据已刷新。'
+    commandNotice.value = t('相关数据已刷新。', 'Related data refreshed.')
     return
   }
-  if (effect.type === 'job') { commandNotice.value = '后台任务已创建：' + effect.payload.job_id; return }
-  commandNotice.value = 'Plugin 命令执行完成。'
+  if (effect.type === 'job') { commandNotice.value = t('后台任务已创建：', 'Background job created: ') + effect.payload.job_id; return }
+  commandNotice.value = t('Plugin 命令执行完成。', 'Plugin command completed.')
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -157,20 +158,20 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown))
 
 <template>
   <div v-if="commandNotice" class="command-toast" role="status">
-    <span>{{ commandNotice }}</span><button aria-label="关闭通知" @click="commandNotice = ''">×</button>
+    <span>{{ commandNotice }}</span><button :aria-label="t('关闭通知', 'Close notification')" @click="commandNotice = ''">×</button>
   </div>
   <Teleport to="body">
     <div v-if="open" class="command-backdrop" @click.self="hide">
-      <section class="command-palette" role="dialog" aria-modal="true" aria-label="命令面板">
-        <input ref="input" v-model="query" class="command-input" placeholder="输入命令…" @keydown.enter.prevent="execute(filteredCommands[0])" />
+      <section class="command-palette" role="dialog" aria-modal="true" :aria-label="t('命令面板', 'Command palette')">
+        <input ref="input" v-model="query" class="command-input" :placeholder="t('输入命令…', 'Enter a command…')" @keydown.enter.prevent="execute(filteredCommands[0])" />
         <p v-if="commandError" class="command-error">{{ commandError }}</p>
         <div class="command-list">
           <button v-for="command in filteredCommands" :key="command.id" type="button" @click="execute(command)">
             <span>{{ command.label }}</span><small>{{ command.hint }}</small>
           </button>
-          <p v-if="!filteredCommands.length">没有匹配的命令</p>
+          <p v-if="!filteredCommands.length">{{ t('没有匹配的命令', 'No matching commands') }}</p>
         </div>
-        <footer><span>Enter 执行</span><span>Esc 关闭</span></footer>
+        <footer><span>Enter · {{ t('执行', 'Run') }}</span><span>Esc · {{ t('关闭', 'Close') }}</span></footer>
       </section>
     </div>
   </Teleport>

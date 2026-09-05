@@ -2,6 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import type { TaskItem, TaskStatus } from '@/contracts'
 import { useTaskStore } from '@/stores/task'
+import { localeTag, t } from '@/i18n'
 
 const taskStore = useTaskStore()
 const showForm = ref(false)
@@ -20,32 +21,32 @@ async function saveTask() {
     if (editingId.value) await taskStore.updateTask(editingId.value, { ...form, due_date: form.due_date || undefined, note_id: form.note_id || null })
     else await taskStore.createTask({ ...form, due_date: form.due_date || undefined, note_id: form.note_id || undefined })
     showForm.value = false; resetForm()
-  } catch (error) { actionError.value = error instanceof Error ? error.message : '任务保存失败' }
+  } catch (error) { actionError.value = error instanceof Error ? error.message : t('任务保存失败', 'Failed to save task') }
 }
 
 async function setStatus(task: TaskItem, status: TaskStatus) {
-  try { await taskStore.updateTask(task.task_id, { status }) } catch (error) { actionError.value = error instanceof Error ? error.message : '状态更新失败' }
+  try { await taskStore.updateTask(task.task_id, { status }) } catch (error) { actionError.value = error instanceof Error ? error.message : t('状态更新失败', 'Failed to update status') }
 }
 
 async function remove(task: TaskItem) {
-  if (!confirm(`确定删除任务“${task.title}”吗？`)) return
-  try { await taskStore.deleteTask(task.task_id) } catch (error) { actionError.value = error instanceof Error ? error.message : '任务删除失败' }
+  if (!confirm(`${t('确定删除任务', 'Delete task')} “${task.title}”?`)) return
+  try { await taskStore.deleteTask(task.task_id) } catch (error) { actionError.value = error instanceof Error ? error.message : t('任务删除失败', 'Failed to delete task') }
 }
 </script>
 
 <template>
   <section class="feature-page">
-    <header class="feature-header"><div><h1>任务</h1><p>管理用户、笔记和 Agent 产生的行动项。</p></div><button class="button-primary" @click="resetForm(); showForm = true">＋ 新建任务</button></header>
+    <header class="feature-header"><div><h1>{{ t('任务', 'Tasks') }}</h1><p>{{ t('管理用户、笔记和 Agent 产生的行动项。', 'Manage action items created by users, notes, and agents.') }}</p></div><button class="button-primary" @click="resetForm(); showForm = true">＋ {{ t('新建任务', 'New task') }}</button></header>
     <div v-if="taskStore.error || actionError" class="error-banner">{{ taskStore.error || actionError }}</div>
     <div v-if="taskStore.filteredTasks.length" class="task-list">
       <article v-for="task in taskStore.filteredTasks" :key="task.task_id" class="item-card task-card">
-        <button class="status-check" :class="{ done: task.status === 'done' }" title="切换完成状态" @click="setStatus(task, task.status === 'done' ? 'todo' : 'done')">{{ task.status === 'done' ? '✓' : '' }}</button>
-        <div class="task-content"><div class="task-title"><strong :class="{ completed: task.status === 'done' }">{{ task.title }}</strong></div><p v-if="task.description" class="muted">{{ task.description }}</p><div class="subtle"><span>{{ task.status }}</span><span v-if="task.due_date">截止 {{ new Date(task.due_date).toLocaleString() }}</span><span v-if="task.note_id">关联 Note：{{ task.note_id }}</span></div></div>
-        <div class="inline-actions"><button class="icon-button" @click="editTask(task)">编辑</button><button class="button-danger" @click="remove(task)">删除</button></div>
+        <button class="status-check" :class="{ done: task.status === 'done' }" :title="t('切换完成状态', 'Toggle completion')" @click="setStatus(task, task.status === 'done' ? 'todo' : 'done')">{{ task.status === 'done' ? '✓' : '' }}</button>
+        <div class="task-content"><div class="task-title"><strong :class="{ completed: task.status === 'done' }">{{ task.title }}</strong></div><p v-if="task.description" class="muted">{{ task.description }}</p><div class="subtle"><span>{{ task.status }}</span><span v-if="task.due_date">{{ t('截止', 'Due') }} {{ new Date(task.due_date).toLocaleString(localeTag()) }}</span><span v-if="task.note_id">{{ t('关联 Note', 'Linked Note') }}: {{ task.note_id }}</span></div></div>
+        <div class="inline-actions"><button class="icon-button" @click="editTask(task)">{{ t('编辑', 'Edit') }}</button><button class="button-danger" @click="remove(task)">{{ t('删除', 'Delete') }}</button></div>
       </article>
     </div>
-    <div v-else class="empty-state"><div><strong>{{ taskStore.isLoading ? '正在加载任务…' : '没有符合条件的任务' }}</strong><p>创建一项任务，或调整左侧筛选条件。</p></div></div>
-    <div v-if="showForm" class="modal-backdrop" @click.self="showForm = false"><div class="modal"><h2>{{ editingId ? '编辑任务' : '新建任务' }}</h2><form @submit.prevent="saveTask"><div class="field"><label>标题</label><input v-model="form.title" class="input" required /></div><div class="field"><label>描述</label><textarea v-model="form.description" class="textarea" /></div><div class="field"><label>截止时间</label><input v-model="form.due_date" class="input" type="datetime-local" /></div><div class="field"><label>关联 Note ID</label><input v-model="form.note_id" class="input" /></div><div class="inline-actions"><button class="button-primary">保存</button><button type="button" class="button-secondary" @click="showForm = false">取消</button></div></form></div></div>
+    <div v-else class="empty-state"><div><strong>{{ taskStore.isLoading ? t('正在加载任务…', 'Loading tasks…') : t('没有符合条件的任务', 'No matching tasks') }}</strong><p>{{ t('创建一项任务，或调整左侧筛选条件。', 'Create a task or adjust the filters.') }}</p></div></div>
+    <div v-if="showForm" class="modal-backdrop" @click.self="showForm = false"><div class="modal"><h2>{{ editingId ? t('编辑任务', 'Edit task') : t('新建任务', 'New task') }}</h2><form @submit.prevent="saveTask"><div class="field"><label>{{ t('标题', 'Title') }}</label><input v-model="form.title" class="input" required /></div><div class="field"><label>{{ t('描述', 'Description') }}</label><textarea v-model="form.description" class="textarea" /></div><div class="field"><label>{{ t('截止时间', 'Due date') }}</label><input v-model="form.due_date" class="input" type="datetime-local" /></div><div class="field"><label>{{ t('关联 Note ID', 'Linked Note ID') }}</label><input v-model="form.note_id" class="input" /></div><div class="inline-actions"><button class="button-primary">{{ t('保存', 'Save') }}</button><button type="button" class="button-secondary" @click="showForm = false">{{ t('取消', 'Cancel') }}</button></div></form></div></div>
   </section>
 </template>
 

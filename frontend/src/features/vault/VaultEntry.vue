@@ -6,6 +6,7 @@ import { useThemeStore } from '@/stores/theme'
 import { useSettingsStore } from '@/stores/settings'
 import { ArrowRight, Document, Folder, FolderOpened, Moon, Sunny } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
+import { t } from '@/i18n'
 
 const router = useRouter()
 const workspaceStore = useWorkspaceStore()
@@ -55,15 +56,15 @@ async function openFolderPicker() {
       <div class="brand-section">
         <div class="logo"><AppIcon :icon="Document" :size="56" /></div>
         <h1 class="app-title">NotesAgent</h1>
-        <p class="app-subtitle">本地优先的 AI 笔记软件</p>
+        <p class="app-subtitle">{{ t('本地优先的 AI 笔记软件', 'A local-first AI note-taking app') }}</p>
       </div>
 
       <div class="vault-card">
-        <h2 class="card-title">选择知识库</h2>
-        <p class="card-desc">Web 联调模式连接 AI Core 当前配置的 Vault</p>
+        <h2 class="card-title">{{ t('选择知识库', 'Select Knowledge Base') }}</h2>
+        <p class="card-desc">{{ t('Web 联调模式连接 AI Core 当前配置的 Vault', 'Web development mode connects to the Vault configured in AI Core') }}</p>
 
         <div v-if="workspaceStore.recentVaults.length" class="recent-vaults">
-          <div class="section-label">最近打开</div>
+          <div class="section-label">{{ t('最近打开', 'Recently opened') }}</div>
           <div class="vault-list">
             <button
               v-for="vault in workspaceStore.recentVaults"
@@ -84,15 +85,15 @@ async function openFolderPicker() {
 
         <div class="actions">
           <button class="btn btn-primary" @click="openFolderPicker" :disabled="isLoading || !workspaceStore.recentVaults.length">
-            <AppIcon :icon="FolderOpened" /> 打开后端 Vault
+            <AppIcon :icon="FolderOpened" /> {{ t('打开后端 Vault', 'Open backend Vault') }}
           </button>
         </div>
 
         <div class="ai-core-status">
           <span class="status-dot" :class="aiCoreStatus" />
-          <span v-if="aiCoreStatus === 'checking'">正在检查 AI Core 状态...</span>
-          <span v-else-if="aiCoreStatus === 'running'" class="status-running">AI Core 运行正常</span>
-          <span v-else class="status-stopped">AI Core 未启动（编辑功能仍可用）</span>
+          <span v-if="aiCoreStatus === 'checking'">{{ t('正在检查 AI Core 状态...', 'Checking AI Core status...') }}</span>
+          <span v-else-if="aiCoreStatus === 'running'" class="status-running">{{ t('AI Core 运行正常', 'AI Core is running') }}</span>
+          <span v-else class="status-stopped">{{ t('AI Core 未启动（编辑功能仍可用）', 'AI Core is offline (editing remains available)') }}</span>
         </div>
       </div>
 
@@ -100,7 +101,7 @@ async function openFolderPicker() {
         <span>v0.1.0</span>
         <button class="theme-toggle" @click="themeStore.toggleTheme()">
           <AppIcon :icon="themeStore.isDark ? Sunny : Moon" :size="15" />
-          {{ themeStore.isDark ? '浅色' : '深色' }}
+          {{ themeStore.isDark ? t('浅色', 'Light') : t('深色', 'Dark') }}
         </button>
       </div>
     </div>

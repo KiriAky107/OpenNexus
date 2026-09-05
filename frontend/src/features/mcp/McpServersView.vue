@@ -5,6 +5,7 @@ import AppIcon from '@/components/common/AppIcon.vue'
 import type { McpServer, McpServerInput, McpServerTransport } from '@/contracts'
 import * as service from '@/services/mcpServerService'
 import { emptyMcpConfig, mergeImportedSecrets, normalizeMcpConfig, parseMcpJson, type ImportedSecret, type SecretKind } from './configuration'
+import { t } from '@/i18n'
 
 const servers = ref<McpServer[]>([])
 const busy = ref('')
@@ -24,12 +25,12 @@ const secretDrafts = reactive<Record<string, string>>({})
 const form = reactive<McpServerInput>(emptyMcpConfig())
 const importedSecrets = ref<ImportedSecret[]>([])
 
-const dialogTitle = computed(() => editingId.value ? '编辑 MCP 服务器' : '新增 MCP 服务器')
+const dialogTitle = computed(() => editingId.value ? t('编辑 MCP 服务器', 'Edit MCP Server') : t('新增 MCP 服务器', 'Add MCP Server'))
 
 async function load() {
   error.value = ''
   try { servers.value = await service.listMcpServers() }
-  catch (cause) { error.value = message(cause, '读取 MCP 服务器失败') }
+  catch (cause) { error.value = message(cause, t('读取 MCP 服务器失败', 'Failed to load MCP servers')) }
 }
 
 function resetEditor(input: McpServerInput) {
@@ -84,8 +85,8 @@ function applyTemplate(transport: McpServerTransport) {
 
 function parseObject(value: string, label: string): Record<string, string> {
   let parsed: unknown
-  try { parsed = JSON.parse(value || '{}') } catch { throw new Error(`${label}必须是 JSON 对象`) }
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' || Object.values(parsed).some(item => typeof item !== 'string')) throw new Error(`${label}必须是字符串键值 JSON 对象`)
+  try { parsed = JSON.parse(value || '{}') } catch { throw new Error(`${label}${t('必须是 JSON 对象', ' must be a JSON object')}`) }
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' || Object.values(parsed).some(item => typeof item !== 'string')) throw new Error(`${label}${t('必须是字符串键值 JSON 对象', ' must be a JSON object with string keys and values')}`)
   return parsed as Record<string, string>
 }
 
@@ -97,8 +98,8 @@ function formPayload(): McpServerInput {
     command: stdio ? form.command?.trim() : null,
     args: stdio ? argsText.value.split('\n').map(value => value.trim()).filter(Boolean) : [],
     url: stdio ? null : form.url?.trim(),
-    headers: stdio ? {} : parseObject(headersText.value, '普通 Header'),
-    environment: stdio ? parseObject(environmentText.value, '普通环境变量') : {},
+    headers: stdio ? {} : parseObject(headersText.value, t('普通 Header', 'Headers')),
+    environment: stdio ? parseObject(environmentText.value, t('普通环境变量', 'Environment variables')) : {},
     secret_environment_keys: stdio ? splitKeys(secretKeysText.value) : [],
     secret_header_keys: stdio ? [] : splitKeys(secretHeaderKeysText.value),
     permissions: permissionsText.value.split(',').map(value => value.trim()).filter(Boolean),
@@ -131,7 +132,7 @@ function switchMode(mode: 'form' | 'json') {
     if (mode === 'json') rawConfig.value = JSON.stringify(payload(false), null, 2)
     else resetEditor(payload(false))
     editorMode.value = mode
-  } catch (cause) { error.value = message(cause, '配置转换失败') }
+  } catch (cause) { error.value = message(cause, t('配置转换失败', 'Configuration conversion failed')) }
 }
 
 async function save() {
@@ -140,8 +141,8 @@ async function save() {
   try {
     error.value = ''
     const input = payload()
-    if (!input.name || (input.transport === 'stdio' ? !input.command : !input.url)) throw new Error('请填写服务器名称和连接地址')
-    if (editingOriginal.value && executionChanged(editingOriginal.value, input) && !confirm('连接命令、地址或认证配置已变化，保存后旧测试与授权会失效。是否保存？')) return
+    if (!input.name || (input.transport === 'stdio' ? !input.command : !input.url)) throw new Error(t('请填写服务器名称和连接地址', 'Enter a server name and connection address'))
+    if (editingOriginal.value && executionChanged(editingOriginal.value, input) && !confirm(t('连接命令、地址或认证配置已变化，保存后旧测试与授权会失效。是否保存？', 'The command, address, or authentication settings changed. Previous tests and authorization will be invalidated. Save?'))) return
     busy.value = 'save'
     saved = editingId.value ? await service.updateMcpServer(editingId.value, input) : await service.createMcpServer(input)
     // Commit the returned ID/version before saving secrets so a partial failure can
@@ -157,7 +158,7 @@ async function save() {
     await load()
   } catch (cause) {
     if (saved) await load()
-    error.value = `${saved ? '服务器配置已保存，但密钥保存失败；可点击保存重试。' : ''}${message(cause, '保存失败')}`
+    error.value = `${saved ? t('服务器配置已保存，但密钥保存失败；可点击保存重试。', 'Server settings were saved, but saving secrets failed. Save again to retry.') : ''}${message(cause, t('保存失败', 'Save failed'))}`
   }
   finally { busy.value = '' }
 }
@@ -189,8 +190,8 @@ function executionChanged(server: McpServer, input: McpServerInput) {
 
 async function approve(server: McpServer): Promise<McpServer | null> {
   if (server.trusted) return server
-  const localWarning = server.transport === 'stdio' ? '\n\n本机进程尚无系统级沙箱，仅应运行可信服务器。' : '\n\n连接可能向该地址发送配置的 Header。'
-  if (!confirm(`请确认 MCP 连接：\n\n${server.command_summary}${localWarning}\n\n是否继续？`)) return null
+  const localWarning = server.transport === 'stdio' ? t('\n\n本机进程尚无系统级沙箱，仅应运行可信服务器。', '\n\nLocal processes have no system-level sandbox. Run trusted servers only.') : t('\n\n连接可能向该地址发送配置的 Header。', '\n\nThe connection may send configured headers to this address.')
+  if (!confirm(`${t('请确认 MCP 连接：', 'Confirm MCP connection:')}\n\n${server.command_summary}${localWarning}\n\n${t('是否继续？', 'Continue?')}`)) return null
   return service.trustMcpServer(server)
 }
 
@@ -199,14 +200,14 @@ async function toggle(server: McpServer) { await act(server, 'toggle', current =
 async function act(server: McpServer, action: string, operation: (server: McpServer) => Promise<McpServer>) {
   busy.value = `${action}:${server.server_id}`; error.value = ''
   try { const current = action === 'toggle' && server.enabled ? server : await approve(server); if (!current) return; await operation(current); await load() }
-  catch (cause) { error.value = message(cause, '操作失败') }
+  catch (cause) { error.value = message(cause, t('操作失败', 'Operation failed')) }
   finally { busy.value = '' }
 }
 
 async function remove(server: McpServer) {
-  if (!confirm(`删除“${server.name}”及其加密凭据？`)) return
+  if (!confirm(t(`删除“${server.name}”及其加密凭据？`, `Delete “${server.name}” and its encrypted credentials?`))) return
   try { busy.value = `delete:${server.server_id}`; await service.deleteMcpServer(server.server_id); await load() }
-  catch (cause) { error.value = message(cause, '删除失败') } finally { busy.value = '' }
+  catch (cause) { error.value = message(cause, t('删除失败', 'Delete failed')) } finally { busy.value = '' }
 }
 
 async function saveSecret(server: McpServer, key: string, kind: SecretKind) {
@@ -214,7 +215,7 @@ async function saveSecret(server: McpServer, key: string, kind: SecretKind) {
   const value = secretDrafts[draftKey]?.trim()
   if (!value) return
   try { busy.value = `secret:${draftKey}`; await service.putMcpServerSecret(server.server_id, key, value, kind); secretDrafts[draftKey] = ''; await load() }
-  catch (cause) { error.value = message(cause, '保存密钥失败') } finally { busy.value = '' }
+  catch (cause) { error.value = message(cause, t('保存密钥失败', 'Failed to save secret')) } finally { busy.value = '' }
 }
 
 function splitKeys(value: string) { return value.split(/[\n,]/).map(item => item.trim()).filter(Boolean) }
@@ -224,20 +225,20 @@ onMounted(load)
 
 <template>
   <section class="feature-page mcp-page">
-    <header class="feature-header"><div><h1>MCP 服务器</h1><p>管理独立 MCP Server 的连接、凭据与工具生命周期。</p></div><div class="inline-actions"><button class="button-secondary" :disabled="!!busy" @click="load"><AppIcon :icon="Refresh" /> 刷新</button><button class="button-primary" @click="openCreate"><AppIcon :icon="Plus" /> 新增服务器</button></div></header>
-    <div class="notice-banner">stdio 本机进程仅在开发环境开放；Streamable HTTP 为首选远程传输，SSE 仅用于兼容旧服务器。uvx 隔离依赖但不是安全沙箱。</div>
+    <header class="feature-header"><div><h1>{{ t('MCP 服务器', 'MCP Servers') }}</h1><p>{{ t('管理独立 MCP Server 的连接、凭据与工具生命周期。', 'Manage standalone MCP server connections, credentials, and tool lifecycles.') }}</p></div><div class="inline-actions"><button class="button-secondary" :disabled="!!busy" @click="load"><AppIcon :icon="Refresh" /> {{ t('刷新', 'Refresh') }}</button><button class="button-primary" @click="openCreate"><AppIcon :icon="Plus" /> {{ t('新增服务器', 'Add server') }}</button></div></header>
+    <div class="notice-banner">{{ t('stdio 本机进程仅在开发环境开放；Streamable HTTP 为首选远程传输，SSE 仅用于兼容旧服务器。uvx 隔离依赖但不是安全沙箱。', 'Local stdio processes are available only in development. Streamable HTTP is the preferred remote transport; SSE supports legacy servers. uvx isolates dependencies but is not a security sandbox.') }}</div>
     <div v-if="error" class="error-banner">{{ error }}</div>
-    <div v-if="!servers.length" class="panel empty"><AppIcon :icon="Connection" :size="34" /><h2>尚未配置 MCP 服务器</h2><p>添加 Server，测试连接成功后才能启用工具。</p><button class="button-primary" @click="openCreate">新增服务器</button></div>
+    <div v-if="!servers.length" class="panel empty"><AppIcon :icon="Connection" :size="34" /><h2>{{ t('尚未配置 MCP 服务器', 'No MCP servers configured') }}</h2><p>{{ t('添加 Server，测试连接成功后才能启用工具。', 'Add a server and test its connection before enabling its tools.') }}</p><button class="button-primary" @click="openCreate">{{ t('新增服务器', 'Add server') }}</button></div>
     <div v-else class="server-list">
       <article v-for="server in servers" :key="server.server_id" class="panel server-card">
         <div class="server-main"><div class="server-title"><AppIcon :icon="Connection" :size="24" /><div><h2>{{ server.name }}</h2><code>{{ server.command_summary }}</code></div></div><span class="badge" :class="{ success: server.status === 'ready', error: ['error','unhealthy'].includes(server.status) }">{{ server.status }}</span></div>
-        <div class="metadata"><span>{{ server.transport }}</span><span>v{{ server.version }}</span><span>{{ server.tools_count }} 个工具</span><span>{{ server.trusted ? '连接已确认' : '等待确认连接' }}</span><span v-if="server.last_test_succeeded">当前配置测试成功</span><span v-if="server.remote_server_name">{{ server.remote_server_name }} {{ server.remote_server_version }}</span></div>
+        <div class="metadata"><span>{{ server.transport }}</span><span>v{{ server.version }}</span><span>{{ server.tools_count }} {{ t('个工具', 'tools') }}</span><span>{{ server.trusted ? t('连接已确认', 'Connection confirmed') : t('等待确认连接', 'Awaiting confirmation') }}</span><span v-if="server.last_test_succeeded">{{ t('当前配置测试成功', 'Current configuration passed') }}</span><span v-if="server.remote_server_name">{{ server.remote_server_name }} {{ server.remote_server_version }}</span></div>
         <div v-if="server.error" class="error-banner compact">{{ server.error }}</div>
         <div v-if="Object.keys(server.secret_environment).length || Object.keys(server.secret_headers).length" class="secrets">
-          <label v-for="(configured, key) in server.secret_environment" :key="`env:${key}`"><span>环境变量 · {{ key }} <small>{{ configured ? '已加密保存' : '未配置' }}</small></span><span class="secret-input"><input v-model="secretDrafts[`${server.server_id}:environment:${key}`]" type="password" autocomplete="new-password" placeholder="输入后保存（不会回显）"><button class="button-secondary" @click="saveSecret(server, key, 'environment')">保存</button></span></label>
-          <label v-for="(configured, key) in server.secret_headers" :key="`header:${key}`"><span>HTTP Header · {{ key }} <small>{{ configured ? '已加密保存' : '未配置' }}</small></span><span class="secret-input"><input v-model="secretDrafts[`${server.server_id}:header:${key}`]" type="password" autocomplete="new-password" placeholder="输入后保存（不会回显）"><button class="button-secondary" @click="saveSecret(server, key, 'header')">保存</button></span></label>
+          <label v-for="(configured, key) in server.secret_environment" :key="`env:${key}`"><span>{{ t('环境变量', 'Environment variable') }} · {{ key }} <small>{{ configured ? t('已加密保存', 'Encrypted and saved') : t('未配置', 'Not configured') }}</small></span><span class="secret-input"><input v-model="secretDrafts[`${server.server_id}:environment:${key}`]" type="password" autocomplete="new-password" :placeholder="t('输入后保存（不会回显）', 'Enter and save (never displayed)')"><button class="button-secondary" @click="saveSecret(server, key, 'environment')">{{ t('保存', 'Save') }}</button></span></label>
+          <label v-for="(configured, key) in server.secret_headers" :key="`header:${key}`"><span>HTTP Header · {{ key }} <small>{{ configured ? t('已加密保存', 'Encrypted and saved') : t('未配置', 'Not configured') }}</small></span><span class="secret-input"><input v-model="secretDrafts[`${server.server_id}:header:${key}`]" type="password" autocomplete="new-password" :placeholder="t('输入后保存（不会回显）', 'Enter and save (never displayed)')"><button class="button-secondary" @click="saveSecret(server, key, 'header')">{{ t('保存', 'Save') }}</button></span></label>
         </div>
-        <footer class="card-actions"><button class="button-secondary" :disabled="!!busy || server.enabled" @click="test(server)"><AppIcon :icon="VideoPlay" /> 测试连接</button><button class="button-secondary" :disabled="!!busy" @click="openEdit(server)"><AppIcon :icon="EditPen" /> 编辑</button><button class="button-danger" :disabled="!!busy" @click="remove(server)"><AppIcon :icon="Delete" /> 删除</button><button class="button-primary" :disabled="!!busy || (!server.enabled && !server.last_test_succeeded)" :title="!server.enabled && !server.last_test_succeeded ? '请先测试当前配置' : ''" @click="toggle(server)">{{ server.enabled ? '停用' : '启用' }}</button></footer>
+        <footer class="card-actions"><button class="button-secondary" :disabled="!!busy || server.enabled" @click="test(server)"><AppIcon :icon="VideoPlay" /> {{ t('测试连接', 'Test connection') }}</button><button class="button-secondary" :disabled="!!busy" @click="openEdit(server)"><AppIcon :icon="EditPen" /> {{ t('编辑', 'Edit') }}</button><button class="button-danger" :disabled="!!busy" @click="remove(server)"><AppIcon :icon="Delete" /> {{ t('删除', 'Delete') }}</button><button class="button-primary" :disabled="!!busy || (!server.enabled && !server.last_test_succeeded)" :title="!server.enabled && !server.last_test_succeeded ? t('请先测试当前配置', 'Test the current configuration first') : ''" @click="toggle(server)">{{ server.enabled ? t('停用', 'Disable') : t('启用', 'Enable') }}</button></footer>
       </article>
     </div>
 
@@ -246,18 +247,18 @@ onMounted(load)
         <fieldset :disabled="!!busy" class="editor-fields">
         <header><h2><AppIcon :icon="Plus" /> {{ dialogTitle }}</h2><button type="button" class="close" @click="closeEditor">×</button></header>
         <div v-if="error" class="error-banner" role="alert">{{ error }}</div>
-        <div v-if="importedSecrets.length" class="notice-banner">已识别 {{ importedSecrets.length }} 项密钥，保存时将单独加密，不会写入普通服务器配置；取消将清除未保存密钥。</div>
-        <div class="mode-tabs"><button type="button" :class="{ active: editorMode === 'form' }" @click="switchMode('form')">表单配置</button><button type="button" :class="{ active: editorMode === 'json' }" @click="switchMode('json')">JSON 配置</button></div>
+        <div v-if="importedSecrets.length" class="notice-banner">{{ t('已识别', 'Detected') }} {{ importedSecrets.length }} {{ t('项密钥，保存时将单独加密，不会写入普通服务器配置；取消将清除未保存密钥。', 'secrets. They will be encrypted separately and excluded from regular server settings. Canceling clears unsaved secrets.') }}</div>
+        <div class="mode-tabs"><button type="button" :class="{ active: editorMode === 'form' }" @click="switchMode('form')">{{ t('表单配置', 'Form') }}</button><button type="button" :class="{ active: editorMode === 'json' }" @click="switchMode('json')">{{ t('JSON 配置', 'JSON') }}</button></div>
         <template v-if="editorMode === 'form'">
-          <label>服务器名称<input v-model="form.name" maxlength="80" placeholder="例如：文件系统工具"></label>
-          <div class="template-row"><span>服务器配置</span><button type="button" class="template" :class="{ active: form.transport === 'stdio' }" @click="applyTemplate('stdio')">stdio 模板</button><button type="button" class="template" :class="{ active: form.transport === 'streamable_http' }" @click="applyTemplate('streamable_http')">Streamable HTTP</button><button type="button" class="template" :class="{ active: form.transport === 'sse' }" @click="applyTemplate('sse')">SSE（兼容）</button></div>
-          <template v-if="form.transport === 'stdio'"><label>可执行命令<input v-model="form.command" placeholder="uvx、npx 或可信可执行文件路径"></label><label>参数（每行一项）<textarea v-model="argsText" rows="5"></textarea></label><div class="two-columns"><label>普通环境变量（JSON）<textarea v-model="environmentText" rows="5"></textarea></label><label>敏感环境变量名（每行一项）<textarea v-model="secretKeysText" rows="5" placeholder="API_KEY"></textarea></label></div></template>
-          <template v-else><label>MCP URL<input v-model="form.url" placeholder="https://example.com/mcp"></label><div class="two-columns"><label>普通 Header（JSON）<textarea v-model="headersText" rows="5" placeholder='{"X-Client":"NotesAgent"}'></textarea></label><label>敏感 Header 名（每行一项）<textarea v-model="secretHeaderKeysText" rows="5" placeholder="Authorization"></textarea></label></div></template>
-          <label>声明权限（逗号分隔，可选）<input v-model="permissionsText" placeholder="network.request, notes.read"></label>
-          <div class="two-columns"><label>启动超时（秒）<input v-model.number="form.startup_timeout_seconds" type="number" min="1" max="120"></label><label>工具超时（秒）<input v-model.number="form.tool_timeout_seconds" type="number" min="1" max="300"></label></div>
+          <label>{{ t('服务器名称', 'Server name') }}<input v-model="form.name" maxlength="80" :placeholder="t('例如：文件系统工具', 'For example: Filesystem tools')"></label>
+          <div class="template-row"><span>{{ t('服务器配置', 'Server configuration') }}</span><button type="button" class="template" :class="{ active: form.transport === 'stdio' }" @click="applyTemplate('stdio')">stdio {{ t('模板', 'template') }}</button><button type="button" class="template" :class="{ active: form.transport === 'streamable_http' }" @click="applyTemplate('streamable_http')">Streamable HTTP</button><button type="button" class="template" :class="{ active: form.transport === 'sse' }" @click="applyTemplate('sse')">SSE {{ t('（兼容）', '(legacy)') }}</button></div>
+          <template v-if="form.transport === 'stdio'"><label>{{ t('可执行命令', 'Executable command') }}<input v-model="form.command" :placeholder="t('uvx、npx 或可信可执行文件路径', 'uvx, npx, or a trusted executable path')"></label><label>{{ t('参数（每行一项）', 'Arguments (one per line)') }}<textarea v-model="argsText" rows="5"></textarea></label><div class="two-columns"><label>{{ t('普通环境变量（JSON）', 'Environment variables (JSON)') }}<textarea v-model="environmentText" rows="5"></textarea></label><label>{{ t('敏感环境变量名（每行一项）', 'Secret environment names (one per line)') }}<textarea v-model="secretKeysText" rows="5" placeholder="API_KEY"></textarea></label></div></template>
+          <template v-else><label>MCP URL<input v-model="form.url" placeholder="https://example.com/mcp"></label><div class="two-columns"><label>{{ t('普通 Header（JSON）', 'Headers (JSON)') }}<textarea v-model="headersText" rows="5" placeholder='{"X-Client":"NotesAgent"}'></textarea></label><label>{{ t('敏感 Header 名（每行一项）', 'Secret header names (one per line)') }}<textarea v-model="secretHeaderKeysText" rows="5" placeholder="Authorization"></textarea></label></div></template>
+          <label>{{ t('声明权限（逗号分隔，可选）', 'Declared permissions (comma-separated, optional)') }}<input v-model="permissionsText" placeholder="network.request, notes.read"></label>
+          <div class="two-columns"><label>{{ t('启动超时（秒）', 'Startup timeout (seconds)') }}<input v-model.number="form.startup_timeout_seconds" type="number" min="1" max="120"></label><label>{{ t('工具超时（秒）', 'Tool timeout (seconds)') }}<input v-model.number="form.tool_timeout_seconds" type="number" min="1" max="300"></label></div>
         </template>
-        <label v-else>服务器 JSON 配置<textarea v-model="rawConfig" class="json-editor" rows="22" spellcheck="false"></textarea><small>支持 NotesAgent 配置、command/args/env 和单服务器 mcpServers 配置。已声明的 Secret 及常见 API Key、Token、Authorization 会拆分后加密保存。其他敏感值请显式声明；不要把密钥放入命令或参数。</small><small>兼容导入 timeout 为启动超时，sse_read_timeout 为工具等待上限（不保留 SSE 读取超时语义）。</small></label>
-        <footer><button type="button" class="button-secondary" @click="closeEditor">取消</button><button class="button-primary" :disabled="busy === 'save'">保存</button></footer>
+        <label v-else>{{ t('服务器 JSON 配置', 'Server JSON configuration') }}<textarea v-model="rawConfig" class="json-editor" rows="22" spellcheck="false"></textarea><small>{{ t('支持 NotesAgent 配置、command/args/env 和单服务器 mcpServers 配置。已声明的 Secret 及常见 API Key、Token、Authorization 会拆分后加密保存。其他敏感值请显式声明；不要把密钥放入命令或参数。', 'Supports NotesAgent, command/args/env, and single-server mcpServers configurations. Declared secrets and common API key, token, and authorization values are separated and encrypted. Declare other sensitive values explicitly; never place secrets in commands or arguments.') }}</small><small>{{ t('兼容导入 timeout 为启动超时，sse_read_timeout 为工具等待上限（不保留 SSE 读取超时语义）。', 'For compatible imports, timeout maps to startup timeout and sse_read_timeout maps to the tool wait limit.') }}</small></label>
+        <footer><button type="button" class="button-secondary" @click="closeEditor">{{ t('取消', 'Cancel') }}</button><button class="button-primary" :disabled="busy === 'save'">{{ t('保存', 'Save') }}</button></footer>
         </fieldset>
       </form>
     </div>
