@@ -23,7 +23,7 @@ it('renders SVG with the requested theme and keeps async revisions isolated', as
   expect(oldPublish).not.toHaveBeenCalled()
   expect(latestPublish).toHaveBeenCalledWith(latest)
   expect(latestPublish.mock.calls[0]![0]).not.toBe(latest)
-  document.getElementById(latest.id)?.remove()
+  document.body.replaceChildren()
   expect(renderMermaid).toHaveBeenLastCalledWith('graph TD; A-->C', { theme: 'dark' })
 })
 
@@ -31,7 +31,7 @@ it('shows syntax errors as text without executing markup', async () => {
   vi.mocked(renderMermaid).mockResolvedValueOnce({ svg: '', warnings: ['<img src=x onerror=alert(1)>'], width: 0, height: 0 })
   const preview = createMermaidPreview('invalid', false, vi.fn())
   await flushPromises()
-  expect(preview.classList.contains('has-error')).toBe(true)
+  expect(preview.querySelector('.has-error')).not.toBeNull()
   expect(preview.querySelector('img')).toBeNull()
   expect(preview.textContent).toContain('点击编辑')
 })

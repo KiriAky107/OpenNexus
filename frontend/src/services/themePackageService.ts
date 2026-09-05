@@ -1,5 +1,10 @@
 import type { InstalledTheme, ThemeManifest, ThemePackageInspection } from '@/contracts'
 import paperMomentsPackage from '@/assets/themes/paper-moments.theme?raw'
+import { valid, gt } from 'semver'
+import appPackage from '../../package.json'
+import { isMap, parseDocument } from 'yaml'
+
+export const THEME_APP_VERSION = appPackage.version
 
 const STORAGE_KEY = 'installed-themes'
 const ACTIVE_CUSTOM_KEY = 'active-custom-theme'
@@ -103,9 +108,11 @@ function validateManifest(raw: Record<string, unknown>): { manifest: ThemeManife
   if (!/^[a-z0-9_-]+$/.test(String(raw.theme_id))) {
     throw new Error('THEME_MANIFEST_INVALID: theme_id must match [a-z0-9_-]+')
   }
-  if (!/^\d+\.\d+\.\d+/.test(String(raw.version))) {
-    warnings.push('版本号格式建议使用 semver（如 1.0.0）')
+  for (const field of ['version', 'min_app_version']) {
+    if (typeof raw[field] !== 'string' || !valid(raw[field] as string)) throw new Error(`THEME_MANIFEST_INVALID: ${field} 必须是有效的 semver 版本号`)
   }
+  if (gt(raw.min_app_version as string, THEME_APP_VERSION)) throw new Error(`THEME_VERSION_INCOMPATIBLE: 主题需要应用 ${raw.min_app_version}，当前版本为 ${THEME_APP_VERSION}`)
+  if (raw.is_dark !== undefined && typeof raw.is_dark !== 'boolean') throw new Error('THEME_MANIFEST_INVALID: is_dark 必须是布尔值')
   const cssEntry = String(raw.css_entry)
   if (cssEntry.includes('://') || cssEntry.startsWith('data:')) {
     throw new Error('THEME_SECURITY_VIOLATION: css_entry must be a relative path within the package')
@@ -158,24 +165,9 @@ function removeThemeCss(themeId: string) {
 }
 
 function inspectYamlContent(yamlText: string): ThemeManifest {
-  const lines = yamlText.split('\n')
-  const result: Record<string, unknown> = {}
-  let currentKey: string | null = null
-  for (const line of lines) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-    const match = trimmed.match(/^([a-z_]+):\s*(.*)$/i)
-    if (match) {
-      currentKey = match[1]
-      let value = match[2].trim()
-      if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1)
-      else if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1)
-      else if (value === 'true') result[currentKey] = true
-      else if (value === 'false') result[currentKey] = false
-      else if (/^\d+$/.test(value)) result[currentKey] = Number(value)
-      if (currentKey && !(currentKey in result)) result[currentKey] = value
-    }
-  }
+  const document = parseDocument(yamlText)
+  if (document.errors.length || document.warnings.length || !isMap(document.contents)) throw new Error('THEME_MANIFEST_INVALID: 主题清单必须是有效的 YAML 映射')
+  const result = document.toJS({ maxAliasCount: 20 }) as Record<string, unknown>
   const { manifest } = validateManifest(result)
   return manifest
 }
@@ -278,6 +270,7 @@ export async function installTheme(
   manifest: ThemeManifest,
   cssContent: string,
 ): Promise<InstalledTheme> {
+  validateManifest(manifest as unknown as Record<string, unknown>)
   // validateCssSafety 会对 @import / expression() / javascript: 抛错，
   // 必须在 applyThemeCss 之前调用 —— 未校验的 CSS 一律不许进入页面。
   const warnings = validateCssSafety(cssContent)
@@ -314,6 +307,7 @@ export async function enableTheme(themeId: string): Promise<InstalledTheme> {
   const themes = loadStoredThemes()
   const theme = themes.find((t) => t.theme_id === themeId)
   if (!theme) throw new Error('THEME_PACKAGE_NOT_FOUND')
+  validateManifest(theme.manifest as unknown as Record<string, unknown>)
   theme.enabled = true
   saveThemes(themes)
   return theme
@@ -346,6 +340,11 @@ export function getActiveCustomTheme(): string | null {
 }
 
 export function setActiveCustomTheme(themeId: string | null) {
+  if (themeId) {
+    const theme = loadStoredThemes().find(item => item.theme_id === themeId)
+    if (!theme) throw new Error('THEME_PACKAGE_NOT_FOUND')
+    validateManifest(theme.manifest as unknown as Record<string, unknown>)
+  }
   const css = themeId ? localStorage.getItem(`${STORAGE_KEY}-css-${themeId}`) : null
   // Validate before changing the current page. Only the selected theme owns a style node.
   if (css) validateCssSafety(css)

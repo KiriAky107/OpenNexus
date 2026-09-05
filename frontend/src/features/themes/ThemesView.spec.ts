@@ -21,6 +21,12 @@ it('downloads a URL for inspection without automatically installing it', async (
   await vi.waitFor(() => expect(useThemeStore().pendingInspection?.compatible).toBe(true))
   expect(useThemeStore().isThemeInstalled('paper-moments')).toBe(false)
   expect(wrapper.get('.inspection-result').text()).toContain('纸间时光')
+  await wrapper.findAll('button').find(button => button.text() === '预览主题效果')!.trigger('click')
+  const preview = wrapper.get('iframe')
+  expect(preview.attributes('sandbox')).toBe('')
+  expect(preview.attributes('srcdoc')).toContain('Content-Security-Policy')
+  expect(preview.attributes('srcdoc')).toContain('data-theme="paper-moments"')
+  expect(useThemeStore().isThemeInstalled('paper-moments')).toBe(false)
 })
 
 it('ignores a URL response after the dialog is cancelled', async () => {

@@ -273,7 +273,7 @@ class LocalSpeech:
         from app.contracts import TranscriptSegment
         result = await runtime.infer("qwen3-asr", "transcription", {"source": str(source.resolve()), "language": language})
         return RoutedTranscript(text=result["text"], source="local",
-                                segments=[TranscriptSegment(**s) for s in result["segments"]])
+                                segments=[TranscriptSegment(**s) for s in result["segments"]], warnings=result.get("warnings", []))
 
     async def match(self, source, reference):
         result = await runtime.infer("eres2netv2", "speaker_matching",

@@ -9,6 +9,7 @@ import CommunityThemePreview from './CommunityThemePreview.vue'
 import paperMomentsUrl from '@/assets/themes/paper-moments.theme?url'
 
 const themeStore = useThemeStore()
+const previewImport = ref(false)
 
 const activeTab = ref<'installed' | 'community'>('installed')
 const showImportDialog = ref(false)
@@ -22,6 +23,7 @@ let importGeneration = 0
 let downloadController: AbortController | undefined
 
 function resetImport() {
+  previewImport.value = false
   importGeneration++
   downloadController?.abort()
   importing.value = false
@@ -253,6 +255,7 @@ onMounted(() => {
             <summary>将要安装的 CSS（{{ themeStore.pendingInspection.css.length }} 字符）</summary>
             <pre>{{ themeStore.pendingInspection.css }}</pre>
           </details>
+          <button type="button" class="button-secondary" @click="previewImport = true">预览主题效果</button>
         </div>
 
         <div v-else class="upload-area">
@@ -280,6 +283,7 @@ onMounted(() => {
       </div>
     </div>
   </section>
+  <CommunityThemePreview v-if="previewImport && themeStore.pendingInspection?.compatible" :theme-id="themeStore.pendingInspection.manifest.theme_id" :name="themeStore.pendingInspection.manifest.name" :css="themeStore.pendingInspection.css" @close="previewImport = false" />
 </template>
 
 <style scoped>

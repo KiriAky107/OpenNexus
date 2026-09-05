@@ -21,6 +21,32 @@ const expandedNodes = ref<Set<string>>(new Set())
 const detailNodes = ref<Set<string>>(new Set())
 const viewMode = ref<'timeline' | 'tree'>('timeline')
 const showDetails = ref(true)
+const query = ref('')
+const eventType = ref('')
+const toolName = ref('')
+const errorsOnly = ref(false)
+const eventTypes = computed(() => [...new Set(props.events.map(event => event.event))])
+const toolNames = computed(() => [...new Set(props.events.filter(event => event.event === 'ToolCall').map(event => String(event.data.name ?? '')))].filter(Boolean))
+const filtering = computed(() => Boolean(query.value.trim() || eventType.value || toolName.value || errorsOnly.value))
+const filteredEvents = computed(() => {
+  const toolIds = new Set(props.events.filter(event => event.event === 'ToolCall' && event.data.name === toolName.value).map(event => event.data.tool_call_id))
+  return props.events.filter(event => (!eventType.value || event.event === eventType.value)
+    && (!toolName.value || (event.data.tool_call_id != null && toolIds.has(event.data.tool_call_id)))
+    && (!errorsOnly.value || event.event.endsWith('Failed') || Boolean(event.data.error_code) || event.data.success === false || event.data.is_error === true)
+    && (!query.value.trim() || `${eventLabel(event.event)} ${event.event} ${JSON.stringify(event.data)}`.toLowerCase().includes(query.value.trim().toLowerCase())))
+})
+const filteredTree = computed(() => {
+  if (!filtering.value) return traceNodes.value
+  const matches = (node: TraceNode) => filteredEvents.value.some(event => event.sequence === node.sequence
+    || (node.type === 'tool_call' && node.data.tool_call_id != null && node.data.tool_call_id === event.data.tool_call_id)
+    || (node.type === 'model_call' && node.data.model_call_id != null && node.data.model_call_id === event.data.model_call_id))
+  const prune = (nodes: TraceNode[]): TraceNode[] => nodes.flatMap(node => {
+    const children = prune(node.children)
+    return matches(node) || children.length ? [{ ...node, children }] : []
+  })
+  return prune(traceNodes.value)
+})
+function resetFilters() { query.value = ''; eventType.value = ''; toolName.value = ''; errorsOnly.value = false }
 
 const traceNodes = computed(() => buildTraceNodes(props.events))
 const toolCalls = computed(() => getToolCallsFromEvents(props.events))
@@ -119,14 +145,14 @@ function flatNodes(nodes: TraceNode[], depth = 0): Array<{ node: TraceNode; dept
   const result: Array<{ node: TraceNode; depth: number }> = []
   for (const node of nodes) {
     result.push({ node, depth })
-    if (node.children.length > 0 && isExpanded(node.id)) {
+    if (node.children.length > 0 && (filtering.value || isExpanded(node.id))) {
       result.push(...flatNodes(node.children, depth + 1))
     }
   }
   return result
 }
 
-const flatTrace = computed(() => flatNodes(traceNodes.value))
+const flatTrace = computed(() => flatNodes(filteredTree.value))
 </script>
 
 <template>
@@ -165,10 +191,19 @@ const flatTrace = computed(() => flatNodes(traceNodes.value))
       </div>
     </div>
 
+    <div class="trace-filters">
+      <input v-model="query" class="input" aria-label="搜索执行轨迹" placeholder="搜索参数、结果或引用…" />
+      <select v-model="eventType" class="select" aria-label="事件类型"><option value="">全部事件</option><option v-for="kind in eventTypes" :key="kind" :value="kind">{{ eventLabel(kind) }}</option></select>
+      <select v-model="toolName" class="select" aria-label="工具筛选"><option value="">全部工具</option><option v-for="name in toolNames" :key="name" :value="name">{{ name }}</option></select>
+      <label><input v-model="errorsOnly" type="checkbox" /> 仅错误</label>
+      <button v-if="filtering" class="button-secondary" @click="resetFilters">清除筛选</button>
+      <span aria-live="polite">{{ filteredEvents.length }} / {{ events.length }} 事件</span>
+    </div>
+    <p v-if="filtering && !filteredEvents.length" class="subtle" role="status">没有匹配的事件</p>
     <div v-if="viewMode === 'timeline'" class="timeline-view">
       <div class="timeline">
         <article
-          v-for="event in events"
+          v-for="event in filteredEvents"
           :key="event.sequence"
           class="event-card"
           :class="{ expanded: isDetailOpen(`event-${event.sequence}`) }"
@@ -265,7 +300,7 @@ const flatTrace = computed(() => flatNodes(traceNodes.value))
       </div>
     </div>
 
-    <div v-if="toolCalls.length > 0 && viewMode === 'timeline'" class="tool-calls-summary panel">
+    <div v-if="!filtering && toolCalls.length > 0 && viewMode === 'timeline'" class="tool-calls-summary panel">
       <h3 class="panel-title">工具调用统计</h3>
       <div class="tool-call-list">
         <div v-for="call in toolCalls" :key="call.tool_call_id" class="tool-call-item" :class="call.status">
@@ -284,6 +319,10 @@ const flatTrace = computed(() => flatNodes(traceNodes.value))
 </template>
 
 <style scoped>
+.trace-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px; border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-surface-primary); }
+.trace-filters > input { flex: 1 1 220px; min-width: 0; }
+.trace-filters label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.trace-filters span { color: var(--color-text-secondary); font-size: var(--font-size-sm); }
 .trace-visualization {
   display: grid;
   gap: var(--space-lg);
