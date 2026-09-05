@@ -4,7 +4,7 @@
 
 NotesAgent 是本地优先的 AI 笔记与知识库项目。当前可运行形态为 Vue/Vite Web 前端与 FastAPI AI Core：Markdown 和附件保存在本地 Vault，SQLite 管理元数据、全文索引、向量空间、搜索历史、AI 会话、任务、Agent Trace、多模态任务及运行诊断。AI 对话已接入知识库检索，会话与消息由后端持久化并供 Web 和桌面客户端共用。
 
-截至 2026-09-05，第一阶段及第二阶段 A～F 的工程范围已经合并到 `main`。当前已完成真实 Workspace、混合检索与知识库问答、Agent/Tool/Permission、Skill/Plugin、MCP 配置与调用、模型提供商与路由、RAG Benchmark，以及本地 Embedding、音频转写和片段级声纹聚类。Tauri/Rust Host、Stronghold、原生多 Vault 文件系统、生产级 MCP 沙箱和 Sync Server 尚未接入。
+截至 2026-09-06，第一阶段及第二阶段 A～F 的工程范围已经合并到 `main`。当前已完成真实 Workspace、混合检索与知识库问答、Agent/Tool/Permission、Skill/Plugin、MCP 配置与调用、模型提供商与路由、RAG Benchmark，以及本地 Embedding、音频转写和片段级声纹聚类。Tauri/Rust Host、Stronghold、原生多 Vault 文件系统、生产级 MCP 沙箱和 Sync Server 尚未接入。
 
 ## 目录
 
@@ -27,6 +27,20 @@ NotesAgent/
 - 模型运行：默认 CPU，可选 CUDA 12.8 组件；固定模型 revision，按需启动独立子进程，交互检索优先排队，CUDA 初始化或显存失败时用同一冻结配置在 CPU 重试一次。
 - 可观测性：输入、输出、缓存命中、推理 Token 与音频用量卡片；本地运行诊断保留最近 200 条，不保存正文、文件路径、密钥或异常全文。
 - 界面偏好：设置页可即时切换全局中文/英文界面，并控制由系统词典提供的编辑器拼写检查；偏好目前保存于 Web 端设备配置，后续由 Tauri 配置存储接管。
+
+## 第二阶段最新合并（2026-09-06）
+
+PR #31 已合并。工作区打开与 HTTP 保存不再等待向量推理；正文和全文索引先可用，向量随后后台更新。“已保存”与“向量就绪”是两个独立状态。Skill / Plugin 支持 ZIP 安装与本地安装状态恢复，并已提供功能示例包；远程社区仍是第三阶段计划。
+
+新增开发说明：
+
+- [工作区后台索引与保存](docs/development/工作区后台索引与保存开发说明.md)：状态、并发、恢复和验证。
+- [Mermaid 预览与缩放](docs/development/Mermaid预览与缩放开发说明.md)：大图适配、鼠标缩放和文字裁切修复。
+- [扩展安装持久化与社区包](docs/development/扩展安装持久化与社区包开发说明.md)：安装边界和示例包验证。
+- [模型上下文管理](docs/development/模型上下文管理.md)：全局人设、预算估算和摘要限制。
+- [第三阶段实施规划](docs/architecture/第三阶段实施规划.md)：Tauri Rust 容器、各社区与 Sync Server。
+
+代码基线 `a5c44c4` 的验证结果为后端 621 项、前端 345 项测试通过，前端生产构建通过。这是该提交的回归记录，不表示全部真实厂商及设备场景完成专项验收。
 
 ## 本地模型
 
