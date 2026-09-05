@@ -50,8 +50,11 @@ export async function getPlugin(pluginId: string): Promise<Plugin> {
   return toPlugin(await apiClient.get<ApiPlugin>(`/api/plugins/${pluginId}`))
 }
 
-export async function installPlugin(packagePath: string): Promise<Plugin> {
-  return toPlugin(await apiClient.post<ApiPlugin>('/api/plugins/install', { package_path: packagePath }))
+export async function installPlugin(source: string | File): Promise<Plugin> {
+  const installed = typeof source === 'string'
+    ? await apiClient.post<ApiPlugin>('/api/plugins/install', { package_path: source })
+    : await apiClient.postBinary<ApiPlugin>('/api/plugins/install-zip', source)
+  return toPlugin(installed)
 }
 
 export async function enablePlugin(pluginId: string): Promise<Plugin> {

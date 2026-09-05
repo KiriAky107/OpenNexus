@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
+const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { mediaService, createMediaSubmission, type MediaJob } from '@/services/mediaService'
@@ -48,7 +51,7 @@ async function refresh() {
   if (!stopped) timer = setTimeout(refresh, 2000)
 }
 async function choose(job: MediaJob) {
-  if (dirty.value && !window.confirm(t('当前校对尚未保存，切换后放弃修改？', 'The current corrections are unsaved. Discard them and switch?'))) return
+  if (dirty.value && !(await askConfirm(t('当前校对尚未保存，切换后放弃修改？', 'The current corrections are unsaved. Discard them and switch?')))) return
   selected.value = JSON.parse(JSON.stringify(job)); dirty.value = false; history.value = []
 }
 async function action(work: () => Promise<void>) {
@@ -77,7 +80,7 @@ async function purge() {
   if (!selected.value) return
   await action(async () => {
     const impact = await mediaService.impact(selected.value!.attachment_id)
-    if (!window.confirm(`${impact.message}\n${t('将保留', 'Will retain')} ${impact.retained_note_ids.length} ${t('篇已保存笔记。确定清理？', 'saved notes. Continue cleanup?')}`)) return
+    if (!(await askConfirm(`${impact.message}\n${t('将保留', 'Will retain')} ${impact.retained_note_ids.length} ${t('篇已保存笔记。确定清理？', 'saved notes. Continue cleanup?')}`))) return
     await mediaService.purge(selected.value!.attachment_id)
     selected.value = await mediaService.get(selected.value!.job_id)
     dirty.value = false; history.value = []; notice.value = t('附件与转写内容已清理', 'Attachment and transcript content were removed')
@@ -110,6 +113,7 @@ onUnmounted(() => { stopped = true; clearTimeout(timer) })
 
 <template>
   <section class="media-page">
+    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <header class="feature-header"><div><h1>{{ t('音视频转写', 'Media Transcription') }}</h1><p class="subtle">{{ t('上传音频或视频音轨，转写、校对后保存到知识库。最多 128 MiB；超过 25 MiB 请启用仅本地处理。音轨最长 1 小时。', 'Upload audio or a video soundtrack, transcribe and correct it, then save it to the knowledge base. Up to 128 MiB; enable local-only processing above 25 MiB. Audio duration is limited to one hour.') }}</p></div></header>
     <div v-if="error" class="error-banner" role="alert">{{ error }}</div><p v-if="notice" role="status">{{ notice }}</p>
     <form class="panel upload" @submit.prevent="submit">

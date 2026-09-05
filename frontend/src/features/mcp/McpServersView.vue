@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
+const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 import AppDialog from '@/components/common/AppDialog.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Connection, Delete, EditPen, Plus, Refresh, VideoPlay } from '@element-plus/icons-vue'
@@ -143,7 +146,7 @@ async function save() {
     error.value = ''
     const input = payload()
     if (!input.name || (input.transport === 'stdio' ? !input.command : !input.url)) throw new Error(t('请填写服务器名称和连接地址', 'Enter a server name and connection address'))
-    if (editingOriginal.value && executionChanged(editingOriginal.value, input) && !confirm(t('连接命令、地址或认证配置已变化，保存后旧测试与授权会失效。是否保存？', 'The command, address, or authentication settings changed. Previous tests and authorization will be invalidated. Save?'))) return
+    if (editingOriginal.value && executionChanged(editingOriginal.value, input) && !(await askConfirm(t('连接命令、地址或认证配置已变化，保存后旧测试与授权会失效。是否保存？', 'The command, address, or authentication settings changed. Previous tests and authorization will be invalidated. Save?')))) return
     busy.value = 'save'
     saved = editingId.value ? await service.updateMcpServer(editingId.value, input) : await service.createMcpServer(input)
     // Commit the returned ID/version before saving secrets so a partial failure can
@@ -192,7 +195,7 @@ function executionChanged(server: McpServer, input: McpServerInput) {
 async function approve(server: McpServer): Promise<McpServer | null> {
   if (server.trusted) return server
   const localWarning = server.transport === 'stdio' ? t('\n\n本机进程尚无系统级沙箱，仅应运行可信服务器。', '\n\nLocal processes have no system-level sandbox. Run trusted servers only.') : t('\n\n连接可能向该地址发送配置的 Header。', '\n\nThe connection may send configured headers to this address.')
-  if (!confirm(`${t('请确认 MCP 连接：', 'Confirm MCP connection:')}\n\n${server.command_summary}${localWarning}\n\n${t('是否继续？', 'Continue?')}`)) return null
+  if (!(await askConfirm(`${t('请确认 MCP 连接：', 'Confirm MCP connection:')}\n\n${server.command_summary}${localWarning}\n\n${t('是否继续？', 'Continue?')}`))) return null
   return service.trustMcpServer(server)
 }
 
@@ -206,7 +209,7 @@ async function act(server: McpServer, action: string, operation: (server: McpSer
 }
 
 async function remove(server: McpServer) {
-  if (!confirm(t(`删除“${server.name}”及其加密凭据？`, `Delete “${server.name}” and its encrypted credentials?`))) return
+  if (!(await askConfirm(t(`删除“${server.name}”及其加密凭据？`, `Delete “${server.name}” and its encrypted credentials?`)))) return
   try { busy.value = `delete:${server.server_id}`; await service.deleteMcpServer(server.server_id); await load() }
   catch (cause) { error.value = message(cause, t('删除失败', 'Delete failed')) } finally { busy.value = '' }
 }
@@ -226,6 +229,7 @@ onMounted(load)
 
 <template>
   <section class="feature-page mcp-page">
+    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <header class="feature-header"><div><h1>{{ t('MCP 服务器', 'MCP Servers') }}</h1><p>{{ t('管理独立 MCP Server 的连接、凭据与工具生命周期。', 'Manage standalone MCP server connections, credentials, and tool lifecycles.') }}</p></div><div class="inline-actions"><button class="button-secondary" :disabled="!!busy" @click="load"><AppIcon :icon="Refresh" /> {{ t('刷新', 'Refresh') }}</button><button class="button-primary" @click="openCreate"><AppIcon :icon="Plus" /> {{ t('新增服务器', 'Add server') }}</button></div></header>
     <div class="notice-banner">{{ t('stdio 本机进程仅在开发环境开放；Streamable HTTP 为首选远程传输，SSE 仅用于兼容旧服务器。uvx 隔离依赖但不是安全沙箱。', 'Local stdio processes are available only in development. Streamable HTTP is the preferred remote transport; SSE supports legacy servers. uvx isolates dependencies but is not a security sandbox.') }}</div>
     <div v-if="error" class="error-banner">{{ error }}</div>
