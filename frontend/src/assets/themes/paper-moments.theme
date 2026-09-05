@@ -1,6 +1,6 @@
 theme_id: paper-moments
 name: 纸间时光 · Paper Moments
-version: 1.4.0
+version: 1.4.1
 author: NotesAgent
 description: 奶油纸张、手帐虚线与粉蓝胶带，把每天的灵感好好收藏。
 min_app_version: 0.2.0
@@ -141,7 +141,7 @@ license: MIT
 [data-theme="paper-moments"] .markdown-toolbar { background: #fff9e9; border-bottom: 1px dashed #b5a693; }
 [data-theme="paper-moments"] .milkdown-host { padding: 30px 24px 40px; }
 [data-theme="paper-moments"] .milkdown-host .milkdown { background: transparent; }
-[data-theme="paper-moments"] .milkdown-host .ProseMirror {
+[data-theme="paper-moments"] .visual-editor .milkdown-host .ProseMirror {
   width: 90%;
   max-width: none;
   position: relative;
@@ -172,7 +172,7 @@ license: MIT
 [data-theme="paper-moments"] .editor-pane.source { margin: 20px; width: calc(100% - 40px); border: 1px solid #b5a693; border-radius: 8px; background: #fffef8; box-shadow: var(--shadow-md); }
 @media (max-width: 720px) {
   [data-theme="paper-moments"] .milkdown-host { padding: 20px 12px 28px; }
-  [data-theme="paper-moments"] .milkdown-host .ProseMirror { width: 100%; padding: 30px 18px 40px 38px; }
+  [data-theme="paper-moments"] .visual-editor .milkdown-host .ProseMirror { width: 100%; padding: 30px 18px 40px 38px; }
 }
 
 /* Warm neutral surfaces preserve the contrast of the selected Shiki palette. */

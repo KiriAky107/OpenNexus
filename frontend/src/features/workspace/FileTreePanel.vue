@@ -68,6 +68,12 @@ const filteredTree = computed(() => {
   })
   return filter(workspaceStore.fileTree)
 })
+function expandAllFiles() {
+  const expand = (nodes: FileNode[]) => nodes.forEach(node => {
+    if (node.type === 'folder') { node.is_open = true; expand(node.children ?? []) }
+  })
+  expand(workspaceStore.fileTree)
+}
 let lastScrollTop = 0
 function revealSearch(event: WheelEvent) {
   if (activeTab.value !== 'files') return
@@ -216,6 +222,7 @@ function containingFolder(path: string): string {
       <button type="button" :title="t('新建笔记', 'New note')" :aria-label="t('新建笔记', 'New note')" @click.stop="beginCreate('file', selectedFolderPath)"><AppIcon :icon="DocumentAdd" /></button>
       <button type="button" :title="t('新建文件夹', 'New folder')" :aria-label="t('新建文件夹', 'New folder')" @click.stop="beginCreate('folder', selectedFolderPath)"><AppIcon :icon="FolderAdd" /></button>
       <button type="button" :aria-label="t('搜索文件', 'Search files')" :aria-expanded="searchVisible" @click="searchVisible = !searchVisible">{{ t('搜索', 'Search') }}</button>
+      <button type="button" :aria-label="t('全部展开文件夹', 'Expand all folders')" @click="expandAllFiles">{{ t('全部展开', 'Expand all') }}</button>
     </div>
     <div v-if="searchVisible || searchQuery || searchFocused" class="file-search">
       <input v-model="searchQuery" type="search" :placeholder="t('搜索文件或文件夹…', 'Search files or folders…')" :aria-label="t('搜索文件或文件夹', 'Search files or folders')" @focus="searchFocused = true" @blur="searchFocused = false" />

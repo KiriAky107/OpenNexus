@@ -11,11 +11,11 @@ let renderVersion = 0
 const diagramTheme = computed<'light' | 'dark'>(() => (themeStore.isDark ? 'dark' : 'light'))
 
 // 主题切换需要重渲染：Mermaid SVG 的配色在渲染时烘焙，无法靠 CSS 变量事后调整。
-watch([() => props.source, diagramTheme], async ([source, theme]) => {
+watch([() => props.source, diagramTheme, () => themeStore.currentThemeId], async ([source, theme]) => {
   const version = ++renderVersion
   const result = await renderMarkdown(source, { theme })
   if (version === renderVersion) html.value = result
-}, { immediate: true })
+}, { immediate: true, flush: 'post' })
 </script>
 
 <template>
