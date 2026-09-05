@@ -209,7 +209,11 @@ class HtmlExporter:
             warnings.append(self._format_plot_diagnostic(diag))
         if parsed.plot is None:
             return f'<pre class="function-plot">{html.escape(node.text)}</pre>'
-        rendered = render_svg(parsed.plot)
+        try:
+            rendered = render_svg(parsed.plot)
+        except Exception as exc:  # 渲染异常回退占位，绝不阻断整篇导出
+            warnings.append(f"函数图像：渲染失败，已回退占位（{exc}）")
+            return f'<pre class="function-plot">{html.escape(node.text)}</pre>'
         warnings.extend(rendered.warnings)
         return f'<figure class="function-plot">{rendered.content}</figure>'
 

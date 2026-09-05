@@ -162,6 +162,9 @@ def _check_node(node: ast.AST) -> None:
             _unsafe(f"不支持的函数调用 {ast.dump(node.func)!r}")
         if node.keywords:
             _unsafe("函数调用不支持关键字参数")
+        # 白名单内所有函数均恰取 1 个参数，提前校验避免求值期 TypeError
+        if len(node.args) != 1:
+            _unsafe(f"{node.func.id} 需要 1 个参数，实际 {len(node.args)} 个")
         for arg in node.args:
             _check_node(arg)
         return
@@ -206,6 +209,9 @@ def _eval_node(node: ast.AST, x: float) -> float:
             return left * right
         if isinstance(node.op, ast.Div):
             return left / right
+        # 负数底 + 非整数指数会得到复数，数学绘图不支持，抛 ValueError 让采样点作为断点处理
+        if left < 0 and not right.is_integer():
+            raise ValueError("negative base with fractional exponent")
         return left**right
     if isinstance(node, ast.UnaryOp):
         value = _eval_node(node.operand, x)
