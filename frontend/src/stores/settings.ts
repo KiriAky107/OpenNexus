@@ -5,7 +5,7 @@ import { resolveApiUrl } from '@/services/apiClient'
 import packageInfo from '../../package.json'
 import * as indexService from '@/services/indexService'
 import * as systemService from '@/services/systemService'
-import { appLocale } from '@/i18n'
+import { appLocale, t } from '@/i18n'
 
 export const useSettingsStore = defineStore('settings', () => {
   const saved = (() => {
@@ -17,7 +17,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const autoSaveInterval = ref(typeof saved.autoSaveInterval === 'number' ? saved.autoSaveInterval : 1500)
   const language = appLocale
   const appVersion = ref(packageInfo.version)
-  const aiCoreVersion = ref('未获取')
+  const aiCoreVersion = ref('—')
 
   // Editor
   const defaultEditorMode = ref<'wysiwyg' | 'source'>(saved.defaultEditorMode === 'source' ? 'source' : 'wysiwyg')
@@ -48,10 +48,10 @@ export const useSettingsStore = defineStore('settings', () => {
     ])
     const [health, status, index, policy] = results
     aiCoreStatus.value = health.status === 'fulfilled' && health.value.status === 'ok' ? 'running' : 'error'
-    aiCoreVersion.value = status.status === 'fulfilled' ? status.value.version : '未获取'
+    aiCoreVersion.value = status.status === 'fulfilled' ? status.value.version : '—'
     indexStatus.value = index.status === 'fulfilled' ? index.value : emptyIndex()
     permissionPolicy.value = policy.status === 'fulfilled' ? policy.value : {}
-    diagnosticsError.value = results.filter(item => item.status === 'rejected').map(item => item.reason instanceof Error ? item.reason.message : '后端请求失败').join('；') || null
+    diagnosticsError.value = results.filter(item => item.status === 'rejected').map(item => item.reason instanceof Error ? item.reason.message : t('后端请求失败', 'Backend request failed')).join(t('；', '; ')) || null
   }
 
   function setAutoSaveInterval(ms: number) {
@@ -69,7 +69,7 @@ export const useSettingsStore = defineStore('settings', () => {
       indexStatus.value = await indexService.getIndexStatus()
     } catch (reason) {
       indexStatus.value.status = 'error'
-      indexStatus.value.error = reason instanceof Error ? reason.message : '索引重建失败'
+      indexStatus.value.error = reason instanceof Error ? reason.message : t('索引重建失败', 'Index rebuild failed')
     }
   }
 

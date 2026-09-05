@@ -81,7 +81,7 @@ async function loadActive() {
       }
     }
   } catch (reason) {
-    if (version === loadVersion) feedback(message(reason, 'MCP 数据加载失败'))
+    if (version === loadVersion) feedback(message(reason, t('MCP 数据加载失败', 'Failed to load MCP data')))
   } finally {
     if (version === loadVersion) loading.value = false
   }
@@ -94,7 +94,7 @@ async function restartHost() {
     host.value = await pluginService.getPluginHostStatus(props.plugin.plugin_id)
     await pluginStore.loadPlugins()
     notice.value = t('MCP Host 已重启。', 'MCP Host restarted.')
-  } catch (reason) { feedback(message(reason, 'MCP Host 重启失败')) } finally { busy.value = '' }
+  } catch (reason) { feedback(message(reason, t('MCP Host 重启失败', 'Failed to restart MCP Host'))) } finally { busy.value = '' }
 }
 function updateValue(field: PluginSettingField, raw: string | boolean) {
   values.value[field.key] = field.type === 'number' && typeof raw === 'string' ? (raw === '' ? null : Number(raw)) : raw
@@ -107,7 +107,7 @@ async function saveSettings() {
     schema.value = await pluginService.updatePluginSettings(props.plugin.plugin_id, schema.value.schema_version, values.value)
     values.value = { ...schema.value.values }
     notice.value = t('普通设置已保存。', 'Settings saved.')
-  } catch (reason) { feedback(message(reason, '设置保存失败')) } finally { busy.value = '' }
+  } catch (reason) { feedback(message(reason, t('设置保存失败', 'Failed to save settings'))) } finally { busy.value = '' }
 }
 async function saveSecret(field: PluginSettingField) {
   const secret = secrets.value[field.key]?.trim()
@@ -119,7 +119,7 @@ async function saveSecret(field: PluginSettingField) {
     if (schema.value) schema.value.secrets[field.key] = { configured: state.configured }
     secrets.value[field.key] = ''
     notice.value = field.label + t('已加密保存。', ' encrypted and saved.')
-  } catch (reason) { feedback(message(reason, '密钥保存失败')) } finally { busy.value = '' }
+  } catch (reason) { feedback(message(reason, t('密钥保存失败', 'Failed to save secret'))) } finally { busy.value = '' }
 }
 async function deleteSecret(field: PluginSettingField) {
   if (!confirm(t('删除已保存的', 'Delete saved ') + field.label + '？')) return
@@ -130,7 +130,7 @@ async function deleteSecret(field: PluginSettingField) {
     if (schema.value) schema.value.secrets[field.key] = { configured: state.configured }
     secrets.value[field.key] = ''
     notice.value = field.label + t('已删除。', ' deleted.')
-  } catch (reason) { feedback(message(reason, '密钥删除失败')) } finally { busy.value = '' }
+  } catch (reason) { feedback(message(reason, t('密钥删除失败', 'Failed to delete secret'))) } finally { busy.value = '' }
 }
 function properties(command: PluginCommand): Record<string, Record<string, unknown>> {
   const result = command.parameters.properties
@@ -178,7 +178,7 @@ async function execute(command: PluginCommand) {
       await loadActive()
       notice.value = t('相关数据已刷新。', 'Related data refreshed.')
     } else notice.value = t('命令执行完成。', 'Command completed.')
-  } catch (reason) { feedback(message(reason, '命令执行失败')) } finally { busy.value = '' }
+  } catch (reason) { feedback(message(reason, t('命令执行失败', 'Command failed'))) } finally { busy.value = '' }
 }
 </script>
 
