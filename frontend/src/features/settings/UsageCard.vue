@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { apiClient } from '@/services/apiClient'
-interface Usage {totals: Record<string,number|null>;coverage:Record<string,number>;request_count:number;complete_requests:number;cache_hit_rate:number|null;cache_covered_requests:number;options:{provider_id:string;model:string;source:string}[]}
+import { t } from '@/i18n'
+interface Usage {audio_request_count:number;audio_seconds:number|null;audio_covered_requests:number;totals: Record<string,number|null>;coverage:Record<string,number>;request_count:number;complete_requests:number;cache_hit_rate:number|null;cache_covered_requests:number;options:{provider_id:string;model:string;source:string}[]}
 const data = ref<Usage | null>(null)
 const period = ref('7')
 const provider = ref('')
@@ -11,7 +12,7 @@ const start = ref('')
 const end = ref('')
 const busy = ref(false)
 const error = ref('')
-const metrics: Record<string,string> = {input_tokens:'输入 Token',output_tokens:'输出 Token',total_tokens:'总 Token',cache_hit_tokens:'缓存命中',cache_miss_tokens:'缓存未命中',cache_write_tokens:'缓存写入',reasoning_tokens:'推理 Token'}
+const metrics = computed<Record<string,string>>(() => ({input_tokens:t('输入 Token','Input tokens'),output_tokens:t('输出 Token','Output tokens'),total_tokens:t('总 Token','Total tokens'),cache_hit_tokens:t('缓存命中','Cache hits'),cache_miss_tokens:t('缓存未命中','Cache misses'),cache_write_tokens:t('缓存写入','Cache writes'),reasoning_tokens:t('推理 Token','Reasoning tokens')}))
 async function load() {
   busy.value = true; error.value = ''
   try {
@@ -19,26 +20,27 @@ async function load() {
     const from = period.value === 'custom' ? new Date(start.value) : new Date(until)
     if (period.value === 'today') from.setHours(0,0,0,0)
     else if (period.value !== 'custom') from.setDate(from.getDate() - Number(period.value))
-    if (!Number.isFinite(from.getTime()) || !Number.isFinite(until.getTime()) || until <= from) throw new Error('请选择有效的开始与结束时间。')
+    if (!Number.isFinite(from.getTime()) || !Number.isFinite(until.getTime()) || until <= from) throw new Error(t('请选择有效的开始与结束时间。', 'Choose a valid start and end time.'))
     data.value = await apiClient.get<Usage>('/api/usage', {params: {start:from.toISOString(),end:until.toISOString(),provider_id:provider.value || undefined,model:model.value || undefined,source:source.value || undefined}})
   } catch(e) { error.value = (e as Error).message } finally { busy.value = false }
 }
 onMounted(load)
 </script>
 <template>
-  <section class="panel usage-card"><header><h3>Token 消耗情况</h3><button class="button-secondary" :disabled="busy" @click="load">{{ busy ? '加载中…' : '刷新统计' }}</button></header>
-    <div class="filters"><label>时间<select v-model="period" class="select" @change="period !== 'custom' && load()"><option value="today">今日</option><option value="7">近 7 天</option><option value="30">近 30 天</option><option value="custom">自定义</option></select></label>
-      <label>提供商<select v-model="provider" class="select" @change="model = ''; load()"><option value="">全部</option><option v-for="id in [...new Set(data?.options.map(o => o.provider_id) || [])]" :key="id">{{ id }}</option></select></label>
-      <label>模型<select v-model="model" class="select" @change="load"><option value="">全部</option><option v-for="id in [...new Set(data?.options.filter(o => !provider || o.provider_id === provider).map(o => o.model) || [])]" :key="id">{{ id }}</option></select></label>
-      <label>来源<select v-model="source" class="select" @change="load"><option value="">全部</option><option value="api">远程 API</option><option value="local">本地服务</option></select></label>
+  <section class="panel usage-card"><header><h3>{{ t('Token 消耗情况', 'Token Usage') }}</h3><button class="button-secondary" :disabled="busy" @click="load">{{ busy ? t('加载中…', 'Loading…') : t('刷新统计', 'Refresh') }}</button></header>
+    <div class="filters"><label>{{ t('时间', 'Period') }}<select v-model="period" class="select" @change="period !== 'custom' && load()"><option value="today">{{ t('今日', 'Today') }}</option><option value="7">{{ t('近 7 天', 'Last 7 days') }}</option><option value="30">{{ t('近 30 天', 'Last 30 days') }}</option><option value="custom">{{ t('自定义', 'Custom') }}</option></select></label>
+      <label>{{ t('提供商', 'Provider') }}<select v-model="provider" class="select" @change="model = ''; load()"><option value="">{{ t('全部', 'All') }}</option><option v-for="id in [...new Set(data?.options.map(o => o.provider_id) || [])]" :key="id">{{ id }}</option></select></label>
+      <label>{{ t('模型', 'Model') }}<select v-model="model" class="select" @change="load"><option value="">{{ t('全部', 'All') }}</option><option v-for="id in [...new Set(data?.options.filter(o => !provider || o.provider_id === provider).map(o => o.model) || [])]" :key="id">{{ id }}</option></select></label>
+      <label>{{ t('来源', 'Source') }}<select v-model="source" class="select" @change="load"><option value="">{{ t('全部', 'All') }}</option><option value="api">{{ t('远程 API', 'Remote API') }}</option><option value="local">{{ t('本地服务', 'Local service') }}</option></select></label>
     </div>
-    <div v-if="period === 'custom'" class="filters"><label>开始<input v-model="start" class="input" type="datetime-local" /></label><label>结束<input v-model="end" class="input" type="datetime-local" /></label><button class="button-secondary" @click="load">应用时间段</button></div>
+    <div v-if="period === 'custom'" class="filters"><label>{{ t('开始', 'Start') }}<input v-model="start" class="input" type="datetime-local" /></label><label>{{ t('结束', 'End') }}<input v-model="end" class="input" type="datetime-local" /></label><button class="button-secondary" @click="load">{{ t('应用时间段', 'Apply period') }}</button></div>
     <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
-    <template v-if="data"><p v-if="!data.request_count" class="subtle">该时间段没有已记录的模型请求。</p>
-      <div class="usage-grid"><div v-for="(label,key) in metrics" :key="key"><small>{{ label }}</small><strong>{{ data.totals[key] === null ? '未提供' : data.totals[key]?.toLocaleString() }}</strong><small>覆盖 {{ data.coverage[key] }} / {{ data.request_count }} 次</small></div>
-      <div><small>缓存命中率</small><strong>{{ data.cache_hit_rate === null ? '未提供' : `${(data.cache_hit_rate * 100).toFixed(1)}%` }}</strong><small>覆盖 {{ data.cache_covered_requests }} 次</small></div></div>
-      <p class="subtle">请求 {{ data.request_count }} 次，其中完整结束 {{ data.complete_requests }} 次。输入总量包含厂商已报告的缓存，推理 Token 不重复加入输出。</p>
-    </template><p class="subtle">统计为本应用观测值，不是厂商账户账单。缺失指标显示“未提供”，历史未记录的数据不补估。</p>
+    <template v-if="data"><p v-if="!data.request_count" class="subtle">{{ t('该时间段没有已记录的模型请求。', 'No model requests were recorded during this period.') }}</p>
+      <div class="usage-grid"><div v-for="(label,key) in metrics" :key="key"><small>{{ label }}</small><strong>{{ data.totals[key] === null ? t('未提供', 'Unavailable') : data.totals[key]?.toLocaleString() }}</strong><small>{{ t('覆盖', 'Coverage') }} {{ data.coverage[key] }} / {{ data.request_count }} {{ t('次', 'requests') }}</small></div>
+      <div><small>{{ t('缓存命中率', 'Cache hit rate') }}</small><strong>{{ data.cache_hit_rate === null ? t('未提供', 'Unavailable') : `${(data.cache_hit_rate * 100).toFixed(1)}%` }}</strong><small>{{ t('覆盖', 'Coverage') }} {{ data.cache_covered_requests }}</small></div></div>
+      <p class="subtle">{{ t('音频调用', 'Audio calls') }} {{ data.audio_request_count ?? 0 }} · {{ t('时长', 'Duration') }} {{ data.audio_seconds == null ? t('未提供', 'Unavailable') : `${data.audio_seconds.toFixed(2)} ${t('秒', 'sec')}` }} ({{ t('覆盖', 'coverage') }} {{ data.audio_covered_requests ?? 0 }}; {{ t('重试分别计数', 'retries counted separately') }})</p>
+      <p class="subtle">{{ t('请求', 'Requests') }} {{ data.request_count }}, {{ t('其中完整结束', 'completed') }} {{ data.complete_requests }}. {{ t('输入总量包含厂商已报告的缓存，推理 Token 不重复加入输出。', 'Input totals include provider-reported cache tokens; reasoning tokens are not added to output twice.') }}</p>
+    </template><p class="subtle">{{ t('统计为本应用观测值，不是厂商账户账单。缺失指标显示“未提供”，历史未记录的数据不补估。', 'Statistics are application observations, not provider billing. Missing metrics stay unavailable and historical gaps are not estimated.') }}</p>
   </section>
 </template>
 <style scoped>.usage-card{display:grid;gap:16px;padding:20px}.usage-card header,.filters{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.usage-card header{justify-content:space-between}.filters label{display:grid;gap:5px}.usage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:16px}.usage-grid>div{display:grid;gap:8px}.usage-grid strong{font-size:22px}</style>

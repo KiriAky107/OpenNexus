@@ -8,6 +8,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { usePluginStore } from '@/stores/plugin'
 import * as pluginService from '@/services/pluginService'
 import type { PluginCommand } from '@/contracts'
+import { t } from '@/i18n'
 
 const pluginStore = usePluginStore()
 const actionError = ref('')
@@ -29,28 +30,28 @@ watch(() => pluginStore.selectedPluginId, async (pluginId) => {
 })
 
 async function install() {
-  const path = prompt('请输入 Plugin Package 路径')?.trim()
+  const path = prompt(t('请输入 Plugin Package 路径', 'Enter the Plugin Package path'))?.trim()
   if (!path) return
   try { await pluginStore.installPlugin(path) }
-  catch (error) { actionError.value = error instanceof Error ? error.message : '安装失败' }
+  catch (error) { actionError.value = error instanceof Error ? error.message : t('安装失败', 'Installation failed') }
 }
 
 async function toggle(id: string, enabled: boolean) {
   try {
     enabled ? await pluginStore.disablePlugin(id) : await pluginStore.enablePlugin(id)
-  } catch (error) { actionError.value = error instanceof Error ? error.message : '状态更新失败' }
+  } catch (error) { actionError.value = error instanceof Error ? error.message : t('状态更新失败', 'Status update failed') }
 }
 
 async function grant(id: string, permissions: string[]) {
-  if (!confirm(`将授权：${permissions.join('、')}。是否继续？`)) return
+  if (!confirm(`${t('将授权：', 'Grant permissions: ')}${permissions.join(', ')}。${t('是否继续？', 'Continue?')}`)) return
   try { await pluginStore.grantPermissions(id, permissions) }
-  catch (error) { actionError.value = error instanceof Error ? error.message : '授权失败' }
+  catch (error) { actionError.value = error instanceof Error ? error.message : t('授权失败', 'Authorization failed') }
 }
 
 async function uninstall(id: string, name: string) {
-  if (!confirm(`卸载"${name}"将移除其全部 Contribution，是否继续？`)) return
+  if (!confirm(t(`卸载「${name}」将移除其全部 Contribution，是否继续？`, `Uninstalling “${name}” removes all its contributions. Continue?`))) return
   try { await pluginStore.uninstallPlugin(id) }
-  catch (error) { actionError.value = error instanceof Error ? error.message : '卸载失败' }
+  catch (error) { actionError.value = error instanceof Error ? error.message : t('卸载失败', 'Uninstall failed') }
 }
 
 const hasSettingsContribution = computed(() =>
@@ -65,8 +66,8 @@ const hasCommandContribution = computed(() =>
 <template>
   <section class="feature-page">
     <header class="feature-header">
-      <div><h1>Plugin 与 MCP</h1><p>管理插件生命周期、MCP Host、权限和受控 Contribution。</p></div>
-      <button class="button-primary" @click="install">安装 Plugin</button>
+      <div><h1>{{ t('Plugin 与 MCP', 'Plugins and MCP') }}</h1><p>{{ t('管理插件生命周期、MCP Host、权限和受控 Contribution。', 'Manage plugin lifecycles, MCP hosts, permissions, and controlled contributions.') }}</p></div>
+      <button class="button-primary" @click="install">{{ t('安装 Plugin', 'Install Plugin') }}</button>
     </header>
 
     <div v-if="pluginStore.error || actionError" class="error-banner">
@@ -95,15 +96,15 @@ const hasCommandContribution = computed(() =>
               v-if="pluginStore.selectedPlugin.status === 'permission_required'"
               class="button-primary"
               @click="grant(pluginStore.selectedPlugin.plugin_id, pluginStore.selectedPlugin.permissions)"
-            >授权权限</button>
+            >{{ t('授权权限', 'Grant permissions') }}</button>
             <button
               class="button-secondary"
               @click="toggle(pluginStore.selectedPlugin.plugin_id, pluginStore.selectedPlugin.enabled)"
-            >{{ pluginStore.selectedPlugin.enabled ? '停用' : '启用' }}</button>
+            >{{ pluginStore.selectedPlugin.enabled ? t('停用', 'Disable') : t('启用', 'Enable') }}</button>
             <button
               class="button-danger"
               @click="uninstall(pluginStore.selectedPlugin.plugin_id, pluginStore.selectedPlugin.name)"
-            >卸载</button>
+            >{{ t('卸载', 'Uninstall') }}</button>
           </div>
         </div>
 
@@ -114,25 +115,25 @@ const hasCommandContribution = computed(() =>
             class="tab-btn"
             :class="{ active: activeTab === 'info' }"
             @click="activeTab = 'info'"
-          >概览</button>
+          >{{ t('概览', 'Overview') }}</button>
           <button
             v-if="hasCommandContribution"
             class="tab-btn"
             :class="{ active: activeTab === 'commands' }"
             @click="activeTab = 'commands'"
-          >命令 ({{ pluginCommands.length }})</button>
+          >{{ t('命令', 'Commands') }} ({{ pluginCommands.length }})</button>
           <button
             v-if="hasSettingsContribution || pluginCommands.some(c => c.enabled)"
             class="tab-btn"
             :class="{ active: activeTab === 'settings' }"
             @click="activeTab = 'settings'"
-          >设置</button>
+          >{{ t('设置', 'Settings') }}</button>
         </div>
 
         <div v-if="activeTab === 'info'" class="tab-content">
           <div class="detail-grid">
             <div>
-              <h3>权限</h3>
+              <h3>{{ t('权限', 'Permissions') }}</h3>
               <div class="tag-list">
                 <span v-for="permission in pluginStore.selectedPlugin.permissions" :key="permission" class="badge warning">
                   {{ permission }}
@@ -158,7 +159,7 @@ const hasCommandContribution = computed(() =>
             {{ pluginStore.selectedPlugin.last_error }}
           </div>
           <div v-if="pluginStore.selectedPlugin.dependent_skills?.length" class="notice-banner">
-            依赖此插件的 Skill：{{ pluginStore.selectedPlugin.dependent_skills.join('、') }}
+            {{ t('依赖此插件的 Skill：', 'Skills that depend on this plugin: ') }}{{ pluginStore.selectedPlugin.dependent_skills.join(', ') }}
           </div>
           <PluginMcpPanel :plugin="pluginStore.selectedPlugin" />
         </div>
@@ -175,8 +176,8 @@ const hasCommandContribution = computed(() =>
 
     <div v-else-if="!pluginStore.plugins.length" class="empty-state">
       <div>
-        <strong>{{ pluginStore.isLoading ? '正在加载…' : pluginStore.error ? '加载失败' : '尚未安装' }}</strong>
-        <button class="button-secondary" @click="pluginStore.loadPlugins">重新加载</button>
+        <strong>{{ pluginStore.isLoading ? t('正在加载…', 'Loading…') : pluginStore.error ? t('加载失败', 'Load failed') : t('尚未安装', 'No plugins installed') }}</strong>
+        <button class="button-secondary" @click="pluginStore.loadPlugins">{{ t('重新加载', 'Reload') }}</button>
       </div>
     </div>
 
@@ -204,7 +205,7 @@ const hasCommandContribution = computed(() =>
         </div>
         <p class="muted">{{ plugin.description }}</p>
         <p class="subtle">
-          {{ plugin.permissions.length }} 项权限 · {{ plugin.contributions.length }} 项 Contribution
+          {{ plugin.permissions.length }} {{ t('项权限', 'permissions') }} · {{ plugin.contributions.length }} {{ t('项 Contribution', 'contributions') }}
         </p>
       </article>
     </div>

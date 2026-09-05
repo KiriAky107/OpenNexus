@@ -4,6 +4,7 @@ import MarkdownContent from '@/components/common/MarkdownContent.vue'
 import { useThemeStore } from '@/stores/theme'
 import { mockCommunityThemes } from '@/services/themePackageService'
 import type { ThemePackageInspection } from '@/contracts'
+import { t } from '@/i18n'
 
 const themeStore = useThemeStore()
 
@@ -85,12 +86,12 @@ onMounted(() => {
   <section class="feature-page">
     <header class="feature-header">
       <div>
-        <h1>主题</h1>
+        <h1>{{ t('主题', 'Themes') }}</h1>
         <p>浏览、导入和管理主题，打造你的知识工作流。</p>
       </div>
       <div class="inline-actions">
         <button class="button-secondary" @click="showImportDialog = true">导入主题</button>
-        <button class="button-secondary" @click="themeStore.resetToDefault()">恢复默认</button>
+        <button class="button-secondary" @click="themeStore.resetToDefault()">{{ t('恢复默认', 'Reset defaults') }}</button>
       </div>
     </header>
 
@@ -131,10 +132,10 @@ onMounted(() => {
             <strong>{{ theme.name }}</strong>
             <p class="subtle">{{ theme.description }}</p>
           </div>
-          <span v-if="themeStore.currentThemeId === theme.theme_id" class="badge success">使用中</span>
+          <span v-if="themeStore.currentThemeId === theme.theme_id" class="badge success">{{ t('使用中', 'Active') }}</span>
         </div>
         <p class="subtle">
-          v{{ theme.version }} · {{ theme.builtin ? '内置主题' : theme.author }}
+          v{{ theme.version }} · {{ theme.builtin ? t('内置主题', 'Built-in theme') : theme.author }}
           <span v-if="!theme.builtin"> · 自定义</span>
         </p>
         <div v-if="!theme.builtin" class="theme-actions" @click.stop>
@@ -178,47 +179,16 @@ onMounted(() => {
     </div>
 
     <div class="panel preference-panel">
-      <h2 class="panel-title">编辑器外观</h2>
+      <h2 class="panel-title">{{ t('编辑器外观', 'Editor Appearance') }}</h2>
       <div class="form-grid">
-        <div class="field">
-          <label>字号：{{ themeStore.fontEditorSize }}px</label>
-          <input v-model.number="themeStore.fontEditorSize" type="range" min="12" max="24" />
-        </div>
-        <div class="field">
-          <label>行高：{{ themeStore.lineHeight }}</label>
-          <input v-model.number="themeStore.lineHeight" type="range" min="1.2" max="2.2" step="0.1" />
-        </div>
-        <div class="field">
-          <label>字体</label>
-          <select v-model="themeStore.fontEditorFamily" class="select">
-            <option value="system-ui">系统字体</option>
-            <option value="serif">衬线字体</option>
-            <option value="var(--font-ui-mono)">等宽字体</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>代码块样式</label>
-          <select v-model="themeStore.codeBlockTheme" class="select">
-            <option value="auto">跟随主题</option>
-            <option value="github-light">GitHub Light</option>
-            <option value="github-dark">GitHub Dark</option>
-          </select>
-          <small>Markdown 渲染使用对应的 Shiki GitHub 主题</small>
-        </div>
+        <div class="field"><label>{{ t('字号', 'Font size') }}: {{ themeStore.fontEditorSize }}px</label><input v-model.number="themeStore.fontEditorSize" type="range" min="12" max="24" /></div>
+        <div class="field"><label>{{ t('行高', 'Line height') }}: {{ themeStore.lineHeight }}</label><input v-model.number="themeStore.lineHeight" type="range" min="1.2" max="2.2" step="0.1" /></div>
+        <div class="field"><label>{{ t('字体', 'Font') }}</label><select v-model="themeStore.fontEditorFamily" class="select"><option value="system-ui">{{ t('系统字体', 'System font') }}</option><option value="serif">{{ t('衬线字体', 'Serif') }}</option><option value="var(--font-ui-mono)">{{ t('等宽字体', 'Monospace') }}</option></select></div>
+        <div class="field"><label>{{ t('代码块样式', 'Code block style') }}</label><select v-model="themeStore.codeBlockTheme" class="select"><option value="auto">{{ t('跟随主题', 'Follow theme') }}</option><option value="github-light">GitHub Light</option><option value="github-dark">GitHub Dark</option></select><small>{{ t('Markdown 渲染使用对应的 Shiki GitHub 主题', 'Markdown rendering uses the matching Shiki GitHub theme') }}</small></div>
       </div>
-      <div
-        class="editor-preview"
-        :style="{
-          fontSize: `${themeStore.fontEditorSize}px`,
-          lineHeight: themeStore.lineHeight,
-          fontFamily: themeStore.fontEditorFamily,
-        }"
-      >
-        <div class="preview-heading">
-          <h3>主题预览</h3>
-          <span class="badge info">{{ codeThemeLabel }}</span>
-        </div>
-        <p>知识的价值不只在于保存，更在于被重新发现和使用。</p>
+      <div class="editor-preview" :style="{ fontSize: `${themeStore.fontEditorSize}px`, lineHeight: themeStore.lineHeight, fontFamily: themeStore.fontEditorFamily }">
+        <div class="preview-heading"><h3>{{ t('主题预览', 'Theme Preview') }}</h3><span class="badge info">{{ codeThemeLabel }}</span></div>
+        <p>{{ t('知识的价值不只在于保存，更在于被重新发现和使用。', 'Knowledge gains value when it can be rediscovered and used.') }}</p>
         <MarkdownContent class="code-theme-preview" :source="shikiPreview" />
       </div>
     </div>

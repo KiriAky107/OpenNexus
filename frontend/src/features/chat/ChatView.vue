@@ -6,6 +6,7 @@ import { useProviderStore } from '@/stores/provider'
 import { useSkillStore } from '@/stores/skill'
 import MarkdownContent from '@/components/common/MarkdownContent.vue'
 import { useCitationNavigation } from '@/composables/useCitationNavigation'
+import { t } from '@/i18n'
 
 const chatStore = useChatStore()
 const providerStore = useProviderStore()
@@ -19,7 +20,7 @@ const availableModels = computed(() => providerStore.modelsByProvider[chatStore.
 
 onMounted(async () => {
   try {
-    await Promise.all([providerStore.loadProviders(), skillStore.loadSkills()])
+    await Promise.all([providerStore.loadProviders(), skillStore.loadSkills(), chatStore.loadConversations()])
     if (disposed || providerStore.error) return
     const selected = providerStore.enabledProviders.find(p => p.provider_id === chatStore.selectedProviderId)
     if (!selected) {
@@ -29,7 +30,7 @@ onMounted(async () => {
     }
   } catch (error) {
     if (disposed) return
-    loadError.value = error instanceof Error ? error.message : '无法加载 AI 配置，请检查后端连接。'
+    loadError.value = error instanceof Error ? error.message : t('无法加载 AI 配置，请检查后端连接。', 'Unable to load AI configuration. Check the backend connection.')
   }
 })
 
@@ -37,7 +38,7 @@ async function refreshModels(providerId: string) {
   loadError.value = ''
   if (!providerId) return
   try { await providerStore.loadModels(providerId) }
-  catch (error) { if (!disposed && chatStore.selectedProviderId === providerId) loadError.value = error instanceof Error ? error.message : '模型列表加载失败，请手动填写模型 ID。' }
+  catch (error) { if (!disposed && chatStore.selectedProviderId === providerId) loadError.value = error instanceof Error ? error.message : t('模型列表加载失败，请手动填写模型 ID。', 'Unable to load models. Enter a model ID manually.') }
 }
 
 watch(() => chatStore.selectedProviderId, async (providerId) => {
@@ -52,7 +53,7 @@ async function openCitationCard(citation: Citation) {
   try {
     await openCitation(citation)
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : '引用定位失败'
+    loadError.value = error instanceof Error ? error.message : t('引用定位失败', 'Failed to open citation')
   }
 }
 </script>
@@ -63,19 +64,19 @@ async function openCitationCard(citation: Citation) {
       <div class="field compact"><label>Provider</label><select v-model="chatStore.selectedProviderId" class="select">
         <option v-for="provider in providerStore.enabledProviders" :key="provider.provider_id" :value="provider.provider_id">{{ provider.name }}</option>
       </select></div>
-      <div class="field compact"><label>模型 ID</label><input v-model="chatStore.selectedModel" class="input" list="chat-models" placeholder="填写模型 ID" /><datalist id="chat-models"><option v-for="model in availableModels" :key="model.model_id" :value="model.model_id">{{ model.name }}</option></datalist></div>
-      <label class="rag-toggle"><input v-model="chatStore.useRag" type="checkbox" :disabled="chatStore.isStreaming" />检索知识库</label>
-      <span class="subtle">开启后，将相关笔记片段发送给所选模型，并显示来源。技能调用请使用智能体。</span>
+      <div class="field compact"><label>{{ t('模型 ID', 'Model ID') }}</label><input v-model="chatStore.selectedModel" class="input" list="chat-models" :placeholder="t('填写模型 ID', 'Enter model ID')" /><datalist id="chat-models"><option v-for="model in availableModels" :key="model.model_id" :value="model.model_id">{{ model.name }}</option></datalist></div>
+      <label class="rag-toggle"><input v-model="chatStore.useRag" type="checkbox" :disabled="chatStore.isStreaming" />{{ t('检索知识库', 'Search knowledge base') }}</label>
+      <span class="subtle">{{ t('开启后，将相关笔记片段发送给所选模型，并显示来源。技能调用请使用智能体。', 'When enabled, relevant note excerpts are sent to the selected model and citations are shown. Use Agent for skills.') }}</span>
     </header>
-    <div v-if="loadError || providerStore.error" class="error-banner chat-error">{{ loadError || providerStore.error }}</div>
+    <div v-if="loadError || providerStore.error || chatStore.historyError" class="error-banner chat-error">{{ loadError || providerStore.error || chatStore.historyError }}</div>
     <main class="message-timeline">
-      <div v-if="!chatStore.messages.length" class="empty-state"><div><strong>开始一段知识对话</strong><p>请先配置模型提供商。聊天记录仅保留在本次页面会话中。</p></div></div>
+      <div v-if="!chatStore.messages.length" class="empty-state"><div><strong>{{ t('开始一段知识对话', 'Start a knowledge conversation') }}</strong><p>{{ t('请先配置模型提供商。聊天记录保存在本地数据库中。', 'Configure a model provider first. Messages are saved in the local database.') }}</p></div></div>
       <article v-for="message in chatStore.messages" :key="message.message_id" class="message" :class="message.role">
-        <div class="avatar">{{ message.role === 'user' ? '你' : 'AI' }}</div>
+        <div class="avatar">{{ message.role === 'user' ? t('你', 'You') : 'AI' }}</div>
         <div class="message-body">
-          <details v-if="message.thinking" class="thinking"><summary>思考过程</summary><p>{{ message.thinking }}</p></details>
+          <details v-if="message.thinking" class="thinking"><summary>{{ t('思考过程', 'Reasoning') }}</summary><p>{{ message.thinking }}</p></details>
           <MarkdownContent v-if="message.content" class="message-content" :source="message.content" />
-          <div v-else-if="chatStore.isStreaming" class="message-content">正在思考…</div>
+          <div v-else-if="chatStore.isStreaming" class="message-content">{{ t('正在思考…', 'Thinking…') }}</div>
           <div v-if="message.tool_calls?.length" class="tool-calls"><div v-for="call in message.tool_calls" :key="call.tool_call_id" class="item-card"><span class="badge info">{{ call.status }}</span><strong>{{ call.name }}</strong><pre>{{ JSON.stringify(call.parameters, null, 2) }}</pre></div></div>
           <div v-if="message.citations?.length" class="citations">
             <button v-for="(citation, index) in message.citations" :key="citation.block_id" class="citation-card" @click="openCitationCard(citation)">
@@ -83,16 +84,16 @@ async function openCitationCard(citation: Citation) {
             </button>
           </div>
           <time>{{ new Date(message.created_at).toLocaleTimeString() }}</time>
-          <small v-if="message.usage" class="usage">Token {{ message.usage.total_tokens }}<span v-if="message.usage.input_tokens !== undefined && message.usage.output_tokens !== undefined">（输入 {{ message.usage.input_tokens }} / 输出 {{ message.usage.output_tokens }}）</span></small>
+          <small v-if="message.usage" class="usage">Token {{ message.usage.total_tokens }}<span v-if="message.usage.input_tokens !== undefined && message.usage.output_tokens !== undefined"> ({{ t('输入', 'input') }} {{ message.usage.input_tokens }} / {{ t('输出', 'output') }} {{ message.usage.output_tokens }})</span></small>
         </div>
       </article>
     </main>
     <footer class="composer">
-      <textarea v-model="chatStore.inputText" class="textarea" placeholder="输入问题，Ctrl + Enter 发送"
+      <textarea v-model="chatStore.inputText" class="textarea" :placeholder="t('输入问题，Ctrl + Enter 发送', 'Enter a question; press Ctrl + Enter to send')"
         @keydown.ctrl.enter.prevent="send" />
-      <div class="composer-actions"><span class="subtle">回答可能包含错误，请核对 Citation。</span>
-        <button v-if="chatStore.isStreaming" class="button-danger" @click="chatStore.stopGeneration">停止</button>
-        <button v-else class="button-primary" :disabled="!chatStore.inputText.trim() || !chatStore.selectedProviderId || !chatStore.selectedModel.trim()" @click="send">发送</button>
+      <div class="composer-actions"><span class="subtle">{{ t('回答可能包含错误，请核对 Citation。', 'Answers may contain errors. Verify the citations.') }}</span>
+        <button v-if="chatStore.isStreaming || chatStore.isPreparing" class="button-danger" @click="chatStore.stopGeneration">{{ t('停止', 'Stop') }}</button>
+        <button v-else class="button-primary" :disabled="!chatStore.canSend || !chatStore.inputText.trim() || !chatStore.selectedProviderId || !chatStore.selectedModel.trim()" @click="send">{{ t('发送', 'Send') }}</button>
       </div>
     </footer>
   </section>

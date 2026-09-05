@@ -7,6 +7,7 @@ import type {
   OperationResponse,
 } from '@/contracts'
 import apiClient from './apiClient'
+import { t } from '@/i18n'
 import * as noteService from './noteService'
 
 /** Web 联调只连接 AI Core 配置的单一 Vault；多 Vault 选择由 Tauri Host 接管。 */
@@ -72,7 +73,7 @@ async function requireNoteId(filePath: string): Promise<string> {
     await refreshTree()
     noteId = noteIdByPath.get(path)
   }
-  if (!noteId) throw new Error(`笔记尚未建立后端索引：${path}`)
+  if (!noteId) throw new Error(`${t('笔记尚未建立后端索引：', 'The note has not been indexed by the backend: ')}${path}`)
   return noteId
 }
 
@@ -174,7 +175,7 @@ export async function deleteFile(pathValue: string): Promise<void> {
 export async function moveFile(sourcePath: string, targetPath: string): Promise<void> {
   const source = normalizePublicPath(sourcePath)
   if (typeByPath.get(source) !== 'file') {
-    throw new Error('当前阶段只支持移动笔记文件。')
+    throw new Error(t('当前阶段只支持移动笔记文件。', 'Only note files can be moved at this stage.'))
   }
   await noteService.moveNote(await requireNoteId(source), relativePath(targetPath))
   await refreshTree()

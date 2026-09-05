@@ -1,4 +1,5 @@
 import type { AgentEventType, AgentRunStatus } from '@/contracts'
+import { appLocale, t } from '@/i18n'
 
 const runStatusLabels: Record<AgentRunStatus, string> = {
   queued: '排队中',
@@ -25,6 +26,20 @@ const eventLabels: Record<AgentEventType, string> = {
   RunCompleted: '运行完成',
   RunFailed: '运行失败',
   RunCancelled: '运行取消',
+}
+
+const runStatusLabelsEn: Record<AgentRunStatus, string> = {
+  queued: 'Queued', running: 'Running', waiting_permission: 'Waiting for permission',
+  completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled',
+}
+
+const eventLabelsEn: Record<AgentEventType, string> = {
+  RunStarted: 'Run started', TextDelta: 'Response', ThinkingDelta: 'Reasoning',
+  ToolCall: 'Tool call', ToolResult: 'Tool result', PermissionRequired: 'Permission required',
+  Usage: 'Usage', Citation: 'Citation', ModelCallStarted: 'Model call started',
+  ModelCallCompleted: 'Model call completed', ModelCallFailed: 'Model call failed',
+  PermissionResolved: 'Permission resolved', RunCompleted: 'Run completed',
+  RunFailed: 'Run failed', RunCancelled: 'Run cancelled',
 }
 
 const toolLabels: Record<string, string> = {
@@ -116,45 +131,50 @@ const detailLabels: Record<string, string> = {
 }
 
 export function runStatusLabel(status?: AgentRunStatus): string {
-  return status ? runStatusLabels[status] : '未知状态'
+  if (!status) return t('未知状态', 'Unknown status')
+  return appLocale.value === 'en' ? runStatusLabelsEn[status] : runStatusLabels[status]
 }
 
 export function eventLabel(event: AgentEventType): string {
-  return eventLabels[event]
+  return appLocale.value === 'en' ? eventLabelsEn[event] : eventLabels[event]
 }
 
 export function toolLabel(name: string): string {
   const remote = mcpName(name)
-  if (remote) return mcpTools[remote]?.label ?? `MCP 工具 · ${remote}`
+  if (remote) return appLocale.value === 'en' ? `MCP Tool · ${remote}` : (mcpTools[remote]?.label ?? `MCP 工具 · ${remote}`)
+  if (appLocale.value === 'en') return name.split('.').map(part => part[0]?.toUpperCase() + part.slice(1)).join(' ')
   return toolLabels[name] ?? name
 }
 
 export function toolDescription(name: string, fallback: string): string {
   const remote = mcpName(name)
   if (remote) {
+    if (appLocale.value === 'en') return fallback && !/\p{Script=Han}/u.test(fallback) ? fallback : `MCP tool ${remote}. See the original service description for full parameters.`
     if (/\p{Script=Han}/u.test(fallback)) return fallback
     return mcpTools[remote]?.description ?? '暂无中文说明，请展开查看服务原文。'
   }
+  if (appLocale.value === 'en') return fallback && !/\p{Script=Han}/u.test(fallback) ? fallback : `Built-in tool: ${name}`
   return toolDescriptions[name] ?? fallback
 }
 
 export function permissionLabel(permission: string): string {
+  if (appLocale.value === 'en') return permission.split('.').map(part => part[0]?.toUpperCase() + part.slice(1)).join(' ')
   return permissionLabels[permission] ?? permission
 }
 
 function localizeValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(localizeValue)
   if (value && typeof value === 'object') return localizeDetails(value as Record<string, unknown>)
-  if (value === true) return '是'
-  if (value === false) return '否'
+  if (value === true) return t('是', 'Yes')
+  if (value === false) return t('否', 'No')
   if (typeof value === 'string' && value in runStatusLabels) {
-    return runStatusLabels[value as AgentRunStatus]
+    return runStatusLabel(value as AgentRunStatus)
   }
   return value
 }
 
 export function localizeDetails(data: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(
-    Object.entries(data).map(([key, value]) => [detailLabels[key] ?? key, localizeValue(value)])
+    Object.entries(data).map(([key, value]) => [appLocale.value === 'en' ? key.replaceAll('_', ' ') : (detailLabels[key] ?? key), localizeValue(value)])
   )
 }

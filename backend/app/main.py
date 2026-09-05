@@ -26,6 +26,8 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         await transcription_service.shutdown()
+        from app.local_models import components
+        await components.shutdown()
         from app.local_models import manager
         for _, key in list(manager._downloads):
             await manager.cancel_download(key)
