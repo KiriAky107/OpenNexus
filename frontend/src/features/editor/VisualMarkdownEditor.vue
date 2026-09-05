@@ -408,6 +408,9 @@ defineExpose({ getEditor: () => crepe?.editor })
 .milkdown-host :deep(.ProseMirror) { box-sizing: border-box; width: min(100%, var(--editor-line-width, 80ch)); min-height: 100%; margin: 0 auto; padding: var(--space-3xl) var(--space-xl); outline: none; font-family: var(--font-editor-sans); font-size: var(--font-editor-size); line-height: var(--font-editor-line-height); caret-color: var(--color-accent-primary); }
 .milkdown-host :deep(.ProseMirror-selectednode) { outline-color: var(--color-accent-primary); }
 .milkdown-host :deep(.ProseMirror p) { font-weight: 400; }
+/* Mermaid measures HTML labels outside the editor. Crepe's paragraph padding
+   must not enlarge them after insertion into fixed-size SVG foreignObjects. */
+.milkdown-host :deep(.editor-mermaid-preview svg foreignObject p) { margin: 0; padding: 0; line-height: inherit; font-weight: inherit; }
 .milkdown-host :deep(.ProseMirror h1), .milkdown-host :deep(.ProseMirror h2), .milkdown-host :deep(.ProseMirror h3), .milkdown-host :deep(.ProseMirror h4), .milkdown-host :deep(.ProseMirror h5), .milkdown-host :deep(.ProseMirror h6) { font-weight: 700; }
 .milkdown-host :deep(.font-size-marker) { display: none; }
 .milkdown-host :deep(.milkdown-code-block) { overflow: visible; border: 1px solid var(--color-code-border); border-radius: 6px; background: var(--color-code-background); color: var(--color-code-text); }

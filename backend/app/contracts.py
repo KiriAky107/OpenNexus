@@ -1131,6 +1131,7 @@ class TranscriptNoteRequest(Contract):
 
 
 class IndexStatus(Contract):
+    vector_refresh_required: bool = False
     total_notes: int = 0
     total_blocks: int = 0
     status: Literal["idle", "queued", "running", "failed"] = "idle"

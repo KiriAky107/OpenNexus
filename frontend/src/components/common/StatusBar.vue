@@ -40,7 +40,8 @@ const saveStatusColor = computed(() => {
 
 const indexStatusText = computed(() => {
   const s = settingsStore.indexStatus.status
-  return s === 'unknown' ? t('索引状态未获取', 'Index status unavailable') : s === 'idle' ? t('索引就绪', 'Index ready') : s === 'indexing' ? `${t('索引中', 'Indexing')} (${settingsStore.indexStatus.pending_jobs})` : t('索引错误', 'Index error')
+  if (s === 'idle' && settingsStore.indexStatus.vector_refresh_required) return t('全文可用 · 向量待重建', 'Full text ready · vectors need rebuilding')
+  return s === 'unknown' ? t('索引状态未获取', 'Index status unavailable') : s === 'idle' ? t('索引就绪', 'Index ready') : s === 'indexing' ? t('后台计算索引', 'Indexing in background') : t('索引错误', 'Index error')
 })
 
 const aiCoreStatusText = computed(() => {
