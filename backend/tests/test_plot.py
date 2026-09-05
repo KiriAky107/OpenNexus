@@ -192,3 +192,58 @@ def test_html_exporter_function_plot_render_error_falls_back(monkeypatch) -> Non
     html = result.content.decode("utf-8")
     assert '<pre class="function-plot">' in html
     assert any("渲染失败" in w for w in result.warnings)
+
+
+# --------------------------------------------------------------------------- #
+# 审阅回归：复杂表达式 / 极端数值范围
+# --------------------------------------------------------------------------- #
+def test_parse_expression_rejects_excessive_depth() -> None:
+    # P2：超长加法链的 AST 深度超限，应拒绝为 PlotParseError 而非触发 RecursionError
+    expr = "+".join(["1"] * 300)
+    with pytest.raises(PlotParseError) as exc:
+        parse_expression(expr)
+    assert exc.value.diagnostic.code == "FUNCTION_PLOT_EXPRESSION_UNSAFE"
+
+
+def test_parse_expression_rejects_excessive_nodes() -> None:
+    # P2：浅层但节点超限的表达式（满二叉树）应被节点数上限拦截
+    def balanced(depth: int) -> str:
+        if depth == 0:
+            return "x"
+        return f"({balanced(depth - 1)}+{balanced(depth - 1)})"
+
+    expr = balanced(10)  # ~2047 个节点，深度仅 ~10
+    with pytest.raises(PlotParseError) as exc:
+        parse_expression(expr)
+    assert exc.value.diagnostic.code == "FUNCTION_PLOT_EXPRESSION_UNSAFE"
+
+
+def test_html_exporter_function_plot_deep_expression_falls_back() -> None:
+    # P2：复杂表达式解析失败应回退占位，不阻断整篇导出
+    expr = "+".join(["1"] * 300)
+    md = f"```function-plot\ny = {expr}\n```"
+    result = asyncio.run(HtmlExporter().export(parse_document(md), ExportOptions()))
+    html = result.content.decode("utf-8")
+    assert '<pre class="function-plot">' in html
+    assert "<svg" not in html
+    assert any("函数图像" in w for w in result.warnings)
+
+
+def test_render_svg_extreme_domain_no_nan() -> None:
+    # P2：有限但跨度溢出的 domain 应回退安全范围，SVG 不得含 nan/inf
+    plot = parse_source("domain: -1e308, 1e308\nrange: -1, 1\ny = 0").plot
+    rendered = render_svg(plot)
+    assert "<svg" in rendered.content
+    assert "nan" not in rendered.content
+    assert "inf" not in rendered.content
+    assert any("domain" in w for w in rendered.warnings)
+
+
+def test_render_svg_extreme_range_no_nan() -> None:
+    # P2：有限但跨度溢出的 range 应回退自动范围，SVG 不得含 nan/inf
+    plot = parse_source("domain: -1, 1\nrange: -1e308, 1e308\ny = x").plot
+    rendered = render_svg(plot)
+    assert "<svg" in rendered.content
+    assert "nan" not in rendered.content
+    assert "inf" not in rendered.content
+    assert any("range" in w for w in rendered.warnings)

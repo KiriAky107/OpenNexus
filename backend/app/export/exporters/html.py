@@ -203,16 +203,17 @@ class HtmlExporter:
         return f"函数图像：{diag.message}{loc}"
 
     def _render_function_plot(self, node: DocumentNode, warnings: list[str]) -> str:
-        # 解析 fenced 源码：有合法 plot 且无 error → 内嵌静态 SVG；否则回退占位并转诊断
-        parsed = parse_source(node.text)
-        for diag in parsed.diagnostics:
-            warnings.append(self._format_plot_diagnostic(diag))
-        if parsed.plot is None:
-            return f'<pre class="function-plot">{html.escape(node.text)}</pre>'
+        # 解析与渲染共同纳入局部异常回退：单个图像失败只回退占位 + warning，
+        # 绝不阻断整篇导出（含复杂表达式触发的 RecursionError 等异常）。
         try:
+            parsed = parse_source(node.text)
+            for diag in parsed.diagnostics:
+                warnings.append(self._format_plot_diagnostic(diag))
+            if parsed.plot is None:
+                return f'<pre class="function-plot">{html.escape(node.text)}</pre>'
             rendered = render_svg(parsed.plot)
-        except Exception as exc:  # 渲染异常回退占位，绝不阻断整篇导出
-            warnings.append(f"函数图像：渲染失败，已回退占位（{exc}）")
+        except Exception as exc:
+            warnings.append(f"函数图像：解析或渲染失败，已回退占位（{exc}）")
             return f'<pre class="function-plot">{html.escape(node.text)}</pre>'
         warnings.extend(rendered.warnings)
         return f'<figure class="function-plot">{rendered.content}</figure>'
