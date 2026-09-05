@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+// The application has a doctype; happy-dom otherwise reports quirks mode to KaTeX.
+vi.hoisted(() => { Object.defineProperty(document, 'compatMode', {value:'CSS1Compat',configurable:true}) })
 import { mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { editorViewCtx, type Editor } from '@milkdown/kit/core'
@@ -49,6 +51,106 @@ afterEach(() => {
 })
 
 describe('VisualMarkdownEditor formatting toolbars', () => {
+  it('renders the supported format matrix and preserves inline code', async () => {
+    const source = ['# H1','## H2','### H3','#### H4','##### H5','###### H6',
+      '正文 **粗体** *斜体* ~~删除~~ `s` 与 ``a`b``', '> 引用', '- 项目\n  - 子项', '1. 第一\n2. 第二',
+      '- [x] 完成\n- [ ] 未完成', '[链接](https://example.com)',
+      '| A | B |\n| --- | --- |\n| x | y |', '---', '$x^2$', '$$\nx^2\n$$', '```js\nconst n = 1\n```'].join('\n\n')
+    const wrapper = mount(VisualMarkdownEditor, {props:{initialContent:source},attachTo:document.body})
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    expect(wrapper.get('.ProseMirror code').text()).toBe('s')
+    for (const selector of ['h1','h2','h3','h4','h5','h6','strong','em','del','blockquote','ol','ul','table','hr','a']) expect(wrapper.find(`.ProseMirror ${selector}`).exists(), selector).toBe(true)
+    expect(editor.action(getMarkdown())).toContain('`s`')
+    expect(editor.action(getMarkdown())).toContain('``a`b``')
+  })
+  it('converts a typed closing backtick to inline code', async () => {
+    const wrapper = mount(VisualMarkdownEditor, {props:{initialContent:''},attachTo:document.body})
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    editor.action(ctx => {
+      const view = ctx.get(editorViewCtx)
+      for (const text of '`s`') {
+        const {from,to} = view.state.selection
+        let handled = false
+        view.someProp('handleTextInput', handler => { if (handler(view,from,to,text, () => view.state.tr.insertText(text,from,to))) { handled = true; return true } })
+        if (!handled) view.dispatch(view.state.tr.insertText(text,from,to))
+      }
+    })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('.ProseMirror code').text()).toBe('s')
+  })
+  it('reconciles IME composition text without handleTextInput', async () => {
+    const wrapper = mount(VisualMarkdownEditor, {props:{initialContent:''},attachTo:document.body})
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    editor.action(ctx => ctx.get(editorViewCtx).dispatch(ctx.get(editorViewCtx).state.tr.insertText('`s`')))
+    await wrapper.get('.ProseMirror').trigger('compositionend', {data:'`s`'})
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(wrapper.get('.ProseMirror code').text()).toBe('s')
+    expect(editor.action(getMarkdown()).trim()).toBe('`s`')
+  })
+  it.each(['insertText', 'insertCompositionText', 'insertReplacementText'])('reconciles %s without event.data after the DOM update', async (inputType) => {
+    const wrapper = mount(VisualMarkdownEditor, {props:{initialContent:''},attachTo:document.body})
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    // Chromium/IME can omit data and commit its DOM change after the input event.
+    await wrapper.get('.ProseMirror').trigger('input', {inputType, data:null})
+    await new Promise(resolve => setTimeout(resolve, 10))
+    editor.action(ctx => ctx.get(editorViewCtx).dispatch(ctx.get(editorViewCtx).state.tr.insertText('`s`')))
+    await vi.waitFor(() => expect(wrapper.get('.ProseMirror code').text()).toBe('s'))
+  })
+  it('waits for composition cleanup before converting committed text', async () => {
+    const wrapper = mount(VisualMarkdownEditor, {props:{initialContent:''},attachTo:document.body})
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    const view = editor.action(ctx => ctx.get(editorViewCtx))
+    const composing = vi.spyOn(view, 'composing', 'get').mockReturnValue(true)
+    await wrapper.get('.ProseMirror').trigger('compositionstart')
+    view.dispatch(view.state.tr.insertText('`s`'))
+    await wrapper.get('.ProseMirror').trigger('compositionend', {data:'`s`'})
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(wrapper.find('.ProseMirror code').exists()).toBe(false)
+    composing.mockReturnValue(false)
+    await vi.waitFor(() => expect(wrapper.get('.ProseMirror code').text()).toBe('s'))
+    composing.mockRestore()
+  })
+  it('converts content typed between an existing pair of backticks', async () => {
+    const wrapper = mount(VisualMarkdownEditor, {props:{initialContent:''},attachTo:document.body})
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    const view = editor.action(ctx => ctx.get(editorViewCtx))
+    view.dispatch(view.state.tr.insertText('``'))
+    await wrapper.get('.ProseMirror').trigger('input', {inputType:'insertText', data:'`'})
+    await new Promise(resolve => setTimeout(resolve, 60))
+    // Empty pairs are serialized as escaped literal text, but that must not
+    // prevent recognition after the user moves back and fills in the content.
+    expect(editor.action(getMarkdown())).toContain('\\`')
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 2)).insertText('s'))
+    await wrapper.get('.ProseMirror').trigger('input', {inputType:'insertText', data:'s'})
+    await vi.waitFor(() => expect(wrapper.get('.ProseMirror code').text()).toBe('s'))
+    expect(editor.action(getMarkdown()).trim()).toBe('`s`')
+    expect(view.state.selection.from).toBe(2)
+    view.dispatch(view.state.tr.insertText('tring'))
+    expect(editor.action(getMarkdown()).trim()).toBe('`string`')
+  })
+  it.each(['insertFromPaste', 'historyUndo', 'deleteContentBackward'])('does not reinterpret literals on %s', async (inputType) => {
+    const wrapper = mount(VisualMarkdownEditor, {props:{initialContent:''},attachTo:document.body})
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    editor.action(ctx => ctx.get(editorViewCtx).dispatch(ctx.get(editorViewCtx).state.tr.insertText('`s`')))
+    await wrapper.get('.ProseMirror').trigger('input', {inputType, data:null})
+    await new Promise(resolve => setTimeout(resolve, 60))
+    expect(wrapper.find('.ProseMirror code').exists()).toBe(false)
+  })
+  it('enables inline code from the toolbar at an empty selection', async () => {
+    const wrapper = mount(VisualMarkdownEditor, {props:{initialContent:''},attachTo:document.body})
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    await wrapper.get('[aria-label="行内代码"]').trigger('pointerdown')
+    editor.action(ctx => ctx.get(editorViewCtx).dispatch(ctx.get(editorViewCtx).state.tr.insertText('value')))
+    expect(editor.action(getMarkdown()).trim()).toBe('`value`')
+  })
   it.each([['jsonc', 'JSON with Comments', '// comment\n{"answer": 42}'], ['ahk', 'AutoHotkey', 'MsgBox "Hello"']])('persists %s from the language menu and renders it with Shiki', async (id, label, source) => {
     const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: `\`\`\`text\n${source}\n\`\`\`` }, attachTo: document.body })
     mounted.push(wrapper)

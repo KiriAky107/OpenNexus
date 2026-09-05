@@ -1,6 +1,11 @@
 <script setup lang="ts">
+import ExtensionRestoreNotice from '@/components/common/ExtensionRestoreNotice.vue'
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
+const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 import { Connection } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
+import ExtensionInstallDialog from '@/components/common/ExtensionInstallDialog.vue'
 import PluginMcpPanel from './PluginMcpPanel.vue'
 import PluginCommandPanel from './PluginCommandPanel.vue'
 import PluginSettingsPanel from './PluginSettingsPanel.vue'
@@ -12,6 +17,7 @@ import { t } from '@/i18n'
 
 const pluginStore = usePluginStore()
 const actionError = ref('')
+const showInstall = ref(false)
 const activeTab = ref<'info' | 'settings' | 'commands'>('info')
 const pluginCommands = ref<PluginCommand[]>([])
 
@@ -29,12 +35,6 @@ watch(() => pluginStore.selectedPluginId, async (pluginId) => {
   }
 })
 
-async function install() {
-  const path = prompt(t('请输入 Plugin Package 路径', 'Enter the Plugin Package path'))?.trim()
-  if (!path) return
-  try { await pluginStore.installPlugin(path) }
-  catch (error) { actionError.value = error instanceof Error ? error.message : t('安装失败', 'Installation failed') }
-}
 
 async function toggle(id: string, enabled: boolean) {
   try {
@@ -43,13 +43,13 @@ async function toggle(id: string, enabled: boolean) {
 }
 
 async function grant(id: string, permissions: string[]) {
-  if (!confirm(`${t('将授权：', 'Grant permissions: ')}${permissions.join(', ')}。${t('是否继续？', 'Continue?')}`)) return
+  if (!(await askConfirm(`${t('将授权：', 'Grant permissions: ')}${permissions.join(', ')}。${t('是否继续？', 'Continue?')}`))) return
   try { await pluginStore.grantPermissions(id, permissions) }
   catch (error) { actionError.value = error instanceof Error ? error.message : t('授权失败', 'Authorization failed') }
 }
 
 async function uninstall(id: string, name: string) {
-  if (!confirm(t(`卸载「${name}」将移除其全部 Contribution，是否继续？`, `Uninstalling “${name}” removes all its contributions. Continue?`))) return
+  if (!(await askConfirm(t(`卸载「${name}」将移除其全部 Contribution，是否继续？`, `Uninstalling “${name}” removes all its contributions. Continue?`)))) return
   try { await pluginStore.uninstallPlugin(id) }
   catch (error) { actionError.value = error instanceof Error ? error.message : t('卸载失败', 'Uninstall failed') }
 }
@@ -65,9 +65,12 @@ const hasCommandContribution = computed(() =>
 
 <template>
   <section class="feature-page">
+    <ExtensionRestoreNotice kind="plugin" />
+    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
+    <ExtensionInstallDialog v-if="showInstall" kind="Plugin" :install="pluginStore.installPlugin" @close="showInstall = false" @installed="showInstall = false; actionError = ''" />
     <header class="feature-header">
       <div><h1>{{ t('Plugin 与 MCP', 'Plugins and MCP') }}</h1><p>{{ t('管理插件生命周期、MCP Host、权限和受控 Contribution。', 'Manage plugin lifecycles, MCP hosts, permissions, and controlled contributions.') }}</p></div>
-      <button class="button-primary" @click="install">{{ t('安装 Plugin', 'Install Plugin') }}</button>
+      <button class="button-primary" @click="showInstall = true">{{ t('安装 Plugin', 'Install Plugin') }}</button>
     </header>
 
     <div v-if="pluginStore.error || actionError" class="error-banner">

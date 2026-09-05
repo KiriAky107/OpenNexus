@@ -82,8 +82,9 @@ async def create_transcription(attachment_id, language=None, *, diarization=Fals
     actual = source if source.is_file() else attachment_path(f"{attachment_id}.txt")
     if not actual.is_file():
         raise ApiError(404, "ATTACHMENT_NOT_FOUND", "Attachment was not found.")
-    if not 0 < actual.stat().st_size <= 25 * 1024 * 1024:
-        raise ApiError(413, "ATTACHMENT_TOO_LARGE", "Attachment must be between 1 byte and 25 MiB.")
+    from app.providers.routing import MAX_LOCAL_MEDIA_BYTES, MAX_MEDIA_BYTES
+    if not 0 < actual.stat().st_size <= (MAX_LOCAL_MEDIA_BYTES if local_only else MAX_MEDIA_BYTES):
+        raise ApiError(413, "ATTACHMENT_TOO_LARGE", "仅本地处理最大支持 128 MiB；超过 25 MiB 的录音请启用仅本地处理。")
     digest = await asyncio.to_thread(lambda: hashlib.sha256(actual.read_bytes()).hexdigest())
     from app.container import container
     from app.local_models.runtime import configuration
@@ -160,6 +161,7 @@ async def _execute(job_id, request, routing=None):
             result = await (routing or container.model_routing).transcribe(source, request.language, local_only=request.local_only)
             job.text, job.source, job.fallback_reason = result.text, result.source, result.fallback_reason
             job.segments = getattr(result, "segments", []) or []
+            job.warnings.extend(getattr(result, "warnings", []) or [])
         if not job.text or not job.text.strip():
             raise ApiError(422, "TRANSCRIPT_EMPTY", "Transcript is empty.")
         if request.diarization:

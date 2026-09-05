@@ -79,7 +79,7 @@ async function requireNoteId(filePath: string): Promise<string> {
 }
 
 export async function getWorkspaceInfo(): Promise<ApiWorkspaceInfo> {
-  return apiClient.get('/api/workspace')
+  return apiClient.get('/api/workspace', { timeoutMs: 15000 })
 }
 
 export async function getRecentVaults(): Promise<VaultInfo[]> {
@@ -88,7 +88,7 @@ export async function getRecentVaults(): Promise<VaultInfo[]> {
 }
 
 export async function openVault(path: string): Promise<VaultInfo> {
-  const snapshot = await apiClient.post<ApiWorkspaceSnapshot>('/api/workspace/open', { path })
+  const snapshot = await apiClient.post<ApiWorkspaceSnapshot>('/api/workspace/open', { path }, { timeoutMs: 15000 })
   cacheEntries(snapshot.items)
   return {
     vault_id: snapshot.workspace.vault_id,

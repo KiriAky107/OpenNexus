@@ -1,16 +1,27 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
-import { decodeThemePackage, fetchThemePackage, inspectThemePackage, MAX_THEME_BYTES } from './themePackageService'
+import { decodeThemePackage, fetchThemePackage, inspectThemePackage, installTheme, MAX_THEME_BYTES, THEME_APP_VERSION } from './themePackageService'
 import paper from '@/assets/themes/paper-moments.theme?raw'
 
 afterEach(() => vi.unstubAllGlobals())
+it.each(['999.0.0', 'bad', '0.2'])('rejects unsupported minimum app version %s at inspection and install', async version => {
+  const source = paper.replace(/min_app_version:.*\r?\n/, `min_app_version: ${version}\n`)
+  expect((await inspectThemePackage(source)).compatible).toBe(false)
+  const { manifest, css } = await inspectThemePackage(paper)
+  await expect(installTheme({ ...manifest, min_app_version: version }, css)).rejects.toThrow()
+})
+it('accepts the current version and preserves real YAML list metadata', async () => {
+  const result = await inspectThemePackage(paper.replace(/min_app_version:.*\r?\n/, `min_app_version: ${THEME_APP_VERSION}\ntags: [paper, "a,b"]\n`))
+  expect(result.compatible).toBe(true)
+  expect(Array.isArray(result.manifest.tags)).toBe(true)
+})
 it('reads ZIP manifests under repository folders and validates the bundled CSS', async () => {
-  const [yaml, css] = paper.split('\n---\n')
+  const [yaml, css] = paper.split(/\r?\n---\r?\n/)
   const zip = zipSync({ 'repo-main/theme.yaml': strToU8(yaml!), 'repo-main/theme.css': strToU8(css!) })
   const result = await inspectThemePackage(await decodeThemePackage(zip))
   expect(result.compatible).toBe(true)
-  expect(result.css).toBe(css!.trim())
+  expect(result.css).toBe(css!.replace(/\r\n/g, '\n').trim())
 })
 it('accepts a zipped single-file theme', async () => {
   expect(await decodeThemePackage(zipSync({ 'paper.theme': strToU8(paper) }))).toBe(paper)

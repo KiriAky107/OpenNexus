@@ -9,11 +9,11 @@ router = APIRouter(prefix="/api/usage", tags=["Usage"])
 @router.get("")
 async def usage(start: datetime | None = None, end: datetime | None = None,
                 provider_id: str | None = Query(None, max_length=200), model: str | None = Query(None, max_length=200),
-                source: str | None = None):
+                source: str | None = None, timezone_offset: int = Query(0, ge=-840, le=840)):
     end = end or datetime.now(timezone.utc)
     start = start or end - timedelta(days=7)
     if not start.tzinfo or not end.tzinfo or end <= start:
         raise ApiError(422, "INVALID_TIME_RANGE", "Provide timezone-aware start/end with end after start.")
     if source not in {None, "local", "api"}:
         raise ApiError(422, "INVALID_USAGE_SOURCE", "Unknown usage source.")
-    return aggregate(start, end, provider_id, model, source)
+    return aggregate(start, end, provider_id, model, source, timezone_offset)

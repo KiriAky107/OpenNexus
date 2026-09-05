@@ -68,7 +68,7 @@ cd ..
 ```powershell
 # 终端一
 cd backend
-uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uv run python scripts/dev-server.py
 
 # 终端二
 cd frontend
@@ -173,3 +173,37 @@ css_entry: styles/theme.css
 发布主题仓库时可提供原始 `.theme` 文件链接或 ZIP 发布附件直链，不要使用仓库 HTML 浏览页面地址。下载请求不携带 Cookie 或 HTTP 登录信息，服务器需允许应用来源的 CORS 请求；暂不支持私有仓库认证。
 
 下载和本地文件限制为 5 MB；ZIP 解压总大小限制为 10 MB，最多 100 个条目。URL 下载超时为 30 秒。取消导入会取消下载，过期请求不会替换当前待安装主题。更新时递增清单版本号，并保持 `theme_id` 稳定。
+
+
+### 主题兼容性与安装前预览
+
+当前应用版本从 `frontend/package.json` 读取（0.2.0）。清单的 `version`、`min_app_version` 必须使用有效 SemVer；最低版本高于应用版本时，检查、安装和启用都会拒绝。文件、URL、ZIP 导入共用此规则。
+
+导入检查通过后可点击“预览主题效果”。预览使用无脚本的 sandbox iframe，与当前应用样式和主题存储隔离；CSP 禁止远程资源，仅允许内联样式及 data 图片/字体。预览不等同于安装。
+
+
+### 用量趋势与纸间时光 1.5
+
+模型设置页将提供商、本地模型、用量统计分成独立卡片。用量趋势支持近 7 天、30 天、90 天及自定义时间，沿用提供商/模型/来源筛选；按本机 UTC 偏移分组（长区间自动合并到最多 90 组）。可切换输入、输出、总 Token 和请求次数，本地为芯片实色图例，提供商为连接斜纹图例。仅汇总已报告值，并提供覆盖数与可展开的数据表，缺失不补零。
+
+纸间时光更新至 1.5.0，通用卡片、执行事件、引用、模型路由及弹窗统一使用纸张、虚线、胶带和叠纸阴影。已安装旧版本时，在主题社区点击“更新”应用新版样式。
+
+
+## Skill / Plugin ZIP 安装（临时规范）
+
+第三阶段完整规划见[桌面容器、扩展社区与多设备同步](docs/architecture/第三阶段实施规划.md)，包含 Tauri/Rust、各社区、Sync Server、迁移、建议分工和验收门禁；该文档是计划，不代表相关服务已经实现。
+
+可运行的社区准备包见 [`backend/extensions/community/README.md`](backend/extensions/community/README.md)：包含 Markdown 检查 Plugin、配套笔记检查 Skill、可重复构建脚本和带 SHA-256 的包索引。
+
+安装弹窗支持 ZIP 文件和 AI Core 主机上的本地目录。ZIP 根目录须包含 `skill.yaml` 或 `plugin.yaml`；也支持整个包放在唯一的顶层文件夹中。每个 ZIP 安装一个扩展，清单字段沿用现有 Skill / Plugin 契约。
+
+```text
+my-skill.zip                 my-plugin.zip
+└─ my-skill/                 ├─ plugin.yaml
+   ├─ skill.yaml            ├─ 后端入口及资源文件
+   └─ prompt.md（可选）      └─ 其他包内资源
+```
+
+ZIP 最大 10 MiB，解压总大小最大 50 MiB，最多 2048 个条目；支持 stored/deflate。拒绝加密条目、符号链接、特殊文件、越界路径以及重复或大小写冲突路径。选择文件后点击安装才上传；后端解压并沿用现有清单、依赖及权限校验，不自动授予权限或启动 Plugin 进程。
+
+解压文件保存在 AI Core 数据目录的 `extension-packages/` 下，安装失败会清理本次目录。此功能不改变扩展运行时现有的安装记录持久化机制；目前重启后仍需重新注册包。扩展 ZIP 暂不支持 URL 下载；主题 ZIP 使用其独立的导入规则。

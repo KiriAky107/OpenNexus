@@ -1,6 +1,6 @@
 theme_id: paper-moments
 name: 纸间时光 · Paper Moments
-version: 1.4.1
+version: 1.6.2
 author: NotesAgent
 description: 奶油纸张、手帐虚线与粉蓝胶带，把每天的灵感好好收藏。
 min_app_version: 0.2.0
@@ -266,3 +266,59 @@ license: MIT
 @media (max-width: 720px) {
   [data-theme="paper-moments"] .note-metadata { width: 100%; padding: 22px 18px; }
 }
+
+
+/* Shared paper surfaces across settings, search, agents, media and extensions. */
+[data-theme="paper-moments"] :is(.panel, .item-card, .event-card, .citation-card, .routing-card, .vault-card, .modal-card, .modal, .usage-chart) {
+  position: relative;
+  border: 1px solid #b5a693;
+  border-radius: 8px 14px 8px 8px;
+  outline: 1px dashed #d5c8b5;
+  outline-offset: -6px;
+  background-color: #fffdf5;
+  background-image: repeating-linear-gradient(transparent 0 31px, #b6c7bd18 31px 32px);
+  box-shadow: 3px 4px 0 #d8e6e2, 6px 7px 0 #f0d8cf;
+}
+[data-theme="paper-moments"] :is(.panel, .item-card, .event-card, .citation-card, .routing-card, .vault-card, .modal-card, .modal)::before {
+  content: '';
+  position: absolute;
+  inset: 0 24px auto auto;
+  opacity: 1;
+  transform: none;
+  width: 48px;
+  height: 9px;
+  background: repeating-linear-gradient(45deg, #c5dfe0b0 0 6px, #daeceba0 6px 12px);
+  pointer-events: none;
+}
+[data-theme="paper-moments"] :is(.item-card, .event-card, .citation-card, .routing-card):nth-child(2n)::before {
+  background: repeating-linear-gradient(45deg, #e7bcb3b0 0 6px, #f2d4cba0 6px 12px);
+}
+[data-theme="paper-moments"] :is(.panel, .item-card, .routing-card, .vault-card) :is(h2, h3, h4) {
+  font-family: Georgia, 'Noto Serif SC', 'Songti SC', SimSun, serif;
+  color: #875343;
+}
+[data-theme="paper-moments"] .usage-chart { background-color: #fbf7ea; }
+[data-theme="paper-moments"] .usage-grid > div { padding: 12px; border: 1px dashed #d5c8b5; border-radius: 5px; background: #fffdf580; }
+
+[data-theme="paper-moments"] .chart-readout,
+[data-theme="paper-moments"] .pie-pane,
+[data-theme="paper-moments"] .cache-explanation {
+  background-color: #fffdf5;
+  border-color: #c5b9a7;
+}
+[data-theme="paper-moments"] .cache-explanation { padding: 12px; border: 1px dashed #c5b9a7; border-radius: 6px; }
+[data-theme="paper-moments"] .cache-explanation summary { color: #875343; cursor: pointer; }
+[data-theme="paper-moments"] .chart-column.highlighted { background: #f3e1d8; }
+[data-theme="paper-moments"] .diagram-viewer { box-shadow: var(--shadow-lg); }
+
+[data-theme="paper-moments"] .ui-disclosure { border: 1px dashed #c5b9a7; background: #fffdf5; border-radius: 6px; }
+[data-theme="paper-moments"] .ui-disclosure > summary { color: #875343; }
+[data-theme="paper-moments"] .ui-disclosure[open] > summary { border-bottom: 1px dashed #c5b9a7; background: #f7eddb; }
+[data-theme="paper-moments"] select { border-color: #b5a693; }
+@supports (appearance: base-select) {
+  [data-theme="paper-moments"] ::picker(select) { border: 1px solid #b5a693; outline: 1px dashed #d5c8b5; outline-offset: -4px; background: #fffdf5; box-shadow: var(--shadow-md); }
+}
+
+/* Nested choices retain a quiet paper border without repeating tape/shadows. */
+[data-theme="paper-moments"] .surface-nested { border: 1px dashed #c5b9a7; background: #fffdf5; border-radius: 6px; }
+[data-theme="paper-moments"] .surface-nested.selected { border-color: var(--color-accent-primary); background: var(--color-accent-soft); }

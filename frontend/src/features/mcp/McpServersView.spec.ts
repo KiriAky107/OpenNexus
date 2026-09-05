@@ -29,7 +29,6 @@ async function render(items: McpServer[] = []) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.stubGlobal('confirm', vi.fn(() => true))
 })
 
 describe('McpServersView', () => {
@@ -78,7 +77,9 @@ describe('McpServersView', () => {
     vi.mocked(service.deleteMcpServer).mockResolvedValue({ status: 'completed' })
     await wrapper.findAll('button').find(button => button.text().includes('删除'))!.trigger('click')
     await flushPromises()
-    expect(confirm).toHaveBeenCalled()
+    expect(service.deleteMcpServer).not.toHaveBeenCalled()
+    await wrapper.get('.action-dialog').trigger('submit')
+    await flushPromises()
     expect(service.deleteMcpServer).toHaveBeenCalledWith('server-1')
   })
 
@@ -89,7 +90,10 @@ describe('McpServersView', () => {
     await wrapper.get('input[placeholder="network.request, notes.read"]').setValue('notes.read')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('旧测试与授权会失效'))
+    expect(wrapper.get('.action-dialog').text()).toContain('旧测试与授权会失效')
+    expect(service.updateMcpServer).not.toHaveBeenCalled()
+    await wrapper.get('.action-dialog').trigger('submit')
+    await flushPromises()
     expect(service.updateMcpServer).toHaveBeenCalled()
   })
 
@@ -125,6 +129,8 @@ describe('McpServersView', () => {
     expect(wrapper.get('.modal-card [role="alert"]').text()).toContain('服务器配置已保存，但密钥保存失败')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
+    await wrapper.get('.action-dialog').trigger('submit')
+    await flushPromises()
     expect(service.createMcpServer).toHaveBeenCalledTimes(1)
     expect(service.updateMcpServer).toHaveBeenCalledWith('new-server', expect.objectContaining({ version: 1 }))
     expect(service.putMcpServerSecret).toHaveBeenCalledTimes(2)
@@ -143,6 +149,8 @@ describe('McpServersView', () => {
     await wrapper.get('.json-editor').setValue('{"name":"Minimal","url":"https://example.test/mcp"}')
     vi.mocked(service.updateMcpServer).mockResolvedValue(server)
     await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await wrapper.get('.action-dialog').trigger('submit')
     await flushPromises()
     expect(service.updateMcpServer).toHaveBeenCalledWith('server-1', expect.objectContaining({ version: 2, headers: {}, args: [] }))
     expect(service.putMcpServerSecret).not.toHaveBeenCalled()

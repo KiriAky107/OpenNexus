@@ -29,12 +29,23 @@ beforeEach(() => {
   vi.spyOn(useSkillStore(), 'loadSkills').mockResolvedValue(undefined)
 })
 
+it('reuses the settings model cache and renders the shared select style', async () => {
+  const providers = useProviderStore()
+  providers.modelsByProvider.a = [{model_id:'a-default',name:'A model',capabilities:{chat:true}}]
+  const wrapper = mount(ChatView)
+  await flushPromises()
+  expect(providers.loadModels).not.toHaveBeenCalled()
+  expect(wrapper.get('select#chat-model-select').classes()).toContain('select')
+  expect(wrapper.get('select#chat-model-select').text()).toContain('A model')
+  wrapper.unmount()
+})
+
 it('preserves the selected provider and manual model after leaving and returning to chat', async () => {
   const chat = useChatStore()
   const first = mount(ChatView)
   await flushPromises()
   await first.get('select').setValue('b')
-  await first.get('input[list="chat-models"]').setValue('b-manual')
+  await first.get('input[data-field="manual-model"]').setValue('b-manual')
   first.unmount()
   const returned = mount(ChatView)
   await flushPromises()
@@ -90,4 +101,22 @@ it.each(['providers', 'skills'])('ignores initialization after unmount while %s 
   await returned.get('textarea').setValue('hello')
   expect(returned.get('button.button-primary').attributes('disabled')).toBeUndefined()
   returned.unmount()
+})
+
+
+it('sends on Enter but preserves Shift+Enter and IME confirmation', async () => {
+  const chat = useChatStore()
+  const send = vi.spyOn(chat, 'sendMessage').mockResolvedValue(undefined)
+  const wrapper = mount(ChatView)
+  await flushPromises()
+  const input = wrapper.get('textarea')
+  await input.setValue('问题')
+  await input.trigger('keydown', { key: 'Enter', isComposing: true })
+  await input.trigger('keydown', { key: 'Enter', shiftKey: true })
+  expect(send).not.toHaveBeenCalled()
+  await input.trigger('keydown', { key: 'Enter' })
+  expect(send).toHaveBeenCalledWith('问题')
+  await input.trigger('keydown', { key: 'Enter', repeat: true })
+  expect(send).toHaveBeenCalledTimes(1)
+  wrapper.unmount()
 })

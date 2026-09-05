@@ -181,7 +181,7 @@ async def get_note(note_id: str) -> Note | None:
 
 @serialized_vault_mutation
 async def update_note(
-    note_id: str, *, title: str | None = None, markdown: str | None = None, tags: list[str] | None = None, expected_content_hash: str | None = None
+    note_id: str, *, title: str | None = None, markdown: str | None = None, tags: list[str] | None = None, expected_content_hash: str | None = None, defer_vectors: bool = False
 ) -> Note:
     record = repository.get_note_record(note_id)
     if record is None:
@@ -207,10 +207,30 @@ async def update_note(
         if title is not None:
             parsed.title = title  # 显式传入的 title 覆盖正文推导结果
 
-        await index_note(parsed)
+        if defer_vectors:
+            conn = connect()
+            try:
+                with transaction(conn):
+                    old_ids = repository.replace_note_metadata(
+                        conn=conn, note_id=parsed.note_id, title=parsed.title,
+                        file_path=parsed.file_path, folder=parsed.folder, tags=parsed.tags,
+                        created_at=parsed.created_at, updated_at=parsed.updated_at, blocks=parsed.blocks,
+                    )
+                    # Saved content is immediately searchable; old vectors must not describe it.
+                    await vector_store.delete(old_ids, conn=conn)
+                    conn.execute('UPDATE blocks SET embedding_local_only=? WHERE note_id=?',
+                                 (int(parsed.embedding_local_only), parsed.note_id))
+                    repository.set_index_meta({f'note_vectors_pending:{parsed.note_id}': '1'}, conn=conn)
+            finally:
+                conn.close()
+        else:
+            await index_note(parsed)
     except BaseException:
         _write_markdown(record.file_path, old_md)  # 索引失败时回滚正文，避免部分提交
         raise
+    if defer_vectors:
+        from app.services import index_service
+        index_service.schedule_workspace_rebuild()
     return _build_note(parsed.note_id, parsed.title, parsed.file_path, parsed.tags,
                        parsed.created_at, parsed.updated_at, parsed.blocks, new_md)
 
