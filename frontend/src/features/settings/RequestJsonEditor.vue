@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { apiClient } from '@/services/apiClient'
 import type { RequestOverride } from '@/contracts'
 import { t } from '@/i18n'
+import FilePicker from '@/components/common/FilePicker.vue'
 const props = defineProps<{modelValue: RequestOverride[]}>()
 const emit = defineEmits<{ 'update:modelValue': [value:RequestOverride[]]; valid:[value:boolean] }>()
 const transferError = ref('')
@@ -38,10 +39,7 @@ watch(() => props.modelValue, value => {
   }
 }, {deep: true})
 function reset() { rules.value = []; transferError.value = ''; publish() }
-async function importRules(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
+async function importRules(file: File | null) {
   if (!file) return
   const current = ++generation
   transferError.value = ''
@@ -68,7 +66,7 @@ async function exportRules() {
 
 </script>
 <template>
-  <details class="request-json"><summary>{{ t('高级：自定义请求 JSON', 'Advanced: Custom request JSON') }}</summary>
+  <details class="request-json ui-disclosure"><summary>{{ t('高级：自定义请求 JSON', 'Advanced: Custom request JSON') }}</summary>
     <p class="subtle">{{ t('提供商通用规则先应用，再应用模型规则。对象递归合并，数组整体替换，null 作为实际值；删除键后恢复继承。密钥继续使用独立 API Key 配置。', 'Provider-wide rules are applied before model rules. Objects merge recursively, arrays replace whole values, and null is kept as a value. Delete a key to inherit it again. API keys remain in the separate credential setting.') }}</p>
     <div v-for="(rule,index) in rules" :key="index" class="rule">
       <div class="rule-selectors"><label>{{ t('能力', 'Capability') }}<select v-model="rule.capability" class="select" @change="publish"><option value="chat">{{ t('聊天', 'Chat') }}</option><option value="embedding">Embedding</option><option value="transcription">{{ t('音频转写', 'Transcription') }}</option><option value="speaker_matching">{{ t('声纹比对', 'Speaker matching') }}</option></select></label>
@@ -79,9 +77,9 @@ async function exportRules() {
       <div class="inline-actions"><button type="button" class="button-secondary" @click="format(index)">{{ t('格式化', 'Format') }}</button><button type="button" class="button-danger" @click="rules.splice(index,1); publish()">{{ t('删除规则', 'Delete rule') }}</button></div>
     </div>
     <button type="button" class="button-secondary" @click="add">{{ t('添加请求规则', 'Add request rule') }}</button>
-    <div class="inline-actions"><button type="button" class="button-secondary" @click="reset">{{ t('恢复默认请求', 'Restore default request') }}</button><button type="button" class="button-secondary" @click="exportRules">{{ t('导出请求配置', 'Export request settings') }}</button><label>{{ t('导入请求配置', 'Import request settings') }}<input type="file" accept=".json" @change="importRules" /></label></div>
+    <div class="transfer-actions"><div class="inline-actions"><button type="button" class="button-secondary" @click="reset">{{ t('恢复默认请求', 'Restore default request') }}</button><button type="button" class="button-secondary" @click="exportRules">{{ t('导出请求配置', 'Export request settings') }}</button></div><FilePicker :file="null" :label="t('导入请求配置', 'Import request settings')" :empty-label="t('选择 JSON 文件', 'Choose a JSON file')" accept=".json,application/json" @select="importRules" /></div>
     <p v-if="transferError" class="error-text" role="alert">{{ transferError }}</p>
     <p class="subtle">{{ t('导入替换当前请求规则，保存提供商后生效。导出仅包含请求规则，不包含凭据引用和 API Key。', 'Importing replaces the current request rules and takes effect after saving the provider. Exports contain rules only, without credential references or API keys.') }}</p>
   </details>
 </template>
-<style scoped>.request-json{display:grid;gap:12px}.rule{padding:12px;border:1px solid var(--border-color);border-radius:8px;margin:12px 0}.rule-selectors{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}.rule-selectors label{display:grid;gap:5px}.json-body{font-family:monospace;width:100%}</style>
+<style scoped>.request-json{display:grid;gap:12px}.rule{padding:12px;border:1px solid var(--color-border-default);border-radius:8px;margin:12px 0}.rule-selectors{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}.rule-selectors label{display:grid;gap:5px}.json-body{font-family:monospace;width:100%}.transfer-actions{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-sm);justify-content:space-between}</style>
