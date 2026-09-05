@@ -9,6 +9,7 @@ import type {
 import apiClient from './apiClient'
 import { t } from '@/i18n'
 import * as noteService from './noteService'
+import { splitNoteMetadata } from '@/utils/noteMetadata'
 
 /** Web 联调只连接 AI Core 配置的单一 Vault；多 Vault 选择由 Tauri Host 接管。 */
 export interface VaultInfo {
@@ -122,7 +123,12 @@ export async function getNoteId(filePath: string): Promise<string> {
 }
 
 export async function saveFileContent(filePath: string, content: string): Promise<void> {
-  await noteService.updateNote(await requireNoteId(filePath), { markdown: content })
+  const metadata = splitNoteMetadata(content)
+  await noteService.updateNote(await requireNoteId(filePath), {
+    markdown: content,
+    // Explicit [] clears the index; absent tags retain API-managed tags.
+    ...(metadata?.hasTags ? { tags: metadata.tags } : {}),
+  })
 }
 
 export async function createFile(

@@ -50,6 +50,25 @@ afterEach(() => {
 })
 
 describe('workspaceService backend adapter', () => {
+  it.each([
+    ['tags:\n- python\n- rust', { tags: ['python', 'rust'] }],
+    ['tags: []', { tags: [] }],
+    ['tags:', { tags: [] }],
+    ['tags: ["a,b", rust]', { tags: ['a,b', 'rust'] }],
+    ['title: Demo', {}],
+    ['tags: [broken', {}],
+  ])('saves explicit metadata tags with the same Markdown snapshot: %s', async (yaml, tagPayload) => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockImplementation(async (input) => String(input) === '/api/workspace/open'
+      ? jsonResponse(workspaceSnapshot) : jsonResponse({}))
+    await workspaceService.openVault('C:\\data\\vault')
+    const markdown = `---\n${yaml}\n---\n# Body\n`
+    await workspaceService.saveFileContent('/课程/操作系统.md', markdown)
+    const patchCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')
+    expect(String(patchCall?.[0])).toBe('/api/notes/note-os')
+    expect(JSON.parse(String(patchCall?.[1]?.body))).toEqual({ markdown, ...tagPayload })
+  })
+
   it('opens the configured Vault and reads/saves Markdown through Note API', async () => {
     const fetchMock = vi.mocked(fetch)
     fetchMock.mockImplementation(async (input, init) => {
