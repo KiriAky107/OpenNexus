@@ -8,6 +8,10 @@ it('distinguishes unreported tokens from zero and switches to request counts', a
     api: { requests: 2, totals: { input_tokens: 0 }, coverage: { input_tokens: 1 } },
   }] } })
   expect(wrapper.findAll('.usage-bar.missing')).toHaveLength(1)
+  expect(wrapper.get('.usage-pie').attributes('aria-label')).toContain('本地模型: 0')
+  await wrapper.get('.chart-column').trigger('mouseenter')
+  expect(wrapper.get('.chart-column').classes()).toContain('highlighted')
+  expect(wrapper.get('.chart-readout').text()).toContain('未提供')
   expect(wrapper.get('.usage-bar.local').attributes('aria-label')).toContain('未提供')
   expect(wrapper.get('.usage-bar.api').attributes('aria-label')).toContain('覆盖 1/2')
   await wrapper.get('select').setValue('requests')
