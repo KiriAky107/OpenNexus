@@ -1,92 +1,206 @@
+import { computed, reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { ref, computed, reactive } from 'vue'
-import type { ChatMessage, Conversation } from '@/contracts'
-import { streamChat } from '@/services/chatService'
+import type { ChatMessage, Citation, Conversation } from '@/contracts'
+import {
+  createConversation as createConversationApi,
+  listConversationMessages,
+  listConversations as listConversationsApi,
+  removeConversation,
+  streamChat,
+} from '@/services/chatService'
 import type { SseClient } from '@/services/sseClient'
+import { t } from '@/i18n'
 
 export const useChatStore = defineStore('chat', () => {
   const conversations = ref<Conversation[]>([])
   const activeConversationId = ref<string | null>(null)
   const messages = ref<ChatMessage[]>([])
   const isStreaming = ref(false)
+  const isPreparing = ref(false)
+  const messagesReady = ref(true)
+  const deletingConversations = reactive(new Set<string>())
+  const canSend = computed(() => messagesReady.value && !isPreparing.value && !isStreaming.value
+    && (!activeConversationId.value || !deletingConversations.has(activeConversationId.value)))
   const inputText = ref('')
-  const useRag = ref(false)
+  const useRag = ref(true)
   const selectedSkillId = ref<string | null>(null)
   const selectedProviderId = ref('')
   const selectedModel = ref('')
+  const historyError = ref('')
+  let initialized = false
+  let loading: Promise<void> | null = null
+  let loadVersion = 0
   let sseClient: SseClient | null = null
   let streamVersion = 0
-
-  // User-created conversations live in this browser session; no fabricated history.
-  const history = reactive<Record<string, ChatMessage[]>>({})
+  const pendingCreates = new Map<string, Promise<void>>()
 
   const activeConversation = computed(() =>
-    conversations.value.find((c) => c.conversation_id === activeConversationId.value) || null
+    conversations.value.find(item => item.conversation_id === activeConversationId.value) || null
   )
-
   const sortedConversations = computed(() =>
     [...conversations.value].sort((a, b) => b.updated_at.localeCompare(a.updated_at))
   )
 
+  function normalizeMessage(message: ChatMessage): ChatMessage {
+    return {
+      ...message,
+      citations: message.citations?.map(citation => ({
+        ...citation,
+        heading_path: Array.isArray(citation.heading_path)
+          ? citation.heading_path.join(' / ')
+          : citation.heading_path,
+      } as Citation)),
+    }
+  }
+
+  async function fetchAllConversations() {
+    const items: Conversation[] = []
+    while (true) {
+      const result = await listConversationsApi(items.length, 100)
+      items.push(...result.items)
+      if (!result.items.length || items.length >= result.page.total) return items
+    }
+  }
+
+  async function fetchAllMessages(conversationId: string) {
+    const items: ChatMessage[] = []
+    while (true) {
+      const result = await listConversationMessages(conversationId, items.length, 500)
+      items.push(...result.items)
+      if (!result.items.length || items.length >= result.page.total) return items
+    }
+  }
+
+  async function loadConversations(force = false) {
+    if (loading) return loading
+    if (initialized && !force) return
+    const version = ++loadVersion
+    messagesReady.value = false
+    loading = (async () => {
+      historyError.value = ''
+      try {
+        const items = await fetchAllConversations()
+        if (version !== loadVersion) return
+        conversations.value = items
+        initialized = true
+        const selected = activeConversationId.value && items.some(item => item.conversation_id === activeConversationId.value)
+          ? activeConversationId.value
+          : items[0]?.conversation_id || null
+        if (selected) await setActiveConversation(selected)
+        else { activeConversationId.value = null; messages.value = []; messagesReady.value = true }
+      } catch (error) {
+        if (version === loadVersion) historyError.value = error instanceof Error ? error.message : t('聊天记录加载失败', 'Failed to load chat history')
+      } finally {
+        loading = null
+      }
+    })()
+    return loading
+  }
+
   async function setActiveConversation(id: string) {
     stopGeneration()
+    const version = ++loadVersion
     activeConversationId.value = id
-    messages.value = history[id] ?? []
+    messagesReady.value = false
+    messages.value = []
+    historyError.value = ''
+    try {
+      const loadedMessages = await fetchAllMessages(id)
+      if (version === loadVersion && activeConversationId.value === id) {
+        messages.value = loadedMessages.map(normalizeMessage)
+        messagesReady.value = true
+      }
+    } catch (error) {
+      if (version === loadVersion) historyError.value = error instanceof Error ? error.message : t('消息加载失败', 'Failed to load messages')
+    }
+  }
+
+  function addLocalConversation(title: string) {
+    loadVersion++
+    const now = new Date().toISOString()
+    const conversation: Conversation = {
+      conversation_id: crypto.randomUUID(), title, created_at: now, updated_at: now, message_count: 0,
+    }
+    conversations.value.unshift(conversation)
+    activeConversationId.value = conversation.conversation_id
+    messages.value = []
+    messagesReady.value = true
+    return conversation
+  }
+
+  async function persistConversation(conversation: Conversation) {
+    const promise = createConversationApi(conversation).then(saved => {
+      const index = conversations.value.findIndex(item => item.conversation_id === saved.conversation_id)
+      if (index >= 0) Object.assign(conversations.value[index]!, saved)
+    }).catch(error => {
+      conversations.value = conversations.value.filter(item => item.conversation_id !== conversation.conversation_id)
+      if (activeConversationId.value === conversation.conversation_id) {
+        activeConversationId.value = null
+        messages.value = []
+      }
+      historyError.value = error instanceof Error ? error.message : t('会话创建失败', 'Failed to create conversation')
+      throw error
+    }).finally(() => pendingCreates.delete(conversation.conversation_id))
+    pendingCreates.set(conversation.conversation_id, promise)
+    return promise
+  }
+
+  async function createNewConversation() {
+    stopGeneration()
+    historyError.value = ''
+    const conversation = addLocalConversation(t('新对话', 'New conversation'))
+    try { await persistConversation(conversation) } catch { /* exposed through historyError */ }
   }
 
   async function sendMessage(text: string) {
-    if (!text.trim() || isStreaming.value || !selectedProviderId.value || !selectedModel.value) return
-    const conversationId = activeConversationId.value || crypto.randomUUID()
-
-    if (!activeConversationId.value) {
-      const newConv: Conversation = {
-        conversation_id: conversationId,
-        title: text.slice(0, 30),
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        message_count: 0,
+    const content = text.trim()
+    if (!content || !canSend.value || !selectedProviderId.value || !selectedModel.value) return
+    const version = ++streamVersion
+    isPreparing.value = true
+    historyError.value = ''
+    let conversation = activeConversation.value
+    try {
+      if (!conversation) {
+        conversation = addLocalConversation(content.slice(0, 30))
+        await persistConversation(conversation)
+      } else if (pendingCreates.has(conversation.conversation_id)) {
+        await pendingCreates.get(conversation.conversation_id)
       }
-      conversations.value.unshift(newConv)
-      activeConversationId.value = conversationId
+    } catch { return }
+    finally {
+      if (version === streamVersion) isPreparing.value = false
     }
+    // Switching, stopping or deleting cancels sends still waiting for creation.
+    if (version !== streamVersion || activeConversationId.value !== conversation.conversation_id) return
 
-    history[conversationId] = messages.value
-    const conversationMessages = messages.value
+    const conversationId = conversation.conversation_id
+    if (conversation.message_count === 0) conversation.title = content.slice(0, 30)
     const userMsg: ChatMessage = {
-      message_id: crypto.randomUUID(),
-      conversation_id: conversationId,
-      role: 'user',
-      content: text,
+      message_id: crypto.randomUUID(), conversation_id: conversationId, role: 'user', content,
       created_at: new Date().toISOString(),
     }
-    messages.value.push(userMsg)
+    const aiMsg = reactive<ChatMessage>({
+      message_id: crypto.randomUUID(), conversation_id: conversationId, role: 'assistant', content: '',
+      created_at: new Date().toISOString(), citations: [], tool_calls: [],
+    })
+    messages.value.push(userMsg, aiMsg)
     inputText.value = ''
     isStreaming.value = true
-    const conversation = conversations.value.find(c => c.conversation_id === conversationId)
-    if (conversation) { conversation.updated_at = new Date().toISOString(); conversation.message_count = messages.value.length }
+    conversation.updated_at = new Date().toISOString()
+    conversation.message_count = messages.value.length
 
-    // 先插入占位消息，随后将 SSE 增量原位合并，避免每个 token 重建消息列表。
-    const aiMsg = reactive<ChatMessage>({
-      message_id: crypto.randomUUID(),
-      conversation_id: conversationId,
-      role: 'assistant',
-      content: '',
-      created_at: new Date().toISOString(),
-      citations: [],
-      tool_calls: [],
-    })
-    messages.value.push(aiMsg)
-
-    const version = ++streamVersion
     const argumentBuffers = new Map<string, string>()
     sseClient = streamChat({
       provider_id: selectedProviderId.value,
       model: selectedModel.value,
       conversation_id: conversationId,
+      user_message_id: userMsg.message_id,
+      assistant_message_id: aiMsg.message_id,
+      conversation_title: conversation.title,
       use_rag: useRag.value,
       messages: messages.value
-        .filter((message) => message.message_id !== aiMsg.message_id)
-        .map((message) => ({ role: message.role, content: message.content })),
+        .filter(message => message.message_id !== aiMsg.message_id)
+        .map(message => ({ role: message.role, content: message.content })),
     }, {
       onEvent(event) {
         if (version !== streamVersion) return
@@ -94,25 +208,21 @@ export const useChatStore = defineStore('chat', () => {
         if (event.event === 'ThinkingDelta') aiMsg.thinking = `${aiMsg.thinking ?? ''}${String(event.data.text ?? '')}`
         if (event.event === 'ToolCallStart') {
           aiMsg.tool_calls?.push({
-            tool_call_id: String(event.data.tool_call_id ?? ''),
-            name: String(event.data.name ?? 'unknown'),
-            parameters: (event.data.arguments ?? {}) as Record<string, unknown>,
-            status: 'running',
+            tool_call_id: String(event.data.tool_call_id ?? ''), name: String(event.data.name ?? 'unknown'),
+            parameters: (event.data.arguments ?? {}) as Record<string, unknown>, status: 'running',
           })
         }
         if (event.event === 'ToolCallDelta') {
-          const call = aiMsg.tool_calls?.find((item) => item.tool_call_id === event.data.tool_call_id)
+          const call = aiMsg.tool_calls?.find(item => item.tool_call_id === event.data.tool_call_id)
           if (call && typeof event.data.arguments_delta === 'string') {
             const buffer = (argumentBuffers.get(call.tool_call_id) ?? '') + event.data.arguments_delta
             argumentBuffers.set(call.tool_call_id, buffer)
             try { call.parameters = JSON.parse(buffer) } catch { /* incomplete JSON fragment */ }
           }
-          if (call && event.data.arguments && typeof event.data.arguments === 'object') {
-            Object.assign(call.parameters, event.data.arguments)
-          }
+          if (call && event.data.arguments && typeof event.data.arguments === 'object') Object.assign(call.parameters, event.data.arguments)
         }
         if (event.event === 'ToolCallEnd') {
-          const call = aiMsg.tool_calls?.find((item) => item.tool_call_id === event.data.tool_call_id)
+          const call = aiMsg.tool_calls?.find(item => item.tool_call_id === event.data.tool_call_id)
           if (call) call.status = 'completed'
         }
         if (event.event === 'Usage') {
@@ -128,21 +238,18 @@ export const useChatStore = defineStore('chat', () => {
             content: String(event.data.content ?? event.data.snippet ?? ''),
           })
         }
-        if (event.event === 'Error') aiMsg.content += `\n\n生成失败：${String(event.data.message ?? '未知错误')}`
+        if (event.event === 'Error') aiMsg.content += `\n\n${t('生成失败：', 'Generation failed: ')}${String(event.data.message ?? t('未知错误', 'Unknown error'))}`
       },
       onError(error) {
         if (version !== streamVersion) return
-        aiMsg.content += `\n\n连接失败：${error.message}`
+        aiMsg.content += `\n\n${t('连接失败：', 'Connection failed: ')}${error.message}`
         isStreaming.value = false
         sseClient = null
       },
       onDone() {
         if (version !== streamVersion) return
-        const conversation = conversations.value.find((item) => item.conversation_id === conversationId)
-        if (conversation) {
-          conversation.message_count = conversationMessages.length
-          conversation.updated_at = new Date().toISOString()
-        }
+        conversation!.message_count = messages.value.length
+        conversation!.updated_at = new Date().toISOString()
         isStreaming.value = false
         sseClient = null
       },
@@ -151,57 +258,35 @@ export const useChatStore = defineStore('chat', () => {
 
   function stopGeneration() {
     streamVersion++
-    if (sseClient) {
-      sseClient.cancel()
-      sseClient = null
-    }
+    isPreparing.value = false
+    if (sseClient) { sseClient.cancel(); sseClient = null }
     isStreaming.value = false
   }
 
-  function createNewConversation() {
-    stopGeneration()
-    const newConv: Conversation = {
-      conversation_id: crypto.randomUUID(),
-      title: '新对话',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      message_count: 0,
-    }
-    conversations.value.unshift(newConv)
-    activeConversationId.value = newConv.conversation_id
-    history[newConv.conversation_id] = []
-    messages.value = history[newConv.conversation_id]
-  }
-
-  function deleteConversation(id: string) {
+  async function deleteConversation(id: string) {
+    if (deletingConversations.has(id)) return
+    deletingConversations.add(id)
     if (activeConversationId.value === id) stopGeneration()
-    delete history[id]
-    const idx = conversations.value.findIndex((c) => c.conversation_id === id)
-    if (idx > -1) {
-      conversations.value.splice(idx, 1)
+    historyError.value = ''
+    try {
+      if (pendingCreates.has(id)) await pendingCreates.get(id)
+      await removeConversation(id)
+      conversations.value = conversations.value.filter(item => item.conversation_id !== id)
       if (activeConversationId.value === id) {
-        activeConversationId.value = conversations.value[0]?.conversation_id || null
-        messages.value = conversations.value[0] ? history[conversations.value[0].conversation_id] || [] : []
+        const next = sortedConversations.value[0]
+        if (next) await setActiveConversation(next.conversation_id)
+        else { loadVersion++; activeConversationId.value = null; messages.value = []; messagesReady.value = true }
       }
+    } catch (error) {
+      historyError.value = error instanceof Error ? error.message : t('会话删除失败', 'Failed to delete conversation')
+    } finally {
+      deletingConversations.delete(id)
     }
   }
 
   return {
-    conversations,
-    activeConversationId,
-    activeConversation,
-    sortedConversations,
-    messages,
-    isStreaming,
-    inputText,
-    useRag,
-    selectedSkillId,
-    selectedProviderId,
-    selectedModel,
-    setActiveConversation,
-    sendMessage,
-    stopGeneration,
-    createNewConversation,
-    deleteConversation,
+    conversations, activeConversationId, activeConversation, sortedConversations, messages,
+    isStreaming, isPreparing, canSend, inputText, useRag, selectedSkillId, selectedProviderId, selectedModel, historyError,
+    loadConversations, setActiveConversation, sendMessage, stopGeneration, createNewConversation, deleteConversation,
   }
 })

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Skill } from '@/contracts'
 import * as skillService from '@/services/skillService'
+import { t } from '@/i18n'
 
 export const useSkillStore = defineStore('skill', () => {
   const skills = ref<Skill[]>([])
@@ -23,7 +24,7 @@ export const useSkillStore = defineStore('skill', () => {
       skills.value = await skillService.listSkills()
       error.value = null
     } catch (reason) {
-      error.value = reason instanceof Error ? reason.message : 'Skill 加载失败'
+      error.value = reason instanceof Error ? reason.message : t('Skill 加载失败', 'Failed to load Skills')
     } finally {
       isLoading.value = false
     }

@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { useTaskStore } from '@/stores/task'
+import { t } from '@/i18n'
 const taskStore = useTaskStore()
 </script>
 
 <template>
   <div class="sidebar-panel filters">
-    <div class="field"><label>状态</label><select v-model="taskStore.filterStatus" class="select"><option value="all">全部</option><option value="todo">待办</option><option value="in_progress">进行中</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></div>
-    <div class="task-counts"><p><span>待办</span><strong>{{ taskStore.todoTasks.length }}</strong></p><p><span>进行中</span><strong>{{ taskStore.inProgressTasks.length }}</strong></p><p><span>已完成</span><strong>{{ taskStore.doneTasks.length }}</strong></p></div>
+    <div class="field"><label>{{ t('状态', 'Status') }}</label><select v-model="taskStore.filterStatus" class="select"><option value="all">{{ t('全部', 'All') }}</option><option value="todo">{{ t('待办', 'To do') }}</option><option value="in_progress">{{ t('进行中', 'In progress') }}</option><option value="done">{{ t('已完成', 'Completed') }}</option><option value="cancelled">{{ t('已取消', 'Cancelled') }}</option></select></div>
+    <div class="task-counts"><p><span>{{ t('待办', 'To do') }}</span><strong>{{ taskStore.todoTasks.length }}</strong></p><p><span>{{ t('进行中', 'In progress') }}</span><strong>{{ taskStore.inProgressTasks.length }}</strong></p><p><span>{{ t('已完成', 'Completed') }}</span><strong>{{ taskStore.doneTasks.length }}</strong></p></div>
   </div>
 </template>
 

@@ -253,6 +253,18 @@ class HTTPProviderMixin:
     stream_path = "/chat/completions"
     stream_format = "sse"
 
+    def _custom_payload(self, payload):
+        from app.request_overrides import apply_overrides
+        config = getattr(self, "provider_config", None)
+        return apply_overrides(payload, config.request_overrides, "chat", stream=bool(payload.get("stream"))) if config else payload
+
+    def _usage_attempt(self, payload):
+        from app.services.usage_service import UsageAttempt
+        config = getattr(self, "provider_config", None)
+        protocol = config.provider_type.value if config else "openai_compatible"
+        return UsageAttempt(config.provider_id if config else "unregistered", str(payload.get("model", "")), protocol,
+                            source="local" if protocol == "ollama" else "api")
+
     def _headers(self) -> dict[str, str]:
         return {"Content-Type": "application/json"}
 
@@ -268,11 +280,18 @@ class HTTPProviderMixin:
 
     async def _request(self, method: str, path: str, **kwargs) -> dict:
         headers = self._headers()
+        attempt = None
+        if isinstance(kwargs.get("json"), dict) and path == self.stream_path:
+            kwargs["json"] = self._custom_payload(kwargs["json"])
+            attempt = self._usage_attempt(kwargs["json"])
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds, transport=self.transport) as client:
                 response = await client.request(method, f"{self.base_url}{path}", headers=headers, **kwargs)
                 response.raise_for_status()
                 data = object_value(response.json())
+                if attempt:
+                    attempt.observe(data)
+                    attempt.completed = True
                 check_error(data)
                 return data
         except httpx.TimeoutException as exc:
@@ -283,8 +302,13 @@ class HTTPProviderMixin:
             raise ProviderError("PROVIDER_UNAVAILABLE", "Provider is unavailable.") from exc
         except (ValueError, TypeError) as exc:
             raise invalid_response() from exc
+        finally:
+            if attempt:
+                attempt.persist()
 
     async def _stream_json(self, payload: dict[str, object]) -> AsyncIterator[dict]:
+        payload = self._custom_payload(payload)
+        attempt = self._usage_attempt(payload)
         headers = self._headers()
         headers["Accept"] = "text/event-stream" if self.stream_format == "sse" else "application/x-ndjson"
         try:
@@ -295,12 +319,14 @@ class HTTPProviderMixin:
                     if self.stream_format == "sse":
                         async with aclosing(sse_objects(response)) as objects:
                             async for data in objects:
+                                attempt.observe(data)
                                 yield data
                     else:
                         async for line in response.aiter_lines():
                             if line.strip():
                                 data = object_value(json.loads(line))
                                 check_error(data)
+                                attempt.observe(data)
                                 yield data
         except httpx.TimeoutException as exc:
             raise ProviderError("PROVIDER_TIMEOUT", "Provider request timed out.") from exc
@@ -310,3 +336,5 @@ class HTTPProviderMixin:
             raise ProviderError("PROVIDER_UNAVAILABLE", "Provider is unavailable.") from exc
         except (ValueError, TypeError) as exc:
             raise invalid_response() from exc
+        finally:
+            attempt.persist()

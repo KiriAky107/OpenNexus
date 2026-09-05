@@ -1,153 +1,175 @@
 # Notes Agent（暂命名） 团队开发说明
 
-> 本文件用于团队开发期间快速配置环境和启动项目，不是正式的项目 README。
+> 本文件用于团队开发期间快速配置环境、启动项目并了解当前实现状态，不是正式的项目 README。
 
-> 当前基线：2026-09-03。第一阶段 Web 联调前后端已经完成；第二阶段已完成 Workspace 去 Mock、Agent Trace 持久化与 SSE 恢复、stdio MCP Bridge、隔离 Plugin Host、Plugin Command/Settings，以及独立 MCP Server 配置中心 C.1（stdio、Streamable HTTP 与旧 SSE 兼容）、RAG Benchmark 与 Markdown → HTML 导出。真实音频、Provider 协议增强、Agent Benchmark、PDF/DOCX 导出、主题包、Trace 可视化、Mermaid 与函数图像仍在后续开发；Tauri Host、Stronghold、原生多 Vault 文件系统和 Sync Server 尚未接入。
+NotesAgent 是本地优先的 AI 笔记与知识库项目。当前可运行形态为 Vue/Vite Web 前端与 FastAPI AI Core：Markdown 和附件保存在本地 Vault，SQLite 管理元数据、全文索引、向量空间、搜索历史、AI 会话、任务、Agent Trace、多模态任务及运行诊断。AI 对话已接入知识库检索，会话与消息由后端持久化并供 Web 和桌面客户端共用。
 
-## 当前目录
+截至 2026-09-05，第一阶段及第二阶段 A～F 的工程范围已经合并到 `main`。当前已完成真实 Workspace、混合检索与知识库问答、Agent/Tool/Permission、Skill/Plugin、MCP 配置与调用、模型提供商与路由、RAG Benchmark，以及本地 Embedding、音频转写和片段级声纹聚类。Tauri/Rust Host、Stronghold、原生多 Vault 文件系统、生产级 MCP 沙箱和 Sync Server 尚未接入。
+
+## 目录
 
 ```text
 NotesAgent/
 ├── frontend/      Vue 3 + TypeScript + Vite 前端
-├── backend/       FastAPI + Pydantic 后端
+├── backend/       FastAPI AI Core、SQLite 与本地模型运行管理
 ├── docs/          架构、契约、开发说明、协作规范与问题复盘
 └── server sync/   云同步服务预留目录，当前未实现
 ```
 
+## 当前能力
+
+- 工作区：打开一个后端配置的真实 Vault，编辑 Markdown，管理文件与目录。
+- 检索与问答：FTS5、sqlite-vec、RRF 与轻量词面精排；搜索历史持久化到后端 SQLite；AI 对话自动检索知识库并返回 Citation。
+- Agent 与扩展：持久化 Trace、可恢复 SSE、Tool/Permission、Skill、Plugin Command/Settings/Secret、隔离 Plugin Host。
+- MCP：独立配置 stdio、Streamable HTTP 和旧 SSE Server，发现并调用工具；生产 stdio 沙箱等待 Tauri Host。
+- 模型服务：OpenAI Chat/Compatible、OpenAI Responses、Anthropic Messages、Ollama；国内常用提供商 logo 预设、独立凭据、模型发现和自定义请求 JSON。
+- 多模态：API 优先，未配置或响应无效时回退本地；`local_only` 禁止远程调用。任务、修订、事件、来源和回退原因写入 SQLite。
+- 模型运行：默认 CPU，可选 CUDA 12.8 组件；固定模型 revision，按需启动独立子进程，交互检索优先排队，CUDA 初始化或显存失败时用同一冻结配置在 CPU 重试一次。
+- 可观测性：输入、输出、缓存命中、推理 Token 与音频用量卡片；本地运行诊断保留最近 200 条，不保存正文、文件路径、密钥或异常全文。
+- 界面偏好：设置页可即时切换全局中文/英文界面，并控制由系统词典提供的编辑器拼写检查；偏好目前保存于 Web 端设备配置，后续由 Tauri 配置存储接管。
+
+## 本地模型
+
+| 能力 | 当前模型 | 许可 | 说明 |
+| --- | --- | --- | --- |
+| 默认 Embedding | `hotchpotch/bekko-embedding-v1-a8m` | MIT | 384 维，中文检索默认选择 |
+| 可选 Embedding | `ibm-granite/granite-embedding-97m-multilingual-r2` | Apache-2.0 | 384 维，多语言备选 |
+| 音频转写与语言识别 | `Qwen/Qwen3-ASR-0.6B` | Apache-2.0 | 返回片段级时间边界 |
+| 声纹提取与匹配 | `iic/speech_eres2netv2_sv_zh-cn_16k-common` | Apache-2.0 | 192 维声纹，供相似度和片段聚类使用 |
+
+模型权重按代码中的固定 revision 下载并校验，推理阶段离线读取。当前说话人处理是能量分段、ASR 片段与 ERes2NetV2 聚类，不包含逐字强制对齐、同段多人或重叠语音分离。`HashEmbeddingProvider` 只用于确定性测试注入。
+
 ## 开发环境
 
-当前开发版需要：
+| 环境 | 要求 |
+| --- | --- |
+| Git | 较新稳定版 |
+| Node.js | 22+，推荐 24 |
+| pnpm | 10+ |
+| Python | 3.11+，推荐 3.12 |
+| uv | 较新稳定版 |
 
-| 环境 | 要求 | 说明 |
-| --- | --- | --- |
-| Git | 较新稳定版 | 代码版本管理 |
-| Node.js | 22 或更高版本 | 推荐使用 Node.js 24 |
-| pnpm | 10 或更高版本 | 前端依赖与脚本管理 |
-| Python | 3.11 或更高版本 | 推荐使用 Python 3.12 |
-| uv | 较新稳定版 | 后端依赖和虚拟环境管理 |
+当前 Web 联调不需要 Rust 和 Tauri。桌面端集成时再安装 Rust Toolchain 与 Tauri CLI。
 
-检查本机环境：
+## 初始化与启动
 
-```powershell
-git --version
-node --version
-pnpm --version
-python --version
-uv --version
-```
-
-当前 Web 联调不需要 Rust 和 Tauri。开始桌面端集成后，再按照 `docs/architecture/AI笔记软件技术栈说明-团队版-v2.3.md` 安装 Rust Toolchain 与 Tauri CLI。
-
-## 首次初始化
-
-### 后端
+安装 API 与前端依赖：
 
 ```powershell
 cd backend
 uv sync
-cd ..
-```
-
-`uv sync` 会根据 `backend/pyproject.toml` 安装依赖，并自动创建和管理 `backend/.venv`，不需要手动创建或激活虚拟环境。
-
-### 前端
-
-```powershell
-cd frontend
+cd ../frontend
 pnpm install
 cd ..
 ```
 
-## 启动开发环境
-
-前端和后端需要在两个终端中分别启动。
-
-### 终端一：启动后端
+在两个终端分别启动：
 
 ```powershell
+# 终端一
 cd backend
 uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
 
-后端地址：
-
-- 健康检查：<http://127.0.0.1:8000/health>
-- 服务状态：<http://127.0.0.1:8000/api/status>
-- API 文档：<http://127.0.0.1:8000/docs>
-- OpenAPI JSON：<http://127.0.0.1:8000/openapi.json>
-
-#### 开发环境使用外部模型
-
-在“设置 → 模型提供商”中选择 DeepSeek 或 OpenAI 预设后，直接在密码输入框填写 API Key。前端只在提交期间持有该值，不写入 Pinia 或 localStorage；AI Core 将其加密保存到本机 `backend/data/credentials/`，Provider 配置只保留内部 Credential ID。
-
-该目录同时包含本地开发用主密钥和密文，并已加入 `.gitignore`。这提供本地静态加密和完整性校验，但不能替代操作系统凭据库。开始 Tauri 桌面集成后，应将存储实现迁移到 Stronghold，保留现有 Credential API 与 Provider 接口边界。
-
-无界面或自动化环境仍可使用 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY` 或 `AINOTE_CREDENTIAL_<ID>` 注入；设置页保存的本地密钥优先，环境变量仅在本地未保存对应 Credential ID 时作为回退。密钥不得写入仓库文件、README、Issue、提交信息或聊天记录。
-
-### 终端二：启动前端
-
-```powershell
+# 终端二
 cd frontend
 pnpm dev
 ```
 
-前端地址：<http://127.0.0.1:5173>
+前端地址为 <http://127.0.0.1:5173>，Vite 将 `/api` 和 `/health` 代理到 <http://127.0.0.1:8000>。后端提供健康检查 `/health`、服务状态 `/api/status`、API 文档 `/docs` 和机器可读契约 `/openapi.json`。
 
-开发环境中，Vite 会将 `/api` 和 `/health` 请求代理到 `http://127.0.0.1:8000`。联调时应先启动后端，再启动或刷新前端。
+## 安装本地模型运行组件
+
+API 环境保留在 `backend/.venv`，模型依赖安装到独立环境。默认安装 CPU：
+
+```powershell
+./backend/scripts/install-model-runtime.ps1
+```
+
+CUDA 为 Windows 可选组件，可在“设置 → 模型提供商 → 本地模型”中安装，也可保留 CPU 环境并创建独立 CUDA 环境：
+
+```powershell
+./backend/scripts/install-model-runtime.ps1 -Device cuda -RuntimeDirectory ./backend/.venv-models-cuda
+$env:APP_MODEL_PYTHON = (Resolve-Path ./backend/.venv-models-cuda/Scripts/python.exe).Path
+```
+
+脚本固定 `torch`/`torchaudio` 2.9.1，CPU 使用官方 CPU wheel，CUDA 使用 cu128 wheel；脚本不会安装或修改 NVIDIA 驱动。模型权重需要在设置页显式下载，不会在推理时自动下载。
+
+## 模型提供商与凭据
+
+在“设置 → 模型提供商”中选择预设或创建自定义提供商。API Key 只在前端提交期间存在，不写入 Pinia 或 `localStorage`；后端将密文和开发主密钥保存到已忽略的 `backend/data/credentials/`，Provider 配置只保存 Credential ID。
+
+无界面环境可使用 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY` 或 `AINOTE_CREDENTIAL_<ID>`。当前 Fernet 存储用于 Web 联调，桌面端将沿用 Credential API 边界迁移到 Stronghold。
 
 ## 测试与构建
-
-后端测试：
 
 ```powershell
 cd backend
 uv run pytest
-```
 
-前端类型检查及生产构建：
-
-```powershell
-cd frontend
+cd ../frontend
+pnpm test
 pnpm build
 ```
 
-前端单元与组件测试：
+当前回归基线为后端 559 项、前端 106 项测试通过，TypeScript 类型检查与生产构建通过。存在一条既有 Starlette/httpx 弃用提示和 Vite 大 bundle 提示；测试数量以当前分支实际输出和 CI 为准。
 
-```powershell
-cd frontend
-pnpm test
-```
-
-当前回归基线为后端 467 项测试、前端 32 项测试，且 TypeScript 类型检查和生产构建通过。测试数量会随功能增长，以本地实际输出和 CI 为准。
-
-构建产物位于 `frontend/dist`，该目录不提交到 Git。
-
-## 文档导航
+## 文档
 
 | 文档 | 用途 |
 | --- | --- |
-| [文档总索引](docs/README.md) | 文档分类、阅读顺序和维护规则 |
-| [技术栈说明](docs/architecture/AI笔记软件技术栈说明-团队版-v2.3.md) | 目标架构、第二阶段技术边界与模块依赖 |
-| [第二阶段分工表](docs/architecture/第二阶段团队分工表.md) | 第二阶段人员职责、任务顺序、协作关系与验收项 |
-| [后端接口契约](docs/contracts/后端接口契约-开发版.md) | HTTP/SSE 接口、错误和当前实现状态 |
-| [第二阶段接口契约](docs/contracts/第二阶段接口契约-开发版.md) | 第二阶段公共 DTO、计划接口、SSE、错误码与联调顺序 |
-| [AI Core 与 Agent Core](docs/development/AI-Core与Agent-Core开发说明.md) | Provider、Agent、Tool、Permission 与 Extension Core |
-| [MCP Bridge 与 Plugin Host](docs/development/MCP-Bridge与Plugin-Host开发说明.md) | stdio MCP、隔离进程、Tool 映射、状态与错误边界 |
-| [Plugin Command 与 Settings](docs/development/Plugin-Command与Settings开发说明.md) | Command Registry、Settings Schema、Secret 引用与联调边界 |
-| [Plugin Command 与 Settings 复盘](docs/retrospectives/Plugin-Command与Settings问题与修复复盘.md) | 阶段 D 连续审阅发现的安全、事务、Schema 与运行时契约问题 |
-| [Git 使用细则](docs/guides/Git使用细则-团队开发版.md) | 分支、提交、PR、Review 与合并流程 |
-| [CI/CD 细则](docs/guides/CI-CD细则-团队开发版.md) | Gitea 流水线、质量门禁、产物、发布与回滚规则 |
-| [Agent Trace 复盘](docs/retrospectives/Agent-Core第二阶段问题与修复复盘.md) | Agent 持久化、SSE 恢复、事件契约与脱敏问题复盘 |
+| [文档总索引](docs/README.md) | 全部架构、契约、开发说明和复盘入口 |
+| [前端 README](frontend/README.md) | 前端结构、运行方式和数据边界 |
+| [后端 README](backend/README.md) | API Core、模型运行与配置 |
+| [技术栈说明](docs/architecture/AI笔记软件技术栈说明-团队版-v2.3.md) | 当前技术基线、目标桌面架构与模块边界 |
+| [多模态与模型运行](docs/development/多模态管线与模型运行开发说明.md) | 模型 revision、CPU/CUDA、路由、用量和接口 |
+| [阶段 F 收尾验收](docs/development/阶段F收尾验收记录.md) | 自动化、CPU/CUDA 真实闭环和未关闭专项 |
+| [后端接口契约](docs/contracts/后端接口契约-开发版.md) | 当前 HTTP/SSE 接口说明 |
+| [第二阶段接口契约](docs/contracts/第二阶段接口契约-开发版.md) | 第二阶段公共 DTO 与行为边界 |
 
-## 日常开发注意事项
+## 开发约定
 
-- Python 依赖统一修改 `backend/pyproject.toml`，修改后执行 `uv sync`。
-- 前端依赖统一使用 pnpm 安装，不要混用 npm 或 yarn。
-- `backend/.venv`、`frontend/node_modules`、`frontend/dist` 均为本地生成目录，不提交到 Git。
-- API 默认监听 `127.0.0.1:8000`，前端默认监听 `127.0.0.1:5173`。
-- 后端附件目录默认是 `backend/data/attachments`，可通过 `APP_ATTACHMENTS_PATH` 覆盖；该目录由桌面 Host 管理。
-- 跨模块接口发生变化时，需要同步更新前后端类型和 `docs` 中的接口说明。
-- 当前已实现接口见 `docs/contracts/后端接口契约-开发版.md`，第二阶段规划接口见 `docs/contracts/第二阶段接口契约-开发版.md`；已实现能力以 `/openapi.json` 为准。
-- 前端页面、交互、状态管理及当前阶段后续页面需求见 `docs/contracts/前端页面需求说明-开发版.md`。
-- 分支、提交、Pull Request、Review 和冲突处理规范见 `docs/guides/Git使用细则-团队开发版.md`。
-- CI 检查、产物、发布和回滚规范见 `docs/guides/CI-CD细则-团队开发版.md`。
+- 后端依赖统一修改 `backend/pyproject.toml` 并执行 `uv sync`；模型依赖由 `backend/scripts/model-requirements.lock` 锁定。
+- 前端依赖统一使用 pnpm，不混用 npm 或 yarn。
+- `backend/.venv*`、模型权重、`frontend/node_modules` 和 `frontend/dist` 都是本地产物，不提交 Git。
+- 前端不直接访问 SQLite 或厂商模型协议；持久数据通过 FastAPI 服务读写。
+- 接口或数据结构变化时，同一提交同步更新前后端类型、契约和开发说明。
+- 当前行为以代码、测试和运行中的 `/openapi.json` 为准；规划能力必须在文档中明确标注。
+
+## 主题包与仓库发布（临时规范）
+
+主题页支持本地文件及 HTTP(S) 文件直链导入。两种入口均先解析、校验并展示清单和 CSS，用户点击安装后才写入本地存储。安装不会自动启用主题。
+
+### 单文件
+
+使用 UTF-8 编码，扩展名 `.theme`、`.yaml` 或 `.yml`。内容为 YAML 清单、一行 `---`、完整 CSS。可参考 `frontend/src/assets/themes/paper-moments.theme`。
+
+### ZIP
+
+一个 ZIP 只包含一个主题。清单命名为 `theme.yaml`、`theme.yml`、`manifest.yaml` 或 `manifest.yml`，可以放在顶层，也可以放在仓库压缩包的子目录中。
+
+```text
+my-theme/
+  theme.yaml
+  styles/
+    theme.css
+```
+
+```yaml
+theme_id: my-theme
+name: My Theme
+version: 1.0.0
+author: your-name
+min_app_version: 0.2.0
+is_dark: false
+css_entry: styles/theme.css
+```
+
+`css_entry` 相对于清单目录解析，不允许绝对路径、反斜杠及 `..`。CSS 应以 `[data-theme="my-theme"]` 限定主题样式。也支持仅包含一个 `.theme` 文件的 ZIP。
+
+目前安装持久化的是清单和 CSS，不会托管 ZIP 内的图片、字体等资源；需要这些资源时请将它们内嵌为 CSS data URL。禁止 `@import` 和脚本表达式。
+
+### URL 与社区仓库
+
+发布主题仓库时可提供原始 `.theme` 文件链接或 ZIP 发布附件直链，不要使用仓库 HTML 浏览页面地址。下载请求不携带 Cookie 或 HTTP 登录信息，服务器需允许应用来源的 CORS 请求；暂不支持私有仓库认证。
+
+下载和本地文件限制为 5 MB；ZIP 解压总大小限制为 10 MB，最多 100 个条目。URL 下载超时为 30 秒。取消导入会取消下载，过期请求不会替换当前待安装主题。更新时递增清单版本号，并保持 `theme_id` 稳定。

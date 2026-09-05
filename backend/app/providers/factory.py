@@ -16,6 +16,30 @@ class ProviderFactory:
         self.credentials = ProviderCredentialResolver(credentials)
 
     def build(self, config: ProviderConfig) -> ModelProvider:
+        adapter = self._build(config)
+        adapter.provider_config = config.model_copy(deep=True)
+        from app.services.usage_service import usage_context
+        from contextlib import aclosing
+        from uuid import uuid4
+        complete, stream = adapter.complete, adapter.stream
+        async def complete_with_trace(request):
+            token = usage_context.set({"request_id": uuid4().hex, "run_id": request.metadata.get("run_id")})
+            try:
+                return await complete(request)
+            finally:
+                usage_context.reset(token)
+        async def stream_with_trace(request):
+            token = usage_context.set({"request_id": uuid4().hex, "run_id": request.metadata.get("run_id")})
+            try:
+                async with aclosing(stream(request)) as events:
+                    async for event in events:
+                        yield event
+            finally:
+                usage_context.reset(token)
+        adapter.complete, adapter.stream = complete_with_trace, stream_with_trace
+        return adapter
+
+    def _build(self, config: ProviderConfig) -> ModelProvider:
         if config.provider_type == ProviderType.openai_responses:
             from app.providers.openai_responses import OpenAIResponsesProvider
             return OpenAIResponsesProvider(

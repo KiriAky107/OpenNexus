@@ -10,6 +10,10 @@ from app.container import container
 from app.errors import ApiError, api_error_handler, http_error_handler, validation_error_handler
 from app.export import service as export_service
 from app.routes import router as api_router
+from app.media_routes import router as media_router
+from app.local_model_routes import router as local_model_router
+from app.usage_routes import router as usage_router
+from app.provider_preview_routes import router as provider_preview_router
 from app.schemas import HealthResponse, ServiceStatusResponse
 
 settings = get_settings()
@@ -19,10 +23,20 @@ settings = get_settings()
 async def lifespan(_: FastAPI):
     # 重启后内存注册表为空，清理上一次运行遗留的导出产物，避免磁盘垃圾堆积。
     export_service.cleanup_orphan_files()
-    yield
-    # 第三方 MCP Server 必须跟随 AI Core 退出，不能遗留孤儿进程。
-    container.plugins.shutdown()
-    container.mcp_servers.shutdown()
+    from app.services import transcription_service
+    transcription_service.recover_interrupted()
+    try:
+        yield
+    finally:
+        await transcription_service.shutdown()
+        from app.local_models import components
+        await components.shutdown()
+        from app.local_models import manager
+        for _, key in list(manager._downloads):
+            await manager.cancel_download(key)
+        # 第三方 MCP Server 必须跟随 AI Core 退出，不能遗留孤儿进程。
+        container.plugins.shutdown()
+        container.mcp_servers.shutdown()
 
 
 app = FastAPI(
@@ -44,6 +58,10 @@ app.add_exception_handler(ApiError, api_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.add_exception_handler(StarletteHttpException, http_error_handler)
 app.include_router(api_router)
+app.include_router(media_router)
+app.include_router(local_model_router)
+app.include_router(usage_router)
+app.include_router(provider_preview_router)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["System"])

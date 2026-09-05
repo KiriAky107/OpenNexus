@@ -1,6 +1,9 @@
 import apiClient from './apiClient'
 import type { ApiSearchResult, PageMeta, SearchRequest, SearchResult } from '@/contracts'
 
+export function getHistory() { return apiClient.get<{ queries: string[] }>('/api/search/history') }
+export function clearHistory() { return apiClient.delete<{ queries: string[] }>('/api/search/history') }
+
 export async function search(request: SearchRequest): Promise<{
   results: SearchResult[]
   total: number

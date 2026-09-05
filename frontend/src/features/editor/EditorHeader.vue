@@ -1,26 +1,28 @@
 <script setup lang="ts">
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { computed } from 'vue'
+import { t } from '@/i18n'
 
 const editorStore = useEditorStore()
 const workspaceStore = useWorkspaceStore()
 
-const statusText: Record<string, string> = {
-  idle: '空闲', dirty: '未保存', saving: '保存中…', saved: '已保存', save_failed: '保存失败',
-  external_changed: '外部文件已变化', conflict: '存在编辑冲突',
-}
+const statusText = computed<Record<string, string>>(() => ({
+  idle: t('空闲', 'Idle'), dirty: t('未保存', 'Unsaved'), saving: t('保存中…', 'Saving…'), saved: t('已保存', 'Saved'), save_failed: t('保存失败', 'Save failed'),
+  external_changed: t('外部文件已变化', 'File changed externally'), conflict: t('存在编辑冲突', 'Edit conflict'),
+}))
 </script>
 
 <template>
   <header class="editor-header">
-    <div class="file-identity"><strong>{{ workspaceStore.activeFile?.name ?? '未命名笔记' }}</strong><small>{{ workspaceStore.activeFilePath }}</small></div>
+    <div class="file-identity"><strong>{{ workspaceStore.activeFile?.name ?? t('未命名笔记', 'Untitled note') }}</strong><small>{{ workspaceStore.activeFilePath }}</small></div>
     <div class="editor-actions">
       <span class="save-status" :class="editorStore.saveStatus">{{ statusText[editorStore.saveStatus] }}</span>
-      <div class="mode-switch" aria-label="编辑模式">
-        <button type="button" :class="{ active: editorStore.mode === 'wysiwyg' }" @click="editorStore.setMode('wysiwyg')">写作</button>
-        <button type="button" :class="{ active: editorStore.mode === 'source' }" @click="editorStore.setMode('source')">源码</button>
+      <div class="mode-switch" :aria-label="t('编辑模式', 'Editor mode')">
+        <button type="button" :class="{ active: editorStore.mode === 'wysiwyg' }" @click="editorStore.setMode('wysiwyg')">{{ t('写作', 'Writing') }}</button>
+        <button type="button" :class="{ active: editorStore.mode === 'source' }" @click="editorStore.setMode('source')">{{ t('源码', 'Source') }}</button>
       </div>
-      <button type="button" class="save-button" :disabled="editorStore.saveStatus === 'saving'" @click="editorStore.save">保存</button>
+      <button type="button" class="save-button" :disabled="editorStore.saveStatus === 'saving'" @click="editorStore.save">{{ t('保存', 'Save') }}</button>
     </div>
   </header>
 </template>
