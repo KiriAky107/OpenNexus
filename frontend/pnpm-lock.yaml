@@ -83,6 +83,9 @@ importers:
       fflate:
         specifier: ^0.8.3
         version: 0.8.3
+      katex:
+        specifier: 0.18.4
+        version: 0.18.4
       marked:
         specifier: ^15.0.0
         version: 15.0.12
@@ -108,6 +111,9 @@ importers:
         specifier: ^2.9.0
         version: 2.9.0
     devDependencies:
+      '@types/katex':
+        specifier: 0.16.8
+        version: 0.16.8
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.1

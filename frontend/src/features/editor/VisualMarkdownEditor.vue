@@ -33,6 +33,7 @@ import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore } from '@/stores/theme'
 import { applyMarkdownFontSize, fontSizeMarkdownPlugin } from './fontSizeMarkdown'
+import { inlineCodeInputPlugin } from './inlineCodeInput'
 import { t } from '@/i18n'
 import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/frame.css'
@@ -93,6 +94,16 @@ type ToolbarCommand = 'bold' | 'italic' | 'ordered-list' | 'bullet-list' | 'inli
 function runCommand(command: ToolbarCommand) {
   const editor = crepe?.editor
   if (!editor) return
+  if (command === 'inline-code' && editor.action(ctx => ctx.get(editorViewCtx).state.selection.empty)) {
+    editor.action(ctx => {
+      const view = ctx.get(editorViewCtx)
+      const mark = view.state.schema.marks.inlineCode!
+      const active = (view.state.storedMarks ?? view.state.selection.$from.marks()).some(item => item.type === mark)
+      view.dispatch(active ? view.state.tr.removeStoredMark(mark) : view.state.tr.setStoredMarks([mark.create()]))
+      view.focus()
+    })
+    return
+  }
   // 顶部工具栏复用 Milkdown 命令，因此选区与浮动工具栏共享同一文档事务。
   const actions = {
     bold: callCommand(toggleStrongCommand.key),
@@ -228,6 +239,7 @@ onMounted(async () => {
     extensions: [basicSetup, keymap.of([indentWithTab]), shikiEditorTheme(themeStore.resolvedCodeBlockTheme)],
   })))
   crepe.editor.use(fontSizeMarkdownPlugin)
+  crepe.editor.use(inlineCodeInputPlugin)
   crepe.on((listener) => {
     listener.markdownUpdated((_ctx, markdown, previousMarkdown) => {
       // 忽略编辑器初始化/回显事件，防止无内容变化时触发自动保存循环。
@@ -404,6 +416,7 @@ defineExpose({ getEditor: () => crepe?.editor })
 .milkdown-host :deep(.milkdown-list-item-block li .label-wrapper) { color: var(--color-markdown-marker); font-weight: 700; }
 .milkdown-host :deep(.milkdown-list-item-block li .label-wrapper svg) { fill: var(--color-markdown-marker); }
 .milkdown-host :deep(code) { font-family: var(--font-editor-mono); }
+.milkdown-host :deep(.ProseMirror :not(pre) > code) { padding: .12em .35em; border: 1px solid var(--color-code-border); border-radius: var(--radius-sm); background: var(--color-code-background); color: var(--color-code-text); font-size: .9em; box-decoration-break: clone; }
 :global([data-theme='dark'] .milkdown-host .milkdown) { color-scheme: dark; }
 @media (max-width: 680px) { .toolbar-select select { min-width: 46px; width: 46px; } }
 </style>
