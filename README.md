@@ -111,7 +111,7 @@ pnpm test
 pnpm build
 ```
 
-阶段 F 合并时的回归基线为后端 559 项、前端 103 项测试通过，TypeScript 类型检查与生产构建通过。存在一条既有 Starlette/httpx 弃用提示和 Vite 大 bundle 提示；测试数量以当前分支实际输出和 CI 为准。
+当前回归基线为后端 559 项、前端 106 项测试通过，TypeScript 类型检查与生产构建通过。存在一条既有 Starlette/httpx 弃用提示和 Vite 大 bundle 提示；测试数量以当前分支实际输出和 CI 为准。
 
 ## 文档
 

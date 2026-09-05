@@ -40,7 +40,7 @@ async function previewRequest() {
   try {
     if (!requestJsonValid.value) throw new Error(t('请先修正 JSON。', 'Fix the JSON first.'))
     const response = await apiClient.post<{body:Record<string,unknown>}>('/api/providers/request-preview', {
-      provider: {provider_type:form.provider_type,name:form.name || '预览',base_url:form.base_url || null,
+      provider: {provider_type:form.provider_type,name:form.name || t('预览', 'Preview'),base_url:form.base_url || null,
         default_model:form.default_model || null,request_overrides:requestOverrides.value}, stream:previewStream.value, capability:previewCapability.value,
     })
     if (active && generation === draftGeneration) requestPreview.value = JSON.stringify(response.body, null, 2)
@@ -54,7 +54,7 @@ async function probeRequest() {
     if (!requestJsonValid.value) throw new Error(t('请先修正 JSON。', 'Fix the JSON first.'))
     if (apiKey.value.trim()) throw new Error(t('请先保存新的 API Key，再进行推理验证。', 'Save the new API key before testing inference.'))
     const result = await apiClient.post<{message:string}>('/api/providers/request-probe', {
-      provider: {provider_type:form.provider_type,name:form.name || '推理验证',base_url:form.base_url || null,
+      provider: {provider_type:form.provider_type,name:form.name || t('推理验证', 'Inference test'),base_url:form.base_url || null,
         default_model:form.default_model || null,request_overrides:JSON.parse(JSON.stringify(requestOverrides.value)),
         credential_id:configured.value ? credentialId.value : null}, stream:previewStream.value,
     })

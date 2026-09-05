@@ -54,7 +54,7 @@ async function load() {
     applyResponse(routing)
     conflict.value = false
   } catch (reason) {
-    if (active) error.value = `加载失败：${reason instanceof Error ? reason.message : '无法读取模型路由或提供商'}`
+    if (active) error.value = `${t('加载失败：', 'Load failed: ')}${reason instanceof Error ? reason.message : t('无法读取模型路由或提供商', 'Could not read model routes or providers')}`
   } finally { loading.value = false }
 }
 
@@ -74,11 +74,11 @@ function bindingFor(capability: RoutingCapability): ModelBinding | null {
   if (!draft.provider_id) return null
   if (!available.value.some(provider => provider.provider_id === draft.provider_id)) throw new Error(t('请选择已启用且协议可用的提供商，或切换到本地。', 'Select an enabled provider with a supported protocol, or switch to local.'))
   if (!draft.model.trim()) throw new Error(t('请填写所选 API 的模型 ID。', 'Enter the model ID for the selected API.'))
-  if (!/^\/[A-Za-z0-9_/-]+$/.test(draft.endpoint) || draft.endpoint.startsWith('//')) throw new Error('Endpoint 必须是以 / 开头的相对路径，只能包含字母、数字、下划线、连字符和 /。')
+  if (!/^\/[A-Za-z0-9_/-]+$/.test(draft.endpoint) || draft.endpoint.startsWith('//')) throw new Error(t('Endpoint 必须是以 / 开头的相对路径，只能包含字母、数字、下划线、连字符和 /。', 'Endpoint must be a relative path beginning with / and containing only letters, numbers, underscores, hyphens, and /.'))
   const binding: ModelBinding = { provider_id: draft.provider_id, model: draft.model.trim(), endpoint: draft.endpoint }
   if (capability === 'embedding') {
     const dimension = String(draft.dimensions).trim()
-    if (dimension && (!/^\d+$/.test(dimension) || !Number.isSafeInteger(Number(dimension)) || Number(dimension) < 1 || Number(dimension) > 16384)) throw new Error('嵌入维度必须为 1–16384 的整数，或留空使用 API 默认值。')
+    if (dimension && (!/^\d+$/.test(dimension) || !Number.isSafeInteger(Number(dimension)) || Number(dimension) < 1 || Number(dimension) > 16384)) throw new Error(t('嵌入维度必须为 1–16384 的整数，或留空使用 API 默认值。', 'Embedding dimensions must be an integer from 1 to 16384, or blank to use the API default.'))
     binding.dimensions = dimension ? Number(dimension) : null
   }
   return binding
@@ -100,8 +100,8 @@ async function save() {
     if (!active) return
     conflict.value = reason instanceof ApiErrorClass && /CONFLICT|VERSION|HTTP_409/i.test(reason.code)
     error.value = conflict.value
-      ? '配置版本冲突：其他窗口已修改路由。当前输入尚未保存，请重新加载最新配置后再编辑。'
-      : `保存失败：${reason instanceof Error ? reason.message : '请重试'}`
+      ? t('配置版本冲突：其他窗口已修改路由。当前输入尚未保存，请重新加载最新配置后再编辑。', 'Configuration conflict: another window changed these routes. Your input is unsaved; reload the latest settings before editing.')
+      : `${t('保存失败：', 'Save failed: ')}${reason instanceof Error ? reason.message : t('请重试', 'please retry')}`
   } finally { saving.value = false }
 }
 </script>

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Plugin } from '@/contracts'
 import * as pluginService from '@/services/pluginService'
+import { t } from '@/i18n'
 
 export const usePluginStore = defineStore('plugin', () => {
   const plugins = ref<Plugin[]>([])
@@ -23,7 +24,7 @@ export const usePluginStore = defineStore('plugin', () => {
       plugins.value = await pluginService.listPlugins()
       error.value = null
     } catch (reason) {
-      error.value = reason instanceof Error ? reason.message : 'Plugin 加载失败'
+      error.value = reason instanceof Error ? reason.message : t('Plugin 加载失败', 'Failed to load Plugins')
     } finally {
       isLoading.value = false
     }

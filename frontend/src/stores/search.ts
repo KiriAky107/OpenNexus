@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import type { SearchResult, SearchRequest } from '@/contracts'
 import * as searchService from '@/services/searchService'
 import { ApiErrorClass } from '@/services/apiClient'
+import { t } from '@/i18n'
 
 const VECTOR_ERROR_CODES = new Set([
   'SEMANTIC_INDEX_UNAVAILABLE',
@@ -28,7 +29,7 @@ export const useSearchStore = defineStore('search', () => {
       if (version !== historyVersion) return
       recentQueries.value = response.queries
       historyError.value = ''
-    } catch { if (version === historyVersion) historyError.value = '无法读取应用搜索记录，请检查后端连接。' }
+    } catch { if (version === historyVersion) historyError.value = t('无法读取应用搜索记录，请检查后端连接。', 'Could not load search history. Check the backend connection.') }
   }
   async function clearHistory() {
     const version = ++historyVersion
@@ -36,7 +37,7 @@ export const useSearchStore = defineStore('search', () => {
       await searchService.clearHistory()
       if (version !== historyVersion) return
       recentQueries.value = []; historyError.value = ''
-    } catch { if (version === historyVersion) historyError.value = '清空搜索记录失败，请重试。' }
+    } catch { if (version === historyVersion) historyError.value = t('清空搜索记录失败，请重试。', 'Failed to clear search history. Please retry.') }
   }
   const error = ref<string | null>(null)
   const vectorUnavailable = ref(false)
@@ -71,12 +72,12 @@ export const useSearchStore = defineStore('search', () => {
           selectedIndex.value = 0
         } catch (fallbackError) {
           if (version !== searchVersion) return
-          error.value = fallbackError instanceof Error ? fallbackError.message : '全文检索降级失败'
+          error.value = fallbackError instanceof Error ? fallbackError.message : t('全文检索降级失败', 'Full-text search fallback failed')
           results.value = []
           total.value = 0
         }
       } else {
-        error.value = reason instanceof Error ? reason.message : '搜索失败'
+        error.value = reason instanceof Error ? reason.message : t('搜索失败', 'Search failed')
         results.value = []
         total.value = 0
       }

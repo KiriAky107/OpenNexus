@@ -3,6 +3,7 @@ import { ref, computed, reactive } from 'vue'
 import type { ChatMessage, Conversation } from '@/contracts'
 import { streamChat } from '@/services/chatService'
 import type { SseClient } from '@/services/sseClient'
+import { t } from '@/i18n'
 
 export const useChatStore = defineStore('chat', () => {
   const conversations = ref<Conversation[]>([])
@@ -128,11 +129,11 @@ export const useChatStore = defineStore('chat', () => {
             content: String(event.data.content ?? event.data.snippet ?? ''),
           })
         }
-        if (event.event === 'Error') aiMsg.content += `\n\n生成失败：${String(event.data.message ?? '未知错误')}`
+        if (event.event === 'Error') aiMsg.content += `\n\n${t('生成失败：', 'Generation failed: ')}${String(event.data.message ?? t('未知错误', 'Unknown error'))}`
       },
       onError(error) {
         if (version !== streamVersion) return
-        aiMsg.content += `\n\n连接失败：${error.message}`
+        aiMsg.content += `\n\n${t('连接失败：', 'Connection failed: ')}${error.message}`
         isStreaming.value = false
         sseClient = null
       },
@@ -162,7 +163,7 @@ export const useChatStore = defineStore('chat', () => {
     stopGeneration()
     const newConv: Conversation = {
       conversation_id: crypto.randomUUID(),
-      title: '新对话',
+      title: t('新对话', 'New conversation'),
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       message_count: 0,
