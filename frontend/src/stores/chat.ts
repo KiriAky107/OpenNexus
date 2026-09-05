@@ -18,7 +18,9 @@ export const useChatStore = defineStore('chat', () => {
   const isStreaming = ref(false)
   const isPreparing = ref(false)
   const messagesReady = ref(true)
-  const canSend = computed(() => messagesReady.value && !isPreparing.value && !isStreaming.value)
+  const deletingConversations = reactive(new Set<string>())
+  const canSend = computed(() => messagesReady.value && !isPreparing.value && !isStreaming.value
+    && (!activeConversationId.value || !deletingConversations.has(activeConversationId.value)))
   const inputText = ref('')
   const useRag = ref(true)
   const selectedSkillId = ref<string | null>(null)
@@ -262,6 +264,8 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function deleteConversation(id: string) {
+    if (deletingConversations.has(id)) return
+    deletingConversations.add(id)
     if (activeConversationId.value === id) stopGeneration()
     historyError.value = ''
     try {
@@ -275,6 +279,8 @@ export const useChatStore = defineStore('chat', () => {
       }
     } catch (error) {
       historyError.value = error instanceof Error ? error.message : t('会话删除失败', 'Failed to delete conversation')
+    } finally {
+      deletingConversations.delete(id)
     }
   }
 
