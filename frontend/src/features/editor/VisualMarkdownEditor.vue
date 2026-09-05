@@ -179,7 +179,7 @@ onMounted(async () => {
   // Replace both AFTER feature configuration to avoid default grammar collisions.
   crepe.editor.config(ctx => ctx.update(codeBlockConfig.key, config => ({
     ...config,
-    languages: shikiLanguages(themeStore.resolvedCodeBlockTheme),
+    languages: shikiLanguages(themeStore.resolvedCodeBlockTheme, config.languages),
     extensions: [basicSetup, keymap.of([indentWithTab]), shikiEditorTheme(themeStore.resolvedCodeBlockTheme)],
   })))
   crepe.editor.use(fontSizeMarkdownPlugin)
