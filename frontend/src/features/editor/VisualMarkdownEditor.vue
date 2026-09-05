@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import DiagramInteractions from '@/components/common/DiagramInteractions.vue'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Link } from '@element-plus/icons-vue'
 import { Crepe } from '@milkdown/crepe'
@@ -68,7 +69,7 @@ function renderDiagram(source: string, apply: (value: HTMLElement) => void) {
     if (entry.apply === apply) diagramPreviews.delete(id)
   }
   const element = createMermaidPreview(source, themeStore.isDark, apply)
-  diagramPreviews.set(element.id, { source, apply })
+  diagramPreviews.set(element.dataset.previewId!, { source, apply })
   return element
 }
 watch(() => themeStore.currentThemeId, () => {
@@ -264,7 +265,7 @@ defineExpose({ getEditor: () => crepe?.editor })
 </script>
 
 <template>
-  <div class="visual-editor">
+  <DiagramInteractions class="visual-editor">
     <div class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
       <label class="toolbar-select heading-select" :title="t('设置标题级别', 'Set heading level')">
         <span class="format-glyph heading-glyph">H</span>
@@ -313,7 +314,7 @@ defineExpose({ getEditor: () => crepe?.editor })
       </section>
       <div ref="editorRoot" />
     </div>
-  </div>
+  </DiagramInteractions>
 </template>
 
 <style scoped>

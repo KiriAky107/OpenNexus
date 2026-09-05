@@ -32,7 +32,9 @@ const labels = computed(() => ({queued: t('排队中', 'Queued'), running: t('�
 const speakers = computed(() => [...new Set(selected.value?.segments.map(s => s.speaker).filter((s): s is string => !!s) || [])])
 const active = (job: MediaJob) => ['queued', 'running', 'processing'].includes(job.status)
 const stamp = (seconds: number) => `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`
-const warningLabel = (warning: string) => ({
+const warningLabel = (warning: string) => warning.startsWith('MEDIA_CORRUPT_PACKETS_SKIPPED:')
+  ? t(`已跳过 ${warning.split(':')[1]} 个损坏音频包；缺失时长以静音保留，请校对受影响内容。`, `Skipped ${warning.split(':')[1]} damaged audio packets; missing duration was retained as silence. Review the affected content.`)
+  : ({
   DIARIZATION_UNAVAILABLE: t('当前无法分离说话人', 'Speaker identification is unavailable'),
   WORD_TIMESTAMPS_UNAVAILABLE: t('未提供逐字时间戳', 'Word-level timestamps are unavailable'),
   DIARIZATION_SEGMENT_LEVEL: t('说话人按音频段估计，同段多人或重叠发言需人工校对', 'Speakers are estimated per segment; multiple or overlapping speakers require manual correction'),
@@ -57,6 +59,8 @@ async function action(work: () => Promise<void>) {
 async function submit() {
   if (!file.value) return
   await action(async () => {
+    if (file.value!.size > 128 * 1024 * 1024) throw new Error(t('文件不能超过 128 MiB。', 'Files cannot exceed 128 MiB.'))
+    if (file.value!.size > 25 * 1024 * 1024 && !localOnly.value) throw new Error(t('超过 25 MiB 的录音请先启用仅本地处理。', 'Enable local-only processing for audio above 25 MiB.'))
     let terms = {}
     if (terminology.value.trim()) {
       terms = JSON.parse(terminology.value)
@@ -106,7 +110,7 @@ onUnmounted(() => { stopped = true; clearTimeout(timer) })
 
 <template>
   <section class="media-page">
-    <header><h1>{{ t('音视频转写', 'Media Transcription') }}</h1><p class="subtle">{{ t('上传音频或视频音轨，转写、校对后保存到知识库。单个文件最多 25 MiB。', 'Upload audio or a video soundtrack, transcribe and correct it, then save it to the knowledge base. Maximum file size: 25 MiB.') }}</p></header>
+    <header><h1>{{ t('音视频转写', 'Media Transcription') }}</h1><p class="subtle">{{ t('上传音频或视频音轨，转写、校对后保存到知识库。最多 128 MiB；超过 25 MiB 请启用仅本地处理。音轨最长 1 小时。', 'Upload audio or a video soundtrack, transcribe and correct it, then save it to the knowledge base. Up to 128 MiB; enable local-only processing above 25 MiB. Audio duration is limited to one hour.') }}</p></header>
     <div v-if="error" class="error-banner" role="alert">{{ error }}</div><p v-if="notice" role="status">{{ notice }}</p>
     <form class="panel upload" @submit.prevent="submit">
       <FilePicker :file="file" :label="t('选择附件', 'Choose attachment')" :empty-label="t('尚未选择文件', 'No file selected')" accept=".wav,.mp3,.flac,.ogg,.m4a,.mp4,.webm,.txt,.md" @select="file = $event" />

@@ -6,6 +6,7 @@ import { bundledLanguagesInfo } from 'shiki/langs'
 import githubDark from '@shikijs/themes/github-dark'
 import githubLight from '@shikijs/themes/github-light'
 import { renderMermaid } from '@/services/mermaidService'
+import { appendDiagramControls } from './diagramControls'
 
 marked.setOptions({ gfm: true, breaks: true })
 
@@ -82,6 +83,7 @@ export async function renderMarkdown(source: string, options?: { theme?: 'light'
       const container = document.createElement('div')
       container.className = 'markdown-mermaid'
       container.innerHTML = result.svg
+      if (!result.warnings.length) appendDiagramControls(container)
       pre.replaceWith(container)
     } catch {
       const fallback = document.createElement('pre')

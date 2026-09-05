@@ -4,16 +4,20 @@ import { t } from '@/i18n'
 import { getCommunityThemePreviewCss, mockCommunityThemes } from '@/services/themePackageService'
 import tokensCss from '@/styles/tokens.css?raw'
 
-const props = defineProps<{ themeId: string }>()
+const props = defineProps<{ themeId: string; name?: string; css?: string }>()
 const emit = defineEmits<{ (event: 'close'): void }>()
-const theme = computed(() => mockCommunityThemes.find(item => item.theme_id === props.themeId))
+const theme = computed(() => props.name ? { name: props.name } : mockCommunityThemes.find(item => item.theme_id === props.themeId))
 const previewDocument = computed(() => {
-  // Only bundled community CSS enters this script-free, isolated document.
+  // Both imported and bundled CSS are previewed in a script-free isolated document.
   // Previewing never installs a theme or changes application styles/storage.
   const doc = document.implementation.createHTMLDocument(theme.value?.name ?? '')
   doc.documentElement.dataset.theme = props.themeId
+  const policy = doc.createElement('meta')
+  policy.httpEquiv = 'Content-Security-Policy'
+  policy.content = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"
+  doc.head.append(policy)
   const style = doc.createElement('style')
-  style.textContent = `${tokensCss}\n${getCommunityThemePreviewCss(props.themeId)}\nbody { margin:0; padding:24px; background:var(--color-background-primary); color:var(--color-text-primary); font:16px/1.6 system-ui; } article { padding:20px; border:1px solid var(--color-border-default); border-radius:8px; background:var(--color-surface-primary); } p { color:var(--color-text-secondary); } button { padding:8px 16px; border:0; border-radius:6px; background:var(--color-accent-primary); color:white; }`
+  style.textContent = `${tokensCss}\n${props.css ?? getCommunityThemePreviewCss(props.themeId)}\nbody { margin:0; padding:24px; background:var(--color-background-primary); color:var(--color-text-primary); font:16px/1.6 system-ui; } article { padding:20px; border:1px solid var(--color-border-default); border-radius:8px; background:var(--color-surface-primary); } p { color:var(--color-text-secondary); } button { padding:8px 16px; border:0; border-radius:6px; background:var(--color-accent-primary); color:white; }`
   doc.head.append(style)
   const article = doc.createElement('article')
   article.className = 'panel'

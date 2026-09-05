@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import DiagramInteractions from './DiagramInteractions.vue'
 import { computed, ref, watch } from 'vue'
 import { renderMarkdown } from '@/utils/markdown'
 import { useThemeStore } from '@/stores/theme'
@@ -19,7 +20,7 @@ watch([() => props.source, diagramTheme, () => themeStore.currentThemeId], async
 </script>
 
 <template>
-  <div class="markdown-content" v-html="html" />
+  <DiagramInteractions><div class="markdown-content" v-html="html" /></DiagramInteractions>
 </template>
 
 <style>
