@@ -673,13 +673,18 @@ async def read_extension_zip(request: Request) -> bytes:
 @router.post('/skills/install-zip', response_model=Skill, status_code=202, tags=['Skills'])
 async def install_skill_zip(request: Request) -> Skill:
     data = await read_extension_zip(request)
-    return extension_call(lambda: install_zip(data, 'skill', get_settings().data_dir / 'extension-packages', container.skills.install))
+    return extension_call(lambda: install_zip(data, 'skill', get_settings().data_dir / 'extension-packages', container.skills.install, managed_install=lambda root, owned: container.skills.install(root, managed_root=owned)))
 
 
 @router.post('/plugins/install-zip', response_model=Plugin, status_code=202, tags=['Plugins'])
 async def install_plugin_zip(request: Request) -> Plugin:
     data = await read_extension_zip(request)
-    return extension_call(lambda: install_zip(data, 'plugin', get_settings().data_dir / 'extension-packages', container.plugins.install))
+    return extension_call(lambda: install_zip(data, 'plugin', get_settings().data_dir / 'extension-packages', container.plugins.install, managed_install=lambda root, owned: container.plugins.install(root, managed_root=owned)))
+
+
+@router.get('/extensions/restore-errors', tags=['Plugins', 'Skills'])
+async def extension_restore_errors():
+    return {'items': container.plugins.restore_errors + container.skills.restore_errors}
 
 
 @router.post(

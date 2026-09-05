@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ExtensionRestoreNotice from '@/components/common/ExtensionRestoreNotice.vue'
 import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
@@ -26,6 +27,7 @@ async function uninstall(skillId: string, name: string) {
 
 <template>
   <section class="feature-page">
+    <ExtensionRestoreNotice kind="skill" />
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <ExtensionInstallDialog v-if="showInstall" kind="Skill" :install="skillStore.installSkill" @close="showInstall = false" @installed="showInstall = false; actionError = ''" />
     <header class="feature-header"><div><h1>{{ t('Skill 管理', 'Skill Management') }}</h1><p>{{ t('查看工作流使用的 Tool、权限、检索配置和模型要求。', 'Review the tools, permissions, retrieval settings, and model requirements used by workflows.') }}</p></div><button class="button-primary" @click="showInstall = true">{{ t('安装 Skill', 'Install Skill') }}</button></header>

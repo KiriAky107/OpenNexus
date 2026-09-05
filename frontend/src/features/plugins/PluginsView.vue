@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ExtensionRestoreNotice from '@/components/common/ExtensionRestoreNotice.vue'
 import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
@@ -64,6 +65,7 @@ const hasCommandContribution = computed(() =>
 
 <template>
   <section class="feature-page">
+    <ExtensionRestoreNotice kind="plugin" />
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <ExtensionInstallDialog v-if="showInstall" kind="Plugin" :install="pluginStore.installPlugin" @close="showInstall = false" @installed="showInstall = false; actionError = ''" />
     <header class="feature-header">

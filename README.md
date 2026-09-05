@@ -68,7 +68,7 @@ cd ..
 ```powershell
 # 终端一
 cd backend
-uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uv run python scripts/dev-server.py
 
 # 终端二
 cd frontend

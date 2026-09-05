@@ -113,6 +113,11 @@ onUnmounted(() => { stopped = true; clearTimeout(timer) })
 
 <template>
   <section class="media-page">
+    <details class="ui-disclosure">
+      <summary>{{ t('当前转写能力与验收范围', 'Transcription capabilities and validation') }}</summary>
+      <p>{{ t('本地转写提供片段级时间戳与说话人聚类，不提供逐字强制对齐或重叠语音分离。聚类编号不代表已确认的真实人数。', 'Local transcription provides segment timestamps and speaker clusters, without forced word alignment or overlapping speech separation. Cluster IDs are not verified speaker counts.') }}</p>
+      <p>{{ t('无参考转写或说话人标注时，只能验证功能与耗时，不能据此判断准确率。请通过播放与人工校对确认内容。', 'Without reference transcripts or speaker labels, runs validate functionality and timing, not accuracy. Review the audio and correct the transcript.') }}</p>
+    </details>
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <header class="feature-header"><div><h1>{{ t('音视频转写', 'Media Transcription') }}</h1><p class="subtle">{{ t('上传音频或视频音轨，转写、校对后保存到知识库。最多 128 MiB；超过 25 MiB 请启用仅本地处理。音轨最长 1 小时。', 'Upload audio or a video soundtrack, transcribe and correct it, then save it to the knowledge base. Up to 128 MiB; enable local-only processing above 25 MiB. Audio duration is limited to one hour.') }}</p></div></header>
     <div v-if="error" class="error-banner" role="alert">{{ error }}</div><p v-if="notice" role="status">{{ notice }}</p>

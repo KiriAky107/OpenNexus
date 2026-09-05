@@ -25,7 +25,7 @@ def invalid(message: str) -> ApiError:
     return ApiError(422, 'EXTENSION_ZIP_INVALID', message)
 
 
-def install_zip(data: bytes, kind: str, storage: Path, install: Callable[[Path], T]) -> T:
+def install_zip(data: bytes, kind: str, storage: Path, install: Callable[[Path], T], *, managed_install: Callable[[Path, Path], T] | None = None) -> T:
     if len(data) > MAX_ZIP_BYTES:
         raise ApiError(413, 'EXTENSION_ZIP_TOO_LARGE', 'ZIP 文件不能超过 10 MiB。')
     if kind not in ('skill', 'plugin'):
@@ -89,7 +89,7 @@ def install_zip(data: bytes, kind: str, storage: Path, install: Callable[[Path],
                 if len(children) != 1 or not children[0].is_dir() or not (children[0] / manifest).is_file():
                     raise invalid(f'ZIP 根目录或唯一顶层文件夹中须包含 {manifest}。')
                 root = children[0]
-            return install(root)
+            return managed_install(root, destination) if managed_install else install(root)
     except BaseException as error:
         shutil.rmtree(destination)
         if isinstance(error, ExtensionError):

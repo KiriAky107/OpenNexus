@@ -128,6 +128,8 @@ async function handleOpenCitation(data: Record<string, unknown>) {
           </p>
         </div>
         <div class="inline-actions">
+          <span v-if="agentStore.connectionState === 'reconnecting'">{{ t('正在恢复连接…', 'Reconnecting…') }}</span>
+          <button v-if="agentStore.connectionState === 'disconnected'" class="button-secondary" @click="agentStore.reconnect()">{{ t('恢复连接', 'Reconnect') }}</button>
           <button v-if="agentStore.isRunning" class="button-danger" @click="agentStore.cancelRun(agentStore.activeRunId!)">{{ t('取消运行', 'Cancel run') }}</button>
           <button class="button-secondary" @click="agentStore.loadRun(agentStore.activeRunId!)">重新加载</button>
         </div>
