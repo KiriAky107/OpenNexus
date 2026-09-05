@@ -1,11 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import type { ThemeConfig } from '@/contracts'
+import { t } from '@/i18n'
 
-const builtinThemes: ThemeConfig[] = [
-  { theme_id: 'light', name: '浅色', version: '1.0.0', description: '默认浅色主题', is_dark: false, builtin: true, code_theme: 'github-light' },
-  { theme_id: 'dark', name: '深色', version: '1.0.0', description: '默认深色主题', is_dark: true, builtin: true, code_theme: 'github-dark' },
-  { theme_id: 'sepia', name: '护眼', version: '1.0.0', description: '护眼暖色调', is_dark: false, builtin: true, code_theme: 'github-light' },
+const builtinThemes = (): ThemeConfig[] => [
+  { theme_id: 'light', name: t('浅色', 'Light'), version: '1.0.0', description: t('默认浅色主题', 'Default light theme'), is_dark: false, builtin: true, code_theme: 'github-light' },
+  { theme_id: 'dark', name: t('深色', 'Dark'), version: '1.0.0', description: t('默认深色主题', 'Default dark theme'), is_dark: true, builtin: true, code_theme: 'github-dark' },
+  { theme_id: 'sepia', name: t('护眼', 'Sepia'), version: '1.0.0', description: t('护眼暖色调', 'Warm, low-glare theme'), is_dark: false, builtin: true, code_theme: 'github-light' },
 ]
 
 export type CodeBlockThemePreference = 'auto' | 'github-light' | 'github-dark'
@@ -15,7 +16,7 @@ function isCodeBlockThemePreference(value: unknown): value is CodeBlockThemePref
 }
 
 export const useThemeStore = defineStore('theme', () => {
-  const themes = ref<ThemeConfig[]>(builtinThemes)
+  const themes = computed<ThemeConfig[]>(builtinThemes)
   const currentThemeId = ref<string>('light')
   const fontEditorSize = ref(15)
   const fontEditorFamily = ref('system-ui')

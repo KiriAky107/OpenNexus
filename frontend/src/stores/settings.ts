@@ -5,6 +5,7 @@ import { resolveApiUrl } from '@/services/apiClient'
 import packageInfo from '../../package.json'
 import * as indexService from '@/services/indexService'
 import * as systemService from '@/services/systemService'
+import { appLocale } from '@/i18n'
 
 export const useSettingsStore = defineStore('settings', () => {
   const saved = (() => {
@@ -14,7 +15,7 @@ export const useSettingsStore = defineStore('settings', () => {
   // General
   const restoreLastVault = ref(saved.restoreLastVault !== false)
   const autoSaveInterval = ref(typeof saved.autoSaveInterval === 'number' ? saved.autoSaveInterval : 1500)
-  const language = ref<'zh-CN' | 'en'>(saved.language === 'en' ? 'en' : 'zh-CN')
+  const language = appLocale
   const appVersion = ref(packageInfo.version)
   const aiCoreVersion = ref('未获取')
 

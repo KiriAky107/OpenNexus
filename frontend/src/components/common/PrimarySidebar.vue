@@ -3,24 +3,25 @@ import { useRoute, useRouter } from 'vue-router'
 import { computed, ref } from 'vue'
 import { ArrowLeftBold, ArrowRightBold, Brush, ChatDotRound, CircleCheck, Connection, Cpu, FolderOpened, Lightning, Monitor, Search, Setting } from '@element-plus/icons-vue'
 import AppIcon from './AppIcon.vue'
+import { t } from '@/i18n'
 
 const route = useRoute()
 const router = useRouter()
 const expanded = ref(localStorage.getItem('primary-sidebar-expanded') === 'true')
 
-const navItems = [
-  { name: 'workspace', icon: FolderOpened, label: '工作区' },
-  { name: 'search', icon: Search, label: '搜索' },
-  { name: 'chat', icon: ChatDotRound, label: 'AI 对话' },
-  { name: 'agent', icon: Cpu, label: '智能体' },
-  { name: 'tasks', icon: CircleCheck, label: '任务' },
-  { name: 'media', icon: Monitor, label: '音视频' },
+const navItems = computed(() => [
+  { name: 'workspace', icon: FolderOpened, label: t('工作区', 'Workspace') },
+  { name: 'search', icon: Search, label: t('搜索', 'Search') },
+  { name: 'chat', icon: ChatDotRound, label: t('AI 对话', 'AI Chat') },
+  { name: 'agent', icon: Cpu, label: t('智能体', 'Agent') },
+  { name: 'tasks', icon: CircleCheck, label: t('任务', 'Tasks') },
+  { name: 'media', icon: Monitor, label: t('音视频', 'Media') },
   { name: 'skills', icon: Lightning, label: 'Skill' },
   { name: 'plugins', icon: Connection, label: 'Plugin' },
   { name: 'mcp-servers', icon: Monitor, label: 'MCP' },
-  { name: 'themes', icon: Brush, label: '主题' },
-  { name: 'settings', icon: Setting, label: '设置' },
-]
+  { name: 'themes', icon: Brush, label: t('主题', 'Themes') },
+  { name: 'settings', icon: Setting, label: t('设置', 'Settings') },
+])
 
 const currentName = computed(() => {
   return route.name as string
@@ -52,9 +53,9 @@ function toggleExpanded() {
       </div>
     </nav>
     <div class="sidebar-footer">
-      <button class="nav-item collapse-button" type="button" :title="expanded ? '收起导航' : '展开导航'" @click="toggleExpanded">
+      <button class="nav-item collapse-button" type="button" :title="expanded ? t('收起导航', 'Collapse navigation') : t('展开导航', 'Expand navigation')" @click="toggleExpanded">
         <AppIcon class="nav-icon" :icon="expanded ? ArrowLeftBold : ArrowRightBold" />
-        <span class="nav-label">{{ expanded ? '收起' : '展开' }}</span>
+        <span class="nav-label">{{ expanded ? t('收起', 'Collapse') : t('展开', 'Expand') }}</span>
       </button>
     </div>
   </aside>

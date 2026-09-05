@@ -25,7 +25,7 @@ pnpm dev
 | `/extensions/mcp` | stdio、Streamable HTTP、旧 SSE Server 配置与工具发现 |
 | `/extensions/plugins` | Plugin Host、Command、Settings、Secret 与 MCP 状态 |
 | `/themes` | 内置 Design Token 主题和编辑器显示偏好 |
-| `/settings` | Provider、模型路由、本地模型、CPU/CUDA 组件、请求 JSON、用量与诊断 |
+| `/settings` | Provider、模型路由、本地模型、CPU/CUDA 组件、请求 JSON、用量与诊断；全局中英文和拼写检查设置 |
 
 ## 技术结构
 
@@ -40,6 +40,8 @@ pnpm dev
 | `src/styles` | Design Token、布局、主题和动效 |
 
 编辑器使用 Milkdown/Crepe 与 CodeMirror 6；Markdown 展示使用 marked、DOMPurify 和 Shiki。Provider logo 位于 `src/assets/providers`，授权与来源说明随目录保存。
+
+语言设置会即时更新主导航、页面标题和各功能页面，并同步更新文档与编辑器的 `lang`。拼写检查使用浏览器或桌面 WebView 提供的本地词典，开关会即时作用于可视化 Markdown、源码编辑器以及普通文本输入；JSON、密码等结构化或敏感输入保持关闭。
 
 ## 数据边界
 
@@ -66,7 +68,7 @@ pnpm type-check
 pnpm build
 ```
 
-阶段 F 合并基线为 29 个测试文件、103 项测试通过，TypeScript 类型检查与 Vite 生产构建通过；构建仍有既有大 bundle 提示。产物位于 `dist`，不提交 Git。
+当前基线为 30 个测试文件、106 项测试通过，TypeScript 类型检查与 Vite 生产构建通过；构建仍有既有大 bundle 提示。产物位于 `dist`，不提交 Git。
 
 ## 开发约定
 
