@@ -10,6 +10,7 @@ import SecondarySidebar from './SecondarySidebar.vue'
 import StatusBar from './StatusBar.vue'
 import TitleBar from './TitleBar.vue'
 import CommandPalette from './CommandPalette.vue'
+import { navigateToCitation } from '@/composables/useCitationNavigation'
 
 defineProps<{
   showSecondarySidebar?: boolean
@@ -43,10 +44,18 @@ const secondaryComponent = computed(() => {
   }
 })
 
-function openCitation(noteId: string, blockId: string, filePath: string) {
-  workspaceStore.openFile(filePath)
-  editorStore.highlightBlock(blockId)
-  router.push('/workspace')
+function openCitation(_noteId: string, blockId: string, filePath: string) {
+  // 走统一的定位流程：必须先 loadFile 再 highlightBlock，
+  // 否则 editor store 的 loadFile 会把刚设好的高亮清掉。
+  return navigateToCitation(
+    { file_path: filePath, block_id: blockId },
+    {
+      loadFile: (path) => editorStore.loadFile(path),
+      openFile: (path) => workspaceStore.openFile(path),
+      highlightBlock: (id) => editorStore.highlightBlock(id),
+      navigate: (path) => router.push(path),
+    },
+  )
 }
 
 defineExpose({ openCitation })

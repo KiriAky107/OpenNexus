@@ -4,6 +4,7 @@ import EditorHeader from '@/features/editor/EditorHeader.vue'
 import EditorPane from '@/features/editor/EditorPane.vue'
 import { EditPen } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
+import { t } from '@/i18n'
 
 const workspaceStore = useWorkspaceStore()
 </script>
@@ -17,8 +18,8 @@ const workspaceStore = useWorkspaceStore()
     <div v-else class="empty-workspace">
       <div class="empty-content">
         <AppIcon class="empty-icon" :icon="EditPen" :size="48" />
-        <h2>开始写作</h2>
-        <p>从左侧文件树选择笔记，或创建新的笔记</p>
+        <h2>{{ t('开始写作', 'Start writing') }}</h2>
+        <p>{{ t('从左侧文件树选择笔记，或创建新的笔记', 'Select a note from the file tree or create a new one') }}</p>
       </div>
     </div>
   </div>

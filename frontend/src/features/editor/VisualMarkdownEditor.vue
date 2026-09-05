@@ -1,8 +1,18 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Link } from '@element-plus/icons-vue'
 import { Crepe } from '@milkdown/crepe'
-import { oneDark } from '@codemirror/theme-one-dark'
+import { codeBlockConfig } from '@milkdown/kit/component/code-block'
+import { basicSetup } from 'codemirror'
+import { keymap } from '@codemirror/view'
+import { indentWithTab } from '@codemirror/commands'
+import { shikiEditorTheme, shikiLanguages, renderCodeLanguage } from './shikiCodeMirror'
+import './language-icons.css'
+import { installLanguagePickerPopover } from './languagePickerPopover'
+import { installCodeBlockLabels } from './codeBlockLabels'
+import { createMermaidPreview } from './mermaidPreview'
+import { splitNoteMetadata, updateMetadataTags } from './noteMetadata'
+import { getMarkdown } from '@milkdown/kit/utils'
 import {
   createCodeBlockCommand,
   toggleEmphasisCommand,
@@ -22,10 +32,27 @@ import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore } from '@/stores/theme'
 import { applyMarkdownFontSize, fontSizeMarkdownPlugin } from './fontSizeMarkdown'
+import { t } from '@/i18n'
 import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/frame.css'
 
 const props = defineProps<{ initialContent: string }>()
+const metadata = ref(splitNoteMetadata(props.initialContent))
+const tagDraft = ref('')
+function setTags(tags: string[]) {
+  if (!metadata.value || !crepe) return
+  const prefix = updateMetadataTags(metadata.value, tags)
+  const body = crepe.editor.action(getMarkdown())
+  metadata.value = splitNoteMetadata(prefix + body)
+  editorStore.updateContent(prefix + body)
+  editorStore.scheduleAutoSave(settingsStore.autoSaveInterval)
+}
+function addTags() {
+  const tags = tagDraft.value.split(/[,，]/).map(tag => tag.trim()).filter(tag => tag && !/[\r\n"\\]/.test(tag))
+  if (!tags.length || !metadata.value) return
+  setTags([...metadata.value.tags, ...tags])
+  tagDraft.value = ''
+}
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
 const themeStore = useThemeStore()
@@ -33,6 +60,32 @@ const editorRoot = ref<HTMLElement | null>(null)
 const loading = ref(true)
 const fontSizeInput = ref(16)
 let crepe: Crepe | null = null
+let disposeLanguagePicker: (() => void) | undefined
+let disposeCodeLabels: (() => void) | undefined
+const diagramPreviews = new Map<string, { source: string; apply: (value: HTMLElement) => void }>()
+function renderDiagram(source: string, apply: (value: HTMLElement) => void) {
+  for (const [id, entry] of diagramPreviews) {
+    if (entry.apply === apply) diagramPreviews.delete(id)
+  }
+  const element = createMermaidPreview(source, themeStore.isDark, apply)
+  diagramPreviews.set(element.id, { source, apply })
+  return element
+}
+watch(() => themeStore.currentThemeId, () => {
+  const current = [...diagramPreviews.entries()]
+  diagramPreviews.clear()
+  for (const [id, entry] of current) {
+    if (editorRoot.value?.querySelector(`[id="${id}"]`)) entry.apply(renderDiagram(entry.source, entry.apply))
+  }
+}, { flush: 'post' })
+
+function applyProofingPreferences() {
+  const editable = editorRoot.value?.querySelector<HTMLElement>('.ProseMirror')
+  if (!editable) return
+  editable.spellcheck = settingsStore.spellCheck
+  editable.setAttribute('spellcheck', String(settingsStore.spellCheck))
+  editable.lang = settingsStore.language
+}
 
 type ToolbarCommand = 'bold' | 'italic' | 'ordered-list' | 'bullet-list' | 'inline-code' | 'code-block' | 'inline-math' | 'math-block'
 
@@ -57,14 +110,14 @@ function runCommand(command: ToolbarCommand) {
 function applyLink() {
   if (!crepe) return
   // TODO(editor): 用受控 Element Plus 对话框替换 prompt，补充 URL 校验和键盘焦点管理。
-  const href = window.prompt('请输入链接地址', 'https://')?.trim()
+  const href = window.prompt(t('请输入链接地址', 'Enter link address'), 'https://')?.trim()
   if (!href) return
 
   crepe.editor.action((ctx) => {
     const view = ctx.get(editorViewCtx)
     const commands = ctx.get(commandsCtx)
     if (view.state.selection.empty) {
-      const label = window.prompt('请输入链接文字', href)?.trim() || href
+      const label = window.prompt(t('请输入链接文字', 'Enter link text'), href)?.trim() || href
       const from = view.state.selection.from
       const transaction = view.state.tr.insertText(label, from)
       transaction.setSelection(TextSelection.create(transaction.doc, from, from + label.length))
@@ -104,120 +157,162 @@ function applyFontSizeValue() {
 onMounted(async () => {
   crepe = new Crepe({
     root: editorRoot.value,
-    defaultValue: props.initialContent,
+    defaultValue: metadata.value?.body ?? props.initialContent,
     features: { [Crepe.Feature.TopBar]: false },
     featureConfigs: {
-      [Crepe.Feature.Placeholder]: { text: '开始记录你的想法…' },
+      [Crepe.Feature.Placeholder]: { text: t('开始记录你的想法…', 'Start writing your thoughts…') },
       [Crepe.Feature.CodeMirror]: {
-        theme: themeStore.resolvedCodeBlockTheme === 'github-dark' ? oneDark : [],
-        previewOnlyByDefault: false,
-        searchPlaceholder: '搜索语言',
-        noResultText: '没有匹配的语言',
-        copyText: '复制',
+        previewOnlyByDefault: true,
+        previewToggleText: previewOnly => previewOnly ? t('编辑', 'Edit') : t('预览', 'Preview'),
+        previewLabel: t('图表预览', 'Preview'),
+        searchPlaceholder: t('搜索语言', 'Search languages'),
+        noResultText: t('没有匹配的语言', 'No matching language'),
+        copyText: t('复制', 'Copy'),
       },
       [Crepe.Feature.Latex]: {
-        inlineEditConfirm: '确认',
+        inlineEditConfirm: t('确认', 'Confirm'),
       },
       [Crepe.Feature.LinkTooltip]: {
-        editButton: '编辑',
-        removeButton: '移除',
-        confirmButton: '确认',
-        inputPlaceholder: '粘贴链接地址…',
+        editButton: t('编辑', 'Edit'),
+        removeButton: t('移除', 'Remove'),
+        confirmButton: t('确认', 'Confirm'),
+        inputPlaceholder: t('粘贴链接地址…', 'Paste link address…'),
       },
       [Crepe.Feature.Toolbar]: {
-        boldLabel: '加粗',
-        italicLabel: '斜体',
-        strikethroughLabel: '删除线',
-        codeLabel: '行内代码',
-        latexLabel: '行内公式',
-        linkLabel: '链接',
+        boldLabel: t('加粗', 'Bold'),
+        italicLabel: t('斜体', 'Italic'),
+        strikethroughLabel: t('删除线', 'Strikethrough'),
+        codeLabel: t('行内代码', 'Inline code'),
+        latexLabel: t('行内公式', 'Inline formula'),
+        linkLabel: t('链接', 'Link'),
       },
       [Crepe.Feature.BlockEdit]: {
         textGroup: {
-          label: '文本',
-          text: { label: '正文' },
-          h1: { label: '一级标题' },
-          h2: { label: '二级标题' },
-          h3: { label: '三级标题' },
-          h4: { label: '四级标题' },
-          h5: { label: '五级标题' },
-          h6: { label: '六级标题' },
-          quote: { label: '引用' },
-          divider: { label: '分割线' },
+          label: t('文本', 'Text'),
+          text: { label: t('正文', 'Paragraph') },
+          h1: { label: t('一级标题', 'Heading 1') },
+          h2: { label: t('二级标题', 'Heading 2') },
+          h3: { label: t('三级标题', 'Heading 3') },
+          h4: { label: t('四级标题', 'Heading 4') },
+          h5: { label: t('五级标题', 'Heading 5') },
+          h6: { label: t('六级标题', 'Heading 6') },
+          quote: { label: t('引用', 'Quote') },
+          divider: { label: t('分割线', 'Divider') },
         },
         listGroup: {
-          label: '列表',
-          bulletList: { label: '无序列表' },
-          orderedList: { label: '有序列表' },
-          taskList: { label: '任务列表' },
+          label: t('列表', 'Lists'),
+          bulletList: { label: t('无序列表', 'Bullet list') },
+          orderedList: { label: t('有序列表', 'Ordered list') },
+          taskList: { label: t('任务列表', 'Task list') },
         },
         advancedGroup: {
-          label: '插入',
-          image: { label: '图片' },
-          codeBlock: { label: '代码块' },
-          table: { label: '表格' },
-          math: { label: '公式块' },
+          label: t('插入', 'Insert'),
+          image: { label: t('图片', 'Image') },
+          codeBlock: { label: t('代码块', 'Code block') },
+          table: { label: t('表格', 'Table') },
+          math: { label: t('公式块', 'Formula block') },
         },
       },
     },
   })
+  // Crepe's defaultsDeep merges language arrays and theme extension internals.
+  // Replace both AFTER feature configuration to avoid default grammar collisions.
+  crepe.editor.config(ctx => ctx.update(codeBlockConfig.key, config => ({
+    ...config,
+    languages: shikiLanguages(themeStore.resolvedCodeBlockTheme),
+    renderLanguage: renderCodeLanguage,
+    renderPreview: (language, content, applyPreview) => language.trim().toLowerCase() === 'mermaid'
+      ? renderDiagram(content, applyPreview)
+      : config.renderPreview(language, content, applyPreview),
+    extensions: [basicSetup, keymap.of([indentWithTab]), shikiEditorTheme(themeStore.resolvedCodeBlockTheme)],
+  })))
   crepe.editor.use(fontSizeMarkdownPlugin)
   crepe.on((listener) => {
     listener.markdownUpdated((_ctx, markdown, previousMarkdown) => {
       // 忽略编辑器初始化/回显事件，防止无内容变化时触发自动保存循环。
-      if (markdown === previousMarkdown || markdown === editorStore.content) return
-      editorStore.updateContent(markdown)
+      const fullMarkdown = (metadata.value?.prefix ?? '') + markdown
+      if (markdown === previousMarkdown || fullMarkdown === editorStore.content) return
+      editorStore.updateContent(fullMarkdown)
       editorStore.scheduleAutoSave(settingsStore.autoSaveInterval)
     })
   })
   await crepe.create()
+  if (editorRoot.value) disposeLanguagePicker = installLanguagePickerPopover(editorRoot.value)
+  if (editorRoot.value) disposeCodeLabels = installCodeBlockLabels(editorRoot.value)
+  applyProofingPreferences()
   loading.value = false
 })
 
-onBeforeUnmount(() => { void crepe?.destroy() })
+watch([() => settingsStore.spellCheck, () => settingsStore.language], applyProofingPreferences)
+watch(() => editorStore.headingRequest, request => {
+  if (!request || request.path !== editorStore.currentFilePath || !crepe) return
+  crepe.editor.action(ctx => {
+    const view = ctx.get(editorViewCtx)
+    let index = 0
+    view.state.doc.forEach((node, offset) => {
+      if (node.type.name !== 'heading') return
+      if (index++ !== request.index) return
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, offset + 1)).scrollIntoView())
+      view.focus()
+    })
+  })
+})
+
+onBeforeUnmount(() => { diagramPreviews.clear(); disposeCodeLabels?.(); disposeLanguagePicker?.(); void crepe?.destroy() })
 
 defineExpose({ getEditor: () => crepe?.editor })
 </script>
 
 <template>
   <div class="visual-editor">
-    <div class="markdown-toolbar" role="toolbar" aria-label="Markdown 格式工具栏">
-      <label class="toolbar-select heading-select" title="设置标题级别">
+    <div class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
+      <label class="toolbar-select heading-select" :title="t('设置标题级别', 'Set heading level')">
         <span class="format-glyph heading-glyph">H</span>
-        <select aria-label="标题级别" @change="applyHeading">
-          <option value="" selected>标题</option>
-          <option value="paragraph">正文</option>
+        <select :aria-label="t('标题级别', 'Heading level')" @change="applyHeading">
+          <option value="" selected>{{ t('标题', 'Heading') }}</option>
+          <option value="paragraph">{{ t('正文', 'Paragraph') }}</option>
           <option v-for="level in 6" :key="level" :value="level">H{{ level }}</option>
         </select>
       </label>
-      <button type="button" title="加粗 (Ctrl+B)" aria-label="加粗" @pointerdown.prevent="runCommand('bold')"><strong class="format-glyph">B</strong></button>
-      <button type="button" title="斜体 (Ctrl+I)" aria-label="斜体" @pointerdown.prevent="runCommand('italic')"><em class="format-glyph">I</em></button>
+      <button type="button" :title="t('加粗 (Ctrl+B)', 'Bold (Ctrl+B)')" :aria-label="t('加粗', 'Bold')" @pointerdown.prevent="runCommand('bold')"><strong class="format-glyph">B</strong></button>
+      <button type="button" :title="t('斜体 (Ctrl+I)', 'Italic (Ctrl+I)')" :aria-label="t('斜体', 'Italic')" @pointerdown.prevent="runCommand('italic')"><em class="format-glyph">I</em></button>
       <span class="toolbar-divider" />
-      <button type="button" class="list-glyph" title="有序列表" aria-label="有序列表" @pointerdown.prevent="runCommand('ordered-list')"><span class="list-marker">1</span><span class="list-lines">☰</span></button>
-      <button type="button" class="list-glyph" title="无序列表" aria-label="无序列表" @pointerdown.prevent="runCommand('bullet-list')"><span class="list-marker">•</span><span class="list-lines">☰</span></button>
+      <button type="button" class="list-glyph" :title="t('有序列表', 'Ordered list')" :aria-label="t('有序列表', 'Ordered list')" @pointerdown.prevent="runCommand('ordered-list')"><span class="list-marker">1</span><span class="list-lines">☰</span></button>
+      <button type="button" class="list-glyph" :title="t('无序列表', 'Bullet list')" :aria-label="t('无序列表', 'Bullet list')" @pointerdown.prevent="runCommand('bullet-list')"><span class="list-marker">•</span><span class="list-lines">☰</span></button>
       <span class="toolbar-divider" />
-      <label class="toolbar-select font-size-select" title="选择预设字号">
+      <label class="toolbar-select font-size-select" :title="t('选择预设字号', 'Choose a preset font size')">
         <span class="format-glyph font-size-glyph">A</span>
-        <select aria-label="文字字号" @change="applyFontSize">
-          <option value="" selected>字号</option>
+        <select :aria-label="t('文字字号', 'Font size')" @change="applyFontSize">
+          <option value="" selected>{{ t('字号', 'Size') }}</option>
           <option v-for="size in [12, 14, 16, 18, 20, 24, 28, 32]" :key="size" :value="size">{{ size }} px</option>
         </select>
       </label>
-      <div class="font-size-input" title="输入字号后按 Enter 或点击应用">
-        <input v-model.number="fontSizeInput" type="number" min="8" max="96" step="1" aria-label="自定义字号"
+      <div class="font-size-input" :title="t('输入字号后按 Enter 或点击应用', 'Enter a font size, then press Enter or Apply')">
+        <input v-model.number="fontSizeInput" type="number" min="8" max="96" step="1" :aria-label="t('自定义字号', 'Custom font size')"
           @keydown.enter.prevent="applyFontSizeValue" />
         <span>px</span>
-        <button type="button" aria-label="应用自定义字号" @pointerdown.prevent="applyFontSizeValue">应用</button>
+        <button type="button" :aria-label="t('应用自定义字号', 'Apply custom font size')" @pointerdown.prevent="applyFontSizeValue">{{ t('应用', 'Apply') }}</button>
       </div>
       <span class="toolbar-divider" />
-      <button type="button" title="行内代码" aria-label="行内代码" @pointerdown.prevent="runCommand('inline-code')"><code class="code-glyph">&lt;/&gt;</code></button>
-      <button type="button" title="代码块" aria-label="代码块" @pointerdown.prevent="runCommand('code-block')"><span class="block-glyph">{ }</span></button>
-      <button type="button" title="行内公式" aria-label="行内公式" @pointerdown.prevent="runCommand('inline-math')"><span class="math-glyph">ƒx</span></button>
-      <button type="button" title="公式块" aria-label="公式块" @pointerdown.prevent="runCommand('math-block')"><span class="math-glyph">∑</span></button>
-      <button type="button" title="插入链接" aria-label="插入链接" @pointerdown.prevent="applyLink"><AppIcon :icon="Link" :size="17" /></button>
+      <button type="button" :title="t('行内代码', 'Inline code')" :aria-label="t('行内代码', 'Inline code')" @pointerdown.prevent="runCommand('inline-code')"><code class="code-glyph">&lt;/&gt;</code></button>
+      <button type="button" :title="t('代码块', 'Code block')" :aria-label="t('代码块', 'Code block')" @pointerdown.prevent="runCommand('code-block')"><span class="block-glyph">{ }</span></button>
+      <button type="button" :title="t('行内公式', 'Inline formula')" :aria-label="t('行内公式', 'Inline formula')" @pointerdown.prevent="runCommand('inline-math')"><span class="math-glyph">ƒx</span></button>
+      <button type="button" :title="t('公式块', 'Formula block')" :aria-label="t('公式块', 'Formula block')" @pointerdown.prevent="runCommand('math-block')"><span class="math-glyph">∑</span></button>
+      <button type="button" :title="t('插入链接', 'Insert link')" :aria-label="t('插入链接', 'Insert link')" @pointerdown.prevent="applyLink"><AppIcon :icon="Link" :size="17" /></button>
     </div>
-    <div v-if="loading" class="editor-loading">正在加载编辑器…</div>
-    <div ref="editorRoot" class="milkdown-host" :class="{ loading }" />
+    <div v-if="loading" class="editor-loading">{{ t('正在加载编辑器…', 'Loading editor…') }}</div>
+    <div class="milkdown-host" :class="{ loading }">
+      <section v-if="metadata" class="note-metadata" :aria-label="t('笔记属性', 'Note properties')">
+        <span class="metadata-caption">{{ t('笔记属性', 'Note properties') }}</span>
+        <h1 v-if="metadata.title">{{ metadata.title }}</h1>
+        <div class="metadata-tags">
+          <span class="metadata-label">{{ t('标签', 'Tags') }}</span>
+          <span v-for="tag in metadata.tags" :key="tag" class="metadata-tag"><span>{{ tag }}</span><button type="button" :aria-label="`${t('移除标签', 'Remove tag')} ${tag}`" @click="setTags(metadata.tags.filter(item => item !== tag))">×</button></span>
+          <form @submit.prevent="addTags"><input v-model="tagDraft" :aria-label="t('添加标签', 'Add tag')" :placeholder="t('+ 添加标签', '+ Add tag')" /><button v-if="tagDraft.trim()" type="submit">{{ t('添加', 'Add') }}</button></form>
+        </div>
+      </section>
+      <div ref="editorRoot" />
+    </div>
   </div>
 </template>
 
@@ -246,6 +341,20 @@ defineExpose({ getEditor: () => crepe?.editor })
 .toolbar-divider { width: 1px; height: 20px; margin: 0 var(--space-xs); background: var(--color-border-default); }
 .milkdown-host { flex: 1; min-height: 0; overflow: auto; color: var(--color-text-primary); }
 .milkdown-host.loading { visibility: hidden; }
+.note-metadata { box-sizing: border-box; width: 90%; margin: 0 auto 20px; padding: 20px 24px; border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-surface-primary); }
+.metadata-caption { color: var(--color-text-secondary); font-size: var(--font-size-xs); }
+.note-metadata h1 { margin: 10px 0 16px; font-size: 24px; color: var(--color-text-primary); overflow-wrap: anywhere; }
+.metadata-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.metadata-label { margin-right: 4px; color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+.metadata-tag { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 8px; border-radius: var(--radius-full); background: var(--color-accent-soft); color: var(--color-accent-primary); font-size: var(--font-size-sm); }
+.metadata-tag > span { overflow-wrap: anywhere; min-width: 0; }
+.metadata-tag button { color: inherit; padding: 0 3px; }
+.metadata-tags form { display: flex; gap: 6px; }
+.metadata-tags input { width: 110px; padding: 5px 8px; border: 1px dashed var(--color-border-default); border-radius: var(--radius-sm); background: transparent; color: var(--color-text-primary); }
+.metadata-tags input:focus { outline: 2px solid var(--color-border-focus); }
+.milkdown-host :deep(.editor-mermaid-preview) { padding: 20px; overflow: auto; background: var(--color-surface-primary); color: var(--color-text-primary); }
+.milkdown-host :deep(.editor-mermaid-preview svg) { display: block; max-width: 100%; height: auto; margin: auto; }
+.milkdown-host :deep(.editor-mermaid-preview.has-error) { color: var(--color-error); white-space: pre-wrap; }
 .editor-loading { padding: var(--space-xl); color: var(--color-text-tertiary); }
 .milkdown-host :deep(.milkdown) {
   min-height: 100%;
@@ -276,7 +385,10 @@ defineExpose({ getEditor: () => crepe?.editor })
 .milkdown-host :deep(.ProseMirror p) { font-weight: 400; }
 .milkdown-host :deep(.ProseMirror h1), .milkdown-host :deep(.ProseMirror h2), .milkdown-host :deep(.ProseMirror h3), .milkdown-host :deep(.ProseMirror h4), .milkdown-host :deep(.ProseMirror h5), .milkdown-host :deep(.ProseMirror h6) { font-weight: 700; }
 .milkdown-host :deep(.font-size-marker) { display: none; }
-.milkdown-host :deep(.milkdown-code-block) { overflow: hidden; border: 1px solid var(--color-code-border); border-radius: 6px; background: var(--color-code-background); color: var(--color-code-text); }
+.milkdown-host :deep(.milkdown-code-block) { overflow: visible; border: 1px solid var(--color-code-border); border-radius: 6px; background: var(--color-code-background); color: var(--color-code-text); }
+.milkdown-host :deep(.language-picker[popover]) { position: fixed !important; inset: auto; left: var(--picker-left) !important; top: var(--picker-top) !important; margin: 0; padding: 0; border: 0; overflow: visible; background: transparent; color: var(--color-text-primary); }
+.milkdown-host :deep(.language-picker .language-list) { height: auto; max-height: var(--picker-list-height, 280px); }
+.milkdown-host :deep(.language-picker .list-wrapper) { width: min(260px, calc(100vw - 24px)); border: 1px solid var(--color-border-default); background: var(--color-surface-elevated); box-shadow: var(--shadow-md); }
 .milkdown-host :deep(.milkdown-code-block .cm-editor),
 .milkdown-host :deep(.milkdown-code-block .cm-gutters),
 .milkdown-host :deep(.milkdown-code-block .cm-panel) { background: var(--color-code-background); }

@@ -10,6 +10,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from app.request_overrides import RequestOverride
 
 
 class Contract(BaseModel):
@@ -261,12 +262,59 @@ class ModelRequest(Contract):
 
 
 class ChatRequest(ModelRequest):
-    conversation_id: str | None = None
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    user_message_id: str | None = Field(default=None, min_length=1, max_length=128)
+    assistant_message_id: str | None = Field(default=None, min_length=1, max_length=128)
+    conversation_title: str | None = Field(default=None, max_length=120)
     use_rag: bool = True
     retrieval: SearchRequest | None = None
 
 
+class ConversationCreateRequest(Contract):
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    title: str = Field(min_length=1, max_length=120)
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("title must not be blank")
+        return value
+
+
+class Conversation(Contract):
+    conversation_id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    message_count: int = 0
+
+
+class ConversationListResponse(Contract):
+    items: list[Conversation] = Field(default_factory=list)
+    page: PageMeta = Field(default_factory=PageMeta)
+
+
+class ChatMessage(Contract):
+    message_id: str
+    conversation_id: str
+    role: Literal["user", "assistant", "system"]
+    content: str
+    created_at: datetime
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    thinking: str | None = None
+    usage: dict[str, Any] | None = None
+
+
+class ChatMessageListResponse(Contract):
+    items: list[ChatMessage] = Field(default_factory=list)
+    page: PageMeta = Field(default_factory=PageMeta)
+
+
 class ModelEventType(str, Enum):
+    citation = "Citation"
     text_delta = "TextDelta"
     thinking_delta = "ThinkingDelta"
     tool_call_start = "ToolCallStart"
@@ -790,6 +838,8 @@ class ProviderConnectionFields(Contract):
 
 
 class ProviderConfig(ProviderConnectionFields):
+    version: int = Field(default=1, ge=1)
+    request_overrides: list[RequestOverride] = Field(default_factory=list, max_length=32)
     provider_id: str
     provider_type: ProviderType
     name: str
@@ -801,6 +851,7 @@ class ProviderConfig(ProviderConnectionFields):
 
 
 class ProviderCreateRequest(ProviderConnectionFields):
+    request_overrides: list[RequestOverride] = Field(default_factory=list, max_length=32)
     provider_type: ProviderType
     name: str
     base_url: str | None = None
@@ -810,6 +861,8 @@ class ProviderCreateRequest(ProviderConnectionFields):
 
 
 class ProviderUpdateRequest(ProviderConnectionFields):
+    version: int | None = Field(default=None, ge=1)
+    request_overrides: list[RequestOverride] | None = Field(default=None, max_length=32)
     provider_type: ProviderType | None = None
     name: str | None = None
     base_url: str | None = None
@@ -897,6 +950,7 @@ class EmbeddingResult(Contract):
 class SpeakerMatchRequest(Contract):
     attachment_id: str
     reference_attachment_id: str
+    local_only: bool = False
 
 
 class SpeakerMatchResult(Contract):
@@ -985,18 +1039,75 @@ class TranscriptionRequest(Contract):
     attachment_id: str
     language: str | None = None
     diarization: bool = False
+    local_only: bool = False
+    word_timestamps: bool = False
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
+    terminology: dict[str, str] = Field(default_factory=dict, max_length=200)
+
+    @field_validator("terminology")
+    @classmethod
+    def bound_terminology(cls, value):
+        if any(not key or len(key) > 200 or len(replacement) > 200 for key, replacement in value.items()):
+            raise ValueError("术语不能为空，每个术语与替换文本最多 200 字符")
+        return value
+
+
+class TranscriptSegment(Contract):
+    segment_id: str
+    start_time: float = Field(ge=0)
+    end_time: float = Field(ge=0)
+    text: str
+    speaker: str | None = None
+    language: str | None = None
+
+    @model_validator(mode="after")
+    def valid_interval(self):
+        import math
+        if not math.isfinite(self.start_time) or not math.isfinite(self.end_time) or self.end_time < self.start_time:
+            raise ValueError("invalid segment time range")
+        return self
 
 
 class TranscriptionJob(Contract):
     job_id: str
     attachment_id: str
-    status: Literal["queued", "processing", "completed", "failed"]
+    status: Literal["queued", "processing", "running", "completed", "failed", "cancelled"]
     text: str | None = None
     error_code: str | None = None
     error_message: str | None = None
     created_at: datetime
     source: Literal["api", "local", "sidecar"] | None = None
     fallback_reason: str | None = None
+    segments: list[TranscriptSegment] = Field(default_factory=list)
+    original_text: str | None = None
+    original_segments: list[TranscriptSegment] = Field(default_factory=list)
+    speaker_names: dict[str, str] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    progress: float | None = Field(default=None, ge=0, le=1)
+    revision: int = 1
+    started_at: datetime | None = None
+    updated_at: datetime | None = None
+    completed_at: datetime | None = None
+    language: str | None = None
+    local_only: bool = False
+    previous_job_id: str | None = None
+    model_snapshot: dict[str, Any] = Field(default_factory=dict)
+    corrections: list[dict[str, str]] = Field(default_factory=list)
+
+
+class TranscriptEditRequest(Contract):
+    revision: int = Field(ge=1)
+    text: str = Field(max_length=1_000_000)
+    segments: list[TranscriptSegment] = Field(default_factory=list, max_length=10000)
+    speaker_names: dict[str, str] = Field(default_factory=dict, max_length=200)
+
+
+class TranscriptNoteRequest(Contract):
+    update_existing: bool = False
+    title: str = Field(min_length=1, max_length=200)
+    folder: str | None = None
+    include_timestamps: bool = True
+    include_speakers: bool = True
 
 
 class IndexStatus(Contract):

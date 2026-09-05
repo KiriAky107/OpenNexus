@@ -641,9 +641,14 @@ def test_api_speech_failure_reports_reason_in_503_and_transcription_job(api):
     assert match.status_code == 503
     assert match.json()["error"]["code"] == "LOCAL_MODEL_NOT_INSTALLED"
     assert match.json()["error"]["details"] == {"fallback_reason": "PROVIDER_UNAVAILABLE"}
-    transcript = api.client.post("/api/media/transcriptions", json={"attachment_id": source.name, "language": "zh"})
-    assert transcript.status_code == 202
-    job = transcript.json()
+    with api.client:
+        transcript = api.client.post("/api/media/transcriptions", json={"attachment_id": source.name, "language": "zh"})
+        assert transcript.status_code == 202
+        job = transcript.json()
+        assert job["status"] == "queued"
+        stream = api.client.get(f"/api/media/transcriptions/{job['job_id']}/events")
+        assert "event: Failed" in stream.text
+        job = api.client.get(f"/api/media/transcriptions/{job['job_id']}").json()
     assert job["status"] == "failed" and job["error_code"] == "LOCAL_MODEL_NOT_INSTALLED"
     assert job["fallback_reason"] == "PROVIDER_UNAVAILABLE"
     assert api.client.get(f"/api/media/transcriptions/{job['job_id']}").json() == job
@@ -661,3 +666,55 @@ def test_out_of_float_range_json_number_is_invalid_remote_and_falls_back(rig, au
         result = run(media_call(rig, capability, audio))
         assert result.source == "local" and result.score == rig.speech.score
         assert result.fallback_reason == "PROVIDER_INVALID_RESPONSE"
+
+
+def test_remote_segments_are_validated_and_local_only_skips_api(rig, audio):
+    bind(rig, "transcription")
+    rig.http.handler = lambda request: response({"text":"内容", "segments":[{"start":0,"end":1.5,"text":"内容"}]})
+    result = run(rig.service.transcribe(audio[0], "zh"))
+    assert result.source == "api" and result.segments[0].end_time == 1.5
+    rig.http.handler = lambda request: response({"text":"内容", "segments":[{"start":2,"end":1,"text":"内容"}]})
+    assert run(rig.service.transcribe(audio[0], "zh")).fallback_reason == "PROVIDER_INVALID_RESPONSE"
+    count = len(rig.requests)
+    result = run(rig.service.transcribe(audio[0], "zh", local_only=True))
+    assert result.source == "local" and len(rig.requests) == count
+
+
+def test_embedding_local_only_does_not_change_normal_api_fallback(rig):
+    bind(rig)
+    result = run(rig.service.embed(['private'], local_only=True))
+    assert result.source == 'local' and result.fallback_reason is None
+    assert rig.requests == [] and rig.credentials.calls == []
+    rig.http.handler = lambda request: response({'data': [{'index': 0, 'embedding': [1, 0, 0]}]})
+    assert run(rig.service.embed(['normal'])).source == 'api'
+    rig.http.handler = lambda request: response({}, status=503)
+    result = run(rig.service.embed(['fallback']))
+    assert result.source == 'local' and result.fallback_reason
+
+
+@pytest.mark.parametrize('api_failure', [False, True])
+def test_local_embedding_identity_and_device_are_frozen_during_inference(rig, monkeypatch, api_failure):
+    import app.local_models.runtime as module
+    config = module.RuntimeConfig(embedding_model='bekko')
+    monkeypatch.setattr(module, 'configuration', lambda: module.runtime_context.get() or config)
+    calls = []
+    async def infer(key, *args, **kwargs):
+        calls.append(key)
+        config.embedding_model = 'granite'
+        config.device = 'cuda'
+        await asyncio.sleep(0)
+        assert module.configuration().embedding_model == key
+        assert module.configuration().device == ('cpu' if len(calls) == 1 else 'cuda')
+        return [[1.0] + [0.0] * 383]
+    monkeypatch.setattr(module.runtime, 'infer', infer)
+    rig.service.local_embedding = module.LocalEmbedding()
+    if api_failure:
+        bind(rig)
+        rig.http.handler = lambda request: response({}, status=503)
+    first = run(rig.service.embed(['first']))
+    assert 'bekko' in first.model_id
+    assert module.runtime_context.get() is None
+    second = run(rig.service.embed(['second']))
+    assert 'granite' in second.model_id
+    assert calls == ['bekko', 'granite']
+    assert bool(first.fallback_reason) == api_failure

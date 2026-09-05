@@ -13,11 +13,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import yaml
+
 from app.contracts import NoteBlock
+from app.errors import ApiError
 from app.textutils import count_tokens
 
 _HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*?)\s*$")
-_FRONTMATTER_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*:\s*(.*)$")
 _FENCE_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(?:[^`]*)$")
 
 
@@ -31,6 +33,7 @@ class ParsedNote:
     created_at: datetime
     updated_at: datetime
     blocks: list[NoteBlock] = field(default_factory=list)
+    embedding_local_only: bool = False
 
 
 def note_id_for_path(rel_path: str) -> str:
@@ -69,6 +72,7 @@ def parse_note(
         created_at=created_at,
         updated_at=updated_at,
         blocks=blocks,
+        embedding_local_only=_embedding_policy(markdown),
     )
 
 
@@ -171,29 +175,114 @@ def _split_lines(text: str) -> list[tuple[str, int]]:
 
 def _content_start(markdown: str) -> int:
     """返回正文起始 UTF-16 偏移：有 frontmatter 时跳过 --- 分隔块。"""
-    if markdown.startswith("---"):
-        end = markdown.find("\n---", 3)
-        if end != -1:
-            return _utf16_len(markdown[: end + 4])
-    return 0
+    header = _frontmatter(markdown)
+    return _utf16_len(markdown[:header[1]]) if header else 0
+
+
+def _frontmatter(markdown: str) -> tuple[str, int] | None:
+    """Return YAML text and body character offset without changing original text."""
+    start = 1 if markdown.startswith("\ufeff") else 0
+    opening = re.match(r"---[ \t]*(?:\r\n|\n|\r|\Z)", markdown[start:])
+    if opening is None:
+        return None
+    content_start = start + opening.end()
+    offset = content_start
+    for raw in markdown[content_start:].splitlines(keepends=True):
+        if re.fullmatch(r"(?:---|\.\.\.)[ \t]*", raw.rstrip("\r\n")):
+            candidate = markdown[content_start:offset]
+            if not candidate.strip() or _metadata_intent(candidate):
+                return candidate, offset + len(raw)
+            return None  # Ordinary Markdown between thematic breaks.
+        offset += len(raw)
+    if not _metadata_intent(markdown[content_start:]):
+        return None
+    raise ApiError(422, "INVALID_EMBEDDING_POLICY", "Frontmatter 未闭合，请补全独立一行的结束分隔符后再保存。")
+
+
+def _metadata_intent(content: str) -> bool:
+    """A thematic break alone is not a declaration of YAML metadata."""
+    # An explicit policy must fail closed even when other header lines are broken.
+    fence_marker = None
+    for line in content.splitlines():
+        fence = _FENCE_RE.match(line)
+        if fence_marker is not None:
+            marker = fence.group(1) if fence else ""
+            if marker.startswith(fence_marker[0]) and len(marker) >= len(fence_marker):
+                fence_marker = None
+            continue
+        if fence:
+            fence_marker = fence.group(1)
+            continue
+        if re.match(r"(?i)^[ \t]*[\"']?embedding_local_only[\"']?[ \t]*:", line):
+            return True
+    try:
+        if isinstance(yaml.compose(content, Loader=yaml.SafeLoader), yaml.MappingNode):
+            return True
+    except yaml.YAMLError:
+        pass
+    first = next((line.strip() for line in content.splitlines()
+                  if line.strip() and not line.lstrip().startswith("#")), "")
+    # Preserve errors for incomplete key/value headers, including flow mappings.
+    return bool(re.match(r"(?:[\w.-]+|[\"'][^\"']+[\"'])\s*:(?:\s|$)", first)
+                or (first.startswith("{") and ":" in first))
 
 
 def _utf16_len(text: str) -> int:
     return len(text.encode("utf-16-le")) // 2
 
 
-def _extract_frontmatter(markdown: str) -> dict[str, str]:
-    """极简 frontmatter 解析，只提取 key: value 行。"""
-    if not markdown.startswith("---"):
+def _embedding_policy(markdown: str) -> bool:
+    header = _frontmatter(markdown)
+    if header is None:
+        return False
+    try:
+        # Compose nodes without constructing objects. This accepts YAML comments,
+        # quoted keys and indentation while retaining duplicate-key information.
+        node = yaml.compose(header[0], Loader=yaml.SafeLoader)
+    except yaml.YAMLError as exc:
+        raise ApiError(422, "INVALID_EMBEDDING_POLICY", "Frontmatter YAML 无效，无法确认本地索引策略。") from exc
+    if node is None:
+        return False
+    if not isinstance(node, yaml.MappingNode):
+        raise ApiError(422, "INVALID_EMBEDDING_POLICY", "Frontmatter 必须是 YAML 键值映射。")
+    if any(key.tag == "tag:yaml.org,2002:merge" for key, _ in node.value):
+        raise ApiError(422, "INVALID_EMBEDDING_POLICY", "Frontmatter 不支持 YAML 合并键，请显式声明索引策略。")
+    values = [value for key, value in node.value
+              if isinstance(key, yaml.ScalarNode) and key.value.lower() == "embedding_local_only"]
+    if not values:
+        return False
+    if len(values) > 1:
+        raise ApiError(422, "INVALID_EMBEDDING_POLICY", "embedding_local_only 不能重复声明。")
+    value = values[0]
+    if (not isinstance(value, yaml.ScalarNode) or value.tag != "tag:yaml.org,2002:bool"
+            or value.value.lower() not in {"true", "false", "yes", "no", "on", "off"}):
+        raise ApiError(422, "INVALID_EMBEDDING_POLICY", "embedding_local_only 必须是 YAML 布尔值 true 或 false。")
+    return value.value.lower() in {"true", "yes", "on"}
+
+
+def _extract_frontmatter(markdown: str) -> dict[str, str | list[str]]:
+    """Read YAML scalars and tag sequences without constructing arbitrary objects."""
+    header = _frontmatter(markdown)
+    if header is None:
         return {}
-    end = markdown.find("\n---", 3)
-    if end == -1:
-        return {}
-    meta: dict[str, str] = {}
-    for line in markdown[3:end].splitlines():
-        m = _FRONTMATTER_KEY_RE.match(line)
-        if m:
-            meta[m.group(1).lower()] = m.group(2).strip()
+    try:
+        node = yaml.compose(header[0], Loader=yaml.SafeLoader)
+    except yaml.YAMLError as exc:
+        raise ApiError(422, "INVALID_EMBEDDING_POLICY", "Frontmatter YAML 无效，无法确认本地索引策略。") from exc
+    meta: dict[str, str | list[str]] = {}
+    if not isinstance(node, yaml.MappingNode):
+        return meta  # The policy validation below handles unsupported documents.
+    for key, value in node.value:
+        if not isinstance(key, yaml.ScalarNode):
+            continue
+        name = key.value.lower()
+        if name not in {"title", "tags"}:
+            continue
+        if isinstance(value, yaml.ScalarNode):
+            # Keep lexical values: YAML 1.1 would otherwise turn tags like on/yes into booleans.
+            meta[name] = "" if value.tag == "tag:yaml.org,2002:null" else value.value
+        elif name == "tags" and isinstance(value, yaml.SequenceNode):
+            meta[name] = [item.value for item in value.value if isinstance(item, yaml.ScalarNode)]
     return meta
 
 
@@ -205,10 +294,10 @@ def _first_heading(markdown: str) -> str | None:
     return None
 
 
-def _parse_tags(raw: str | None) -> list[str]:
+def _parse_tags(raw: str | list[str] | None) -> list[str]:
+    if isinstance(raw, list):
+        return raw
     if not raw:
         return []
     raw = raw.strip()
-    if raw.startswith("[") and raw.endswith("]"):
-        raw = raw[1:-1]
-    return [t.strip().strip("'\"") for t in raw.split(",") if t.strip()]
+    return [t.strip() for t in raw.split(",") if t.strip()]
