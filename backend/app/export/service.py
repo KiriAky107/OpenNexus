@@ -39,8 +39,10 @@ _jobs: dict[str, ExportJob] = {}
 _tasks: dict[str, asyncio.Task] = {}
 _cancel_flags: dict[str, asyncio.Event] = {}
 MAX_JOBS = 100
-# markdown 源大小上限，防止未保存预览塞爆内存/产物
+# 输入源（note / markdown）统一大小上限，防止未保存预览或超长笔记塞爆内存/产物
 MAX_MARKDOWN_CHARS = 200_000
+# 最终导出产物大小上限，防止超大 HTML 耗尽内存/磁盘
+MAX_EXPORT_BYTES = 20 * 1024 * 1024  # 20 MB
 # 产物有效期
 FILE_TTL = timedelta(hours=24)
 
@@ -49,6 +51,10 @@ _INVALID_FILE_CHARS = re.compile(r'[\\/:*?"<>|]')
 
 class ExportCancelled(Exception):
     """导出在渲染前被取消时抛出，用于标记 cancelled。"""
+
+
+class ExportTooLarge(Exception):
+    """导出产物超过大小上限时抛出，用于标记 failed 并携带专用错误码。"""
 
 
 def _now() -> datetime:
@@ -122,6 +128,13 @@ async def _resolve_source(source: ExportSource) -> tuple[str, str, dict | None]:
                 "EXPORT_SOURCE_NOT_FOUND",
                 "note not found",
                 {"note_id": source.note_id},
+            )
+        if len(note.markdown) > MAX_MARKDOWN_CHARS:
+            raise ApiError(
+                400,
+                "EXPORT_OPTIONS_INVALID",
+                f"note source exceeds {MAX_MARKDOWN_CHARS} characters",
+                {"size": len(note.markdown), "limit": MAX_MARKDOWN_CHARS},
             )
         metadata = {
             "file_path": note.file_path,
@@ -210,6 +223,8 @@ async def _execute(
         result = await asyncio.to_thread(_render_document, document, options)
         if cancel_event.is_set():
             raise ExportCancelled()
+        if len(result.content) > MAX_EXPORT_BYTES:
+            raise ExportTooLarge()
 
         out_dir = get_settings().exports_path
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -238,6 +253,15 @@ async def _execute(
         _jobs[job_id] = _jobs[job_id].model_copy(
             update={
                 "status": ExportStatus.cancelled,
+                "completed_at": _now(),
+            }
+        )
+    except ExportTooLarge:
+        _jobs[job_id] = _jobs[job_id].model_copy(
+            update={
+                "status": ExportStatus.failed,
+                "error": "Export output exceeds size limit.",
+                "error_code": "EXPORT_OUTPUT_TOO_LARGE",
                 "completed_at": _now(),
             }
         )

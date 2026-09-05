@@ -22,6 +22,9 @@ _RAW_HTML_WARNING = "原始 HTML 已按纯文本转义保留"
 # 链接/图片地址允许的协议；无 scheme 的相对地址视为安全，其余协议一律降级
 _ALLOWED_URL_SCHEMES = frozenset({"http", "https", "mailto"})
 
+# 单篇文档允许的函数图像数量上限，超出部分回退占位，防止多图块并发采样耗尽内存/线程
+_MAX_FUNCTION_PLOTS = 16
+
 
 def _safe_url(url: str) -> str | None:
     """校验 URL 协议；安全返回原串，不安全返回 None。"""
@@ -69,6 +72,7 @@ class HtmlExporter:
     def render(self, document: Document, options: ExportOptions) -> ExportResult:
         """同步渲染；CPU 密集，调用方应放入线程执行，避免阻塞事件循环。"""
         self._options = options
+        self._plot_count = 0
         warnings: list[str] = []
         body = self._render_children(document.children, warnings)
         content = self._assemble(document, options, body, warnings)
@@ -203,6 +207,13 @@ class HtmlExporter:
         return f"函数图像：{diag.message}{loc}"
 
     def _render_function_plot(self, node: DocumentNode, warnings: list[str]) -> str:
+        # 文档级数量上限：超出部分直接回退占位，不解析不采样，防止海量图像耗尽资源
+        self._plot_count += 1
+        if self._plot_count > _MAX_FUNCTION_PLOTS:
+            warnings.append(
+                f"函数图像：文档内函数图像数量超过上限 {_MAX_FUNCTION_PLOTS}，已回退为源码占位"
+            )
+            return f'<pre class="function-plot">{html.escape(node.text)}</pre>'
         # 解析与渲染共同纳入局部异常回退：单个图像失败只回退占位 + warning，
         # 绝不阻断整篇导出（含复杂表达式触发的 RecursionError 等异常）。
         try:

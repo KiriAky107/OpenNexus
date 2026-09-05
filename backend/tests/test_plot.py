@@ -247,3 +247,25 @@ def test_render_svg_extreme_range_no_nan() -> None:
     assert "nan" not in rendered.content
     assert "inf" not in rendered.content
     assert any("range" in w for w in rendered.warnings)
+
+
+# --------------------------------------------------------------------------- #
+# 审阅回归：函数/图像数量上限
+# --------------------------------------------------------------------------- #
+def test_parse_source_rejects_too_many_expressions() -> None:
+    # P1：单块表达式数量超限应整块回退，避免海量采样求值
+    source = "\n".join(f"y = x + {i}" for i in range(50))
+    result = parse_source(source)
+    assert result.plot is None
+    assert any(d.code == "FUNCTION_PLOT_TOO_MANY_EXPRESSIONS" for d in result.diagnostics)
+
+
+def test_html_exporter_limits_function_plot_count() -> None:
+    # P1：文档内函数图像数量超限，超出部分回退占位，不耗尽资源
+    blocks = "\n\n".join("```function-plot\ny = x\n```" for _ in range(20))
+    result = asyncio.run(HtmlExporter().export(parse_document(blocks), ExportOptions()))
+    html = result.content.decode("utf-8")
+    # 上限 16：前 16 个渲染为 SVG，其余 4 个回退占位
+    assert html.count('<figure class="function-plot">') == 16
+    assert html.count('<pre class="function-plot">') == 4
+    assert any("函数图像数量超过上限" in w for w in result.warnings)
