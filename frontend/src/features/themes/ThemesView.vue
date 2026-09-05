@@ -5,12 +5,14 @@ import { useThemeStore } from '@/stores/theme'
 import { mockCommunityThemes } from '@/services/themePackageService'
 import type { ThemePackageInspection } from '@/contracts'
 import { t } from '@/i18n'
+import CommunityThemePreview from './CommunityThemePreview.vue'
 
 const themeStore = useThemeStore()
 
 const activeTab = ref<'installed' | 'community'>('installed')
 const showImportDialog = ref(false)
 const previewThemeId = ref<string | null>(null)
+const communityPreviewId = ref<string | null>(null)
 const actionError = ref('')
 
 const shikiPreview = `\`\`\`typescript
@@ -71,10 +73,7 @@ async function installFromCommunity(themeId: string) {
 }
 
 function previewCommunity(themeId: string) {
-  // 临时切换预览
-  const current = themeStore.currentThemeId
-  themeStore.applyTheme(themeId)
-  setTimeout(() => themeStore.applyTheme(current), 1500)
+  communityPreviewId.value = themeId
 }
 
 onMounted(() => {
@@ -84,6 +83,7 @@ onMounted(() => {
 
 <template>
   <section class="feature-page">
+    <CommunityThemePreview v-if="communityPreviewId" :theme-id="communityPreviewId" @close="communityPreviewId = null" />
     <header class="feature-header">
       <div>
         <h1>{{ t('主题', 'Themes') }}</h1>
