@@ -13,6 +13,10 @@ export const useEditorStore = defineStore('editor', () => {
   const currentFilePath = ref<string | null>(null)
   const highlightBlockId = ref<string | null>(null)
   const cursorPosition = ref({ line: 0, column: 0 })
+  const headingRequest = ref<{ index: number; offset: number; path: string | null } | null>(null)
+  function jumpToHeading(index: number, offset: number) {
+    headingRequest.value = { index, offset, path: currentFilePath.value }
+  }
 
   const wordCount = computed(() => {
     const text = content.value.replace(/[#*`>\-_\[\]()!]/g, '')
@@ -144,6 +148,8 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   return {
+    headingRequest,
+    jumpToHeading,
     mode,
     content,
     saveStatus,
