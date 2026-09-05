@@ -4,9 +4,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAgentStore } from '@/stores/agent'
 import { useProviderStore } from '@/stores/provider'
 import { useSkillStore } from '@/stores/skill'
+import TraceTimeline from './TraceTimeline.vue'
 import type { AgentEvent } from '@/contracts'
-import { eventLabel, localizeDetails, permissionLabel, runStatusLabel, toolLabel } from './labels'
+import { localizeDetails, permissionLabel, runStatusLabel, toolLabel } from './labels'
 import ToolOption from './ToolOption.vue'
+import { useCitationNavigation } from '@/composables/useCitationNavigation'
 import { localeTag, t } from '@/i18n'
 
 const route = useRoute()
@@ -14,6 +16,7 @@ const router = useRouter()
 const agentStore = useAgentStore()
 const providerStore = useProviderStore()
 const skillStore = useSkillStore()
+const { openCitation } = useCitationNavigation()
 const pageError = ref('')
 const form = reactive({
   input: '', provider_id: '', model: '', skill_id: '', max_steps: 10,
@@ -71,6 +74,16 @@ function eventText(event: AgentEvent) {
   if (text) return String(text)
   return ''
 }
+
+/** Trace 里点引用 → 打开对应笔记块。失败原因要让用户看到，不能静默。 */
+async function handleOpenCitation(data: Record<string, unknown>) {
+  pageError.value = ''
+  try {
+    await openCitation(data)
+  } catch (error) {
+    pageError.value = error instanceof Error ? error.message : t('引用定位失败', 'Failed to open citation')
+  }
+}
 </script>
 
 <template>
@@ -96,15 +109,33 @@ function eventText(event: AgentEvent) {
     </form>
 
     <div v-else class="trace-layout">
-      <div class="panel run-summary"><div><span class="badge info">{{ runStatusLabel(agentStore.activeRun?.status) }}</span><h2>{{ agentStore.activeRunId }}</h2></div><div class="inline-actions"><span>{{ t('步骤', 'Step') }} {{ agentStore.currentStep }} / {{ agentStore.activeRun?.max_steps }}</span><button v-if="agentStore.isRunning" class="button-danger" @click="agentStore.cancelRun(agentStore.activeRunId!)">{{ t('取消运行', 'Cancel run') }}</button></div></div>
-      <div class="timeline">
-        <article v-for="event in agentStore.events" :key="event.sequence" class="event-card item-card">
-          <div class="event-head"><span class="badge" :class="{ success: event.event === 'RunCompleted', error: event.event === 'RunFailed', warning: event.event === 'PermissionRequired' }">{{ eventLabel(event.event) }}</span><span>#{{ event.sequence }} · {{ new Date(event.timestamp).toLocaleTimeString(localeTag()) }}</span></div>
-          <p v-if="eventText(event)" class="event-text">{{ eventText(event) }}</p>
-          <pre v-if="['ToolCall', 'ToolResult', 'Citation', 'Usage'].includes(event.event)">{{ JSON.stringify(localizeDetails(event.data), null, 2) }}</pre>
-        </article>
-        <div v-if="!agentStore.events.length" class="empty-state"><div><strong>{{ t('等待执行轨迹', 'Waiting for trace events') }}</strong><p>{{ t('事件连接建立后将在这里实时显示。', 'Events will appear here after the connection is established.') }}</p></div></div>
+      <div class="panel run-summary">
+        <div>
+          <span class="badge" :class="{
+            success: agentStore.activeRun?.status === 'completed',
+            error: agentStore.activeRun?.status === 'failed',
+            warning: agentStore.activeRun?.status === 'waiting_permission',
+            info: agentStore.activeRun?.status === 'running' || agentStore.activeRun?.status === 'queued',
+          }">{{ runStatusLabel(agentStore.activeRun?.status) }}</span>
+          <h2>{{ agentStore.activeRun?.run_id ?? agentStore.activeRunId }}</h2>
+          <p v-if="agentStore.activeRun" class="run-meta">
+            <span>{{ t('步骤', 'Step') }} {{ agentStore.currentStep }} / {{ agentStore.activeRun.max_steps }}</span>
+            <span>·</span>
+            <span>Token: {{ agentStore.activeRun.token_usage?.total_tokens ?? 0 }}</span>
+            <span v-if="agentStore.activeRun.started_at">·</span>
+            <span v-if="agentStore.activeRun.started_at">{{ t('开始', 'Started') }}: {{ new Date(agentStore.activeRun.started_at).toLocaleString(localeTag()) }}</span>
+          </p>
+        </div>
+        <div class="inline-actions">
+          <button v-if="agentStore.isRunning" class="button-danger" @click="agentStore.cancelRun(agentStore.activeRunId!)">{{ t('取消运行', 'Cancel run') }}</button>
+          <button class="button-secondary" @click="agentStore.loadRun(agentStore.activeRunId!)">重新加载</button>
+        </div>
       </div>
+      <TraceTimeline
+        :events="agentStore.events"
+        :run-status="agentStore.activeRun?.status"
+        @open-citation="handleOpenCitation"
+      />
     </div>
 
     <div v-if="agentStore.permissionRequest" class="modal-backdrop">
@@ -119,14 +150,24 @@ function eventText(event: AgentEvent) {
 .tool-grid { display: grid; align-items: start; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: var(--space-sm); }
 .network { display: flex; gap: var(--space-sm); }
 .trace-layout { display: grid; gap: var(--space-lg); }
-.run-summary, .event-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); }
-.run-summary h2 { margin-top: var(--space-sm); font-family: var(--font-ui-mono); font-size: var(--font-size-lg); }
-.timeline { position: relative; display: grid; gap: var(--space-md); padding-left: var(--space-md); }
-.timeline::before { content: ''; position: absolute; top: 10px; bottom: 10px; left: 1px; width: 2px; border-radius: var(--radius-full); background: var(--color-border-default); }
-.event-card { position: relative; }
-.event-card::before { content: ''; position: absolute; top: 20px; left: calc(-1 * var(--space-md) - 5px); width: 8px; height: 8px; border: 2px solid var(--color-surface-primary); border-radius: var(--radius-full); background: var(--color-accent-primary); box-shadow: 0 0 0 1px var(--color-accent-secondary); }
-.event-head { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
-.event-text { margin-top: var(--space-md); white-space: pre-wrap; line-height: var(--line-height-relaxed); }
-pre { margin-top: var(--space-md); max-height: 260px; overflow: auto; padding: var(--space-md); border-radius: var(--radius-md); background: var(--color-background-secondary); font-family: var(--font-ui-mono); font-size: var(--font-size-xs); white-space: pre-wrap; user-select: text; }
+.run-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+.run-summary h2 {
+  margin-top: var(--space-sm);
+  font-family: var(--font-ui-mono);
+  font-size: var(--font-size-lg);
+  word-break: break-all;
+}
+.run-meta {
+  display: flex;
+  gap: var(--space-sm);
+  margin-top: var(--space-xs);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
 .permission-actions { margin-top: var(--space-lg); }
 </style>
