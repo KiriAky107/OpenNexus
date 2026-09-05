@@ -286,7 +286,7 @@ async def get_note(note_id: str) -> Note:
 @router.patch("/notes/{note_id}", response_model=Note, tags=["Notes"])
 async def update_note(note_id: str, request: NoteUpdateRequest) -> Note:
     return await note_service.update_note(
-        note_id, title=request.title, markdown=request.markdown, tags=request.tags
+        note_id, title=request.title, markdown=request.markdown, tags=request.tags, defer_vectors=True
     )
 
 

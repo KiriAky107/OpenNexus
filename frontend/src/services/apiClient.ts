@@ -9,6 +9,7 @@ export function resolveApiUrl(path: string): string {
 }
 
 interface RequestOptions extends RequestInit {
+  timeoutMs?: number
   params?: Record<string, string | number | boolean | undefined>
   token?: string
 }
@@ -26,7 +27,13 @@ export class ApiErrorClass extends Error {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { params, token, headers, ...rest } = options
+  const { params, token, headers, timeoutMs, ...rest } = options
+  const controller = timeoutMs ? new AbortController() : null
+  let timedOut = false
+  const abort = () => controller?.abort()
+  if (rest.signal?.aborted) abort()
+  rest.signal?.addEventListener('abort', abort, { once: true })
+  const timer = timeoutMs ? setTimeout(() => { timedOut = true; controller?.abort() }, timeoutMs) : undefined
 
   let url = resolveApiUrl(path)
 
@@ -54,6 +61,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   try {
     const resp = await fetch(url, {
       ...rest,
+      signal: controller?.signal ?? rest.signal,
       headers: reqHeaders,
     })
 
@@ -78,8 +86,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
     throw new ApiErrorClass(code, message, details)
   } catch (e) {
+    if (timedOut) throw new ApiErrorClass('REQUEST_TIMEOUT', '请求超时，请检查后端状态后重试。')
     if (e instanceof ApiErrorClass) throw e
     throw new ApiErrorClass('NETWORK_ERROR', (e as Error).message || 'Network error')
+  } finally {
+    if (timer) clearTimeout(timer)
+    rest.signal?.removeEventListener('abort', abort)
   }
 }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useThemeStore } from '@/stores/theme'
@@ -10,6 +10,7 @@ import SecondarySidebar from './SecondarySidebar.vue'
 import StatusBar from './StatusBar.vue'
 import TitleBar from './TitleBar.vue'
 import CommandPalette from './CommandPalette.vue'
+import { getIndexStatus } from '@/services/indexService'
 import { navigateToCitation } from '@/composables/useCitationNavigation'
 
 defineProps<{
@@ -23,7 +24,14 @@ const settingsStore = useSettingsStore()
 const route = useRoute()
 const router = useRouter()
 
-onMounted(() => { void settingsStore.loadDiagnostics() })
+let statusTimer: ReturnType<typeof setTimeout> | undefined
+let disposed = false
+async function pollIndex() {
+  try { settingsStore.indexStatus = await getIndexStatus() } catch { /* retain last status; retry */ }
+  if (!disposed) statusTimer = setTimeout(pollIndex, 5000)
+}
+onMounted(() => { void settingsStore.loadDiagnostics(); void pollIndex() })
+onUnmounted(() => { disposed = true; clearTimeout(statusTimer) })
 watch(() => settingsStore.defaultEditorMode, (mode) => editorStore.setMode(mode), { immediate: true })
 watch(() => settingsStore.editorLineWidth, (width) => {
   document.documentElement.style.setProperty('--editor-line-width', `${width}ch`)

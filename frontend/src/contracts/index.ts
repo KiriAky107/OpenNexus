@@ -507,6 +507,7 @@ export interface ThemeConfig {
 // ============ Index ============
 
 export interface IndexStatus {
+  vector_refresh_required?: boolean
   status: 'unknown' | 'idle' | 'indexing' | 'error'
   pending_jobs: number
   total_notes: number | null
@@ -800,6 +801,7 @@ export interface ApiTask {
 }
 
 export interface ApiIndexStatus {
+  vector_refresh_required?: boolean
   total_notes: number
   total_blocks: number
   status: 'idle' | 'queued' | 'running' | 'failed'
