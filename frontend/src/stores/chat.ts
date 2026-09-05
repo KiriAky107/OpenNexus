@@ -16,6 +16,9 @@ export const useChatStore = defineStore('chat', () => {
   const activeConversationId = ref<string | null>(null)
   const messages = ref<ChatMessage[]>([])
   const isStreaming = ref(false)
+  const isPreparing = ref(false)
+  const messagesReady = ref(true)
+  const canSend = computed(() => messagesReady.value && !isPreparing.value && !isStreaming.value)
   const inputText = ref('')
   const useRag = ref(true)
   const selectedSkillId = ref<string | null>(null)
@@ -70,6 +73,7 @@ export const useChatStore = defineStore('chat', () => {
     if (loading) return loading
     if (initialized && !force) return
     const version = ++loadVersion
+    messagesReady.value = false
     loading = (async () => {
       historyError.value = ''
       try {
@@ -81,7 +85,7 @@ export const useChatStore = defineStore('chat', () => {
           ? activeConversationId.value
           : items[0]?.conversation_id || null
         if (selected) await setActiveConversation(selected)
-        else { activeConversationId.value = null; messages.value = [] }
+        else { activeConversationId.value = null; messages.value = []; messagesReady.value = true }
       } catch (error) {
         if (version === loadVersion) historyError.value = error instanceof Error ? error.message : t('聊天记录加载失败', 'Failed to load chat history')
       } finally {
@@ -95,12 +99,14 @@ export const useChatStore = defineStore('chat', () => {
     stopGeneration()
     const version = ++loadVersion
     activeConversationId.value = id
+    messagesReady.value = false
     messages.value = []
     historyError.value = ''
     try {
       const loadedMessages = await fetchAllMessages(id)
       if (version === loadVersion && activeConversationId.value === id) {
         messages.value = loadedMessages.map(normalizeMessage)
+        messagesReady.value = true
       }
     } catch (error) {
       if (version === loadVersion) historyError.value = error instanceof Error ? error.message : t('消息加载失败', 'Failed to load messages')
@@ -116,6 +122,7 @@ export const useChatStore = defineStore('chat', () => {
     conversations.value.unshift(conversation)
     activeConversationId.value = conversation.conversation_id
     messages.value = []
+    messagesReady.value = true
     return conversation
   }
 
@@ -145,15 +152,24 @@ export const useChatStore = defineStore('chat', () => {
 
   async function sendMessage(text: string) {
     const content = text.trim()
-    if (!content || isStreaming.value || !selectedProviderId.value || !selectedModel.value) return
+    if (!content || !canSend.value || !selectedProviderId.value || !selectedModel.value) return
+    const version = ++streamVersion
+    isPreparing.value = true
     historyError.value = ''
     let conversation = activeConversation.value
-    if (!conversation) {
-      conversation = addLocalConversation(content.slice(0, 30))
-      try { await persistConversation(conversation) } catch { return }
-    } else if (pendingCreates.has(conversation.conversation_id)) {
-      try { await pendingCreates.get(conversation.conversation_id) } catch { return }
+    try {
+      if (!conversation) {
+        conversation = addLocalConversation(content.slice(0, 30))
+        await persistConversation(conversation)
+      } else if (pendingCreates.has(conversation.conversation_id)) {
+        await pendingCreates.get(conversation.conversation_id)
+      }
+    } catch { return }
+    finally {
+      if (version === streamVersion) isPreparing.value = false
     }
+    // Switching, stopping or deleting cancels sends still waiting for creation.
+    if (version !== streamVersion || activeConversationId.value !== conversation.conversation_id) return
 
     const conversationId = conversation.conversation_id
     if (conversation.message_count === 0) conversation.title = content.slice(0, 30)
@@ -171,7 +187,6 @@ export const useChatStore = defineStore('chat', () => {
     conversation.updated_at = new Date().toISOString()
     conversation.message_count = messages.value.length
 
-    const version = ++streamVersion
     const argumentBuffers = new Map<string, string>()
     sseClient = streamChat({
       provider_id: selectedProviderId.value,
@@ -241,6 +256,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function stopGeneration() {
     streamVersion++
+    isPreparing.value = false
     if (sseClient) { sseClient.cancel(); sseClient = null }
     isStreaming.value = false
   }
@@ -255,7 +271,7 @@ export const useChatStore = defineStore('chat', () => {
       if (activeConversationId.value === id) {
         const next = sortedConversations.value[0]
         if (next) await setActiveConversation(next.conversation_id)
-        else { activeConversationId.value = null; messages.value = [] }
+        else { loadVersion++; activeConversationId.value = null; messages.value = []; messagesReady.value = true }
       }
     } catch (error) {
       historyError.value = error instanceof Error ? error.message : t('会话删除失败', 'Failed to delete conversation')
@@ -264,7 +280,7 @@ export const useChatStore = defineStore('chat', () => {
 
   return {
     conversations, activeConversationId, activeConversation, sortedConversations, messages,
-    isStreaming, inputText, useRag, selectedSkillId, selectedProviderId, selectedModel, historyError,
+    isStreaming, isPreparing, canSend, inputText, useRag, selectedSkillId, selectedProviderId, selectedModel, historyError,
     loadConversations, setActiveConversation, sendMessage, stopGeneration, createNewConversation, deleteConversation,
   }
 })

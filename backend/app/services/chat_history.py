@@ -147,6 +147,10 @@ def _append_message_in_transaction(
         "SELECT 1 FROM chat_conversations WHERE conversation_id=?", (conversation_id,)
     ).fetchone()
     if conversation is None:
+        # A stream may finish after deletion. Check under BEGIN IMMEDIATE so
+        # deletion and assistant persistence cannot recreate an orphaned chat.
+        if role == "assistant":
+            return
         conn.execute(
             "INSERT INTO chat_conversations(conversation_id,title,created_at,updated_at) VALUES(?,?,?,?)",
             (conversation_id, title, now, now),
