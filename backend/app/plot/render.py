@@ -26,6 +26,16 @@ def _safe_color(color: str | None, fallback: str) -> str:
     return color.strip() if color and _COLOR_RE.match(color.strip()) else fallback
 
 
+def _valid_span(lo: float, hi: float) -> bool:
+    """范围跨度有效：端点有限、跨度有限且大于零。
+
+    端点相减可能溢出为 ``inf``（如 ``-1e308`` 到 ``1e308``），需单独校验跨度，
+    否则后续坐标换算会生成含 ``nan`` 的 SVG。
+    """
+    span = hi - lo
+    return math.isfinite(lo) and math.isfinite(hi) and math.isfinite(span) and span > 0
+
+
 def _fmt_num(v: float) -> str:
     if v == 0:
         return "0"
@@ -116,6 +126,12 @@ def _polyline(
             continue
         px = sx(x)
         py = sy(y)
+        # 映射后的坐标必须有限：显式 range 下极端 y 值可能让像素坐标溢出为 inf
+        if not (math.isfinite(px) and math.isfinite(py)):
+            if points:
+                segments.append(f'<polyline points="{" ".join(points)}" fill="none" stroke="{color}"/>')
+                points = []
+            continue
         points.append(f"{px:.2f},{py:.2f}")
     if points:
         segments.append(f'<polyline points="{" ".join(points)}" fill="none" stroke="{color}"/>')
@@ -186,7 +202,7 @@ def render_svg(plot: FunctionPlot) -> StaticRenderResult:
     """把已解析的 FunctionPlot 渲染为内嵌 SVG。"""
     warnings: list[str] = []
     xmin, xmax = plot.domain
-    if not (math.isfinite(xmin) and math.isfinite(xmax)) or xmin >= xmax:
+    if not _valid_span(xmin, xmax):
         warnings.append("domain 无效，回退到 [-10, 10]")
         xmin, xmax = -10.0, 10.0
 
@@ -200,16 +216,21 @@ def render_svg(plot: FunctionPlot) -> StaticRenderResult:
             continue
         fns.append((expr, tree))
 
-    # 纵轴范围：显式 range 有效则用之；无效（退化/非有限）丢弃并自动采样重算
+    # 纵轴范围：显式 range 有效则用之；无效（退化/非有限/跨度溢出）丢弃并自动采样重算
     if plot.range is not None:
         lo, hi = float(plot.range[0]), float(plot.range[1])
-        if math.isfinite(lo) and math.isfinite(hi) and lo < hi:
+        if _valid_span(lo, hi):
             ymin, ymax = lo, hi
         else:
             warnings.append("range 无效，改用自动范围")
             ymin, ymax = _compute_range(fns, xmin, xmax)
     else:
         ymin, ymax = _compute_range(fns, xmin, xmax)
+
+    # 最终防线：自动范围在极端样本下也可能溢出，坐标映射前必须保证跨度有限且大于零
+    if not _valid_span(ymin, ymax):
+        warnings.append("y 范围跨度无法表示，回退到 [-10, 10]")
+        ymin, ymax = -10.0, 10.0
 
     def sx(x: float) -> float:
         return _MARGIN + (x - xmin) / (xmax - xmin) * (_WIDTH - 2 * _MARGIN)

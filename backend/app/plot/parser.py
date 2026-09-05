@@ -47,6 +47,11 @@ _ALLOWED_UNARY = (ast.UAdd, ast.USub)
 _DIRECTIVE_KEYS = frozenset({"domain", "range", "xlabel", "ylabel", "grid"})
 _NUMBER_RE = re.compile(r"^(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
 
+# 表达式复杂度上限：深层嵌套或海量节点在递归校验/求值时会触发 RecursionError，
+# 用白名单校验提前拦截，保证失败走正常诊断路径而不是异常逃逸出导出链路。
+_MAX_AST_DEPTH = 200
+_MAX_AST_NODES = 1000
+
 
 class PlotParseError(Exception):
     """表达式解析/校验失败，携带可定位诊断。"""
@@ -136,8 +141,19 @@ def _preprocess(expr: str) -> str:
     return _insert_implicit_multiplication(expr.replace("^", "**"))
 
 
-def _check_node(node: ast.AST) -> None:
-    """白名单校验：任何越界节点都抛 FUNCTION_PLOT_EXPRESSION_UNSAFE。"""
+def _check_node(node: ast.AST, depth: int = 0, counter: list[int] | None = None) -> None:
+    """白名单校验：任何越界节点都抛 FUNCTION_PLOT_EXPRESSION_UNSAFE。
+
+    同时限制 AST 深度与节点总数，避免超长/超深表达式在递归校验或求值时触发
+    RecursionError 而绕过解析失败路径。
+    """
+    if counter is None:
+        counter = [0]
+    if depth > _MAX_AST_DEPTH:
+        _unsafe(f"表达式嵌套过深（超过 {_MAX_AST_DEPTH} 层）")
+    counter[0] += 1
+    if counter[0] > _MAX_AST_NODES:
+        _unsafe(f"表达式过于复杂（节点数超过 {_MAX_AST_NODES}）")
     if isinstance(node, ast.Constant):
         if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
             _unsafe(f"不支持的常量 {node.value!r}")
@@ -149,13 +165,13 @@ def _check_node(node: ast.AST) -> None:
     if isinstance(node, ast.BinOp):
         if not isinstance(node.op, _ALLOWED_BINOPS):
             _unsafe(f"不支持的运算符 {type(node.op).__name__}")
-        _check_node(node.left)
-        _check_node(node.right)
+        _check_node(node.left, depth + 1, counter)
+        _check_node(node.right, depth + 1, counter)
         return
     if isinstance(node, ast.UnaryOp):
         if not isinstance(node.op, _ALLOWED_UNARY):
             _unsafe(f"不支持的运算符 {type(node.op).__name__}")
-        _check_node(node.operand)
+        _check_node(node.operand, depth + 1, counter)
         return
     if isinstance(node, ast.Call):
         if not isinstance(node.func, ast.Name) or node.func.id not in _FUNCTIONS:
@@ -166,7 +182,7 @@ def _check_node(node: ast.AST) -> None:
         if len(node.args) != 1:
             _unsafe(f"{node.func.id} 需要 1 个参数，实际 {len(node.args)} 个")
         for arg in node.args:
-            _check_node(arg)
+            _check_node(arg, depth + 1, counter)
         return
     _unsafe(f"不支持的语法 {type(node).__name__}")
 
@@ -182,6 +198,15 @@ def parse_expression(expr: str) -> ast.Expression:
                 severity="error",
                 code="FUNCTION_PLOT_PARSE_FAILED",
                 message=f"表达式语法错误：{exc.msg}",
+            )
+        ) from exc
+    except RecursionError as exc:
+        # 极深嵌套可能在 ast.parse 阶段就触发 RecursionError，转为可定位诊断
+        raise PlotParseError(
+            PlotDiagnostic(
+                severity="error",
+                code="FUNCTION_PLOT_PARSE_FAILED",
+                message="表达式嵌套过深，无法解析",
             )
         ) from exc
     _check_node(tree.body)
