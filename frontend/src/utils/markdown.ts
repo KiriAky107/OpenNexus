@@ -7,6 +7,27 @@ import githubDark from '@shikijs/themes/github-dark'
 import githubLight from '@shikijs/themes/github-light'
 import { renderMermaid } from '@/services/mermaidService'
 import { appendDiagramControls } from './diagramControls'
+import katex from 'katex'
+import 'katex/dist/katex.min.css'
+
+function mathHtml(source: string, displayMode: boolean) {
+  const result = katex.renderToString(source, {displayMode, throwOnError:false, trust:false, maxExpand:1000, output:'html'})
+  const label = source.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+  return `<${displayMode ? 'div' : 'span'} class="markdown-math" role="math" aria-label="${label}">${result}</${displayMode ? 'div' : 'span'}>`
+}
+
+marked.use({extensions:[
+  {name:'blockMath',level:'block',tokenizer(source) {
+    const match = /^ {0,3}\$\$\s*\n?([\s\S]+?)\n?\$\$[ \t]*(?:\n|$)/.exec(source)
+    if (match) return {type:'blockMath',raw:match[0],text:match[1]!.trim()}
+    return undefined
+  }, renderer(token) { return mathHtml(token.text, true) }},
+  {name:'inlineMath',level:'inline',start(source) { return source.indexOf('$') },tokenizer(source) {
+    const match = /^\$([^$\n]+?)\$(?!\$)/.exec(source)
+    if (match && !/^\s|\s$/.test(match[1]!)) return {type:'inlineMath',raw:match[0],text:match[1]!}
+    return undefined
+  },renderer(token) { return mathHtml(token.text, false) }},
+]})
 
 marked.setOptions({ gfm: true, breaks: true })
 
@@ -70,6 +91,10 @@ export async function renderMarkdown(source: string, options?: { theme?: 'light'
     const requestedLanguage = [...code.classList].find((name) => name.startsWith('language-'))?.slice(9) || 'text'
     if (requestedLanguage === 'mermaid') {
       mermaidBlocks.push({ pre: code.parentElement!, source: code.textContent ?? '' })
+      continue
+    }
+    if (requestedLanguage.toLowerCase() === 'latex') {
+      code.parentElement?.replaceWith(document.createRange().createContextualFragment(mathHtml(code.textContent ?? '', true)))
       continue
     }
     const highlighted = await highlightCode(code.textContent ?? '', requestedLanguage)

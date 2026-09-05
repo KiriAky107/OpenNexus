@@ -33,11 +33,17 @@ watch([() => props.source, diagramTheme, () => themeStore.currentThemeId], async
 .markdown-content .shiki { overflow: auto; margin: .85em 0; padding: 16px; border: 1px solid var(--color-code-border); border-radius: 6px; background: var(--color-code-background) !important; color: var(--color-code-text); font-family: var(--font-ui-mono); font-size: .875em; line-height: 1.45; tab-size: 4; }
 .markdown-content code { padding: .1em .3em; border-radius: var(--radius-sm); background: var(--color-background-tertiary); font-family: var(--font-ui-mono); }
 .markdown-content .shiki code { display: block; min-width: max-content; padding: 0; background: transparent; font: inherit; }
+.markdown-content :not(pre) > code { background: var(--color-code-background); color: var(--color-code-text); border: 1px solid var(--color-code-border); }
+.markdown-content div.markdown-math { overflow-x: auto; padding-block: .5em; }
+.markdown-content h4, .markdown-content h5, .markdown-content h6 { margin: 1em 0 .5em; font-weight: 600; }
+.markdown-content input[type="checkbox"] { margin-right: .45em; accent-color: var(--color-accent-primary); }
 .markdown-content .shiki .line { display: block; min-height: 1.45em; }
 .markdown-content blockquote { padding-left: 1em; border-left: 3px solid var(--color-accent-primary); color: var(--color-text-secondary); }
 .markdown-content table { width: 100%; margin: .65em 0; border-collapse: collapse; }
 .markdown-content th, .markdown-content td { padding: .45em .65em; border: 1px solid var(--color-markdown-grid); text-align: left; }
 .markdown-content th { background: var(--color-markdown-table-header); font-weight: 700; }
+.markdown-content :is(th, td)[align="center"] { text-align: center; }
+.markdown-content :is(th, td)[align="right"] { text-align: right; }
 .markdown-content img { max-width: 100%; }
 .markdown-content hr { margin: 1em 0; border: 0; border-top: 1px solid var(--color-border-default); }
 [data-code-theme='github-light'] .markdown-content .shiki,
