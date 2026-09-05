@@ -1,31 +1,45 @@
 import mermaid from 'mermaid'
-import { ref, watch } from 'vue'
+import { computed } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 
-let initialized = false
-let initTheme: 'light' | 'dark' = 'light'
+export function mermaidThemeVariables(dark: boolean) {
+  const style = typeof document === 'undefined' ? null : getComputedStyle(document.documentElement)
+  const color = (name: string, fallback: string) => style?.getPropertyValue(`--color-${name}`).trim() || fallback
+  const text = color('text-primary', dark ? '#e6edf3' : '#1f2328')
+  const border = color('border-default', dark ? '#484f58' : '#d0d7de')
+  const surface = color('surface-primary', dark ? '#161b22' : '#ffffff')
+  const primary = color('accent-soft', dark ? '#30363d' : '#eef0ff')
+  const line = color('text-secondary', dark ? '#b1bac4' : '#656d76')
+  return {
+    darkMode: dark, background: surface, primaryColor: primary, primaryTextColor: text, primaryBorderColor: border,
+    secondaryColor: color('info-soft', primary), secondaryTextColor: text, secondaryBorderColor: border,
+    tertiaryColor: color('success-soft', primary), tertiaryTextColor: text, tertiaryBorderColor: border,
+    textColor: text, lineColor: line, mainBkg: primary, nodeBorder: border,
+    clusterBkg: surface, clusterBorder: border, edgeLabelBackground: surface,
+    actorBkg: primary, actorBorder: border, actorTextColor: text, actorLineColor: line,
+    signalColor: line, signalTextColor: text, labelBoxBkgColor: surface, labelBoxBorderColor: border, labelTextColor: text,
+    noteBkgColor: color('warning-soft', primary), noteTextColor: text, noteBorderColor: border,
+    activationBkgColor: primary, activationBorderColor: border,
+  }
+}
 
 function ensureInitialized(theme: 'light' | 'dark') {
-  if (!initialized) {
     mermaid.initialize({
       startOnLoad: false,
-      theme: theme === 'dark' ? 'dark' : 'default',
+      theme: 'base',
+      themeVariables: mermaidThemeVariables(theme === 'dark'),
       securityLevel: 'strict',
       fontFamily: 'var(--font-ui-sans)',
       flowchart: { useMaxWidth: true, htmlLabels: true },
       sequence: { useMaxWidth: true },
       gantt: { useMaxWidth: true },
     })
-    initialized = true
-    initTheme = theme
-    return
-  }
-  if (initTheme !== theme) {
-    mermaid.initialize({
-      theme: theme === 'dark' ? 'dark' : 'default',
-    })
-    initTheme = theme
-  }
+}
+let queue: Promise<unknown> = Promise.resolve()
+function serialized<T>(work: () => Promise<T>): Promise<T> {
+  const result = queue.then(work)
+  queue = result.catch(() => {})
+  return result
 }
 
 export interface MermaidRenderResult {
@@ -43,7 +57,11 @@ export interface MermaidParseError {
 
 let renderCounter = 0
 
-export async function renderMermaid(
+export function renderMermaid(source: string, options: { theme?: 'light' | 'dark'; mode?: 'interactive' | 'static' } = {}): Promise<MermaidRenderResult> {
+  return serialized(() => renderMermaidNow(source, options))
+}
+
+async function renderMermaidNow(
   source: string,
   options: { theme?: 'light' | 'dark'; mode?: 'interactive' | 'static' } = {}
 ): Promise<MermaidRenderResult> {
@@ -106,18 +124,14 @@ function escapeXml(str: string): string {
 
 export function useMermaidTheme() {
   const themeStore = useThemeStore()
-  const mermaidTheme = ref<'light' | 'dark'>(themeStore.isDark ? 'dark' : 'light')
-  watch(() => themeStore.isDark, (isDark) => {
-    mermaidTheme.value = isDark ? 'dark' : 'light'
-    ensureInitialized(mermaidTheme.value)
-  })
-  return { mermaidTheme }
+  const mermaidTheme = computed<'light' | 'dark'>(() => themeStore.isDark ? 'dark' : 'light')
+  const themeId = computed(() => themeStore.currentThemeId)
+  return { mermaidTheme, themeId }
 }
 
 export async function validateMermaid(source: string): Promise<{ valid: boolean; error?: MermaidParseError }> {
   try {
-    ensureInitialized('light')
-    await mermaid.parse(source)
+    await serialized(async () => { ensureInitialized('light'); await mermaid.parse(source) })
     return { valid: true }
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误'

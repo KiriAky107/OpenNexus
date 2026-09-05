@@ -13,7 +13,7 @@ const emit = defineEmits<{
   (e: 'rendered', info: { width: number; height: number }): void
 }>()
 
-const { mermaidTheme } = useMermaidTheme()
+const { mermaidTheme, themeId } = useMermaidTheme()
 const svgHtml = ref('')
 const isLoading = ref(true)
 const hasError = ref(false)
@@ -52,7 +52,7 @@ async function doRender() {
 
 onMounted(doRender)
 
-watch(() => [props.source, mermaidTheme.value], () => { scale.value = 1; doRender() })
+watch(() => [props.source, mermaidTheme.value, themeId.value], () => { scale.value = 1; doRender() }, { flush: 'post' })
 
 function zoomIn() { scale.value = Math.min(scale.value * 1.2, 5) }
 function zoomOut() { scale.value = Math.max(scale.value / 1.2, 0.2) }

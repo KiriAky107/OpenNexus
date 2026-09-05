@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref, watch } from 'vue'
 import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore } from '@/stores/theme'
@@ -7,6 +8,15 @@ import VisualMarkdownEditor from './VisualMarkdownEditor.vue'
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
 const themeStore = useThemeStore()
+const sourceEditor = ref<HTMLTextAreaElement | null>(null)
+watch(() => editorStore.headingRequest, request => {
+  const input = sourceEditor.value
+  if (!request || !input || request.path !== editorStore.currentFilePath) return
+  input.focus()
+  input.setSelectionRange(request.offset, request.offset)
+  const lines = input.value.slice(0, request.offset).split('\n').length - 1
+  input.scrollTop = lines * (parseFloat(getComputedStyle(input).lineHeight) || 24)
+})
 function updateContent(event: Event) {
   editorStore.updateContent((event.target as HTMLTextAreaElement).value)
   editorStore.scheduleAutoSave(settingsStore.autoSaveInterval)
@@ -16,7 +26,7 @@ function updateContent(event: Event) {
 <template>
   <VisualMarkdownEditor v-if="editorStore.mode === 'wysiwyg'" :key="`${editorStore.currentFilePath ?? 'empty'}:${themeStore.resolvedCodeBlockTheme}:${settingsStore.language}`"
     :initial-content="editorStore.content" />
-  <textarea v-else class="editor-pane source" :value="editorStore.content" :spellcheck="settingsStore.spellCheck"
+  <textarea v-else ref="sourceEditor" class="editor-pane source" :value="editorStore.content" :spellcheck="settingsStore.spellCheck"
     :lang="settingsStore.language" :aria-label="settingsStore.language === 'en' ? 'Markdown source editor' : 'Markdown 源码编辑器'" @input="updateContent" />
 </template>
 

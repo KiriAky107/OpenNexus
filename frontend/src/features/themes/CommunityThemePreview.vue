@@ -16,10 +16,15 @@ const previewDocument = computed(() => {
   style.textContent = `${tokensCss}\n${getCommunityThemePreviewCss(props.themeId)}\nbody { margin:0; padding:24px; background:var(--color-background-primary); color:var(--color-text-primary); font:16px/1.6 system-ui; } article { padding:20px; border:1px solid var(--color-border-default); border-radius:8px; background:var(--color-surface-primary); } p { color:var(--color-text-secondary); } button { padding:8px 16px; border:0; border-radius:6px; background:var(--color-accent-primary); color:white; }`
   doc.head.append(style)
   const article = doc.createElement('article')
+  article.className = 'panel'
+  const header = doc.createElement('header'); header.className = 'feature-header'
   const heading = doc.createElement('h1'); heading.textContent = theme.value?.name ?? props.themeId
+  header.append(heading)
+  const journal = doc.createElement('section'); journal.className = 'editor-preview'; journal.style.cssText = 'padding:24px;margin:28px 0;'
   const text = doc.createElement('p'); text.textContent = t('知识的价值不只在于保存，更在于被重新发现和使用。', 'Knowledge gains value when it can be rediscovered and used.')
   const button = doc.createElement('button'); button.textContent = t('示例按钮', 'Example button')
-  article.append(heading, text, button); doc.body.append(article)
+  journal.append(text)
+  article.append(header, journal, button); doc.body.append(article)
   return '<!doctype html>' + doc.documentElement.outerHTML
 })
 </script>
