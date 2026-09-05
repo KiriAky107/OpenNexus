@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it } from 'vitest'
 import { Compartment } from '@codemirror/state'
-import { LanguageDescription } from '@codemirror/language'
+import { bundledLanguagesInfo } from 'shiki/langs'
 import { EditorView } from '@codemirror/view'
 import { shikiLanguage, shikiLanguages } from './shikiCodeMirror'
 import { getCodeTokenizer } from '@/utils/markdown'
@@ -39,19 +39,29 @@ it('reconfigures language and theme without modifying the document', async () =>
 
 it('offers fenced-code aliases and retains the LaTeX selector', () => {
   const languages = shikiLanguages('github-light')
-  expect(languages.find(item => item.name === 'Python')?.alias).toContain('py')
-  expect(languages.find(item => item.name === 'LaTeX')?.alias).toContain('latex')
+  expect(languages.find(item => item.name === 'python')?.alias).toContain('py')
+  expect(languages.find(item => item.name === 'latex')?.alias).toContain('latex')
 })
 
-it('preserves original loaders and metadata while replacing supported languages', async () => {
-  const originalPython = LanguageDescription.of({ name: 'Python', alias: ['py', 'custom-python'], extensions: ['py'], filename: /^SConstruct$/, load: () => shikiLanguage('text', 'github-light') })
-  const originalRust = LanguageDescription.of({ name: 'Rust', alias: ['rs'], extensions: ['rs'], load: () => shikiLanguage('text', 'github-light') })
-  const languages = shikiLanguages('github-dark', [originalPython, originalRust])
-  expect(languages.find(item => item.name === 'Rust')).toBe(originalRust)
-  const python = languages.find(item => item.name === 'Python')!
-  expect(languages.filter(item => item.alias.includes('python'))).toHaveLength(1)
-  expect(python.alias).toContain('custom-python')
-  expect(python.extensions).toEqual(['py'])
-  expect(python.filename).toBe(originalPython.filename)
-  expect(await python.load()).not.toBe(await originalPython.load())
+it('offers every bundled Shiki language and alias', () => {
+  const languages = shikiLanguages('github-light')
+  expect(languages).toHaveLength(bundledLanguagesInfo.length + 1)
+  for (const info of bundledLanguagesInfo) {
+    const language = languages.find(item => item.alias.includes(info.id))!
+    expect(language, info.id).toBeDefined()
+    expect(language.name).toBe(info.id)
+    expect(language.alias).toContain(info.name.toLowerCase())
+    for (const alias of info.aliases ?? []) expect(language.alias).toContain(alias.toLowerCase())
+  }
 })
+
+it('loads every bundled grammar and produces tokens with both GitHub themes', async () => {
+  for (const info of bundledLanguagesInfo) {
+    for (const theme of ['github-light', 'github-dark'] as const) {
+      const tokenize = await getCodeTokenizer(theme, info.id)
+      const tokens = tokenize('example = 42', info.id).flat()
+      expect(tokens.map(token => token.content).join(''), info.id).toBe('example = 42')
+      expect(tokens.every(token => token.color), info.id).toBe(true)
+    }
+  }
+}, 120000)

@@ -1,11 +1,12 @@
 import { LanguageDescription, LanguageSupport, StreamLanguage } from '@codemirror/language'
 import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view'
+import { bundledLanguagesInfo } from 'shiki/langs'
 import { getCodeTokenizer } from '@/utils/markdown'
 
 type CodeTheme = 'github-light' | 'github-dark'
 
 export async function shikiLanguage(language: string, theme: CodeTheme): Promise<LanguageSupport> {
-  const tokenize = await getCodeTokenizer(theme)
+  const tokenize = await getCodeTokenizer(theme, language)
   const highlights = ViewPlugin.fromClass(class {
     decorations: DecorationSet
 
@@ -39,42 +40,22 @@ export async function shikiLanguage(language: string, theme: CodeTheme): Promise
   return new LanguageSupport(parser, highlights)
 }
 
-export function shikiLanguages(theme: CodeTheme, originalLanguages: readonly LanguageDescription[] = []): LanguageDescription[] {
-  const overrides = [
-    { name: 'C', alias: ['c'] },
-    { name: 'C++', alias: ['cpp', 'c++'] },
-    { name: 'Python', alias: ['python', 'py'] },
-    { name: 'JavaScript', alias: ['javascript', 'js'] },
-    { name: 'TypeScript', alias: ['typescript', 'ts'] },
-    { name: 'HTML', alias: ['html'] },
-    { name: 'CSS', alias: ['css'] },
-    { name: 'JSON', alias: ['json'] },
-    { name: 'Shell', alias: ['shell', 'bash', 'sh'] },
-    { name: 'SQL', alias: ['sql'] },
-    { name: 'Markdown', alias: ['markdown', 'md'] },
-    { name: 'Plain text', alias: ['text', 'plaintext'] },
-    { name: 'LaTeX', alias: ['latex'] },
-  ].map(({ name, alias }) => LanguageDescription.of({
-    name, alias, load: () => shikiLanguage(alias[0]!, theme),
-  }))
-  // Keep Crepe's full registry and lazy loaders for languages without Shiki grammars.
-  const remaining = new Map(overrides.map(language => [language.name.toLowerCase(), language]))
-  const languages = originalLanguages.map(original => {
-    const key = original.name.toLowerCase()
-    const replacement = remaining.get(key)
-    if (!replacement) return original
-    remaining.delete(key)
-    return LanguageDescription.of({
-      name: original.name,
-      alias: [...new Set([...original.alias, ...replacement.alias])],
-      extensions: original.extensions,
-      filename: original.filename,
-      load: () => replacement.load(),
-    })
-  })
-  return [...languages, ...remaining.values()]
+export function shikiLanguages(theme: CodeTheme): LanguageDescription[] {
+  return [
+    ...bundledLanguagesInfo.map(info => LanguageDescription.of({
+      name: info.id,
+      alias: [info.name, ...(info.aliases ?? [])],
+      load: () => shikiLanguage(info.id, theme),
+    })),
+    LanguageDescription.of({ name: 'text', alias: ['Plain text', 'txt', 'plaintext'], load: () => shikiLanguage('text', theme) }),
+  ]
 }
-
+const languageLabels = new Map(bundledLanguagesInfo.flatMap(info =>
+  [info.id, info.name, ...(info.aliases ?? [])].map(alias => [alias.toLowerCase(), info.name] as const),
+))
+export function renderCodeLanguage(language: string): string {
+  return languageLabels.get(language.toLowerCase()) ?? (['text', 'txt', 'plaintext'].includes(language.toLowerCase()) ? 'Plain text' : language)
+}
 export function shikiEditorTheme(theme: CodeTheme) {
   return EditorView.theme({
     '&': { color: 'var(--color-code-text)', backgroundColor: 'var(--color-code-background)' },
