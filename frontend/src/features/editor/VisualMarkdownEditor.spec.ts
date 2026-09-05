@@ -56,6 +56,12 @@ describe('VisualMarkdownEditor formatting toolbars', () => {
     const config = editor.action(ctx => ctx.get(codeBlockConfig.key))
     const matching = config.languages.filter(item => item.alias.includes('python'))
     expect(matching).toHaveLength(1)
+    for (const name of ['Java', 'Go', 'Rust']) {
+      const language = config.languages.find(item => item.name === name)
+      expect(language, `${name} remains available`).toBeDefined()
+      const support = await language!.load()
+      expect(support.language.parser.parse('class Example {}').length).toBe(16)
+    }
     const cm = new CodeMirror({ doc: 'print("Hello")', extensions: [...config.extensions, await matching[0]!.load()] })
     try {
       const string = [...cm.dom.querySelectorAll<HTMLElement>('.shiki-token')].find(el => el.textContent?.includes('Hello'))

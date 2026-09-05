@@ -39,8 +39,8 @@ export async function shikiLanguage(language: string, theme: CodeTheme): Promise
   return new LanguageSupport(parser, highlights)
 }
 
-export function shikiLanguages(theme: CodeTheme): LanguageDescription[] {
-  return [
+export function shikiLanguages(theme: CodeTheme, originalLanguages: readonly LanguageDescription[] = []): LanguageDescription[] {
+  const overrides = [
     { name: 'C', alias: ['c'] },
     { name: 'C++', alias: ['cpp', 'c++'] },
     { name: 'Python', alias: ['python', 'py'] },
@@ -57,6 +57,22 @@ export function shikiLanguages(theme: CodeTheme): LanguageDescription[] {
   ].map(({ name, alias }) => LanguageDescription.of({
     name, alias, load: () => shikiLanguage(alias[0]!, theme),
   }))
+  // Keep Crepe's full registry and lazy loaders for languages without Shiki grammars.
+  const remaining = new Map(overrides.map(language => [language.name.toLowerCase(), language]))
+  const languages = originalLanguages.map(original => {
+    const key = original.name.toLowerCase()
+    const replacement = remaining.get(key)
+    if (!replacement) return original
+    remaining.delete(key)
+    return LanguageDescription.of({
+      name: original.name,
+      alias: [...new Set([...original.alias, ...replacement.alias])],
+      extensions: original.extensions,
+      filename: original.filename,
+      load: () => replacement.load(),
+    })
+  })
+  return [...languages, ...remaining.values()]
 }
 
 export function shikiEditorTheme(theme: CodeTheme) {

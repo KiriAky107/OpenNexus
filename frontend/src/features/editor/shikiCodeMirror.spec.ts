@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it } from 'vitest'
 import { Compartment } from '@codemirror/state'
+import { LanguageDescription } from '@codemirror/language'
 import { EditorView } from '@codemirror/view'
 import { shikiLanguage, shikiLanguages } from './shikiCodeMirror'
 import { getCodeTokenizer } from '@/utils/markdown'
@@ -40,4 +41,17 @@ it('offers fenced-code aliases and retains the LaTeX selector', () => {
   const languages = shikiLanguages('github-light')
   expect(languages.find(item => item.name === 'Python')?.alias).toContain('py')
   expect(languages.find(item => item.name === 'LaTeX')?.alias).toContain('latex')
+})
+
+it('preserves original loaders and metadata while replacing supported languages', async () => {
+  const originalPython = LanguageDescription.of({ name: 'Python', alias: ['py', 'custom-python'], extensions: ['py'], filename: /^SConstruct$/, load: () => shikiLanguage('text', 'github-light') })
+  const originalRust = LanguageDescription.of({ name: 'Rust', alias: ['rs'], extensions: ['rs'], load: () => shikiLanguage('text', 'github-light') })
+  const languages = shikiLanguages('github-dark', [originalPython, originalRust])
+  expect(languages.find(item => item.name === 'Rust')).toBe(originalRust)
+  const python = languages.find(item => item.name === 'Python')!
+  expect(languages.filter(item => item.alias.includes('python'))).toHaveLength(1)
+  expect(python.alias).toContain('custom-python')
+  expect(python.extensions).toEqual(['py'])
+  expect(python.filename).toBe(originalPython.filename)
+  expect(await python.load()).not.toBe(await originalPython.load())
 })
