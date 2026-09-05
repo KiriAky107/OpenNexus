@@ -134,3 +134,42 @@ pnpm build
 - 前端不直接访问 SQLite 或厂商模型协议；持久数据通过 FastAPI 服务读写。
 - 接口或数据结构变化时，同一提交同步更新前后端类型、契约和开发说明。
 - 当前行为以代码、测试和运行中的 `/openapi.json` 为准；规划能力必须在文档中明确标注。
+
+## 主题包与仓库发布（临时规范）
+
+主题页支持本地文件及 HTTP(S) 文件直链导入。两种入口均先解析、校验并展示清单和 CSS，用户点击安装后才写入本地存储。安装不会自动启用主题。
+
+### 单文件
+
+使用 UTF-8 编码，扩展名 `.theme`、`.yaml` 或 `.yml`。内容为 YAML 清单、一行 `---`、完整 CSS。可参考 `frontend/src/assets/themes/paper-moments.theme`。
+
+### ZIP
+
+一个 ZIP 只包含一个主题。清单命名为 `theme.yaml`、`theme.yml`、`manifest.yaml` 或 `manifest.yml`，可以放在顶层，也可以放在仓库压缩包的子目录中。
+
+```text
+my-theme/
+  theme.yaml
+  styles/
+    theme.css
+```
+
+```yaml
+theme_id: my-theme
+name: My Theme
+version: 1.0.0
+author: your-name
+min_app_version: 0.2.0
+is_dark: false
+css_entry: styles/theme.css
+```
+
+`css_entry` 相对于清单目录解析，不允许绝对路径、反斜杠及 `..`。CSS 应以 `[data-theme="my-theme"]` 限定主题样式。也支持仅包含一个 `.theme` 文件的 ZIP。
+
+目前安装持久化的是清单和 CSS，不会托管 ZIP 内的图片、字体等资源；需要这些资源时请将它们内嵌为 CSS data URL。禁止 `@import` 和脚本表达式。
+
+### URL 与社区仓库
+
+发布主题仓库时可提供原始 `.theme` 文件链接或 ZIP 发布附件直链，不要使用仓库 HTML 浏览页面地址。下载请求不携带 Cookie 或 HTTP 登录信息，服务器需允许应用来源的 CORS 请求；暂不支持私有仓库认证。
+
+下载和本地文件限制为 5 MB；ZIP 解压总大小限制为 10 MB，最多 100 个条目。URL 下载超时为 30 秒。取消导入会取消下载，过期请求不会替换当前待安装主题。更新时递增清单版本号，并保持 `theme_id` 稳定。

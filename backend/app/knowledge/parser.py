@@ -20,7 +20,6 @@ from app.errors import ApiError
 from app.textutils import count_tokens
 
 _HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*?)\s*$")
-_FRONTMATTER_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*:\s*(.*)$")
 _FENCE_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(?:[^`]*)$")
 
 
@@ -261,16 +260,29 @@ def _embedding_policy(markdown: str) -> bool:
     return value.value.lower() in {"true", "yes", "on"}
 
 
-def _extract_frontmatter(markdown: str) -> dict[str, str]:
-    """极简 frontmatter 解析，只提取 key: value 行。"""
+def _extract_frontmatter(markdown: str) -> dict[str, str | list[str]]:
+    """Read YAML scalars and tag sequences without constructing arbitrary objects."""
     header = _frontmatter(markdown)
     if header is None:
         return {}
-    meta: dict[str, str] = {}
-    for line in header[0].splitlines():
-        m = _FRONTMATTER_KEY_RE.match(line)
-        if m:
-            meta[m.group(1).lower()] = m.group(2).strip()
+    try:
+        node = yaml.compose(header[0], Loader=yaml.SafeLoader)
+    except yaml.YAMLError as exc:
+        raise ApiError(422, "INVALID_EMBEDDING_POLICY", "Frontmatter YAML 无效，无法确认本地索引策略。") from exc
+    meta: dict[str, str | list[str]] = {}
+    if not isinstance(node, yaml.MappingNode):
+        return meta  # The policy validation below handles unsupported documents.
+    for key, value in node.value:
+        if not isinstance(key, yaml.ScalarNode):
+            continue
+        name = key.value.lower()
+        if name not in {"title", "tags"}:
+            continue
+        if isinstance(value, yaml.ScalarNode):
+            # Keep lexical values: YAML 1.1 would otherwise turn tags like on/yes into booleans.
+            meta[name] = "" if value.tag == "tag:yaml.org,2002:null" else value.value
+        elif name == "tags" and isinstance(value, yaml.SequenceNode):
+            meta[name] = [item.value for item in value.value if isinstance(item, yaml.ScalarNode)]
     return meta
 
 
@@ -282,10 +294,10 @@ def _first_heading(markdown: str) -> str | None:
     return None
 
 
-def _parse_tags(raw: str | None) -> list[str]:
+def _parse_tags(raw: str | list[str] | None) -> list[str]:
+    if isinstance(raw, list):
+        return raw
     if not raw:
         return []
     raw = raw.strip()
-    if raw.startswith("[") and raw.endswith("]"):
-        raw = raw[1:-1]
-    return [t.strip().strip("'\"") for t in raw.split(",") if t.strip()]
+    return [t.strip() for t in raw.split(",") if t.strip()]

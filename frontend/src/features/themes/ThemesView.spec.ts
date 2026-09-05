@@ -5,10 +5,62 @@ import { createPinia, setActivePinia } from 'pinia'
 import ThemesView from './ThemesView.vue'
 import { useThemeStore } from '@/stores/theme'
 import { mockCommunityThemes, getCommunityThemePreviewCss } from '@/services/themePackageService'
+import paperPackage from '@/assets/themes/paper-moments.theme?raw'
 
 let wrapper: VueWrapper
 beforeEach(() => { localStorage.clear(); setActivePinia(createPinia()) })
-afterEach(() => { wrapper?.unmount(); vi.useRealTimers() })
+afterEach(() => { useThemeStore().applyTheme('light'); wrapper?.unmount(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers() })
+
+it('downloads a URL for inspection without automatically installing it', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(paperPackage)))
+  wrapper = mount(ThemesView, { global: { stubs: { MarkdownContent: true } } })
+  await flushPromises()
+  await wrapper.findAll('button').find(button => button.text() === '导入主题')!.trigger('click')
+  await wrapper.get('#theme-package-url').setValue('https://example.com/paper.theme')
+  await wrapper.get('.url-import').trigger('submit')
+  await vi.waitFor(() => expect(useThemeStore().pendingInspection?.compatible).toBe(true))
+  expect(useThemeStore().isThemeInstalled('paper-moments')).toBe(false)
+  expect(wrapper.get('.inspection-result').text()).toContain('纸间时光')
+})
+
+it('ignores a URL response after the dialog is cancelled', async () => {
+  let respond!: (response: Response) => void
+  vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => { respond = resolve })))
+  wrapper = mount(ThemesView, { global: { stubs: { MarkdownContent: true } } })
+  await flushPromises()
+  await wrapper.findAll('button').find(button => button.text() === '导入主题')!.trigger('click')
+  await wrapper.get('#theme-package-url').setValue('https://example.com/paper.theme')
+  await wrapper.get('.url-import').trigger('submit')
+  await wrapper.get('.import-modal .inline-actions button').trigger('click')
+  respond(new Response(paperPackage))
+  await flushPromises()
+  expect(useThemeStore().pendingInspection).toBeNull()
+  expect(wrapper.find('.import-modal').exists()).toBe(false)
+})
+
+it('opens the file picker from the styled button and imports the actual paper theme', async () => {
+  const store = useThemeStore()
+  wrapper = mount(ThemesView, { global: { stubs: { MarkdownContent: true } } })
+  await flushPromises()
+  await wrapper.findAll('button').find(button => button.text() === '导入主题')!.trigger('click')
+  const input = wrapper.get<HTMLInputElement>('input[type="file"]')
+  const click = vi.spyOn(input.element, 'click').mockImplementation(() => {})
+  await wrapper.get('.upload-area .button-primary').trigger('click')
+  expect(click).toHaveBeenCalledOnce()
+  Object.defineProperty(input.element, 'files', { value: [new File([paperPackage], 'paper-moments.theme', { type: 'text/plain' })] })
+  await input.trigger('change')
+  await vi.waitFor(() => expect(store.pendingInspection?.compatible).toBe(true))
+  expect(store.pendingInspection!.warnings).toEqual([])
+  await wrapper.get('.import-modal .inline-actions .button-primary').trigger('click')
+  await flushPromises()
+  expect(store.isThemeInstalled('paper-moments')).toBe(true)
+  expect(localStorage.getItem('installed-themes-css-paper-moments')).toBe(getCommunityThemePreviewCss('paper-moments'))
+  expect(document.getElementById('theme-style-paper-moments')).toBeNull()
+  store.applyTheme('paper-moments')
+  expect(document.getElementById('theme-style-paper-moments')!.textContent).toBe(getCommunityThemePreviewCss('paper-moments'))
+  store.applyTheme('light')
+  expect(document.getElementById('theme-style-paper-moments')).toBeNull()
+})
 
 it.each(mockCommunityThemes)('previews uninstalled $theme_id using its actual CSS without changing the active theme', async theme => {
   const store = useThemeStore()
