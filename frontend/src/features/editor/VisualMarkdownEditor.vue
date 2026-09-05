@@ -9,6 +9,8 @@ import { indentWithTab } from '@codemirror/commands'
 import { shikiEditorTheme, shikiLanguages, renderCodeLanguage } from './shikiCodeMirror'
 import './language-icons.css'
 import { installLanguagePickerPopover } from './languagePickerPopover'
+import { installCodeBlockLabels } from './codeBlockLabels'
+import { createMermaidPreview } from './mermaidPreview'
 import {
   createCodeBlockCommand,
   toggleEmphasisCommand,
@@ -41,6 +43,7 @@ const loading = ref(true)
 const fontSizeInput = ref(16)
 let crepe: Crepe | null = null
 let disposeLanguagePicker: (() => void) | undefined
+let disposeCodeLabels: (() => void) | undefined
 
 function applyProofingPreferences() {
   const editable = editorRoot.value?.querySelector<HTMLElement>('.ProseMirror')
@@ -125,7 +128,9 @@ onMounted(async () => {
     featureConfigs: {
       [Crepe.Feature.Placeholder]: { text: t('开始记录你的想法…', 'Start writing your thoughts…') },
       [Crepe.Feature.CodeMirror]: {
-        previewOnlyByDefault: false,
+        previewOnlyByDefault: true,
+        previewToggleText: previewOnly => previewOnly ? t('编辑', 'Edit') : t('预览', 'Preview'),
+        previewLabel: t('图表预览', 'Preview'),
         searchPlaceholder: t('搜索语言', 'Search languages'),
         noResultText: t('没有匹配的语言', 'No matching language'),
         copyText: t('复制', 'Copy'),
@@ -182,6 +187,9 @@ onMounted(async () => {
     ...config,
     languages: shikiLanguages(themeStore.resolvedCodeBlockTheme),
     renderLanguage: renderCodeLanguage,
+    renderPreview: (language, content, applyPreview) => language.trim().toLowerCase() === 'mermaid'
+      ? createMermaidPreview(content, themeStore.isDark, applyPreview)
+      : config.renderPreview(language, content, applyPreview),
     extensions: [basicSetup, keymap.of([indentWithTab]), shikiEditorTheme(themeStore.resolvedCodeBlockTheme)],
   })))
   crepe.editor.use(fontSizeMarkdownPlugin)
@@ -195,13 +203,14 @@ onMounted(async () => {
   })
   await crepe.create()
   if (editorRoot.value) disposeLanguagePicker = installLanguagePickerPopover(editorRoot.value)
+  if (editorRoot.value) disposeCodeLabels = installCodeBlockLabels(editorRoot.value)
   applyProofingPreferences()
   loading.value = false
 })
 
 watch([() => settingsStore.spellCheck, () => settingsStore.language], applyProofingPreferences)
 
-onBeforeUnmount(() => { disposeLanguagePicker?.(); void crepe?.destroy() })
+onBeforeUnmount(() => { disposeCodeLabels?.(); disposeLanguagePicker?.(); void crepe?.destroy() })
 
 defineExpose({ getEditor: () => crepe?.editor })
 </script>
@@ -273,6 +282,9 @@ defineExpose({ getEditor: () => crepe?.editor })
 .toolbar-divider { width: 1px; height: 20px; margin: 0 var(--space-xs); background: var(--color-border-default); }
 .milkdown-host { flex: 1; min-height: 0; overflow: auto; color: var(--color-text-primary); }
 .milkdown-host.loading { visibility: hidden; }
+.milkdown-host :deep(.editor-mermaid-preview) { padding: 20px; overflow: auto; background: var(--color-surface-primary); color: var(--color-text-primary); }
+.milkdown-host :deep(.editor-mermaid-preview svg) { display: block; max-width: 100%; height: auto; margin: auto; }
+.milkdown-host :deep(.editor-mermaid-preview.has-error) { color: var(--color-error); white-space: pre-wrap; }
 .editor-loading { padding: var(--space-xl); color: var(--color-text-tertiary); }
 .milkdown-host :deep(.milkdown) {
   min-height: 100%;

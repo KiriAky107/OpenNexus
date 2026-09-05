@@ -1,7 +1,83 @@
 import type { InstalledTheme, ThemeManifest, ThemePackageInspection } from '@/contracts'
+import paperMomentsPackage from '@/assets/themes/paper-moments.theme?raw'
 
 const STORAGE_KEY = 'installed-themes'
 const ACTIVE_CUSTOM_KEY = 'active-custom-theme'
+export const MAX_THEME_BYTES = 5 * 1024 * 1024
+
+/** Normalize all transports to the existing single-file inspection format. */
+export async function decodeThemePackage(bytes: Uint8Array): Promise<string> {
+  if (bytes.length > MAX_THEME_BYTES) throw new Error('主题包不能超过 5 MB')
+  const decode = (data: Uint8Array) => new TextDecoder('utf-8', { fatal: true }).decode(data)
+  if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) return decode(bytes)
+  const { unzipSync } = await import('fflate')
+  let total = 0
+  let count = 0
+  const names = new Set<string>()
+  const safePath = (path: string) => path.length > 0 && !path.startsWith('/') && !path.includes('\\') && !path.includes(':') && !path.split('/').some(part => part === '..' || part === '.')
+  const files = unzipSync(bytes, { filter: file => {
+    if (!safePath(file.name) || names.has(file.name)) throw new Error('ZIP 包含非法或重复路径')
+    names.add(file.name)
+    total += file.originalSize
+    if (++count > 100 || total > 10 * 1024 * 1024) throw new Error('ZIP 解压内容不能超过 10 MB 或 100 个文件')
+    return !file.name.endsWith('/')
+  } })
+  const entries = Object.keys(files)
+  const manifests = entries.filter(name => /(^|\/)(theme|manifest)\.ya?ml$/i.test(name))
+  if (!manifests.length) {
+    const single = entries.filter(name => name.endsWith('.theme'))
+    if (single.length !== 1) throw new Error('ZIP 需要唯一的 theme.yaml / manifest.yaml，或一个 .theme 文件')
+    return decode(files[single[0]!]!)
+  }
+  if (manifests.length !== 1) throw new Error('ZIP 中存在多个主题清单，请每包只放一个主题')
+  const manifestPath = manifests[0]!
+  const yaml = decode(files[manifestPath]!)
+  const manifest = inspectYamlContent(yaml)
+  if (!safePath(manifest.css_entry)) throw new Error('css_entry 必须是包内相对路径')
+  const base = manifestPath.slice(0, manifestPath.lastIndexOf('/') + 1)
+  const css = files[base + manifest.css_entry]
+  if (!css) throw new Error(`ZIP 中找不到 CSS 文件：${manifest.css_entry}`)
+  return `${yaml}\n---\n${decode(css)}`
+}
+
+export async function fetchThemePackage(urlText: string, signal?: AbortSignal): Promise<string> {
+  const url = new URL(urlText.trim())
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('请输入不含账号密码的 HTTP(S) 主题包直链')
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  signal?.addEventListener('abort', abort, { once: true })
+  if (signal?.aborted) abort()
+  const timeout = setTimeout(abort, 30000)
+  try {
+    const response = await fetch(url.href, { signal: controller.signal, credentials: 'omit', referrerPolicy: 'no-referrer' })
+    if (!response.ok) throw new Error(`下载失败：HTTP ${response.status}`)
+    if (Number(response.headers.get('content-length')) > MAX_THEME_BYTES) throw new Error('主题包不能超过 5 MB')
+    if (!response.body) throw new Error('下载内容为空')
+    const reader = response.body.getReader()
+    const chunks: Uint8Array[] = []
+    let size = 0
+    try {
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        size += value.length
+        if (size > MAX_THEME_BYTES) throw new Error('主题包不能超过 5 MB')
+        chunks.push(value)
+      }
+    } finally { await reader.cancel() }
+    const bytes = new Uint8Array(size)
+    let offset = 0
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length }
+    return await decodeThemePackage(bytes)
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('下载已取消或超时，请重试')
+    if (error instanceof TypeError) throw new Error('无法下载，请检查直链及服务器是否允许跨域访问（CORS）')
+    throw error
+  } finally {
+    clearTimeout(timeout)
+    signal?.removeEventListener('abort', abort)
+  }
+}
 
 function loadStoredThemes(): InstalledTheme[] {
   try {
@@ -113,8 +189,7 @@ function inspectYamlContent(yamlText: string): ThemeManifest {
  *   ---
  *   [data-theme="my-theme"] { --color-... }
  *
- * 浏览器端没有解压能力，所以不支持 ZIP —— 与其把二进制当文本解析出
- * 一堆乱码再报「清单无效」，不如直接告诉用户格式不支持。
+ * ZIP 必须先通过 decodeThemePackage 解码；此函数只处理规范化后的文本。
  */
 export function parseThemePackage(packageData: string): { manifestText: string; css: string } {
   if (looksLikeZip(packageData)) {
@@ -146,19 +221,19 @@ function looksLikeZip(data: string): boolean {
 }
 
 export async function selectThemePackage(): Promise<string | null> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const input = document.createElement('input')
     input.type = 'file'
-    // 只接受能在浏览器里解析的单文件主题；ZIP 需要 Host 端解压，暂不支持。
-    input.accept = '.yaml,.yml,.theme'
+    input.accept = '.yaml,.yml,.theme,.zip'
     input.multiple = false
     input.onchange = () => {
       const file = input.files?.[0]
       if (!file) { resolve(null); return }
+      if (file.size > MAX_THEME_BYTES) { reject(new Error('主题包不能超过 5 MB')); return }
       const reader = new FileReader()
-      reader.onload = () => resolve(reader.result as string)
+      reader.onload = () => { void decodeThemePackage(new Uint8Array(reader.result as ArrayBuffer)).then(resolve, reject) }
       reader.onerror = () => resolve(null)
-      reader.readAsText(file)
+      reader.readAsArrayBuffer(file)
     }
     input.oncancel = () => resolve(null)
     input.click()
@@ -280,7 +355,10 @@ export function setActiveCustomTheme(themeId: string | null) {
   else localStorage.removeItem(ACTIVE_CUSTOM_KEY)
 }
 
+const paperMoments = parseThemePackage(paperMomentsPackage)
+
 export const mockCommunityThemes: ThemeManifest[] = [
+  { ...inspectYamlContent(paperMoments.manifestText), tags: ['浅色', '手帐', '纸张'] },
   {
     theme_id: 'ocean-blue',
     name: 'Ocean Blue',
@@ -291,18 +369,6 @@ export const mockCommunityThemes: ThemeManifest[] = [
     is_dark: false,
     css_entry: 'theme.css',
     tags: ['浅色', '蓝色', '阅读'],
-    license: 'MIT',
-  },
-  {
-    theme_id: 'forest-green',
-    name: 'Forest Green',
-    version: '1.0.1',
-    author: 'nature-collection',
-    description: '森林绿色护眼主题',
-    min_app_version: '0.2.0',
-    is_dark: false,
-    css_entry: 'theme.css',
-    tags: ['浅色', '绿色', '护眼'],
     license: 'MIT',
   },
   {
@@ -317,39 +383,12 @@ export const mockCommunityThemes: ThemeManifest[] = [
     tags: ['深色', '紫色', '极客'],
     license: 'Apache-2.0',
   },
-  {
-    theme_id: 'solarized-light',
-    name: 'Solarized Light',
-    version: '1.1.0',
-    author: 'solarized',
-    description: '经典 Solarized 浅色主题',
-    min_app_version: '0.1.0',
-    is_dark: false,
-    css_entry: 'theme.css',
-    tags: ['浅色', '经典', '阅读'],
-    license: 'MIT',
-  },
-  {
-    theme_id: 'dracula',
-    name: 'Dracula',
-    version: '3.0.0',
-    author: 'dracula-theme',
-    description: '流行的 Dracula 暗色主题',
-    min_app_version: '0.2.0',
-    is_dark: true,
-    css_entry: 'theme.css',
-    tags: ['深色', '紫色', '高对比'],
-    license: 'MIT',
-  },
 ]
 
-function buildCommunityThemeCss(themeId: string, isDark: boolean, accent: string): string {
+function buildCommunityThemeCss(themeId: string, isDark: boolean): string {
   const palettes: Record<string, { primary: string; soft: string; hover: string }> = {
     'ocean-blue': { primary: '#0077b6', soft: '#e0f0fa', hover: '#005f92' },
-    'forest-green': { primary: '#2d6a4f', soft: '#e8f5ec', hover: '#1b4332' },
     'midnight-purple': { primary: '#9d4edd', soft: '#2b1a3e', hover: '#7b2cbf' },
-    'solarized-light': { primary: '#b58900', soft: '#fdf6e3', hover: '#8a6d0b' },
-    'dracula': { primary: '#bd93f9', soft: '#2d2a3e', hover: '#a77bf5' },
   }
   const p = palettes[themeId] ?? palettes['ocean-blue']
   if (isDark) {
@@ -415,12 +454,13 @@ function buildCommunityThemeCss(themeId: string, isDark: boolean, accent: string
 export async function installCommunityTheme(themeId: string): Promise<InstalledTheme> {
   const themeManifest = mockCommunityThemes.find((t) => t.theme_id === themeId)
   if (!themeManifest) throw new Error('THEME_PACKAGE_NOT_FOUND')
-  const css = buildCommunityThemeCss(themeId, themeManifest.is_dark, themeManifest.theme_id)
+  const css = getCommunityThemePreviewCss(themeId)
   return installTheme(themeManifest, css)
 }
 
 export function getCommunityThemePreviewCss(themeId: string): string {
+  if (themeId === 'paper-moments') return paperMoments.css
   const t = mockCommunityThemes.find((m) => m.theme_id === themeId)
   if (!t) return ''
-  return buildCommunityThemeCss(themeId, t.is_dark, themeId)
+  return buildCommunityThemeCss(themeId, t.is_dark)
 }

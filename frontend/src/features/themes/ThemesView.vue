@@ -1,19 +1,58 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import MarkdownContent from '@/components/common/MarkdownContent.vue'
 import { useThemeStore } from '@/stores/theme'
-import { mockCommunityThemes } from '@/services/themePackageService'
+import { mockCommunityThemes, decodeThemePackage, fetchThemePackage, inspectThemePackage, MAX_THEME_BYTES } from '@/services/themePackageService'
 import type { ThemePackageInspection } from '@/contracts'
 import { t } from '@/i18n'
 import CommunityThemePreview from './CommunityThemePreview.vue'
+import paperMomentsUrl from '@/assets/themes/paper-moments.theme?url'
 
 const themeStore = useThemeStore()
 
 const activeTab = ref<'installed' | 'community'>('installed')
 const showImportDialog = ref(false)
+const fileInput = ref<HTMLInputElement | null>(null)
 const previewThemeId = ref<string | null>(null)
 const communityPreviewId = ref<string | null>(null)
 const actionError = ref('')
+const importUrl = ref('')
+const importing = ref(false)
+let importGeneration = 0
+let downloadController: AbortController | undefined
+
+function resetImport() {
+  importGeneration++
+  downloadController?.abort()
+  importing.value = false
+  themeStore.pendingInspection = null
+  themeStore.importError = null
+  actionError.value = ''
+}
+function closeImport() { resetImport(); showImportDialog.value = false }
+function openImport() { resetImport(); showImportDialog.value = true }
+onBeforeUnmount(resetImport)
+
+async function importPackage(load: () => Promise<string>) {
+  resetImport()
+  const generation = importGeneration
+  importing.value = true
+  try {
+    const result = await inspectThemePackage(await load())
+    if (generation !== importGeneration) return
+    themeStore.pendingInspection = result
+    if (!result.compatible) actionError.value = result.warnings[0] ?? '主题包无法解析'
+  } catch (error) {
+    if (generation === importGeneration) actionError.value = error instanceof Error ? error.message : '导入失败'
+  } finally { if (generation === importGeneration) importing.value = false }
+}
+
+function importFromUrl() {
+  void importPackage(() => {
+    downloadController = new AbortController()
+    return fetchThemePackage(importUrl.value, downloadController.signal)
+  })
+}
 
 const shikiPreview = `\`\`\`typescript
 const notes = await search('本地优先')
@@ -30,23 +69,16 @@ function handleFileImport(event: Event) {
   const file = input.files?.[0]
   input.value = ''
   if (!file) return
-  actionError.value = ''
-  const reader = new FileReader()
-  reader.onload = async () => {
-    try {
-      const result = await themeStore.inspectThemePackage(String(reader.result ?? ''))
-      if (result.compatible) {
-        previewThemeId.value = result.manifest.theme_id
-      } else {
-        actionError.value = result.warnings[0] ?? '主题包无法解析'
-      }
-    } catch (error) {
-      actionError.value = error instanceof Error ? error.message : '导入失败'
-    }
-  }
-  reader.onerror = () => { actionError.value = '文件读取失败' }
-  // 主题包是文本格式（YAML 清单 + --- + CSS），二进制包在解析阶段会被拒绝。
-  reader.readAsText(file)
+  void importPackage(async () => {
+    if (file.size > MAX_THEME_BYTES) throw new Error('主题包不能超过 5 MB')
+    const bytes = await new Promise<ArrayBuffer>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result as ArrayBuffer)
+      reader.onerror = () => reject(new Error('文件读取失败'))
+      reader.readAsArrayBuffer(file)
+    })
+    return decodeThemePackage(new Uint8Array(bytes))
+  })
 }
 
 async function confirmInstall(inspection: ThemePackageInspection) {
@@ -90,7 +122,7 @@ onMounted(() => {
         <p>浏览、导入和管理主题，打造你的知识工作流。</p>
       </div>
       <div class="inline-actions">
-        <button class="button-secondary" @click="showImportDialog = true">导入主题</button>
+        <button class="button-secondary" @click="openImport">导入主题</button>
         <button class="button-secondary" @click="themeStore.resetToDefault()">{{ t('恢复默认', 'Reset defaults') }}</button>
       </div>
     </header>
@@ -124,7 +156,7 @@ onMounted(() => {
         :class="{ selected: themeStore.currentThemeId === theme.theme_id }"
         @click="themeStore.applyTheme(theme.theme_id)"
       >
-        <div class="theme-preview" :class="theme.is_dark ? 'preview-dark' : (theme.theme_id === 'sepia' ? 'preview-sepia' : 'preview-light')">
+        <div class="theme-preview" :class="theme.theme_id === 'paper-moments' ? 'preview-paper' : theme.is_dark ? 'preview-dark' : (theme.theme_id === 'sepia' ? 'preview-sepia' : 'preview-light')">
           <span></span><span></span><span></span><div></div>
         </div>
         <div class="theme-info">
@@ -150,7 +182,7 @@ onMounted(() => {
         :key="theme.theme_id"
         class="item-card theme-card"
       >
-        <div class="theme-preview" :class="theme.is_dark ? 'preview-dark' : 'preview-light'">
+        <div class="theme-preview" :class="theme.theme_id === 'paper-moments' ? 'preview-paper' : theme.is_dark ? 'preview-dark' : 'preview-light'">
           <span></span><span></span><span></span><div></div>
         </div>
         <div class="theme-info">
@@ -165,14 +197,15 @@ onMounted(() => {
           <span v-for="tag in theme.tags" :key="tag" class="tag">{{ tag }}</span>
         </div>
         <div class="theme-actions">
+          <a v-if="theme.theme_id === 'paper-moments'" class="button-secondary small" :href="paperMomentsUrl" download="paper-moments.theme">下载主题包</a>
           <button
-            v-if="themeStore.isThemeInstalled(theme.theme_id)"
+            v-if="themeStore.allThemes.some(installed => installed.theme_id === theme.theme_id && installed.version === theme.version)"
             class="button-secondary small"
             @click="themeStore.applyTheme(theme.theme_id)"
           >启用</button>
           <template v-else>
             <button class="button-secondary small" @click="previewCommunity(theme.theme_id)">预览</button>
-            <button class="button-primary small" @click="installFromCommunity(theme.theme_id)">安装</button>
+            <button class="button-primary small" @click="installFromCommunity(theme.theme_id)">{{ themeStore.isThemeInstalled(theme.theme_id) ? '更新' : '安装' }}</button>
           </template>
         </div>
       </article>
@@ -193,11 +226,12 @@ onMounted(() => {
       </div>
     </div>
 
-    <div v-if="showImportDialog" class="modal-backdrop" @click.self="showImportDialog = false">
+    <div v-if="showImportDialog" class="modal-backdrop" @click.self="closeImport">
       <div class="modal import-modal">
         <span class="badge info">主题导入</span>
         <h2>导入主题包</h2>
-        <p class="subtle">单文件主题包：YAML 清单 + 一行 <code>---</code> + 主题 CSS。安装前会校验清单与 CSS 安全性。</p>
+        <p class="subtle">选择本地文件或粘贴主题包直链。支持单文件主题与 ZIP，安装前会校验清单和 CSS。</p>
+        <p v-if="actionError" class="error-banner" role="alert">{{ actionError }}</p>
 
         <div v-if="themeStore.pendingInspection?.compatible" class="inspection-result">
           <div class="inspect-head">
@@ -222,13 +256,21 @@ onMounted(() => {
         </div>
 
         <div v-else class="upload-area">
-          <input type="file" accept=".yaml,.yml,.theme" @change="handleFileImport" />
-          <p>点击选择主题包文件</p>
-          <p class="subtle">支持 .yaml / .yml / .theme；ZIP 需要 Host 端解压，暂不支持。</p>
+          <input ref="fileInput" class="theme-file-input" type="file" accept=".yaml,.yml,.theme,.zip" tabindex="-1" aria-label="主题包文件" @change="handleFileImport" />
+          <button type="button" class="button-primary" :disabled="importing" @click="fileInput?.click()">选择主题包文件</button>
+          <p>从本地导入你喜欢的主题</p>
+          <p class="subtle">支持 .yaml / .yml / .theme / .zip，最大 5 MB。</p>
+          <form class="url-import" @submit.prevent="importFromUrl">
+            <label for="theme-package-url">从 URL 导入</label>
+            <input id="theme-package-url" v-model="importUrl" class="input" type="url" required placeholder="https://example.com/theme.zip" :disabled="importing" />
+            <button class="button-secondary" type="submit" :disabled="importing">{{ importing ? '正在读取…' : '下载并校验' }}</button>
+            <p class="subtle">请使用文件直链；远程服务器需允许跨域访问。</p>
+          </form>
         </div>
 
         <div class="inline-actions">
-          <button class="button-secondary" @click="showImportDialog = false">取消</button>
+          <button v-if="themeStore.pendingInspection?.compatible" class="button-secondary" @click="resetImport">重新选择</button>
+          <button class="button-secondary" @click="closeImport">取消</button>
           <button
             v-if="themeStore.pendingInspection?.compatible"
             class="button-primary"
@@ -262,9 +304,16 @@ onMounted(() => {
 .preview-sepia { background: #fbf3df; border-color: #ddcfad; }
 .preview-sepia span { background: #d8c69c; }
 .preview-sepia div { background: #f4e8ca; }
+.preview-paper { background: #fffdf5; border: 1px dashed #8b7865; box-shadow: 3px 3px 0 #d8e6e2, 6px 6px 0 #f0d8cf; }
+.preview-paper span { background: #efd8d0; }
+.preview-paper span:nth-child(2) { background: #d8e7e8; }
+.preview-paper span:nth-child(3) { background: #f6e9b8; }
+.preview-paper div { border: 1px solid #b5a693; background: repeating-linear-gradient(#fffef8 0 14px, #dce4db 14px 15px); }
+.theme-actions a { text-decoration: none; }
 
 .theme-info { display: flex; justify-content: space-between; gap: var(--space-md); align-items: flex-start; }
 .theme-info strong { display: block; margin-bottom: 2px; }
+.theme-info > .badge { flex-shrink: 0; white-space: nowrap; }
 
 .theme-tags { display: flex; flex-wrap: wrap; gap: 4px; }
 .tag {
@@ -347,10 +396,10 @@ onMounted(() => {
   transition: border-color var(--motion-fast);
 }
 .upload-area:hover { border-color: var(--color-accent-secondary); }
-.upload-area input {
-  display: block;
-  margin: 0 auto var(--space-md);
-}
+.url-import { display: grid; gap: 10px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--color-border-default); text-align: left; }
+.url-import .input { width: 100%; min-width: 0; }
+.upload-area .theme-file-input { display: none; }
+.upload-area > button { margin-bottom: var(--space-md); }
 .upload-area p { color: var(--color-text-secondary); }
 
 .inspection-result {
