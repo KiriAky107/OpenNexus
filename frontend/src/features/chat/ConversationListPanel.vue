@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import { useChatStore } from '@/stores/chat'
 import { t } from '@/i18n'
 
 const chatStore = useChatStore()
+onMounted(() => { void chatStore.loadConversations() })
 </script>
 
 <template>

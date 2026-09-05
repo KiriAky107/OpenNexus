@@ -24,7 +24,7 @@ const availableModels = computed(() => providerStore.modelsByProvider[chatStore.
 
 onMounted(async () => {
   try {
-    await Promise.all([providerStore.loadProviders(), skillStore.loadSkills()])
+    await Promise.all([providerStore.loadProviders(), skillStore.loadSkills(), chatStore.loadConversations()])
     if (disposed || providerStore.error) return
     const selected = providerStore.enabledProviders.find(p => p.provider_id === chatStore.selectedProviderId)
     if (!selected) {
@@ -70,9 +70,9 @@ async function openCitation(citation: Citation) {
       <label class="rag-toggle"><input v-model="chatStore.useRag" type="checkbox" :disabled="chatStore.isStreaming" />{{ t('检索知识库', 'Search knowledge base') }}</label>
       <span class="subtle">{{ t('开启后，将相关笔记片段发送给所选模型，并显示来源。技能调用请使用智能体。', 'When enabled, relevant note excerpts are sent to the selected model and citations are shown. Use Agent for skills.') }}</span>
     </header>
-    <div v-if="loadError || providerStore.error" class="error-banner chat-error">{{ loadError || providerStore.error }}</div>
+    <div v-if="loadError || providerStore.error || chatStore.historyError" class="error-banner chat-error">{{ loadError || providerStore.error || chatStore.historyError }}</div>
     <main class="message-timeline">
-      <div v-if="!chatStore.messages.length" class="empty-state"><div><strong>{{ t('开始一段知识对话', 'Start a knowledge conversation') }}</strong><p>{{ t('请先配置模型提供商。聊天记录仅保留在本次页面会话中。', 'Configure a model provider first. Messages are kept only for this page session.') }}</p></div></div>
+      <div v-if="!chatStore.messages.length" class="empty-state"><div><strong>{{ t('开始一段知识对话', 'Start a knowledge conversation') }}</strong><p>{{ t('请先配置模型提供商。聊天记录保存在本地数据库中。', 'Configure a model provider first. Messages are saved in the local database.') }}</p></div></div>
       <article v-for="message in chatStore.messages" :key="message.message_id" class="message" :class="message.role">
         <div class="avatar">{{ message.role === 'user' ? t('你', 'You') : 'AI' }}</div>
         <div class="message-body">

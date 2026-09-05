@@ -27,7 +27,7 @@ uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 | `app/extensions` | Skill、Plugin Host、MCP Registry 与 stdio/HTTP/SSE Bridge |
 | `app/providers` | OpenAI Chat/Compatible、Responses、Anthropic Messages、Ollama 与能力路由 |
 | `app/local_models` | 模型目录、固定 revision 下载、独立进程、设备回退和队列调度 |
-| `app/services` | 索引、知识库上下文、转写、搜索历史、用量和诊断等应用服务 |
+| `app/services` | 索引、知识库上下文、聊天记录、转写、搜索历史、用量和诊断等应用服务 |
 | `app/benchmarks` | 版本化 RAG Dataset、异步评测、指标与报告 |
 
 ## 模型路由
@@ -82,7 +82,7 @@ API Key 可由前端设置页写入，也可通过 `OPENAI_API_KEY`、`DEEPSEEK_
 uv run pytest
 ```
 
-阶段 F 合并基线为 559 项测试通过，另有一条既有 Starlette/httpx 弃用提示。真实模型冒烟脚本：
+当前基线为 562 项测试通过，另有一条既有 Starlette/httpx 弃用提示。真实模型冒烟脚本：
 
 ```powershell
 .venv/Scripts/python scripts/local-model-smoke.py bekko --download

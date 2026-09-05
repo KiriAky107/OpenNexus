@@ -255,9 +255,55 @@ class ModelRequest(Contract):
 
 
 class ChatRequest(ModelRequest):
-    conversation_id: str | None = None
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    user_message_id: str | None = Field(default=None, min_length=1, max_length=128)
+    assistant_message_id: str | None = Field(default=None, min_length=1, max_length=128)
+    conversation_title: str | None = Field(default=None, max_length=120)
     use_rag: bool = True
     retrieval: SearchRequest | None = None
+
+
+class ConversationCreateRequest(Contract):
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    title: str = Field(min_length=1, max_length=120)
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("title must not be blank")
+        return value
+
+
+class Conversation(Contract):
+    conversation_id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    message_count: int = 0
+
+
+class ConversationListResponse(Contract):
+    items: list[Conversation] = Field(default_factory=list)
+    page: PageMeta = Field(default_factory=PageMeta)
+
+
+class ChatMessage(Contract):
+    message_id: str
+    conversation_id: str
+    role: Literal["user", "assistant", "system"]
+    content: str
+    created_at: datetime
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    thinking: str | None = None
+    usage: dict[str, Any] | None = None
+
+
+class ChatMessageListResponse(Contract):
+    items: list[ChatMessage] = Field(default_factory=list)
+    page: PageMeta = Field(default_factory=PageMeta)
 
 
 class ModelEventType(str, Enum):
