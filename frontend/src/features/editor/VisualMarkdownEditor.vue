@@ -6,7 +6,8 @@ import { codeBlockConfig } from '@milkdown/kit/component/code-block'
 import { basicSetup } from 'codemirror'
 import { keymap } from '@codemirror/view'
 import { indentWithTab } from '@codemirror/commands'
-import { shikiEditorTheme, shikiLanguages } from './shikiCodeMirror'
+import { shikiEditorTheme, shikiLanguages, renderCodeLanguage } from './shikiCodeMirror'
+import './language-icons.css'
 import { installLanguagePickerPopover } from './languagePickerPopover'
 import {
   createCodeBlockCommand,
@@ -179,7 +180,8 @@ onMounted(async () => {
   // Replace both AFTER feature configuration to avoid default grammar collisions.
   crepe.editor.config(ctx => ctx.update(codeBlockConfig.key, config => ({
     ...config,
-    languages: shikiLanguages(themeStore.resolvedCodeBlockTheme, config.languages),
+    languages: shikiLanguages(themeStore.resolvedCodeBlockTheme),
+    renderLanguage: renderCodeLanguage,
     extensions: [basicSetup, keymap.of([indentWithTab]), shikiEditorTheme(themeStore.resolvedCodeBlockTheme)],
   })))
   crepe.editor.use(fontSizeMarkdownPlugin)
