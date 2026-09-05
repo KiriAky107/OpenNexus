@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppDialog from '@/components/common/AppDialog.vue'
 import { onMounted, reactive, ref } from 'vue'
 import type { TaskItem, TaskStatus } from '@/contracts'
 import { useTaskStore } from '@/stores/task'
@@ -46,7 +47,7 @@ async function remove(task: TaskItem) {
       </article>
     </div>
     <div v-else class="empty-state"><div><strong>{{ taskStore.isLoading ? t('正在加载任务…', 'Loading tasks…') : t('没有符合条件的任务', 'No matching tasks') }}</strong><p>{{ t('创建一项任务，或调整左侧筛选条件。', 'Create a task or adjust the filters.') }}</p></div></div>
-    <div v-if="showForm" class="modal-backdrop" @click.self="showForm = false"><div class="modal"><h2>{{ editingId ? t('编辑任务', 'Edit task') : t('新建任务', 'New task') }}</h2><form @submit.prevent="saveTask"><div class="field"><label>{{ t('标题', 'Title') }}</label><input v-model="form.title" class="input" required /></div><div class="field"><label>{{ t('描述', 'Description') }}</label><textarea v-model="form.description" class="textarea" /></div><div class="field"><label>{{ t('截止时间', 'Due date') }}</label><input v-model="form.due_date" class="input" type="datetime-local" /></div><div class="field"><label>{{ t('关联 Note ID', 'Linked Note ID') }}</label><input v-model="form.note_id" class="input" /></div><div class="inline-actions"><button class="button-primary">{{ t('保存', 'Save') }}</button><button type="button" class="button-secondary" @click="showForm = false">{{ t('取消', 'Cancel') }}</button></div></form></div></div>
+    <AppDialog v-if="showForm" :label="t('任务表单', 'Task form')" @close="showForm = false"><div class="modal"><h2>{{ editingId ? t('编辑任务', 'Edit task') : t('新建任务', 'New task') }}</h2><form @submit.prevent="saveTask"><div class="field"><label>{{ t('标题', 'Title') }}</label><input v-model="form.title" class="input" required /></div><div class="field"><label>{{ t('描述', 'Description') }}</label><textarea v-model="form.description" class="textarea" /></div><div class="field"><label>{{ t('截止时间', 'Due date') }}</label><input v-model="form.due_date" class="input" type="datetime-local" /></div><div class="field"><label>{{ t('关联 Note ID', 'Linked Note ID') }}</label><input v-model="form.note_id" class="input" /></div><div class="inline-actions"><button class="button-primary">{{ t('保存', 'Save') }}</button><button type="button" class="button-secondary" @click="showForm = false">{{ t('取消', 'Cancel') }}</button></div></form></div></AppDialog>
   </section>
 </template>
 

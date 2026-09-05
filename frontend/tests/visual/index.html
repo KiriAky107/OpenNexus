@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>隔离视觉回归</title></head><body><div id="app"></div>
+<script type="module">
+import { createApp, h, ref } from 'vue';
+import { createPinia } from 'pinia';
+import Preview from '/src/features/themes/CommunityThemePreview.vue';
+import Editor from '/src/features/editor/VisualMarkdownEditor.vue';
+import AppDialog from '/src/components/common/AppDialog.vue';
+import '/src/styles/tokens.css';
+import '/src/styles/features.css';
+const params = new URLSearchParams(location.search);
+const theme = params.get('theme') || 'light';
+const builtin = ['light','dark','sepia'].includes(theme);
+const mode = params.get('case') || 'theme';
+createApp({setup(){
+  const open = ref(true);
+  return () => mode === 'editor' ? h(Editor,{initialContent:''}) : mode === 'dialog' ? h('main', {class:'feature-page',style:'height:100vh;'},[
+    h('div',{style:'height:120vh;'},'背景长页面'),
+    h('button',{class:'button-primary',onClick:()=>open.value=true},'打开测试弹窗'),
+    open.value && h(AppDialog,{label:'隔离弹窗',onClose:()=>open.value=false},{default:()=>h('section',{class:'modal'},[h('h2','弹窗滚动与焦点'),h('input',{class:'input',autofocus:true}),h('div',{style:'height:110vh;'},'内部长内容'),h('button',{class:'button-secondary',onClick:()=>open.value=false},'关闭')])})
+  ]) : h('main',{},[h('button',{onClick:()=>open.value=true},'打开主题样例'),open.value&&h(Preview,{themeId:theme,name:theme,...(builtin?{css:''}:{}),onClose:()=>open.value=false})]);
+}}).use(createPinia()).mount('#app');
+</script></body></html>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { lockDialogScroll } from '@/components/common/dialogScroll'
 import { onMounted, onBeforeUnmount, reactive, ref } from 'vue'
 import { useChatPreferences, validAvatar } from '@/stores/chatPreferences'
 import { t } from '@/i18n'
@@ -14,6 +15,7 @@ const saving = ref(false)
 const loading = ref(0)
 const dialog = ref<HTMLDialogElement>()
 const previousFocus = document.activeElement as HTMLElement | null
+let restoreScroll: (() => void) | undefined
 let active = true
 const generations = { aiAvatar: 0, userAvatar: 0 }
 async function loadGlobal() {
@@ -21,8 +23,8 @@ async function loadGlobal() {
   try { const result = await apiClient.get<GlobalPersona>('/api/settings/persona'); if (active) { Object.assign(remote,result); ready.value = true } }
   catch { if (active) error.value = t('无法加载全局人设，请重试。', 'Could not load global persona. Retry.') }
 }
-onMounted(() => { dialog.value?.showModal(); void loadGlobal() })
-onBeforeUnmount(() => { active = false; dialog.value?.close(); previousFocus?.focus() })
+onMounted(() => { if (dialog.value) restoreScroll = lockDialogScroll(dialog.value); dialog.value?.showModal(); void loadGlobal() })
+onBeforeUnmount(() => { active = false; dialog.value?.close(); restoreScroll?.(); previousFocus?.focus() })
 async function chooseAvatar(event: Event, field: 'aiAvatar' | 'userAvatar') {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]

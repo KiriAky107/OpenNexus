@@ -1,8 +1,11 @@
 <script setup lang="ts">
+import AppDialog from '@/components/common/AppDialog.vue'
 import { computed } from 'vue'
 import { t } from '@/i18n'
 import { getCommunityThemePreviewCss, mockCommunityThemes } from '@/services/themePackageService'
 import tokensCss from '@/styles/tokens.css?raw'
+import featuresCss from '@/styles/features.css?raw'
+import specimenHtml from './themeSpecimen.html?raw'
 
 const props = defineProps<{ themeId: string; name?: string; css?: string }>()
 const emit = defineEmits<{ (event: 'close'): void }>()
@@ -17,7 +20,8 @@ const previewDocument = computed(() => {
   policy.content = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"
   doc.head.append(policy)
   const style = doc.createElement('style')
-  style.textContent = `${tokensCss}\n${props.css ?? getCommunityThemePreviewCss(props.themeId)}\nbody { margin:0; padding:24px; background:var(--color-background-primary); color:var(--color-text-primary); font:16px/1.6 system-ui; } article { padding:20px; border:1px solid var(--color-border-default); border-radius:8px; background:var(--color-surface-primary); } p { color:var(--color-text-secondary); } button { padding:8px 16px; border:0; border-radius:6px; background:var(--color-accent-primary); color:white; }`
+  style.textContent = `${tokensCss}\n${featuresCss}\n${props.css ?? getCommunityThemePreviewCss(props.themeId)}\nbody { margin:0; padding:24px; background:var(--color-background-primary); color:var(--color-text-primary); font:16px/1.6 system-ui; } article { min-width:0; } .theme-specimen { display:grid; gap:16px; margin-top:20px; } .surface-nested { padding:12px; border:1px solid var(--color-border-default); border-radius:var(--radius-md); } .specimen-markdown { overflow:auto; } .specimen-markdown code { background:var(--color-code-background, var(--color-background-secondary)); color:var(--color-code-text, var(--color-text-primary)); padding:3px 6px; border-radius:4px; } .specimen-markdown pre { padding:12px; background:var(--color-background-secondary); } .specimen-markdown blockquote { border-left:3px solid var(--color-accent-primary); padding-left:12px; } .specimen-markdown table { width:100%; border-collapse:collapse; } .specimen-markdown td,.specimen-markdown th { padding:8px; border:1px solid var(--color-border-default); } .specimen-markdown th { background:var(--color-markdown-table-header); } .specimen-chart > div { display:flex; align-items:flex-end; gap:12px; height:100px; border-bottom:1px solid var(--color-border-default); } .specimen-chart span { width:36px; } .specimen-long { overflow-wrap:anywhere; } @media(max-width:480px) { body { padding:12px; } .form-grid { grid-template-columns:minmax(0,1fr); } }`
+
   doc.head.append(style)
   const article = doc.createElement('article')
   article.className = 'panel'
@@ -26,21 +30,22 @@ const previewDocument = computed(() => {
   header.append(heading)
   const journal = doc.createElement('section'); journal.className = 'editor-preview'; journal.style.cssText = 'padding:24px;margin:28px 0;'
   const text = doc.createElement('p'); text.textContent = t('知识的价值不只在于保存，更在于被重新发现和使用。', 'Knowledge gains value when it can be rediscovered and used.')
-  const button = doc.createElement('button'); button.textContent = t('示例按钮', 'Example button')
+  const button = doc.createElement('button'); button.className = 'button-primary'; button.textContent = t('示例按钮', 'Example button')
   journal.append(text)
-  article.append(header, journal, button); doc.body.append(article)
+  const specimen = doc.createElement('template'); specimen.innerHTML = specimenHtml
+  article.append(header, journal, button, specimen.content); doc.body.append(article)
   return '<!doctype html>' + doc.documentElement.outerHTML
 })
 </script>
 
 <template>
-  <div class="modal-backdrop" @click.self="emit('close')" @keydown.esc="emit('close')">
-    <section class="modal theme-preview-dialog" role="dialog" aria-modal="true" :aria-label="t('社区主题预览', 'Community theme preview')">
+  <AppDialog :label="t('社区主题预览', 'Community theme preview')" @close="emit('close')">
+    <section class="modal theme-preview-dialog">
       <div class="preview-heading"><h2>{{ theme?.name }}</h2><button class="button-secondary" autofocus @click="emit('close')">{{ t('关闭预览', 'Close preview') }}</button></div>
       <iframe :title="`${t('主题预览', 'Theme preview')}: ${theme?.name ?? themeId}`" sandbox="" :srcdoc="previewDocument" />
       <p class="subtle">{{ t('仅预览，不会安装或更改当前主题。', 'Preview only. Your installed themes and current appearance remain unchanged.') }}</p>
     </section>
-  </div>
+  </AppDialog>
 </template>
 
 <style scoped>
