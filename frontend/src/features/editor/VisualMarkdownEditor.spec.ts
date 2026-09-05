@@ -3,10 +3,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { editorViewCtx, type Editor } from '@milkdown/kit/core'
-import { TextSelection } from '@milkdown/kit/prose/state'
+import { NodeSelection, TextSelection } from '@milkdown/kit/prose/state'
 import { getMarkdown } from '@milkdown/kit/utils'
 import VisualMarkdownEditor from './VisualMarkdownEditor.vue'
 import { useSettingsStore } from '@/stores/settings'
+import { useThemeStore } from '@/stores/theme'
+import { codeBlockConfig } from '@milkdown/kit/component/code-block'
+import { EditorView as CodeMirror } from '@codemirror/view'
+import { renderMarkdown } from '@/utils/markdown'
 
 type EditorComponent = { getEditor: () => Editor | undefined }
 
@@ -45,6 +49,51 @@ afterEach(() => {
 })
 
 describe('VisualMarkdownEditor formatting toolbars', () => {
+  it.each([['jsonc', 'JSON with Comments', '// comment\n{"answer": 42}'], ['ahk', 'AutoHotkey', 'MsgBox "Hello"']])('persists %s from the language menu and renders it with Shiki', async (id, label, source) => {
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: `\`\`\`text\n${source}\n\`\`\`` }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    editor.action(ctx => {
+      const view = ctx.get(editorViewCtx)
+      view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, 0)))
+    })
+    for (let attempt = 0; attempt < 100 && !wrapper.find('.language-button').exists(); attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    await wrapper.get('.language-button').trigger('click')
+    const item = wrapper.get(`.language-list-item[data-language="${id}"]`)
+    expect(item.text()).toBe(label)
+    await item.trigger('click')
+    const markdown = editor.action(getMarkdown())
+    expect(markdown).toContain(`\`\`\`${id}\n`)
+    const html = await renderMarkdown(markdown)
+    expect(new Set([...html.matchAll(/--shiki-light:([^;" ]+)/g)].map(match => match[1])).size).toBeGreaterThan(1)
+    const reopened = mount(VisualMarkdownEditor, { props: { initialContent: markdown }, attachTo: document.body })
+    mounted.push(reopened)
+    const restored = await waitForEditor(reopened)
+    expect(restored.action(ctx => ctx.get(editorViewCtx).state.doc.firstChild?.attrs.language)).toBe(id)
+  })
+  it.each(['github-light', 'github-dark'] as const)('keeps Shiki %s mappings after Crepe merges its defaults', async theme => {
+    useThemeStore().codeBlockTheme = theme
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: '```python\nprint("Hello")\n```' }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    const config = editor.action(ctx => ctx.get(codeBlockConfig.key))
+    const matching = config.languages.filter(item => item.alias.includes('python'))
+    expect(matching).toHaveLength(1)
+    for (const name of ['Java', 'Go', 'Rust']) {
+      const language = config.languages.find(item => item.name === name.toLowerCase())
+      expect(language, `${name} remains available`).toBeDefined()
+      const view = new CodeMirror({ doc: 'class Example {}', extensions: [...config.extensions, await language!.load()] })
+      try { expect(view.dom.querySelector('.shiki-token')).not.toBeNull() }
+      finally { view.destroy() }
+    }
+    const cm = new CodeMirror({ doc: 'print("Hello")', extensions: [...config.extensions, await matching[0]!.load()] })
+    try {
+      const string = [...cm.dom.querySelectorAll<HTMLElement>('.shiki-token')].find(el => el.textContent?.includes('Hello'))
+      expect(string?.style.color.toUpperCase()).toBe(theme === 'github-dark' ? '#9ECBFF' : '#032F62')
+    } finally { cm.destroy() }
+  })
   it('applies bold from the top toolbar to the selected text', async () => {
     const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: 'alpha beta' }, attachTo: document.body })
     mounted.push(wrapper)
