@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import AppDialog from './AppDialog.vue'
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
+const { actionDialog, resolveAction, askPrompt } = useActionDialog()
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useEditorStore } from '@/stores/editor'
@@ -79,6 +83,7 @@ function hide() { open.value = false }
 async function execute(command: Command | undefined) {
   if (!command) return
   hide()
+  await nextTick()
   try {
     await command.run()
   } catch (error) {
@@ -87,7 +92,7 @@ async function execute(command: Command | undefined) {
 }
 
 async function createNote() {
-  const rawName = window.prompt(t('笔记名称', 'Note name'))?.trim()
+  const rawName = (await askPrompt(t('笔记名称', 'Note name')))?.trim()
   if (!rawName) return
   const name = rawName.endsWith('.md') ? rawName : `${rawName}.md`
   const file = await workspaceService.createFile('/', name, `# ${rawName}\n\n`)
@@ -148,6 +153,7 @@ async function applyPluginEffect(effect: PluginCommandEffect) {
 
 function handleKeydown(event: KeyboardEvent) {
   if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'p') {
+    if (!open.value && document.querySelector('dialog[open]')) return
     event.preventDefault()
     open.value ? hide() : show()
   } else if (event.key === 'Escape' && open.value) {
@@ -160,12 +166,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown))
 </script>
 
 <template>
+  <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
   <div v-if="commandNotice" class="command-toast" role="status">
     <span>{{ commandNotice }}</span><button :aria-label="t('关闭通知', 'Close notification')" @click="commandNotice = ''">×</button>
   </div>
   <Teleport to="body">
-    <div v-if="open" class="command-backdrop" @click.self="hide">
-      <section class="command-palette" role="dialog" aria-modal="true" :aria-label="t('命令面板', 'Command palette')">
+    <AppDialog v-if="open" :label="t('命令面板', 'Command palette')" @close="hide">
+      <section class="modal command-palette">
         <input ref="input" v-model="query" class="command-input" :placeholder="t('输入命令…', 'Enter a command…')" @keydown.enter.prevent="execute(filteredCommands[0])" />
         <p v-if="commandError" class="command-error">{{ commandError }}</p>
         <div class="command-list">
@@ -176,15 +183,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown))
         </div>
         <footer><span>Enter · {{ t('执行', 'Run') }}</span><span>Esc · {{ t('关闭', 'Close') }}</span></footer>
       </section>
-    </div>
+    </AppDialog>
   </Teleport>
 </template>
 
 <style scoped>
-.command-backdrop { position: fixed; inset: 0; z-index: var(--z-modal); display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; background: var(--color-background-overlay); animation: command-backdrop-in var(--motion-fast) both; }
-.command-palette { width: min(620px, calc(100vw - 32px)); overflow: hidden; border: 1px solid var(--color-border-default); border-radius: var(--radius-xl); background: var(--color-surface-elevated); box-shadow: var(--shadow-xl); animation: command-palette-in var(--motion-normal) both; }
+.command-palette { padding: 0; display: flex; flex-direction: column; width: min(620px, calc(100vw - 32px)); overflow: hidden; border: 1px solid var(--color-border-default); border-radius: var(--radius-xl); background: var(--color-surface-elevated); box-shadow: var(--shadow-xl); animation: command-palette-in var(--motion-normal) both; }
 .command-input { width: 100%; padding: var(--space-xl); border: 0; border-bottom: 1px solid var(--color-border-default); outline: 0; background: transparent; color: var(--color-text-primary); font-size: var(--font-size-xl); }
-.command-list { max-height: 360px; overflow: auto; padding: var(--space-sm); }
+.command-list { min-height: 0; max-height: 360px; overflow: auto; padding: var(--space-sm); }
 .command-list button { display: flex; justify-content: space-between; width: 100%; padding: var(--space-md) var(--space-lg); border-radius: var(--radius-md); text-align: left; transition: color var(--motion-fast), background-color var(--motion-fast), transform var(--motion-fast); }
 .command-list button:hover, .command-list button:focus { outline: 0; background: var(--color-accent-soft); color: var(--color-accent-primary); }
 .command-list button:hover { transform: translateX(2px); }

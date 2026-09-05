@@ -96,6 +96,7 @@ export interface Citation {
 // ============ Model Events (SSE) ============
 
 export type ModelEventType =
+  | 'ContextStatus'
   | 'TextDelta'
   | 'ThinkingDelta'
   | 'ToolCallStart'
@@ -404,8 +405,18 @@ export interface RequestOverride {
   body: Record<string, unknown>
 }
 
+export interface ModelContextPolicy {
+  model: string
+  context_window: number
+  output_reserve: number
+  threshold: number
+  mode: 'detect' | 'compress'
+  prompt: string
+}
+
 export interface ProviderConfig {
   version?: number
+  context_policies?: ModelContextPolicy[]
   request_overrides?: RequestOverride[]
   provider_id: string
   provider_type: ProviderType
@@ -496,6 +507,7 @@ export interface ThemeConfig {
 // ============ Index ============
 
 export interface IndexStatus {
+  vector_refresh_required?: boolean
   status: 'unknown' | 'idle' | 'indexing' | 'error'
   pending_jobs: number
   total_notes: number | null
@@ -747,6 +759,7 @@ export type ApiProviderType =
 
 export interface ApiProviderConfig {
   version?: number
+  context_policies?: ModelContextPolicy[]
   request_overrides?: RequestOverride[]
   provider_id: string
   provider_type: ApiProviderType
@@ -788,6 +801,7 @@ export interface ApiTask {
 }
 
 export interface ApiIndexStatus {
+  vector_refresh_required?: boolean
   total_notes: number
   total_blocks: number
   status: 'idle' | 'queued' | 'running' | 'failed'

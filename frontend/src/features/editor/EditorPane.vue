@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { defineAsyncComponent, ref, watch } from 'vue'
 import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore } from '@/stores/theme'
-import VisualMarkdownEditor from './VisualMarkdownEditor.vue'
+const VisualMarkdownEditor = defineAsyncComponent(() => import('./VisualMarkdownEditor.vue'))
 
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()

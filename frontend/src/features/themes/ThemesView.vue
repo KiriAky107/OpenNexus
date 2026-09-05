@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppDialog from '@/components/common/AppDialog.vue'
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import MarkdownContent from '@/components/common/MarkdownContent.vue'
 import { useThemeStore } from '@/stores/theme'
@@ -9,6 +10,7 @@ import CommunityThemePreview from './CommunityThemePreview.vue'
 import paperMomentsUrl from '@/assets/themes/paper-moments.theme?url'
 
 const themeStore = useThemeStore()
+const previewImport = ref(false)
 
 const activeTab = ref<'installed' | 'community'>('installed')
 const showImportDialog = ref(false)
@@ -22,6 +24,7 @@ let importGeneration = 0
 let downloadController: AbortController | undefined
 
 function resetImport() {
+  previewImport.value = false
   importGeneration++
   downloadController?.abort()
   importing.value = false
@@ -135,7 +138,7 @@ onMounted(() => {
       {{ themeStore.themeLoadWarning }}
     </div>
 
-    <div class="tabs">
+    <div class="tabs theme-tabs">
       <button
         class="tab-btn"
         :class="{ active: activeTab === 'installed' }"
@@ -213,7 +216,7 @@ onMounted(() => {
 
     <div class="panel preference-panel">
       <h2 class="panel-title">{{ t('编辑器外观', 'Editor Appearance') }}</h2>
-      <div class="form-grid">
+      <div class="form-grid appearance-fields">
         <div class="field"><label>{{ t('字号', 'Font size') }}: {{ themeStore.fontEditorSize }}px</label><input v-model.number="themeStore.fontEditorSize" type="range" min="12" max="24" /></div>
         <div class="field"><label>{{ t('行高', 'Line height') }}: {{ themeStore.lineHeight }}</label><input v-model.number="themeStore.lineHeight" type="range" min="1.2" max="2.2" step="0.1" /></div>
         <div class="field"><label>{{ t('字体', 'Font') }}</label><select v-model="themeStore.fontEditorFamily" class="select"><option value="system-ui">{{ t('系统字体', 'System font') }}</option><option value="serif">{{ t('衬线字体', 'Serif') }}</option><option value="var(--font-ui-mono)">{{ t('等宽字体', 'Monospace') }}</option></select></div>
@@ -226,7 +229,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <div v-if="showImportDialog" class="modal-backdrop" @click.self="closeImport">
+    <AppDialog v-if="showImportDialog" label="导入主题包" :dismissible="!importing" @close="closeImport">
       <div class="modal import-modal">
         <span class="badge info">主题导入</span>
         <h2>导入主题包</h2>
@@ -249,10 +252,11 @@ onMounted(() => {
           <div v-if="themeStore.pendingInspection.warnings.length" class="warnings">
             <p v-for="w in themeStore.pendingInspection.warnings" :key="w" class="warning-text">⚠ {{ w }}</p>
           </div>
-          <details class="css-preview">
+          <details class="css-preview ui-disclosure">
             <summary>将要安装的 CSS（{{ themeStore.pendingInspection.css.length }} 字符）</summary>
             <pre>{{ themeStore.pendingInspection.css }}</pre>
           </details>
+          <button type="button" class="button-secondary" @click="previewImport = true">预览主题效果</button>
         </div>
 
         <div v-else class="upload-area">
@@ -278,11 +282,20 @@ onMounted(() => {
           >安装主题</button>
         </div>
       </div>
-    </div>
+    </AppDialog>
   </section>
+  <CommunityThemePreview v-if="previewImport && themeStore.pendingInspection?.compatible" :theme-id="themeStore.pendingInspection.manifest.theme_id" :name="themeStore.pendingInspection.manifest.name" :css="themeStore.pendingInspection.css" @close="previewImport = false" />
 </template>
 
 <style scoped>
+.theme-tabs { width: 100%; max-width: 1180px; margin-inline: auto; box-sizing: border-box; }
+.theme-tabs button { min-height: 38px; padding-inline: 20px; }
+.appearance-fields { align-items: start; }
+.appearance-fields .field { min-width: 0; grid-template-rows: minmax(22px, auto) 38px auto; align-content: start; }
+.appearance-fields .field > :is(input, select) { box-sizing: border-box; height: 38px; width: 100%; margin: 0; align-self: center; }
+.appearance-fields .field > label { margin: 0; line-height: 22px; }
+.appearance-fields .field > small { line-height: 1.5; }
+
 .themes { margin-bottom: var(--space-xl); }
 .theme-card { display: grid; gap: var(--space-md); text-align: left; position: relative; }
 .theme-preview {
@@ -309,7 +322,7 @@ onMounted(() => {
 .preview-paper span:nth-child(2) { background: #d8e7e8; }
 .preview-paper span:nth-child(3) { background: #f6e9b8; }
 .preview-paper div { border: 1px solid #b5a693; background: repeating-linear-gradient(#fffef8 0 14px, #dce4db 14px 15px); }
-.theme-actions a { text-decoration: none; }
+.theme-actions a { display: inline-flex; align-items: center; justify-content: center; text-align: center; text-decoration: none; }
 
 .theme-info { display: flex; justify-content: space-between; gap: var(--space-md); align-items: flex-start; }
 .theme-info strong { display: block; margin-bottom: 2px; }

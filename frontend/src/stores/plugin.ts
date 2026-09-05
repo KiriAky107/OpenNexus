@@ -34,7 +34,7 @@ export const usePluginStore = defineStore('plugin', () => {
     selectedPluginId.value = pluginId
   }
 
-  async function installPlugin(packagePath: string) {
+  async function installPlugin(packagePath: string | File) {
     const installed = await pluginService.installPlugin(packagePath)
     const index = plugins.value.findIndex((plugin) => plugin.plugin_id === installed.plugin_id)
     if (index >= 0) plugins.value[index] = installed

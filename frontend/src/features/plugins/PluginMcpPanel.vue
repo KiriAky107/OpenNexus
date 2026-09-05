@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
+const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 import { Key, Refresh } from '@element-plus/icons-vue'
 import { computed, ref, watch } from 'vue'
 import AppIcon from '@/components/common/AppIcon.vue'
@@ -116,11 +119,14 @@ async function saveSecret(field: PluginSettingField) {
   } catch (reason) { feedback(message(reason, t('密钥保存失败', 'Failed to save secret'))) } finally { busy.value = '' }
 }
 async function deleteSecret(field: PluginSettingField) {
-  if (!confirm(t('删除已保存的', 'Delete saved ') + field.label + '？')) return
+  const pluginId = props.plugin.plugin_id
+  if (!(await askConfirm(t('删除已保存的', 'Delete saved ') + field.label + '？'))) return
+  if (pluginId !== props.plugin.plugin_id) return
   busy.value = 'secret:' + field.key
   feedback()
   try {
-    const state = await pluginService.deletePluginSecret(props.plugin.plugin_id, field.key)
+    const state = await pluginService.deletePluginSecret(pluginId, field.key)
+    if (pluginId !== props.plugin.plugin_id) return
     if (schema.value) schema.value.secrets[field.key] = { configured: state.configured }
     secrets.value[field.key] = ''
     notice.value = field.label + t('已删除。', ' deleted.')
@@ -130,6 +136,7 @@ async function deleteSecret(field: PluginSettingField) {
 
 <template>
   <section class="mcp-panel">
+    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <nav class="mcp-tabs" :aria-label="t('MCP 与 Plugin 配置', 'MCP and Plugin settings')">
       <button v-for="tab in tabs" :key="tab.id" :class="{ active: activeTab === tab.id }" @click="selectTab(tab.id)">{{ tab.label }}</button>
     </nav>

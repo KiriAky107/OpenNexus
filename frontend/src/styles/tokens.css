@@ -328,3 +328,19 @@ ol {
     --sidebar-secondary-width: 224px;
   }
 }
+
+
+/* Native form controls share the same surfaces as component controls. */
+:where(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']), textarea, select) {
+  background-color: var(--color-surface-primary);
+  border-color: var(--color-border-default);
+}
+:root { color-scheme: light; }
+[data-theme='dark'] { color-scheme: dark; }
+[data-theme='sepia'] {
+  --color-accent-primary-active: #5d3d22;
+  --color-accent-secondary: #947044;
+  --color-accent-soft-hover: #e3d1aa;
+  --color-border-focus: #8a5b32;
+  --color-border-disabled: #eadfc4;
+}

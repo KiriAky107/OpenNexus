@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
+const { actionDialog, resolveAction, askPrompt } = useActionDialog()
+import DiagramInteractions from '@/components/common/DiagramInteractions.vue'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Link } from '@element-plus/icons-vue'
 import { Crepe } from '@milkdown/crepe'
@@ -32,6 +36,7 @@ import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore } from '@/stores/theme'
 import { applyMarkdownFontSize, fontSizeMarkdownPlugin } from './fontSizeMarkdown'
+import { inlineCodeInputPlugin } from './inlineCodeInput'
 import { t } from '@/i18n'
 import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/frame.css'
@@ -68,7 +73,7 @@ function renderDiagram(source: string, apply: (value: HTMLElement) => void) {
     if (entry.apply === apply) diagramPreviews.delete(id)
   }
   const element = createMermaidPreview(source, themeStore.isDark, apply)
-  diagramPreviews.set(element.id, { source, apply })
+  diagramPreviews.set(element.dataset.previewId!, { source, apply })
   return element
 }
 watch(() => themeStore.currentThemeId, () => {
@@ -92,6 +97,16 @@ type ToolbarCommand = 'bold' | 'italic' | 'ordered-list' | 'bullet-list' | 'inli
 function runCommand(command: ToolbarCommand) {
   const editor = crepe?.editor
   if (!editor) return
+  if (command === 'inline-code' && editor.action(ctx => ctx.get(editorViewCtx).state.selection.empty)) {
+    editor.action(ctx => {
+      const view = ctx.get(editorViewCtx)
+      const mark = view.state.schema.marks.inlineCode!
+      const active = (view.state.storedMarks ?? view.state.selection.$from.marks()).some(item => item.type === mark)
+      view.dispatch(active ? view.state.tr.removeStoredMark(mark) : view.state.tr.setStoredMarks([mark.create()]))
+      view.focus()
+    })
+    return
+  }
   // 顶部工具栏复用 Milkdown 命令，因此选区与浮动工具栏共享同一文档事务。
   const actions = {
     bold: callCommand(toggleStrongCommand.key),
@@ -107,20 +122,28 @@ function runCommand(command: ToolbarCommand) {
   editorRoot.value?.querySelector<HTMLElement>('.ProseMirror')?.focus()
 }
 
-function applyLink() {
+async function applyLink() {
   if (!crepe) return
-  // TODO(editor): 用受控 Element Plus 对话框替换 prompt，补充 URL 校验和键盘焦点管理。
-  const href = window.prompt(t('请输入链接地址', 'Enter link address'), 'https://')?.trim()
-  if (!href) return
-
-  crepe.editor.action((ctx) => {
+  const editor = crepe
+  const snapshot = editor.editor.action(ctx => {
     const view = ctx.get(editorViewCtx)
+    return { doc: view.state.doc, selection: view.state.selection }
+  })
+  const href = (await askPrompt(t('请输入链接地址', 'Enter link address'), 'https://'))?.trim()
+  if (!href || crepe !== editor) return
+  const label = snapshot.selection.empty ? await askPrompt(t('请输入链接文字', 'Enter link text'), href) : ''
+  if (label === null || crepe !== editor) return
+
+  editor.editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx)
+    if (!view.state.doc.eq(snapshot.doc)) return
+    view.dispatch(view.state.tr.setSelection(snapshot.selection))
     const commands = ctx.get(commandsCtx)
     if (view.state.selection.empty) {
-      const label = window.prompt(t('请输入链接文字', 'Enter link text'), href)?.trim() || href
+      const text = label.trim() || href
       const from = view.state.selection.from
-      const transaction = view.state.tr.insertText(label, from)
-      transaction.setSelection(TextSelection.create(transaction.doc, from, from + label.length))
+      const transaction = view.state.tr.insertText(text, from)
+      transaction.setSelection(TextSelection.create(transaction.doc, from, from + text.length))
       view.dispatch(transaction)
     }
     return commands.call(toggleLinkCommand.key, { href })
@@ -227,6 +250,7 @@ onMounted(async () => {
     extensions: [basicSetup, keymap.of([indentWithTab]), shikiEditorTheme(themeStore.resolvedCodeBlockTheme)],
   })))
   crepe.editor.use(fontSizeMarkdownPlugin)
+  crepe.editor.use(inlineCodeInputPlugin)
   crepe.on((listener) => {
     listener.markdownUpdated((_ctx, markdown, previousMarkdown) => {
       // 忽略编辑器初始化/回显事件，防止无内容变化时触发自动保存循环。
@@ -264,7 +288,8 @@ defineExpose({ getEditor: () => crepe?.editor })
 </script>
 
 <template>
-  <div class="visual-editor">
+  <DiagramInteractions class="visual-editor">
+    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <div class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
       <label class="toolbar-select heading-select" :title="t('设置标题级别', 'Set heading level')">
         <span class="format-glyph heading-glyph">H</span>
@@ -313,7 +338,7 @@ defineExpose({ getEditor: () => crepe?.editor })
       </section>
       <div ref="editorRoot" />
     </div>
-  </div>
+  </DiagramInteractions>
 </template>
 
 <style scoped>
@@ -383,6 +408,9 @@ defineExpose({ getEditor: () => crepe?.editor })
 .milkdown-host :deep(.ProseMirror) { box-sizing: border-box; width: min(100%, var(--editor-line-width, 80ch)); min-height: 100%; margin: 0 auto; padding: var(--space-3xl) var(--space-xl); outline: none; font-family: var(--font-editor-sans); font-size: var(--font-editor-size); line-height: var(--font-editor-line-height); caret-color: var(--color-accent-primary); }
 .milkdown-host :deep(.ProseMirror-selectednode) { outline-color: var(--color-accent-primary); }
 .milkdown-host :deep(.ProseMirror p) { font-weight: 400; }
+/* Mermaid measures HTML labels outside the editor. Crepe's paragraph padding
+   must not enlarge them after insertion into fixed-size SVG foreignObjects. */
+.milkdown-host :deep(.editor-mermaid-preview svg foreignObject p) { margin: 0; padding: 0; line-height: inherit; font-weight: inherit; }
 .milkdown-host :deep(.ProseMirror h1), .milkdown-host :deep(.ProseMirror h2), .milkdown-host :deep(.ProseMirror h3), .milkdown-host :deep(.ProseMirror h4), .milkdown-host :deep(.ProseMirror h5), .milkdown-host :deep(.ProseMirror h6) { font-weight: 700; }
 .milkdown-host :deep(.font-size-marker) { display: none; }
 .milkdown-host :deep(.milkdown-code-block) { overflow: visible; border: 1px solid var(--color-code-border); border-radius: 6px; background: var(--color-code-background); color: var(--color-code-text); }
@@ -403,6 +431,7 @@ defineExpose({ getEditor: () => crepe?.editor })
 .milkdown-host :deep(.milkdown-list-item-block li .label-wrapper) { color: var(--color-markdown-marker); font-weight: 700; }
 .milkdown-host :deep(.milkdown-list-item-block li .label-wrapper svg) { fill: var(--color-markdown-marker); }
 .milkdown-host :deep(code) { font-family: var(--font-editor-mono); }
+.milkdown-host :deep(.ProseMirror :not(pre) > code) { padding: .12em .35em; border: 1px solid var(--color-code-border); border-radius: var(--radius-sm); background: var(--color-code-background); color: var(--color-code-text); font-size: .9em; box-decoration-break: clone; }
 :global([data-theme='dark'] .milkdown-host .milkdown) { color-scheme: dark; }
 @media (max-width: 680px) { .toolbar-select select { min-width: 46px; width: 46px; } }
 </style>

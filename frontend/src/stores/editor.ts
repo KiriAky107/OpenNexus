@@ -67,6 +67,7 @@ export const useEditorStore = defineStore('editor', () => {
         if (currentFilePath.value === targetPath) saveStatus.value = 'save_failed'
       } finally {
         pendingSave = null
+        if (currentFilePath.value === targetPath && saveStatus.value === 'dirty') scheduleAutoSave()
       }
     })()
     return pendingSave

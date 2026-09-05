@@ -1,0 +1,15 @@
+id: markdown-workbench
+name: Markdown 笔记检查
+version: 1.0.0
+description: 本地检查 Markdown 标题层级、重复标题、未完成任务和未闭合代码围栏，返回原文行号。
+permissions: []
+contributes:
+  tools: [markdown-workbench.inspect_markdown]
+  commands: [markdown-workbench.inspect-selection]
+backend:
+  type: mcp
+  transport: stdio
+  command: python
+  args: [-u, server.py]
+  startup_timeout_seconds: 10
+  tool_timeout_seconds: 10

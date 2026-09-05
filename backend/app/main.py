@@ -25,6 +25,8 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        from app.services import index_service
+        await index_service.shutdown()
         await transcription_service.shutdown()
         from app.local_models import components
         await components.shutdown()
