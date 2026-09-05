@@ -1,0 +1,221 @@
+theme_id: paper-moments
+name: 纸间时光 · Paper Moments
+version: 1.2.0
+author: NotesAgent
+description: 奶油纸张、手帐虚线与粉蓝胶带，把每天的灵感好好收藏。
+min_app_version: 0.2.0
+is_dark: false
+css_entry: theme.css
+license: MIT
+---
+[data-theme="paper-moments"] {
+  color-scheme: light;
+  --color-background-primary: #faf7ee;
+  --color-background-secondary: #f3eee3;
+  --color-background-tertiary: #ece5d7;
+  --color-background-hover: #f1e5da;
+  --color-background-active: #ecdbd2;
+  --color-background-overlay: rgba(65, 55, 45, .35);
+  --color-surface-primary: #fffdf5;
+  --color-surface-secondary: #f7f1e5;
+  --color-surface-elevated: #fffdf7;
+  --color-text-primary: #493f35;
+  --color-text-secondary: #6e6053;
+  --color-text-tertiary: #7d6b5e;
+  --color-text-inverse: #fffdf5;
+  --color-text-link: #875343;
+  --color-text-disabled: #9c9081;
+  --color-accent-primary: #875343;
+  --color-accent-primary-hover: #704334;
+  --color-accent-primary-active: #5e382b;
+  --color-accent-secondary: #a77a67;
+  --color-accent-soft: #f3e1d8;
+  --color-accent-soft-hover: #ecd3c7;
+  --color-border-default: #b5a693;
+  --color-border-subtle: #ded5c5;
+  --color-border-focus: #875343;
+  --color-border-disabled: #e2dacc;
+  --color-success: #526849;
+  --color-success-soft: #e5ecd9;
+  --color-warning: #806323;
+  --color-warning-soft: #faf0cb;
+  --color-error: #a0423c;
+  --color-error-soft: #f8e2dc;
+  --color-info: #456671;
+  --color-info-soft: #e1eef0;
+  --color-markdown-grid: #ded5c5;
+  --color-markdown-marker: #a77a67;
+  --color-markdown-table-header: #eee7d7;
+  --shadow-sm: 2px 3px 0 #e5ded0;
+  --shadow-md: 3px 4px 0 #dae5df, 6px 7px 0 #f0d8cf;
+  --shadow-lg: 4px 5px 0 #dae5df, 8px 9px 0 #f0d8cf;
+  --shadow-xl: 5px 6px 0 #dae5df, 10px 11px 0 #f0d8cf, 0 18px 42px #493f3520;
+}
+
+[data-theme="paper-moments"] body,
+[data-theme="paper-moments"] .feature-page,
+[data-theme="paper-moments"] .main-content {
+  background-color: var(--color-background-primary);
+  background-image: radial-gradient(#b5a69350 .8px, transparent .8px);
+  background-size: 20px 20px;
+}
+
+[data-theme="paper-moments"] .feature-header {
+  flex-wrap: wrap;
+  position: relative;
+  padding: 24px;
+  margin-top: 12px;
+  border: 1px solid #685949;
+  outline: 1px dashed #b5a693;
+  outline-offset: -8px;
+  border-radius: 12px 5px 12px 5px;
+  background: #fffdf5;
+  box-shadow: var(--shadow-md);
+}
+
+[data-theme="paper-moments"] .feature-header::before,
+[data-theme="paper-moments"] .editor-preview::before {
+  content: '';
+  position: absolute;
+  top: -10px;
+  left: 42%;
+  width: 86px;
+  height: 22px;
+  background: repeating-linear-gradient(45deg, #c5dfe0b0 0 8px, #daeceba0 8px 16px);
+  transform: rotate(-3deg);
+  pointer-events: none;
+}
+
+[data-theme="paper-moments"] .feature-header h1,
+[data-theme="paper-moments"] .panel-title,
+[data-theme="paper-moments"] .preview-heading h3 {
+  color: #875343;
+  font-family: Georgia, 'Noto Serif SC', 'Songti SC', SimSun, serif;
+  letter-spacing: .04em;
+}
+
+[data-theme="paper-moments"] .panel,
+[data-theme="paper-moments"] .item-card {
+  border-color: #b5a693;
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+}
+
+[data-theme="paper-moments"] .theme-card:nth-child(3n + 1) { background: #f8e9e3; }
+[data-theme="paper-moments"] .theme-card:nth-child(3n + 2) { background: #e8f0f0; }
+[data-theme="paper-moments"] .theme-card:nth-child(3n) { background: #fbf3d8; }
+
+[data-theme="paper-moments"] .editor-preview {
+  position: relative;
+  border: 1px solid #685949;
+  border-radius: 4px 14px 4px 10px;
+  background-color: #fffef8;
+  background-image: linear-gradient(90deg, transparent 20px, #e9cfc780 20px 22px, transparent 22px), repeating-linear-gradient(transparent 0 31px, #b6c7bd55 31px 32px);
+  box-shadow: 4px 5px 0 #e3e9d7;
+}
+
+[data-theme="paper-moments"] .editor-preview::before {
+  background: repeating-linear-gradient(45deg, #e7bcb3b0 0 8px, #f2d4cba0 8px 16px);
+}
+
+[data-theme="paper-moments"] .modal { border-color: #685949; border-radius: 12px; }
+[data-theme="paper-moments"] .upload-area { background: #fbf6e7; }
+[data-theme="paper-moments"] .button-secondary { background: #fff9e5; }
+
+[data-theme="paper-moments"] .workspace-view,
+[data-theme="paper-moments"] .visual-editor {
+  background: radial-gradient(#b5a69355 .8px, transparent .8px) 0 0 / 20px 20px #f3eee3;
+}
+[data-theme="paper-moments"] .secondary-sidebar {
+  background: #fff9e9;
+  border-right: 1px dashed #b5a693;
+}
+[data-theme="paper-moments"] .primary-sidebar { background: #f1e9dc; }
+[data-theme="paper-moments"] .file-tree-panel .toolbar,
+[data-theme="paper-moments"] .sidebar-header { background: #e5eeee; border-bottom: 1px dashed #b5a693; }
+[data-theme="paper-moments"] .editor-header { background: #f8e9e3; border-bottom: 1px solid #b5a693; }
+[data-theme="paper-moments"] .markdown-toolbar { background: #fff9e9; border-bottom: 1px dashed #b5a693; }
+[data-theme="paper-moments"] .milkdown-host { padding: 30px 24px 40px; }
+[data-theme="paper-moments"] .milkdown-host .milkdown { background: transparent; }
+[data-theme="paper-moments"] .milkdown-host .ProseMirror {
+  width: 90%;
+  max-width: none;
+  position: relative;
+  min-height: calc(100vh - 220px);
+  padding: 44px 40px 60px 52px;
+  border: 1px solid #685949;
+  border-radius: 8px 16px 8px 8px;
+  outline: 1px dashed #c5b9a7;
+  outline-offset: -10px;
+  background: linear-gradient(90deg, transparent 32px, #e9cfc7 32px 34px, transparent 34px), #fffef8;
+  box-shadow: 6px 6px 0 #d8e6e2, 12px 12px 0 #f0d8cf;
+}
+[data-theme="paper-moments"] .milkdown-host .ProseMirror::before {
+  content: '';
+  position: absolute;
+  top: -11px;
+  left: calc(50% - 48px);
+  width: 96px;
+  height: 24px;
+  background: repeating-linear-gradient(45deg, #e7bcb3c0 0 8px, #f2d4cbc0 8px 16px);
+  transform: rotate(-3deg);
+  pointer-events: none;
+}
+[data-theme="paper-moments"] .milkdown-host .ProseMirror > p {
+  background-image: repeating-linear-gradient(transparent 0 calc(1lh - 1px), #b6c7bd55 calc(1lh - 1px) 1lh);
+}
+[data-theme="paper-moments"] .milkdown-host .ProseMirror > :is(h1, h2, h3) { color: #875343; }
+[data-theme="paper-moments"] .editor-pane.source { margin: 20px; width: calc(100% - 40px); border: 1px solid #b5a693; border-radius: 8px; background: #fffef8; box-shadow: var(--shadow-md); }
+@media (max-width: 720px) {
+  [data-theme="paper-moments"] .milkdown-host { padding: 20px 12px 28px; }
+  [data-theme="paper-moments"] .milkdown-host .ProseMirror { width: 100%; padding: 30px 18px 40px 38px; }
+}
+
+/* Warm neutral surfaces preserve the contrast of the selected Shiki palette. */
+[data-theme="paper-moments"][data-code-theme="github-light"] {
+  --color-code-background: #f1ecdf;
+  --color-code-text: #302b25;
+  --color-code-muted: #6d6256;
+  --color-code-border: #b1a18b;
+}
+[data-theme="paper-moments"][data-code-theme="github-dark"] {
+  --color-code-background: #282723;
+  --color-code-text: #f1e9da;
+  --color-code-muted: #bdb19f;
+  --color-code-border: #786b59;
+}
+[data-theme="paper-moments"] .milkdown-host .milkdown-code-block {
+  position: relative;
+  padding-top: 34px;
+  padding-bottom: 30px;
+  border-color: var(--color-code-border);
+  box-shadow: 3px 4px 0 #d8cebd;
+}
+[data-theme="paper-moments"] .milkdown-code-block::before {
+  content: '';
+  position: absolute;
+  top: 15px;
+  left: 18px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #c77768;
+  box-shadow: 18px 0 0 #c9a65d, 36px 0 0 #819b75;
+  pointer-events: none;
+}
+[data-theme="paper-moments"] .milkdown-code-block::after {
+  content: attr(data-language-label);
+  position: absolute;
+  right: 18px;
+  bottom: 9px;
+  max-width: calc(100% - 36px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-code-muted);
+  font: 600 12px/1.4 var(--font-ui-mono);
+  pointer-events: none;
+}
+[data-theme="paper-moments"] .milkdown-code-block .tools { margin-left: 72px; }
+[data-theme="paper-moments"] .milkdown-code-block .cm-activeLine,
+[data-theme="paper-moments"] .milkdown-code-block .cm-activeLineGutter { background: color-mix(in srgb, var(--color-code-text) 7%, transparent); }
