@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import type { AgentRun, AgentEvent, ToolDefinition, PermissionRequest, ToolCall } from '@/contracts'
 import * as agentService from '@/services/agentService'
 import type { SseClient } from '@/services/sseClient'
+import { t } from '@/i18n'
 
 export const useAgentStore = defineStore('agent', () => {
   const runs = ref<AgentRun[]>([])
@@ -93,7 +94,7 @@ export const useAgentStore = defineStore('agent', () => {
         tool_name: String(call.name ?? 'unknown'),
         permission: String(data.permission ?? ''),
         parameters: (call.arguments ?? {}) as Record<string, unknown>,
-        impact: '该工具需要获得权限后才能继续执行。',
+        impact: t('该工具需要获得权限后才能继续执行。', 'This tool requires permission before it can continue.'),
       }
       if (run) run.status = 'waiting_permission'
     } else if (['RunCompleted', 'RunFailed', 'RunCancelled'].includes(event.event)) {

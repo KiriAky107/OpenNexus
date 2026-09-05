@@ -24,6 +24,8 @@ const isLoading = ref(false)
 const isSaving = ref(false)
 const saveError = ref('')
 const hasChanges = ref(false)
+let editVersion = 0
+let loadVersion = 0
 
 const nonSecretFields = computed(() =>
   schema.value?.fields.filter((f) => f.type !== 'secret') ?? []
@@ -34,36 +36,49 @@ const secretFields = computed(() =>
 )
 
 async function load() {
+  const version = ++loadVersion
+  const pluginId = props.pluginId
   isLoading.value = true
+  isSaving.value = false
   saveError.value = ''
+  schema.value = null
+  Object.keys(secrets).forEach(key => delete secrets[key])
   try {
-    schema.value = await getPluginSettings(props.pluginId)
+    const loaded = await getPluginSettings(pluginId)
+    if (version !== loadVersion) return
+    schema.value = loaded
     Object.keys(values).forEach((k) => delete values[k])
     Object.assign(values, schema.value.values)
     hasChanges.value = false
+    editVersion = 0
   } catch (error) {
-    emit('error', error instanceof Error ? error.message : '设置加载失败')
+    if (version === loadVersion) emit('error', error instanceof Error ? error.message : '设置加载失败')
   } finally {
-    isLoading.value = false
+    if (version === loadVersion) isLoading.value = false
   }
 }
 
 async function save() {
-  if (!schema.value) return
+  if (!schema.value || isSaving.value) return
+  const version = loadVersion
+  const submittedEditVersion = editVersion
+  const pluginId = props.pluginId
   isSaving.value = true
   saveError.value = ''
   try {
-    schema.value = await updatePluginSettings(
-      props.pluginId,
+    const saved = await updatePluginSettings(
+      pluginId,
       schema.value.schema_version,
       { ...values }
     )
-    hasChanges.value = false
+    if (version !== loadVersion) return
+    schema.value = saved
+    hasChanges.value = editVersion !== submittedEditVersion
     emit('saved')
   } catch (error) {
-    saveError.value = error instanceof Error ? error.message : '保存失败'
+    if (version === loadVersion) saveError.value = error instanceof Error ? error.message : '保存失败'
   } finally {
-    isSaving.value = false
+    if (version === loadVersion) isSaving.value = false
   }
 }
 
@@ -108,6 +123,7 @@ function setFieldValue(key: string, value: unknown, field: PluginSettingField) {
     values[key] = value
   }
   hasChanges.value = true
+  editVersion++
 }
 
 onMounted(load)

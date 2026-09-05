@@ -5,6 +5,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useProviderStore } from '@/stores/provider'
 import { useAgentStore } from '@/stores/agent'
 import { useRoute } from 'vue-router'
+import { t } from '@/i18n'
 
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
@@ -15,12 +16,12 @@ const route = useRoute()
 const saveStatusText = computed(() => {
   const map: Record<string, string> = {
     idle: '',
-    dirty: '未保存',
-    saving: '保存中...',
-    saved: '已保存',
-    save_failed: '保存失败',
-    external_changed: '外部已更新',
-    conflict: '存在冲突',
+    dirty: t('未保存', 'Unsaved'),
+    saving: t('保存中...', 'Saving...'),
+    saved: t('已保存', 'Saved'),
+    save_failed: t('保存失败', 'Save failed'),
+    external_changed: t('外部已更新', 'Changed externally'),
+    conflict: t('存在冲突', 'Conflict'),
   }
   return map[editorStore.saveStatus] || ''
 })
@@ -39,16 +40,16 @@ const saveStatusColor = computed(() => {
 
 const indexStatusText = computed(() => {
   const s = settingsStore.indexStatus.status
-  return s === 'unknown' ? '索引状态未获取' : s === 'idle' ? '索引就绪' : s === 'indexing' ? `索引中 (${settingsStore.indexStatus.pending_jobs})` : '索引错误'
+  return s === 'unknown' ? t('索引状态未获取', 'Index status unavailable') : s === 'idle' ? t('索引就绪', 'Index ready') : s === 'indexing' ? `${t('索引中', 'Indexing')} (${settingsStore.indexStatus.pending_jobs})` : t('索引错误', 'Index error')
 })
 
 const aiCoreStatusText = computed(() => {
   const map: Record<string, string> = {
-    unknown: 'AI Core 状态未获取',
-    starting: 'AI Core 启动中',
-    running: 'AI Core 运行中',
-    stopped: 'AI Core 已停止',
-    error: 'AI Core 错误',
+    unknown: t('AI Core 状态未获取', 'AI Core status unavailable'),
+    starting: t('AI Core 启动中', 'AI Core starting'),
+    running: t('AI Core 运行中', 'AI Core running'),
+    stopped: t('AI Core 已停止', 'AI Core stopped'),
+    error: t('AI Core 错误', 'AI Core error'),
   }
   return map[settingsStore.aiCoreStatus] || ''
 })
@@ -85,7 +86,7 @@ const showEditorInfo = computed(() => route.name === 'workspace')
       </span>
       <span v-if="agentStore.isRunning" class="status-item agent-status">
         <span class="spinner" />
-        智能体运行中
+        {{ t('智能体运行中', 'Agent running') }}
       </span>
     </div>
     <div class="statusbar-right">
@@ -93,10 +94,10 @@ const showEditorInfo = computed(() => route.name === 'workspace')
         {{ defaultProvider.name }} · {{ defaultProvider.default_model }}
       </span>
       <span v-if="showEditorInfo" class="status-item">
-        {{ editorStore.lineCount }} 行
+        {{ editorStore.lineCount }} {{ t('行', 'lines') }}
       </span>
       <span v-if="showEditorInfo" class="status-item">
-        {{ editorStore.wordCount }} 字
+        {{ editorStore.wordCount }} {{ t('字', 'words') }}
       </span>
     </div>
   </footer>

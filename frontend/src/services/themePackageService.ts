@@ -209,7 +209,6 @@ export async function installTheme(
   if (warnings.length > 0) {
     console.warn('[theme] CSS validation warnings:', warnings)
   }
-  applyThemeCss(manifest.theme_id, cssContent)
   const installed: InstalledTheme = {
     theme_id: manifest.theme_id,
     name: manifest.name,
@@ -233,14 +232,7 @@ export async function installTheme(
 }
 
 export async function listInstalledThemes(): Promise<InstalledTheme[]> {
-  const themes = loadStoredThemes()
-  for (const theme of themes) {
-    if (!theme.builtin) {
-      const css = localStorage.getItem(`${STORAGE_KEY}-css-${theme.theme_id}`)
-      if (css) applyThemeCss(theme.theme_id, css)
-    }
-  }
-  return themes
+  return loadStoredThemes()
 }
 
 export async function enableTheme(themeId: string): Promise<InstalledTheme> {
@@ -279,6 +271,11 @@ export function getActiveCustomTheme(): string | null {
 }
 
 export function setActiveCustomTheme(themeId: string | null) {
+  const css = themeId ? localStorage.getItem(`${STORAGE_KEY}-css-${themeId}`) : null
+  // Validate before changing the current page. Only the selected theme owns a style node.
+  if (css) validateCssSafety(css)
+  document.head.querySelectorAll('style[id^="theme-style-"]').forEach(style => style.remove())
+  if (themeId && css) applyThemeCss(themeId, css)
   if (themeId) localStorage.setItem(ACTIVE_CUSTOM_KEY, themeId)
   else localStorage.removeItem(ACTIVE_CUSTOM_KEY)
 }

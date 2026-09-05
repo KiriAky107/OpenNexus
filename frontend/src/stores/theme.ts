@@ -2,11 +2,12 @@ import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import type { ThemeConfig, ThemeManifest, InstalledTheme, ThemePackageInspection } from '@/contracts'
 import * as themePkg from '@/services/themePackageService'
+import { t } from '@/i18n'
 
-const builtinThemes: ThemeConfig[] = [
-  { theme_id: 'light', name: '浅色', version: '1.0.0', description: '默认浅色主题', is_dark: false, builtin: true, code_theme: 'github-light' },
-  { theme_id: 'dark', name: '深色', version: '1.0.0', description: '默认深色主题', is_dark: true, builtin: true, code_theme: 'github-dark' },
-  { theme_id: 'sepia', name: '护眼', version: '1.0.0', description: '护眼暖色调', is_dark: false, builtin: true, code_theme: 'github-light' },
+const builtinThemes = (): ThemeConfig[] => [
+  { theme_id: 'light', name: t('浅色', 'Light'), version: '1.0.0', description: t('默认浅色主题', 'Default light theme'), is_dark: false, builtin: true, code_theme: 'github-light' },
+  { theme_id: 'dark', name: t('深色', 'Dark'), version: '1.0.0', description: t('默认深色主题', 'Default dark theme'), is_dark: true, builtin: true, code_theme: 'github-dark' },
+  { theme_id: 'sepia', name: t('护眼', 'Sepia'), version: '1.0.0', description: t('护眼暖色调', 'Warm, low-glare theme'), is_dark: false, builtin: true, code_theme: 'github-light' },
 ]
 
 export type CodeBlockThemePreference = 'auto' | 'github-light' | 'github-dark'
@@ -38,7 +39,7 @@ const builtinToInstalled = (t: ThemeConfig): InstalledTheme => ({
 })
 
 export const useThemeStore = defineStore('theme', () => {
-  const themes = ref<ThemeConfig[]>([...builtinThemes])
+  const themes = computed<ThemeConfig[]>(() => [...builtinThemes(), ...installedCustomThemes.value.map(theme => ({ ...theme, description: theme.description ?? '' }))])
   const installedCustomThemes = ref<InstalledTheme[]>([])
   const currentThemeId = ref<string>('light')
   const fontEditorSize = ref(15)
@@ -53,7 +54,7 @@ export const useThemeStore = defineStore('theme', () => {
   let appearanceHydrated = false
 
   const allThemes = computed<InstalledTheme[]>(() => [
-    ...builtinThemes.map(builtinToInstalled),
+    ...builtinThemes().map(builtinToInstalled),
     ...installedCustomThemes.value,
   ])
 
@@ -72,6 +73,7 @@ export const useThemeStore = defineStore('theme', () => {
   function applyTheme(themeId: string, options: { persist?: boolean } = {}): boolean {
     const theme = allThemes.value.find((t) => t.theme_id === themeId)
     if (!theme) return false
+    themePkg.setActiveCustomTheme(theme.builtin ? null : themeId)
     currentThemeId.value = themeId
     const root = document.documentElement
     if (theme.builtin) {
@@ -90,7 +92,7 @@ export const useThemeStore = defineStore('theme', () => {
   }
 
   function isBuiltinThemeId(themeId: string): boolean {
-    return builtinThemes.some((t) => t.theme_id === themeId)
+    return builtinThemes().some((t) => t.theme_id === themeId)
   }
 
   function systemThemeId(): string {
@@ -142,16 +144,6 @@ export const useThemeStore = defineStore('theme', () => {
     try {
       const list = await themePkg.listInstalledThemes()
       installedCustomThemes.value = list
-      themes.value = [...builtinThemes, ...list.map((t) => ({
-        theme_id: t.theme_id,
-        name: t.name,
-        version: t.version,
-        description: t.description ?? '',
-        is_dark: t.is_dark,
-        builtin: false,
-        author: t.author,
-        code_theme: t.code_theme,
-      }))]
       themeLoadWarning.value = null
     } catch (error) {
       // 只保留内置主题，但要让用户知道自定义主题这次没加载上。
@@ -206,19 +198,7 @@ export const useThemeStore = defineStore('theme', () => {
       const idx = installedCustomThemes.value.findIndex((t) => t.theme_id === installed.theme_id)
       if (idx >= 0) installedCustomThemes.value[idx] = installed
       else installedCustomThemes.value.push(installed)
-      const themeConfig: ThemeConfig = {
-        theme_id: installed.theme_id,
-        name: installed.name,
-        version: installed.version,
-        description: installed.description ?? '',
-        is_dark: installed.is_dark,
-        builtin: false,
-        author: installed.author,
-        code_theme: installed.code_theme,
-      }
-      const existingIdx = themes.value.findIndex((t) => t.theme_id === installed.theme_id)
-      if (existingIdx >= 0) themes.value[existingIdx] = themeConfig
-      else themes.value.push(themeConfig)
+      if (currentThemeId.value === installed.theme_id) applyTheme(installed.theme_id)
       pendingInspection.value = null
       return installed
     } catch (error) {
@@ -232,7 +212,6 @@ export const useThemeStore = defineStore('theme', () => {
   async function uninstallTheme(themeId: string) {
     await themePkg.uninstallTheme(themeId)
     installedCustomThemes.value = installedCustomThemes.value.filter((t) => t.theme_id !== themeId)
-    themes.value = themes.value.filter((t) => t.theme_id !== themeId || t.builtin)
     if (currentThemeId.value === themeId) {
       applyTheme('light')
     }
@@ -246,19 +225,7 @@ export const useThemeStore = defineStore('theme', () => {
       const idx = installedCustomThemes.value.findIndex((t) => t.theme_id === installed.theme_id)
       if (idx >= 0) installedCustomThemes.value[idx] = installed
       else installedCustomThemes.value.push(installed)
-      const themeConfig: ThemeConfig = {
-        theme_id: installed.theme_id,
-        name: installed.name,
-        version: installed.version,
-        description: installed.description ?? '',
-        is_dark: installed.is_dark,
-        builtin: false,
-        author: installed.author,
-        code_theme: installed.code_theme,
-      }
-      const existingIdx = themes.value.findIndex((t) => t.theme_id === installed.theme_id)
-      if (existingIdx >= 0) themes.value[existingIdx] = themeConfig
-      else themes.value.push(themeConfig)
+      if (currentThemeId.value === installed.theme_id) applyTheme(installed.theme_id)
       return installed
     } catch (error) {
       importError.value = error instanceof Error ? error.message : '安装失败'

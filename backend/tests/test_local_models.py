@@ -47,7 +47,7 @@ def test_local_model_missing_is_explicit():
 def test_cancel_reaps_active_model_process(monkeypatch):
     import app.local_models.runtime as module
     monkeypatch.setattr(module,'read_state',lambda key:{'status':'installed'})
-    monkeypatch.setattr(module,'interpreter',lambda:Path(sys.executable))
+    monkeypatch.setattr(module,'interpreter',lambda *_:Path(sys.executable))
     class Input:
         def write(self, value):
             request = json.loads(value)
@@ -92,7 +92,7 @@ def test_subprocess_fallback_runs_and_reaps_real_worker(monkeypatch, tmp_path, c
     import app.local_models.process as process_module
 
     monkeypatch.setattr(module, 'read_state', lambda key: {'status': 'installed'})
-    monkeypatch.setattr(module, 'interpreter', lambda: Path(sys.executable))
+    monkeypatch.setattr(module, 'interpreter', lambda *_: Path(sys.executable))
     worker = tmp_path / 'worker.py'
     worker.write_text(
         'import json,sys,time\n'

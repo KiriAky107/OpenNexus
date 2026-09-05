@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import { Refresh, VideoPlay } from '@element-plus/icons-vue'
 import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -51,7 +52,7 @@ async function load() {
     for (const command of mine) next[command.command_id] = initialArguments(command)
     argumentsByCommand.value = next
   } catch (reason) {
-    if (version === loadVersion) error.value = reason instanceof Error ? reason.message : '命令加载失败'
+    if (version === loadVersion) error.value = reason instanceof Error ? reason.message : t('命令加载失败', 'Failed to load commands')
   } finally {
     if (version === loadVersion) loading.value = false
   }
@@ -125,7 +126,7 @@ async function execute(command: PluginCommand) {
       notify: (text) => { notice.value = text },
     })
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '命令执行失败'
+    error.value = reason instanceof Error ? reason.message : t('命令执行失败', 'Command failed')
   } finally {
     busy.value = ''
   }
@@ -136,11 +137,11 @@ async function execute(command: PluginCommand) {
   <div class="command-panel">
     <div class="section-head">
       <div>
-        <h3>Plugin 命令</h3>
-        <p>执行该 Plugin 注册的受控 Command Contribution；参数表单由后端声明的 JSON Schema 生成。</p>
+        <h3>{{ t('Plugin 命令', 'Plugin commands') }}</h3>
+        <p>{{ t('执行该 Plugin 注册的受控 Command Contribution；参数表单由后端声明的 JSON Schema 生成。', 'Run controlled plugin commands using the parameter form defined by the plugin.') }}</p>
       </div>
       <button class="button-secondary" :disabled="loading" @click="load">
-        <AppIcon :icon="Refresh" :size="15" />刷新
+        <AppIcon :icon="Refresh" :size="15" />{{ t('刷新', 'Refresh') }}
       </button>
     </div>
 
@@ -160,14 +161,14 @@ async function execute(command: PluginCommand) {
               success: commandAvailable(command),
               warning: command.enabled && !commandAvailable(command),
             }"
-          >{{ commandAvailable(command) ? '可执行' : command.enabled ? '缺少上下文' : '不可用' }}</span>
+          >{{ commandAvailable(command) ? t('可执行', 'Available') : command.enabled ? t('缺少上下文', 'Missing context') : t('不可用', 'Unavailable') }}</span>
         </div>
 
         <div v-if="commandFields(command).length" class="command-fields">
           <label v-for="field in commandFields(command)" :key="field.key" class="field">
             <span>
               {{ field.title }}
-              <em v-if="field.required">必填</em>
+              <em v-if="field.required">{{ t('必填', 'Required') }}</em>
             </span>
             <select
               v-if="field.enum"
@@ -175,7 +176,7 @@ async function execute(command: PluginCommand) {
               :value="fieldValue(command.command_id, field)"
               @change="updateArgument(command.command_id, field, ($event.target as HTMLSelectElement).value)"
             >
-              <option value="">请选择</option>
+              <option value="">{{ t('请选择', 'Select') }}</option>
               <option v-for="option in field.enum" :key="option" :value="option">{{ option }}</option>
             </select>
             <select
@@ -184,8 +185,8 @@ async function execute(command: PluginCommand) {
               :value="fieldValue(command.command_id, field)"
               @change="updateArgument(command.command_id, field, ($event.target as HTMLSelectElement).value)"
             >
-              <option value="false">否</option>
-              <option value="true">是</option>
+              <option value="false">{{ t('否', 'No') }}</option>
+              <option value="true">{{ t('是', 'Yes') }}</option>
             </select>
             <input
               v-else
@@ -209,12 +210,12 @@ async function execute(command: PluginCommand) {
           @click="execute(command)"
         >
           <AppIcon :icon="VideoPlay" :size="15" />
-          {{ busy === command.command_id ? '执行中…' : '执行命令' }}
+          {{ busy === command.command_id ? t('执行中…', 'Running…') : t('执行命令', 'Run command') }}
         </button>
       </article>
     </div>
     <div v-else-if="!loading" class="empty-state">
-      <div><strong>没有可用命令</strong><p>启用 Plugin 后，已注册的命令会出现在这里。</p></div>
+      <div><strong>{{ t('没有可用命令', 'No available commands') }}</strong><p>{{ t('启用 Plugin 后，已注册的命令会出现在这里。', 'Registered commands appear here after the Plugin is enabled.') }}</p></div>
     </div>
   </div>
 </template>

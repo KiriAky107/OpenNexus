@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { t } from '@/i18n'
 
 const routes = [
   { path: '/media', name: 'media', component: () => import('@/features/media/MediaView.vue'), meta: { title: '音视频转写', requiresVault: true } },
@@ -87,10 +88,26 @@ router.beforeEach((to) => {
   return true
 })
 
-router.afterEach((to) => {
+export function updateDocumentTitle(to = router.currentRoute.value) {
   const baseTitle = 'NotesAgent'
-  const title = to.meta.title as string | undefined
+  const titles: Record<string, string> = {
+    media: t('音视频转写', 'Media Transcription'),
+    'vault-entry': t('选择知识库', 'Select Knowledge Base'),
+    workspace: t('工作区', 'Workspace'),
+    search: t('搜索', 'Search'),
+    chat: t('AI 对话', 'AI Chat'),
+    agent: 'Agent Trace',
+    tasks: t('任务', 'Tasks'),
+    skills: t('Skill 管理', 'Skill Management'),
+    'mcp-servers': t('MCP 服务器', 'MCP Servers'),
+    plugins: t('Plugin 与 MCP', 'Plugins and MCP'),
+    themes: t('主题管理', 'Theme Management'),
+    settings: t('设置', 'Settings'),
+  }
+  const title = titles[String(to.name ?? '')] ?? (to.meta.title as string | undefined)
   document.title = title ? `${title} · ${baseTitle}` : baseTitle
-})
+}
+
+router.afterEach(updateDocumentTitle)
 
 export default router

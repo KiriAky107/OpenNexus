@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import { localeTag, t } from '@/i18n'
 import { computed, ref } from 'vue'
 import type { TraceNode, AgentEvent } from '@/contracts'
 import { buildTraceNodes, getToolCallsFromEvents, getTotalDuration } from '@/services/traceService'
-import { eventLabel } from './labels'
+import { eventLabel, localizeDetails } from './labels'
 
 const props = defineProps<{
   events: AgentEvent[]
@@ -64,7 +65,7 @@ function isDetailOpen(nodeId: string): boolean {
 
 function formatTime(iso: string): string {
   const d = new Date(iso)
-  return d.toLocaleTimeString('zh-CN', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0')
+  return d.toLocaleTimeString(localeTag(), { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0')
 }
 
 function formatDuration(ms: number): string {
@@ -111,7 +112,7 @@ function prettyData(data: Record<string, unknown>): string {
   if (typeof filtered.output === 'string' && filtered.output.length > 500) {
     filtered.output = filtered.output.slice(0, 500) + '...'
   }
-  return JSON.stringify(filtered, null, 2)
+  return JSON.stringify(localizeDetails(filtered), null, 2)
 }
 
 function flatNodes(nodes: TraceNode[], depth = 0): Array<{ node: TraceNode; depth: number }> {
@@ -213,7 +214,7 @@ const flatTrace = computed(() => flatNodes(traceNodes.value))
         </article>
 
         <div v-if="!events.length" class="empty-state">
-          <div><strong>等待执行轨迹</strong><p>事件连接建立后将在这里实时显示。</p></div>
+          <div><strong>{{ t('等待执行轨迹', 'Waiting for trace events') }}</strong><p>{{ t('事件连接建立后将在这里实时显示。', 'Events will appear here after the connection is established.') }}</p></div>
         </div>
       </div>
     </div>

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { SaveStatus } from '@/contracts'
 import * as workspaceService from '@/services/workspaceService'
+import { t } from '@/i18n'
 
 export const useEditorStore = defineStore('editor', () => {
   const mode = ref<'wysiwyg' | 'source'>('wysiwyg')
@@ -76,12 +77,12 @@ export const useEditorStore = defineStore('editor', () => {
       saveTimer = null
     }
     if (saveStatus.value === 'conflict') {
-      throw new Error('当前文件存在编辑冲突，请处理后再切换文件。')
+      throw new Error(t('当前文件存在编辑冲突，请处理后再切换文件。', 'The current file has an editing conflict. Resolve it before switching files.'))
     }
     if (pendingSave) await pendingSave
     if (saveStatus.value === 'dirty' || saveStatus.value === 'save_failed') await save()
     if (saveStatus.value === 'dirty' || saveStatus.value === 'save_failed') {
-      throw new Error('当前文件保存失败，已阻止切换以避免内容丢失。')
+      throw new Error(t('当前文件保存失败，已阻止切换以避免内容丢失。', 'The current file could not be saved. Switching was blocked to prevent data loss.'))
     }
     // 版本号使较慢的旧读取不能覆盖用户后选择的新文件。
     const version = ++loadVersion

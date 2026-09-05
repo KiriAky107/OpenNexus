@@ -5,6 +5,7 @@ import type { SearchResult } from '@/contracts'
 import { useEditorStore } from '@/stores/editor'
 import { useSearchStore } from '@/stores/search'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { t } from '@/i18n'
 
 const searchStore = useSearchStore()
 onMounted(() => { void searchStore.loadHistory() })
@@ -34,28 +35,28 @@ async function openResult(result: SearchResult) {
 <template>
   <section class="feature-page search-page">
     <header class="feature-header">
-      <div><h1>搜索知识库</h1><p>在当前 Vault 中进行全文、向量或混合检索。</p></div>
+      <div><h1>{{ t('搜索知识库', 'Search Knowledge Base') }}</h1><p>{{ t('在当前 Vault 中进行全文、向量或混合检索。', 'Run full-text, vector, or hybrid search in the current Vault.') }}</p></div>
     </header>
     <form class="search-form panel" @submit.prevent="submitSearch">
-      <input v-model="searchStore.query" class="input search-input" placeholder="搜索笔记内容、标题或标签" autofocus />
+      <input v-model="searchStore.query" class="input search-input" :placeholder="t('搜索笔记内容、标题或标签', 'Search note content, titles, or tags')" autofocus />
       <button class="button-primary" :disabled="!searchStore.query.trim() || searchStore.isSearching">
-        {{ searchStore.isSearching ? '搜索中…' : '搜索' }}
+        {{ searchStore.isSearching ? t('搜索中…', 'Searching…') : t('搜索', 'Search') }}
       </button>
       <div class="form-grid advanced">
-        <div class="field"><label>文件夹范围</label><input v-model="folder" class="input" placeholder="例如 /数据结构" /></div>
-        <div class="field"><label>标签</label><input v-model="tag" class="input" placeholder="例如 算法" /></div>
+        <div class="field"><label>{{ t('文件夹范围', 'Folder scope') }}</label><input v-model="folder" class="input" :placeholder="t('例如 /数据结构', 'For example /Data Structures')" /></div>
+        <div class="field"><label>{{ t('标签', 'Tag') }}</label><input v-model="tag" class="input" :placeholder="t('例如 算法', 'For example algorithms')" /></div>
       </div>
     </form>
     <div v-if="searchStore.error" class="error-banner">{{ searchStore.error }}</div>
     <div v-if="searchStore.historyError" class="notice-banner">{{ searchStore.historyError }}</div>
     <div v-if="searchStore.recentQueries.length" class="search-history">
-      <span class="subtle">最近搜索（保存在应用数据中）</span>
+      <span class="subtle">{{ t('最近搜索（保存在应用数据中）', 'Recent searches (stored in application data)') }}</span>
       <button v-for="item in searchStore.recentQueries" :key="item" class="button-secondary" @click="searchStore.query = item; submitSearch()">{{ item }}</button>
-      <button class="button-secondary" @click="searchStore.clearHistory">清空记录</button>
+      <button class="button-secondary" @click="searchStore.clearHistory">{{ t('清空记录', 'Clear history') }}</button>
     </div>
-    <div v-if="searchStore.vectorUnavailable" class="notice-banner">向量索引不可用，已保留全文检索能力。</div>
+    <div v-if="searchStore.vectorUnavailable" class="notice-banner">{{ t('向量索引不可用，已保留全文检索能力。', 'Vector search is unavailable; full-text search remains active.') }}</div>
     <div v-if="searchStore.results.length" class="results-header">
-      <span>找到 {{ searchStore.total }} 条结果</span><span class="badge info">{{ searchStore.mode }}</span>
+      <span>{{ t('找到', 'Found') }} {{ searchStore.total }} {{ t('条结果', 'results') }}</span><span class="badge info">{{ searchStore.mode }}</span>
     </div>
     <div v-if="searchStore.results.length" class="result-list">
       <article v-for="result in searchStore.results" :key="`${result.note_id}:${result.block_id}`"
@@ -63,11 +64,11 @@ async function openResult(result: SearchResult) {
         <div class="result-title"><strong>{{ result.note_title }}</strong><span class="badge">{{ result.match_type }}</span></div>
         <p class="subtle">{{ result.file_path }} · {{ result.heading_path }}</p>
         <p class="snippet">{{ result.snippet }}</p>
-        <div class="result-meta"><span>相关度 {{ Math.round(result.score * 100) }}%</span><span>点击定位原文 →</span></div>
+        <div class="result-meta"><span>{{ t('相关度', 'Relevance') }} {{ Math.round(result.score * 100) }}%</span><span>{{ t('点击定位原文 →', 'Open source →') }}</span></div>
       </article>
     </div>
     <div v-else-if="!searchStore.isSearching" class="empty-state">
-      <div><strong>{{ searchStore.query ? '没有找到匹配内容' : '从你的知识库开始搜索' }}</strong><p>可切换检索模式或缩小文件夹、标签范围。</p></div>
+      <div><strong>{{ searchStore.query ? t('没有找到匹配内容', 'No matching content') : t('从你的知识库开始搜索', 'Start searching your knowledge base') }}</strong><p>{{ t('可切换检索模式或缩小文件夹、标签范围。', 'Try another search mode or narrow the folder and tag scope.') }}</p></div>
     </div>
   </section>
 </template>

@@ -53,4 +53,19 @@ describe('EditorPane file switching', () => {
     expect(store.currentFilePath).toBe('/数据结构/红黑树.md')
     expect(wrapper.text()).not.toContain('祝你写作愉快')
   })
+
+  it('applies the saved spell-check and language settings to source mode', async () => {
+    const editor = useEditorStore()
+    const settings = (await import('@/stores/settings')).useSettingsStore()
+    editor.setMode('source')
+    settings.spellCheck = true
+    settings.language = 'en'
+    wrapper = mount(EditorPane, { attachTo: document.body })
+    await nextTick()
+
+    const textarea = wrapper.get('textarea')
+    expect(textarea.attributes('spellcheck')).toBe('true')
+    expect(textarea.attributes('lang')).toBe('en')
+    expect(textarea.attributes('aria-label')).toBe('Markdown source editor')
+  })
 })

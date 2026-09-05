@@ -5,6 +5,10 @@ import router from './router'
 import './styles/tokens.css'
 import './styles/features.css'
 import { useThemeStore } from './stores/theme'
+import { useSettingsStore } from './stores/settings'
+import { watch } from 'vue'
+import { appLocale } from './i18n'
+import { updateDocumentTitle } from './router'
 
 const app = createApp(App)
 const pinia = createPinia()
@@ -13,7 +17,12 @@ app.use(pinia)
 app.use(router)
 
 const themeStore = useThemeStore()
-// initTheme 先同步落内置主题兜底，自定义主题恢复是异步的，不阻塞挂载。
+const settingsStore = useSettingsStore()
 void themeStore.initTheme()
+watch(appLocale, () => updateDocumentTitle())
+watch(() => settingsStore.spellCheck, (enabled) => {
+  document.body.spellcheck = enabled
+  document.body.setAttribute('spellcheck', String(enabled))
+}, { immediate: true })
 
 app.mount('#app')

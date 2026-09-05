@@ -12,6 +12,7 @@ vi.mock('@/services/themePackageService', () => ({
   installTheme: vi.fn(),
   uninstallTheme: vi.fn(),
   installCommunityTheme: vi.fn(),
+  setActiveCustomTheme: vi.fn(),
 }))
 
 const listInstalledThemes = vi.mocked(themePkg.listInstalledThemes)

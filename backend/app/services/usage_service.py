@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from contextlib import closing
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -53,6 +54,7 @@ class UsageAttempt:
         self.capability, self.source = capability, source
         self.started_at = datetime.now(timezone.utc).isoformat()
         self.raw = {}
+        self.audio_seconds = None
         self.completed = False
         context = usage_context.get() or {}
         self.request_id = context.get("request_id") or uuid4().hex
@@ -61,6 +63,9 @@ class UsageAttempt:
     def observe(self, data):
         if not isinstance(data, dict):
             return
+        duration = data.get("audio_seconds", data.get("duration"))
+        if self.capability in {"transcription", "speaker_matching"} and type(duration) in (int, float) and math.isfinite(duration) and 0 <= duration <= 7200:
+            self.audio_seconds = max(self.audio_seconds or 0, duration)
         values = [data.get("usage"), (data.get("message") or {}).get("usage") if isinstance(data.get("message"), dict) else None,
                   (data.get("response") or {}).get("usage") if isinstance(data.get("response"), dict) else None]
         if self.protocol == "ollama":
@@ -87,7 +92,7 @@ class UsageAttempt:
             miss = inputs - hit
         if hit is not None and inputs is not None and hit > inputs:
             hit, miss = None, None
-        return dict(input_tokens=inputs, output_tokens=outputs,
+        return dict(audio_seconds=self.audio_seconds, input_tokens=inputs, output_tokens=outputs,
                     total_tokens=inputs + outputs if inputs is not None and outputs is not None else first("total_tokens"),
                     cache_hit_tokens=hit, cache_miss_tokens=miss, cache_write_tokens=write,
                     reasoning_tokens=first("output_tokens_details.reasoning_tokens", "completion_tokens_details.reasoning_tokens"))
@@ -103,7 +108,7 @@ class UsageAttempt:
 
 
 def aggregate(start, end, provider_id=None, model=None, source=None):
-    query = "SELECT counters_json,completed FROM model_usage WHERE started_at>=? AND started_at<?"
+    query = "SELECT counters_json,completed,capability FROM model_usage WHERE started_at>=? AND started_at<?"
     args = [start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()]
     for column, value in (("provider_id", provider_id), ("model", model), ("source", source)):
         if value:
@@ -115,8 +120,14 @@ def aggregate(start, end, provider_id=None, model=None, source=None):
     totals = {key: None for key in METRICS}
     coverage = {key: 0 for key in METRICS}
     hits, eligible_input, cache_requests = 0, 0, 0
+    audio_requests, audio_covered, audio_seconds = 0, 0, None
     for row in rows:
+        if row[2] in {"transcription", "speaker_matching"}:
+            audio_requests += 1
         counts = json.loads(row[0])
+        if counts.get("audio_seconds") is not None:
+            audio_covered += 1
+            audio_seconds = (audio_seconds or 0) + counts["audio_seconds"]
         for key in METRICS:
             if counts.get(key) is not None:
                 totals[key] = (totals[key] or 0) + counts[key]
@@ -125,7 +136,7 @@ def aggregate(start, end, provider_id=None, model=None, source=None):
             hits += counts["cache_hit_tokens"]
             eligible_input += counts["input_tokens"] if counts.get("input_tokens") is not None else counts["cache_hit_tokens"] + counts["cache_miss_tokens"]
             cache_requests += 1
-    return {"totals": totals, "coverage": coverage, "request_count": len(rows),
+    return {"audio_request_count": audio_requests, "audio_seconds": audio_seconds, "audio_covered_requests": audio_covered, "totals": totals, "coverage": coverage, "request_count": len(rows),
             "complete_requests": sum(row[1] for row in rows), "cache_covered_requests": cache_requests,
             "cache_hit_rate": hits / eligible_input if eligible_input else None,
             "options": [dict(row) for row in options], "start": start, "end": end,
