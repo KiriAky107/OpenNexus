@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
+const { actionDialog, resolveAction, askConfirm, askPrompt } = useActionDialog()
 import { computed, nextTick, ref, watch } from 'vue'
 import { noteOutline } from './outline'
 import { useRouter } from 'vue-router'
@@ -168,7 +171,7 @@ function closeContextMenu() { contextTarget.value = null }
 async function renameTarget() {
   const node = contextTarget.value
   if (!node) return
-  const newName = window.prompt(t('新名称', 'New name'), node.name)?.trim()
+  const newName = (await askPrompt(t('新名称', 'New name'), node.name))?.trim()
   if (newName && newName !== node.name) {
     const normalizedName = node.type === 'file' && !newName.toLowerCase().endsWith('.md') ? `${newName}.md` : newName
     const oldPath = node.path
@@ -190,7 +193,7 @@ async function renameTarget() {
 async function deleteTarget() {
   const node = contextTarget.value
   if (!node) return
-  if (!window.confirm(`${t('确定要删除', 'Delete')} “${node.name}”?`)) return closeContextMenu()
+  if (!(await askConfirm(`${t('确定要删除', 'Delete')} “${node.name}”?`))) return closeContextMenu()
   await workspaceService.deleteFile(node.path)
   const activeWasRemoved = workspaceStore.closePath(node.path)
   workspaceStore.removeFromTree(node.path)
@@ -213,6 +216,7 @@ function containingFolder(path: string): string {
 
 <template>
   <section class="file-tree-panel" @click="closeContextMenu" @keydown.esc="closeContextMenu" @wheel.passive="revealSearch">
+    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <div class="workspace-tabs" role="tablist" :aria-label="t('工作区导航', 'Workspace navigation')" @keydown="navigateTabs">
       <button id="workspace-files-tab" role="tab" aria-controls="workspace-files-panel" :aria-selected="activeTab === 'files'" :tabindex="activeTab === 'files' ? 0 : -1" @click="switchTab('files')">{{ t('文件', 'Files') }}</button>
       <button id="workspace-outline-tab" role="tab" aria-controls="workspace-outline-panel" :aria-selected="activeTab === 'outline'" :tabindex="activeTab === 'outline' ? 0 : -1" @click="switchTab('outline')">{{ t('大纲', 'Outline') }}</button>

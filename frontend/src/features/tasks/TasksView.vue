@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
+const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 import AppDialog from '@/components/common/AppDialog.vue'
 import { onMounted, reactive, ref } from 'vue'
 import type { TaskItem, TaskStatus } from '@/contracts'
@@ -30,13 +33,14 @@ async function setStatus(task: TaskItem, status: TaskStatus) {
 }
 
 async function remove(task: TaskItem) {
-  if (!confirm(`${t('确定删除任务', 'Delete task')} “${task.title}”?`)) return
+  if (!(await askConfirm(`${t('确定删除任务', 'Delete task')} “${task.title}”?`))) return
   try { await taskStore.deleteTask(task.task_id) } catch (error) { actionError.value = error instanceof Error ? error.message : t('任务删除失败', 'Failed to delete task') }
 }
 </script>
 
 <template>
   <section class="feature-page tasks-page">
+    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <header class="feature-header"><div><h1>{{ t('任务', 'Tasks') }}</h1><p>{{ t('管理用户、笔记和 Agent 产生的行动项。', 'Manage action items created by users, notes, and agents.') }}</p></div><button class="button-primary" @click="resetForm(); showForm = true">＋ {{ t('新建任务', 'New task') }}</button></header>
     <div v-if="taskStore.error || actionError" class="error-banner">{{ taskStore.error || actionError }}</div>
     <div v-if="taskStore.filteredTasks.length" class="task-list">

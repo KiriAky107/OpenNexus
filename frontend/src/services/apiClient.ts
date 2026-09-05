@@ -84,6 +84,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 
 export const apiClient = {
+  postBinary<T>(path: string, body: Blob) {
+    return request<T>(path, { method: 'POST', body, headers: { 'Content-Type': 'application/zip' } })
+  },
   get<T>(path: string, options?: Omit<RequestOptions, 'method'>) {
     return request<T>(path, { ...options, method: 'GET' })
   },

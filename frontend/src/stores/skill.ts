@@ -34,7 +34,7 @@ export const useSkillStore = defineStore('skill', () => {
     selectedSkillId.value = skillId
   }
 
-  async function installSkill(packagePath: string) {
+  async function installSkill(packagePath: string | File) {
     const installed = await skillService.installSkill(packagePath)
     const index = skills.value.findIndex((skill) => skill.skill_id === installed.skill_id)
     if (index >= 0) skills.value[index] = installed

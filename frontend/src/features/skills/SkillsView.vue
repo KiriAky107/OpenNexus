@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
+const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 import { Lightning } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import ExtensionInstallDialog from '@/components/common/ExtensionInstallDialog.vue'
@@ -16,13 +19,14 @@ async function toggle(skillId: string, enabled: boolean) {
   try { enabled ? await skillStore.disableSkill(skillId) : await skillStore.enableSkill(skillId) } catch (error) { actionError.value = error instanceof Error ? error.message : t('状态更新失败', 'Status update failed') }
 }
 async function uninstall(skillId: string, name: string) {
-  if (!confirm(`${t('确定卸载 Skill', 'Uninstall Skill')} “${name}”?`)) return
+  if (!(await askConfirm(`${t('确定卸载 Skill', 'Uninstall Skill')} “${name}”?`))) return
   try { await skillStore.uninstallSkill(skillId) } catch (error) { actionError.value = error instanceof Error ? error.message : t('卸载失败', 'Uninstall failed') }
 }
 </script>
 
 <template>
   <section class="feature-page">
+    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <ExtensionInstallDialog v-if="showInstall" kind="Skill" :install="skillStore.installSkill" @close="showInstall = false" @installed="showInstall = false; actionError = ''" />
     <header class="feature-header"><div><h1>{{ t('Skill 管理', 'Skill Management') }}</h1><p>{{ t('查看工作流使用的 Tool、权限、检索配置和模型要求。', 'Review the tools, permissions, retrieval settings, and model requirements used by workflows.') }}</p></div><button class="button-primary" @click="showInstall = true">{{ t('安装 Skill', 'Install Skill') }}</button></header>
     <div v-if="skillStore.error || actionError" class="error-banner">{{ skillStore.error || actionError }}</div>

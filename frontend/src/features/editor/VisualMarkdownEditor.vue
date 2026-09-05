@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
+const { actionDialog, resolveAction, askPrompt } = useActionDialog()
 import DiagramInteractions from '@/components/common/DiagramInteractions.vue'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Link } from '@element-plus/icons-vue'
@@ -119,20 +122,28 @@ function runCommand(command: ToolbarCommand) {
   editorRoot.value?.querySelector<HTMLElement>('.ProseMirror')?.focus()
 }
 
-function applyLink() {
+async function applyLink() {
   if (!crepe) return
-  // TODO(editor): 用受控 Element Plus 对话框替换 prompt，补充 URL 校验和键盘焦点管理。
-  const href = window.prompt(t('请输入链接地址', 'Enter link address'), 'https://')?.trim()
-  if (!href) return
-
-  crepe.editor.action((ctx) => {
+  const editor = crepe
+  const snapshot = editor.editor.action(ctx => {
     const view = ctx.get(editorViewCtx)
+    return { doc: view.state.doc, selection: view.state.selection }
+  })
+  const href = (await askPrompt(t('请输入链接地址', 'Enter link address'), 'https://'))?.trim()
+  if (!href || crepe !== editor) return
+  const label = snapshot.selection.empty ? await askPrompt(t('请输入链接文字', 'Enter link text'), href) : ''
+  if (label === null || crepe !== editor) return
+
+  editor.editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx)
+    if (!view.state.doc.eq(snapshot.doc)) return
+    view.dispatch(view.state.tr.setSelection(snapshot.selection))
     const commands = ctx.get(commandsCtx)
     if (view.state.selection.empty) {
-      const label = window.prompt(t('请输入链接文字', 'Enter link text'), href)?.trim() || href
+      const text = label.trim() || href
       const from = view.state.selection.from
-      const transaction = view.state.tr.insertText(label, from)
-      transaction.setSelection(TextSelection.create(transaction.doc, from, from + label.length))
+      const transaction = view.state.tr.insertText(text, from)
+      transaction.setSelection(TextSelection.create(transaction.doc, from, from + text.length))
       view.dispatch(transaction)
     }
     return commands.call(toggleLinkCommand.key, { href })
@@ -278,6 +289,7 @@ defineExpose({ getEditor: () => crepe?.editor })
 
 <template>
   <DiagramInteractions class="visual-editor">
+    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <div class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
       <label class="toolbar-select heading-select" :title="t('设置标题级别', 'Set heading level')">
         <span class="format-glyph heading-glyph">H</span>

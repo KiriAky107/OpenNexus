@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
+const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 import { computed, onMounted, ref } from 'vue'
 import type { ProviderConfig } from '@/contracts'
 import ProviderForm from './ProviderForm.vue'
@@ -62,7 +65,7 @@ async function providerSaved(provider: ProviderConfig) {
   if (provider.enabled) void providerStore.loadModels(provider.provider_id).catch(() => undefined)
 }
 
-async function removeProvider(provider: ProviderConfig) { if (!confirm(`${t('确定删除 Provider', 'Delete Provider')} “${provider.name}”?`)) return; try { await providerStore.deleteProvider(provider.provider_id) } catch (error) { providerAction.value = error instanceof Error ? error.message : t('删除失败', 'Delete failed') } }
+async function removeProvider(provider: ProviderConfig) { if (!(await askConfirm(`${t('确定删除 Provider', 'Delete Provider')} “${provider.name}”?`))) return; try { await providerStore.deleteProvider(provider.provider_id) } catch (error) { providerAction.value = error instanceof Error ? error.message : t('删除失败', 'Delete failed') } }
 async function testProvider(provider: ProviderConfig) { testResults.value[provider.provider_id] = t('测试中…', 'Testing…'); const result = await providerStore.testProvider(provider.provider_id); testResults.value[provider.provider_id] = result.success ? `${t('连接成功', 'Connection succeeded')}${result.latency_ms ? ` · ${result.latency_ms}ms` : ''}` : `${t('连接失败：', 'Connection failed: ')}${result.error}` }
 async function refreshModels(provider: ProviderConfig) { await providerStore.loadModels(provider.provider_id).catch(() => undefined) }
 async function chooseDefaultModel(provider: ProviderConfig, event: Event) {
@@ -74,6 +77,7 @@ async function chooseDefaultModel(provider: ProviderConfig, event: Event) {
 
 <template>
   <section class="feature-page settings-page">
+    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <header class="feature-header"><div><h1>{{ t('设置', 'Settings') }}</h1><p>{{ t('管理应用偏好、模型、索引、权限和本地 AI Core。', 'Manage application preferences, models, indexing, permissions, and the local AI Core.') }}</p></div></header>
     <nav class="settings-nav"><button v-for="section in sections" :key="section.id" :class="{ active: activeSection === section.id }" @click="activeSection = section.id">{{ section.label }}</button></nav>
 
