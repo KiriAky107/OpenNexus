@@ -2,7 +2,13 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Link } from '@element-plus/icons-vue'
 import { Crepe } from '@milkdown/crepe'
-import { oneDark } from '@codemirror/theme-one-dark'
+import { codeBlockConfig } from '@milkdown/kit/component/code-block'
+import { basicSetup } from 'codemirror'
+import { keymap } from '@codemirror/view'
+import { indentWithTab } from '@codemirror/commands'
+import { shikiEditorTheme, shikiLanguages, renderCodeLanguage } from './shikiCodeMirror'
+import './language-icons.css'
+import { installLanguagePickerPopover } from './languagePickerPopover'
 import {
   createCodeBlockCommand,
   toggleEmphasisCommand,
@@ -34,6 +40,7 @@ const editorRoot = ref<HTMLElement | null>(null)
 const loading = ref(true)
 const fontSizeInput = ref(16)
 let crepe: Crepe | null = null
+let disposeLanguagePicker: (() => void) | undefined
 
 function applyProofingPreferences() {
   const editable = editorRoot.value?.querySelector<HTMLElement>('.ProseMirror')
@@ -118,7 +125,6 @@ onMounted(async () => {
     featureConfigs: {
       [Crepe.Feature.Placeholder]: { text: t('开始记录你的想法…', 'Start writing your thoughts…') },
       [Crepe.Feature.CodeMirror]: {
-        theme: themeStore.resolvedCodeBlockTheme === 'github-dark' ? oneDark : [],
         previewOnlyByDefault: false,
         searchPlaceholder: t('搜索语言', 'Search languages'),
         noResultText: t('没有匹配的语言', 'No matching language'),
@@ -170,6 +176,14 @@ onMounted(async () => {
       },
     },
   })
+  // Crepe's defaultsDeep merges language arrays and theme extension internals.
+  // Replace both AFTER feature configuration to avoid default grammar collisions.
+  crepe.editor.config(ctx => ctx.update(codeBlockConfig.key, config => ({
+    ...config,
+    languages: shikiLanguages(themeStore.resolvedCodeBlockTheme),
+    renderLanguage: renderCodeLanguage,
+    extensions: [basicSetup, keymap.of([indentWithTab]), shikiEditorTheme(themeStore.resolvedCodeBlockTheme)],
+  })))
   crepe.editor.use(fontSizeMarkdownPlugin)
   crepe.on((listener) => {
     listener.markdownUpdated((_ctx, markdown, previousMarkdown) => {
@@ -180,13 +194,14 @@ onMounted(async () => {
     })
   })
   await crepe.create()
+  if (editorRoot.value) disposeLanguagePicker = installLanguagePickerPopover(editorRoot.value)
   applyProofingPreferences()
   loading.value = false
 })
 
 watch([() => settingsStore.spellCheck, () => settingsStore.language], applyProofingPreferences)
 
-onBeforeUnmount(() => { void crepe?.destroy() })
+onBeforeUnmount(() => { disposeLanguagePicker?.(); void crepe?.destroy() })
 
 defineExpose({ getEditor: () => crepe?.editor })
 </script>
@@ -288,7 +303,10 @@ defineExpose({ getEditor: () => crepe?.editor })
 .milkdown-host :deep(.ProseMirror p) { font-weight: 400; }
 .milkdown-host :deep(.ProseMirror h1), .milkdown-host :deep(.ProseMirror h2), .milkdown-host :deep(.ProseMirror h3), .milkdown-host :deep(.ProseMirror h4), .milkdown-host :deep(.ProseMirror h5), .milkdown-host :deep(.ProseMirror h6) { font-weight: 700; }
 .milkdown-host :deep(.font-size-marker) { display: none; }
-.milkdown-host :deep(.milkdown-code-block) { overflow: hidden; border: 1px solid var(--color-code-border); border-radius: 6px; background: var(--color-code-background); color: var(--color-code-text); }
+.milkdown-host :deep(.milkdown-code-block) { overflow: visible; border: 1px solid var(--color-code-border); border-radius: 6px; background: var(--color-code-background); color: var(--color-code-text); }
+.milkdown-host :deep(.language-picker[popover]) { position: fixed !important; inset: auto; left: var(--picker-left) !important; top: var(--picker-top) !important; margin: 0; padding: 0; border: 0; overflow: visible; background: transparent; color: var(--color-text-primary); }
+.milkdown-host :deep(.language-picker .language-list) { height: auto; max-height: var(--picker-list-height, 280px); }
+.milkdown-host :deep(.language-picker .list-wrapper) { width: min(260px, calc(100vw - 24px)); border: 1px solid var(--color-border-default); background: var(--color-surface-elevated); box-shadow: var(--shadow-md); }
 .milkdown-host :deep(.milkdown-code-block .cm-editor),
 .milkdown-host :deep(.milkdown-code-block .cm-gutters),
 .milkdown-host :deep(.milkdown-code-block .cm-panel) { background: var(--color-code-background); }
