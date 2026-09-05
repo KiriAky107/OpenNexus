@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "packages": [
+    {
+      "id": "markdown-workbench",
+      "kind": "plugin",
+      "version": "1.0.0",
+      "file": "markdown-workbench-1.0.0.zip",
+      "bytes": 5444,
+      "sha256": "130f9c85ab08986c2101ec1b8f030da27120ff66309f3ccc25f26c5e39b46670",
+      "dependencies": [],
+      "license": null,
+      "publication_status": "local-preview"
+    },
+    {
+      "id": "note-reviewer",
+      "kind": "skill",
+      "version": "1.0.0",
+      "file": "note-reviewer-1.0.0.zip",
+      "bytes": 2589,
+      "sha256": "3d55f07517c886bdb08a558db4da265f269671aed4043bed1edbe0599d6f14e7",
+      "dependencies": [
+        "markdown-workbench"
+      ],
+      "license": null,
+      "publication_status": "local-preview"
+    }
+  ]
+}

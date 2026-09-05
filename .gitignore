@@ -22,6 +22,7 @@ backend/data/credentials/
 backend/data/vault/验收/
 # 本机 MCP 配置、授权状态及服务器工作目录不得提交。
 backend/data/mcp/
+backend/data/extension-packages/
 server.json
 servers.json
 
