@@ -94,8 +94,8 @@ async function openCitation(citation: Citation) {
       <textarea v-model="chatStore.inputText" class="textarea" :placeholder="t('输入问题，Ctrl + Enter 发送', 'Enter a question; press Ctrl + Enter to send')"
         @keydown.ctrl.enter.prevent="send" />
       <div class="composer-actions"><span class="subtle">{{ t('回答可能包含错误，请核对 Citation。', 'Answers may contain errors. Verify the citations.') }}</span>
-        <button v-if="chatStore.isStreaming" class="button-danger" @click="chatStore.stopGeneration">{{ t('停止', 'Stop') }}</button>
-        <button v-else class="button-primary" :disabled="!chatStore.inputText.trim() || !chatStore.selectedProviderId || !chatStore.selectedModel.trim()" @click="send">{{ t('发送', 'Send') }}</button>
+        <button v-if="chatStore.isStreaming || chatStore.isPreparing" class="button-danger" @click="chatStore.stopGeneration">{{ t('停止', 'Stop') }}</button>
+        <button v-else class="button-primary" :disabled="!chatStore.canSend || !chatStore.inputText.trim() || !chatStore.selectedProviderId || !chatStore.selectedModel.trim()" @click="send">{{ t('发送', 'Send') }}</button>
       </div>
     </footer>
   </section>

@@ -1,9 +1,11 @@
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+import pytest
 
-from app.contracts import ModelEvent, ModelEventType
+from app.contracts import ChatRequest, ModelEvent, ModelEventType
 from app.main import app
 from app.services import chat_history
 
@@ -80,3 +82,40 @@ def test_chat_conversation_crud_api() -> None:
         missing = client.get("/api/chat/conversations/crud/messages")
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "CONVERSATION_NOT_FOUND"
+
+
+@pytest.mark.parametrize("close_early", [True, False])
+@pytest.mark.parametrize("deleted", [True, False])
+def test_stream_finalization_respects_conversation_deletion(monkeypatch, close_early, deleted) -> None:
+    from app import routes
+
+    class Adapter:
+        async def stream(self, _request):
+            now = datetime.now(timezone.utc)
+            yield ModelEvent(event=ModelEventType.text_delta, data={"text": "partial answer"}, timestamp=now)
+            yield ModelEvent(event=ModelEventType.done, timestamp=now)
+
+    monkeypatch.setattr(routes, "provider_or_404", lambda _: SimpleNamespace(adapter=Adapter()))
+
+    async def scenario():
+        response = await routes.chat(ChatRequest(
+            provider_id="configured", model="model", conversation_id="stream",
+            use_rag=False, messages=[{"role": "user", "content": "question"}],
+        ))
+        await anext(response.body_iterator)
+        if deleted:
+            assert chat_history.delete("stream")
+        if close_early:
+            await response.body_iterator.aclose()
+        else:
+            async for _ in response.body_iterator:
+                pass
+        if deleted:
+            assert chat_history.get("stream") is None
+            assert chat_history.list_conversations(50, 0)[1] == 0
+        else:
+            messages, total = chat_history.list_messages("stream", 50, 0)
+            assert total == 2
+            assert [message.content for message in messages] == ["question", "partial answer"]
+
+    asyncio.run(scenario())
