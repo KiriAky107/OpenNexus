@@ -37,6 +37,7 @@ def _message(row) -> ChatMessage:
         role=row["role"],
         content=row["content"],
         thinking=row["thinking"],
+        activity=json.loads(row['activity_json']),
         citations=citations,
         tool_calls=json.loads(row["tool_calls_json"]),
         usage=json.loads(row["usage_json"]) if row["usage_json"] else None,
@@ -87,12 +88,24 @@ def list_messages(conversation_id: str, limit: int, offset: int) -> tuple[list[C
     if get(conversation_id) is None:
         raise ApiError(404, "CONVERSATION_NOT_FOUND", "conversation not found", {"conversation_id": conversation_id})
     with closing(connect()) as conn:
-        total = conn.execute("SELECT COUNT(*) FROM chat_messages WHERE conversation_id=?", (conversation_id,)).fetchone()[0]
-        rows = conn.execute(
-            "SELECT * FROM chat_messages WHERE conversation_id=? ORDER BY sequence LIMIT ? OFFSET ?",
-            (conversation_id, limit, offset),
-        ).fetchall()
-        return [_message(row) for row in rows], total
+        all_rows = conn.execute('SELECT * FROM chat_messages WHERE conversation_id=? ORDER BY sequence', (conversation_id,)).fetchall()
+        by_id = {row['message_id']: row for row in all_rows}
+        siblings = {}
+        for row in all_rows:
+            siblings.setdefault((row['parent_message_id'], row['role']), []).append(row['message_id'])
+        leaf = conn.execute('SELECT active_leaf FROM chat_conversations WHERE conversation_id=?', (conversation_id,)).fetchone()[0]
+        path = []
+        while leaf in by_id:
+            row = by_id[leaf]
+            path.append(row)
+            leaf = row['parent_message_id']
+        path.reverse()
+        items = []
+        for row in path[offset:offset + limit]:
+            message = _message(row)
+            message.versions = siblings[(row['parent_message_id'], row['role'])]
+            items.append(message)
+        return items, len(path)
 
 
 def delete(conversation_id: str) -> bool:
@@ -111,6 +124,8 @@ def append_message(
     citations: list[dict[str, Any]] | None = None,
     tool_calls: list[dict[str, Any]] | None = None,
     usage: dict[str, Any] | None = None,
+    activity: list[dict[str, Any]] | None = None,
+    parent_message_id: str | None = None,
 ) -> None:
     now = _now().isoformat()
     clean_title = (title or "").strip() or content[:30].strip() or "New conversation"
@@ -120,7 +135,7 @@ def append_message(
             _append_message_in_transaction(
                 conn, conversation_id, message_id=message_id, role=role, content=content,
                 title=clean_title, thinking=thinking, citations=citations, tool_calls=tool_calls,
-                usage=usage, now=now,
+                usage=usage, now=now, activity=activity, parent_message_id=parent_message_id,
             )
             conn.execute("COMMIT")
         except BaseException:
@@ -142,6 +157,8 @@ def _append_message_in_transaction(
     tool_calls: list[dict[str, Any]] | None,
     usage: dict[str, Any] | None,
     now: str,
+    activity: list[dict[str, Any]] | None = None,
+    parent_message_id: str | None = None,
 ) -> None:
     conversation = conn.execute(
         "SELECT 1 FROM chat_conversations WHERE conversation_id=?", (conversation_id,)
@@ -174,6 +191,10 @@ def _append_message_in_transaction(
         "SELECT COALESCE(MAX(sequence), -1) + 1 FROM chat_messages WHERE conversation_id=?",
         (conversation_id,),
     ).fetchone()[0]
+    active_leaf = conn.execute('SELECT active_leaf FROM chat_conversations WHERE conversation_id=?', (conversation_id,)).fetchone()[0]
+    parent = parent_message_id if parent_message_id is not None else active_leaf
+    if parent is not None and not conn.execute('SELECT 1 FROM chat_messages WHERE message_id=? AND conversation_id=?', (parent, conversation_id)).fetchone():
+        raise ApiError(409, 'CHAT_PARENT_MISSING', 'Parent message no longer exists')
     conn.execute(
         """INSERT INTO chat_messages(message_id,conversation_id,sequence,role,content,thinking,citations_json,tool_calls_json,usage_json,created_at)
            VALUES(?,?,?,?,?,?,?,?,?,?)""",
@@ -185,3 +206,35 @@ def _append_message_in_transaction(
         "UPDATE chat_conversations SET updated_at=? WHERE conversation_id=?",
         (now, conversation_id),
     )
+    conn.execute('UPDATE chat_messages SET parent_message_id=?, activity_json=? WHERE message_id=?', (parent, json.dumps(activity or [], ensure_ascii=False), message_id))
+    # A late stream may be persisted, but must not steal the selected branch.
+    response_id = conn.execute('SELECT active_response_id FROM chat_conversations WHERE conversation_id=?', (conversation_id,)).fetchone()[0]
+    if active_leaf == parent and (role != 'assistant' or response_id is None or response_id == message_id):
+        conn.execute('UPDATE chat_conversations SET active_leaf=? WHERE conversation_id=?', (message_id, conversation_id))
+
+
+def prepare_retry(conversation_id: str, message_id: str):
+    with closing(connect()) as conn, transaction(conn):
+        row = conn.execute('SELECT * FROM chat_messages WHERE conversation_id=? AND message_id=?', (conversation_id, message_id)).fetchone()
+        if row is None or row['role'] not in ('user', 'assistant'):
+            raise ApiError(404, 'MESSAGE_NOT_FOUND', 'Message not found')
+        conn.execute("UPDATE chat_conversations SET active_leaf=?,active_response_id='' WHERE conversation_id=?", (row['parent_message_id'], conversation_id))
+        return dict(row)
+
+
+def select_version(conversation_id: str, message_id: str):
+    with closing(connect()) as conn, transaction(conn):
+        row = conn.execute('SELECT message_id FROM chat_messages WHERE conversation_id=? AND message_id=?', (conversation_id, message_id)).fetchone()
+        if row is None:
+            raise ApiError(404, 'MESSAGE_NOT_FOUND', 'Message not found')
+        leaf = message_id
+        while True:
+            child = conn.execute('SELECT message_id FROM chat_messages WHERE conversation_id=? AND parent_message_id=? ORDER BY sequence DESC LIMIT 1', (conversation_id, leaf)).fetchone()
+            if child is None: break
+            leaf = child[0]
+        conn.execute("UPDATE chat_conversations SET active_leaf=?,active_response_id='' WHERE conversation_id=?", (leaf, conversation_id))
+
+
+def reserve_response(conversation_id: str, message_id: str):
+    with closing(connect()) as conn:
+        conn.execute('UPDATE chat_conversations SET active_response_id=? WHERE conversation_id=?', (message_id, conversation_id))

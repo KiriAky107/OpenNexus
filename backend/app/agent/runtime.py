@@ -375,7 +375,7 @@ class AgentRuntime:
                     for item in turn.tool_calls
                 ]
                 messages.append(
-                    Message(role=MessageRole.assistant, content=turn.text or "", tool_calls=calls)
+                    Message(role=MessageRole.assistant, content=turn.text or "", reasoning_content=turn.reasoning_content, tool_calls=calls)
                 )
                 # 工具可以并发执行，但结果按模型原始调用顺序写回上下文，保证轮次可复现。
                 semaphore = asyncio.Semaphore(record.request.max_concurrent_tools)

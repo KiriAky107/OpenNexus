@@ -49,7 +49,8 @@ class OpenAICompatibleProvider(EventStreamingMixin, HTTPProviderMixin):
         if text is not None:
             text = string_value(text)
         usage = UsageTracker("prompt_tokens", "completion_tokens").update(data.get("usage") or {})
-        return ProviderTurn(text=text, tool_calls=calls, **usage)
+        reasoning = message.get('reasoning_content')
+        return ProviderTurn(text=text, reasoning_content=string_value(reasoning) if reasoning is not None else None, tool_calls=calls, **usage)
 
     def _payload(self, request: ModelRequest, *, stream: bool) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -155,6 +156,8 @@ class OpenAICompatibleProvider(EventStreamingMixin, HTTPProviderMixin):
             result.append({"role": "system", "content": request.system})
         for message in request.messages:
             item: dict[str, object] = {"role": message.role.value, "content": message.content}
+            if message.role == MessageRole.assistant and message.reasoning_content is not None:
+                item['reasoning_content'] = message.reasoning_content
             if message.name:
                 item["name"] = message.name
             if message.role == MessageRole.tool and message.tool_call_id:

@@ -18,6 +18,7 @@ vi.mock('@/services/chatService', () => ({
   listConversations: vi.fn(),
   removeConversation: vi.fn(),
   streamChat: vi.fn(),
+  selectMessageVersion: vi.fn().mockResolvedValue({ status: 'completed' }),
 }))
 
 const page = { total: 0, limit: 100, offset: 0 }
@@ -38,6 +39,34 @@ beforeEach(() => {
     ...value, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), message_count: 0,
   }))
   vi.mocked(removeConversation).mockReset().mockResolvedValue(undefined)
+})
+
+it('keeps reasoning and tools ordered and retries only the selected branch prefix', async () => {
+  const store = useChatStore()
+  store.selectedProviderId = 'real'
+  store.selectedModel = 'model'
+  await store.sendMessage('original')
+  const first = vi.mocked(streamChat).mock.calls[0]![1]
+  const event = (name: string, data: Record<string, unknown>) => first.onEvent?.({ event: name as 'ThinkingDelta', sequence: 0, data, timestamp: new Date().toISOString() })
+  event('ThinkingDelta', { text: 'before' })
+  event('ToolCallStart', { tool_call_id: 'tool', name: 'rag.search' })
+  event('ThinkingDelta', { text: 'after' })
+  event('TextDelta', { text: 'answer' })
+  expect(store.messages[1]!.activity).toEqual([{ type: 'thinking', text: 'before' }, { type: 'tool', tool_call_id: 'tool' }, { type: 'thinking', text: 'after' }])
+  first.onDone?.()
+  const originalUser = store.messages[0]!.message_id
+  const originalAnswer = store.messages[1]!.message_id
+  await store.retryMessage(originalAnswer)
+  const second = vi.mocked(streamChat).mock.calls[1]!
+  expect(second[0].retry_message_id).toBe(originalAnswer)
+  expect(second[0].user_message_id).toBe(originalUser)
+  expect(second[0].messages).toEqual([{ role: 'user', content: 'original' }])
+  expect(store.messages[1]!.versions).toContain(originalAnswer)
+  second[1].onDone?.()
+  await store.retryMessage(originalUser, 'edited')
+  expect(vi.mocked(streamChat).mock.calls[2]![0].messages).toEqual([{ role: 'user', content: 'edited' }])
+  expect(store.messages[0]!.versions).toContain(originalUser)
+  expect(store.messages[0]!.message_id).not.toBe(originalUser)
 })
 
 it('sends persistent message ids and restores messages from the backend', async () => {

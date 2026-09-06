@@ -7,6 +7,7 @@ import {
   listConversations as listConversationsApi,
   removeConversation,
   streamChat,
+  selectMessageVersion,
 } from '@/services/chatService'
 import type { SseClient } from '@/services/sseClient'
 import { t } from '@/i18n'
@@ -156,7 +157,7 @@ export const useChatStore = defineStore('chat', () => {
     try { await persistConversation(conversation) } catch { /* exposed through historyError */ }
   }
 
-  async function sendMessage(text: string) {
+  async function sendMessage(text: string, retryMessageId?: string) {
     const content = text.trim()
     if (!content || !canSend.value || !selectedProviderId.value || !selectedModel.value) return
     const version = ++streamVersion
@@ -180,15 +181,26 @@ export const useChatStore = defineStore('chat', () => {
 
     const conversationId = conversation.conversation_id
     if (conversation.message_count === 0) conversation.title = content.slice(0, 30)
-    const userMsg: ChatMessage = {
+    const retryIndex = retryMessageId ? messages.value.findIndex(m => m.message_id === retryMessageId) : -1
+    const retryTarget = retryIndex >= 0 ? messages.value[retryIndex] : undefined
+    if (retryMessageId && !retryTarget) return
+    const originalMessages = retryTarget ? [...messages.value] : null
+    const regenerate = retryTarget?.role === 'assistant'
+    const userMsg: ChatMessage = regenerate ? messages.value[retryIndex - 1]! : {
       message_id: crypto.randomUUID(), conversation_id: conversationId, role: 'user', content,
       created_at: new Date().toISOString(),
     }
     const aiMsg = reactive<ChatMessage>({
       message_id: crypto.randomUUID(), conversation_id: conversationId, role: 'assistant', content: '',
-      created_at: new Date().toISOString(), citations: [], tool_calls: [],
+      created_at: new Date().toISOString(), citations: [], tool_calls: [], activity: [],
     })
-    messages.value.push(userMsg, aiMsg)
+    if (retryTarget) {
+      messages.value = messages.value.slice(0, retryIndex)
+      const newVersion = regenerate ? aiMsg : userMsg
+      newVersion.versions = [...(retryTarget.versions?.length ? retryTarget.versions : [retryTarget.message_id]), newVersion.message_id]
+    }
+    if (!regenerate) messages.value.push(userMsg)
+    messages.value.push(aiMsg)
     inputText.value = ''
     isStreaming.value = true
     conversation.updated_at = new Date().toISOString()
@@ -197,6 +209,7 @@ export const useChatStore = defineStore('chat', () => {
     const argumentBuffers = new Map<string, string>()
     sseClient = streamChat({
       provider_id: selectedProviderId.value,
+      ...(retryMessageId ? { retry_message_id: retryMessageId } : {}),
       model: selectedModel.value,
       conversation_id: conversationId,
       user_message_id: userMsg.message_id,
@@ -205,13 +218,22 @@ export const useChatStore = defineStore('chat', () => {
       use_rag: useRag.value,
       messages: messages.value
         .filter(message => message.message_id !== aiMsg.message_id)
-        .map(message => ({ role: message.role, content: message.content })),
+        .map(message => ({ role: message.role, content: message.content,
+          ...(message.role === 'assistant' && message.thinking != null ? { reasoning_content: message.thinking } : {}),
+        })),
     }, {
       onEvent(event) {
         if (version !== streamVersion) return
         if (event.event === 'TextDelta') aiMsg.content += String(event.data.text ?? '')
-        if (event.event === 'ThinkingDelta') aiMsg.thinking = `${aiMsg.thinking ?? ''}${String(event.data.text ?? '')}`
+        if (event.event === 'ThinkingDelta') {
+          const text = String(event.data.text ?? '')
+          aiMsg.thinking = `${aiMsg.thinking ?? ''}${text}`
+          const last = aiMsg.activity?.at(-1)
+          if (last?.type === 'thinking') last.text += text
+          else aiMsg.activity?.push({ type: 'thinking', text })
+        }
         if (event.event === 'ToolCallStart') {
+          aiMsg.activity?.push({ type: 'tool', tool_call_id: String(event.data.tool_call_id ?? '') })
           aiMsg.tool_calls?.push({
             tool_call_id: String(event.data.tool_call_id ?? ''), name: String(event.data.name ?? 'unknown'),
             parameters: (event.data.arguments ?? {}) as Record<string, unknown>, status: 'running',
@@ -228,7 +250,7 @@ export const useChatStore = defineStore('chat', () => {
         }
         if (event.event === 'ToolCallEnd') {
           const call = aiMsg.tool_calls?.find(item => item.tool_call_id === event.data.tool_call_id)
-          if (call) call.status = 'completed'
+          if (call) call.status = event.data.status === 'failed' ? 'error' : 'completed'
         }
         if (event.event === 'Usage') {
           const input = Number(event.data.input_tokens ?? 0)
@@ -249,6 +271,7 @@ export const useChatStore = defineStore('chat', () => {
       onError(error) {
         if (version !== streamVersion) return
         aiMsg.content += `\n\n${t('连接失败：', 'Connection failed: ')}${error.message}`
+        if (originalMessages) historyError.value = t('重试连接失败，可切换版本恢复原回复。', 'Retry connection failed. Switch versions to return to the original reply.')
         isStreaming.value = false
         sseClient = null
       },
@@ -260,6 +283,27 @@ export const useChatStore = defineStore('chat', () => {
         sseClient = null
       },
     })
+  }
+
+  async function retryMessage(messageId: string, editedText?: string) {
+    if (!canSend.value) return
+    const index = messages.value.findIndex(m => m.message_id === messageId)
+    const message = messages.value[index]
+    if (!message) return
+    const text = message.role === 'user' ? editedText : messages.value[index - 1]?.content
+    if (text?.trim()) await sendMessage(text, messageId)
+  }
+
+  async function switchVersion(messageId: string) {
+    const id = activeConversationId.value
+    if (!canSend.value || !id) return
+    const version = loadVersion
+    isPreparing.value = true
+    try {
+      await selectMessageVersion(id, messageId)
+      if (activeConversationId.value === id && loadVersion === version) await setActiveConversation(id)
+    } catch (error) { historyError.value = error instanceof Error ? error.message : 'Version switch failed' }
+    finally { isPreparing.value = false }
   }
 
   function stopGeneration() {
@@ -294,6 +338,6 @@ export const useChatStore = defineStore('chat', () => {
   return {
     conversations, activeConversationId, activeConversation, sortedConversations, messages,
     isStreaming, isPreparing, canSend, inputText, useRag, selectedSkillId, selectedProviderId, selectedModel, historyError, contextNotice,
-    loadConversations, setActiveConversation, sendMessage, stopGeneration, createNewConversation, deleteConversation,
+    loadConversations, setActiveConversation, sendMessage, stopGeneration, createNewConversation, deleteConversation, retryMessage, switchVersion,
   }
 })

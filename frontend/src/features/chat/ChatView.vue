@@ -9,6 +9,7 @@ import { useCitationNavigation } from '@/composables/useCitationNavigation'
 import { t } from '@/i18n'
 import ChatPersonaDialog from './ChatPersonaDialog.vue'
 import { useChatPreferences } from '@/stores/chatPreferences'
+import { usedCitations } from '@/utils/usedCitations'
 
 const chatStore = useChatStore()
 const preferences = useChatPreferences()
@@ -21,6 +22,29 @@ let disposed = false
 onBeforeUnmount(() => { disposed = true })
 
 const availableModels = computed(() => providerStore.modelsByProvider[chatStore.selectedProviderId] ?? [])
+const streamingMessageId = computed(() => chatStore.isStreaming ? chatStore.messages.at(-1)?.message_id : undefined)
+const thinkingLabel = computed(() => t('正在思考…', 'Thinking…'))
+const editingMessage = ref<string | null>(null)
+const editedText = ref('')
+watch(() => chatStore.activeConversationId, () => { editingMessage.value = null })
+const activities = computed(() => Object.fromEntries(chatStore.messages.map(message => {
+  const entries = message.activity?.length ? message.activity : [
+    ...(message.thinking ? [{ type: 'thinking' as const, text: message.thinking }] : []),
+    ...(message.tool_calls ?? []).map(call => ({ type: 'tool' as const, tool_call_id: call.tool_call_id })),
+  ]
+  return [message.message_id, entries.map(entry => entry.type === 'thinking'
+    ? { text: entry.text, call: undefined }
+    : { text: undefined, call: message.tool_calls?.find(call => call.tool_call_id === entry.tool_call_id) })]
+})))
+async function saveEdit() {
+  const id = editingMessage.value
+  if (!id || !editedText.value.trim()) return
+  await chatStore.retryMessage(id, editedText.value)
+  editingMessage.value = null
+}
+const visibleCitations = computed(() => Object.fromEntries(chatStore.messages.map(message => [
+  message.message_id, message.role === 'assistant' ? usedCitations(message.content, message.citations) : [],
+])))
 
 onMounted(async () => {
   try {
@@ -82,7 +106,7 @@ async function openCitationCard(citation: Citation) {
       </div>
       <button type="button" class="button-secondary" @click="showPersona = true">{{ t('人设与头像', 'Persona and avatars') }}</button>
       <label class="rag-toggle"><input v-model="chatStore.useRag" type="checkbox" :disabled="chatStore.isStreaming" />{{ t('检索知识库', 'Search knowledge base') }}</label>
-      <span class="subtle">{{ t('开启后，将相关笔记片段发送给所选模型，并显示来源。技能调用请使用智能体。', 'When enabled, relevant note excerpts are sent to the selected model and citations are shown. Use Agent for skills.') }}</span>
+      <span class="subtle">{{ t('模型先回复，按需调用知识库检索；需要提供商支持工具调用，仅显示正文引用的来源。笔记修改和技能调用请使用智能体。', 'The model responds first and can search the knowledge base as needed. Requires tool calling; only cited sources are shown. Use Agent for note edits and skills.') }}</span>
     </header>
     <div v-if="chatStore.contextNotice" class="notice-banner" role="status">{{ chatStore.contextNotice }}</div>
     <div v-if="loadError || providerStore.error || chatStore.historyError" class="error-banner chat-error">{{ loadError || providerStore.error || chatStore.historyError }}</div>
@@ -91,16 +115,38 @@ async function openCitationCard(citation: Citation) {
       <article v-for="message in chatStore.messages" :key="message.message_id" class="message" :class="message.role">
         <div class="avatar"><img v-if="message.role === 'user' ? preferences.settings.userAvatar : preferences.settings.aiAvatar" :src="message.role === 'user' ? preferences.settings.userAvatar : preferences.settings.aiAvatar" :alt="message.role === 'user' ? t('我', 'Me') : 'AI'" /><span v-else>{{ message.role === 'user' ? t('你', 'You') : 'AI' }}</span></div>
         <div class="message-body">
-          <details v-if="message.thinking" class="thinking ui-disclosure"><summary>{{ t('思考过程', 'Reasoning') }}</summary><p>{{ message.thinking }}</p></details>
-          <MarkdownContent v-if="message.content" class="message-content" :source="message.content" />
-          <div v-else-if="chatStore.isStreaming" class="message-content">{{ t('正在思考…', 'Thinking…') }}</div>
-          <div v-if="message.tool_calls?.length" class="tool-calls"><div v-for="call in message.tool_calls" :key="call.tool_call_id" class="item-card"><span class="badge info">{{ call.status }}</span><strong>{{ call.name }}</strong><pre>{{ JSON.stringify(call.parameters, null, 2) }}</pre></div></div>
-          <div v-if="message.citations?.length" class="citations">
-            <button v-for="(citation, index) in message.citations" :key="citation.block_id" class="citation-card" @click="openCitationCard(citation)">
-              <span class="badge info">{{ index + 1 }}</span><span><strong>{{ citation.heading_path || citation.file_path }}</strong><small>{{ citation.content }}</small></span>
+          <details v-if="message.thinking || message.tool_calls?.length || (message.role === 'assistant' && message.message_id === streamingMessageId)" class="thinking ui-disclosure">
+            <summary>
+              <span v-if="message.message_id === streamingMessageId && !message.content" class="thinking-indicator" :aria-label="thinkingLabel">
+                <span class="thinking-typewriter" aria-hidden="true" :style="{ '--typing-steps': Array.from(thinkingLabel).length }">{{ thinkingLabel }}</span>
+              </span>
+              <span v-else>{{ t('思考过程', 'Reasoning') }}</span>
+            </summary>
+            <template v-for="(entry, index) in activities[message.message_id]" :key="index">
+              <p v-if="entry.text !== undefined">{{ entry.text }}</p>
+              <div v-else-if="entry.call" class="tool-calls"><div class="item-card"><span class="badge info">{{ entry.call.status }}</span><strong>{{ entry.call.name }}</strong><pre>{{ JSON.stringify(entry.call.parameters, null, 2) }}</pre></div></div>
+            </template>
+          </details>
+          <div v-if="editingMessage === message.message_id" class="message-edit">
+            <textarea v-model="editedText" class="textarea" :aria-label="t('编辑消息', 'Edit message')" :disabled="!chatStore.canSend" />
+            <div class="inline-actions"><button class="button-primary" :disabled="!chatStore.canSend || !editedText.trim()" @click="saveEdit">{{ t('保存并重新生成', 'Save and regenerate') }}</button><button class="button-secondary" @click="editingMessage = null">{{ t('取消', 'Cancel') }}</button></div>
+          </div>
+          <MarkdownContent v-else-if="message.content" class="message-content" :source="message.content" :citation-aliases="Object.fromEntries((message.citations ?? []).filter(c => c.citation_id).map(c => [c.citation_id!, (message.citations ?? []).indexOf(c) + 1]))" :citation-numbers="visibleCitations[message.message_id]?.map(item => item.number)" @citation="number => message.citations?.[number - 1] && openCitationCard(message.citations[number - 1]!)" />
+          <div v-if="visibleCitations[message.message_id]?.length" class="citations">
+            <button v-for="{ citation, number } in visibleCitations[message.message_id]" :key="number" class="citation-card" @click="openCitationCard(citation)">
+              <span class="badge info">{{ number }}</span><span><strong>{{ citation.heading_path || citation.file_path }}</strong><small>{{ citation.content }}</small></span>
             </button>
           </div>
           <time>{{ new Date(message.created_at).toLocaleTimeString() }}</time>
+          <div class="message-actions inline-actions">
+            <button v-if="message.role === 'assistant'" class="button-secondary" :disabled="!chatStore.canSend" @click="chatStore.retryMessage(message.message_id)">{{ t('重新生成', 'Regenerate') }}</button>
+            <button v-if="message.role === 'user' && editingMessage !== message.message_id" class="button-secondary" :disabled="!chatStore.canSend" @click="editingMessage = message.message_id; editedText = message.content">{{ t('编辑', 'Edit') }}</button>
+            <template v-if="message.versions && message.versions.length > 1">
+              <button class="button-secondary" :aria-label="t('上一版本', 'Previous version')" :disabled="!chatStore.canSend || message.versions.indexOf(message.message_id) <= 0" @click="chatStore.switchVersion(message.versions[message.versions.indexOf(message.message_id) - 1]!)">‹</button>
+              <span>{{ message.versions.indexOf(message.message_id) + 1 }} / {{ message.versions.length }}</span>
+              <button class="button-secondary" :aria-label="t('下一版本', 'Next version')" :disabled="!chatStore.canSend || message.versions.indexOf(message.message_id) >= message.versions.length - 1" @click="chatStore.switchVersion(message.versions[message.versions.indexOf(message.message_id) + 1]!)">›</button>
+            </template>
+          </div>
           <small v-if="message.usage" class="usage">Token {{ message.usage.total_tokens }}<span v-if="message.usage.input_tokens !== undefined && message.usage.output_tokens !== undefined"> ({{ t('输入', 'input') }} {{ message.usage.input_tokens }} / {{ t('输出', 'output') }} {{ message.usage.output_tokens }})</span></small>
         </div>
       </article>
@@ -132,6 +178,12 @@ async function openCitationCard(citation: Citation) {
 .user .message-body { background: var(--color-accent-soft); border-color: color-mix(in srgb, var(--color-accent-primary) 14%, transparent); }
 .message-content { white-space: pre-wrap; line-height: var(--line-height-relaxed); }
 .thinking { margin-bottom: var(--space-sm); color: var(--color-text-secondary); }.thinking p { margin-top: var(--space-sm); white-space: pre-wrap; }
+.thinking-indicator { display: inline-block; }
+.message-actions { margin-top: var(--space-sm); }
+.message-edit .textarea { width: 100%; min-height: 100px; }
+.thinking-typewriter { display: inline-block; white-space: nowrap; padding-inline-end: 3px; border-inline-end: 2px solid var(--color-accent-primary); animation: thinking-type 2s steps(var(--typing-steps), end) infinite; }
+@keyframes thinking-type { 0% { clip-path: inset(0 100% 0 0); } 65%, 100% { clip-path: inset(0 0 0 0); } }
+@media (prefers-reduced-motion: reduce) { .thinking-typewriter { animation: none; border-inline-end: 0; } }
 .tool-calls { display: grid; gap: var(--space-sm); margin-top: var(--space-md); }.tool-calls .item-card { display: grid; gap: var(--space-xs); }.tool-calls pre { overflow: auto; font-size: var(--font-size-xs); }
 .usage { display: block; margin-top: var(--space-xs); color: var(--color-text-tertiary); }
 .message time { display: block; margin-top: var(--space-sm); color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
