@@ -8,7 +8,9 @@ import { Link } from '@element-plus/icons-vue'
 import { Crepe } from '@milkdown/crepe'
 import { codeBlockConfig } from '@milkdown/kit/component/code-block'
 import { basicSetup } from 'codemirror'
-import { keymap } from '@codemirror/view'
+import { keymap, EditorView as CodeEditorView } from '@codemirror/view'
+import { indentUnit } from '@codemirror/language'
+import { EditorState as CodeEditorState } from '@codemirror/state'
 import { indentWithTab } from '@codemirror/commands'
 import { shikiEditorTheme, shikiLanguages, renderCodeLanguage } from './shikiCodeMirror'
 import './language-icons.css'
@@ -16,7 +18,7 @@ import { installLanguagePickerPopover } from './languagePickerPopover'
 import { installCodeBlockLabels } from './codeBlockLabels'
 import { createMermaidPreview } from './mermaidPreview'
 import { splitNoteMetadata, updateMetadataTags } from './noteMetadata'
-import { getMarkdown } from '@milkdown/kit/utils'
+import { getMarkdown, $remark } from '@milkdown/kit/utils'
 import {
   createCodeBlockCommand,
   toggleEmphasisCommand,
@@ -28,7 +30,7 @@ import {
   wrapInHeadingCommand,
   wrapInOrderedListCommand,
 } from '@milkdown/kit/preset/commonmark'
-import { commandsCtx, editorViewCtx, parserCtx } from '@milkdown/kit/core'
+import { commandsCtx, editorViewCtx, parserCtx, remarkStringifyOptionsCtx } from '@milkdown/kit/core'
 import { Slice } from '@milkdown/kit/prose/model'
 import { registerEditorCommands, type CommandHandler, type EditorCommandId } from '@/services/editorCommandService'
 import { TextSelection } from '@milkdown/kit/prose/state'
@@ -41,11 +43,16 @@ import { applyMarkdownFontSize, fontSizeMarkdownPlugin } from './fontSizeMarkdow
 import { inlineCodeInputPlugin } from './inlineCodeInput'
 import { calloutPlugin, configureCalloutSerialization } from './calloutPlugin'
 import { calloutTypes } from '@/utils/callouts'
+import { headingFoldingPlugin, headingFoldTransaction } from './headingFolding'
+import { useHeadingAppearanceStore } from '@/stores/headingAppearance'
+import { useMarkdownPreferencesStore } from '@/stores/markdownPreferences'
 import { t } from '@/i18n'
 import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/frame.css'
 
 const props = defineProps<{ initialContent: string }>()
+const headingAppearance = useHeadingAppearanceStore()
+const markdownPreferences = { ...useMarkdownPreferencesStore().normalized }
 const metadata = ref(splitNoteMetadata(props.initialContent))
 const tagDraft = ref('')
 function setTags(tags: string[]) {
@@ -93,8 +100,14 @@ function insertCallout(event: Event) {
 function installCommands() {
   const targetPath = editorStore.currentFilePath
   const handlers: Partial<Record<EditorCommandId, CommandHandler>> = {}
+  for (const [id, action] of [['editor.heading.toggle-fold', 'toggle'], ['editor.heading.fold-all', 'all'], ['editor.heading.unfold-all', 'none']] as const) {
+    handlers[id] = () => { foldHeadings(action); return { ok: true } }
+  }
   const toolbar: ToolbarCommand[] = ['bold', 'italic', 'ordered-list', 'bullet-list', 'inline-code', 'code-block', 'inline-math', 'math-block']
-  for (const command of toolbar) handlers[`editor.${command}`] = () => { runCommand(command); return { ok: true } }
+  for (const command of toolbar) {
+    if (!markdownPreferences.math && command.includes('math')) continue
+    handlers[`editor.${command}`] = () => { runCommand(command); return { ok: true } }
+  }
   handlers['editor.paragraph'] = () => { crepe!.editor.action(callCommand(turnIntoTextCommand.key)); return { ok: true } }
   handlers['editor.heading'] = params => {
     if (!Number.isInteger(params) || Number(params) < 1 || Number(params) > 6) return { ok: false, reason: 'invalid-params' }
@@ -113,6 +126,7 @@ function installCommands() {
     return { ok: true }
   }
   handlers['editor.callout'] = params => {
+    if (!markdownPreferences.callouts) return { ok: false, reason: 'unsupported' }
     if (!params || typeof params !== 'object') return { ok: false, reason: 'invalid-params' }
     const { type, title = '', body = '', fold = '' } = params as Record<string, unknown>
     if (typeof type !== 'string' || !/^[\w-]{1,64}$/.test(type) || typeof title !== 'string' || /[\r\n]/.test(title)
@@ -124,6 +138,14 @@ function installCommands() {
     available: () => !loading.value && !!crepe && editorStore.mode === 'wysiwyg' && editorStore.saveStatus !== 'conflict'
       && !!targetPath && targetPath === editorStore.currentFilePath && crepe.editor.action(ctx => ctx.get(editorViewCtx).editable),
     handlers,
+  })
+}
+
+function foldHeadings(action: 'toggle' | 'all' | 'none') {
+  crepe?.editor.action(ctx => {
+    const view = ctx.get(editorViewCtx)
+    const tr = headingFoldTransaction(view.state, action)
+    if (tr) view.dispatch(tr)
   })
 }
 const diagramPreviews = new Map<string, { source: string; apply: (value: HTMLElement) => void }>()
@@ -173,7 +195,7 @@ function runCommand(command: ToolbarCommand) {
     'ordered-list': callCommand(wrapInOrderedListCommand.key),
     'bullet-list': callCommand(wrapInBulletListCommand.key),
     'inline-code': callCommand(toggleInlineCodeCommand.key),
-    'code-block': callCommand(createCodeBlockCommand.key, ''),
+    'code-block': callCommand(createCodeBlockCommand.key, markdownPreferences.defaultLanguage),
     'inline-math': callCommand('ToggleLatex'),
     'math-block': callCommand(createCodeBlockCommand.key, 'LaTeX'),
   }
@@ -240,7 +262,7 @@ onMounted(async () => {
   crepe = new Crepe({
     root: editorRoot.value,
     defaultValue: metadata.value?.body ?? props.initialContent,
-    features: { [Crepe.Feature.TopBar]: false },
+    features: { [Crepe.Feature.TopBar]: false, [Crepe.Feature.Latex]: markdownPreferences.math },
     featureConfigs: {
       [Crepe.Feature.Placeholder]: { text: t('开始记录你的想法…', 'Start writing your thoughts…') },
       [Crepe.Feature.CodeMirror]: {
@@ -304,14 +326,35 @@ onMounted(async () => {
     languages: shikiLanguages(themeStore.resolvedCodeBlockTheme),
     renderLanguage: renderCodeLanguage,
     renderPreview: (language, content, applyPreview) => language.trim().toLowerCase() === 'mermaid'
-      ? renderDiagram(content, applyPreview)
+      ? markdownPreferences.diagrams ? renderDiagram(content, applyPreview) : null
       : config.renderPreview(language, content, applyPreview),
-    extensions: [basicSetup, keymap.of([indentWithTab]), shikiEditorTheme(themeStore.resolvedCodeBlockTheme)],
+    extensions: [basicSetup, keymap.of([indentWithTab]), shikiEditorTheme(themeStore.resolvedCodeBlockTheme),
+      indentUnit.of(' '.repeat(markdownPreferences.indent)), CodeEditorState.tabSize.of(markdownPreferences.indent),
+      ...(markdownPreferences.wrapCode ? [CodeEditorView.lineWrapping] : [])],
   })))
+  crepe.editor.config(ctx => ctx.update(remarkStringifyOptionsCtx, options => ({
+    ...options, setext: markdownPreferences.heading === 'setext', bullet: markdownPreferences.bullet,
+    incrementListMarker: markdownPreferences.incrementList, fence: markdownPreferences.fence,
+  })))
+  if (!markdownPreferences.autoLinks) crepe.editor.use($remark('disable-bare-autolinks', () => () => (tree, file) => {
+    type Ast = { type: string; value?: string; url?: string; children?: Ast[]; position?: { start: { offset?: number }; end: { offset?: number } } }
+    const source = String(file.value)
+    const walk = (node: Ast) => {
+      if (node.type === 'link' && node.position) {
+        const raw = source.slice(node.position.start.offset, node.position.end.offset)
+        if (/^(?:https?:\/\/|www\.)\S+$/.test(raw)) {
+          node.type = 'text'; node.value = raw; delete node.children; delete node.url
+        }
+      }
+      node.children?.forEach(walk)
+    }
+    walk(tree as Ast)
+  }))
   crepe.editor.use(fontSizeMarkdownPlugin)
   crepe.editor.use(inlineCodeInputPlugin)
-  crepe.editor.use(calloutPlugin)
-  crepe.editor.config(configureCalloutSerialization)
+  if (markdownPreferences.callouts) crepe.editor.use(calloutPlugin)
+  crepe.editor.use(headingFoldingPlugin)
+  if (markdownPreferences.callouts) crepe.editor.config(configureCalloutSerialization)
   crepe.on((listener) => {
     listener.markdownUpdated((_ctx, markdown, previousMarkdown) => {
       // 忽略编辑器初始化/回显事件，防止无内容变化时触发自动保存循环。
@@ -350,9 +393,11 @@ defineExpose({ getEditor: () => crepe?.editor })
 </script>
 
 <template>
-  <DiagramInteractions class="visual-editor">
+  <DiagramInteractions class="visual-editor" :class="{ 'hide-code-line-numbers': !markdownPreferences.lineNumbers }" :data-heading-style="headingAppearance.preferences.custom ? 'custom' : undefined" :style="headingAppearance.cssVariables">
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <div class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
+      <button type="button" :title="t('折叠所有章节', 'Fold all sections')" :aria-label="t('折叠所有章节', 'Fold all sections')" @click="foldHeadings('all')">▸</button>
+      <button type="button" :title="t('展开所有章节', 'Unfold all sections')" :aria-label="t('展开所有章节', 'Unfold all sections')" @click="foldHeadings('none')">▾</button>
       <label class="toolbar-select heading-select" :title="t('设置标题级别', 'Set heading level')">
         <span class="format-glyph heading-glyph">H</span>
         <select :aria-label="t('标题级别', 'Heading level')" @change="applyHeading">
@@ -383,11 +428,11 @@ defineExpose({ getEditor: () => crepe?.editor })
       <span class="toolbar-divider" />
       <button type="button" :title="t('行内代码', 'Inline code')" :aria-label="t('行内代码', 'Inline code')" @pointerdown.prevent="runCommand('inline-code')"><code class="code-glyph">&lt;/&gt;</code></button>
       <button type="button" :title="t('代码块', 'Code block')" :aria-label="t('代码块', 'Code block')" @pointerdown.prevent="runCommand('code-block')"><span class="block-glyph">{ }</span></button>
-      <button type="button" :title="t('行内公式', 'Inline formula')" :aria-label="t('行内公式', 'Inline formula')" @pointerdown.prevent="runCommand('inline-math')"><span class="math-glyph">ƒx</span></button>
-      <button type="button" :title="t('公式块', 'Formula block')" :aria-label="t('公式块', 'Formula block')" @pointerdown.prevent="runCommand('math-block')"><span class="math-glyph">∑</span></button>
+      <button v-if="markdownPreferences.math" type="button" :title="t('行内公式', 'Inline formula')" :aria-label="t('行内公式', 'Inline formula')" @pointerdown.prevent="runCommand('inline-math')"><span class="math-glyph">ƒx</span></button>
+      <button v-if="markdownPreferences.math" type="button" :title="t('公式块', 'Formula block')" :aria-label="t('公式块', 'Formula block')" @pointerdown.prevent="runCommand('math-block')"><span class="math-glyph">∑</span></button>
       <button type="button" :title="t('插入链接', 'Insert link')" :aria-label="t('插入链接', 'Insert link')" @pointerdown.prevent="applyLink"><AppIcon :icon="Link" :size="17" /></button>
       <label class="toolbar-select">
-        <select :aria-label="t('插入警告框', 'Insert callout')" @change="insertCallout">
+        <select v-if="markdownPreferences.callouts" :aria-label="t('插入警告框', 'Insert callout')" @change="insertCallout">
           <option value="">{{ t('提示框', 'Callout') }}</option>
           <option v-for="(_, type) in calloutTypes" :key="type" :value="type">{{ type }}</option>
         </select>
@@ -411,6 +456,7 @@ defineExpose({ getEditor: () => crepe?.editor })
 
 <style scoped>
 .visual-editor { display: flex; flex: 1; min-height: 0; flex-direction: column; background: var(--color-background-primary); }
+.hide-code-line-numbers :deep(.cm-lineNumbers) { display: none; }
 .markdown-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; min-height: 42px; padding: 5px var(--space-lg); border-bottom: 1px solid var(--color-border-subtle); background: var(--color-surface-primary); }
 .markdown-toolbar button { display: inline-grid; place-items: center; min-width: 32px; min-height: 30px; padding: 4px 8px; border-radius: var(--radius-sm); color: var(--color-text-primary); }
 .markdown-toolbar button:hover, .toolbar-select:hover { background: var(--color-background-hover); color: var(--color-text-primary); }

@@ -1,11 +1,21 @@
 <script setup lang="ts">
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
 import { t } from '@/i18n'
 
 const editorStore = useEditorStore()
 const workspaceStore = useWorkspaceStore()
+const { actionDialog, resolveAction, askConfirm } = useActionDialog()
+const reloadError = ref('')
+async function reload() {
+  const path = editorStore.currentFilePath, snapshot = editorStore.content
+  if (!(await askConfirm(t('重新加载会丢弃当前未保存内容。请先复制需要保留的文字。继续吗？', 'Reload discards unsaved edits. Copy any text you need to keep first. Continue?')))) return
+  if (path !== editorStore.currentFilePath || snapshot !== editorStore.content) return
+  try { await editorStore.reloadExternalFile(); reloadError.value = '' } catch (error) { reloadError.value = error instanceof Error ? error.message : '重新加载失败' }
+}
 
 const statusText = computed<Record<string, string>>(() => ({
   idle: t('空闲', 'Idle'), dirty: t('未保存', 'Unsaved'), saving: t('保存中…', 'Saving…'), saved: t('已保存', 'Saved'), save_failed: t('保存失败', 'Save failed'),
@@ -15,14 +25,17 @@ const statusText = computed<Record<string, string>>(() => ({
 
 <template>
   <header class="editor-header">
+    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <div class="file-identity"><strong>{{ workspaceStore.activeFile?.name ?? t('未命名笔记', 'Untitled note') }}</strong><small>{{ workspaceStore.activeFilePath }}</small></div>
     <div class="editor-actions">
       <span class="save-status" :class="editorStore.saveStatus">{{ statusText[editorStore.saveStatus] }}</span>
+      <button v-if="['conflict', 'external_changed'].includes(editorStore.saveStatus)" class="button-secondary" @click="reload">{{ t('重新加载外部版本', 'Reload external version') }}</button>
+      <span v-if="reloadError" class="save-status conflict" role="alert">{{ reloadError }}</span>
       <div class="mode-switch" :aria-label="t('编辑模式', 'Editor mode')">
         <button type="button" :class="{ active: editorStore.mode === 'wysiwyg' }" @click="editorStore.setMode('wysiwyg')">{{ t('写作', 'Writing') }}</button>
         <button type="button" :class="{ active: editorStore.mode === 'source' }" @click="editorStore.setMode('source')">{{ t('源码', 'Source') }}</button>
       </div>
-      <button type="button" class="save-button" :disabled="editorStore.saveStatus === 'saving'" @click="editorStore.save">{{ t('保存', 'Save') }}</button>
+      <button type="button" class="save-button" :disabled="['saving','conflict','external_changed'].includes(editorStore.saveStatus)" @click="editorStore.save">{{ t('保存', 'Save') }}</button>
     </div>
   </header>
 </template>

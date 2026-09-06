@@ -225,7 +225,7 @@ async def open_workspace(request: WorkspaceOpenRequest) -> WorkspaceSnapshot:
 
 @router.get("/workspace/tree", response_model=list[WorkspaceEntry], tags=["Workspace"])
 async def get_workspace_tree() -> list[WorkspaceEntry]:
-    return workspace_service.get_workspace_tree()
+    return await workspace_service.refresh_workspace_tree()
 
 
 @router.post("/workspace/folders", response_model=WorkspaceEntry, tags=["Workspace"])
@@ -286,7 +286,8 @@ async def get_note(note_id: str) -> Note:
 @router.patch("/notes/{note_id}", response_model=Note, tags=["Notes"])
 async def update_note(note_id: str, request: NoteUpdateRequest) -> Note:
     return await note_service.update_note(
-        note_id, title=request.title, markdown=request.markdown, tags=request.tags, defer_vectors=True
+        note_id, title=request.title, markdown=request.markdown, tags=request.tags,
+        expected_content_hash=request.expected_content_hash, defer_vectors=True
     )
 
 

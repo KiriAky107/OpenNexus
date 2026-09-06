@@ -2,8 +2,22 @@
 import { describe, expect, it } from 'vitest'
 import { calloutTypes, parseCallout } from './callouts'
 import { renderMarkdown } from './markdown'
+import { defaultMarkdownPreferences } from '@/stores/markdownPreferences'
 
 describe('callouts', () => {
+  it('keeps disabled syntax literal without leaking settings between render requests', async () => {
+    const source = '> [!WARNING]\n> text\n\n$x$\n\nhttps://example.com'
+    const [plain, extended] = await Promise.all([
+      renderMarkdown(source, { preferences: { ...defaultMarkdownPreferences, callouts: false, math: false, autoLinks: false } }),
+      renderMarkdown(source),
+    ])
+    expect(plain).not.toContain('markdown-callout')
+    expect(plain).not.toContain('katex')
+    expect(plain).not.toContain('<a ')
+    expect(extended).toContain('markdown-callout')
+    expect(extended).toContain('katex')
+    expect(extended).toContain('<a ')
+  })
   for (const [type, aliases] of Object.entries(calloutTypes)) {
     for (const alias of aliases) it(`renders ${alias}`, async () => {
       const root = document.createElement('div')
