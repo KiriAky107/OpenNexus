@@ -102,6 +102,40 @@ describe('VisualMarkdownEditor formatting toolbars', () => {
     expect(wrapper.get('.section-actions button').text()).toBe('全部折叠')
     expect(wrapper.find('.heading-fold-hidden').exists()).toBe(false)
   })
+  it('reuses heading decorations for cursor-only moves and invalidates them for folds and edits', async () => {
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: '# A\n\nfirst paragraph\n\nsecond paragraph' }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    editor.action(ctx => {
+      const view = ctx.get(editorViewCtx), plugin = headingFoldKey.get(view.state)!
+      const decorations = () => plugin.props.decorations!.call(plugin, view.state)
+      const initial = decorations()
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 6)))
+      expect(decorations()).toBe(initial)
+      view.dispatch(view.state.tr.insertText('新增'))
+      expect(decorations()).not.toBe(initial)
+    })
+    await wrapper.get('.section-actions button').trigger('click')
+    expect(wrapper.find('.heading-fold-hidden').exists()).toBe(true)
+    await wrapper.get('.section-actions button').trigger('click')
+    expect(wrapper.find('.heading-fold-hidden').exists()).toBe(false)
+  })
+  it('returns to the top after collapsing many sibling chapters from the document end', async () => {
+    const source = Array.from({ length: 100 }, (_, i) => `# Chapter ${i}\n\nBody ${i}`).join('\n\n')
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: source }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    editor.action(ctx => {
+      const view = ctx.get(editorViewCtx)
+      view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(view.state.doc.content.size - 1))))
+    })
+    const viewport = wrapper.get('.milkdown-host').element as HTMLElement
+    viewport.scrollTop = 5000
+    await wrapper.get('.section-actions button').trigger('click')
+    expect(viewport.scrollTop).toBe(0)
+    editor.action(ctx => expect(ctx.get(editorViewCtx).state.selection.from).toBe(1))
+    expect(editor.action(getMarkdown()).trim()).toBe(source)
+  })
   it('offers expand all when individually collapsed parents hide expanded children', async () => {
     const source = '# A\n\nbody\n\n## B\n\nchild\n\n# C\n\nbody'
     const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: source }, attachTo: document.body })

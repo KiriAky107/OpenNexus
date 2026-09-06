@@ -81,13 +81,36 @@ async function loadCodeLanguage(requestedLanguage: string) {
   return { shiki, language }
 }
 
+// Bounded LRU of dual-theme HTML. Large one-off blocks never remain in the cache.
+const highlightedBlocks = new Map<string, string>()
+let highlightedCharacters = 0
+const highlightBudget = 1_000_000
 export async function highlightCode(source: string, requestedLanguage = 'text'): Promise<string> {
+  const key = JSON.stringify([requestedLanguage.toLowerCase(), source])
+  const cached = highlightedBlocks.get(key)
+  if (cached !== undefined) {
+    highlightedBlocks.delete(key); highlightedBlocks.set(key, cached)
+    return cached
+  }
   const { shiki, language } = await loadCodeLanguage(requestedLanguage)
-  return shiki.codeToHtml(source, {
+  const html = shiki.codeToHtml(source, {
     lang: language,
     themes: { light: 'github-light', dark: 'github-dark' },
     defaultColor: false,
   })
+  const cost = key.length + html.length
+  if (cost <= highlightBudget / 4) {
+    // A concurrent caller may already have filled the same entry.
+    const previous = highlightedBlocks.get(key)
+    if (previous !== undefined) { highlightedCharacters -= key.length + previous.length; highlightedBlocks.delete(key) }
+    while (highlightedBlocks.size && (highlightedBlocks.size >= 64 || highlightedCharacters + cost > highlightBudget)) {
+      const oldest = highlightedBlocks.keys().next().value!
+      highlightedCharacters -= oldest.length + highlightedBlocks.get(oldest)!.length
+      highlightedBlocks.delete(oldest)
+    }
+    highlightedBlocks.set(key, html); highlightedCharacters += cost
+  }
+  return html
 }
 
 /** Share the initialized grammar/theme registry with editable code blocks. */

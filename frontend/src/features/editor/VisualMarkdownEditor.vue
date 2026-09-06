@@ -148,6 +148,10 @@ function foldHeadings(action: 'toggle' | 'all' | 'none') {
     const view = ctx.get(editorViewCtx)
     const tr = headingFoldTransaction(view.state, action)
     if (tr) view.dispatch(tr)
+    if (action === 'all') {
+      const viewport = editorRoot.value?.closest<HTMLElement>('.milkdown-host')
+      if (viewport) viewport.scrollTop = 0
+    }
   })
 }
 const diagramPreviews = new Map<string, { source: string; apply: (value: HTMLElement) => void }>()
