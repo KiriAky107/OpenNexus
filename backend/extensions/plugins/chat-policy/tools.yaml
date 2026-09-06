@@ -1,0 +1,11 @@
+tools:
+  - name: chat-policy.plan
+    description: 在委托前校验任务和步骤预算，输出读取、执行、核验的计划及权限约束。
+    handler: execution_policy
+    parameters:
+      type: object
+      additionalProperties: false
+      properties:
+        task: {type: string, minLength: 1, maxLength: 16000}
+        max_steps: {type: integer, minimum: 1, maximum: 10}
+      required: [task]

@@ -9,11 +9,12 @@ dependencies = [
     "fastapi>=0.116,<1.0",
     "httpx>=0.28,<1.0",
     "jsonschema>=4.25,<5.0",
+    "olefile>=0.47",
     "mistune>=3.0,<4.0",
     "python-docx>=1.1,<2.0",
+    "reportlab>=4.0,<5.0",
     "pyyaml>=6.0,<7.0",
     "referencing>=0.36,<1.0",
-    "reportlab>=4.0,<5.0",
     "sqlite-vec>=0.1.9",
     "uvicorn[standard]>=0.35,<1.0",
 ]

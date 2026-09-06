@@ -68,7 +68,14 @@ export interface Conversation {
   message_count: number
 }
 
+export interface WorkspaceContext { file_path: string; content: string }
+
 export interface ChatMessage {
+  context_captured?: boolean
+  attachments?: string[]
+  workspace_context?: WorkspaceContext
+  activity?: Array<{ type: 'thinking'; text: string } | { type: 'tool'; tool_call_id: string }>
+  versions?: string[]
   message_id: string
   conversation_id: string
   role: 'user' | 'assistant' | 'system'
@@ -81,6 +88,7 @@ export interface ChatMessage {
 }
 
 export interface Citation {
+  citation_id?: string
   note_id: string
   block_id: string
   file_path: string

@@ -11,7 +11,7 @@ from app.services.chat_context import prepare
 
 
 @pytest.mark.parametrize('enabled', [True, False])
-def test_chat_stream_retrieves_real_notes_and_emits_sources(monkeypatch, enabled):
+def test_chat_stream_does_not_presearch_notes(monkeypatch, enabled):
     received = []
 
     class Adapter:
@@ -34,14 +34,9 @@ def test_chat_stream_retrieves_real_notes_and_emits_sources(monkeypatch, enabled
         assert [e['sequence'] for e in events] == list(range(len(events)))
         assert events[-1]['event'] == 'Done'
         assert received[0].messages == request.messages
-        if enabled:
-            assert events[0]['event'] == 'Citation'
-            assert events[0]['data']['note_id'] == note.note_id
-            assert 'apple orchard knowledge' in received[0].system
-            assert 'Keep original instructions' in received[0].system
-        else:
-            assert all(e['event'] != 'Citation' for e in events)
-            assert received[0].system == request.system
+        assert all(e['event'] != 'Citation' for e in events)
+        assert 'apple orchard knowledge' not in received[0].system
+        assert 'Keep original instructions' in received[0].system
         assert request.system == 'Keep original instructions'
 
     asyncio.run(scenario())

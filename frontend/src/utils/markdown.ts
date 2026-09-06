@@ -125,9 +125,19 @@ export async function getCodeTokenizer(theme: 'github-light' | 'github-dark', re
   }
 }
 
-export async function renderMarkdown(source: string, options?: { theme?: 'light' | 'dark'; preferences?: MarkdownPreferences }): Promise<string> {
+export async function renderMarkdown(source: string, options?: { theme?: 'light' | 'dark'; preferences?: MarkdownPreferences; citationNumbers?: number[]; citationAliases?: Record<string, number> }): Promise<string> {
   const preferences = options?.preferences ?? defaultMarkdownPreferences
   const marked = createMarkdownParser(preferences)
+  const citations = new Set(options?.citationNumbers ?? [])
+  if (citations.size) marked.use({ extensions: [{ name: 'citation', level: 'inline',
+    start: text => text.indexOf('['),
+    tokenizer(text) {
+      const match = /^\[([1-9]\d*|cit_[A-Za-z0-9_-]+)\](?!\()/.exec(text)
+      const number = match ? options?.citationAliases?.[match[1]!] ?? Number(match[1]) : 0
+      if (match && citations.has(number)) return { type: 'citation', raw: match[0], number }
+    },
+    renderer: token => `<button type="button" class="inline-citation" data-citation-number="${token.number}" aria-label="查看来源 ${token.number}">[${token.number}]</button>`,
+  }] })
   const html = marked.parse(source, { async: false }) as string
   const documentNode = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html')
 
@@ -145,7 +155,17 @@ export async function renderMarkdown(source: string, options?: { theme?: 'light'
     }
     const highlighted = await highlightCode(code.textContent ?? '', requestedLanguage)
     const fragment = document.createRange().createContextualFragment(highlighted)
-    code.parentElement?.replaceWith(fragment)
+    // Shiki separates line spans with newlines. Block layout must not render those
+    // separators as additional blank rows; the untouched source remains available for copy.
+    for (const node of [...(fragment.querySelector('code')?.childNodes ?? [])]) {
+      if (node.nodeType === Node.TEXT_NODE && !node.textContent?.trim()) node.remove()
+    }
+    const wrapper = document.createElement('div')
+    wrapper.className = 'markdown-code-block'
+    wrapper.dataset.languageLabel = requestedLanguage
+    appendCodeToolbar(wrapper, requestedLanguage, code.textContent ?? '')
+    wrapper.append(fragment)
+    code.parentElement?.replaceWith(wrapper)
   }
 
   for (const { pre, source } of mermaidBlocks) {
@@ -154,6 +174,7 @@ export async function renderMarkdown(source: string, options?: { theme?: 'light'
       const container = document.createElement('div')
       container.className = 'markdown-mermaid'
       container.innerHTML = result.svg
+      appendCodeToolbar(container, 'mermaid', source, true)
       if (!result.warnings.length) appendDiagramControls(container)
       pre.replaceWith(container)
     } catch {
@@ -166,10 +187,11 @@ export async function renderMarkdown(source: string, options?: { theme?: 'light'
 
   return DOMPurify.sanitize(documentNode.body.innerHTML, {
     USE_PROFILES: { html: true },
+    HTML_INTEGRATION_POINTS: { foreignobject: true },
     ADD_TAGS: ['svg', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon',
       'text', 'tspan', 'textPath', 'g', 'defs', 'marker', 'style', 'clipPath', 'foreignObject',
       'title', 'desc', 'use', 'image', 'linearGradient', 'stop', 'radialGradient'],
-    ADD_ATTR: ['viewBox', 'd', 'cx', 'cy', 'r', 'rx', 'ry', 'x', 'y', 'width', 'height',
+    ADD_ATTR: ['xmlns', 'viewBox', 'd', 'cx', 'cy', 'r', 'rx', 'ry', 'x', 'y', 'width', 'height',
       'fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin',
       'transform', 'points', 'x1', 'y1', 'x2', 'y2', 'class', 'id', 'style', 'text-anchor',
       'dominant-baseline', 'font-size', 'font-family', 'font-weight', 'opacity', 'orient',
@@ -177,6 +199,26 @@ export async function renderMarkdown(source: string, options?: { theme?: 'light'
       'xlink:href', 'href', 'clip-path', 'gradientUnits', 'gradientTransform', 'stop-color',
       'stop-opacity', 'offset', 'patternUnits', 'patternTransform', 'target'],
   })
+}
+
+function appendCodeToolbar(container: HTMLElement, language: string, source: string, diagram = false) {
+  const header = document.createElement('div')
+  header.className = 'markdown-code-toolbar tools'
+  const label = document.createElement('span'); label.textContent = language
+  header.append(label)
+  for (const action of diagram ? ['source', 'copy'] : ['copy']) {
+    const button = document.createElement('button')
+    button.type = 'button'; button.className = 'button-secondary'
+    button.dataset.codeAction = action
+    button.textContent = action === 'source' ? '查看源码' : '复制'
+    button.setAttribute('aria-label', action === 'source' ? '查看源码' : '复制源码')
+    if (action === 'source') button.setAttribute('aria-pressed', 'false')
+    header.append(button)
+  }
+  const raw = document.createElement('pre')
+  raw.className = 'markdown-code-source'; raw.hidden = true; raw.textContent = source
+  container.prepend(header)
+  container.append(raw)
 }
 
 // 高亮器首次需要代码高亮时才创建；语法保持按语言加载。Worker 可在性能测量后进一步引入。

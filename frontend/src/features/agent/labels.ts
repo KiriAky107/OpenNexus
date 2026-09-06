@@ -43,6 +43,9 @@ const eventLabelsEn: Record<AgentEventType, string> = {
 }
 
 const toolLabels: Record<string, string> = {
+  'markdown.catalog': 'Markdown 格式目录',
+  'markdown.compose': '生成 Markdown 片段',
+  'notes.patch_markdown': '局部修改 Markdown',
   'system.echo': '回显测试',
   'math.add': '数值相加',
   'notes.search': '搜索笔记',
@@ -61,6 +64,9 @@ const toolLabels: Record<string, string> = {
 }
 
 const toolDescriptions: Record<string, string> = {
+  'markdown.catalog': '查询支持的 Markdown 格式、警告框类型及渲染限制。',
+  'markdown.compose': '生成标题、列表、表格、警告框、公式、Mermaid 和元数据等片段，不直接写入笔记。',
+  'notes.patch_markdown': '根据内容版本精确替换唯一片段，避免误改重复内容或覆盖并发编辑。',
   'system.echo': '回显文本，用于本地智能体集成测试。',
   'math.add': '计算两个数的和，不产生外部副作用。',
   'notes.search': '搜索已建立索引的笔记，并返回摘要和引用。',
