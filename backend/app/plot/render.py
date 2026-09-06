@@ -226,9 +226,14 @@ def _sample_segments(
     ymin: float,
     ymax: float,
 ) -> list[list[tuple[float, float]]]:
-    """采样并映射为像素点段，再裁剪到绘图矩形；非有限点处断段，避免画穿渐近线。"""
+    """采样并映射为像素点段，再裁剪到绘图矩形。
+
+    两处断段：非有限点处（画穿渐近线）；相邻有限采样点横跨可见范围上下两侧时
+    （渐近点恰好落在两个采样点之间，否则会被裁剪成贯穿绘图区的伪竖线）。
+    """
     segments: list[list[tuple[float, float]]] = []
     points: list[tuple[float, float]] = []
+    prev_y: float | None = None
     for i in range(_SAMPLES + 1):
         x = xmin + (xmax - xmin) * i / _SAMPLES
         try:
@@ -239,6 +244,7 @@ def _sample_segments(
             if points:
                 segments.append(points)
                 points = []
+            prev_y = None
             continue
         px = _sx(x, xmin, xmax)
         py = _sy(y, ymin, ymax)
@@ -247,8 +253,18 @@ def _sample_segments(
             if points:
                 segments.append(points)
                 points = []
+            prev_y = None
             continue
+        # 渐近线检测：相邻有限采样点分居可见范围上下两侧（一个 < ymin、一个 > ymax），
+        # 说明两者之间夹着竖直渐近线，断段避免被 Liang-Barsky 裁剪成贯穿绘图区的伪竖线
+        if prev_y is not None and (
+            (prev_y < ymin and y > ymax) or (prev_y > ymax and y < ymin)
+        ):
+            if points:
+                segments.append(points)
+                points = []
         points.append((px, py))
+        prev_y = y
     if points:
         segments.append(points)
 
