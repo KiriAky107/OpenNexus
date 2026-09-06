@@ -39,6 +39,7 @@ def _message(row) -> ChatMessage:
         thinking=row["thinking"],
         activity=json.loads(row['activity_json']),
         attachments=json.loads(row['attachments_json']),
+        context_captured=bool(row['context_captured']),
         workspace_context=json.loads(row['workspace_context_json']) if row['workspace_context_json'] else None,
         citations=citations,
         tool_calls=json.loads(row["tool_calls_json"]),
@@ -130,6 +131,7 @@ def append_message(
     parent_message_id: str | None = None,
     workspace_context: dict | None = None,
     attachments: list[str] | None = None,
+    context_captured: bool = False,
 ) -> None:
     now = _now().isoformat()
     clean_title = (title or "").strip() or content[:30].strip() or "New conversation"
@@ -139,7 +141,7 @@ def append_message(
             _append_message_in_transaction(
                 conn, conversation_id, message_id=message_id, role=role, content=content,
                 title=clean_title, thinking=thinking, citations=citations, tool_calls=tool_calls,
-                usage=usage, now=now, activity=activity, parent_message_id=parent_message_id, workspace_context=workspace_context, attachments=attachments,
+                usage=usage, now=now, activity=activity, parent_message_id=parent_message_id, workspace_context=workspace_context, attachments=attachments, context_captured=context_captured,
             )
             conn.execute("COMMIT")
         except BaseException:
@@ -165,6 +167,7 @@ def _append_message_in_transaction(
     parent_message_id: str | None = None,
     workspace_context: dict | None = None,
     attachments: list[str] | None = None,
+    context_captured: bool = False,
 ) -> None:
     conversation = conn.execute(
         "SELECT 1 FROM chat_conversations WHERE conversation_id=?", (conversation_id,)
@@ -215,6 +218,7 @@ def _append_message_in_transaction(
     conn.execute('UPDATE chat_messages SET parent_message_id=?, activity_json=? WHERE message_id=?', (parent, json.dumps(activity or [], ensure_ascii=False), message_id))
     conn.execute('UPDATE chat_messages SET workspace_context_json=? WHERE message_id=?', (json.dumps(workspace_context, ensure_ascii=False) if workspace_context is not None else None, message_id))
     conn.execute('UPDATE chat_messages SET attachments_json=? WHERE message_id=?', (json.dumps(attachments or []),message_id))
+    conn.execute('UPDATE chat_messages SET context_captured=? WHERE message_id=?', (int(context_captured), message_id))
     # A late stream may be persisted, but must not steal the selected branch.
     response_id = conn.execute('SELECT active_response_id FROM chat_conversations WHERE conversation_id=?', (conversation_id,)).fetchone()[0]
     if active_leaf == parent and (role != 'assistant' or response_id is None or response_id == message_id):

@@ -50,3 +50,40 @@ def test_workspace_snapshots_and_agent_links_survive_history_reload():
     assert total == 2
     assert messages[0].workspace_context.model_dump() == snapshot
     assert messages[1].tool_calls == calls
+
+
+def test_regeneration_persists_context_per_answer_without_rewriting_original(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from app.contracts import ChatRequest, Message, ModelEvent, ModelEventType
+    from app.routes import chat, utc_now
+    received=[]
+    class Adapter:
+        async def stream(self, request):
+            received.append(request)
+            yield ModelEvent(event=ModelEventType.text_delta, sequence=0, data={'text':'answer'}, timestamp=utc_now())
+            yield ModelEvent(event=ModelEventType.done, sequence=1, data={}, timestamp=utc_now())
+    monkeypatch.setattr('app.routes.provider_or_404',lambda _:SimpleNamespace(adapter=Adapter()))
+    # Keep attachment parsing out of this persistence test; the route must save raw IDs.
+    async def prepare(request, provider):
+        return request.model_copy(update={'attachments':[]})
+    monkeypatch.setattr('app.services.chat_attachments.prepare',prepare)
+    async def scenario():
+        history.create('Snapshots','snapshots')
+        for index,context in enumerate([{'file_path':'a.md','content':'A'},{'file_path':'b.md','content':'B'},None]):
+            req=ChatRequest(provider_id='test',model='test',use_rag=False,conversation_id='snapshots',
+                user_message_id='su',assistant_message_id=f'sa{index}',retry_message_id=f'sa{index-1}' if index else None,
+                messages=[Message(role='user',content='explain')],workspace_context=context,attachments=[f'file{index}.md'])
+            response=await chat(req)
+            _=[chunk async for chunk in response.body_iterator]
+        for index,path in enumerate(['a.md','b.md',None]):
+            history.select_version('snapshots',f'sa{index}')
+            messages,_=history.list_messages('snapshots',100,0)
+            assert messages[0].workspace_context.file_path=='a.md'
+            answer=messages[-1]
+            assert answer.context_captured
+            assert (answer.workspace_context.file_path if answer.workspace_context else None)==path
+            assert answer.attachments==[f'file{index}.md']
+        assert 'b.md' in received[1].system
+        assert received[2].system is None
+    asyncio.run(scenario())

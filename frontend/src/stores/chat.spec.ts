@@ -356,3 +356,38 @@ it('uploads attachments and includes their durable IDs in an attachment-only mes
   expect(store.pendingAttachments).toEqual([])
   upload.mockRestore()
 })
+
+it.each(['user', 'assistant'] as const)('retries older %s messages with their attachments, preserving pending uploads', async role => {
+  const s=useChatStore(); s.selectedProviderId='real'; s.selectedModel='model'
+  s.pendingAttachments=[{attachment_id:'first.md',name:'first.md'}]
+  await s.sendMessage('first'); vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
+  const old=s.messages[role === 'user' ? 0 : 1]!.message_id
+  s.pendingAttachments=[{attachment_id:'later.md',name:'later.md'}]
+  await s.sendMessage('later'); vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
+  s.pendingAttachments=[{attachment_id:'draft.md',name:'draft.md'}]
+  await s.retryMessage(old, role === 'user' ? 'edited first' : undefined)
+  expect(vi.mocked(streamChat).mock.calls.at(-1)![0].attachments).toEqual(['first.md'])
+  expect(s.pendingAttachments.map(a=>a.attachment_id)).toEqual(['draft.md'])
+})
+
+it('restores each answer context after history reload, including explicitly absent workspace context', async () => {
+  const s=useChatStore(); s.selectedProviderId='real'; s.selectedModel='model'
+  const first={file_path:'a.md',content:'A'}; const second={file_path:'b.md',content:'B'}
+  await s.sendMessage('explain',undefined,first); vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
+  const original=s.messages[1]!.message_id
+  await s.retryMessage(original,undefined,second); vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
+  expect(s.messages[0]!.workspace_context).toEqual(first)
+  expect(s.messages[1]!.workspace_context).toEqual(second)
+  vi.mocked(listConversationMessages).mockResolvedValue({items:JSON.parse(JSON.stringify(s.messages)),page:{total:2,limit:500,offset:0}})
+  await s.setActiveConversation(s.activeConversationId!)
+  await s.retryMessage(s.messages[1]!.message_id)
+  expect(vi.mocked(streamChat).mock.calls.at(-1)![0].workspace_context).toEqual(second)
+  vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
+  await s.retryMessage(s.messages[1]!.message_id,undefined,null)
+  vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
+  // API serializes absent captured context as null; do not fall back to the original user snapshot.
+  vi.mocked(listConversationMessages).mockResolvedValue({items:JSON.parse(JSON.stringify(s.messages)),page:{total:2,limit:500,offset:0}})
+  await s.setActiveConversation(s.activeConversationId!)
+  await s.sendMessage('continue')
+  expect(vi.mocked(streamChat).mock.calls.at(-1)![0].workspace_context).toBeUndefined()
+})

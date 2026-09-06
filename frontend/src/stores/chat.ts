@@ -181,9 +181,15 @@ export const useChatStore = defineStore('chat', () => {
   async function sendMessage(text: string, retryMessageId?: string, workspaceContext?: WorkspaceContext | null) {
     const content = text.trim() || (pendingAttachments.value.length ? '请分析附件内容' : '')
     if (!content || !canSend.value || !selectedProviderId.value || !selectedModel.value) return
-    const context = workspaceContext === undefined ? [...messages.value].reverse().find(m => m.role === 'user')?.workspace_context : workspaceContext
+    const targetIndex = retryMessageId ? messages.value.findIndex(m => m.message_id === retryMessageId) : messages.value.length - 1
+    if (retryMessageId && targetIndex < 0) return
+    const target = messages.value[targetIndex]
+    const source = target?.role === 'assistant' && !target.context_captured
+      ? messages.value[targetIndex - 1] : target
+    const context = workspaceContext === undefined ? source?.workspace_context : workspaceContext
     const snapshot = context ? { ...context } : undefined
-    const attachments = pendingAttachments.value.length ? pendingAttachments.value.map(a=>a.attachment_id) : ([...messages.value].reverse().find(m=>m.role==='user')?.attachments ?? [])
+    const attachments = !retryMessageId && pendingAttachments.value.length
+      ? pendingAttachments.value.map(a => a.attachment_id) : [...(source?.attachments ?? [])]
     const version = ++streamVersion
     isPreparing.value = true
     historyError.value = ''
@@ -217,6 +223,7 @@ export const useChatStore = defineStore('chat', () => {
     const aiMsg = reactive<ChatMessage>({
       message_id: crypto.randomUUID(), conversation_id: conversationId, role: 'assistant', content: '',
       created_at: new Date().toISOString(), citations: [], tool_calls: [], activity: [],
+      context_captured: true, workspace_context: snapshot, attachments: [...attachments],
     })
     if (retryTarget) {
       messages.value = messages.value.slice(0, retryIndex)
@@ -226,7 +233,7 @@ export const useChatStore = defineStore('chat', () => {
     if (!regenerate) messages.value.push(userMsg)
     messages.value.push(aiMsg)
     inputText.value = ''
-    pendingAttachments.value = []
+    if (!retryMessageId) pendingAttachments.value = []
     isStreaming.value = true
     conversation.updated_at = new Date().toISOString()
     conversation.message_count = messages.value.length
@@ -322,7 +329,7 @@ export const useChatStore = defineStore('chat', () => {
     const message = messages.value[index]
     if (!message) return
     const text = message.role === 'user' ? editedText : messages.value[index - 1]?.content
-    if (text?.trim()) await sendMessage(text, messageId, workspaceContext !== undefined ? workspaceContext : (message.role === 'user' ? message.workspace_context : messages.value[index - 1]?.workspace_context))
+    if (text?.trim()) await sendMessage(text, messageId, workspaceContext)
   }
 
   async function switchVersion(messageId: string) {
