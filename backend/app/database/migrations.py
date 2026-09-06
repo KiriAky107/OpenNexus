@@ -171,6 +171,7 @@ MIGRATIONS: list[str] = [
     """ALTER TABLE chat_conversations ADD COLUMN active_response_id TEXT;""",
     """ALTER TABLE chat_messages ADD COLUMN workspace_context_json TEXT;""",
     """ALTER TABLE chat_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]';""",
+    """ALTER TABLE chat_messages ADD COLUMN context_captured INTEGER NOT NULL DEFAULT 0;""",
 ]
 
 

@@ -506,6 +506,9 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                     usage=usage,
                     activity=activity,
                     parent_message_id=user_message_id,
+                    workspace_context=request.workspace_context.model_dump() if request.workspace_context else None,
+                    attachments=request.attachments,
+                    context_captured=True,
                 )
 
     return StreamingResponse(stream(), media_type="text/event-stream")

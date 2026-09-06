@@ -71,6 +71,7 @@ export interface Conversation {
 export interface WorkspaceContext { file_path: string; content: string }
 
 export interface ChatMessage {
+  context_captured?: boolean
   attachments?: string[]
   workspace_context?: WorkspaceContext
   activity?: Array<{ type: 'thinking'; text: string } | { type: 'tool'; tool_call_id: string }>

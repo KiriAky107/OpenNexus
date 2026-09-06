@@ -312,6 +312,7 @@ class ConversationListResponse(Contract):
 
 
 class ChatMessage(Contract):
+    context_captured: bool = False
     attachments: list[str] = Field(default_factory=list)
     workspace_context: WorkspaceContext | None = None
     activity: list[dict[str, Any]] = Field(default_factory=list)
