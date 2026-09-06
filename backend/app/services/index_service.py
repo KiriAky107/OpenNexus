@@ -17,7 +17,7 @@ from app.errors import ApiError
 from app.knowledge.parser import parse_note
 from app.services.note_service import index_note, prepare_note_index
 from app.database.db import connect, transaction
-from app.services.coordination import _vault_mutation_lock
+from app.services.coordination import vault_mutation_lock
 from app.retrieval.vectorstore import SqliteVecStore
 from app.local_models.runtime import LocalEmbedding
 from app.services import note_service
@@ -116,7 +116,7 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
             prepared_notes.append((parsed, prepared))
         # All network/model awaits precede the transaction. The concrete SQLite
         # methods below complete synchronously despite their async interfaces.
-        async with _vault_mutation_lock:
+        async with vault_mutation_lock():
             if _scan_vault() != docs or saved_records != {key: repository.get_note_record(key) for key in _pending_notes()}:
                 raise ApiError(409, "INDEX_SNAPSHOT_CHANGED", "笔记在计算期间发生变化，稍后重新计算。")
             conn = connect()
@@ -263,7 +263,7 @@ async def _refresh_saved_note(note_id: str) -> None:
         prepared = await prepare_note_index(parsed, strict=True)
         if isinstance(note_service.embedding, LocalEmbedding) and parsed.blocks and prepared[1] is None:
             raise ApiError(503, "EMBEDDING_UNAVAILABLE", "笔记已保存，后台向量计算未完成。")
-        async with _vault_mutation_lock:
+        async with vault_mutation_lock():
             current = repository.get_note_record(note_id)
             if current != record or note_service._read_markdown(record.file_path) != markdown:
                 # Another save or rename won the race; leave the durable queue entry intact.
