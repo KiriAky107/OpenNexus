@@ -127,16 +127,30 @@ class DocxExporter:
         self._render_inline(p, node.children, warnings)
 
     def _block_blockquote(self, node: DocumentNode, warnings: list[str]) -> None:
-        p = self._doc.add_paragraph()
-        self._render_inline(p, node.children, warnings)
-        p.paragraph_format.left_indent = Pt(16)
-        for run in p.runs:
-            run.font.color.rgb = RGBColor(0x57, 0x60, 0x6A)
+        # 引用块的直接子节点是块级节点（paragraph/list 等），不能交给行内渲染器，
+        # 否则正文会被当作「无法表示的行内节点」丢弃；逐个渲染并继承引用缩进/颜色。
+        for child in node.children:
+            if child.type == "paragraph":
+                p = self._doc.add_paragraph()
+                self._render_inline(p, child.children, warnings)
+                p.paragraph_format.left_indent = Pt(16)
+                for run in p.runs:
+                    run.font.color.rgb = RGBColor(0x57, 0x60, 0x6A)
+            elif child.type == "list":
+                self._block_list(child, warnings, level=1, color=RGBColor(0x57, 0x60, 0x6A))
+            else:
+                self._render_block(child, warnings)
 
-    def _block_list(self, node: DocumentNode, warnings: list[str], level: int = 0) -> None:
+    def _block_list(
+        self,
+        node: DocumentNode,
+        warnings: list[str],
+        level: int = 0,
+        color: RGBColor | None = None,
+    ) -> None:
         ordered = bool(node.attributes.get("ordered"))
         for index, item in enumerate(node.children, start=1):
-            self._block_list_item(item, warnings, ordered, index, level)
+            self._block_list_item(item, warnings, ordered, index, level, color)
 
     def _block_list_item(
         self,
@@ -145,6 +159,7 @@ class DocxExporter:
         ordered: bool,
         index: int,
         level: int,
+        color: RGBColor | None = None,
     ) -> None:
         if item.attributes.get("task"):
             marker = "☑ " if item.attributes.get("checked") else "☐ "
@@ -154,26 +169,22 @@ class DocxExporter:
         first = True
         for child in item.children:
             if child.type == "list":
-                self._block_list(child, warnings, level + 1)
+                self._block_list(child, warnings, level + 1, color)
                 continue
-            if child.type == "paragraph":
-                p = self._doc.add_paragraph()
-                p.paragraph_format.left_indent = indent
-                if first:
-                    self._add_run(p, marker)
-                    first = False
-                self._render_inline(p, child.children, warnings)
-            elif child.children:
-                # 直接行内子节点：拼进一个段落
-                p = self._doc.add_paragraph()
-                p.paragraph_format.left_indent = indent
-                if first:
-                    self._add_run(p, marker)
-                    first = False
+            p = self._doc.add_paragraph()
+            p.paragraph_format.left_indent = indent
+            if first:
+                self._add_run(p, marker)
+                first = False
+            if child.children:
+                # 段落或行内容器（strong/link 等）：渲染其行内子节点
                 self._render_inline(p, child.children, warnings)
             else:
-                self._render_block(child, warnings)
-                first = False
+                # 直接行内叶子节点（text 等）：拼进段落，不能交给块级渲染器（会丢弃正文）
+                self._add_run(p, child.text or "")
+            if color is not None:
+                for run in p.runs:
+                    run.font.color.rgb = color
 
     def _block_table(self, node: DocumentNode, warnings: list[str]) -> None:
         rows = node.children

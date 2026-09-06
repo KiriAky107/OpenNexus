@@ -212,6 +212,32 @@ async def create_export(request: ExportRequest) -> ExportJob:
     return job
 
 
+async def _acquire_render_slot(cancel_event: asyncio.Event) -> bool:
+    """等待渲染槽位，同时响应取消：拿到槽位返回 True，被取消返回 False。
+
+    等待期间任务保持 queued；取消即时生效，不必等前面的渲染完成。
+    """
+    while True:
+        if cancel_event.is_set():
+            return False
+        acquire = asyncio.create_task(_render_slots.acquire())
+        cancel_wait = asyncio.create_task(cancel_event.wait())
+        done, pending = await asyncio.wait(
+            (acquire, cancel_wait), return_when=asyncio.FIRST_COMPLETED
+        )
+        if acquire in done:
+            # 拿到槽位；收掉仍在等待取消标志的任务（不释放刚拿到的槽位）
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            return True
+        # 取消先到：取消尚未完成的 acquire（Semaphore.acquire 取消不会递减计数）
+        acquire.cancel()
+        cancel_wait.cancel()
+        await asyncio.gather(acquire, cancel_wait, return_exceptions=True)
+        return False
+
+
 async def _execute(
     job_id: str,
     format: ExportFormat,
@@ -220,61 +246,66 @@ async def _execute(
     metadata: dict | None,
     options: ExportOptions,
 ) -> None:
-    """后台渲染：解析 → 导出 → 写文件 → 挂载产物元信息。"""
+    """后台渲染：排队 → 解析 → 导出 → 写文件 → 挂载产物元信息。"""
     cancel_event = _cancel_flags[job_id]
-    _jobs[job_id] = _jobs[job_id].model_copy(
-        update={
-            "status": ExportStatus.running,
-            "started_at": _now(),
-            "progress": ExportProgress(phase="rendering", current=0, total=1, percent=0.0),
-        }
-    )
+    acquired = False
     try:
-        # 并发渲染限额：解析/渲染是 CPU 密集的同步工作，用信号量限制同时执行的任务数，
-        # 超出限额的任务在此排队等待，避免大量任务同时占满工作线程与内存
-        async with _render_slots:
-            # 让出一次，使「创建后立即取消」的 queued 任务能及时进入 cancelled
-            await asyncio.sleep(0)
-            if cancel_event.is_set():
-                raise ExportCancelled()
+        # 并发渲染限额：解析/渲染是 CPU 密集的同步工作，用信号量限制同时执行的任务数。
+        # 等待槽位期间保持 queued 并同时监听取消，取消即时生效，不必等前面的渲染完成。
+        if not await _acquire_render_slot(cancel_event):
+            raise ExportCancelled()
+        acquired = True
 
-            # 解析与渲染都是 CPU 密集的同步工作，放入线程执行避免阻塞事件循环，
-            # 使运行中的取消能在渲染边界生效；写文件前再次检查取消。
-            document = await asyncio.to_thread(parse_document, markdown)
-            document.attributes["title"] = title
-            if metadata:
-                document.attributes["metadata"] = metadata
+        # 拿到槽位后才进入 running
+        _jobs[job_id] = _jobs[job_id].model_copy(
+            update={
+                "status": ExportStatus.running,
+                "started_at": _now(),
+                "progress": ExportProgress(phase="rendering", current=0, total=1, percent=0.0),
+            }
+        )
+        # 让出一次，使「创建后立即取消」的 queued 任务能及时进入 cancelled
+        await asyncio.sleep(0)
+        if cancel_event.is_set():
+            raise ExportCancelled()
 
-            result = await asyncio.to_thread(_render_document, document, options, format)
-            if cancel_event.is_set():
-                raise ExportCancelled()
-            if len(result.content) > MAX_EXPORT_BYTES:
-                raise ExportTooLarge()
+        # 解析与渲染都是 CPU 密集的同步工作，放入线程执行避免阻塞事件循环，
+        # 使运行中的取消能在渲染边界生效；写文件前再次检查取消。
+        document = await asyncio.to_thread(parse_document, markdown)
+        document.attributes["title"] = title
+        if metadata:
+            document.attributes["metadata"] = metadata
 
-            ext = _extension_for(format)
-            out_dir = get_settings().exports_path
-            out_dir.mkdir(parents=True, exist_ok=True)
-            path = _export_path(job_id, ext)
-            path.write_bytes(result.content)
+        result = await asyncio.to_thread(_render_document, document, options, format)
+        if cancel_event.is_set():
+            raise ExportCancelled()
+        if len(result.content) > MAX_EXPORT_BYTES:
+            raise ExportTooLarge()
 
-            completed_at = _now()
-            _jobs[job_id] = _jobs[job_id].model_copy(
-                update={
-                    "status": ExportStatus.completed,
-                    "progress": ExportProgress(
-                        phase="completed", current=1, total=1, percent=1.0
-                    ),
-                    "file": ExportFile(
-                        file_name=f"{_safe_download_name(title)}{ext}",
-                        mime_type=result.mime_type,
-                        size=len(result.content),
-                        sha256=hashlib.sha256(result.content).hexdigest(),
-                        expires_at=completed_at + FILE_TTL,
-                    ),
-                    "warnings": result.warnings,
-                    "completed_at": completed_at,
-                }
-            )
+        ext = _extension_for(format)
+        out_dir = get_settings().exports_path
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = _export_path(job_id, ext)
+        path.write_bytes(result.content)
+
+        completed_at = _now()
+        _jobs[job_id] = _jobs[job_id].model_copy(
+            update={
+                "status": ExportStatus.completed,
+                "progress": ExportProgress(
+                    phase="completed", current=1, total=1, percent=1.0
+                ),
+                "file": ExportFile(
+                    file_name=f"{_safe_download_name(title)}{ext}",
+                    mime_type=result.mime_type,
+                    size=len(result.content),
+                    sha256=hashlib.sha256(result.content).hexdigest(),
+                    expires_at=completed_at + FILE_TTL,
+                ),
+                "warnings": result.warnings,
+                "completed_at": completed_at,
+            }
+        )
     except ExportCancelled:
         _jobs[job_id] = _jobs[job_id].model_copy(
             update={
@@ -302,6 +333,8 @@ async def _execute(
             }
         )
     finally:
+        if acquired:
+            _render_slots.release()
         _cancel_flags.pop(job_id, None)
 
 

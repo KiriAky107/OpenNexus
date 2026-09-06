@@ -8,6 +8,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import re
+import zlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -60,10 +63,15 @@ $$
 
 @pytest.fixture(autouse=True)
 def _reset_export_state():
-    """清空内存注册表，避免跨用例的任务/取消标志互相污染。"""
+    """清空内存注册表，避免跨用例的任务/取消标志互相污染。
+
+    每个用例经 `asyncio.run()` 使用独立事件循环，模块级 Semaphore 会绑定到首个
+    循环，跨用例复用会触发「bound to a different event loop」；此处每例重建槽位。
+    """
     export_service._jobs.clear()
     export_service._tasks.clear()
     export_service._cancel_flags.clear()
+    export_service._render_slots = asyncio.Semaphore(export_service.MAX_CONCURRENT_RENDERS)
     yield
     export_service._jobs.clear()
     export_service._tasks.clear()
@@ -345,6 +353,158 @@ def test_docx_exporter_contains_cjk_text() -> None:
     with zipfile.ZipFile(BytesIO(result.content)) as zf:
         xml = zf.read("word/document.xml")
     assert "进程调度".encode("utf-8") in xml
+
+
+def _pdf_unescape(raw: bytes) -> bytes:
+    """反转义 PDF 字符串字面量（八进制转义与 \n \r \t 等）。"""
+    out = bytearray()
+    i = 0
+    n = len(raw)
+    while i < n:
+        b = raw[i]
+        if b == 0x5C and i + 1 < n:  # 反斜杠转义
+            nxt = raw[i + 1]
+            if 0x30 <= nxt <= 0x37:  # 八进制（如 \000）
+                j = i + 1
+                digits = bytearray()
+                while j < n and j < i + 4 and 0x30 <= raw[j] <= 0x37:
+                    digits.append(raw[j])
+                    j += 1
+                out.append(int(digits.decode(), 8) & 0xFF)
+                i = j
+                continue
+            simple = {0x6E: 0x0A, 0x72: 0x0D, 0x74: 0x09, 0x62: 0x08, 0x66: 0x0C}
+            out.append(simple.get(nxt, nxt))
+            i += 2
+            continue
+        out.append(b)
+        i += 1
+    return bytes(out)
+
+
+def _extract_pdf_text(content: bytes) -> str:
+    """从 PDF 内容流提取文本（仅测试断言用，非完整 PDF 文本提取）。
+
+    reportlab 对 CID 字体按 UTF-16BE（高位 0x00）编码，字符串写为 \000 前缀的八进制
+    转义；这里解码 ASCII85+flate 内容流、反转义字符串并去掉 0x00 还原 ASCII 正文。
+    """
+    chunks: list[str] = []
+    for m in re.finditer(rb"stream\r?\n(.*?)endstream", content, re.DOTALL):
+        raw = m.group(1).strip()
+        if raw.endswith(b"~>"):
+            raw = raw[:-2]
+        try:
+            dec = zlib.decompress(base64.a85decode(raw))
+        except Exception:
+            try:
+                dec = zlib.decompress(raw)
+            except Exception:
+                dec = raw
+        for sm in re.finditer(rb"\(((?:[^()\\]|\\.)*)\)\s*Tj", dec):
+            text = _pdf_unescape(sm.group(1))
+            if text.count(0) > len(text) // 4:
+                text = text.replace(b"\x00", b"")
+            chunks.append(text.decode("latin-1"))
+    return "".join(chunks)
+
+
+# --------------------------------------------------------------------------- #
+# 审阅回归：结构内容验证（不只校验魔法字节，还验证产物正文）
+# --------------------------------------------------------------------------- #
+def test_pdf_blockquote_preserves_content() -> None:
+    from app.export.exporters.pdf import PdfExporter
+
+    # P2：引用块正文不能因「把块级子节点交给行内渲染器」而丢失
+    result = asyncio.run(
+        PdfExporter().export(parse_document("> quoted **content**"), ExportOptions())
+    )
+    text = _extract_pdf_text(result.content)
+    assert "quoted" in text
+    assert "content" in text
+    assert not any("无法表示" in w for w in result.warnings)
+
+
+def test_docx_blockquote_preserves_content() -> None:
+    import zipfile
+    from io import BytesIO
+
+    from app.export.exporters.docx import DocxExporter
+
+    result = asyncio.run(
+        DocxExporter().export(parse_document("> quoted **content**"), ExportOptions())
+    )
+    with zipfile.ZipFile(BytesIO(result.content)) as zf:
+        xml = zf.read("word/document.xml").decode("utf-8")
+    assert "quoted" in xml
+    assert "content" in xml
+    assert not any("无法表示" in w for w in result.warnings)
+
+
+def test_pdf_nested_list_parent_before_child() -> None:
+    from app.export.exporters.pdf import PdfExporter
+
+    # P2：嵌套列表输出顺序颠倒——父级正文应在子列表之前
+    result = asyncio.run(
+        PdfExporter().export(parse_document("- parent\n  - child"), ExportOptions())
+    )
+    text = _extract_pdf_text(result.content)
+    assert text.index("parent") < text.index("child")
+
+
+def test_docx_nested_list_parent_before_child() -> None:
+    import zipfile
+    from io import BytesIO
+
+    from app.export.exporters.docx import DocxExporter
+
+    result = asyncio.run(
+        DocxExporter().export(parse_document("- parent\n  - child"), ExportOptions())
+    )
+    with zipfile.ZipFile(BytesIO(result.content)) as zf:
+        xml = zf.read("word/document.xml").decode("utf-8")
+    assert xml.index("parent") < xml.index("child")
+
+
+def test_export_cancel_queued_job_waiting_for_slot(monkeypatch) -> None:
+    # P2：等待渲染槽位的任务取消后应立即进入 cancelled，不必等前面的渲染完成
+    import threading
+
+    real_render = export_service._render_document
+    release = threading.Event()
+    entered = 0
+    lock = threading.Lock()
+
+    def blocking_render(document, options, format):
+        nonlocal entered
+        with lock:
+            entered += 1
+        release.wait(timeout=5)
+        return real_render(document, options, format)
+
+    monkeypatch.setattr(export_service, "_render_document", blocking_render)
+
+    async def _go():
+        a = await export_service.create_export(_markdown_request("# a"))
+        b = await export_service.create_export(_markdown_request("# b"))
+        # 等 a/b 两个任务都拿到槽位并阻塞在渲染里
+        for _ in range(2000):
+            if entered >= 2:
+                break
+            await asyncio.sleep(0.001)
+        c = await export_service.create_export(_markdown_request("# c"))
+        await asyncio.sleep(0.01)  # 让 c 进入排队等待槽位
+        export_service.cancel_export(c.job_id)
+        finished_c = await export_service.wait_for_export(c.job_id)
+        release.set()  # 放行前面的任务，避免测试挂起
+        await asyncio.gather(
+            export_service.wait_for_export(a.job_id),
+            export_service.wait_for_export(b.job_id),
+        )
+        return finished_c
+
+    finished = asyncio.run(_go())
+    assert finished.status == ExportStatus.cancelled
+    assert finished.file is None
 
 
 def test_export_unknown_note_404() -> None:
