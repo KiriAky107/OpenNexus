@@ -1,9 +1,9 @@
 """PdfExporter：Document AST → PDF（reportlab platypus）。
 
 v1 为文本优先：标题/段落/行内强调与链接/列表/引用/表格/代码块/数学文本均可导出；
-function_plot 与 mermaid 保留源码占位并记 warning。中文字体用 reportlab 内置
-STSong-Light CID 字体，避免外部字体依赖。CID 字体无独立 bold/italic 字重，
-故行内强调退化为普通文本（内容不丢、样式简化），标题靠字号区分层级。
+function_plot 内嵌为矢量图（reportlab Drawing），mermaid 保留源码占位并记 warning。
+中文字体用 reportlab 内置 STSong-Light CID 字体，避免外部字体依赖。CID 字体无独立
+bold/italic 字重，故行内强调退化为普通文本（内容不丢、样式简化），标题靠字号区分层级。
 """
 
 from __future__ import annotations
