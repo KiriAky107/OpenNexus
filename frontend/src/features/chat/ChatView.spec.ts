@@ -7,6 +7,7 @@ import { useProviderStore } from '@/stores/provider'
 import { useSkillStore } from '@/stores/skill'
 import ChatView from './ChatView.vue'
 
+vi.mock('@/services/agentService', () => ({ listTools: vi.fn().mockResolvedValue([]) }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('@/stores/editor', () => ({ useEditorStore: () => ({}) }))
 vi.mock('@/stores/workspace', () => ({ useWorkspaceStore: () => ({}) }))
@@ -27,6 +28,49 @@ beforeEach(() => {
   vi.spyOn(providers, 'loadProviders').mockResolvedValue(undefined)
   vi.spyOn(providers, 'loadModels').mockResolvedValue([])
   vi.spyOn(useSkillStore(), 'loadSkills').mockResolvedValue(undefined)
+})
+
+it('reveals only cited sources as the streamed answer reaches complete markers', async () => {
+  const wrapper = mount(ChatView)
+  await flushPromises()
+  const chat = useChatStore()
+  chat.messages = [{ message_id: 'answer', conversation_id: 'test', role: 'assistant', content: '', created_at: new Date().toISOString(),
+    citations: [1, 2, 3].map(number => ({ note_id: 'note', block_id: String(number), file_path: 'note.md', heading_path: '', content: `source ${number}` })),
+  }]
+  await flushPromises()
+  expect(wrapper.findAll('.citation-card')).toHaveLength(0)
+  chat.messages[0]!.content = '结论 [3'
+  await flushPromises()
+  expect(wrapper.findAll('.citation-card')).toHaveLength(0)
+  chat.messages[0]!.content += ']，补充 [1]，再次 [3]'
+  await flushPromises()
+  expect(wrapper.findAll('.citation-card .badge').map(item => item.text())).toEqual(['3', '1'])
+  wrapper.unmount()
+})
+
+it('animates only the active reply and keeps tools inside the reasoning disclosure', async () => {
+  const wrapper = mount(ChatView)
+  await flushPromises()
+  const chat = useChatStore()
+  const base = { conversation_id: 'test', role: 'assistant' as const, content: '', created_at: new Date().toISOString() }
+  chat.messages = [{ ...base, message_id: 'old' }, { ...base, message_id: 'active', tool_calls: [{ tool_call_id: 'search', name: 'rag.search', parameters: { query: 'Python' }, status: 'running' }] }]
+  chat.isStreaming = true
+  await flushPromises()
+  expect(wrapper.findAll('.thinking-typewriter')).toHaveLength(1)
+  expect(wrapper.findAll('.message')[0]!.find('.thinking').exists()).toBe(false)
+  expect(wrapper.get('details.thinking .tool-calls').text()).toContain('rag.search')
+  expect(wrapper.get('details.thinking summary').text()).toContain('正在思考')
+  chat.messages[1]!.thinking = 'beforeafter'
+  chat.messages[1]!.activity = [{ type: 'thinking', text: 'before' }, { type: 'tool', tool_call_id: 'search' }, { type: 'thinking', text: 'after' }]
+  await flushPromises()
+  expect(wrapper.get('details.thinking').element.textContent).toMatch(/before[\s\S]*rag.search[\s\S]*after/)
+  chat.messages[1]!.content = 'Answer'
+  chat.isStreaming = false
+  await flushPromises()
+  expect(wrapper.find('.thinking-typewriter').exists()).toBe(false)
+  expect(wrapper.get('details.thinking summary').text()).toBe('思考过程')
+  expect(wrapper.find('details.thinking .tool-calls').exists()).toBe(true)
+  wrapper.unmount()
 })
 
 it('reuses the settings model cache and renders the shared select style', async () => {
@@ -115,7 +159,7 @@ it('sends on Enter but preserves Shift+Enter and IME confirmation', async () => 
   await input.trigger('keydown', { key: 'Enter', shiftKey: true })
   expect(send).not.toHaveBeenCalled()
   await input.trigger('keydown', { key: 'Enter' })
-  expect(send).toHaveBeenCalledWith('问题')
+  expect(send).toHaveBeenCalledWith('问题', undefined, undefined)
   await input.trigger('keydown', { key: 'Enter', repeat: true })
   expect(send).toHaveBeenCalledTimes(1)
   wrapper.unmount()

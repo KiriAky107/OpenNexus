@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { defineAsyncComponent, ref } from 'vue'
 import { useWorkspaceStore } from '@/stores/workspace'
 import EditorHeader from '@/features/editor/EditorHeader.vue'
 import EditorPane from '@/features/editor/EditorPane.vue'
@@ -7,11 +8,16 @@ import { EditPen } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { t } from '@/i18n'
 
+const WorkspaceChat = defineAsyncComponent(() => import('../chat/WorkspaceChat.vue'))
+const chatOpened = ref(false), chatVisible = ref(false)
+function openChat() { chatOpened.value = true; chatVisible.value = true }
 const workspaceStore = useWorkspaceStore()
 </script>
 
 <template>
   <div class="workspace-view">
+    <button class="workspace-chat-launcher button-secondary" aria-label="唤起 AI 聊天" title="AI 聊天" @click="openChat">AI</button>
+    <WorkspaceChat v-if="chatOpened" :open="chatVisible" @close="chatVisible = false" />
     <template v-if="workspaceStore.activeFilePath">
       <EditorHeader />
       <WorkspacePluginCommands><EditorPane /></WorkspacePluginCommands>
@@ -27,7 +33,10 @@ const workspaceStore = useWorkspaceStore()
 </template>
 
 <style scoped>
+.workspace-chat-launcher { position: absolute; right: 24px; bottom: 76px; z-index: 11; width: 42px; height: 42px; border-radius: var(--radius-full); background: var(--color-editor-scroll-background); color: var(--color-editor-scroll-text); box-shadow: var(--shadow-sm); }
+
 .workspace-view {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;

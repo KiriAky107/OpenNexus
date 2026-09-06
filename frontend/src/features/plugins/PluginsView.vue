@@ -216,10 +216,19 @@ const hasCommandContribution = computed(() =>
 </template>
 
 <style scoped>
-.plugin-detail { display: grid; gap: var(--space-lg); }
+.plugin-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-lg);
+  max-width: 1180px;
+  margin-inline: auto;
+}
+.detail-panel, .detail-grid > div { min-width: 0; }
+.contribution-list { overflow-wrap: anywhere; }
 
 .detail-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-md);

@@ -260,10 +260,10 @@ def test_core_collections_are_typed() -> None:
     assert notes.items == []
     assert notes.page.limit == 20
     assert [skill.manifest.skill_id for skill in skills.items] == [
-        "knowledge-assistant"
+        "knowledge-assistant", "chat-operator"
     ]
     assert skills.items[0].status == "ready"
-    assert [plugin.manifest.plugin_id for plugin in plugins.items] == ["text-tools"]
+    assert [plugin.manifest.plugin_id for plugin in plugins.items] == ["text-tools", "chat-policy"]
     assert plugins.items[0].status == "ready"
     assert [provider.provider_id for provider in providers.items] == ["mock"]
     assert index.status == "idle"

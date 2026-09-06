@@ -159,6 +159,19 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation
         ON chat_messages(conversation_id, sequence);
     """,
+    """
+    ALTER TABLE chat_messages ADD COLUMN parent_message_id TEXT;
+    ALTER TABLE chat_messages ADD COLUMN activity_json TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE chat_conversations ADD COLUMN active_leaf TEXT;
+    UPDATE chat_messages SET parent_message_id=(SELECT prev.message_id FROM chat_messages prev
+        WHERE prev.conversation_id=chat_messages.conversation_id AND prev.sequence<chat_messages.sequence ORDER BY prev.sequence DESC LIMIT 1);
+    UPDATE chat_conversations SET active_leaf=(SELECT message_id FROM chat_messages WHERE conversation_id=chat_conversations.conversation_id ORDER BY sequence DESC LIMIT 1);
+    CREATE INDEX idx_chat_parent ON chat_messages(conversation_id,parent_message_id);
+    """,
+    """ALTER TABLE chat_conversations ADD COLUMN active_response_id TEXT;""",
+    """ALTER TABLE chat_messages ADD COLUMN workspace_context_json TEXT;""",
+    """ALTER TABLE chat_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]';""",
+    """ALTER TABLE chat_messages ADD COLUMN context_captured INTEGER NOT NULL DEFAULT 0;""",
 ]
 
 

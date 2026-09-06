@@ -34,7 +34,7 @@ async def prepare_context(request, config, complete, *, stream=False):
     budget = policy.context_window - reserve
     if budget <= 0:
         raise ProviderError("CONTEXT_CONFIG_CONFLICT", "输出及思考预算已占满上下文窗口，请调整模型上下文配置。")
-    if request.attachments:
+    if request.attachments or any(m.images for m in request.messages):
         raise ProviderError("CONTEXT_ESTIMATE_UNSUPPORTED", "当前上下文检测只支持文本；附件 Token 无法可靠估算，请关闭该模型的检测或移除附件。")
     before = estimate(request)
     if before < budget * policy.threshold:

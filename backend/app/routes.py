@@ -381,6 +381,14 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     from app.services import chat_history
 
     conversation_id = request.conversation_id
+    provider = provider_or_404(request.provider_id)
+    user_message_id = request.user_message_id or f"message_{uuid4().hex}"
+    if request.retry_message_id:
+        if not conversation_id:
+            raise ApiError(400, 'CHAT_CONVERSATION_REQUIRED', 'Retry requires a saved conversation')
+        target = chat_history.prepare_retry(conversation_id, request.retry_message_id)
+        if target['role'] == 'assistant':
+            user_message_id = target['parent_message_id']
     assistant_message_id = request.assistant_message_id or f"message_{uuid4().hex}"
     if conversation_id:
         user_message = next(
@@ -390,12 +398,14 @@ async def chat(request: ChatRequest) -> StreamingResponse:
         if user_message is not None:
             chat_history.append_message(
                 conversation_id,
-                message_id=request.user_message_id or f"message_{uuid4().hex}",
+                message_id=user_message_id,
                 role="user",
                 content=user_message.content,
                 title=request.conversation_title or user_message.content[:30],
+                workspace_context=request.workspace_context.model_dump() if request.workspace_context else None,
+                attachments=request.attachments,
             )
-    provider = provider_or_404(request.provider_id)
+        chat_history.reserve_response(conversation_id, assistant_message_id)
 
     async def stream() -> AsyncIterator[str]:
         sequence = 0
@@ -405,24 +415,24 @@ async def chat(request: ChatRequest) -> StreamingResponse:
         tool_calls: list[dict] = []
         argument_buffers: dict[str, str] = {}
         usage: dict | None = None
+        activity: list[dict] = []
         try:
-            from app.services.chat_context import prepare
-            grounded_request, grounded_citations = await prepare(request)
-            for citation in grounded_citations:
-                citations.append(citation)
-                event = ModelEvent(event=ModelEventType.citation, sequence=sequence,
-                                   data=citation, timestamp=utc_now())
-                sequence += 1
-                yield as_sse(event.event.value, event.model_dump_json())
-            async with aclosing(provider.adapter.stream(grounded_request)) as events:
+            from app.services.chat_retrieval import stream as retrieval_stream
+            async with aclosing(retrieval_stream(request, provider)) as events:
                 async for event in events:
                     event = event.model_copy(update={"sequence": sequence})
                     sequence += 1
-                    if event.event == ModelEventType.text_delta:
+                    if event.event == ModelEventType.citation:
+                        citations.append(event.data)
+                    elif event.event == ModelEventType.text_delta:
                         assistant_content += str(event.data.get("text", ""))
                     elif event.event == ModelEventType.thinking_delta:
-                        assistant_thinking += str(event.data.get("text", ""))
+                        delta = str(event.data.get("text", ""))
+                        assistant_thinking += delta
+                        if activity and activity[-1]['type'] == 'thinking': activity[-1]['text'] += delta
+                        else: activity.append({'type': 'thinking', 'text': delta})
                     elif event.event == ModelEventType.tool_call_start:
+                        activity.append({'type': 'tool', 'tool_call_id': str(event.data.get('tool_call_id', ''))})
                         tool_calls.append({
                             "tool_call_id": str(event.data.get("tool_call_id", "")),
                             "name": str(event.data.get("name", "unknown")),
@@ -449,7 +459,8 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                         call_id = str(event.data.get("tool_call_id", ""))
                         call = next((item for item in tool_calls if item["tool_call_id"] == call_id), None)
                         if call is not None:
-                            call["status"] = "completed"
+                            call["status"] = "error" if event.data.get("status") == "failed" else "completed"
+                            if "result" in event.data: call["result"] = json.dumps(event.data["result"], ensure_ascii=False)
                     elif event.event == ModelEventType.usage:
                         input_tokens = int(event.data.get("input_tokens", 0))
                         output_tokens = int(event.data.get("output_tokens", 0))
@@ -493,9 +504,21 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                     citations=citations,
                     tool_calls=tool_calls,
                     usage=usage,
+                    activity=activity,
+                    parent_message_id=user_message_id,
+                    workspace_context=request.workspace_context.model_dump() if request.workspace_context else None,
+                    attachments=request.attachments,
+                    context_captured=True,
                 )
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@router.post('/chat/conversations/{conversation_id}/messages/{message_id}/select', tags=['Chat'])
+async def select_chat_version(conversation_id: str, message_id: str):
+    from app.services import chat_history
+    await asyncio.to_thread(chat_history.select_version, conversation_id, message_id)
+    return {'status': 'completed'}
 
 
 # Agent

@@ -18,6 +18,7 @@ vi.mock('@/services/chatService', () => ({
   listConversations: vi.fn(),
   removeConversation: vi.fn(),
   streamChat: vi.fn(),
+  selectMessageVersion: vi.fn().mockResolvedValue({ status: 'completed' }),
 }))
 
 const page = { total: 0, limit: 100, offset: 0 }
@@ -38,6 +39,34 @@ beforeEach(() => {
     ...value, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), message_count: 0,
   }))
   vi.mocked(removeConversation).mockReset().mockResolvedValue(undefined)
+})
+
+it('keeps reasoning and tools ordered and retries only the selected branch prefix', async () => {
+  const store = useChatStore()
+  store.selectedProviderId = 'real'
+  store.selectedModel = 'model'
+  await store.sendMessage('original')
+  const first = vi.mocked(streamChat).mock.calls[0]![1]
+  const event = (name: string, data: Record<string, unknown>) => first.onEvent?.({ event: name as 'ThinkingDelta', sequence: 0, data, timestamp: new Date().toISOString() })
+  event('ThinkingDelta', { text: 'before' })
+  event('ToolCallStart', { tool_call_id: 'tool', name: 'rag.search' })
+  event('ThinkingDelta', { text: 'after' })
+  event('TextDelta', { text: 'answer' })
+  expect(store.messages[1]!.activity).toEqual([{ type: 'thinking', text: 'before' }, { type: 'tool', tool_call_id: 'tool' }, { type: 'thinking', text: 'after' }])
+  first.onDone?.()
+  const originalUser = store.messages[0]!.message_id
+  const originalAnswer = store.messages[1]!.message_id
+  await store.retryMessage(originalAnswer)
+  const second = vi.mocked(streamChat).mock.calls[1]!
+  expect(second[0].retry_message_id).toBe(originalAnswer)
+  expect(second[0].user_message_id).toBe(originalUser)
+  expect(second[0].messages).toEqual([{ role: 'user', content: 'original' }])
+  expect(store.messages[1]!.versions).toContain(originalAnswer)
+  second[1].onDone?.()
+  await store.retryMessage(originalUser, 'edited')
+  expect(vi.mocked(streamChat).mock.calls[2]![0].messages).toEqual([{ role: 'user', content: 'edited' }])
+  expect(store.messages[0]!.versions).toContain(originalUser)
+  expect(store.messages[0]!.message_id).not.toBe(originalUser)
 })
 
 it('sends persistent message ids and restores messages from the backend', async () => {
@@ -292,4 +321,73 @@ it('keeps a deleting conversation blocked after reselecting it without blocking 
   expect(store.messages[0]?.content).toBe('belongs to b')
   expect(store.isStreaming).toBe(true)
   expect(client.cancel).not.toHaveBeenCalled()
+})
+
+it('captures fresh workspace contents each send and restores the saved context for page continuation', async () => {
+  const store = useChatStore()
+  store.selectedProviderId = 'real'; store.selectedModel = 'model'; store.allowAgent = true
+  const context = { file_path: 'note.md', content: 'unsaved first' }
+  await store.sendMessage('first', undefined, context)
+  context.content = 'unsaved second'
+  expect(vi.mocked(streamChat).mock.calls[0]![0].workspace_context?.content).toBe('unsaved first')
+  expect(store.messages[0]?.workspace_context?.content).toBe('unsaved first')
+  vi.mocked(streamChat).mock.calls[0]![1].onDone?.()
+  await store.sendMessage('second', undefined, context)
+  expect(vi.mocked(streamChat).mock.calls[1]![0].workspace_context?.content).toBe('unsaved second')
+  expect(vi.mocked(streamChat).mock.calls[1]![0].allow_agent).toBe(true)
+  vi.mocked(streamChat).mock.calls[1]![1].onDone?.()
+  await store.sendMessage('continue on chat page')
+  expect(vi.mocked(streamChat).mock.calls[2]![0].workspace_context?.content).toBe('unsaved second')
+  vi.mocked(streamChat).mock.calls[2]![1].onDone?.()
+  await store.sendMessage('no active file', undefined, null)
+  expect(vi.mocked(streamChat).mock.calls[3]![0].workspace_context).toBeUndefined()
+  expect(vi.mocked(createConversation)).toHaveBeenCalledTimes(1)
+})
+
+it('uploads attachments and includes their durable IDs in an attachment-only message', async () => {
+  const { mediaService } = await import('@/services/mediaService')
+  const upload = vi.spyOn(mediaService,'upload').mockResolvedValue({attachment_id:'media_test.docx'})
+  const store=useChatStore(); store.selectedProviderId='real'; store.selectedModel='model'
+  await store.uploadFiles([new File(['document'],'test.docx')])
+  expect(store.pendingAttachments[0]?.name).toBe('test.docx')
+  await store.sendMessage('')
+  expect(vi.mocked(streamChat).mock.calls[0]![0].attachments).toEqual(['media_test.docx'])
+  expect(store.messages[0]?.attachments).toEqual(['media_test.docx'])
+  expect(store.pendingAttachments).toEqual([])
+  upload.mockRestore()
+})
+
+it.each(['user', 'assistant'] as const)('retries older %s messages with their attachments, preserving pending uploads', async role => {
+  const s=useChatStore(); s.selectedProviderId='real'; s.selectedModel='model'
+  s.pendingAttachments=[{attachment_id:'first.md',name:'first.md'}]
+  await s.sendMessage('first'); vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
+  const old=s.messages[role === 'user' ? 0 : 1]!.message_id
+  s.pendingAttachments=[{attachment_id:'later.md',name:'later.md'}]
+  await s.sendMessage('later'); vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
+  s.pendingAttachments=[{attachment_id:'draft.md',name:'draft.md'}]
+  await s.retryMessage(old, role === 'user' ? 'edited first' : undefined)
+  expect(vi.mocked(streamChat).mock.calls.at(-1)![0].attachments).toEqual(['first.md'])
+  expect(s.pendingAttachments.map(a=>a.attachment_id)).toEqual(['draft.md'])
+})
+
+it('restores each answer context after history reload, including explicitly absent workspace context', async () => {
+  const s=useChatStore(); s.selectedProviderId='real'; s.selectedModel='model'
+  const first={file_path:'a.md',content:'A'}; const second={file_path:'b.md',content:'B'}
+  await s.sendMessage('explain',undefined,first); vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
+  const original=s.messages[1]!.message_id
+  await s.retryMessage(original,undefined,second); vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
+  expect(s.messages[0]!.workspace_context).toEqual(first)
+  expect(s.messages[1]!.workspace_context).toEqual(second)
+  vi.mocked(listConversationMessages).mockResolvedValue({items:JSON.parse(JSON.stringify(s.messages)),page:{total:2,limit:500,offset:0}})
+  await s.setActiveConversation(s.activeConversationId!)
+  await s.retryMessage(s.messages[1]!.message_id)
+  expect(vi.mocked(streamChat).mock.calls.at(-1)![0].workspace_context).toEqual(second)
+  vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
+  await s.retryMessage(s.messages[1]!.message_id,undefined,null)
+  vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
+  // API serializes absent captured context as null; do not fall back to the original user snapshot.
+  vi.mocked(listConversationMessages).mockResolvedValue({items:JSON.parse(JSON.stringify(s.messages)),page:{total:2,limit:500,offset:0}})
+  await s.setActiveConversation(s.activeConversationId!)
+  await s.sendMessage('continue')
+  expect(vi.mocked(streamChat).mock.calls.at(-1)![0].workspace_context).toBeUndefined()
 })
