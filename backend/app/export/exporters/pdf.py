@@ -42,8 +42,7 @@ from app.export.exporters._common import (
 from app.plot.render_reportlab import render_drawing
 from app.plot.renderer import FunctionPlotStaticRenderer, StaticRenderRequest
 
-_FONT = "STSong-Light"
-pdfmetrics.registerFont(UnicodeCIDFont(_FONT))
+from app.export.fonts import FONT as _FONT
 
 _MIME = "application/pdf"
 
@@ -122,6 +121,7 @@ class PdfExporter:
         self._styles = _make_styles()
         warnings: list[str] = []
         print_theme_warning(options, warnings, "PDF")
+        if _FONT == "STSong-Light": warnings.append("PDF 使用 CID 字体，阅读器需提供中文字体；可配置 APP_EXPORT_FONT 嵌入 TrueType 字体")
 
         page = _PAGE_SIZES.get((options.page_size or "A4").lower(), A4)
         self._options = options
@@ -169,6 +169,14 @@ class PdfExporter:
             self._render_block(child, story, warnings)
 
     def _render_block(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
+        if node.attributes.get('static_png'):
+            from reportlab.platypus import Image
+            image = Image(BytesIO(node.attributes['static_png']))
+            scale = min(1, self._plot_width / image.imageWidth, 600 / image.imageHeight)
+            image.drawWidth = image.imageWidth * scale
+            image.drawHeight = image.imageHeight * scale
+            story.append(image)
+            return
         handler = getattr(self, f"_block_{node.type}", None)
         if handler is not None:
             handler(node, story, warnings)
@@ -362,6 +370,15 @@ class PdfExporter:
         return "".join(self._render_inline_node(child, warnings) for child in children)
 
     def _render_inline_node(self, node: DocumentNode, warnings: list[str]) -> str:
+        if node.attributes.get('static_png'):
+            import base64
+            from PIL import Image as PILImage
+            raw = node.attributes['static_png']
+            with PILImage.open(BytesIO(raw)) as image:
+                scale = min(.4 if node.type.startswith('math') else 1, 350/image.width, 160/image.height)
+                width, height = image.width*scale, image.height*scale
+            data = base64.b64encode(raw).decode()
+            return f'<img src="data:image/png;base64,{data}" width="{width}" height="{height}" valign="middle"/>'
         t = node.type
         if t == "text":
             return _html.escape(node.text)

@@ -86,6 +86,7 @@ async def _evaluate_one(
         limit=request.retrieval.top_k,
         include_snippet=False,
         rrf_k=request.retrieval.rrf_k,
+        fusion=request.retrieval.fusion,
         rerank=request.retrieval.rerank,
         rerank_candidates=request.retrieval.rerank_candidates,
         score_threshold=request.retrieval.score_threshold,

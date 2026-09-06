@@ -3,6 +3,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { t } from '@/i18n'
 
 const routes = [
+  { path: '/benchmarks', name: 'benchmarks', component: () => import('@/features/benchmarks/BenchmarkView.vue'), meta: { title: 'Benchmark' } },
   { path: '/logs', name: 'logs', component: () => import('@/features/logs/LogsView.vue'), meta: { title: '运行日志' } },
   { path: '/media', name: 'media', component: () => import('@/features/media/MediaView.vue'), meta: { title: '音视频转写', requiresVault: true } },
   {
@@ -80,7 +81,10 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const workspaceStore = useWorkspaceStore()
-  if (to.meta.requiresVault && !workspaceStore.hasVault) {
+  // A benchmark can run without the workspace UI being open. Its persisted Trace
+  // and permission tickets must remain reachable from the report page.
+  const existingAgentRun = to.name === 'agent' && Boolean(to.params.runId)
+  if (to.meta.requiresVault && !workspaceStore.hasVault && !existingAgentRun) {
     return { path: '/' }
   }
   if (to.path === '/' && workspaceStore.hasVault) {

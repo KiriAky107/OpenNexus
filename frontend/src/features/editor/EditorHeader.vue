@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
+import ExportDialog from './ExportDialog.vue'
 import { computed, ref } from 'vue'
 import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
@@ -10,6 +11,7 @@ const editorStore = useEditorStore()
 const workspaceStore = useWorkspaceStore()
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 const reloadError = ref('')
+const exportOpen = ref(false)
 const needsRecovery = computed(() => ['conflict', 'external_changed'].includes(editorStore.saveStatus))
 const missingFile = computed(() => needsRecovery.value && editorStore.currentFilePath === workspaceStore.activeFilePath && !workspaceStore.activeFile && !workspaceStore.treeRefreshError)
 function downloadCopy() {
@@ -43,9 +45,11 @@ const statusText = computed<Record<string, string>>(() => ({
 
 <template>
   <header class="editor-header">
+    <ExportDialog v-if="exportOpen" @close="exportOpen = false" />
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <div class="file-identity"><strong>{{ workspaceStore.activeFile?.name ?? t('未命名笔记', 'Untitled note') }}</strong><small>{{ workspaceStore.activeFilePath }}</small></div>
     <div class="editor-actions">
+      <button class="button-secondary" @click="exportOpen = true">{{ t('导出', 'Export') }}</button>
       <span class="save-status" :class="editorStore.saveStatus">{{ statusText[editorStore.saveStatus] }}</span>
       <button v-if="needsRecovery && !missingFile" class="button-secondary" @click="reload">{{ t('重新加载外部版本', 'Reload external version') }}</button>
       <span v-if="missingFile" class="save-status conflict">{{ t('原文件已删除或移动', 'Original file deleted or moved') }}</span>

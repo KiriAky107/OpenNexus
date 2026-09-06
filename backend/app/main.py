@@ -35,6 +35,8 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        from app.benchmarks import service as benchmark_service
+        await benchmark_service.shutdown()
         await container.agent.shutdown()
         from app.services import index_service
         await index_service.shutdown()
@@ -75,6 +77,8 @@ app.include_router(local_model_router)
 app.include_router(usage_router)
 app.include_router(provider_preview_router)
 app.include_router(log_router)
+from app.plot_routes import router as plot_router
+app.include_router(plot_router)
 
 
 @app.middleware('http')

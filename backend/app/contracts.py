@@ -155,6 +155,7 @@ class SearchRequest(Contract):
     include_snippet: bool = True
     # 检索调优参数（Benchmark 与 Skill 共用）：控制 RRF / 精排 / 候选池 / 分数阈值。
     # rerank_candidates=None 表示对全部候选精排（保留原有行为），Benchmark 传显式值。
+    fusion: Literal['rrf', 'weighted'] = 'rrf'
     rrf_k: int = Field(default=60, ge=1)
     rerank: bool = True
     rerank_candidates: int | None = Field(default=None, ge=1)
@@ -1221,6 +1222,7 @@ class RAGRetrievalConfig(Contract):
     其余参数透传到 SearchRequest，由检索引擎实际执行。"""
 
     top_k: int = Field(default=10, ge=1, le=100)
+    fusion: Literal['rrf', 'weighted'] = 'rrf'
     rrf_k: int = Field(default=60, ge=1)
     rerank: bool = True
     rerank_candidates: int = Field(default=20, ge=1)
@@ -1329,6 +1331,51 @@ class RAGCaseResult(Contract):
     error_code: str | None = None
 
 
+class ExpectedToolCall(Contract):
+    name: str = Field(min_length=1)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentDatasetCase(Contract):
+    case_id: str = Field(min_length=1)
+    prompt: str = Field(min_length=1, max_length=20000)
+    allowed_tools: list[str] = Field(default_factory=list, max_length=30)
+    expected_tools: list[ExpectedToolCall] = Field(default_factory=list, max_length=30)
+    output_contains: list[str] = Field(default_factory=list)
+    citation_required: bool = False
+    tasks_created: int | None = Field(default=None, ge=0, le=20)
+    tags: list[str] = Field(default_factory=list)
+
+
+class AgentBenchmarkRequest(Contract):
+    dataset_id: str = Field(min_length=1)
+    provider_id: str
+    model: str = Field(min_length=1)
+    max_steps: int = Field(default=6, ge=1, le=20)
+    timeout_seconds: int = Field(default=90, ge=1, le=300)
+    token_budget: int = Field(default=6000, ge=1, le=30000)
+    repeat: int = Field(default=1, ge=1, le=3)
+    allow_network: bool = False
+    offline: bool = False
+
+
+class AgentCaseResult(Contract):
+    case_id: str
+    repeat: int
+    agent_run_id: str | None = None
+    success: bool = False
+    tool_calls: int = 0
+    expected_calls: int = 0
+    selected_calls: int = 0
+    accurate_calls: int = 0
+    invalid_calls: int = 0
+    steps: int = 0
+    latency_ms: float = 0
+    token_usage: int = 0
+    checks: dict[str, bool] = Field(default_factory=dict)
+    error_code: str | None = None
+
+
 class BenchmarkReport(Contract):
     run_id: str
     kind: BenchmarkKind
@@ -1337,7 +1384,7 @@ class BenchmarkReport(Contract):
     status: BenchmarkStatus
     config_snapshot: dict[str, Any] = Field(default_factory=dict)
     metrics: dict[str, Any] = Field(default_factory=dict)
-    cases: list[RAGCaseResult] = Field(default_factory=list)
+    cases: list[RAGCaseResult | AgentCaseResult] = Field(default_factory=list)
     error: str | None = None
     error_code: str | None = None
 
@@ -1366,6 +1413,7 @@ class ExportSource(Contract):
     """导出源：note 引用已索引笔记，markdown 用于未保存预览（不持久化）。"""
 
     type: ExportSourceType
+    file_path: str | None = Field(default=None, max_length=1024)
     note_id: str | None = None
     markdown: str | None = None
 
@@ -1386,7 +1434,15 @@ class ExportOptions(Contract):
     code_theme: str = "github-light"
 
 
+class ExportAsset(Contract):
+    kind: Literal['mermaid', 'math_block', 'math_inline', 'image']
+    source_hash: str = Field(pattern=r'^[a-f0-9]{64}$')
+    png_base64: str = Field(max_length=2800000)
+
+
 class ExportRequest(Contract):
+    assets: list[ExportAsset] = Field(default_factory=list, max_length=64)
+    title: str = Field(default="", max_length=200)
     source: ExportSource
     format: ExportFormat
     options: ExportOptions = Field(default_factory=ExportOptions)

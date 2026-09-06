@@ -156,20 +156,20 @@ function foldHeadings(action: 'toggle' | 'all' | 'none') {
     }
   })
 }
-const diagramPreviews = new Map<string, { source: string; apply: (value: HTMLElement) => void }>()
-function renderDiagram(source: string, apply: (value: HTMLElement) => void) {
+const diagramPreviews = new Map<string, { source: string; kind: string; apply: (value: HTMLElement) => void }>()
+function renderDiagram(source: string, apply: (value: HTMLElement) => void, kind = 'mermaid') {
   for (const [id, entry] of diagramPreviews) {
     if (entry.apply === apply) diagramPreviews.delete(id)
   }
-  const element = createMermaidPreview(source, themeStore.isDark, apply)
-  diagramPreviews.set(element.dataset.previewId!, { source, apply })
+  const element = createMermaidPreview(source, themeStore.isDark, apply, kind, themeStore.currentThemeId)
+  diagramPreviews.set(element.dataset.previewId!, { source, apply, kind })
   return element
 }
 watch(() => themeStore.currentThemeId, () => {
   const current = [...diagramPreviews.entries()]
   diagramPreviews.clear()
   for (const [id, entry] of current) {
-    if (editorRoot.value?.querySelector(`[id="${id}"]`)) entry.apply(renderDiagram(entry.source, entry.apply))
+    if (editorRoot.value?.querySelector(`[id="${id}"]`)) entry.apply(renderDiagram(entry.source, entry.apply, entry.kind))
   }
 }, { flush: 'post' })
 
@@ -333,8 +333,8 @@ onMounted(async () => {
     ...config,
     languages: shikiLanguages(themeStore.resolvedCodeBlockTheme),
     renderLanguage: renderCodeLanguage,
-    renderPreview: (language, content, applyPreview) => language.trim().toLowerCase() === 'mermaid'
-      ? markdownPreferences.diagrams ? renderDiagram(content, applyPreview) : null
+    renderPreview: (language, content, applyPreview) => ['mermaid', 'function-plot'].includes(language.trim().toLowerCase())
+      ? markdownPreferences.diagrams ? renderDiagram(content, applyPreview, language.trim().toLowerCase()) : null
       : config.renderPreview(language, content, applyPreview),
     extensions: [basicSetup, keymap.of([indentWithTab]), shikiEditorTheme(themeStore.resolvedCodeBlockTheme),
       indentUnit.of(' '.repeat(markdownPreferences.indent)), CodeEditorState.tabSize.of(markdownPreferences.indent),

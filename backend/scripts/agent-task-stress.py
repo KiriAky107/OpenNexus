@@ -96,11 +96,13 @@ async def main(output):
                 assert all(sequences)
                 recovered = AgentRuntime(container.providers, container.tools, container.permissions,
                                          trace_repository=runtime.trace_repository)
-                assert all(recovered.get_run(run_id).status == AgentRunStatus.completed for run_id in ids)
+                recovery_started = time.perf_counter()
+                assert await asyncio.to_thread(lambda: all(recovered.get_run(run_id).status == AgentRunStatus.completed for run_id in ids))
+                recovery_read_ms = (time.perf_counter() - recovery_started) * 1000
                 assert not any(record.subscribers for record in runtime._records.values())
                 return {"concurrency": concurrency, "runs": len(ids), "latency": stats(durations),
                         "completed": statuses.count('completed'), "ordered_events_and_replay": True,
-                        "terminal_recovery": True, "retained_records": len(runtime._records)}
+                        "terminal_recovery": True, "recovery_read_ms": round(recovery_read_ms,2), "retained_records": len(runtime._records)}
             save('agent_tool_runs', await measured(batch))
 
         # Hold model calls so all 200 records remain active while testing admission.

@@ -1,7 +1,7 @@
 """DocxExporter：Document AST → DOCX（python-docx）。
 
-v1 为文本优先：标题/段落/行内强调与链接/列表/引用/表格/代码块/数学文本均可导出；
-function_plot 与 mermaid 保留源码占位并记 warning。中文字体通过 Normal 样式挂载
+标题、段落、列表、表格等使用原生 Word 元素；函数图、已准备的 Mermaid、
+受支持的公式与 Vault 图片使用静态图片，无法表示的资源保留源码并记 warning。中文字体通过 Normal 样式挂载
 w:eastAsia=宋体，保证 Word 打开时中文正常显示；bold/italic 由 Word 原生渲染。
 """
 
@@ -50,6 +50,8 @@ class DocxExporter:
 
     def render(self, document: Document, options: ExportOptions) -> ExportResult:
         """同步渲染；CPU 密集，调用方应放入线程执行，避免阻塞事件循环。"""
+        from app.export.exporters._common import FunctionPlotBudget
+        self._plot_budget = FunctionPlotBudget()
         self._doc = DocxDocument()
         self._configure_normal_style()
         self._configure_page(options)
@@ -109,6 +111,13 @@ class DocxExporter:
             self._render_block(child, warnings)
 
     def _render_block(self, node: DocumentNode, warnings: list[str]) -> None:
+        if node.attributes.get('static_png'):
+            from PIL import Image
+            png = node.attributes['static_png']
+            with Image.open(BytesIO(png)) as image:
+                width = min(5.8, image.width / (180 if node.type == 'math_block' else 96))
+            self._doc.add_picture(BytesIO(png), width=Inches(width))
+            return
         handler = getattr(self, f"_block_{node.type}", None)
         if handler is not None:
             handler(node, warnings)
@@ -270,7 +279,20 @@ class DocxExporter:
         self._block_code_block(node, warnings)
 
     def _block_function_plot(self, node: DocumentNode, warnings: list[str]) -> None:
-        warnings.append(PLOT_PLACEHOLDER_WARNING)
+        from app.plot.parser import parse_source
+        from app.export.assets import plot_png
+        over = self._plot_budget.check_count()
+        if not over:
+            parsed = parse_source(node.text)
+            warnings.extend(d.message for d in parsed.diagnostics)
+            if parsed.plot:
+                over = self._plot_budget.check_nodes(parsed.plot.node_count)
+                if not over:
+                    png, messages = plot_png(parsed.plot)
+                    warnings.extend(messages)
+                    self._doc.add_picture(BytesIO(png), width=Inches(5.8))
+                    return
+        warnings.append(over or '函数图像无法绘制，已保留源码')
         self._block_code_block(node, warnings)
 
     def _block_math_block(self, node: DocumentNode, warnings: list[str]) -> None:
@@ -303,6 +325,12 @@ class DocxExporter:
         bold: bool = False,
         italic: bool = False,
     ) -> None:
+        if node.attributes.get('static_png'):
+            from PIL import Image
+            with Image.open(BytesIO(node.attributes['static_png'])) as image:
+                width = min(5.8, image.width / (180 if node.type.startswith('math') else 96))
+            paragraph.add_run().add_picture(BytesIO(node.attributes['static_png']), width=Inches(width))
+            return
         t = node.type
         if t == "text":
             self._add_run(paragraph, node.text, bold=bold, italic=italic)
