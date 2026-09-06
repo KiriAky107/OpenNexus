@@ -3,12 +3,17 @@ import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 import AppDialog from '@/components/common/AppDialog.vue'
-import { onMounted, reactive, ref } from 'vue'
+import { computed, watch, onMounted, reactive, ref } from 'vue'
 import type { TaskItem, TaskStatus } from '@/contracts'
 import { useTaskStore } from '@/stores/task'
 import { localeTag, t } from '@/i18n'
 
 const taskStore = useTaskStore()
+const page = ref(1)
+const pageCount = computed(() => Math.max(1, Math.ceil(taskStore.filteredTasks.length / 100)))
+const visibleTasks = computed(() => taskStore.filteredTasks.slice((page.value - 1) * 100, page.value * 100))
+watch(() => [taskStore.filterStatus, taskStore.filterPriority, taskStore.filterSource], () => { page.value = 1 })
+watch(pageCount, count => { page.value = Math.min(page.value, count) })
 const showForm = ref(false)
 const editingId = ref<string | null>(null)
 const actionError = ref('')
@@ -44,13 +49,14 @@ async function remove(task: TaskItem) {
     <header class="feature-header"><div><h1>{{ t('任务', 'Tasks') }}</h1><p>{{ t('管理用户、笔记和 Agent 产生的行动项。', 'Manage action items created by users, notes, and agents.') }}</p></div><button class="button-primary" @click="resetForm(); showForm = true">＋ {{ t('新建任务', 'New task') }}</button></header>
     <div v-if="taskStore.error || actionError" class="error-banner">{{ taskStore.error || actionError }}</div>
     <div v-if="taskStore.filteredTasks.length" class="task-list">
-      <article v-for="task in taskStore.filteredTasks" :key="task.task_id" class="item-card task-card">
+      <article v-for="task in visibleTasks" :key="task.task_id" class="item-card task-card">
         <button class="status-check" :class="{ done: task.status === 'done' }" :title="t('切换完成状态', 'Toggle completion')" @click="setStatus(task, task.status === 'done' ? 'todo' : 'done')">{{ task.status === 'done' ? '✓' : '' }}</button>
         <div class="task-content"><div class="task-title"><strong :class="{ completed: task.status === 'done' }">{{ task.title }}</strong></div><p v-if="task.description" class="muted">{{ task.description }}</p><div class="subtle"><span>{{ task.status }}</span><span v-if="task.due_date">{{ t('截止', 'Due') }} {{ new Date(task.due_date).toLocaleString(localeTag()) }}</span><span v-if="task.note_id">{{ t('关联 Note', 'Linked Note') }}: {{ task.note_id }}</span></div></div>
         <div class="inline-actions"><button class="icon-button" @click="editTask(task)">{{ t('编辑', 'Edit') }}</button><button class="button-danger" @click="remove(task)">{{ t('删除', 'Delete') }}</button></div>
       </article>
     </div>
     <div v-else class="empty-state"><div><strong>{{ taskStore.isLoading ? t('正在加载任务…', 'Loading tasks…') : t('没有符合条件的任务', 'No matching tasks') }}</strong><p>{{ t('创建一项任务，或调整左侧筛选条件。', 'Create a task or adjust the filters.') }}</p></div></div>
+    <nav v-if="pageCount > 1" class="inline-actions"><button class="button-secondary" :disabled="page === 1" @click="page--">{{ t('上一页', 'Previous') }}</button><span>{{ page }} / {{ pageCount }} · {{ taskStore.filteredTasks.length }}</span><button class="button-secondary" :disabled="page === pageCount" @click="page++">{{ t('下一页', 'Next') }}</button></nav>
     <AppDialog v-if="showForm" :label="t('任务表单', 'Task form')" @close="showForm = false"><div class="modal"><h2>{{ editingId ? t('编辑任务', 'Edit task') : t('新建任务', 'New task') }}</h2><form @submit.prevent="saveTask"><div class="field"><label>{{ t('标题', 'Title') }}</label><input v-model="form.title" class="input" required /></div><div class="field"><label>{{ t('描述', 'Description') }}</label><textarea v-model="form.description" class="textarea" /></div><div class="field"><label>{{ t('截止时间', 'Due date') }}</label><input v-model="form.due_date" class="input" type="datetime-local" /></div><div class="field"><label>{{ t('关联 Note ID', 'Linked Note ID') }}</label><input v-model="form.note_id" class="input" /></div><div class="inline-actions"><button class="button-primary">{{ t('保存', 'Save') }}</button><button type="button" class="button-secondary" @click="showForm = false">{{ t('取消', 'Cancel') }}</button></div></form></div></AppDialog>
   </section>
 </template>

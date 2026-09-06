@@ -128,7 +128,32 @@ async function chooseDefaultModel(provider: ProviderConfig, event: Event) {
       <UsageCard />
     </div>
 
-    <div v-else-if="activeSection === 'index'" class="panel settings-section"><h2>{{ t('索引与模型', 'Index and Models') }}</h2><div class="index-summary"><div><span class="badge" :class="{ success: settingsStore.indexStatus.status === 'idle', error: settingsStore.indexStatus.status === 'error' }">{{ settingsStore.indexStatus.status }}</span><p>{{ t('待处理任务', 'Pending jobs') }} {{ settingsStore.indexStatus.pending_jobs }}</p></div><div><strong>{{ settingsStore.indexStatus.total_notes ?? t('未获取', 'Unavailable') }}</strong><small>{{ t('笔记', 'Notes') }}</small></div><div><strong>{{ settingsStore.indexStatus.total_blocks ?? t('未获取', 'Unavailable') }}</strong><small>Block</small></div></div><div v-if="settingsStore.indexStatus.error" class="error-banner">{{ settingsStore.indexStatus.error }}</div><div class="inline-actions"><button class="button-primary" @click="settingsStore.rebuildIndex('full')">{{ t('重建全部', 'Rebuild all') }}</button><span class="subtle">{{ t('当前后端支持全量重建。', 'The current backend supports a full rebuild.') }}</span></div><ModelRoutingSettings /></div>
+    <div v-else-if="activeSection === 'index'" class="panel settings-section">
+      <h2>{{ t('索引与模型', 'Index and Models') }}</h2>
+      <div class="index-summary">
+        <div>
+          <span class="badge" :class="{ success: settingsStore.indexStatus.status === 'idle' && !settingsStore.indexStatus.vector_refresh_required && !settingsStore.indexStatus.active_searches, error: settingsStore.indexStatus.status === 'error' }">{{ settingsStore.indexStatusLabel }}</span>
+          <p>{{ t('未完成索引', 'Unfinished indexing jobs') }} {{ settingsStore.indexStatus.status === 'unknown' ? t('未获取', 'Unavailable') : settingsStore.indexStatus.pending_jobs }}</p>
+          <small>{{ t('运行中', 'Running') }} {{ settingsStore.indexStatus.running_jobs ?? t('未获取', 'Unavailable') }}</small>
+        </div>
+        <div><strong>{{ settingsStore.indexStatus.total_notes ?? t('未获取', 'Unavailable') }}</strong><small>{{ t('笔记', 'Notes') }}</small></div>
+        <div><strong>{{ settingsStore.indexStatus.total_blocks ?? t('未获取', 'Unavailable') }}</strong><small>Block</small></div>
+      </div>
+      <p class="subtle">{{ t('未完成数包含运行中的任务；全库重建计为一个任务，不是笔记或 Block 数量。', 'Unfinished jobs include running jobs. A full rebuild counts as one job, not the number of notes or blocks.') }}</p>
+      <div class="index-search-activity">
+        <h3>{{ t('向量 / 混合检索', 'Vector / hybrid searches') }}</h3>
+        <div class="inline-actions">
+          <span>{{ t('进行中', 'Active') }} {{ settingsStore.indexStatus.active_searches ?? t('未获取', 'Unavailable') }}</span>
+          <span>{{ t('已完成', 'Completed') }} {{ settingsStore.indexStatus.completed_searches ?? t('未获取', 'Unavailable') }}</span>
+          <span>{{ t('失败', 'Failed') }} {{ settingsStore.indexStatus.failed_searches ?? t('未获取', 'Unavailable') }}</span>
+          <span>{{ t('已取消', 'Cancelled') }} {{ settingsStore.indexStatus.cancelled_searches ?? t('未获取', 'Unavailable') }}</span>
+        </div>
+        <p class="subtle">{{ t('统计本次 AI Core 启动以来的检索，包含搜索、对话和智能体调用；不计纯全文检索。', 'Counts searches, chat and agent retrievals since AI Core started; excludes full-text-only searches.') }}</p>
+      </div>
+      <div v-if="settingsStore.indexStatus.error" class="error-banner">{{ settingsStore.indexStatus.error }}</div>
+      <div class="inline-actions"><button class="button-primary" :disabled="settingsStore.indexStatus.status === 'indexing'" @click="settingsStore.rebuildIndex('full')">{{ t('重建全部', 'Rebuild all') }}</button><span class="subtle">{{ t('当前后端支持全量重建。', 'The current backend supports a full rebuild.') }}</span></div>
+      <ModelRoutingSettings />
+    </div>
 
     <div v-else-if="activeSection === 'permissions'" class="panel settings-section"><h2>{{ t('权限策略', 'Permission Policy') }}</h2><p class="muted section-description">{{ t('以下为后端当前生效的权限策略；全局策略编辑尚未开放，运行时按实际权限请求确认。', 'These policies are active in the backend. Global policy editing is not yet available; runtime requests are confirmed as needed.') }}</p><p v-if="!Object.keys(settingsStore.permissionPolicy).length" class="subtle">{{ t('尚未获取权限策略，请检查后端连接并重新检测。', 'Permission policy is unavailable. Check the backend connection and try again.') }}</p><div class="permission-list"><div v-for="(policy, permission) in settingsStore.permissionPolicy" :key="permission" class="setting-row"><span><strong>{{ permission }}</strong></span><span>{{ policy === 'allow' ? t('允许', 'Allow') : policy === 'confirm' ? t('每次确认', 'Confirm each time') : t('拒绝', 'Deny') }}</span></div></div></div>
 

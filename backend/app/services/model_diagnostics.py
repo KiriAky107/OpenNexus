@@ -19,6 +19,13 @@ def connection():
 
 
 def record(**values):
+    from app.operation_logs import log_event
+    log_event('models', 'model.' + str(values.get('operation', 'inference')),
+              level='ERROR' if values.get('status') == 'failed' else 'WARNING' if values.get('status') == 'fallback' else 'INFO',
+              model=values.get('model'), source=values.get('source'), status=values.get('status'),
+              device=values.get('actual_device') or values.get('attempted_device'),
+              error_code=values.get('error_code'), fallback=values.get('fallback_reason'),
+              duration_ms=round(values.get('elapsed_seconds', 0) * 1000, 2))
     safe = {key: value[:240] for key, value in values.items() if key in TEXT and isinstance(value, str)}
     safe.update({key: value for key, value in values.items()
                  if key in NUMBERS and type(value) in (float, int) and math.isfinite(value) and value >= 0})

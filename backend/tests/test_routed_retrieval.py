@@ -66,6 +66,161 @@ async def seed():
     return apple, banana
 
 
+def test_native_spaces_isolate_dimensions_and_reuse_without_json_scan(runtime, monkeypatch):
+    from app.retrieval import space_index
+    async def scenario():
+        apple, banana = await seed()
+        ids = [b.block_id for note in (apple, banana) for b in note.blocks]
+        conn = connect()
+        try:
+            with transaction(conn):
+                routed_vectors.store_remote(conn, ids, routed_vectors.RemoteEmbeddings('space-a', 4, [[1., 0., 0., 0.]] * len(ids)))
+            assert conn.execute('SELECT COUNT(DISTINCT dimensions) FROM routed_block_vectors').fetchone()[0] == 2
+        finally:
+            conn.close()
+        # A new connection uses the persistent native index, without reading vector JSON.
+        def forbidden(*args, **kwargs):
+            raise AssertionError('query decoded stored JSON')
+        monkeypatch.setattr(space_index.json, 'loads', forbidden)
+        hits = await routed_vectors.search_remote('apple orchard', top_k=2, strict=True)
+        assert len(hits) == 2
+        assert hits[0].id == apple.blocks[0].block_id
+    asyncio.run(scenario())
+
+
+def test_legacy_vectors_migrate_without_document_embedding(runtime):
+    from app.retrieval import space_index
+    async def scenario():
+        apple, banana = await seed()
+        conn = connect()
+        table = space_index.table_name('space-a', 3)
+        try:
+            with transaction(conn):
+                conn.execute(f'DROP TRIGGER {table}_delete')
+                conn.execute(f'DROP TRIGGER {table}_update')
+                conn.execute(f'DROP TABLE {table}')
+                conn.execute('ALTER TABLE routed_block_vectors RENAME TO saved_vectors')
+                conn.execute('CREATE TABLE routed_block_vectors(space_id TEXT,block_id TEXT REFERENCES blocks(block_id) ON DELETE CASCADE,dimensions INTEGER,vector TEXT,PRIMARY KEY(space_id,block_id))')
+                conn.execute('INSERT INTO routed_block_vectors SELECT * FROM saved_vectors')
+                conn.execute('DROP TABLE saved_vectors')
+        finally:
+            conn.close()
+        runtime.calls.clear()
+        hits = await routed_vectors.search_remote('apple orchard', top_k=2, strict=True)
+        assert len(hits) == 2
+        assert runtime.calls == [['apple orchard']]
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('partitioned', [False, True])
+def test_concurrent_first_search_serializes_migration_and_warm_search_is_read_only(runtime, monkeypatch, partitioned):
+    import threading
+    from app.retrieval import space_index
+    async def scenario():
+        await seed()
+        table = space_index.table_name('space-a', 3)
+        conn = connect()
+        try:
+            with transaction(conn):
+                conn.execute(f'DROP TRIGGER {table}_delete')
+                conn.execute(f'DROP TRIGGER {table}_update')
+                conn.execute(f'DROP TABLE {table}')
+        finally:
+            conn.close()
+        entered, release, second = threading.Event(), threading.Event(), threading.Event()
+        original_ensure, original_prepare = space_index.ensure, space_index.prepare
+        calls = []
+        def ensure(*args):
+            calls.append(1)
+            entered.set()
+            assert release.wait(5)
+            return original_ensure(*args)
+        def prepare(*args):
+            if entered.is_set():
+                second.set()
+            return original_prepare(*args)
+        monkeypatch.setattr(space_index, 'ensure', ensure)
+        monkeypatch.setattr(space_index, 'prepare', prepare)
+        batch = routed_vectors.RemoteEmbeddings('space-a', 3, [[1., 0., 0.]])
+        async def search():
+            if entered.is_set():
+                second.set()
+            await routed_vectors._prepare_indexes([batch])
+            if partitioned:
+                return await asyncio.to_thread(routed_vectors._search_partitions, {False: batch}, {False}, 2, True)
+            return await asyncio.to_thread(routed_vectors._search_space, batch, 2, True)
+        tasks = []
+        try:
+            tasks.append(asyncio.create_task(search()))
+            assert await asyncio.to_thread(entered.wait, 5)
+            tasks.append(asyncio.create_task(search()))
+            assert await asyncio.to_thread(second.wait, 5)
+            release.set()
+            first, other = await asyncio.gather(*tasks)
+            assert first == other and len(first) == 2
+            assert len(calls) == 1
+            # Prepared indexes are reusable even with SQLite query_only enforced.
+            original_connect = routed_vectors.connect
+            def read_only():
+                connection = original_connect()
+                connection.execute('PRAGMA query_only=ON')
+                return connection
+            monkeypatch.setattr(routed_vectors, 'connect', read_only)
+            assert await search() == first
+        finally:
+            release.set()
+            await asyncio.gather(*tasks, return_exceptions=True)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('cancel_search', [False, True])
+def test_save_waits_for_migration_even_when_search_is_cancelled(runtime, monkeypatch, cancel_search):
+    import threading
+    from app.retrieval import space_index
+    async def scenario():
+        apple, _ = await seed()
+        table = space_index.table_name('space-a', 3)
+        conn = connect()
+        try:
+            with transaction(conn):
+                conn.execute(f'DROP TRIGGER {table}_delete')
+                conn.execute(f'DROP TRIGGER {table}_update')
+                conn.execute(f'DROP TABLE {table}')
+        finally:
+            conn.close()
+        entered, release = threading.Event(), threading.Event()
+        original = space_index.ensure
+        def slow(*args):
+            entered.set()
+            assert release.wait(5)
+            return original(*args)
+        monkeypatch.setattr(space_index, 'ensure', slow)
+        # Keep the subsequent vector job queued; test saving and its durable marker.
+        monkeypatch.setattr(index_service, 'schedule_workspace_rebuild', lambda: None)
+        query = asyncio.create_task(routed_vectors.search_remote('apple orchard', top_k=2, strict=True))
+        save = None
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            if cancel_search:
+                query.cancel()
+            save = asyncio.create_task(note_service.update_note(apple.note_id, markdown='Saved during migration', defer_vectors=True))
+            await asyncio.sleep(0.02)
+            assert not save.done()
+            release.set()
+            saved = await asyncio.wait_for(save, 5)
+            assert saved.markdown == 'Saved during migration'
+            assert (await note_service.get_note(apple.note_id)).markdown == saved.markdown
+            assert repository.get_index_meta()[f'note_vectors_pending:{apple.note_id}'] == '1'
+            # Query may observe the saved revision's pending index, but saving must succeed.
+            result = (await asyncio.gather(query, return_exceptions=True))[0]
+            if cancel_search:
+                assert isinstance(result, asyncio.CancelledError)
+        finally:
+            release.set()
+            await asyncio.gather(*([query, save] if save else [query]), return_exceptions=True)
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("outcome", ["api", "api_failure", "missing_space"])
 def test_benchmark_reports_actual_embedding_and_fallback(runtime, outcome):
     from app.benchmarks import service

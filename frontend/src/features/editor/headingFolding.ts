@@ -7,6 +7,7 @@ import { t } from '@/i18n'
 export const headingFoldKey = new PluginKey<Set<number>>('heading-folding')
 type Section = { from: number; body: number; end: number; level: number }
 const sectionCache = new WeakMap<Node, Section[]>()
+const decorationCache = new WeakMap<Node, WeakMap<Set<number>, DecorationSet>>()
 /** A section ends at the next sibling heading of the same or a higher rank. */
 export function headingSections(doc: Node): Section[] {
   const cached = sectionCache.get(doc)
@@ -50,7 +51,8 @@ export function headingFoldTransaction(state: EditorState, action: 'toggle' | 'a
   }
   const tr = state.tr
   const enclosing = sections.find(section => folded.has(section.from) && state.selection.to >= section.body && state.selection.from < section.end)
-  if (enclosing) tr.setSelection(TextSelection.near(state.doc.resolve(enclosing.from + 1)))
+  if (action === 'all' && sections.length) tr.setSelection(TextSelection.near(state.doc.resolve(sections[0]!.from + 1))).scrollIntoView()
+  else if (enclosing) tr.setSelection(TextSelection.near(state.doc.resolve(enclosing.from + 1)))
   return tr.setMeta(headingFoldKey, folded).setMeta('addToHistory', false)
 }
 
@@ -61,11 +63,21 @@ export const headingFoldingPlugin = $prose(() => new Plugin<Set<number>>({
     apply(tr, previous) {
       const explicit = tr.getMeta(headingFoldKey) as Set<number> | undefined
       if (explicit) return explicit
+      if (!previous.size) return previous
       const sections = headingSections(tr.doc)
+      if (!tr.docChanged) {
+        if (!tr.selectionSet) return previous
+        const opened = sections.filter(section => previous.has(section.from) && tr.selection.to >= section.body && tr.selection.from < section.end)
+        if (!opened.length) return previous
+        const next = new Set(previous)
+        opened.forEach(section => next.delete(section.from))
+        return next
+      }
+      const positions = new Set(sections.map(section => section.from))
       const mapped = new Set<number>()
       for (const old of previous) {
         const result = tr.mapping.mapResult(old, 1)
-        if (!result.deleted && sections.some(section => section.from === result.pos)) mapped.add(result.pos)
+        if (!result.deleted && positions.has(result.pos)) mapped.add(result.pos)
       }
       // Outline jumps, find and keyboard navigation must never leave a hidden caret.
       if (tr.selectionSet || tr.docChanged) {
@@ -77,6 +89,8 @@ export const headingFoldingPlugin = $prose(() => new Plugin<Set<number>>({
   props: {
     decorations(state) {
       const folded = headingFoldKey.getState(state) ?? new Set<number>()
+      const cached = decorationCache.get(state.doc)?.get(folded)
+      if (cached) return cached
       const sections = headingSections(state.doc)
       const decorations: Decoration[] = []
       for (const section of sections) {
@@ -103,7 +117,7 @@ export const headingFoldingPlugin = $prose(() => new Plugin<Set<number>>({
         else hidden.push({ body: section.body, end: section.end })
       }
       let rangeIndex = 0
-      state.doc.descendants((node, pos) => {
+      if (hidden.length) state.doc.descendants((node, pos) => {
         if (!node.isBlock) return
         while (hidden[rangeIndex] && pos >= hidden[rangeIndex]!.end) rangeIndex++
         const range = hidden[rangeIndex]
@@ -112,7 +126,11 @@ export const headingFoldingPlugin = $prose(() => new Plugin<Set<number>>({
           return false
         }
       })
-      return DecorationSet.create(state.doc, decorations)
+      const result = DecorationSet.create(state.doc, decorations)
+      let byState = decorationCache.get(state.doc)
+      if (!byState) { byState = new WeakMap(); decorationCache.set(state.doc, byState) }
+      byState.set(folded, result)
+      return result
     },
   },
 }))
