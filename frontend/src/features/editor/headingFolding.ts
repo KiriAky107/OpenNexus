@@ -84,7 +84,6 @@ export const headingFoldingPlugin = $prose(() => new Plugin<Set<number>>({
         decorations.push(Decoration.widget(section.from + 1, view => {
           const button = document.createElement('button')
           button.type = 'button'; button.className = 'heading-fold-toggle'; button.contentEditable = 'false'
-          button.textContent = collapsed ? '▸' : '▾'
           button.setAttribute('aria-expanded', String(!collapsed))
           button.setAttribute('aria-label', `${collapsed ? t('展开', 'Expand') : t('折叠', 'Collapse')} H${section.level} ${state.doc.nodeAt(section.from)?.textContent ?? ''}`)
           button.onmousedown = event => event.preventDefault()

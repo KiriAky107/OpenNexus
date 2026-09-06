@@ -4,7 +4,7 @@ import { useActionDialog } from '@/composables/useActionDialog'
 const { actionDialog, resolveAction, askPrompt } = useActionDialog()
 import DiagramInteractions from '@/components/common/DiagramInteractions.vue'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Link } from '@element-plus/icons-vue'
+import { Link, Fold, Expand } from '@element-plus/icons-vue'
 import { Crepe } from '@milkdown/crepe'
 import { codeBlockConfig } from '@milkdown/kit/component/code-block'
 import { basicSetup } from 'codemirror'
@@ -18,7 +18,7 @@ import { installLanguagePickerPopover } from './languagePickerPopover'
 import { installCodeBlockLabels } from './codeBlockLabels'
 import { createMermaidPreview } from './mermaidPreview'
 import { splitNoteMetadata, updateMetadataTags } from './noteMetadata'
-import { getMarkdown, $remark } from '@milkdown/kit/utils'
+import { getMarkdown, $remark, $prose } from '@milkdown/kit/utils'
 import {
   createCodeBlockCommand,
   toggleEmphasisCommand,
@@ -33,7 +33,7 @@ import {
 import { commandsCtx, editorViewCtx, parserCtx, remarkStringifyOptionsCtx } from '@milkdown/kit/core'
 import { Slice } from '@milkdown/kit/prose/model'
 import { registerEditorCommands, type CommandHandler, type EditorCommandId } from '@/services/editorCommandService'
-import { TextSelection } from '@milkdown/kit/prose/state'
+import { TextSelection, Plugin } from '@milkdown/kit/prose/state'
 import { callCommand } from '@milkdown/kit/utils'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { useEditorStore } from '@/stores/editor'
@@ -43,7 +43,7 @@ import { applyMarkdownFontSize, fontSizeMarkdownPlugin } from './fontSizeMarkdow
 import { inlineCodeInputPlugin } from './inlineCodeInput'
 import { calloutPlugin, configureCalloutSerialization } from './calloutPlugin'
 import { calloutTypes } from '@/utils/callouts'
-import { headingFoldingPlugin, headingFoldTransaction } from './headingFolding'
+import { headingFoldingPlugin, headingFoldTransaction, headingFoldKey, headingSections } from './headingFolding'
 import { useHeadingAppearanceStore } from '@/stores/headingAppearance'
 import { useMarkdownPreferencesStore } from '@/stores/markdownPreferences'
 import { t } from '@/i18n'
@@ -74,6 +74,8 @@ const settingsStore = useSettingsStore()
 const themeStore = useThemeStore()
 const editorRoot = ref<HTMLElement | null>(null)
 const loading = ref(true)
+const allHeadingsFolded = ref(false)
+const hasFoldableHeadings = ref(false)
 const fontSizeInput = ref(16)
 let crepe: Crepe | null = null
 let disposeLanguagePicker: (() => void) | undefined
@@ -354,6 +356,25 @@ onMounted(async () => {
   crepe.editor.use(inlineCodeInputPlugin)
   if (markdownPreferences.callouts) crepe.editor.use(calloutPlugin)
   crepe.editor.use(headingFoldingPlugin)
+  crepe.editor.use($prose(() => new Plugin({
+    view(view) {
+      const sync = (current: typeof view) => {
+        const sections = headingSections(current.state.doc)
+        const folded = headingFoldKey.getState(current.state)
+        hasFoldableHeadings.value = sections.length > 0
+        // Hidden descendants retain their own state but are not visible expanded sections.
+        let hiddenUntil = -1
+        allHeadingsFolded.value = sections.length > 0 && sections.every(section => {
+          if (section.from < hiddenUntil) return true
+          if (!folded?.has(section.from)) return false
+          hiddenUntil = section.end
+          return true
+        })
+      }
+      sync(view)
+      return { update: sync }
+    },
+  })))
   if (markdownPreferences.callouts) crepe.editor.config(configureCalloutSerialization)
   crepe.on((listener) => {
     listener.markdownUpdated((_ctx, markdown, previousMarkdown) => {
@@ -396,8 +417,15 @@ defineExpose({ getEditor: () => crepe?.editor })
   <DiagramInteractions class="visual-editor" :class="{ 'hide-code-line-numbers': !markdownPreferences.lineNumbers }" :data-heading-style="headingAppearance.preferences.custom ? 'custom' : undefined" :style="headingAppearance.cssVariables">
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <div class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
-      <button type="button" :title="t('折叠所有章节', 'Fold all sections')" :aria-label="t('折叠所有章节', 'Fold all sections')" @click="foldHeadings('all')">▸</button>
-      <button type="button" :title="t('展开所有章节', 'Unfold all sections')" :aria-label="t('展开所有章节', 'Unfold all sections')" @click="foldHeadings('none')">▾</button>
+      <div class="section-actions">
+        <button type="button" :disabled="loading || !hasFoldableHeadings"
+          :title="allHeadingsFolded ? t('展开所有章节正文', 'Expand all section content') : t('折叠所有章节，保留标题', 'Collapse all sections, keeping headings visible')"
+          :aria-label="allHeadingsFolded ? t('展开所有章节', 'Unfold all sections') : t('折叠所有章节', 'Fold all sections')"
+          @click="foldHeadings(allHeadingsFolded ? 'none' : 'all')">
+          <AppIcon :icon="allHeadingsFolded ? Expand : Fold" :size="16" />
+          <span>{{ allHeadingsFolded ? t('全部展开', 'Expand all') : t('全部折叠', 'Collapse all') }}</span>
+        </button>
+      </div>
       <label class="toolbar-select heading-select" :title="t('设置标题级别', 'Set heading level')">
         <span class="format-glyph heading-glyph">H</span>
         <select :aria-label="t('标题级别', 'Heading level')" @change="applyHeading">
@@ -461,6 +489,11 @@ defineExpose({ getEditor: () => crepe?.editor })
 .markdown-toolbar button { display: inline-grid; place-items: center; min-width: 32px; min-height: 30px; padding: 4px 8px; border-radius: var(--radius-sm); color: var(--color-text-primary); }
 .markdown-toolbar button:hover, .toolbar-select:hover { background: var(--color-background-hover); color: var(--color-text-primary); }
 .markdown-toolbar button:focus-visible, .toolbar-select:focus-within { outline: 2px solid var(--color-border-focus); outline-offset: 1px; }
+.section-actions { display: inline-flex; align-items: center; flex-shrink: 0; margin-inline-end: 8px; padding: 2px; border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-background-secondary); }
+.markdown-toolbar .section-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 28px; padding: 4px 8px; font: inherit; font-size: var(--font-size-xs); line-height: 1.25; white-space: nowrap; color: var(--color-text-secondary); }
+.section-actions :deep(.app-icon) { transform: rotate(90deg); }
+.markdown-toolbar .section-actions button:hover:not(:disabled) { background: var(--color-background-hover); color: var(--color-accent-primary); }
+.markdown-toolbar .section-actions button:disabled { opacity: .45; cursor: default; }
 .format-glyph { font-family: Georgia, 'Times New Roman', serif; font-size: 17px; line-height: 1; }
 .heading-glyph { font-weight: 800; }
 .font-size-glyph { font-size: 18px; }
