@@ -1,6 +1,7 @@
 import { $prose } from '@milkdown/kit/utils'
 import { Plugin } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
+import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { parseCallout } from '@/utils/callouts'
 import '@/styles/callouts.css'
 import { remarkStringifyOptionsCtx, type Editor } from '@milkdown/kit/core'
@@ -21,21 +22,30 @@ export const configureCalloutSerialization: Parameters<Editor['config']>[0] = ct
   }))
 }
 
+const markerCache = new WeakMap<ProseNode, { from: number; to: number }[]>()
+function calloutMarkers(doc: ProseNode) {
+  const cached = markerCache.get(doc)
+  if (cached) return cached
+  const markers: { from: number; to: number }[] = []
+  doc.descendants((node, position) => {
+    if (node.type.name !== 'blockquote' || node.firstChild?.type.name !== 'paragraph' || node.firstChild.firstChild?.marks.length) return
+    const callout = parseCallout(node.firstChild.textBetween(0, node.firstChild.content.size, '\n', '\n'))
+    if (callout) markers.push({ from: position + 2, to: position + 2 + callout.markerLength })
+  })
+  markerCache.set(doc, markers)
+  return markers
+}
+
 // Keep native blockquotes in the document: typing, undo and Markdown serialization
 // remain Milkdown transactions; the view never rewrites a user's callout source.
 export const calloutPlugin = $prose(() => new Plugin({
   props: {
     decorations(state) {
       const decorations: Decoration[] = []
-      state.doc.descendants((node, position) => {
-        if (node.type.name !== 'blockquote' || node.firstChild?.type.name !== 'paragraph' || node.firstChild.firstChild?.marks.length) return
-        const callout = parseCallout(node.firstChild.textBetween(0, node.firstChild.content.size, '\n', '\n'))
-        if (!callout) return
-        const from = position + 2
-        const to = from + callout.markerLength
+      for (const { from, to } of calloutMarkers(state.doc)) {
         const editing = state.selection.from <= to && state.selection.to >= from
         decorations.push(Decoration.inline(from, to, { class: editing ? 'callout-marker-editing' : 'callout-marker' }))
-      })
+      }
       return DecorationSet.create(state.doc, decorations)
     },
     nodeViews: {
