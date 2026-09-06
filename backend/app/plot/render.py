@@ -219,21 +219,72 @@ def _clip_polyline(
     return segments
 
 
+_REFINE_MAX_DEPTH = 24
+_REFINE_MAX_EVALUATIONS = 256
+_CURVE_MAX_REFINEMENT_EVALUATIONS = 8192
+
+
+def _refine_crossing(tree, left, right, ymin, ymax, budget=None):
+    """Adaptively check both halves of a crossing; None explicitly breaks a path.
+
+    A visible midpoint is not a continuity proof. Accept a visible chord only
+    when its midpoint error is within a quarter pixel; otherwise subdivide both
+    halves. Depth, evaluation and floating-point limits always break unresolved
+    intervals instead of joining them. Entirely off-screen triples can be culled.
+    """
+    remaining = _REFINE_MAX_EVALUATIONS
+    if budget is None:
+        budget = [_REFINE_MAX_EVALUATIONS]
+    tolerance = (ymax - ymin) / (_PLOT_Y1 - _PLOT_Y0) / 4
+
+    def refine(a, b, depth):
+        nonlocal remaining
+        x = a[0] + (b[0] - a[0]) / 2
+        if depth >= _REFINE_MAX_DEPTH or remaining == 0 or budget[0] == 0 or not a[0] < x < b[0]:
+            return [a, None, b]
+        remaining -= 1
+        budget[0] -= 1
+        try:
+            y = evaluate(tree, x)
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+            y = math.nan
+        if not isinstance(y, (int, float)):
+            y = math.nan
+        mid = (x, y)
+        values = (a[1], y, b[1])
+        if all(math.isfinite(v) for v in values):
+            if max(values) < ymin or min(values) > ymax:
+                return [a, None, b]  # No visible chord; do not connect across it.
+            error = abs(y - (a[1] / 2 + b[1] / 2))
+            if any(ymin <= v <= ymax for v in values) and error <= tolerance:
+                return [a, mid, b]
+        # Refine either side of a nonfinite midpoint too: dropping the whole
+        # interval would erase valid branches between the original samples.
+        first = refine(a, mid, depth + 1)
+        second = refine(mid, b, depth + 1)
+        return first + second[1:]
+
+    return refine(left, right, 0)
+
+
 def _sample_segments(
     tree: object,
     xmin: float,
     xmax: float,
     ymin: float,
     ymax: float,
+    warnings: list[str] | None = None,
 ) -> list[list[tuple[float, float]]]:
     """采样并映射为像素点段，再裁剪到绘图矩形。
 
-    两处断段：非有限点处（画穿渐近线）；相邻有限采样点横跨可见范围上下两侧时
-    （渐近点恰好落在两个采样点之间，否则会被裁剪成贯穿绘图区的伪竖线）。
+    每个相邻有限采样区间都检查中点，避免端点在可见范围内的渐近线漏判。
+    自适应细分受区间与整条曲线预算限制，未解析区间以断点保守处理。
     """
     segments: list[list[tuple[float, float]]] = []
     points: list[tuple[float, float]] = []
     prev_y: float | None = None
+    prev_x = xmin
+    budget = [_CURVE_MAX_REFINEMENT_EVALUATIONS]
     for i in range(_SAMPLES + 1):
         x = xmin + (xmax - xmin) * i / _SAMPLES
         try:
@@ -255,18 +306,30 @@ def _sample_segments(
                 points = []
             prev_y = None
             continue
-        # 渐近线检测：相邻有限采样点分居可见范围上下两侧（一个 < ymin、一个 > ymax），
-        # 说明两者之间夹着竖直渐近线，断段避免被 Liang-Barsky 裁剪成贯穿绘图区的伪竖线
-        if prev_y is not None and (
-            (prev_y < ymin and y > ymax) or (prev_y > ymax and y < ymin)
-        ):
-            if points:
-                segments.append(points)
-                points = []
-        points.append((px, py))
+        if prev_y is not None:
+            refined = _refine_crossing(tree, (prev_x, prev_y), (x, y), ymin, ymax, budget)
+            samples = refined[1:]  # The previous endpoint is already in points.
+        else:
+            samples = [(x, y)]
+        for sample in samples:
+            mapped = None if sample is None else (
+                _sx(sample[0], xmin, xmax), _sy(sample[1], ymin, ymax)
+            )
+            if mapped is None or not all(math.isfinite(value) for value in mapped):
+                if points:
+                    segments.append(points)
+                    points = []
+            else:
+                points.append(mapped)
         prev_y = y
+        prev_x = x
     if points:
         segments.append(points)
+
+    if budget[0] == 0 and warnings is not None:
+        warning = "曲线细分达到求值上限，未解析区间已断开；请缩小 domain 后重试"
+        if warning not in warnings:
+            warnings.append(warning)
 
     # 裁剪到绘图矩形：reportlab 无 SVG viewport 那样的自动裁剪，超出显式 range 的
     # 曲线会覆盖页面其他内容，故在共享几何层统一裁剪（SVG 也一并收敛到绘图区）。
@@ -320,7 +383,7 @@ def compute_geometry(plot: FunctionPlot) -> PlotGeometry:
     for i, (expr, tree) in enumerate(fns):
         color = _safe_color(expr.color, _PALETTE[i % len(_PALETTE)])
         colors.append(color)
-        polylines.append(_sample_segments(tree, xmin, xmax, ymin, ymax))
+        polylines.append(_sample_segments(tree, xmin, xmax, ymin, ymax, warnings))
 
     return PlotGeometry(
         width=_WIDTH,

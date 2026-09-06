@@ -441,3 +441,119 @@ def test_compute_geometry_breaks_at_asymptote() -> None:
             # 相邻点垂直跨度若接近整个绘图区高度，即为渐近线伪连接
             for (_, py0), (_, py1) in zip(seg, seg[1:]):
                 assert abs(py1 - py0) < full_height * 0.5
+
+
+@pytest.mark.parametrize('slope,root', [(1000, 0.0025), (-1000, 0.0025), (1000000, 0.002731)])
+def test_steep_continuous_crossing_survives_svg_and_pdf(slope, root):
+    from app.plot.render import compute_geometry, _PLOT_Y0, _PLOT_Y1, _PLOT_X0, _PLOT_X1
+    from app.plot.render_reportlab import render_drawing
+    from reportlab.graphics.shapes import PolyLine
+    plot = parse_source(f'domain: -1, 1\nrange: -1, 1\ny = {slope}*(x-{root})').plot
+    segments = compute_geometry(plot).polylines[0]
+    assert len(segments) == 1
+    points = segments[0]
+    assert min(y for x,y in points) == pytest.approx(_PLOT_Y0)
+    assert max(y for x,y in points) == pytest.approx(_PLOT_Y1)
+    for x,y in points:
+        data_x = (x-_PLOT_X0)/(_PLOT_X1-_PLOT_X0)*2-1
+        data_y = 1-(y-_PLOT_Y0)/(_PLOT_Y1-_PLOT_Y0)*2
+        assert data_y == pytest.approx(slope*(data_x-root),abs=1e-7)
+    assert '<polyline ' in render_svg(plot).content
+    assert any(isinstance(item,PolyLine) for item in render_drawing(plot).contents)
+
+
+def test_crossing_refinement_has_bounded_work(monkeypatch):
+    import app.plot.render as rendering
+    calls = []
+    def jump(tree, x):
+        calls.append(x)
+        return -2 if x < 0.123456789 else 2
+    monkeypatch.setattr(rendering, 'evaluate', jump)
+    samples = rendering._refine_crossing(None, (0,-2), (1,2), -1,1)
+    assert None in samples
+    assert len(calls) <= rendering._REFINE_MAX_EVALUATIONS
+
+
+def test_visible_midpoint_does_not_bridge_a_pole():
+    from app.plot.render import compute_geometry, _PLOT_Y0, _PLOT_Y1, _PLOT_X0, _PLOT_X1
+    plot = parse_source('domain: 0, 2\nrange: -1, 1\ny = 1000*(x-0.0025)+0.001/(x-0.001)').plot
+    segments = compute_geometry(plot).polylines[0]
+    assert segments
+    for seg in segments:
+        for px, py in seg:
+            x = (px-_PLOT_X0)/(_PLOT_X1-_PLOT_X0)*2
+            y = 1-(py-_PLOT_Y0)/(_PLOT_Y1-_PLOT_Y0)*2
+            # On the visible branch, 1000*t + .001/t - 1.5 >= .5.
+            assert x > .001
+            assert y >= .5-1e-8
+            assert y == pytest.approx(1000*(x-.0025)+.001/(x-.001),abs=.002)
+
+
+def test_refined_extreme_samples_never_emit_nonfinite_coordinates():
+    from app.plot.render import compute_geometry
+    from app.plot.render_reportlab import render_drawing
+    from reportlab.graphics.shapes import PolyLine
+    plot = parse_source('domain: 0, 2\nrange: -1e-308, 1e-308\ny = 1e-304*(x-0.00125)-1e308*x*(x-0.005)*(x-0.00125)').plot
+    geo = compute_geometry(plot)
+    for segments in geo.polylines:
+        for seg in segments:
+            assert all(math.isfinite(v) for point in seg for v in point)
+    svg = render_svg(plot).content
+    assert 'nan' not in svg and 'inf' not in svg
+    for shape in render_drawing(plot).contents:
+        if isinstance(shape, PolyLine):
+            assert all(math.isfinite(v) for v in shape.points)
+
+
+def test_refinement_budget_is_shared_by_both_subtrees(monkeypatch):
+    import app.plot.render as rendering
+    calls = []
+    def oscillate(tree, x):
+        calls.append(x)
+        return .9*math.sin(1e9*x)
+    monkeypatch.setattr(rendering, 'evaluate', oscillate)
+    samples = rendering._refine_crossing(None, (0,-2), (1,2), -1,1)
+    assert len(calls) == rendering._REFINE_MAX_EVALUATIONS
+    assert None in samples  # Exhaustion leaves gaps, never unchecked chords.
+
+
+@pytest.mark.parametrize('factor,pole', [(0.0001,.001),(-0.0001,.001),(.001,.001),(.0001,.0025),(.0001,.00419)])
+def test_visible_endpoints_do_not_hide_a_pole(factor, pole):
+    from app.plot.render import compute_geometry, _PLOT_X0, _PLOT_X1
+    plot = parse_source(f'domain: 0, 2\nrange: -1, 1\ny = {factor}/(x-{pole})').plot
+    segments = compute_geometry(plot).polylines[0]
+    assert segments
+    left = right = False
+    for segment in segments:
+        xs = [(px-_PLOT_X0)/(_PLOT_X1-_PLOT_X0)*2 for px,py in segment]
+        assert not min(xs) < pole < max(xs)
+        left |= max(xs) < pole
+        right |= min(xs) > pole
+    assert left and right
+
+
+@pytest.mark.parametrize('expression', ['x', 'x^2', 'sin(x)', 'exp(x)', 'sqrt(x)', 'log(x)'])
+def test_smooth_and_domain_limited_curves_remain_visible(expression):
+    from app.plot.render import compute_geometry, _PLOT_X0, _PLOT_X1, _PLOT_Y0, _PLOT_Y1
+    plot = parse_source(f'domain: -2, 2\nrange: -2, 5\ny = {expression}').plot
+    geometry = compute_geometry(plot)
+    assert geometry.polylines[0]
+    assert not geometry.warnings
+    for segment in geometry.polylines[0]:
+        for x,y in segment:
+            assert math.isfinite(x) and math.isfinite(y)
+            assert _PLOT_X0-1e-8 <= x <= _PLOT_X1+1e-8
+            assert _PLOT_Y0-1e-8 <= y <= _PLOT_Y1+1e-8
+
+
+def test_curve_refinement_has_one_shared_budget(monkeypatch):
+    import app.plot.render as rendering
+    calls=[]
+    def oscillate(tree, x):
+        calls.append(x)
+        return .9*math.sin(1e9*x)
+    monkeypatch.setattr(rendering,'evaluate',oscillate)
+    warnings=[]
+    rendering._sample_segments(None,0,2,-1,1,warnings)
+    assert len(calls) <= rendering._SAMPLES+1+rendering._CURVE_MAX_REFINEMENT_EVALUATIONS
+    assert len(warnings)==1
