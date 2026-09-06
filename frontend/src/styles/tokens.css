@@ -1,4 +1,7 @@
 :root {
+  --color-markdown-selection: color-mix(in srgb, var(--color-accent-primary) 24%, var(--color-background-primary));
+  --color-editor-scroll-background: var(--color-surface-elevated);
+  --color-editor-scroll-text: var(--color-accent-primary);
   /* Callout heading colors also serve as borders; keep text readable on tint. */
   --color-callout-info: var(--color-info);
   --color-callout-success: var(--color-success);

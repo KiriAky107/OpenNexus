@@ -24,7 +24,7 @@ watch([() => props.source, diagramTheme, () => themeStore.currentThemeId, () => 
 </script>
 
 <template>
-  <DiagramInteractions :data-heading-style="headingAppearance.preferences.custom ? 'custom' : undefined" :style="headingAppearance.cssVariables"><div class="markdown-content" v-html="html" /></DiagramInteractions>
+  <DiagramInteractions :data-heading-style="headingAppearance.preferences.custom ? 'custom' : undefined" :style="headingAppearance.cssVariables"><div class="markdown-content" :data-code-wrap="markdownPreferences.normalized.wrapCode" :data-line-numbers="markdownPreferences.normalized.lineNumbers" :style="{ '--markdown-code-indent': markdownPreferences.normalized.indent }" v-html="html" /></DiagramInteractions>
 </template>
 
 <style>
@@ -36,12 +36,10 @@ watch([() => props.source, diagramTheme, () => themeStore.currentThemeId, () => 
 .markdown-content li::marker { color: var(--color-markdown-marker); font-weight: 700; }
 .markdown-content .shiki { overflow: auto; margin: .85em 0; padding: 16px; border: 1px solid var(--color-code-border); border-radius: 6px; background: var(--color-code-background) !important; color: var(--color-code-text); font-family: var(--font-ui-mono); font-size: .875em; line-height: 1.45; tab-size: 4; }
 .markdown-content code { padding: .1em .3em; border-radius: var(--radius-sm); background: var(--color-background-tertiary); font-family: var(--font-ui-mono); }
-.markdown-content .shiki code { display: block; min-width: max-content; padding: 0; background: transparent; font: inherit; }
 .markdown-content :not(pre) > code { background: var(--color-code-background); color: var(--color-code-text); border: 1px solid var(--color-code-border); }
 .markdown-content div.markdown-math { overflow-x: auto; padding-block: .5em; }
 .markdown-content h4, .markdown-content h5, .markdown-content h6 { margin: 1em 0 .5em; font-weight: 600; }
 .markdown-content input[type="checkbox"] { margin-right: .45em; accent-color: var(--color-accent-primary); }
-.markdown-content .shiki .line { display: block; min-height: 1.45em; }
 .markdown-content blockquote { padding-left: 1em; border-left: 3px solid var(--color-accent-primary); color: var(--color-text-secondary); }
 .markdown-content table { width: 100%; margin: .65em 0; border-collapse: collapse; }
 .markdown-content th, .markdown-content td { padding: .45em .65em; border: 1px solid var(--color-markdown-grid); text-align: left; }
