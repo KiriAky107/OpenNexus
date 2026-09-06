@@ -465,6 +465,54 @@ def test_docx_nested_list_parent_before_child() -> None:
     assert xml.index("parent") < xml.index("child")
 
 
+def test_pdf_nested_list_mixed_order_preserves_sequence() -> None:
+    from app.export.exporters.pdf import PdfExporter
+
+    # P2：混合列表项（父段—子列表—后续段）应保持原始顺序，不能把所有正文挤到子列表之前
+    result = asyncio.run(
+        PdfExporter().export(parse_document("- parent\n\n  - child\n\n  after"), ExportOptions())
+    )
+    text = _extract_pdf_text(result.content)
+    assert text.index("parent") < text.index("child") < text.index("after")
+
+
+def test_pdf_list_item_preserves_inline_semantics() -> None:
+    from app.export.exporters.pdf import PdfExporter
+
+    # P2：列表项内的加粗与链接语义不能被「只渲染 children」而静默丢失
+    result = asyncio.run(
+        PdfExporter().export(parse_document("- **bold** [link](https://example.com)"), ExportOptions())
+    )
+    text = _extract_pdf_text(result.content)
+    assert "bold" in text
+    assert "link" in text
+    # 链接以 PDF 链接注解（/URI）保留，而非降级为纯文本
+    assert b"/URI" in result.content
+    assert b"example.com" in result.content
+    assert not any("链接协议不安全" in w for w in result.warnings)
+    assert not any("无法表示" in w for w in result.warnings)
+
+
+def test_docx_list_item_preserves_inline_semantics() -> None:
+    import zipfile
+    from io import BytesIO
+
+    from app.export.exporters.docx import DocxExporter
+
+    # P2：列表项内的加粗与链接语义应保留（w:b 加粗、w:hyperlink 可点击链接）
+    result = asyncio.run(
+        DocxExporter().export(parse_document("- **bold** [link](https://example.com)"), ExportOptions())
+    )
+    with zipfile.ZipFile(BytesIO(result.content)) as zf:
+        xml = zf.read("word/document.xml").decode("utf-8")
+        rels = zf.read("word/_rels/document.xml.rels").decode("utf-8")
+    assert "<w:b/>" in xml
+    assert "w:hyperlink" in xml
+    assert "example.com" in rels
+    assert not any("链接协议不安全" in w for w in result.warnings)
+    assert not any("无法表示" in w for w in result.warnings)
+
+
 def test_export_cancel_queued_job_waiting_for_slot(monkeypatch) -> None:
     # P2：等待渲染槽位的任务取消后应立即进入 cancelled，不必等前面的渲染完成
     import threading
