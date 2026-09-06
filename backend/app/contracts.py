@@ -1132,6 +1132,11 @@ class TranscriptNoteRequest(Contract):
 
 
 class IndexStatus(Contract):
+    running_jobs: int = 0
+    active_searches: int = 0
+    completed_searches: int = 0
+    failed_searches: int = 0
+    cancelled_searches: int = 0
     vector_refresh_required: bool = False
     total_notes: int = 0
     total_blocks: int = 0

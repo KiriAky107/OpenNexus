@@ -1,8 +1,11 @@
 import { $prose } from '@milkdown/kit/utils'
 import { Plugin, TextSelection } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
+import type { Node } from '@milkdown/kit/prose/model'
 import type { Editor } from '@milkdown/kit/core'
 import { editorViewCtx } from '@milkdown/kit/core'
+
+const decorationCache = new WeakMap<Node, DecorationSet>()
 
 const openingTag = /^<span style="font-size:\s*(\d+(?:\.\d+)?)px">$/i
 const closingTag = /^<\/span>$/i
@@ -10,6 +13,8 @@ const closingTag = /^<\/span>$/i
 export const fontSizeMarkdownPlugin = $prose(() => new Plugin({
   props: {
     decorations(state) {
+      const cached = decorationCache.get(state.doc)
+      if (cached) return cached
       const decorations: Decoration[] = []
       const stack: Array<{ from: number; size: string }> = []
 
@@ -36,7 +41,9 @@ export const fontSizeMarkdownPlugin = $prose(() => new Plugin({
         }
       })
 
-      return DecorationSet.create(state.doc, decorations)
+      const result = DecorationSet.create(state.doc, decorations)
+      decorationCache.set(state.doc, result)
+      return result
     },
   },
 }))

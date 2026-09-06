@@ -7,6 +7,10 @@ type CodeTheme = 'github-light' | 'github-dark'
 
 export async function shikiLanguage(language: string, theme: CodeTheme): Promise<LanguageSupport> {
   const tokenize = await getCodeTokenizer(theme, language)
+  // Milkdown recreates off-screen CodeMirror views. Reuse immutable ranges for
+  // identical code within this language/theme, with a bounded retention budget.
+  const cache = new Map<string, DecorationSet>()
+  let cachedCharacters = 0
   const highlights = ViewPlugin.fromClass(class {
     decorations: DecorationSet
 
@@ -17,7 +21,13 @@ export async function shikiLanguage(language: string, theme: CodeTheme): Promise
     }
 
     highlight(view: EditorView): DecorationSet {
-      const tokens = tokenize(view.state.doc.toString(), language)
+      const source = view.state.doc.toString()
+      const cached = cache.get(source)
+      if (cached) {
+        cache.delete(source); cache.set(source, cached)
+        return cached
+      }
+      const tokens = tokenize(source, language)
       const ranges = tokens.flatMap((line, index) => {
         let offset = view.state.doc.line(index + 1).from
         return line.flatMap(token => {
@@ -31,7 +41,15 @@ export async function shikiLanguage(language: string, theme: CodeTheme): Promise
           }).range(from, offset)]
         })
       })
-      return Decoration.set(ranges)
+      const decorations = Decoration.set(ranges)
+      if (source.length <= 16000) {
+        cache.set(source, decorations); cachedCharacters += source.length
+        while (cache.size > 32 || cachedCharacters > 64000) {
+          const oldest = cache.keys().next().value!
+          cachedCharacters -= oldest.length; cache.delete(oldest)
+        }
+      }
+      return decorations
     }
   }, { decorations: value => value.decorations })
 

@@ -12,6 +12,42 @@ from app.local_models.runtime import Runtime
 from app.providers.base import ProviderError
 
 
+@pytest.mark.parametrize('threaded', [False, True])
+def test_large_embedding_result_crosses_pipe_limit_without_truncation(monkeypatch, tmp_path, threaded):
+    import app.local_models.runtime as module
+    import app.local_models.process as process_module
+    from app.local_models.protocol import response_lines
+    vector = [0.012345678901234567] * 384
+    result = {'result': [vector] * 2111}
+    assert len(json.dumps(result).encode()) > 16 * 1024 * 1024
+    assert max(map(len, response_lines(result, 'embedding'))) < 16 * 1024 * 1024
+    worker = tmp_path / 'large_worker.py'
+    protocol_dir = Path(module.__file__).parent
+    worker.write_text(
+        'import sys,json\n'
+        f'sys.path.insert(0, {str(protocol_dir)!r})\n'
+        'from protocol import response_lines\n'
+        'request=json.load(sys.stdin)\n'
+        'vector=[0.012345678901234567]*384\n'
+        'for line in response_lines({"result":[vector]*len(request["payload"]["texts"])}, "embedding"):\n'
+        ' sys.stdout.write(line)\n', encoding='utf-8')
+    monkeypatch.setattr(module, 'read_state', lambda key: {'status': 'installed'})
+    monkeypatch.setattr(module, 'interpreter', lambda *_: Path(sys.executable))
+    original_async = asyncio.create_subprocess_exec
+    original_threaded = process_module.ThreadedProcess
+
+    async def spawn(*args, **kwargs):
+        if threaded:
+            raise NotImplementedError
+        return await original_async(sys.executable, str(worker), **kwargs)
+
+    monkeypatch.setattr(module.asyncio, 'create_subprocess_exec', spawn)
+    monkeypatch.setattr(process_module, 'ThreadedProcess',
+                        lambda args, **kwargs: original_threaded((sys.executable, str(worker)), **kwargs))
+    actual = asyncio.run(Runtime().infer('bekko', 'embedding', {'texts': ['test'] * 2111}))
+    assert actual == result['result']
+
+
 def test_download_resumes_partial_and_checks_digest(monkeypatch):
     payload = b'verified-model-weights'
     entry = {'path':'model.safetensors','size':len(payload),'hash':hashlib.sha256(payload).hexdigest(),

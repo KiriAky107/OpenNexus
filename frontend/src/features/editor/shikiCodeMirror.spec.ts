@@ -1,13 +1,37 @@
 // @vitest-environment happy-dom
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { Compartment } from '@codemirror/state'
 import { bundledLanguagesInfo } from 'shiki/langs'
 import { EditorView } from '@codemirror/view'
 import { shikiLanguage, shikiLanguages } from './shikiCodeMirror'
 import { getCodeTokenizer } from '@/utils/markdown'
+import * as markdown from '@/utils/markdown'
 
 const editors: EditorView[] = []
-afterEach(() => { editors.splice(0).forEach(view => view.destroy()) })
+afterEach(() => { editors.splice(0).forEach(view => view.destroy()); vi.restoreAllMocks() })
+
+it('reuses highlighting across recreated views and bounds retained entries', async () => {
+  const tokenize = vi.fn(await getCodeTokenizer('github-light', 'javascript'))
+  vi.spyOn(markdown, 'getCodeTokenizer').mockResolvedValue(tokenize)
+  const support = await shikiLanguage('javascript', 'github-light')
+  const create = (doc: string) => {
+    const view = new EditorView({ doc, extensions: [support] })
+    editors.push(view)
+    return view
+  }
+  const source = 'const answer = 42'
+  create(source)
+  const recreated = create(source)
+  expect(tokenize).toHaveBeenCalledTimes(1)
+  expect(recreated.dom.textContent).toContain(source)
+  recreated.dispatch({ changes: { from: 0, to: source.length, insert: 'let changed = 1' } })
+  expect(tokenize).toHaveBeenCalledTimes(2)
+  expect(recreated.dom.textContent).toContain('let changed = 1')
+  for (let i = 0; i < 33; i++) create(`const value = ${i}`)
+  const before = tokenize.mock.calls.length
+  create(source)
+  expect(tokenize).toHaveBeenCalledTimes(before + 1)
+})
 
 it.each(['github-light', 'github-dark'] as const)('uses Shiki %s tokens and updates editable content', async theme => {
   const support = await shikiLanguage('python', theme)

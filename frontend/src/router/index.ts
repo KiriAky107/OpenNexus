@@ -3,6 +3,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { t } from '@/i18n'
 
 const routes = [
+  { path: '/logs', name: 'logs', component: () => import('@/features/logs/LogsView.vue'), meta: { title: '运行日志' } },
   { path: '/media', name: 'media', component: () => import('@/features/media/MediaView.vue'), meta: { title: '音视频转写', requiresVault: true } },
   {
     path: '/',
@@ -91,6 +92,7 @@ router.beforeEach((to) => {
 export function updateDocumentTitle(to = router.currentRoute.value) {
   const baseTitle = 'NotesAgent'
   const titles: Record<string, string> = {
+    logs: t('运行日志', 'Operation logs'),
     media: t('音视频转写', 'Media Transcription'),
     'vault-entry': t('选择知识库', 'Select Knowledge Base'),
     workspace: t('工作区', 'Workspace'),

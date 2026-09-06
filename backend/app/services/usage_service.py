@@ -98,6 +98,11 @@ class UsageAttempt:
                     reasoning_tokens=first("output_tokens_details.reasoning_tokens", "completion_tokens_details.reasoning_tokens"))
 
     def persist(self):
+        from app.operation_logs import log_event
+        log_event('providers', 'model.request_finished', level='INFO' if self.completed else 'WARNING',
+                  provider_id=self.provider_id, model=self.model, run_id=self.run_id,
+                  request_id=self.request_id, source=self.source,
+                  status='completed' if self.completed else 'incomplete')
         try:
             with closing(connection()) as conn:
                 conn.execute("INSERT OR REPLACE INTO model_usage VALUES (?,?,?,?,?,?,?,?,?,?,?)", (

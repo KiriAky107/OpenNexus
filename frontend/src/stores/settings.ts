@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { AiCoreStatus, IndexStatus } from '@/contracts'
 import { resolveApiUrl } from '@/services/apiClient'
 import packageInfo from '../../package.json'
@@ -31,6 +31,15 @@ export const useSettingsStore = defineStore('settings', () => {
   // Index
   const emptyIndex = (): IndexStatus => ({ status: 'unknown', pending_jobs: 0, total_notes: null, total_blocks: null })
   const indexStatus = ref<IndexStatus>(emptyIndex())
+  const indexStatusLabel = computed(() => {
+    const value = indexStatus.value
+    if (value.status === 'unknown') return t('索引状态未获取', 'Index status unavailable')
+    if (value.status === 'indexing') return t('后台计算索引', 'Indexing in background')
+    if (value.status === 'error') return t('索引错误', 'Index error')
+    if (value.vector_refresh_required) return t('全文可用 · 向量待重建', 'Full text ready · vectors need rebuilding')
+    if (value.active_searches) return t('向量检索中', 'Vector search running')
+    return t('索引就绪', 'Index ready')
+  })
 
   // Permissions
   const permissionPolicy = ref<Record<string, 'allow' | 'confirm' | 'deny'>>({})
@@ -85,6 +94,7 @@ export const useSettingsStore = defineStore('settings', () => {
     aiCoreStatus,
     aiCoreAddress,
     indexStatus,
+    indexStatusLabel,
     permissionPolicy,
     diagnosticsError,
     loadDiagnostics,
