@@ -215,6 +215,13 @@ def parse_expression(expr: str) -> ast.Expression:
     return tree
 
 
+def _count_nodes(node: ast.AST) -> int:
+    """统计已通过校验的表达式 AST 节点数，供文档级累计复杂度预算使用。"""
+    counter = [0]
+    _check_node(node, counter=counter)
+    return counter[0]
+
+
 def evaluate(expr_ast: ast.Expression, x: float) -> float:
     """递归解释已校验 AST 得到数值，全程不编译/执行代码。"""
     return _eval_node(expr_ast.body, x)
@@ -282,6 +289,7 @@ def parse_source(source: str) -> FunctionPlotParseResult:
     ylabel: str | None = None
     grid: bool = True
     has_error = False
+    total_nodes = 0
 
     for lineno, raw_line in enumerate(source.splitlines(), start=1):
         line = raw_line.strip()
@@ -363,12 +371,13 @@ def parse_source(source: str) -> FunctionPlotParseResult:
             continue
 
         try:
-            parse_expression(expr_text)
+            tree = parse_expression(expr_text)
         except PlotParseError as exc:
             exc.diagnostic.line = lineno
             diagnostics.append(exc.diagnostic)
             has_error = True
             continue
+        total_nodes += _count_nodes(tree.body)
         expressions.append(FunctionPlotExpression(expression=expr_text))
         # 表达式数量超限：整块回退并提前终止，避免对海量表达式做采样求值
         if len(expressions) > _MAX_EXPRESSIONS:
@@ -398,5 +407,6 @@ def parse_source(source: str) -> FunctionPlotParseResult:
         domain=domain,
         range=range_,
         axes=PlotAxes(xlabel=xlabel, ylabel=ylabel, grid=grid),
+        node_count=total_nodes,
     )
     return FunctionPlotParseResult(plot=plot, diagnostics=diagnostics)

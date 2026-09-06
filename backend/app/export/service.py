@@ -43,6 +43,10 @@ MAX_JOBS = 100
 MAX_MARKDOWN_CHARS = 200_000
 # 最终导出产物大小上限，防止超大 HTML 耗尽内存/磁盘
 MAX_EXPORT_BYTES = 20 * 1024 * 1024  # 20 MB
+# 并发渲染上限：解析/渲染是 CPU 密集的同步工作，限制同时执行的任务数，
+# 防止大量任务同时占满工作线程与内存
+MAX_CONCURRENT_RENDERS = 2
+_render_slots = asyncio.Semaphore(MAX_CONCURRENT_RENDERS)
 # 产物有效期
 FILE_TTL = timedelta(hours=24)
 
@@ -208,47 +212,50 @@ async def _execute(
         }
     )
     try:
-        # 让出一次，使「创建后立即取消」的 queued 任务能及时进入 cancelled
-        await asyncio.sleep(0)
-        if cancel_event.is_set():
-            raise ExportCancelled()
+        # 并发渲染限额：解析/渲染是 CPU 密集的同步工作，用信号量限制同时执行的任务数，
+        # 超出限额的任务在此排队等待，避免大量任务同时占满工作线程与内存
+        async with _render_slots:
+            # 让出一次，使「创建后立即取消」的 queued 任务能及时进入 cancelled
+            await asyncio.sleep(0)
+            if cancel_event.is_set():
+                raise ExportCancelled()
 
-        # 解析与渲染都是 CPU 密集的同步工作，放入线程执行避免阻塞事件循环，
-        # 使运行中的取消能在渲染边界生效；写文件前再次检查取消。
-        document = await asyncio.to_thread(parse_document, markdown)
-        document.attributes["title"] = title
-        if metadata:
-            document.attributes["metadata"] = metadata
+            # 解析与渲染都是 CPU 密集的同步工作，放入线程执行避免阻塞事件循环，
+            # 使运行中的取消能在渲染边界生效；写文件前再次检查取消。
+            document = await asyncio.to_thread(parse_document, markdown)
+            document.attributes["title"] = title
+            if metadata:
+                document.attributes["metadata"] = metadata
 
-        result = await asyncio.to_thread(_render_document, document, options)
-        if cancel_event.is_set():
-            raise ExportCancelled()
-        if len(result.content) > MAX_EXPORT_BYTES:
-            raise ExportTooLarge()
+            result = await asyncio.to_thread(_render_document, document, options)
+            if cancel_event.is_set():
+                raise ExportCancelled()
+            if len(result.content) > MAX_EXPORT_BYTES:
+                raise ExportTooLarge()
 
-        out_dir = get_settings().exports_path
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = _export_path(job_id)
-        path.write_bytes(result.content)
+            out_dir = get_settings().exports_path
+            out_dir.mkdir(parents=True, exist_ok=True)
+            path = _export_path(job_id)
+            path.write_bytes(result.content)
 
-        completed_at = _now()
-        _jobs[job_id] = _jobs[job_id].model_copy(
-            update={
-                "status": ExportStatus.completed,
-                "progress": ExportProgress(
-                    phase="completed", current=1, total=1, percent=1.0
-                ),
-                "file": ExportFile(
-                    file_name=f"{_safe_download_name(title)}.html",
-                    mime_type=result.mime_type,
-                    size=len(result.content),
-                    sha256=hashlib.sha256(result.content).hexdigest(),
-                    expires_at=completed_at + FILE_TTL,
-                ),
-                "warnings": result.warnings,
-                "completed_at": completed_at,
-            }
-        )
+            completed_at = _now()
+            _jobs[job_id] = _jobs[job_id].model_copy(
+                update={
+                    "status": ExportStatus.completed,
+                    "progress": ExportProgress(
+                        phase="completed", current=1, total=1, percent=1.0
+                    ),
+                    "file": ExportFile(
+                        file_name=f"{_safe_download_name(title)}.html",
+                        mime_type=result.mime_type,
+                        size=len(result.content),
+                        sha256=hashlib.sha256(result.content).hexdigest(),
+                        expires_at=completed_at + FILE_TTL,
+                    ),
+                    "warnings": result.warnings,
+                    "completed_at": completed_at,
+                }
+            )
     except ExportCancelled:
         _jobs[job_id] = _jobs[job_id].model_copy(
             update={

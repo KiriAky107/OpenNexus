@@ -31,6 +31,8 @@ class FunctionPlot(BaseModel):
     domain: tuple[float, float] = (-10.0, 10.0)
     range: tuple[float, float] | None = None
     axes: PlotAxes = Field(default_factory=PlotAxes)
+    # 该块所有表达式 AST 节点数之和，供导出器做文档级累计复杂度预算
+    node_count: int = 0
 
 
 class PlotDiagnostic(BaseModel):
