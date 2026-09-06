@@ -161,7 +161,7 @@ async def _register_workspace_files() -> None:
                     created_at=parsed.created_at, updated_at=parsed.updated_at, blocks=parsed.blocks)
                 conn.execute('UPDATE blocks SET embedding_local_only=? WHERE note_id=?', (int(parsed.embedding_local_only), parsed.note_id))
             if prepared:
-                repository.set_index_meta({'workspace_vectors_pending': '1'}, conn=conn)
+                repository.set_index_meta({f'note_vectors_pending:{parsed.note_id}': '1' for parsed in prepared}, conn=conn)
     finally:
         conn.close()
 

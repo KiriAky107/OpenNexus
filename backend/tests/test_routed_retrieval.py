@@ -66,6 +66,52 @@ async def seed():
     return apple, banana
 
 
+def test_native_spaces_isolate_dimensions_and_reuse_without_json_scan(runtime, monkeypatch):
+    from app.retrieval import space_index
+    async def scenario():
+        apple, banana = await seed()
+        ids = [b.block_id for note in (apple, banana) for b in note.blocks]
+        conn = connect()
+        try:
+            with transaction(conn):
+                routed_vectors.store_remote(conn, ids, routed_vectors.RemoteEmbeddings('space-a', 4, [[1., 0., 0., 0.]] * len(ids)))
+            assert conn.execute('SELECT COUNT(DISTINCT dimensions) FROM routed_block_vectors').fetchone()[0] == 2
+        finally:
+            conn.close()
+        # A new connection uses the persistent native index, without reading vector JSON.
+        def forbidden(*args, **kwargs):
+            raise AssertionError('query decoded stored JSON')
+        monkeypatch.setattr(space_index.json, 'loads', forbidden)
+        hits = await routed_vectors.search_remote('apple orchard', top_k=2, strict=True)
+        assert len(hits) == 2
+        assert hits[0].id == apple.blocks[0].block_id
+    asyncio.run(scenario())
+
+
+def test_legacy_vectors_migrate_without_document_embedding(runtime):
+    from app.retrieval import space_index
+    async def scenario():
+        apple, banana = await seed()
+        conn = connect()
+        table = space_index.table_name('space-a', 3)
+        try:
+            with transaction(conn):
+                conn.execute(f'DROP TRIGGER {table}_delete')
+                conn.execute(f'DROP TRIGGER {table}_update')
+                conn.execute(f'DROP TABLE {table}')
+                conn.execute('ALTER TABLE routed_block_vectors RENAME TO saved_vectors')
+                conn.execute('CREATE TABLE routed_block_vectors(space_id TEXT,block_id TEXT REFERENCES blocks(block_id) ON DELETE CASCADE,dimensions INTEGER,vector TEXT,PRIMARY KEY(space_id,block_id))')
+                conn.execute('INSERT INTO routed_block_vectors SELECT * FROM saved_vectors')
+                conn.execute('DROP TABLE saved_vectors')
+        finally:
+            conn.close()
+        runtime.calls.clear()
+        hits = await routed_vectors.search_remote('apple orchard', top_k=2, strict=True)
+        assert len(hits) == 2
+        assert runtime.calls == [['apple orchard']]
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("outcome", ["api", "api_failure", "missing_space"])
 def test_benchmark_reports_actual_embedding_and_fallback(runtime, outcome):
     from app.benchmarks import service

@@ -271,6 +271,14 @@ async def _refresh_saved_note(note_id: str) -> None:
             conn = connect()
             try:
                 with transaction(conn):
+                    existing_ids = {row[0] for row in conn.execute('SELECT block_id FROM blocks WHERE note_id=?', (note_id,))}
+                    if existing_ids != {block.block_id for block in parsed.blocks}:
+                        # An external editor changed a newly registered note while inference ran.
+                        # Reconcile that note only; the snapshot check above protects newer saves.
+                        parsed.title = parse_note(markdown=markdown, file_path=record.file_path,
+                            folder=record.folder, tags=record.tags, created_at=record.created_at,
+                            updated_at=record.updated_at, note_id=note_id).title
+                        await index_note(parsed, prepared=prepared, conn=conn)
                     # Write only vectors: metadata and FTS already represent the saved revision.
                     vectors, remote = prepared
                     from app.retrieval.vectorstore import VectorRecord
@@ -278,6 +286,14 @@ async def _refresh_saved_note(note_id: str) -> None:
                     await vector_store.upsert([VectorRecord(id=b.block_id, vector=v)
                         for b, v in zip(parsed.blocks, vectors)], conn=conn)
                     routed_vectors.store_remote(conn, [b.block_id for b in parsed.blocks], remote)
+                    if isinstance(note_service.embedding, LocalEmbedding) and parsed.blocks:
+                        from app.retrieval.space_index import table_name
+                        if remote is None:
+                            raise ApiError(503, 'EMBEDDING_UNAVAILABLE', '笔记已保存，向量计算未完成。')
+                        table = table_name(remote.space_id, remote.dimensions)
+                        missing = conn.execute(f'SELECT 1 FROM blocks b LEFT JOIN {table} v ON v.block_id=b.block_id WHERE b.note_id=? AND v.block_id IS NULL LIMIT 1', (note_id,)).fetchone()
+                        if missing:
+                            raise ApiError(500, 'SEMANTIC_INDEX_WRITE_FAILED', '向量写入未完成，保留待处理标记。')
                     repository.set_index_meta({key: '0'}, conn=conn)
             finally:
                 conn.close()
