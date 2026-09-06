@@ -5,6 +5,33 @@ from app.config import get_settings
 from app.services import index_service, workspace_service
 
 
+def test_external_new_note_does_not_rebuild_existing_notes(monkeypatch):
+    from app.services import note_service
+    async def scenario():
+        await note_service.create_note(title='Existing', markdown='Keep existing vectors', folder=None, tags=[])
+        calls = []
+        original = index_service.prepare_note_index
+        async def record(parsed, **kwargs):
+            calls.append(parsed.file_path)
+            return await original(parsed, **kwargs)
+        async def forbidden(*args, **kwargs):
+            raise AssertionError('full rebuild should not run')
+        monkeypatch.setattr(index_service, 'prepare_note_index', record)
+        monkeypatch.setattr(index_service, 'rebuild', forbidden)
+        path = get_settings().vault_path / 'external.md'
+        path.write_text('# External\n\nNew content', encoding='utf-8')
+        try:
+            await workspace_service.refresh_workspace_tree()
+            await index_service._background_task
+            assert calls == ['external.md']
+            assert not index_service.get_status().vector_refresh_required
+            await workspace_service.open_workspace(None)
+            assert calls == ['external.md']
+        finally:
+            await index_service.shutdown()
+    asyncio.run(scenario())
+
+
 def test_open_returns_before_vectors_and_deduplicates_background(monkeypatch):
     async def scenario():
         started, release = asyncio.Event(), asyncio.Event()
