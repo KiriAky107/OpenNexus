@@ -375,3 +375,41 @@ ol {
   --color-border-focus: #8a5b32;
   --color-border-disabled: #eadfc4;
 }
+
+/* Function plot tokens inherit all installed themes, including custom packages. */
+:root {
+  --color-plot-background: var(--color-surface-primary);
+  --color-plot-text: var(--color-text-primary);
+  --color-plot-axis: var(--color-text-secondary);
+  --color-plot-grid: var(--color-border-default);
+  --color-plot-curve-0: #0969da;
+  --color-plot-curve-1: #d1242f;
+  --color-plot-curve-2: #1a7f37;
+  --color-plot-curve-3: #8250df;
+  --color-plot-curve-4: #9a6700;
+  --color-plot-curve-5: #bc4c00;
+}
+[data-theme='dark'], [data-theme='midnight-purple'] {
+  --color-plot-curve-0: #79c0ff;
+  --color-plot-curve-1: #ff9b9b;
+  --color-plot-curve-2: #7ee787;
+  --color-plot-curve-3: #d2a8ff;
+  --color-plot-curve-4: #f2cc60;
+  --color-plot-curve-5: #ffa657;
+}
+.function-plot-svg > rect:first-child { fill: var(--color-plot-background); }
+.function-plot-svg .plot-grid { stroke: var(--color-plot-grid); }
+.function-plot-svg .plot-axis { stroke: var(--color-plot-axis); }
+.function-plot-svg text { fill: var(--color-plot-text); }
+.function-plot-svg .plot-curve-0 { stroke: var(--color-plot-curve-0); }
+.function-plot-svg .plot-legend-0 { fill: var(--color-plot-curve-0); }
+.function-plot-svg .plot-curve-1 { stroke: var(--color-plot-curve-1); }
+.function-plot-svg .plot-legend-1 { fill: var(--color-plot-curve-1); }
+.function-plot-svg .plot-curve-2 { stroke: var(--color-plot-curve-2); }
+.function-plot-svg .plot-legend-2 { fill: var(--color-plot-curve-2); }
+.function-plot-svg .plot-curve-3 { stroke: var(--color-plot-curve-3); }
+.function-plot-svg .plot-legend-3 { fill: var(--color-plot-curve-3); }
+.function-plot-svg .plot-curve-4 { stroke: var(--color-plot-curve-4); }
+.function-plot-svg .plot-legend-4 { fill: var(--color-plot-curve-4); }
+.function-plot-svg .plot-curve-5 { stroke: var(--color-plot-curve-5); }
+.function-plot-svg .plot-legend-5 { fill: var(--color-plot-curve-5); }

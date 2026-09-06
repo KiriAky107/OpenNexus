@@ -20,6 +20,7 @@ const navItems = computed(() => [
   { name: 'plugins', icon: Connection, label: 'Plugin' },
   { name: 'mcp-servers', icon: Monitor, label: 'MCP' },
   { name: 'themes', icon: Brush, label: t('主题', 'Themes') },
+  { name: 'benchmarks', icon: Monitor, label: 'Benchmark' },
   { name: 'logs', icon: Document, label: t('日志', 'Logs') },
   { name: 'settings', icon: Setting, label: t('设置', 'Settings') },
 ])

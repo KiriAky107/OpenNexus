@@ -1,3 +1,4 @@
+import { renderFunctionPlot } from '@/services/functionPlotService'
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
 import { defaultMarkdownPreferences, type MarkdownPreferences } from '@/stores/markdownPreferences'
@@ -125,7 +126,7 @@ export async function getCodeTokenizer(theme: 'github-light' | 'github-dark', re
   }
 }
 
-export async function renderMarkdown(source: string, options?: { theme?: 'light' | 'dark'; preferences?: MarkdownPreferences; citationNumbers?: number[]; citationAliases?: Record<string, number> }): Promise<string> {
+export async function renderMarkdown(source: string, options?: { themeId?: string; theme?: 'light' | 'dark'; preferences?: MarkdownPreferences; citationNumbers?: number[]; citationAliases?: Record<string, number> }): Promise<string> {
   const preferences = options?.preferences ?? defaultMarkdownPreferences
   const marked = createMarkdownParser(preferences)
   const citations = new Set(options?.citationNumbers ?? [])
@@ -141,12 +142,12 @@ export async function renderMarkdown(source: string, options?: { theme?: 'light'
   const html = marked.parse(source, { async: false }) as string
   const documentNode = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html')
 
-  const mermaidBlocks: { pre: Element; source: string }[] = []
+  const mermaidBlocks: { pre: Element; source: string; kind: string }[] = []
 
   for (const code of documentNode.querySelectorAll('pre > code')) {
     const requestedLanguage = [...code.classList].find((name) => name.startsWith('language-'))?.slice(9) || 'text'
-    if (requestedLanguage === 'mermaid' && preferences.diagrams) {
-      mermaidBlocks.push({ pre: code.parentElement!, source: code.textContent ?? '' })
+    if (['mermaid', 'function-plot'].includes(requestedLanguage) && preferences.diagrams) {
+      mermaidBlocks.push({ pre: code.parentElement!, source: code.textContent ?? '', kind: requestedLanguage })
       continue
     }
     if (requestedLanguage.toLowerCase() === 'latex' && preferences.math) {
@@ -168,19 +169,23 @@ export async function renderMarkdown(source: string, options?: { theme?: 'light'
     code.parentElement?.replaceWith(wrapper)
   }
 
-  for (const { pre, source } of mermaidBlocks) {
+  let plotCount = 0, plotNodes = 0
+  for (const { pre, source, kind } of mermaidBlocks) {
     try {
-      const result = await renderMermaid(source, { theme: options?.theme, mode: 'static' })
+      if (kind === 'function-plot' && ++plotCount > 16) throw new Error('函数图像数量超过 16')
+      const result = kind === 'function-plot' ? await renderFunctionPlot(source, options?.themeId) : await renderMermaid(source, { theme: options?.theme, mode: 'static' })
+      if ('nodeCount' in result && (plotNodes += result.nodeCount) > 8000) throw new Error('函数图像累计复杂度超过 8000')
       const container = document.createElement('div')
-      container.className = 'markdown-mermaid'
+      container.className = 'markdown-mermaid' + (kind === 'function-plot' ? ' markdown-function-plot' : '')
       container.innerHTML = result.svg
-      appendCodeToolbar(container, 'mermaid', source, true)
-      if (!result.warnings.length) appendDiagramControls(container)
+      appendCodeToolbar(container, kind, source, true)
+      if (result.warnings.length) { const message = document.createElement('p'); message.textContent = result.warnings.join('\n'); message.setAttribute('role', 'status'); container.append(message) }
+      if (!result.warnings.length || (kind === 'function-plot' && result.svg)) appendDiagramControls(container)
       pre.replaceWith(container)
-    } catch {
+    } catch (error) {
       const fallback = document.createElement('pre')
       fallback.className = 'mermaid-error'
-      fallback.textContent = source
+      fallback.textContent = `${error instanceof Error ? error.message : '图表渲染失败'}\n${source}`
       pre.replaceWith(fallback)
     }
   }

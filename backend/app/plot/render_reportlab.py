@@ -17,9 +17,7 @@ from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from app.plot.model import FunctionPlot
 from app.plot.render import PlotGeometry, _fmt_num, _sx, _sy, compute_geometry
 
-_FONT = "STSong-Light"
-if _FONT not in pdfmetrics.getRegisteredFontNames():
-    pdfmetrics.registerFont(UnicodeCIDFont(_FONT))
+from app.export.fonts import FONT as _FONT
 
 _GRID_COLOR = HexColor("#eaeef2")
 _AXIS_COLOR = HexColor("#57606a")
@@ -115,6 +113,11 @@ def render_drawing(plot: FunctionPlot, width: float | None = None) -> Drawing:
     """
     geo = compute_geometry(plot)
     drawing = _build_drawing(geo)
+    legend_height = ((len(plot.expressions)+1)//2)*24
+    drawing.height += legend_height
+    for index, expression in enumerate(plot.expressions):
+        drawing.add(String(24+(index%2)*310,geo.height+legend_height-18-(index//2)*24,
+            expression.label or 'y = '+expression.expression,fontName=_FONT,fontSize=12,fillColor=HexColor(geo.colors[index])))
     if width is not None and width > 0:
         drawing.renderScale = min(1.0, width / geo.width)
     return drawing

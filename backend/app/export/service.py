@@ -182,12 +182,15 @@ async def _resolve_source(source: ExportSource) -> tuple[str, str, dict | None]:
             f"markdown source exceeds {MAX_MARKDOWN_CHARS} characters",
             {"size": len(markdown), "limit": MAX_MARKDOWN_CHARS},
         )
-    return markdown, "", None
+    return markdown, "", {"file_path": source.file_path} if source.file_path else None
 
 
 async def create_export(request: ExportRequest) -> ExportJob:
     """创建导出任务，立即返回 queued 的 ExportJob，由后台 Task 渲染。"""
     markdown, title, metadata = await _resolve_source(request.source)
+    title = request.title or title
+    from app.export.assets import validate_assets
+    assets = await asyncio.to_thread(validate_assets, request.assets)
 
     if not _evict_terminal():
         raise ApiError(
@@ -207,7 +210,7 @@ async def create_export(request: ExportRequest) -> ExportJob:
     _jobs[job_id] = job
     _cancel_flags[job_id] = asyncio.Event()
     _tasks[job_id] = asyncio.create_task(
-        _execute(job_id, request.format, markdown, title, metadata, request.options)
+        _execute(job_id, request.format, markdown, title, metadata, request.options, assets)
     )
     return job
 
@@ -245,6 +248,7 @@ async def _execute(
     title: str,
     metadata: dict | None,
     options: ExportOptions,
+    assets: dict | None = None,
 ) -> None:
     """后台渲染：排队 → 解析 → 导出 → 写文件 → 挂载产物元信息。"""
     cancel_event = _cancel_flags[job_id]
@@ -273,10 +277,15 @@ async def _execute(
         # 使运行中的取消能在渲染边界生效；写文件前再次检查取消。
         document = await asyncio.to_thread(parse_document, markdown)
         document.attributes["title"] = title
+        from app.export.assets import attach_assets
+        attach_assets(document, assets or {})
         if metadata:
             document.attributes["metadata"] = metadata
 
+        from app.export.assets import enrich_document
+        resource_warnings = await asyncio.to_thread(enrich_document, document, (metadata or {}).get('file_path'))
         result = await asyncio.to_thread(_render_document, document, options, format)
+        result.warnings[:0] = resource_warnings
         if cancel_event.is_set():
             raise ExportCancelled()
         if len(result.content) > MAX_EXPORT_BYTES:

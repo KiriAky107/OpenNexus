@@ -15,6 +15,19 @@ const fixtures = {
 };
 const allThemes = [{theme_id:'light',is_dark:false},{theme_id:'dark',is_dark:true},{theme_id:'sepia',is_dark:false},...mockCommunityThemes];
 const requested = new URLSearchParams(location.search).get('theme');
+if (!requested) {
+  const results=[];
+  for (const theme of allThemes) {
+    const frame=document.createElement('iframe');
+    frame.title=theme.theme_id; frame.style.cssText='width:100%;height:900px;border:0';
+    frame.src='?theme='+encodeURIComponent(theme.theme_id); document.querySelector('#results').append(frame);
+    await new Promise(resolve=>frame.onload=resolve);
+    while(frame.contentDocument.documentElement.dataset.complete!=='true') await new Promise(resolve=>setTimeout(resolve,100));
+    results.push(...JSON.parse(frame.contentDocument.querySelector('#status').textContent).results);
+  }
+  document.querySelector('#status').textContent=JSON.stringify({passed:results.filter(r=>r.passed).length,total:results.length,results});
+  document.documentElement.dataset.complete='true';
+} else {
 const themes = requested ? allThemes.filter(t=>t.theme_id===requested) : allThemes;
 const style = document.createElement('style'); document.head.append(style);
 const results = [];
@@ -35,4 +48,5 @@ for (const theme of themes) {
 }
 document.querySelector('#status').textContent=JSON.stringify({passed:results.filter(r=>r.passed).length,total:results.length,results});
 document.documentElement.dataset.complete='true';
+}
 </script></body></html>

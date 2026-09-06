@@ -8,8 +8,8 @@ function loadMermaid() {
 import { computed } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 
-export function mermaidThemeVariables(dark: boolean) {
-  const style = typeof document === 'undefined' ? null : getComputedStyle(document.documentElement)
+export function mermaidThemeVariables(dark: boolean, useDocument = true) {
+  const style = !useDocument || typeof document === 'undefined' ? null : getComputedStyle(document.documentElement)
   const color = (name: string, fallback: string) => style?.getPropertyValue(`--color-${name}`).trim() || fallback
   const text = color('text-primary', dark ? '#e6edf3' : '#1f2328')
   const border = color('border-default', dark ? '#484f58' : '#d0d7de')
@@ -29,15 +29,15 @@ export function mermaidThemeVariables(dark: boolean) {
   }
 }
 
-async function ensureInitialized(theme: 'light' | 'dark') {
+async function ensureInitialized(theme: 'light' | 'dark', raster = false) {
     const mermaid = await loadMermaid()
     mermaid.initialize({
       startOnLoad: false,
       theme: 'base',
-      themeVariables: mermaidThemeVariables(theme === 'dark'),
+      themeVariables: mermaidThemeVariables(theme === 'dark', !raster),
       securityLevel: 'strict',
-      fontFamily: 'var(--font-ui-sans)',
-      flowchart: { useMaxWidth: true, htmlLabels: true },
+      fontFamily: raster ? 'Arial, Microsoft YaHei, sans-serif' : 'var(--font-ui-sans)',
+      flowchart: { useMaxWidth: true, htmlLabels: !raster },
       sequence: { useMaxWidth: true },
       gantt: { useMaxWidth: true },
     })
@@ -65,18 +65,18 @@ export interface MermaidParseError {
 
 let renderCounter = 0
 
-export function renderMermaid(source: string, options: { theme?: 'light' | 'dark'; mode?: 'interactive' | 'static' } = {}): Promise<MermaidRenderResult> {
+export function renderMermaid(source: string, options: { theme?: 'light' | 'dark'; mode?: 'interactive' | 'static' | 'raster' } = {}): Promise<MermaidRenderResult> {
   return serialized(() => renderMermaidNow(source, options))
 }
 
 async function renderMermaidNow(
   source: string,
-  options: { theme?: 'light' | 'dark'; mode?: 'interactive' | 'static' } = {}
+  options: { theme?: 'light' | 'dark'; mode?: 'interactive' | 'static' | 'raster' } = {}
 ): Promise<MermaidRenderResult> {
   const theme = options.theme ?? 'light'
   const id = `mermaid-${Date.now()}-${++renderCounter}`
   try {
-    const mermaid = await ensureInitialized(theme)
+    const mermaid = await ensureInitialized(theme, options.mode === 'raster')
     const result = await mermaid.render(id, source)
     const parser = new DOMParser()
     const doc = parser.parseFromString(result.svg, 'image/svg+xml')

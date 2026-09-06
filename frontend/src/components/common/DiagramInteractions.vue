@@ -220,3 +220,8 @@ function close() { disarm(); viewer.value?.close(); svgHtml.value = ''; opener?.
 :is(.editor-mermaid-preview, .markdown-mermaid):is(:hover, :focus-within) > .diagram-controls { opacity: 1; pointer-events: auto; }
 @media (hover: none) { :is(.editor-mermaid-preview, .markdown-mermaid) > .diagram-controls { opacity: 1; pointer-events: auto; } }
 </style>
+
+<style>
+/* Keep 10px axis labels readable on narrow screens; the existing container scrolls. */
+.function-plot-preview > svg, .markdown-function-plot > svg { min-width: 640px; }
+</style>

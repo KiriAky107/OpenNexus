@@ -114,7 +114,13 @@ class RetrievalEngine:
         elif request.mode == SearchMode.vector:
             candidate_scores = vec_scores
         else:  # hybrid：RRF 融合
-            candidate_scores = rrf_fuse([fts_ranked, vec_ranked], k=request.rrf_k)
+            if request.fusion == 'weighted':
+                fts_normal = dict(normalize_scores(list(fts_scores.items())))
+                vec_normal = dict(normalize_scores(list(vec_scores.items())))
+                candidate_scores = {bid: .5 * fts_normal.get(bid, 0) + .5 * vec_normal.get(bid, 0)
+                    for bid in dict.fromkeys(fts_ranked + vec_ranked)}
+            else:
+                candidate_scores = rrf_fuse([fts_ranked, vec_ranked], k=request.rrf_k)
 
         if not candidate_scores:
             return self._empty(request)

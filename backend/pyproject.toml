@@ -17,6 +17,7 @@ dependencies = [
     "referencing>=0.36,<1.0",
     "sqlite-vec>=0.1.9",
     "uvicorn[standard]>=0.35,<1.0",
+    "matplotlib>=3.9,<4",
 ]
 
 [dependency-groups]

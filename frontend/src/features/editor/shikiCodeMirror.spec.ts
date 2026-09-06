@@ -69,7 +69,7 @@ it('offers fenced-code aliases and retains the LaTeX selector', () => {
 
 it('offers every bundled Shiki language and alias', () => {
   const languages = shikiLanguages('github-light')
-  expect(languages).toHaveLength(bundledLanguagesInfo.length + 1)
+  expect(languages).toHaveLength(bundledLanguagesInfo.length + 2)
   for (const info of bundledLanguagesInfo) {
     const language = languages.find(item => item.alias.includes(info.id))!
     expect(language, info.id).toBeDefined()

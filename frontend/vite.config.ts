@@ -17,6 +17,7 @@ function mathChunk(module: string) {
 export default defineConfig({
   plugins: [vue()],
   resolve: {
+    dedupe: ['katex'],
     alias: {
       '@': path.resolve(__dirname, 'src'),
     },
@@ -42,8 +43,8 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     proxy: {
-      '/api': 'http://127.0.0.1:8000',
-      '/health': 'http://127.0.0.1:8000',
+      '/api': process.env.NOTES_API_TARGET ?? 'http://127.0.0.1:8000',
+      '/health': process.env.NOTES_API_TARGET ?? 'http://127.0.0.1:8000',
     },
   },
 })
