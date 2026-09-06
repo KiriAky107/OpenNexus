@@ -24,7 +24,7 @@ watch([() => props.source, diagramTheme, () => themeStore.currentThemeId, () => 
 </script>
 
 <template>
-  <DiagramInteractions :data-heading-style="headingAppearance.preferences.custom ? 'custom' : undefined" :style="headingAppearance.cssVariables"><div class="markdown-content" v-html="html" /></DiagramInteractions>
+  <DiagramInteractions :data-heading-style="headingAppearance.preferences.custom ? 'custom' : undefined" :style="headingAppearance.cssVariables"><div class="markdown-content" :data-code-wrap="markdownPreferences.normalized.wrapCode" :data-line-numbers="markdownPreferences.normalized.lineNumbers" :style="{ '--markdown-code-indent': markdownPreferences.normalized.indent }" v-html="html" /></DiagramInteractions>
 </template>
 
 <style>

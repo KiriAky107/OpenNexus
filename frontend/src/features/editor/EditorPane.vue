@@ -3,12 +3,14 @@ import { defineAsyncComponent, ref, watch } from 'vue'
 import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore } from '@/stores/theme'
+import EditorScrollButtons from './EditorScrollButtons.vue'
 const VisualMarkdownEditor = defineAsyncComponent(() => import('./VisualMarkdownEditor.vue'))
 
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
 const themeStore = useThemeStore()
 const sourceEditor = ref<HTMLTextAreaElement | null>(null)
+const container = ref<HTMLElement | null>(null)
 watch(() => editorStore.headingRequest, request => {
   const input = sourceEditor.value
   if (!request || !input || request.path !== editorStore.currentFilePath) return
@@ -24,13 +26,17 @@ function updateContent(event: Event) {
 </script>
 
 <template>
+  <div ref="container" class="editor-scroll-pane">
   <VisualMarkdownEditor v-if="editorStore.mode === 'wysiwyg'" :key="`${editorStore.currentFilePath ?? 'empty'}:${editorStore.contentRevision}:${themeStore.resolvedCodeBlockTheme}:${settingsStore.language}`"
     :initial-content="editorStore.content" />
   <textarea v-else ref="sourceEditor" class="editor-pane source" :value="editorStore.content" :spellcheck="settingsStore.spellCheck"
     :lang="settingsStore.language" :aria-label="settingsStore.language === 'en' ? 'Markdown source editor' : 'Markdown 源码编辑器'" @input="updateContent" />
+  <EditorScrollButtons :container="container" :content="editorStore.content" />
+  </div>
 </template>
 
 <style scoped>
+.editor-scroll-pane { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .editor-pane {
   box-sizing: border-box;
   flex: 1;
