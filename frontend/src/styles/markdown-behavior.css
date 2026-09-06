@@ -20,7 +20,7 @@
 .markdown-content details.markdown-callout:not([open]) { border-style: dashed; border-inline-start-style: solid; }
 .editor-pane.source { caret-color: var(--color-accent-primary); }
 .markdown-content .shiki code { display: block; min-width: max-content; padding: 0; background: transparent; font: inherit; }
-.markdown-content .shiki .line { display: block; min-height: 1.45em; }
+.markdown-content .shiki .line { display: block; min-height: 1lh; }
 .markdown-content[data-code-wrap] .shiki { tab-size: var(--markdown-code-indent, 4); }
 .markdown-content[data-code-wrap='true'] .shiki code { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .markdown-content[data-line-numbers='true'] .shiki code { counter-reset: code-line; }
@@ -32,3 +32,11 @@
 .editor-scroll-buttons button:hover { background: var(--color-background-hover); border-color: var(--color-accent-primary); }
 .editor-scroll-buttons button:active { background: var(--color-accent-soft); }
 .editor-scroll-buttons button:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 2px; }
+
+/* The read-only renderer uses the same framed code surface as the workspace. */
+.markdown-content .markdown-code-block { position: relative; margin: .85em 0; padding: 8px 20px 16px; border: 1px solid var(--color-code-border); border-radius: 6px; background: var(--color-code-background); color: var(--color-code-text); }
+.markdown-content .markdown-code-block > .markdown-code-toolbar { display: flex; align-items: center; gap: 8px; padding: 0 0 8px; min-height: 28px; font: 12px/1.4 var(--font-ui-mono); color: var(--color-code-muted); }
+.markdown-content .markdown-code-block > .markdown-code-toolbar button { min-height: 24px; padding: 3px 10px; border: 0; border-radius: var(--radius-sm); box-shadow: none; background: var(--color-accent-soft); color: var(--color-code-muted); font: inherit; }
+.markdown-content .markdown-code-block > .shiki { margin: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none; font-family: var(--font-editor-mono); font-size: var(--font-editor-size); line-height: 1.4; }
+.markdown-content .markdown-code-block > .shiki::before,
+.markdown-content .markdown-code-block > .shiki::after { content: none; }

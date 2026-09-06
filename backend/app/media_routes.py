@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/media", tags=["Media"])
 from app.providers.routing import MAX_LOCAL_MEDIA_BYTES
 
 MAX_UPLOAD_BYTES = MAX_LOCAL_MEDIA_BYTES
-MEDIA_SUFFIXES = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".mp4", ".webm", ".txt", ".md"}
+MEDIA_SUFFIXES = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".mp4", ".webm", ".txt", ".md", ".docx", ".pptx", ".ppt", ".png", ".jpg", ".jpeg", ".webp"}
 
 
 @router.post("/attachments", status_code=201)

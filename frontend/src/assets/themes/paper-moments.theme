@@ -1,6 +1,6 @@
 theme_id: paper-moments
 name: 纸间时光 · Paper Moments
-version: 1.9.0
+version: 1.9.2
 author: NotesAgent
 description: 奶油纸张、手帐虚线与粉蓝胶带，把每天的灵感好好收藏。
 min_app_version: 0.2.0
@@ -201,14 +201,16 @@ license: MIT
   --color-code-muted: #bdb19f;
   --color-code-border: #786b59;
 }
-[data-theme="paper-moments"] .milkdown-host .milkdown-code-block {
+[data-theme="paper-moments"] .milkdown-host .milkdown-code-block,
+[data-theme="paper-moments"] .markdown-content .markdown-code-block {
   position: relative;
   padding-top: 34px;
   padding-bottom: 30px;
   border-color: var(--color-code-border);
   box-shadow: 3px 4px 0 #d8cebd;
 }
-[data-theme="paper-moments"] .milkdown-code-block::before {
+[data-theme="paper-moments"] .milkdown-code-block::before,
+[data-theme="paper-moments"] .markdown-content .markdown-code-block::before {
   content: '';
   position: absolute;
   top: 15px;
@@ -220,7 +222,8 @@ license: MIT
   box-shadow: 18px 0 0 #c9a65d, 36px 0 0 #819b75;
   pointer-events: none;
 }
-[data-theme="paper-moments"] .milkdown-code-block::after {
+[data-theme="paper-moments"] .milkdown-code-block::after,
+[data-theme="paper-moments"] .markdown-content .markdown-code-block::after {
   content: attr(data-language-label);
   position: absolute;
   right: 18px;
@@ -233,6 +236,7 @@ license: MIT
   font: 600 12px/1.4 var(--font-ui-mono);
   pointer-events: none;
 }
+[data-theme="paper-moments"] .markdown-code-block .tools,
 [data-theme="paper-moments"] .milkdown-code-block .tools { margin-left: 72px; }
 [data-theme="paper-moments"] .milkdown-code-block .cm-activeLine,
 [data-theme="paper-moments"] .milkdown-code-block .cm-activeLineGutter { background: color-mix(in srgb, var(--color-code-text) 7%, transparent); }

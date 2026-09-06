@@ -39,6 +39,9 @@ class AnthropicMessagesProvider(OpenAICompatibleProvider):
             else:
                 role = message.role.value
                 content = [{"type": "text", "text": message.content}] if message.content else []
+                for uri in message.images:
+                    header, data = uri.split(",", 1)
+                    content.append({"type":"image", "source":{"type":"base64", "media_type":header[5:].split(";")[0], "data":data}})
                 content += [{"type": "tool_use", "id": call.tool_call_id, "name": call.name,
                              "input": call.arguments} for call in message.tool_calls]
             if not content:

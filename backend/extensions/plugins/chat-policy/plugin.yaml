@@ -1,0 +1,10 @@
+id: chat-policy
+name: 聊天执行规范
+version: 1.0.0
+description: 检查智能体执行计划，返回预算与权限约束；无网络和文件副作用。
+permissions: []
+contributes:
+  tools: [chat-policy.plan]
+backend:
+  type: internal_rpc
+  transport: none
