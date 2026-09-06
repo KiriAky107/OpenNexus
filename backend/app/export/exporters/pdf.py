@@ -46,6 +46,8 @@ _PAGE_SIZES = {"a4": A4, "letter": letter}
 
 # 标题字号随层级递减；标题不依赖粗体（CID 无粗体字重），靠字号拉开层级
 _HEADING_SIZES = {1: 20, 2: 16, 3: 14, 4: 12, 5: 11, 6: 10.5}
+# 引用块文字颜色，与 HtmlExporter 的引用灰一致
+_QUOTE_COLOR = "#57606a"
 
 
 def _make_styles() -> dict[str, ParagraphStyle]:
@@ -171,12 +173,29 @@ class PdfExporter:
         story.append(Paragraph(self._render_inline(node.children, warnings), self._styles["body"]))
 
     def _block_blockquote(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
-        story.append(Paragraph(self._render_inline(node.children, warnings), self._styles["quote"]))
+        # 引用块的直接子节点是块级节点（paragraph/list 等），不能交给行内渲染器，
+        # 否则正文会被当作「无法表示的行内节点」丢弃；逐个渲染并继承引用缩进/颜色。
+        for child in node.children:
+            if child.type == "paragraph":
+                story.append(
+                    Paragraph(self._render_inline(child.children, warnings), self._styles["quote"])
+                )
+            elif child.type == "list":
+                self._block_list(child, story, warnings, indent=14, color=_QUOTE_COLOR)
+            else:
+                self._render_block(child, story, warnings)
 
-    def _block_list(self, node: DocumentNode, story: list, warnings: list[str], indent: int = 14) -> None:
+    def _block_list(
+        self,
+        node: DocumentNode,
+        story: list,
+        warnings: list[str],
+        indent: int = 14,
+        color: str | None = None,
+    ) -> None:
         ordered = bool(node.attributes.get("ordered"))
         for index, item in enumerate(node.children, start=1):
-            self._block_list_item(item, story, warnings, ordered, index, indent)
+            self._block_list_item(item, story, warnings, ordered, index, indent, color)
 
     def _block_list_item(
         self,
@@ -186,23 +205,28 @@ class PdfExporter:
         ordered: bool,
         index: int,
         indent: int,
+        color: str | None = None,
     ) -> None:
         if item.attributes.get("task"):
             marker = "☑ " if item.attributes.get("checked") else "☐ "
         else:
             marker = f"{index}. " if ordered else "• "
-        style = ParagraphStyle(
-            f"pdf-li-{indent}",
+        style_kwargs: dict = dict(
             parent=self._styles["body"],
             leftIndent=indent,
             firstLineIndent=-7,
             spaceAfter=2,
         )
-        # 列表项内容通常是单个段落或直接行内节点，嵌套列表单独递归加深缩进
+        if color:
+            style_kwargs["textColor"] = color
+        style = ParagraphStyle(f"pdf-li-{indent}-{color or 'normal'}", **style_kwargs)
+        # 先收集父级正文、后处理嵌套列表：保证「父级文字在前、子列表在后」的阅读顺序，
+        # 而不是在循环里遇到嵌套列表就立刻递归输出（那会把子列表排到父级前面）。
         parts: list[str] = []
+        nested: list[DocumentNode] = []
         for child in item.children:
             if child.type == "list":
-                self._block_list(child, story, warnings, indent + 14)
+                nested.append(child)
             elif child.type == "paragraph":
                 parts.append(self._render_inline(child.children, warnings))
             elif child.children:
@@ -210,6 +234,8 @@ class PdfExporter:
             else:
                 parts.append(_html.escape(child.text))
         story.append(Paragraph(marker + "<br/>".join(parts), style))
+        for child_list in nested:
+            self._block_list(child_list, story, warnings, indent + 14, color)
 
     def _block_table(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
         rows = node.children
