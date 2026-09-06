@@ -86,3 +86,7 @@ pnpm build
 Mermaid 大图打开时适配窗口，支持平滑滚轮缩放和鼠标位置补偿；行内中键启用滚轮控制，移动鼠标退出。标签段落样式与正文隔离，避免 foreignObject 内文字裁切。
 
 开发和验证方法见 [后台索引与保存](../docs/development/工作区后台索引与保存开发说明.md)、[Mermaid 预览与缩放](../docs/development/Mermaid预览与缩放开发说明.md)。
+
+## 构建体积检查
+
+执行 `pnpm build` 后运行 `pnpm build:report`，查看入口静态 JS 依赖与大块清单。分组策略、统计口径及保留的大资源见 [前端构建分块优化开发说明](../docs/development/前端构建分块优化开发说明.md)。
