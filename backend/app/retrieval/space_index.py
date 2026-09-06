@@ -1,10 +1,40 @@
 """Persistent vec0 indexes derived from durable routed vectors, one per space/dimension."""
 import hashlib
 import json
+import threading
 
 import sqlite_vec
 
 from app.retrieval.vectorstore import VectorHit
+
+
+_migration_lock = threading.Lock()
+
+
+def is_ready(conn, batches):
+    return all(conn.execute('SELECT 1 FROM sqlite_master WHERE name=?',
+               (table_name(batch.space_id, batch.dimensions),)).fetchone() for batch in batches)
+
+
+def prepare(conn, batches):
+    """Finish lazy writes before opening a search snapshot. Warm searches do not write."""
+    from app.retrieval.routed_vectors import _ensure_table
+    batches = list(batches)
+    if is_ready(conn, batches):
+        return
+    # Waiting holds no read transaction, so a concurrent migration can commit.
+    with _migration_lock:
+        if is_ready(conn, batches):
+            return
+        conn.execute('BEGIN IMMEDIATE')
+        try:
+            _ensure_table(conn)
+            for batch in batches:
+                ensure(conn, batch.space_id, batch.dimensions)
+            conn.execute('COMMIT')
+        except BaseException:
+            conn.execute('ROLLBACK')
+            raise
 
 
 def table_name(space, dimensions):
@@ -40,7 +70,7 @@ def upsert(conn, block_ids, batch):
 
 
 def search(conn, batch, top_k, policy=None):
-    table = ensure(conn, batch.space_id, batch.dimensions)
+    table = table_name(batch.space_id, batch.dimensions)
     # Coverage checks stay relational; no JSON decoding or Python dot products on the hot path.
     where = '' if policy is None else ' AND b.embedding_local_only=?'
     params = () if policy is None else (int(policy),)

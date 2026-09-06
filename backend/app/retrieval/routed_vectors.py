@@ -190,7 +190,47 @@ async def search_remote(query: str, *, top_k: int, accept_local=False, strict=Fa
     if batch is None:
         return None
 
+    if not await _prepare_for_search([batch], strict):
+        return None
     return await asyncio.to_thread(_search_space, batch, top_k, strict)
+
+
+async def _prepare_indexes(batches):
+    from app.services.coordination import vault_mutation_lock
+    def prepare(check_only=False):
+        conn = connect()
+        try:
+            if check_only:
+                return space_index.is_ready(conn, batches)
+            space_index.prepare(conn, batches)
+        finally:
+            conn.close()
+    if await asyncio.to_thread(prepare, True):
+        return
+    # Share the cooperative gate with saves: never block the event loop on a
+    # SQLite write lock while a migration owns it in another thread.
+    async with vault_mutation_lock():
+        work = asyncio.create_task(asyncio.to_thread(prepare))
+        cancelled = False
+        while not work.done():
+            try:
+                await asyncio.shield(work)
+            except asyncio.CancelledError:
+                cancelled = True
+        work.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
+
+async def _prepare_for_search(batches, strict):
+    try:
+        await _prepare_indexes(batches)
+        return True
+    except Exception as exc:
+        record_embedding(fallback_reason='REMOTE_INDEX_UNAVAILABLE')
+        if strict:
+            raise ApiError(409, 'SEMANTIC_INDEX_UNAVAILABLE', '向量索引准备失败，请检查索引状态。') from exc
+        return False
 
 
 def _search_space(batch, top_k, strict):
@@ -209,7 +249,6 @@ def _search_space(batch, top_k, strict):
                     if strict:
                         raise ValueError("semantic index missing")
                     return None
-                _ensure_table(conn)
                 result = space_index.search(conn, batch, top_k)
                 record_embedding(source=batch.source, model_id=batch.space_id,
                                  dimensions=batch.dimensions, fallback_reason=None)
@@ -234,6 +273,8 @@ async def _search_partitioned(query: str, policies: set[bool], *, top_k: int, st
         if batch is None:
             return None
         batches[policy] = batch
+    if not await _prepare_for_search(list(batches.values()), strict):
+        return None
     return await asyncio.to_thread(_search_partitions, batches, policies, top_k, strict)
 
 
@@ -247,7 +288,6 @@ def _search_partitions(batches, policies, top_k, strict):
                 raise ValueError("embedding policies changed while querying")
             ranked = []
             for policy, batch in batches.items():
-                _ensure_table(conn)
                 ranked.append(space_index.search(conn, batch, top_k, policy))
             spaces = [{"source": b.source, "model_id": b.space_id, "dimensions": b.dimensions,
                        "local_only": policy} for policy, b in batches.items()]
