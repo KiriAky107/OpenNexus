@@ -46,11 +46,15 @@ async def main(args):
                     timings[kind].append((perf_counter()-start)*1000)
                     response.raise_for_status()
                     return response.json()
+                health_stop = asyncio.Event()
                 async def health():
-                    while True:
+                    while not health_stop.is_set():
                         try: await request('GET', '/health', 'health')
                         except httpx.HTTPError as error: errors.append(type(error).__name__)
-                        await asyncio.sleep(.05)
+                        try:
+                            await asyncio.wait_for(health_stop.wait(), timeout=.05)
+                        except TimeoutError:
+                            pass
                 heartbeat = asyncio.create_task(health())
                 start = perf_counter()
                 try:
@@ -72,7 +76,8 @@ async def main(args):
                     remaining = await request('GET', '/api/tasks', 'list')
                     assert remaining['page']['total'] == 0
                 finally:
-                    heartbeat.cancel(); await asyncio.gather(heartbeat, return_exceptions=True)
+                    health_stop.set()
+                    await asyncio.wait_for(heartbeat, timeout=35)
                 report = {'transport': 'real loopback HTTP, separate Uvicorn process', 'tasks': args.count,
                     'concurrency': args.concurrency, 'elapsed_ms': round((perf_counter()-start)*1000, 2),
                     'latencies': {key: stats(value) for key,value in timings.items()}, 'health_errors': errors,

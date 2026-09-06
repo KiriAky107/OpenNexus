@@ -80,6 +80,7 @@ class OllamaProvider(EventStreamingMixin, HTTPProviderMixin):
             messages.append({"role": "system", "content": request.system})
         for message in request.messages:
             item: dict[str, object] = {"role": message.role.value, "content": message.content}
+            if message.images: item["images"] = [uri.split(",",1)[1] for uri in message.images]
             if message.tool_calls:
                 item["tool_calls"] = [
                     {"function": {"name": call.name, "arguments": call.arguments}}

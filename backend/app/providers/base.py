@@ -22,6 +22,7 @@ class ProviderToolCall:
 @dataclass(slots=True)
 class ProviderTurn:
     text: str | None = None
+    reasoning_content: str | None = None
     tool_calls: list[ProviderToolCall] = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0

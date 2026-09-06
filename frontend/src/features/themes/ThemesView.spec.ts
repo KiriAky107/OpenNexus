@@ -105,6 +105,6 @@ it('offers and applies the paper theme update without discarding the active them
   const card = wrapper.findAll('article.theme-card').find(item => item.text().includes('Paper Moments'))!
   await card.findAll('button').find(button => button.text() === '更新')!.trigger('click')
   await flushPromises()
-  expect(store.allThemes.find(theme => theme.theme_id === 'paper-moments')?.version).toBe('1.9.0')
+  expect(store.allThemes.find(theme => theme.theme_id === 'paper-moments')?.version).toBe('1.9.2')
   expect(document.getElementById('theme-style-paper-moments')!.textContent).toContain('.surface-nested')
 })

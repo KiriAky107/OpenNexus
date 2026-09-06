@@ -25,3 +25,31 @@ it('renders inline, display and editor LaTeX fences while leaving code literals 
   expect(root.querySelector('code')?.textContent).toBe('$literal$')
   expect(root.querySelector('pre code')?.textContent).toContain('$literal$')
 })
+
+it('renders numeric and legacy citations as numbered buttons without altering code', async () => {
+  const root = document.createElement('div')
+  root.innerHTML = await renderMarkdown('正文 [1][2] [cit_blk_a] `[1]` [3] [1](https://example.com)', { citationNumbers: [1, 2], citationAliases: { cit_blk_a: 2 } })
+  expect([...root.querySelectorAll('.inline-citation')].map(c => c.textContent)).toEqual(['[1]', '[2]', '[2]'])
+  expect(root.querySelector('code')?.textContent).toBe('[1]')
+  expect(root.querySelector('a')?.getAttribute('href')).toBe('https://example.com')
+})
+
+it('shows code language and preserves exact source for copying', async () => {
+  const root = document.createElement('div')
+  root.innerHTML = await renderMarkdown('```python\nprint("hello")\n```')
+  expect(root.querySelector('.markdown-code-toolbar')?.textContent).toContain('python')
+  expect(root.querySelector('[data-code-action="copy"]')).not.toBeNull()
+  expect(root.querySelector('.markdown-code-source')?.textContent).toBe('print("hello")\n')
+})
+
+it('keeps code toolbar inside the themed frame and avoids extra rendered newline rows', async () => {
+  const root = document.createElement('div')
+  root.innerHTML = await renderMarkdown('```markdown\n# First\n\n## Second\n```')
+  const frame = root.querySelector('.markdown-code-block')!
+  expect(frame.getAttribute('data-language-label')).toBe('markdown')
+  expect(frame.querySelector(':scope > .markdown-code-toolbar')).not.toBeNull()
+  const code = frame.querySelector('.shiki code')!
+  expect([...code.childNodes].filter(n => n.nodeType === Node.TEXT_NODE && n.textContent?.includes('\n'))).toHaveLength(0)
+  expect(code.querySelectorAll('.line')).toHaveLength(4)
+  expect(frame.querySelector('.markdown-code-source')?.textContent).toBe('# First\n\n## Second\n')
+})

@@ -3,6 +3,10 @@ import { apiClient } from './apiClient'
 import type { ChatMessage, Conversation, ModelEvent, PageMeta } from '@/contracts'
 
 export interface ChatRequest {
+  workspace_context?: import('@/contracts').WorkspaceContext
+  allow_agent?: boolean
+  image_fallback_tools?: string[]
+  retry_message_id?: string
   provider_id: string
   model: string
   conversation_id?: string
@@ -39,6 +43,10 @@ export function listConversationMessages(conversationId: string, offset = 0, lim
 
 export function removeConversation(conversationId: string) {
   return apiClient.delete(`/api/chat/conversations/${encodeURIComponent(conversationId)}`)
+}
+
+export function selectMessageVersion(conversationId: string, messageId: string) {
+  return apiClient.post(`/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/select`, {})
 }
 
 export function streamChat(
