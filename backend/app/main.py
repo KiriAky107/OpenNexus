@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHttpException
 from app.config import get_settings
 from app.container import container
 from app.errors import ApiError, api_error_handler, http_error_handler, validation_error_handler
+from app.export import service as export_service
 from app.routes import router as api_router
 from app.media_routes import router as media_router
 from app.local_model_routes import router as local_model_router
@@ -27,6 +28,8 @@ settings = get_settings()
 async def lifespan(_: FastAPI):
     install_logging()
     log_event('system', 'service.started')
+    # 重启后内存注册表为空，清理上一次运行遗留的导出产物，避免磁盘垃圾堆积。
+    export_service.cleanup_orphan_files()
     from app.services import transcription_service
     transcription_service.recover_interrupted()
     try:
@@ -41,6 +44,7 @@ async def lifespan(_: FastAPI):
         from app.local_models import manager
         for _, key in list(manager._downloads):
             await manager.cancel_download(key)
+        # 第三方 MCP Server 必须跟随 AI Core 退出，不能遗留孤儿进程。
         container.plugins.shutdown()
         container.mcp_servers.shutdown()
         log_event('system', 'service.stopped')
