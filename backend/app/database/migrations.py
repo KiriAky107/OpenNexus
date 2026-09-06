@@ -169,6 +169,8 @@ MIGRATIONS: list[str] = [
     CREATE INDEX idx_chat_parent ON chat_messages(conversation_id,parent_message_id);
     """,
     """ALTER TABLE chat_conversations ADD COLUMN active_response_id TEXT;""",
+    """ALTER TABLE chat_messages ADD COLUMN workspace_context_json TEXT;""",
+    """ALTER TABLE chat_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]';""",
 ]
 
 

@@ -38,3 +38,15 @@ def test_late_response_does_not_replace_new_generation():
     assert history.list_messages('late', 500, 0)[0][-1].message_id == 'u'
     history.append_message('late', message_id='new', role='assistant', content='new', parent_message_id='u')
     assert history.list_messages('late', 500, 0)[0][-1].message_id == 'new'
+
+
+def test_workspace_snapshots_and_agent_links_survive_history_reload():
+    history.create('Workspace', 'workspace')
+    snapshot = {'file_path': 'demo.md', 'content': '# unsaved draft'}
+    history.append_message('workspace', message_id='wu', role='user', content='explain', workspace_context=snapshot)
+    calls = [{'tool_call_id': 'ac', 'name': 'agent.create', 'result': '{"run_id":"run_example"}'}]
+    history.append_message('workspace', message_id='wa', role='assistant', content='started', tool_calls=calls)
+    messages, total = history.list_messages('workspace', 100, 0)
+    assert total == 2
+    assert messages[0].workspace_context.model_dump() == snapshot
+    assert messages[1].tool_calls == calls

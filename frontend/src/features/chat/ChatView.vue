@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { Citation } from '@/contracts'
+import type { Citation, WorkspaceContext } from '@/contracts'
 import { useChatStore } from '@/stores/chat'
 import { useProviderStore } from '@/stores/provider'
 import { useSkillStore } from '@/stores/skill'
@@ -9,11 +9,18 @@ import { useCitationNavigation } from '@/composables/useCitationNavigation'
 import { t } from '@/i18n'
 import ChatPersonaDialog from './ChatPersonaDialog.vue'
 import { useChatPreferences } from '@/stores/chatPreferences'
+import { listTools } from '@/services/agentService'
+import type { ToolDefinition } from '@/contracts'
 import { usedCitations } from '@/utils/usedCitations'
 
+const props = defineProps<{ workspaceContext?: WorkspaceContext; embedded?: boolean }>()
 const chatStore = useChatStore()
 const preferences = useChatPreferences()
 const showPersona = ref(false)
+const settingsExpanded = ref(false)
+const imageTools = ref<ToolDefinition[]>([])
+const uploadInput = ref<HTMLInputElement | null>(null)
+async function selectFiles(e: Event) { const input=e.target as HTMLInputElement; await chatStore.uploadFiles(Array.from(input.files ?? [])); input.value='' }
 const providerStore = useProviderStore()
 const skillStore = useSkillStore()
 const { openCitation } = useCitationNavigation()
@@ -39,7 +46,7 @@ const activities = computed(() => Object.fromEntries(chatStore.messages.map(mess
 async function saveEdit() {
   const id = editingMessage.value
   if (!id || !editedText.value.trim()) return
-  await chatStore.retryMessage(id, editedText.value)
+  await chatStore.retryMessage(id, editedText.value, props.embedded ? props.workspaceContext ?? null : undefined)
   editingMessage.value = null
 }
 const visibleCitations = computed(() => Object.fromEntries(chatStore.messages.map(message => [
@@ -48,6 +55,7 @@ const visibleCitations = computed(() => Object.fromEntries(chatStore.messages.ma
 
 onMounted(async () => {
   try {
+    void listTools().then(items => { if (!disposed) imageTools.value=items.filter(t => /image|vision/i.test(t.name)) }).catch(() => {})
     await Promise.all([providerStore.loadProviders(), skillStore.loadSkills(), chatStore.loadConversations()])
     if (disposed || providerStore.error) return
     const selected = providerStore.enabledProviders.find(p => p.provider_id === chatStore.selectedProviderId)
@@ -74,11 +82,15 @@ watch(() => chatStore.selectedProviderId, async (providerId) => {
   await refreshModels(providerId)
 })
 
-function send() { void chatStore.sendMessage(chatStore.inputText) }
+function send() { void chatStore.sendMessage(chatStore.inputText, undefined, props.embedded ? props.workspaceContext ?? null : undefined) }
 function composerKeydown(event: KeyboardEvent) {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return
   event.preventDefault()
   if (!event.repeat) send()
+}
+
+function agentRunId(result?: string): string {
+  try { const id = JSON.parse(result ?? '{}').run_id; return typeof id === 'string' && /^run_[a-zA-Z0-9]+$/.test(id) ? id : '' } catch { return '' }
 }
 
 async function openCitationCard(citation: Citation) {
@@ -93,7 +105,11 @@ async function openCitationCard(citation: Citation) {
 
 <template>
   <section class="chat-page">
-    <header class="chat-toolbar">
+    <header class="chat-toolbar" :class="{ embedded }">
+      <template v-if="embedded"><select class="select" aria-label="恢复聊天记录" :value="chatStore.activeConversationId" :disabled="chatStore.isPreparing" @change="chatStore.setActiveConversation(($event.target as HTMLSelectElement).value)"><option v-for="conversation in chatStore.sortedConversations" :key="conversation.conversation_id" :value="conversation.conversation_id">{{ conversation.title }}</option></select></template>
+      <button v-if="embedded" class="button-secondary config-toggle" :aria-expanded="settingsExpanded" @click="settingsExpanded = !settingsExpanded">{{ settingsExpanded ? '收起聊天设置 ▴' : '聊天设置 ▾' }}</button>
+      <div v-show="!embedded || settingsExpanded" class="chat-settings">
+      <button v-if="embedded" class="button-secondary" @click="chatStore.createNewConversation()">新对话</button>
       <div class="field compact"><label>Provider</label><select v-model="chatStore.selectedProviderId" class="select">
         <option v-for="provider in providerStore.enabledProviders" :key="provider.provider_id" :value="provider.provider_id">{{ provider.name }}</option>
       </select></div>
@@ -105,16 +121,20 @@ async function openCitationCard(citation: Citation) {
         <input v-else id="chat-model-select" v-model="chatStore.selectedModel" class="input" data-field="manual-model" :placeholder="t('填写模型 ID', 'Enter model ID')" />
       </div>
       <button type="button" class="button-secondary" @click="showPersona = true">{{ t('人设与头像', 'Persona and avatars') }}</button>
+      <label class="rag-toggle"><input v-model="chatStore.allowAgent" type="checkbox" :disabled="chatStore.isStreaming" />允许创建智能体</label>
       <label class="rag-toggle"><input v-model="chatStore.useRag" type="checkbox" :disabled="chatStore.isStreaming" />{{ t('检索知识库', 'Search knowledge base') }}</label>
-      <span class="subtle">{{ t('模型先回复，按需调用知识库检索；需要提供商支持工具调用，仅显示正文引用的来源。笔记修改和技能调用请使用智能体。', 'The model responds first and can search the knowledge base as needed. Requires tool calling; only cited sources are shown. Use Agent for note edits and skills.') }}</span>
+      <span class="subtle">{{ t('模型先回复，按需调用知识库检索；需要提供商支持工具调用，仅显示正文引用的来源。开启智能体后可委托笔记和任务工作，写入操作仍需确认。', 'The model responds first and can search the knowledge base as needed. Requires tool calling; only cited sources are shown. Use Agent for note edits and skills.') }}</span>
+      <details class="ui-disclosure image-routing"><summary>图片降级处理</summary><p class="subtle">优先当前模型视觉；选择下列处理器后，允许本次会话将图片交给对应服务。MCP 优先于插件。</p><select v-for="(source,index) in (['mcp_server','plugin'] as const)" :key="source" class="select" :aria-label="index === 0 ? 'MCP 图片处理器' : 'Plugin 图片处理器'" v-model="chatStore.imageFallbackTools[index]"><option value="">不启用此级降级</option><option v-for="tool in imageTools.filter(item => item.source === source)" :key="tool.name" :value="tool.name">{{ tool.name }}</option></select></details>
+      </div>
     </header>
+    <div v-if="workspaceContext" class="notice-banner">每次发送附带当前文件（含未保存编辑）：{{ workspaceContext.file_path }}</div>
     <div v-if="chatStore.contextNotice" class="notice-banner" role="status">{{ chatStore.contextNotice }}</div>
     <div v-if="loadError || providerStore.error || chatStore.historyError" class="error-banner chat-error">{{ loadError || providerStore.error || chatStore.historyError }}</div>
     <main class="message-timeline">
       <div v-if="!chatStore.messages.length" class="empty-state"><div><strong>{{ t('开始一段知识对话', 'Start a knowledge conversation') }}</strong><p>{{ t('请先配置模型提供商。聊天记录保存在本地数据库中。', 'Configure a model provider first. Messages are saved in the local database.') }}</p></div></div>
       <article v-for="message in chatStore.messages" :key="message.message_id" class="message" :class="message.role">
         <div class="avatar"><img v-if="message.role === 'user' ? preferences.settings.userAvatar : preferences.settings.aiAvatar" :src="message.role === 'user' ? preferences.settings.userAvatar : preferences.settings.aiAvatar" :alt="message.role === 'user' ? t('我', 'Me') : 'AI'" /><span v-else>{{ message.role === 'user' ? t('你', 'You') : 'AI' }}</span></div>
-        <div class="message-body">
+        <div class="message-body"><small v-if="message.attachments?.length">附件：{{ message.attachments.map(id=>id.split('.').at(-1)).join('、') }}</small><details v-if="message.workspace_context" class="ui-disclosure"><summary>发送时的文件：{{ message.workspace_context.file_path }}</summary><pre class="context-snapshot">{{ message.workspace_context.content }}</pre></details>
           <details v-if="message.thinking || message.tool_calls?.length || (message.role === 'assistant' && message.message_id === streamingMessageId)" class="thinking ui-disclosure">
             <summary>
               <span v-if="message.message_id === streamingMessageId && !message.content" class="thinking-indicator" :aria-label="thinkingLabel">
@@ -124,7 +144,7 @@ async function openCitationCard(citation: Citation) {
             </summary>
             <template v-for="(entry, index) in activities[message.message_id]" :key="index">
               <p v-if="entry.text !== undefined">{{ entry.text }}</p>
-              <div v-else-if="entry.call" class="tool-calls"><div class="item-card"><span class="badge info">{{ entry.call.status }}</span><strong>{{ entry.call.name }}</strong><pre>{{ JSON.stringify(entry.call.parameters, null, 2) }}</pre></div></div>
+              <div v-else-if="entry.call" class="tool-calls"><div class="item-card"><span class="badge info">{{ entry.call.status }}</span><strong>{{ entry.call.name }}</strong><pre>{{ JSON.stringify(entry.call.parameters, null, 2) }}</pre><a v-if="agentRunId(entry.call.result)" :href="`#/agent/runs/${agentRunId(entry.call.result)}`">查看智能体运行 / 处理权限确认</a></div></div>
             </template>
           </details>
           <div v-if="editingMessage === message.message_id" class="message-edit">
@@ -139,7 +159,7 @@ async function openCitationCard(citation: Citation) {
           </div>
           <time>{{ new Date(message.created_at).toLocaleTimeString() }}</time>
           <div class="message-actions inline-actions">
-            <button v-if="message.role === 'assistant'" class="button-secondary" :disabled="!chatStore.canSend" @click="chatStore.retryMessage(message.message_id)">{{ t('重新生成', 'Regenerate') }}</button>
+            <button v-if="message.role === 'assistant'" class="button-secondary" :disabled="!chatStore.canSend" @click="chatStore.retryMessage(message.message_id, undefined, props.embedded ? props.workspaceContext ?? null : undefined)">{{ t('重新生成', 'Regenerate') }}</button>
             <button v-if="message.role === 'user' && editingMessage !== message.message_id" class="button-secondary" :disabled="!chatStore.canSend" @click="editingMessage = message.message_id; editedText = message.content">{{ t('编辑', 'Edit') }}</button>
             <template v-if="message.versions && message.versions.length > 1">
               <button class="button-secondary" :aria-label="t('上一版本', 'Previous version')" :disabled="!chatStore.canSend || message.versions.indexOf(message.message_id) <= 0" @click="chatStore.switchVersion(message.versions[message.versions.indexOf(message.message_id) - 1]!)">‹</button>
@@ -152,11 +172,13 @@ async function openCitationCard(citation: Citation) {
       </article>
     </main>
     <footer class="composer">
+      <input ref="uploadInput" type="file" multiple hidden accept=".ppt,.pptx,.docx,.md,.txt,.wav,.mp3,.flac,.ogg,.m4a,.mp4,.webm,.png,.jpg,.jpeg,.webp" @change="selectFiles" />
+      <div class="attachment-list"><button class="button-secondary" :disabled="chatStore.uploading || chatStore.isStreaming" @click="uploadInput?.click()">{{ chatStore.uploading ? '上传中…' : '上传文件' }}</button><span v-for="(file,index) in chatStore.pendingAttachments" :key="file.attachment_id" class="badge">{{ file.name }} <button aria-label="移除附件" @click="chatStore.pendingAttachments.splice(index,1)">×</button></span></div>
       <textarea v-model="chatStore.inputText" class="textarea" :placeholder="t('输入问题，Enter 发送，Shift + Enter 换行', 'Enter to send; Shift + Enter for a new line')"
         @keydown="composerKeydown" />
       <div class="composer-actions"><span class="subtle">{{ t('回答可能包含错误，请核对 Citation。', 'Answers may contain errors. Verify the citations.') }}</span>
         <button v-if="chatStore.isStreaming || chatStore.isPreparing" class="button-danger" @click="chatStore.stopGeneration">{{ t('停止', 'Stop') }}</button>
-        <button v-else class="button-primary" :disabled="!chatStore.canSend || !chatStore.inputText.trim() || !chatStore.selectedProviderId || !chatStore.selectedModel.trim()" @click="send">{{ t('发送', 'Send') }}</button>
+        <button v-else class="button-primary" :disabled="!chatStore.canSend || (!chatStore.inputText.trim() && !chatStore.pendingAttachments.length) || !chatStore.selectedProviderId || !chatStore.selectedModel.trim()" @click="send">{{ t('发送', 'Send') }}</button>
       </div>
     </footer>
     <ChatPersonaDialog v-if="showPersona" @close="showPersona = false" />
@@ -164,8 +186,16 @@ async function openCitationCard(citation: Citation) {
 </template>
 
 <style scoped>
+.context-snapshot { max-height: 180px; overflow: auto; white-space: pre-wrap; }
 .chat-page { display: flex; flex-direction: column; height: 100%; min-height: 0; background: radial-gradient(circle at 85% -10%, var(--color-accent-soft), transparent 30%), var(--color-background-primary); }
 .chat-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: var(--space-md); padding: var(--space-md) var(--space-xl); border-bottom: 1px solid var(--color-border-default); background: var(--color-surface-secondary); box-shadow: var(--shadow-sm); z-index: 1; }
+.attachment-list { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.image-routing { flex-basis: 100%; }
+.chat-settings { display: flex; align-items: end; flex-wrap: wrap; gap: var(--space-md); width: min(100%, 820px); min-width: 0; margin: 0 auto; }
+.chat-settings > .subtle { flex-basis: 100%; }
+.chat-toolbar.embedded { flex-shrink: 0; }
+.chat-toolbar.embedded .chat-settings { max-height: 210px; overflow: auto; }
+.config-toggle { margin-left: auto; }
 .compact { min-width: 160px; }
 .rag-toggle { display: flex; align-items: center; gap: var(--space-xs); min-height: 36px; color: var(--color-text-secondary); }
 .chat-error { margin: var(--space-md) var(--space-xl) 0; }

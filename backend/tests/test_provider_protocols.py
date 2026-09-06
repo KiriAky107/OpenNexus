@@ -595,12 +595,12 @@ def test_chat_route_closes_upstream_and_sanitizes_unexpected_errors(monkeypatch)
     monkeypatch.setattr(routes, "provider_or_404", lambda _: SimpleNamespace(adapter=Adapter()))
 
     async def scenario():
-        response = await routes.chat(ChatRequest(provider_id="test", model="test", messages=[]))
+        response = await routes.chat(ChatRequest(provider_id="test", model="test", messages=[], use_rag=False))
         iterator = response.body_iterator
         await anext(iterator)
         await iterator.aclose()
         assert len(closed) == 1
-        response = await routes.chat(ChatRequest(provider_id="test", model="test", messages=[]))
+        response = await routes.chat(ChatRequest(provider_id="test", model="test", messages=[], use_rag=False))
         items = [json.loads(chunk.split("data: ")[1].strip()) async for chunk in response.body_iterator]
         assert [item["sequence"] for item in items] == [0, 1, 2]
         assert items[-1]["data"]["status"] == "failed"

@@ -156,6 +156,8 @@ class OpenAICompatibleProvider(EventStreamingMixin, HTTPProviderMixin):
             result.append({"role": "system", "content": request.system})
         for message in request.messages:
             item: dict[str, object] = {"role": message.role.value, "content": message.content}
+            if message.images and message.role == MessageRole.user:
+                item['content'] = [{'type':'text','text':message.content}] + [{'type':'image_url','image_url':{'url':uri}} for uri in message.images]
             if message.role == MessageRole.assistant and message.reasoning_content is not None:
                 item['reasoning_content'] = message.reasoning_content
             if message.name:

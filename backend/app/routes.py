@@ -402,6 +402,8 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                 role="user",
                 content=user_message.content,
                 title=request.conversation_title or user_message.content[:30],
+                workspace_context=request.workspace_context.model_dump() if request.workspace_context else None,
+                attachments=request.attachments,
             )
         chat_history.reserve_response(conversation_id, assistant_message_id)
 
@@ -458,6 +460,7 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                         call = next((item for item in tool_calls if item["tool_call_id"] == call_id), None)
                         if call is not None:
                             call["status"] = "error" if event.data.get("status") == "failed" else "completed"
+                            if "result" in event.data: call["result"] = json.dumps(event.data["result"], ensure_ascii=False)
                     elif event.event == ModelEventType.usage:
                         input_tokens = int(event.data.get("input_tokens", 0))
                         output_tokens = int(event.data.get("output_tokens", 0))

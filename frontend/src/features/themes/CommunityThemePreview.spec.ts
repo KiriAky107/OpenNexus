@@ -34,7 +34,7 @@ it.each(themes)('previews shared component states safely for $theme_id', theme =
     const lineRule = rules.find(rule => rule.selectorText === '.markdown-content .shiki .line')!
     expect(codeRule.style.getPropertyValue('display')).toBe('block')
     expect(lineRule.style.getPropertyValue('display')).toBe('block')
-    expect(lineRule.style.getPropertyValue('min-height')).toBe('1.45em')
+    expect(lineRule.style.getPropertyValue('min-height')).toBe('1lh')
     const rootRule = rules.filter(rule => rule.selectorText === 'html').pop()!
     const bodyRule = rules.filter(rule => rule.selectorText === 'body').pop()!
     // The embedded document must override the app-shell overflow lock.

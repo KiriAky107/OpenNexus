@@ -1,6 +1,6 @@
 import { computed, reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
-import type { ChatMessage, Citation, Conversation } from '@/contracts'
+import type { ChatMessage, Citation, Conversation, WorkspaceContext } from '@/contracts'
 import {
   createConversation as createConversationApi,
   listConversationMessages,
@@ -11,6 +11,7 @@ import {
 } from '@/services/chatService'
 import type { SseClient } from '@/services/sseClient'
 import { t } from '@/i18n'
+import { mediaService } from '@/services/mediaService'
 
 export const useChatStore = defineStore('chat', () => {
   const conversations = ref<Conversation[]>([])
@@ -20,10 +21,28 @@ export const useChatStore = defineStore('chat', () => {
   const isPreparing = ref(false)
   const messagesReady = ref(true)
   const deletingConversations = reactive(new Set<string>())
-  const canSend = computed(() => messagesReady.value && !isPreparing.value && !isStreaming.value
+  const canSend = computed(() => messagesReady.value && !isPreparing.value && !isStreaming.value && !uploading.value
     && (!activeConversationId.value || !deletingConversations.has(activeConversationId.value)))
+  const uploading = ref(false)
+  const pendingAttachments = ref<{attachment_id:string;name:string}[]>([])
+  const imageFallbackTools = ref<string[]>(['',''])
+  async function uploadFiles(files: File[]) {
+    if (uploading.value || isStreaming.value) return
+    uploading.value=true; historyError.value=''
+    const conversationId=activeConversationId.value
+    try {
+      for (const file of files) {
+        if (pendingAttachments.value.length >= 8) throw new Error('每次最多上传 8 个附件')
+        const saved = await mediaService.upload(file, crypto.randomUUID())
+        if (activeConversationId.value !== conversationId) return
+        pendingAttachments.value.push({...saved,name:file.name})
+      }
+    } catch(error) { historyError.value=error instanceof Error ? error.message : '上传失败' }
+    finally { uploading.value=false }
+  }
   const inputText = ref('')
   const useRag = ref(true)
+  const allowAgent = ref(false)
   const selectedSkillId = ref<string | null>(null)
   const selectedProviderId = ref('')
   const selectedModel = ref('')
@@ -102,6 +121,7 @@ export const useChatStore = defineStore('chat', () => {
 
   async function setActiveConversation(id: string) {
     stopGeneration()
+    pendingAttachments.value=[]
     const version = ++loadVersion
     activeConversationId.value = id
     messagesReady.value = false
@@ -151,15 +171,19 @@ export const useChatStore = defineStore('chat', () => {
 
   async function createNewConversation() {
     stopGeneration()
+    pendingAttachments.value=[]
     historyError.value = ''
     contextNotice.value = ''
     const conversation = addLocalConversation(t('新对话', 'New conversation'))
     try { await persistConversation(conversation) } catch { /* exposed through historyError */ }
   }
 
-  async function sendMessage(text: string, retryMessageId?: string) {
-    const content = text.trim()
+  async function sendMessage(text: string, retryMessageId?: string, workspaceContext?: WorkspaceContext | null) {
+    const content = text.trim() || (pendingAttachments.value.length ? '请分析附件内容' : '')
     if (!content || !canSend.value || !selectedProviderId.value || !selectedModel.value) return
+    const context = workspaceContext === undefined ? [...messages.value].reverse().find(m => m.role === 'user')?.workspace_context : workspaceContext
+    const snapshot = context ? { ...context } : undefined
+    const attachments = pendingAttachments.value.length ? pendingAttachments.value.map(a=>a.attachment_id) : ([...messages.value].reverse().find(m=>m.role==='user')?.attachments ?? [])
     const version = ++streamVersion
     isPreparing.value = true
     historyError.value = ''
@@ -187,7 +211,7 @@ export const useChatStore = defineStore('chat', () => {
     const originalMessages = retryTarget ? [...messages.value] : null
     const regenerate = retryTarget?.role === 'assistant'
     const userMsg: ChatMessage = regenerate ? messages.value[retryIndex - 1]! : {
-      message_id: crypto.randomUUID(), conversation_id: conversationId, role: 'user', content,
+      message_id: crypto.randomUUID(), conversation_id: conversationId, role: 'user', content, workspace_context: snapshot, attachments,
       created_at: new Date().toISOString(),
     }
     const aiMsg = reactive<ChatMessage>({
@@ -202,6 +226,7 @@ export const useChatStore = defineStore('chat', () => {
     if (!regenerate) messages.value.push(userMsg)
     messages.value.push(aiMsg)
     inputText.value = ''
+    pendingAttachments.value = []
     isStreaming.value = true
     conversation.updated_at = new Date().toISOString()
     conversation.message_count = messages.value.length
@@ -216,6 +241,9 @@ export const useChatStore = defineStore('chat', () => {
       assistant_message_id: aiMsg.message_id,
       conversation_title: conversation.title,
       use_rag: useRag.value,
+      allow_agent: allowAgent.value,
+      attachments, image_fallback_tools: imageFallbackTools.value.filter(Boolean),
+      workspace_context: snapshot,
       messages: messages.value
         .filter(message => message.message_id !== aiMsg.message_id)
         .map(message => ({ role: message.role, content: message.content,
@@ -250,7 +278,10 @@ export const useChatStore = defineStore('chat', () => {
         }
         if (event.event === 'ToolCallEnd') {
           const call = aiMsg.tool_calls?.find(item => item.tool_call_id === event.data.tool_call_id)
-          if (call) call.status = event.data.status === 'failed' ? 'error' : 'completed'
+          if (call) {
+            call.status = event.data.status === 'failed' ? 'error' : 'completed'
+            if (event.data.result) call.result = JSON.stringify(event.data.result)
+          }
         }
         if (event.event === 'Usage') {
           const input = Number(event.data.input_tokens ?? 0)
@@ -259,7 +290,7 @@ export const useChatStore = defineStore('chat', () => {
         }
         if (event.event === 'Citation') {
           aiMsg.citations?.push({
-            note_id: String(event.data.note_id ?? ''), block_id: String(event.data.block_id ?? ''),
+            citation_id: String(event.data.citation_id ?? ''), note_id: String(event.data.note_id ?? ''), block_id: String(event.data.block_id ?? ''),
             file_path: String(event.data.file_path ?? ''),
             heading_path: Array.isArray(event.data.heading_path) ? event.data.heading_path.join(' / ') : String(event.data.heading_path ?? ''),
             content: String(event.data.content ?? event.data.snippet ?? ''),
@@ -285,13 +316,13 @@ export const useChatStore = defineStore('chat', () => {
     })
   }
 
-  async function retryMessage(messageId: string, editedText?: string) {
+  async function retryMessage(messageId: string, editedText?: string, workspaceContext?: WorkspaceContext | null) {
     if (!canSend.value) return
     const index = messages.value.findIndex(m => m.message_id === messageId)
     const message = messages.value[index]
     if (!message) return
     const text = message.role === 'user' ? editedText : messages.value[index - 1]?.content
-    if (text?.trim()) await sendMessage(text, messageId)
+    if (text?.trim()) await sendMessage(text, messageId, workspaceContext !== undefined ? workspaceContext : (message.role === 'user' ? message.workspace_context : messages.value[index - 1]?.workspace_context))
   }
 
   async function switchVersion(messageId: string) {
@@ -336,8 +367,9 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   return {
+    uploading, pendingAttachments, imageFallbackTools, uploadFiles,
     conversations, activeConversationId, activeConversation, sortedConversations, messages,
-    isStreaming, isPreparing, canSend, inputText, useRag, selectedSkillId, selectedProviderId, selectedModel, historyError, contextNotice,
+    isStreaming, isPreparing, canSend, inputText, useRag, allowAgent, selectedSkillId, selectedProviderId, selectedModel, historyError, contextNotice,
     loadConversations, setActiveConversation, sendMessage, stopGeneration, createNewConversation, deleteConversation, retryMessage, switchVersion,
   }
 })

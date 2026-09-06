@@ -322,3 +322,37 @@ it('keeps a deleting conversation blocked after reselecting it without blocking 
   expect(store.isStreaming).toBe(true)
   expect(client.cancel).not.toHaveBeenCalled()
 })
+
+it('captures fresh workspace contents each send and restores the saved context for page continuation', async () => {
+  const store = useChatStore()
+  store.selectedProviderId = 'real'; store.selectedModel = 'model'; store.allowAgent = true
+  const context = { file_path: 'note.md', content: 'unsaved first' }
+  await store.sendMessage('first', undefined, context)
+  context.content = 'unsaved second'
+  expect(vi.mocked(streamChat).mock.calls[0]![0].workspace_context?.content).toBe('unsaved first')
+  expect(store.messages[0]?.workspace_context?.content).toBe('unsaved first')
+  vi.mocked(streamChat).mock.calls[0]![1].onDone?.()
+  await store.sendMessage('second', undefined, context)
+  expect(vi.mocked(streamChat).mock.calls[1]![0].workspace_context?.content).toBe('unsaved second')
+  expect(vi.mocked(streamChat).mock.calls[1]![0].allow_agent).toBe(true)
+  vi.mocked(streamChat).mock.calls[1]![1].onDone?.()
+  await store.sendMessage('continue on chat page')
+  expect(vi.mocked(streamChat).mock.calls[2]![0].workspace_context?.content).toBe('unsaved second')
+  vi.mocked(streamChat).mock.calls[2]![1].onDone?.()
+  await store.sendMessage('no active file', undefined, null)
+  expect(vi.mocked(streamChat).mock.calls[3]![0].workspace_context).toBeUndefined()
+  expect(vi.mocked(createConversation)).toHaveBeenCalledTimes(1)
+})
+
+it('uploads attachments and includes their durable IDs in an attachment-only message', async () => {
+  const { mediaService } = await import('@/services/mediaService')
+  const upload = vi.spyOn(mediaService,'upload').mockResolvedValue({attachment_id:'media_test.docx'})
+  const store=useChatStore(); store.selectedProviderId='real'; store.selectedModel='model'
+  await store.uploadFiles([new File(['document'],'test.docx')])
+  expect(store.pendingAttachments[0]?.name).toBe('test.docx')
+  await store.sendMessage('')
+  expect(vi.mocked(streamChat).mock.calls[0]![0].attachments).toEqual(['media_test.docx'])
+  expect(store.messages[0]?.attachments).toEqual(['media_test.docx'])
+  expect(store.pendingAttachments).toEqual([])
+  upload.mockRestore()
+})

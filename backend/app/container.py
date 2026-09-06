@@ -65,6 +65,8 @@ def build_container() -> ApplicationContainer:
     )
     plugins.install(BACKEND_DIR / "extensions" / "plugins" / "text-tools")
     plugins.enable("text-tools")
+    plugins.install(BACKEND_DIR / "extensions" / "plugins" / "chat-policy")
+    plugins.enable("chat-policy")
     plugins = InstalledRuntime(plugins, 'plugin', settings.data_dir)
     plugins.restore()
 
@@ -80,6 +82,9 @@ def build_container() -> ApplicationContainer:
     skills.install(BACKEND_DIR / "extensions" / "skills" / "knowledge-assistant")
     if not skills.get("knowledge-assistant").missing_dependencies:
         skills.enable("knowledge-assistant")
+    skills.install(BACKEND_DIR / "extensions" / "skills" / "chat-operator")
+    if not skills.get("chat-operator").missing_dependencies:
+        skills.enable("chat-operator")
     skills = InstalledRuntime(skills, 'skill', settings.data_dir)
     skills.restore()
 
