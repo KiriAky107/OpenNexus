@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 from app.contracts import ExportOptions
 from app.export.document import Document, DocumentNode, ExportResult
+from app.export.exporters._common import FunctionPlotBudget, format_plot_diagnostic
 from app.plot.renderer import FunctionPlotStaticRenderer, StaticRenderRequest
 
 _MERMAID_WARNING = "mermaid 需前端渲染，已保留为占位代码块"
@@ -20,12 +21,6 @@ _RAW_HTML_WARNING = "原始 HTML 已按纯文本转义保留"
 
 # 链接/图片地址允许的协议；无 scheme 的相对地址视为安全，其余协议一律降级
 _ALLOWED_URL_SCHEMES = frozenset({"http", "https", "mailto"})
-
-# 单篇文档允许的函数图像数量上限，超出部分回退占位，防止多图块并发采样耗尽内存/线程
-_MAX_FUNCTION_PLOTS = 16
-# 单篇文档允许的函数图像累计 AST 节点预算，超出部分回退占位，防止组合复杂度（多图块
-# × 多表达式 × 深表达式）在采样求值时长时间占满 CPU
-_MAX_TOTAL_PLOT_NODES = 8000
 
 
 def _safe_url(url: str) -> str | None:
@@ -74,8 +69,7 @@ class HtmlExporter:
     def render(self, document: Document, options: ExportOptions) -> ExportResult:
         """同步渲染；CPU 密集，调用方应放入线程执行，避免阻塞事件循环。"""
         self._options = options
-        self._plot_count = 0
-        self._plot_nodes = 0
+        self._plot_budget = FunctionPlotBudget()
         self._plot_renderer = FunctionPlotStaticRenderer()
         warnings: list[str] = []
         body = self._render_children(document.children, warnings)
@@ -205,18 +199,11 @@ class HtmlExporter:
         warnings.append(_MERMAID_WARNING)
         return f'<pre class="mermaid">{html.escape(node.text)}</pre>'
 
-    @staticmethod
-    def _format_plot_diagnostic(diag) -> str:
-        loc = f"（第 {diag.line} 行）" if diag.line else ""
-        return f"函数图像：{diag.message}{loc}"
-
     def _render_function_plot(self, node: DocumentNode, warnings: list[str]) -> str:
         # 文档级数量上限：超出部分直接回退占位，不解析不采样，防止海量图像耗尽资源
-        self._plot_count += 1
-        if self._plot_count > _MAX_FUNCTION_PLOTS:
-            warnings.append(
-                f"函数图像：文档内函数图像数量超过上限 {_MAX_FUNCTION_PLOTS}，已回退为源码占位"
-            )
+        over = self._plot_budget.check_count()
+        if over is not None:
+            warnings.append(over)
             return f'<pre class="function-plot">{html.escape(node.text)}</pre>'
         # 解析与渲染共同纳入局部异常回退：单个图像失败只回退占位 + warning，
         # 绝不阻断整篇导出（含复杂表达式触发的 RecursionError 等异常）。
@@ -226,16 +213,14 @@ class HtmlExporter:
             )
             parsed = self._plot_renderer.parse(request)
             for diag in parsed.diagnostics:
-                warnings.append(self._format_plot_diagnostic(diag))
+                warnings.append(format_plot_diagnostic(diag))
             if parsed.plot is None:
                 return f'<pre class="function-plot">{html.escape(node.text)}</pre>'
             # 文档级累计复杂度预算：超出后回退占位，不再采样求值
-            if self._plot_nodes + parsed.plot.node_count > _MAX_TOTAL_PLOT_NODES:
-                warnings.append(
-                    f"函数图像：文档内函数图像累计复杂度超过上限 {_MAX_TOTAL_PLOT_NODES} 节点，已回退为源码占位"
-                )
+            over = self._plot_budget.check_nodes(parsed.plot.node_count)
+            if over is not None:
+                warnings.append(over)
                 return f'<pre class="function-plot">{html.escape(node.text)}</pre>'
-            self._plot_nodes += parsed.plot.node_count
             rendered = self._plot_renderer.render_plot(parsed.plot)
         except Exception as exc:
             warnings.append(f"函数图像：解析或渲染失败，已回退占位（{exc}）")

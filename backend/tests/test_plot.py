@@ -278,9 +278,9 @@ def test_html_exporter_limits_function_plot_count() -> None:
 
 def test_html_exporter_limits_total_plot_nodes(monkeypatch) -> None:
     # P1：文档级累计 AST 节点预算超限后，后续图像回退占位，防止组合复杂度耗尽 CPU
-    import app.export.exporters.html as html_mod
+    import app.export.exporters._common as common_mod
 
-    monkeypatch.setattr(html_mod, "_MAX_TOTAL_PLOT_NODES", 5)
+    monkeypatch.setattr(common_mod, "MAX_TOTAL_PLOT_NODES", 5)
     # 第一个图块 y=x（1 节点）在预算内；第二个图块 y=x+x+x+x（7 节点）累计超限
     md = "```function-plot\ny = x\n```\n\n```function-plot\ny = x + x + x + x\n```"
     result = asyncio.run(HtmlExporter().export(parse_document(md), ExportOptions()))
@@ -322,3 +322,64 @@ def test_mermaid_static_renderer_returns_placeholder() -> None:
     result = renderer.render(StaticRenderRequest(kind="mermaid", source="graph LR"))
     assert result.content == ""
     assert any("mermaid" in w for w in result.warnings)
+
+
+# --------------------------------------------------------------------------- #
+# 共享几何与 reportlab 后端（PDF 内嵌函数图像）
+# --------------------------------------------------------------------------- #
+def test_compute_geometry_shares_pixel_segments() -> None:
+    from app.plot.render import compute_geometry
+
+    plot = parse_source("y = x^2\ny = sin(x)").plot
+    geo = compute_geometry(plot)
+    assert geo.width == 640
+    assert geo.height == 480
+    assert len(geo.polylines) == 2
+    assert geo.colors == ["#0969da", "#d1242f"]
+    assert geo.xticks and geo.yticks
+    for segments in geo.polylines:
+        assert segments
+        for seg in segments:
+            assert seg
+            for px, py in seg:
+                assert math.isfinite(px) and math.isfinite(py)
+                assert 0 <= px <= geo.width
+                assert 0 <= py <= geo.height
+
+
+def test_render_reportlab_builds_drawing() -> None:
+    from reportlab.graphics.shapes import Drawing, Group, Line, PolyLine, String
+
+    from app.plot.render_reportlab import render_drawing
+
+    plot = parse_source("xlabel: 时间\nylabel: 数值\ny = x^2").plot
+    drawing = render_drawing(plot, width=480)
+    assert isinstance(drawing, Drawing)
+    assert drawing.renderScale == 0.75  # 480 / 640
+    kinds = {type(c).__name__ for c in drawing.contents}
+    assert {"Line", "PolyLine", "String", "Group"} <= kinds
+    strings = [c for c in drawing.contents if isinstance(c, String)]
+    assert any(s.fontName == "STSong-Light" for s in strings)
+    assert any(s.text == "时间" for s in strings)
+    # ylabel 在旋转 Group 内
+    groups = [c for c in drawing.contents if isinstance(c, Group)]
+    assert groups
+    group_texts = [s.text for g in groups for s in g.contents if isinstance(s, String)]
+    assert "数值" in group_texts
+
+
+def test_render_reportlab_curves_are_finite_and_bounded() -> None:
+    from reportlab.graphics.shapes import PolyLine
+
+    from app.plot.render_reportlab import render_drawing
+
+    plot = parse_source("y = x").plot
+    drawing = render_drawing(plot)
+    polylines = [c for c in drawing.contents if isinstance(c, PolyLine)]
+    assert polylines
+    for pl in polylines:
+        pts = pl.points  # 扁平 [x0,y0,x1,y1,...]
+        for x, y in zip(pts[0::2], pts[1::2]):
+            assert math.isfinite(x) and math.isfinite(y)
+            assert 0 <= x <= 640
+            assert 0 <= y <= 480
