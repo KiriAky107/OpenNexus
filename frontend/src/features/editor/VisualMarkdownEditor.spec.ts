@@ -13,6 +13,8 @@ import { useThemeStore } from '@/stores/theme'
 import { codeBlockConfig } from '@milkdown/kit/component/code-block'
 import { EditorView as CodeMirror } from '@codemirror/view'
 import { renderMarkdown } from '@/utils/markdown'
+import { useEditorStore } from '@/stores/editor'
+import { executeEditorCommand } from '@/services/editorCommandService'
 
 type EditorComponent = { getEditor: () => Editor | undefined }
 
@@ -51,6 +53,45 @@ afterEach(() => {
 })
 
 describe('VisualMarkdownEditor formatting toolbars', () => {
+  it('renders and folds callouts without losing portable Markdown on serialization', async () => {
+    const source = '> [!WARNING]- 注意\n>\n> **正文**\n>\n> > [!TIP] 内层\n> > 内容'
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: source }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    expect(wrapper.findAll('.markdown-callout')).toHaveLength(2)
+    expect(wrapper.get('.markdown-callout').attributes('data-collapsed')).toBe('true')
+    await wrapper.get('.callout-title').trigger('click')
+    expect(wrapper.get('.markdown-callout').attributes('data-collapsed')).toBe('false')
+    const markdown = editor.action(getMarkdown())
+    expect(markdown.trim()).toBe(source)
+  })
+  it('dispatches native-ready commands through editor transactions and rejects invalid parameters', async () => {
+    useEditorStore().currentFilePath = 'test.md'
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: 'text' }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    expect(await executeEditorCommand('editor.heading', 8)).toEqual({ ok: false, reason: 'invalid-params' })
+    expect(await executeEditorCommand('editor.heading', 2)).toEqual({ ok: true })
+    expect(editor.action(getMarkdown())).toContain('## text')
+    expect(await executeEditorCommand('editor.callout', { type: 'tip', body: '**test**' })).toEqual({ ok: true })
+    expect(wrapper.find('.markdown-callout').exists()).toBe(true)
+    useEditorStore().saveStatus = 'conflict'
+    expect(await executeEditorCommand('editor.bold')).toEqual({ ok: false, reason: 'unavailable' })
+  })
+  it('keeps code examples as ordinary quotes and renders newly typed markers', async () => {
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: '> `[!NOTE]`\n\n> text' }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    expect(wrapper.find('.markdown-callout').exists()).toBe(false)
+    editor.action(ctx => {
+      const view = ctx.get(editorViewCtx)
+      let position = 0
+      view.state.doc.descendants((node, pos) => { if (node.isText && node.text === 'text') position = pos })
+      view.dispatch(view.state.tr.insertText('[!TIP]', position, position + 4))
+    })
+    expect(wrapper.find('.markdown-callout').exists()).toBe(true)
+    expect(editor.action(getMarkdown())).toContain('[!TIP]')
+  })
   it('renders the supported format matrix and preserves inline code', async () => {
     const source = ['# H1','## H2','### H3','#### H4','##### H5','###### H6',
       '正文 **粗体** *斜体* ~~删除~~ `s` 与 ``a`b``', '> 引用', '- 项目\n  - 子项', '1. 第一\n2. 第二',

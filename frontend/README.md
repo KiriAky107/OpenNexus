@@ -41,6 +41,8 @@ pnpm dev
 
 编辑器使用 Milkdown/Crepe 与 CodeMirror 6；Markdown 展示使用 marked、DOMPurify 和 Shiki。Provider logo 位于 `src/assets/providers`，授权与来源说明随目录保存。
 
+工作区和静态预览支持 GitHub alerts / Obsidian callout 的类型、别名、标题、嵌套与折叠。桌面快捷键使用预留的 v1 编辑命令边界，尚未接入 Tauri 原生快捷键与元数据转换处理器；见 [警告框与桌面编辑命令开发说明](../docs/development/警告框与桌面编辑命令开发说明.md)。
+
 语言设置会即时更新主导航、页面标题和各功能页面，并同步更新文档与编辑器的 `lang`。拼写检查使用浏览器或桌面 WebView 提供的本地词典，开关会即时作用于可视化 Markdown、源码编辑器以及普通文本输入；JSON、密码等结构化或敏感输入保持关闭。
 
 ## 数据边界

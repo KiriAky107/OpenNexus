@@ -361,7 +361,7 @@ export const mockCommunityThemes: ThemeManifest[] = [
   {
     theme_id: 'ocean-blue',
     name: 'Ocean Blue',
-    version: '1.3.1',
+    version: '1.4.0',
     author: 'community',
     description: '宁静的海洋蓝色主题，适合长时间阅读',
     min_app_version: '0.2.0',
@@ -373,7 +373,7 @@ export const mockCommunityThemes: ThemeManifest[] = [
   {
     theme_id: 'midnight-purple',
     name: 'Midnight Purple',
-    version: '2.1.1',
+    version: '2.2.0',
     author: 'night-owl',
     description: '深紫色暗夜主题，适合编码',
     min_app_version: '0.2.0',
@@ -464,6 +464,12 @@ export function getCommunityThemePreviewCss(themeId: string): string {
   return buildCommunityThemeCss(themeId, t.is_dark) + `
 [data-theme="${themeId}"] {
   color-scheme: ${t.is_dark ? 'dark' : 'light'};
+  --color-callout-info: ${t.is_dark ? '#9dbbff' : '#126589'};
+  --color-callout-success: ${t.is_dark ? '#a7d58c' : '#267049'};
+  --color-callout-warning: ${t.is_dark ? '#efc886' : '#885c13'};
+  --color-callout-danger: ${t.is_dark ? '#ff9caf' : '#b13d4d'};
+  --color-callout-important: ${t.is_dark ? '#d4afff' : '#7050a3'};
+  --color-callout-quote: ${t.is_dark ? '#b0b9dd' : '#53697d'};
   --color-text-inverse: ${t.is_dark ? '#1a1b26' : '#ffffff'};
   --color-text-disabled: color-mix(in srgb, var(--color-text-primary) 45%, var(--color-surface-primary));
   --color-background-overlay: ${t.is_dark ? '#000000a6' : '#00000073'};
