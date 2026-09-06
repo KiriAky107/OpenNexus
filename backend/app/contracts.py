@@ -195,6 +195,16 @@ class MessageRole(str, Enum):
 
 
 class Message(Contract):
+    images: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator('images')
+    @classmethod
+    def validate_images(cls, values):
+        import re
+        for value in values:
+            if len(value) > 28*1024*1024 or not re.fullmatch(r'data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}', value):
+                raise ValueError('Images must be bounded base64 PNG, JPEG or WebP data')
+        return values
     role: MessageRole
     content: str
     reasoning_content: str | None = None
@@ -256,7 +266,16 @@ class ModelRequest(Contract):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class WorkspaceContext(Contract):
+    file_path: str = Field(max_length=4096)
+    content: str = Field(max_length=2000000)
+
+
 class ChatRequest(ModelRequest):
+    attachments: list[str] = Field(default_factory=list, max_length=8)
+    image_fallback_tools: list[str] = Field(default_factory=list, max_length=2)
+    workspace_context: WorkspaceContext | None = None
+    allow_agent: bool = False
     retry_message_id: str | None = None
     conversation_id: str | None = Field(default=None, min_length=1, max_length=128)
     user_message_id: str | None = Field(default=None, min_length=1, max_length=128)
@@ -293,6 +312,8 @@ class ConversationListResponse(Contract):
 
 
 class ChatMessage(Contract):
+    attachments: list[str] = Field(default_factory=list)
+    workspace_context: WorkspaceContext | None = None
     activity: list[dict[str, Any]] = Field(default_factory=list)
     versions: list[str] = Field(default_factory=list)
     message_id: str

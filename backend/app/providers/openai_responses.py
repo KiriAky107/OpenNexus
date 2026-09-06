@@ -26,7 +26,7 @@ class OpenAIResponsesProvider(OpenAICompatibleProvider):
                                "output": message.content})
                 continue
             if message.content or not message.tool_calls:
-                inputs.append({"role": message.role.value, "content": message.content})
+                inputs.append({"role": message.role.value, "content": ([{"type":"input_text","text":message.content}] + [{"type":"input_image","image_url":uri} for uri in message.images]) if message.images else message.content})
             for call in message.tool_calls:
                 inputs.append({"type": "function_call", "call_id": call.tool_call_id,
                                "name": call.name, "arguments": json.dumps(call.arguments)})

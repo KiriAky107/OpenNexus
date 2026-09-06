@@ -3,6 +3,9 @@ import { apiClient } from './apiClient'
 import type { ChatMessage, Conversation, ModelEvent, PageMeta } from '@/contracts'
 
 export interface ChatRequest {
+  workspace_context?: import('@/contracts').WorkspaceContext
+  allow_agent?: boolean
+  image_fallback_tools?: string[]
   retry_message_id?: string
   provider_id: string
   model: string

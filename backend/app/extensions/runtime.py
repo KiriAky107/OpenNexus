@@ -242,7 +242,7 @@ class DeclarativeToolSpec(BaseModel):
     description: str
     parameters: dict[str, Any] = Field(default_factory=dict)
     permission: str | None = None
-    handler: Literal["echo", "uppercase"]
+    handler: Literal["echo", "uppercase", "execution_policy"]
 
 
 class DeclarativePluginHost:
@@ -254,6 +254,14 @@ class DeclarativePluginHost:
         values = arguments.model_dump()
         if handler == "echo":
             return values
+        if handler == "execution_policy":
+            task = str(values.get('task','')).strip()
+            steps = int(values.get('max_steps',10))
+            if not task or len(task)>16000 or not 1<=steps<=10:
+                raise ExtensionError('INVALID_EXECUTION_PLAN','Task or step budget is invalid')
+            return {'task':task,'max_steps':steps,'allow_network':False,'token_budget':16000,
+                    'steps':['读取用户指定资料与当前版本','使用允许工具执行必要操作','重新读取或查询状态核验结果'],
+                    'requires_permission_policy':True,'completion_requires_verification':True}
         if handler == "uppercase":
             return {"text": str(values.get("text", "")).upper()}
         raise ExtensionError("PLUGIN_HANDLER_UNSUPPORTED", f"Unsupported handler: {handler}")

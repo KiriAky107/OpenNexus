@@ -7,6 +7,7 @@ import { useProviderStore } from '@/stores/provider'
 import { useSkillStore } from '@/stores/skill'
 import ChatView from './ChatView.vue'
 
+vi.mock('@/services/agentService', () => ({ listTools: vi.fn().mockResolvedValue([]) }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('@/stores/editor', () => ({ useEditorStore: () => ({}) }))
 vi.mock('@/stores/workspace', () => ({ useWorkspaceStore: () => ({}) }))
@@ -158,7 +159,7 @@ it('sends on Enter but preserves Shift+Enter and IME confirmation', async () => 
   await input.trigger('keydown', { key: 'Enter', shiftKey: true })
   expect(send).not.toHaveBeenCalled()
   await input.trigger('keydown', { key: 'Enter' })
-  expect(send).toHaveBeenCalledWith('问题')
+  expect(send).toHaveBeenCalledWith('问题', undefined, undefined)
   await input.trigger('keydown', { key: 'Enter', repeat: true })
   expect(send).toHaveBeenCalledTimes(1)
   wrapper.unmount()
