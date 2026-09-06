@@ -12,6 +12,8 @@ import TitleBar from './TitleBar.vue'
 import CommandPalette from './CommandPalette.vue'
 import { getIndexStatus } from '@/services/indexService'
 import { navigateToCitation } from '@/composables/useCitationNavigation'
+import { useWorkspaceRefresh } from '@/composables/useWorkspaceRefresh'
+useWorkspaceRefresh()
 
 defineProps<{
   showSecondarySidebar?: boolean

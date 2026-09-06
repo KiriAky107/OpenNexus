@@ -3,6 +3,10 @@ import DiagramInteractions from './DiagramInteractions.vue'
 import { computed, ref, watch } from 'vue'
 import { renderMarkdown } from '@/utils/markdown'
 import { useThemeStore } from '@/stores/theme'
+import { useHeadingAppearanceStore } from '@/stores/headingAppearance'
+const headingAppearance = useHeadingAppearanceStore()
+import { useMarkdownPreferencesStore } from '@/stores/markdownPreferences'
+const markdownPreferences = useMarkdownPreferencesStore()
 
 const props = defineProps<{ source: string }>()
 const themeStore = useThemeStore()
@@ -12,15 +16,15 @@ let renderVersion = 0
 const diagramTheme = computed<'light' | 'dark'>(() => (themeStore.isDark ? 'dark' : 'light'))
 
 // 主题切换需要重渲染：Mermaid SVG 的配色在渲染时烘焙，无法靠 CSS 变量事后调整。
-watch([() => props.source, diagramTheme, () => themeStore.currentThemeId], async ([source, theme]) => {
+watch([() => props.source, diagramTheme, () => themeStore.currentThemeId, () => JSON.stringify(markdownPreferences.normalized)], async ([source, theme]) => {
   const version = ++renderVersion
-  const result = await renderMarkdown(source, { theme })
+  const result = await renderMarkdown(source, { theme, preferences: markdownPreferences.normalized })
   if (version === renderVersion) html.value = result
 }, { immediate: true, flush: 'post' })
 </script>
 
 <template>
-  <DiagramInteractions><div class="markdown-content" v-html="html" /></DiagramInteractions>
+  <DiagramInteractions :data-heading-style="headingAppearance.preferences.custom ? 'custom' : undefined" :style="headingAppearance.cssVariables"><div class="markdown-content" v-html="html" /></DiagramInteractions>
 </template>
 
 <style>

@@ -5,6 +5,9 @@ import { t } from '@/i18n'
 import { getCommunityThemePreviewCss, mockCommunityThemes } from '@/services/themePackageService'
 import tokensCss from '@/styles/tokens.css?raw'
 import featuresCss from '@/styles/features.css?raw'
+import headingsCss from '@/styles/headings.css?raw'
+import calloutsCss from '@/styles/callouts.css?raw'
+import { calloutTypes } from '@/utils/callouts'
 import specimenHtml from './themeSpecimen.html?raw'
 
 const props = defineProps<{ themeId: string; name?: string; css?: string }>()
@@ -20,7 +23,7 @@ const previewDocument = computed(() => {
   policy.content = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"
   doc.head.append(policy)
   const style = doc.createElement('style')
-  style.textContent = `${tokensCss}\n${featuresCss}\n${props.css ?? getCommunityThemePreviewCss(props.themeId)}\nhtml { height:100% !important; overflow-y:auto !important; overflow-x:hidden !important; overscroll-behavior:contain; } body { height:auto !important; min-height:100%; overflow:visible !important; margin:0; padding:24px; background:var(--color-background-primary); color:var(--color-text-primary); font:16px/1.6 system-ui; } article { min-width:0; } .theme-specimen { display:grid; gap:16px; margin-top:20px; } .surface-nested { padding:12px; border:1px solid var(--color-border-default); border-radius:var(--radius-md); } .specimen-markdown { overflow:auto; } .specimen-markdown code { background:var(--color-code-background, var(--color-background-secondary)); color:var(--color-code-text, var(--color-text-primary)); padding:3px 6px; border-radius:4px; } .specimen-markdown pre { padding:12px; background:var(--color-background-secondary); } .specimen-markdown blockquote { border-left:3px solid var(--color-accent-primary); padding-left:12px; } .specimen-markdown table { width:100%; border-collapse:collapse; } .specimen-markdown td,.specimen-markdown th { padding:8px; border:1px solid var(--color-border-default); } .specimen-markdown th { background:var(--color-markdown-table-header); } .specimen-chart > div { display:flex; align-items:flex-end; gap:12px; height:100px; border-bottom:1px solid var(--color-border-default); } .specimen-chart span { width:36px; } .specimen-long { overflow-wrap:anywhere; } @media(max-width:480px) { body { padding:12px; } .form-grid { grid-template-columns:minmax(0,1fr); } }`
+  style.textContent = `${tokensCss}\n${featuresCss}\n${calloutsCss}\n${headingsCss}\n${props.css ?? getCommunityThemePreviewCss(props.themeId)}\nhtml { height:100% !important; overflow-y:auto !important; overflow-x:hidden !important; overscroll-behavior:contain; } body { height:auto !important; min-height:100%; overflow:visible !important; margin:0; padding:24px; background:var(--color-background-primary); color:var(--color-text-primary); font:16px/1.6 system-ui; } article { min-width:0; } .theme-specimen { display:grid; gap:16px; margin-top:20px; } .surface-nested { padding:12px; border:1px solid var(--color-border-default); border-radius:var(--radius-md); } .specimen-markdown { overflow:auto; } .specimen-markdown code { background:var(--color-code-background, var(--color-background-secondary)); color:var(--color-code-text, var(--color-text-primary)); padding:3px 6px; border-radius:4px; } .specimen-markdown pre { padding:12px; background:var(--color-background-secondary); } .specimen-markdown blockquote { border-left:3px solid var(--color-accent-primary); padding-left:12px; } .specimen-markdown table { width:100%; border-collapse:collapse; } .specimen-markdown td,.specimen-markdown th { padding:8px; border:1px solid var(--color-border-default); } .specimen-markdown th { background:var(--color-markdown-table-header); } .specimen-chart > div { display:flex; align-items:flex-end; gap:12px; height:100px; border-bottom:1px solid var(--color-border-default); } .specimen-chart span { width:36px; } .specimen-long { overflow-wrap:anywhere; } @media(max-width:480px) { body { padding:12px; } .form-grid { grid-template-columns:minmax(0,1fr); } }`
 
   doc.head.append(style)
   const article = doc.createElement('article')
@@ -33,6 +36,22 @@ const previewDocument = computed(() => {
   const button = doc.createElement('button'); button.className = 'button-primary'; button.textContent = t('示例按钮', 'Example button')
   journal.append(text)
   const specimen = doc.createElement('template'); specimen.innerHTML = specimenHtml
+  const callouts = doc.createElement('section'); callouts.className = 'specimen-callouts'
+  const caption = doc.createElement('h2'); caption.textContent = t('警告框与提示框', 'Alerts and callouts'); callouts.append(caption)
+  for (const type of Object.keys(calloutTypes)) {
+    const block = doc.createElement('aside'); block.className = 'markdown-callout'; block.dataset.callout = type
+    const title = doc.createElement('div'); title.className = 'callout-title'; title.textContent = type
+    const body = doc.createElement('div'); body.className = 'callout-body'; body.textContent = t('提示正文：检查文字、边框与主题配色。', 'Callout body: check text, borders and theme colors.')
+    block.append(title, body); callouts.append(block)
+  }
+  for (const open of [false, true]) {
+    const details = doc.createElement('details'); details.className = 'markdown-callout'; details.dataset.callout = 'warning'; details.open = open
+    const summary = doc.createElement('summary'); summary.className = 'callout-title'; summary.textContent = t('可折叠警告框', 'Collapsible callout')
+    const body = doc.createElement('div'); body.className = 'callout-body'
+    const nested = doc.createElement('aside'); nested.className = 'markdown-callout'; nested.dataset.callout = 'tip'; nested.textContent = t('嵌套提示内容', 'Nested callout content')
+    body.append(nested); details.append(summary, body); callouts.append(details)
+  }
+  specimen.content.append(callouts)
   article.append(header, journal, button, specimen.content); doc.body.append(article)
   return '<!doctype html>' + doc.documentElement.outerHTML
 })

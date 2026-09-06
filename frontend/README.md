@@ -41,6 +41,10 @@ pnpm dev
 
 编辑器使用 Milkdown/Crepe 与 CodeMirror 6；Markdown 展示使用 marked、DOMPurify 和 Shiki。Provider logo 位于 `src/assets/providers`，授权与来源说明随目录保存。
 
+写作模式支持按标题折叠章节及全部展开/折叠；“设置 → 编辑器 → 标题样式”可按 H1–H6 设置字号、粗细与标题字体。设置本地保存，不改写 Markdown；详见 [标题折叠与样式开发说明](../docs/development/标题折叠与样式开发说明.md)。
+
+工作区和静态预览支持 GitHub alerts / Obsidian callout 的类型、别名、标题、嵌套与折叠。桌面快捷键使用预留的 v1 编辑命令边界，尚未接入 Tauri 原生快捷键与元数据转换处理器；见 [警告框与桌面编辑命令开发说明](../docs/development/警告框与桌面编辑命令开发说明.md)。
+
 语言设置会即时更新主导航、页面标题和各功能页面，并同步更新文档与编辑器的 `lang`。拼写检查使用浏览器或桌面 WebView 提供的本地词典，开关会即时作用于可视化 Markdown、源码编辑器以及普通文本输入；JSON、密码等结构化或敏感输入保持关闭。
 
 ## 数据边界
@@ -86,3 +90,9 @@ pnpm build
 Mermaid 大图打开时适配窗口，支持平滑滚轮缩放和鼠标位置补偿；行内中键启用滚轮控制，移动鼠标退出。标签段落样式与正文隔离，避免 foreignObject 内文字裁切。
 
 开发和验证方法见 [后台索引与保存](../docs/development/工作区后台索引与保存开发说明.md)、[Mermaid 预览与缩放](../docs/development/Mermaid预览与缩放开发说明.md)。
+
+## 构建体积检查
+
+执行 `pnpm build` 后运行 `pnpm build:report`，查看入口静态 JS 依赖与大块清单。分组策略、统计口径及保留的大资源见 [前端构建分块优化开发说明](../docs/development/前端构建分块优化开发说明.md)。
+
+Markdown 语法预设、主题适配和外部文件刷新规则见 [开发说明](../docs/development/Markdown语法预设与外部文件刷新.md)。

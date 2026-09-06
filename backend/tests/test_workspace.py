@@ -114,3 +114,34 @@ def test_workspace_openapi_paths_are_published() -> None:
         "/api/workspace/folders/delete",
         "/api/notes/{note_id}/rename",
     } <= paths.keys()
+
+def test_external_files_are_registered_and_removed_without_vector_wait(monkeypatch) -> None:
+    from app.services import index_service
+    scheduled = []
+    monkeypatch.setattr(index_service, 'schedule_workspace_rebuild', lambda: scheduled.append(True))
+    vault = get_settings().vault_path
+    vault.mkdir(parents=True, exist_ok=True)
+    external = vault / 'external.md'
+    external.write_text('# External\n', encoding='utf-8')
+    tree = asyncio.run(get_workspace_tree())
+    assert tree[0].note_id is not None
+    external.rename(vault / 'renamed.md')
+    tree = asyncio.run(get_workspace_tree())
+    assert [item.name for item in tree] == ['renamed.md']
+    (vault / 'renamed.md').unlink()
+    assert asyncio.run(get_workspace_tree()) == []
+    assert len(scheduled) == 3
+
+
+def test_save_rejects_external_content_change() -> None:
+    import hashlib
+    from app.contracts import NoteUpdateRequest
+    from app.routes import update_note
+    original = '# Original\n'
+    note = asyncio.run(create_note(NoteCreateRequest(title='Conflict', markdown=original)))
+    disk = get_settings().vault_path / note.file_path
+    disk.write_text('# External\n', encoding='utf-8')
+    with pytest.raises(ApiError) as error:
+        asyncio.run(update_note(note.note_id, NoteUpdateRequest(markdown='# Editor\n', expected_content_hash=hashlib.sha256(original.encode()).hexdigest())))
+    assert error.value.code == 'NOTE_CONTENT_CONFLICT'
+    assert disk.read_text(encoding='utf-8') == '# External\n'

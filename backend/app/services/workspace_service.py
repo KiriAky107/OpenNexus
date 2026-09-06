@@ -105,6 +105,14 @@ def get_workspace_tree() -> list[WorkspaceEntry]:
     return _tree(get_settings().vault_path.resolve(), locations)
 
 
+async def refresh_workspace_tree() -> list[WorkspaceEntry]:
+    """Observe external creates/deletes without waiting for vector inference."""
+    if get_workspace_info().requires_refresh:
+        await _register_workspace_files()
+        index_service.schedule_workspace_rebuild()
+    return get_workspace_tree()
+
+
 async def open_workspace(requested_path: str | None) -> WorkspaceSnapshot:
     """打开只登记文件与全文索引，不让 Embedding 或厂商网络阻塞工作区。"""
 

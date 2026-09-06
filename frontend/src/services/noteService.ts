@@ -25,7 +25,7 @@ export async function createNote(data: {
 
 export async function updateNote(
   noteId: string,
-  data: { title?: string; markdown?: string; tags?: string[] }
+  data: { title?: string; markdown?: string; tags?: string[]; expected_content_hash?: string }
 ): Promise<ApiNote> {
   return apiClient.patch(`/api/notes/${noteId}`, data)
 }
