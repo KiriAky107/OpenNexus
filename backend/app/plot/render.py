@@ -24,6 +24,11 @@ _MARGIN = 52  # 四周留白，放轴刻度与标签
 _SAMPLES = 400
 _PALETTE = ["#0969da", "#d1242f", "#1a7f37", "#8250df", "#bf8700", "#e36209"]
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{3,8}$")
+# 绘图矩形（像素，SVG y-down）：曲线与坐标轴所在区域，坐标轴/网格均在此范围内
+_PLOT_X0 = _MARGIN
+_PLOT_Y0 = _MARGIN
+_PLOT_X1 = _WIDTH - _MARGIN
+_PLOT_Y1 = _HEIGHT - _MARGIN
 
 
 def _safe_color(color: str | None, fallback: str) -> str:
@@ -141,6 +146,79 @@ class PlotGeometry:
     warnings: list[str]
 
 
+def _clip_segment(
+    p0: tuple[float, float],
+    p1: tuple[float, float],
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """Liang-Barsky：把线段裁剪到轴对齐矩形 [x0,x1]×[y0,y1]，完全在外返回 None。"""
+    dx = p1[0] - p0[0]
+    dy = p1[1] - p0[1]
+    p = (-dx, dx, -dy, dy)
+    q = (p0[0] - x0, x1 - p0[0], p0[1] - y0, y1 - p0[1])
+    u1, u2 = 0.0, 1.0
+    for pk, qk in zip(p, q):
+        if pk == 0:
+            if qk < 0:
+                return None
+        else:
+            r = qk / pk
+            if pk < 0:
+                if r > u2:
+                    return None
+                if r > u1:
+                    u1 = r
+            else:
+                if r < u1:
+                    return None
+                if r < u2:
+                    u2 = r
+    if u1 > u2:
+        return None
+    return (p0[0] + u1 * dx, p0[1] + u1 * dy), (p0[0] + u2 * dx, p0[1] + u2 * dy)
+
+
+def _points_close(
+    a: tuple[float, float], b: tuple[float, float], eps: float = 1e-9
+) -> bool:
+    return abs(a[0] - b[0]) < eps and abs(a[1] - b[1]) < eps
+
+
+def _clip_polyline(
+    points: list[tuple[float, float]],
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+) -> list[list[tuple[float, float]]]:
+    """把折线裁剪到矩形，返回若干连续子段；相邻点不衔接处自动断段。"""
+    if not points:
+        return []
+    segments: list[list[tuple[float, float]]] = []
+    current: list[tuple[float, float]] = []
+    for i in range(len(points) - 1):
+        clipped = _clip_segment(points[i], points[i + 1], x0, y0, x1, y1)
+        if clipped is None:
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        a, b = clipped
+        # 共享点被裁剪修改（折线短暂越界后折返）时，a 与上一段末点不衔接，需断段
+        if current and not _points_close(a, current[-1]):
+            segments.append(current)
+            current = []
+        if not current:
+            current.append(a)
+        current.append(b)
+    if current:
+        segments.append(current)
+    return segments
+
+
 def _sample_segments(
     tree: object,
     xmin: float,
@@ -148,7 +226,7 @@ def _sample_segments(
     ymin: float,
     ymax: float,
 ) -> list[list[tuple[float, float]]]:
-    """采样并映射为像素点段；非有限点处断段，避免画穿渐近线。"""
+    """采样并映射为像素点段，再裁剪到绘图矩形；非有限点处断段，避免画穿渐近线。"""
     segments: list[list[tuple[float, float]]] = []
     points: list[tuple[float, float]] = []
     for i in range(_SAMPLES + 1):
@@ -173,7 +251,13 @@ def _sample_segments(
         points.append((px, py))
     if points:
         segments.append(points)
-    return segments
+
+    # 裁剪到绘图矩形：reportlab 无 SVG viewport 那样的自动裁剪，超出显式 range 的
+    # 曲线会覆盖页面其他内容，故在共享几何层统一裁剪（SVG 也一并收敛到绘图区）。
+    clipped: list[list[tuple[float, float]]] = []
+    for seg in segments:
+        clipped.extend(_clip_polyline(seg, _PLOT_X0, _PLOT_Y0, _PLOT_X1, _PLOT_Y1))
+    return clipped
 
 
 def compute_geometry(plot: FunctionPlot) -> PlotGeometry:

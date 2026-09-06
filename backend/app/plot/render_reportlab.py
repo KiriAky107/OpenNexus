@@ -89,15 +89,19 @@ def _build_drawing(geo: PlotGeometry) -> Drawing:
             )
         )
     if geo.ylabel:
-        # 竖向标签：rotate(90) 在 y-up 坐标下等价于 SVG 的 rotate(-90)
+        # 竖向标签：Group.rotate(90) 在 y-up 坐标下等价于 SVG 的 rotate(-90)。
+        # 文本放在组内局部坐标 (0,0)，先平移后旋转得到 T·R（先绕原点旋转、再平移到
+        # 目标位置），避免用绝对坐标定位又用相同坐标当旋转中心造成的重复变换，
+        # 后者会把标签甩到画布之外（负 x 区域）。
         label = Group()
         label.add(
             String(
-                16, geo.height / 2, geo.ylabel,
+                0, 0, geo.ylabel,
                 fontName=_FONT, fontSize=_LABEL_FONT_SIZE, fillColor=_LABEL_COLOR, textAnchor="middle",
             )
         )
-        label.rotate(90, 16, geo.height / 2)
+        label.translate(16, geo.height / 2)
+        label.rotate(90)
         drawing.add(label)
 
     return drawing

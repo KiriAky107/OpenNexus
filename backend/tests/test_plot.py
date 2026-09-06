@@ -383,3 +383,45 @@ def test_render_reportlab_curves_are_finite_and_bounded() -> None:
             assert math.isfinite(x) and math.isfinite(y)
             assert 0 <= x <= 640
             assert 0 <= y <= 480
+
+
+def test_compute_geometry_clips_curves_to_plot_rect() -> None:
+    # P2：显式 range 外的曲线应裁剪到绘图矩形，避免 PDF 中曲线覆盖页面其他内容
+    from app.plot.render import (
+        _PLOT_X0,
+        _PLOT_X1,
+        _PLOT_Y0,
+        _PLOT_Y1,
+        compute_geometry,
+    )
+
+    plot = parse_source("range: -1, 1\ny = 10*x").plot
+    geo = compute_geometry(plot)
+    assert geo.polylines
+    assert any(geo.polylines)  # 曲线穿越 range 后在绘图区内仍有可见段
+    for segments in geo.polylines:
+        for seg in segments:
+            assert seg
+            for px, py in seg:
+                assert _PLOT_X0 <= px <= _PLOT_X1
+                assert _PLOT_Y0 <= py <= _PLOT_Y1
+
+
+def test_render_reportlab_ylabel_within_drawing_bounds() -> None:
+    # P2：纵轴标签旋转后边界应落在 Drawing 范围内，不能甩到负 x 区域
+    from reportlab.graphics.shapes import Group, String
+
+    from app.plot.render_reportlab import render_drawing
+
+    plot = parse_source("ylabel: 数值\ny = x").plot
+    drawing = render_drawing(plot)
+    groups = [c for c in drawing.contents if isinstance(c, Group)]
+    ylabel_groups = [
+        g
+        for g in groups
+        if any(isinstance(s, String) and s.text == "数值" for s in g.contents)
+    ]
+    assert ylabel_groups
+    x0, y0, x1, y1 = ylabel_groups[0].getBounds()
+    assert 0 <= x0 <= x1 <= 640
+    assert 0 <= y0 <= y1 <= 480
