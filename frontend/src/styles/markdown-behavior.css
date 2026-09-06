@@ -19,6 +19,8 @@
 .markdown-callout[data-collapsed='true'] { border-style: dashed; border-inline-start-style: solid; }
 .markdown-content details.markdown-callout:not([open]) { border-style: dashed; border-inline-start-style: solid; }
 .editor-pane.source { caret-color: var(--color-accent-primary); }
+.markdown-content .shiki code { display: block; min-width: max-content; padding: 0; background: transparent; font: inherit; }
+.markdown-content .shiki .line { display: block; min-height: 1.45em; }
 .markdown-content[data-code-wrap] .shiki { tab-size: var(--markdown-code-indent, 4); }
 .markdown-content[data-code-wrap='true'] .shiki code { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .markdown-content[data-line-numbers='true'] .shiki code { counter-reset: code-line; }
