@@ -1,0 +1,116 @@
+"""Function Plot → reportlab 矢量 Drawing（供 PDF 内嵌）。
+
+消费 ``render.compute_geometry`` 的共享几何，产出 ``reportlab.graphics.shapes.Drawing``：
+网格/坐标轴用 ``Line``、曲线用 ``PolyLine``、刻度数字与轴标签用 ``String``。
+reportlab 原点在左下（y-up），与 SVG 的 y-down 相反，故对几何里的像素 y 统一翻转；
+轴标签（ylabel）用 ``Group.rotate`` 旋转为竖向文本。中文字体复用内置 STSong-Light，
+guarded 注册避免与 pdf.py 重复注册。
+"""
+
+from __future__ import annotations
+
+from reportlab.graphics.shapes import Drawing, Group, Line, PolyLine, String
+from reportlab.lib.colors import HexColor
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+from app.plot.model import FunctionPlot
+from app.plot.render import PlotGeometry, _fmt_num, _sx, _sy, compute_geometry
+
+_FONT = "STSong-Light"
+if _FONT not in pdfmetrics.getRegisteredFontNames():
+    pdfmetrics.registerFont(UnicodeCIDFont(_FONT))
+
+_GRID_COLOR = HexColor("#eaeef2")
+_AXIS_COLOR = HexColor("#57606a")
+_LABEL_COLOR = HexColor("#1f2328")
+_TICK_FONT_SIZE = 10
+_LABEL_FONT_SIZE = 12
+
+
+def _build_drawing(geo: PlotGeometry) -> Drawing:
+    """由共享几何构建矢量 Drawing（坐标翻转后仍沿用 SVG 的像素布局）。"""
+    drawing = Drawing(geo.width, geo.height)
+
+    # SVG y-down → reportlab y-up：翻转像素 y
+    def sx(x: float) -> float:
+        return _sx(x, geo.xmin, geo.xmax)
+
+    def sy(y: float) -> float:
+        return geo.height - _sy(y, geo.ymin, geo.ymax)
+
+    # 网格
+    if geo.grid:
+        for x in geo.xticks:
+            drawing.add(
+                Line(sx(x), sy(geo.ymin), sx(x), sy(geo.ymax), strokeColor=_GRID_COLOR, strokeWidth=0.5)
+            )
+        for y in geo.yticks:
+            drawing.add(
+                Line(sx(geo.xmin), sy(y), sx(geo.xmax), sy(y), strokeColor=_GRID_COLOR, strokeWidth=0.5)
+            )
+
+    # 坐标轴（过原点画在原点，否则贴边，与 SVG 一致）
+    drawing.add(
+        Line(sx(geo.xmin), sy(geo.x_axis_y), sx(geo.xmax), sy(geo.x_axis_y), strokeColor=_AXIS_COLOR, strokeWidth=0.7)
+    )
+    drawing.add(
+        Line(sx(geo.y_axis_x), sy(geo.ymin), sx(geo.y_axis_x), sy(geo.ymax), strokeColor=_AXIS_COLOR, strokeWidth=0.7)
+    )
+
+    # 刻度数字（x 轴下方、y 轴左侧）
+    for x in geo.xticks:
+        drawing.add(
+            String(
+                sx(x), sy(geo.x_axis_y) - 14, _fmt_num(x),
+                fontName=_FONT, fontSize=_TICK_FONT_SIZE, fillColor=_AXIS_COLOR, textAnchor="middle",
+            )
+        )
+    for y in geo.yticks:
+        drawing.add(
+            String(
+                sx(geo.y_axis_x) - 6, sy(y) - 3, _fmt_num(y),
+                fontName=_FONT, fontSize=_TICK_FONT_SIZE, fillColor=_AXIS_COLOR, textAnchor="end",
+            )
+        )
+
+    # 曲线（非有限点处已由几何断成多段）
+    for segments, color in zip(geo.polylines, geo.colors):
+        for seg in segments:
+            flipped = [(px, geo.height - py) for px, py in seg]
+            drawing.add(PolyLine(flipped, strokeColor=HexColor(color), strokeWidth=1.4))
+
+    # 轴标签
+    if geo.xlabel:
+        drawing.add(
+            String(
+                geo.width / 2, 10, geo.xlabel,
+                fontName=_FONT, fontSize=_LABEL_FONT_SIZE, fillColor=_LABEL_COLOR, textAnchor="middle",
+            )
+        )
+    if geo.ylabel:
+        # 竖向标签：rotate(90) 在 y-up 坐标下等价于 SVG 的 rotate(-90)
+        label = Group()
+        label.add(
+            String(
+                16, geo.height / 2, geo.ylabel,
+                fontName=_FONT, fontSize=_LABEL_FONT_SIZE, fillColor=_LABEL_COLOR, textAnchor="middle",
+            )
+        )
+        label.rotate(90, 16, geo.height / 2)
+        drawing.add(label)
+
+    return drawing
+
+
+def render_drawing(plot: FunctionPlot, width: float | None = None) -> Drawing:
+    """把已解析的 FunctionPlot 渲染为 reportlab Drawing（可直接追加到 platypus story）。
+
+    ``width`` 为目标输出宽度（点），用于把 640px 的几何缩放到页面内容宽；省略则按
+    原始尺寸输出。缩放只影响 PDF 渲染，不改动共享几何。
+    """
+    geo = compute_geometry(plot)
+    drawing = _build_drawing(geo)
+    if width is not None and width > 0:
+        drawing.renderScale = min(1.0, width / geo.width)
+    return drawing

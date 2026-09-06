@@ -31,11 +31,14 @@ from app.contracts import ExportOptions
 from app.export.document import Document, DocumentNode, ExportResult
 from app.export.exporters._common import (
     MERMAID_WARNING,
-    PLOT_PLACEHOLDER_WARNING,
     RAW_HTML_WARNING,
+    FunctionPlotBudget,
     format_meta_value,
+    format_plot_diagnostic,
     safe_url,
 )
+from app.plot.render_reportlab import render_drawing
+from app.plot.renderer import FunctionPlotStaticRenderer, StaticRenderRequest
 
 _FONT = "STSong-Light"
 pdfmetrics.registerFont(UnicodeCIDFont(_FONT))
@@ -118,6 +121,11 @@ class PdfExporter:
         warnings: list[str] = []
 
         page = _PAGE_SIZES.get((options.page_size or "A4").lower(), A4)
+        self._options = options
+        self._plot_budget = FunctionPlotBudget()
+        self._plot_renderer = FunctionPlotStaticRenderer()
+        # 内容区宽度（左右各 20mm 边距），供函数图像缩放适配页面
+        self._plot_width = page[0] - 40 * mm
         buf = BytesIO()
         doc = SimpleDocTemplate(
             buf,
@@ -292,8 +300,36 @@ class PdfExporter:
         story.append(Preformatted(node.text, self._styles["code"]))
 
     def _block_function_plot(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
-        warnings.append(PLOT_PLACEHOLDER_WARNING)
-        story.append(Preformatted(node.text, self._styles["code"]))
+        # 文档级数量上限：超出部分直接回退占位，不解析不采样，防止海量图像耗尽资源
+        over = self._plot_budget.check_count()
+        if over is not None:
+            warnings.append(over)
+            story.append(Preformatted(node.text, self._styles["code"]))
+            return
+        # 解析与渲染共同纳入局部异常回退：单个图像失败只回退占位 + warning，
+        # 绝不阻断整篇导出（含复杂表达式触发的 RecursionError 等异常）。
+        try:
+            request = StaticRenderRequest(
+                kind="function_plot", source=node.text, theme=self._options.theme_id
+            )
+            parsed = self._plot_renderer.parse(request)
+            for diag in parsed.diagnostics:
+                warnings.append(format_plot_diagnostic(diag))
+            if parsed.plot is None:
+                story.append(Preformatted(node.text, self._styles["code"]))
+                return
+            # 文档级累计复杂度预算：超出后回退占位，不再采样求值
+            over = self._plot_budget.check_nodes(parsed.plot.node_count)
+            if over is not None:
+                warnings.append(over)
+                story.append(Preformatted(node.text, self._styles["code"]))
+                return
+            # Drawing 本身即 Flowable，缩放后追加到 story，与 HTML 视觉一致
+            drawing = render_drawing(parsed.plot, width=self._plot_width)
+            story.append(drawing)
+        except Exception as exc:
+            warnings.append(f"函数图像：解析或渲染失败，已回退占位（{exc}）")
+            story.append(Preformatted(node.text, self._styles["code"]))
 
     def _block_math_block(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
         story.append(Paragraph(f"$${_html.escape(node.text)}$$", self._styles["math"]))

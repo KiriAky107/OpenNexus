@@ -311,14 +311,48 @@ def test_export_docx_completes_with_zip_magic_bytes() -> None:
     assert path.read_bytes()[:2] == b"PK"
 
 
-def test_pdf_exporter_marks_plot_and_mermaid_as_placeholders() -> None:
+def test_pdf_exporter_embeds_function_plot_and_marks_mermaid() -> None:
     from app.export.exporters.pdf import PdfExporter
 
     md = "```mermaid\ngraph LR\n```\n\n```function_plot\ny = x\n```"
     result = asyncio.run(PdfExporter().export(parse_document(md), ExportOptions()))
     assert result.content[:4] == b"%PDF"
     assert any("mermaid" in w for w in result.warnings)
+    # function_plot 已内嵌为矢量图，不再产生「函数图像占位」warning
+    assert not any("函数图像" in w for w in result.warnings)
+    # 绘图用 STSong-Light 渲染刻度/标签，字体应嵌入 PDF
+    assert b"STSong-Light" in result.content
+
+
+def test_pdf_exporter_function_plot_fallback_on_error() -> None:
+    from app.export.exporters.pdf import PdfExporter
+
+    # 解析失败（不安全表达式）应回退源码占位并记 warning，不阻断整篇导出
+    md = "```function_plot\ny = os.system('x')\n```"
+    result = asyncio.run(PdfExporter().export(parse_document(md), ExportOptions()))
+    assert result.content[:4] == b"%PDF"
     assert any("函数图像" in w for w in result.warnings)
+
+
+def test_pdf_exporter_limits_function_plot_count() -> None:
+    from app.export.exporters.pdf import PdfExporter
+
+    blocks = "\n\n".join("```function-plot\ny = x\n```" for _ in range(20))
+    result = asyncio.run(PdfExporter().export(parse_document(blocks), ExportOptions()))
+    assert result.content[:4] == b"%PDF"
+    # 超出数量上限的图块回退占位并记 warning
+    assert any("数量超过上限" in w for w in result.warnings)
+
+
+def test_pdf_exporter_limits_total_plot_nodes(monkeypatch) -> None:
+    import app.export.exporters._common as common_mod
+    from app.export.exporters.pdf import PdfExporter
+
+    monkeypatch.setattr(common_mod, "MAX_TOTAL_PLOT_NODES", 5)
+    md = "```function-plot\ny = x\n```\n\n```function-plot\ny = x + x + x + x\n```"
+    result = asyncio.run(PdfExporter().export(parse_document(md), ExportOptions()))
+    assert result.content[:4] == b"%PDF"
+    assert any("累计复杂度" in w for w in result.warnings)
 
 
 def test_docx_exporter_marks_plot_and_mermaid_as_placeholders() -> None:

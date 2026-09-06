@@ -1,7 +1,11 @@
-"""Function Plot → 静态 SVG 渲染。
+"""Function Plot → 静态 SVG 渲染 + 共享几何计算。
 
 只输出纯几何与 <text> 的 SVG（无 script/foreignObject/内联事件），可安全内嵌 HTML。
 所有文本与颜色都经过转义/校验，不把用户输入直接拼进标记。
+
+几何计算（范围解析、采样、刻度、非有限点分段）统一收敛到 ``compute_geometry``，
+返回像素坐标的 ``PlotGeometry``；``render_svg`` 只做 SVG 序列化，reportlab 后端
+（``render_reportlab.py``）消费同一份几何，保证 PDF 与 SVG 视觉一致。
 """
 
 from __future__ import annotations
@@ -9,7 +13,7 @@ from __future__ import annotations
 import html
 import math
 import re
-from typing import Callable
+from dataclasses import dataclass
 
 from app.plot.model import FunctionPlot, StaticRenderResult
 from app.plot.parser import PlotParseError, evaluate, parse_expression
@@ -102,17 +106,51 @@ def _compute_range(
     return lo - pad, hi + pad
 
 
-def _polyline(
+def _sx(x: float, xmin: float, xmax: float) -> float:
+    """数据 x → 像素 x（SVG y-down 约定，原点左上）。"""
+    return _MARGIN + (x - xmin) / (xmax - xmin) * (_WIDTH - 2 * _MARGIN)
+
+
+def _sy(y: float, ymin: float, ymax: float) -> float:
+    """数据 y → 像素 y（SVG y-down 约定，原点左上）。"""
+    return _HEIGHT - _MARGIN - (y - ymin) / (ymax - ymin) * (_HEIGHT - 2 * _MARGIN)
+
+
+@dataclass
+class PlotGeometry:
+    """已解析的几何：范围、轴位置、刻度、曲线像素点段、标签与 warnings。
+
+    像素坐标统一为 SVG y-down 约定；reportlab 后端（y-up）自行翻转 y。
+    """
+
+    width: int
+    height: int
+    xmin: float
+    xmax: float
+    ymin: float
+    ymax: float
+    x_axis_y: float  # 数据空间里 x 轴所在 y（过原点则 0，否则贴边）
+    y_axis_x: float  # 数据空间里 y 轴所在 x（过原点则 0，否则贴边）
+    xticks: list[float]
+    yticks: list[float]
+    polylines: list[list[list[tuple[float, float]]]]  # 按表达式分组：段 → 像素点
+    colors: list[str]  # 与 polylines 对齐
+    xlabel: str | None
+    ylabel: str | None
+    grid: bool
+    warnings: list[str]
+
+
+def _sample_segments(
     tree: object,
     xmin: float,
     xmax: float,
-    sx: Callable[[float], float],
-    sy: Callable[[float], float],
-    color: str,
-) -> str:
-    """采样并把非有限点处断开成多段 polyline，避免画穿渐近线。"""
-    segments: list[str] = []
-    points: list[str] = []
+    ymin: float,
+    ymax: float,
+) -> list[list[tuple[float, float]]]:
+    """采样并映射为像素点段；非有限点处断段，避免画穿渐近线。"""
+    segments: list[list[tuple[float, float]]] = []
+    points: list[tuple[float, float]] = []
     for i in range(_SAMPLES + 1):
         x = xmin + (xmax - xmin) * i / _SAMPLES
         try:
@@ -121,85 +159,25 @@ def _polyline(
             y = math.nan
         if not isinstance(y, (int, float)) or not math.isfinite(y):
             if points:
-                segments.append(f'<polyline points="{" ".join(points)}" fill="none" stroke="{color}"/>')
+                segments.append(points)
                 points = []
             continue
-        px = sx(x)
-        py = sy(y)
+        px = _sx(x, xmin, xmax)
+        py = _sy(y, ymin, ymax)
         # 映射后的坐标必须有限：显式 range 下极端 y 值可能让像素坐标溢出为 inf
         if not (math.isfinite(px) and math.isfinite(py)):
             if points:
-                segments.append(f'<polyline points="{" ".join(points)}" fill="none" stroke="{color}"/>')
+                segments.append(points)
                 points = []
             continue
-        points.append(f"{px:.2f},{py:.2f}")
+        points.append((px, py))
     if points:
-        segments.append(f'<polyline points="{" ".join(points)}" fill="none" stroke="{color}"/>')
-    return "".join(segments)
+        segments.append(points)
+    return segments
 
 
-def _grid(
-    xmin: float,
-    xmax: float,
-    ymin: float,
-    ymax: float,
-    sx: Callable[[float], float],
-    sy: Callable[[float], float],
-) -> str:
-    parts: list[str] = []
-    for x in _ticks(xmin, xmax, _nice_step(xmax - xmin)):
-        parts.append(f'<line x1="{sx(x):.2f}" y1="{sy(ymin):.2f}" x2="{sx(x):.2f}" y2="{sy(ymax):.2f}" stroke="#eaeef2"/>')
-    for y in _ticks(ymin, ymax, _nice_step(ymax - ymin)):
-        parts.append(f'<line x1="{sx(xmin):.2f}" y1="{sy(y):.2f}" x2="{sx(xmax):.2f}" y2="{sy(y):.2f}" stroke="#eaeef2"/>')
-    return "".join(parts)
-
-
-def _axes(
-    xmin: float,
-    xmax: float,
-    ymin: float,
-    ymax: float,
-    sx: Callable[[float], float],
-    sy: Callable[[float], float],
-) -> str:
-    parts: list[str] = []
-    # 坐标轴：过原点则画在原点，否则贴边，保证始终有参照系
-    x_axis_y = 0.0 if ymin <= 0 <= ymax else ymin
-    y_axis_x = 0.0 if xmin <= 0 <= xmax else xmin
-    parts.append(
-        f'<line x1="{sx(xmin):.2f}" y1="{sy(x_axis_y):.2f}" x2="{sx(xmax):.2f}" y2="{sy(x_axis_y):.2f}" stroke="#57606a"/>'
-    )
-    parts.append(
-        f'<line x1="{sx(y_axis_x):.2f}" y1="{sy(ymin):.2f}" x2="{sx(y_axis_x):.2f}" y2="{sy(ymax):.2f}" stroke="#57606a"/>'
-    )
-    # x 轴刻度数字（画在轴下方）
-    for x in _ticks(xmin, xmax, _nice_step(xmax - xmin)):
-        parts.append(
-            f'<text x="{sx(x):.2f}" y="{sy(x_axis_y) + 14:.2f}" text-anchor="middle" font-size="10" fill="#57606a">{html.escape(_fmt_num(x))}</text>'
-        )
-    # y 轴刻度数字（画在轴左侧）
-    for y in _ticks(ymin, ymax, _nice_step(ymax - ymin)):
-        parts.append(
-            f'<text x="{sx(y_axis_x) - 6:.2f}" y="{sy(y) + 3:.2f}" text-anchor="end" font-size="10" fill="#57606a">{html.escape(_fmt_num(y))}</text>'
-        )
-    return "".join(parts)
-
-
-def _labels(plot: FunctionPlot, sx: Callable[[float], float], sy: Callable[[float], float]) -> str:
-    parts: list[str] = []
-    if plot.axes.xlabel:
-        parts.append(
-            f'<text x="{(_WIDTH / 2):.2f}" y="{_HEIGHT - 10:.2f}" text-anchor="middle" font-size="12" fill="#1f2328">{html.escape(plot.axes.xlabel)}</text>'
-        )
-    if plot.axes.ylabel:
-        parts.append(
-            f'<text x="16" y="{(_HEIGHT / 2):.2f}" text-anchor="middle" font-size="12" fill="#1f2328" transform="rotate(-90 16 {_HEIGHT / 2:.2f})">{html.escape(plot.axes.ylabel)}</text>'
-        )
-    return "".join(parts)
-
-
-def render_svg(plot: FunctionPlot) -> StaticRenderResult:
-    """把已解析的 FunctionPlot 渲染为内嵌 SVG。"""
+def compute_geometry(plot: FunctionPlot) -> PlotGeometry:
+    """解析并计算几何，供 SVG 与 reportlab 后端复用。"""
     warnings: list[str] = []
     xmin, xmax = plot.domain
     if not _valid_span(xmin, xmax):
@@ -232,27 +210,125 @@ def render_svg(plot: FunctionPlot) -> StaticRenderResult:
         warnings.append("y 范围跨度无法表示，回退到 [-10, 10]")
         ymin, ymax = -10.0, 10.0
 
-    def sx(x: float) -> float:
-        return _MARGIN + (x - xmin) / (xmax - xmin) * (_WIDTH - 2 * _MARGIN)
+    x_axis_y = 0.0 if ymin <= 0 <= ymax else ymin
+    y_axis_x = 0.0 if xmin <= 0 <= xmax else xmin
+    xticks = _ticks(xmin, xmax, _nice_step(xmax - xmin))
+    yticks = _ticks(ymin, ymax, _nice_step(ymax - ymin))
 
-    def sy(y: float) -> float:
-        return _HEIGHT - _MARGIN - (y - ymin) / (ymax - ymin) * (_HEIGHT - 2 * _MARGIN)
-
-    parts: list[str] = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {_WIDTH} {_HEIGHT}" role="img">'
-    ]
-    if plot.axes.grid:
-        parts.append(_grid(xmin, xmax, ymin, ymax, sx, sy))
-    parts.append(_axes(xmin, xmax, ymin, ymax, sx, sy))
+    polylines: list[list[list[tuple[float, float]]]] = []
+    colors: list[str] = []
     for i, (expr, tree) in enumerate(fns):
         color = _safe_color(expr.color, _PALETTE[i % len(_PALETTE)])
-        parts.append(_polyline(tree, xmin, xmax, sx, sy, color))
-    parts.append(_labels(plot, sx, sy))
+        colors.append(color)
+        polylines.append(_sample_segments(tree, xmin, xmax, ymin, ymax))
+
+    return PlotGeometry(
+        width=_WIDTH,
+        height=_HEIGHT,
+        xmin=xmin,
+        xmax=xmax,
+        ymin=ymin,
+        ymax=ymax,
+        x_axis_y=x_axis_y,
+        y_axis_x=y_axis_x,
+        xticks=xticks,
+        yticks=yticks,
+        polylines=polylines,
+        colors=colors,
+        xlabel=plot.axes.xlabel,
+        ylabel=plot.axes.ylabel,
+        grid=plot.axes.grid,
+        warnings=warnings,
+    )
+
+
+# --- SVG 序列化（与 compute_geometry 共用，保证字节级稳定） ---
+def _grid_svg(geo: PlotGeometry) -> str:
+    sx = lambda x: _sx(x, geo.xmin, geo.xmax)
+    sy = lambda y: _sy(y, geo.ymin, geo.ymax)
+    parts: list[str] = []
+    for x in geo.xticks:
+        parts.append(
+            f'<line x1="{sx(x):.2f}" y1="{sy(geo.ymin):.2f}" x2="{sx(x):.2f}" '
+            f'y2="{sy(geo.ymax):.2f}" stroke="#eaeef2"/>'
+        )
+    for y in geo.yticks:
+        parts.append(
+            f'<line x1="{sx(geo.xmin):.2f}" y1="{sy(y):.2f}" x2="{sx(geo.xmax):.2f}" '
+            f'y2="{sy(y):.2f}" stroke="#eaeef2"/>'
+        )
+    return "".join(parts)
+
+
+def _axes_svg(geo: PlotGeometry) -> str:
+    sx = lambda x: _sx(x, geo.xmin, geo.xmax)
+    sy = lambda y: _sy(y, geo.ymin, geo.ymax)
+    parts: list[str] = []
+    # 坐标轴：过原点则画在原点，否则贴边，保证始终有参照系
+    parts.append(
+        f'<line x1="{sx(geo.xmin):.2f}" y1="{sy(geo.x_axis_y):.2f}" x2="{sx(geo.xmax):.2f}" '
+        f'y2="{sy(geo.x_axis_y):.2f}" stroke="#57606a"/>'
+    )
+    parts.append(
+        f'<line x1="{sx(geo.y_axis_x):.2f}" y1="{sy(geo.ymin):.2f}" x2="{sx(geo.y_axis_x):.2f}" '
+        f'y2="{sy(geo.ymax):.2f}" stroke="#57606a"/>'
+    )
+    # x 轴刻度数字（画在轴下方）
+    for x in geo.xticks:
+        parts.append(
+            f'<text x="{sx(x):.2f}" y="{sy(geo.x_axis_y) + 14:.2f}" text-anchor="middle" '
+            f'font-size="10" fill="#57606a">{html.escape(_fmt_num(x))}</text>'
+        )
+    # y 轴刻度数字（画在轴左侧）
+    for y in geo.yticks:
+        parts.append(
+            f'<text x="{sx(geo.y_axis_x) - 6:.2f}" y="{sy(y) + 3:.2f}" text-anchor="end" '
+            f'font-size="10" fill="#57606a">{html.escape(_fmt_num(y))}</text>'
+        )
+    return "".join(parts)
+
+
+def _polylines_svg(geo: PlotGeometry) -> str:
+    parts: list[str] = []
+    for segments, color in zip(geo.polylines, geo.colors):
+        for seg in segments:
+            points = " ".join(f"{px:.2f},{py:.2f}" for px, py in seg)
+            parts.append(f'<polyline points="{points}" fill="none" stroke="{color}"/>')
+    return "".join(parts)
+
+
+def _labels_svg(geo: PlotGeometry) -> str:
+    parts: list[str] = []
+    if geo.xlabel:
+        parts.append(
+            f'<text x="{geo.width / 2:.2f}" y="{geo.height - 10:.2f}" text-anchor="middle" '
+            f'font-size="12" fill="#1f2328">{html.escape(geo.xlabel)}</text>'
+        )
+    if geo.ylabel:
+        parts.append(
+            f'<text x="16" y="{geo.height / 2:.2f}" text-anchor="middle" font-size="12" '
+            f'fill="#1f2328" transform="rotate(-90 16 {geo.height / 2:.2f})">'
+            f'{html.escape(geo.ylabel)}</text>'
+        )
+    return "".join(parts)
+
+
+def render_svg(plot: FunctionPlot) -> StaticRenderResult:
+    """把已解析的 FunctionPlot 渲染为内嵌 SVG。"""
+    geo = compute_geometry(plot)
+    parts: list[str] = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {geo.width} {geo.height}" role="img">'
+    ]
+    if geo.grid:
+        parts.append(_grid_svg(geo))
+    parts.append(_axes_svg(geo))
+    parts.append(_polylines_svg(geo))
+    parts.append(_labels_svg(geo))
     parts.append("</svg>")
 
     return StaticRenderResult(
         content="".join(parts),
-        width=_WIDTH,
-        height=_HEIGHT,
-        warnings=warnings,
+        width=geo.width,
+        height=geo.height,
+        warnings=geo.warnings,
     )
