@@ -269,3 +269,17 @@ def test_html_exporter_limits_function_plot_count() -> None:
     assert html.count('<figure class="function-plot">') == 16
     assert html.count('<pre class="function-plot">') == 4
     assert any("函数图像数量超过上限" in w for w in result.warnings)
+
+
+def test_html_exporter_limits_total_plot_nodes(monkeypatch) -> None:
+    # P1：文档级累计 AST 节点预算超限后，后续图像回退占位，防止组合复杂度耗尽 CPU
+    import app.export.exporters.html as html_mod
+
+    monkeypatch.setattr(html_mod, "_MAX_TOTAL_PLOT_NODES", 5)
+    # 第一个图块 y=x（1 节点）在预算内；第二个图块 y=x+x+x+x（7 节点）累计超限
+    md = "```function-plot\ny = x\n```\n\n```function-plot\ny = x + x + x + x\n```"
+    result = asyncio.run(HtmlExporter().export(parse_document(md), ExportOptions()))
+    html = result.content.decode("utf-8")
+    assert html.count('<figure class="function-plot">') == 1
+    assert html.count('<pre class="function-plot">') == 1
+    assert any("累计复杂度" in w for w in result.warnings)

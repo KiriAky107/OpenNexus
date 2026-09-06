@@ -449,3 +449,37 @@ def test_export_output_too_large(monkeypatch) -> None:
     assert finished.error_code == "EXPORT_OUTPUT_TOO_LARGE"
     assert finished.file is None
     assert not (get_settings().exports_path / f"{finished.job_id}.html").exists()
+
+
+def test_export_limits_concurrent_rendering(monkeypatch) -> None:
+    # P1：并发渲染受 MAX_CONCURRENT_RENDERS 限制，大量任务不会同时占满工作线程
+    import threading
+    import time
+
+    real_render = export_service._render_document
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def slow_render(document, options):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.05)
+        with lock:
+            active -= 1
+        return real_render(document, options)
+
+    monkeypatch.setattr(export_service, "_render_document", slow_render)
+
+    async def _go():
+        jobs = [
+            await export_service.create_export(_markdown_request(f"# t{i}"))
+            for i in range(6)
+        ]
+        return [await export_service.wait_for_export(j.job_id) for j in jobs]
+
+    finished = asyncio.run(_go())
+    assert all(j.status == ExportStatus.completed for j in finished)
+    assert peak <= export_service.MAX_CONCURRENT_RENDERS

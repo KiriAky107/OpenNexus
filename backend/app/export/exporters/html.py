@@ -24,6 +24,9 @@ _ALLOWED_URL_SCHEMES = frozenset({"http", "https", "mailto"})
 
 # 单篇文档允许的函数图像数量上限，超出部分回退占位，防止多图块并发采样耗尽内存/线程
 _MAX_FUNCTION_PLOTS = 16
+# 单篇文档允许的函数图像累计 AST 节点预算，超出部分回退占位，防止组合复杂度（多图块
+# × 多表达式 × 深表达式）在采样求值时长时间占满 CPU
+_MAX_TOTAL_PLOT_NODES = 8000
 
 
 def _safe_url(url: str) -> str | None:
@@ -73,6 +76,7 @@ class HtmlExporter:
         """同步渲染；CPU 密集，调用方应放入线程执行，避免阻塞事件循环。"""
         self._options = options
         self._plot_count = 0
+        self._plot_nodes = 0
         warnings: list[str] = []
         body = self._render_children(document.children, warnings)
         content = self._assemble(document, options, body, warnings)
@@ -222,6 +226,13 @@ class HtmlExporter:
                 warnings.append(self._format_plot_diagnostic(diag))
             if parsed.plot is None:
                 return f'<pre class="function-plot">{html.escape(node.text)}</pre>'
+            # 文档级累计复杂度预算：超出后回退占位，不再采样求值
+            if self._plot_nodes + parsed.plot.node_count > _MAX_TOTAL_PLOT_NODES:
+                warnings.append(
+                    f"函数图像：文档内函数图像累计复杂度超过上限 {_MAX_TOTAL_PLOT_NODES} 节点，已回退为源码占位"
+                )
+                return f'<pre class="function-plot">{html.escape(node.text)}</pre>'
+            self._plot_nodes += parsed.plot.node_count
             rendered = render_svg(parsed.plot)
         except Exception as exc:
             warnings.append(f"函数图像：解析或渲染失败，已回退占位（{exc}）")
