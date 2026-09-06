@@ -1,6 +1,6 @@
 theme_id: paper-moments
 name: 纸间时光 · Paper Moments
-version: 1.8.0
+version: 1.8.1
 author: NotesAgent
 description: 奶油纸张、手帐虚线与粉蓝胶带，把每天的灵感好好收藏。
 min_app_version: 0.2.0
@@ -155,9 +155,13 @@ license: MIT
   padding: 44px 40px 60px 52px;
   border: 1px solid #685949;
   border-radius: 8px 16px 8px 8px;
-  outline: 1px dashed #c5b9a7;
-  outline-offset: -10px;
-  background: linear-gradient(90deg, transparent 32px, #e9cfc7 32px 34px, transparent 34px), #fffef8;
+  /* Small repeated tiles retain the stitching without a document-height dashed outline. */
+  background:
+    linear-gradient(#c5b9a7 50%, transparent 50%) 10px 0 / 1px 8px repeat-y,
+    linear-gradient(#c5b9a7 50%, transparent 50%) calc(100% - 10px) 0 / 1px 8px repeat-y,
+    linear-gradient(90deg, #c5b9a7 50%, transparent 50%) 0 10px / 8px 1px repeat-x,
+    linear-gradient(90deg, #c5b9a7 50%, transparent 50%) 0 calc(100% - 10px) / 8px 1px repeat-x,
+    linear-gradient(90deg, transparent 32px, #e9cfc7 32px 34px, transparent 34px), #fffef8;
   box-shadow: 6px 6px 0 #d8e6e2, 12px 12px 0 #f0d8cf;
 }
 [data-theme="paper-moments"] .milkdown-host .ProseMirror::before {

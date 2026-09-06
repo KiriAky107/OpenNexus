@@ -216,4 +216,6 @@ if __name__ == "__main__":
                 response = {"error_code": "LOCAL_INFERENCE_FAILED", "message": "本地推理失败，请检查媒体格式、模型和设备配置。"}
     if "error_code" in response:
         response["diagnostics"] = {"requested_device": request["config"]["device"], "actual_device": request.get("_actual_device", "unknown")}
-    sys.stdout.buffer.write((json.dumps(response, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8"))
+    from protocol import response_lines
+    for line in response_lines(response, request['operation']):
+        sys.stdout.buffer.write(line.encode('utf-8'))

@@ -1,0 +1,98 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Agent 与任务压测</title></head>
+<body><div id="viewport"><div id="app"></div></div>
+<script type="module">
+import { createApp, h, nextTick, ref } from 'vue'
+import { createPinia } from 'pinia'
+import TasksView from '/src/features/tasks/TasksView.vue'
+import TraceTimeline from '/src/features/agent/TraceTimeline.vue'
+import { useTaskStore } from '/src/stores/task.ts'
+import { getCommunityThemePreviewCss } from '/src/services/themePackageService.ts'
+import '/src/styles/tokens.css'
+import '/src/styles/features.css'
+const frame = () => new Promise(resolve => requestAnimationFrame(resolve))
+const settle = async () => { await nextTick(); await frame(); await frame() }
+const summary = values => { const sorted=[...values].sort((a,b)=>a-b); return {median:sorted[Math.floor(sorted.length/2)]??0,p95:sorted[Math.ceil(sorted.length*.95)-1]??0,max:sorted.at(-1)??0} }
+window.prepareScrollBenchmark = async (size = 1000) => {
+ const params=new URLSearchParams(location.search), kind=params.get('kind')||'tasks', theme=params.get('theme')||'light'
+ document.documentElement.dataset.theme=theme
+ const style=document.createElement('style');style.textContent=theme==='paper-moments'?getCommunityThemePreviewCss(theme):'';document.head.append(style)
+ const pinia=createPinia(), store=useTaskStore(pinia), host=document.getElementById('app'), viewport=document.getElementById('viewport')
+ // App tokens normally clip #app; the real Agent page provides its own scroller.
+ // This standalone Trace mount uses #viewport in that role.
+ if(kind==='trace'){host.style.height='auto';host.style.overflow='visible'}
+ const date='2026-09-06T00:00:00Z'
+ const tasks=Array.from({length:size},(_,i)=>({task_id:`task_${i}`,title:`压测任务 ${i}`,description:'用于验证任务列表渲染与筛选，独立生成，不读取真实笔记。',status:i%3===0?'done':'todo',created_at:date,updated_at:date}))
+ const events=ref(Array.from({length:size},(_,i)=>{
+  const step=Math.floor(i/4), event=['ModelCallStarted','ModelCallCompleted','ToolCall','ToolResult'][i%4]
+  return {run_id:'stress',sequence:i,event,timestamp:new Date(Date.parse(date)+i*10).toISOString(),data:{step,model_call_id:`m_${step}`,parent_model_call_id:`m_${step}`,tool_call_id:`t_${step}`,name:'system.echo',arguments:{text:`压力测试 ${step}`},output:{text:'工具返回内容'},success:true,duration_ms:10}}
+ }))
+ const originalFetch=window.fetch, requests=[]
+ // Intercept every request in this isolated page: never fall through to the user's backend.
+ window.fetch=async (input)=>{
+  const url=new URL(typeof input==='string'?input:input.url,location.href);requests.push(url.pathname+url.search)
+  if(url.pathname==='/api/tasks'){
+   const limit=Number(url.searchParams.get('limit')||50),offset=Number(url.searchParams.get('offset')||0)
+   return new Response(JSON.stringify({items:tasks.slice(offset,offset+limit),page:{total:size,limit,offset}}),{headers:{'Content-Type':'application/json'}})
+  }
+  throw Error(`Unexpected request in isolated benchmark: ${url.pathname}`)
+ }
+ const start=performance.now()
+ const app=createApp({render:()=>kind==='tasks'?h(TasksView):h(TraceTimeline,{events:events.value,runStatus:'completed'})}).use(pinia)
+ app.mount(host)
+ await settle()
+ while(store.isLoading) await settle()
+ const result={kind,theme,size,initialRenderMs:performance.now()-start,requests,initialTaskCount:kind==='tasks'?store.tasks.length:undefined}
+ if(kind==='tasks'){
+  const fullStart=performance.now();store.tasks=tasks;await settle()
+  result.fullListRenderMs=performance.now()-fullStart
+  result.fullListIsInjected=true; result.renderedTasks=host.querySelectorAll('article.task-card').length // Diagnostic upper bound, distinct from current paginated API behavior.
+ }
+ result.domNodes=host.querySelectorAll('*').length
+ const scroller=host.querySelector('.feature-page')||viewport
+ result.scrollContainers=[...document.querySelectorAll('html,body,#app,#viewport,.trace-visualization,.timeline-view,.timeline')].map(element=>({node:element.id||element.className||element.tagName,height:element.clientHeight,scrollHeight:element.scrollHeight,overflow:getComputedStyle(element).overflow,position:getComputedStyle(element).position}))
+ let maxScrollTop=0
+ const trackScroll=()=>{maxScrollTop=Math.max(maxScrollTop,scroller.scrollTop)}
+ scroller.addEventListener('scroll',trackScroll,{passive:true})
+ const gaps=[],longTasks=[];let last=performance.now(),raf=0
+ const tick=now=>{gaps.push(now-last);last=now;raf=requestAnimationFrame(tick)}
+ const observer=new PerformanceObserver(list=>longTasks.push(...list.getEntries().map(t=>t.duration)))
+ observer.observe({type:'longtask',buffered:false});raf=requestAnimationFrame(tick)
+ window.finishScrollBenchmark=async()=>{
+  cancelAnimationFrame(raf);observer.disconnect()
+  result.frameGapsMs=summary(gaps);result.frames=gaps.length;result.longTasks=longTasks
+  result.scrollTop=scroller.scrollTop;result.scrollHeight=scroller.scrollHeight;result.maxScrollTop=maxScrollTop
+  scroller.removeEventListener('scroll',trackScroll)
+  const started=performance.now()
+  if(kind==='tasks'){
+   store.setFilterStatus('done');await settle()
+   result.filteredCount=host.querySelectorAll('article.task-card').length
+   result.totalFilteredCount=store.filteredTasks.length
+   result.expectedFilteredCount=Math.min(100,tasks.filter(task=>task.status==='done').length)
+   if(result.filteredCount!==result.expectedFilteredCount)throw Error('Task filter lost items')
+  } else {
+   const input=host.querySelector('input')
+   if(input){input.value='压力测试 1';input.dispatchEvent(new Event('input',{bubbles:true}));await settle()}
+   result.filteredDomNodes=host.querySelectorAll('*').length
+   result.filteredCount=host.querySelectorAll('.event-card').length
+   result.expectedFilteredCount=Math.min(200,events.value.filter(event=>JSON.stringify(event.data).includes('压力测试 1')).length)
+   if(result.filteredCount!==result.expectedFilteredCount)throw Error('Trace filter lost events')
+  }
+  result.filterMs=performance.now()-started
+  if(kind==='trace'){
+   const input=host.querySelector('input');input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));await settle()
+   let start=performance.now()
+   ;[...host.querySelectorAll('.view-toggle button')].find(button=>button.textContent==='树形').click();await settle()
+   result.treeSwitchMs=performance.now()-start
+   start=performance.now();input.value='压力测试';input.dispatchEvent(new Event('input',{bubbles:true}));await settle()
+   result.treeFilterMs=performance.now()-start
+   result.treeFilteredDomNodes=host.querySelectorAll('*').length
+  }
+  app.unmount();window.fetch=originalFetch;style.remove()
+  return result
+ }
+ const bounds=viewport.getBoundingClientRect();return {x:bounds.left+bounds.width/2,y:bounds.top+bounds.height/2}
+}
+window.runBenchmark=async size=>{await window.prepareScrollBenchmark(size);return window.finishScrollBenchmark()}
+</script>
+<style>html,body{height:100%;margin:0;background:var(--color-background-primary);color:var(--color-text-primary);font-family:system-ui}#viewport{height:100vh;overflow:auto}#app{max-width:1200px;margin:auto;padding:24px;box-sizing:border-box}</style>
+</body></html>

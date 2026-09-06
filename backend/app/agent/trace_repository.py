@@ -6,6 +6,7 @@ SQLite 中的事件是 SSE、前端 Trace 和 Benchmark 的共同事实来源。
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 import re
 from datetime import datetime, timezone
@@ -94,15 +95,30 @@ def sanitize_trace_value(
 
 
 class AgentTraceRepository:
+    def write_batch(self, jobs):
+        conn = connect()
+        try:
+            with transaction(conn):
+                for operation, args in jobs:
+                    if operation == 'create':
+                        self.create_run(*args, _conn=conn)
+                    elif operation == 'save':
+                        self.save_run(*args, _conn=conn)
+                    else:
+                        self.append_event(*args, _conn=conn)
+        finally:
+            conn.close()
+
     def create_run(
         self,
         run: AgentRun,
         request: AgentRunCreateRequest,
         config_snapshot: dict[str, Any],
+        *, _conn=None,
     ) -> None:
-        conn = connect()
+        conn = _conn or connect()
         try:
-            with transaction(conn):
+            with transaction(conn) if _conn is None else nullcontext():
                 conn.execute(
                     """
                     INSERT INTO agent_runs(
@@ -126,22 +142,24 @@ class AgentTraceRepository:
                     ),
                 )
         finally:
-            conn.close()
+            if _conn is None:
+                conn.close()
 
-    def save_run(self, run: AgentRun) -> None:
-        conn = connect()
+    def save_run(self, run: AgentRun, *, _conn=None) -> None:
+        conn = _conn or connect()
         try:
-            with transaction(conn):
+            with transaction(conn) if _conn is None else nullcontext():
                 self._update_run(conn, run)
         finally:
-            conn.close()
+            if _conn is None:
+                conn.close()
 
-    def append_event(self, run: AgentRun, event: AgentEvent) -> None:
+    def append_event(self, run: AgentRun, event: AgentEvent, *, _conn=None) -> None:
         """在同一事务中保存最新 Run 和事件；复写同一序号时保持幂等。"""
 
-        conn = connect()
+        conn = _conn or connect()
         try:
-            with transaction(conn):
+            with transaction(conn) if _conn is None else nullcontext():
                 self._update_run(conn, run)
                 conn.execute(
                     """
@@ -158,7 +176,8 @@ class AgentTraceRepository:
                     ),
                 )
         finally:
-            conn.close()
+            if _conn is None:
+                conn.close()
 
     def get_run(self, run_id: str) -> AgentRun | None:
         conn = connect()

@@ -29,8 +29,9 @@ const router = useRouter()
 let statusTimer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
 async function pollIndex() {
-  try { settingsStore.indexStatus = await getIndexStatus() } catch { /* retain last status; retry */ }
-  if (!disposed) statusTimer = setTimeout(pollIndex, 5000)
+  try { const status = await getIndexStatus(); if (!disposed) settingsStore.indexStatus = status } catch { /* retain last status; retry */ }
+  const busy = settingsStore.indexStatus.status === 'indexing' || settingsStore.indexStatus.active_searches
+  if (!disposed) statusTimer = setTimeout(pollIndex, busy || route.name === 'settings' || route.name === 'search' ? 1000 : 5000)
 }
 onMounted(() => { void settingsStore.loadDiagnostics(); void pollIndex() })
 onUnmounted(() => { disposed = true; clearTimeout(statusTimer) })

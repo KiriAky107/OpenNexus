@@ -54,8 +54,12 @@ window.runBenchmark = async (size = 25000) => {
 
 window.prepareScrollBenchmark = async (size = 25000) => {
  const source = makeStressDocument(size), target = document.getElementById('app')
- document.documentElement.dataset.theme = 'paper-moments'
- const style = document.createElement('style'); style.textContent = getCommunityThemePreviewCss('paper-moments'); document.head.append(style)
+ const options = new URLSearchParams(location.search)
+ const theme = options.get('theme') || 'paper-moments'
+ document.documentElement.dataset.theme = theme
+ const style = document.createElement('style'); style.textContent = theme === 'paper-moments' ? getCommunityThemePreviewCss(theme) : ''; document.head.append(style)
+ const variant = options.get('variant') || 'default'
+ if (variant === 'no-outline') style.textContent += '.visual-editor .milkdown-host .ProseMirror { outline: none !important; }'
  const pinia = createPinia(), component = ref()
  const app = createApp({render:()=>h(Editor,{ref:component,initialContent:source})}).use(pinia)
  app.mount(target)
@@ -69,7 +73,7 @@ window.prepareScrollBenchmark = async (size = 25000) => {
  observer.observe({type:'longtask',buffered:false});raf=requestAnimationFrame(tick)
  window.finishScrollBenchmark = async () => {
   cancelAnimationFrame(raf);observer.disconnect()
-  const result={requestedHan:size,theme:'paper-moments',frameGapsMs:summarize(gaps),frames:gaps.length,framesOver25ms:gaps.filter(g=>g>25).length,longTasks:tasks,scrollTop:scroller.scrollTop,scrollHeight:scroller.scrollHeight}
+  const result={requestedHan:size,theme,variant,frameGapsMs:summarize(gaps),frames:gaps.length,framesOver25ms:gaps.filter(g=>g>25).length,longTasks:tasks,scrollTop:scroller.scrollTop,scrollHeight:scroller.scrollHeight}
   const editor=component.value.getEditor(),view=editor.action(ctx=>ctx.get(editorViewCtx))
   view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(view.state.doc.content.size-1))))
   scroller.scrollTop=scroller.scrollHeight;await settle()

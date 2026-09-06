@@ -3,6 +3,11 @@ import type { ApiIndexJob, ApiIndexStatus, IndexStatus } from '@/contracts'
 
 function toIndexStatus(status: ApiIndexStatus): IndexStatus {
   return {
+    running_jobs: status.running_jobs,
+    active_searches: status.active_searches,
+    completed_searches: status.completed_searches,
+    failed_searches: status.failed_searches,
+    cancelled_searches: status.cancelled_searches,
     vector_refresh_required: status.vector_refresh_required ?? false,
     status: status.status === 'idle' ? 'idle' : status.status === 'failed' ? 'error' : 'indexing',
     pending_jobs: status.pending_jobs,

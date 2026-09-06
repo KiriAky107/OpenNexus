@@ -58,9 +58,22 @@ export const useAgentStore = defineStore('agent', () => {
     tools.value = await agentService.listTools()
   }
 
+  let listVersion = 0
   async function loadRuns() {
-    const resp = await agentService.listAgentRuns()
-    runs.value = resp.items
+    const version = ++listVersion
+    const items: AgentRun[] = []
+    let offset = 0
+    do {
+      const resp = await agentService.listAgentRuns({ limit: 100, offset })
+      if (version !== listVersion) return
+      items.push(...resp.items)
+      offset += resp.items.length
+      if (!resp.items.length || offset >= resp.total) break
+    } while (true)
+    const active = runs.value.find(run => run.run_id === activeRunId.value)
+    const merged = new Map(items.map(item => [item.run_id, item]))
+    if (active && !merged.has(active.run_id)) merged.set(active.run_id, active)
+    runs.value = [...merged.values()]
   }
 
   async function loadRun(runId: string) {

@@ -25,16 +25,27 @@ export const useTaskStore = defineStore('task', () => {
   const inProgressTasks = computed(() => tasks.value.filter((t) => t.status === 'in_progress'))
   const doneTasks = computed(() => tasks.value.filter((t) => t.status === 'done'))
 
+  let loadVersion = 0
   async function loadTasks() {
+    const version = ++loadVersion
     isLoading.value = true
     try {
-      const resp = await listTasks()
-      tasks.value = resp.items
+      const items: TaskItem[] = []
+      let offset = 0
+      do {
+        const resp = await listTasks({ limit: 100, offset })
+        if (version !== loadVersion) return
+        items.push(...resp.items)
+        offset += resp.items.length
+        if (!resp.items.length || offset >= resp.total) break
+      } while (true)
+      tasks.value = [...new Map(items.map(item => [item.task_id, item])).values()]
       error.value = null
     } catch (reason) {
+      if (version !== loadVersion) return
       error.value = reason instanceof Error ? reason.message : t('任务加载失败', 'Failed to load tasks')
     } finally {
-      isLoading.value = false
+      if (version === loadVersion) isLoading.value = false
     }
   }
 
