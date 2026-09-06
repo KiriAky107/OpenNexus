@@ -9,6 +9,7 @@ export const editorCommandIds = [
   'editor.font-size', 'editor.insert-markdown', 'editor.import-note-properties',
   'editor.metadata.edit', 'editor.metadata.title', 'editor.metadata.tags',
   'editor.reference-link', 'editor.html', 'editor.undo', 'editor.redo',
+  'editor.heading.toggle-fold', 'editor.heading.fold-all', 'editor.heading.unfold-all',
 ] as const
 export type EditorCommandId = typeof editorCommandIds[number]
 export type CommandResult = { ok: true } | { ok: false; reason: 'unsupported' | 'unavailable' | 'invalid-params' | 'failed' }

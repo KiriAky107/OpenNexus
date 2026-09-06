@@ -361,7 +361,7 @@ export const mockCommunityThemes: ThemeManifest[] = [
   {
     theme_id: 'ocean-blue',
     name: 'Ocean Blue',
-    version: '1.4.0',
+    version: '1.5.0',
     author: 'community',
     description: '宁静的海洋蓝色主题，适合长时间阅读',
     min_app_version: '0.2.0',
@@ -373,7 +373,7 @@ export const mockCommunityThemes: ThemeManifest[] = [
   {
     theme_id: 'midnight-purple',
     name: 'Midnight Purple',
-    version: '2.2.0',
+    version: '2.3.0',
     author: 'night-owl',
     description: '深紫色暗夜主题，适合编码',
     min_app_version: '0.2.0',

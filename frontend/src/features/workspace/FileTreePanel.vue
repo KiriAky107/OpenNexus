@@ -216,6 +216,7 @@ function containingFolder(path: string): string {
 
 <template>
   <section class="file-tree-panel" @click="closeContextMenu" @keydown.esc="closeContextMenu" @wheel.passive="revealSearch">
+    <p v-if="workspaceStore.treeRefreshError" class="subtle" role="status">{{ t('文件树暂未同步，将自动重试。', 'File tree sync delayed; retrying automatically.') }}</p>
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <div class="workspace-tabs" role="tablist" :aria-label="t('工作区导航', 'Workspace navigation')" @keydown="navigateTabs">
       <button id="workspace-files-tab" role="tab" aria-controls="workspace-files-panel" :aria-selected="activeTab === 'files'" :tabindex="activeTab === 'files' ? 0 : -1" @click="switchTab('files')">{{ t('文件', 'Files') }}</button>

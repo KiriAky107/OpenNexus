@@ -13,6 +13,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const isLoading = ref(false)
   const hasVault = ref(false)
   const recentVaults = ref<workspaceService.VaultInfo[]>([])
+  const treeRefreshError = ref<string | null>(null)
+  let refreshSequence = 0
 
   const activeFile = computed(() => {
     if (!activeFilePath.value) return null
@@ -65,10 +67,27 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   /** 重新拉取文件树。插件命令返回 refresh:workspace 时需要。 */
   async function refreshFileTree() {
     if (!hasVault.value) return
-    fileTree.value = await workspaceService.getFileTree()
+    const sequence = ++refreshSequence
+    const path = vaultPath.value
+    try {
+      const fresh = await workspaceService.refreshTree()
+      if (sequence !== refreshSequence || path !== vaultPath.value || !hasVault.value) return
+      const open = new Map<string, boolean>()
+      const collect = (nodes: FileNode[]) => nodes.forEach(node => { if (node.type === 'folder') open.set(node.path, !!node.is_open); if (node.children) collect(node.children) })
+      collect(fileTree.value)
+      const restore = (nodes: FileNode[]) => nodes.forEach(node => { if (node.type === 'folder') node.is_open = open.get(node.path) ?? false; if (node.children) restore(node.children) })
+      restore(fresh)
+      // Avoid redrawing an unchanged tree on every background check.
+      if (JSON.stringify(fresh) !== JSON.stringify(fileTree.value)) fileTree.value = fresh
+      treeRefreshError.value = null
+    } catch (error) {
+      if (sequence === refreshSequence) treeRefreshError.value = error instanceof Error ? error.message : '文件树刷新失败'
+      throw error
+    }
   }
 
   async function openVault(path: string) {
+    refreshSequence++
     isLoading.value = true
     try {
       const info = await workspaceService.openVault(path)
@@ -84,6 +103,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   async function createVault(path: string, name: string) {
+    refreshSequence++
     isLoading.value = true
     try {
       const info = await workspaceService.createVault(path, name)
@@ -162,6 +182,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     isLoading,
     hasVault,
     recentVaults,
+    treeRefreshError,
     toggleFolder,
     openFile,
     closeFile,
