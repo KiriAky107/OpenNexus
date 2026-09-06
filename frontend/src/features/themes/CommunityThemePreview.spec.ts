@@ -4,6 +4,7 @@ import { mount } from '@vue/test-utils'
 // Vitest disables CSS by default, including CSS raw imports. Load the real files here.
 vi.mock('@/styles/features.css?raw', async () => ({ default: (await import('node:fs')).readFileSync(process.cwd() + '/src/styles/features.css', 'utf8') }))
 vi.mock('@/styles/tokens.css?raw', async () => ({ default: (await import('node:fs')).readFileSync(process.cwd() + '/src/styles/tokens.css', 'utf8') }))
+vi.mock('@/styles/callouts.css?raw', async () => ({ default: (await import('node:fs')).readFileSync(process.cwd() + '/src/styles/callouts.css', 'utf8') }))
 import CommunityThemePreview from './CommunityThemePreview.vue'
 import { mockCommunityThemes } from '@/services/themePackageService'
 const themes = [...['light','dark','sepia'].map(theme_id => ({theme_id,name:theme_id,builtin:true})), ...mockCommunityThemes.map(t => ({...t,builtin:false}))]
@@ -15,6 +16,10 @@ it.each(themes)('previews shared component states safely for $theme_id', theme =
     const doc = new DOMParser().parseFromString(iframe.attributes('srcdoc')!, 'text/html')
     expect(doc.documentElement.dataset.theme).toBe(theme.theme_id)
     expect(doc.querySelector('script')).toBeNull()
+    expect(doc.querySelectorAll('.specimen-callouts > aside.markdown-callout')).toHaveLength(14)
+    expect(doc.querySelector('.specimen-callouts > details[open]')).not.toBeNull()
+    expect(doc.querySelector('.specimen-callouts > details:not([open])')).not.toBeNull()
+    expect(doc.querySelector('style')!.textContent).toContain('.callout-title:focus-visible')
     expect(doc.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content')).toContain("default-src 'none'")
     for (const selector of ['input.input','input:disabled','textarea.textarea','select.select','.ui-disclosure[open]','.ui-disclosure:not([open])','.button-primary:disabled','.badge.success','.error-banner','.specimen-markdown code','.specimen-markdown table','.specimen-chart','.specimen-long']) expect(doc.querySelector(selector), selector).not.toBeNull()
     expect(doc.querySelector('style')!.textContent).toContain('.button-primary:hover')

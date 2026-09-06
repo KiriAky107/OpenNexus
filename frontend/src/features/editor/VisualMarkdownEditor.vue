@@ -28,7 +28,9 @@ import {
   wrapInHeadingCommand,
   wrapInOrderedListCommand,
 } from '@milkdown/kit/preset/commonmark'
-import { commandsCtx, editorViewCtx } from '@milkdown/kit/core'
+import { commandsCtx, editorViewCtx, parserCtx } from '@milkdown/kit/core'
+import { Slice } from '@milkdown/kit/prose/model'
+import { registerEditorCommands, type CommandHandler, type EditorCommandId } from '@/services/editorCommandService'
 import { TextSelection } from '@milkdown/kit/prose/state'
 import { callCommand } from '@milkdown/kit/utils'
 import AppIcon from '@/components/common/AppIcon.vue'
@@ -37,6 +39,8 @@ import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore } from '@/stores/theme'
 import { applyMarkdownFontSize, fontSizeMarkdownPlugin } from './fontSizeMarkdown'
 import { inlineCodeInputPlugin } from './inlineCodeInput'
+import { calloutPlugin, configureCalloutSerialization } from './calloutPlugin'
+import { calloutTypes } from '@/utils/callouts'
 import { t } from '@/i18n'
 import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/frame.css'
@@ -67,6 +71,61 @@ const fontSizeInput = ref(16)
 let crepe: Crepe | null = null
 let disposeLanguagePicker: (() => void) | undefined
 let disposeCodeLabels: (() => void) | undefined
+let disposeCommands: (() => void) | undefined
+let disposed = false
+
+function insertMarkdown(source: string) {
+  crepe?.editor.action(ctx => {
+    const doc = ctx.get(parserCtx)(source)
+    if (!doc) throw new Error('Invalid Markdown')
+    const view = ctx.get(editorViewCtx)
+    view.dispatch(view.state.tr.replaceSelection(new Slice(doc.content, 0, 0)).scrollIntoView())
+    view.focus()
+  })
+}
+
+function insertCallout(event: Event) {
+  const select = event.target as HTMLSelectElement
+  if (select.value) insertMarkdown(`> [!${select.value.toUpperCase()}]\n> ${t('提示内容', 'Callout content')}`)
+  select.value = ''
+}
+
+function installCommands() {
+  const targetPath = editorStore.currentFilePath
+  const handlers: Partial<Record<EditorCommandId, CommandHandler>> = {}
+  const toolbar: ToolbarCommand[] = ['bold', 'italic', 'ordered-list', 'bullet-list', 'inline-code', 'code-block', 'inline-math', 'math-block']
+  for (const command of toolbar) handlers[`editor.${command}`] = () => { runCommand(command); return { ok: true } }
+  handlers['editor.paragraph'] = () => { crepe!.editor.action(callCommand(turnIntoTextCommand.key)); return { ok: true } }
+  handlers['editor.heading'] = params => {
+    if (!Number.isInteger(params) || Number(params) < 1 || Number(params) > 6) return { ok: false, reason: 'invalid-params' }
+    crepe!.editor.action(callCommand(wrapInHeadingCommand.key, Number(params)))
+    return { ok: true }
+  }
+  handlers['editor.font-size'] = params => {
+    if (typeof params !== 'number' || !Number.isFinite(params) || params < 8 || params > 96) return { ok: false, reason: 'invalid-params' }
+    fontSizeInput.value = params
+    applyFontSizeValue()
+    return { ok: true }
+  }
+  handlers['editor.insert-markdown'] = params => {
+    if (typeof params !== 'string' || !params.trim() || params.length > 100000) return { ok: false, reason: 'invalid-params' }
+    insertMarkdown(params)
+    return { ok: true }
+  }
+  handlers['editor.callout'] = params => {
+    if (!params || typeof params !== 'object') return { ok: false, reason: 'invalid-params' }
+    const { type, title = '', body = '', fold = '' } = params as Record<string, unknown>
+    if (typeof type !== 'string' || !/^[\w-]{1,64}$/.test(type) || typeof title !== 'string' || /[\r\n]/.test(title)
+      || typeof body !== 'string' || !['', '+', '-'].includes(String(fold)) || title.length + body.length > 100000) return { ok: false, reason: 'invalid-params' }
+    insertMarkdown(`> [!${type}]${fold} ${title}\n${body.split(/\r?\n/).map(line => `> ${line}`).join('\n')}`)
+    return { ok: true }
+  }
+  disposeCommands = registerEditorCommands({
+    available: () => !loading.value && !!crepe && editorStore.mode === 'wysiwyg' && editorStore.saveStatus !== 'conflict'
+      && !!targetPath && targetPath === editorStore.currentFilePath && crepe.editor.action(ctx => ctx.get(editorViewCtx).editable),
+    handlers,
+  })
+}
 const diagramPreviews = new Map<string, { source: string; apply: (value: HTMLElement) => void }>()
 function renderDiagram(source: string, apply: (value: HTMLElement) => void) {
   for (const [id, entry] of diagramPreviews) {
@@ -251,6 +310,8 @@ onMounted(async () => {
   })))
   crepe.editor.use(fontSizeMarkdownPlugin)
   crepe.editor.use(inlineCodeInputPlugin)
+  crepe.editor.use(calloutPlugin)
+  crepe.editor.config(configureCalloutSerialization)
   crepe.on((listener) => {
     listener.markdownUpdated((_ctx, markdown, previousMarkdown) => {
       // 忽略编辑器初始化/回显事件，防止无内容变化时触发自动保存循环。
@@ -265,6 +326,7 @@ onMounted(async () => {
   if (editorRoot.value) disposeCodeLabels = installCodeBlockLabels(editorRoot.value)
   applyProofingPreferences()
   loading.value = false
+  if (!disposed) installCommands()
 })
 
 watch([() => settingsStore.spellCheck, () => settingsStore.language], applyProofingPreferences)
@@ -282,7 +344,7 @@ watch(() => editorStore.headingRequest, request => {
   })
 })
 
-onBeforeUnmount(() => { diagramPreviews.clear(); disposeCodeLabels?.(); disposeLanguagePicker?.(); void crepe?.destroy() })
+onBeforeUnmount(() => { disposed = true; disposeCommands?.(); diagramPreviews.clear(); disposeCodeLabels?.(); disposeLanguagePicker?.(); void crepe?.destroy() })
 
 defineExpose({ getEditor: () => crepe?.editor })
 </script>
@@ -324,6 +386,12 @@ defineExpose({ getEditor: () => crepe?.editor })
       <button type="button" :title="t('行内公式', 'Inline formula')" :aria-label="t('行内公式', 'Inline formula')" @pointerdown.prevent="runCommand('inline-math')"><span class="math-glyph">ƒx</span></button>
       <button type="button" :title="t('公式块', 'Formula block')" :aria-label="t('公式块', 'Formula block')" @pointerdown.prevent="runCommand('math-block')"><span class="math-glyph">∑</span></button>
       <button type="button" :title="t('插入链接', 'Insert link')" :aria-label="t('插入链接', 'Insert link')" @pointerdown.prevent="applyLink"><AppIcon :icon="Link" :size="17" /></button>
+      <label class="toolbar-select">
+        <select :aria-label="t('插入警告框', 'Insert callout')" @change="insertCallout">
+          <option value="">{{ t('提示框', 'Callout') }}</option>
+          <option v-for="(_, type) in calloutTypes" :key="type" :value="type">{{ type }}</option>
+        </select>
+      </label>
     </div>
     <div v-if="loading" class="editor-loading">{{ t('正在加载编辑器…', 'Loading editor…') }}</div>
     <div class="milkdown-host" :class="{ loading }">

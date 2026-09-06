@@ -9,6 +9,19 @@ import { renderMermaid } from '@/services/mermaidService'
 import { appendDiagramControls } from './diagramControls'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
+import { parseCallout, escapeCalloutTitle } from './callouts'
+import '@/styles/callouts.css'
+
+marked.use({ renderer: { blockquote(token) {
+  const callout = parseCallout(token.text)
+  if (!callout) return false
+  const title = escapeCalloutTitle(callout.title)
+  const body = marked.parse(callout.body, { async: false }) as string
+  const attributes = `class="markdown-callout" data-callout="${callout.type}"`
+  return callout.fold
+    ? `<details ${attributes}${callout.fold === '+' ? ' open' : ''}><summary class="callout-title">${title}</summary><div class="callout-body">${body}</div></details>`
+    : `<aside ${attributes}><div class="callout-title">${title}</div><div class="callout-body">${body}</div></aside>`
+} } })
 
 function mathHtml(source: string, displayMode: boolean) {
   const result = katex.renderToString(source, {displayMode, throwOnError:false, trust:false, maxExpand:1000, output:'html'})
