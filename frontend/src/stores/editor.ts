@@ -161,7 +161,13 @@ export const useEditorStore = defineStore('editor', () => {
     content.value = latest; diskContent = latest; saveStatus.value = 'saved'; contentRevision.value++
   }
 
-  // TODO(editor): 桌面文件监听接入后提供冲突对比/合并界面，而非只阻止切换。
+  async function discardExternalChanges(path: string, snapshot: string): Promise<boolean> {
+    if (pendingSave) await pendingSave
+    if (currentFilePath.value !== path || content.value !== snapshot) return false
+    closeFile()
+    return true
+  }
+
 
   function closeFile() {
     loadVersion++
@@ -189,6 +195,7 @@ export const useEditorStore = defineStore('editor', () => {
     contentRevision,
     checkExternalFile,
     reloadExternalFile,
+    discardExternalChanges,
     saveStatus,
     lastSavedAt,
     currentNoteId,
