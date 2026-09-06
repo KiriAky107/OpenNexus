@@ -29,6 +29,12 @@ it.each(themes)('previews shared component states safely for $theme_id', theme =
     expect(doc.querySelector('style')!.textContent).toContain('.button-primary:hover')
     expect(doc.querySelector('style')!.textContent).not.toContain('color:white')
     const rules = Array.from(doc.styleSheets[0]!.cssRules) as CSSStyleRule[]
+    // The sandbox cannot inherit MarkdownContent's component stylesheet.
+    const codeRule = rules.find(rule => rule.selectorText === '.markdown-content .shiki code')!
+    const lineRule = rules.find(rule => rule.selectorText === '.markdown-content .shiki .line')!
+    expect(codeRule.style.getPropertyValue('display')).toBe('block')
+    expect(lineRule.style.getPropertyValue('display')).toBe('block')
+    expect(lineRule.style.getPropertyValue('min-height')).toBe('1.45em')
     const rootRule = rules.filter(rule => rule.selectorText === 'html').pop()!
     const bodyRule = rules.filter(rule => rule.selectorText === 'body').pop()!
     // The embedded document must override the app-shell overflow lock.
