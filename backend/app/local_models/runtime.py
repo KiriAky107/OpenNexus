@@ -189,15 +189,30 @@ class Runtime:
                 await process.stdin.drain()
                 process.stdin.close()
                 final = None
+                vectors = []
                 while line := await process.stdout.readline():
                     message = json.loads(line)
-                    if "progress" in message:
+                    if "embedding_chunk" in message:
+                        chunk = message['embedding_chunk']
+                        if (operation != 'embedding' or not isinstance(chunk, list)
+                                or message.get('embedding_offset') != len(vectors)
+                                or len(vectors) + len(chunk) > len(payload.get('texts', []))):
+                            raise ProviderError('LOCAL_MODEL_INVALID_RESPONSE', '本地向量传输顺序或数量无效。')
+                        vectors.extend(chunk)
+                    elif "progress" in message:
                         callback = runtime_progress.get()
                         if callback:
                             callback(message)
                     else:
                         final = message
                 await process.wait()
+                if isinstance(final, dict) and 'embedding_count' in final:
+                    if (final['embedding_count'] != len(vectors)
+                            or len(vectors) != len(payload.get('texts', []))):
+                        raise ProviderError('LOCAL_MODEL_INVALID_RESPONSE', '本地向量传输不完整。')
+                    final['result'] = vectors
+                elif vectors:
+                    raise ProviderError('LOCAL_MODEL_INVALID_RESPONSE', '本地向量传输缺少结束标记。')
                 return final
             try:
                 result = await asyncio.wait_for(receive(), config.timeout_seconds)

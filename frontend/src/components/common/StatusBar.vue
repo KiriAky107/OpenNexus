@@ -38,11 +38,7 @@ const saveStatusColor = computed(() => {
   return map[editorStore.saveStatus] || 'var(--color-text-tertiary)'
 })
 
-const indexStatusText = computed(() => {
-  const s = settingsStore.indexStatus.status
-  if (s === 'idle' && settingsStore.indexStatus.vector_refresh_required) return t('全文可用 · 向量待重建', 'Full text ready · vectors need rebuilding')
-  return s === 'unknown' ? t('索引状态未获取', 'Index status unavailable') : s === 'idle' ? t('索引就绪', 'Index ready') : s === 'indexing' ? t('后台计算索引', 'Indexing in background') : t('索引错误', 'Index error')
-})
+const indexStatusText = computed(() => settingsStore.indexStatusLabel)
 
 const aiCoreStatusText = computed(() => {
   const map: Record<string, string> = {
@@ -78,7 +74,7 @@ const showEditorInfo = computed(() => route.name === 'workspace')
         {{ saveStatusText }}
       </span>
       <span class="status-item" :title="indexStatusText">
-        <span class="status-dot" :style="{ background: settingsStore.indexStatus.status === 'error' ? 'var(--color-error)' : settingsStore.indexStatus.status === 'indexing' ? 'var(--color-warning)' : 'var(--color-success)' }" />
+        <span class="status-dot" :style="{ background: settingsStore.indexStatus.status === 'error' ? 'var(--color-error)' : settingsStore.indexStatus.status === 'unknown' ? 'var(--color-text-tertiary)' : settingsStore.indexStatus.status === 'indexing' || settingsStore.indexStatus.vector_refresh_required || settingsStore.indexStatus.active_searches ? 'var(--color-warning)' : 'var(--color-success)' }" />
         {{ indexStatusText }}
       </span>
       <span class="status-item" :style="{ color: aiCoreColor }">

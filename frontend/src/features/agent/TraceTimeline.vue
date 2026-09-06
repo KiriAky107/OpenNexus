@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { localeTag, t } from '@/i18n'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { TraceNode, AgentEvent } from '@/contracts'
 import { buildTraceNodes, getToolCallsFromEvents, getTotalDuration } from '@/services/traceService'
 import { eventLabel, localizeDetails } from './labels'
@@ -37,9 +37,12 @@ const filteredEvents = computed(() => {
 })
 const filteredTree = computed(() => {
   if (!filtering.value) return traceNodes.value
-  const matches = (node: TraceNode) => filteredEvents.value.some(event => event.sequence === node.sequence
-    || (node.type === 'tool_call' && node.data.tool_call_id != null && node.data.tool_call_id === event.data.tool_call_id)
-    || (node.type === 'model_call' && node.data.model_call_id != null && node.data.model_call_id === event.data.model_call_id))
+  const sequences = new Set(filteredEvents.value.map(event => event.sequence))
+  const tools = new Set<unknown>(filteredEvents.value.map(event => event.data.tool_call_id).filter(id => id != null))
+  const models = new Set<unknown>(filteredEvents.value.map(event => event.data.model_call_id).filter(id => id != null))
+  const matches = (node: TraceNode) => sequences.has(node.sequence)
+    || (node.type === 'tool_call' && tools.has(node.data.tool_call_id))
+    || (node.type === 'model_call' && models.has(node.data.model_call_id))
   const prune = (nodes: TraceNode[]): TraceNode[] => nodes.flatMap(node => {
     const children = prune(node.children)
     return matches(node) || children.length ? [{ ...node, children }] : []
@@ -50,6 +53,17 @@ function resetFilters() { query.value = ''; eventType.value = ''; toolName.value
 
 const traceNodes = computed(() => buildTraceNodes(props.events))
 const toolCalls = computed(() => getToolCallsFromEvents(props.events))
+const toolSummary = computed(() => {
+  const groups = new Map<string, { key: string; name: string; status: string; count: number; duration_ms: number }>()
+  for (const call of toolCalls.value) {
+    const key = `${call.name}:${call.status}`
+    const group = groups.get(key) ?? { key, name: call.name, status: call.status, count: 0, duration_ms: 0 }
+    group.count++
+    group.duration_ms += call.duration_ms ?? 0
+    groups.set(key, group)
+  }
+  return [...groups.values()]
+})
 const totalDuration = computed(() => getTotalDuration(props.events))
 
 const summaryStats = computed(() => {
@@ -153,6 +167,12 @@ function flatNodes(nodes: TraceNode[], depth = 0): Array<{ node: TraceNode; dept
 }
 
 const flatTrace = computed(() => flatNodes(filteredTree.value))
+const page = ref(1)
+const pageCount = computed(() => Math.max(1, Math.ceil((viewMode.value === 'tree' ? flatTrace.value.length : filteredEvents.value.length) / 200)))
+const visibleEvents = computed(() => filteredEvents.value.slice((page.value - 1) * 200, page.value * 200))
+const visibleTrace = computed(() => flatTrace.value.slice((page.value - 1) * 200, page.value * 200))
+watch([query, eventType, toolName, errorsOnly, viewMode], () => { page.value = 1 })
+watch(pageCount, count => { page.value = Math.min(page.value, count) })
 </script>
 
 <template>
@@ -199,11 +219,12 @@ const flatTrace = computed(() => flatNodes(filteredTree.value))
       <button v-if="filtering" class="button-secondary" @click="resetFilters">清除筛选</button>
       <span aria-live="polite">{{ filteredEvents.length }} / {{ events.length }} 事件</span>
     </div>
+    <nav v-if="pageCount > 1" class="inline-actions"><button class="button-secondary" :disabled="page === 1" @click="page--">{{ t('上一页', 'Previous') }}</button><span>{{ page }} / {{ pageCount }}</span><button class="button-secondary" :disabled="page === pageCount" @click="page++">{{ t('下一页', 'Next') }}</button></nav>
     <p v-if="filtering && !filteredEvents.length" class="subtle" role="status">没有匹配的事件</p>
     <div v-if="viewMode === 'timeline'" class="timeline-view">
       <div class="timeline">
         <article
-          v-for="event in filteredEvents"
+          v-for="event in visibleEvents"
           :key="event.sequence"
           class="event-card"
           :class="{ expanded: isDetailOpen(`event-${event.sequence}`) }"
@@ -255,7 +276,7 @@ const flatTrace = computed(() => flatNodes(filteredTree.value))
     </div>
 
     <div v-else class="tree-view">
-      <div v-for="item in flatTrace" :key="item.node.id" class="tree-node" :style="{ paddingLeft: `${item.depth * 24 + 8}px` }">
+      <div v-for="item in visibleTrace" :key="item.node.id" class="tree-node" :style="{ paddingLeft: `${item.depth * 24 + 8}px` }">
         <div
           class="node-row"
           :class="[getNodeStatusClass(item.node), { 'detail-open': isDetailOpen(item.node.id) }]"
@@ -303,9 +324,10 @@ const flatTrace = computed(() => flatNodes(filteredTree.value))
     <div v-if="!filtering && toolCalls.length > 0 && viewMode === 'timeline'" class="tool-calls-summary panel">
       <h3 class="panel-title">工具调用统计</h3>
       <div class="tool-call-list">
-        <div v-for="call in toolCalls" :key="call.tool_call_id" class="tool-call-item" :class="call.status">
+        <div v-for="call in toolSummary" :key="call.key" class="tool-call-item" :class="call.status">
           <span class="tool-status-dot"></span>
           <code class="tool-name">{{ call.name }}</code>
+          <span>{{ call.count }} {{ t('次', 'calls') }}</span>
           <span v-if="call.duration_ms != null" class="tool-duration">
             {{ formatDuration(call.duration_ms) }}
           </span>
