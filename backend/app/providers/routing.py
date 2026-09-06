@@ -31,6 +31,7 @@ from app.retrieval.provenance import record_embedding
 CAPABILITIES = ("embedding", "transcription", "speaker_matching")
 HTTP_TYPES = {ProviderType.openai_chat, ProviderType.openai_compatible}
 MAX_MEDIA_BYTES = 25 * 1024 * 1024
+MAX_LOCAL_MEDIA_BYTES = 128 * 1024 * 1024
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 
@@ -58,6 +59,7 @@ class RoutedTranscript:
     source: str
     fallback_reason: str | None = None
     segments: list = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 def invalid_response() -> ProviderError:
@@ -276,21 +278,22 @@ class ModelRoutingService:
                                dimensions=local_embedding.dim, fallback_reason=reason)
 
     @staticmethod
-    def _media_file(path: Path):
+    def _media_file(path: Path, *, local_only: bool = False):
         try:
             handle = path.open("rb")
         except OSError as exc:
             raise ApiError(404, "ATTACHMENT_NOT_FOUND", "Audio attachment was not found.") from exc
         import os
-        if not 0 < os.fstat(handle.fileno()).st_size <= MAX_MEDIA_BYTES:
+        limit = MAX_LOCAL_MEDIA_BYTES if local_only else MAX_MEDIA_BYTES
+        if not 0 < os.fstat(handle.fileno()).st_size <= limit:
             handle.close()
-            raise ApiError(413, "ATTACHMENT_TOO_LARGE", "Audio attachment must be between 1 byte and 25 MiB.")
+            raise ApiError(413, "ATTACHMENT_TOO_LARGE", f"Audio attachment must be between 1 byte and {limit // (1024 * 1024)} MiB.")
         return handle
 
     async def transcribe(self, source: Path, language: str | None, *, local_only: bool = False) -> RoutedTranscript:
         binding = None if local_only else self.configuration().transcription
         if binding is None:
-            with self._media_file(source):
+            with self._media_file(source, local_only=local_only):
                 pass
         reason = None
         if binding:
@@ -343,7 +346,7 @@ class ModelRoutingService:
     async def match_speakers(self, source: Path, reference: Path, *, local_only: bool = False) -> SpeakerMatchResult:
         binding = None if local_only else self.configuration().speaker_matching
         if binding is None:
-            with self._media_file(source), self._media_file(reference):
+            with self._media_file(source, local_only=local_only), self._media_file(reference, local_only=local_only):
                 pass
         reason = None
         if binding:

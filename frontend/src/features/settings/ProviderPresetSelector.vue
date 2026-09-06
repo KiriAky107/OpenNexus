@@ -32,6 +32,6 @@ const filtered = computed(() => {
 .preset-grid { display: flex; flex-wrap: wrap; gap: 8px; max-height: 220px; overflow-y: auto; padding: 3px; }
 .preset-chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--color-border-default); border-radius: 11px; background: var(--color-surface-primary); color: var(--color-text-primary); cursor: pointer; font: inherit; font-size: 13px; }
 .preset-chip:hover { background: var(--color-background-hover); }
-.preset-chip.selected { border-color: #377cf6; background: color-mix(in srgb, #377cf6 12%, var(--color-surface-primary)); color: #377cf6; box-shadow: 0 0 0 1px #377cf6; }
+.preset-chip.selected { border-color: var(--color-accent-primary); background: color-mix(in srgb, var(--color-accent-primary) 12%, var(--color-surface-primary)); color: var(--color-accent-primary); box-shadow: 0 0 0 1px var(--color-accent-primary); }
 .preset-chip:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 2px; }
 </style>

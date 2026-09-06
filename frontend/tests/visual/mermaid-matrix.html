@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Mermaid 真实渲染验收</title></head>
+<body><h1>Mermaid 真实渲染验收</h1><p id="status">运行中</p><main id="results"></main>
+<script type="module">
+import { renderMermaid } from '/src/services/mermaidService.ts';
+import { getCommunityThemePreviewCss, mockCommunityThemes } from '/src/services/themePackageService.ts';
+import '/src/styles/tokens.css';
+import '/src/styles/features.css';
+const fixtures = {
+  flowchart: 'flowchart TD\n A[开始] --> B[完成]',
+  sequence: 'sequenceDiagram\n participant A as 用户\n participant B as 服务\n A->>B: 请求\n B-->>A: 结果',
+  class: 'classDiagram\n class Note {\n +String title\n }\n class Vault\n Vault --> Note',
+  state: 'stateDiagram-v2\n [*] --> Ready\n Ready --> Done\n Done --> [*]',
+  er: 'erDiagram\n VAULT ||--o{ NOTE : contains',
+  gantt: 'gantt\n title Plan\n dateFormat YYYY-MM-DD\n section Work\n Build :a, 2026-09-01, 2d',
+};
+const allThemes = [{theme_id:'light',is_dark:false},{theme_id:'dark',is_dark:true},{theme_id:'sepia',is_dark:false},...mockCommunityThemes];
+const requested = new URLSearchParams(location.search).get('theme');
+const themes = requested ? allThemes.filter(t=>t.theme_id===requested) : allThemes;
+const style = document.createElement('style'); document.head.append(style);
+const results = [];
+for (const theme of themes) {
+  document.documentElement.dataset.theme = theme.theme_id;
+  style.textContent = getCommunityThemePreviewCss(theme.theme_id) || '';
+  for (const [type,source] of Object.entries(fixtures)) {
+    const rendered = await renderMermaid(source,{theme:theme.is_dark?'dark':'light'});
+    const article = document.createElement('article'); article.className='item-card';
+    const label = document.createElement('h2'); label.textContent=theme.theme_id+' / '+type;
+    const preview = document.createElement('div'); preview.innerHTML=rendered.svg; preview.style.overflow='auto';
+    article.append(label,preview); document.querySelector('#results').append(article);
+    const svg=preview.querySelector('svg');
+    const valid = !rendered.warnings.length && svg && svg.getBoundingClientRect().height>0 && svg.textContent.trim().length>0 && !svg.querySelector('.error-icon');
+    results.push({theme:theme.theme_id,type,passed:Boolean(valid),warnings:rendered.warnings});
+    article.dataset.passed=String(Boolean(valid));
+  }
+}
+document.querySelector('#status').textContent=JSON.stringify({passed:results.filter(r=>r.passed).length,total:results.length,results});
+document.documentElement.dataset.complete='true';
+</script></body></html>

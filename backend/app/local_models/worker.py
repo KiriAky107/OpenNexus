@@ -9,27 +9,49 @@ import threading
 import time
 
 
-def decode(path, *, limit_seconds=3600):
+def decode(path, *, limit_seconds=3600, warnings=None):
     import av
     import numpy as np
     frames = []
     samples = 0
+    corrupt = 0
     with av.open(path, options={"protocol_whitelist": "file,pipe"}) as container:
         if not container.streams.audio:
             raise ValueError("Media has no audio track")
         resampler = av.AudioResampler(format="fltp", layout="mono", rate=16000)
-        for frame in container.decode(audio=0):
-            for output in resampler.resample(frame):
-                audio = output.to_ndarray().reshape(-1)
-                samples += len(audio)
+        for packet in container.demux(audio=0):
+            try:
+                decoded = packet.decode()
+            except av.error.InvalidDataError:
+                corrupt += 1
+                if corrupt > 100:
+                    raise ValueError("Too many damaged audio packets")
+                # Retain the missing packet's duration as silence so later timestamps do not shift.
+                missing = max(0, round(float((packet.duration or 0) * (packet.time_base or 0)) * 16000))
+                samples += missing
                 if samples > limit_seconds * 16000:
                     raise ValueError("Audio exceeds one hour")
-                frames.append(audio)
+                if missing:
+                    frames.append(np.zeros(missing, dtype=np.float32))
+                continue
+            for frame in decoded:
+                for output in resampler.resample(frame):
+                    audio = output.to_ndarray().reshape(-1)
+                    samples += len(audio)
+                    if samples > limit_seconds * 16000:
+                        raise ValueError("Audio exceeds one hour")
+                    frames.append(audio)
         for output in resampler.resample(None):
-            frames.append(output.to_ndarray().reshape(-1))
+            audio = output.to_ndarray().reshape(-1)
+            samples += len(audio)
+            if samples > limit_seconds * 16000:
+                raise ValueError("Audio exceeds one hour")
+            frames.append(audio)
     if not frames:
         raise ValueError("Audio is empty")
     audio = np.concatenate(frames).astype(np.float32)
+    if corrupt and warnings is not None:
+        warnings.append(f"MEDIA_CORRUPT_PACKETS_SKIPPED:{corrupt}")
     if not np.isfinite(audio).all() or len(audio) < 1600:
         raise ValueError("Invalid or too short audio")
     return audio
@@ -125,7 +147,8 @@ def run(request):
             model = Qwen3ASRModel.from_pretrained(path, dtype=torch.float32 if device == "cpu" else torch.float16,
                 device_map=device, attn_implementation="sdpa", max_inference_batch_size=1, max_new_tokens=512)
             loaded = time.monotonic()
-            audio = decode(payload["source"])
+            decode_warnings = []
+            audio = decode(payload["source"], warnings=decode_warnings)
             audio_seconds = len(audio) / 16000
             regions = speech_regions(audio)
             language = {"zh": "Chinese", "en": "English", "ja": "Japanese", "yue": "Cantonese"}.get(payload.get("language"), payload.get("language"))
@@ -137,7 +160,7 @@ def run(request):
                                      "end_time": end / 16000, "text": output.text, "language": output.language})
                     sys.__stdout__.write(json.dumps({"progress": end / len(audio), "segment": segments[-1]}, ensure_ascii=False) + "\n")
                     sys.__stdout__.flush()
-            result = {"text": "\n".join(s["text"] for s in segments), "segments": segments}
+            result = {"text": "\n".join(s["text"] for s in segments), "segments": segments, "warnings": decode_warnings}
         elif operation == "speaker_matching":
             model = speaker_model(path, device)
             loaded = time.monotonic()

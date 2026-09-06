@@ -6,7 +6,7 @@ import logging
 import math
 from contextlib import closing
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 
 from app.database.db import connect
@@ -107,8 +107,8 @@ class UsageAttempt:
             logger.warning("Usage persistence failed; model response remains available")
 
 
-def aggregate(start, end, provider_id=None, model=None, source=None):
-    query = "SELECT counters_json,completed,capability FROM model_usage WHERE started_at>=? AND started_at<?"
+def aggregate(start, end, provider_id=None, model=None, source=None, timezone_offset=0):
+    query = "SELECT counters_json,completed,capability,started_at,source,provider_id,model FROM model_usage WHERE started_at>=? AND started_at<?"
     args = [start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()]
     for column, value in (("provider_id", provider_id), ("model", model), ("source", source)):
         if value:
@@ -117,6 +117,18 @@ def aggregate(start, end, provider_id=None, model=None, source=None):
     with closing(connection()) as conn:
         rows = conn.execute(query, args).fetchall()
         options = conn.execute("SELECT DISTINCT provider_id,model,source FROM model_usage ORDER BY provider_id,model").fetchall()
+    # Calendar buckets use the caller's UTC offset; absent counters remain null.
+    zone = timezone(timedelta(minutes=timezone_offset))
+    first = start.astimezone(zone).date()
+    last = (end - timedelta(microseconds=1)).astimezone(zone).date()
+    days = (last - first).days + 1
+    step = max(1, (days + 89) // 90)
+    series = []
+    for offset in range(0, days, step):
+        date = first + timedelta(days=offset)
+        series.append({"date": date.isoformat(), "end_date": (first + timedelta(days=min(days-1, offset+step-1))).isoformat(),
+                       "local": {"requests": 0, "totals": {key: None for key in METRICS}, "coverage": {key: 0 for key in METRICS}, "models": {}},
+                       "api": {"requests": 0, "totals": {key: None for key in METRICS}, "coverage": {key: 0 for key in METRICS}, "models": {}}})
     totals = {key: None for key in METRICS}
     coverage = {key: 0 for key in METRICS}
     hits, eligible_input, cache_requests = 0, 0, 0
@@ -125,6 +137,20 @@ def aggregate(start, end, provider_id=None, model=None, source=None):
         if row[2] in {"transcription", "speaker_matching"}:
             audio_requests += 1
         counts = json.loads(row[0])
+        date = datetime.fromisoformat(row[3]).astimezone(zone).date()
+        bucket = series[(date - first).days // step][row[4]]
+        bucket['requests'] += 1
+        model_key = json.dumps([row[5], row[6]], ensure_ascii=False)
+        part = bucket['models'].setdefault(model_key, {'key': model_key, 'provider_id': row[5], 'model': row[6], 'requests': 0, 'totals': {key: None for key in METRICS}, 'coverage': {key: 0 for key in METRICS}})
+        part['requests'] += 1
+        for key in METRICS:
+            if counts.get(key) is not None:
+                part['totals'][key] = (part['totals'][key] or 0) + counts[key]
+                part['coverage'][key] += 1
+        for key in METRICS:
+            if counts.get(key) is not None:
+                bucket['totals'][key] = (bucket['totals'][key] or 0) + counts[key]
+                bucket['coverage'][key] += 1
         if counts.get("audio_seconds") is not None:
             audio_covered += 1
             audio_seconds = (audio_seconds or 0) + counts["audio_seconds"]
@@ -136,8 +162,11 @@ def aggregate(start, end, provider_id=None, model=None, source=None):
             hits += counts["cache_hit_tokens"]
             eligible_input += counts["input_tokens"] if counts.get("input_tokens") is not None else counts["cache_hit_tokens"] + counts["cache_miss_tokens"]
             cache_requests += 1
+    for bucket in series:
+        for origin in ('local', 'api'):
+            bucket[origin]['models'] = sorted(bucket[origin]['models'].values(), key=lambda item: item['key'])
     return {"audio_request_count": audio_requests, "audio_seconds": audio_seconds, "audio_covered_requests": audio_covered, "totals": totals, "coverage": coverage, "request_count": len(rows),
             "complete_requests": sum(row[1] for row in rows), "cache_covered_requests": cache_requests,
             "cache_hit_rate": hits / eligible_input if eligible_input else None,
             "options": [dict(row) for row in options], "start": start, "end": end,
-            "scope": "application_observed_usage"}
+            "scope": "application_observed_usage", "series": series, "timezone_offset": timezone_offset}

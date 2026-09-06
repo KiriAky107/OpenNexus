@@ -27,6 +27,7 @@ export const useChatStore = defineStore('chat', () => {
   const selectedProviderId = ref('')
   const selectedModel = ref('')
   const historyError = ref('')
+  const contextNotice = ref('')
   let initialized = false
   let loading: Promise<void> | null = null
   let loadVersion = 0
@@ -78,6 +79,7 @@ export const useChatStore = defineStore('chat', () => {
     messagesReady.value = false
     loading = (async () => {
       historyError.value = ''
+    contextNotice.value = ''
       try {
         const items = await fetchAllConversations()
         if (version !== loadVersion) return
@@ -104,6 +106,7 @@ export const useChatStore = defineStore('chat', () => {
     messagesReady.value = false
     messages.value = []
     historyError.value = ''
+    contextNotice.value = ''
     try {
       const loadedMessages = await fetchAllMessages(id)
       if (version === loadVersion && activeConversationId.value === id) {
@@ -148,6 +151,7 @@ export const useChatStore = defineStore('chat', () => {
   async function createNewConversation() {
     stopGeneration()
     historyError.value = ''
+    contextNotice.value = ''
     const conversation = addLocalConversation(t('新对话', 'New conversation'))
     try { await persistConversation(conversation) } catch { /* exposed through historyError */ }
   }
@@ -158,6 +162,7 @@ export const useChatStore = defineStore('chat', () => {
     const version = ++streamVersion
     isPreparing.value = true
     historyError.value = ''
+    contextNotice.value = ''
     let conversation = activeConversation.value
     try {
       if (!conversation) {
@@ -238,6 +243,7 @@ export const useChatStore = defineStore('chat', () => {
             content: String(event.data.content ?? event.data.snippet ?? ''),
           })
         }
+        if (event.event === 'ContextStatus') contextNotice.value = String(event.data.message ?? '')
         if (event.event === 'Error') aiMsg.content += `\n\n${t('生成失败：', 'Generation failed: ')}${String(event.data.message ?? t('未知错误', 'Unknown error'))}`
       },
       onError(error) {
@@ -268,6 +274,7 @@ export const useChatStore = defineStore('chat', () => {
     deletingConversations.add(id)
     if (activeConversationId.value === id) stopGeneration()
     historyError.value = ''
+    contextNotice.value = ''
     try {
       if (pendingCreates.has(id)) await pendingCreates.get(id)
       await removeConversation(id)
@@ -286,7 +293,7 @@ export const useChatStore = defineStore('chat', () => {
 
   return {
     conversations, activeConversationId, activeConversation, sortedConversations, messages,
-    isStreaming, isPreparing, canSend, inputText, useRag, selectedSkillId, selectedProviderId, selectedModel, historyError,
+    isStreaming, isPreparing, canSend, inputText, useRag, selectedSkillId, selectedProviderId, selectedModel, historyError, contextNotice,
     loadConversations, setActiveConversation, sendMessage, stopGeneration, createNewConversation, deleteConversation,
   }
 })

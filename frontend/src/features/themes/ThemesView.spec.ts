@@ -4,7 +4,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ThemesView from './ThemesView.vue'
 import { useThemeStore } from '@/stores/theme'
-import { mockCommunityThemes, getCommunityThemePreviewCss } from '@/services/themePackageService'
+import { mockCommunityThemes, getCommunityThemePreviewCss, inspectThemePackage } from '@/services/themePackageService'
 import paperPackage from '@/assets/themes/paper-moments.theme?raw'
 
 let wrapper: VueWrapper
@@ -21,6 +21,12 @@ it('downloads a URL for inspection without automatically installing it', async (
   await vi.waitFor(() => expect(useThemeStore().pendingInspection?.compatible).toBe(true))
   expect(useThemeStore().isThemeInstalled('paper-moments')).toBe(false)
   expect(wrapper.get('.inspection-result').text()).toContain('纸间时光')
+  await wrapper.findAll('button').find(button => button.text() === '预览主题效果')!.trigger('click')
+  const preview = wrapper.get('iframe')
+  expect(preview.attributes('sandbox')).toBe('')
+  expect(preview.attributes('srcdoc')).toContain('Content-Security-Policy')
+  expect(preview.attributes('srcdoc')).toContain('data-theme="paper-moments"')
+  expect(useThemeStore().isThemeInstalled('paper-moments')).toBe(false)
 })
 
 it('ignores a URL response after the dialog is cancelled', async () => {
@@ -70,7 +76,7 @@ it.each(mockCommunityThemes)('previews uninstalled $theme_id using its actual CS
   await wrapper.findAll('.tab-btn')[1]!.trigger('click')
   const card = wrapper.findAll('article.theme-card').find(item => item.text().includes(theme.name))!
   await card.findAll('button').find(button => button.text() === '预览')!.trigger('click')
-  expect(wrapper.get('[role="dialog"]').text()).toContain(theme.name)
+  expect(wrapper.get('dialog.app-dialog').text()).toContain(theme.name)
   const frame = wrapper.get('iframe')
   expect(frame.attributes('sandbox')).toBe('')
   const preview = new DOMParser().parseFromString(frame.attributes('srcdoc')!, 'text/html')
@@ -81,9 +87,24 @@ it.each(mockCommunityThemes)('previews uninstalled $theme_id using its actual CS
   expect(store.isThemeInstalled(theme.theme_id)).toBe(false)
   expect(document.head.querySelectorAll('style[id^="theme-style-"]')).toHaveLength(0)
   vi.useFakeTimers()
-  await wrapper.get('[role="dialog"] button').trigger('click')
+  await wrapper.get('dialog.app-dialog button').trigger('click')
   store.applyTheme('dark')
   await vi.advanceTimersByTimeAsync(2000)
   expect(wrapper.find('iframe').exists()).toBe(false)
   expect(store.currentThemeId).toBe('dark')
+})
+
+it('offers and applies the paper theme update without discarding the active theme', async () => {
+  const store = useThemeStore()
+  const old = await inspectThemePackage(paperPackage.replace('version: 1.8.0', 'version: 1.6.1'))
+  await store.installThemeFromInspection(old.manifest, old.css)
+  store.applyTheme('paper-moments')
+  wrapper = mount(ThemesView, { global: { stubs: { MarkdownContent: true } } })
+  await flushPromises()
+  await wrapper.findAll('.tab-btn')[1]!.trigger('click')
+  const card = wrapper.findAll('article.theme-card').find(item => item.text().includes('Paper Moments'))!
+  await card.findAll('button').find(button => button.text() === '更新')!.trigger('click')
+  await flushPromises()
+  expect(store.allThemes.find(theme => theme.theme_id === 'paper-moments')?.version).toBe('1.8.0')
+  expect(document.getElementById('theme-style-paper-moments')!.textContent).toContain('.surface-nested')
 })

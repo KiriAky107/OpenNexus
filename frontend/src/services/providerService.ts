@@ -10,6 +10,7 @@ function toProvider(provider: ApiProviderConfig): ProviderConfig {
     provider_id: provider.provider_id,
     version: provider.version,
     request_overrides: provider.request_overrides || [],
+    context_policies: provider.context_policies || [],
     provider_type: provider.provider_type,
     name: provider.name,
     base_url: provider.base_url ?? undefined,
@@ -38,6 +39,7 @@ export async function createProvider(data: Omit<ProviderConfig, 'provider_id'>):
   const response = await apiClient.post<ApiProviderConfig>('/api/providers', {
     provider_type: data.provider_type,
     request_overrides: data.request_overrides,
+    context_policies: data.context_policies,
     name: data.name,
     base_url: data.base_url,
     default_model: data.default_model || null,
@@ -69,6 +71,7 @@ export async function updateProvider(providerId: string, data: ProviderUpdateReq
     provider_type: data.provider_type,
     version: data.version,
     request_overrides: data.request_overrides,
+    context_policies: data.context_policies,
     name: data.name,
     base_url: data.base_url,
     default_model: data.default_model,

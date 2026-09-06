@@ -10,6 +10,7 @@ import {
 } from '@/services/chatService'
 import type { ChatMessage, Conversation } from '@/contracts'
 import type { SseClient } from '@/services/sseClient'
+import { useChatPreferences } from './chatPreferences'
 
 vi.mock('@/services/chatService', () => ({
   createConversation: vi.fn(),
@@ -61,6 +62,17 @@ it('sends persistent message ids and restores messages from the backend', async 
   await store.setActiveConversation(id)
   expect(store.messages.map(message => message.content)).toEqual(['user input', 'real response'])
   expect(store.messages[1]?.citations?.[0]?.heading_path).toBe('Heading')
+})
+
+it('leaves global persona assembly to the backend', async () => {
+  useChatPreferences().settings = {persona:'stale browser persona',presetDialogue:'old example',aiAvatar:'',userAvatar:''}
+  const store = useChatStore()
+  store.selectedProviderId = 'real'
+  store.selectedModel = 'configured-model'
+  await store.sendMessage('hello')
+  const request = vi.mocked(streamChat).mock.calls[0]![0]
+  expect(request).not.toHaveProperty('system')
+  expect(request).not.toHaveProperty('aiAvatar')
 })
 
 it('loads the newest persisted conversation on initialization', async () => {

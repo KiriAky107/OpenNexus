@@ -2,6 +2,7 @@
 import { useWorkspaceStore } from '@/stores/workspace'
 import EditorHeader from '@/features/editor/EditorHeader.vue'
 import EditorPane from '@/features/editor/EditorPane.vue'
+import WorkspacePluginCommands from './WorkspacePluginCommands.vue'
 import { EditPen } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { t } from '@/i18n'
@@ -13,7 +14,7 @@ const workspaceStore = useWorkspaceStore()
   <div class="workspace-view">
     <template v-if="workspaceStore.activeFilePath">
       <EditorHeader />
-      <EditorPane />
+      <WorkspacePluginCommands><EditorPane /></WorkspacePluginCommands>
     </template>
     <div v-else class="empty-workspace">
       <div class="empty-content">

@@ -5,11 +5,14 @@ from contextlib import aclosing
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Header, Query
+from fastapi import APIRouter, Header, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.agent import AgentCapacityError, AgentRunNotFoundError
 from app.container import container
+from app.config import get_settings
+from app.extensions.archive import MAX_ZIP_BYTES, install_zip
+from app.services.persona_settings import PersonaSettings, load_persona, save_persona
 from app.contracts import (
     AgentRun,
     AgentRunCreateRequest,
@@ -108,6 +111,7 @@ from app.benchmarks import datasets as benchmark_datasets
 from app.benchmarks import service as benchmark_service
 from app.config import get_settings
 from app.container import container
+from app.services.persona_settings import PersonaSettings, load_persona, save_persona
 from app.errors import ApiError
 from app.export import service as export_service
 from app.extensions import ExtensionError
@@ -228,7 +232,7 @@ async def open_workspace(request: WorkspaceOpenRequest) -> WorkspaceSnapshot:
 
 @router.get("/workspace/tree", response_model=list[WorkspaceEntry], tags=["Workspace"])
 async def get_workspace_tree() -> list[WorkspaceEntry]:
-    return workspace_service.get_workspace_tree()
+    return await workspace_service.refresh_workspace_tree()
 
 
 @router.post("/workspace/folders", response_model=WorkspaceEntry, tags=["Workspace"])
@@ -289,7 +293,8 @@ async def get_note(note_id: str) -> Note:
 @router.patch("/notes/{note_id}", response_model=Note, tags=["Notes"])
 async def update_note(note_id: str, request: NoteUpdateRequest) -> Note:
     return await note_service.update_note(
-        note_id, title=request.title, markdown=request.markdown, tags=request.tags
+        note_id, title=request.title, markdown=request.markdown, tags=request.tags,
+        expected_content_hash=request.expected_content_hash, defer_vectors=True
     )
 
 
@@ -662,6 +667,32 @@ async def get_skill(skill_id: str) -> Skill:
 )
 async def install_skill(request: ExtensionInstallRequest) -> Skill:
     return extension_call(lambda: container.skills.install(request.package_path))
+
+
+async def read_extension_zip(request: Request) -> bytes:
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > MAX_ZIP_BYTES:
+            raise ApiError(413, 'EXTENSION_ZIP_TOO_LARGE', 'ZIP 文件不能超过 10 MiB。')
+        data.extend(chunk)
+    return bytes(data)
+
+
+@router.post('/skills/install-zip', response_model=Skill, status_code=202, tags=['Skills'])
+async def install_skill_zip(request: Request) -> Skill:
+    data = await read_extension_zip(request)
+    return extension_call(lambda: install_zip(data, 'skill', get_settings().data_dir / 'extension-packages', container.skills.install, managed_install=lambda root, owned: container.skills.install(root, managed_root=owned)))
+
+
+@router.post('/plugins/install-zip', response_model=Plugin, status_code=202, tags=['Plugins'])
+async def install_plugin_zip(request: Request) -> Plugin:
+    data = await read_extension_zip(request)
+    return extension_call(lambda: install_zip(data, 'plugin', get_settings().data_dir / 'extension-packages', container.plugins.install, managed_install=lambda root, owned: container.plugins.install(root, managed_root=owned)))
+
+
+@router.get('/extensions/restore-errors', tags=['Plugins', 'Skills'])
+async def extension_restore_errors():
+    return {'items': container.plugins.restore_errors + container.skills.restore_errors}
 
 
 @router.post(
@@ -1067,6 +1098,7 @@ async def create_provider(request: ProviderCreateRequest) -> ProviderConfig:
         credential_id=request.credential_id,
         enabled=request.enabled,
         request_overrides=request.request_overrides,
+        context_policies=request.context_policies,
         capabilities=container.provider_factory.capabilities(request.provider_type),
     )
     try:
@@ -1100,7 +1132,7 @@ async def update_provider(
     if ("provider_type" in fields and request.provider_type is None) or ("name" in fields and request.name is None) or (
         "enabled" in fields and request.enabled is None
     ) or (
-        "request_overrides" in fields and request.request_overrides is None
+        ("request_overrides" in fields and request.request_overrides is None) or ("context_policies" in fields and request.context_policies is None)
     ):
         raise ApiError(
             422,
@@ -1552,3 +1584,13 @@ async def cancel_export(job_id: str) -> OperationResponse:
     return OperationResponse(
         status="accepted", resource_id=job_id, message="Export cancellation accepted."
     )
+
+
+@router.get("/settings/persona", response_model=PersonaSettings, tags=["Settings"])
+async def get_global_persona():
+    return load_persona()
+
+
+@router.put("/settings/persona", response_model=PersonaSettings, tags=["Settings"])
+async def put_global_persona(request: PersonaSettings):
+    return save_persona(request)

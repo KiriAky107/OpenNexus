@@ -1,31 +1,36 @@
 <script setup lang="ts">
+import ExtensionRestoreNotice from '@/components/common/ExtensionRestoreNotice.vue'
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
+const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 import { Lightning } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
+import ExtensionInstallDialog from '@/components/common/ExtensionInstallDialog.vue'
 import { onMounted, ref } from 'vue'
 import { useSkillStore } from '@/stores/skill'
 import { t } from '@/i18n'
 
 const skillStore = useSkillStore()
 const actionError = ref('')
+const showInstall = ref(false)
 onMounted(() => { void skillStore.loadSkills() })
 
-async function install() {
-  const path = prompt(t('请输入 Skill Package 路径', 'Enter the Skill package path'))?.trim()
-  if (!path) return
-  try { await skillStore.installSkill(path) } catch (error) { actionError.value = error instanceof Error ? error.message : t('安装失败', 'Installation failed') }
-}
+
 async function toggle(skillId: string, enabled: boolean) {
   try { enabled ? await skillStore.disableSkill(skillId) : await skillStore.enableSkill(skillId) } catch (error) { actionError.value = error instanceof Error ? error.message : t('状态更新失败', 'Status update failed') }
 }
 async function uninstall(skillId: string, name: string) {
-  if (!confirm(`${t('确定卸载 Skill', 'Uninstall Skill')} “${name}”?`)) return
+  if (!(await askConfirm(`${t('确定卸载 Skill', 'Uninstall Skill')} “${name}”?`))) return
   try { await skillStore.uninstallSkill(skillId) } catch (error) { actionError.value = error instanceof Error ? error.message : t('卸载失败', 'Uninstall failed') }
 }
 </script>
 
 <template>
   <section class="feature-page">
-    <header class="feature-header"><div><h1>{{ t('Skill 管理', 'Skill Management') }}</h1><p>{{ t('查看工作流使用的 Tool、权限、检索配置和模型要求。', 'Review the tools, permissions, retrieval settings, and model requirements used by workflows.') }}</p></div><button class="button-primary" @click="install">{{ t('安装 Skill', 'Install Skill') }}</button></header>
+    <ExtensionRestoreNotice kind="skill" />
+    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
+    <ExtensionInstallDialog v-if="showInstall" kind="Skill" :install="skillStore.installSkill" @close="showInstall = false" @installed="showInstall = false; actionError = ''" />
+    <header class="feature-header"><div><h1>{{ t('Skill 管理', 'Skill Management') }}</h1><p>{{ t('查看工作流使用的 Tool、权限、检索配置和模型要求。', 'Review the tools, permissions, retrieval settings, and model requirements used by workflows.') }}</p></div><button class="button-primary" @click="showInstall = true">{{ t('安装 Skill', 'Install Skill') }}</button></header>
     <div v-if="skillStore.error || actionError" class="error-banner">{{ skillStore.error || actionError }}</div>
     <div v-if="skillStore.selectedSkill" class="panel detail-panel">
       <div class="detail-head"><div><span class="badge" :class="{ success: skillStore.selectedSkill.status === 'ready', error: skillStore.selectedSkill.status === 'error', warning: skillStore.selectedSkill.status.includes('missing') }">{{ skillStore.selectedSkill.status }}</span><h2>{{ skillStore.selectedSkill.icon }} {{ skillStore.selectedSkill.name }}</h2><p class="muted">v{{ skillStore.selectedSkill.version }} · {{ skillStore.selectedSkill.author || t('未知作者', 'Unknown author') }}</p></div><div class="inline-actions"><button class="button-secondary" @click="toggle(skillStore.selectedSkill.skill_id, skillStore.selectedSkill.enabled)">{{ skillStore.selectedSkill.enabled ? t('停用', 'Disable') : t('启用', 'Enable') }}</button><button class="button-danger" @click="uninstall(skillStore.selectedSkill.skill_id, skillStore.selectedSkill.name)">{{ t('卸载', 'Uninstall') }}</button></div></div>

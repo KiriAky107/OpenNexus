@@ -1,0 +1,12 @@
+id: note-reviewer
+name: 笔记检查助手
+version: 1.0.0
+description: 查找用户指定的笔记，调用 Markdown 笔记检查插件生成带原文行号的格式问题与未完成任务清单。
+permissions: [notes.search, notes.read]
+tools: [notes.search, notes.read, markdown-workbench.inspect_markdown]
+retrieval:
+  top_k: 5
+  rerank: true
+  citation: true
+model:
+  required_capabilities: [chat, tool_calling]

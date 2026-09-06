@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
+const { actionDialog, resolveAction, askConfirm } = useActionDialog()
+import AppDialog from '@/components/common/AppDialog.vue'
 import { onMounted, reactive, ref } from 'vue'
 import type { TaskItem, TaskStatus } from '@/contracts'
 import { useTaskStore } from '@/stores/task'
@@ -29,13 +33,14 @@ async function setStatus(task: TaskItem, status: TaskStatus) {
 }
 
 async function remove(task: TaskItem) {
-  if (!confirm(`${t('确定删除任务', 'Delete task')} “${task.title}”?`)) return
+  if (!(await askConfirm(`${t('确定删除任务', 'Delete task')} “${task.title}”?`))) return
   try { await taskStore.deleteTask(task.task_id) } catch (error) { actionError.value = error instanceof Error ? error.message : t('任务删除失败', 'Failed to delete task') }
 }
 </script>
 
 <template>
-  <section class="feature-page">
+  <section class="feature-page tasks-page">
+    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <header class="feature-header"><div><h1>{{ t('任务', 'Tasks') }}</h1><p>{{ t('管理用户、笔记和 Agent 产生的行动项。', 'Manage action items created by users, notes, and agents.') }}</p></div><button class="button-primary" @click="resetForm(); showForm = true">＋ {{ t('新建任务', 'New task') }}</button></header>
     <div v-if="taskStore.error || actionError" class="error-banner">{{ taskStore.error || actionError }}</div>
     <div v-if="taskStore.filteredTasks.length" class="task-list">
@@ -46,12 +51,14 @@ async function remove(task: TaskItem) {
       </article>
     </div>
     <div v-else class="empty-state"><div><strong>{{ taskStore.isLoading ? t('正在加载任务…', 'Loading tasks…') : t('没有符合条件的任务', 'No matching tasks') }}</strong><p>{{ t('创建一项任务，或调整左侧筛选条件。', 'Create a task or adjust the filters.') }}</p></div></div>
-    <div v-if="showForm" class="modal-backdrop" @click.self="showForm = false"><div class="modal"><h2>{{ editingId ? t('编辑任务', 'Edit task') : t('新建任务', 'New task') }}</h2><form @submit.prevent="saveTask"><div class="field"><label>{{ t('标题', 'Title') }}</label><input v-model="form.title" class="input" required /></div><div class="field"><label>{{ t('描述', 'Description') }}</label><textarea v-model="form.description" class="textarea" /></div><div class="field"><label>{{ t('截止时间', 'Due date') }}</label><input v-model="form.due_date" class="input" type="datetime-local" /></div><div class="field"><label>{{ t('关联 Note ID', 'Linked Note ID') }}</label><input v-model="form.note_id" class="input" /></div><div class="inline-actions"><button class="button-primary">{{ t('保存', 'Save') }}</button><button type="button" class="button-secondary" @click="showForm = false">{{ t('取消', 'Cancel') }}</button></div></form></div></div>
+    <AppDialog v-if="showForm" :label="t('任务表单', 'Task form')" @close="showForm = false"><div class="modal"><h2>{{ editingId ? t('编辑任务', 'Edit task') : t('新建任务', 'New task') }}</h2><form @submit.prevent="saveTask"><div class="field"><label>{{ t('标题', 'Title') }}</label><input v-model="form.title" class="input" required /></div><div class="field"><label>{{ t('描述', 'Description') }}</label><textarea v-model="form.description" class="textarea" /></div><div class="field"><label>{{ t('截止时间', 'Due date') }}</label><input v-model="form.due_date" class="input" type="datetime-local" /></div><div class="field"><label>{{ t('关联 Note ID', 'Linked Note ID') }}</label><input v-model="form.note_id" class="input" /></div><div class="inline-actions"><button class="button-primary">{{ t('保存', 'Save') }}</button><button type="button" class="button-secondary" @click="showForm = false">{{ t('取消', 'Cancel') }}</button></div></form></div></AppDialog>
   </section>
 </template>
 
 <style scoped>
-.task-list { display: grid; gap: var(--space-md); width: min(100%, 980px); margin-inline: auto; }
+.tasks-page > :is(.feature-header, .task-list, .empty-state, .error-banner) { width: 100%; max-width: 1180px; margin-inline: auto; box-sizing: border-box; }
+.task-content { min-width: 0; overflow-wrap: anywhere; }
+.task-list { display: grid; gap: var(--space-md); width: min(100%, 1180px); margin-inline: auto; }
 .task-card { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: var(--space-md); }
 .status-check { width: 28px; height: 28px; border: 2px solid var(--color-border-default); border-radius: var(--radius-full); transition: border-color var(--motion-fast), background-color var(--motion-fast), color var(--motion-fast), transform var(--motion-fast); }
 .status-check:hover { border-color: var(--color-success); transform: scale(1.06); }

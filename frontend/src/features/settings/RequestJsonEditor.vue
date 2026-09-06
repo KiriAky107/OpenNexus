@@ -72,7 +72,7 @@ async function exportRules() {
       <div class="rule-selectors"><label>{{ t('能力', 'Capability') }}<select v-model="rule.capability" class="select" @change="publish"><option value="chat">{{ t('聊天', 'Chat') }}</option><option value="embedding">Embedding</option><option value="transcription">{{ t('音频转写', 'Transcription') }}</option><option value="speaker_matching">{{ t('声纹比对', 'Speaker matching') }}</option></select></label>
       <label>{{ t('模型', 'Model') }}<input v-model="rule.model" class="input" :placeholder="t('留空：全部模型', 'Blank: all models')" @input="publish" /></label>
       <label>{{ t('请求模式', 'Request mode') }}<select v-model="rule.stream" class="select" @change="publish"><option :value="null">{{ t('全部', 'All') }}</option><option :value="true">{{ t('仅流式', 'Streaming only') }}</option><option :value="false">{{ t('仅非流式', 'Non-streaming only') }}</option></select></label></div>
-      <textarea v-model="rule.draft" class="input json-body" rows="6" :aria-label="t('自定义请求 JSON', 'Custom request JSON')" spellcheck="false" placeholder='{"stream_options":{"include_usage":true}}' @input="publish" />
+      <textarea v-model="rule.draft" class="textarea json-body" rows="6" :aria-label="t('自定义请求 JSON', 'Custom request JSON')" spellcheck="false" placeholder='{"stream_options":{"include_usage":true}}' @input="publish" />
       <p v-if="rule.error" class="error-text" role="alert">{{ rule.error }}</p>
       <div class="inline-actions"><button type="button" class="button-secondary" @click="format(index)">{{ t('格式化', 'Format') }}</button><button type="button" class="button-danger" @click="rules.splice(index,1); publish()">{{ t('删除规则', 'Delete rule') }}</button></div>
     </div>
@@ -82,4 +82,4 @@ async function exportRules() {
     <p class="subtle">{{ t('导入替换当前请求规则，保存提供商后生效。导出仅包含请求规则，不包含凭据引用和 API Key。', 'Importing replaces the current request rules and takes effect after saving the provider. Exports contain rules only, without credential references or API keys.') }}</p>
   </details>
 </template>
-<style scoped>.request-json{display:grid;gap:12px}.rule{padding:12px;border:1px solid var(--color-border-default);border-radius:8px;margin:12px 0}.rule-selectors{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}.rule-selectors label{display:grid;gap:5px}.json-body{font-family:monospace;width:100%}.transfer-actions{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-sm);justify-content:space-between}</style>
+<style scoped>.request-json{display:grid;gap:12px}.rule{padding:12px;border:1px solid var(--color-border-default);border-radius:8px;margin:12px 0}.rule-selectors{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}.rule-selectors label{display:grid;gap:5px}.json-body{font-family:var(--font-ui-mono);width:100%}.transfer-actions{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-sm);justify-content:space-between}</style>

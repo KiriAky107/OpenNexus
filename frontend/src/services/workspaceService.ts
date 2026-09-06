@@ -19,6 +19,7 @@ export interface VaultInfo {
 }
 
 let cachedTree: FileNode[] | null = null
+let treeRequestVersion = 0
 const noteIdByPath = new Map<string, string>()
 const typeByPath = new Map<string, FileNode['type']>()
 
@@ -79,7 +80,7 @@ async function requireNoteId(filePath: string): Promise<string> {
 }
 
 export async function getWorkspaceInfo(): Promise<ApiWorkspaceInfo> {
-  return apiClient.get('/api/workspace')
+  return apiClient.get('/api/workspace', { timeoutMs: 15000 })
 }
 
 export async function getRecentVaults(): Promise<VaultInfo[]> {
@@ -88,7 +89,8 @@ export async function getRecentVaults(): Promise<VaultInfo[]> {
 }
 
 export async function openVault(path: string): Promise<VaultInfo> {
-  const snapshot = await apiClient.post<ApiWorkspaceSnapshot>('/api/workspace/open', { path })
+  treeRequestVersion++
+  const snapshot = await apiClient.post<ApiWorkspaceSnapshot>('/api/workspace/open', { path }, { timeoutMs: 15000 })
   cacheEntries(snapshot.items)
   return {
     vault_id: snapshot.workspace.vault_id,
@@ -104,7 +106,9 @@ export async function createVault(path: string, name: string): Promise<VaultInfo
 }
 
 export async function refreshTree(): Promise<FileNode[]> {
-  const entries = await apiClient.get<ApiWorkspaceEntry[]>('/api/workspace/tree')
+  const version = ++treeRequestVersion
+  const entries = await apiClient.get<ApiWorkspaceEntry[]>('/api/workspace/tree', { timeoutMs: 10000 })
+  if (version !== treeRequestVersion) return cachedTree ?? []
   return cacheEntries(entries)
 }
 
@@ -122,10 +126,12 @@ export async function getNoteId(filePath: string): Promise<string> {
   return requireNoteId(filePath)
 }
 
-export async function saveFileContent(filePath: string, content: string): Promise<void> {
+export async function saveFileContent(filePath: string, content: string, expectedContent?: string): Promise<void> {
   const metadata = splitNoteMetadata(content)
+  const expectedHash = expectedContent === undefined ? undefined : Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(expectedContent)))).map(byte => byte.toString(16).padStart(2, '0')).join('')
   await noteService.updateNote(await requireNoteId(filePath), {
     markdown: content,
+    ...(expectedHash ? { expected_content_hash: expectedHash } : {}),
     // Explicit [] clears the index; absent tags retain API-managed tags.
     ...(metadata?.hasTags ? { tags: metadata.tags } : {}),
   })

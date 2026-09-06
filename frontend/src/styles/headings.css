@@ -1,0 +1,19 @@
+.heading-fold-hidden { display: none !important; }
+.milkdown .ProseMirror .heading-fold-toggle { opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
+.milkdown .ProseMirror :is(h1,h2,h3,h4,h5,h6):hover > .heading-fold-toggle,
+.milkdown .ProseMirror .heading-fold-toggle:focus-visible { opacity: 1; pointer-events: auto; }
+@media (hover: none) { .milkdown .ProseMirror .heading-fold-toggle { opacity: 1; pointer-events: auto; } }
+@media (prefers-reduced-motion: reduce) { .milkdown .ProseMirror .heading-fold-toggle { transition: none; } }
+.milkdown .ProseMirror .heading-fold-toggle { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; width: 24px; height: 28px; padding: 0; margin-inline-end: 5px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-secondary); font: 16px/1 system-ui; cursor: pointer; user-select: none; }
+.milkdown .ProseMirror .heading-fold-toggle:hover { background: var(--color-background-hover); color: var(--color-accent-primary); }
+.milkdown .ProseMirror .heading-fold-toggle:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 2px; }
+[data-heading-style='custom'] :is(.ProseMirror, .markdown-content) :is(h1,h2,h3,h4,h5,h6) { font-family: var(--heading-family) !important; }
+[data-heading-style='custom'] :is(.ProseMirror, .markdown-content) h1 { font-size: var(--heading-1-size) !important; font-weight: var(--heading-1-weight) !important; }
+[data-heading-style='custom'] :is(.ProseMirror, .markdown-content) h2 { font-size: var(--heading-2-size) !important; font-weight: var(--heading-2-weight) !important; }
+[data-heading-style='custom'] :is(.ProseMirror, .markdown-content) h3 { font-size: var(--heading-3-size) !important; font-weight: var(--heading-3-weight) !important; }
+[data-heading-style='custom'] :is(.ProseMirror, .markdown-content) h4 { font-size: var(--heading-4-size) !important; font-weight: var(--heading-4-weight) !important; }
+[data-heading-style='custom'] :is(.ProseMirror, .markdown-content) h5 { font-size: var(--heading-5-size) !important; font-weight: var(--heading-5-weight) !important; }
+[data-heading-style='custom'] :is(.ProseMirror, .markdown-content) h6 { font-size: var(--heading-6-size) !important; font-weight: var(--heading-6-weight) !important; }
+
+.milkdown .ProseMirror .heading-fold-toggle::before { content: ''; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); }
+.milkdown .ProseMirror .heading-fold-toggle[aria-expanded='false']::before { transform: rotate(-45deg); }
