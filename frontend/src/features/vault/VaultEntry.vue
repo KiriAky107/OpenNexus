@@ -65,7 +65,8 @@ async function openFolderPicker() {
         <p class="app-subtitle">{{ t('本地优先的 AI 笔记软件', 'A local-first AI note-taking app') }}</p>
       </div>
 
-      <div class="vault-card">
+        <div class="vault-card">
+          <button class="btn" @click="router.push('/logs')">{{ t('查看运行日志', 'View operation logs') }}</button>
         <div v-if="openError" class="error-banner" role="alert">{{ openError }} <button class="btn" @click="initializeVault" :disabled="isLoading">{{ t('重试', 'Retry') }}</button></div>
         <p v-if="isLoading" role="status">{{ t('正在打开知识库…', 'Opening knowledge base…') }}</p>
         <h2 class="card-title">{{ t('选择知识库', 'Select Knowledge Base') }}</h2>

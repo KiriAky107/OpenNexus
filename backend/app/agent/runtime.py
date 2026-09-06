@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from app.agent.async_trace import AsyncTraceWriter
+from app.operation_logs import log_event, agent_run_id
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -65,6 +67,9 @@ class RunRecord:
     subscribers: set[asyncio.Queue[AgentEvent]] = field(default_factory=set)
     task: asyncio.Task[None] | None = None
     next_sequence: int = 0
+    publish_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    cancel_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    persisted_run: AgentRun | None = None
 
 
 class AgentRuntime:
@@ -84,6 +89,7 @@ class AgentRuntime:
         self.skills = skills
         self.trace_repository = trace_repository or AgentTraceRepository()
         self._records: dict[str, RunRecord] = {}
+        self._writer = AsyncTraceWriter(self.trace_repository)
 
     async def create_run(self, request: AgentRunCreateRequest) -> AgentRun:
         self._prune_records()
@@ -122,19 +128,25 @@ class AgentRuntime:
             skill_config=skill_config,
             allowed_tools=allowed_tools,
         )
-        self.trace_repository.create_run(
-            run,
-            request,
-            self._config_snapshot(record),
-        )
+        # Reserve capacity before yielding to concurrent creators.
         self._records[run.run_id] = record
+        try:
+            cancelled = await self._writer.submit('create', run.model_copy(deep=True), request.model_copy(deep=True), self._config_snapshot(record))
+        except BaseException:
+            self._records.pop(run.run_id, None)
+            raise
+        record.persisted_run = run.model_copy(deep=True)
+        log_event('agent', 'run.created', run_id=run.run_id, provider_id=run.provider_id, model=run.model)
+        if cancelled:
+            await self._finish_cancelled(record)
+            raise asyncio.CancelledError
         record.task = asyncio.create_task(self._execute(record), name=run.run_id)
         return run.model_copy(deep=True)
 
     def get_run(self, run_id: str) -> AgentRun:
         record = self._records.get(run_id)
         if record is not None:
-            return record.run.model_copy(deep=True)
+            return (record.persisted_run or record.run).model_copy(deep=True)
         run = self.trace_repository.recover_interrupted(run_id)
         if run is None:
             raise AgentRunNotFoundError(run_id)
@@ -145,7 +157,7 @@ class AgentRuntime:
         recovered = [
             self.trace_repository.recover_interrupted(item.run_id) or item
             if item.run_id not in self._records
-            else self._records[item.run_id].run.model_copy(deep=True)
+            else (self._records[item.run_id].persisted_run or self._records[item.run_id].run).model_copy(deep=True)
             for item in items
         ]
         return recovered, total
@@ -154,25 +166,24 @@ class AgentRuntime:
         record = self._records.get(run_id)
         if record is None:
             return self.get_run(run_id)
-        if record.run.status in TERMINAL_STATUSES:
-            return record.run.model_copy(deep=True)
-        record.run.cancelled = True
-        record.run.status = AgentRunStatus.cancelled
-        record.run.updated_at = datetime.now(timezone.utc)
-        self.permissions.cancel_run(run_id)
-        self._publish(record, AgentEventType.run_cancelled, {})
-        if record.task and not record.task.done():
-            record.task.cancel()
-        return record.run.model_copy(deep=True)
+        async with record.cancel_lock:
+            if record.task and not record.task.done():
+                if record.run.status not in TERMINAL_STATUSES:
+                    record.task.cancel()
+                    self.permissions.cancel_run(run_id)
+                await asyncio.gather(record.task, return_exceptions=True)
+            if record.run.status not in TERMINAL_STATUSES:
+                await self._finish_cancelled(record)
+            return (record.persisted_run or record.run).model_copy(deep=True)
 
-    def resolve_permission(self, run_id: str, request_id: str, decision: str) -> bool:
+    async def resolve_permission(self, run_id: str, request_id: str, decision: str) -> bool:
         record = self._records.get(run_id)
         if record is None:
             return False
         ticket = self.permissions.get_ticket(run_id, request_id)
         resolved = self.permissions.resolve(run_id, request_id, decision)
         if resolved:
-            self._publish(
+            await self._publish(
                 record,
                 AgentEventType.permission_resolved,
                 {
@@ -189,23 +200,24 @@ class AgentRuntime:
         record = self._records.get(run_id)
         run = self.get_run(run_id)
         if record is None:
-            for event in self.trace_repository.list_events(
+            for event in await asyncio.to_thread(self.trace_repository.list_events,
                 run_id, after_sequence=after_sequence
             ):
                 yield event
             return
 
-        # 先注册订阅再读持久化历史；同一事件循环内没有 await，不会丢失交界事件。
+        # 先注册再异步读取历史；历史与实时队列的交界用 sequence 去重。
         queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
         record.subscribers.add(queue)
-        history = self.trace_repository.list_events(
-            run_id, after_sequence=after_sequence
-        )
         last_sequence = after_sequence
         try:
+            history = await asyncio.to_thread(self.trace_repository.list_events,
+                run_id, after_sequence=after_sequence)
             for event in history:
                 last_sequence = event.sequence
                 yield event
+                if event.event in {AgentEventType.run_completed, AgentEventType.run_failed, AgentEventType.run_cancelled}:
+                    return
             if run.status in TERMINAL_STATUSES:
                 return
             while True:
@@ -232,7 +244,7 @@ class AgentRuntime:
                 await asyncio.shield(record.task)
             except asyncio.CancelledError:
                 pass
-        return record.run.model_copy(deep=True)
+        return (record.persisted_run or record.run).model_copy(deep=True)
 
     def get_trace(
         self, run_id: str, *, after_sequence: int, limit: int
@@ -246,23 +258,35 @@ class AgentRuntime:
         return trace
 
     async def _execute(self, record: RunRecord) -> None:
+        token = agent_run_id.set(record.run.run_id)
         try:
             async with asyncio.timeout(record.request.run_timeout_seconds):
                 await self._run_loop(record)
         except asyncio.CancelledError:
             if record.run.status != AgentRunStatus.cancelled:
-                self._finish_cancelled(record)
+                await self._finish_cancelled(record)
         except TimeoutError:
-            self._fail(record, "AGENT_TIMEOUT", "Agent run exceeded its timeout.")
+            await self._fail(record, "AGENT_TIMEOUT", "Agent run exceeded its timeout.")
         except ProviderError as exc:
-            self._fail(record, exc.code, exc.message)
+            await self._fail(record, exc.code, exc.message)
         except Exception as exc:
-            self._fail(record, "AGENT_FAILED", str(exc))
+            log_event('agent', 'execution.failed', level='ERROR', error=exc, run_id=record.run.run_id)
+            await self._fail(record, "AGENT_FAILED", str(exc))
+        finally:
+            self.permissions.cancel_run(record.run.run_id)
+            agent_run_id.reset(token)
+
+    async def shutdown(self) -> None:
+        results = await asyncio.gather(*(self.cancel(run_id) for run_id in list(self._records)), return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                log_event('agent', 'shutdown.failed', level='ERROR', error=result)
+        await self._writer.queue.join()
 
     async def _run_loop(self, record: RunRecord) -> None:
         record.run.status = AgentRunStatus.running
         record.run.updated_at = datetime.now(timezone.utc)
-        self._publish(
+        await self._publish(
             record,
             AgentEventType.run_started,
             {"provider_id": record.request.provider_id, "model": record.request.model},
@@ -277,7 +301,7 @@ class AgentRuntime:
             record.run.updated_at = datetime.now(timezone.utc)
             model_call_id = f"model_call_{uuid4().hex}"
             started_at = perf_counter()
-            self._publish(
+            await self._publish(
                 record,
                 AgentEventType.model_call_started,
                 {
@@ -299,7 +323,7 @@ class AgentRuntime:
                     )
                 )
             except Exception as exc:
-                self._publish(
+                await self._publish(
                     record,
                     AgentEventType.model_call_failed,
                     {
@@ -309,7 +333,7 @@ class AgentRuntime:
                     },
                 )
                 raise
-            self._publish(
+            await self._publish(
                 record,
                 AgentEventType.model_call_completed,
                 {
@@ -322,7 +346,7 @@ class AgentRuntime:
                 },
             )
             record.run.token_usage += turn.input_tokens + turn.output_tokens
-            self._publish(
+            await self._publish(
                 record,
                 AgentEventType.usage,
                 {"token_usage": record.run.token_usage},
@@ -331,12 +355,12 @@ class AgentRuntime:
                 record.request.token_budget is not None
                 and record.run.token_usage > record.request.token_budget
             ):
-                self._fail(record, "TOKEN_BUDGET_EXCEEDED", "Agent token budget exceeded.")
+                await self._fail(record, "TOKEN_BUDGET_EXCEEDED", "Agent token budget exceeded.")
                 return
 
             if turn.tool_calls:
                 if len(turn.tool_calls) > MAX_TOOL_CALLS_PER_TURN:
-                    self._fail(
+                    await self._fail(
                         record,
                         "TOO_MANY_TOOL_CALLS",
                         f"Provider requested more than {MAX_TOOL_CALLS_PER_TURN} tools in one turn.",
@@ -360,10 +384,17 @@ class AgentRuntime:
                     async with semaphore:
                         return await self._execute_tool(record, call, model_call_id)
 
-                results = await asyncio.gather(*(execute(call) for call in calls))
+                executions = [asyncio.create_task(execute(call)) for call in calls]
+                try:
+                    results = await asyncio.gather(*executions)
+                finally:
+                    for execution in executions:
+                        if not execution.done():
+                            execution.cancel()
+                    await asyncio.gather(*executions, return_exceptions=True)
                 for call, result in zip(calls, results):
                     record.run.tool_results.append(result)
-                    self._collect_citations(record, result)
+                    await self._collect_citations(record, result)
                     messages.append(
                         Message(
                             role=MessageRole.tool,
@@ -376,20 +407,20 @@ class AgentRuntime:
 
             if turn.text is not None:
                 record.run.output = turn.text
-                self._publish(record, AgentEventType.text_delta, {"text": turn.text})
+                await self._publish(record, AgentEventType.text_delta, {"text": turn.text})
                 record.run.status = AgentRunStatus.completed
                 record.run.updated_at = datetime.now(timezone.utc)
-                self._publish(
+                await self._publish(
                     record,
                     AgentEventType.run_completed,
                     {"output": turn.text, "token_usage": record.run.token_usage},
                 )
                 return
 
-            self._fail(record, "EMPTY_MODEL_RESPONSE", "Provider returned no text or tool call.")
+            await self._fail(record, "EMPTY_MODEL_RESPONSE", "Provider returned no text or tool call.")
             return
 
-        self._fail(record, "MAX_STEPS_EXCEEDED", "Agent reached its maximum step count.")
+        await self._fail(record, "MAX_STEPS_EXCEEDED", "Agent reached its maximum step count.")
 
     async def _execute_tool(
         self, record: RunRecord, call: ToolCall, parent_model_call_id: str
@@ -397,7 +428,7 @@ class AgentRuntime:
         started_at = perf_counter()
         call_data = call.model_dump(mode="json")
         call_data["parent_model_call_id"] = parent_model_call_id
-        self._publish(record, AgentEventType.tool_call, call_data)
+        await self._publish(record, AgentEventType.tool_call, call_data)
         try:
             registered = self.tools.get(call.name)
         except ToolNotFoundError:
@@ -411,7 +442,7 @@ class AgentRuntime:
                 error_code="TOOL_NOT_ALLOWED",
                 error_message="Tool is not included in allowed_tools.",
             )
-            self._publish_tool_result(
+            await self._publish_tool_result(
                 record, result, parent_model_call_id, started_at
             )
             return result
@@ -425,7 +456,7 @@ class AgentRuntime:
                 error_code="NETWORK_NOT_ALLOWED",
                 error_message="Agent run does not allow network tools.",
             )
-            self._publish_tool_result(
+            await self._publish_tool_result(
                 record, result, parent_model_call_id, started_at
             )
             return result
@@ -436,7 +467,7 @@ class AgentRuntime:
             # 运行状态必须在等待期间可见，前端才能展示并处理权限确认卡片。
             ticket = self.permissions.create_ticket(record.run.run_id, permission)
             record.run.status = AgentRunStatus.waiting_permission
-            self._publish(
+            await self._publish(
                 record,
                 AgentEventType.permission_required,
                 {
@@ -458,13 +489,18 @@ class AgentRuntime:
                     error_code="PERMISSION_TIMEOUT",
                     error_message="Tool permission confirmation timed out.",
                 )
-                self._publish_tool_result(
+                await self._publish_tool_result(
                     record, result, parent_model_call_id, started_at
                 )
                 return result
             record.run.status = AgentRunStatus.running
             record.run.updated_at = datetime.now(timezone.utc)
-            self.trace_repository.save_run(record.run)
+            async with record.publish_lock:
+                snapshot = record.run.model_copy(deep=True)
+                cancelled = await self._writer.submit('save', snapshot)
+                record.persisted_run = snapshot
+                if cancelled:
+                    raise asyncio.CancelledError
             result = (
                 await self._invoke_tool(record, call)
                 if decision in {"allow_once", "allow_session"}
@@ -473,10 +509,10 @@ class AgentRuntime:
         else:
             result = await self._invoke_tool(record, call)
 
-        self._publish_tool_result(record, result, parent_model_call_id, started_at)
+        await self._publish_tool_result(record, result, parent_model_call_id, started_at)
         return result
 
-    def _publish_tool_result(
+    async def _publish_tool_result(
         self,
         record: RunRecord,
         result: ToolResult,
@@ -486,7 +522,7 @@ class AgentRuntime:
         data = result.model_dump(mode="json")
         data["parent_model_call_id"] = parent_model_call_id
         data["duration_ms"] = int((perf_counter() - started_at) * 1000)
-        self._publish(record, AgentEventType.tool_result, data)
+        await self._publish(record, AgentEventType.tool_result, data)
 
     async def _invoke_tool(self, record: RunRecord, call: ToolCall) -> ToolResult:
         try:
@@ -519,45 +555,60 @@ class AgentRuntime:
             error_message="Tool permission was denied.",
         )
 
-    def _finish_cancelled(self, record: RunRecord) -> None:
+    async def _finish_cancelled(self, record: RunRecord) -> None:
         record.run.cancelled = True
         record.run.status = AgentRunStatus.cancelled
         record.run.updated_at = datetime.now(timezone.utc)
-        self._publish(record, AgentEventType.run_cancelled, {})
+        await self._publish(record, AgentEventType.run_cancelled, {})
 
-    def _fail(self, record: RunRecord, code: str, message: str) -> None:
-        if record.run.status in TERMINAL_STATUSES:
+    async def _fail(self, record: RunRecord, code: str, message: str) -> None:
+        log_event('agent', 'run.error', level='ERROR', run_id=record.run.run_id, error_code=code)
+        if record.persisted_run and record.persisted_run.status in TERMINAL_STATUSES:
             return
         record.run.status = AgentRunStatus.failed
         record.run.error_code = code
         record.run.error_message = message
         record.run.updated_at = datetime.now(timezone.utc)
-        self._publish(
+        await self._publish(
             record,
             AgentEventType.run_failed,
             {"code": code, "message": message},
         )
 
-    def _publish(
+    async def _publish(
         self, record: RunRecord, event_type: AgentEventType, data: dict[str, object]
     ) -> None:
-        sanitized = sanitize_trace_value(data)
-        assert isinstance(sanitized, dict)
-        event = AgentEvent(
-            event=event_type,
-            run_id=record.run.run_id,
-            sequence=record.next_sequence,
-            data=sanitized,
-            timestamp=datetime.now(timezone.utc),
-        )
-        record.next_sequence += 1
-        record.events.append(event)
-        self.trace_repository.append_event(record.run, event)
-        # 内存只保留实时订阅窗口；完整审计轨迹由 SQLite 保存。
-        if len(record.events) > MAX_EVENTS_PER_RUN:
-            del record.events[: len(record.events) - MAX_EVENTS_PER_RUN]
-        for queue in record.subscribers:
-            queue.put_nowait(event)
+        async with record.publish_lock:
+            sanitized = sanitize_trace_value(data)
+            assert isinstance(sanitized, dict)
+            event = AgentEvent(
+                event=event_type,
+                run_id=record.run.run_id,
+                sequence=record.next_sequence,
+                data=sanitized,
+                timestamp=datetime.now(timezone.utc),
+            )
+            snapshot = record.run.model_copy(deep=True)
+            try:
+                cancelled = await self._writer.submit('event', snapshot, event)
+            except Exception as exc:
+                log_event('agent', 'trace.write_failed', level='ERROR', error=exc, run_id=record.run.run_id)
+                raise
+            record.next_sequence += 1
+            record.persisted_run = snapshot
+            record.events.append(event)
+            log_event('agent', event_type.value,
+                      level='ERROR' if event_type.value.endswith('Failed') or data.get('success') is False else 'INFO',
+                      run_id=record.run.run_id, provider_id=record.run.provider_id, model=record.run.model,
+                      sequence=event.sequence, step=record.run.current_step, status=snapshot.status.value,
+                      tool=data.get('name'), error_code=data.get('code') or data.get('error_code'))
+            # 内存只保留实时订阅窗口；完整审计轨迹由 SQLite 保存。
+            if len(record.events) > MAX_EVENTS_PER_RUN:
+                del record.events[: len(record.events) - MAX_EVENTS_PER_RUN]
+            for queue in record.subscribers:
+                queue.put_nowait(event)
+            if cancelled:
+                raise asyncio.CancelledError
 
     @staticmethod
     def _request_metadata(record: RunRecord) -> dict[str, object]:
@@ -583,7 +634,7 @@ class AgentRuntime:
             "metadata": record.request.metadata,
         }
 
-    def _collect_citations(self, record: RunRecord, result: ToolResult) -> None:
+    async def _collect_citations(self, record: RunRecord, result: ToolResult) -> None:
         if not result.success or not isinstance(result.output, dict):
             return
         items = result.output.get("items")
@@ -601,7 +652,7 @@ class AgentRuntime:
                 continue
             known.add(citation.citation_id)
             record.run.citations.append(citation)
-            self._publish(record, AgentEventType.citation, citation.model_dump(mode="json"))
+            await self._publish(record, AgentEventType.citation, citation.model_dump(mode="json"))
 
     def _get_record(self, run_id: str) -> RunRecord:
         try:
@@ -618,7 +669,7 @@ class AgentRuntime:
             (
                 record
                 for record in self._records.values()
-                if record.run.status in TERMINAL_STATUSES
+                if record.run.status in TERMINAL_STATUSES and (record.task is None or record.task.done())
             ),
             key=lambda record: record.run.updated_at,
         )

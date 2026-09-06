@@ -1,7 +1,14 @@
 import asyncio
 from functools import wraps
+from weakref import WeakKeyDictionary
 
-_vault_mutation_lock = asyncio.Lock()
+_vault_locks = WeakKeyDictionary()
+
+
+def vault_mutation_lock():
+    # Service/test lifecycle restarts must not reuse a lock bound to a closed loop.
+    loop = asyncio.get_running_loop()
+    return _vault_locks.setdefault(loop, asyncio.Lock())
 
 
 def serialized_vault_mutation(operation):
@@ -9,7 +16,7 @@ def serialized_vault_mutation(operation):
 
     @wraps(operation)
     async def wrapped(*args, **kwargs):
-        async with _vault_mutation_lock:
+        async with vault_mutation_lock():
             return await operation(*args, **kwargs)
 
     return wrapped

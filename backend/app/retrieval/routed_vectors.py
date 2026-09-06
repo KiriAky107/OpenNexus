@@ -2,15 +2,14 @@
 
 The runtime's model_id is the authoritative space ID (including provider URL,
 endpoint, model and dimensions); equal dimensions alone never imply compatibility.
-This phase uses a lazy, rebuildable SQLite side table instead of a schema migration.
-Search scans only current blocks in one database snapshot and requires complete
-coverage. Cosine ranking costs O(blocks * dimensions) with an O(top_k) heap; this
-small-vault implementation should become a per-space ANN index at larger scale.
+Durable vectors are reused to build per-space/dimension sqlite-vec indexes lazily.
+Native exact KNN avoids Python JSON decoding and dot products on every search.
+Coverage checks and ranking share one transaction.
 """
 
 from __future__ import annotations
 
-import heapq
+import asyncio
 import json
 import logging
 import math
@@ -20,9 +19,11 @@ from typing import Protocol
 
 from app.database.db import connect, transaction
 from app.errors import ApiError
+from app.operation_logs import log_event
 from app.retrieval.vectorstore import VectorHit
 from app.retrieval.provenance import record_embedding
 from app.retrieval.hybrid import rrf_fuse
+from app.retrieval import space_index
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,8 @@ async def embed_remote(texts: list[str], *, accept_local=False, strict=False, lo
             source=result.source,
         )
     except Exception as exc:
+        log_event('vectors', 'embedding.failed', level='ERROR' if strict else 'WARNING', error=exc,
+                  count=len(texts), fallback='none' if strict else 'local_index')
         # Avoid logging provider exceptions containing credentials or note text.
         record_embedding(fallback_reason="REMOTE_EMBEDDING_UNAVAILABLE")
         logger.warning("Remote embedding unavailable (%s); using local index", type(exc).__name__)
@@ -118,9 +121,15 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
             block_id TEXT NOT NULL REFERENCES blocks(block_id) ON DELETE CASCADE,
             dimensions INTEGER NOT NULL CHECK (dimensions > 0),
             vector TEXT NOT NULL,
-            PRIMARY KEY (space_id, block_id)
+            PRIMARY KEY (space_id, dimensions, block_id)
         )
     """)
+    primary = [row[1] for row in sorted(conn.execute('PRAGMA table_info(routed_block_vectors)'), key=lambda row: row[5]) if row[5]]
+    if primary == ['space_id', 'block_id']:
+        conn.execute('CREATE TABLE routed_block_vectors_upgrade (space_id TEXT NOT NULL, block_id TEXT NOT NULL REFERENCES blocks(block_id) ON DELETE CASCADE, dimensions INTEGER NOT NULL CHECK(dimensions>0), vector TEXT NOT NULL, PRIMARY KEY(space_id,dimensions,block_id))')
+        conn.execute('INSERT INTO routed_block_vectors_upgrade SELECT * FROM routed_block_vectors')
+        conn.execute('DROP TABLE routed_block_vectors')
+        conn.execute('ALTER TABLE routed_block_vectors_upgrade RENAME TO routed_block_vectors')
     conn.execute("""
         CREATE INDEX IF NOT EXISTS routed_block_vectors_block_id
         ON routed_block_vectors(block_id)
@@ -146,13 +155,14 @@ def store_remote(
             conn.executemany(
                 """INSERT INTO routed_block_vectors (space_id, block_id, dimensions, vector)
                    VALUES (?, ?, ?, ?)
-                   ON CONFLICT (space_id, block_id) DO UPDATE SET
+                   ON CONFLICT (space_id, dimensions, block_id) DO UPDATE SET
                        dimensions = excluded.dimensions, vector = excluded.vector""",
                 [
                     (batch.space_id, block_id, batch.dimensions, json.dumps(vector, allow_nan=False))
                     for block_id, vector in zip(block_ids, batch.vectors)
                 ],
             )
+            space_index.upsert(conn, block_ids, batch)
         except BaseException:
             conn.execute("ROLLBACK TO routed_vectors_write")
             raise
@@ -180,6 +190,50 @@ async def search_remote(query: str, *, top_k: int, accept_local=False, strict=Fa
     if batch is None:
         return None
 
+    if not await _prepare_for_search([batch], strict):
+        return None
+    return await asyncio.to_thread(_search_space, batch, top_k, strict)
+
+
+async def _prepare_indexes(batches):
+    from app.services.coordination import vault_mutation_lock
+    def prepare(check_only=False):
+        conn = connect()
+        try:
+            if check_only:
+                return space_index.is_ready(conn, batches)
+            space_index.prepare(conn, batches)
+        finally:
+            conn.close()
+    if await asyncio.to_thread(prepare, True):
+        return
+    # Share the cooperative gate with saves: never block the event loop on a
+    # SQLite write lock while a migration owns it in another thread.
+    async with vault_mutation_lock():
+        work = asyncio.create_task(asyncio.to_thread(prepare))
+        cancelled = False
+        while not work.done():
+            try:
+                await asyncio.shield(work)
+            except asyncio.CancelledError:
+                cancelled = True
+        work.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
+
+async def _prepare_for_search(batches, strict):
+    try:
+        await _prepare_indexes(batches)
+        return True
+    except Exception as exc:
+        record_embedding(fallback_reason='REMOTE_INDEX_UNAVAILABLE')
+        if strict:
+            raise ApiError(409, 'SEMANTIC_INDEX_UNAVAILABLE', '向量索引准备失败，请检查索引状态。') from exc
+        return False
+
+
+def _search_space(batch, top_k, strict):
     record_embedding(attempted_space={"model_id": batch.space_id, "dimensions": batch.dimensions})
     try:
         conn = connect()
@@ -195,29 +249,7 @@ async def search_remote(query: str, *, top_k: int, accept_local=False, strict=Fa
                     if strict:
                         raise ValueError("semantic index missing")
                     return None
-                rows = conn.execute(
-                    """SELECT b.block_id, r.vector
-                       FROM blocks AS b
-                       LEFT JOIN routed_block_vectors AS r
-                         ON r.block_id = b.block_id AND r.space_id = ? AND r.dimensions = ?
-                       ORDER BY b.block_id""",
-                    (batch.space_id, batch.dimensions),
-                )
-
-                def hits():
-                    for row in rows:
-                        if row["vector"] is None:
-                            raise ValueError("remote space has incomplete block coverage")
-                        vector = _unit_vector(json.loads(row["vector"]), batch.dimensions)
-                        score = math.fsum(a * b for a, b in zip(batch.vectors[0], vector))
-                        yield VectorHit(id=row["block_id"], score=max(0.0, min(1.0, score)))
-
-                try:
-                    result = heapq.nlargest(top_k, hits(), key=lambda hit: hit.score)
-                finally:
-                    # Exceptions may retain the generator/traceback; finalize its
-                    # cursor now so a subsequent rebuild can acquire a write lock.
-                    rows.close()
+                result = space_index.search(conn, batch, top_k)
                 record_embedding(source=batch.source, model_id=batch.space_id,
                                  dimensions=batch.dimensions, fallback_reason=None)
                 return result
@@ -241,6 +273,12 @@ async def _search_partitioned(query: str, policies: set[bool], *, top_k: int, st
         if batch is None:
             return None
         batches[policy] = batch
+    if not await _prepare_for_search(list(batches.values()), strict):
+        return None
+    return await asyncio.to_thread(_search_partitions, batches, policies, top_k, strict)
+
+
+def _search_partitions(batches, policies, top_k, strict):
     conn = connect()
     try:
         with transaction(conn):
@@ -250,23 +288,7 @@ async def _search_partitioned(query: str, policies: set[bool], *, top_k: int, st
                 raise ValueError("embedding policies changed while querying")
             ranked = []
             for policy, batch in batches.items():
-                rows = conn.execute(
-                    "SELECT b.block_id,r.vector FROM blocks b LEFT JOIN routed_block_vectors r "
-                    "ON r.block_id=b.block_id AND r.space_id=? AND r.dimensions=? "
-                    "WHERE b.embedding_local_only=? ORDER BY b.block_id",
-                    (batch.space_id, batch.dimensions, int(policy)),
-                )
-                def hits():
-                    for row in rows:
-                        if row['vector'] is None:
-                            raise ValueError("incomplete policy coverage")
-                        vector = _unit_vector(json.loads(row['vector']), batch.dimensions)
-                        score = math.fsum(a * b for a, b in zip(batch.vectors[0], vector))
-                        yield VectorHit(id=row['block_id'], score=max(0.0, min(1.0, score)))
-                try:
-                    ranked.append(heapq.nlargest(top_k, hits(), key=lambda hit: hit.score))
-                finally:
-                    rows.close()
+                ranked.append(space_index.search(conn, batch, top_k, policy))
             spaces = [{"source": b.source, "model_id": b.space_id, "dimensions": b.dimensions,
                        "local_only": policy} for policy, b in batches.items()]
             record_embedding(source="mixed" if len({b.source for b in batches.values()}) > 1 else batch.source,

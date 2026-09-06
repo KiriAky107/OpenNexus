@@ -1,0 +1,89 @@
+<!doctype html><html><head><meta charset="utf-8"><title>长文渲染压测</title></head>
+<body><div id="app"></div><pre id="report">通过 run-stress.py 运行，或在控制台调用 runBenchmark(25000)。</pre>
+<script type="module">
+import { createApp, h, ref, nextTick } from 'vue'
+import { createPinia } from 'pinia'
+import Editor from '/src/features/editor/VisualMarkdownEditor.vue'
+import { editorViewCtx } from '@milkdown/kit/core'
+import { TextSelection } from '@milkdown/kit/prose/state'
+import { getMarkdown } from '@milkdown/kit/utils'
+import { renderMarkdown } from '/src/utils/markdown.ts'
+import { useEditorStore } from '/src/stores/editor.ts'
+import { getCommunityThemePreviewCss } from '/src/services/themePackageService.ts'
+import { makeStressDocument } from './fixture.js'
+import '/src/styles/tokens.css'
+import '/src/styles/features.css'
+const frame = () => new Promise(resolve => requestAnimationFrame(() => resolve()))
+const settle = async () => { await nextTick(); await frame(); await frame() }
+const summarize = values => { const sorted = [...values].sort((a,b)=>a-b); return {median:sorted[Math.floor(sorted.length/2)],p95:sorted[Math.min(sorted.length-1,Math.ceil(sorted.length*.95)-1)],max:sorted.at(-1)} }
+window.runBenchmark = async (size = 25000) => {
+ const source = makeStressDocument(size), target = document.getElementById('app')
+ const pinia = createPinia(), component = ref(), tasks = []
+ const observer = new PerformanceObserver(list => tasks.push(...list.getEntries().map(t => t.duration)))
+ observer.observe({type:'longtask',buffered:false})
+ const app = createApp({render:()=>h(Editor,{ref:component,initialContent:source})}).use(pinia)
+ const result = {requestedHan:size,hanCharacters:(source.match(/\p{Script=Han}/gu)||[]).length,sourceCharacters:source.length,userAgent:navigator.userAgent,viewport:[innerWidth,innerHeight]}
+ const start = performance.now(); app.mount(target)
+ try {
+  const deadline = performance.now()+120000
+  while (!component.value?.getEditor() || target.querySelector('.milkdown-host.loading')) { if(performance.now()>deadline)throw Error('Editor startup timeout'); await frame() }
+  await settle(); result.openMs = performance.now()-start
+  const editor = component.value.getEditor(), view = editor.action(ctx=>ctx.get(editorViewCtx))
+  result.domNodes = target.querySelectorAll('*').length
+  const measure = async (count, operation) => { const values=[]; for(let i=0;i<count;i++) {const start=performance.now(); operation(i); values.push(performance.now()-start); await settle()} return summarize(values) }
+  const positions=[]; view.state.doc.descendants((node,pos)=>{if(node.isTextblock && !node.type.spec.code)positions.push(pos+1)})
+  result.selectionMs = await measure(30, i => view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc,positions[Math.floor(i*positions.length/30)]))))
+  result.insertMs = await measure(20, () => view.dispatch(view.state.tr.insertText('压测输入')))
+  result.foldMs = await measure(6, () => target.querySelector('.section-actions button').click())
+  const serialized = editor.action(getMarkdown())
+  if(!serialized.includes('压测输入') || !serialized.includes('结束标记：长文内容完整。'))throw Error('Content integrity check failed')
+  result.integrity = true
+  const preview = document.createElement('div'); document.body.append(preview)
+  const previews=[]
+  for(let i=0;i<3;i++){const start=performance.now(); preview.innerHTML=await renderMarkdown(source); await settle(); previews.push(performance.now()-start)}
+  result.previewMs=previews
+  result.previewNodes=preview.querySelectorAll('*').length; preview.remove()
+  await settle(); result.longTasks={count:tasks.length,...summarize(tasks.length?tasks:[0])}
+  result.heapUsedBytes=performance.memory?.usedJSHeapSize
+  return result
+ } finally {
+  observer.disconnect(); useEditorStore(pinia).closeFile(); app.unmount()
+  document.getElementById('report').textContent=JSON.stringify(result,null,2)
+ }
+}
+
+window.prepareScrollBenchmark = async (size = 25000) => {
+ const source = makeStressDocument(size), target = document.getElementById('app')
+ const options = new URLSearchParams(location.search)
+ const theme = options.get('theme') || 'paper-moments'
+ document.documentElement.dataset.theme = theme
+ const style = document.createElement('style'); style.textContent = theme === 'paper-moments' ? getCommunityThemePreviewCss(theme) : ''; document.head.append(style)
+ const variant = options.get('variant') || 'default'
+ if (variant === 'no-outline') style.textContent += '.visual-editor .milkdown-host .ProseMirror { outline: none !important; }'
+ const pinia = createPinia(), component = ref()
+ const app = createApp({render:()=>h(Editor,{ref:component,initialContent:source})}).use(pinia)
+ app.mount(target)
+ const deadline = performance.now()+120000
+ while (!component.value?.getEditor() || target.querySelector('.milkdown-host.loading')) { if(performance.now()>deadline)throw Error('Editor startup timeout'); await frame() }
+ await settle()
+ const scroller=target.querySelector('.milkdown-host'), gaps=[], tasks=[]
+ let raf=0, last=performance.now()
+ const tick = now => {gaps.push(now-last);last=now;raf=requestAnimationFrame(tick)}
+ const observer = new PerformanceObserver(list=>tasks.push(...list.getEntries().map(t=>t.duration)))
+ observer.observe({type:'longtask',buffered:false});raf=requestAnimationFrame(tick)
+ window.finishScrollBenchmark = async () => {
+  cancelAnimationFrame(raf);observer.disconnect()
+  const result={requestedHan:size,theme,variant,frameGapsMs:summarize(gaps),frames:gaps.length,framesOver25ms:gaps.filter(g=>g>25).length,longTasks:tasks,scrollTop:scroller.scrollTop,scrollHeight:scroller.scrollHeight}
+  const editor=component.value.getEditor(),view=editor.action(ctx=>ctx.get(editorViewCtx))
+  view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(view.state.doc.content.size-1))))
+  scroller.scrollTop=scroller.scrollHeight;await settle()
+  target.querySelector('.section-actions button').click();await settle()
+  result.foldedScrollTop=scroller.scrollTop
+  result.caretAfterFold=view.state.selection.from
+  useEditorStore(pinia).closeFile();app.unmount();style.remove()
+  return result
+ }
+ const rect=scroller.getBoundingClientRect()
+ return {x:rect.left+rect.width/2,y:rect.top+rect.height/2}
+}
+</script><style>html,body{margin:0;height:100%;}#app{display:flex;flex-direction:column;height:90vh;max-width:1200px;margin:auto;}#report{white-space:pre-wrap;}</style></body></html>

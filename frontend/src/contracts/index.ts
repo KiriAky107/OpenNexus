@@ -507,6 +507,11 @@ export interface ThemeConfig {
 // ============ Index ============
 
 export interface IndexStatus {
+  running_jobs?: number
+  active_searches?: number
+  completed_searches?: number
+  failed_searches?: number
+  cancelled_searches?: number
   vector_refresh_required?: boolean
   status: 'unknown' | 'idle' | 'indexing' | 'error'
   pending_jobs: number
@@ -801,6 +806,11 @@ export interface ApiTask {
 }
 
 export interface ApiIndexStatus {
+  running_jobs?: number
+  active_searches?: number
+  completed_searches?: number
+  failed_searches?: number
+  cancelled_searches?: number
   vector_refresh_required?: boolean
   total_notes: number
   total_blocks: number

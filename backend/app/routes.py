@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from app.agent import AgentCapacityError, AgentRunNotFoundError
 from app.container import container
 from app.config import get_settings
+from app.operation_logs import log_event
 from app.extensions.archive import MAX_ZIP_BYTES, install_zip
 from app.services.persona_settings import PersonaSettings, load_persona, save_persona
 from app.contracts import (
@@ -462,11 +463,15 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                         usage = {"input_tokens": input_tokens, "output_tokens": output_tokens,
                                  "total_tokens": input_tokens + output_tokens}
                     elif event.event == ModelEventType.error:
+                        log_event('chat', 'model.error', level='ERROR', provider_id=request.provider_id,
+                                  model=request.model, error_code=event.data.get('code'))
                         if assistant_content:
                             assistant_content += "\n\n"
                         assistant_content += str(event.data.get("message", "Model generation failed."))
                     yield as_sse(event.event.value, event.model_dump_json())
         except Exception as exc:
+            log_event('chat', 'chat.failed', level='ERROR', error=exc,
+                      provider_id=request.provider_id, model=request.model)
             failure_message = exc.message if isinstance(exc, ApiError) else "知识库检索或模型生成失败，请检查服务状态。"
             if assistant_content:
                 assistant_content += "\n\n"
@@ -505,7 +510,7 @@ async def chat(request: ChatRequest) -> StreamingResponse:
 async def list_agent_runs(
     limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0)
 ) -> AgentRunListResponse:
-    items, total = container.agent.list_runs(limit=limit, offset=offset)
+    items, total = await asyncio.to_thread(container.agent.list_runs, limit=limit, offset=offset)
     return AgentRunListResponse(
         items=items,
         page=PageMeta(total=total, limit=limit, offset=offset),
@@ -610,7 +615,7 @@ async def get_agent_trace(
     limit: int = Query(default=200, ge=1, le=500),
 ) -> AgentTraceResponse:
     try:
-        return container.agent.get_trace(
+        return await asyncio.to_thread(container.agent.get_trace,
             run_id, after_sequence=after_sequence, limit=limit
         )
     except AgentRunNotFoundError as exc:
@@ -631,7 +636,7 @@ async def decide_agent_permission(
     run_id: str, request_id: str, request: PermissionDecisionRequest
 ) -> OperationResponse:
     agent_run_or_404(run_id)
-    if not container.agent.resolve_permission(run_id, request_id, request.decision):
+    if not await container.agent.resolve_permission(run_id, request_id, request.decision):
         raise ApiError(
             404,
             "PERMISSION_REQUEST_NOT_FOUND",
@@ -1230,7 +1235,7 @@ async def test_provider(request: ProviderTestRequest) -> ProviderTestResponse:
 async def list_tasks(
     limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0)
 ) -> TaskListResponse:
-    items, total = task_service.list_tasks(limit=limit, offset=offset)
+    items, total = await asyncio.to_thread(task_service.list_tasks, limit=limit, offset=offset)
     return TaskListResponse(
         items=items, page=PageMeta(total=total, limit=limit, offset=offset)
     )
@@ -1238,12 +1243,12 @@ async def list_tasks(
 
 @router.post("/tasks", response_model=Task, tags=["Tasks"])
 async def create_task(request: TaskCreateRequest) -> Task:
-    return task_service.create_task(**request.model_dump())
+    return await task_service.write_in_background(task_service.create_task, **request.model_dump())
 
 
 @router.get("/tasks/{task_id}", response_model=Task, tags=["Tasks"])
 async def get_task(task_id: str) -> Task:
-    task = task_service.get_task(task_id)
+    task = await asyncio.to_thread(task_service.get_task, task_id)
     if task is None:
         raise ApiError(
             404, "RESOURCE_NOT_FOUND", "task not found", {"task_id": task_id}
@@ -1253,7 +1258,7 @@ async def get_task(task_id: str) -> Task:
 
 @router.patch("/tasks/{task_id}", response_model=Task, tags=["Tasks"])
 async def update_task(task_id: str, request: TaskUpdateRequest) -> Task:
-    return task_service.update_task(task_id, request.model_dump(exclude_unset=True))
+    return await task_service.write_in_background(task_service.update_task, task_id, request.model_dump(exclude_unset=True))
 
 
 @router.delete(
@@ -1262,7 +1267,7 @@ async def update_task(task_id: str, request: TaskUpdateRequest) -> Task:
     tags=["Tasks"],
 )
 async def delete_task(task_id: str) -> OperationResponse:
-    if not task_service.delete_task(task_id):
+    if not await task_service.write_in_background(task_service.delete_task, task_id):
         raise ApiError(
             404, "RESOURCE_NOT_FOUND", "task not found", {"task_id": task_id}
         )
