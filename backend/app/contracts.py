@@ -197,6 +197,7 @@ class MessageRole(str, Enum):
 class Message(Contract):
     role: MessageRole
     content: str
+    reasoning_content: str | None = None
     name: str | None = None
     tool_call_id: str | None = None
     tool_calls: list["ToolCall"] = Field(default_factory=list)
@@ -256,6 +257,7 @@ class ModelRequest(Contract):
 
 
 class ChatRequest(ModelRequest):
+    retry_message_id: str | None = None
     conversation_id: str | None = Field(default=None, min_length=1, max_length=128)
     user_message_id: str | None = Field(default=None, min_length=1, max_length=128)
     assistant_message_id: str | None = Field(default=None, min_length=1, max_length=128)
@@ -291,6 +293,8 @@ class ConversationListResponse(Contract):
 
 
 class ChatMessage(Contract):
+    activity: list[dict[str, Any]] = Field(default_factory=list)
+    versions: list[str] = Field(default_factory=list)
     message_id: str
     conversation_id: str
     role: Literal["user", "assistant", "system"]

@@ -110,7 +110,8 @@ async def read_note(arguments: NoteReadArguments, _: ToolExecutionContext) -> di
     note = await note_service.get_note(arguments.note_id)
     if note is None:
         raise LookupError(f"Note does not exist: {arguments.note_id}")
-    return note.model_dump(mode="json")
+    import hashlib
+    return {**note.model_dump(mode="json"), "content_hash": hashlib.sha256(note.markdown.encode()).hexdigest()}
 
 
 async def create_note(arguments: NoteCreateArguments, _: ToolExecutionContext) -> dict:
@@ -189,6 +190,8 @@ def _register(
 
 
 def register_builtin_tools(registry: ToolRegistry) -> None:
+    from app.agent.markdown_tools import register
+    register(registry)
     _register(
         registry,
         name="system.echo",

@@ -103,6 +103,26 @@ function widthOf(svg: SVGSVGElement) {
 }
 async function interact(event: MouseEvent) {
   if (!(event.target instanceof Element)) return
+  const codeButton = event.target.closest<HTMLButtonElement>('[data-code-action]')
+  if (codeButton) {
+    const block = codeButton.closest<HTMLElement>('.markdown-code-block, .markdown-mermaid')
+    const source = block?.querySelector<HTMLElement>('.markdown-code-source')
+    if (!block || !source) return
+    event.preventDefault(); event.stopPropagation()
+    if (codeButton.dataset.codeAction === 'copy') {
+      try { await navigator.clipboard.writeText(source.textContent ?? ''); codeButton.textContent = '已复制' }
+      catch { codeButton.textContent = '复制失败，请选择源码复制' }
+    } else {
+      disarm()
+      source.hidden = !source.hidden
+      const svg = block.querySelector<SVGSVGElement>(':scope > svg')
+      if (svg) svg.style.display = source.hidden ? '' : 'none'
+      block.dataset.sourceView = String(!source.hidden)
+      codeButton.setAttribute('aria-pressed', String(!source.hidden))
+      codeButton.textContent = source.hidden ? '查看源码' : '查看预览'
+    }
+    return
+  }
   const button = event.target.closest<HTMLElement>('[data-diagram-action]')
   const diagram = button?.closest<HTMLElement>('.editor-mermaid-preview, .markdown-mermaid')
   const svg = diagram?.querySelector<SVGSVGElement>('svg')
@@ -167,6 +187,12 @@ function close() { disarm(); viewer.value?.close(); svgHtml.value = ''; opener?.
 
 <style>
 .diagram-interactions { min-width: 0; }
+.markdown-code-toolbar { display: flex; align-items: center; gap: var(--space-sm); padding: var(--space-sm); color: var(--color-code-muted); font: 12px/1.4 var(--font-editor-mono); }
+.markdown-code-toolbar > span { margin-right: auto; }
+.markdown-code-toolbar button { font: inherit; }
+.markdown-code-source { text-align: left; white-space: pre; overflow: auto; padding: var(--space-md); background: var(--color-code-background); color: var(--color-code-text); font-family: var(--font-editor-mono); }
+.markdown-code-source[hidden] { display: none !important; }
+.markdown-mermaid[data-source-view='true'] > .diagram-controls { display: none; }
 .diagram-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .diagram-controls button { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); color: var(--color-text-primary); background: var(--color-surface-primary); cursor: pointer; font: inherit; font-size: 12px; }
 .diagram-controls button:hover { border-color: var(--color-accent-primary); }
