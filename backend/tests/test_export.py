@@ -272,13 +272,79 @@ def test_export_note_source_resolves_title_and_metadata() -> None:
     assert "进程调度" in content
 
 
-def test_export_pdf_unsupported() -> None:
-    with pytest.raises(ApiError) as exc:
-        asyncio.run(
-            export_service.create_export(_markdown_request("# x", format=ExportFormat.pdf))
-        )
-    assert exc.value.status_code == 400
-    assert exc.value.code == "EXPORT_FORMAT_UNSUPPORTED"
+# --------------------------------------------------------------------------- #
+# PDF / DOCX 导出
+# --------------------------------------------------------------------------- #
+def test_export_pdf_completes_with_pdf_magic_bytes() -> None:
+    finished = _create_and_wait(_markdown_request(MD, format=ExportFormat.pdf))
+
+    assert finished.status == ExportStatus.completed
+    assert finished.file is not None
+    assert finished.file.mime_type == "application/pdf"
+    assert finished.file.file_name.endswith(".pdf")
+
+    path = get_settings().exports_path / f"{finished.job_id}.pdf"
+    assert path.exists()
+    assert path.read_bytes()[:4] == b"%PDF"
+
+
+def test_export_docx_completes_with_zip_magic_bytes() -> None:
+    finished = _create_and_wait(_markdown_request(MD, format=ExportFormat.docx))
+
+    assert finished.status == ExportStatus.completed
+    assert finished.file is not None
+    assert finished.file.mime_type == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert finished.file.file_name.endswith(".docx")
+
+    path = get_settings().exports_path / f"{finished.job_id}.docx"
+    assert path.exists()
+    assert path.read_bytes()[:2] == b"PK"
+
+
+def test_pdf_exporter_marks_plot_and_mermaid_as_placeholders() -> None:
+    from app.export.exporters.pdf import PdfExporter
+
+    md = "```mermaid\ngraph LR\n```\n\n```function_plot\ny = x\n```"
+    result = asyncio.run(PdfExporter().export(parse_document(md), ExportOptions()))
+    assert result.content[:4] == b"%PDF"
+    assert any("mermaid" in w for w in result.warnings)
+    assert any("函数图像" in w for w in result.warnings)
+
+
+def test_docx_exporter_marks_plot_and_mermaid_as_placeholders() -> None:
+    from app.export.exporters.docx import DocxExporter
+
+    md = "```mermaid\ngraph LR\n```\n\n```function_plot\ny = x\n```"
+    result = asyncio.run(DocxExporter().export(parse_document(md), ExportOptions()))
+    assert result.content[:2] == b"PK"
+    assert any("mermaid" in w for w in result.warnings)
+    assert any("函数图像" in w for w in result.warnings)
+
+
+def test_pdf_exporter_embeds_cjk_font() -> None:
+    from app.export.exporters.pdf import PdfExporter
+
+    doc = parse_document("# 进程调度\n\n一些中文正文。")
+    doc.attributes["title"] = "操作系统复习"
+    result = asyncio.run(PdfExporter().export(doc, ExportOptions(include_title=True)))
+    assert result.content[:4] == b"%PDF"
+    # 中文字体通过 STSong-Light CID 字体嵌入，PDF 内应引用该 BaseFont
+    assert b"STSong-Light" in result.content
+
+
+def test_docx_exporter_contains_cjk_text() -> None:
+    import zipfile
+    from io import BytesIO
+
+    from app.export.exporters.docx import DocxExporter
+
+    doc = parse_document("# 进程调度\n\n一些中文正文。")
+    result = asyncio.run(DocxExporter().export(doc, ExportOptions()))
+    with zipfile.ZipFile(BytesIO(result.content)) as zf:
+        xml = zf.read("word/document.xml")
+    assert "进程调度".encode("utf-8") in xml
 
 
 def test_export_unknown_note_404() -> None:
@@ -461,7 +527,7 @@ def test_export_limits_concurrent_rendering(monkeypatch) -> None:
     peak = 0
     lock = threading.Lock()
 
-    def slow_render(document, options):
+    def slow_render(document, options, format):
         nonlocal active, peak
         with lock:
             active += 1
@@ -469,7 +535,7 @@ def test_export_limits_concurrent_rendering(monkeypatch) -> None:
         time.sleep(0.05)
         with lock:
             active -= 1
-        return real_render(document, options)
+        return real_render(document, options, format)
 
     monkeypatch.setattr(export_service, "_render_document", slow_render)
 

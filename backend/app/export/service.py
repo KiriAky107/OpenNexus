@@ -29,7 +29,9 @@ from app.contracts import (
 )
 from app.errors import ApiError
 from app.export.document import Document, ExportResult
+from app.export.exporters.docx import DocxExporter
 from app.export.exporters.html import HtmlExporter
+from app.export.exporters.pdf import PdfExporter
 from app.export.markdown import parse_document
 from app.services import note_service
 
@@ -52,6 +54,24 @@ FILE_TTL = timedelta(hours=24)
 
 _INVALID_FILE_CHARS = re.compile(r'[\\/:*?"<>|]')
 
+# 格式 → 导出器；新增格式只需在此登记，路由与任务模型无需改动
+_EXPORTERS: dict[ExportFormat, type] = {
+    ExportFormat.html: HtmlExporter,
+    ExportFormat.pdf: PdfExporter,
+    ExportFormat.docx: DocxExporter,
+}
+
+# 格式 → 文件扩展名（用于落盘文件名与产物清理）
+_EXTENSIONS: dict[ExportFormat, str] = {
+    ExportFormat.html: ".html",
+    ExportFormat.pdf: ".pdf",
+    ExportFormat.docx: ".docx",
+}
+
+
+def _extension_for(format: ExportFormat) -> str:
+    return _EXTENSIONS[format]
+
 
 class ExportCancelled(Exception):
     """导出在渲染前被取消时抛出，用于标记 cancelled。"""
@@ -71,14 +91,14 @@ def _safe_download_name(title: str) -> str:
     return name[:80]
 
 
-def _export_path(job_id: str) -> Path:
-    return get_settings().exports_path / f"{job_id}.html"
+def _export_path(job_id: str, ext: str) -> Path:
+    return get_settings().exports_path / f"{job_id}{ext}"
 
 
-def _delete_file(job_id: str) -> None:
+def _delete_file(job_id: str, ext: str) -> None:
     """删除导出产物文件；文件不存在时忽略。"""
     try:
-        _export_path(job_id).unlink(missing_ok=True)
+        _export_path(job_id, ext).unlink(missing_ok=True)
     except OSError:
         logger.warning("Failed to delete export file: %s", job_id)
 
@@ -89,26 +109,30 @@ def cleanup_orphan_files() -> int:
     if not exports_dir.is_dir():
         return 0
     removed = 0
-    for path in exports_dir.glob("*.html"):
-        if path.stem not in _jobs:
-            try:
-                path.unlink()
-                removed += 1
-            except OSError:
-                logger.warning("Failed to delete orphan export file: %s", path)
+    for ext in _EXTENSIONS.values():
+        for path in exports_dir.glob(f"*{ext}"):
+            if path.stem not in _jobs:
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError:
+                    logger.warning("Failed to delete orphan export file: %s", path)
     return removed
 
 
-def _render_document(document: Document, options: ExportOptions) -> ExportResult:
-    """同步渲染辅助，供 asyncio.to_thread 调用；每次新建实例避免跨线程复用。"""
-    return HtmlExporter().render(document, options)
+def _render_document(document: Document, options: ExportOptions, format: ExportFormat) -> ExportResult:
+    """按 format 分发到对应导出器；每次新建实例避免跨线程复用。"""
+    exporter_cls = _EXPORTERS[format]
+    return exporter_cls().render(document, options)
 
 
 def _forget(job_id: str) -> None:
+    job = _jobs.get(job_id)
+    ext = _extension_for(job.format) if job is not None else ".html"
     _jobs.pop(job_id, None)
     _tasks.pop(job_id, None)
     _cancel_flags.pop(job_id, None)
-    _delete_file(job_id)
+    _delete_file(job_id, ext)
 
 
 def _evict_terminal() -> bool:
@@ -163,13 +187,6 @@ async def _resolve_source(source: ExportSource) -> tuple[str, str, dict | None]:
 
 async def create_export(request: ExportRequest) -> ExportJob:
     """创建导出任务，立即返回 queued 的 ExportJob，由后台 Task 渲染。"""
-    if request.format != ExportFormat.html:
-        raise ApiError(
-            400,
-            "EXPORT_FORMAT_UNSUPPORTED",
-            "PDF/DOCX 暂未实现，当前仅支持 HTML",
-            {"format": request.format.value},
-        )
     markdown, title, metadata = await _resolve_source(request.source)
 
     if not _evict_terminal():
@@ -190,13 +207,14 @@ async def create_export(request: ExportRequest) -> ExportJob:
     _jobs[job_id] = job
     _cancel_flags[job_id] = asyncio.Event()
     _tasks[job_id] = asyncio.create_task(
-        _execute(job_id, markdown, title, metadata, request.options)
+        _execute(job_id, request.format, markdown, title, metadata, request.options)
     )
     return job
 
 
 async def _execute(
     job_id: str,
+    format: ExportFormat,
     markdown: str,
     title: str,
     metadata: dict | None,
@@ -227,15 +245,16 @@ async def _execute(
             if metadata:
                 document.attributes["metadata"] = metadata
 
-            result = await asyncio.to_thread(_render_document, document, options)
+            result = await asyncio.to_thread(_render_document, document, options, format)
             if cancel_event.is_set():
                 raise ExportCancelled()
             if len(result.content) > MAX_EXPORT_BYTES:
                 raise ExportTooLarge()
 
+            ext = _extension_for(format)
             out_dir = get_settings().exports_path
             out_dir.mkdir(parents=True, exist_ok=True)
-            path = _export_path(job_id)
+            path = _export_path(job_id, ext)
             path.write_bytes(result.content)
 
             completed_at = _now()
@@ -246,7 +265,7 @@ async def _execute(
                         phase="completed", current=1, total=1, percent=1.0
                     ),
                     "file": ExportFile(
-                        file_name=f"{_safe_download_name(title)}.html",
+                        file_name=f"{_safe_download_name(title)}{ext}",
                         mime_type=result.mime_type,
                         size=len(result.content),
                         sha256=hashlib.sha256(result.content).hexdigest(),
@@ -328,7 +347,7 @@ def get_export_file(job_id: str) -> Path:
     if job.file.expires_at <= _now():
         _forget(job_id)  # 过期即清理内存记录与产物文件
         raise ApiError(410, "EXPORT_FILE_EXPIRED", "export file has expired", {"job_id": job_id})
-    return _export_path(job_id)
+    return _export_path(job_id, _extension_for(job.format))
 
 
 async def wait_for_export(job_id: str) -> ExportJob | None:
