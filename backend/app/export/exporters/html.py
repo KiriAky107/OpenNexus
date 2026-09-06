@@ -12,6 +12,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 from app.contracts import ExportOptions
+from app.export.themes import html_theme, CALLOUTS
 from app.export.document import Document, DocumentNode, ExportResult
 from app.export.exporters._common import FunctionPlotBudget, format_plot_diagnostic
 from app.plot.renderer import FunctionPlotStaticRenderer, StaticRenderRequest
@@ -34,32 +35,50 @@ def _safe_url(url: str) -> str | None:
     return url
 
 _BASE_CSS = """
-body { margin: 0; background: #f6f7f9; color: #1f2328; font: 15px/1.7 -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif; }
-article { max-width: 860px; margin: 0 auto; padding: 40px 48px; background: #fff; }
-article.theme-dark { background: #0d1117; color: #c9d1d9; }
+body { margin: 0; background: var(--page); color: var(--text); font: 15px/1.7 -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif; }
+article { max-width: 860px; margin: 0 auto; padding: 40px 48px; background: var(--surface); }
+
 h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.4em 0 0.6em; }
 h1.title { margin-top: 0; }
 p { margin: 0.6em 0; }
-a { color: #0969da; }
-code { font-family: 'JetBrains Mono', Consolas, monospace; font-size: 0.9em; background: #f0f1f3; padding: 0.15em 0.35em; border-radius: 3px; }
-pre { background: #f6f8fa; padding: 14px 16px; border-radius: 6px; overflow-x: auto; }
+a { color: var(--accent); }
+code { font-family: 'JetBrains Mono', Consolas, monospace; font-size: 0.9em; background: var(--code); padding: 0.15em 0.35em; border-radius: 3px; }
+pre { background: var(--code); padding: 14px 16px; border-radius: 6px; overflow-x: auto; }
+pre.code-theme-github-light { background: #f6f8fa; color: #1f2328; }
 pre.code-theme-github-dark { background: #0d1117; color: #c9d1d9; }
 pre code { background: none; padding: 0; }
-pre.mermaid, pre.function-plot { border: 1px dashed #d0d7de; }
+pre.mermaid, pre.function-plot { border: 1px dashed var(--border); }
 figure.function-plot { margin: 1em 0; text-align: center; }
 figure.function-plot svg { max-width: 100%; height: auto; }
-blockquote { margin: 0.8em 0; padding: 0.2em 1em; border-left: 4px solid #d0d7de; color: #57606a; }
+blockquote { margin: 0.8em 0; padding: 0.2em 1em; border-left: 4px solid var(--border); color: var(--muted); }
 img { max-width: 100%; }
 table { border-collapse: collapse; margin: 0.8em 0; }
-th, td { border: 1px solid #d0d7de; padding: 6px 12px; }
-th { background: #f6f8fa; }
-dl.metadata { font-size: 0.85em; color: #57606a; border-top: 1px solid #eaeef2; border-bottom: 1px solid #eaeef2; padding: 0.6em 0; }
+th, td { border: 1px solid var(--border); padding: 6px 12px; }
+th { background: var(--code); }
+dl.metadata { font-size: 0.85em; color: var(--muted); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 0.6em 0; }
 dl.metadata dt { display: inline; font-weight: 600; margin-right: 0.4em; }
 dl.metadata dd { display: inline; margin: 0 1.2em 0 0; }
 .math, .math-block { overflow-x: auto; padding: 0.4em 0; }
 .task-list-item { list-style: none; }
 .task-list-item input { margin-right: 0.4em; }
-hr { border: none; border-top: 1px solid #d0d7de; margin: 1.4em 0; }
+hr { border: none; border-top: 1px solid var(--border); margin: 1.4em 0; }
+.callout { --callout:var(--accent); border:1px solid var(--border); border-left:4px solid var(--callout,var(--accent)); border-radius:6px; margin:1em 0; padding:.8em 1em; }
+.callout-title { display:block; font-weight:bold; color:var(--callout,var(--accent)); }
+.callout-content { color:var(--text); }
+.callout[data-kind="warning"], .callout[data-kind="question"] { --callout:#805400; }
+.callout[data-kind="danger"], .callout[data-kind="failure"], .callout[data-kind="bug"] { --callout:#b42318; }
+.callout[data-kind="tip"], .callout[data-kind="success"] { --callout:#176f41; }
+.callout[data-kind="example"], .callout[data-kind="abstract"], .callout[data-kind="important"] { --callout:#7041a0; }
+.theme-dark .callout, .theme-midnight-purple .callout { --callout:#a5d6ff; }
+.theme-dark .callout[data-kind="warning"], .theme-midnight-purple .callout[data-kind="warning"], .theme-dark .callout[data-kind="question"], .theme-midnight-purple .callout[data-kind="question"] { --callout:#f2cc60; }
+.theme-dark .callout[data-kind="danger"], .theme-midnight-purple .callout[data-kind="danger"], .theme-dark .callout[data-kind="failure"], .theme-midnight-purple .callout[data-kind="failure"], .theme-dark .callout[data-kind="bug"], .theme-midnight-purple .callout[data-kind="bug"] { --callout:#ffa198; }
+.theme-dark .callout[data-kind="tip"], .theme-midnight-purple .callout[data-kind="tip"], .theme-dark .callout[data-kind="success"], .theme-midnight-purple .callout[data-kind="success"] { --callout:#7ee787; }
+.theme-dark .callout[data-kind="important"], .theme-midnight-purple .callout[data-kind="important"], .theme-dark .callout[data-kind="abstract"], .theme-midnight-purple .callout[data-kind="abstract"], .theme-dark .callout[data-kind="example"], .theme-midnight-purple .callout[data-kind="example"] { --callout:#d2a8ff; }
+figure.function-plot svg text { fill:var(--muted); }
+figure.function-plot svg line { stroke:var(--border); }
+figure.function-plot svg line[stroke="#57606a"] { stroke:var(--muted); }
+summary.callout-title { cursor:pointer; display:list-item; }
+.callout { overflow-wrap:anywhere; }
 """.strip()
 
 
@@ -72,6 +91,7 @@ class HtmlExporter:
         self._plot_budget = FunctionPlotBudget()
         self._plot_renderer = FunctionPlotStaticRenderer()
         warnings: list[str] = []
+        self._theme_id, self._theme_css = html_theme(options.theme_id, warnings)
         body = self._render_children(document.children, warnings)
         content = self._assemble(document, options, body, warnings)
         return ExportResult(
@@ -95,10 +115,10 @@ class HtmlExporter:
         ]
         if title:
             parts.append(f"<title>{html.escape(title)}</title>")
-        parts.append(f"<style>{_BASE_CSS}</style>")
+        parts.append(f"<style>{self._theme_css}{_BASE_CSS}</style>")
         parts.append("</head>")
         parts.append("<body>")
-        parts.append(f'<article class="theme-{html.escape(options.theme_id)}">')
+        parts.append(f'<article class="theme-{html.escape(self._theme_id)}">')
         if options.include_title and title:
             parts.append(f'<h1 class="title">{html.escape(title)}</h1>')
         if options.include_metadata:
@@ -144,6 +164,17 @@ class HtmlExporter:
 
     def _render_paragraph(self, node: DocumentNode, warnings: list[str]) -> str:
         return f"<p>{self._render_children(node.children, warnings)}</p>"
+
+    def _render_callout(self, node, warnings):
+        kind = node.attributes['kind']
+        title = self._render_children(node.children[0].children,warnings)
+        icon = html.escape(CALLOUTS[kind][0])
+        body = self._render_children(node.children[1:],warnings)
+        heading = f'<span aria-hidden="true">{icon}</span> {title}'
+        if node.attributes.get('fold'):
+            opened = ' open' if node.attributes['fold'] == '+' else ''
+            return f'<details class="callout" data-kind="{kind}"{opened}><summary class="callout-title">{heading}</summary><div class="callout-content">{body}</div></details>'
+        return f'<aside class="callout" data-kind="{kind}"><div class="callout-title">{heading}</div><div class="callout-content">{body}</div></aside>'
 
     def _render_blockquote(self, node: DocumentNode, warnings: list[str]) -> str:
         return f"<blockquote>{self._render_children(node.children, warnings)}</blockquote>"

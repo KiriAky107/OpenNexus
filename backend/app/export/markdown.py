@@ -8,6 +8,10 @@
 from __future__ import annotations
 
 import mistune
+from mistune.plugins.table import table_in_list, table_in_quote
+import re
+from copy import deepcopy
+from app.export.themes import CALLOUTS, ALIASES
 
 from app.export.document import Document, DocumentNode
 
@@ -21,6 +25,8 @@ _FUNCTION_PLOT_LANGS = {"function-plot", "function_plot", "functionplot"}
 def parse_document(markdown: str) -> Document:
     """把 Markdown 文本解析为 Document AST 根节点。"""
     renderer = mistune.create_markdown(renderer="ast", plugins=_PLUGINS)
+    table_in_quote(renderer)
+    table_in_list(renderer)
     tokens = renderer(markdown)
     mapper = _AstMapper()
     return Document(node_id=mapper.next_id(), children=mapper.map_blocks(tokens))
@@ -70,6 +76,28 @@ class _AstMapper:
         if kind == "block_code":
             return self._map_code(token)
         if kind == "block_quote":
+            children = deepcopy(token.get('children', []))
+            first = children[0] if children else {}
+            inline = first.get('children', [])
+            if first.get('type') == 'paragraph' and inline and inline[0].get('type') == 'text':
+                match = re.match(r'^\[!([\w-]+)\]([+-]?)[ \t]*', inline[0].get('raw', ''))
+                if match:
+                    name = match[1].lower()
+                    name = ALIASES.get(name, name)
+                    if name not in CALLOUTS:
+                        name = 'note'
+                    inline[0]['raw'] = inline[0]['raw'][match.end():]
+                    split = next((i for i,t in enumerate(inline) if t['type'] in ('softbreak','linebreak')),len(inline))
+                    title = inline[:split]
+                    if not any(t.get('raw') or t.get('children') for t in title):
+                        title = [{'type':'text','raw':match[1].lower().capitalize()}]
+                    first['children'] = inline[split+1:]
+                    if not first['children']:
+                        children.pop(0)
+                    heading = DocumentNode(type='paragraph',node_id=self.next_id(),children=self.map_inline(title))
+                    return DocumentNode(type='callout',node_id=self.next_id(),
+                            attributes={'kind':name,'fold':match[2]},
+                            children=[heading,*self.map_blocks(children)])
             return DocumentNode(
                 type="blockquote",
                 node_id=self.next_id(),

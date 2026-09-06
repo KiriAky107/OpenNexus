@@ -17,6 +17,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Mm, Pt, RGBColor
 
 from app.contracts import ExportOptions
+from app.export.themes import CALLOUTS, print_theme_warning
 from app.export.document import Document, DocumentNode, ExportResult
 from app.export.exporters._common import (
     MERMAID_WARNING,
@@ -53,6 +54,7 @@ class DocxExporter:
         self._configure_normal_style()
         self._configure_page(options)
         warnings: list[str] = []
+        print_theme_warning(options, warnings, "DOCX")
 
         self._render_header(document, options, warnings)
         self._render_children(document.children, warnings)
@@ -126,6 +128,19 @@ class DocxExporter:
         p = self._doc.add_paragraph()
         self._render_inline(p, node.children, warnings)
 
+    def _block_callout(self, node, warnings):
+        icon, color = CALLOUTS[node.attributes['kind']]
+        p = self._doc.add_paragraph()
+        p.add_run(icon+' ')
+        self._render_inline(p,node.children[0].children,warnings)
+        for run in p.runs:
+            run.bold = True
+            run.font.color.rgb = RGBColor.from_string(color[1:])
+        shading = OxmlElement('w:shd')
+        shading.set(qn('w:fill'),'F6F8FA')
+        p._p.get_or_add_pPr().append(shading)
+        self._render_children(node.children[1:],warnings)
+
     def _block_blockquote(self, node: DocumentNode, warnings: list[str]) -> None:
         # 引用块的直接子节点是块级节点（paragraph/list 等），不能交给行内渲染器，
         # 否则正文会被当作「无法表示的行内节点」丢弃；逐个渲染并继承引用缩进/颜色。
@@ -170,6 +185,27 @@ class DocxExporter:
         for child in item.children:
             if child.type == "list":
                 self._block_list(child, warnings, level + 1, color)
+                continue
+            if child.type != "paragraph" and hasattr(self, f"_block_{child.type}"):
+                if first:
+                    marker_p = self._doc.add_paragraph()
+                    marker_p.paragraph_format.left_indent = indent
+                    self._add_run(marker_p, marker)
+                    first = False
+                before = len(self._doc.paragraphs)
+                before_tables = len(self._doc.tables)
+                self._render_block(child, warnings)
+                for nested_p in self._doc.paragraphs[before:]:
+                    current = nested_p.paragraph_format.left_indent or 0
+                    nested_p.paragraph_format.left_indent = current + indent
+                for table in self._doc.tables[before_tables:]:
+                    table_indent = table._tbl.tblPr.find(qn("w:tblInd"))
+                    if table_indent is None:
+                        table_indent = OxmlElement("w:tblInd")
+                        table._tbl.tblPr.append(table_indent)
+                    current_twips = int(table_indent.get(qn("w:w"), "0"))
+                    table_indent.set(qn("w:w"), str(current_twips + indent.twips))
+                    table_indent.set(qn("w:type"), "dxa")
                 continue
             p = self._doc.add_paragraph()
             p.paragraph_format.left_indent = indent
