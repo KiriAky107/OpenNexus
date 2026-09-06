@@ -20,6 +20,7 @@ from typing import Protocol
 
 from app.database.db import connect, transaction
 from app.errors import ApiError
+from app.operation_logs import log_event
 from app.retrieval.vectorstore import VectorHit
 from app.retrieval.provenance import record_embedding
 from app.retrieval.hybrid import rrf_fuse
@@ -101,6 +102,8 @@ async def embed_remote(texts: list[str], *, accept_local=False, strict=False, lo
             source=result.source,
         )
     except Exception as exc:
+        log_event('vectors', 'embedding.failed', level='ERROR' if strict else 'WARNING', error=exc,
+                  count=len(texts), fallback='none' if strict else 'local_index')
         # Avoid logging provider exceptions containing credentials or note text.
         record_embedding(fallback_reason="REMOTE_EMBEDDING_UNAVAILABLE")
         logger.warning("Remote embedding unavailable (%s); using local index", type(exc).__name__)

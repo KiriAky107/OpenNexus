@@ -112,7 +112,7 @@ def test_permission_confirmation_resumes_agent() -> None:
                     break
 
         assert request_id is not None
-        assert container.agent.resolve_permission(
+        assert await container.agent.resolve_permission(
             created.run_id, request_id, "allow_once"
         )
         completed = await container.agent.wait(created.run_id)
@@ -370,8 +370,9 @@ def test_cancelling_permission_wait_cancels_run() -> None:
         )
 
         async with asyncio.timeout(2):
-            while container.agent.get_run(created.run_id).status != AgentRunStatus.waiting_permission:
-                await asyncio.sleep(0)
+            async for event in container.agent.events(created.run_id):
+                if event.event == AgentEventType.permission_required:
+                    break
 
         cancelled = await container.agent.cancel(created.run_id)
         await container.agent.wait(created.run_id)

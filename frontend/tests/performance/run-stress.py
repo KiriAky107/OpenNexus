@@ -1,7 +1,7 @@
 """Real Chromium benchmark. Run with backend/.venv/Scripts/python.exe; requires websockets.
 Vite must be serving the frontend. Uses an isolated disposable browser profile.
 """
-import argparse, asyncio, json, pathlib, subprocess, tempfile, urllib.request
+import argparse, asyncio, base64, json, pathlib, subprocess, tempfile, urllib.request
 import websockets
 
 async def main(args):
@@ -44,6 +44,9 @@ async def main(args):
                         response = await call('Runtime.evaluate', {'expression':expression,'awaitPromise':True,'returnByValue':True})
                         if args.scroll and 'exceptionDetails' not in response:
                             point = response['result']['value']
+                            if args.screenshot:
+                                capture = await call('Page.captureScreenshot', {'format': 'png'})
+                                pathlib.Path(args.output + f'.{size}.{repeat+1}.png').write_bytes(base64.b64decode(capture['data']))
                             if args.profile:
                                 await call('Profiler.enable'); await call('Profiler.start')
                             await call('Input.dispatchMouseEvent', {'type':'mouseMoved', **point})
@@ -74,6 +77,7 @@ if __name__=='__main__':
     parser.add_argument('--runs',type=int,default=3)
     parser.add_argument('--output',required=True)
     parser.add_argument('--profile',action='store_true',help='Save CPU profiles for scroll runs')
+    parser.add_argument('--screenshot',action='store_true',help='Save a viewport screenshot before each scroll run')
     parser.add_argument('--scroll',action='store_true',help='Dispatch real wheel events and check fold-to-top')
     args = parser.parse_args()
     if args.runs < 1 or any(size < 1 for size in args.sizes): parser.error('runs and sizes must be positive')

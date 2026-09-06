@@ -55,6 +55,22 @@ afterEach(() => {
 })
 
 describe('VisualMarkdownEditor formatting toolbars', () => {
+  it('opens a rendered Markdown link on Ctrl click without changing its source', async () => {
+    const wrapper = mount(VisualMarkdownEditor, {
+      props: { initialContent: '[**文档**](https://example.com/docs)' }, attachTo: document.body,
+    })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    const before = editor.action(getMarkdown())
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    try {
+      const link = wrapper.get('.ProseMirror a')
+      await link.trigger('click', { ctrlKey: true, button: 0 })
+      expect(open).toHaveBeenCalledWith('https://example.com/docs', '_blank', 'noopener,noreferrer')
+      expect(editor.action(getMarkdown())).toBe(before)
+    } finally { open.mockRestore() }
+  })
+
   it('applies syntax and renderer preferences when opening the visual editor', async () => {
     const preferences = useMarkdownPreferencesStore()
     preferences.preferences.heading = 'setext'

@@ -40,3 +40,15 @@ backend/.venv/Scripts/python.exe frontend/tests/performance/run-stress.py --url 
 `--scroll` 使用纸间时光主题及高度受限的编辑区，派发 120 次真实 CDP 滚轮事件（先向下再向上），记录 animation frame 间隔与长任务；随后从文末全部折叠，记录滚动位置和光标位置。可追加 `--profile --sizes 120000 --runs 1` 保存 CPU profile，用 Chrome DevTools Performance 面板导入。采样会增加开销，勿将 profile 结果与无采样结果直接比较。
 
 帧间隔包含无头浏览器、CDP 调度和布局开销，不等同于用户设备的 FPS。滚轮模式不验证输入法、保存或图表渲染。当前测试容器改为有限高度的 flex 布局，早期普通事务报告使用的容器布局不同，跨版本比较应分别保留同一布局下的基线。
+
+主题对比使用 URL 查询参数：`stress.html?theme=light`、`?theme=dark`，默认是 `paper-moments`。诊断参数 `?variant=no-outline` 可关闭编辑区轮廓线，用于隔离旧版纸间时光的长文开销；1.8.1 已不再使用这条 outline。`--screenshot` 会在派发滚轮前保存当前视口 PNG，截图时间可能计入记录区间。
+
+## Agent 与任务
+
+`agent-task.html?kind=tasks&theme=light` 测试任务组件，`kind=trace` 测试 Trace；支持 light、dark、paper-moments。继续使用 `run-stress.py --scroll`，任务规模可设 `--sizes 100 1000`，Trace 可设 `--sizes 200 2000 10000`。每个规模在新页面中生成独立数据，所有 fetch 被拦截，未知请求直接失败，不落到真实后端。
+
+任务先记录实际分页加载数量，再注入全量夹具测渲染上限，结果包含 `fullListIsInjected`。Trace 测量时间线、树形搜索及切换；滚轮区间与过滤区间分别计时。`scrollContainers` 和 `maxScrollTop` 用来确认目标实际滚动。完整结果及限制见 [Agent 与任务压测报告](../../../docs/development/Agent与任务压测报告.md)。
+
+修复后任务会读取所有 API 页，渲染每页 100 条；Trace 每页 200 条，筛选仍覆盖完整数据。`renderedTasks`、`totalFilteredCount` 区分 DOM 数量与实际记录总数，不能把分页后的 DOM 数量误报为数据丢失。
+
+`logs.html?theme=paper-moments` 使用隔离的合成日志，支持 `light`、`dark` 主题，用于筛选栏、日志详情和主题视觉检查。可搭配驱动的 `--scroll --screenshot --sizes 1 --runs 1` 保存首屏；该夹具不连接真实日志库，不用于测后端日志吞吐。

@@ -41,6 +41,17 @@ async function switchToTree(wrapper: ReturnType<typeof mountTree>) {
 }
 
 describe('TraceTimeline 树形视图', () => {
+  it('bounds rendered events while searching the complete history', async () => {
+    const events = Array.from({ length: 1000 }, (_, i) => event('TextDelta', { text: `message-${i}` }))
+    const wrapper = mountTree(events)
+    expect(wrapper.findAll('.event-card')).toHaveLength(200)
+    await wrapper.findAll('button').find(button => button.text() === '下一页')!.trigger('click')
+    expect(wrapper.findAll('.event-card')).toHaveLength(200)
+    await wrapper.get('input').setValue('message-999')
+    expect(wrapper.findAll('.event-card')).toHaveLength(1)
+    expect(wrapper.text()).toContain('message-999')
+    wrapper.unmount()
+  })
   it('filters errors while retaining tree ancestors and final tool data', async () => {
     const events = sampleEvents()
     const result = events.find(item => item.event === 'ToolResult')!

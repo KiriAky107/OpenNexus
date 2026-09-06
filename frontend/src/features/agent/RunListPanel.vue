@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, watch, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAgentStore } from '@/stores/agent'
 import { localeTag, t } from '@/i18n'
@@ -8,6 +8,10 @@ import { runStatusLabel } from './labels'
 const agentStore = useAgentStore()
 const router = useRouter()
 const error = ref('')
+const page = ref(1)
+const pages = computed(() => Math.max(1, Math.ceil(agentStore.sortedRuns.length / 50)))
+const visibleRuns = computed(() => agentStore.sortedRuns.slice((page.value - 1) * 50, page.value * 50))
+watch(pages, count => { page.value = Math.min(page.value, count) })
 
 onMounted(async () => {
   try { await agentStore.loadRuns() } catch (reason) { error.value = reason instanceof Error ? reason.message : t('运行记录加载失败', 'Failed to load runs') }
@@ -20,8 +24,9 @@ function selectRun(runId: string) { void router.push({ name: 'agent', params: { 
   <div class="sidebar-panel">
     <button class="button-primary new-button" @click="router.push({ name: 'agent' })">＋ {{ t('新建运行', 'New run') }}</button>
     <p v-if="error" class="subtle error-text">{{ error }}</p>
+    <div v-if="pages > 1" class="inline-actions"><button class="button-secondary" :disabled="page === 1" @click="page--">{{ t('上一页', 'Previous') }}</button><span>{{ page }} / {{ pages }}</span><button class="button-secondary" :disabled="page === pages" @click="page++">{{ t('下一页', 'Next') }}</button></div>
     <div class="sidebar-list">
-      <button v-for="run in agentStore.sortedRuns" :key="run.run_id" class="sidebar-list-item run-item"
+      <button v-for="run in visibleRuns" :key="run.run_id" class="sidebar-list-item run-item"
         :class="{ active: agentStore.activeRunId === run.run_id }" @click="selectRun(run.run_id)">
         <span class="badge" :class="{ success: run.status === 'completed', error: run.status === 'failed', warning: run.status === 'waiting_permission' }">{{ runStatusLabel(run.status) }}</span>
         <strong>{{ run.run_id.slice(0, 12) }}</strong><small>{{ run.started_at ? new Date(run.started_at).toLocaleString(localeTag()) : t('等待开始', 'Waiting to start') }}</small>

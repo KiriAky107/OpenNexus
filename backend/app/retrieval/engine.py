@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app import repository
+from app.retrieval.activity import track_search
 from app.contracts import (
     Citation,
     PageMeta,
@@ -52,6 +53,7 @@ class RetrievalEngine:
         # remain authoritative, including monkeypatches on the singleton.
         self._routed_defaults = (embedding, vector_store) if route_embeddings else None
 
+    @track_search
     async def search(self, request: SearchRequest) -> SearchResponse:
         if request.mode == SearchMode.fts:
             return self._search_fts(request)

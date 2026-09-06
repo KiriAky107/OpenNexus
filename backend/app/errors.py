@@ -25,6 +25,10 @@ class ApiError(Exception):
 
 
 async def api_error_handler(_: Request, exc: ApiError) -> JSONResponse:
+    from app.operation_logs import log_event
+    log_event('api', 'operation.failed', level='ERROR' if exc.status_code >= 500 else 'WARNING',
+              error=exc, status=exc.status_code,
+              **{key: value for key, value in exc.details.items() if key in {'run_id', 'task_id', 'note_id', 'job_id', 'provider_id'}})
     body = ErrorResponse(
         error=ErrorDetail(code=exc.code, message=exc.message, details=exc.details)
     )

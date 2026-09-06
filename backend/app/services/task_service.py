@@ -2,11 +2,37 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from uuid import uuid4
+import asyncio
+from contextvars import copy_context
+from functools import partial
+from weakref import WeakKeyDictionary
 
 from app import repository
 from app.contracts import Task, TaskStatus
 from app.database.db import connect, transaction
 from app.errors import ApiError
+from app.operation_logs import log_event
+
+_write_locks = WeakKeyDictionary()
+
+
+async def write_in_background(operation, *args, **kwargs):
+    # SQLite has one writer. Queue cooperatively instead of letting many worker
+    # threads fight over the file lock and starve unrelated model work.
+    loop = asyncio.get_running_loop()
+    lock = _write_locks.setdefault(loop, asyncio.Lock())
+    async with lock:
+        work = loop.run_in_executor(None, copy_context().run, partial(operation, *args, **kwargs))
+        cancelled = False
+        while not work.done():
+            try:
+                await asyncio.shield(work)
+            except asyncio.CancelledError:
+                cancelled = True
+        result = work.result()
+        if cancelled:
+            raise asyncio.CancelledError
+        return result
 
 
 def _now() -> datetime:
@@ -49,6 +75,7 @@ def create_task(
                 ),
             )
         row = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+        log_event('tasks', 'task.created', task_id=task_id, note_id=note_id, status='todo')
         return _task_from_row(row)
     finally:
         conn.close()
@@ -111,6 +138,7 @@ def update_task(task_id: str, values: dict[str, object]) -> Task:
                 params,
             )
         row = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+        log_event('tasks', 'task.updated', task_id=task_id, status=row['status'], changed_fields=','.join(values))
         return _task_from_row(row)
     finally:
         conn.close()
@@ -121,6 +149,7 @@ def delete_task(task_id: str) -> bool:
     try:
         with transaction(conn):
             cursor = conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+        log_event('tasks', 'task.deleted' if cursor.rowcount else 'task.not_found', task_id=task_id)
         return cursor.rowcount > 0
     finally:
         conn.close()

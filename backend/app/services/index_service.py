@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from app.operation_logs import log_event
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,7 @@ vector_store = SqliteVecStore()
 
 _jobs: dict[str, IndexJob] = {}
 _active_job_id: str | None = None
+_active_scope: str | None = None
 _last_completed_at: datetime | None = None
 _last_error: str | None = None
 MAX_JOBS = 100
@@ -33,6 +35,7 @@ _logger = logging.getLogger(__name__)
 
 
 def _remember_job(job: IndexJob) -> None:
+    log_event('vectors', 'index.' + job.status, job_id=job.job_id, status=job.status)
     _jobs[job.job_id] = job
     while len(_jobs) > MAX_JOBS:
         oldest = next(iter(_jobs))
@@ -64,7 +67,7 @@ def _scan_vault() -> list[tuple[str, str, str, datetime, datetime]]:
 
 
 async def rebuild(request: IndexRebuildRequest) -> IndexJob:
-    global _active_job_id, _last_completed_at, _last_error
+    global _active_job_id, _active_scope, _last_completed_at, _last_error
     if _active_job_id is not None:
         raise ApiError(409, "INDEX_BUSY", "索引正在后台计算，请稍后重试。")
     job_id = "job_" + uuid4().hex[:12]
@@ -82,6 +85,7 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
     saved_paths = {record.file_path: record for record in saved_records.values() if record is not None}
 
     _active_job_id = job_id
+    _active_scope = 'all'
     _last_error = None
     _remember_job(IndexJob(
         job_id=job_id, status="running", scope=request.scope,
@@ -148,6 +152,7 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
             finally:
                 conn.close()
     except BaseException as exc:
+        log_event('vectors', 'index.failed', level='WARNING' if isinstance(exc, asyncio.CancelledError) else 'ERROR', error=exc, job_id=job_id)
         _remember_job(IndexJob(
             job_id=job_id, status="failed", scope=request.scope,
             created_at=datetime.now(timezone.utc),
@@ -156,6 +161,7 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
         raise
     finally:
         _active_job_id = None
+        _active_scope = None
 
     job = IndexJob(job_id=job_id, status="completed", scope=request.scope, created_at=datetime.now(timezone.utc))
     _remember_job(job)
@@ -166,16 +172,26 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
 
 
 def get_status() -> IndexStatus:
+    from app.retrieval import activity
     counts = repository.stats()
-    vector_refresh_required = repository.get_index_meta().get('workspace_vectors_pending') == '1' or bool(_pending_notes())
+    workspace_pending = repository.get_index_meta().get('workspace_vectors_pending') == '1'
+    notes_pending = len(_pending_notes())
+    vector_refresh_required = workspace_pending or bool(notes_pending)
+    running = int(_active_job_id is not None)
+    # An entire-vault rebuild is one job, not one job per block/note.
+    pending = 1 if running and _active_scope == 'all' else (1 + running if workspace_pending else max(notes_pending, running))
+    activity_fields = dict(running_jobs=running, active_searches=activity.active,
+                           completed_searches=activity.completed, failed_searches=activity.failed,
+                           cancelled_searches=activity.cancelled)
     if _active_job_id is not None:
-        return IndexStatus(status="running", pending_jobs=0, active_job_id=_active_job_id, vector_refresh_required=vector_refresh_required,
+        return IndexStatus(**activity_fields, status="running", pending_jobs=pending, active_job_id=_active_job_id, vector_refresh_required=vector_refresh_required,
                            total_notes=counts["notes"], total_blocks=counts["blocks"])
     return IndexStatus(
+        **activity_fields,
         vector_refresh_required=vector_refresh_required,
         total_notes=counts["notes"], total_blocks=counts["blocks"],
         status="failed" if _last_error else "idle",
-        pending_jobs=0,
+        pending_jobs=pending,
         last_completed_at=_last_completed_at,
         error_message=_last_error,
     )
@@ -227,7 +243,7 @@ def _pending_notes() -> list[str]:
 
 
 async def _refresh_saved_note(note_id: str) -> None:
-    global _active_job_id, _last_error, _last_completed_at
+    global _active_job_id, _active_scope, _last_error, _last_completed_at
     record = repository.get_note_record(note_id)
     key = f'note_vectors_pending:{note_id}'
     if record is None:
@@ -240,6 +256,7 @@ async def _refresh_saved_note(note_id: str) -> None:
     parsed.title = record.title
     job_id = 'job_' + uuid4().hex[:12]
     _active_job_id = job_id
+    _active_scope = 'note'
     _last_error = None
     _remember_job(IndexJob(job_id=job_id, status='running', scope='all', created_at=datetime.now(timezone.utc)))
     try:
@@ -267,8 +284,10 @@ async def _refresh_saved_note(note_id: str) -> None:
         _last_completed_at = datetime.now(timezone.utc)
         _remember_job(IndexJob(job_id=job_id, status='completed', scope='all', created_at=_last_completed_at))
     except BaseException as exc:
+        log_event('vectors', 'index.failed', level='WARNING' if isinstance(exc, asyncio.CancelledError) else 'ERROR', error=exc, job_id=job_id)
         _last_error = str(exc) or '后台向量计算已中断，笔记已保存。'
         _remember_job(IndexJob(job_id=job_id, status='failed', scope='all', created_at=datetime.now(timezone.utc)))
         raise
     finally:
         _active_job_id = None
+        _active_scope = None

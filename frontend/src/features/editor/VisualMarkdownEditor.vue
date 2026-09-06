@@ -16,6 +16,7 @@ import { shikiEditorTheme, shikiLanguages, renderCodeLanguage } from './shikiCod
 import './language-icons.css'
 import { installLanguagePickerPopover } from './languagePickerPopover'
 import { installCodeBlockLabels } from './codeBlockLabels'
+import { installLinkNavigation } from './linkNavigation'
 import { createMermaidPreview } from './mermaidPreview'
 import { splitNoteMetadata, updateMetadataTags } from './noteMetadata'
 import { getMarkdown, $remark, $prose } from '@milkdown/kit/utils'
@@ -80,6 +81,7 @@ const fontSizeInput = ref(16)
 let crepe: Crepe | null = null
 let disposeLanguagePicker: (() => void) | undefined
 let disposeCodeLabels: (() => void) | undefined
+let disposeLinkNavigation: (() => void) | undefined
 let disposeCommands: (() => void) | undefined
 let disposed = false
 
@@ -392,6 +394,7 @@ onMounted(async () => {
   await crepe.create()
   if (editorRoot.value) disposeLanguagePicker = installLanguagePickerPopover(editorRoot.value)
   if (editorRoot.value) disposeCodeLabels = installCodeBlockLabels(editorRoot.value)
+  if (editorRoot.value) disposeLinkNavigation = installLinkNavigation(editorRoot.value)
   applyProofingPreferences()
   loading.value = false
   if (!disposed) installCommands()
@@ -412,7 +415,7 @@ watch(() => editorStore.headingRequest, request => {
   })
 })
 
-onBeforeUnmount(() => { disposed = true; disposeCommands?.(); diagramPreviews.clear(); disposeCodeLabels?.(); disposeLanguagePicker?.(); void crepe?.destroy() })
+onBeforeUnmount(() => { disposed = true; disposeCommands?.(); diagramPreviews.clear(); disposeLinkNavigation?.(); disposeCodeLabels?.(); disposeLanguagePicker?.(); void crepe?.destroy() })
 
 defineExpose({ getEditor: () => crepe?.editor })
 </script>
