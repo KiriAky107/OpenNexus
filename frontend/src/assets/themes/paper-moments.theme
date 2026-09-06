@@ -1,6 +1,6 @@
 theme_id: paper-moments
 name: 纸间时光 · Paper Moments
-version: 1.8.1
+version: 1.9.0
 author: NotesAgent
 description: 奶油纸张、手帐虚线与粉蓝胶带，把每天的灵感好好收藏。
 min_app_version: 0.2.0
@@ -9,6 +9,9 @@ css_entry: theme.css
 license: MIT
 ---
 [data-theme="paper-moments"] {
+  --color-markdown-selection: #ecd3c7;
+  --color-editor-scroll-background: #fff9e9;
+  --color-editor-scroll-text: #875343;
   --color-callout-info: #406b7b;
   --color-callout-success: #536f43;
   --color-callout-warning: #875f25;

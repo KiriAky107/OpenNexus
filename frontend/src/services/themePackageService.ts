@@ -361,7 +361,7 @@ export const mockCommunityThemes: ThemeManifest[] = [
   {
     theme_id: 'ocean-blue',
     name: 'Ocean Blue',
-    version: '1.5.0',
+    version: '1.6.0',
     author: 'community',
     description: '宁静的海洋蓝色主题，适合长时间阅读',
     min_app_version: '0.2.0',
@@ -373,7 +373,7 @@ export const mockCommunityThemes: ThemeManifest[] = [
   {
     theme_id: 'midnight-purple',
     name: 'Midnight Purple',
-    version: '2.3.0',
+    version: '2.4.0',
     author: 'night-owl',
     description: '深紫色暗夜主题，适合编码',
     min_app_version: '0.2.0',
@@ -464,6 +464,9 @@ export function getCommunityThemePreviewCss(themeId: string): string {
   return buildCommunityThemeCss(themeId, t.is_dark) + `
 [data-theme="${themeId}"] {
   color-scheme: ${t.is_dark ? 'dark' : 'light'};
+  --color-markdown-selection: ${t.is_dark ? '#443252' : '#d4eaf5'};
+  --color-editor-scroll-background: var(--color-surface-elevated);
+  --color-editor-scroll-text: var(--color-accent-primary);
   --color-callout-info: ${t.is_dark ? '#9dbbff' : '#126589'};
   --color-callout-success: ${t.is_dark ? '#a7d58c' : '#267049'};
   --color-callout-warning: ${t.is_dark ? '#efc886' : '#885c13'};
