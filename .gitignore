@@ -18,6 +18,8 @@ backend/.env
 # 运行期生成的 SQLite 索引（vault 下的 Markdown 测试数据需提交）
 backend/data/*.db*
 backend/data/credentials/
+# 运行期导出的 HTML/PDF/DOCX 产物（不提交）
+backend/data/exports/
 backend/data/logs/
 # 阶段验收笔记（验收用，不提交）
 backend/data/vault/验收/

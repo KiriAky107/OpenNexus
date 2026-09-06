@@ -25,6 +25,7 @@ class Settings:
     vault_path: Path
     attachments_path: Path
     benchmark_datasets_path: Path
+    exports_path: Path
 
 
 @lru_cache
@@ -45,4 +46,5 @@ def get_settings() -> Settings:
         benchmark_datasets_path=Path(
             os.getenv("APP_BENCHMARK_DATASETS_PATH", str(data_dir / "benchmarks"))
         ),
+        exports_path=Path(os.getenv("APP_EXPORTS_PATH", str(data_dir / "exports"))),
     )
