@@ -425,3 +425,19 @@ def test_render_reportlab_ylabel_within_drawing_bounds() -> None:
     x0, y0, x1, y1 = ylabel_groups[0].getBounds()
     assert 0 <= x0 <= x1 <= 640
     assert 0 <= y0 <= y1 <= 480
+
+
+def test_compute_geometry_breaks_at_asymptote() -> None:
+    # P2：渐近点落在两个采样点之间时，两侧采样仍有限，若不断段会被 Liang-Barsky
+    # 裁剪成贯穿绘图区的伪竖线；这里断言不存在跨越上下边界的伪连接线段。
+    from app.plot.render import _PLOT_Y0, _PLOT_Y1, compute_geometry
+
+    plot = parse_source("domain: -1, 1\nrange: -10, 10\ny = 1/(x-0.013)").plot
+    geo = compute_geometry(plot)
+    assert any(geo.polylines)  # 渐近线两侧的曲线分支仍在绘图区内可见
+    full_height = _PLOT_Y1 - _PLOT_Y0
+    for segments in geo.polylines:
+        for seg in segments:
+            # 相邻点垂直跨度若接近整个绘图区高度，即为渐近线伪连接
+            for (_, py0), (_, py1) in zip(seg, seg[1:]):
+                assert abs(py1 - py0) < full_height * 0.5
