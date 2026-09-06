@@ -19,6 +19,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import (
     Paragraph,
+    Indenter,
     Preformatted,
     SimpleDocTemplate,
     Spacer,
@@ -28,6 +29,7 @@ from reportlab.platypus import (
 from reportlab.platypus.flowables import HRFlowable
 
 from app.contracts import ExportOptions
+from app.export.themes import CALLOUTS, print_theme_warning
 from app.export.document import Document, DocumentNode, ExportResult
 from app.export.exporters._common import (
     MERMAID_WARNING,
@@ -119,6 +121,7 @@ class PdfExporter:
         """同步渲染；CPU 密集，调用方应放入线程执行，避免阻塞事件循环。"""
         self._styles = _make_styles()
         warnings: list[str] = []
+        print_theme_warning(options, warnings, "PDF")
 
         page = _PAGE_SIZES.get((options.page_size or "A4").lower(), A4)
         self._options = options
@@ -179,6 +182,15 @@ class PdfExporter:
 
     def _block_paragraph(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
         story.append(Paragraph(self._render_inline(node.children, warnings), self._styles["body"]))
+
+    def _block_callout(self, node, story, warnings):
+        kind = node.attributes['kind']
+        icon, color = CALLOUTS[kind]
+        title = self._render_inline(node.children[0].children,warnings)
+        style = ParagraphStyle('callout-'+kind,parent=self._styles['body'],textColor=color,
+            backColor='#f6f8fa',borderColor=color,borderWidth=1,borderPadding=6,spaceBefore=8,spaceAfter=8)
+        story.append(Paragraph(_html.escape(icon)+' '+title,style))
+        self._render_children(node.children[1:],story,warnings)
 
     def _block_blockquote(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
         # 引用块的直接子节点是块级节点（paragraph/list 等），不能交给行内渲染器，
@@ -251,6 +263,12 @@ class PdfExporter:
                 self._block_list(child, story, warnings, indent + 14, color)
             elif child.type == "paragraph":
                 parts.append(self._render_inline(child.children, warnings))
+            elif hasattr(self, f"_block_{child.type}"):
+                flush()
+                # Keep block content inside the list frame, including tables and callouts.
+                story.append(Indenter(left=indent))
+                self._render_block(child, story, warnings)
+                story.append(Indenter(left=-indent))
             else:
                 parts.append(self._render_inline_node(child, warnings))
         flush()

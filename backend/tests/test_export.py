@@ -791,3 +791,166 @@ def test_export_limits_concurrent_rendering(monkeypatch) -> None:
     finished = asyncio.run(_go())
     assert all(j.status == ExportStatus.completed for j in finished)
     assert peak <= export_service.MAX_CONCURRENT_RENDERS
+
+
+from app.export.themes import CALLOUTS, ALIASES, PALETTES
+
+@pytest.mark.parametrize("theme", list(PALETTES))
+def test_export_theme_palette(theme):
+    result = HtmlExporter().render(parse_document("`inline`"), ExportOptions(theme_id=theme))
+    text = result.content.decode()
+    assert f"--surface:{PALETTES[theme][1]}" in text
+    assert f"--text:{PALETTES[theme][2]}" in text
+    assert 'pre.code-theme-github-light { background: #f6f8fa; color: #1f2328; }' in text
+    assert not result.warnings
+
+
+def test_unknown_theme_is_not_injected():
+    result = HtmlExporter().render(parse_document("body"), ExportOptions(theme_id="</style><script>bad</script>"))
+    assert result.warnings
+    assert '<script>' not in result.content.decode()
+
+
+@pytest.mark.parametrize("name", list(CALLOUTS) + list(ALIASES))
+def test_callout_formats(name):
+    from app.export.exporters.docx import DocxExporter
+    from app.export.exporters.pdf import PdfExporter
+    from io import BytesIO
+    from zipfile import ZipFile
+    doc = parse_document(f"> [!{name.upper()}]- **Title**\n> Body `code`\n>\n> - item\n> - second")
+    assert doc.children[0].attributes == {"kind": ALIASES.get(name, name), "fold": "-"}
+    text = HtmlExporter().render(doc, ExportOptions()).content.decode()
+    assert '<details class="callout"' in text and '<strong>Title</strong>' in text
+    assert 'item' in text and '[!' not in text
+    result = DocxExporter().render(doc, ExportOptions(theme_id="dark"))
+    assert len(result.warnings) == 1
+    with ZipFile(BytesIO(result.content)) as z:
+        xml = z.read("word/document.xml").decode()
+    assert all(word in xml for word in ["Title", "Body", "item", "second", "w:shd"])
+    result = PdfExporter().render(doc, ExportOptions(theme_id="sepia"))
+    assert result.content.startswith(b"%PDF") and len(result.warnings) == 1
+
+
+@pytest.mark.parametrize("fold", ["", "+", "-"])
+def test_callout_fold_and_nested_content(fold):
+    doc = parse_document(f"> [!NOTE]{fold}\n> body\n>\n> > [!TIP] Nested\n> > child")
+    text = HtmlExporter().render(doc, ExportOptions()).content.decode()
+    assert "Note" in text and "Nested" in text and "child" in text
+    assert (' open>' in text) == (fold == "+")
+    assert ("<details" in text) == bool(fold)
+
+
+def test_callout_code_literal():
+    doc = parse_document("```md\n> [!NOTE] literal\n```\n\n> ordinary quote")
+    assert [n.type for n in doc.children] == ["code_block", "blockquote"]
+
+
+@pytest.mark.parametrize("marker,kind,title", [
+    ("[!WARNING]Title", "warning", "Title"),
+    ("[!custom-type] Title", "note", "Title"),
+    ("[!custom_type]+", "note", "Custom_type"),
+    ("[!NOTE]", "note", "Note"),
+    ("[!TIP]-**Title**", "tip", "Title"),
+])
+def test_export_callout_matches_workspace_syntax(marker, kind, title):
+    doc = parse_document(f"> {marker}\n> Body")
+    assert doc.children[0].type == "callout"
+    assert doc.children[0].attributes["kind"] == kind
+    result = HtmlExporter().render(doc, ExportOptions())
+    assert title in result.content.decode() and "Body" in result.content.decode()
+    assert not result.warnings
+
+
+@pytest.mark.parametrize("prefix", ["- Parent", "1. Parent", "- [x] Parent"])
+def test_list_callout_preserves_export_content_and_order(prefix):
+    from app.export.exporters.docx import DocxExporter
+    from app.export.exporters.pdf import PdfExporter
+    from docx import Document as WordDocument
+    from io import BytesIO
+    md = prefix + "\n\n  > [!WARNING] NestedTitle\n  > NestedBody\n  >\n  > - Inside\n  >\n  > > [!TIP] DeepTitle\n  > > DeepBody\n\n  After\n\n- Sibling"
+    md = md.replace("\n  ", "\n    ")
+    doc = parse_document(md)
+    result = DocxExporter().render(doc, ExportOptions())
+    assert not result.warnings
+    word = WordDocument(BytesIO(result.content))
+    paragraphs = word.paragraphs
+    text = " ".join(p.text for p in paragraphs)
+    expected = ["Parent", "NestedTitle", "NestedBody", "Inside", "DeepTitle", "DeepBody", "After", "Sibling"]
+    positions = [text.index(part) for part in expected]
+    assert positions == sorted(positions)
+    for p in paragraphs:
+        if any(part in p.text for part in ["NestedTitle", "NestedBody", "DeepBody"]):
+            assert p.paragraph_format.left_indent.pt >= 18
+    result = PdfExporter().render(doc, ExportOptions())
+    assert not result.warnings
+    text = _extract_pdf_text(result.content)
+    positions = [text.index(part) for part in expected]
+    assert positions == sorted(positions)
+
+
+@pytest.mark.parametrize("container", ["quote", "callout", "list", "list_callout", "callout_list"])
+def test_container_tables_export_as_tables(container):
+    from app.export.exporters.docx import DocxExporter
+    from app.export.exporters.pdf import PdfExporter
+    from docx import Document as WordDocument
+    from io import BytesIO
+    table = "| HeaderA | HeaderB |\n|---|---|\n| CellA | CellB |"
+    def quote(text):
+        return "\n".join("> " + line for line in text.splitlines())
+    def item(text):
+        return "- Parent\n\n" + "\n".join("    " + line for line in text.splitlines())
+    callout = "[!NOTE] Title\n\n"
+    md = {
+        "quote": quote(table),
+        "callout": quote(callout + table),
+        "list": item(table),
+        "list_callout": item(quote(callout + table)),
+        "callout_list": quote(callout + item(table)),
+    }[container]
+    doc = parse_document(md)
+    html = HtmlExporter().render(doc, ExportOptions())
+    assert not html.warnings
+    assert "<table>" in html.content.decode() and "<th" in html.content.decode()
+    result = DocxExporter().render(doc, ExportOptions())
+    assert not result.warnings
+    word = WordDocument(BytesIO(result.content))
+    assert len(word.tables) == 1
+    assert [[cell.text for cell in row.cells] for row in word.tables[0].rows] == [
+        ["HeaderA", "HeaderB"], ["CellA", "CellB"]]
+    exporter = PdfExporter()
+    tables = []
+    render_table = exporter._block_table
+    def capture_table(node, story, warnings):
+        render_table(node, story, warnings)
+        tables.append(story[-1])
+    exporter._block_table = capture_table
+    result = exporter.render(doc, ExportOptions())
+    assert not result.warnings and len(tables) == 1
+    from reportlab.platypus import Table
+    assert isinstance(tables[0], Table)
+    text = _extract_pdf_text(result.content)
+    assert all(value in text for value in ["HeaderA", "HeaderB", "CellA", "CellB"])
+
+
+@pytest.mark.parametrize("depth", [1, 2, 3])
+def test_docx_nested_table_indent_accumulates_once(depth):
+    from app.export.exporters.docx import DocxExporter
+    from docx import Document as WordDocument
+    from docx.oxml.ns import qn
+    from io import BytesIO
+    md = "| A | B |\n|---|---|\n| x | y |"
+    for level in range(depth):
+        callout = f"[!NOTE] Level{level}\n\n" + md
+        quote = "\n".join("> " + line for line in callout.splitlines())
+        md = "- Parent\n\n" + "\n".join("    " + line for line in quote.splitlines())
+    result = DocxExporter().render(parse_document(md), ExportOptions())
+    assert not result.warnings
+    word = WordDocument(BytesIO(result.content))
+    assert len(word.tables) == 1
+    indents = word.tables[0]._tbl.tblPr.findall(qn("w:tblInd"))
+    assert len(indents) == 1
+    assert indents[0].get(qn("w:type")) == "dxa"
+    assert int(indents[0].get(qn("w:w"))) == 360 * depth
+    title = next(p for p in word.paragraphs if "Level0" in p.text)
+    assert title.paragraph_format.left_indent.twips == 360 * depth
+    assert [[c.text for c in r.cells] for r in word.tables[0].rows] == [["A", "B"], ["x", "y"]]
