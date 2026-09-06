@@ -220,22 +220,32 @@ class PdfExporter:
         if color:
             style_kwargs["textColor"] = color
         style = ParagraphStyle(f"pdf-li-{indent}-{color or 'normal'}", **style_kwargs)
-        # 先收集父级正文、后处理嵌套列表：保证「父级文字在前、子列表在后」的阅读顺序，
-        # 而不是在循环里遇到嵌套列表就立刻递归输出（那会把子列表排到父级前面）。
+        # 按 AST 顺序逐段输出：正文暂存为行内标记文本，遇到嵌套列表先 flush 再递归、
+        # 之后继续后续正文，保持「父段—子列表—后续段」的原始顺序（而不是把所有正文
+        # 都挤到子列表之前）。直接行内节点（text/strong/link 等）走 _render_inline_node，
+        # 保留加粗/链接等语义，不能只渲染其 children 而丢掉格式。
         parts: list[str] = []
-        nested: list[DocumentNode] = []
+        first = True
+
+        def flush() -> None:
+            nonlocal first
+            text = "<br/>".join(parts)
+            if first:
+                text = marker + text
+                first = False
+            if text:
+                story.append(Paragraph(text, style))
+            parts.clear()
+
         for child in item.children:
             if child.type == "list":
-                nested.append(child)
+                flush()
+                self._block_list(child, story, warnings, indent + 14, color)
             elif child.type == "paragraph":
                 parts.append(self._render_inline(child.children, warnings))
-            elif child.children:
-                parts.append(self._render_inline(child.children, warnings))
             else:
-                parts.append(_html.escape(child.text))
-        story.append(Paragraph(marker + "<br/>".join(parts), style))
-        for child_list in nested:
-            self._block_list(child_list, story, warnings, indent + 14, color)
+                parts.append(self._render_inline_node(child, warnings))
+        flush()
 
     def _block_table(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
         rows = node.children

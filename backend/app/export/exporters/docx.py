@@ -176,12 +176,13 @@ class DocxExporter:
             if first:
                 self._add_run(p, marker)
                 first = False
-            if child.children:
-                # 段落或行内容器（strong/link 等）：渲染其行内子节点
+            if child.type == "paragraph":
+                # 块级容器：展开其行内子节点
                 self._render_inline(p, child.children, warnings)
             else:
-                # 直接行内叶子节点（text 等）：拼进段落，不能交给块级渲染器（会丢弃正文）
-                self._add_run(p, child.text or "")
+                # 直接行内节点（text/strong/emphasis/link/codespan 等）：走行内渲染保留
+                # 语义（加粗/斜体/超链接），不能只渲染其 children 而丢掉格式。
+                self._render_inline_node(p, child, warnings)
             if color is not None:
                 for run in p.runs:
                     run.font.color.rgb = color
@@ -259,7 +260,12 @@ class DocxExporter:
             self._render_inline_node(paragraph, child, warnings, bold, italic)
 
     def _render_inline_node(
-        self, paragraph, node: DocumentNode, warnings: list[str], bold: bool, italic: bool
+        self,
+        paragraph,
+        node: DocumentNode,
+        warnings: list[str],
+        bold: bool = False,
+        italic: bool = False,
     ) -> None:
         t = node.type
         if t == "text":
