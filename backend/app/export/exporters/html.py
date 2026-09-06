@@ -13,8 +13,7 @@ from urllib.parse import urlparse
 
 from app.contracts import ExportOptions
 from app.export.document import Document, DocumentNode, ExportResult
-from app.plot.parser import parse_source
-from app.plot.render import render_svg
+from app.plot.renderer import FunctionPlotStaticRenderer, StaticRenderRequest
 
 _MERMAID_WARNING = "mermaid 需前端渲染，已保留为占位代码块"
 _RAW_HTML_WARNING = "原始 HTML 已按纯文本转义保留"
@@ -77,6 +76,7 @@ class HtmlExporter:
         self._options = options
         self._plot_count = 0
         self._plot_nodes = 0
+        self._plot_renderer = FunctionPlotStaticRenderer()
         warnings: list[str] = []
         body = self._render_children(document.children, warnings)
         content = self._assemble(document, options, body, warnings)
@@ -221,7 +221,10 @@ class HtmlExporter:
         # 解析与渲染共同纳入局部异常回退：单个图像失败只回退占位 + warning，
         # 绝不阻断整篇导出（含复杂表达式触发的 RecursionError 等异常）。
         try:
-            parsed = parse_source(node.text)
+            request = StaticRenderRequest(
+                kind="function_plot", source=node.text, theme=self._options.theme_id
+            )
+            parsed = self._plot_renderer.parse(request)
             for diag in parsed.diagnostics:
                 warnings.append(self._format_plot_diagnostic(diag))
             if parsed.plot is None:
@@ -233,7 +236,7 @@ class HtmlExporter:
                 )
                 return f'<pre class="function-plot">{html.escape(node.text)}</pre>'
             self._plot_nodes += parsed.plot.node_count
-            rendered = render_svg(parsed.plot)
+            rendered = self._plot_renderer.render_plot(parsed.plot)
         except Exception as exc:
             warnings.append(f"函数图像：解析或渲染失败，已回退占位（{exc}）")
             return f'<pre class="function-plot">{html.escape(node.text)}</pre>'

@@ -16,6 +16,11 @@ from app.export.exporters.html import HtmlExporter
 from app.export.markdown import parse_document
 from app.plot.parser import PlotParseError, evaluate, parse_expression, parse_source
 from app.plot.render import render_svg
+from app.plot.renderer import (
+    FunctionPlotStaticRenderer,
+    MermaidStaticRenderer,
+    StaticRenderRequest,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -181,12 +186,12 @@ def test_render_svg_nonfinite_range_falls_back() -> None:
 
 def test_html_exporter_function_plot_render_error_falls_back(monkeypatch) -> None:
     # P2：渲染异常不阻断整篇导出，回退占位并记 warning
-    import app.export.exporters.html as html_mod
+    import app.plot.renderer as renderer_mod
 
     def boom(plot):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(html_mod, "render_svg", boom)
+    monkeypatch.setattr(renderer_mod, "render_svg", boom)
     md = "```function-plot\ny = x\n```"
     result = asyncio.run(HtmlExporter().export(parse_document(md), ExportOptions()))
     html = result.content.decode("utf-8")
@@ -283,3 +288,37 @@ def test_html_exporter_limits_total_plot_nodes(monkeypatch) -> None:
     assert html.count('<figure class="function-plot">') == 1
     assert html.count('<pre class="function-plot">') == 1
     assert any("累计复杂度" in w for w in result.warnings)
+
+
+# --------------------------------------------------------------------------- #
+# StaticRenderer 内部契约（§10.4）
+# --------------------------------------------------------------------------- #
+def test_function_plot_static_renderer_renders_svg() -> None:
+    renderer = FunctionPlotStaticRenderer()
+    result = renderer.render(StaticRenderRequest(kind="function_plot", source="y = x^2"))
+    assert "<svg" in result.content
+    assert "<polyline" in result.content
+    assert result.mime_type == "image/svg+xml"
+    assert result.width == 640
+    assert result.height == 480
+
+
+def test_function_plot_static_renderer_parse_exposes_node_count() -> None:
+    renderer = FunctionPlotStaticRenderer()
+    parsed = renderer.parse(StaticRenderRequest(kind="function_plot", source="y = x + x"))
+    assert parsed.plot is not None
+    assert parsed.plot.node_count > 0
+
+
+def test_function_plot_static_renderer_raises_on_no_plot() -> None:
+    renderer = FunctionPlotStaticRenderer()
+    request = StaticRenderRequest(kind="function_plot", source="y = os.system('x')")
+    with pytest.raises(ValueError):
+        renderer.render(request)
+
+
+def test_mermaid_static_renderer_returns_placeholder() -> None:
+    renderer = MermaidStaticRenderer()
+    result = renderer.render(StaticRenderRequest(kind="mermaid", source="graph LR"))
+    assert result.content == ""
+    assert any("mermaid" in w for w in result.warnings)

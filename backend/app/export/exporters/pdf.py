@@ -1,0 +1,303 @@
+"""PdfExporter：Document AST → PDF（reportlab platypus）。
+
+v1 为文本优先：标题/段落/行内强调与链接/列表/引用/表格/代码块/数学文本均可导出；
+function_plot 与 mermaid 保留源码占位并记 warning。中文字体用 reportlab 内置
+STSong-Light CID 字体，避免外部字体依赖。CID 字体无独立 bold/italic 字重，
+故行内强调退化为普通文本（内容不丢、样式简化），标题靠字号区分层级。
+"""
+
+from __future__ import annotations
+
+import html as _html
+from io import BytesIO
+
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4, letter
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.platypus import (
+    Paragraph,
+    Preformatted,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
+from reportlab.platypus.flowables import HRFlowable
+
+from app.contracts import ExportOptions
+from app.export.document import Document, DocumentNode, ExportResult
+from app.export.exporters._common import (
+    MERMAID_WARNING,
+    PLOT_PLACEHOLDER_WARNING,
+    RAW_HTML_WARNING,
+    format_meta_value,
+    safe_url,
+)
+
+_FONT = "STSong-Light"
+pdfmetrics.registerFont(UnicodeCIDFont(_FONT))
+
+_MIME = "application/pdf"
+
+_PAGE_SIZES = {"a4": A4, "letter": letter}
+
+# 标题字号随层级递减；标题不依赖粗体（CID 无粗体字重），靠字号拉开层级
+_HEADING_SIZES = {1: 20, 2: 16, 3: 14, 4: 12, 5: 11, 6: 10.5}
+
+
+def _make_styles() -> dict[str, ParagraphStyle]:
+    body = ParagraphStyle(
+        "pdf-body",
+        fontName=_FONT,
+        fontSize=10.5,
+        leading=16,
+        spaceAfter=6,
+    )
+    title = ParagraphStyle("pdf-title", parent=body, fontSize=22, leading=28, spaceAfter=12)
+    quote = ParagraphStyle(
+        "pdf-quote",
+        parent=body,
+        leftIndent=14,
+        textColor="#57606a",
+        spaceBefore=4,
+        spaceAfter=6,
+    )
+    code = ParagraphStyle(
+        "pdf-code",
+        parent=body,
+        fontSize=9,
+        leading=12,
+        leftIndent=6,
+        rightIndent=6,
+        backColor="#f6f8fa",
+        borderColor="#d0d7de",
+        borderWidth=0.5,
+        borderPadding=6,
+        spaceBefore=4,
+        spaceAfter=8,
+    )
+    math = ParagraphStyle("pdf-math", parent=body, alignment=TA_CENTER, spaceBefore=6)
+    cell = ParagraphStyle("pdf-cell", parent=body, fontSize=10, leading=14, spaceAfter=0)
+    cell_head = ParagraphStyle(
+        "pdf-cell-head", parent=cell, textColor="#1f2328", fontSize=10
+    )
+    meta = ParagraphStyle("pdf-meta", parent=body, fontSize=8.5, leading=13, textColor="#57606a")
+    styles: dict[str, ParagraphStyle] = {
+        "body": body,
+        "title": title,
+        "quote": quote,
+        "code": code,
+        "math": math,
+        "cell": cell,
+        "cell_head": cell_head,
+        "meta": meta,
+    }
+    for level, size in _HEADING_SIZES.items():
+        styles[f"h{level}"] = ParagraphStyle(
+            f"pdf-h{level}",
+            parent=body,
+            fontSize=size,
+            leading=size * 1.4,
+            spaceBefore=14 if level <= 2 else 10,
+            spaceAfter=6,
+        )
+    return styles
+
+
+class PdfExporter:
+    """实现 DocumentExporter：递归渲染 Document AST 为 PDF 字节流。"""
+
+    def render(self, document: Document, options: ExportOptions) -> ExportResult:
+        """同步渲染；CPU 密集，调用方应放入线程执行，避免阻塞事件循环。"""
+        self._styles = _make_styles()
+        warnings: list[str] = []
+
+        page = _PAGE_SIZES.get((options.page_size or "A4").lower(), A4)
+        buf = BytesIO()
+        doc = SimpleDocTemplate(
+            buf,
+            pagesize=page,
+            leftMargin=20 * mm,
+            rightMargin=20 * mm,
+            topMargin=18 * mm,
+            bottomMargin=18 * mm,
+            title=str(document.attributes.get("title") or "") or None,
+        )
+
+        story: list = []
+        self._render_header(document, options, story)
+        self._render_children(document.children, story, warnings)
+
+        doc.build(story)
+        return ExportResult(content=buf.getvalue(), mime_type=_MIME, warnings=warnings)
+
+    async def export(self, document: Document, options: ExportOptions) -> ExportResult:
+        """契约要求的 async 接口；渲染本身同步，直接转发到 render。"""
+        return self.render(document, options)
+
+    # --- 文档头部 ---
+    def _render_header(self, document: Document, options: ExportOptions, story: list) -> None:
+        title = str(document.attributes.get("title") or "")
+        if options.include_title and title:
+            story.append(Paragraph(_html.escape(title), self._styles["title"]))
+        if options.include_metadata:
+            metadata = document.attributes.get("metadata")
+            if metadata:
+                for key, value in metadata.items():
+                    text = f"{_html.escape(str(key))}: {_html.escape(format_meta_value(value))}"
+                    story.append(Paragraph(text, self._styles["meta"]))
+
+    # --- 块级 ---
+    def _render_children(self, children: list[DocumentNode], story: list, warnings: list[str]) -> None:
+        for child in children:
+            self._render_block(child, story, warnings)
+
+    def _render_block(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
+        handler = getattr(self, f"_block_{node.type}", None)
+        if handler is not None:
+            handler(node, story, warnings)
+        else:
+            warnings.append(f"无法表示的节点类型已跳过：{node.type}")
+
+    def _block_heading(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
+        level = max(1, min(6, int(node.attributes.get("level", 1))))
+        inline = self._render_inline(node.children, warnings)
+        story.append(Paragraph(inline, self._styles[f"h{level}"]))
+
+    def _block_paragraph(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
+        story.append(Paragraph(self._render_inline(node.children, warnings), self._styles["body"]))
+
+    def _block_blockquote(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
+        story.append(Paragraph(self._render_inline(node.children, warnings), self._styles["quote"]))
+
+    def _block_list(self, node: DocumentNode, story: list, warnings: list[str], indent: int = 14) -> None:
+        ordered = bool(node.attributes.get("ordered"))
+        for index, item in enumerate(node.children, start=1):
+            self._block_list_item(item, story, warnings, ordered, index, indent)
+
+    def _block_list_item(
+        self,
+        item: DocumentNode,
+        story: list,
+        warnings: list[str],
+        ordered: bool,
+        index: int,
+        indent: int,
+    ) -> None:
+        if item.attributes.get("task"):
+            marker = "☑ " if item.attributes.get("checked") else "☐ "
+        else:
+            marker = f"{index}. " if ordered else "• "
+        style = ParagraphStyle(
+            f"pdf-li-{indent}",
+            parent=self._styles["body"],
+            leftIndent=indent,
+            firstLineIndent=-7,
+            spaceAfter=2,
+        )
+        # 列表项内容通常是单个段落或直接行内节点，嵌套列表单独递归加深缩进
+        parts: list[str] = []
+        for child in item.children:
+            if child.type == "list":
+                self._block_list(child, story, warnings, indent + 14)
+            elif child.type == "paragraph":
+                parts.append(self._render_inline(child.children, warnings))
+            elif child.children:
+                parts.append(self._render_inline(child.children, warnings))
+            else:
+                parts.append(_html.escape(child.text))
+        story.append(Paragraph(marker + "<br/>".join(parts), style))
+
+    def _block_table(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
+        rows = node.children
+        if not rows:
+            return
+        data: list[list[Paragraph]] = []
+        head_row_count = 0
+        for row in rows:
+            head = bool(row.attributes.get("head"))
+            if head:
+                head_row_count += 1
+            cells = [
+                Paragraph(
+                    self._render_inline(cell.children, warnings),
+                    self._styles["cell_head" if cell.attributes.get("head") else "cell"],
+                )
+                for cell in row.children
+            ]
+            data.append(cells)
+        table = Table(data, repeatRows=head_row_count)
+        commands = [
+            ("GRID", (0, 0), (-1, -1), 0.5, "#d0d7de"),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]
+        if head_row_count:
+            commands.append(("BACKGROUND", (0, 0), (-1, head_row_count - 1), "#f6f8fa"))
+        table.setStyle(TableStyle(commands))
+        story.append(table)
+
+    def _block_code_block(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
+        story.append(Preformatted(node.text, self._styles["code"]))
+
+    def _block_thematic_break(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
+        story.append(Spacer(1, 4))
+        story.append(HRFlowable(width="100%", color="#d0d7de", thickness=0.5))
+        story.append(Spacer(1, 6))
+
+    def _block_mermaid(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
+        warnings.append(MERMAID_WARNING)
+        story.append(Preformatted(node.text, self._styles["code"]))
+
+    def _block_function_plot(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
+        warnings.append(PLOT_PLACEHOLDER_WARNING)
+        story.append(Preformatted(node.text, self._styles["code"]))
+
+    def _block_math_block(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
+        story.append(Paragraph(f"$${_html.escape(node.text)}$$", self._styles["math"]))
+
+    def _block_html_block(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
+        # 原始 HTML 不可信，按纯文本保留正文
+        warnings.append(RAW_HTML_WARNING)
+        story.append(Paragraph(_html.escape(node.text), self._styles["body"]))
+
+    # --- 行内（产出 reportlab Paragraph 标记文本） ---
+    def _render_inline(self, children: list[DocumentNode], warnings: list[str]) -> str:
+        return "".join(self._render_inline_node(child, warnings) for child in children)
+
+    def _render_inline_node(self, node: DocumentNode, warnings: list[str]) -> str:
+        t = node.type
+        if t == "text":
+            return _html.escape(node.text)
+        if t in ("strong", "emphasis"):
+            return self._render_inline(node.children, warnings)
+        if t == "codespan":
+            return f'<font size="9">{_html.escape(node.text)}</font>'
+        if t == "link":
+            inner = self._render_inline(node.children, warnings)
+            href = str(node.attributes.get("href") or "")
+            safe_href = safe_url(href)
+            if safe_href is None:
+                warnings.append(f"链接协议不安全，已降级为纯文本：{href!r}")
+                return inner
+            return f'<a href="{_html.escape(safe_href)}">{inner}</a>'
+        if t == "image":
+            src = str(node.attributes.get("src") or "")
+            alt = str(node.attributes.get("alt") or "")
+            if safe_url(src) is None:
+                warnings.append(f"图片地址不安全，已跳过：{src!r}")
+            else:
+                warnings.append("图片未内嵌到 PDF，已用替代文本表示")
+            return _html.escape(alt) if alt else ""
+        if t == "math_inline":
+            return f"\\({_html.escape(node.text)}\\)"
+        if t == "linebreak":
+            return "<br/>"
+        warnings.append(f"无法表示的行内节点已跳过：{t}")
+        return ""
