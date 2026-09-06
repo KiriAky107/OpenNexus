@@ -54,13 +54,17 @@ it.each(['save', 'delete'] as const)('ignores old secret %s responses after swit
   let finish!: () => void
   vi.mocked(service.putPluginSecret).mockReturnValue(new Promise(resolve => { finish = () => resolve({ plugin_id: 'demo', key: 'token', configured: true }) }))
   if (action === 'delete') {
-    vi.stubGlobal('confirm', vi.fn(() => true))
+
     vi.mocked(service.deletePluginSecret).mockReturnValue(new Promise(resolve => { finish = () => resolve({ plugin_id: 'demo', key: 'token', configured: false }) }))
   }
   wrapper = mount(PluginSettingsPanel, { props: { pluginId: 'demo' } })
   await flushPromises()
   await wrapper.get('input[type="password"]').setValue('old-fixture-value')
   await wrapper.get(action === 'save' ? '.secret-row button' : '.secret-row .danger').trigger('click')
+  if (action === 'delete') {
+    await wrapper.get('.action-dialog').trigger('submit')
+    await flushPromises()
+  }
   vi.mocked(service.getPluginSettings).mockResolvedValue(secretSchema(false))
   await wrapper.setProps({ pluginId: 'other' })
   await flushPromises()

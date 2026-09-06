@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
+const { actionDialog, resolveAction, askConfirm, askPrompt } = useActionDialog()
 import { computed, nextTick, ref, watch } from 'vue'
 import { noteOutline } from './outline'
 import { useRouter } from 'vue-router'
@@ -168,7 +171,7 @@ function closeContextMenu() { contextTarget.value = null }
 async function renameTarget() {
   const node = contextTarget.value
   if (!node) return
-  const newName = window.prompt(t('新名称', 'New name'), node.name)?.trim()
+  const newName = (await askPrompt(t('新名称', 'New name'), node.name))?.trim()
   if (newName && newName !== node.name) {
     const normalizedName = node.type === 'file' && !newName.toLowerCase().endsWith('.md') ? `${newName}.md` : newName
     const oldPath = node.path
@@ -190,7 +193,7 @@ async function renameTarget() {
 async function deleteTarget() {
   const node = contextTarget.value
   if (!node) return
-  if (!window.confirm(`${t('确定要删除', 'Delete')} “${node.name}”?`)) return closeContextMenu()
+  if (!(await askConfirm(`${t('确定要删除', 'Delete')} “${node.name}”?`))) return closeContextMenu()
   await workspaceService.deleteFile(node.path)
   const activeWasRemoved = workspaceStore.closePath(node.path)
   workspaceStore.removeFromTree(node.path)
@@ -213,6 +216,8 @@ function containingFolder(path: string): string {
 
 <template>
   <section class="file-tree-panel" @click="closeContextMenu" @keydown.esc="closeContextMenu" @wheel.passive="revealSearch">
+    <p v-if="workspaceStore.treeRefreshError" class="subtle" role="status">{{ t('文件树暂未同步，将自动重试。', 'File tree sync delayed; retrying automatically.') }}</p>
+    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <div class="workspace-tabs" role="tablist" :aria-label="t('工作区导航', 'Workspace navigation')" @keydown="navigateTabs">
       <button id="workspace-files-tab" role="tab" aria-controls="workspace-files-panel" :aria-selected="activeTab === 'files'" :tabindex="activeTab === 'files' ? 0 : -1" @click="switchTab('files')">{{ t('文件', 'Files') }}</button>
       <button id="workspace-outline-tab" role="tab" aria-controls="workspace-outline-panel" :aria-selected="activeTab === 'outline'" :tabindex="activeTab === 'outline' ? 0 : -1" @click="switchTab('outline')">{{ t('大纲', 'Outline') }}</button>
@@ -252,7 +257,7 @@ function containingFolder(path: string): string {
         <button :title="t('展开全部标题', 'Expand all headings')" @click="collapsedHeadings = new Set()">{{ t('全部展开', 'Expand all') }}</button>
       </div>
       <nav class="outline-list" :aria-label="t('当前笔记大纲', 'Current note outline')">
-        <div v-for="heading in visibleHeadings" :key="heading.index" class="outline-row" :class="{ 'is-selected': editorStore.headingRequest?.path === editorStore.currentFilePath && editorStore.headingRequest?.index === heading.index, 'is-nested': heading.level > 1 }" :style="{ marginLeft: `${(heading.level - 1) * 10}px` }">
+        <div v-for="heading in visibleHeadings" :key="heading.index" class="outline-row" :data-level="heading.level" :class="{ 'is-selected': editorStore.headingRequest?.path === editorStore.currentFilePath && editorStore.headingRequest?.index === heading.index, 'is-nested': heading.level > 1 }" :style="{ marginLeft: `${(heading.level - 1) * 10}px` }">
           <button v-if="hasChildren(heading.index)" class="outline-toggle" :aria-label="t('折叠或展开标题', 'Toggle heading')" :aria-expanded="!collapsedHeadings.has(heading.index)" @click="toggleHeading(heading.index)"><AppIcon :icon="ArrowRight" :size="10" /></button>
           <span v-else class="outline-spacer" />
           <button class="outline-title" :title="heading.title" :aria-current="editorStore.headingRequest?.path === editorStore.currentFilePath && editorStore.headingRequest?.index === heading.index ? 'location' : undefined" @click="editorStore.jumpToHeading(heading.index, heading.offset)"><span class="outline-text">{{ heading.title }}</span><span class="outline-level" aria-hidden="true">H{{ heading.level }}</span></button>
@@ -300,8 +305,14 @@ function containingFolder(path: string): string {
 .outline-row .outline-title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 6px 2px; text-align: left; background: transparent; }
 .outline-level { flex-shrink: 0; color: var(--color-text-tertiary); font: 400 10px/18px var(--font-ui-mono); }
 .outline-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-size-sm); line-height: 20px; }
-.is-selected .outline-text { color: var(--color-accent-primary); font-weight: 600; }
+.is-selected .outline-text { color: var(--color-accent-primary); }
 .is-selected .outline-level { color: var(--color-accent-primary); }
+
+.outline-row[data-level="1"] .outline-text { font-size: 15px; font-weight: 700; }
+.outline-row[data-level="2"] .outline-text { font-size: 14px; font-weight: 600; }
+.outline-row[data-level="3"] .outline-text { font-size: 13px; font-weight: 500; }
+.outline-row[data-level="4"] .outline-text { font-size: 13px; font-weight: 400; }
+.outline-row[data-level="5"] .outline-text, .outline-row[data-level="6"] .outline-text { font-size: 12px; font-weight: 400; }
 .outline-empty { display: grid; justify-items: center; gap: 10px; padding: 32px 16px; text-align: center; color: var(--color-text-secondary); }
 .outline-empty strong { color: var(--color-text-primary); font-size: var(--font-size-sm); }
 .outline-empty p { margin: 0; font-size: var(--font-size-xs); line-height: 1.7; }

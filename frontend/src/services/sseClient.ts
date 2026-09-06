@@ -130,7 +130,7 @@ export class SseClient {
     this.controller.abort()
   }
 
-  // TODO(streaming): 桌面网络策略确定后，在 Store 层增加有上限的指数退避重连。
+  // 传输层不自动重试 POST；Agent Store 使用 sequence 游标执行有界 GET 重连。
 
   isConnected() {
     return this.connected

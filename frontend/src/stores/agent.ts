@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, onScopeDispose } from 'vue'
 import type { AgentRun, AgentEvent, ToolDefinition, PermissionRequest, ToolCall } from '@/contracts'
 import * as agentService from '@/services/agentService'
 import type { SseClient } from '@/services/sseClient'
@@ -17,6 +17,29 @@ export const useAgentStore = defineStore('agent', () => {
   const error = ref<string | null>(null)
   let eventStream: SseClient | null = null
   let selectionVersion = 0
+  let streamVersion = 0
+  let retryTimer: ReturnType<typeof setTimeout> | null = null
+  let retryCount = 0
+  const seenSequences = new Set<number>()
+  let lastSequence = -1
+  const connectionState = ref<'idle' | 'connected' | 'reconnecting' | 'disconnected'>('idle')
+  const terminal = (status?: string) => ['completed', 'failed', 'cancelled'].includes(status || '')
+
+  function stopStream() {
+    streamVersion++
+    if (retryTimer) clearTimeout(retryTimer)
+    retryTimer = null
+    eventStream?.cancel()
+    eventStream = null
+  }
+  function resetEvents() {
+    events.value = []
+    toolCalls.value = []
+    seenSequences.clear()
+    lastSequence = -1
+    retryCount = 0
+  }
+  onScopeDispose(stopStream)
 
   const activeRun = computed(() =>
     runs.value.find((r) => r.run_id === activeRunId.value) || null
@@ -42,10 +65,9 @@ export const useAgentStore = defineStore('agent', () => {
 
   async function loadRun(runId: string) {
     const version = ++selectionVersion
-    eventStream?.cancel()
+    stopStream()
     activeRunId.value = runId
-    events.value = []
-    toolCalls.value = []
+    resetEvents()
     permissionRequest.value = null
     isRunning.value = false
     const run = await agentService.getAgentRun(runId)
@@ -61,9 +83,14 @@ export const useAgentStore = defineStore('agent', () => {
 
   function processEvent(event: AgentEvent) {
     // 服务端会先回放历史再发送实时事件，以 run_id + sequence 去重保证幂等。
-    if (events.value.some((item) => item.run_id === event.run_id && item.sequence === event.sequence)) return
-    events.value.push(event)
-    events.value.sort((a, b) => a.sequence - b.sequence)
+    if (seenSequences.has(event.sequence)) return
+    seenSequences.add(event.sequence)
+    if (event.sequence > lastSequence) events.value.push(event)
+    else {
+      const index = events.value.findIndex(item => item.sequence > event.sequence)
+      events.value.splice(index < 0 ? events.value.length : index, 0, event)
+    }
+    lastSequence = Math.max(lastSequence, event.sequence)
     const data = event.data
     const run = runs.value.find((item) => item.run_id === event.run_id)
     if (event.event === 'RunStarted' && run) run.status = 'running'
@@ -108,15 +135,49 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   function subscribe(runId: string) {
-    // 任一时刻只保留当前运行的事件流，防止切换详情后旧事件污染新页面。
-    eventStream?.cancel()
-    isRunning.value = true
-    error.value = null
+    stopStream()
+    const version = streamVersion
+    const current = () => activeRunId.value === runId && version === streamVersion
+    isRunning.value = !terminal(activeRun.value?.status)
+    const interrupted = (cause?: Error) => {
+      if (!current() || retryTimer) return
+      eventStream?.cancel()
+      eventStream = null
+      if (terminal(activeRun.value?.status)) {
+        isRunning.value = false
+        connectionState.value = 'idle'
+        return
+      }
+      error.value = cause?.message || t('事件连接中断', 'Event connection interrupted')
+      connectionState.value = retryCount >= 5 ? 'disconnected' : 'reconnecting'
+      if (retryCount >= 5) return
+      const delay = Math.min(1000 * 2 ** retryCount++, 16000)
+      retryTimer = setTimeout(async () => {
+        retryTimer = null
+        try {
+          const run = await agentService.getAgentRun(runId)
+          if (!current()) return
+          const index = runs.value.findIndex(item => item.run_id === runId)
+          if (index >= 0) runs.value[index] = run
+          // 即使已结束仍续读一次缺失的尾部事件，保留完整 Trace。
+          subscribe(runId)
+        } catch (cause) {
+          if (current()) interrupted(cause instanceof Error ? cause : new Error(String(cause)))
+        }
+      }, delay)
+    }
     eventStream = agentService.streamAgentEvents(runId, {
-      onEvent(event) { if (activeRunId.value === runId) processEvent(event) },
-      onError(streamError) { if (activeRunId.value === runId) { error.value = streamError.message; isRunning.value = false } },
-      onDone() { if (activeRunId.value === runId) { isRunning.value = false; eventStream = null } },
-    })
+      onOpen() { if (current()) { connectionState.value = 'connected'; error.value = null } },
+      onEvent(event) { if (current()) processEvent(event) },
+      onError: interrupted,
+      onDone() { interrupted() },
+    }, lastSequence)
+  }
+
+  function reconnect() {
+    if (!activeRunId.value) return
+    retryCount = 0
+    subscribe(activeRunId.value)
   }
 
   async function createRun(request: agentService.CreateAgentRunRequest) {
@@ -126,8 +187,7 @@ export const useAgentStore = defineStore('agent', () => {
       selectionVersion++
       runs.value.unshift(run)
       activeRunId.value = run.run_id
-      events.value = []
-      toolCalls.value = []
+      resetEvents()
       subscribe(run.run_id)
       return run
     } finally {
@@ -139,9 +199,12 @@ export const useAgentStore = defineStore('agent', () => {
     await agentService.cancelAgentRun(runId)
     const run = runs.value.find((r) => r.run_id === runId)
     if (run) run.status = 'cancelled'
-    isRunning.value = false
-    eventStream?.cancel()
-    eventStream = null
+    if (activeRunId.value === runId) {
+      isRunning.value = false
+      permissionRequest.value = null
+      stopStream()
+      connectionState.value = 'idle'
+    }
   }
 
   async function respondPermission(decision: 'allow' | 'deny', scope: 'once' | 'session' = 'once') {
@@ -163,6 +226,8 @@ export const useAgentStore = defineStore('agent', () => {
     permissionRequest,
     toolCalls,
     error,
+    connectionState,
+    reconnect,
     currentStep,
     loadTools,
     loadRuns,

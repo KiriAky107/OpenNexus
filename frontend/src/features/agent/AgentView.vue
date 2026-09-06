@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppDialog from '@/components/common/AppDialog.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAgentStore } from '@/stores/agent'
@@ -127,6 +128,8 @@ async function handleOpenCitation(data: Record<string, unknown>) {
           </p>
         </div>
         <div class="inline-actions">
+          <span v-if="agentStore.connectionState === 'reconnecting'">{{ t('正在恢复连接…', 'Reconnecting…') }}</span>
+          <button v-if="agentStore.connectionState === 'disconnected'" class="button-secondary" @click="agentStore.reconnect()">{{ t('恢复连接', 'Reconnect') }}</button>
           <button v-if="agentStore.isRunning" class="button-danger" @click="agentStore.cancelRun(agentStore.activeRunId!)">{{ t('取消运行', 'Cancel run') }}</button>
           <button class="button-secondary" @click="agentStore.loadRun(agentStore.activeRunId!)">重新加载</button>
         </div>
@@ -138,9 +141,9 @@ async function handleOpenCitation(data: Record<string, unknown>) {
       />
     </div>
 
-    <div v-if="agentStore.permissionRequest" class="modal-backdrop">
+    <AppDialog v-if="agentStore.permissionRequest" :label="t('权限确认', 'Permission confirmation')" :dismissible="false">
       <div class="modal"><span class="badge warning">{{ t('权限确认', 'Permission Confirmation') }}</span><h2>{{ toolLabel(agentStore.permissionRequest.tool_name) }}</h2><p>{{ agentStore.permissionRequest.impact }}</p><p class="subtle">{{ t('所需权限：', 'Required permission: ') }}{{ permissionLabel(agentStore.permissionRequest.permission) }} ({{ agentStore.permissionRequest.permission }})</p><pre>{{ JSON.stringify(localizeDetails(agentStore.permissionRequest.parameters), null, 2) }}</pre><div class="inline-actions permission-actions"><button class="button-primary" @click="agentStore.respondPermission('allow', 'once')">{{ t('仅本次允许', 'Allow once') }}</button><button class="button-secondary" @click="agentStore.respondPermission('allow', 'session')">{{ t('本次会话允许', 'Allow for session') }}</button><button class="button-danger" @click="agentStore.respondPermission('deny')">{{ t('拒绝', 'Deny') }}</button></div></div>
-    </div>
+    </AppDialog>
   </section>
 </template>
 

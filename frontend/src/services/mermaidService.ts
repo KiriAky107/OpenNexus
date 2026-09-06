@@ -1,4 +1,10 @@
-import mermaid from 'mermaid'
+let mermaidPromise: Promise<typeof import('mermaid')['default']> | undefined
+function loadMermaid() {
+  return mermaidPromise ??= import('mermaid').then(module => module.default).catch(error => {
+    mermaidPromise = undefined
+    throw error
+  })
+}
 import { computed } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 
@@ -23,7 +29,8 @@ export function mermaidThemeVariables(dark: boolean) {
   }
 }
 
-function ensureInitialized(theme: 'light' | 'dark') {
+async function ensureInitialized(theme: 'light' | 'dark') {
+    const mermaid = await loadMermaid()
     mermaid.initialize({
       startOnLoad: false,
       theme: 'base',
@@ -34,6 +41,7 @@ function ensureInitialized(theme: 'light' | 'dark') {
       sequence: { useMaxWidth: true },
       gantt: { useMaxWidth: true },
     })
+    return mermaid
 }
 let queue: Promise<unknown> = Promise.resolve()
 function serialized<T>(work: () => Promise<T>): Promise<T> {
@@ -66,9 +74,9 @@ async function renderMermaidNow(
   options: { theme?: 'light' | 'dark'; mode?: 'interactive' | 'static' } = {}
 ): Promise<MermaidRenderResult> {
   const theme = options.theme ?? 'light'
-  ensureInitialized(theme)
   const id = `mermaid-${Date.now()}-${++renderCounter}`
   try {
+    const mermaid = await ensureInitialized(theme)
     const result = await mermaid.render(id, source)
     const parser = new DOMParser()
     const doc = parser.parseFromString(result.svg, 'image/svg+xml')
@@ -131,7 +139,7 @@ export function useMermaidTheme() {
 
 export async function validateMermaid(source: string): Promise<{ valid: boolean; error?: MermaidParseError }> {
   try {
-    await serialized(async () => { ensureInitialized('light'); await mermaid.parse(source) })
+    await serialized(async () => { const mermaid = await ensureInitialized('light'); await mermaid.parse(source) })
     return { valid: true }
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误'

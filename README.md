@@ -4,7 +4,7 @@
 
 NotesAgent 是本地优先的 AI 笔记与知识库项目。当前可运行形态为 Vue/Vite Web 前端与 FastAPI AI Core：Markdown 和附件保存在本地 Vault，SQLite 管理元数据、全文索引、向量空间、搜索历史、AI 会话、任务、Agent Trace、多模态任务及运行诊断。AI 对话已接入知识库检索，会话与消息由后端持久化并供 Web 和桌面客户端共用。
 
-截至 2026-09-05，第一阶段及第二阶段 A～F 的工程范围已经合并到 `main`。当前已完成真实 Workspace、混合检索与知识库问答、Agent/Tool/Permission、Skill/Plugin、MCP 配置与调用、模型提供商与路由、RAG Benchmark，以及本地 Embedding、音频转写和片段级声纹聚类。Tauri/Rust Host、Stronghold、原生多 Vault 文件系统、生产级 MCP 沙箱和 Sync Server 尚未接入。
+截至 2026-09-06，第一阶段及第二阶段 A～F 的工程范围已经合并到 `main`。当前已完成真实 Workspace、混合检索与知识库问答、Agent/Tool/Permission、Skill/Plugin、MCP 配置与调用、模型提供商与路由、RAG Benchmark，以及本地 Embedding、音频转写和片段级声纹聚类。Tauri/Rust Host、Stronghold、原生多 Vault 文件系统、生产级 MCP 沙箱和 Sync Server 尚未接入。
 
 ## 目录
 
@@ -27,6 +27,20 @@ NotesAgent/
 - 模型运行：默认 CPU，可选 CUDA 12.8 组件；固定模型 revision，按需启动独立子进程，交互检索优先排队，CUDA 初始化或显存失败时用同一冻结配置在 CPU 重试一次。
 - 可观测性：输入、输出、缓存命中、推理 Token 与音频用量卡片；本地运行诊断保留最近 200 条，不保存正文、文件路径、密钥或异常全文。
 - 界面偏好：设置页可即时切换全局中文/英文界面，并控制由系统词典提供的编辑器拼写检查；偏好目前保存于 Web 端设备配置，后续由 Tauri 配置存储接管。
+
+## 第二阶段最新合并（2026-09-06）
+
+PR #31 已合并。工作区打开与 HTTP 保存不再等待向量推理；正文和全文索引先可用，向量随后后台更新。“已保存”与“向量就绪”是两个独立状态。Skill / Plugin 支持 ZIP 安装与本地安装状态恢复，并已提供功能示例包；远程社区仍是第三阶段计划。
+
+新增开发说明：
+
+- [工作区后台索引与保存](docs/development/工作区后台索引与保存开发说明.md)：状态、并发、恢复和验证。
+- [Mermaid 预览与缩放](docs/development/Mermaid预览与缩放开发说明.md)：大图适配、鼠标缩放和文字裁切修复。
+- [扩展安装持久化与社区包](docs/development/扩展安装持久化与社区包开发说明.md)：安装边界和示例包验证。
+- [模型上下文管理](docs/development/模型上下文管理.md)：全局人设、预算估算和摘要限制。
+- [第三阶段实施规划](docs/architecture/第三阶段实施规划.md)：Tauri Rust 容器、各社区与 Sync Server。
+
+代码基线 `a5c44c4` 的验证结果为后端 621 项、前端 345 项测试通过，前端生产构建通过。这是该提交的回归记录，不表示全部真实厂商及设备场景完成专项验收。
 
 ## 本地模型
 
@@ -68,7 +82,7 @@ cd ..
 ```powershell
 # 终端一
 cd backend
-uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uv run python scripts/dev-server.py
 
 # 终端二
 cd frontend
@@ -173,3 +187,37 @@ css_entry: styles/theme.css
 发布主题仓库时可提供原始 `.theme` 文件链接或 ZIP 发布附件直链，不要使用仓库 HTML 浏览页面地址。下载请求不携带 Cookie 或 HTTP 登录信息，服务器需允许应用来源的 CORS 请求；暂不支持私有仓库认证。
 
 下载和本地文件限制为 5 MB；ZIP 解压总大小限制为 10 MB，最多 100 个条目。URL 下载超时为 30 秒。取消导入会取消下载，过期请求不会替换当前待安装主题。更新时递增清单版本号，并保持 `theme_id` 稳定。
+
+
+### 主题兼容性与安装前预览
+
+当前应用版本从 `frontend/package.json` 读取（0.2.0）。清单的 `version`、`min_app_version` 必须使用有效 SemVer；最低版本高于应用版本时，检查、安装和启用都会拒绝。文件、URL、ZIP 导入共用此规则。
+
+导入检查通过后可点击“预览主题效果”。预览使用无脚本的 sandbox iframe，与当前应用样式和主题存储隔离；CSP 禁止远程资源，仅允许内联样式及 data 图片/字体。预览不等同于安装。
+
+
+### 用量趋势与纸间时光 1.5
+
+模型设置页将提供商、本地模型、用量统计分成独立卡片。用量趋势支持近 7 天、30 天、90 天及自定义时间，沿用提供商/模型/来源筛选；按本机 UTC 偏移分组（长区间自动合并到最多 90 组）。可切换输入、输出、总 Token 和请求次数，本地为芯片实色图例，提供商为连接斜纹图例。仅汇总已报告值，并提供覆盖数与可展开的数据表，缺失不补零。
+
+纸间时光更新至 1.5.0，通用卡片、执行事件、引用、模型路由及弹窗统一使用纸张、虚线、胶带和叠纸阴影。已安装旧版本时，在主题社区点击“更新”应用新版样式。
+
+
+## Skill / Plugin ZIP 安装（临时规范）
+
+第三阶段完整规划见[桌面容器、扩展社区与多设备同步](docs/architecture/第三阶段实施规划.md)，包含 Tauri/Rust、各社区、Sync Server、迁移、建议分工和验收门禁；该文档是计划，不代表相关服务已经实现。
+
+可运行的社区准备包见 [`backend/extensions/community/README.md`](backend/extensions/community/README.md)：包含 Markdown 检查 Plugin、配套笔记检查 Skill、可重复构建脚本和带 SHA-256 的包索引。
+
+安装弹窗支持 ZIP 文件和 AI Core 主机上的本地目录。ZIP 根目录须包含 `skill.yaml` 或 `plugin.yaml`；也支持整个包放在唯一的顶层文件夹中。每个 ZIP 安装一个扩展，清单字段沿用现有 Skill / Plugin 契约。
+
+```text
+my-skill.zip                 my-plugin.zip
+└─ my-skill/                 ├─ plugin.yaml
+   ├─ skill.yaml            ├─ 后端入口及资源文件
+   └─ prompt.md（可选）      └─ 其他包内资源
+```
+
+ZIP 最大 10 MiB，解压总大小最大 50 MiB，最多 2048 个条目；支持 stored/deflate。拒绝加密条目、符号链接、特殊文件、越界路径以及重复或大小写冲突路径。选择文件后点击安装才上传；后端解压并沿用现有清单、依赖及权限校验，不自动授予权限或启动 Plugin 进程。
+
+解压文件保存在 AI Core 数据目录的 `extension-packages/` 下，安装失败会清理本次目录。此功能不改变扩展运行时现有的安装记录持久化机制；目前重启后仍需重新注册包。扩展 ZIP 暂不支持 URL 下载；主题 ZIP 使用其独立的导入规则。

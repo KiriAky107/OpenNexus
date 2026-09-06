@@ -41,6 +41,31 @@ async function switchToTree(wrapper: ReturnType<typeof mountTree>) {
 }
 
 describe('TraceTimeline 树形视图', () => {
+  it('filters errors while retaining tree ancestors and final tool data', async () => {
+    const events = sampleEvents()
+    const result = events.find(item => item.event === 'ToolResult')!
+    result.data.success = false
+    result.data.error_code = 'TIMEOUT'
+    const wrapper = mountTree(events)
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    expect(wrapper.findAll('.event-card')).toHaveLength(1)
+    await switchToTree(wrapper)
+    expect(wrapper.findAll('.tree-node')).toHaveLength(2)
+    expect(wrapper.text()).toContain('TIMEOUT')
+    await wrapper.get('[aria-label="搜索执行轨迹"]').setValue('no-match')
+    expect(wrapper.text()).toContain('没有匹配的事件')
+    wrapper.unmount()
+  })
+  it('filters a tool including its result and keeps citation navigation usable', async () => {
+    const wrapper = mountTree(sampleEvents())
+    await wrapper.get('[aria-label="工具筛选"]').setValue('read_note')
+    expect(wrapper.findAll('.event-card')).toHaveLength(2)
+    await wrapper.findAll('button').find(button => button.text() === '清除筛选')!.trigger('click')
+    await wrapper.get('[aria-label="事件类型"]').setValue('Citation')
+    await wrapper.get('.event-citation').trigger('click')
+    expect(wrapper.emitted('open-citation')).toHaveLength(1)
+    wrapper.unmount()
+  })
   it('叶子节点点击后能看到自己的数据', async () => {
     // 回归：之前行的 click 是 `children.length && toggleExpand(id)`，
     // 而详情 v-if 又要求 children.length === 0 —— 两个条件互斥，

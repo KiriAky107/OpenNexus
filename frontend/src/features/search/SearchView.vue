@@ -80,7 +80,7 @@ async function openResult(result: SearchResult) {
 .search-history { display: flex; flex-wrap: wrap; gap: var(--space-sm); margin-bottom: var(--space-md); }
 .advanced { grid-column: 1 / -1; }
 .results-header, .result-title, .result-meta { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); }
-.results-header { margin: var(--space-xl) 0 var(--space-md); color: var(--color-text-secondary); }
+.results-header { margin-block: var(--space-xl) var(--space-md); color: var(--color-text-secondary); }
 .result-list { display: grid; gap: var(--space-md); }
 .result-card { position: relative; cursor: pointer; overflow: hidden; }
 .result-card::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--color-accent-primary); opacity: 0; transform: scaleY(.45); transition: opacity var(--motion-fast), transform var(--motion-fast); }

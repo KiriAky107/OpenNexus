@@ -11,7 +11,6 @@ from uuid import uuid4
 from app import repository
 from app.config import get_settings
 from app.contracts import (
-    IndexRebuildRequest,
     OperationResponse,
     WorkspaceEntry,
     WorkspaceInfo,
@@ -20,6 +19,7 @@ from app.contracts import (
 from app.database.db import connect, transaction
 from app.errors import ApiError
 from app.retrieval.vectorstore import SqliteVecStore
+from app.knowledge.parser import parse_note
 from app.services import index_service
 from app.services.coordination import serialized_vault_mutation
 from app.services.vault_paths import normalize_entry_name, normalize_folder, resolve_in_vault
@@ -105,8 +105,16 @@ def get_workspace_tree() -> list[WorkspaceEntry]:
     return _tree(get_settings().vault_path.resolve(), locations)
 
 
+async def refresh_workspace_tree() -> list[WorkspaceEntry]:
+    """Observe external creates/deletes without waiting for vector inference."""
+    if get_workspace_info().requires_refresh:
+        await _register_workspace_files()
+        index_service.schedule_workspace_rebuild()
+    return get_workspace_tree()
+
+
 async def open_workspace(requested_path: str | None) -> WorkspaceSnapshot:
-    """打开当前配置 Vault；发现未索引文件时先执行一次安全全量刷新。"""
+    """打开只登记文件与全文索引，不让 Embedding 或厂商网络阻塞工作区。"""
 
     root = get_settings().vault_path.resolve()
     if requested_path and Path(requested_path).resolve() != root:
@@ -119,9 +127,43 @@ async def open_workspace(requested_path: str | None) -> WorkspaceSnapshot:
     root.mkdir(parents=True, exist_ok=True)
     info = get_workspace_info()
     if info.requires_refresh:
-        await index_service.rebuild(IndexRebuildRequest())
+        await _register_workspace_files()
         info = get_workspace_info()
+    if index_service.get_status().vector_refresh_required:
+        index_service.schedule_workspace_rebuild()
     return WorkspaceSnapshot(workspace=info, items=get_workspace_tree())
+
+
+@serialized_vault_mutation
+async def _register_workspace_files() -> None:
+    root = get_settings().vault_path.resolve()
+    paths = _disk_markdown_paths()
+    existing = {item.file_path: item for item in repository.list_note_locations()}
+    prepared = []
+    for relative in sorted(paths - existing.keys()):
+        path = resolve_in_vault(relative)
+        stat = path.stat()
+        prepared.append(parse_note(
+            markdown=path.read_text(encoding='utf-8'), file_path=relative,
+            folder='' if path.parent == root else path.parent.relative_to(root).as_posix(),
+            tags=None, created_at=datetime.fromtimestamp(stat.st_ctime, timezone.utc),
+            updated_at=datetime.fromtimestamp(stat.st_mtime, timezone.utc),
+        ))
+    conn = connect()
+    try:
+        with transaction(conn):
+            for relative in existing.keys() - paths:
+                block_ids = repository.delete_note(existing[relative].note_id, conn=conn)
+                await vector_store.delete(block_ids, conn=conn)
+            for parsed in prepared:
+                repository.replace_note_metadata(conn=conn, note_id=parsed.note_id, title=parsed.title,
+                    file_path=parsed.file_path, folder=parsed.folder, tags=parsed.tags,
+                    created_at=parsed.created_at, updated_at=parsed.updated_at, blocks=parsed.blocks)
+                conn.execute('UPDATE blocks SET embedding_local_only=? WHERE note_id=?', (int(parsed.embedding_local_only), parsed.note_id))
+            if prepared:
+                repository.set_index_meta({'workspace_vectors_pending': '1'}, conn=conn)
+    finally:
+        conn.close()
 
 
 @serialized_vault_mutation

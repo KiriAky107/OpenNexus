@@ -90,7 +90,7 @@ class SkillRuntime:
         self._records: dict[str, _SkillRecord] = {}
 
     def install(self, package_path: str | Path) -> Skill:
-        # TODO(extension): 将安装记录持久化，应用重启后从可信包目录恢复状态。
+        # 应用层 InstalledRuntime 负责安装记录和可信包恢复；此类保留独立可测试的运行时。
         root = _package_dir(package_path)
         raw = _read_yaml(root / "skill.yaml")
         if "id" in raw and "skill_id" not in raw:

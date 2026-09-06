@@ -59,11 +59,15 @@ export function initialArguments(command: PluginCommand): Record<string, unknown
 
 /** 按字段类型把输入框的字符串转成 schema 期望的类型。 */
 export function coerceArgument(field: CommandField, raw: string): unknown {
+  if (raw.trim() === '') return undefined
   if (field.type === 'boolean') return raw === 'true'
   if (field.type === 'number' || field.type === 'integer') {
     if (raw.trim() === '') return undefined
     const parsed = Number(raw)
     return Number.isNaN(parsed) ? undefined : parsed
+  }
+  if (field.type === 'object' || field.type === 'array') {
+    try { return JSON.parse(raw) } catch { return raw } // Backend reports the schema error without discarding the input.
   }
   return raw
 }

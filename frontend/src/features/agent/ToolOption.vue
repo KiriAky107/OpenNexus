@@ -10,7 +10,7 @@ const showOriginal = computed(() => props.description.length > 0)
 </script>
 
 <template>
-  <article class="tool-choice" :class="{ selected }">
+  <article class="tool-choice surface-nested" :class="{ selected }">
     <label class="tool-selection">
       <input type="checkbox" :checked="selected" @change="emit('toggle', name)" />
       <span class="tool-copy">
@@ -19,7 +19,7 @@ const showOriginal = computed(() => props.description.length > 0)
         <small class="tool-summary">{{ summary }}</small>
       </span>
     </label>
-    <details v-if="showOriginal" class="tool-original">
+    <details v-if="showOriginal" class="tool-original ui-disclosure">
       <summary>{{ t('查看服务原文与参数', 'View original service description and parameters') }}</summary>
       <p>{{ description }}</p>
     </details>

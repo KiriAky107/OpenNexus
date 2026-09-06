@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { defineAsyncComponent, ref, watch } from 'vue'
 import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore } from '@/stores/theme'
-import VisualMarkdownEditor from './VisualMarkdownEditor.vue'
+const VisualMarkdownEditor = defineAsyncComponent(() => import('./VisualMarkdownEditor.vue'))
 
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
@@ -24,7 +24,7 @@ function updateContent(event: Event) {
 </script>
 
 <template>
-  <VisualMarkdownEditor v-if="editorStore.mode === 'wysiwyg'" :key="`${editorStore.currentFilePath ?? 'empty'}:${themeStore.resolvedCodeBlockTheme}:${settingsStore.language}`"
+  <VisualMarkdownEditor v-if="editorStore.mode === 'wysiwyg'" :key="`${editorStore.currentFilePath ?? 'empty'}:${editorStore.contentRevision}:${themeStore.resolvedCodeBlockTheme}:${settingsStore.language}`"
     :initial-content="editorStore.content" />
   <textarea v-else ref="sourceEditor" class="editor-pane source" :value="editorStore.content" :spellcheck="settingsStore.spellCheck"
     :lang="settingsStore.language" :aria-label="settingsStore.language === 'en' ? 'Markdown source editor' : 'Markdown 源码编辑器'" @input="updateContent" />

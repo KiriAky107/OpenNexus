@@ -27,8 +27,11 @@ export async function getSkill(skillId: string): Promise<Skill> {
   return toSkill(await apiClient.get<ApiSkill>(`/api/skills/${skillId}`))
 }
 
-export async function installSkill(packagePath: string): Promise<Skill> {
-  return toSkill(await apiClient.post<ApiSkill>('/api/skills/install', { package_path: packagePath }))
+export async function installSkill(source: string | File): Promise<Skill> {
+  const installed = typeof source === 'string'
+    ? await apiClient.post<ApiSkill>('/api/skills/install', { package_path: source })
+    : await apiClient.postBinary<ApiSkill>('/api/skills/install-zip', source)
+  return toSkill(installed)
 }
 
 export async function enableSkill(skillId: string): Promise<Skill> {

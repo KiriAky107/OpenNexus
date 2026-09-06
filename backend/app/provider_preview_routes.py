@@ -91,6 +91,9 @@ async def preview(request: PreviewRequest):
             raise ApiError(422, "PROVIDER_TYPE_UNSUPPORTED", "该协议不支持请求预览。") from exc
         model_request = ModelRequest(provider_id="preview", model=config.default_model or "<模型 ID>",
             messages=[Message(role=MessageRole.user, content="<运行时消息，已隐藏>")])
+        policy = next((p for p in config.context_policies if p.model == model_request.model), None)
+        if policy:
+            model_request.max_tokens = policy.output_reserve
         build = getattr(adapter, "_payload", None) or adapter._chat_payload
         payload = build(model_request, stream=request.stream)
     return {"body": apply_overrides(payload, config.request_overrides, request.capability,

@@ -18,7 +18,9 @@ from app.services import transcription_service as jobs
 from app.services.attachment_service import attachment_path
 
 router = APIRouter(prefix="/api/media", tags=["Media"])
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+from app.providers.routing import MAX_LOCAL_MEDIA_BYTES
+
+MAX_UPLOAD_BYTES = MAX_LOCAL_MEDIA_BYTES
 MEDIA_SUFFIXES = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".mp4", ".webm", ".txt", ".md"}
 
 
@@ -40,7 +42,7 @@ async def upload_attachment(request: Request, filename: str = Query(min_length=1
             async for chunk in request.stream():
                 size += len(chunk)
                 if size > MAX_UPLOAD_BYTES:
-                    raise ApiError(413, "ATTACHMENT_TOO_LARGE", "Attachment exceeds 25 MiB.")
+                    raise ApiError(413, "ATTACHMENT_TOO_LARGE", "Attachment exceeds 128 MiB.")
                 digest.update(chunk)
                 stream.write(chunk)
         if not size:

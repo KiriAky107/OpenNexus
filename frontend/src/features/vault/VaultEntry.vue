@@ -7,6 +7,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { ArrowRight, Document, Folder, FolderOpened, Moon, Sunny } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { t } from '@/i18n'
+import { ApiErrorClass } from '@/services/apiClient'
 
 const router = useRouter()
 const workspaceStore = useWorkspaceStore()
@@ -15,29 +16,34 @@ const settingsStore = useSettingsStore()
 
 const isLoading = ref(false)
 const aiCoreStatus = ref<'checking' | 'running' | 'stopped'>('checking')
+const openError = ref('')
 
-onMounted(async () => {
-  await Promise.allSettled([workspaceStore.loadRecentVaults(), settingsStore.loadDiagnostics()])
+onMounted(() => { void initializeVault() })
+
+async function initializeVault() {
+  openError.value = ''
+  void settingsStore.loadDiagnostics().then(() => {
+    aiCoreStatus.value = settingsStore.aiCoreStatus === 'running' ? 'running' : 'stopped'
+  }).catch(() => { aiCoreStatus.value = 'stopped' })
+  try { await workspaceStore.loadRecentVaults() }
+  catch (reason) { openError.value = reason instanceof Error ? reason.message : String(reason); return }
   const lastVaultPath = localStorage.getItem('last-vault-path')
   if (settingsStore.restoreLastVault && lastVaultPath) {
-    try {
-      await openVault(lastVaultPath)
-      return
-    } catch {
-      // 历史保存的旧路径可能与当前后端 Vault 不同，清除后让用户重新选择。
-      localStorage.removeItem('last-vault-path')
-    }
+    await openVault(lastVaultPath)
   }
-  {
-    aiCoreStatus.value = settingsStore.aiCoreStatus === 'running' ? 'running' : 'stopped'
-  }
-})
+}
 
 async function openVault(path: string) {
+  if (isLoading.value) return
   isLoading.value = true
+  openError.value = ''
   try {
     await workspaceStore.openVault(path)
-    router.push('/workspace')
+    await router.push('/workspace')
+    void settingsStore.loadDiagnostics()
+  } catch (reason) {
+    openError.value = reason instanceof Error ? reason.message : String(reason)
+    if (reason instanceof ApiErrorClass && reason.code === 'WORKSPACE_PATH_MISMATCH') localStorage.removeItem('last-vault-path')
   } finally {
     isLoading.value = false
   }
@@ -60,6 +66,8 @@ async function openFolderPicker() {
       </div>
 
       <div class="vault-card">
+        <div v-if="openError" class="error-banner" role="alert">{{ openError }} <button class="btn" @click="initializeVault" :disabled="isLoading">{{ t('重试', 'Retry') }}</button></div>
+        <p v-if="isLoading" role="status">{{ t('正在打开知识库…', 'Opening knowledge base…') }}</p>
         <h2 class="card-title">{{ t('选择知识库', 'Select Knowledge Base') }}</h2>
         <p class="card-desc">{{ t('Web 联调模式连接 AI Core 当前配置的 Vault', 'Web development mode connects to the Vault configured in AI Core') }}</p>
 

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import ActionDialog from '@/components/common/ActionDialog.vue'
+import { useActionDialog } from '@/composables/useActionDialog'
+const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { PluginSettingsSchema, PluginSettingField } from '@/contracts'
 import {
@@ -106,9 +109,10 @@ async function saveSecret(key: string) {
 
 async function clearSecret(key: string) {
   if (!schema.value || isSaving.value) return
-  if (!confirm(`确认删除 " ${key} " 的配置？`)) return
   const version = loadVersion
   const pluginId = props.pluginId
+  if (!(await askConfirm(`确认删除 " ${key} " 的配置？`))) return
+  if (version !== loadVersion || pluginId !== props.pluginId) return
   isSaving.value = true
   saveError.value = ''
   try {
@@ -145,6 +149,7 @@ watch(() => props.pluginId, load)
 
 <template>
   <div class="plugin-settings-panel">
+    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <div v-if="isLoading" class="loading">加载设置中…</div>
 
     <template v-else-if="schema && schema.fields.length > 0">
