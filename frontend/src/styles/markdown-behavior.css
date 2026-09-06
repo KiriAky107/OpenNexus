@@ -1,0 +1,34 @@
+/* Shared interaction layer: colors follow the active theme; syntax preferences
+   continue to be handled by the parser/editor rather than CSS-generated content. */
+:is(.markdown-content, .milkdown .ProseMirror) a:not(.callout-title) {
+  color: var(--color-text-link); text-decoration: underline; text-underline-offset: .18em;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+}
+:is(.markdown-content, .milkdown .ProseMirror) a:hover { text-decoration-color: currentColor; }
+:is(.markdown-content, .milkdown .ProseMirror) a:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 3px; border-radius: var(--radius-sm); }
+:is(.markdown-content, .milkdown .ProseMirror) input[type='checkbox'] { accent-color: var(--color-accent-primary); }
+:is(.markdown-content, .milkdown .ProseMirror) input[type='checkbox']:disabled { opacity: 1; }
+.markdown-content .task-list-item { list-style: none; }
+:is(.markdown-content, .milkdown .ProseMirror) blockquote:not(.markdown-callout) { border-inline-start: 3px solid var(--color-markdown-marker); color: var(--color-text-secondary); }
+:is(.markdown-content, .milkdown .ProseMirror) hr { border: 0; border-top: 1px solid var(--color-markdown-grid); }
+:is(.markdown-content, .milkdown .ProseMirror) :is(h1,h2,h3,h4,h5,h6) { scroll-margin-top: 16px; }
+:is(.markdown-content, .milkdown .ProseMirror) :is(p,li,h1,h2,h3,h4,h5,h6,code)::selection,
+.editor-pane.source::selection { background: var(--color-markdown-selection); color: var(--color-text-primary); }
+.milkdown .ProseMirror .selectedCell::after { background: color-mix(in srgb, var(--color-accent-primary) 18%, transparent); pointer-events: none; }
+.milkdown .ProseMirror .heading-fold-toggle[aria-expanded='false'] { color: var(--color-accent-primary); background: var(--color-accent-soft); }
+.markdown-callout[data-collapsed='true'] { border-style: dashed; border-inline-start-style: solid; }
+.markdown-content details.markdown-callout:not([open]) { border-style: dashed; border-inline-start-style: solid; }
+.editor-pane.source { caret-color: var(--color-accent-primary); }
+.markdown-content .shiki code { display: block; min-width: max-content; padding: 0; background: transparent; font: inherit; }
+.markdown-content .shiki .line { display: block; min-height: 1.45em; }
+.markdown-content[data-code-wrap] .shiki { tab-size: var(--markdown-code-indent, 4); }
+.markdown-content[data-code-wrap='true'] .shiki code { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.markdown-content[data-line-numbers='true'] .shiki code { counter-reset: code-line; }
+.markdown-content[data-line-numbers='true'] .shiki .line { position: relative; padding-inline-start: 3.5em; }
+.markdown-content[data-line-numbers='true'] .shiki .line::before { counter-increment: code-line; content: counter(code-line); position: absolute; inset-inline-start: 0; width: 2.5em; text-align: end; color: var(--color-code-muted); user-select: none; }
+:is(.milkdown-host, .editor-pane.source) { scrollbar-color: var(--color-border-default) var(--color-background-primary); }
+.editor-scroll-buttons { position: absolute; right: 24px; bottom: 24px; z-index: 10; display: flex; flex-direction: column; gap: 8px; }
+.editor-scroll-buttons button { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; min-height: 38px; padding: 0; border-radius: var(--radius-md); background: var(--color-editor-scroll-background); color: var(--color-editor-scroll-text); border: 1px solid var(--color-border-default); box-shadow: var(--shadow-sm); }
+.editor-scroll-buttons button:hover { background: var(--color-background-hover); border-color: var(--color-accent-primary); }
+.editor-scroll-buttons button:active { background: var(--color-accent-soft); }
+.editor-scroll-buttons button:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 2px; }

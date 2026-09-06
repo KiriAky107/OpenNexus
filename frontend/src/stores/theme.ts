@@ -6,9 +6,9 @@ import * as themePkg from '@/services/themePackageService'
 import { t } from '@/i18n'
 
 const builtinThemes = (): ThemeConfig[] => [
-  { theme_id: 'light', name: t('浅色', 'Light'), version: '1.3.0', description: t('默认浅色主题', 'Default light theme'), is_dark: false, builtin: true, code_theme: 'github-light' },
-  { theme_id: 'dark', name: t('深色', 'Dark'), version: '1.3.0', description: t('默认深色主题', 'Default dark theme'), is_dark: true, builtin: true, code_theme: 'github-dark' },
-  { theme_id: 'sepia', name: t('护眼', 'Sepia'), version: '1.3.0', description: t('护眼暖色调', 'Warm, low-glare theme'), is_dark: false, builtin: true, code_theme: 'github-light' },
+  { theme_id: 'light', name: t('浅色', 'Light'), version: '1.4.0', description: t('默认浅色主题', 'Default light theme'), is_dark: false, builtin: true, code_theme: 'github-light' },
+  { theme_id: 'dark', name: t('深色', 'Dark'), version: '1.4.0', description: t('默认深色主题', 'Default dark theme'), is_dark: true, builtin: true, code_theme: 'github-dark' },
+  { theme_id: 'sepia', name: t('护眼', 'Sepia'), version: '1.4.0', description: t('护眼暖色调', 'Warm, low-glare theme'), is_dark: false, builtin: true, code_theme: 'github-light' },
 ]
 
 export type CodeBlockThemePreference = 'auto' | 'github-light' | 'github-dark'

@@ -20,3 +20,20 @@ console.log(note);</code></pre><table><thead><tr><th>名称</th><th>状态</th><
 
 <section class="surface-nested markdown-preferences"><h2>Markdown 语法预设</h2><label>标题样式 <select class="select"><option>ATX (#)</option><option>Setext</option></select></label><label><input type="checkbox" checked> 警告框与提示框</label><button class="button-secondary">保存为预设</button></section>
 <section class="milkdown"><div class="ProseMirror"><h2><button class="heading-fold-toggle" aria-expanded="true" aria-label="折叠示例标题"></button>悬停查看折叠箭头</h2><p>折叠按钮跟随主题，键盘聚焦时也可见。</p></div></section>
+<section class="markdown-content specimen-markdown">
+  <h2>Markdown 行为与状态</h2>
+  <h4>四级标题</h4><h5>五级标题</h5><h6>六级标题</h6>
+  <p><a href="#markdown-preview-target">链接：检查悬停与键盘焦点</a>，<code>行内代码</code>与<strong>强调</strong>、<em>斜体</em>、<del>删除线</del>。选中这段文字检查主题选区颜色。</p>
+  <ul><li>无序列表<ul><li>嵌套列表</li></ul></li></ul><ol><li>有序列表</li><li>第二项</li></ol>
+  <ul><li class="task-list-item"><input type="checkbox" disabled> 未完成任务</li><li class="task-list-item"><input type="checkbox" checked disabled> 已完成任务</li></ul>
+  <blockquote><p>普通引用</p><blockquote>嵌套引用</blockquote></blockquote><hr>
+  <details class="markdown-callout" data-callout="tip"><summary class="callout-title">点击展开提示</summary><div class="callout-body"><p>提示内的 <code>代码</code> 与列表也继承主题。</p></div></details>
+  <p id="markdown-preview-target">ATX 和 Setext 解析后使用相同标题样式；关闭扩展语法时保留源码展示。</p>
+  <pre><code>&gt; [!NOTE]
+关闭警告框扩展时显示原始内容
+```mermaid
+graph LR; A--&gt;B
+```</code></pre>
+</section>
+<section class="surface-nested specimen-scroll"><p>工作区滚动按钮：悬停、按下或 Tab 聚焦检查配色。</p><div class="editor-scroll-buttons"><button class="button-secondary" aria-label="滑动到顶部" title="滑动到顶部">↑</button><button class="button-secondary" aria-label="滑动到底部" title="滑动到底部">↓</button></div></section>
+<section class="markdown-content specimen-markdown" data-code-wrap="true" data-line-numbers="true"><h3>代码换行与行号</h3><pre class="shiki"><code><span class="line">const description = "这是一段用于检查代码自动换行、行号与主题配色的较长说明，较窄视口下也应该保留可读内容。";</span><span class="line">console.log(description);</span></code></pre></section>
