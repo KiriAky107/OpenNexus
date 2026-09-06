@@ -1,5 +1,6 @@
 import DOMPurify from 'dompurify'
-import { marked } from 'marked'
+import { Marked } from 'marked'
+import { defaultMarkdownPreferences, type MarkdownPreferences } from '@/stores/markdownPreferences'
 import { createHighlighterCore } from 'shiki/core'
 import { createOnigurumaEngine } from 'shiki/engine/oniguruma'
 import { bundledLanguagesInfo } from 'shiki/langs'
@@ -9,6 +10,8 @@ import { renderMermaid } from '@/services/mermaidService'
 import { appendDiagramControls } from './diagramControls'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
+import { parseCallout, escapeCalloutTitle } from './callouts'
+import '@/styles/callouts.css'
 
 function mathHtml(source: string, displayMode: boolean) {
   const result = katex.renderToString(source, {displayMode, throwOnError:false, trust:false, maxExpand:1000, output:'html'})
@@ -16,7 +19,21 @@ function mathHtml(source: string, displayMode: boolean) {
   return `<${displayMode ? 'div' : 'span'} class="markdown-math" role="math" aria-label="${label}">${result}</${displayMode ? 'div' : 'span'}>`
 }
 
-marked.use({extensions:[
+function createMarkdownParser(preferences: MarkdownPreferences) {
+const marked = new Marked()
+marked.use({ renderer: { blockquote(token) {
+  if (!preferences.callouts) return false
+  const callout = parseCallout(token.text)
+  if (!callout) return false
+  const title = escapeCalloutTitle(callout.title)
+  const body = marked.parse(callout.body, { async: false }) as string
+  const attributes = `class="markdown-callout" data-callout="${callout.type}"`
+  return callout.fold
+    ? `<details ${attributes}${callout.fold === '+' ? ' open' : ''}><summary class="callout-title">${title}</summary><div class="callout-body">${body}</div></details>`
+    : `<aside ${attributes}><div class="callout-title">${title}</div><div class="callout-body">${body}</div></aside>`
+} } })
+
+if (preferences.math) marked.use({extensions:[
   {name:'blockMath',level:'block',tokenizer(source) {
     const match = /^ {0,3}\$\$\s*\n?([\s\S]+?)\n?\$\$[ \t]*(?:\n|$)/.exec(source)
     if (match) return {type:'blockMath',raw:match[0],text:match[1]!.trim()}
@@ -30,6 +47,9 @@ marked.use({extensions:[
 ]})
 
 marked.setOptions({ gfm: true, breaks: true })
+if (!preferences.autoLinks) marked.use({ tokenizer: { url() { return undefined } } })
+return marked
+}
 
 // Highlighter 是昂贵的单例；复用初始化 Promise，避免每个代码块重复加载语法与主题。
 let highlighter: ReturnType<typeof createHighlighterCore> | undefined
@@ -82,7 +102,9 @@ export async function getCodeTokenizer(theme: 'github-light' | 'github-dark', re
   }
 }
 
-export async function renderMarkdown(source: string, options?: { theme?: 'light' | 'dark' }): Promise<string> {
+export async function renderMarkdown(source: string, options?: { theme?: 'light' | 'dark'; preferences?: MarkdownPreferences }): Promise<string> {
+  const preferences = options?.preferences ?? defaultMarkdownPreferences
+  const marked = createMarkdownParser(preferences)
   const html = marked.parse(source, { async: false }) as string
   const documentNode = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html')
 
@@ -90,11 +112,11 @@ export async function renderMarkdown(source: string, options?: { theme?: 'light'
 
   for (const code of documentNode.querySelectorAll('pre > code')) {
     const requestedLanguage = [...code.classList].find((name) => name.startsWith('language-'))?.slice(9) || 'text'
-    if (requestedLanguage === 'mermaid') {
+    if (requestedLanguage === 'mermaid' && preferences.diagrams) {
       mermaidBlocks.push({ pre: code.parentElement!, source: code.textContent ?? '' })
       continue
     }
-    if (requestedLanguage.toLowerCase() === 'latex') {
+    if (requestedLanguage.toLowerCase() === 'latex' && preferences.math) {
       code.parentElement?.replaceWith(document.createRange().createContextualFragment(mathHtml(code.textContent ?? '', true)))
       continue
     }

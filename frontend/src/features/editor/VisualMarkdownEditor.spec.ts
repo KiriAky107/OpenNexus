@@ -13,6 +13,10 @@ import { useThemeStore } from '@/stores/theme'
 import { codeBlockConfig } from '@milkdown/kit/component/code-block'
 import { EditorView as CodeMirror } from '@codemirror/view'
 import { renderMarkdown } from '@/utils/markdown'
+import { useEditorStore } from '@/stores/editor'
+import { executeEditorCommand } from '@/services/editorCommandService'
+import { headingFoldKey } from './headingFolding'
+import { useMarkdownPreferencesStore } from '@/stores/markdownPreferences'
 
 type EditorComponent = { getEditor: () => Editor | undefined }
 
@@ -51,6 +55,111 @@ afterEach(() => {
 })
 
 describe('VisualMarkdownEditor formatting toolbars', () => {
+  it('applies syntax and renderer preferences when opening the visual editor', async () => {
+    const preferences = useMarkdownPreferencesStore()
+    preferences.preferences.heading = 'setext'
+    preferences.preferences.bullet = '+'
+    preferences.preferences.fence = '~'
+    preferences.preferences.callouts = false
+    preferences.preferences.math = false
+    preferences.preferences.autoLinks = false
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: '# Heading\n\n- first\n- second\n\n> [!NOTE]\n> text\n\nhttps://example.com\n\n```text\ncode\n```' }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    const result = editor.action(getMarkdown())
+    expect(result).toContain('Heading\n===')
+    expect(result).toContain('+ first')
+    expect(result).toContain('~~~text')
+    expect(wrapper.find('.markdown-callout').exists()).toBe(false)
+    expect(wrapper.find('.ProseMirror a').exists()).toBe(false)
+  })
+  it('folds heading sections, retains nested state and opens hidden outline targets', async () => {
+    const source = '# A\n\nbody\n\n## B\n\nchild\n\n# C\n\nvisible'
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: source }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    await wrapper.get('.heading-fold-toggle[aria-label="折叠 H2 B"]').trigger('click')
+    await wrapper.get('.heading-fold-toggle[aria-label="折叠 H1 A"]').trigger('click')
+    expect(wrapper.findAll('.heading-fold-hidden').length).toBeGreaterThan(1)
+    await wrapper.get('.heading-fold-toggle[aria-label="展开 H1 A"]').trigger('click')
+    expect(wrapper.get('.heading-fold-toggle[aria-label="展开 H2 B"]').attributes('aria-expanded')).toBe('false')
+    editor.action(ctx => {
+      const view = ctx.get(editorViewCtx)
+      let position = 0
+      view.state.doc.descendants((node, pos) => { if (node.isText && node.text === 'child') position = pos })
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, position)))
+      expect(headingFoldKey.getState(view.state)?.size).toBe(0)
+    })
+    expect(wrapper.find('.heading-fold-hidden').exists()).toBe(false)
+    expect(editor.action(getMarkdown()).trim()).toBe(source)
+    await wrapper.get('button[aria-label="折叠所有章节"]').trigger('click')
+    expect(wrapper.findAll('.section-actions button')).toHaveLength(1)
+    expect(wrapper.get('.section-actions button').text()).toBe('全部展开')
+    await wrapper.get('.heading-fold-toggle[aria-label="展开 H1 C"]').trigger('click')
+    expect(wrapper.get('.section-actions button').text()).toBe('全部折叠')
+    await wrapper.get('button[aria-label="折叠所有章节"]').trigger('click')
+    await wrapper.get('button[aria-label="展开所有章节"]').trigger('click')
+    expect(wrapper.get('.section-actions button').text()).toBe('全部折叠')
+    expect(wrapper.find('.heading-fold-hidden').exists()).toBe(false)
+  })
+  it('offers expand all when individually collapsed parents hide expanded children', async () => {
+    const source = '# A\n\nbody\n\n## B\n\nchild\n\n# C\n\nbody'
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: source }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    await wrapper.get('.heading-fold-toggle[aria-label="折叠 H1 A"]').trigger('click')
+    expect(wrapper.get('.section-actions button').text()).toBe('全部折叠')
+    await wrapper.get('.heading-fold-toggle[aria-label="折叠 H1 C"]').trigger('click')
+    expect(wrapper.get('.section-actions button').text()).toBe('全部展开')
+    expect(wrapper.get('.heading-fold-toggle[aria-label="折叠 H2 B"]').attributes('aria-expanded')).toBe('true')
+    await wrapper.get('.heading-fold-toggle[aria-label="展开 H1 A"]').trigger('click')
+    expect(wrapper.get('.section-actions button').text()).toBe('全部折叠')
+    expect(wrapper.get('.heading-fold-toggle[aria-label="折叠 H2 B"]').attributes('aria-expanded')).toBe('true')
+    await wrapper.get('.heading-fold-toggle[aria-label="折叠 H1 A"]').trigger('click')
+    await wrapper.get('.section-actions button').trigger('click')
+    expect(wrapper.find('.heading-fold-hidden').exists()).toBe(false)
+    expect(wrapper.get('.section-actions button').text()).toBe('全部折叠')
+    expect(editor.action(getMarkdown()).trim()).toBe(source)
+  })
+  it('renders and folds callouts without losing portable Markdown on serialization', async () => {
+    const source = '> [!WARNING]- 注意\n>\n> **正文**\n>\n> > [!TIP] 内层\n> > 内容'
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: source }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    expect(wrapper.findAll('.markdown-callout')).toHaveLength(2)
+    expect(wrapper.get('.markdown-callout').attributes('data-collapsed')).toBe('true')
+    await wrapper.get('.callout-title').trigger('click')
+    expect(wrapper.get('.markdown-callout').attributes('data-collapsed')).toBe('false')
+    const markdown = editor.action(getMarkdown())
+    expect(markdown.trim()).toBe(source)
+  })
+  it('dispatches native-ready commands through editor transactions and rejects invalid parameters', async () => {
+    useEditorStore().currentFilePath = 'test.md'
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: 'text' }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    expect(await executeEditorCommand('editor.heading', 8)).toEqual({ ok: false, reason: 'invalid-params' })
+    expect(await executeEditorCommand('editor.heading', 2)).toEqual({ ok: true })
+    expect(editor.action(getMarkdown())).toContain('## text')
+    expect(await executeEditorCommand('editor.callout', { type: 'tip', body: '**test**' })).toEqual({ ok: true })
+    expect(wrapper.find('.markdown-callout').exists()).toBe(true)
+    useEditorStore().saveStatus = 'conflict'
+    expect(await executeEditorCommand('editor.bold')).toEqual({ ok: false, reason: 'unavailable' })
+  })
+  it('keeps code examples as ordinary quotes and renders newly typed markers', async () => {
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: '> `[!NOTE]`\n\n> text' }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    expect(wrapper.find('.markdown-callout').exists()).toBe(false)
+    editor.action(ctx => {
+      const view = ctx.get(editorViewCtx)
+      let position = 0
+      view.state.doc.descendants((node, pos) => { if (node.isText && node.text === 'text') position = pos })
+      view.dispatch(view.state.tr.insertText('[!TIP]', position, position + 4))
+    })
+    expect(wrapper.find('.markdown-callout').exists()).toBe(true)
+    expect(editor.action(getMarkdown())).toContain('[!TIP]')
+  })
   it('renders the supported format matrix and preserves inline code', async () => {
     const source = ['# H1','## H2','### H3','#### H4','##### H5','###### H6',
       '正文 **粗体** *斜体* ~~删除~~ `s` 与 ``a`b``', '> 引用', '- 项目\n  - 子项', '1. 第一\n2. 第二',

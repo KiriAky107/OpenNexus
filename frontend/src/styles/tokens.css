@@ -1,4 +1,11 @@
 :root {
+  /* Callout heading colors also serve as borders; keep text readable on tint. */
+  --color-callout-info: var(--color-info);
+  --color-callout-success: var(--color-success);
+  --color-callout-warning: var(--color-warning);
+  --color-callout-danger: var(--color-error);
+  --color-callout-important: var(--color-accent-secondary);
+  --color-callout-quote: var(--color-text-secondary);
   /* Background */
   --color-background-primary: #ffffff;
   --color-background-secondary: #f7f8fa;
@@ -117,7 +124,22 @@
   --statusbar-height: 28px;
 }
 
+[data-theme='light'] {
+  --color-callout-info: #175da6;
+  --color-callout-success: #236b3b;
+  --color-callout-warning: #855700;
+  --color-callout-danger: #ad2935;
+  --color-callout-important: #7443ad;
+  --color-callout-quote: #59636e;
+}
+
 [data-theme='dark'] {
+  --color-callout-info: #8bbdff;
+  --color-callout-success: #80ce93;
+  --color-callout-warning: #efc66f;
+  --color-callout-danger: #ff9b9b;
+  --color-callout-important: #c8a5ff;
+  --color-callout-quote: #abb6c2;
   --color-background-primary: #0d1117;
   --color-background-secondary: #161b22;
   --color-background-tertiary: #21262d;
@@ -168,6 +190,12 @@
 }
 
 [data-theme='sepia'] {
+  --color-callout-info: #396578;
+  --color-callout-success: #496b3b;
+  --color-callout-warning: #805918;
+  --color-callout-danger: #a04438;
+  --color-callout-important: #785476;
+  --color-callout-quote: #746653;
   --color-background-primary: #fbf3df;
   --color-background-secondary: #f4e8ca;
   --color-background-tertiary: #eadbb8;

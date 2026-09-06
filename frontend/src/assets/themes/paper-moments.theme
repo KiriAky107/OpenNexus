@@ -1,6 +1,6 @@
 theme_id: paper-moments
 name: 纸间时光 · Paper Moments
-version: 1.6.2
+version: 1.8.0
 author: NotesAgent
 description: 奶油纸张、手帐虚线与粉蓝胶带，把每天的灵感好好收藏。
 min_app_version: 0.2.0
@@ -9,6 +9,12 @@ css_entry: theme.css
 license: MIT
 ---
 [data-theme="paper-moments"] {
+  --color-callout-info: #406b7b;
+  --color-callout-success: #536f43;
+  --color-callout-warning: #875f25;
+  --color-callout-danger: #a34e42;
+  --color-callout-important: #805c7e;
+  --color-callout-quote: #6e6053;
   color-scheme: light;
   --color-background-primary: #faf7ee;
   --color-background-secondary: #f3eee3;
@@ -322,3 +328,15 @@ license: MIT
 /* Nested choices retain a quiet paper border without repeating tape/shadows. */
 [data-theme="paper-moments"] .surface-nested { border: 1px dashed #c5b9a7; background: #fffdf5; border-radius: 6px; }
 [data-theme="paper-moments"] .surface-nested.selected { border-color: var(--color-accent-primary); background: var(--color-accent-soft); }
+
+/* Callout paper: no tape over titles, no repeated shadows in nested blocks. */
+[data-theme="paper-moments"] .markdown-callout,
+[data-theme="paper-moments"] .milkdown .ProseMirror blockquote.markdown-callout {
+  border-radius: 10px 3px 10px 3px;
+  outline: 1px dashed color-mix(in srgb, var(--callout-color) 30%, transparent);
+  outline-offset: -6px;
+  box-shadow: 3px 3px 0 color-mix(in srgb, var(--callout-color) 12%, transparent);
+  padding: 14px 18px;
+}
+[data-theme="paper-moments"] .markdown-callout .markdown-callout { box-shadow: none; }
+[data-theme="paper-moments"] .markdown-callout > .callout-title { font-family: Georgia, 'Noto Serif SC', 'Songti SC', SimSun, serif; }

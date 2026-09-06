@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import HeadingStyleSettings from '@/features/editor/HeadingStyleSettings.vue'
 import AppDialog from '@/components/common/AppDialog.vue'
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import MarkdownContent from '@/components/common/MarkdownContent.vue'
@@ -222,6 +223,7 @@ onMounted(() => {
         <div class="field"><label>{{ t('字体', 'Font') }}</label><select v-model="themeStore.fontEditorFamily" class="select"><option value="system-ui">{{ t('系统字体', 'System font') }}</option><option value="serif">{{ t('衬线字体', 'Serif') }}</option><option value="var(--font-ui-mono)">{{ t('等宽字体', 'Monospace') }}</option></select></div>
         <div class="field"><label>{{ t('代码块样式', 'Code block style') }}</label><select v-model="themeStore.codeBlockTheme" class="select"><option value="auto">{{ t('跟随主题', 'Follow theme') }}</option><option value="github-light">GitHub Light</option><option value="github-dark">GitHub Dark</option></select><small>{{ t('Markdown 渲染使用对应的 Shiki GitHub 主题', 'Markdown rendering uses the matching Shiki GitHub theme') }}</small></div>
       </div>
+      <HeadingStyleSettings />
       <div class="editor-preview" :style="{ fontSize: `${themeStore.fontEditorSize}px`, lineHeight: themeStore.lineHeight, fontFamily: themeStore.fontEditorFamily }">
         <div class="preview-heading"><h3>{{ t('主题预览', 'Theme Preview') }}</h3><span class="badge info">{{ codeThemeLabel }}</span></div>
         <p>{{ t('知识的价值不只在于保存，更在于被重新发现和使用。', 'Knowledge gains value when it can be rediscovered and used.') }}</p>

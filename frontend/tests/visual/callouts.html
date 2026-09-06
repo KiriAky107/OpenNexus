@@ -1,0 +1,21 @@
+<!doctype html><html><head><meta charset="utf-8"><title>警告框渲染验收</title></head>
+<body><div id="app"></div><script type="module">
+import { createApp, h } from 'vue';
+import { createPinia } from 'pinia';
+import Editor from '/src/features/editor/VisualMarkdownEditor.vue';
+import MarkdownContent from '/src/components/common/MarkdownContent.vue';
+import { calloutTypes } from '/src/utils/callouts.ts';
+import { getCommunityThemePreviewCss } from '/src/services/themePackageService.ts';
+import '/src/styles/tokens.css';
+import '/src/styles/features.css';
+const theme = new URLSearchParams(location.search).get('theme') || 'light';
+document.documentElement.dataset.theme = theme;
+const style = document.createElement('style');
+style.textContent = getCommunityThemePreviewCss(theme) || '';
+document.head.append(style);
+const source = Object.keys(calloutTypes).map(type => `> [!${type.toUpperCase()}] ${type} 提示\n> 正文 **粗体** 与 \`code\`\n>\n> - 列表项`).join('\n\n') + '\n\n> [!WARNING]- 折叠提示\n>\n> > [!TIP]+ 嵌套提示\n> > 点击展开后可见';
+createApp({ render: () => h('main', {style:'max-width:1200px;margin:auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:24px'}, [
+  h('section', [h('h1', '工作区'), h(Editor, {initialContent:source})]),
+  h('section', [h('h1', '静态预览'), h(MarkdownContent, {source})]),
+]) }).use(createPinia()).mount('#app');
+</script></body></html>

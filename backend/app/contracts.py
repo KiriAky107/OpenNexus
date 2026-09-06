@@ -116,6 +116,7 @@ class NoteUpdateRequest(Contract):
     title: str | None = None
     markdown: str | None = None
     tags: list[str] | None = None
+    expected_content_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class NoteMoveRequest(Contract):
