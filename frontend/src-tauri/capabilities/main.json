@@ -9,6 +9,7 @@
     "core:default",
     "allow-host-capabilities",
     "allow-workspace-choose",
+    "allow-workspace-open",
     "allow-workspace-tree",
     "allow-workspace-read",
     "allow-workspace-write",

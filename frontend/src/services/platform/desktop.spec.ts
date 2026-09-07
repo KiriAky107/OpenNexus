@@ -28,6 +28,13 @@ describe('原生 Workspace 适配', () => {
   })
   it('取消原生目录选择不进入空 Vault', async () => {
     native.enabled = true; native.invoke.mockResolvedValue(null)
-    await expect(workspace.openVault('ignored')).rejects.toThrow()
+    await expect(workspace.openVault('')).rejects.toThrow()
+    expect(native.invoke).toHaveBeenCalledWith('workspace_choose', undefined)
+  })
+  it('最近 Vault 只能通过已授权路径命令重开', async () => {
+    native.enabled = true
+    native.invoke.mockResolvedValue({ vault_id: 'vault', path: 'C:\\notes', name: 'notes' })
+    await expect(workspace.openVault('C:\\notes')).resolves.toMatchObject({ vault_id: 'vault' })
+    expect(native.invoke).toHaveBeenCalledWith('workspace_open', { path: 'C:\\notes' })
   })
 })

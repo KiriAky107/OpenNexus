@@ -98,7 +98,10 @@ export async function getRecentVaults(): Promise<VaultInfo[]> {
 
 export async function openVault(path: string): Promise<VaultInfo> {
   if (isDesktop()) {
-    const vault = await hostInvoke<HostVault | null>('workspace_choose')
+    // 空路径只表示用户点击“选择目录”；最近列表只能重开 Host 已持久化授权的路径。
+    const vault = path
+      ? await hostInvoke<HostVault>('workspace_open', { path })
+      : await hostInvoke<HostVault | null>('workspace_choose')
     if (!vault) throw new Error(t('已取消选择', 'Selection cancelled'))
     cachedTree = null; noteIdByPath.clear(); typeByPath.clear(); treeRequestVersion++
     return vault
