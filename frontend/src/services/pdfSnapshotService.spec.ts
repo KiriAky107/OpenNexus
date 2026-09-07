@@ -38,3 +38,23 @@ it('an aborted snapshot never requests backend resources',async()=>{
  await expect(preparePdfSnapshot('text','note',{theme_id:'light',include_title:false,page_size:'A4'},controller.signal)).rejects.toMatchObject({name:'AbortError'})
  expect(apiClient.post).not.toHaveBeenCalled()
 })
+
+it('renders snapshot metadata with editor theme scopes and excludes YAML from the body',async()=>{
+ const markdown='---\ntitle: "<Current & title>"\ntags: ["<tag>", "未保存标签"]\n---\n# Body'
+ const html=await preparePdfSnapshot(markdown,'filename',{theme_id:'light',include_title:false,page_size:'A4'})
+ const doc=new DOMParser().parseFromString(html,'text/html')
+ const metadata=doc.querySelector('.milkdown-host > .note-metadata')!
+ expect(metadata.querySelector('h1')?.textContent).toBe('<Current & title>')
+ expect([...metadata.querySelectorAll('.metadata-tag')].map(el=>el.textContent)).toEqual(['<tag>','未保存标签'])
+ expect([...metadata.querySelectorAll('*')].every(el=>el.hasAttribute('data-v-editor'))).toBe(true)
+ expect(metadata.querySelector('button,input,form')).toBeNull()
+ expect(renderMarkdown).toHaveBeenCalledWith('# Body',expect.anything())
+ expect(apiClient.post).toHaveBeenCalledWith('/api/exports/preview-resources',expect.objectContaining({source:expect.objectContaining({markdown:'# Body'})}))
+})
+it('does not invent a metadata bar for plain notes or unsupported frontmatter',async()=>{
+ for(const source of ['plain text','---\ntitle: [invalid]\n---\nbody']) {
+  const html=await preparePdfSnapshot(source,'filename',{theme_id:'light',include_title:true,page_size:'A4'})
+  expect(html).not.toContain('<section class="note-metadata"')
+  expect(renderMarkdown).toHaveBeenCalledWith(source,expect.anything())
+ }
+})
