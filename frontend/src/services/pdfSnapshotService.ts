@@ -1,5 +1,7 @@
 import { apiClient } from './apiClient'
 import { renderMarkdown } from '@/utils/markdown'
+import { splitNoteMetadata } from '@/utils/noteMetadata'
+import { t } from '@/i18n'
 import { mermaidThemeVariables } from './mermaidService'
 import { useThemeStore } from '@/stores/theme'
 import { useMarkdownPreferencesStore } from '@/stores/markdownPreferences'
@@ -71,9 +73,14 @@ export async function preparePdfSnapshot(markdown:string,title:string,options:Op
   const headingStyle=Object.entries(heading.cssVariables).map(([key,value])=>`${key}:${value}`).join(';')
   const customHeading=heading.preferences.custom
   const dark=theme.isDark
-  const resources=await apiClient.post<Resources>('/api/exports/preview-resources',{format:'pdf',source:{type:'markdown',markdown,file_path:filePath},options})
+  const metadata=splitNoteMetadata(markdown)
+  const body=metadata?.body ?? markdown
+  const scope=scopeAttributes(VisualMarkdownEditor)
+  // Match the editor DOM and scoped styles, with read-only metadata controls.
+  const metadataHtml=metadata ? `<section class="note-metadata"${scope} aria-label="${escape(t('笔记属性','Note properties'))}"><span class="metadata-caption"${scope}>${escape(t('笔记属性','Note properties'))}</span>${metadata.title ? `<h1${scope}>${escape(metadata.title)}</h1>` : ''}<div class="metadata-tags"${scope}><span class="metadata-label"${scope}>${escape(t('标签','Tags'))}</span>${metadata.tags.map(tag=>`<span class="metadata-tag"${scope}><span${scope}>${escape(tag)}</span></span>`).join('')}</div></section>` : ''
+  const resources=await apiClient.post<Resources>('/api/exports/preview-resources',{format:'pdf',source:{type:'markdown',markdown:body,file_path:filePath},options})
   signal?.throwIfAborted()
-  const rendered=await renderMarkdown(markdown,{themeId:options.theme_id,theme:dark?'dark':'light',preferences,pdf:{mermaidVariables:diagramVariables,plot:async source=>{
+  const rendered=await renderMarkdown(body,{themeId:options.theme_id,theme:dark?'dark':'light',preferences,pdf:{mermaidVariables:diagramVariables,plot:async source=>{
     const plot=resources.plots.find(p=>p.source.trim()===source.trim()); if(!plot?.svg)throw Error(plot?.warnings.join('; ')||'函数图像无法导出');return plot
   }}})
   const fragment=new DOMParser().parseFromString(rendered,'text/html')
@@ -101,6 +108,5 @@ export async function preparePdfSnapshot(markdown:string,title:string,options:Op
   fragment.querySelectorAll('.markdown-code-toolbar button,.diagram-controls').forEach(e=>e.remove())
   const css=(await Promise.all(styles.map(s=>embedCss(s.css,s.base,signal)))).join('\n')
   signal?.throwIfAborted()
-  const scope=scopeAttributes(VisualMarkdownEditor)
-  return `<!doctype html><html${htmlAttrs}><head><meta charset="utf-8"><title>${escape(title)}</title><style>${css.replace(/<\/style/gi,'<\\/style')}\n:root{${rootVariables}}\n${printRules}</style></head><body${bodyAttrs}><div class="visual-editor pdf-document"${scope} ${customHeading?'data-heading-style="custom"':''} style="${escape(headingStyle)}"><div class="milkdown-host"${scope}><div class="milkdown"><article class="ProseMirror markdown-content" data-code-wrap="${preferences.wrapCode}" data-line-numbers="${preferences.lineNumbers}" style="--markdown-code-indent:${preferences.indent}">${options.include_title?`<h1>${escape(title)}</h1>`:''}${fragment.body.innerHTML}</article></div></div></div></body></html>`
+  return `<!doctype html><html${htmlAttrs}><head><meta charset="utf-8"><title>${escape(title)}</title><style>${css.replace(/<\/style/gi,'<\\/style')}\n:root{${rootVariables}}\n${printRules}</style></head><body${bodyAttrs}><div class="visual-editor pdf-document"${scope} ${customHeading?'data-heading-style="custom"':''} style="${escape(headingStyle)}"><div class="milkdown-host"${scope}>${metadataHtml}<div class="milkdown"><article class="ProseMirror markdown-content" data-code-wrap="${preferences.wrapCode}" data-line-numbers="${preferences.lineNumbers}" style="--markdown-code-indent:${preferences.indent}">${options.include_title?`<h1>${escape(title)}</h1>`:''}${fragment.body.innerHTML}</article></div></div></div></body></html>`
 }
