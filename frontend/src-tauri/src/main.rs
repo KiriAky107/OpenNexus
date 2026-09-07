@@ -3,7 +3,7 @@
 //! 预览 Host 只开放本地文件命令；未接通的 AI / 同步 / 凭据能力明确返回不可用。
 
 use notesagent_host::recent::{RecentVault, RecentVaultStore};
-use notesagent_host::workspace::{Document, Entry, Workspace};
+use notesagent_host::workspace::{portable_path_string, Document, Entry, Workspace};
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -18,7 +18,7 @@ struct Host {
 fn info(ws: &Workspace) -> RecentVault {
     RecentVault {
         vault_id: ws.vault_id.clone(),
-        path: ws.root.to_string_lossy().into(),
+        path: portable_path_string(&ws.root),
         name: ws
             .root
             .file_name()
@@ -164,10 +164,11 @@ fn workspace_open(host: State<'_, Host>, path: String) -> Result<RecentVault, St
         .authorized(Path::new(&path))?
         .ok_or("VAULT_NOT_AUTHORIZED")?;
     let mut guard = host.workspace.lock().map_err(|_| "HOST_BUSY")?;
-    if guard
-        .as_ref()
-        .is_some_and(|ws| ws.root == Path::new(&authorized.path))
-    {
+    if guard.as_ref().is_some_and(|ws| {
+        Path::new(&authorized.path)
+            .canonicalize()
+            .is_ok_and(|path| ws.root == path)
+    }) {
         return Ok(guard.as_ref().map(info).ok_or("VAULT_NOT_OPEN")?);
     }
     let workspace = Workspace::open(Path::new(&authorized.path)).map_err(|e| e.code)?;

@@ -73,6 +73,30 @@ fn linked(path: &Path) -> std::io::Result<bool> {
     }
 }
 
+/// 将 Windows 本地磁盘的 verbatim 路径转换为适合界面和持久化的普通路径。
+/// UNC 与其他设备路径保持原样，后续仍会被 Vault 安全检查拒绝。
+pub fn portable_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let raw = path.to_string_lossy();
+        if let Some(rest) = raw.strip_prefix(r"\\?\") {
+            let bytes = rest.as_bytes();
+            if bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && matches!(bytes[2], b'\\' | b'/')
+            {
+                return PathBuf::from(rest);
+            }
+        }
+    }
+    path.to_path_buf()
+}
+
+pub fn portable_path_string(path: &Path) -> String {
+    portable_path(path).to_string_lossy().into_owned()
+}
+
 pub struct Workspace {
     pub root: PathBuf,
     pub vault_id: String,
@@ -82,7 +106,8 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn open(root: &Path) -> Result<Self> {
-        if !root.is_dir() || linked(root)? || root.to_string_lossy().starts_with("\\\\") {
+        let root = portable_path(root);
+        if root.to_string_lossy().starts_with("\\\\") || !root.is_dir() || linked(&root)? {
             return Err(HostError::new("VAULT_PATH_UNSUPPORTED"));
         }
         let root = root.canonicalize()?;
@@ -516,6 +541,17 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn opens_windows_verbatim_disk_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let verbatim = dir.path().canonicalize().unwrap();
+        assert!(verbatim.to_string_lossy().starts_with(r"\\?\"));
+
+        let ws = Workspace::open(&verbatim).unwrap();
+        assert_eq!(portable_path(&ws.root), portable_path(&verbatim));
+    }
 
     #[test]
     fn rename_and_delete_recover_after_source_removed() {

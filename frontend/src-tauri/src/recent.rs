@@ -3,7 +3,9 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use crate::workspace::{portable_path, portable_path_string};
 
 const MAX_RECENT_VAULTS: i64 = 20;
 
@@ -52,10 +54,20 @@ impl RecentVaultStore {
             })
             .map_err(|_| "RECENT_VAULT_STORE_ERROR")?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map(|vaults| {
+                vaults
+                    .into_iter()
+                    .map(|mut vault| {
+                        vault.path = portable_path_string(Path::new(&vault.path));
+                        vault
+                    })
+                    .collect()
+            })
             .map_err(|_| "RECENT_VAULT_STORE_ERROR".into())
     }
 
     pub fn remember(&mut self, vault: &RecentVault) -> Result<(), String> {
+        let (canonical, portable) = path_forms(Path::new(&vault.path))?;
         let transaction = self
             .db
             .transaction()
@@ -69,9 +81,15 @@ impl RecentVaultStore {
             .map_err(|_| "RECENT_VAULT_STORE_ERROR")?;
         transaction
             .execute(
+                "DELETE FROM recent_vaults WHERE path=? OR path=?",
+                params![canonical, portable],
+            )
+            .map_err(|_| "RECENT_VAULT_STORE_ERROR")?;
+        transaction
+            .execute(
                 "INSERT INTO recent_vaults(path,vault_id,name,ordering) VALUES(?,?,?,?)
                  ON CONFLICT(path) DO UPDATE SET vault_id=excluded.vault_id,name=excluded.name,ordering=excluded.ordering",
-                params![vault.path, vault.vault_id, vault.name, ordering],
+                params![portable, vault.vault_id, vault.name, ordering],
             )
             .map_err(|_| "RECENT_VAULT_STORE_ERROR")?;
         transaction
@@ -88,11 +106,11 @@ impl RecentVaultStore {
     }
 
     pub fn authorized(&self, path: &Path) -> Result<Option<RecentVault>, String> {
-        let canonical = path.canonicalize().map_err(|_| "VAULT_PATH_UNSUPPORTED")?;
-        self.db
+        let (canonical, portable) = path_forms(path)?;
+        let result = self.db
             .query_row(
-                "SELECT vault_id,path,name FROM recent_vaults WHERE path=?",
-                [canonical.to_string_lossy().as_ref()],
+                "SELECT vault_id,path,name FROM recent_vaults WHERE path=? OR path=? ORDER BY ordering DESC LIMIT 1",
+                params![canonical, portable],
                 |row| {
                     Ok(RecentVault {
                         vault_id: row.get(0)?,
@@ -102,19 +120,34 @@ impl RecentVaultStore {
                 },
             )
             .optional()
-            .map_err(|_| "RECENT_VAULT_STORE_ERROR".into())
+            .map_err(|_| "RECENT_VAULT_STORE_ERROR")?;
+        Ok(result.map(|mut vault| {
+            vault.path = portable_path_string(Path::new(&vault.path));
+            vault
+        }))
     }
 
     pub fn revoke(&mut self, path: &Path) -> Result<(), String> {
-        let canonical: PathBuf = path.canonicalize().map_err(|_| "VAULT_PATH_UNSUPPORTED")?;
+        let (canonical, portable) = path_forms(path)?;
         self.db
             .execute(
-                "DELETE FROM recent_vaults WHERE path=?",
-                [canonical.to_string_lossy().as_ref()],
+                "DELETE FROM recent_vaults WHERE path=? OR path=?",
+                params![canonical, portable],
             )
             .map_err(|_| "RECENT_VAULT_STORE_ERROR")?;
         Ok(())
     }
+}
+
+fn path_forms(path: &Path) -> Result<(String, String), String> {
+    let accessible = portable_path(path);
+    let canonical = accessible
+        .canonicalize()
+        .map_err(|_| "VAULT_PATH_UNSUPPORTED")?;
+    Ok((
+        canonical.to_string_lossy().into_owned(),
+        portable_path_string(&canonical),
+    ))
 }
 
 #[cfg(test)]
@@ -126,7 +159,7 @@ mod tests {
         fs::create_dir(&path).unwrap();
         RecentVault {
             vault_id: format!("id-{id}"),
-            path: path.canonicalize().unwrap().to_string_lossy().into(),
+            path: portable_path_string(&path.canonicalize().unwrap()),
             name: format!("Vault {id}"),
         }
     }
@@ -164,5 +197,40 @@ mod tests {
         assert_eq!(items.len(), MAX_RECENT_VAULTS as usize);
         assert_eq!(items[0].vault_id, "id-24");
         assert_eq!(items[19].vault_id, "id-5");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reads_and_replaces_legacy_verbatim_paths() {
+        let temporary = tempfile::tempdir().unwrap();
+        let database = temporary.path().join("host.sqlite3");
+        let current = vault(temporary.path(), 1);
+        let legacy = Path::new(&current.path)
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(legacy.starts_with(r"\\?\"));
+
+        let mut store = RecentVaultStore::open(&database).unwrap();
+        store
+            .db
+            .execute(
+                "INSERT INTO recent_vaults VALUES (?,?,?,1)",
+                params![legacy, current.vault_id, current.name],
+            )
+            .unwrap();
+
+        assert_eq!(store.list().unwrap(), vec![current.clone()]);
+        assert_eq!(
+            store.authorized(Path::new(&current.path)).unwrap(),
+            Some(current.clone())
+        );
+        store.remember(&current).unwrap();
+        let stored: String = store
+            .db
+            .query_row("SELECT path FROM recent_vaults", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stored, current.path);
     }
 }
