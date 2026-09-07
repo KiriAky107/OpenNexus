@@ -26,7 +26,7 @@ describe('桌面顶部段落菜单', () => {
     editor.currentFilePath = '/示例.md'
     editor.saveStatus = 'saved'
     const wrapper = mount(TitleBarMenu)
-    expect(wrapper.text()).toContain('文件编辑段落视图')
+    expect(wrapper.text()).toContain('文件编辑段落格式视图主题帮助')
     await wrapper.get('[data-menu="paragraph"] .menu-trigger').trigger('click')
     const item = wrapper.get('.import-properties')
     expect((item.element as HTMLButtonElement).disabled).toBe(false)
@@ -51,7 +51,7 @@ describe('桌面顶部段落菜单', () => {
   it('标题命令传入对应级别并显示快捷键', async () => {
     const wrapper = mount(TitleBarMenu)
     await wrapper.get('[data-menu="paragraph"] .menu-trigger').trigger('click')
-    const headings = wrapper.findAll('[data-menu="paragraph"] [role="menuitem"]').filter(item => item.text().startsWith('标题'))
+    const headings = wrapper.findAll('[data-menu="paragraph"] [role="menuitem"]').filter(item => item.text().includes('级标题'))
     await headings[1].trigger('click')
     expect(execute).toHaveBeenCalledWith('editor.heading', 2)
     await wrapper.get('[data-menu="paragraph"] .menu-trigger').trigger('click')
