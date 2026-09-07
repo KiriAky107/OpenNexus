@@ -10,9 +10,19 @@ const format = ref<ExportFormat>('html'), page = ref('A4'), title = ref(true)
 const jobs = ref<ExportJob[]>([]), error = ref(''), preparing = ref(false)
 let timer: ReturnType<typeof setTimeout> | undefined, disposed = false
 let controller: AbortController | undefined
+const visibleJobIds = new Set<string>()
+let initialized = false
 const labels = { queued: '排队中', running: '渲染中', completed: '已完成', failed: '失败', cancelled: '已取消' }
 async function refresh() {
-  try { const value = await exportService.list(); if (!disposed) jobs.value = value } catch (e) { error.value = String(e) }
+  try {
+    const value = await exportService.list()
+    if (!initialized) {
+      // 重新打开弹窗时丢弃历史终态记录，但接回仍在后台执行的任务。
+      value.filter(job => ['queued','running'].includes(job.status)).forEach(job => visibleJobIds.add(job.id))
+      initialized = true
+    }
+    if (!disposed) jobs.value = value.filter(job => visibleJobIds.has(job.id))
+  } catch (e) { error.value = String(e) }
   if (!disposed) timer = setTimeout(refresh, 1500)
 }
 async function start() {
@@ -20,6 +30,7 @@ async function start() {
   const snapshot = editor.content, name = editor.currentFilePath?.split('/').pop()?.replace(/\.md$/i, '') ?? '笔记'
   try {
     const job = await exportService.create(snapshot, name, format.value, { theme_id: theme.currentThemeId, include_title: title.value, page_size: page.value, palette: captureExportPalette() }, controller.signal, editor.currentFilePath ?? undefined)
+    visibleJobIds.add(job.id)
     if (!disposed) jobs.value.unshift(job)
   } catch (e) { error.value = e instanceof DOMException && e.name === 'AbortError' ? '已取消导出' : String(e) }
   finally { preparing.value = false }

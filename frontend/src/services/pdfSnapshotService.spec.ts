@@ -8,10 +8,17 @@ vi.mock('@/stores/markdownPreferences',()=>({useMarkdownPreferencesStore:()=>({n
 vi.mock('@/stores/headingAppearance',()=>({useHeadingAppearanceStore:()=>({cssVariables:{'--heading-1-size':'37px'},preferences:{custom:true}})}))
 vi.mock('@/components/common/MarkdownContent.vue',()=>({default:{}}))
 vi.mock('@/features/editor/VisualMarkdownEditor.vue',()=>({default:{__scopeId:'data-v-editor'}}))
-import {preparePdfSnapshot} from './pdfSnapshotService'
+import {preparePdfSnapshot,preferWoff2FontSource} from './pdfSnapshotService'
 import {apiClient} from './apiClient'
 import {renderMarkdown} from '@/utils/markdown'
 afterEach(()=>vi.clearAllMocks())
+it('keeps only the WOFF2 source when preparing embedded print fonts',()=>{
+ const css='@font-face { font-family: "Demo"; src: url("data:font/woff2;base64,d09GMg==") format("woff2"), url("demo.woff") format("woff"), url("demo.ttf") format("truetype"); font-style: normal; }'
+ const compact=preferWoff2FontSource(css)
+ expect(compact).toContain('url("data:font/woff2;base64,d09GMg==") format("woff2")')
+ expect(compact).not.toContain('demo.woff"')
+ expect(compact).not.toContain('demo.ttf')
+})
 it('preserves actual theme CSS, pseudo elements, root attributes and heading preferences',async()=>{
  const style=document.createElement('style');style.textContent='[data-theme="paper"] .ProseMirror::before { content:"tape"; transform:rotate(-3deg) }';document.head.append(style)
  document.documentElement.dataset.theme='paper'
