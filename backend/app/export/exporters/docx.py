@@ -115,7 +115,13 @@ class DocxExporter:
             from PIL import Image
             png = node.attributes['static_png']
             with Image.open(BytesIO(png)) as image:
-                width = min(5.8, image.width / (180 if node.type == 'math_block' else 96))
+                section = self._doc.sections[-1]
+                available_width = (section.page_width - section.left_margin - section.right_margin) / 914400
+                # Leave room for Word's containing paragraph line/spacing.
+                available_height = (section.page_height - section.top_margin - section.bottom_margin) / 914400 - 0.25
+                width = min(5.8, available_width,
+                    image.width / (180 if node.type == 'math_block' else 96),
+                    available_height * image.width / image.height)
             self._doc.add_picture(BytesIO(png), width=Inches(width))
             return
         handler = getattr(self, f"_block_{node.type}", None)

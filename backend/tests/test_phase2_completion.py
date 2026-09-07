@@ -164,3 +164,36 @@ def test_repeated_static_assets_share_document_resource_budget():
     warnings = enrich_document(document)
     assert sum(bool(node.attributes.get('static_png')) for node in document.children) == 64
     assert any('预算' in warning for warning in warnings)
+
+
+@pytest.mark.parametrize('order', [(1, 2), (2, 1)])
+def test_agent_parameter_matching_is_independent_of_call_order(order):
+    from types import SimpleNamespace as NS
+    from app.benchmarks.agent import score
+    from app.contracts import AgentDatasetCase
+    case = AgentDatasetCase(case_id='overlap', prompt='test', allowed_tools=['math.add'],
+        expected_tools=[{'name':'math.add','arguments':{}}, {'name':'math.add','arguments':{'left':1}}])
+    events = [NS(event=NS(value='ToolCall'), data={'name':'math.add','arguments':{'left':value}}) for value in order]
+    run = NS(status=NS(value='completed'),tool_results=[],output='',citations=[],run_id='test',current_step=1,token_usage=0,error_code=None)
+    result = score(case, run, events, 1, 0)
+    assert result.success and result.accurate_calls == result.selected_calls == 2
+    # Two expectations cannot reuse one matching call.
+    result = score(case, run, events[:1], 1, 0)
+    assert not result.success and result.accurate_calls == 1
+
+
+@pytest.mark.parametrize('page_size', ['A4', 'Letter'])
+@pytest.mark.parametrize('dimensions', [(200, 2000), (2000, 200)])
+def test_docx_static_images_fit_both_page_dimensions(page_size, dimensions):
+    from app.export.markdown import parse_document
+    from app.export.exporters.docx import DocxExporter
+    from app.contracts import ExportOptions
+    from docx import Document
+    png = BytesIO(); Image.new('RGB', dimensions, 'white').save(png, 'PNG')
+    document = parse_document('```mermaid\nflowchart TD\n A-->B\n```')
+    document.children[0].attributes['static_png'] = png.getvalue()
+    result = DocxExporter().render(document, ExportOptions(page_size=page_size))
+    word = Document(BytesIO(result.content)); section = word.sections[0]; shape = word.inline_shapes[0]
+    assert shape.width <= section.page_width - section.left_margin - section.right_margin
+    assert shape.height < section.page_height - section.top_margin - section.bottom_margin
+    assert shape.width / shape.height == pytest.approx(dimensions[0] / dimensions[1], rel=1e-5)
