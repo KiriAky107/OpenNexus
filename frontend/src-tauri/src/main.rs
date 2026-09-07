@@ -170,7 +170,7 @@ fn main() {
                 "editor.import-note-properties",
                 "导入为笔记属性…",
                 false,
-                None::<&str>,
+                Some("CmdOrCtrl+Alt+P"),
             )?;
             let paragraph = Submenu::with_items(app, "段落", true, &[&import])?;
             app.manage(import);

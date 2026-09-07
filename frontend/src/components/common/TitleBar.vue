@@ -6,7 +6,6 @@ import { useEditorStore } from '@/stores/editor'
 import { useThemeStore } from '@/stores/theme'
 import { Moon, Sunny } from '@element-plus/icons-vue'
 import AppIcon from './AppIcon.vue'
-import TitleBarMenu from './TitleBarMenu.vue'
 import { t } from '@/i18n'
 import { isDesktop } from '@/services/platform/desktop'
 import { minimizeWindow, requestWindowClose, toggleMaximizeWindow } from '@/services/platform/windowControls'
@@ -62,7 +61,6 @@ function toggleFromTitlebar(event: MouseEvent) {
         {{ currentFileName }}
         <span v-if="isDirty" class="dirty-dot" />
       </span>
-      <TitleBarMenu />
     </div>
     <div class="titlebar-center" data-tauri-drag-region>
       <span class="app-name" data-tauri-drag-region>NotesAgent</span>

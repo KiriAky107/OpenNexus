@@ -6,11 +6,17 @@ import { useEditorStore } from '@/stores/editor'
 import TitleBarMenu from './TitleBarMenu.vue'
 
 const execute = vi.hoisted(() => vi.fn())
-vi.mock('@/services/editorCommandService', () => ({ executeEditorCommand: execute }))
+const capabilities = vi.hoisted(() => vi.fn())
+vi.mock('@/services/editorCommandService', () => ({ executeEditorCommand: execute, getEditorCommandCapabilities: capabilities }))
 
 beforeEach(() => {
   setActivePinia(createPinia())
   execute.mockReset().mockResolvedValue({ ok: true })
+  capabilities.mockReturnValue([
+    { id: 'editor.paragraph', supported: true, enabled: true },
+    { id: 'editor.heading', supported: true, enabled: true },
+    { id: 'editor.import-note-properties', supported: true, enabled: true },
+  ])
 })
 
 describe('桌面顶部段落菜单', () => {
@@ -20,8 +26,9 @@ describe('桌面顶部段落菜单', () => {
     editor.currentFilePath = '/示例.md'
     editor.saveStatus = 'saved'
     const wrapper = mount(TitleBarMenu)
-    await wrapper.get('.menu-trigger').trigger('click')
-    const item = wrapper.get('[role="menuitem"]')
+    expect(wrapper.text()).toContain('文件编辑段落视图')
+    await wrapper.get('[data-menu="paragraph"] .menu-trigger').trigger('click')
+    const item = wrapper.get('.import-properties')
     expect((item.element as HTMLButtonElement).disabled).toBe(false)
     await item.trigger('click')
     expect(execute).toHaveBeenCalledWith('editor.import-note-properties')
@@ -34,9 +41,21 @@ describe('桌面顶部段落菜单', () => {
     editor.mode = 'wysiwyg'
     editor.currentFilePath = '/示例.md'
     const wrapper = mount(TitleBarMenu)
-    await wrapper.get('.menu-trigger').trigger('click')
-    expect((wrapper.get('[role="menuitem"]').element as HTMLButtonElement).disabled).toBe(true)
+    capabilities.mockReturnValue([])
+    await wrapper.get('[data-menu="paragraph"] .menu-trigger').trigger('click')
+    expect((wrapper.get('.import-properties').element as HTMLButtonElement).disabled).toBe(true)
     expect(wrapper.text()).toContain('请在无冲突的 Markdown 源码笔记中使用')
+    wrapper.unmount()
+  })
+
+  it('标题命令传入对应级别并显示快捷键', async () => {
+    const wrapper = mount(TitleBarMenu)
+    await wrapper.get('[data-menu="paragraph"] .menu-trigger').trigger('click')
+    const headings = wrapper.findAll('[data-menu="paragraph"] [role="menuitem"]').filter(item => item.text().startsWith('标题'))
+    await headings[1].trigger('click')
+    expect(execute).toHaveBeenCalledWith('editor.heading', 2)
+    await wrapper.get('[data-menu="paragraph"] .menu-trigger').trigger('click')
+    expect(wrapper.get('.import-properties').text()).toContain('Ctrl+Alt+P')
     wrapper.unmount()
   })
 })
