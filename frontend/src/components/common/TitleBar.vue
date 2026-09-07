@@ -7,11 +7,14 @@ import { useThemeStore } from '@/stores/theme'
 import { Moon, Sunny } from '@element-plus/icons-vue'
 import AppIcon from './AppIcon.vue'
 import { t } from '@/i18n'
+import { isDesktop } from '@/services/platform/desktop'
+import { minimizeWindow, requestWindowClose, toggleMaximizeWindow } from '@/services/platform/windowControls'
 
 const route = useRoute()
 const workspaceStore = useWorkspaceStore()
 const editorStore = useEditorStore()
 const themeStore = useThemeStore()
+const desktop = isDesktop()
 
 const pageTitle = computed(() => {
   const name = route.name as string
@@ -25,6 +28,11 @@ const pageTitle = computed(() => {
     plugins: t('Plugin 与 MCP', 'Plugins and MCP'),
     themes: t('主题管理', 'Theme Management'),
     settings: t('设置', 'Settings'),
+    'vault-entry': t('选择知识库', 'Select Knowledge Base'),
+    community: t('社区目录', 'Community Catalog'),
+    benchmarks: 'Benchmark',
+    logs: t('运行日志', 'Operation Logs'),
+    media: t('音视频转写', 'Media Transcription'),
   }
   return titles[name] || 'NotesAgent'
 })
@@ -38,32 +46,36 @@ const currentFileName = computed(() => {
 })
 
 const isDirty = computed(() => editorStore.saveStatus === 'dirty' || editorStore.saveStatus === 'conflict')
+
+function toggleFromTitlebar(event: MouseEvent) {
+  if (desktop && !(event.target as HTMLElement).closest('button')) void toggleMaximizeWindow()
+}
 </script>
 
 <template>
-  <div class="titlebar">
-    <div class="titlebar-left">
-      <span class="vault-name">{{ workspaceStore.vaultName }}</span>
-      <span class="title-separator">/</span>
-      <span class="file-name" :class="{ dirty: isDirty }">
+  <header class="titlebar" :class="{ desktop }" data-tauri-drag-region @dblclick="toggleFromTitlebar">
+    <div class="titlebar-left" data-tauri-drag-region>
+      <span v-if="workspaceStore.vaultName" class="vault-name" data-tauri-drag-region>{{ workspaceStore.vaultName }}</span>
+      <span v-if="workspaceStore.vaultName" class="title-separator" data-tauri-drag-region>/</span>
+      <span class="file-name" :class="{ dirty: isDirty }" data-tauri-drag-region>
         {{ currentFileName }}
         <span v-if="isDirty" class="dirty-dot" />
       </span>
     </div>
-    <div class="titlebar-center">
-      <span class="app-name">NotesAgent</span>
+    <div class="titlebar-center" data-tauri-drag-region>
+      <span class="app-name" data-tauri-drag-region>NotesAgent</span>
     </div>
     <div class="titlebar-right">
       <button class="icon-btn" @click="themeStore.toggleTheme()" :title="themeStore.isDark ? t('切换浅色主题', 'Switch to light theme') : t('切换深色主题', 'Switch to dark theme')">
         <AppIcon :icon="themeStore.isDark ? Sunny : Moon" :size="16" />
       </button>
-      <div class="window-controls">
-        <span class="win-btn minimize">—</span>
-        <span class="win-btn maximize">▢</span>
-        <span class="win-btn close">✕</span>
+      <div v-if="desktop" class="window-controls">
+        <button class="win-btn minimize" type="button" :aria-label="t('最小化窗口', 'Minimize window')" @click="minimizeWindow">—</button>
+        <button class="win-btn maximize" type="button" :aria-label="t('最大化或还原窗口', 'Maximize or restore window')" @click="toggleMaximizeWindow">▢</button>
+        <button class="win-btn close" type="button" :aria-label="t('关闭窗口', 'Close window')" @click="requestWindowClose">✕</button>
       </div>
     </div>
-  </div>
+  </header>
 </template>
 
 <style scoped>
@@ -187,6 +199,9 @@ const isDirty = computed(() => editorStore.saveStatus === 'dirty' || editorStore
   color: var(--color-text-secondary);
   border-radius: var(--radius-sm);
   cursor: pointer;
+  padding: 0;
+  border: 0;
+  background: transparent;
   transition: background-color var(--motion-fast), color var(--motion-fast);
 
   &:hover {

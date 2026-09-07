@@ -122,7 +122,8 @@ async function openFolderPicker() {
 
 <style scoped>
 .vault-entry {
-  height: 100vh;
+  height: 100%;
+  min-height: 0;
   width: 100vw;
   display: flex;
   align-items: center;
