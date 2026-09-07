@@ -196,6 +196,16 @@ describe('VisualMarkdownEditor formatting toolbars', () => {
     useEditorStore().saveStatus = 'conflict'
     expect(await executeEditorCommand('editor.bold')).toEqual({ ok: false, reason: 'unavailable' })
   })
+  it('creates editable front matter when the metadata shortcut has no existing block', async () => {
+    const store = useEditorStore(); store.currentFilePath = '/notes/示例.md'
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: '正文' }, attachTo: document.body })
+    mounted.push(wrapper)
+    await waitForEditor(wrapper)
+    expect(await executeEditorCommand('editor.metadata.edit')).toEqual({ ok: true })
+    expect(wrapper.find('.note-metadata').exists()).toBe(true)
+    expect(store.content).toContain('title: "示例"')
+    expect(store.content).toContain('tags: []')
+  })
   it('keeps code examples as ordinary quotes and renders newly typed markers', async () => {
     const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: '> `[!NOTE]`\n\n> text' }, attachTo: document.body })
     mounted.push(wrapper)

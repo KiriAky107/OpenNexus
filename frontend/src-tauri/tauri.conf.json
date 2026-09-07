@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{"label": "main", "title": "NotesAgent Preview", "width": 1200, "height": 800, "minWidth": 640, "minHeight": 480, "decorations": false}],
+    "windows": [{"label": "main", "title": "NotesAgent Preview", "width": 1280, "height": 960, "minWidth": 720, "minHeight": 700, "center": true, "decorations": false}],
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://127.0.0.1:8000; font-src 'self' data:; connect-src ipc: http://ipc.localhost http://127.0.0.1:8000; frame-src 'self' blob:; object-src 'none'; base-uri 'self'",
       "capabilities": ["main"]

@@ -14,6 +14,11 @@ const open = ref<MenuName | null>(null)
 const bar = ref<HTMLElement | null>(null)
 const error = ref('')
 const shortcut = computed(() => /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘⌥P' : 'Ctrl+Alt+P')
+const callouts = [
+  ['note', '笔记'], ['abstract', '摘要'], ['info', '信息'], ['todo', '待办'], ['tip', '技巧'],
+  ['important', '重要'], ['success', '成功'], ['question', '问题'], ['warning', '警告'],
+  ['failure', '失败'], ['danger', '危险'], ['bug', '缺陷'], ['example', '示例'], ['quote', '引用'],
+] as const
 
 function enabled(id: EditorCommandId) {
   return getEditorCommandCapabilities().find(item => item.id === id)?.enabled ?? false
@@ -30,6 +35,11 @@ async function command(id: EditorCommandId, params?: unknown) {
   const result = params === undefined ? await executeEditorCommand(id) : await executeEditorCommand(id, params)
   if (result.ok) close()
   else error.value = t('当前编辑器无法执行此命令。', 'The active editor cannot run this command.')
+}
+async function metadataCommand() {
+  const imported = await executeEditorCommand('editor.import-note-properties')
+  if (imported.ok) { close(); return }
+  await command('editor.metadata.edit')
 }
 async function save() { await editor.save(); close() }
 function setMode(mode: 'source' | 'wysiwyg') { editor.setMode(mode); close() }
@@ -63,14 +73,14 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', dismiss))
     <div class="menu-group" data-menu="paragraph">
       <button class="menu-trigger" :aria-expanded="open === 'paragraph'" aria-haspopup="menu" @click="toggle('paragraph')" @keydown.down.prevent="focusFirst('paragraph')">{{ t('段落', 'Paragraph') }}</button>
       <div v-if="open === 'paragraph'" class="menu-popover paragraph-menu" role="menu">
-        <button role="menuitem" :disabled="!enabled('editor.paragraph')" @click="command('editor.paragraph')"><span>{{ t('正文', 'Body text') }}</span></button>
+        <button role="menuitem" :disabled="!enabled('editor.paragraph')" @click="command('editor.paragraph')"><span>{{ t('正文', 'Body text') }}</span><kbd>Ctrl+0</kbd></button>
         <button v-for="level in 6" :key="level" role="menuitem" :disabled="!enabled('editor.heading')" @click="command('editor.heading', level)"><span>{{ t(`${level} 级标题`, `Heading ${level}`) }}</span><kbd>Ctrl+{{ level }}</kbd></button>
         <span class="menu-separator" role="separator" />
-        <button role="menuitem" :disabled="!enabled('editor.bullet-list')" @click="command('editor.bullet-list')"><span>{{ t('无序列表', 'Bullet list') }}</span></button>
-        <button role="menuitem" :disabled="!enabled('editor.ordered-list')" @click="command('editor.ordered-list')"><span>{{ t('有序列表', 'Ordered list') }}</span></button>
-        <button role="menuitem" :disabled="!enabled('editor.task-list')" @click="command('editor.task-list')"><span>{{ t('任务列表', 'Task list') }}</span></button>
-        <button role="menuitem" :disabled="!enabled('editor.blockquote')" @click="command('editor.blockquote')"><span>{{ t('引用', 'Blockquote') }}</span></button>
-        <button role="menuitem" :disabled="!enabled('editor.code-block')" @click="command('editor.code-block')"><span>{{ t('代码块', 'Code block') }}</span></button>
+        <button role="menuitem" :disabled="!enabled('editor.bullet-list')" @click="command('editor.bullet-list')"><span>{{ t('无序列表', 'Bullet list') }}</span><kbd>Ctrl+Shift+]</kbd></button>
+        <button role="menuitem" :disabled="!enabled('editor.ordered-list')" @click="command('editor.ordered-list')"><span>{{ t('有序列表', 'Ordered list') }}</span><kbd>Ctrl+Shift+[</kbd></button>
+        <button role="menuitem" :disabled="!enabled('editor.task-list')" @click="command('editor.task-list')"><span>{{ t('任务列表', 'Task list') }}</span><kbd>Ctrl+Shift+X</kbd></button>
+        <button role="menuitem" :disabled="!enabled('editor.blockquote')" @click="command('editor.blockquote')"><span>{{ t('引用', 'Blockquote') }}</span><kbd>Ctrl+Shift+Q</kbd></button>
+        <button role="menuitem" :disabled="!enabled('editor.code-block')" @click="command('editor.code-block')"><span>{{ t('代码块', 'Code block') }}</span><kbd>Ctrl+Shift+K</kbd></button>
         <span class="menu-separator" role="separator" />
         <button class="import-properties" role="menuitem" :disabled="!enabled('editor.import-note-properties')" @click="command('editor.import-note-properties')">
           <span>{{ t('导入为笔记属性…', 'Import as note properties…') }}</span><kbd>{{ shortcut }}</kbd>
@@ -80,16 +90,24 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', dismiss))
     </div>
     <div class="menu-group" data-menu="format">
       <button class="menu-trigger" :aria-expanded="open === 'format'" aria-haspopup="menu" @click="toggle('format')" @keydown.down.prevent="focusFirst('format')">{{ t('格式', 'Format') }}</button>
-      <div v-if="open === 'format'" class="menu-popover" role="menu">
+      <div v-if="open === 'format'" class="menu-popover format-menu" role="menu">
         <button role="menuitem" :disabled="!enabled('editor.bold')" @click="command('editor.bold')"><span>{{ t('加粗', 'Bold') }}</span><kbd>Ctrl+B</kbd></button>
         <button role="menuitem" :disabled="!enabled('editor.italic')" @click="command('editor.italic')"><span>{{ t('斜体', 'Italic') }}</span><kbd>Ctrl+I</kbd></button>
-        <button role="menuitem" :disabled="!enabled('editor.strikethrough')" @click="command('editor.strikethrough')"><span>{{ t('删除线', 'Strikethrough') }}</span></button>
-        <button role="menuitem" :disabled="!enabled('editor.inline-code')" @click="command('editor.inline-code')"><span>{{ t('行内代码', 'Inline code') }}</span></button>
+        <button role="menuitem" :disabled="!enabled('editor.strikethrough')" @click="command('editor.strikethrough')"><span>{{ t('删除线', 'Strikethrough') }}</span><kbd>Alt+Shift+5</kbd></button>
+        <button role="menuitem" :disabled="!enabled('editor.inline-code')" @click="command('editor.inline-code')"><span>{{ t('行内代码', 'Inline code') }}</span><kbd>Ctrl+`</kbd></button>
+        <button role="menuitem" :disabled="!enabled('editor.link')" @click="command('editor.link')"><span>{{ t('链接', 'Link') }}</span><kbd>Ctrl+K</kbd></button>
         <span class="menu-separator" role="separator" />
         <button role="menuitem" :disabled="!enabled('editor.code-block')" @click="command('editor.code-block')"><span>{{ t('代码块', 'Code block') }}</span><kbd>Ctrl+Shift+K</kbd></button>
         <button role="menuitem" :disabled="!enabled('editor.math-block')" @click="command('editor.math-block')"><span>{{ t('公式块', 'Math block') }}</span><kbd>Ctrl+Shift+M</kbd></button>
-        <button role="menuitem" :disabled="!enabled('editor.callout')" @click="command('editor.callout', { type: 'NOTE', body: t('提示内容', 'Callout content') })"><span>{{ t('警告框', 'Callout') }}</span></button>
-        <button role="menuitem" :disabled="!enabled('editor.horizontal-rule')" @click="command('editor.horizontal-rule')"><span>{{ t('水平分割线', 'Horizontal rule') }}</span></button>
+        <button role="menuitem" :disabled="!enabled('editor.inline-math')" @click="command('editor.inline-math')"><span>{{ t('行内公式', 'Inline math') }}</span><kbd>Ctrl+Shift+L</kbd></button>
+        <button role="menuitem" :disabled="!enabled('editor.table')" @click="command('editor.table')"><span>{{ t('表格', 'Table') }}</span><kbd>Ctrl+Alt+T</kbd></button>
+        <div class="submenu-heading"><span>{{ t('警告框样式', 'Callout styles') }}</span><kbd>Ctrl+Alt+C</kbd></div>
+        <div class="callout-options">
+          <button v-for="item in callouts" :key="item[0]" role="menuitem" :disabled="!enabled('editor.callout')" @click="command('editor.callout', { type: item[0], body: t('提示内容', 'Callout content') })"><span>{{ item[1] }}</span><code>{{ item[0] }}</code></button>
+        </div>
+        <button role="menuitem" :disabled="!enabled('editor.horizontal-rule')" @click="command('editor.horizontal-rule')"><span>{{ t('水平分割线', 'Horizontal rule') }}</span><kbd>Ctrl+Shift+H</kbd></button>
+        <span class="menu-separator" role="separator" />
+        <button class="metadata-command" role="menuitem" :disabled="!enabled('editor.import-note-properties') && !enabled('editor.metadata.edit')" @click="metadataCommand"><span>{{ t('元数据 / YAML Front Matter…', 'Metadata / YAML Front Matter…') }}</span><kbd>{{ shortcut }}</kbd></button>
       </div>
     </div>
     <div class="menu-group" data-menu="view">
@@ -129,10 +147,16 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', dismiss))
 .menu-trigger:hover, .menu-trigger[aria-expanded='true'] { background: var(--color-background-hover); color: var(--color-text-primary); }
 .menu-popover { position: absolute; top: calc(100% + 2px); left: 0; z-index: calc(var(--z-titlebar) + 2); display: grid; min-width: 230px; padding: var(--space-xs); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-surface-elevated); box-shadow: var(--shadow-lg); }
 .paragraph-menu { min-width: 270px; }
+.format-menu { min-width: 330px; }
 .menu-popover button { display: flex; align-items: center; justify-content: space-between; gap: var(--space-xl); width: 100%; padding: 7px var(--space-md); border-radius: var(--radius-sm); text-align: left; white-space: nowrap; }
 .menu-popover button:hover:not(:disabled), .menu-popover button:focus-visible { background: var(--color-accent-soft); color: var(--color-accent-primary); }
 .menu-popover button:disabled { opacity: .45; cursor: not-allowed; }
 .menu-popover kbd { color: var(--color-text-tertiary); font: inherit; font-size: var(--font-size-xs); }
+.submenu-heading { display: flex; justify-content: space-between; padding: 7px var(--space-md) 4px; color: var(--color-text-secondary); font-weight: 650; }
+.callout-options { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 0 var(--space-xs) var(--space-xs); }
+.callout-options button { gap: var(--space-sm); padding: 5px var(--space-sm); }
+.callout-options code { color: var(--color-text-tertiary); font-size: 10px; }
+.menu-popover { max-height: calc(100vh - 110px); overflow: auto; }
 .menu-separator { height: 1px; margin: var(--space-xs); background: var(--color-border-subtle); }
 .menu-popover small { padding: var(--space-xs) var(--space-md); color: var(--color-text-tertiary); white-space: normal; }
 .menu-error { margin-left: var(--space-md); color: var(--color-error); font-size: var(--font-size-xs); }

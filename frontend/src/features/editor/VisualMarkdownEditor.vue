@@ -3,7 +3,7 @@ import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
 const { actionDialog, resolveAction, askPrompt } = useActionDialog()
 import DiagramInteractions from '@/components/common/DiagramInteractions.vue'
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Link, Fold, Expand } from '@element-plus/icons-vue'
 import { Crepe } from '@milkdown/crepe'
 import { codeBlockConfig } from '@milkdown/kit/component/code-block'
@@ -28,9 +28,11 @@ import {
   toggleStrongCommand,
   turnIntoTextCommand,
   wrapInBulletListCommand,
+  wrapInBlockquoteCommand,
   wrapInHeadingCommand,
   wrapInOrderedListCommand,
 } from '@milkdown/kit/preset/commonmark'
+import { toggleStrikethroughCommand } from '@milkdown/kit/preset/gfm'
 import { commandsCtx, editorViewCtx, parserCtx, remarkStringifyOptionsCtx } from '@milkdown/kit/core'
 import { Slice } from '@milkdown/kit/prose/model'
 import { registerEditorCommands, type CommandHandler, type EditorCommandId } from '@/services/editorCommandService'
@@ -113,6 +115,27 @@ function installCommands() {
     handlers[`editor.${command}`] = () => { runCommand(command); return { ok: true } }
   }
   handlers['editor.paragraph'] = () => { crepe!.editor.action(callCommand(turnIntoTextCommand.key)); return { ok: true } }
+  handlers['editor.strikethrough'] = () => { crepe!.editor.action(callCommand(toggleStrikethroughCommand.key)); return { ok: true } }
+  handlers['editor.blockquote'] = () => { crepe!.editor.action(callCommand(wrapInBlockquoteCommand.key)); return { ok: true } }
+  handlers['editor.task-list'] = () => { insertMarkdown('- [ ] '); return { ok: true } }
+  handlers['editor.horizontal-rule'] = () => { insertMarkdown('\n---\n'); return { ok: true } }
+  handlers['editor.hard-break'] = () => { insertMarkdown('  \n'); return { ok: true } }
+  handlers['editor.table'] = () => { insertMarkdown('| 列 1 | 列 2 |\n| --- | --- |\n|  |  |'); return { ok: true } }
+  handlers['editor.link'] = async () => { await applyLink(); return { ok: true } }
+  handlers['editor.metadata.edit'] = async () => {
+    if (!metadata.value) {
+      const body = crepe!.editor.action(getMarkdown())
+      const filename = (editorStore.currentFilePath?.split('/').at(-1) ?? '未命名').replace(/\.md$/i, '')
+      const source = `---\ntitle: ${JSON.stringify(filename)}\ntags: []\n---\n${body}`
+      metadata.value = splitNoteMetadata(source)
+      editorStore.updateContent(source)
+      editorStore.scheduleAutoSave(settingsStore.autoSaveInterval)
+      await nextTick()
+    }
+    const input = editorRoot.value?.closest<HTMLElement>('.milkdown-host')?.querySelector<HTMLElement>('.note-metadata input')
+    if (!input) return { ok: false, reason: 'unavailable' }
+    input.scrollIntoView({ block: 'center' }); input.focus(); return { ok: true }
+  }
   handlers['editor.heading'] = params => {
     if (!Number.isInteger(params) || Number(params) < 1 || Number(params) > 6) return { ok: false, reason: 'invalid-params' }
     crepe!.editor.action(callCommand(wrapInHeadingCommand.key, Number(params)))

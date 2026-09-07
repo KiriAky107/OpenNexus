@@ -58,4 +58,13 @@ describe('桌面顶部段落菜单', () => {
     expect(wrapper.get('.import-properties').text()).toContain('Ctrl+Alt+P')
     wrapper.unmount()
   })
+
+  it('格式菜单列出十四种警告框和元数据快捷键', async () => {
+    const wrapper = mount(TitleBarMenu)
+    await wrapper.get('[data-menu="format"] .menu-trigger').trigger('click')
+    expect(wrapper.findAll('.callout-options button')).toHaveLength(14)
+    expect(wrapper.get('.submenu-heading').text()).toContain('Ctrl+Alt+C')
+    expect(wrapper.get('.metadata-command').text()).toContain('Ctrl+Alt+P')
+    wrapper.unmount()
+  })
 })
