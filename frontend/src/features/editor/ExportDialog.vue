@@ -21,7 +21,7 @@ async function start() {
   try {
     const job = await exportService.create(snapshot, name, format.value, { theme_id: theme.currentThemeId, include_title: title.value, page_size: page.value }, controller.signal, editor.currentFilePath ?? undefined)
     if (!disposed) jobs.value.unshift(job)
-  } catch (e) { error.value = controller.signal.aborted ? '已取消图表准备' : String(e) }
+  } catch (e) { error.value = e instanceof DOMException && e.name === 'AbortError' ? '已取消导出' : String(e) }
   finally { preparing.value = false }
 }
 async function action(job: ExportJob, download = false) {

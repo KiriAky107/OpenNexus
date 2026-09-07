@@ -11,15 +11,27 @@ INVALID = {'TOOL_NOT_FOUND', 'TOOL_NOT_ALLOWED', 'TOOL_ARGUMENT_INVALID', 'TOOL_
 
 def score(case, run, events, latency, repeat):
     calls = [e.data for e in events if e.event.value == 'ToolCall']
-    unmatched = list(calls)
-    selected = accurate = 0
-    for expected in case.expected_tools:
-        candidates = [c for c in unmatched if c.get('name') == expected.name]
-        if not candidates:
-            continue
-        exact = next((c for c in candidates if all(k in c.get('arguments', {}) and c['arguments'][k] == v for k,v in expected.arguments.items())), None)
-        chosen = exact or candidates[0]
-        unmatched.remove(chosen); selected += 1; accurate += int(exact is not None)
+    # Maximum bipartite matching: broad parameter subsets must not consume the
+    # only call satisfying a more specific expectation. Each call is used once.
+    matched = {}
+    def assign(expected_index, visited):
+        expected = case.expected_tools[expected_index]
+        for call_index, call in enumerate(calls):
+            if call_index in visited or call.get('name') != expected.name:
+                continue
+            arguments = call.get('arguments', {})
+            if not all(key in arguments and arguments[key] == value for key, value in expected.arguments.items()):
+                continue
+            visited.add(call_index)
+            if call_index not in matched or assign(matched[call_index], visited):
+                matched[call_index] = expected_index
+                return True
+        return False
+    accurate = sum(assign(index, set()) for index in range(len(case.expected_tools)))
+    from collections import Counter
+    actual_names = Counter(call.get('name') for call in calls)
+    expected_names = Counter(tool.name for tool in case.expected_tools)
+    selected = sum(min(count, actual_names[name]) for name, count in expected_names.items())
     results = run.tool_results
     checks = {
         'completed': run.status.value == 'completed',

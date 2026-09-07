@@ -15,7 +15,7 @@ const {chromium}=require('playwright');const fs=require('node:fs/promises');cons
  await page.screenshot({path:path.join(output,'benchmark-report.png'),fullPage:true});
  const pending=page.waitForEvent('download');await page.getByRole('button',{name:'下载完整 JSON'}).click();
  await(await pending).saveAs(path.join(output,'agent-ui-report.json'));
- await row.getByRole('link',{name:'Agent Trace'}).click();
+ await row.getByRole('link',{name:'执行轨迹'}).click();
  await page.waitForSelector('.agent-page .trace-visualization',{timeout:20000});
  await page.screenshot({path:path.join(output,'benchmark-trace.png'),fullPage:true});
  await browser.close();console.log('Benchmark UI start/report/download/Trace completed');

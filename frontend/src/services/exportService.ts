@@ -44,7 +44,7 @@ export const exportService = {
   async create(markdown: string, title: string, format: ExportFormat, options: { theme_id: string; include_title: boolean; page_size: string }, signal?: AbortSignal, filePath?: string) {
     const blocks: string[] = []
     const parser = new Marked()
-    parser.walkTokens(parser.lexer(markdown), token => { if (token.type === 'code' && token.lang === 'mermaid') blocks.push(token.text) })
+    parser.walkTokens(parser.lexer(markdown), token => { if (token.type === 'code' && token.lang?.trim().split(/\s+/)[0]?.toLowerCase() === 'mermaid') blocks.push(token.text) })
     const assets = []
     for (const source of [...new Set(blocks)]) {
       signal?.throwIfAborted()
@@ -54,7 +54,17 @@ export const exportService = {
       assets.push({ kind: 'mermaid', source_hash: await hashSource(source), png_base64: await rasterize(result.svg, signal) })
     }
     signal?.throwIfAborted()
-    return mapJob(await apiClient.post<JobWire>('/api/exports', { source: { type: 'markdown', markdown, file_path: filePath }, title, format, options, assets }))
+    // Keep the response handle when cancellation arrives during submission:
+    // aborting HTTP alone could leave an undiscoverable running server job.
+    const job = mapJob(await apiClient.post<JobWire>('/api/exports', { source: { type: 'markdown', markdown, file_path: filePath }, title, format, options, assets }))
+    if (signal?.aborted) {
+      await apiClient.post(`/api/exports/${encodeURIComponent(job.id)}/cancel`)
+      const current = await apiClient.get<JobWire>(`/api/exports/${encodeURIComponent(job.id)}`)
+      if (current.status === 'completed') throw new Error('导出已完成，无法取消；请在任务列表中下载。')
+      if (current.status === 'failed') throw new Error(current.error || '导出任务已失败，请查看任务列表。')
+      signal.throwIfAborted()
+    }
+    return job
   },
   async get(id: string) { return mapJob(await apiClient.get<JobWire>(`/api/exports/${encodeURIComponent(id)}`)) },
   async list() { const response = await apiClient.get<{ items: JobWire[] }>('/api/exports'); return response.items.map(mapJob) },
