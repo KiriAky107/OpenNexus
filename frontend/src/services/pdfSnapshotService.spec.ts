@@ -58,3 +58,19 @@ it('does not invent a metadata bar for plain notes or unsupported frontmatter',a
   expect(renderMarkdown).toHaveBeenCalledWith(source,expect.anything())
  }
 })
+
+it('exports metadata-only notes without submitting an empty resource request',async()=>{
+ for(const tail of ['', '\n  \n']) {
+  const html=await preparePdfSnapshot('---\ntitle: Metadata only\ntags: [draft]\n---\n'+tail,'note',{theme_id:'light',include_title:false,page_size:'A4'})
+  const doc=new DOMParser().parseFromString(html,'text/html')
+  expect(doc.querySelector('.note-metadata h1')?.textContent).toBe('Metadata only')
+  expect(doc.querySelector('.metadata-tag')?.textContent).toBe('draft')
+ }
+ expect(apiClient.post).not.toHaveBeenCalled()
+})
+it('embeds prepared HTML images without retaining local URLs',async()=>{
+ vi.mocked(renderMarkdown).mockResolvedValueOnce('<p><img src="assets/a&amp;b.png"></p>')
+ vi.mocked(apiClient.post).mockResolvedValueOnce({images:[{source:'assets/a&b.png',data:'data:image/png;base64,aGVsbG8=',warnings:[]}],plots:[]})
+ const html=await preparePdfSnapshot('<img src="assets/a&amp;b.png">','note',{theme_id:'light',include_title:false,page_size:'A4'})
+ expect(new DOMParser().parseFromString(html,'text/html').querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,aGVsbG8=')
+})

@@ -78,7 +78,7 @@ export async function preparePdfSnapshot(markdown:string,title:string,options:Op
   const scope=scopeAttributes(VisualMarkdownEditor)
   // Match the editor DOM and scoped styles, with read-only metadata controls.
   const metadataHtml=metadata ? `<section class="note-metadata"${scope} aria-label="${escape(t('笔记属性','Note properties'))}"><span class="metadata-caption"${scope}>${escape(t('笔记属性','Note properties'))}</span>${metadata.title ? `<h1${scope}>${escape(metadata.title)}</h1>` : ''}<div class="metadata-tags"${scope}><span class="metadata-label"${scope}>${escape(t('标签','Tags'))}</span>${metadata.tags.map(tag=>`<span class="metadata-tag"${scope}><span${scope}>${escape(tag)}</span></span>`).join('')}</div></section>` : ''
-  const resources=await apiClient.post<Resources>('/api/exports/preview-resources',{format:'pdf',source:{type:'markdown',markdown:body,file_path:filePath},options})
+  const resources:Resources=body.trim() ? await apiClient.post<Resources>('/api/exports/preview-resources',{format:'pdf',source:{type:'markdown',markdown:body,file_path:filePath},options}) : {images:[],plots:[]}
   signal?.throwIfAborted()
   const rendered=await renderMarkdown(body,{themeId:options.theme_id,theme:dark?'dark':'light',preferences,pdf:{mermaidVariables:diagramVariables,plot:async source=>{
     const plot=resources.plots.find(p=>p.source.trim()===source.trim()); if(!plot?.svg)throw Error(plot?.warnings.join('; ')||'函数图像无法导出');return plot
