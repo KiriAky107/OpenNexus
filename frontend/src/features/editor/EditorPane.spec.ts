@@ -63,7 +63,8 @@ describe('EditorPane file switching', () => {
     wrapper = mount(EditorPane, { attachTo: document.body })
     await nextTick()
 
-    const textarea = wrapper.get('textarea')
+    await vi.waitFor(() => expect(wrapper!.find('.cm-content').exists()).toBe(true))
+    const textarea = wrapper.get('.cm-content')
     expect(textarea.attributes('spellcheck')).toBe('true')
     expect(textarea.attributes('lang')).toBe('en')
     expect(textarea.attributes('aria-label')).toBe('Markdown source editor')

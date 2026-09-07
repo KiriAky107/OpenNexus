@@ -1,4 +1,5 @@
 import type { ApiError, ErrorResponse } from '@/contracts'
+import { isDesktop } from './platform/desktop'
 
 // 所有 HTTP 请求都经过此边界，以统一地址、请求追踪和错误契约。
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE ?? ''
@@ -27,6 +28,7 @@ export class ApiErrorClass extends Error {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  if (isDesktop()) throw new ApiErrorClass('CORE_UNAVAILABLE', '桌面 AI Core 尚未接通；本地编辑可继续。')
   const { params, token, headers, timeoutMs, ...rest } = options
   const controller = timeoutMs ? new AbortController() : null
   let timedOut = false

@@ -10,6 +10,7 @@ import { useSettingsStore } from './stores/settings'
 import { watch } from 'vue'
 import { appLocale } from './i18n'
 import { updateDocumentTitle } from './router'
+import { installDesktopLifecycle } from './services/platform/lifecycle'
 
 const app = createApp(App)
 const pinia = createPinia()
@@ -27,3 +28,4 @@ watch(() => settingsStore.spellCheck, (enabled) => {
 }, { immediate: true })
 
 app.mount('#app')
+void installDesktopLifecycle()

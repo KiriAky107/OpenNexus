@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-workspace-recent"
+description = "Enables the workspace_recent command without any pre-configured scope."
+commands.allow = ["workspace_recent"]
+
+[[permission]]
+identifier = "deny-workspace-recent"
+description = "Denies the workspace_recent command without any pre-configured scope."
+commands.deny = ["workspace_recent"]
