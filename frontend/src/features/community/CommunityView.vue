@@ -75,21 +75,23 @@ function toggleSource() {
 </script>
 
 <template>
-  <main class="community-page">
-    <h1>社区目录</h1>
-    <p>连接您选择的来源。安装后仍需独立启用和授权；关闭社区不影响本地编辑。</p>
-    <section class="community-controls" aria-label="社区来源">
+  <main class="community-page feature-page">
+    <header class="feature-header">
+      <div><h1>社区目录</h1><p>连接您选择的来源。安装后仍需独立启用和授权；关闭社区不影响本地编辑。</p></div>
+    </header>
+    <section class="community-panel panel" aria-label="社区来源与搜索">
+    <div class="community-controls">
       <label>来源地址 <input v-model="url" placeholder="https://community.example.org" :disabled="busy" /></label>
       <button class="btn" :disabled="busy || !url.trim()" @click="inspectSource">检查来源与公钥</button>
       <label>已添加来源 <select v-model="selectedSource" @change="search"><option value="">请选择</option><option v-for="item in sources" :key="item.id" :value="item.id">{{ item.url }}{{ item.enabled ? '' : '（已停用）' }}</option></select></label>
       <button class="btn" :disabled="!selectedSource || busy" @click="toggleSource">启用 / 停用来源</button>
-    </section>
-    <section class="community-controls" aria-label="搜索目录">
+    </div>
+    <div class="community-controls">
       <label>关键词 <input v-model="query" @keydown.enter="search" /></label>
       <label>类别 <select v-model="kind"><option v-for="item in kinds" :key="item.id" :value="item.id">{{ item.label }}</option></select></label>
       <button class="btn btn-primary" :disabled="busy || !selectedSource" @click="search">搜索 / 刷新</button>
       <button v-if="busy" class="btn" @click="cancel">取消</button>
-    </section>
+    </div>
     <p v-if="busy" role="status">正在处理…</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <p v-if="notice" role="status">{{ notice }}</p>
@@ -102,6 +104,7 @@ function toggleSource() {
         <span v-if="item.withdrawn">已撤回</span>
       </button>
     </div>
+    </section>
     <section v-if="candidates.length">
       <h2>已保存的声明式候选</h2><p>这些候选尚未应用到人设、MCP 或模型运行配置。</p>
       <details v-for="item in candidates" :key="item.key"><summary>{{ item.key.replace('community-candidate:', '') }}</summary><pre>{{ item.value }}</pre><button class="btn" @click="removeCandidate(item.key)">删除候选</button></details>
@@ -125,6 +128,10 @@ function toggleSource() {
 
 <style scoped>
 .community-page { padding: var(--space-xl); overflow: auto; min-width: 0; }
+.feature-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-xl); }
+.feature-header h1, .feature-header p { margin: 0; }
+.feature-header p { margin-top: var(--space-xs); color: var(--color-text-secondary); }
+.community-panel { padding: var(--space-xl); border: 1px solid var(--color-border-default); border-radius: var(--radius-lg); background: var(--color-surface-primary); }
 .community-controls { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-md); margin-block: var(--space-lg); }
 label { display: grid; gap: var(--space-xs); }
 input, select { color: var(--color-text-primary); background: var(--color-background-secondary); border: 1px solid var(--color-border-subtle); padding: var(--space-sm); }
