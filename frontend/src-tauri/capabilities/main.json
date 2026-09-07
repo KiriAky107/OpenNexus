@@ -8,6 +8,7 @@
   "permissions": [
     "core:default",
     "allow-host-capabilities",
+    "allow-core-request",
     "allow-workspace-choose",
     "allow-workspace-open",
     "allow-workspace-tree",

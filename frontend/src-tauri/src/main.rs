@@ -6,6 +6,7 @@ use notesagent_host::recent::{RecentVault, RecentVaultStore};
 use notesagent_host::workspace::{Document, Entry, Workspace};
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{Emitter, Manager, State};
 
 #[derive(Default)]
@@ -38,7 +39,84 @@ fn with_workspace<T>(
 
 #[tauri::command]
 fn host_capabilities() -> serde_json::Value {
-    serde_json::json!({"protocol":1,"workspace":true,"core":false,"sync":false,"credentials":false,"extensions":false,"release":"preview"})
+    serde_json::json!({"protocol":1,"workspace":true,"core":true,"sync":false,"credentials":false,"extensions":false,"release":"preview"})
+}
+
+#[derive(serde::Serialize)]
+struct CoreResponse {
+    status: u16,
+    content_type: String,
+    body: String,
+}
+
+fn core_url(path: &str) -> Result<String, String> {
+    if (!path.starts_with("/api/") && path != "/api" && path != "/health")
+        || path.contains("..")
+        || path.contains(['\r', '\n'])
+    {
+        return Err("CORE_PATH_DENIED".into());
+    }
+    Ok(format!("http://127.0.0.1:8000{path}"))
+}
+
+#[cfg(test)]
+mod core_proxy_tests {
+    use super::core_url;
+
+    #[test]
+    fn only_allows_expected_loopback_paths() {
+        assert_eq!(core_url("/health").unwrap(), "http://127.0.0.1:8000/health");
+        assert!(core_url("/api/status?verbose=true").is_ok());
+        assert!(core_url("https://example.com/api/status").is_err());
+        assert!(core_url("/api/../secret").is_err());
+    }
+}
+
+/// 预览版只代理固定回环地址，避免 WebView CORS 与任意地址转发。
+#[tauri::command]
+async fn core_request(
+    method: String,
+    path: String,
+    body: Option<serde_json::Value>,
+    authorization: Option<String>,
+) -> Result<CoreResponse, String> {
+    let method =
+        reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| "CORE_METHOD_DENIED")?;
+    if !matches!(
+        method,
+        reqwest::Method::GET
+            | reqwest::Method::POST
+            | reqwest::Method::PUT
+            | reqwest::Method::PATCH
+            | reqwest::Method::DELETE
+    ) {
+        return Err("CORE_METHOD_DENIED".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|_| "CORE_CLIENT_ERROR")?;
+    let mut request = client.request(method, core_url(&path)?);
+    if let Some(value) = body {
+        request = request.json(&value);
+    }
+    if let Some(value) = authorization {
+        request = request.header(reqwest::header::AUTHORIZATION, value);
+    }
+    let response = request.send().await.map_err(|_| "CORE_UNAVAILABLE")?;
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_owned();
+    let body = response.text().await.map_err(|_| "CORE_RESPONSE_ERROR")?;
+    Ok(CoreResponse {
+        status,
+        content_type,
+        body,
+    })
 }
 
 #[tauri::command]
@@ -197,6 +275,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             host_capabilities,
+            core_request,
             editor_capabilities,
             workspace_choose,
             workspace_open,
