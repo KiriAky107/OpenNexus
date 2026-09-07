@@ -20,7 +20,7 @@ from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import (
     Paragraph,
     Indenter,
-    Preformatted,
+    XPreformatted,
     SimpleDocTemplate,
     Spacer,
     Table,
@@ -29,12 +29,11 @@ from reportlab.platypus import (
 from reportlab.platypus.flowables import HRFlowable
 
 from app.contracts import ExportOptions
-from app.export.themes import CALLOUTS, print_theme_warning
+from app.export.themes import CALLOUTS, pdf_palette
 from app.export.document import Document, DocumentNode, ExportResult
 from app.export.exporters._common import (
     MERMAID_WARNING,
     RAW_HTML_WARNING,
-    FunctionPlotBudget,
     format_meta_value,
     format_plot_diagnostic,
     safe_url,
@@ -54,10 +53,11 @@ _HEADING_SIZES = {1: 20, 2: 16, 3: 14, 4: 12, 5: 11, 6: 10.5}
 _QUOTE_COLOR = "#57606a"
 
 
-def _make_styles() -> dict[str, ParagraphStyle]:
+def _make_styles(palette) -> dict[str, ParagraphStyle]:
     body = ParagraphStyle(
         "pdf-body",
         fontName=_FONT,
+        textColor=palette["text"],
         fontSize=10.5,
         leading=16,
         spaceAfter=6,
@@ -67,7 +67,7 @@ def _make_styles() -> dict[str, ParagraphStyle]:
         "pdf-quote",
         parent=body,
         leftIndent=14,
-        textColor="#57606a",
+        textColor=palette["muted"],
         spaceBefore=4,
         spaceAfter=6,
     )
@@ -78,8 +78,8 @@ def _make_styles() -> dict[str, ParagraphStyle]:
         leading=12,
         leftIndent=6,
         rightIndent=6,
-        backColor="#f6f8fa",
-        borderColor="#d0d7de",
+        backColor=palette["code"],
+        borderColor=palette["border"],
         borderWidth=0.5,
         borderPadding=6,
         spaceBefore=4,
@@ -88,9 +88,9 @@ def _make_styles() -> dict[str, ParagraphStyle]:
     math = ParagraphStyle("pdf-math", parent=body, alignment=TA_CENTER, spaceBefore=6)
     cell = ParagraphStyle("pdf-cell", parent=body, fontSize=10, leading=14, spaceAfter=0)
     cell_head = ParagraphStyle(
-        "pdf-cell-head", parent=cell, textColor="#1f2328", fontSize=10
+        "pdf-cell-head", parent=cell, textColor=palette["text"], fontSize=10
     )
-    meta = ParagraphStyle("pdf-meta", parent=body, fontSize=8.5, leading=13, textColor="#57606a")
+    meta = ParagraphStyle("pdf-meta", parent=body, fontSize=8.5, leading=13, textColor=palette["muted"])
     styles: dict[str, ParagraphStyle] = {
         "body": body,
         "title": title,
@@ -109,6 +109,7 @@ def _make_styles() -> dict[str, ParagraphStyle]:
             leading=size * 1.4,
             spaceBefore=14 if level <= 2 else 10,
             spaceAfter=6,
+            keepWithNext=True,
         )
     return styles
 
@@ -118,17 +119,17 @@ class PdfExporter:
 
     def render(self, document: Document, options: ExportOptions) -> ExportResult:
         """同步渲染；CPU 密集，调用方应放入线程执行，避免阻塞事件循环。"""
-        self._styles = _make_styles()
         warnings: list[str] = []
-        print_theme_warning(options, warnings, "PDF")
+        self._palette = pdf_palette(options, warnings)
+        self._styles = _make_styles(self._palette)
         if _FONT == "STSong-Light": warnings.append("PDF 使用 CID 字体，阅读器需提供中文字体；可配置 APP_EXPORT_FONT 嵌入 TrueType 字体")
 
         page = _PAGE_SIZES.get((options.page_size or "A4").lower(), A4)
         self._options = options
-        self._plot_budget = FunctionPlotBudget()
         self._plot_renderer = FunctionPlotStaticRenderer()
         # 内容区宽度（左右各 20mm 边距），供函数图像缩放适配页面
-        self._plot_width = page[0] - 40 * mm
+        self._plot_width = page[0] - 40 * mm - 12
+        self._plot_height = page[1] - 36 * mm - 12
         buf = BytesIO()
         doc = SimpleDocTemplate(
             buf,
@@ -144,7 +145,14 @@ class PdfExporter:
         self._render_header(document, options, story)
         self._render_children(document.children, story, warnings)
 
-        doc.build(story)
+        def paint_page(canvas, template):
+            canvas.saveState()
+            canvas.setFillColor(self._palette['page'])
+            canvas.rect(0, 0, page[0], page[1], fill=1, stroke=0)
+            canvas.setFillColor(self._palette['surface'])
+            canvas.roundRect(12*mm, 10*mm, page[0]-24*mm, page[1]-20*mm, 5*mm, fill=1, stroke=0)
+            canvas.restoreState()
+        doc.build(story, onFirstPage=paint_page, onLaterPages=paint_page)
         return ExportResult(content=buf.getvalue(), mime_type=_MIME, warnings=warnings)
 
     async def export(self, document: Document, options: ExportOptions) -> ExportResult:
@@ -172,7 +180,7 @@ class PdfExporter:
         if node.attributes.get('static_png'):
             from reportlab.platypus import Image
             image = Image(BytesIO(node.attributes['static_png']))
-            scale = min(1, self._plot_width / image.imageWidth, 600 / image.imageHeight)
+            scale = min(1, self._plot_width / image.imageWidth, self._plot_height / image.imageHeight)
             image.drawWidth = image.imageWidth * scale
             image.drawHeight = image.imageHeight * scale
             story.append(image)
@@ -194,9 +202,13 @@ class PdfExporter:
     def _block_callout(self, node, story, warnings):
         kind = node.attributes['kind']
         icon, color = CALLOUTS[kind]
+        from reportlab.lib.colors import HexColor
+        background = HexColor(self._palette['code'])
+        if .2126*background.red + .7152*background.green + .0722*background.blue < .5:
+            color = {'#0969da':'#a5d6ff','#7041a0':'#d2a8ff','#176f41':'#7ee787','#805400':'#f2cc60','#b42318':'#ffa198','#57606a':self._palette['muted']}[color]
         title = self._render_inline(node.children[0].children,warnings)
         style = ParagraphStyle('callout-'+kind,parent=self._styles['body'],textColor=color,
-            backColor='#f6f8fa',borderColor=color,borderWidth=1,borderPadding=6,spaceBefore=8,spaceAfter=8)
+            backColor=self._palette['code'],borderColor=color,borderWidth=1,borderPadding=6,spaceBefore=8,spaceAfter=8)
         story.append(Paragraph(_html.escape(icon)+' '+title,style))
         self._render_children(node.children[1:],story,warnings)
 
@@ -209,7 +221,7 @@ class PdfExporter:
                     Paragraph(self._render_inline(child.children, warnings), self._styles["quote"])
                 )
             elif child.type == "list":
-                self._block_list(child, story, warnings, indent=14, color=_QUOTE_COLOR)
+                self._block_list(child, story, warnings, indent=14, color=self._palette['muted'])
             else:
                 self._render_block(child, story, warnings)
 
@@ -301,7 +313,7 @@ class PdfExporter:
             data.append(cells)
         table = Table(data, repeatRows=head_row_count)
         commands = [
-            ("GRID", (0, 0), (-1, -1), 0.5, "#d0d7de"),
+            ("GRID", (0, 0), (-1, -1), 0.5, self._palette["border"]),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("LEFTPADDING", (0, 0), (-1, -1), 6),
             ("RIGHTPADDING", (0, 0), (-1, -1), 6),
@@ -309,53 +321,42 @@ class PdfExporter:
             ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ]
         if head_row_count:
-            commands.append(("BACKGROUND", (0, 0), (-1, head_row_count - 1), "#f6f8fa"))
+            commands.append(("BACKGROUND", (0, 0), (-1, head_row_count - 1), self._palette["code"]))
         table.setStyle(TableStyle(commands))
         story.append(table)
 
     def _block_code_block(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
-        story.append(Preformatted(node.text, self._styles["code"]))
+        story.append(XPreformatted(_html.escape(node.text), self._styles["code"]))
 
     def _block_thematic_break(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
         story.append(Spacer(1, 4))
-        story.append(HRFlowable(width="100%", color="#d0d7de", thickness=0.5))
+        story.append(HRFlowable(width="100%", color=self._palette["border"], thickness=0.5))
         story.append(Spacer(1, 6))
 
     def _block_mermaid(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
         warnings.append(MERMAID_WARNING)
-        story.append(Preformatted(node.text, self._styles["code"]))
+        story.append(XPreformatted(_html.escape(node.text), self._styles["code"]))
 
     def _block_function_plot(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
-        # 文档级数量上限：超出部分直接回退占位，不解析不采样，防止海量图像耗尽资源
-        over = self._plot_budget.check_count()
-        if over is not None:
-            warnings.append(over)
-            story.append(Preformatted(node.text, self._styles["code"]))
-            return
         # 解析与渲染共同纳入局部异常回退：单个图像失败只回退占位 + warning，
         # 绝不阻断整篇导出（含复杂表达式触发的 RecursionError 等异常）。
         try:
             request = StaticRenderRequest(
                 kind="function_plot", source=node.text, theme=self._options.theme_id
             )
-            parsed = self._plot_renderer.parse(request)
+            from app.plot.parser import parse_source
+            parsed = parse_source(request.source, unlimited=True)
             for diag in parsed.diagnostics:
                 warnings.append(format_plot_diagnostic(diag))
             if parsed.plot is None:
-                story.append(Preformatted(node.text, self._styles["code"]))
-                return
-            # 文档级累计复杂度预算：超出后回退占位，不再采样求值
-            over = self._plot_budget.check_nodes(parsed.plot.node_count)
-            if over is not None:
-                warnings.append(over)
-                story.append(Preformatted(node.text, self._styles["code"]))
+                story.append(XPreformatted(_html.escape(node.text), self._styles["code"]))
                 return
             # Drawing 本身即 Flowable，缩放后追加到 story，与 HTML 视觉一致
-            drawing = render_drawing(parsed.plot, width=self._plot_width)
+            drawing = render_drawing(parsed.plot, width=self._plot_width, palette=self._palette, unlimited=True, max_height=self._plot_height)
             story.append(drawing)
         except Exception as exc:
             warnings.append(f"函数图像：解析或渲染失败，已回退占位（{exc}）")
-            story.append(Preformatted(node.text, self._styles["code"]))
+            story.append(XPreformatted(_html.escape(node.text), self._styles["code"]))
 
     def _block_math_block(self, node: DocumentNode, story: list, warnings: list[str]) -> None:
         story.append(Paragraph(f"$${_html.escape(node.text)}$$", self._styles["math"]))
@@ -393,7 +394,7 @@ class PdfExporter:
             if safe_href is None:
                 warnings.append(f"链接协议不安全，已降级为纯文本：{href!r}")
                 return inner
-            return f'<a href="{_html.escape(safe_href)}">{inner}</a>'
+            return f'<a href="{_html.escape(safe_href)}" color="{self._palette["accent"]}">{inner}</a>'
         if t == "image":
             src = str(node.attributes.get("src") or "")
             alt = str(node.attributes.get("alt") or "")

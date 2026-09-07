@@ -1426,7 +1426,18 @@ class ExportSource(Contract):
         return self
 
 
+class ExportPalette(Contract):
+    page: str = Field(pattern=r'^#[0-9a-fA-F]{6}$')
+    surface: str = Field(pattern=r'^#[0-9a-fA-F]{6}$')
+    text: str = Field(pattern=r'^#[0-9a-fA-F]{6}$')
+    muted: str = Field(pattern=r'^#[0-9a-fA-F]{6}$')
+    code: str = Field(pattern=r'^#[0-9a-fA-F]{6}$')
+    border: str = Field(pattern=r'^#[0-9a-fA-F]{6}$')
+    accent: str = Field(pattern=r'^#[0-9a-fA-F]{6}$')
+
+
 class ExportOptions(Contract):
+    palette: ExportPalette | None = None
     theme_id: str = "light"
     include_title: bool = True
     include_metadata: bool = False
@@ -1437,15 +1448,22 @@ class ExportOptions(Contract):
 class ExportAsset(Contract):
     kind: Literal['mermaid', 'math_block', 'math_inline', 'image']
     source_hash: str = Field(pattern=r'^[a-f0-9]{64}$')
-    png_base64: str = Field(max_length=2800000)
+    png_base64: str
 
 
 class ExportRequest(Contract):
-    assets: list[ExportAsset] = Field(default_factory=list, max_length=64)
+    assets: list[ExportAsset] = Field(default_factory=list)
     title: str = Field(default="", max_length=200)
     source: ExportSource
     format: ExportFormat
     options: ExportOptions = Field(default_factory=ExportOptions)
+
+    @model_validator(mode="after")
+    def _asset_limits(self) -> "ExportRequest":
+        if self.format != ExportFormat.pdf:
+            if len(self.assets) > 64 or any(len(asset.png_base64) > 2800000 for asset in self.assets):
+                raise ValueError("export asset count or size limit exceeded")
+        return self
 
 
 class ExportProgress(Contract):
