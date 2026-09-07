@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, "feat/**", "fix/**", "chore/**"]
+  workflow_dispatch:
+
+jobs:
+  docs-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: git diff --check
+      - run: python scripts/check-doc-links.py
+
+  backend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install uv==0.9.24
+      - run: uv sync --frozen
+        working-directory: backend
+      - run: uv run python -m compileall -q app
+        working-directory: backend
+      - run: uv run pytest
+        working-directory: backend
+
+  service-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install uv==0.9.24
+      - run: uv sync --frozen
+        working-directory: backend
+      - run: uv sync --frozen && uv run pytest
+        working-directory: server sync
+      - run: uv sync --frozen && uv run pytest
+        working-directory: community-server
+      - run: backend/.venv/bin/python scripts/phase3-isolated-smoke.py
+
+  frontend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: pnpm, cache-dependency-path: frontend/pnpm-lock.yaml }
+      - run: corepack enable && corepack prepare pnpm@10.28.0 --activate
+      - run: pnpm install --frozen-lockfile
+        working-directory: frontend
+      - run: pnpm test && pnpm type-check && pnpm build
+        working-directory: frontend
+
+  rust-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt, clippy }
+      - run: cargo fmt --check && cargo test --lib --locked && cargo clippy --lib --locked -- -D warnings
+        working-directory: frontend/src-tauri
