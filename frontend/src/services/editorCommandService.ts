@@ -17,6 +17,16 @@ export type CommandResult = { ok: true } | { ok: false; reason: 'unsupported' | 
 export type CommandHandler = (params: unknown) => CommandResult | Promise<CommandResult>
 type Target = { available: () => boolean; handlers: Partial<Record<EditorCommandId, CommandHandler>> }
 let active: Target | undefined
+const capabilityListeners = new Set<() => void>()
+
+export function subscribeEditorCommandCapabilities(listener: () => void) {
+  capabilityListeners.add(listener)
+  return () => capabilityListeners.delete(listener)
+}
+
+function notifyCapabilityListeners() {
+  capabilityListeners.forEach(listener => listener())
+}
 
 export function registerEditorCommands(target: Target) {
   active = target
@@ -24,6 +34,7 @@ export function registerEditorCommands(target: Target) {
   return () => { if (active === target) { active = undefined; updateNativeEditorMenu() } }
 }
 export function updateNativeEditorMenu() {
+  notifyCapabilityListeners()
   if (isDesktop()) void hostInvoke('editor_capabilities', { importEnabled: !!active?.handlers['editor.import-note-properties'] && active.available() }).catch(() => undefined)
 }
 export function getEditorCommandCapabilities() {

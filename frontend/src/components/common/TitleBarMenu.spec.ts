@@ -7,7 +7,11 @@ import TitleBarMenu from './TitleBarMenu.vue'
 
 const execute = vi.hoisted(() => vi.fn())
 const capabilities = vi.hoisted(() => vi.fn())
-vi.mock('@/services/editorCommandService', () => ({ executeEditorCommand: execute, getEditorCommandCapabilities: capabilities }))
+vi.mock('@/services/editorCommandService', () => ({
+  executeEditorCommand: execute,
+  getEditorCommandCapabilities: capabilities,
+  subscribeEditorCommandCapabilities: () => () => undefined,
+}))
 
 beforeEach(() => {
   setActivePinia(createPinia())
@@ -15,6 +19,7 @@ beforeEach(() => {
   capabilities.mockReturnValue([
     { id: 'editor.paragraph', supported: true, enabled: true },
     { id: 'editor.heading', supported: true, enabled: true },
+    { id: 'editor.callout', supported: true, enabled: true },
     { id: 'editor.import-note-properties', supported: true, enabled: true },
   ])
 })
@@ -40,8 +45,8 @@ describe('桌面顶部段落菜单', () => {
     const editor = useEditorStore()
     editor.mode = 'wysiwyg'
     editor.currentFilePath = '/示例.md'
-    const wrapper = mount(TitleBarMenu)
     capabilities.mockReturnValue([])
+    const wrapper = mount(TitleBarMenu)
     await wrapper.get('[data-menu="paragraph"] .menu-trigger').trigger('click')
     expect((wrapper.get('.import-properties').element as HTMLButtonElement).disabled).toBe(true)
     expect(wrapper.text()).toContain('请在无冲突的 Markdown 源码笔记中使用')
@@ -62,9 +67,29 @@ describe('桌面顶部段落菜单', () => {
   it('格式菜单列出十四种警告框和元数据快捷键', async () => {
     const wrapper = mount(TitleBarMenu)
     await wrapper.get('[data-menu="format"] .menu-trigger').trigger('click')
-    expect(wrapper.findAll('.callout-options button')).toHaveLength(14)
-    expect(wrapper.get('.submenu-heading').text()).toContain('Ctrl+Alt+C')
+    const calloutTrigger = wrapper.get('.submenu-trigger')
+    expect(calloutTrigger.text()).toContain('Ctrl+Alt+C')
+    await calloutTrigger.trigger('click')
+    expect(wrapper.findAll('.submenu-popover button')).toHaveLength(14)
     expect(wrapper.get('.metadata-command').text()).toContain('Ctrl+Alt+P')
+    wrapper.unmount()
+  })
+
+  it('支持菜单栏方向键与警告框子菜单键盘访问', async () => {
+    capabilities.mockReturnValue([{ id: 'editor.callout', supported: true, enabled: true }])
+    const wrapper = mount(TitleBarMenu, { attachTo: document.body })
+    const file = wrapper.get('[data-menu="file"] .menu-trigger')
+    ;(file.element as HTMLElement).focus()
+    await file.trigger('keydown', { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(wrapper.get('[data-menu="edit"] .menu-trigger').element)
+
+    await wrapper.get('[data-menu="format"] .menu-trigger').trigger('click')
+    const trigger = wrapper.get('.submenu-trigger')
+    ;(trigger.element as HTMLElement).focus()
+    await trigger.trigger('keydown', { key: 'ArrowRight' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(wrapper.findAll('.submenu-popover [role="menuitem"]')).toHaveLength(14)
+    expect((document.activeElement as HTMLElement).closest('.submenu-popover')).not.toBeNull()
     wrapper.unmount()
   })
 })

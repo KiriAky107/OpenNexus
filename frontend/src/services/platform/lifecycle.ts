@@ -5,34 +5,9 @@ import { useEditorStore } from '@/stores/editor'
 import { executeEditorCommand, updateNativeEditorMenu } from '@/services/editorCommandService'
 import { watch } from 'vue'
 import { isDesktop } from './desktop'
+import { resolveEditorShortcut } from '@/services/editorMenu'
 
-type ShortcutCommand = { id: Parameters<typeof executeEditorCommand>[0]; params?: unknown }
-
-/** 桌面菜单快捷键表；使用 code 避免数字键受键盘布局影响。 */
-export function resolveEditorShortcut(event: Pick<KeyboardEvent, 'code' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>): ShortcutCommand | undefined {
-  const mod = event.ctrlKey || event.metaKey
-  if (mod && !event.altKey && !event.shiftKey && /^Digit[0-6]$/.test(event.code)) {
-    const level = Number(event.code.at(-1))
-    return level === 0 ? { id: 'editor.paragraph' } : { id: 'editor.heading', params: level }
-  }
-  const key = `${mod ? 'M' : ''}${event.altKey ? 'A' : ''}${event.shiftKey ? 'S' : ''}:${event.code}`
-  const commands: Record<string, ShortcutCommand> = {
-    'AS:Digit5': { id: 'editor.strikethrough' },
-    'M:Backquote': { id: 'editor.inline-code' },
-    'M:KeyK': { id: 'editor.link' },
-    'MS:KeyK': { id: 'editor.code-block' },
-    'MS:KeyM': { id: 'editor.math-block' },
-    'MA:KeyC': { id: 'editor.callout', params: { type: 'note', body: '提示内容' } },
-    'MA:KeyT': { id: 'editor.table' },
-    'MS:KeyL': { id: 'editor.inline-math' },
-    'MS:KeyH': { id: 'editor.horizontal-rule' },
-    'MS:BracketLeft': { id: 'editor.ordered-list' },
-    'MS:BracketRight': { id: 'editor.bullet-list' },
-    'MS:KeyX': { id: 'editor.task-list' },
-    'MS:KeyQ': { id: 'editor.blockquote' },
-  }
-  return commands[key]
-}
+export { resolveEditorShortcut } from '@/services/editorMenu'
 
 async function executeMetadataCommand() {
   const result = await executeEditorCommand('editor.import-note-properties')

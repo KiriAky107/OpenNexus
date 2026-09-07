@@ -70,6 +70,15 @@ mod core_proxy_tests {
         assert!(core_url("https://example.com/api/status").is_err());
         assert!(core_url("/api/../secret").is_err());
     }
+
+    #[test]
+    fn desktop_csp_allows_shiki_wasm_without_general_eval() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let csp = config["app"]["security"]["csp"].as_str().unwrap();
+        assert!(csp.contains("'wasm-unsafe-eval'"));
+        assert!(!csp.split_whitespace().any(|token| token == "'unsafe-eval'"));
+    }
 }
 
 /// 预览版只代理固定回环地址，避免 WebView CORS 与任意地址转发。
