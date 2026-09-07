@@ -14,7 +14,7 @@ required-features = ["desktop"]
 
 [features]
 default = []
-desktop = ["dep:tauri", "dep:tauri-build", "dep:rfd", "dep:reqwest"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:rfd", "dep:reqwest", "dep:base64"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -27,6 +27,7 @@ fs2 = "0.4"
 tauri = { version = "2", optional = true, features = ["tray-icon"] }
 rfd = { version = "0.15", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+base64 = { version = "0.22", optional = true }
 
 [build-dependencies]
 tauri-build = { version = "2", optional = true , features = [] }

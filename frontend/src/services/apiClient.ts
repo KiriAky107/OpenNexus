@@ -4,7 +4,26 @@ import { hostInvoke, isDesktop } from './platform/desktop'
 // 所有 HTTP 请求都经过此边界，以统一地址、请求追踪和错误契约。
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE ?? (isDesktop() ? 'http://127.0.0.1:8000' : '')
 
-interface DesktopCoreResponse { status: number; content_type: string; body: string }
+interface DesktopCoreResponse {
+  status: number
+  content_type: string
+  body: string
+  body_base64?: string
+}
+
+function responseFromDesktopCore(response: DesktopCoreResponse): Response {
+  let body: BodyInit = response.body
+  if (response.body_base64 !== undefined) {
+    const binary = atob(response.body_base64)
+    const bytes = new Uint8Array(binary.length)
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+    body = bytes.buffer
+  }
+  return new Response(body, {
+    status: response.status,
+    headers: response.content_type ? { 'Content-Type': response.content_type } : undefined,
+  })
+}
 
 export function resolveApiUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) return path
@@ -72,7 +91,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       })
       if (response.status >= 200 && response.status < 300) {
         if (response.status === 204) return undefined as T
-        return (response.content_type.includes('application/json') ? JSON.parse(response.body) : response.body) as T
+        return (response.content_type.includes('application/json')
+          ? JSON.parse(response.body)
+          : responseFromDesktopCore(response)) as T
       }
       let error: ErrorResponse | null = null
       try { error = JSON.parse(response.body) as ErrorResponse } catch { /* 非 JSON 错误 */ }
