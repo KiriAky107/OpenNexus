@@ -365,6 +365,25 @@ describe('VisualMarkdownEditor formatting toolbars', () => {
       expect(string?.style.color.toUpperCase()).toBe(theme === 'github-dark' ? '#9ECBFF' : '#032F62')
     } finally { cm.destroy() }
   })
+  it.each(['github-light', 'github-dark'] as const)('renders Shiki %s tokens in the mounted Milkdown code block', async theme => {
+    useThemeStore().codeBlockTheme = theme
+    const wrapper = mount(VisualMarkdownEditor, {
+      props: { initialContent: '```python\ndef average(scores: list[float]) -> float | None:\n    return sum(scores) / len(scores)\n```' },
+      attachTo: document.body,
+    })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    editor.action(ctx => {
+      const view = ctx.get(editorViewCtx)
+      view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, 0)))
+    })
+    for (let attempt = 0; attempt < 100 && wrapper.findAll('.shiki-token').length < 4; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    const tokens = wrapper.findAll<HTMLElement>('.shiki-token')
+    expect(tokens.length).toBeGreaterThan(3)
+    expect(new Set(tokens.map(token => token.element.style.color).filter(Boolean)).size).toBeGreaterThan(2)
+  })
   it('applies bold from the top toolbar to the selected text', async () => {
     const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: 'alpha beta' }, attachTo: document.body })
     mounted.push(wrapper)
