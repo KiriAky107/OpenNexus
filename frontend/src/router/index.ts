@@ -3,6 +3,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { t } from '@/i18n'
 
 const routes = [
+  { path: '/community', name: 'community', component: () => import('@/features/community/CommunityView.vue'), meta: { title: '社区目录' } },
   { path: '/benchmarks', name: 'benchmarks', component: () => import('@/features/benchmarks/BenchmarkView.vue'), meta: { title: 'Benchmark' } },
   { path: '/logs', name: 'logs', component: () => import('@/features/logs/LogsView.vue'), meta: { title: '运行日志' } },
   { path: '/media', name: 'media', component: () => import('@/features/media/MediaView.vue'), meta: { title: '音视频转写', requiresVault: true } },

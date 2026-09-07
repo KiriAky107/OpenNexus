@@ -20,6 +20,7 @@ const navItems = computed(() => [
   { name: 'plugins', icon: Connection, label: 'Plugin' },
   { name: 'mcp-servers', icon: Monitor, label: 'MCP' },
   { name: 'themes', icon: Brush, label: t('主题', 'Themes') },
+  { name: 'community', icon: Connection, label: t('社区', 'Community') },
   { name: 'benchmarks', icon: Monitor, label: 'Benchmark' },
   { name: 'logs', icon: Document, label: t('日志', 'Logs') },
   { name: 'settings', icon: Setting, label: t('设置', 'Settings') },
@@ -42,7 +43,8 @@ function toggleExpanded() {
 <template>
   <aside class="primary-sidebar" :class="{ expanded }">
     <nav class="nav-list">
-      <div
+      <button
+        type="button"
         v-for="item in navItems"
         :key="item.name"
         class="nav-item"
@@ -52,7 +54,7 @@ function toggleExpanded() {
       >
         <AppIcon class="nav-icon" :icon="item.icon" :size="20" />
         <span class="nav-label">{{ item.label }}</span>
-      </div>
+      </button>
     </nav>
     <div class="sidebar-footer">
       <button class="nav-item collapse-button" type="button" :title="expanded ? t('收起导航', 'Collapse navigation') : t('展开导航', 'Expand navigation')" @click="toggleExpanded">
@@ -89,6 +91,9 @@ function toggleExpanded() {
 }
 
 .nav-item {
+  border: 0;
+  background: transparent;
+  font: inherit;
   display: flex;
   flex-direction: column;
   align-items: center;
