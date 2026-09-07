@@ -38,8 +38,31 @@ async function dataUrl(url: string, signal?:AbortSignal):Promise<string> {
   const blob=await response.blob()
   return await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=reject;reader.readAsDataURL(blob)})
 }
+export function preferWoff2FontSource(css:string):string {
+  if(!/^\s*@font-face\b/i.test(css))return css
+  const declaration=/\bsrc\s*:/i.exec(css)
+  if(!declaration)return css
+  const valueStart=declaration.index+declaration[0].length
+  let quote='',depth=0,valueEnd=-1
+  for(let index=valueStart;index<css.length;index+=1) {
+    const character=css[index]!
+    if(quote) {
+      if(character==='\\')index+=1
+      else if(character===quote)quote=''
+    } else if(character==='"'||character==="'")quote=character
+    else if(character==='(')depth+=1
+    else if(character===')')depth=Math.max(0,depth-1)
+    else if(character===';'&&depth===0){valueEnd=index;break}
+  }
+  if(valueEnd<0)return css
+  const sources=css.slice(valueStart,valueEnd)
+  const woff2=sources.match(/url\(\s*(?:["'][^"']*["']|[^)]*)\s*\)\s*format\(\s*["']?woff2["']?\s*\)/i)
+  return woff2 ? `${css.slice(0,valueStart)} ${woff2[0]}${css.slice(valueEnd)}` : css
+}
 async function embedCss(css: string, base: string, signal?:AbortSignal) {
   // 打印进程完全离线，主题资源必须来自应用同源地址并在此转换为 data URL。
+  // Chromium 支持 WOFF2；丢弃同一字体的 WOFF/TTF 回退，避免重复嵌入三份字体。
+  css=preferWoff2FontSource(css)
   const matches=[...css.matchAll(/url\(\s*(['"]?)(.*?)\1\s*\)/g)]
   for(const match of matches) {
     const url=match[2]!

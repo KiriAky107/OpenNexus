@@ -24,6 +24,11 @@ export default defineConfig({
   },
   build: {
     manifest: true,
+    // PDF 快照运行在离线打印页中；将 Chromium 实际使用的 WOFF2 字体内联，
+    // 避免 Tauri 资源协议无法通过 fetch 转存字体而导致整次导出失败。
+    assetsInlineLimit(filePath) {
+      return /\.woff2$/i.test(filePath) ? true : undefined
+    },
     rollupOptions: {
       output: {
         // Keep lazy languages/diagrams independent; do not collect every vendor into one bundle.
