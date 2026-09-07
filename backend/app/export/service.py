@@ -406,7 +406,7 @@ async def wait_for_export(job_id: str) -> ExportJob | None:
 
 
 async def preview_resources(request: ExportRequest):
-    """Prepare Vault images and vector plots for the shared browser renderer."""
+    """为浏览器渲染器准备通过 Vault 校验的图片和静态函数图。"""
     import base64
     from app.export.assets import enrich_document
     from app.plot.parser import parse_source
@@ -418,6 +418,8 @@ async def preview_resources(request: ExportRequest):
         document = parse_document(markdown)
         images, plots = [], []
         class HtmlImages(HTMLParser):
+            # 原始 HTML 只提取 img.src；路径、扩展名和图片格式仍交给 enrich_document 校验。
+            # 行内代码和代码块在 AST 中不是 HTML 节点，因此不会误当作图片资源。
             def handle_starttag(self, tag, attrs):
                 if tag == 'img':
                     src = dict(attrs).get('src')

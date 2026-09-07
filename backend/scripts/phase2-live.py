@@ -1,7 +1,7 @@
-"""Bounded real protocol/Agent checks using existing configuration; no secret output.
+"""使用现有配置执行有界的真实协议与 Agent 检查，不输出凭据。
 
-Requires --execute; at most 5 direct model requests plus one 4-case Agent dataset
-(6 steps and 6000 tokens per case). No provisioning or external writes.
+必须显式传入 --execute；最多发起 5 次直接模型请求和一组 4 样本 Agent 评测，
+每个样本最多 6 步、6000 Token。不创建配置，也不执行外部写入。
 """
 import argparse, asyncio, json, sys
 from pathlib import Path

@@ -115,6 +115,7 @@ class RetrievalEngine:
             candidate_scores = vec_scores
         else:  # hybrid：RRF 融合
             if request.fusion == 'weighted':
+                # 两路原始分值量纲不同，先各自归一化再等权融合，避免任一路分值范围支配结果。
                 fts_normal = dict(normalize_scores(list(fts_scores.items())))
                 vec_normal = dict(normalize_scores(list(vec_scores.items())))
                 candidate_scores = {bid: .5 * fts_normal.get(bid, 0) + .5 * vec_normal.get(bid, 0)

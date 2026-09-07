@@ -81,8 +81,7 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const workspaceStore = useWorkspaceStore()
-  // A benchmark can run without the workspace UI being open. Its persisted Trace
-  // and permission tickets must remain reachable from the report page.
+  // Benchmark 不依赖工作区界面；报告中的持久化 Trace 和待决权限入口必须仍可访问。
   const existingAgentRun = to.name === 'agent' && Boolean(to.params.runId)
   if (to.meta.requiresVault && !workspaceStore.hasVault && !existingAgentRun) {
     return { path: '/' }

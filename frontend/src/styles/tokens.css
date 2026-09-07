@@ -376,7 +376,7 @@ ol {
   --color-border-disabled: #eadfc4;
 }
 
-/* Function plot tokens inherit all installed themes, including custom packages. */
+/* 函数图颜色继承所有已安装主题，也允许自定义主题包覆盖这些 Token。 */
 :root {
   --color-plot-background: var(--color-surface-primary);
   --color-plot-text: var(--color-text-primary);

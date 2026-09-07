@@ -1,4 +1,4 @@
-"""Embed an available CJK TrueType font; retain the portable CID fallback."""
+"""嵌入可用的 CJK TrueType 字体，找不到时保留可移植的 CID 字体回退。"""
 import os
 from pathlib import Path
 from reportlab.pdfbase import pdfmetrics
@@ -6,6 +6,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
 def register_font():
+    """按显式配置、系统字体、Linux 字体的顺序注册 PDF 中文字体。"""
     candidates = [os.getenv('APP_EXPORT_FONT',''),
         str(Path(os.getenv('WINDIR','C:/Windows'))/'Fonts/simsun.ttc'),
         '/usr/share/fonts/truetype/arphic/uming.ttc']

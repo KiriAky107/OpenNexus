@@ -33,8 +33,7 @@ def test_preview_resources_keeps_vault_boundary_and_plot_quota_removed():
 
 @pytest.mark.skipif(browser_executable() is None,reason='No installed Chromium browser')
 def test_browser_prints_css_without_executing_document_scripts(tmp_path):
-    # The script would erase all text if executed. Embedded CSS and fonts must
-    # survive the browser path while network and file resources stay blocked.
+    # 若脚本被执行会清空正文；测试同时确认 CSS/字体可用且网络、文件资源保持禁用。
     html='<style>h1{color:#875343;font-size:37px} h1::before{content:"Theme "}</style><h1>Snapshot</h1><script>document.body.innerHTML="EXECUTED"</script><img src="file:///private.png">'
     result=render_snapshot(html,'A4')
     assert result.content.startswith(b'%PDF')

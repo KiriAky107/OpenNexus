@@ -117,7 +117,7 @@ class DocxExporter:
             with Image.open(BytesIO(png)) as image:
                 section = self._doc.sections[-1]
                 available_width = (section.page_width - section.left_margin - section.right_margin) / 914400
-                # Leave room for Word's containing paragraph line/spacing.
+                # 为 Word 外层段落的行高和间距预留空间，避免图片跨出页面。
                 available_height = (section.page_height - section.top_margin - section.bottom_margin) / 914400 - 0.25
                 width = min(5.8, available_width,
                     image.width / (180 if node.type == 'math_block' else 96),

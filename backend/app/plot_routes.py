@@ -1,4 +1,4 @@
-"""Interactive previews use the same bounded parser and geometry as exports."""
+"""交互预览复用导出使用的有界解析器和几何计算。"""
 import asyncio
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
@@ -19,6 +19,7 @@ class PlotResponse(BaseModel):
     node_count: int = 0
 
 def preview(request):
+    """同步解析并渲染函数图，供受并发限制的异步路由在线程中调用。"""
     parsed = parse_source(request.source)
     if parsed.plot is None:
         return PlotResponse(diagnostics=parsed.diagnostics)
@@ -30,5 +31,6 @@ def preview(request):
 
 @router.post('/function', response_model=PlotResponse)
 async def render_function(request: PlotRequest):
+    # 绘图属于 CPU 密集任务，限制并发并移入线程，避免阻塞事件循环。
     async with _slots:
         return await asyncio.to_thread(preview, request)

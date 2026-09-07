@@ -241,9 +241,8 @@ class Runtime:
 
 runtime = Runtime()
 
-# Bounded in-memory reuse of deterministic single-text local embeddings. The key
-# includes the data/model location, immutable model revision and frozen runtime
-# configuration. No remote API response or unavailable-model fallback is cached.
+# 对确定性的单文本本地向量做有界内存复用。键包含模型目录、不可变版本和冻结运行配置；
+# 远程 API 响应以及模型不可用时的回退结果都不进入缓存。
 _embedding_cache = OrderedDict()
 _EMBEDDING_CACHE_TTL = 600
 
