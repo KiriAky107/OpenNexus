@@ -45,3 +45,25 @@ def test_browser_prints_css_without_executing_document_scripts(tmp_path):
         text=subprocess.check_output(['pdftotext',str(pdf),'-']).decode('utf-8')
         assert 'Theme Snapshot' in text
         assert 'EXECUTED' not in text
+
+
+@pytest.mark.parametrize('source', ['<div><IMG SRC="assets/a&amp;b.png"></div>', 'inline <img src="assets/a&amp;b.png"/> image'])
+def test_preview_embeds_html_images(source):
+    from app.config import get_settings
+    from PIL import Image
+    import base64
+    folder=get_settings().vault_path/'notes'/'assets'
+    folder.mkdir(parents=True)
+    Image.new('RGBA',(2,2),(10,20,30,128)).save(folder/'a&b.png')
+    resources=asyncio.run(service.preview_resources(ExportRequest(format='pdf',source={'type':'markdown','markdown':source,'file_path':'notes/test.md'})))
+    image=resources['images'][0]
+    assert image['source']=='assets/a&b.png'
+    assert base64.b64decode(image['data'].split(',')[1]).startswith(b'\x89PNG')
+    assert image['warnings']==[]
+
+
+def test_html_images_keep_path_validation_and_code_is_not_an_image():
+    source='<img src="../../private.png">\n\ninline <img src="https://example.com/a.png">\n\n`<img src="code.png">`\n\n```html\n<img src="fenced.png">\n```'
+    resources=asyncio.run(service.preview_resources(ExportRequest(format='pdf',source={'type':'markdown','markdown':source})))
+    assert [image['source'] for image in resources['images']]==['../../private.png','https://example.com/a.png']
+    assert all(image['data'] is None and image['warnings'] for image in resources['images'])

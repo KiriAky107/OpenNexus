@@ -411,12 +411,23 @@ async def preview_resources(request: ExportRequest):
     from app.export.assets import enrich_document
     from app.plot.parser import parse_source
     from app.plot.render import render_svg
-    from app.export.document import Document
+    from app.export.document import Document, DocumentNode
+    from html.parser import HTMLParser
     markdown, _, metadata = await _resolve_source(request.source, True)
     def prepare():
         document = parse_document(markdown)
         images, plots = [], []
+        class HtmlImages(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                if tag == 'img':
+                    src = dict(attrs).get('src')
+                    if src:
+                        visit(DocumentNode(type='image', node_id='html-image', attributes={'src':src}))
         def visit(node):
+            if node.type == 'html_block' or node.attributes.get('raw_html'):
+                parser = HtmlImages(convert_charrefs=True)
+                parser.feed(node.text)
+                parser.close()
             if node.type == 'image':
                 warnings = enrich_document(Document(node_id='pdf-resources', children=[node]), (metadata or {}).get('file_path'), True, request.options, preserve_alpha=True)
                 raw = node.attributes.get('static_png')
