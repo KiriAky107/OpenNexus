@@ -222,6 +222,6 @@ function close() { disarm(); viewer.value?.close(); svgHtml.value = ''; opener?.
 </style>
 
 <style>
-/* Keep 10px axis labels readable on narrow screens; the existing container scrolls. */
+/* 窄屏仍保持 10px 坐标轴文字可读，溢出由现有图表容器滚动承接。 */
 .function-plot-preview > svg, .markdown-function-plot > svg { min-width: 640px; }
 </style>

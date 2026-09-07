@@ -1,4 +1,4 @@
-"""Standard task evaluation over AgentRuntime, never a scripted substitute runner."""
+"""通过真实 AgentRuntime 执行标准任务评测，不使用脚本化替代运行器。"""
 import asyncio
 from time import perf_counter
 from uuid import uuid4
@@ -10,9 +10,10 @@ from app.errors import ApiError
 INVALID = {'TOOL_NOT_FOUND', 'TOOL_NOT_ALLOWED', 'TOOL_ARGUMENT_INVALID', 'TOOL_VALIDATION_ERROR'}
 
 def score(case, run, events, latency, repeat):
+    """按工具选择、参数、结果、输出和引用要求评定单个样本。"""
     calls = [e.data for e in events if e.event.value == 'ToolCall']
-    # Maximum bipartite matching: broad parameter subsets must not consume the
-    # only call satisfying a more specific expectation. Each call is used once.
+    # 使用最大二分匹配，避免宽松的参数子集占用唯一能满足更严格预期的调用；
+    # 每个实际调用最多匹配一个预期调用。
     matched = {}
     def assign(expected_index, visited):
         expected = case.expected_tools[expected_index]
@@ -49,10 +50,11 @@ def score(case, run, events, latency, repeat):
         steps=run.current_step, latency_ms=latency, token_usage=run.token_usage, checks=checks, error_code=run.error_code)
 
 def aggregate(cases, planned_total=None):
+    """汇总已执行样本，并让取消后的未执行样本继续计入计划总数。"""
     total = len(cases) if planned_total is None else planned_total
     calls = sum(c.tool_calls for c in cases)
     expected = sum(c.expected_calls for c in cases)
-    # Micro accuracy penalizes omitted AND unnecessary calls; no-call cases are N/A.
+    # 微平均同时惩罚遗漏和多余调用；完全没有调用要求时准确率记为不适用。
     denominator = max(calls, expected)
     return {'total_cases': total, 'evaluated_cases': len(cases), 'task_success_rate': sum(c.success for c in cases)/total if total else 0,
         'tool_selection_accuracy': sum(c.selected_calls for c in cases)/denominator if denominator else None,
@@ -63,6 +65,7 @@ def aggregate(cases, planned_total=None):
         'token_usage': sum(c.token_usage for c in cases), 'tool_calls': calls, 'expected_calls': expected}
 
 async def create_run(request: AgentBenchmarkRequest):
+    """冻结数据集与运行配置，并把评测交给后台真实 Agent Runtime。"""
     from app.container import container
     from app.providers.registry import ProviderNotFoundError
     try:
@@ -91,6 +94,7 @@ async def create_run(request: AgentBenchmarkRequest):
     return run
 
 async def execute(run_id, request, dataset, runtime):
+    """顺序执行样本，传播取消信号，并持续发布可订阅的运行事件。"""
     flag = service._cancel_flags[run_id]
     results = []; active = None
     def emit(kind, data):
@@ -112,7 +116,7 @@ async def execute(run_id, request, dataset, runtime):
                     token_budget=request.token_budget, run_timeout_seconds=request.timeout_seconds,
                     tool_timeout_seconds=min(30, request.timeout_seconds), allow_network=request.allow_network,
                     metadata={'benchmark_run_id': run_id, 'case_id': case.case_id}))
-                # Surface the real Trace/permission entry while the case is still executing.
+                # 样本仍在运行时就暴露真实 Trace 与权限入口，便于界面处理待决授权。
                 service._runs[run_id].config_snapshot['active_agent_run_id'] = active.run_id
                 wait = asyncio.create_task(runtime.wait(active.run_id))
                 cancel = asyncio.create_task(flag.wait())

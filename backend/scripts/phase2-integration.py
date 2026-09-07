@@ -1,7 +1,7 @@
-"""Explicit isolated Demo: retrieval → read → three tasks, then real read-only MCP.
+"""显式隔离演示：检索、读取、创建三个任务，再调用真实只读 MCP。
 
-Approves only this run's tasks.write tickets. Requires the quality fixture Vault.
-Calls public API contracts; never writes completion state into SQLite.
+只批准本次运行产生的 tasks.write 权限票据，需要质量验收用 Vault。
+脚本仅调用公共 API 契约，不把伪造的完成状态写入 SQLite。
 """
 import argparse, json, time
 from pathlib import Path

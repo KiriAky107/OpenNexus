@@ -11,6 +11,7 @@ interface JobWire {
 export interface ExportJob { id: string; status: JobWire['status']; warnings: string[]; error: string | null; fileName?: string }
 const mapJob = (w: JobWire): ExportJob => ({ id: w.job_id, status: w.status, warnings: w.warnings, error: w.error, fileName: w.file?.file_name })
 export type ExportPalette = Record<'page' | 'surface' | 'text' | 'muted' | 'code' | 'border' | 'accent', string>
+// 冻结导出开始时的主题颜色，避免后台兼容渲染受到后续主题切换影响。
 export function captureExportPalette(): ExportPalette | undefined {
   const style = getComputedStyle(document.documentElement)
   const tokens = { page:'background-primary', surface:'surface-primary', text:'text-primary', muted:'text-secondary', code:'background-secondary', border:'border-default', accent:'accent-primary' }
@@ -20,8 +21,7 @@ export function captureExportPalette(): ExportPalette | undefined {
     if (/^#[0-9a-f]{3}$/i.test(value)) return [key, '#' + [...value.slice(1)].map(c => c+c).join('')]
     const rgb = value.match(/^rgb\(\s*(\d+)[, ]+\s*(\d+)[, ]+\s*(\d+)\s*\)$/)
     if (rgb) return [key, '#' + rgb.slice(1,4).map(v => Number(v).toString(16).padStart(2,'0')).join('')]
-    // Resolve named colors, color-mix/OKLCH and alpha through the browser's
-    // color implementation before freezing a portable RGB palette.
+    // 借助浏览器解析命名色、color-mix、OKLCH 和透明色，再冻结为可移植 RGB 色板。
     if (typeof CSS !== 'undefined' && CSS.supports('color', value)) {
       const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1
       const context = canvas.getContext('2d')
@@ -37,6 +37,7 @@ export function captureExportPalette(): ExportPalette | undefined {
   return entries.every(([,value]) => value) ? Object.fromEntries(entries) as ExportPalette : undefined
 }
 export async function rasterize(svg: string, signal?: AbortSignal, unlimited = false, background = '#ffffff'): Promise<string> {
+  // 非 PDF 格式保留像素预算和解码超时；PDF 的自包含快照解除资源配额。
   const doc = new DOMParser().parseFromString(svg, 'image/svg+xml')
   const root = doc.documentElement
   const box = root.getAttribute('viewBox')?.split(/[ ,]+/).map(Number)
@@ -86,8 +87,7 @@ export const exportService = {
       assets.push({ kind: 'mermaid', source_hash: await hashSource(source), png_base64: await rasterize(result.svg, signal, pdf, pdf ? options.palette?.surface ?? (['dark','midnight-purple'].includes(options.theme_id) ? '#161b22' : '#ffffff') : '#ffffff') })
     }
     signal?.throwIfAborted()
-    // Keep the response handle when cancellation arrives during submission:
-    // aborting HTTP alone could leave an undiscoverable running server job.
+    // 提交期间收到取消时仍等待服务器返回任务句柄；只中断 HTTP 会遗留无法追踪的后台任务。
     const job = mapJob(await apiClient.post<JobWire>('/api/exports', { source: { type: 'markdown', markdown, file_path: filePath }, title, format, options, assets, ...(printHtml ? { print_html:printHtml } : {}) }))
     if (signal?.aborted) {
       await apiClient.post(`/api/exports/${encodeURIComponent(job.id)}/cancel`)

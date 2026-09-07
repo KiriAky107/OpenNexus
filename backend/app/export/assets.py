@@ -1,4 +1,4 @@
-"""Raster-only resources; PDF bypasses export quotas but retains path/format validation."""
+"""处理栅格资源；PDF 不受导出配额限制，但仍执行路径和格式校验。"""
 import base64
 import hashlib
 import threading
@@ -9,7 +9,7 @@ from app.errors import ApiError
 _math_lock = threading.Lock()
 
 def enrich_document(document, file_path=None, unlimited=False, options=None, preserve_alpha=False):
-    """Embed Vault images and MathText, with format-specific quotas and palette."""
+    """内嵌 Vault 图片和 MathText，并按导出格式应用配额与主题配色。"""
     from app.config import get_settings
     from urllib.parse import unquote, urlsplit
     vault = get_settings().vault_path.resolve()
@@ -51,7 +51,7 @@ def enrich_document(document, file_path=None, unlimited=False, options=None, pre
                     if not unlimited and pixels > 16_000_000: raise ValueError('document pixels')
                     if not unlimited and image.width * image.height > 4_000_000: raise ValueError('image dimensions')
                     out = BytesIO()
-                    # Composite transparency over the PDF theme or the print/Word white surface.
+                    # 透明像素按 PDF 主题表面色合成；打印 HTML 与 Word 使用白色底色。
                     rgba=image.convert('RGBA'); background=Image.new('RGBA',rgba.size,palette['surface'] if palette else 'white')
                     background.alpha_composite(rgba); (rgba if preserve_alpha else background.convert('RGB')).save(out,'PNG')
                     png=out.getvalue();total += len(png)
@@ -70,6 +70,7 @@ def source_hash(source):
     return hashlib.sha256(source.strip().encode()).hexdigest()
 
 def validate_assets(assets, unlimited=False):
+    """校验前端静态资源并解码为 PNG；PDF 仅解除容量限制，不放宽格式要求。"""
     result = {}
     total = pixels = 0
     for asset in assets:
@@ -98,6 +99,7 @@ def validate_assets(assets, unlimited=False):
     return result
 
 def attach_assets(document, assets):
+    """按资源类型和源码哈希把已验证图片挂载到对应文档节点。"""
     def visit(node):
         source = node.attributes.get('src', '') if node.type == 'image' else node.text
         key = (node.type, source_hash(source))
@@ -109,7 +111,7 @@ def attach_assets(document, assets):
         visit(child)
 
 def plot_png(plot):
-    """DOCX consumes the same clipped geometry as SVG/PDF, rendered at 2x."""
+    """按 SVG/PDF 共用的裁剪几何，以二倍分辨率生成 DOCX 图像。"""
     from app.plot.render import compute_geometry, _sx, _sy, _fmt_num
     from PIL import ImageDraw, ImageFont
     geo = compute_geometry(plot)
@@ -135,7 +137,7 @@ def plot_png(plot):
     if geo.xlabel:
         draw.text((geo.width, (geo.height - 18)*2), geo.xlabel, fill='#1f2328', font=font, anchor='mm')
     if geo.ylabel:
-        # Horizontal at the upper-left margin keeps CJK labels readable in Word.
+        # 纵轴标题横排在左上边距，避免 CJK 文本在 Word 中旋转后不可读。
         draw.text((24, 24), geo.ylabel, fill='#1f2328', font=font)
     for index, expression in enumerate(plot.expressions):
         draw.text((48+(index%2)*620,geo.height*2+index//2*48),expression.label or 'y = '+expression.expression,fill=geo.colors[index],font=font)

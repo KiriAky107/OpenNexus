@@ -1,4 +1,4 @@
-"""Two bounded live calls for context summary + answer; never changes saved config."""
+"""执行两次有界真实调用完成上下文摘要与回答，不修改已保存配置。"""
 import argparse, asyncio, json, sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))

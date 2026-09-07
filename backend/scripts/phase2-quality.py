@@ -1,7 +1,7 @@
-"""Reproducible real-model quality run in an explicitly isolated APP_DATA_DIR.
+"""在显式隔离的 APP_DATA_DIR 中执行可复现的真实模型质量验证。
 
-Uses the application index/benchmark services. Never injects vectors or completion rows.
-Existing local weights/runtime must be configured; inference does not download models.
+使用应用自身的索引与评测服务，不注入向量或伪造完成记录。
+运行前必须已有本地权重和运行环境，推理过程不会下载模型。
 """
 import argparse
 import asyncio

@@ -285,7 +285,7 @@ class PdfExporter:
                 parts.append(self._render_inline(child.children, warnings))
             elif hasattr(self, f"_block_{child.type}"):
                 flush()
-                # Keep block content inside the list frame, including tables and callouts.
+                # 表格、警告框等块级内容也要保持在列表缩进框内。
                 story.append(Indenter(left=indent))
                 self._render_block(child, story, warnings)
                 story.append(Indenter(left=-indent))

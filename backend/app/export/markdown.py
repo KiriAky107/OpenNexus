@@ -179,6 +179,7 @@ class _AstMapper:
                 children=self.map_inline(token.get("children", [])),
             )
         if kind == "inline_html":
+            # 保留行内 HTML 的来源标记，仅供 PDF 资源扫描识别 img；最终 HTML 仍由前端净化。
             return DocumentNode(type="text", node_id=self.next_id(), text=token.get("raw", ""), attributes={"raw_html": True})
         if kind == "codespan":
             return DocumentNode(type="codespan", node_id=self.next_id(), text=token.get("raw", ""))

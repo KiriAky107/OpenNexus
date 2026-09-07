@@ -1,8 +1,7 @@
-"""Print the app's self-contained theme snapshot with a real browser engine.
+"""使用真实浏览器引擎打印应用生成的自包含主题快照。
 
-A child process isolates Playwright's Windows event loop from Uvicorn and keeps
-browser lifecycle scoped to one export. Snapshot scripts/network/file loads are
-blocked; fonts and images must already be embedded by the client.
+子进程隔离 Playwright 在 Windows 上的事件循环与 Uvicorn，并把浏览器生命周期限制在
+单次导出内。快照禁止脚本、网络和文件加载，字体与图片必须由客户端提前内嵌。
 """
 from pathlib import Path
 import os
@@ -14,6 +13,7 @@ from app.export.document import ExportResult
 
 
 def browser_executable():
+    """优先使用显式配置，再查找系统已安装的 Chromium 系浏览器。"""
     configured = os.environ.get('APP_PDF_BROWSER')
     if configured:
         return configured
@@ -28,6 +28,7 @@ def browser_executable():
 
 
 def render_snapshot(snapshot: str, page_size: str) -> ExportResult:
+    """在隔离子进程中打印快照，避免阻塞或污染服务进程的事件循环。"""
     with tempfile.TemporaryDirectory(prefix='notes-pdf-') as directory:
         source = Path(directory) / 'snapshot.html'
         output = Path(directory) / 'document.pdf'
@@ -42,6 +43,7 @@ def render_snapshot(snapshot: str, page_size: str) -> ExportResult:
 
 
 def print_snapshot(source: Path, output: Path, page_size: str):
+    """在离线、禁用 JavaScript 的上下文中将自包含 HTML 打印为 PDF。"""
     from playwright.sync_api import sync_playwright
     with sync_playwright() as runtime:
         browser = runtime.chromium.launch(executable_path=browser_executable(), headless=True)

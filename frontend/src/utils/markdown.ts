@@ -146,6 +146,7 @@ export async function renderMarkdown(source: string, options?: { themeId?: strin
 
   for (const code of documentNode.querySelectorAll('pre > code')) {
     const requestedLanguage = [...code.classList].find((name) => name.startsWith('language-'))?.slice(9) || 'text'
+    // Mermaid 与函数图共用静态图表管线；兼容旧的 function_plot 围栏写法。
     const diagramKind = requestedLanguage.toLowerCase().split(/\s+/)[0]!.replace('function_plot','function-plot')
     if (['mermaid', 'function-plot'].includes(diagramKind) && preferences.diagrams) {
       mermaidBlocks.push({ pre: code.parentElement!, source: code.textContent ?? '', kind: diagramKind })
@@ -173,6 +174,7 @@ export async function renderMarkdown(source: string, options?: { themeId?: strin
   let plotCount = 0, plotNodes = 0
   for (const { pre, source, kind } of mermaidBlocks) {
     try {
+      // 交互预览保持数量和 AST 复杂度预算；PDF 已在隔离渲染链路中按需求解除限制。
       if (!options?.pdf && kind === 'function-plot' && ++plotCount > 16) throw new Error('函数图像数量超过 16')
       const result = kind === 'function-plot' ? (options?.pdf ? await options.pdf.plot(source) : await renderFunctionPlot(source, options?.themeId)) : await renderMermaid(source, { theme: options?.theme, mode: 'static', ...(options?.pdf ? { unlimited:true, themeVariables:options.pdf.mermaidVariables } : {}) })
       if (!options?.pdf && 'nodeCount' in result && (plotNodes += Number(result.nodeCount)) > 8000) throw new Error('函数图像累计复杂度超过 8000')

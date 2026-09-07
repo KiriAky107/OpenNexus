@@ -6,7 +6,7 @@ import { mermaidThemeVariables } from './mermaidService'
 import { useThemeStore } from '@/stores/theme'
 import { useMarkdownPreferencesStore } from '@/stores/markdownPreferences'
 import { useHeadingAppearanceStore } from '@/stores/headingAppearance'
-// Load the same CSS, including Vue's scoped editor rules, without mounting an editor.
+// 仅加载编辑器及 Markdown 组件的样式，包括 Vue scoped 规则，不额外挂载编辑器实例。
 import MarkdownContent from '@/components/common/MarkdownContent.vue'
 import VisualMarkdownEditor from '@/features/editor/VisualMarkdownEditor.vue'
 void MarkdownContent; void VisualMarkdownEditor
@@ -39,6 +39,7 @@ async function dataUrl(url: string, signal?:AbortSignal):Promise<string> {
   return await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=reject;reader.readAsDataURL(blob)})
 }
 async function embedCss(css: string, base: string, signal?:AbortSignal) {
+  // 打印进程完全离线，主题资源必须来自应用同源地址并在此转换为 data URL。
   const matches=[...css.matchAll(/url\(\s*(['"]?)(.*?)\1\s*\)/g)]
   for(const match of matches) {
     const url=match[2]!
@@ -62,6 +63,7 @@ function stylesheetSnapshot(): {css:string;base:string}[] {
 }
 
 export async function preparePdfSnapshot(markdown:string,title:string,options:Options,signal?:AbortSignal,filePath?:string):Promise<string> {
+  // 在任何异步资源请求前冻结主题、排版和编辑器内容，保证产物对应点击导出时的状态。
   signal?.throwIfAborted()
   const theme=useThemeStore(), preferences={...useMarkdownPreferencesStore().normalized}, heading=useHeadingAppearanceStore()
   if(theme.currentThemeId && theme.currentThemeId!==options.theme_id)throw Error('主题在导出准备期间发生变化，请重新导出。')
@@ -76,8 +78,9 @@ export async function preparePdfSnapshot(markdown:string,title:string,options:Op
   const metadata=splitNoteMetadata(markdown)
   const body=metadata?.body ?? markdown
   const scope=scopeAttributes(VisualMarkdownEditor)
-  // Match the editor DOM and scoped styles, with read-only metadata controls.
+  // 复用编辑器 DOM 与 scoped 样式；元数据只输出展示内容，不携带编辑控件。
   const metadataHtml=metadata ? `<section class="note-metadata"${scope} aria-label="${escape(t('笔记属性','Note properties'))}"><span class="metadata-caption"${scope}>${escape(t('笔记属性','Note properties'))}</span>${metadata.title ? `<h1${scope}>${escape(metadata.title)}</h1>` : ''}<div class="metadata-tags"${scope}><span class="metadata-label"${scope}>${escape(t('标签','Tags'))}</span>${metadata.tags.map(tag=>`<span class="metadata-tag"${scope}><span${scope}>${escape(tag)}</span></span>`).join('')}</div></section>` : ''
+  // 仅含元数据的笔记没有正文资源，跳过请求可避免空 Markdown 触发接口的 422 校验。
   const resources:Resources=body.trim() ? await apiClient.post<Resources>('/api/exports/preview-resources',{format:'pdf',source:{type:'markdown',markdown:body,file_path:filePath},options}) : {images:[],plots:[]}
   signal?.throwIfAborted()
   const rendered=await renderMarkdown(body,{themeId:options.theme_id,theme:dark?'dark':'light',preferences,pdf:{mermaidVariables:diagramVariables,plot:async source=>{
@@ -91,10 +94,9 @@ export async function preparePdfSnapshot(markdown:string,title:string,options:Op
     if(!resource?.data)throw Error(resource?.warnings.join('; ')||`PDF 图片无法读取：${source}`)
     image.src=resource.data
   }
-  // Print all callout content and remove only interactive tools, not decoration.
+  // 打印全部警告框内容，只移除交互控件，保留主题装饰。
   fragment.querySelectorAll('details').forEach(d=>d.open=true)
-  // The workspace uses blockquotes for callouts. Preserve that DOM contract so
-  // editor-specific theme selectors apply, including spacing and decoration.
+  // 工作区使用 blockquote 表示警告框；保持相同 DOM 契约，让间距和装饰选择器继续生效。
   fragment.querySelectorAll('.markdown-callout:not(blockquote)').forEach(details=>{
     const block=fragment.createElement('blockquote')
     for(const attribute of [...details.attributes])if(attribute.name!=='open')block.setAttribute(attribute.name,attribute.value)
