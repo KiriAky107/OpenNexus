@@ -5,6 +5,7 @@ fn main() {
             "host_capabilities",
             "editor_capabilities",
             "workspace_choose",
+            "workspace_open",
             "workspace_tree",
             "workspace_read",
             "workspace_write",

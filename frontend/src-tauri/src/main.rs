@@ -2,23 +2,20 @@
 
 //! 预览 Host 只开放本地文件命令；未接通的 AI / 同步 / 凭据能力明确返回不可用。
 
+use notesagent_host::recent::{RecentVault, RecentVaultStore};
 use notesagent_host::workspace::{Document, Entry, Workspace};
-use serde::Serialize;
+use std::path::Path;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State};
 
 #[derive(Default)]
-struct Host(Mutex<Option<Workspace>>);
-
-#[derive(Serialize)]
-struct VaultInfo {
-    vault_id: String,
-    path: String,
-    name: String,
+struct Host {
+    workspace: Mutex<Option<Workspace>>,
+    recent: Mutex<Option<RecentVaultStore>>,
 }
 
-fn info(ws: &Workspace) -> VaultInfo {
-    VaultInfo {
+fn info(ws: &Workspace) -> RecentVault {
+    RecentVault {
         vault_id: ws.vault_id.clone(),
         path: ws.root.to_string_lossy().into(),
         name: ws
@@ -34,7 +31,7 @@ fn with_workspace<T>(
     host: &Host,
     f: impl FnOnce(&mut Workspace) -> notesagent_host::workspace::Result<T>,
 ) -> Result<T, String> {
-    let mut guard = host.0.lock().map_err(|_| "HOST_BUSY")?;
+    let mut guard = host.workspace.lock().map_err(|_| "HOST_BUSY")?;
     let ws = guard.as_mut().ok_or("VAULT_NOT_OPEN")?;
     f(ws).map_err(|e| e.code)
 }
@@ -52,14 +49,14 @@ fn editor_capabilities(app: tauri::AppHandle, import_enabled: bool) -> Result<()
 }
 
 #[tauri::command]
-fn workspace_choose(host: State<'_, Host>) -> Result<Option<VaultInfo>, String> {
+fn workspace_choose(host: State<'_, Host>) -> Result<Option<RecentVault>, String> {
     let Some(path) = rfd::FileDialog::new()
         .set_title("选择本地 Vault")
         .pick_folder()
     else {
         return Ok(None);
     };
-    let mut guard = host.0.lock().map_err(|_| "HOST_BUSY")?;
+    let mut guard = host.workspace.lock().map_err(|_| "HOST_BUSY")?;
     if guard
         .as_ref()
         .is_some_and(|ws| ws.root == path.canonicalize().unwrap_or_default())
@@ -68,19 +65,61 @@ fn workspace_choose(host: State<'_, Host>) -> Result<Option<VaultInfo>, String> 
     }
     let workspace = Workspace::open(&path).map_err(|e| e.code)?;
     let result = info(&workspace);
+    host.recent
+        .lock()
+        .map_err(|_| "HOST_BUSY")?
+        .as_mut()
+        .ok_or("HOST_NOT_READY")?
+        .remember(&result)?;
     *guard = Some(workspace);
     Ok(Some(result))
 }
 
 #[tauri::command]
-fn workspace_recent(host: State<'_, Host>) -> Result<Vec<VaultInfo>, String> {
-    let guard = host.0.lock().map_err(|_| "HOST_BUSY")?;
-    Ok(guard.as_ref().map(info).into_iter().collect())
+fn workspace_open(host: State<'_, Host>, path: String) -> Result<RecentVault, String> {
+    let authorized = host
+        .recent
+        .lock()
+        .map_err(|_| "HOST_BUSY")?
+        .as_ref()
+        .ok_or("HOST_NOT_READY")?
+        .authorized(Path::new(&path))?
+        .ok_or("VAULT_NOT_AUTHORIZED")?;
+    let mut guard = host.workspace.lock().map_err(|_| "HOST_BUSY")?;
+    if guard
+        .as_ref()
+        .is_some_and(|ws| ws.root == Path::new(&authorized.path))
+    {
+        return Ok(guard.as_ref().map(info).ok_or("VAULT_NOT_OPEN")?);
+    }
+    let workspace = Workspace::open(Path::new(&authorized.path)).map_err(|e| e.code)?;
+    let result = info(&workspace);
+    *guard = Some(workspace);
+    Ok(result)
+}
+
+#[tauri::command]
+fn workspace_recent(host: State<'_, Host>) -> Result<Vec<RecentVault>, String> {
+    host.recent
+        .lock()
+        .map_err(|_| "HOST_BUSY")?
+        .as_ref()
+        .ok_or("HOST_NOT_READY")?
+        .list()
 }
 
 #[tauri::command]
 fn workspace_revoke(host: State<'_, Host>) -> Result<(), String> {
-    *host.0.lock().map_err(|_| "HOST_BUSY")? = None;
+    let mut workspace = host.workspace.lock().map_err(|_| "HOST_BUSY")?;
+    if let Some(active) = workspace.as_ref() {
+        host.recent
+            .lock()
+            .map_err(|_| "HOST_BUSY")?
+            .as_mut()
+            .ok_or("HOST_NOT_READY")?
+            .revoke(&active.root)?;
+    }
+    *workspace = None;
     Ok(())
 }
 
@@ -136,6 +175,12 @@ fn main() {
             let paragraph = Submenu::with_items(app, "段落", true, &[&import])?;
             app.manage(import);
             app.set_menu(Menu::with_items(app, &[&paragraph])?)?;
+            let state_path = app.path().app_data_dir()?.join("host-state.sqlite3");
+            *app.state::<Host>()
+                .recent
+                .lock()
+                .map_err(|_| std::io::Error::other("HOST_BUSY"))? =
+                Some(RecentVaultStore::open(&state_path).map_err(std::io::Error::other)?);
             Ok(())
         })
         .on_menu_event(|app, event| {
@@ -154,6 +199,7 @@ fn main() {
             host_capabilities,
             editor_capabilities,
             workspace_choose,
+            workspace_open,
             workspace_recent,
             workspace_revoke,
             workspace_tree,
