@@ -35,7 +35,9 @@ export function registerEditorCommands(target: Target) {
 }
 export function updateNativeEditorMenu() {
   notifyCapabilityListeners()
-  if (isDesktop()) void hostInvoke('editor_capabilities', { importEnabled: !!active?.handlers['editor.import-note-properties'] && active.available() }).catch(() => undefined)
+  const metadataEnabled = !!active?.available()
+    && (!!active.handlers['editor.import-note-properties'] || !!active.handlers['editor.metadata.edit'])
+  if (isDesktop()) void hostInvoke('editor_capabilities', { metadataEnabled }).catch(() => undefined)
 }
 export function getEditorCommandCapabilities() {
   return editorCommandIds.map(id => ({ id, supported: !!active?.handlers[id], enabled: !!active?.handlers[id] && active.available() }))

@@ -3,19 +3,26 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { useEditorStore } from '@/stores/editor'
+import { useWorkspaceStore } from '@/stores/workspace'
 import TitleBarMenu from './TitleBarMenu.vue'
 
 const execute = vi.hoisted(() => vi.fn())
 const capabilities = vi.hoisted(() => vi.fn())
+const routerPush = vi.hoisted(() => vi.fn())
 vi.mock('@/services/editorCommandService', () => ({
   executeEditorCommand: execute,
   getEditorCommandCapabilities: capabilities,
   subscribeEditorCommandCapabilities: () => () => undefined,
 }))
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: routerPush }),
+  useRoute: () => ({ name: 'workspace' }),
+}))
 
 beforeEach(() => {
   setActivePinia(createPinia())
   execute.mockReset().mockResolvedValue({ ok: true })
+  routerPush.mockReset()
   capabilities.mockReturnValue([
     { id: 'editor.paragraph', supported: true, enabled: true },
     { id: 'editor.heading', supported: true, enabled: true },
@@ -25,6 +32,33 @@ beforeEach(() => {
 })
 
 describe('桌面顶部段落菜单', () => {
+  it('文件菜单承载实际工作区命令和笔记导出', async () => {
+    const editor = useEditorStore()
+    editor.currentFilePath = '/示例.md'
+    editor.content = '# 示例'
+    editor.saveStatus = 'saved'
+    const wrapper = mount(TitleBarMenu, { global: { stubs: { ExportDialog: { template: '<div data-testid="export-dialog" />' } } } })
+    await wrapper.get('[data-menu="file"] .menu-trigger').trigger('click')
+    expect(wrapper.text()).toContain('新建笔记…')
+    expect(wrapper.text()).toContain('打开其他知识库…')
+    expect(wrapper.text()).toContain('刷新文件树')
+    expect(wrapper.text()).toContain('下载 Markdown 副本')
+    await wrapper.get('.export-command').trigger('click')
+    expect(wrapper.find('[data-testid="export-dialog"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('视图和帮助菜单只连接项目已有页面', async () => {
+    useWorkspaceStore().hasVault = true
+    const wrapper = mount(TitleBarMenu)
+    await wrapper.get('[data-menu="view"] .menu-trigger').trigger('click')
+    expect(wrapper.text()).toContain('工作区搜索AI 对话智能体任务音视频')
+    expect(wrapper.text()).toContain('Skill 管理Plugin 管理MCP 服务器')
+    await wrapper.get('[data-menu="help"] .menu-trigger').trigger('click')
+    expect(wrapper.text()).toContain('运行日志Benchmark 评测社区目录设置与诊断…')
+    wrapper.unmount()
+  })
+
   it('源码笔记通过统一编辑命令执行属性导入', async () => {
     const editor = useEditorStore()
     editor.mode = 'source'
