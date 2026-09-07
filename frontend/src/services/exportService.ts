@@ -68,9 +68,14 @@ export async function hashSource(source: string) {
 }
 export const exportService = {
   async create(markdown: string, title: string, format: ExportFormat, options: { theme_id: string; include_title: boolean; page_size: string; palette?: ExportPalette }, signal?: AbortSignal, filePath?: string) {
+    let printHtml: string | undefined
+    if (format === 'pdf') {
+      const { preparePdfSnapshot } = await import('./pdfSnapshotService')
+      printHtml = await preparePdfSnapshot(markdown,title,options,signal,filePath)
+    }
     const blocks: string[] = []
     const parser = new Marked()
-    parser.walkTokens(parser.lexer(markdown), token => { if (token.type === 'code' && token.lang?.trim().split(/\s+/)[0]?.toLowerCase() === 'mermaid') blocks.push(token.text) })
+    if (format !== 'pdf') parser.walkTokens(parser.lexer(markdown), token => { if (token.type === 'code' && token.lang?.trim().split(/\s+/)[0]?.toLowerCase() === 'mermaid') blocks.push(token.text) })
     const assets = []
     for (const source of [...new Set(blocks)]) {
       signal?.throwIfAborted()
@@ -83,7 +88,7 @@ export const exportService = {
     signal?.throwIfAborted()
     // Keep the response handle when cancellation arrives during submission:
     // aborting HTTP alone could leave an undiscoverable running server job.
-    const job = mapJob(await apiClient.post<JobWire>('/api/exports', { source: { type: 'markdown', markdown, file_path: filePath }, title, format, options, assets }))
+    const job = mapJob(await apiClient.post<JobWire>('/api/exports', { source: { type: 'markdown', markdown, file_path: filePath }, title, format, options, assets, ...(printHtml ? { print_html:printHtml } : {}) }))
     if (signal?.aborted) {
       await apiClient.post(`/api/exports/${encodeURIComponent(job.id)}/cancel`)
       const current = await apiClient.get<JobWire>(`/api/exports/${encodeURIComponent(job.id)}`)

@@ -210,7 +210,7 @@ async def create_export(request: ExportRequest) -> ExportJob:
     _jobs[job_id] = job
     _cancel_flags[job_id] = asyncio.Event()
     _tasks[job_id] = asyncio.create_task(
-        _execute(job_id, request.format, markdown, title, metadata, request.options, assets)
+        _execute(job_id, request.format, markdown, title, metadata, request.options, assets, request.print_html)
     )
     return job
 
@@ -249,6 +249,7 @@ async def _execute(
     metadata: dict | None,
     options: ExportOptions,
     assets: dict | None = None,
+    print_html: str | None = None,
 ) -> None:
     """后台渲染：排队 → 解析 → 导出 → 写文件 → 挂载产物元信息。"""
     cancel_event = _cancel_flags[job_id]
@@ -275,17 +276,21 @@ async def _execute(
 
         # 解析与渲染都是 CPU 密集的同步工作，放入线程执行避免阻塞事件循环，
         # 使运行中的取消能在渲染边界生效；写文件前再次检查取消。
-        document = await asyncio.to_thread(parse_document, markdown)
-        document.attributes["title"] = title
-        from app.export.assets import attach_assets
-        attach_assets(document, assets or {})
-        if metadata:
-            document.attributes["metadata"] = metadata
+        if format == ExportFormat.pdf and print_html is not None:
+            from app.export.browser_pdf import render_snapshot
+            result = await asyncio.to_thread(render_snapshot, print_html, options.page_size)
+        else:
+            document = await asyncio.to_thread(parse_document, markdown)
+            document.attributes["title"] = title
+            from app.export.assets import attach_assets
+            attach_assets(document, assets or {})
+            if metadata:
+                document.attributes["metadata"] = metadata
 
-        from app.export.assets import enrich_document
-        resource_warnings = await asyncio.to_thread(enrich_document, document, (metadata or {}).get('file_path'), format == ExportFormat.pdf, options)
-        result = await asyncio.to_thread(_render_document, document, options, format)
-        result.warnings[:0] = resource_warnings
+            from app.export.assets import enrich_document
+            resource_warnings = await asyncio.to_thread(enrich_document, document, (metadata or {}).get('file_path'), format == ExportFormat.pdf, options)
+            result = await asyncio.to_thread(_render_document, document, options, format)
+            result.warnings[:0] = resource_warnings
         if cancel_event.is_set():
             raise ExportCancelled()
         if format != ExportFormat.pdf and len(result.content) > MAX_EXPORT_BYTES:
@@ -398,3 +403,29 @@ async def wait_for_export(job_id: str) -> ExportJob | None:
     if task is not None:
         await task
     return _jobs.get(job_id)
+
+
+async def preview_resources(request: ExportRequest):
+    """Prepare Vault images and vector plots for the shared browser renderer."""
+    import base64
+    from app.export.assets import enrich_document
+    from app.plot.parser import parse_source
+    from app.plot.render import render_svg
+    from app.export.document import Document
+    markdown, _, metadata = await _resolve_source(request.source, True)
+    def prepare():
+        document = parse_document(markdown)
+        images, plots = [], []
+        def visit(node):
+            if node.type == 'image':
+                warnings = enrich_document(Document(node_id='pdf-resources', children=[node]), (metadata or {}).get('file_path'), True, request.options, preserve_alpha=True)
+                raw = node.attributes.get('static_png')
+                images.append({'source': node.attributes.get('src',''), 'data': 'data:image/png;base64,'+base64.b64encode(raw).decode() if raw else None, 'warnings': warnings})
+            if node.type == 'function_plot':
+                parsed = parse_source(node.text, unlimited=True)
+                result = render_svg(parsed.plot, request.options.theme_id, unlimited=True) if parsed.plot else None
+                plots.append({'source':node.text, 'svg':result.content if result else '', 'warnings':[d.message for d in parsed.diagnostics]+(result.warnings if result else [])})
+            for child in node.children: visit(child)
+        for child in document.children: visit(child)
+        return {'images':images,'plots':plots}
+    return await asyncio.to_thread(prepare)

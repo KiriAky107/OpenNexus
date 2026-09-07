@@ -37,7 +37,7 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer) })
     <label>纸张 <select v-model="page"><option>A4</option><option>Letter</option></select></label>
     <label><input v-model="title" type="checkbox">包含标题</label>
     <p v-if="format === 'docx'">DOCX 使用浅色打印样式。</p>
-    <p v-if="format === 'pdf'">PDF 使用当前主题配色。</p>
+    <p v-if="format === 'pdf'">PDF 使用当前笔记主题与排版样式。</p>
     <button class="button-primary" :disabled="preparing || !editor.content.trim()" @click="start">{{ preparing ? '准备图表…' : '开始导出' }}</button>
     <button v-if="preparing" @click="controller?.abort()">取消准备</button>
     <p v-if="error" role="alert">{{ error }}</p>

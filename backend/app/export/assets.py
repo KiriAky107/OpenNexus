@@ -8,7 +8,7 @@ from app.errors import ApiError
 
 _math_lock = threading.Lock()
 
-def enrich_document(document, file_path=None, unlimited=False, options=None):
+def enrich_document(document, file_path=None, unlimited=False, options=None, preserve_alpha=False):
     """Embed Vault images and MathText, with format-specific quotas and palette."""
     from app.config import get_settings
     from urllib.parse import unquote, urlsplit
@@ -53,7 +53,7 @@ def enrich_document(document, file_path=None, unlimited=False, options=None):
                     out = BytesIO()
                     # Composite transparency over the PDF theme or the print/Word white surface.
                     rgba=image.convert('RGBA'); background=Image.new('RGBA',rgba.size,palette['surface'] if palette else 'white')
-                    background.alpha_composite(rgba); background.convert('RGB').save(out,'PNG')
+                    background.alpha_composite(rgba); (rgba if preserve_alpha else background.convert('RGB')).save(out,'PNG')
                     png=out.getvalue();total += len(png)
                     if not unlimited and total > 8_000_000: raise ValueError('resource bytes')
                     node.attributes['static_png']=png

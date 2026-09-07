@@ -1547,6 +1547,11 @@ async def create_export(request: ExportRequest) -> ExportJob:
     return await export_service.create_export(request)
 
 
+@router.post("/exports/preview-resources", tags=["Export"])
+async def export_preview_resources(request: ExportRequest):
+    return await export_service.preview_resources(request)
+
+
 @router.get(
     "/exports",
     response_model=ExportJobListResponse,

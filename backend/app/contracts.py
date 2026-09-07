@@ -1452,6 +1452,7 @@ class ExportAsset(Contract):
 
 
 class ExportRequest(Contract):
+    print_html: str | None = None
     assets: list[ExportAsset] = Field(default_factory=list)
     title: str = Field(default="", max_length=200)
     source: ExportSource
@@ -1460,6 +1461,8 @@ class ExportRequest(Contract):
 
     @model_validator(mode="after")
     def _asset_limits(self) -> "ExportRequest":
+        if self.print_html is not None and self.format != ExportFormat.pdf:
+            raise ValueError("print_html is only supported for PDF")
         if self.format != ExportFormat.pdf:
             if len(self.assets) > 64 or any(len(asset.png_base64) > 2800000 for asset in self.assets):
                 raise ValueError("export asset count or size limit exceeded")
