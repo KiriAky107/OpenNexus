@@ -8,6 +8,7 @@ import { ArrowRight, Document, Folder, FolderOpened, Moon, Sunny } from '@elemen
 import AppIcon from '@/components/common/AppIcon.vue'
 import { t } from '@/i18n'
 import { ApiErrorClass } from '@/services/apiClient'
+import { isDesktop } from '@/services/platform/desktop'
 
 const router = useRouter()
 const workspaceStore = useWorkspaceStore()
@@ -28,7 +29,7 @@ async function initializeVault() {
   try { await workspaceStore.loadRecentVaults() }
   catch (reason) { openError.value = reason instanceof Error ? reason.message : String(reason); return }
   const lastVaultPath = localStorage.getItem('last-vault-path')
-  if (settingsStore.restoreLastVault && lastVaultPath) {
+  if (!isDesktop() && settingsStore.restoreLastVault && lastVaultPath) {
     await openVault(lastVaultPath)
   }
 }
@@ -50,6 +51,7 @@ async function openVault(path: string) {
 }
 
 async function openFolderPicker() {
+  if (isDesktop()) { await openVault(''); return }
   const configured = workspaceStore.recentVaults[0]
   if (configured) await openVault(configured.path)
 }
@@ -70,7 +72,7 @@ async function openFolderPicker() {
         <div v-if="openError" class="error-banner" role="alert">{{ openError }} <button class="btn" @click="initializeVault" :disabled="isLoading">{{ t('重试', 'Retry') }}</button></div>
         <p v-if="isLoading" role="status">{{ t('正在打开知识库…', 'Opening knowledge base…') }}</p>
         <h2 class="card-title">{{ t('选择知识库', 'Select Knowledge Base') }}</h2>
-        <p class="card-desc">{{ t('Web 联调模式连接 AI Core 当前配置的 Vault', 'Web development mode connects to the Vault configured in AI Core') }}</p>
+        <p class="card-desc">{{ isDesktop() ? t('桌面预览：选择本地目录；AI 与同步尚未接通。', 'Desktop preview: choose a local folder. AI and sync are not connected yet.') : t('Web 联调模式连接 AI Core 当前配置的 Vault', 'Web development mode connects to the Vault configured in AI Core') }}</p>
 
         <div v-if="workspaceStore.recentVaults.length" class="recent-vaults">
           <div class="section-label">{{ t('最近打开', 'Recently opened') }}</div>
@@ -93,8 +95,8 @@ async function openFolderPicker() {
         </div>
 
         <div class="actions">
-          <button class="btn btn-primary" @click="openFolderPicker" :disabled="isLoading || !workspaceStore.recentVaults.length">
-            <AppIcon :icon="FolderOpened" /> {{ t('打开后端 Vault', 'Open backend Vault') }}
+          <button class="btn btn-primary" @click="openFolderPicker" :disabled="isLoading || (!isDesktop() && !workspaceStore.recentVaults.length)">
+            <AppIcon :icon="FolderOpened" /> {{ isDesktop() ? t('选择本地 Vault', 'Choose local Vault') : t('打开后端 Vault', 'Open backend Vault') }}
           </button>
         </div>
 

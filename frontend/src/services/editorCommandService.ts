@@ -1,4 +1,5 @@
-/** Versioned frontend boundary for future native menus/shortcuts; no Tauri IPC yet. */
+/** 活动编辑器命令边界；原生菜单复用能力检测和处理器。 */
+import { hostInvoke, isDesktop } from './platform/desktop'
 export const editorCommandVersion = 1
 export const editorCommandIds = [
   'editor.bold', 'editor.italic', 'editor.strikethrough', 'editor.inline-code',
@@ -19,7 +20,11 @@ let active: Target | undefined
 
 export function registerEditorCommands(target: Target) {
   active = target
-  return () => { if (active === target) active = undefined }
+  updateNativeEditorMenu()
+  return () => { if (active === target) { active = undefined; updateNativeEditorMenu() } }
+}
+export function updateNativeEditorMenu() {
+  if (isDesktop()) void hostInvoke('editor_capabilities', { importEnabled: !!active?.handlers['editor.import-note-properties'] && active.available() }).catch(() => undefined)
 }
 export function getEditorCommandCapabilities() {
   return editorCommandIds.map(id => ({ id, supported: !!active?.handlers[id], enabled: !!active?.handlers[id] && active.available() }))

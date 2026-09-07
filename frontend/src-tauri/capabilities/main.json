@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "仅本地应用主窗口可请求受限 Vault 命令；远程来源没有授权。",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-host-capabilities",
+    "allow-workspace-choose",
+    "allow-workspace-tree",
+    "allow-workspace-read",
+    "allow-workspace-write",
+    "allow-workspace-rename",
+    "allow-workspace-delete",
+    "allow-workspace-mkdir",
+    "allow-workspace-recent",
+    "allow-workspace-revoke",
+    "core:window:allow-destroy",
+    "allow-editor-capabilities"
+  ]
+}
