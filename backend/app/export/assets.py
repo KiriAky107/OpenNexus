@@ -1,4 +1,4 @@
-"""Bounded raster-only resource boundary. No URLs, XML or filesystem paths accepted."""
+"""Raster-only resources; PDF bypasses export quotas but retains path/format validation."""
 import base64
 import hashlib
 import threading
@@ -8,12 +8,14 @@ from app.errors import ApiError
 
 _math_lock = threading.Lock()
 
-def enrich_document(document, file_path=None):
-    """Embed local vault images and bounded MathText. Unsupported TeX stays explicit."""
+def enrich_document(document, file_path=None, unlimited=False, options=None):
+    """Embed Vault images and MathText, with format-specific quotas and palette."""
     from app.config import get_settings
     from urllib.parse import unquote, urlsplit
     vault = get_settings().vault_path.resolve()
     base = (vault / (file_path or '')).parent if file_path else vault
+    from app.export.themes import pdf_palette
+    palette = pdf_palette(options, []) if unlimited and options else None
     warnings = []
     count = total = pixels = 0
     def visit(node):
@@ -21,14 +23,14 @@ def enrich_document(document, file_path=None):
         if node.type in {'image','math_block','math_inline'} or node.attributes.get('static_png'):
             count += 1
             try:
-                if count > 64: raise ValueError('resource count')
+                if not unlimited and count > 64: raise ValueError('resource count')
                 if node.attributes.get('static_png'):
                     raw = node.attributes['static_png']
                 elif node.type == 'image':
                     src = str(node.attributes.get('src',''))
                     if urlsplit(src).scheme or src.startswith('//'): raise ValueError('remote image')
                     path = (base / unquote(src)).resolve()
-                    if not path.is_relative_to(vault) or path.suffix.lower() not in {'.png','.jpg','.jpeg','.webp'} or path.stat().st_size > 2_000_000:
+                    if not path.is_relative_to(vault) or path.suffix.lower() not in {'.png','.jpg','.jpeg','.webp'} or (not unlimited and path.stat().st_size > 2_000_000):
                         raise ValueError('image path or budget')
                     raw = path.read_bytes()
                 else:
@@ -36,23 +38,24 @@ def enrich_document(document, file_path=None):
                     depth = 0
                     for char in source:
                         depth += (char == '{') - (char == '}')
-                        if depth > 20: raise ValueError('math depth')
-                    if len(source) > 512 or depth != 0: raise ValueError('math budget')
+                        if not unlimited and depth > 20: raise ValueError('math depth')
+                    if (not unlimited and len(source) > 512) or depth != 0: raise ValueError('math budget')
                     from matplotlib.mathtext import math_to_image
-                    with _math_lock:
+                    from matplotlib import rc_context
+                    with _math_lock, rc_context({'savefig.transparent': bool(palette)}):
                         out = BytesIO()
-                        math_to_image('$'+source+'$', out, dpi=180, format='png', color='black')
+                        math_to_image('$'+source+'$', out, dpi=180, format='png', color=palette['text'] if palette else 'black')
                         raw = out.getvalue()
                 with Image.open(BytesIO(raw)) as image:
                     pixels += image.width * image.height
-                    if pixels > 16_000_000: raise ValueError('document pixels')
-                    if image.width * image.height > 4_000_000: raise ValueError('image dimensions')
+                    if not unlimited and pixels > 16_000_000: raise ValueError('document pixels')
+                    if not unlimited and image.width * image.height > 4_000_000: raise ValueError('image dimensions')
                     out = BytesIO()
-                    # Flatten alpha on white for portable print/Word output.
-                    rgba=image.convert('RGBA'); background=Image.new('RGBA',rgba.size,'white')
+                    # Composite transparency over the PDF theme or the print/Word white surface.
+                    rgba=image.convert('RGBA'); background=Image.new('RGBA',rgba.size,palette['surface'] if palette else 'white')
                     background.alpha_composite(rgba); background.convert('RGB').save(out,'PNG')
                     png=out.getvalue();total += len(png)
-                    if total > 8_000_000: raise ValueError('resource bytes')
+                    if not unlimited and total > 8_000_000: raise ValueError('resource bytes')
                     node.attributes['static_png']=png
             except Exception:
                 node.attributes.pop('static_png', None)
@@ -66,26 +69,26 @@ def enrich_document(document, file_path=None):
 def source_hash(source):
     return hashlib.sha256(source.strip().encode()).hexdigest()
 
-def validate_assets(assets):
+def validate_assets(assets, unlimited=False):
     result = {}
     total = pixels = 0
     for asset in assets:
         try:
             raw = base64.b64decode(asset.png_base64, validate=True)
             total += len(raw)
-            if total > 8 * 1024 * 1024:
+            if not unlimited and total > 8 * 1024 * 1024:
                 raise ValueError('asset budget')
             with Image.open(BytesIO(raw)) as image:
                 pixels += image.width * image.height
-                if pixels > 16_000_000: raise ValueError('document pixel budget')
-                if image.format != 'PNG' or image.width * image.height > 4_000_000:
+                if not unlimited and pixels > 16_000_000: raise ValueError('document pixel budget')
+                if image.format != 'PNG' or (not unlimited and image.width * image.height > 4_000_000):
                     raise ValueError('image budget')
                 image.load()
                 out = BytesIO()
                 rgba = image.convert('RGBA')
                 background = Image.new('RGBA', rgba.size, 'white')
                 background.alpha_composite(rgba)
-                background.convert('RGB').save(out, 'PNG')
+                (rgba if unlimited else background.convert('RGB')).save(out, 'PNG')
                 key = (asset.kind, asset.source_hash)
                 if key in result:
                     raise ValueError('duplicate asset')

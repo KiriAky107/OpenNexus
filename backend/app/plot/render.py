@@ -339,7 +339,7 @@ def _sample_segments(
     return clipped
 
 
-def compute_geometry(plot: FunctionPlot) -> PlotGeometry:
+def compute_geometry(plot: FunctionPlot, unlimited: bool = False) -> PlotGeometry:
     """解析并计算几何，供 SVG 与 reportlab 后端复用。"""
     warnings: list[str] = []
     xmin, xmax = plot.domain
@@ -351,7 +351,7 @@ def compute_geometry(plot: FunctionPlot) -> PlotGeometry:
     fns: list[tuple[object, object]] = []
     for expr in plot.expressions:
         try:
-            tree = parse_expression(expr.expression)
+            tree = parse_expression(expr.expression, unlimited=unlimited)
         except PlotParseError as exc:
             warnings.append(f"表达式无法渲染，已跳过：{expr.expression}（{exc.diagnostic.message}）")
             continue

@@ -146,7 +146,7 @@ def _evict_terminal() -> bool:
     return True
 
 
-async def _resolve_source(source: ExportSource) -> tuple[str, str, dict | None]:
+async def _resolve_source(source: ExportSource, unlimited: bool = False) -> tuple[str, str, dict | None]:
     """把导出源解析为 (markdown, title, metadata)；metadata 仅 note 源提供。"""
     if source.type == ExportSourceType.note:
         note = await note_service.get_note(source.note_id)
@@ -157,7 +157,7 @@ async def _resolve_source(source: ExportSource) -> tuple[str, str, dict | None]:
                 "note not found",
                 {"note_id": source.note_id},
             )
-        if len(note.markdown) > MAX_MARKDOWN_CHARS:
+        if not unlimited and len(note.markdown) > MAX_MARKDOWN_CHARS:
             raise ApiError(
                 400,
                 "EXPORT_OPTIONS_INVALID",
@@ -175,7 +175,7 @@ async def _resolve_source(source: ExportSource) -> tuple[str, str, dict | None]:
     markdown = source.markdown or ""
     if not markdown.strip():
         raise ApiError(400, "EXPORT_OPTIONS_INVALID", "markdown source must not be empty")
-    if len(markdown) > MAX_MARKDOWN_CHARS:
+    if not unlimited and len(markdown) > MAX_MARKDOWN_CHARS:
         raise ApiError(
             400,
             "EXPORT_OPTIONS_INVALID",
@@ -187,10 +187,10 @@ async def _resolve_source(source: ExportSource) -> tuple[str, str, dict | None]:
 
 async def create_export(request: ExportRequest) -> ExportJob:
     """创建导出任务，立即返回 queued 的 ExportJob，由后台 Task 渲染。"""
-    markdown, title, metadata = await _resolve_source(request.source)
+    markdown, title, metadata = await _resolve_source(request.source, request.format == ExportFormat.pdf)
     title = request.title or title
     from app.export.assets import validate_assets
-    assets = await asyncio.to_thread(validate_assets, request.assets)
+    assets = await asyncio.to_thread(validate_assets, request.assets, request.format == ExportFormat.pdf)
 
     if not _evict_terminal():
         raise ApiError(
@@ -283,12 +283,12 @@ async def _execute(
             document.attributes["metadata"] = metadata
 
         from app.export.assets import enrich_document
-        resource_warnings = await asyncio.to_thread(enrich_document, document, (metadata or {}).get('file_path'))
+        resource_warnings = await asyncio.to_thread(enrich_document, document, (metadata or {}).get('file_path'), format == ExportFormat.pdf, options)
         result = await asyncio.to_thread(_render_document, document, options, format)
         result.warnings[:0] = resource_warnings
         if cancel_event.is_set():
             raise ExportCancelled()
-        if len(result.content) > MAX_EXPORT_BYTES:
+        if format != ExportFormat.pdf and len(result.content) > MAX_EXPORT_BYTES:
             raise ExportTooLarge()
 
         ext = _extension_for(format)

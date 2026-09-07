@@ -3,7 +3,7 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import AppDialog from '@/components/common/AppDialog.vue'
 import { useEditorStore } from '@/stores/editor'
 import { useThemeStore } from '@/stores/theme'
-import { exportService, type ExportFormat, type ExportJob } from '@/services/exportService'
+import { exportService, captureExportPalette, type ExportFormat, type ExportJob } from '@/services/exportService'
 const emit = defineEmits<{ close: [] }>()
 const editor = useEditorStore(), theme = useThemeStore()
 const format = ref<ExportFormat>('html'), page = ref('A4'), title = ref(true)
@@ -19,7 +19,7 @@ async function start() {
   preparing.value = true; error.value = ''; controller = new AbortController()
   const snapshot = editor.content, name = editor.currentFilePath?.split('/').pop()?.replace(/\.md$/i, '') ?? '笔记'
   try {
-    const job = await exportService.create(snapshot, name, format.value, { theme_id: theme.currentThemeId, include_title: title.value, page_size: page.value }, controller.signal, editor.currentFilePath ?? undefined)
+    const job = await exportService.create(snapshot, name, format.value, { theme_id: theme.currentThemeId, include_title: title.value, page_size: page.value, palette: captureExportPalette() }, controller.signal, editor.currentFilePath ?? undefined)
     if (!disposed) jobs.value.unshift(job)
   } catch (e) { error.value = e instanceof DOMException && e.name === 'AbortError' ? '已取消导出' : String(e) }
   finally { preparing.value = false }
@@ -28,7 +28,7 @@ async function action(job: ExportJob, download = false) {
   try { if (download) await exportService.download(job); else await exportService.cancel(job.id) } catch (e) { error.value = String(e) }
 }
 onMounted(refresh)
-onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort() })
+onBeforeUnmount(() => { disposed = true; clearTimeout(timer) })
 </script>
 <template>
   <AppDialog label="导出笔记" @close="emit('close')"><section class="modal export-modal">
@@ -36,7 +36,8 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort(
     <label for="export-format">格式</label><select id="export-format" v-model="format"><option value="html">HTML</option><option value="pdf">PDF</option><option value="docx">DOCX</option></select>
     <label>纸张 <select v-model="page"><option>A4</option><option>Letter</option></select></label>
     <label><input v-model="title" type="checkbox">包含标题</label>
-    <p v-if="format !== 'html'">PDF / DOCX 使用浅色打印样式。</p>
+    <p v-if="format === 'docx'">DOCX 使用浅色打印样式。</p>
+    <p v-if="format === 'pdf'">PDF 使用当前主题配色。</p>
     <button class="button-primary" :disabled="preparing || !editor.content.trim()" @click="start">{{ preparing ? '准备图表…' : '开始导出' }}</button>
     <button v-if="preparing" @click="controller?.abort()">取消准备</button>
     <p v-if="error" role="alert">{{ error }}</p>

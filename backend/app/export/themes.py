@@ -32,3 +32,13 @@ ALIASES = {'summary':'abstract','tldr':'abstract','hint':'tip',
            'check':'success','done':'success','help':'question','faq':'question',
            'caution':'warning','attention':'warning','fail':'failure','missing':'failure',
            'error':'danger','cite':'quote'}
+
+
+def pdf_palette(options, warnings):
+    if options.palette is not None:
+        return options.palette.model_dump()
+    theme_id = options.theme_id
+    if theme_id not in PALETTES:
+        warnings.append(f'PDF 不支持主题 {theme_id}，已使用 light 导出配色')
+        theme_id = 'light'
+    return dict(zip(('page','surface','text','muted','code','border','accent'), PALETTES[theme_id]))

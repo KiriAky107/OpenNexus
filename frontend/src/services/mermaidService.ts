@@ -29,12 +29,25 @@ export function mermaidThemeVariables(dark: boolean, useDocument = true) {
   }
 }
 
-async function ensureInitialized(theme: 'light' | 'dark', raster = false) {
+async function ensureInitialized(theme: 'light' | 'dark', raster = false, palette?: Record<string,string>, unlimited = false) {
     const mermaid = await loadMermaid()
+    const dark = palette ? [1,3,5].reduce((sum,index,i) => sum + parseInt(palette.surface!.slice(index,index+2),16) * [0.2126,0.7152,0.0722][i]!,0) < 128 : theme === 'dark'
     mermaid.initialize({
       startOnLoad: false,
       theme: 'base',
-      themeVariables: mermaidThemeVariables(theme === 'dark', !raster),
+      themeVariables: palette ? {
+        ...mermaidThemeVariables(dark, false), background: palette.surface,
+        primaryColor: palette.code, primaryTextColor: palette.text, primaryBorderColor: palette.border,
+        secondaryColor: palette.code, secondaryTextColor: palette.text, secondaryBorderColor: palette.border,
+        tertiaryColor: palette.code, tertiaryTextColor: palette.text, tertiaryBorderColor: palette.border,
+        textColor: palette.text, lineColor: palette.muted, mainBkg: palette.code, nodeBorder: palette.border,
+        clusterBkg: palette.surface, clusterBorder: palette.border, edgeLabelBackground: palette.surface,
+        actorBkg: palette.code, actorBorder: palette.border, actorTextColor: palette.text, actorLineColor: palette.muted,
+        signalColor: palette.muted, signalTextColor: palette.text, labelBoxBkgColor: palette.surface,
+        labelBoxBorderColor: palette.border, labelTextColor: palette.text, noteBkgColor: palette.code,
+        noteTextColor: palette.text, noteBorderColor: palette.border, activationBkgColor: palette.code, activationBorderColor: palette.border,
+      } : mermaidThemeVariables(theme === 'dark', !raster),
+      ...(unlimited ? { maxTextSize: Number.MAX_SAFE_INTEGER, maxEdges: Number.MAX_SAFE_INTEGER } : {}),
       securityLevel: 'strict',
       fontFamily: raster ? 'Arial, Microsoft YaHei, sans-serif' : 'var(--font-ui-sans)',
       flowchart: { useMaxWidth: true, htmlLabels: !raster },
@@ -65,18 +78,18 @@ export interface MermaidParseError {
 
 let renderCounter = 0
 
-export function renderMermaid(source: string, options: { theme?: 'light' | 'dark'; mode?: 'interactive' | 'static' | 'raster' } = {}): Promise<MermaidRenderResult> {
+export function renderMermaid(source: string, options: { theme?: 'light' | 'dark'; mode?: 'interactive' | 'static' | 'raster'; palette?: Record<string,string>; unlimited?: boolean } = {}): Promise<MermaidRenderResult> {
   return serialized(() => renderMermaidNow(source, options))
 }
 
 async function renderMermaidNow(
   source: string,
-  options: { theme?: 'light' | 'dark'; mode?: 'interactive' | 'static' | 'raster' } = {}
+  options: { theme?: 'light' | 'dark'; mode?: 'interactive' | 'static' | 'raster'; palette?: Record<string,string>; unlimited?: boolean } = {}
 ): Promise<MermaidRenderResult> {
   const theme = options.theme ?? 'light'
   const id = `mermaid-${Date.now()}-${++renderCounter}`
   try {
-    const mermaid = await ensureInitialized(theme, options.mode === 'raster')
+    const mermaid = await ensureInitialized(theme, options.mode === 'raster', options.palette, options.unlimited)
     const result = await mermaid.render(id, source)
     const parser = new DOMParser()
     const doc = parser.parseFromString(result.svg, 'image/svg+xml')
