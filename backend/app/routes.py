@@ -562,7 +562,7 @@ async def create_agent_run(request: AgentRunCreateRequest) -> AgentRun:
     tags=["Agent"],
 )
 async def get_agent_run(run_id: str) -> AgentRun:
-    return agent_run_or_404(run_id)
+    return await asyncio.to_thread(agent_run_or_404, run_id)
 
 
 @router.post(
@@ -571,7 +571,7 @@ async def get_agent_run(run_id: str) -> AgentRun:
     tags=["Agent"],
 )
 async def cancel_agent_run(run_id: str) -> OperationResponse:
-    agent_run_or_404(run_id)
+    await asyncio.to_thread(agent_run_or_404, run_id)
     run = await container.agent.cancel(run_id)
     return OperationResponse(
         status="completed",
@@ -596,7 +596,7 @@ async def agent_events(
     after_sequence: int | None = Query(default=None, ge=-1),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
 ) -> StreamingResponse:
-    agent_run_or_404(run_id)
+    await asyncio.to_thread(agent_run_or_404, run_id)
     cursor = after_sequence
     if cursor is None and last_event_id is not None:
         try:
@@ -658,7 +658,7 @@ async def get_agent_trace(
 async def decide_agent_permission(
     run_id: str, request_id: str, request: PermissionDecisionRequest
 ) -> OperationResponse:
-    agent_run_or_404(run_id)
+    await asyncio.to_thread(agent_run_or_404, run_id)
     if not await container.agent.resolve_permission(run_id, request_id, request.decision):
         raise ApiError(
             404,
@@ -1547,6 +1547,11 @@ async def create_export(request: ExportRequest) -> ExportJob:
     return await export_service.create_export(request)
 
 
+@router.post("/exports/preview-resources", tags=["Export"])
+async def export_preview_resources(request: ExportRequest):
+    return await export_service.preview_resources(request)
+
+
 @router.get(
     "/exports",
     response_model=ExportJobListResponse,
@@ -1622,3 +1627,11 @@ async def get_global_persona():
 @router.put("/settings/persona", response_model=PersonaSettings, tags=["Settings"])
 async def put_global_persona(request: PersonaSettings):
     return save_persona(request)
+
+
+from app.contracts import AgentBenchmarkRequest
+from app.benchmarks import agent as agent_benchmark
+
+@router.post('/benchmarks/agent/runs', response_model=BenchmarkRun, status_code=202, tags=['Benchmark'])
+async def create_agent_benchmark(request: AgentBenchmarkRequest):
+    return await agent_benchmark.create_run(request)

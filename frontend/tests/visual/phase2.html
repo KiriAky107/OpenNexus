@@ -1,0 +1,20 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Phase 2 interaction acceptance</title></head><body><div id="app"></div>
+<script type="module">
+import {createApp,h} from 'vue'; import {createPinia,setActivePinia} from 'pinia';
+import {useSettingsStore} from '/src/stores/settings.ts';
+import {useThemeStore} from '/src/stores/theme.ts'; import {useEditorStore} from '/src/stores/editor.ts';
+import {mockCommunityThemes} from '/src/services/themePackageService.ts';
+import EditorHeader from '/src/features/editor/EditorHeader.vue'; import EditorPane from '/src/features/editor/EditorPane.vue';
+import MarkdownContent from '/src/components/common/MarkdownContent.vue';
+import '/src/styles/tokens.css'; import '/src/styles/features.css';
+const pinia=createPinia();setActivePinia(pinia);
+const theme=useThemeStore(); await theme.loadCustomThemes();
+const id=new URLSearchParams(location.search).get('theme')||'light';
+if(mockCommunityThemes.some(t=>t.theme_id===id)) await theme.installCommunityTheme(id);
+theme.applyTheme(id,{persist:false});
+useSettingsStore().autoSaveInterval=3600000;
+const editor=useEditorStore();
+editor.content='# 第二阶段图表与导出\n\n未保存快照 PHASE2-SNAPSHOT\n\n```function-plot\ndomain: -4, 4\ny = x^2\ny = sin(x)\n```\n\n```mermaid\nflowchart LR\n A[笔记] --> B[导出]\n```\n\n公式：$x^2 + y^2 = 1$。';
+editor.currentFilePath='phase2-demo.md';
+createApp({render:()=>h('main',{},[h('h1',{},id),h('button',{onClick:()=>theme.applyTheme(theme.currentThemeId==='dark'?'light':'dark',{persist:false})},'测试切换主题'),h(EditorHeader),h('div',{style:'height:650px;display:flex'},[h(EditorPane)]),h('h2',{},'只读 / AI 共用预览'),h(MarkdownContent,{source:editor.content})])}).use(pinia).mount('#app');
+</script><style>body{height:auto!important;overflow:auto!important;margin:0;padding:16px;background:var(--color-background-primary);color:var(--color-text-primary);font-family:Arial,'Microsoft YaHei',sans-serif}main{max-width:1050px;margin:auto}button,select,input{font:inherit;color:inherit;background:var(--color-surface-primary);border:1px solid var(--color-border-default);border-radius:4px;padding:5px}button{cursor:pointer}svg{max-width:100%}</style></body></html>

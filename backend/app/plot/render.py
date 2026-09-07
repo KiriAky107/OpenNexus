@@ -339,7 +339,7 @@ def _sample_segments(
     return clipped
 
 
-def compute_geometry(plot: FunctionPlot) -> PlotGeometry:
+def compute_geometry(plot: FunctionPlot, unlimited: bool = False) -> PlotGeometry:
     """解析并计算几何，供 SVG 与 reportlab 后端复用。"""
     warnings: list[str] = []
     xmin, xmax = plot.domain
@@ -351,7 +351,7 @@ def compute_geometry(plot: FunctionPlot) -> PlotGeometry:
     fns: list[tuple[object, object]] = []
     for expr in plot.expressions:
         try:
-            tree = parse_expression(expr.expression)
+            tree = parse_expression(expr.expression, unlimited=unlimited)
         except PlotParseError as exc:
             warnings.append(f"表达式无法渲染，已跳过：{expr.expression}（{exc.diagnostic.message}）")
             continue
@@ -413,12 +413,12 @@ def _grid_svg(geo: PlotGeometry) -> str:
     for x in geo.xticks:
         parts.append(
             f'<line x1="{sx(x):.2f}" y1="{sy(geo.ymin):.2f}" x2="{sx(x):.2f}" '
-            f'y2="{sy(geo.ymax):.2f}" stroke="#eaeef2"/>'
+            f'y2="{sy(geo.ymax):.2f}" stroke="#eaeef2" class="plot-grid"/>'
         )
     for y in geo.yticks:
         parts.append(
             f'<line x1="{sx(geo.xmin):.2f}" y1="{sy(y):.2f}" x2="{sx(geo.xmax):.2f}" '
-            f'y2="{sy(y):.2f}" stroke="#eaeef2"/>'
+            f'y2="{sy(y):.2f}" stroke="#eaeef2" class="plot-grid"/>'
         )
     return "".join(parts)
 
@@ -430,11 +430,11 @@ def _axes_svg(geo: PlotGeometry) -> str:
     # 坐标轴：过原点则画在原点，否则贴边，保证始终有参照系
     parts.append(
         f'<line x1="{sx(geo.xmin):.2f}" y1="{sy(geo.x_axis_y):.2f}" x2="{sx(geo.xmax):.2f}" '
-        f'y2="{sy(geo.x_axis_y):.2f}" stroke="#57606a"/>'
+        f'y2="{sy(geo.x_axis_y):.2f}" stroke="#57606a" class="plot-axis"/>'
     )
     parts.append(
         f'<line x1="{sx(geo.y_axis_x):.2f}" y1="{sy(geo.ymin):.2f}" x2="{sx(geo.y_axis_x):.2f}" '
-        f'y2="{sy(geo.ymax):.2f}" stroke="#57606a"/>'
+        f'y2="{sy(geo.ymax):.2f}" stroke="#57606a" class="plot-axis"/>'
     )
     # x 轴刻度数字（画在轴下方）
     for x in geo.xticks:
@@ -453,10 +453,10 @@ def _axes_svg(geo: PlotGeometry) -> str:
 
 def _polylines_svg(geo: PlotGeometry) -> str:
     parts: list[str] = []
-    for segments, color in zip(geo.polylines, geo.colors):
+    for index, (segments, color) in enumerate(zip(geo.polylines, geo.colors)):
         for seg in segments:
             points = " ".join(f"{px:.2f},{py:.2f}" for px, py in seg)
-            parts.append(f'<polyline points="{points}" fill="none" stroke="{color}"/>')
+            parts.append(f'<polyline points="{points}" fill="none" stroke="{color}" class="plot-curve-{index % 6}"/>')
     return "".join(parts)
 
 
@@ -476,22 +476,43 @@ def _labels_svg(geo: PlotGeometry) -> str:
     return "".join(parts)
 
 
-def render_svg(plot: FunctionPlot) -> StaticRenderResult:
+def render_svg(plot: FunctionPlot, theme_id: str = 'light', unlimited: bool = False) -> StaticRenderResult:
     """把已解析的 FunctionPlot 渲染为内嵌 SVG。"""
-    geo = compute_geometry(plot)
+    geo = compute_geometry(plot, unlimited=unlimited)
+    legend_height = ((len(plot.expressions) + 1) // 2) * 24
+    height = geo.height + legend_height
     parts: list[str] = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {geo.width} {geo.height}" role="img">'
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {geo.width} {height}" role="img" class="function-plot-svg">'
     ]
     if geo.grid:
         parts.append(_grid_svg(geo))
     parts.append(_axes_svg(geo))
     parts.append(_polylines_svg(geo))
     parts.append(_labels_svg(geo))
+    for index, expression in enumerate(plot.expressions):
+        x = 24 + (index % 2) * 310
+        y = geo.height + 18 + (index // 2) * 24
+        label = html.escape(expression.label or ('y = ' + expression.expression))
+        parts.append(f'<text x="{x}" y="{y}" font-size="12" fill="{geo.colors[index]}" class="plot-legend-{index % 6}">{label}</text>')
     parts.append("</svg>")
 
     return StaticRenderResult(
-        content="".join(parts),
+        content=theme_svg("".join(parts), theme_id),
         width=geo.width,
-        height=geo.height,
+        height=height,
         warnings=geo.warnings,
     )
+
+
+def theme_svg(svg: str, theme_id: str) -> str:
+    from app.export.themes import PALETTES
+    palette = PALETTES.get(theme_id, PALETTES['light'])
+    for source, target in [('#eaeef2', palette[5]), ('#57606a', palette[3]), ('#1f2328', palette[2])]:
+        svg = svg.replace(source, target)
+    if theme_id in {'dark', 'midnight-purple'}:
+        for source, target in zip(_PALETTE, ['#79c0ff','#ff9b9b','#7ee787','#d2a8ff','#f2cc60','#ffa657']):
+            svg = svg.replace(source, target)
+    background = '<rect width="100%" height="100%" fill="' + palette[1] + '"/>'
+    if re.search(r'<rect width="100%" height="100%" fill="[^"]*"/>', svg):
+        return re.sub(r'<rect width="100%" height="100%" fill="[^"]*"/>', background, svg, count=1)
+    return svg.replace('role="img" class="function-plot-svg">', 'role="img" class="function-plot-svg">' + background)

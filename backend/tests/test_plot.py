@@ -107,7 +107,7 @@ def test_render_svg_contains_polyline_and_axes() -> None:
     assert "<line" in svg  # 坐标轴/网格
     assert "<script" not in svg
     assert rendered.width == 640
-    assert rendered.height == 480
+    assert rendered.height == 504  # Includes the legend row.
 
 
 def test_render_svg_multiple_functions() -> None:
@@ -300,7 +300,7 @@ def test_function_plot_static_renderer_renders_svg() -> None:
     assert "<polyline" in result.content
     assert result.mime_type == "image/svg+xml"
     assert result.width == 640
-    assert result.height == 480
+    assert result.height == 504  # Includes the legend row.
 
 
 def test_function_plot_static_renderer_parse_exposes_node_count() -> None:
@@ -359,7 +359,8 @@ def test_render_reportlab_builds_drawing() -> None:
     kinds = {type(c).__name__ for c in drawing.contents}
     assert {"Line", "PolyLine", "String", "Group"} <= kinds
     strings = [c for c in drawing.contents if isinstance(c, String)]
-    assert any(s.fontName == "STSong-Light" for s in strings)
+    from app.export.fonts import FONT
+    assert any(s.fontName == FONT for s in strings)
     assert any(s.text == "时间" for s in strings)
     # ylabel 在旋转 Group 内
     groups = [c for c in drawing.contents if isinstance(c, Group)]

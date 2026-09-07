@@ -1,5 +1,7 @@
 # NotesAgent Backend
 
+> 第二阶段收尾：标准 Agent/RAG Benchmark 与报告页、函数图预览、三格式快照导出及真实 Provider/MCP 结果见[实现与验收记录](../docs/development/第二阶段收尾实现与验收-2026-09-07.md)。当前分支尚未合并，不更改下文历史 main 基线。
+
 NotesAgent Backend 是基于 Python 3.11+、FastAPI、Pydantic v2 和 SQLite 的本地 AI Core / Agent Core，使用 uv 管理 API 依赖和虚拟环境。
 
 当前实现包含 Knowledge/Retrieval、Chat、Agent、Tool/Permission、Skill/Plugin、MCP、模型提供商、RAG Benchmark、多模态任务、本地模型调度、Token/音频用量和运行诊断。数据持久化位于后端 SQLite 与 Vault；Tauri Sidecar 生命周期、Stronghold 和操作系统级 Plugin 沙箱属于后续桌面阶段。

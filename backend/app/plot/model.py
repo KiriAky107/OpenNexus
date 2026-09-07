@@ -1,7 +1,7 @@
 """Function Plot 内部数据模型。
 
-契约 §12.2 的 FunctionPlot 结构与 §10.4 的 StaticRenderResult 只在导出链路的后端内部
-流转，不进入 HTTP 契约，因此与 Document AST 一样放在独立包内，不进 contracts.py。
+FunctionPlot 供预览和导出共享；StaticRenderResult 同时是交互预览端点的响应内容。
+模型保留在独立包内，由 plot_routes 中的请求与响应类型注册 OpenAPI。
 """
 
 from __future__ import annotations

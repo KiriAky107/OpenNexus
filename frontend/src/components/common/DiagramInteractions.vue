@@ -220,3 +220,8 @@ function close() { disarm(); viewer.value?.close(); svgHtml.value = ''; opener?.
 :is(.editor-mermaid-preview, .markdown-mermaid):is(:hover, :focus-within) > .diagram-controls { opacity: 1; pointer-events: auto; }
 @media (hover: none) { :is(.editor-mermaid-preview, .markdown-mermaid) > .diagram-controls { opacity: 1; pointer-events: auto; } }
 </style>
+
+<style>
+/* 窄屏仍保持 10px 坐标轴文字可读，溢出由现有图表容器滚动承接。 */
+.function-plot-preview > svg, .markdown-function-plot > svg { min-width: 640px; }
+</style>

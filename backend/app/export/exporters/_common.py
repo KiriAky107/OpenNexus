@@ -1,7 +1,6 @@
 """导出器共享工具：URL 协议校验、函数图像预算与占位 warning 文案。
 
-html / pdf / docx 三个导出器共用同一套安全规则与函数图像资源预算，避免各写一份
-导致行为漂移。
+导出器共享 URL 规则；HTML / DOCX 使用文档资源预算，PDF 不使用这些预算。
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ MAX_TOTAL_PLOT_NODES = 8000
 class FunctionPlotBudget:
     """函数图像文档级资源预算：数量上限 + 累计 AST 节点上限。
 
-    HTML 与 PDF 导出器在渲染每个 function-plot 图块前先问预算，超限即回退源码占位，
+    HTML 与 DOCX 导出器在渲染每个 function-plot 图块前先问预算，超限即回退源码占位，
     不解析不采样，避免多图块组合复杂度耗尽内存/CPU。
     """
 

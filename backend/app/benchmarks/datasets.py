@@ -17,20 +17,20 @@ from app.config import get_settings
 from app.contracts import (
     BenchmarkDatasetInfo,
     BenchmarkKind,
-    RAGDatasetCase,
+    RAGDatasetCase, AgentDatasetCase,
 )
 from app.errors import ApiError
 
 
 @dataclass
 class RAGDataset:
-    """内存中的 RAG 数据集：元信息 + 已校验的 Case 列表 + 内容哈希。"""
+    """内存中的 RAG / Agent 数据集：元信息 + 已校验的 Case 列表 + 内容哈希。"""
 
     dataset_id: str
     kind: BenchmarkKind
     version: str
     description: str
-    cases: list[RAGDatasetCase] = field(default_factory=list)
+    cases: list[RAGDatasetCase | AgentDatasetCase] = field(default_factory=list)
     content_hash: str = ""
 
 
@@ -104,10 +104,10 @@ def _dataset_from_raw(raw: dict, raw_bytes: bytes, kind: BenchmarkKind) -> RAGDa
             {"dataset_id": dataset_id},
         )
 
-    cases: list[RAGDatasetCase] = []
+    cases: list[RAGDatasetCase | AgentDatasetCase] = []
     for index, case in enumerate(raw_cases):
         try:
-            parsed = RAGDatasetCase.model_validate(case)
+            parsed = (AgentDatasetCase if kind == BenchmarkKind.agent else RAGDatasetCase).model_validate(case)
         except ValidationError as exc:
             raise ApiError(
                 422,
@@ -115,6 +115,13 @@ def _dataset_from_raw(raw: dict, raw_bytes: bytes, kind: BenchmarkKind) -> RAGDa
                 f"Dataset case #{index} is invalid.",
                 {"dataset_id": dataset_id, "case_index": index, "errors": exc.errors()},
             ) from exc
+        if kind == BenchmarkKind.agent:
+            if not (parsed.expected_tools or parsed.output_contains or parsed.citation_required or parsed.tasks_created is not None):
+                raise ApiError(422, 'BENCHMARK_DATASET_INVALID', 'Agent case requires objective expectations.')
+            if any(tool.name not in parsed.allowed_tools for tool in parsed.expected_tools):
+                raise ApiError(422, 'BENCHMARK_DATASET_INVALID', 'Expected tools must be allowed.')
+            cases.append(parsed)
+            continue
         # 每个 Case 至少要声明一个期望 id，否则无法计算命中/召回
         if not parsed.expected_note_ids and not parsed.expected_block_ids:
             raise ApiError(
@@ -133,6 +140,8 @@ def _dataset_from_raw(raw: dict, raw_bytes: bytes, kind: BenchmarkKind) -> RAGDa
             )
         cases.append(parsed)
 
+    if len(cases) > 100 or len({c.case_id for c in cases}) != len(cases):
+        raise ApiError(422, 'BENCHMARK_DATASET_INVALID', 'Dataset case IDs must be unique; maximum 100 cases.')
     return RAGDataset(
         dataset_id=dataset_id,
         kind=kind,

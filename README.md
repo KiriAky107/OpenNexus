@@ -1,5 +1,7 @@
 # Notes Agent（暂命名） 团队开发说明
 
+> 第二阶段收尾（开发分支，2026-09-07）：标准 Agent/RAG Benchmark 与报告页、函数图预览、三格式快照导出及真实 Provider/MCP 结果见[实现与验收记录](docs/development/第二阶段收尾实现与验收-2026-09-07.md)。当前分支尚未合并，不更改下文历史 main 基线。
+
 > 本文件用于团队开发期间快速配置环境、启动项目并了解当前实现状态，不是正式的项目 README。
 
 NotesAgent 是本地优先的 AI 笔记与知识库项目。当前可运行形态为 Vue/Vite Web 前端与 FastAPI AI Core：Markdown 和附件保存在本地 Vault，SQLite 管理元数据、全文索引、向量空间、搜索历史、AI 会话、任务、Agent Trace、多模态任务及运行诊断。AI 对话已接入知识库检索，会话与消息由后端持久化并供 Web 和桌面客户端共用。
