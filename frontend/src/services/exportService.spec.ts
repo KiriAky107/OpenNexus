@@ -3,6 +3,8 @@ import {webcrypto} from 'node:crypto'
 import {describe,it,expect,vi,afterEach} from 'vitest'
 vi.mock('./apiClient',()=>({apiClient:{post:vi.fn(),get:vi.fn()}}))
 vi.mock('./mermaidService',()=>({renderMermaid:vi.fn()}))
+vi.mock('./pdfSnapshotService',()=>({preparePdfSnapshot:vi.fn().mockResolvedValue('<html>theme snapshot</html>')}))
+import {preparePdfSnapshot} from './pdfSnapshotService'
 import {renderMermaid} from './mermaidService'
 import {apiClient} from './apiClient'
 import {exportService,captureExportPalette} from './exportService'
@@ -63,20 +65,13 @@ it.each(['mermaid','Mermaid','mermaid title="Flow"'])('prepares a static asset f
   expect(apiClient.post).toHaveBeenCalledWith('/api/exports',expect.objectContaining({assets:[expect.objectContaining({kind:'mermaid',png_base64:'YWJj',source_hash:expect.stringMatching(/^[a-f0-9]{64}$/)})]}))
 })
 
-it('PDF prepares more than 16 Mermaid assets with the frozen palette',async()=>{
-  vi.stubGlobal('crypto',webcrypto)
-  vi.stubGlobal('Image',class {src='';decode(){return Promise.resolve()}})
-  vi.spyOn(HTMLCanvasElement.prototype,'getContext').mockReturnValue({fillStyle:'',fillRect:vi.fn(),drawImage:vi.fn()} as never)
-  vi.spyOn(HTMLCanvasElement.prototype,'toDataURL').mockReturnValue('data:image/png;base64,YWJj')
-  vi.mocked(renderMermaid).mockResolvedValue({svg:'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"></svg>',warnings:[]} as never)
+it('PDF submits the shared browser snapshot instead of raster assets',async()=>{
   vi.mocked(apiClient.post).mockResolvedValue(queued)
-  const palette={page:'#010409',surface:'#161b22',text:'#e6edf3',muted:'#b1bac4',code:'#21262d',border:'#57606a',accent:'#79c0ff'}
   const markdown=Array.from({length:17},(_,i)=>'```mermaid\nflowchart LR\n A'+i+'-->B\n```').join('\n\n')
-  await exportService.create(markdown,'many','pdf',{...reviewOptions,theme_id:'dark',palette})
-  expect(renderMermaid).toHaveBeenCalledTimes(17)
-  expect(renderMermaid).toHaveBeenCalledWith(expect.any(String),{mode:'raster',theme:'dark',unlimited:true,palette})
-  expect(apiClient.post).toHaveBeenCalledWith('/api/exports',expect.objectContaining({assets:expect.arrayContaining(Array.from({length:17},()=>expect.anything())),options:expect.objectContaining({palette})}))
-  await expect(exportService.create(markdown,'many','html',reviewOptions)).rejects.toThrow('最多 16')
+  await exportService.create(markdown,'many','pdf',{...reviewOptions,theme_id:'dark'})
+  expect(preparePdfSnapshot).toHaveBeenCalledWith(markdown,'many',expect.objectContaining({theme_id:'dark'}),undefined,undefined)
+  expect(renderMermaid).not.toHaveBeenCalled()
+  expect(apiClient.post).toHaveBeenCalledWith('/api/exports',expect.objectContaining({assets:[],print_html:'<html>theme snapshot</html>'}))
 })
 it('captures custom theme CSS as a portable palette',()=>{
   const values={'background-primary':'#010409','surface-primary':'rgb(22, 27, 34)','text-primary':'#e6edf3','text-secondary':'#b1bac4','background-secondary':'#21262d','border-default':'#57606a','accent-primary':'#79c0ff'}

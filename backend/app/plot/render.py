@@ -476,9 +476,9 @@ def _labels_svg(geo: PlotGeometry) -> str:
     return "".join(parts)
 
 
-def render_svg(plot: FunctionPlot, theme_id: str = 'light') -> StaticRenderResult:
+def render_svg(plot: FunctionPlot, theme_id: str = 'light', unlimited: bool = False) -> StaticRenderResult:
     """把已解析的 FunctionPlot 渲染为内嵌 SVG。"""
-    geo = compute_geometry(plot)
+    geo = compute_geometry(plot, unlimited=unlimited)
     legend_height = ((len(plot.expressions) + 1) // 2) * 24
     height = geo.height + legend_height
     parts: list[str] = [

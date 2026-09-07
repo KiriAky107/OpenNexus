@@ -7,7 +7,7 @@ import { createOnigurumaEngine } from 'shiki/engine/oniguruma'
 import { bundledLanguagesInfo } from 'shiki/langs'
 import githubDark from '@shikijs/themes/github-dark'
 import githubLight from '@shikijs/themes/github-light'
-import { renderMermaid } from '@/services/mermaidService'
+import { renderMermaid, type mermaidThemeVariables } from '@/services/mermaidService'
 import { appendDiagramControls } from './diagramControls'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
@@ -126,7 +126,7 @@ export async function getCodeTokenizer(theme: 'github-light' | 'github-dark', re
   }
 }
 
-export async function renderMarkdown(source: string, options?: { themeId?: string; theme?: 'light' | 'dark'; preferences?: MarkdownPreferences; citationNumbers?: number[]; citationAliases?: Record<string, number> }): Promise<string> {
+export async function renderMarkdown(source: string, options?: { themeId?: string; theme?: 'light' | 'dark'; preferences?: MarkdownPreferences; pdf?: { plot: (source: string) => Promise<{svg: string; warnings: string[]}>; mermaidVariables: ReturnType<typeof mermaidThemeVariables> }; citationNumbers?: number[]; citationAliases?: Record<string, number> }): Promise<string> {
   const preferences = options?.preferences ?? defaultMarkdownPreferences
   const marked = createMarkdownParser(preferences)
   const citations = new Set(options?.citationNumbers ?? [])
@@ -146,8 +146,9 @@ export async function renderMarkdown(source: string, options?: { themeId?: strin
 
   for (const code of documentNode.querySelectorAll('pre > code')) {
     const requestedLanguage = [...code.classList].find((name) => name.startsWith('language-'))?.slice(9) || 'text'
-    if (['mermaid', 'function-plot'].includes(requestedLanguage) && preferences.diagrams) {
-      mermaidBlocks.push({ pre: code.parentElement!, source: code.textContent ?? '', kind: requestedLanguage })
+    const diagramKind = requestedLanguage.toLowerCase().split(/\s+/)[0]!.replace('function_plot','function-plot')
+    if (['mermaid', 'function-plot'].includes(diagramKind) && preferences.diagrams) {
+      mermaidBlocks.push({ pre: code.parentElement!, source: code.textContent ?? '', kind: diagramKind })
       continue
     }
     if (requestedLanguage.toLowerCase() === 'latex' && preferences.math) {
@@ -172,9 +173,9 @@ export async function renderMarkdown(source: string, options?: { themeId?: strin
   let plotCount = 0, plotNodes = 0
   for (const { pre, source, kind } of mermaidBlocks) {
     try {
-      if (kind === 'function-plot' && ++plotCount > 16) throw new Error('函数图像数量超过 16')
-      const result = kind === 'function-plot' ? await renderFunctionPlot(source, options?.themeId) : await renderMermaid(source, { theme: options?.theme, mode: 'static' })
-      if ('nodeCount' in result && (plotNodes += result.nodeCount) > 8000) throw new Error('函数图像累计复杂度超过 8000')
+      if (!options?.pdf && kind === 'function-plot' && ++plotCount > 16) throw new Error('函数图像数量超过 16')
+      const result = kind === 'function-plot' ? (options?.pdf ? await options.pdf.plot(source) : await renderFunctionPlot(source, options?.themeId)) : await renderMermaid(source, { theme: options?.theme, mode: 'static', ...(options?.pdf ? { unlimited:true, themeVariables:options.pdf.mermaidVariables } : {}) })
+      if (!options?.pdf && 'nodeCount' in result && (plotNodes += Number(result.nodeCount)) > 8000) throw new Error('函数图像累计复杂度超过 8000')
       const container = document.createElement('div')
       container.className = 'markdown-mermaid' + (kind === 'function-plot' ? ' markdown-function-plot' : '')
       container.innerHTML = result.svg
