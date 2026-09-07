@@ -1,8 +1,10 @@
 import type { ApiError, ErrorResponse } from '@/contracts'
-import { isDesktop } from './platform/desktop'
+import { hostInvoke, isDesktop } from './platform/desktop'
 
 // 所有 HTTP 请求都经过此边界，以统一地址、请求追踪和错误契约。
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE ?? ''
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE ?? (isDesktop() ? 'http://127.0.0.1:8000' : '')
+
+interface DesktopCoreResponse { status: number; content_type: string; body: string }
 
 export function resolveApiUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) return path
@@ -28,7 +30,6 @@ export class ApiErrorClass extends Error {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  if (isDesktop()) throw new ApiErrorClass('CORE_UNAVAILABLE', '桌面 AI Core 尚未接通；本地编辑可继续。')
   const { params, token, headers, timeoutMs, ...rest } = options
   const controller = timeoutMs ? new AbortController() : null
   let timedOut = false
@@ -61,6 +62,22 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   reqHeaders['X-Request-Id'] = reqId
 
   try {
+    if (isDesktop()) {
+      const parsed = new URL(url)
+      const response = await hostInvoke<DesktopCoreResponse>('core_request', {
+        method: rest.method ?? 'GET',
+        path: `${parsed.pathname}${parsed.search}`,
+        body: typeof rest.body === 'string' ? JSON.parse(rest.body) : undefined,
+        authorization: token ? `Bearer ${token}` : undefined,
+      })
+      if (response.status >= 200 && response.status < 300) {
+        if (response.status === 204) return undefined as T
+        return (response.content_type.includes('application/json') ? JSON.parse(response.body) : response.body) as T
+      }
+      let error: ErrorResponse | null = null
+      try { error = JSON.parse(response.body) as ErrorResponse } catch { /* 非 JSON 错误 */ }
+      throw new ApiErrorClass(error?.error?.code ?? `HTTP_${response.status}`, error?.error?.message ?? `Request failed with status ${response.status}`, error?.error?.details)
+    }
     const resp = await fetch(url, {
       ...rest,
       signal: controller?.signal ?? rest.signal,

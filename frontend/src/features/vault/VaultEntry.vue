@@ -72,7 +72,7 @@ async function openFolderPicker() {
         <div v-if="openError" class="error-banner" role="alert">{{ openError }} <button class="btn" @click="initializeVault" :disabled="isLoading">{{ t('重试', 'Retry') }}</button></div>
         <p v-if="isLoading" role="status">{{ t('正在打开知识库…', 'Opening knowledge base…') }}</p>
         <h2 class="card-title">{{ t('选择知识库', 'Select Knowledge Base') }}</h2>
-        <p class="card-desc">{{ isDesktop() ? t('桌面预览：选择本地目录；AI 与同步尚未接通。', 'Desktop preview: choose a local folder. AI and sync are not connected yet.') : t('Web 联调模式连接 AI Core 当前配置的 Vault', 'Web development mode connects to the Vault configured in AI Core') }}</p>
+        <p class="card-desc">{{ isDesktop() ? t('桌面预览：选择本地目录；自动连接本机 AI Core。', 'Desktop preview: choose a local folder and connect to the local AI Core.') : t('Web 联调模式连接 AI Core 当前配置的 Vault', 'Web development mode connects to the Vault configured in AI Core') }}</p>
 
         <div v-if="workspaceStore.recentVaults.length" class="recent-vaults">
           <div class="section-label">{{ t('最近打开', 'Recently opened') }}</div>
