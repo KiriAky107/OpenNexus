@@ -46,3 +46,5 @@ community-server/.venv/
 community-server/.env
 frontend/src-tauri/target/
 frontend/src-tauri/gen/
+# Rust Workspace Service 在所选 Vault 内生成的锁与事务数据库。
+**/.ainote/
