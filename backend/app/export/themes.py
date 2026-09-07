@@ -1,5 +1,6 @@
 """Export palettes are fixed data; arbitrary theme CSS is never executed."""
 PALETTES = {
+    'ocean-blue': ('#edf5fa','#ffffff','#183a50','#46667a','#e6f1f8','#a6c5d9','#086b9c'),
     'light': ('#f6f7f9','#ffffff','#1f2328','#57606a','#eaeef2','#d0d7de','#0969da'),
     'dark': ('#010409','#0d1117','#e6edf3','#b1bac4','#21262d','#57606a','#79c0ff'),
     'sepia': ('#eee5d2','#faf4e6','#463b2d','#6b5943','#eae0cd','#b5a58b','#80532a'),
@@ -31,3 +32,13 @@ ALIASES = {'summary':'abstract','tldr':'abstract','hint':'tip',
            'check':'success','done':'success','help':'question','faq':'question',
            'caution':'warning','attention':'warning','fail':'failure','missing':'failure',
            'error':'danger','cite':'quote'}
+
+
+def pdf_palette(options, warnings):
+    if options.palette is not None:
+        return options.palette.model_dump()
+    theme_id = options.theme_id
+    if theme_id not in PALETTES:
+        warnings.append(f'PDF 不支持主题 {theme_id}，已使用 light 导出配色')
+        theme_id = 'light'
+    return dict(zip(('page','surface','text','muted','code','border','accent'), PALETTES[theme_id]))

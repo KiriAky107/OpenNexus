@@ -1,5 +1,7 @@
 # NotesAgent Frontend
 
+> 第二阶段收尾：标准 Agent/RAG Benchmark 与报告页、函数图预览、三格式快照导出及真实 Provider/MCP 结果见[实现与验收记录](../docs/development/第二阶段收尾实现与验收-2026-09-07.md)。当前分支尚未合并，不更改下文历史 main 基线。
+
 NotesAgent Frontend 是基于 Vue 3、TypeScript、Vite、Pinia、Vue Router、Milkdown 和 CodeMirror 6 的 Web 联调前端。当前页面调用 FastAPI 真实接口，不使用业务 Mock 作为运行时回退；测试文件中的 mock 只用于隔离单元和组件测试。
 
 ## 初始化与运行
@@ -19,6 +21,7 @@ pnpm dev
 | `/search` | 全文、向量和混合检索；从后端读取并清空搜索历史 |
 | `/chat` | 流式 AI 对话、知识库上下文与 Citation |
 | `/agent/runs/:runId?` | 创建 Agent 运行，查看可恢复 Trace 与 Tool/Permission 事件 |
+| `/benchmarks` | RAG/Agent 数据集、参数、真实运行、报告下载与 Trace 入口 |
 | `/media` | 上传音频、创建/取消/重试转写、修订结果并生成知识库笔记 |
 | `/tasks` | 管理用户、笔记和 Agent 产生的任务 |
 | `/extensions/skills` | Skill 安装、启停与配置 |

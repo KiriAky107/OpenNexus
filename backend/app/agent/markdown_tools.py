@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.contracts import ToolDefinition
 from app.services import note_service
 
-Format = Literal['heading', 'paragraph', 'bold', 'italic', 'strikethrough', 'inline-code', 'bullet-list', 'ordered-list', 'task-list', 'blockquote', 'callout', 'code-block', 'mermaid', 'inline-math', 'math-block', 'link', 'image', 'table', 'horizontal-rule', 'hard-break', 'reference-link', 'html', 'metadata']
+Format = Literal['heading', 'paragraph', 'bold', 'italic', 'strikethrough', 'inline-code', 'bullet-list', 'ordered-list', 'task-list', 'blockquote', 'callout', 'code-block', 'mermaid', 'function-plot', 'inline-math', 'math-block', 'link', 'image', 'table', 'horizontal-rule', 'hard-break', 'reference-link', 'html', 'metadata']
 CALLOUTS = ['note', 'abstract', 'summary', 'tldr', 'info', 'todo', 'tip', 'hint', 'important', 'success', 'check', 'done', 'question', 'help', 'faq', 'warning', 'caution', 'attention', 'failure', 'fail', 'missing', 'danger', 'error', 'bug', 'example', 'quote', 'cite']
 
 
@@ -56,7 +56,7 @@ def compose(arguments: ComposeArguments, _):
     elif kind == 'inline-code':
         marker = '`' * (max([0, *(len(m[0]) for m in re.finditer(r'`+', text))]) + 1)
         result = marker + ' ' + text.replace('\n', ' ') + ' ' + marker
-    elif kind in ('code-block', 'mermaid'): result = fenced(text, 'mermaid' if kind == 'mermaid' else a.language)
+    elif kind in ('code-block', 'mermaid', 'function-plot'): result = fenced(text, kind if kind != 'code-block' else a.language)
     elif kind in ('bullet-list', 'ordered-list', 'task-list'):
         result = '\n'.join((f'{i + 1}. ' if kind == 'ordered-list' else '- [ ] ' if kind == 'task-list' else '- ') + item.replace('\n', '\n    ') for i, item in enumerate(a.items))
     elif kind == 'blockquote': result = '\n'.join('> ' + line for line in text.split('\n'))
@@ -90,7 +90,8 @@ def catalog(_, __):
     from typing import get_args
     return {'formats': list(get_args(Format)), 'callouts': CALLOUTS,
             'workflow': 'Use markdown.compose, then notes.create or notes.patch_markdown to persist. Read notes.read.content_hash before patching. metadata composition replaces the frontmatter only when you explicitly patch it; do not prepend duplicate frontmatter.',
-            'rendering': 'Math, Mermaid, callouts and auto-links depend on editor preferences. HTML is sanitized; scripts are not supported. Heading folding, font size, undo and redo are UI state, not Markdown document syntax. Callout collapsed=null is static, true is folded, false is expanded.'}
+            'function_plot': 'Use a function-plot fenced block: domain: -4, 4 followed by y = x^2 and y = sin(x). At most 16 expressions per block, 16 plots and 8000 total AST nodes per exported document. No arbitrary code execution.',
+            'rendering': 'Function plots, Math, Mermaid, callouts and auto-links depend on editor preferences. HTML is sanitized; scripts are not supported. Heading folding, font size, undo and redo are UI state, not Markdown document syntax. Callout collapsed=null is static, true is folded, false is expanded.'}
 
 
 async def patch(arguments: PatchArguments, _):

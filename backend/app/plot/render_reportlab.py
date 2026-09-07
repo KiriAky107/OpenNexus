@@ -17,9 +17,7 @@ from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from app.plot.model import FunctionPlot
 from app.plot.render import PlotGeometry, _fmt_num, _sx, _sy, compute_geometry
 
-_FONT = "STSong-Light"
-if _FONT not in pdfmetrics.getRegisteredFontNames():
-    pdfmetrics.registerFont(UnicodeCIDFont(_FONT))
+from app.export.fonts import FONT as _FONT
 
 _GRID_COLOR = HexColor("#eaeef2")
 _AXIS_COLOR = HexColor("#57606a")
@@ -28,9 +26,12 @@ _TICK_FONT_SIZE = 10
 _LABEL_FONT_SIZE = 12
 
 
-def _build_drawing(geo: PlotGeometry) -> Drawing:
+def _build_drawing(geo: PlotGeometry, palette=None) -> Drawing:
     """由共享几何构建矢量 Drawing（坐标翻转后仍沿用 SVG 的像素布局）。"""
     drawing = Drawing(geo.width, geo.height)
+    grid_color = HexColor(palette['border']) if palette else _GRID_COLOR
+    axis_color = HexColor(palette['muted']) if palette else _AXIS_COLOR
+    label_color = HexColor(palette['text']) if palette else _LABEL_COLOR
 
     # SVG y-down → reportlab y-up：翻转像素 y
     def sx(x: float) -> float:
@@ -43,19 +44,19 @@ def _build_drawing(geo: PlotGeometry) -> Drawing:
     if geo.grid:
         for x in geo.xticks:
             drawing.add(
-                Line(sx(x), sy(geo.ymin), sx(x), sy(geo.ymax), strokeColor=_GRID_COLOR, strokeWidth=0.5)
+                Line(sx(x), sy(geo.ymin), sx(x), sy(geo.ymax), strokeColor=grid_color, strokeWidth=0.5)
             )
         for y in geo.yticks:
             drawing.add(
-                Line(sx(geo.xmin), sy(y), sx(geo.xmax), sy(y), strokeColor=_GRID_COLOR, strokeWidth=0.5)
+                Line(sx(geo.xmin), sy(y), sx(geo.xmax), sy(y), strokeColor=grid_color, strokeWidth=0.5)
             )
 
     # 坐标轴（过原点画在原点，否则贴边，与 SVG 一致）
     drawing.add(
-        Line(sx(geo.xmin), sy(geo.x_axis_y), sx(geo.xmax), sy(geo.x_axis_y), strokeColor=_AXIS_COLOR, strokeWidth=0.7)
+        Line(sx(geo.xmin), sy(geo.x_axis_y), sx(geo.xmax), sy(geo.x_axis_y), strokeColor=axis_color, strokeWidth=0.7)
     )
     drawing.add(
-        Line(sx(geo.y_axis_x), sy(geo.ymin), sx(geo.y_axis_x), sy(geo.ymax), strokeColor=_AXIS_COLOR, strokeWidth=0.7)
+        Line(sx(geo.y_axis_x), sy(geo.ymin), sx(geo.y_axis_x), sy(geo.ymax), strokeColor=axis_color, strokeWidth=0.7)
     )
 
     # 刻度数字（x 轴下方、y 轴左侧）
@@ -63,14 +64,14 @@ def _build_drawing(geo: PlotGeometry) -> Drawing:
         drawing.add(
             String(
                 sx(x), sy(geo.x_axis_y) - 14, _fmt_num(x),
-                fontName=_FONT, fontSize=_TICK_FONT_SIZE, fillColor=_AXIS_COLOR, textAnchor="middle",
+                fontName=_FONT, fontSize=_TICK_FONT_SIZE, fillColor=axis_color, textAnchor="middle",
             )
         )
     for y in geo.yticks:
         drawing.add(
             String(
                 sx(geo.y_axis_x) - 6, sy(y) - 3, _fmt_num(y),
-                fontName=_FONT, fontSize=_TICK_FONT_SIZE, fillColor=_AXIS_COLOR, textAnchor="end",
+                fontName=_FONT, fontSize=_TICK_FONT_SIZE, fillColor=axis_color, textAnchor="end",
             )
         )
 
@@ -85,7 +86,7 @@ def _build_drawing(geo: PlotGeometry) -> Drawing:
         drawing.add(
             String(
                 geo.width / 2, 10, geo.xlabel,
-                fontName=_FONT, fontSize=_LABEL_FONT_SIZE, fillColor=_LABEL_COLOR, textAnchor="middle",
+                fontName=_FONT, fontSize=_LABEL_FONT_SIZE, fillColor=label_color, textAnchor="middle",
             )
         )
     if geo.ylabel:
@@ -97,7 +98,7 @@ def _build_drawing(geo: PlotGeometry) -> Drawing:
         label.add(
             String(
                 0, 0, geo.ylabel,
-                fontName=_FONT, fontSize=_LABEL_FONT_SIZE, fillColor=_LABEL_COLOR, textAnchor="middle",
+                fontName=_FONT, fontSize=_LABEL_FONT_SIZE, fillColor=label_color, textAnchor="middle",
             )
         )
         label.translate(16, geo.height / 2)
@@ -107,14 +108,25 @@ def _build_drawing(geo: PlotGeometry) -> Drawing:
     return drawing
 
 
-def render_drawing(plot: FunctionPlot, width: float | None = None) -> Drawing:
+def render_drawing(plot: FunctionPlot, width: float | None = None, palette=None, unlimited=False, max_height=None) -> Drawing:
     """把已解析的 FunctionPlot 渲染为 reportlab Drawing（可直接追加到 platypus story）。
 
     ``width`` 为目标输出宽度（点），用于把 640px 的几何缩放到页面内容宽；省略则按
     原始尺寸输出。缩放只影响 PDF 渲染，不改动共享几何。
     """
-    geo = compute_geometry(plot)
-    drawing = _build_drawing(geo)
+    geo = compute_geometry(plot, unlimited=unlimited)
+    if palette:
+        from reportlab.lib.colors import HexColor as color
+        bg = color(palette['surface'])
+        if .2126*bg.red + .7152*bg.green + .0722*bg.blue < .5:
+            colors = ['#79c0ff','#ff9b9b','#7ee787','#d2a8ff','#f2cc60','#ffa657']
+            geo.colors = [value if plot.expressions[i].color else colors[i % len(colors)] for i,value in enumerate(geo.colors)]
+    drawing = _build_drawing(geo, palette)
+    legend_height = ((len(plot.expressions)+1)//2)*24
+    drawing.height += legend_height
+    for index, expression in enumerate(plot.expressions):
+        drawing.add(String(24+(index%2)*310,geo.height+legend_height-18-(index//2)*24,
+            expression.label or 'y = '+expression.expression,fontName=_FONT,fontSize=12,fillColor=HexColor(geo.colors[index])))
     if width is not None and width > 0:
-        drawing.renderScale = min(1.0, width / geo.width)
+        drawing.renderScale = min(1.0, width / geo.width, max_height / drawing.height if max_height else 1.0)
     return drawing

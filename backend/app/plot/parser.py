@@ -143,7 +143,7 @@ def _preprocess(expr: str) -> str:
     return _insert_implicit_multiplication(expr.replace("^", "**"))
 
 
-def _check_node(node: ast.AST, depth: int = 0, counter: list[int] | None = None) -> None:
+def _check_node(node: ast.AST, depth: int = 0, counter: list[int] | None = None, unlimited: bool = False) -> None:
     """白名单校验：任何越界节点都抛 FUNCTION_PLOT_EXPRESSION_UNSAFE。
 
     同时限制 AST 深度与节点总数，避免超长/超深表达式在递归校验或求值时触发
@@ -151,10 +151,10 @@ def _check_node(node: ast.AST, depth: int = 0, counter: list[int] | None = None)
     """
     if counter is None:
         counter = [0]
-    if depth > _MAX_AST_DEPTH:
+    if not unlimited and depth > _MAX_AST_DEPTH:
         _unsafe(f"表达式嵌套过深（超过 {_MAX_AST_DEPTH} 层）")
     counter[0] += 1
-    if counter[0] > _MAX_AST_NODES:
+    if not unlimited and counter[0] > _MAX_AST_NODES:
         _unsafe(f"表达式过于复杂（节点数超过 {_MAX_AST_NODES}）")
     if isinstance(node, ast.Constant):
         if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
@@ -167,13 +167,13 @@ def _check_node(node: ast.AST, depth: int = 0, counter: list[int] | None = None)
     if isinstance(node, ast.BinOp):
         if not isinstance(node.op, _ALLOWED_BINOPS):
             _unsafe(f"不支持的运算符 {type(node.op).__name__}")
-        _check_node(node.left, depth + 1, counter)
-        _check_node(node.right, depth + 1, counter)
+        _check_node(node.left, depth + 1, counter, unlimited)
+        _check_node(node.right, depth + 1, counter, unlimited)
         return
     if isinstance(node, ast.UnaryOp):
         if not isinstance(node.op, _ALLOWED_UNARY):
             _unsafe(f"不支持的运算符 {type(node.op).__name__}")
-        _check_node(node.operand, depth + 1, counter)
+        _check_node(node.operand, depth + 1, counter, unlimited)
         return
     if isinstance(node, ast.Call):
         if not isinstance(node.func, ast.Name) or node.func.id not in _FUNCTIONS:
@@ -184,12 +184,12 @@ def _check_node(node: ast.AST, depth: int = 0, counter: list[int] | None = None)
         if len(node.args) != 1:
             _unsafe(f"{node.func.id} 需要 1 个参数，实际 {len(node.args)} 个")
         for arg in node.args:
-            _check_node(arg, depth + 1, counter)
+            _check_node(arg, depth + 1, counter, unlimited)
         return
     _unsafe(f"不支持的语法 {type(node).__name__}")
 
 
-def parse_expression(expr: str) -> ast.Expression:
+def parse_expression(expr: str, unlimited: bool = False) -> ast.Expression:
     """把数学表达式解析为已通过白名单校验的 AST（可直接交给 evaluate）。"""
     preprocessed = _preprocess(expr)
     try:
@@ -211,7 +211,7 @@ def parse_expression(expr: str) -> ast.Expression:
                 message="表达式嵌套过深，无法解析",
             )
         ) from exc
-    _check_node(tree.body)
+    _check_node(tree.body, unlimited=unlimited)
     return tree
 
 
@@ -279,7 +279,7 @@ def _parse_directive(line: str) -> tuple[str, str] | None:
     return key, value.strip()
 
 
-def parse_source(source: str) -> FunctionPlotParseResult:
+def parse_source(source: str, unlimited: bool = False) -> FunctionPlotParseResult:
     """把 function-plot fenced block 源码解析为 FunctionPlot + 诊断。"""
     diagnostics: list[PlotDiagnostic] = []
     expressions: list[FunctionPlotExpression] = []
@@ -371,7 +371,7 @@ def parse_source(source: str) -> FunctionPlotParseResult:
             continue
 
         try:
-            tree = parse_expression(expr_text)
+            tree = parse_expression(expr_text, unlimited=unlimited)
         except PlotParseError as exc:
             exc.diagnostic.line = lineno
             diagnostics.append(exc.diagnostic)
@@ -380,7 +380,7 @@ def parse_source(source: str) -> FunctionPlotParseResult:
         total_nodes += _count_nodes(tree.body)
         expressions.append(FunctionPlotExpression(expression=expr_text))
         # 表达式数量超限：整块回退并提前终止，避免对海量表达式做采样求值
-        if len(expressions) > _MAX_EXPRESSIONS:
+        if not unlimited and len(expressions) > _MAX_EXPRESSIONS:
             diagnostics.append(
                 PlotDiagnostic(
                     severity="error",

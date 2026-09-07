@@ -151,6 +151,16 @@ class HtmlExporter:
         return "".join(self._render_node(child, warnings) for child in children)
 
     def _render_node(self, node: DocumentNode, warnings: list[str]) -> str:
+        if node.attributes.get('static_png'):
+            import base64
+            data = base64.b64encode(node.attributes['static_png']).decode()
+            from PIL import Image
+            from io import BytesIO
+            width = ''
+            if node.type.startswith('math'):
+                with Image.open(BytesIO(node.attributes['static_png'])) as image:
+                    width = f'width:{image.width*96/180:.1f}px;vertical-align:middle;'
+            return f'<img alt="{html.escape(node.text or node.type)}" src="data:image/png;base64,{data}" style="{width}max-width:100%">'
         handler = getattr(self, f"_render_{node.type}", None)
         if handler is not None:
             return handler(node, warnings)
@@ -257,6 +267,8 @@ class HtmlExporter:
             warnings.append(f"函数图像：解析或渲染失败，已回退占位（{exc}）")
             return f'<pre class="function-plot">{html.escape(node.text)}</pre>'
         warnings.extend(rendered.warnings)
+        from app.plot.render import theme_svg
+        rendered.content = theme_svg(rendered.content, self._options.theme_id)
         return f'<figure class="function-plot">{rendered.content}</figure>'
 
     def _render_math_block(self, node: DocumentNode, warnings: list[str]) -> str:

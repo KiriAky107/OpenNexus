@@ -321,7 +321,7 @@ def test_pdf_exporter_embeds_function_plot_and_marks_mermaid() -> None:
     # function_plot 已内嵌为矢量图，不再产生「函数图像占位」warning
     assert not any("函数图像" in w for w in result.warnings)
     # 绘图用 STSong-Light 渲染刻度/标签，字体应嵌入 PDF
-    assert b"STSong-Light" in result.content
+    assert b"STSong-Light" in result.content or b"/FontFile2" in result.content
 
 
 def test_pdf_exporter_function_plot_fallback_on_error() -> None:
@@ -334,17 +334,16 @@ def test_pdf_exporter_function_plot_fallback_on_error() -> None:
     assert any("函数图像" in w for w in result.warnings)
 
 
-def test_pdf_exporter_limits_function_plot_count() -> None:
+def test_pdf_exporter_has_no_function_plot_count_quota() -> None:
     from app.export.exporters.pdf import PdfExporter
 
     blocks = "\n\n".join("```function-plot\ny = x\n```" for _ in range(20))
     result = asyncio.run(PdfExporter().export(parse_document(blocks), ExportOptions()))
     assert result.content[:4] == b"%PDF"
-    # 超出数量上限的图块回退占位并记 warning
-    assert any("数量超过上限" in w for w in result.warnings)
+    assert not any("函数图像" in w for w in result.warnings)
 
 
-def test_pdf_exporter_limits_total_plot_nodes(monkeypatch) -> None:
+def test_pdf_exporter_has_no_total_plot_node_quota(monkeypatch) -> None:
     import app.export.exporters._common as common_mod
     from app.export.exporters.pdf import PdfExporter
 
@@ -352,17 +351,20 @@ def test_pdf_exporter_limits_total_plot_nodes(monkeypatch) -> None:
     md = "```function-plot\ny = x\n```\n\n```function-plot\ny = x + x + x + x\n```"
     result = asyncio.run(PdfExporter().export(parse_document(md), ExportOptions()))
     assert result.content[:4] == b"%PDF"
-    assert any("累计复杂度" in w for w in result.warnings)
+    assert not any("函数图像" in w for w in result.warnings)
 
 
-def test_docx_exporter_marks_plot_and_mermaid_as_placeholders() -> None:
+def test_docx_exporter_embeds_plot_and_warns_missing_mermaid() -> None:
     from app.export.exporters.docx import DocxExporter
 
     md = "```mermaid\ngraph LR\n```\n\n```function_plot\ny = x\n```"
     result = asyncio.run(DocxExporter().export(parse_document(md), ExportOptions()))
     assert result.content[:2] == b"PK"
     assert any("mermaid" in w for w in result.warnings)
-    assert any("函数图像" in w for w in result.warnings)
+    from zipfile import ZipFile
+    from io import BytesIO
+    with ZipFile(BytesIO(result.content)) as archive:
+        assert any(name.startswith('word/media/') for name in archive.namelist())
 
 
 def test_pdf_exporter_embeds_cjk_font() -> None:
@@ -373,7 +375,7 @@ def test_pdf_exporter_embeds_cjk_font() -> None:
     result = asyncio.run(PdfExporter().export(doc, ExportOptions(include_title=True)))
     assert result.content[:4] == b"%PDF"
     # 中文字体通过 STSong-Light CID 字体嵌入，PDF 内应引用该 BaseFont
-    assert b"STSong-Light" in result.content
+    assert b"STSong-Light" in result.content or b"/FontFile2" in result.content
 
 
 def test_docx_exporter_contains_cjk_text() -> None:
@@ -828,7 +830,8 @@ def test_callout_formats(name):
         xml = z.read("word/document.xml").decode()
     assert all(word in xml for word in ["Title", "Body", "item", "second", "w:shd"])
     result = PdfExporter().render(doc, ExportOptions(theme_id="sepia"))
-    assert result.content.startswith(b"%PDF") and len(result.warnings) == 1
+    assert result.content.startswith(b"%PDF")
+    assert not any("浅色打印" in warning for warning in result.warnings)
 
 
 @pytest.mark.parametrize("fold", ["", "+", "-"])

@@ -47,7 +47,7 @@ class FunctionPlotStaticRenderer:
         parsed = self.parse(request)
         if parsed.plot is None:
             raise ValueError("function-plot source has no valid plot")
-        return self.render_plot(parsed.plot)
+        return render_svg(parsed.plot, request.theme or 'light')
 
     def render_plot(self, plot: FunctionPlot) -> StaticRenderResult:
         return render_svg(plot)

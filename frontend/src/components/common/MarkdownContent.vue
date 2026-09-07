@@ -24,7 +24,7 @@ const diagramTheme = computed<'light' | 'dark'>(() => (themeStore.isDark ? 'dark
 // 主题切换需要重渲染：Mermaid SVG 的配色在渲染时烘焙，无法靠 CSS 变量事后调整。
 watch([() => props.source, diagramTheme, () => themeStore.currentThemeId, () => JSON.stringify(markdownPreferences.normalized), () => JSON.stringify([props.citationNumbers, props.citationAliases])], async ([source, theme]) => {
   const version = ++renderVersion
-  const result = await renderMarkdown(source, { theme, preferences: markdownPreferences.normalized, citationNumbers: props.citationNumbers, citationAliases: props.citationAliases })
+  const result = await renderMarkdown(source, { theme, themeId: themeStore.currentThemeId, preferences: markdownPreferences.normalized, citationNumbers: props.citationNumbers, citationAliases: props.citationAliases })
   if (version === renderVersion) html.value = result
 }, { immediate: true, flush: 'post' })
 </script>

@@ -5,6 +5,8 @@ import asyncio
 import json
 import os
 import time
+import hashlib
+from collections import OrderedDict
 from contextlib import closing
 from contextvars import ContextVar
 from functools import wraps
@@ -239,6 +241,11 @@ class Runtime:
 
 runtime = Runtime()
 
+# 对确定性的单文本本地向量做有界内存复用。键包含模型目录、不可变版本和冻结运行配置；
+# 远程 API 响应以及模型不可用时的回退结果都不进入缓存。
+_embedding_cache = OrderedDict()
+_EMBEDDING_CACHE_TTL = 600
+
 
 class LocalEmbedding:
     dim = 384
@@ -264,9 +271,24 @@ class LocalEmbedding:
 
     async def embed_documents(self, texts):
         config = (self._config or configuration()).model_copy(deep=True)
+        from app.retrieval.provenance import record_embedding
+        cache_key = None
+        if len(texts) == 1 and read_state(config.embedding_model)['status'] == 'installed' and interpreter(config).is_file():
+            cache_key = (str(model_path(config.embedding_model).resolve()), config.model_dump_json(),
+                         hashlib.sha256(texts[0].encode()).hexdigest())
+            cached = _embedding_cache.get(cache_key)
+            if cached and time.monotonic() - cached[0] < _EMBEDDING_CACHE_TTL:
+                _embedding_cache.move_to_end(cache_key)
+                record_embedding(query_embedding_cache='hit')
+                return [list(cached[1])]
+        record_embedding(query_embedding_cache='miss')
         token = runtime_context.set(config)
         try:
-            return await runtime.infer(config.embedding_model, "embedding", {"texts": texts}, priority=embedding_priority.get())
+            vectors = await runtime.infer(config.embedding_model, "embedding", {"texts": texts}, priority=embedding_priority.get())
+            if cache_key and len(vectors) == 1:
+                _embedding_cache[cache_key] = (time.monotonic(), tuple(vectors[0]))
+                while len(_embedding_cache) > 128: _embedding_cache.popitem(last=False)
+            return vectors
         finally:
             runtime_context.reset(token)
 

@@ -3,6 +3,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { t } from '@/i18n'
 
 const routes = [
+  { path: '/benchmarks', name: 'benchmarks', component: () => import('@/features/benchmarks/BenchmarkView.vue'), meta: { title: 'Benchmark' } },
   { path: '/logs', name: 'logs', component: () => import('@/features/logs/LogsView.vue'), meta: { title: '运行日志' } },
   { path: '/media', name: 'media', component: () => import('@/features/media/MediaView.vue'), meta: { title: '音视频转写', requiresVault: true } },
   {
@@ -80,7 +81,9 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const workspaceStore = useWorkspaceStore()
-  if (to.meta.requiresVault && !workspaceStore.hasVault) {
+  // Benchmark 不依赖工作区界面；报告中的持久化 Trace 和待决权限入口必须仍可访问。
+  const existingAgentRun = to.name === 'agent' && Boolean(to.params.runId)
+  if (to.meta.requiresVault && !workspaceStore.hasVault && !existingAgentRun) {
     return { path: '/' }
   }
   if (to.path === '/' && workspaceStore.hasVault) {

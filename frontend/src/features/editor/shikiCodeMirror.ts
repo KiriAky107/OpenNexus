@@ -60,6 +60,7 @@ export async function shikiLanguage(language: string, theme: CodeTheme): Promise
 
 export function shikiLanguages(theme: CodeTheme): LanguageDescription[] {
   return [
+    LanguageDescription.of({ name: 'function-plot', alias: ['Function Plot'], load: () => shikiLanguage('text', theme) }),
     ...bundledLanguagesInfo.map(info => LanguageDescription.of({
       name: info.id,
       alias: [info.name, ...(info.aliases ?? [])],

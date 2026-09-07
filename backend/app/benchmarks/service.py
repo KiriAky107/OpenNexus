@@ -352,3 +352,12 @@ async def wait_for_run(run_id: str) -> BenchmarkRun:
     if task is not None:
         await task
     return _runs.get(run_id)
+
+
+async def shutdown():
+    loop = asyncio.get_running_loop()
+    active = {rid: task for rid, task in _tasks.items() if not task.done() and task.get_loop() is loop}
+    for rid in active:
+        flag = _cancel_flags.get(rid)
+        if flag: flag.set()
+    await asyncio.gather(*active.values(), return_exceptions=True)
