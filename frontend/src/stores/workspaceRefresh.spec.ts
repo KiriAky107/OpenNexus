@@ -18,3 +18,15 @@ it('fetches external entries while keeping folder state and ignoring stale respo
   release([]); await old
   expect(store.fileTree).toHaveLength(1)
 })
+it('clears document tabs only after another vault opens successfully', async () => {
+  const store = useWorkspaceStore()
+  store.openFile('/old.md')
+  vi.spyOn(service, 'openVault').mockResolvedValue({ vault_id: 'new-vault', path: 'D:/notes', name: 'notes' })
+  vi.spyOn(service, 'getFileTree').mockResolvedValue([{ id: 'new', path: '/new.md', name: 'new.md', type: 'file' }])
+
+  await store.openVault('D:/notes')
+
+  expect(store.openFiles).toEqual([])
+  expect(store.activeFilePath).toBeNull()
+  expect(store.fileTree.map(item => item.path)).toEqual(['/new.md'])
+})

@@ -91,10 +91,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     isLoading.value = true
     try {
       const info = await workspaceService.openVault(path)
+      const tree = await workspaceService.getFileTree()
       vaultPath.value = info.path
       vaultId.value = info.vault_id
       vaultName.value = info.name
-      fileTree.value = await workspaceService.getFileTree()
+      fileTree.value = tree
+      openFiles.value = []
+      activeFilePath.value = null
       hasVault.value = true
       localStorage.setItem('last-vault-path', info.path)
     } finally {
@@ -107,10 +110,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     isLoading.value = true
     try {
       const info = await workspaceService.createVault(path, name)
+      const tree = await workspaceService.getFileTree()
       vaultPath.value = info.path
       vaultId.value = info.vault_id
       vaultName.value = info.name
-      fileTree.value = await workspaceService.getFileTree()
+      fileTree.value = tree
+      openFiles.value = []
+      activeFilePath.value = null
       hasVault.value = true
       localStorage.setItem('last-vault-path', info.path)
     } finally {

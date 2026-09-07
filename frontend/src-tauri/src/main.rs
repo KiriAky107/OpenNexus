@@ -129,9 +129,9 @@ async fn core_request(
 }
 
 #[tauri::command]
-fn editor_capabilities(app: tauri::AppHandle, import_enabled: bool) -> Result<(), String> {
+fn editor_capabilities(app: tauri::AppHandle, metadata_enabled: bool) -> Result<(), String> {
     app.state::<tauri::menu::MenuItem<tauri::Wry>>()
-        .set_enabled(import_enabled)
+        .set_enabled(metadata_enabled)
         .map_err(|_| "MENU_UNAVAILABLE".into())
 }
 
@@ -256,7 +256,7 @@ fn main() {
             let import = MenuItem::with_id(
                 app,
                 "editor.import-note-properties",
-                "导入为笔记属性…",
+                "元数据 / YAML Front Matter…",
                 false,
                 Some("CmdOrCtrl+Alt+P"),
             )?;
