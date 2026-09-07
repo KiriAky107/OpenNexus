@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import AppShell from '@/components/common/AppShell.vue'
 import TitleBar from '@/components/common/TitleBar.vue'
+import TitleBarMenu from '@/components/common/TitleBarMenu.vue'
 import { isDesktop } from '@/services/platform/desktop'
 
 const route = useRoute()
@@ -13,6 +14,7 @@ const desktop = isDesktop()
 <template>
   <div v-if="isVaultEntry" class="entry-shell">
     <TitleBar v-if="desktop" />
+    <TitleBarMenu v-if="desktop" />
     <router-view />
   </div>
   <AppShell v-else>

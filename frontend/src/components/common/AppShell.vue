@@ -9,8 +9,10 @@ import PrimarySidebar from './PrimarySidebar.vue'
 import SecondarySidebar from './SecondarySidebar.vue'
 import StatusBar from './StatusBar.vue'
 import TitleBar from './TitleBar.vue'
+import TitleBarMenu from './TitleBarMenu.vue'
 import CommandPalette from './CommandPalette.vue'
 import { getIndexStatus } from '@/services/indexService'
+import { isDesktop } from '@/services/platform/desktop'
 import { navigateToCitation } from '@/composables/useCitationNavigation'
 import { useWorkspaceRefresh } from '@/composables/useWorkspaceRefresh'
 useWorkspaceRefresh()
@@ -25,6 +27,7 @@ const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
 const route = useRoute()
 const router = useRouter()
+const desktop = isDesktop()
 
 let statusTimer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
@@ -75,6 +78,7 @@ defineExpose({ openCitation })
 <template>
   <div class="app-shell" :class="{ 'theme-dark': themeStore.isDark }">
     <TitleBar />
+    <TitleBarMenu v-if="desktop" />
     <div class="app-body">
       <PrimarySidebar />
       <SecondarySidebar v-if="secondaryComponent" :component="secondaryComponent" />
