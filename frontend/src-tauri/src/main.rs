@@ -2,6 +2,7 @@
 
 //! 预览 Host 只开放本地文件命令；未接通的 AI / 同步 / 凭据能力明确返回不可用。
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use notesagent_host::recent::{RecentVault, RecentVaultStore};
 use notesagent_host::workspace::{portable_path_string, Document, Entry, Workspace};
 use std::path::Path;
@@ -47,6 +48,21 @@ struct CoreResponse {
     status: u16,
     content_type: String,
     body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body_base64: Option<String>,
+}
+
+// 后端常规导出上限为 20 MiB；为 PDF 和未来的二进制接口保留余量，同时限制 IPC 内存占用。
+const MAX_CORE_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+
+fn is_json_content_type(content_type: &str) -> bool {
+    let media_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    media_type == "application/json" || media_type.ends_with("+json")
 }
 
 fn core_url(path: &str) -> Result<String, String> {
@@ -61,7 +77,7 @@ fn core_url(path: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod core_proxy_tests {
-    use super::core_url;
+    use super::{core_url, is_json_content_type};
 
     #[test]
     fn only_allows_expected_loopback_paths() {
@@ -78,6 +94,17 @@ mod core_proxy_tests {
         let csp = config["app"]["security"]["csp"].as_str().unwrap();
         assert!(csp.contains("'wasm-unsafe-eval'"));
         assert!(!csp.split_whitespace().any(|token| token == "'unsafe-eval'"));
+    }
+
+    #[test]
+    fn only_json_media_types_use_text_ipc_payloads() {
+        assert!(is_json_content_type("application/json; charset=utf-8"));
+        assert!(is_json_content_type("application/problem+json"));
+        assert!(!is_json_content_type("text/html; charset=utf-8"));
+        assert!(!is_json_content_type("application/pdf"));
+        assert!(!is_json_content_type(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ));
     }
 }
 
@@ -120,11 +147,29 @@ async fn core_request(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("")
         .to_owned();
-    let body = response.text().await.map_err(|_| "CORE_RESPONSE_ERROR")?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_CORE_RESPONSE_BYTES as u64)
+    {
+        return Err("CORE_RESPONSE_TOO_LARGE".into());
+    }
+    let bytes = response.bytes().await.map_err(|_| "CORE_RESPONSE_ERROR")?;
+    if bytes.len() > MAX_CORE_RESPONSE_BYTES {
+        return Err("CORE_RESPONSE_TOO_LARGE".into());
+    }
+    let (body, body_base64) = if is_json_content_type(&content_type) {
+        (
+            String::from_utf8(bytes.to_vec()).map_err(|_| "CORE_RESPONSE_ERROR")?,
+            None,
+        )
+    } else {
+        (String::new(), Some(BASE64_STANDARD.encode(&bytes)))
+    };
     Ok(CoreResponse {
         status,
         content_type,
         body,
+        body_base64,
     })
 }
 
