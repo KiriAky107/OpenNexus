@@ -175,6 +175,10 @@ impl<'a> Suspended<'a> {
     }
 }
 impl Running<'_> {
+    #[cfg(test)]
+    pub(crate) fn active_test_processes(&self) -> Result<u32> {
+        self.0.job.active_processes()
+    }
     /// Arm before dispatching a tool request; finish after receiving its result.
     /// Failure to arm must prevent dispatch. This does not time server lifetime.
     pub fn start_tool_call(&self) -> Result<crate::extension_deadline::ToolDeadline> {

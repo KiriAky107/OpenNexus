@@ -825,4 +825,121 @@ mod tests {
         drop(root);
         profile.remove().unwrap();
     }
+    #[test]
+    #[ignore = "production 60-second wall-clock and process-tree acceptance; run explicitly"]
+    fn real_sixty_second_tool_deadline_kills_tree_and_host_can_save() {
+        use std::{
+            os::windows::fs::OpenOptionsExt,
+            time::{Duration, Instant},
+        };
+        use windows_sys::Win32::Storage::FileSystem::*;
+        let profile = Profile::create().unwrap();
+        let package = tempfile::tempdir().unwrap();
+        let executable = package.path().join("network-probe.exe");
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/sandbox_network_probe.rs");
+        let compile = std::process::Command::new("rustc")
+            .arg("--edition=2021")
+            .arg(&fixture)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            compile.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+        let open = |path: &std::path::Path| {
+            std::fs::OpenOptions::new()
+                .access_mode(READ_CONTROL | WRITE_DAC)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(path)
+                .unwrap()
+        };
+        let root = open(package.path());
+        let entry = open(&executable);
+        profile.grant_package_read_execute(&root).unwrap();
+        profile.grant_package_read_execute(&entry).unwrap();
+
+        let folder = profile.folder().unwrap();
+        let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+        let data = crate::extension_launch_data::LaunchData::new(
+            &executable,
+            &["wait_tree".to_owned()],
+            &system,
+            &folder,
+            &folder.join("Temp"),
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        let suspended =
+            crate::extension_process::Suspended::create(&profile, &executable, data).unwrap();
+        let running = unsafe { suspended.resume().unwrap() };
+        let start = Instant::now();
+        let deadline = running.start_tool_call().unwrap();
+        while running.active_test_processes().unwrap() != 2
+            && start.elapsed() < Duration::from_secs(5)
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            running.active_test_processes().unwrap(),
+            2,
+            "container child did not start"
+        );
+        let vault = tempfile::tempdir().unwrap();
+        let mut workspace = crate::workspace::Workspace::open(vault.path()).unwrap();
+        let before = workspace
+            .write("deadline.md", "", b"during tool call", "local")
+            .unwrap();
+        eprintln!("production deadline: two managed processes; Host save succeeded; waiting 60-second budget");
+        let exit = running
+            .wait(Duration::from_secs(60))
+            .unwrap()
+            .or_else(|| running.wait(Duration::from_secs(5)).unwrap())
+            .unwrap();
+        assert_ne!(
+            exit, 84,
+            "probe ended naturally before the watchdog killed it"
+        );
+        while running.active_test_processes().unwrap() != 0
+            && start.elapsed() < Duration::from_secs(70)
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(running.active_test_processes().unwrap(), 0);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_secs(60) && elapsed < Duration::from_secs(70),
+            "{elapsed:?}"
+        );
+        assert_eq!(
+            deadline.finish().unwrap_err().code,
+            "EXTENSION_TOOL_DEADLINE_EXCEEDED"
+        );
+        workspace
+            .write(
+                "deadline.md",
+                &before.hash,
+                b"after process-tree cleanup",
+                "local",
+            )
+            .unwrap();
+        drop(workspace);
+        let mut reopened = crate::workspace::Workspace::open(vault.path()).unwrap();
+        assert_eq!(
+            reopened.read("deadline.md").unwrap().content,
+            "after process-tree cleanup"
+        );
+        eprintln!(
+            "production deadline: tree empty after {elapsed:?}; Host save and reopen succeeded"
+        );
+        drop(reopened);
+        drop(running);
+        drop(entry);
+        drop(root);
+        profile.remove().unwrap();
+    }
 }
