@@ -247,9 +247,87 @@ pub async fn extension_staged(
     .map_err(|_| "EXTENSION_LIST_FAILED".to_string())?
 }
 
+#[tauri::command]
+pub fn extension_trust_confirm_group(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+    requests: Vec<Confirmation>,
+) -> Result<Vec<String>, String> {
+    main_window(&window)?;
+    trust_confirm_group(&host, requests)
+}
+fn trust_confirm_group(host: &Host, requests: Vec<Confirmation>) -> Result<Vec<String>, String> {
+    if requests.is_empty() || requests.len() > 64 {
+        return Err("EXTENSION_TRUST_INVALID".into());
+    }
+    let mut reviews = host.extension_reviews.0.lock().map_err(|_| "HOST_BUSY")?;
+    let mut ids = std::collections::BTreeSet::new();
+    let mut proposals = Vec::new();
+    for request in &requests {
+        if !ids.insert(&request.review_id) {
+            return Err("EXTENSION_TRUST_INVALID".into());
+        }
+        let review = reviews
+            .get(&request.review_id)
+            .ok_or("EXTENSION_REVIEW_EXPIRED")?;
+        if review.expires <= Instant::now() {
+            return Err("EXTENSION_REVIEW_EXPIRED".into());
+        }
+        if review.fingerprint != request.fingerprint {
+            return Err("EXTENSION_TRUST_CONFIRMATION".into());
+        }
+        proposals.push((
+            review.setting.clone(),
+            review.expected.clone(),
+            review.fingerprint.clone(),
+        ));
+    }
+    let revisions = store(host, |s| s.confirm_trust_group(&proposals))?;
+    for request in requests {
+        reviews.remove(&request.review_id);
+    }
+    Ok(revisions)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_group_does_not_consume_valid_review_then_success_consumes_all() {
+        let temp = tempfile::tempdir().unwrap();
+        let host = Host::default();
+        *host.extensions.lock().unwrap() = Some(ExtensionStore::open(temp.path()).unwrap());
+        let mut setting = TrustSetting {
+            source: "https://catalog.example/".into(),
+            source_id: "catalog".into(),
+            namespace: "examples".into(),
+            key_id: "one".into(),
+            public_key: ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+                .verifying_key()
+                .to_bytes(),
+            enabled: true,
+        };
+        let first = trust_review(&host, setting.clone()).unwrap();
+        setting.key_id = "two".into();
+        let second = trust_review(&host, setting).unwrap();
+        let input = |value: &Value| Confirmation {
+            review_id: value["review_id"].as_str().unwrap().into(),
+            fingerprint: value["fingerprint"].as_str().unwrap().into(),
+        };
+        let mut wrong = input(&second);
+        wrong.fingerprint = "wrong".into();
+        assert!(trust_confirm_group(&host, vec![input(&first), wrong]).is_err());
+        assert_eq!(host.extension_reviews.0.lock().unwrap().len(), 2);
+        assert!(store(&host, |s| s.trust_setting(
+            "https://catalog.example/",
+            "examples",
+            "one"
+        ))
+        .unwrap()
+        .is_none());
+        trust_confirm_group(&host, vec![input(&first), input(&second)]).unwrap();
+        assert!(host.extension_reviews.0.lock().unwrap().is_empty());
+    }
     #[test]
     fn review_nonce_expiry_consumption_and_stale_setting_are_enforced() {
         let temp = tempfile::tempdir().unwrap();

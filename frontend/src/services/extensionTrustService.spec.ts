@@ -10,7 +10,7 @@ it('reviews normalized source and confirms only Host-issued id and fingerprint',
   expect(native.invoke).toHaveBeenCalledWith('extension_trust_review', { setting: { source: 'https://catalog.example/', source_id: 'catalog', key_id: 'key', namespace: 'examples', public_key: Array(32).fill(97), enabled: true } })
   expect(native.invoke).toHaveBeenCalledTimes(1)
   await confirmTrust(reviews)
-  expect(native.invoke).toHaveBeenLastCalledWith('extension_trust_confirm', { request: { review_id: 'review', fingerprint: 'digest' } })
+  expect(native.invoke).toHaveBeenLastCalledWith('extension_trust_confirm_group', { requests: [{ review_id: 'review', fingerprint: 'digest' }] })
 })
 it('rejects invalid and revoked input before invoking Host', async () => {
   await expect(reviewTrust('http://example.com', 'catalog', [key], true)).rejects.toThrow()

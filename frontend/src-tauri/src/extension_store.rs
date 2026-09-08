@@ -374,6 +374,39 @@ impl ExtensionStore {
             params![setting.source,setting.namespace,setting.key_id,serde_json::to_string(setting).unwrap(),revision])?;
         Ok(revision)
     }
+    pub fn confirm_trust_group(
+        &mut self,
+        proposals: &[(TrustSetting, Option<String>, String)],
+    ) -> Result<Vec<String>> {
+        if proposals.is_empty() || proposals.len() > 64 {
+            return Err(HostError::new("EXTENSION_TRUST_INVALID"));
+        }
+        let mut identities = std::collections::BTreeSet::new();
+        for (setting, _, _) in proposals {
+            if setting.source != proposals[0].0.source
+                || setting.source_id != proposals[0].0.source_id
+                || !identities.insert((&setting.namespace, &setting.key_id))
+            {
+                return Err(HostError::new("EXTENSION_TRUST_INVALID"));
+            }
+        }
+        self.db
+            .execute_batch("SAVEPOINT trust_confirmation_group")?;
+        let result = (|| {
+            let mut revisions = Vec::new();
+            for (setting, expected, confirmed) in proposals {
+                revisions.push(self.confirm_trust(setting, expected.as_deref(), confirmed)?);
+            }
+            self.db.execute_batch("RELEASE trust_confirmation_group")?;
+            Ok(revisions)
+        })();
+        if result.is_err() {
+            self.db.execute_batch(
+                "ROLLBACK TO trust_confirmation_group; RELEASE trust_confirmation_group",
+            )?;
+        }
+        result
+    }
     fn block_identity(
         source_url: &str,
         release: &Release,
@@ -1110,6 +1143,58 @@ mod tests {
             withdrawn: false,
             archive,
         }
+    }
+    #[test]
+    fn grouped_trust_confirmation_rolls_back_earlier_keys_on_later_conflict() {
+        let temp = tempfile::tempdir().unwrap();
+        let (_, _, key) = fixture();
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        let first = TrustSetting {
+            source: "https://catalog.example/".into(),
+            source_id: "catalog".into(),
+            namespace: "examples".into(),
+            key_id: "first".into(),
+            public_key: key,
+            enabled: true,
+        };
+        let mut second = first.clone();
+        second.key_id = "second".into();
+        store
+            .confirm_trust(&second, None, &second.fingerprint().unwrap())
+            .unwrap();
+        second.enabled = false;
+        let proposals = vec![
+            (first.clone(), None, first.fingerprint().unwrap()),
+            (second.clone(), None, second.fingerprint().unwrap()),
+        ];
+        assert!(store.confirm_trust_group(&proposals).is_err());
+        drop(store);
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        assert!(store
+            .trust_setting(&first.source, &first.namespace, &first.key_id)
+            .unwrap()
+            .is_none());
+        let old = store
+            .trust_setting(&second.source, &second.namespace, &second.key_id)
+            .unwrap()
+            .unwrap();
+        assert!(old.enabled);
+        let mut proposals = proposals;
+        proposals[1].1 = Some(old.fingerprint().unwrap());
+        store.confirm_trust_group(&proposals).unwrap();
+        assert!(store
+            .trust_setting(&first.source, &first.namespace, &first.key_id)
+            .unwrap()
+            .is_some());
+        assert!(
+            !store
+                .trust_setting(&second.source, &second.namespace, &second.key_id)
+                .unwrap()
+                .unwrap()
+                .enabled
+        );
+        let duplicate = vec![proposals[0].clone(), proposals[0].clone()];
+        assert!(store.confirm_trust_group(&duplicate).is_err());
     }
     #[test]
     fn cancelled_stage_reports_durable_commit_race_truthfully() {

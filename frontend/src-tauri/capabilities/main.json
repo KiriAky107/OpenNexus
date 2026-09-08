@@ -57,6 +57,7 @@
     "allow-extension-stage-prepare",
     "allow-extension-stage-cancel",
     "allow-extension-stage-status",
-    "allow-extension-staged"
+    "allow-extension-staged",
+    "allow-extension-trust-confirm-group"
   ]
 }

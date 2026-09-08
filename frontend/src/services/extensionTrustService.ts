@@ -24,7 +24,5 @@ export async function reviewTrust(url: string, sourceId: string, keys: Community
 }
 export async function confirmTrust(reviews: TrustReview[]): Promise<void> {
   if (!reviews.length || reviews.length > 64) throw new Error('请重新检查来源后确认')
-  for (const review of reviews) {
-    await invoke('extension_trust_confirm', { request: { review_id: review.review_id, fingerprint: review.fingerprint } })
-  }
+  await invoke('extension_trust_confirm_group', { requests: reviews.map(review => ({ review_id: review.review_id, fingerprint: review.fingerprint })) })
 }
