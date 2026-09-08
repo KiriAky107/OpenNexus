@@ -84,6 +84,22 @@ impl TrustSetting {
         Ok(hash(&serde_json::to_vec(self).unwrap()))
     }
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstallRequest {
+    pub root_key: String,
+    pub vault_id: String,
+    pub app_version: String,
+    pub platform: String,
+    pub architecture: String,
+    pub configurations: std::collections::BTreeMap<String, serde_json::Value>,
+}
+#[derive(Debug, Serialize)]
+pub struct InstallPreview {
+    pub fingerprint: String,
+    pub dependencies: crate::extension_dependencies::Plan,
+    pub changes: Vec<crate::extension_transaction::Change>,
+}
 pub struct ExtensionStore {
     root: PathBuf,
     db: Connection,
@@ -272,10 +288,10 @@ impl ExtensionStore {
         let mut db = Connection::open(database)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 5 {
+        if version > 6 {
             return Err(HostError::new("EXTENSION_SCHEMA_INCOMPATIBLE"));
         }
-        if (1..5).contains(&version) {
+        if (1..6).contains(&version) {
             let backup = root.join(format!(
                 "extensions.schema{version}.{}.sqlite3",
                 Uuid::new_v4()
@@ -291,7 +307,8 @@ impl ExtensionStore {
             CREATE TABLE IF NOT EXISTS extension_transactions(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,before_state TEXT NOT NULL,after_state TEXT NOT NULL,state TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS extension_trust(source TEXT NOT NULL,namespace TEXT NOT NULL,key_id TEXT NOT NULL,setting TEXT NOT NULL,revision TEXT NOT NULL,PRIMARY KEY(source,namespace,key_id));
             CREATE TABLE IF NOT EXISTS extension_blocks(identity TEXT PRIMARY KEY,reason TEXT NOT NULL);
-            PRAGMA user_version=5; COMMIT;")?;
+            CREATE TABLE IF NOT EXISTS extension_confirmations(operation_id TEXT PRIMARY KEY,request_hash TEXT NOT NULL,review_hash TEXT NOT NULL,changes TEXT NOT NULL);
+            PRAGMA user_version=6; COMMIT;")?;
         crate::extension_transaction::recover(&mut db)?;
         Ok(Self {
             root,
@@ -430,6 +447,158 @@ impl ExtensionStore {
             params![identity, code],
         )?;
         Ok(())
+    }
+    /// Builds the complete consent payload; staging work is allowed, but active
+    /// pointers, running instances and permissions are untouched.
+    pub fn installation_preview(&mut self, request: &InstallRequest) -> Result<InstallPreview> {
+        use crate::extension_transaction::{Change, Target};
+        let vault = Uuid::parse_str(&request.vault_id)
+            .map_err(|_| HostError::new("VAULT_INVALID"))?
+            .to_string();
+        if vault != request.vault_id || request.configurations.len() > 200 {
+            return Err(HostError::new("EXTENSION_TRANSACTION_INVALID"));
+        }
+        let dependencies = self.dependency_plan(
+            &request.root_key,
+            &request.app_version,
+            &request.platform,
+            &request.architecture,
+        )?;
+        for key in request.configurations.keys() {
+            if !dependencies.packages.iter().any(|p| &p.package_key == key) {
+                return Err(HostError::new("EXTENSION_CONFIG_INVALID"));
+            }
+        }
+        let mut changes = Vec::new();
+        let mut trust_revisions = Vec::new();
+        for locked in &dependencies.packages {
+            let (json, key): (String, Vec<u8>) = self.db.query_row(
+                "SELECT release,signer FROM versions WHERE package_key=?1",
+                [&locked.package_key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            let release: Release = serde_json::from_str(&json)
+                .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+            let key: [u8; 32] = key
+                .try_into()
+                .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+            self.check_not_revoked(&locked.source, &release, &key)?;
+            let trusted = self
+                .trust_setting(&locked.source, &release.namespace, &release.key_id)?
+                .ok_or_else(|| HostError::new("EXTENSION_SOURCE_UNTRUSTED"))?;
+            if !trusted.enabled || trusted.public_key != key {
+                return Err(HostError::new("EXTENSION_SOURCE_UNTRUSTED"));
+            }
+            trust_revisions.push(trusted.fingerprint()?);
+            let configuration = request
+                .configurations
+                .get(&locked.package_key)
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            let archive = self.archive(&locked.package_key)?;
+            let (_, manifest) = release.verify_package(
+                &key,
+                &release.key_id,
+                &release.namespace,
+                false,
+                false,
+                &archive,
+            )?;
+            crate::extension_config::validate(&manifest, &configuration)?;
+            let prepared = self.prepare(
+                &locked.package_key,
+                Signer {
+                    public_key: &key,
+                    key_id: &release.key_id,
+                    namespace: &release.namespace,
+                    revoked: false,
+                },
+                false,
+            )?;
+            let slot = hash(
+                &serde_json::to_vec(&(
+                    &vault,
+                    &locked.source,
+                    &release.namespace,
+                    &release.package_id,
+                ))
+                .unwrap(),
+            );
+            let current = self.active_installation(&slot)?;
+            if current
+                .as_ref()
+                .is_some_and(|p| p.pending_operation.is_some())
+            {
+                return Err(HostError::new("EXTENSION_TRANSACTION_BUSY"));
+            }
+            changes.push(Change {
+                target: Target {
+                    slot,
+                    package_key: locked.package_key.clone(),
+                    directory: prepared.directory,
+                    tree_sha256: prepared.tree_sha256,
+                    configuration,
+                },
+                expected_revision: current.map(|p| p.revision),
+            });
+        }
+        let bytes =
+            serde_json::to_vec(&(request, &dependencies, &changes, trust_revisions)).unwrap();
+        if bytes.len() > 4 * 1024 * 1024 {
+            return Err(HostError::new("EXTENSION_TRANSACTION_INVALID"));
+        }
+        Ok(InstallPreview {
+            fingerprint: hash(&bytes),
+            dependencies,
+            changes,
+        })
+    }
+    /// Recompute the exact reviewed payload before online checks. The main-window
+    /// confirmation UI must supply this digest; this method alone is not consent.
+    pub async fn install_confirmed(
+        &mut self,
+        operation: &str,
+        request: &InstallRequest,
+        confirmed_fingerprint: &str,
+    ) -> Result<crate::extension_transaction::Receipt> {
+        let changes = self.lock_confirmed_plan(operation, request, confirmed_fingerprint)?;
+        self.switch_online(operation, &request.vault_id, &changes)
+            .await
+    }
+    fn lock_confirmed_plan(
+        &mut self,
+        operation: &str,
+        request: &InstallRequest,
+        confirmed_fingerprint: &str,
+    ) -> Result<Vec<crate::extension_transaction::Change>> {
+        Uuid::parse_str(operation).map_err(|_| HostError::new("OPERATION_ID_INVALID"))?;
+        let request_bytes = serde_json::to_vec(request).unwrap();
+        if request_bytes.len() > 4 * 1024 * 1024 {
+            return Err(HostError::new("EXTENSION_TRANSACTION_INVALID"));
+        }
+        let request_hash = hash(&request_bytes);
+        let existing:Option<(String,String,String)>=self.db.query_row("SELECT request_hash,review_hash,changes FROM extension_confirmations WHERE operation_id=?1",[operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        if let Some((old_request, old_review, json)) = existing {
+            if old_request != request_hash || old_review != confirmed_fingerprint {
+                return Err(HostError::new("OPERATION_REUSED"));
+            }
+            return serde_json::from_str(&json)
+                .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"));
+        }
+        let preview = self.installation_preview(request)?;
+        if preview.fingerprint != confirmed_fingerprint {
+            return Err(HostError::new("EXTENSION_INSTALL_REVIEW_CHANGED"));
+        }
+        self.db.execute(
+            "INSERT INTO extension_confirmations VALUES (?1,?2,?3,?4)",
+            params![
+                operation,
+                request_hash,
+                confirmed_fingerprint,
+                serde_json::to_string(&preview.changes).unwrap()
+            ],
+        )?;
+        Ok(preview.changes)
     }
     /// Online installation gate, using confirmed Host trust settings only.
     pub async fn switch_online(
@@ -861,6 +1030,107 @@ mod tests {
             withdrawn: false,
             archive,
         }
+    }
+    #[tokio::test]
+    async fn installation_preview_binds_target_state_and_rejects_stale_confirmation_before_network()
+    {
+        let temp = tempfile::tempdir().unwrap();
+        let (release, archive, key) = fixture();
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        let staged = store
+            .stage(request(
+                &Uuid::new_v4().to_string(),
+                &release,
+                &archive,
+                &key,
+            ))
+            .unwrap();
+        let setting = TrustSetting {
+            source: "https://catalog.example/".into(),
+            source_id: "catalog".into(),
+            namespace: release.namespace.clone(),
+            key_id: release.key_id.clone(),
+            public_key: key,
+            enabled: true,
+        };
+        store
+            .confirm_trust(&setting, None, &setting.fingerprint().unwrap())
+            .unwrap();
+        let mut req = InstallRequest {
+            root_key: staged.package_key,
+            vault_id: Uuid::new_v4().to_string(),
+            app_version: "1.0.0".into(),
+            platform: "windows".into(),
+            architecture: "x86_64".into(),
+            configurations: Default::default(),
+        };
+        let preview = store.installation_preview(&req).unwrap();
+        assert_eq!(
+            preview.fingerprint,
+            store.installation_preview(&req).unwrap().fingerprint
+        );
+        drop(store);
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        assert_eq!(
+            preview.fingerprint,
+            store.installation_preview(&req).unwrap().fingerprint
+        );
+        assert_eq!(
+            store
+                .install_confirmed(&Uuid::new_v4().to_string(), &req, "stale")
+                .await
+                .unwrap_err()
+                .code,
+            "EXTENSION_INSTALL_REVIEW_CHANGED"
+        );
+        req.app_version = "1.0.1".into();
+        assert_ne!(
+            preview.fingerprint,
+            store.installation_preview(&req).unwrap().fingerprint
+        );
+        req.app_version = "1.0.0".into();
+        let confirmed_operation = Uuid::new_v4().to_string();
+        let locked = store
+            .lock_confirmed_plan(&confirmed_operation, &req, &preview.fingerprint)
+            .unwrap();
+        let id = Uuid::new_v4().to_string();
+        store
+            .switch_prepared(&id, &req.vault_id, &preview.changes)
+            .unwrap();
+        assert!(store.installation_preview(&req).is_err());
+        store.finish_installation(&id, true).unwrap();
+        assert_eq!(
+            locked,
+            store
+                .lock_confirmed_plan(&confirmed_operation, &req, &preview.fingerprint)
+                .unwrap()
+        );
+        drop(store);
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        assert_eq!(
+            locked,
+            store
+                .lock_confirmed_plan(&confirmed_operation, &req, &preview.fingerprint)
+                .unwrap()
+        );
+        assert!(store
+            .lock_confirmed_plan(&confirmed_operation, &req, "different")
+            .is_err());
+        assert_ne!(
+            preview.fingerprint,
+            store.installation_preview(&req).unwrap().fingerprint
+        );
+        assert_eq!(
+            store
+                .install_confirmed(&Uuid::new_v4().to_string(), &req, &preview.fingerprint)
+                .await
+                .unwrap_err()
+                .code,
+            "EXTENSION_INSTALL_REVIEW_CHANGED"
+        );
+        req.configurations
+            .insert("unknown-package".into(), serde_json::json!({}));
+        assert!(store.installation_preview(&req).is_err());
     }
     #[test]
     fn revocations_survive_restart_and_consent_without_overblocking_other_releases() {
