@@ -374,7 +374,9 @@ impl SyncClient {
         if let Some(initial) = workspace.access(|ws| ws.sync_initial_pending(&binding.id))? {
             let count = initial.len().min(100);
             for revision in initial.iter().take(count) {
-                if revision.operation == "put" {
+                if revision.operation == "put"
+                    && workspace.access(|ws| ws.sync_path_enabled(&revision.path))?
+                {
                     self.download(workspace, binding, revision).await?;
                 }
                 workspace.access(|ws| {
@@ -423,7 +425,9 @@ impl SyncClient {
             if revision.sequence != cursor + index as i64 + 1 || revision.sequence > end {
                 return Err(SyncError::new("SYNC_RESPONSE_INVALID"));
             }
-            if revision.operation == "put" {
+            if revision.operation == "put"
+                && workspace.access(|ws| ws.sync_path_enabled(&revision.path))?
+            {
                 self.download(workspace, binding, &revision).await?;
             }
             workspace.access(|ws| {

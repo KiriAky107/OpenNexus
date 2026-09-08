@@ -21,6 +21,10 @@ impl OptionalScope {
 }
 
 impl Workspace {
+    pub fn sync_path_enabled(&self, path: &str) -> Result<bool> {
+        Ok(crate::sync_discovery::allowed(path) && self.sync_optional_scope()?.includes(path))
+    }
+
     pub fn sync_optional_scope(&self) -> Result<OptionalScope> {
         Ok(self
             .db
@@ -54,6 +58,104 @@ impl Workspace {
 mod tests {
     use super::*;
 
+    #[test]
+    fn old_queued_optional_jobs_cannot_bypass_missing_consent() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        ws.sync_set_optional_scope(OptionalScope {
+            persona: true,
+            layout: false,
+        })
+        .unwrap();
+        let data = serde_json::to_vec(&serde_json::json!({"schema":1,"kind":"persona","id":"default","data":{"version":0,"name":"local","system_prompt":"private","dialogue_pairs":[]}})).unwrap();
+        let path = "opennexus-records/v1/persona/default.json";
+        ws.write(path, "", &data, "local").unwrap();
+        let binding = ws
+            .sync_bind_empty("https://sync.example", "remote", "account")
+            .unwrap();
+        let job = ws.sync_next(&binding.id).unwrap().unwrap();
+        // Models a pre-scope database's pending job after schema migration.
+        ws.db
+            .execute("DELETE FROM sync_optional_scope", [])
+            .unwrap();
+        assert_eq!(
+            ws.sync_commit_payload(&job).unwrap_err().code,
+            "SYNC_SCOPE_DISABLED"
+        );
+        assert!(ws.sync_next(&binding.id).unwrap().is_none());
+        ws.write("note.md", "", b"still synchronized", "local")
+            .unwrap();
+        ws.sync_capture(&binding.id).unwrap();
+        assert_eq!(ws.sync_next(&binding.id).unwrap().unwrap().path, "note.md");
+        assert_eq!(std::fs::read(root.path().join(path)).unwrap(), data);
+    }
+    #[test]
+    fn excluded_records_neither_upload_nor_require_object_bytes_to_advance_cursor() {
+        use crate::sync_inbox::RemoteRevision;
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let path = "opennexus-records/v1/persona/default.json";
+        let local = serde_json::to_vec(&serde_json::json!({"schema":1,"kind":"persona","id":"default","data":{"version":0,"name":"Local only","system_prompt":"private","dialogue_pairs":[]}})).unwrap();
+        ws.write(path, "", &local, "local").unwrap();
+        let binding = ws
+            .sync_bind_download("https://sync.example", "remote", "account")
+            .unwrap();
+        ws.sync_capture(&binding.id).unwrap();
+        assert!(ws.sync_next(&binding.id).unwrap().is_none());
+        let revision = RemoteRevision {
+            vault_id: "remote".into(),
+            sequence: 1,
+            file_id: uuid::Uuid::new_v4().to_string(),
+            base_revision: 0,
+            path: path.into(),
+            operation: "put".into(),
+            hash: Some("a".repeat(64)),
+            size: 123,
+            operation_id: uuid::Uuid::new_v4().to_string(),
+        };
+        ws.sync_set_boundary(&binding.id, 1).unwrap();
+        ws.sync_stage(&binding.id, &revision).unwrap();
+        assert!(ws.sync_apply_pending(&binding.id).unwrap());
+        assert_eq!(ws.sync_binding().unwrap().unwrap().cursor, 1);
+        assert_eq!(std::fs::read(root.path().join(path)).unwrap(), local);
+        assert!(!ws
+            .sync_spool(revision.hash.as_ref().unwrap())
+            .unwrap()
+            .exists());
+        assert!(ws.sync_conflicts(&binding.id).unwrap().is_empty());
+        ws.sync_unbind(&binding.id).unwrap();
+        let snapshot = crate::sync_initial::Snapshot {
+            boundary: 1,
+            items: vec![revision],
+        };
+        let before = ws
+            .sync_preview("https://sync.example", "remote", "account", &snapshot)
+            .unwrap();
+        assert!(before.items.is_empty());
+        ws.sync_set_optional_scope(OptionalScope {
+            persona: true,
+            layout: false,
+        })
+        .unwrap();
+        assert_eq!(
+            ws.sync_bind_initial(
+                "https://sync.example",
+                "remote",
+                "account",
+                &snapshot,
+                &before.fingerprint
+            )
+            .err()
+            .unwrap()
+            .code,
+            "SYNC_PREVIEW_CHANGED"
+        );
+        let after = ws
+            .sync_preview("https://sync.example", "remote", "account", &snapshot)
+            .unwrap();
+        assert_eq!(after.items.len(), 1);
+        assert_eq!(after.items[0].action, "conflict");
+    }
     #[test]
     fn schema_ten_upgrade_preserves_vault_and_does_not_infer_consent() {
         let root = tempfile::tempdir().unwrap();

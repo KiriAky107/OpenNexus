@@ -249,6 +249,21 @@ pub fn sync_pause(host: State<'_, Host>, binding_id: String, paused: bool) -> Re
     Ok(())
 }
 #[tauri::command]
+pub fn sync_set_scope(
+    host: State<'_, Host>,
+    vault_id: String,
+    scope: notesagent_host::sync_scope::OptionalScope,
+) -> Result<(), String> {
+    with_workspace(&host, |ws| {
+        if ws.vault_id != vault_id {
+            return Err(notesagent_host::workspace::HostError::new(
+                "VAULT_PERMISSION_CHANGED",
+            ));
+        }
+        ws.sync_set_optional_scope(scope)
+    })
+}
+#[tauri::command]
 pub fn sync_status(host: State<'_, Host>) -> Result<Value, String> {
     let snapshot = with_workspace(&host, |ws| {
         let binding = ws.sync_binding()?;
@@ -263,6 +278,7 @@ pub fn sync_status(host: State<'_, Host>) -> Result<Value, String> {
             .transpose()?
             .unwrap_or_default();
         Ok((
+            ws.sync_optional_scope()?,
             ws.vault_id.clone(),
             binding.clone(),
             paused,
@@ -280,7 +296,7 @@ pub fn sync_status(host: State<'_, Host>) -> Result<Value, String> {
                 .unwrap_or_default(),
         ))
     })?;
-    let (vault_id, binding, paused, conflicts, pending, attempts, retry) = snapshot;
+    let (optional_scope, vault_id, binding, paused, conflicts, pending, attempts, retry) = snapshot;
     let credential_state = if let Some(b) = &binding {
         sync_auth::available(&host.credentials, &b.endpoint, &b.account)
             .map(|exists| {
@@ -298,7 +314,7 @@ pub fn sync_status(host: State<'_, Host>) -> Result<Value, String> {
     let statuses = host.sync.status.lock().map_err(|_| "HOST_BUSY")?;
     let status = binding.as_ref().and_then(|b| statuses.get(&b.id));
     Ok(
-        json!({"vault_id":vault_id,"binding":binding,"paused":paused,"pending":pending,"conflicts":conflicts,"credential_state":credential_state,"running":status.is_some_and(|s|s.running),"error":retry.error,"retry_in":retry.retry_at.map(|_| retry.remaining(now())),"failures":retry.failures,"halted":retry.halted,"attempts":attempts}),
+        json!({"optional_scope":optional_scope,"vault_id":vault_id,"binding":binding,"paused":paused,"pending":pending,"conflicts":conflicts,"credential_state":credential_state,"running":status.is_some_and(|s|s.running),"error":retry.error,"retry_in":retry.retry_at.map(|_| retry.remaining(now())),"failures":retry.failures,"halted":retry.halted,"attempts":attempts}),
     )
 }
 #[tauri::command]

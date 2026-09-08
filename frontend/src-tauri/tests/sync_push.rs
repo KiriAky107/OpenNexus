@@ -75,6 +75,14 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
     client.verify_empty(remote).await.unwrap();
     let local = tempfile::tempdir().unwrap();
     let workspace = Arc::new(Mutex::new(Workspace::open(local.path()).unwrap()));
+    workspace
+        .lock()
+        .unwrap()
+        .sync_set_optional_scope(notesagent_host::sync_scope::OptionalScope {
+            persona: true,
+            layout: true,
+        })
+        .unwrap();
     let binding = {
         let mut ws = workspace.lock().unwrap();
         let mut digest = String::new();
@@ -152,6 +160,14 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
     .unwrap();
     let root_b = tempfile::tempdir().unwrap();
     let workspace_b = Arc::new(Mutex::new(Workspace::open(root_b.path()).unwrap()));
+    workspace_b
+        .lock()
+        .unwrap()
+        .sync_set_optional_scope(notesagent_host::sync_scope::OptionalScope {
+            persona: true,
+            layout: true,
+        })
+        .unwrap();
     let binding_b = workspace_b
         .lock()
         .unwrap()
@@ -659,6 +675,86 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
                 .unwrap()
         );
     }
+
+    // A default-off device consumes history metadata without downloading either
+    // optional record. Rebinding after opt-in must fetch the already-seen heads.
+    let excluded_root = tempfile::tempdir().unwrap();
+    let excluded_ws = Arc::new(Mutex::new(Workspace::open(excluded_root.path()).unwrap()));
+    let excluded_binding = excluded_ws
+        .lock()
+        .unwrap()
+        .sync_bind_download(&endpoint, remote, "rust-fixture")
+        .unwrap();
+    while client_b
+        .pull_page(&excluded_ws, &excluded_binding)
+        .await
+        .unwrap()
+        > 0
+    {}
+    for (kind, id) in [("persona", "default"), ("layout", "sidebars")] {
+        let original = workspace
+            .lock()
+            .unwrap()
+            .record_get_kind(kind, id)
+            .unwrap()
+            .unwrap();
+        let mut excluded = excluded_ws.lock().unwrap();
+        assert!(excluded.record_get_kind(kind, id).unwrap().is_none());
+        assert!(!excluded
+            .sync_spool(original["hash"].as_str().unwrap())
+            .unwrap()
+            .exists());
+    }
+    assert!(!client_b
+        .push_one(&excluded_ws, &excluded_binding)
+        .await
+        .unwrap());
+    {
+        let mut excluded = excluded_ws.lock().unwrap();
+        excluded.sync_unbind(&excluded_binding.id).unwrap();
+        excluded
+            .sync_set_optional_scope(notesagent_host::sync_scope::OptionalScope {
+                persona: true,
+                layout: true,
+            })
+            .unwrap();
+    }
+    let snapshot = client_b.snapshot(remote).await.unwrap();
+    let opted_binding = {
+        let mut excluded = excluded_ws.lock().unwrap();
+        let preview = excluded
+            .sync_preview(&endpoint, remote, "rust-fixture", &snapshot)
+            .unwrap();
+        excluded
+            .sync_bind_initial(
+                &endpoint,
+                remote,
+                "rust-fixture",
+                &snapshot,
+                &preview.fingerprint,
+            )
+            .unwrap()
+    };
+    while client_b
+        .pull_page(&excluded_ws, &opted_binding)
+        .await
+        .unwrap()
+        > 0
+    {}
+    for (kind, id) in [("persona", "default"), ("layout", "sidebars")] {
+        assert_eq!(
+            excluded_ws
+                .lock()
+                .unwrap()
+                .record_get_kind(kind, id)
+                .unwrap(),
+            workspace.lock().unwrap().record_get_kind(kind, id).unwrap()
+        );
+    }
+    assert!(!client_b
+        .push_one(&excluded_ws, &opted_binding)
+        .await
+        .unwrap());
 
     // Kill the actual client process after each durable 10 MiB server offset,
     // before its response reaches the client. The next process must query offset.
