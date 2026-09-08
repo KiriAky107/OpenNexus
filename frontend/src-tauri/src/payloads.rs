@@ -4,7 +4,7 @@ use rusqlite::{params, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::Path,
 };
 impl Workspace {
@@ -59,6 +59,11 @@ impl Workspace {
     }
 }
 pub(crate) fn verify(path: &Path, digest: &str, size: u64) -> Result<()> {
+    open_verified(path, digest, size).map(drop)
+}
+/// Return the verified handle, rewound for use by a streaming caller.
+/// Path containment is the caller's responsibility; this is not a sandbox opener.
+pub(crate) fn open_verified(path: &Path, digest: &str, size: u64) -> Result<fs::File> {
     let meta = fs::symlink_metadata(path)?;
     if meta.file_type().is_symlink() || !meta.is_file() || meta.len() != size {
         return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
@@ -71,17 +76,118 @@ pub(crate) fn verify(path: &Path, digest: &str, size: u64) -> Result<()> {
         }
     }
     let mut stream = fs::File::open(path)?;
+    if stream.metadata()?.len() != size {
+        return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
+    }
+    verify_reader(&mut stream, digest, size)?;
+    stream.seek(SeekFrom::Start(0))?;
+    Ok(stream)
+}
+const VERIFY_BUFFER_BYTES: usize = 64 * 1024;
+fn verify_reader(stream: &mut impl Read, digest: &str, size: u64) -> Result<()> {
     let mut hasher = Sha256::new();
-    let mut buffer = vec![0; 1024 * 1024];
+    let mut buffer = vec![0; VERIFY_BUFFER_BYTES];
+    let mut length = 0u64;
     loop {
-        let count = stream.read(&mut buffer)?;
+        // Even if a file grows after metadata inspection, consume at most the
+        // declared payload plus one byte, never an unbounded changing stream.
+        let limit = size
+            .saturating_sub(length)
+            .saturating_add(1)
+            .min(buffer.len() as u64) as usize;
+        let count = stream.read(&mut buffer[..limit])?;
         if count == 0 {
             break;
         }
+        length += count as u64;
+        if length > size {
+            return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
+        }
         hasher.update(&buffer[..count]);
     }
-    if format!("{:x}", hasher.finalize()) != digest {
+    if length != size || format!("{:x}", hasher.finalize()) != digest {
         return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    struct Generated {
+        remaining: u64,
+        consumed: u64,
+        max_request: usize,
+    }
+    impl Read for Generated {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.max_request = self.max_request.max(buffer.len());
+            let count = self.remaining.min(buffer.len() as u64) as usize;
+            buffer[..count].fill(7);
+            self.remaining -= count as u64;
+            self.consumed += count as u64;
+            Ok(count)
+        }
+    }
+    #[test]
+    fn hundred_mib_verification_is_bounded_and_rejects_growth_or_truncation() {
+        let size = 100 * 1024 * 1024u64;
+        let block = vec![7u8; VERIFY_BUFFER_BYTES];
+        let mut hasher = Sha256::new();
+        for _ in 0..size / block.len() as u64 {
+            hasher.update(&block);
+        }
+        let digest = format!("{:x}", hasher.finalize());
+        let mut stream = Generated {
+            remaining: size,
+            consumed: 0,
+            max_request: 0,
+        };
+        verify_reader(&mut stream, &digest, size).unwrap();
+        assert_eq!(stream.consumed, size);
+        assert_eq!(stream.max_request, VERIFY_BUFFER_BYTES);
+        let mut growing = Generated {
+            remaining: u64::MAX,
+            consumed: 0,
+            max_request: 0,
+        };
+        assert_eq!(
+            verify_reader(&mut growing, &hash(&[7; 8]), 8)
+                .unwrap_err()
+                .code,
+            "SYNC_SPOOL_CORRUPT"
+        );
+        assert_eq!(growing.consumed, 9);
+        assert_eq!(
+            verify_reader(&mut &[7; 7][..], &hash(&[7; 8]), 8)
+                .unwrap_err()
+                .code,
+            "SYNC_SPOOL_CORRUPT"
+        );
+        assert_eq!(
+            verify_reader(&mut &[8; 8][..], &hash(&[7; 8]), 8)
+                .unwrap_err()
+                .code,
+            "SYNC_SPOOL_CORRUPT"
+        );
+        verify_reader(&mut &[][..], &hash(&[]), 0).unwrap();
+    }
+    #[test]
+    fn verified_file_is_rewound_and_corruption_is_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("payload");
+        fs::write(&path, b"verified payload").unwrap();
+        let mut file = open_verified(&path, &hash(b"verified payload"), 16).unwrap();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"verified payload");
+        drop(file);
+        fs::write(&path, b"modified payload").unwrap();
+        assert_eq!(
+            verify(&path, &hash(b"verified payload"), 16)
+                .unwrap_err()
+                .code,
+            "SYNC_SPOOL_CORRUPT"
+        );
+    }
 }

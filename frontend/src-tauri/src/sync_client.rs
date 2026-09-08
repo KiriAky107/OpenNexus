@@ -449,11 +449,9 @@ impl SyncClient {
             ws.sync_spool(digest)
         })?;
         if target.exists() {
-            let bytes = std::fs::read(&target)?;
-            if bytes.len() as i64 == revision.size && crate::workspace::hash(&bytes) == digest {
-                return Ok(());
-            }
-            return Err(SyncError::new("SYNC_SPOOL_CORRUPT"));
+            crate::payloads::verify(&target, digest, revision.size as u64)?;
+            workspace.access(|ws| ws.check_binding(&binding.id))?;
+            return Ok(());
         }
         let url = self
             .endpoint
@@ -511,22 +509,9 @@ impl SyncClient {
         job: &Job,
     ) -> Result<()> {
         let path = workspace.access(|ws| ws.sync_spool(&job.hash))?;
-        let mut file = std::fs::File::open(path)?;
-        if file.metadata()?.len() != job.size as u64 {
-            return Err(SyncError::new("SYNC_SPOOL_CORRUPT"));
-        }
-        let mut hasher = Sha256::new();
+        let mut file = crate::payloads::open_verified(&path, &job.hash, job.size as u64)?;
+        workspace.access(|ws| ws.check_binding(&binding.id))?;
         let mut buffer = vec![0u8; 1048576];
-        loop {
-            let count = file.read(&mut buffer)?;
-            if count == 0 {
-                break;
-            }
-            hasher.update(&buffer[..count]);
-        }
-        if format!("{:x}", hasher.finalize()) != job.hash {
-            return Err(SyncError::new("SYNC_SPOOL_CORRUPT"));
-        }
         let base = format!("sync/v1/vaults/{}/uploads", binding.remote_vault);
         let mut upload_id = job.upload_id.clone();
         let mut offset = 0;
