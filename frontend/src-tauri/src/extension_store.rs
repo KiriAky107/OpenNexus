@@ -290,7 +290,7 @@ impl ExtensionStore {
             let public: [u8; 32] = key
                 .try_into()
                 .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
-            let (inventory, _) = release.verify_package(
+            let (inventory, manifest) = release.verify_package(
                 &public,
                 &release.key_id,
                 &release.namespace,
@@ -298,6 +298,7 @@ impl ExtensionStore {
                 false,
                 &self.archive(&change.target.package_key)?,
             )?;
+            crate::extension_config::validate(&manifest, &change.target.configuration)?;
             let slot = hash(
                 &serde_json::to_vec(&(&vault, &source, &release.namespace, &release.package_id))
                     .unwrap(),
@@ -663,7 +664,7 @@ mod tests {
                 package_key: staged.package_key,
                 directory: prepared.directory.clone(),
                 tree_sha256: prepared.tree_sha256,
-                configuration: serde_json::json!({"review":true}),
+                configuration: serde_json::json!({}),
             },
             expected_revision: None,
         }];
@@ -674,6 +675,19 @@ mod tests {
                 &changes
             )
             .is_err());
+        let mut invalid = changes.clone();
+        invalid[0].target.configuration = serde_json::json!({"password":"never-persist-this"});
+        assert!(store
+            .switch_prepared(&Uuid::new_v4().to_string(), &vault, &invalid)
+            .is_err());
+        assert_eq!(
+            store
+                .db
+                .query_row("SELECT COUNT(*) FROM extension_transactions", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
         let operation = Uuid::new_v4().to_string();
         store.switch_prepared(&operation, &vault, &changes).unwrap();
         assert!(store

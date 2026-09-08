@@ -45,6 +45,7 @@ serde-saphyr = { version = "1.2", default-features = false, features = ["deseria
 semver = { version = "1", features = ["serde"] }
 cap-std = "4.0.2"
 cap-fs-ext = "4.0.2"
+jsonschema = { version = "0.55", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_RemoteDesktop", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader"] }

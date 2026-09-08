@@ -45,3 +45,6 @@ pub mod extension_permit;
 
 #[cfg(feature = "desktop")]
 pub mod extension_transaction;
+
+#[cfg(feature = "desktop")]
+pub mod extension_config;
