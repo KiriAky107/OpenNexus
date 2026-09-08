@@ -9,3 +9,4 @@ mod runtime_compat;
 #[cfg(windows)]
 pub mod session_lock;
 pub mod workspace;
+pub mod workspace_broker;

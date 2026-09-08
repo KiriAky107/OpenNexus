@@ -363,11 +363,15 @@ impl CoreSupervisor {
             let mut reader = BufReader::new(stdout);
             loop {
                 let mut line = Zeroizing::new(Vec::new());
-                match reader.by_ref().take(131073).read_until(b'\n', &mut line) {
+                match reader
+                    .by_ref()
+                    .take(8 * 1024 * 1024 + 1)
+                    .read_until(b'\n', &mut line)
+                {
                     Ok(0) | Err(_) => break,
                     _ => {}
                 }
-                if line.len() > 131072 {
+                if line.len() > 8 * 1024 * 1024 {
                     break;
                 }
                 let Ok(message) = serde_json::from_slice::<serde_json::Value>(&line) else {
@@ -393,7 +397,7 @@ impl CoreSupervisor {
                     break;
                 };
                 let mut bytes = Zeroizing::new(bytes);
-                if bytes.len() > 131072 {
+                if bytes.len() > 8 * 1024 * 1024 {
                     break;
                 }
                 bytes.push(b'\n');

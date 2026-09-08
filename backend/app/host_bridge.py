@@ -17,7 +17,7 @@ class HostBridge:
         request_id = uuid.uuid4().hex
         result = queue.Queue(maxsize=1)
         payload = json.dumps({"rpc": method, "request_id": request_id, "params": params}, separators=(",", ":"))
-        if len(payload.encode()) > 131072:
+        if len(payload.encode()) > (8 * 1024 * 1024):
             raise RuntimeError("HOST_REQUEST_TOO_LARGE")
         with self.lock:
             if self.closed.is_set():
@@ -42,8 +42,8 @@ class HostBridge:
 
     def listen(self, on_disconnect):
         try:
-            while line := self.reader.readline(131073):
-                if len(line) > 131072:
+            while line := self.reader.readline((8 * 1024 * 1024 + 1)):
+                if len(line) > (8 * 1024 * 1024):
                     break
                 message = json.loads(line)
                 with self.lock:
@@ -65,3 +65,8 @@ class HostBridge:
 
 
 active: HostBridge | None = None
+
+# Set only by authenticated Host HTTP transport; inherited by Agent tasks.
+from contextvars import ContextVar
+vault_id: ContextVar[str | None] = ContextVar("host_vault_id", default=None)
+operation_id: ContextVar[str | None] = ContextVar("host_operation_id", default=None)

@@ -171,6 +171,10 @@ async def create_note(*, title: str, markdown: str, folder: str | None, tags: li
 
 
 async def get_note(note_id: str) -> Note | None:
+    from app.config import get_settings
+    if get_settings().environment == 'desktop':
+        from app.services.desktop_notes import get_note as desktop_get_note
+        return await desktop_get_note(note_id)
     record = repository.get_note_record(note_id)
     if record is None:
         return None
@@ -375,6 +379,10 @@ async def delete_note(note_id: str) -> bool:
 
 
 def list_notes(*, limit: int, offset: int, folder: str | None, tag: str | None) -> tuple[list[NoteSummary], int]:
+    from app.config import get_settings
+    if get_settings().environment == 'desktop':
+        from app.services.desktop_notes import list_notes as desktop_list_notes
+        return desktop_list_notes(limit=limit, offset=offset, folder=folder, tag=tag)
     items, total = repository.list_note_summaries(limit=limit, offset=offset, folder=folder, tag=tag)
     return [NoteSummary(**item) for item in items], total
 

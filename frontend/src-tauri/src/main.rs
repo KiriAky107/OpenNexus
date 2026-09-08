@@ -18,7 +18,7 @@ use zeroize::Zeroizing;
 #[derive(Default)]
 struct Host {
     requests: Requests,
-    workspace: Mutex<Option<Workspace>>,
+    workspace: Arc<Mutex<Option<Workspace>>>,
     recent: Mutex<Option<RecentVaultStore>>,
     core: Arc<Mutex<Option<CoreSupervisor>>>,
     credentials: Arc<Mutex<Option<CredentialBroker>>>,
@@ -162,6 +162,12 @@ async fn core_request(request: CoreRequest, host: State<'_, Host>) -> Result<Cor
         content_type,
         idempotency_key,
     } = request;
+    let vault_id = host
+        .workspace
+        .lock()
+        .map_err(|_| "HOST_BUSY")?
+        .as_ref()
+        .map(|ws| ws.vault_id.clone());
     let mut lease = host.requests.claim(&request_id)?;
     let checkpoint = lease.checkpoint();
     lease
@@ -212,6 +218,9 @@ async fn core_request(request: CoreRequest, host: State<'_, Host>) -> Result<Cor
                 )
                 .header("X-Core-Generation", &session.generation)
                 .header("X-Request-Id", &request_id);
+            if let Some(vault_id) = &vault_id {
+                request = request.header("X-OpenNexus-Vault", vault_id);
+            }
             if let Some(value) = body {
                 request = request.json(&value);
             }
@@ -321,6 +330,12 @@ fn core_stream(
         return Err("CORE_HEADER_INVALID".into());
     }
     let core = host.core.clone();
+    let vault_id = host
+        .workspace
+        .lock()
+        .map_err(|_| "HOST_BUSY")?
+        .as_ref()
+        .map(|ws| ws.vault_id.clone());
     let streams = host.streams.clone();
     let mut running = host.streams.lock().map_err(|_| "HOST_BUSY")?;
     if running.len() >= 16 || running.contains_key(&request_id) {
@@ -338,6 +353,7 @@ fn core_stream(
             let mut request = client.request(reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| "CORE_METHOD_DENIED")?, session.url)
                 .header("Authorization", session.authorization.as_str())
                 .header("X-Core-Generation", session.generation).header("Accept", "text/event-stream");
+            if let Some(vault_id) = vault_id { request = request.header("X-OpenNexus-Vault", vault_id); }
             if let Some(body) = body { request = request.json(&body); }
             if let Some(id) = last_event_id { request = request.header("Last-Event-ID", id); }
             let mut response = request.send().await.map_err(|_| "CORE_UNAVAILABLE")?;
@@ -619,10 +635,30 @@ fn workspace_write(
     path: String,
     expected: String,
     content: String,
+    operation_id: Option<String>,
 ) -> Result<Entry, String> {
     with_workspace(&host, |ws| {
-        ws.write(&path, &expected, content.as_bytes(), "local")
+        ws.write_operation(
+            &path,
+            &expected,
+            content.as_bytes(),
+            "local",
+            &operation_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        )
     })
+}
+#[tauri::command]
+fn workspace_operation(
+    host: State<'_, Host>,
+    vault_id: String,
+    operation_id: String,
+) -> Result<Option<serde_json::Value>, String> {
+    let guard = host.workspace.lock().map_err(|_| "HOST_BUSY")?;
+    let workspace = guard.as_ref().ok_or("WORKSPACE_NOT_OPEN")?;
+    if workspace.vault_id != vault_id {
+        return Err("VAULT_PERMISSION_CHANGED".into());
+    }
+    workspace.operation(&operation_id).map_err(|e| e.code)
 }
 #[tauri::command]
 fn workspace_rename(
@@ -730,7 +766,21 @@ fn main() {
                     include_str!(concat!(env!("OUT_DIR"), "/core-manifest.json")).to_owned(),
                 )
             };
+            let workspace_state = app.state::<Host>().workspace.clone();
             let core = core.with_broker(Arc::new(move |request| {
+                if request["rpc"]
+                    .as_str()
+                    .is_some_and(|method| method.starts_with("workspace."))
+                {
+                    return notesagent_host::workspace_broker::dispatch(
+                        workspace_state
+                            .lock()
+                            .map_err(|_| "HOST_BUSY")?
+                            .as_mut()
+                            .ok_or("WORKSPACE_NOT_OPEN")?,
+                        request,
+                    );
+                }
                 credential_state
                     .lock()
                     .map_err(|_| "HOST_BUSY")?
@@ -786,6 +836,7 @@ fn main() {
             workspace_tree,
             workspace_read,
             workspace_write,
+            workspace_operation,
             workspace_rename,
             workspace_delete,
             workspace_mkdir
