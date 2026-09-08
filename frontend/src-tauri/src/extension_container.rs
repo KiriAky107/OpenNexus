@@ -779,12 +779,16 @@ mod tests {
                 "before_resume",
                 "permit",
                 "credential",
+                "credential_without_secret",
                 "owner_drop",
                 "expiry",
             ] {
                 let mut issuer = Authority::default();
                 let mut waiting = claims.clone();
                 waiting.arguments = vec!["wait_tree".into()];
+                if cause == "credential_without_secret" {
+                    waiting.environment.clear();
+                }
                 waiting.expires_at_ms = if cause == "expiry" { 2_002 } else { 120_000 };
                 let permit = issuer.issue(&waiting, 1).unwrap();
                 let prepared = context
@@ -822,7 +826,7 @@ mod tests {
                 let revoked = std::time::Instant::now();
                 match cause {
                     "permit" => issuer.invalidate_all(),
-                    "credential" => broker.lock(),
+                    "credential" | "credential_without_secret" => broker.lock(),
                     "expiry" => {}
                     _ => drop(issuer),
                 }
@@ -839,7 +843,7 @@ mod tests {
                 assert_eq!(running.active_test_processes().unwrap(), 0);
                 assert!(revoked.elapsed() < std::time::Duration::from_secs(5));
                 let expected = match cause {
-                    "credential" => "CREDENTIALS_LOCKED",
+                    "credential" | "credential_without_secret" => "CREDENTIALS_LOCKED",
                     "expiry" => "EXTENSION_PERMIT_EXPIRED",
                     _ => "EXTENSION_PERMIT_REVOKED",
                 };
@@ -850,7 +854,7 @@ mod tests {
                     revoked.elapsed()
                 );
                 drop(running);
-                if cause == "credential" {
+                if matches!(cause, "credential" | "credential_without_secret") {
                     broker
                         .unlock(Zeroizing::new(b"native fixture passphrase".to_vec()))
                         .unwrap();
