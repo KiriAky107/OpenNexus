@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-core-request-prepare"
+description = "Enables the core_request_prepare command without any pre-configured scope."
+commands.allow = ["core_request_prepare"]
+
+[[permission]]
+identifier = "deny-core-request-prepare"
+description = "Denies the core_request_prepare command without any pre-configured scope."
+commands.deny = ["core_request_prepare"]

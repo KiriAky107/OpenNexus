@@ -22,6 +22,8 @@ fn main() {
             "credentials_change_password",
             "credentials_import",
             "core_request",
+            "core_request_prepare",
+            "core_request_cancel",
             "core_stream",
             "core_stream_cancel",
             "editor_capabilities",

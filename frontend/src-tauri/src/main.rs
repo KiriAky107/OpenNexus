@@ -6,6 +6,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use notesagent_host::core::CoreSupervisor;
 use notesagent_host::credentials::CredentialBroker;
 use notesagent_host::recent::{RecentVault, RecentVaultStore};
+use notesagent_host::request_lifecycle::Requests;
 use notesagent_host::workspace::{portable_path_string, Document, Entry, Workspace};
 use std::collections::HashMap;
 use std::path::Path;
@@ -16,6 +17,7 @@ use zeroize::Zeroizing;
 
 #[derive(Default)]
 struct Host {
+    requests: Requests,
     workspace: Mutex<Option<Workspace>>,
     recent: Mutex<Option<RecentVaultStore>>,
     core: Arc<Mutex<Option<CoreSupervisor>>>,
@@ -88,6 +90,14 @@ mod core_proxy_tests {
     use super::{core_url, is_json_content_type};
 
     #[test]
+    fn request_dto_accepts_camel_case_and_rejects_unowned_headers() {
+        let mut payload = serde_json::json!({"requestId":"fixture-reservation","method":"POST","path":"/api/tasks","body":{"title":"fixture"},"contentType":"application/json"});
+        assert!(serde_json::from_value::<super::CoreRequest>(payload.clone()).is_ok());
+        payload["authorization"] = serde_json::json!("must-not-be-forwarded");
+        assert!(serde_json::from_value::<super::CoreRequest>(payload).is_err());
+    }
+
+    #[test]
     fn only_allows_expected_loopback_paths() {
         assert_eq!(core_url("/health").unwrap(), "http://127.0.0.1:8000/health");
         assert!(core_url("/api/status?verbose=true").is_ok());
@@ -118,115 +128,155 @@ mod core_proxy_tests {
 
 /// Authenticated process-local transport; session headers are owned by Rust.
 #[tauri::command]
-async fn core_request(
+fn core_request_prepare(host: State<'_, Host>, timeout_ms: u64) -> Result<String, String> {
+    host.requests.prepare(timeout_ms)
+}
+
+#[tauri::command]
+fn core_request_cancel(host: State<'_, Host>, request_id: String) -> Result<(), String> {
+    host.requests.cancel(&request_id)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CoreRequest {
+    request_id: String,
     method: String,
     path: String,
     body: Option<serde_json::Value>,
     body_base64: Option<String>,
     content_type: Option<String>,
     idempotency_key: Option<String>,
-    host: State<'_, Host>,
-) -> Result<CoreResponse, String> {
-    let core = host.core.clone();
-    let core_path = path.clone();
-    let session = tauri::async_runtime::spawn_blocking(move || {
-        core.lock()
-            .map_err(|_| "HOST_BUSY")?
-            .as_mut()
-            .ok_or("CORE_UNAVAILABLE")?
-            .request_session(&core_path)
-    })
-    .await
-    .map_err(|_| "CORE_UNAVAILABLE")??;
-    let method =
-        reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| "CORE_METHOD_DENIED")?;
-    if !matches!(
+}
+
+#[tauri::command]
+async fn core_request(request: CoreRequest, host: State<'_, Host>) -> Result<CoreResponse, String> {
+    let CoreRequest {
+        request_id,
         method,
-        reqwest::Method::GET
-            | reqwest::Method::POST
-            | reqwest::Method::PUT
-            | reqwest::Method::PATCH
-            | reqwest::Method::DELETE
-    ) {
-        return Err("CORE_METHOD_DENIED".into());
-    }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .build()
-        .map_err(|_| "CORE_CLIENT_ERROR")?;
-    let mut request = client
-        .request(method, &session.url)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            session.authorization.as_str(),
-        )
-        .header("X-Core-Generation", &session.generation);
-    if let Some(value) = body {
-        request = request.json(&value);
-    }
-    if let Some(encoded) = body_base64 {
-        if encoded.len() > MAX_CORE_RESPONSE_BYTES * 4 / 3 + 4 {
-            return Err("CORE_REQUEST_TOO_LARGE".into());
-        }
-        let bytes = BASE64_STANDARD
-            .decode(encoded)
-            .map_err(|_| "CORE_BODY_INVALID")?;
-        if bytes.len() > MAX_CORE_RESPONSE_BYTES {
-            return Err("CORE_REQUEST_TOO_LARGE".into());
-        }
-        let content_type = content_type
-            .as_deref()
-            .unwrap_or("application/octet-stream");
-        if !matches!(content_type, "application/octet-stream" | "application/zip") {
-            return Err("CORE_CONTENT_TYPE_DENIED".into());
-        }
-        request = request
-            .header(reqwest::header::CONTENT_TYPE, content_type)
-            .body(bytes);
-    }
-    if let Some(key) = idempotency_key {
-        if key.len() > 128 || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
-            return Err("CORE_HEADER_INVALID".into());
-        }
-        request = request.header("Idempotency-Key", key);
-    }
-    let mut response = request.send().await.map_err(|_| "CORE_UNAVAILABLE")?;
-    let status = response.status().as_u16();
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("")
-        .to_owned();
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_CORE_RESPONSE_BYTES as u64)
-    {
-        return Err("CORE_RESPONSE_TOO_LARGE".into());
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| "CORE_RESPONSE_ERROR")? {
-        if bytes.len().saturating_add(chunk.len()) > MAX_CORE_RESPONSE_BYTES {
-            return Err("CORE_RESPONSE_TOO_LARGE".into());
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    let (body, body_base64) = if is_json_content_type(&content_type) {
-        (
-            String::from_utf8(bytes.to_vec()).map_err(|_| "CORE_RESPONSE_ERROR")?,
-            None,
-        )
-    } else {
-        (String::new(), Some(BASE64_STANDARD.encode(&bytes)))
-    };
-    Ok(CoreResponse {
-        status,
-        content_type,
+        path,
         body,
         body_base64,
-    })
+        content_type,
+        idempotency_key,
+    } = request;
+    let mut lease = host.requests.claim(&request_id)?;
+    let checkpoint = lease.checkpoint();
+    lease
+        .run(async {
+            if body.is_some() && body_base64.is_some() {
+                return Err("CORE_BODY_INVALID".into());
+            }
+            if body
+                .as_ref()
+                .is_some_and(|value| value.to_string().len() > MAX_CORE_RESPONSE_BYTES)
+            {
+                return Err("CORE_REQUEST_TOO_LARGE".into());
+            }
+            let core = host.core.clone();
+            let core_path = path.clone();
+            let session = tauri::async_runtime::spawn_blocking(move || {
+                core.lock()
+                    .map_err(|_| "HOST_BUSY")?
+                    .as_mut()
+                    .ok_or("CORE_UNAVAILABLE")?
+                    .request_session(&core_path)
+            })
+            .await
+            .map_err(|_| "CORE_UNAVAILABLE")??;
+            let method =
+                reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| "CORE_METHOD_DENIED")?;
+            if !matches!(
+                method,
+                reqwest::Method::GET
+                    | reqwest::Method::POST
+                    | reqwest::Method::PUT
+                    | reqwest::Method::PATCH
+                    | reqwest::Method::DELETE
+            ) {
+                return Err("CORE_METHOD_DENIED".into());
+            }
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(600))
+                .redirect(reqwest::redirect::Policy::none())
+                .no_proxy()
+                .build()
+                .map_err(|_| "CORE_CLIENT_ERROR")?;
+            let mut request = client
+                .request(method, &session.url)
+                .header(
+                    reqwest::header::AUTHORIZATION,
+                    session.authorization.as_str(),
+                )
+                .header("X-Core-Generation", &session.generation)
+                .header("X-Request-Id", &request_id);
+            if let Some(value) = body {
+                request = request.json(&value);
+            }
+            if let Some(encoded) = body_base64 {
+                if encoded.len() > MAX_CORE_RESPONSE_BYTES * 4 / 3 + 4 {
+                    return Err("CORE_REQUEST_TOO_LARGE".into());
+                }
+                let bytes = BASE64_STANDARD
+                    .decode(encoded)
+                    .map_err(|_| "CORE_BODY_INVALID")?;
+                if bytes.len() > MAX_CORE_RESPONSE_BYTES {
+                    return Err("CORE_REQUEST_TOO_LARGE".into());
+                }
+                let content_type = content_type
+                    .as_deref()
+                    .unwrap_or("application/octet-stream");
+                if !matches!(content_type, "application/octet-stream" | "application/zip") {
+                    return Err("CORE_CONTENT_TYPE_DENIED".into());
+                }
+                request = request
+                    .header(reqwest::header::CONTENT_TYPE, content_type)
+                    .body(bytes);
+            }
+            if let Some(key) = idempotency_key {
+                if key.len() > 128 || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                    return Err("CORE_HEADER_INVALID".into());
+                }
+                request = request.header("Idempotency-Key", key);
+            }
+            checkpoint()?;
+            let mut response = request.send().await.map_err(|_| "CORE_UNAVAILABLE")?;
+            let status = response.status().as_u16();
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("")
+                .to_owned();
+            if response
+                .content_length()
+                .is_some_and(|length| length > MAX_CORE_RESPONSE_BYTES as u64)
+            {
+                return Err("CORE_RESPONSE_TOO_LARGE".into());
+            }
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(|_| "CORE_RESPONSE_ERROR")? {
+                if bytes.len().saturating_add(chunk.len()) > MAX_CORE_RESPONSE_BYTES {
+                    return Err("CORE_RESPONSE_TOO_LARGE".into());
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            let (body, body_base64) = if is_json_content_type(&content_type) {
+                (
+                    String::from_utf8(bytes.to_vec()).map_err(|_| "CORE_RESPONSE_ERROR")?,
+                    None,
+                )
+            } else {
+                (String::new(), Some(BASE64_STANDARD.encode(&bytes)))
+            };
+            Ok(CoreResponse {
+                status,
+                content_type,
+                body,
+                body_base64,
+            })
+        })
+        .await
 }
 
 #[tauri::command]
@@ -627,6 +677,8 @@ fn main() {
             credentials_change_password,
             credentials_import,
             core_request,
+            core_request_prepare,
+            core_request_cancel,
             core_stream,
             core_stream_cancel,
             editor_capabilities,
