@@ -184,6 +184,10 @@ impl Workspace {
             "UPDATE files SET deleted=1,revision=revision+1 WHERE id=?1",
             [&revision.file_id],
         )?;
+        tx.execute(
+            "UPDATE sync_observed SET deleted=1 WHERE file_id=?1",
+            [&revision.file_id],
+        )?;
         let entry: Entry = tx.query_row(
             "SELECT id,path,hash,revision FROM files WHERE id=?1",
             [&revision.file_id],

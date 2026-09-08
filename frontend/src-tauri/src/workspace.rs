@@ -135,10 +135,10 @@ impl Workspace {
         let db = Connection::open(db_path)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 6 {
+        if version > 7 {
             return Err(HostError::new("SCHEMA_INCOMPATIBLE"));
         }
-        if (1..6).contains(&version) {
+        if (1..7).contains(&version) {
             // Independent, complete SQLite backup before the schema ownership change.
             let backup = managed.join(format!("host-schema{version}-{}.sqlite3", Uuid::new_v4()));
             db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
@@ -157,6 +157,8 @@ impl Workspace {
             CREATE TABLE IF NOT EXISTS sync_windows (binding TEXT PRIMARY KEY,boundary INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS sync_inbox (binding TEXT NOT NULL,sequence INTEGER NOT NULL,revision TEXT NOT NULL,operation_id TEXT NOT NULL,rename_id TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(binding,sequence));
             CREATE TABLE IF NOT EXISTS sync_conflicts (binding TEXT NOT NULL,sequence INTEGER NOT NULL,file_id TEXT NOT NULL,local_path TEXT NOT NULL,local_hash TEXT NOT NULL,remote TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(binding,sequence));
+            CREATE TABLE IF NOT EXISTS payloads (operation_id TEXT PRIMARY KEY,hash TEXT NOT NULL,size INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS sync_observed (file_id TEXT PRIMARY KEY,path TEXT NOT NULL,hash TEXT NOT NULL,deleted INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS sync_preferences (binding TEXT PRIMARY KEY,paused INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS sync_resolutions (binding TEXT NOT NULL,sequence INTEGER NOT NULL,choice TEXT NOT NULL,destination TEXT NOT NULL,expected TEXT NOT NULL,operation_id TEXT NOT NULL,rename_id TEXT NOT NULL,copy_id TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(binding,sequence));")?;
         let has_origin: bool = db.query_row(
@@ -170,7 +172,10 @@ impl Workspace {
                 [],
             )?;
         }
-        db.execute_batch("PRAGMA user_version=6; COMMIT;")?;
+        if version < 7 {
+            db.execute_batch("INSERT OR IGNORE INTO sync_observed SELECT f.id,COALESCE((SELECT o.path FROM outbox o WHERE o.file_id=f.id AND o.state IN ('pending','queued') ORDER BY rowid DESC LIMIT 1),(SELECT h.path FROM sync_heads h JOIN sync_bindings b ON h.binding=b.id WHERE h.file_id=f.id AND b.state='active'),f.path),COALESCE((SELECT o.hash FROM outbox o WHERE o.file_id=f.id AND o.state IN ('pending','queued') ORDER BY rowid DESC LIMIT 1),(SELECT h.hash FROM sync_heads h JOIN sync_bindings b ON h.binding=b.id WHERE h.file_id=f.id AND b.state='active'),f.hash),f.deleted FROM files f;")?;
+        }
+        db.execute_batch("PRAGMA user_version=7; COMMIT;")?;
         let vault_id: String = db
             .query_row("SELECT id FROM identity", [], |r| r.get(0))
             .optional()?
@@ -222,7 +227,7 @@ impl Workspace {
         Ok(path)
     }
 
-    fn entry(&self, path: &str) -> Result<Option<Entry>> {
+    pub(crate) fn entry(&self, path: &str) -> Result<Option<Entry>> {
         Ok(self
             .db
             .query_row(
@@ -477,6 +482,7 @@ impl Workspace {
             },
             |entry| entry.file_id,
         );
+        self.store_payload(operation_id, content)?;
         let tx = self.db.transaction()?;
         tx.execute(
             "INSERT INTO operations VALUES (?1,?2,'pending',NULL)",
@@ -484,7 +490,14 @@ impl Workspace {
         )?;
         tx.execute(
             "INSERT INTO journal VALUES (?1,?2,?3,?4,?5,?6,'pending')",
-            params![operation_id, file_id, path, expected, content, origin],
+            params![
+                operation_id,
+                file_id,
+                path,
+                expected,
+                b"".as_slice(),
+                origin
+            ],
         )?;
         tx.commit()?;
         self.apply_journal(operation_id, &file_id, path, expected, content, origin)?;
@@ -534,11 +547,14 @@ impl Workspace {
             #[cfg(unix)]
             File::open(parent)?.sync_all()?;
         }
+        // Upgrade legacy inline journal payloads before publishing an outbox reference.
+        self.store_payload(operation_id, content)?;
         // 文件成功但 DB 未提交时，重启凭 journal 补齐同一 operation_id，避免丢 outbox。
         let tx = self.db.transaction()?;
         tx.execute("INSERT INTO files VALUES (?1,?2,?3,1,0) ON CONFLICT(path) DO UPDATE SET hash=excluded.hash,revision=files.revision+1,deleted=0", params![file_id,path,digest])?;
+        tx.execute("INSERT INTO sync_observed VALUES (?1,?2,?3,0) ON CONFLICT(file_id) DO UPDATE SET path=excluded.path,hash=excluded.hash,deleted=0",params![file_id,path,digest])?;
         if origin == "local" {
-            tx.execute("INSERT OR IGNORE INTO outbox SELECT ?1,id,revision,path,hash,'put',?2,'pending' FROM files WHERE path=?3", params![operation_id,content,path])?;
+            tx.execute("INSERT OR IGNORE INTO outbox SELECT ?1,id,revision,path,hash,'put',?2,'pending' FROM files WHERE path=?3", params![operation_id,b"".as_slice(),path])?;
         }
         let entry = tx.query_row(
             "SELECT id,path,hash,revision,deleted FROM files WHERE path=?1",
@@ -597,6 +613,7 @@ impl Workspace {
             result
         };
         for (op, id, path, expected, content, origin) in pending {
+            let content = self.payload(&op, &content)?;
             match self.apply_journal(&op, &id, &path, &expected, &content, &origin) {
                 Err(e) if e.code == "RECOVERY_CONFLICT" => {}
                 result => result?,
@@ -738,6 +755,7 @@ impl Workspace {
         }
         self.entry(path)?
             .ok_or_else(|| HostError::new("FILE_NOT_FOUND"))?;
+        self.store_payload(id, &content)?;
         let tx = self.db.transaction()?;
         tx.execute(
             "INSERT INTO operations VALUES (?1,?2,'pending',NULL)",
@@ -745,7 +763,15 @@ impl Workspace {
         )?;
         tx.execute(
             "INSERT INTO file_ops VALUES (?1,?2,?3,?4,?5,?6,'pending',?7)",
-            params![id, kind, path, destination, expected, content, origin],
+            params![
+                id,
+                kind,
+                path,
+                destination,
+                expected,
+                b"".as_slice(),
+                origin
+            ],
         )?;
         tx.commit()?;
         Ok(id.to_owned())
@@ -773,6 +799,8 @@ impl Workspace {
                 ))
             },
         )?;
+        let content = self.payload(id, &content)?;
+        self.store_payload(id, &content)?;
         let source = self.resolve(&path)?;
         let previous = self
             .entry(&path)?
@@ -822,7 +850,7 @@ impl Workspace {
                 params![destination, previous.file_id],
             )?;
             if origin == "local" {
-                tx.execute("INSERT INTO outbox SELECT ?1,id,revision,path,hash,'put',?2,'pending' FROM files WHERE id=?3", params![id,content,previous.file_id])?;
+                tx.execute("INSERT INTO outbox SELECT ?1,id,revision,path,hash,'put',?2,'pending' FROM files WHERE id=?3", params![id,b"".as_slice(),previous.file_id])?;
             }
         } else {
             tx.execute(
@@ -833,6 +861,7 @@ impl Workspace {
                 tx.execute("INSERT INTO outbox SELECT ?1,id,revision,path,'','delete',X'','pending' FROM files WHERE id=?2", params![id,previous.file_id])?;
             }
         }
+        tx.execute("INSERT INTO sync_observed SELECT id,path,hash,deleted FROM files WHERE id=?1 ON CONFLICT(file_id) DO UPDATE SET path=excluded.path,hash=excluded.hash,deleted=excluded.deleted",[&previous.file_id])?;
         tx.execute("DELETE FROM file_ops WHERE id=?1", [id])?;
         let mut result = previous;
         result.revision += 1;
