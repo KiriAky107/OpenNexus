@@ -48,3 +48,6 @@ pub mod extension_transaction;
 
 #[cfg(feature = "desktop")]
 pub mod extension_config;
+
+#[cfg(feature = "desktop")]
+pub mod extension_trust;
