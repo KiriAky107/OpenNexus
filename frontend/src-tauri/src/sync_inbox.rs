@@ -115,11 +115,7 @@ impl Workspace {
         let digest = hash(bytes);
         let path = self.sync_spool(&digest)?;
         if path.exists() {
-            if fs::symlink_metadata(&path)?.file_type().is_symlink()
-                || hash(&fs::read(&path)?) != digest
-            {
-                return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
-            }
+            crate::payloads::verify(&path, &digest, bytes.len() as u64)?;
         } else {
             let mut temp = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
             temp.write_all(bytes)?;
@@ -150,10 +146,7 @@ impl Workspace {
             return Err(HostError::new("SYNC_CURSOR_INVALID"));
         }
         if let Some(digest) = &revision.hash {
-            let bytes = fs::read(self.sync_spool(digest)?)?;
-            if bytes.len() as i64 != revision.size || hash(&bytes) != *digest {
-                return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
-            }
+            crate::payloads::verify(&self.sync_spool(digest)?, digest, revision.size as u64)?;
         }
         let encoded =
             serde_json::to_string(revision).map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?;
