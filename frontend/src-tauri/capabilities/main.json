@@ -46,6 +46,7 @@
     "allow-sync-status",
     "allow-sync-resolve",
     "allow-sync-logout",
-    "allow-sync-run"
+    "allow-sync-run",
+    "allow-sync-preview"
   ]
 }

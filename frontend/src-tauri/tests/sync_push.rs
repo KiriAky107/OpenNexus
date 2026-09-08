@@ -304,6 +304,125 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
         }
     }
 
+    workspace
+        .lock()
+        .unwrap()
+        .write("collision.md", "", b"created-a", "local")
+        .unwrap();
+    workspace_b
+        .lock()
+        .unwrap()
+        .write("collision.md", "", b"created-b", "local")
+        .unwrap();
+    client.push_one(&workspace, &binding).await.unwrap();
+    client_b.pull_page(&workspace_b, &binding_b).await.unwrap();
+    {
+        let mut ws = workspace_b.lock().unwrap();
+        let conflict = ws.sync_conflicts(&binding_b.id).unwrap().remove(0);
+        ws.sync_resolve(
+            &binding_b.id,
+            conflict["sequence"].as_i64().unwrap(),
+            "local",
+            "",
+            conflict["current_hash"].as_str().unwrap(),
+        )
+        .unwrap();
+    }
+    client_b.push_one(&workspace_b, &binding_b).await.unwrap();
+    client.pull_page(&workspace, &binding).await.unwrap();
+    client_b.pull_page(&workspace_b, &binding_b).await.unwrap();
+    assert_eq!(
+        workspace
+            .lock()
+            .unwrap()
+            .read("collision.md")
+            .unwrap()
+            .content,
+        "created-b"
+    );
+    assert_eq!(
+        workspace
+            .lock()
+            .unwrap()
+            .read("collision.md")
+            .unwrap()
+            .entry
+            .file_id,
+        workspace_b
+            .lock()
+            .unwrap()
+            .read("collision.md")
+            .unwrap()
+            .entry
+            .file_id
+    );
+
+    // Initial merge reviews a fixed snapshot and preserves conflicting local content.
+    let merge_root = tempfile::tempdir().unwrap();
+    let merge_ws = Arc::new(Mutex::new(Workspace::open(merge_root.path()).unwrap()));
+    let snapshot = client.snapshot(remote).await.unwrap();
+    let merge_binding = {
+        let mut ws = merge_ws.lock().unwrap();
+        ws.write("note.md", "", b"next-a", "local").unwrap();
+        ws.write("collision.md", "", b"merge-local", "local")
+            .unwrap();
+        ws.write("local-only.md", "", b"only-local", "local")
+            .unwrap();
+        let preview = ws
+            .sync_preview(&endpoint, remote, "rust-fixture", &snapshot)
+            .unwrap();
+        assert!(preview
+            .items
+            .iter()
+            .any(|v| v.path == "note.md" && v.action == "identical"));
+        assert!(preview
+            .items
+            .iter()
+            .any(|v| v.path == "collision.md" && v.action == "conflict"));
+        ws.sync_bind_initial(
+            &endpoint,
+            remote,
+            "rust-fixture",
+            &snapshot,
+            &preview.fingerprint,
+        )
+        .unwrap()
+    };
+    assert!(!client_b.push_one(&merge_ws, &merge_binding).await.unwrap());
+    assert_eq!(
+        client_b.pull_page(&merge_ws, &merge_binding).await.unwrap(),
+        snapshot.items.len()
+    );
+    {
+        let mut ws = merge_ws.lock().unwrap();
+        assert_eq!(ws.read("collision.md").unwrap().content, "merge-local");
+        assert_eq!(ws.read("copy.md").unwrap().content, "next-b");
+        assert_eq!(
+            ws.sync_binding().unwrap().unwrap().cursor,
+            snapshot.boundary
+        );
+        let conflict = ws.sync_conflicts(&merge_binding.id).unwrap().remove(0);
+        ws.sync_resolve(
+            &merge_binding.id,
+            conflict["sequence"].as_i64().unwrap(),
+            "remote",
+            "",
+            conflict["current_hash"].as_str().unwrap(),
+        )
+        .unwrap();
+    }
+    assert!(client_b.push_one(&merge_ws, &merge_binding).await.unwrap());
+    assert!(!client_b.push_one(&merge_ws, &merge_binding).await.unwrap());
+    client.pull_page(&workspace, &binding).await.unwrap();
+    assert_eq!(
+        workspace
+            .lock()
+            .unwrap()
+            .read("local-only.md")
+            .unwrap()
+            .content,
+        "only-local"
+    );
     // Kill the actual client process after each durable 10 MiB server offset,
     // before its response reaches the client. The next process must query offset.
     use sha2::{Digest, Sha256};

@@ -45,9 +45,6 @@ impl Workspace {
             if current != expected {
                 return Err(HostError::new("REVISION_CONFLICT"));
             }
-            if !current.is_empty() && self.path_for_id(&revision.file_id).is_err() {
-                return Err(HostError::new("SYNC_CONFLICT_REQUIRES_RENAME"));
-            }
             if choice == "copy" {
                 if current.is_empty() || self.resolve(destination)?.exists() {
                     return Err(HostError::new("PATH_CONFLICT"));
@@ -112,24 +109,41 @@ impl Workspace {
             .is_some_and(|value| value["state"] == "committed")
         {
             let source = self.resolve(&path)?;
-            let current = if source.is_file() {
+            let mut current = if source.is_file() {
                 hash(&fs::read(source)?)
             } else {
                 String::new()
             };
-            if current != expected {
+            let retired = self.operation(&rename)?.is_some_and(|value| {
+                value["state"] == "committed" && value["result"]["deleted"] == true
+            });
+            if current != if retired { "" } else { &expected } {
                 return Err(HostError::new("REVISION_CONFLICT"));
             }
             if choice == "copy" {
                 let content = fs::read(self.sync_spool(&expected)?)?;
                 self.write_operation(&destination, "", &content, "local", &copy)?;
             }
+            if self
+                .entry(&path)?
+                .is_some_and(|entry| !entry.deleted && entry.file_id != revision.file_id)
+            {
+                self.mutate_with_origin("delete", &path, "", &current, &rename, "remote")?;
+                current.clear();
+            }
             if choice == "local" {
-                if current.is_empty() {
+                if expected.is_empty() {
                     self.sync_delete_intent(&revision, &operation)?;
                 } else {
                     let content = fs::read(self.sync_spool(&expected)?)?;
-                    self.write_operation(&path, &expected, &content, "local", &operation)?;
+                    self.write_with_identity(
+                        &path,
+                        &current,
+                        &content,
+                        "local",
+                        &operation,
+                        Some(&revision.file_id),
+                    )?;
                 }
             } else if revision.operation == "delete" {
                 if !current.is_empty() {
@@ -164,7 +178,24 @@ impl Workspace {
                 )?;
             }
         }
+        let retired = self.operation(&rename)?.and_then(|value| {
+            (value["state"] == "committed" && value["result"]["deleted"] == true)
+                .then(|| value["result"]["file_id"].as_str().map(str::to_owned))
+                .flatten()
+        });
         let tx = self.db.transaction()?;
+        if let Some(retired) = retired.filter(|id| id != &revision.file_id) {
+            tx.execute(
+                "UPDATE file_aliases SET file_id=?1 WHERE file_id=?2",
+                params![revision.file_id, retired],
+            )?;
+            tx.execute(
+                "INSERT OR REPLACE INTO file_aliases VALUES (?1,?2)",
+                params![retired, revision.file_id],
+            )?;
+            tx.execute("UPDATE outbox SET state='archived' WHERE file_id=?1 AND state IN ('pending','queued')",[&retired])?;
+            tx.execute("UPDATE sync_jobs SET state='archived' WHERE binding=?1 AND file_id=?2 AND state!='acked'",params![binding,retired])?;
+        }
         tx.execute("UPDATE outbox SET state='archived' WHERE file_id=?1 AND state IN ('pending','queued') AND operation_id!=?2",params![revision.file_id,operation])?;
         tx.execute("UPDATE sync_jobs SET state='archived' WHERE binding=?1 AND file_id=?2 AND state!='acked' AND operation_id!=?3",params![binding,revision.file_id,operation])?;
         tx.execute(
@@ -421,5 +452,71 @@ mod tests {
         assert_eq!(payload["base_revision"], 2);
         assert_eq!(payload["operation"], "delete");
         assert_eq!(ws.pending_count().unwrap(), 1);
+    }
+    #[test]
+    fn same_path_independent_identities_resolve_and_recover_twenty_rounds() {
+        for _ in 0..20 {
+            for choice in ["local", "remote", "copy"] {
+                for crash in [false, true] {
+                    let root = tempfile::tempdir().unwrap();
+                    let mut ws = Workspace::open(root.path()).unwrap();
+                    let local = ws.write("a.md", "", b"local", "local").unwrap();
+                    let binding = ws
+                        .sync_bind_empty("https://sync.example", "remote-vault", "account")
+                        .unwrap();
+                    let remote = RemoteRevision {
+                        vault_id: "remote-vault".into(),
+                        sequence: 1,
+                        file_id: Uuid::new_v4().to_string(),
+                        base_revision: 0,
+                        path: "a.md".into(),
+                        operation: "put".into(),
+                        hash: Some(ws.sync_store_bytes(b"remote").unwrap()),
+                        size: 6,
+                        operation_id: Uuid::new_v4().to_string(),
+                    };
+                    receive(&mut ws, &binding.id, &remote);
+                    if crash {
+                        let operation = Uuid::new_v4().to_string();
+                        let rename = Uuid::new_v4().to_string();
+                        let copy = Uuid::new_v4().to_string();
+                        ws.db.execute("INSERT INTO sync_resolutions VALUES (?1,1,?2,?3,?4,?5,?6,?7,'pending')",params![binding.id,choice,if choice=="copy" {"copy.md"} else {""},local.hash,operation,rename,copy]).unwrap();
+                        if choice == "copy" {
+                            ws.write_operation("copy.md", "", b"local", "local", &copy)
+                                .unwrap();
+                        }
+                        ws.mutate_with_origin("delete", "a.md", "", &local.hash, &rename, "remote")
+                            .unwrap();
+                        drop(ws);
+                        ws = Workspace::open(root.path()).unwrap();
+                        ws.sync_resume_resolutions(&binding.id).unwrap();
+                    } else {
+                        ws.sync_resolve(
+                            &binding.id,
+                            1,
+                            choice,
+                            if choice == "copy" { "copy.md" } else { "" },
+                            &local.hash,
+                        )
+                        .unwrap();
+                    }
+                    let actual = ws.read("a.md").unwrap();
+                    assert_eq!(actual.entry.file_id, remote.file_id);
+                    assert_eq!(
+                        actual.content,
+                        if choice == "local" { "local" } else { "remote" }
+                    );
+                    assert!(ws.sync_conflicts(&binding.id).unwrap().is_empty());
+                    assert_eq!(ws.path_for_id(&local.file_id).unwrap(), "a.md");
+                    ws.sync_capture(&binding.id).unwrap();
+                    let job = ws.sync_next(&binding.id).unwrap();
+                    if choice == "remote" {
+                        assert!(job.is_none());
+                    } else {
+                        assert_ne!(job.unwrap().file_id, local.file_id);
+                    }
+                }
+            }
+        }
     }
 }

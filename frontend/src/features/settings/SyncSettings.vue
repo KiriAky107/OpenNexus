@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch, computed } from 'vue'
 import { hostInvoke } from '@/services/platform/desktop'
 import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
@@ -13,6 +13,18 @@ const status = ref<Status | null>(null)
 const endpoint = ref('https://'), account = ref(''), password = ref(''), device = ref('OpenNexus Desktop'), testHttp = ref(false)
 const connected = ref(false), busy = ref(false), message = ref(''), remoteVaults = ref<RemoteVault[]>([]), selected = ref(''), newName = ref('')
 const copies = ref<Record<number, string>>({})
+interface Preview { fingerprint: string; boundary: number; items: Array<{ path: string; action: string }> }
+const preview = ref<Preview | null>(null), previewPage = ref(0)
+const previewItems = computed(() => preview.value?.items.slice(previewPage.value * 100, (previewPage.value + 1) * 100) ?? [])
+watch([endpoint, account, selected, () => status.value?.vault_id], () => { preview.value = null; previewPage.value = 0 })
+function previewMerge() { return act(async () => {
+  preview.value = await hostInvoke<Preview>('sync_preview', { request: { vault_id: status.value!.vault_id, endpoint: endpoint.value, account: account.value, remote_vault: selected.value, mode: 'merge' } })
+}) }
+async function merge() {
+  const plan = preview.value, vaultId = status.value?.vault_id, remote = selected.value
+  if (!plan || !vaultId || !(await askConfirm(t('按预览合并并绑定？相同路径将使用远端文件身份，内容不同的文件保留为待解决冲突。', 'Merge and bind this preview? Matching paths adopt remote identities; differing contents are preserved as conflicts.')))) return
+  await act(async () => { await hostInvoke('sync_bind', { request: { vault_id: vaultId, endpoint: endpoint.value, account: account.value, remote_vault: remote, mode: 'merge', fingerprint: plan.fingerprint } }); preview.value = null })
+}
 let timer: ReturnType<typeof setInterval> | undefined
 let mounted = true
 async function refresh() {
@@ -73,8 +85,8 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
   <section class="panel settings-section sync-settings" aria-labelledby="sync-title">
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <h2 id="sync-title">OpenNexus Sync</h2>
-    <p>{{ t('同步当前 Vault 的文件。登录前请先解锁设备凭据保险库。', 'Sync files in the current vault. Unlock the device credential vault before signing in.') }}</p>
-    <p class="subtle">{{ t('当前支持本地上传到空远端，或远端下载到空本地。两边都有文件时请先使用独立空库；合并预览仍在开发中。', 'Upload to an empty remote vault, or download into an empty local vault. Initial merge of two populated vaults is still under development.') }}</p>
+    <p>{{ t('同步当前 Vault 的 Markdown 与常用附件。登录前请先解锁设备凭据保险库。', 'Sync Markdown and supported attachments in the current vault. Unlock the device credential vault before signing in.') }}</p>
+    <p class="subtle">{{ t('两边都有文件时先预览合并。内容冲突会保留两端版本；任务和配置记录同步仍在开发中。', 'Preview a merge when both vaults contain files. Conflicts retain both versions; task and configuration record sync is still under development.') }}</p>
     <p v-if="message" class="error-banner" role="alert">{{ message }}</p>
     <form class="sync-form" @submit.prevent="login">
       <label>{{ t('服务器地址', 'Server URL') }}<input v-model="endpoint" required :disabled="!!status?.binding || busy" type="url" autocomplete="url" /></label>
@@ -89,6 +101,12 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
       <label>{{ t('远端库', 'Remote vault') }}<select v-model="selected"><option value="">{{ t('请选择', 'Choose a vault') }}</option><option v-for="vault in remoteVaults" :key="vault.id" :value="vault.id">{{ vault.name }} · {{ vault.sequence }}</option></select></label>
       <div class="inline-actions"><input v-model="newName" :placeholder="t('新远端库名称', 'New vault name')" /><button :disabled="busy || !newName.trim()" @click="createVault">{{ t('创建远端库', 'Create vault') }}</button></div>
       <div class="inline-actions"><button :disabled="busy || !selected || !status" @click="bind('upload')">{{ t('上传到空远端', 'Upload to empty remote') }}</button><button :disabled="busy || !selected || !status" @click="bind('download')">{{ t('下载到空本地', 'Download into empty local') }}</button></div>
+      <button :disabled="busy || !selected || !status" @click="previewMerge">{{ t('预览合并', 'Preview merge') }}</button>
+      <div v-if="preview" class="sync-preview">
+        <p>{{ t('预览文件数', 'Files in preview') }} {{ preview.items.length }}</p>
+        <ul><li v-for="item in previewItems" :key="item.path">{{ item.path }} · {{ item.action }}</li></ul>
+        <div class="inline-actions"><button :disabled="previewPage === 0" @click="previewPage--">{{ t('上一页', 'Previous') }}</button><button :disabled="(previewPage + 1) * 100 >= preview.items.length" @click="previewPage++">{{ t('下一页', 'Next') }}</button><button :disabled="busy" @click="merge">{{ t('确认合并并绑定', 'Confirm merge and bind') }}</button></div>
+      </div>
     </div>
     <div v-if="status?.binding" class="sync-bound">
       <p>{{ status.binding.endpoint }} · {{ status.binding.account }} · {{ status.binding.remote_vault }}</p>
