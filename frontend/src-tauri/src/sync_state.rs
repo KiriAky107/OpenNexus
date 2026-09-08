@@ -197,7 +197,7 @@ impl Workspace {
         }
         Ok(job)
     }
-    fn check_job(&self, job: &Job) -> Result<()> {
+    pub(crate) fn check_job(&self, job: &Job) -> Result<()> {
         self.check_binding(&job.binding)?;
         let state: String = self.db.query_row(
             "SELECT state FROM sync_jobs WHERE binding=?1 AND operation_id=?2",

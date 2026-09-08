@@ -618,6 +618,14 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
     }
     std::fs::remove_file(root.path().join("interrupt-upload")).unwrap();
     let large_workspace = Arc::new(Mutex::new(Workspace::open(large_root.path()).unwrap()));
+    let interrupted = large_workspace
+        .lock()
+        .unwrap()
+        .sync_attempts(&large_binding.id)
+        .unwrap();
+    assert_eq!(interrupted.len(), 1);
+    assert_eq!(interrupted[0]["attempts"], 10);
+    assert_eq!(interrupted[0]["outcome"], "interrupted");
     assert!(client
         .push_one(&large_workspace, &large_binding)
         .await
@@ -707,6 +715,59 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
         .unwrap()
         .unlock(Zeroizing::new(b"fixture-stronghold-password".to_vec()))
         .unwrap();
+    // Expire the access token early in this isolated fixture; the refresh token stays valid.
+    let database = rusqlite::Connection::open(root.path().join("sync.sqlite3")).unwrap();
+    database
+        .execute("UPDATE sessions SET expires=0", [])
+        .unwrap();
+    let attempts = std::sync::atomic::AtomicUsize::new(0);
+    let recovered = sync_auth::authenticated(&credentials, &canonical, "rust-fixture", |client| {
+        attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        async move {
+            client
+                .json(reqwest::Method::GET, "sync/v1/vaults", None)
+                .await
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert!(recovered["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v["id"] == remote));
+    // Even a repeated 401 must stop after one rotation, rather than refresh indefinitely.
+    attempts.store(0, std::sync::atomic::Ordering::SeqCst);
+    let denied = sync_auth::authenticated(&credentials, &canonical, "rust-fixture", |_client| {
+        attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        async {
+            Err::<(), _>(notesagent_host::sync_client::SyncError {
+                code: "UNAUTHORIZED".into(),
+                status: 401,
+                retry_after: None,
+            })
+        }
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(denied.status, 401);
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+    attempts.store(0, std::sync::atomic::Ordering::SeqCst);
+    let denied = sync_auth::authenticated(&credentials, &canonical, "rust-fixture", |_client| {
+        attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        async {
+            Err::<(), _>(notesagent_host::sync_client::SyncError {
+                code: "FORBIDDEN".into(),
+                status: 403,
+                retry_after: None,
+            })
+        }
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(denied.status, 403);
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
     let restored = sync_auth::client(&credentials, &canonical, "rust-fixture", false)
         .await
         .unwrap();
@@ -723,6 +784,30 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
             .status,
         401
     );
+    sync_auth::login(
+        &credentials,
+        &endpoint,
+        "rust-fixture",
+        Zeroizing::new("controlled-fixture-password".into()),
+        "Revoked Host",
+        true,
+    )
+    .await
+    .unwrap();
+    database.execute("DELETE FROM sessions", []).unwrap();
+    attempts.store(0, std::sync::atomic::Ordering::SeqCst);
+    let revoked = sync_auth::authenticated(&credentials, &canonical, "rust-fixture", |client| {
+        attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        async move {
+            client
+                .json(reqwest::Method::GET, "sync/v1/vaults", None)
+                .await
+        }
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(revoked.status, 401);
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

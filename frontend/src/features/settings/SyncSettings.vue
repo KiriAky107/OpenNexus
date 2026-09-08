@@ -8,7 +8,7 @@ import { t } from '@/i18n'
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 interface Binding { id: string; endpoint: string; account: string; remote_vault: string; cursor: number }
 interface Conflict { sequence: number; local_path: string; local_hash: string; current_hash?: string; current_path?: string; remote: { path: string; operation: string } }
-interface Status { vault_id: string; binding: Binding | null; paused: boolean; pending: number; conflicts: Conflict[]; credential_state: string; running: boolean; error: string | null; retry_in: number | null; failures: number; halted: boolean }
+interface Status { vault_id: string; binding: Binding | null; paused: boolean; pending: number; conflicts: Conflict[]; credential_state: string; running: boolean; error: string | null; retry_in: number | null; failures: number; halted: boolean; attempts?: Array<{ operation_id: string; path: string; attempts: number; outcome: string; error: string | null }> }
 interface RemoteVault { id: string; name: string; sequence: number; used: number; quota: number }
 const status = ref<Status | null>(null)
 const endpoint = ref('https://'), account = ref(''), password = ref(''), device = ref('OpenNexus Desktop'), testHttp = ref(false)
@@ -129,6 +129,10 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
         <button :disabled="busy" @click="unbind">{{ t('解除绑定', 'Unbind') }}</button>
         <button :disabled="busy" @click="act(async () => { await hostInvoke('sync_logout', { endpoint, account }); connected = false })">{{ t('退出登录', 'Sign out') }}</button>
       </div>
+      <details v-if="status.attempts?.length">
+        <summary>{{ t('上传作业恢复记录（最多 20 项）', 'Upload recovery records (up to 20)') }}</summary>
+        <p v-for="job in status.attempts" :key="job.operation_id">{{ job.path }} · {{ t('尝试次数', 'Attempts') }} {{ job.attempts }} · {{ job.outcome === 'interrupted' ? t('上次上传已中断，将从已确认位置恢复', 'Previous upload interrupted; resumes from the confirmed offset') : job.outcome === 'failed' ? t('上次尝试失败', 'Last attempt failed') : t('上传处理中', 'Upload in progress') }}<span v-if="job.error"> · {{ job.error }}</span></p>
+      </details>
       <article v-for="conflict in status.conflicts" :key="conflict.sequence" class="sync-conflict">
         <h3>{{ conflict.local_path }}</h3><p>{{ t('远端版本', 'Remote revision') }} {{ conflict.sequence }} · {{ conflict.remote.operation }} · {{ conflict.remote.path }}</p>
         <div class="inline-actions"><button :disabled="busy" @click="resolve(conflict, 'local')">{{ t('保留本地', 'Keep local') }}</button><button :disabled="busy" @click="resolve(conflict, 'remote')">{{ t('采用远端', 'Use remote') }}</button></div>

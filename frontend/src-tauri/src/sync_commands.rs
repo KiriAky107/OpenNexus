@@ -270,12 +270,17 @@ pub fn sync_status(host: State<'_, Host>) -> Result<Value, String> {
             ws.pending_count()?,
             binding
                 .as_ref()
+                .map(|b| ws.sync_attempts(&b.id))
+                .transpose()?
+                .unwrap_or_default(),
+            binding
+                .as_ref()
                 .map(|b| ws.sync_retry(&b.id))
                 .transpose()?
                 .unwrap_or_default(),
         ))
     })?;
-    let (vault_id, binding, paused, conflicts, pending, retry) = snapshot;
+    let (vault_id, binding, paused, conflicts, pending, attempts, retry) = snapshot;
     let credential_state = if let Some(b) = &binding {
         sync_auth::available(&host.credentials, &b.endpoint, &b.account)
             .map(|exists| {
@@ -293,7 +298,7 @@ pub fn sync_status(host: State<'_, Host>) -> Result<Value, String> {
     let statuses = host.sync.status.lock().map_err(|_| "HOST_BUSY")?;
     let status = binding.as_ref().and_then(|b| statuses.get(&b.id));
     Ok(
-        json!({"vault_id":vault_id,"binding":binding,"paused":paused,"pending":pending,"conflicts":conflicts,"credential_state":credential_state,"running":status.is_some_and(|s|s.running),"error":retry.error,"retry_in":retry.retry_at.map(|_| retry.remaining(now())),"failures":retry.failures,"halted":retry.halted}),
+        json!({"vault_id":vault_id,"binding":binding,"paused":paused,"pending":pending,"conflicts":conflicts,"credential_state":credential_state,"running":status.is_some_and(|s|s.running),"error":retry.error,"retry_in":retry.retry_at.map(|_| retry.remaining(now())),"failures":retry.failures,"halted":retry.halted,"attempts":attempts}),
     )
 }
 #[tauri::command]
@@ -387,15 +392,11 @@ fn now() -> i64 {
 
 async fn cycle(host: &Host, binding: &Binding) -> Result<(), SyncError> {
     let epoch = host.sync.epoch.load(Ordering::SeqCst);
-    let work = async {
-        let client = sync_auth::client(
-            &host.credentials,
-            &binding.endpoint,
-            &binding.account,
-            false,
-        )
-        .await?;
-        let work = async {
+    let work = sync_auth::authenticated(
+        &host.credentials,
+        &binding.endpoint,
+        &binding.account,
+        |client| async move {
             client.handshake().await?;
             host.workspace.access(|ws| ws.sync_discover(&binding.id))?;
             for _ in 0..10 {
@@ -418,9 +419,8 @@ async fn cycle(host: &Host, binding: &Binding) -> Result<(), SyncError> {
             }
             client.pull_page(&host.workspace, binding).await?;
             Ok(())
-        };
-        sync_auth::guarded(&host.credentials, work).await
-    };
+        },
+    );
     tokio::pin!(work);
     let mut tick = tokio::time::interval(Duration::from_millis(50));
     loop {

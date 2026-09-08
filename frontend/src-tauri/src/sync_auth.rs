@@ -158,6 +158,27 @@ pub async fn client(
         saved.allow_test_http,
     )
 }
+/// The coordinator must serialize calls. Only use for read-only or durably idempotent work:
+/// a 401 repeats the operation once with the same device after rotating its session.
+pub async fn authenticated<T, F, Fut>(
+    credentials: &Credentials,
+    endpoint: &str,
+    account: &str,
+    mut action: F,
+) -> Result<T>
+where
+    F: FnMut(SyncClient) -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let first = client(credentials, endpoint, account, false).await?;
+    match guarded(credentials, action(first)).await {
+        Err(error) if error.status == 401 => {
+            let refreshed = client(credentials, endpoint, account, true).await?;
+            guarded(credentials, action(refreshed)).await
+        }
+        result => result,
+    }
+}
 pub async fn logout(credentials: &Credentials, endpoint: &str, account: &str) -> Result<()> {
     let client = client(credentials, endpoint, account, false).await?;
     // A failed server revocation is reported; the encrypted record remains available for retry.
