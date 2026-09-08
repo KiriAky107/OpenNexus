@@ -822,7 +822,10 @@ mod tests {
                 vault_id: uuid::Uuid::new_v4().to_string(),
                 platform: "windows".into(),
                 policy_version: "1".into(),
-                expires_at_ms: 1000,
+                // This probe checks argv/environment, not expiry. Keep its permit
+                // longer than the bounded process observation under parallel load.
+                // The dedicated expiry probe below still uses a two-second lease.
+                expires_at_ms: 120_000,
             };
             broker
                 .put(
@@ -839,14 +842,20 @@ mod tests {
                 container_data: &folder,
                 scratch: &folder.join("Temp"),
             };
+            let launch_started = std::time::Instant::now();
             let prepared = context
                 .prepare(&authority, &permit, &claims, &bound_entry, &broker, 2)
                 .unwrap();
             let suspended = prepared.create_suspended(&profile, &bound_entry).unwrap();
             let running = unsafe { suspended.resume().unwrap() };
+            let exit = running.wait(std::time::Duration::from_secs(5)).unwrap();
             assert_eq!(
-                running.wait(std::time::Duration::from_secs(5)).unwrap(),
-                Some(0)
+                exit,
+                Some(0),
+                "launch probe elapsed={:?} authorization={:?} active_processes={:?}",
+                launch_started.elapsed(),
+                running.check_authorization().err().map(|error| error.code),
+                running.active_test_processes().ok(),
             );
             drop(running);
             // Actual native RPC: the child cannot name an identity or connect to
