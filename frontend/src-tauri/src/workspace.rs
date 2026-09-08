@@ -298,8 +298,7 @@ impl Workspace {
                 });
                 continue;
             }
-            let content = fs::read(self.resolve(&path)?)?;
-            let digest = hash(&content);
+            let digest = crate::payloads::hash_file(&self.resolve(&path)?)?;
             let previous = self.entry(&path)?;
             if previous
                 .as_ref()

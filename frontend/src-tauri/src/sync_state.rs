@@ -71,7 +71,7 @@ impl Workspace {
                 .query_row("SELECT EXISTS(SELECT 1 FROM sync_bindings)", [], |r| {
                     r.get(0)
                 })?;
-        let entries = self.scan()?;
+        let paths = self.sync_paths()?;
         let id = Uuid::new_v4().to_string();
         // Rebinding explicitly starts from the current snapshot, never an old account's queue.
         if had_binding {
@@ -80,15 +80,30 @@ impl Workspace {
                 [],
             )?;
         }
-        for entry in entries.into_iter().filter(|e| !e.is_folder && !e.deleted) {
-            let queued: bool = self.db.query_row(
-                "SELECT EXISTS(SELECT 1 FROM outbox WHERE file_id=?1 AND state='pending')",
-                [&entry.file_id],
-                |r| r.get(0),
-            )?;
+        for path in paths {
+            let entry = self.entry(&path)?;
+            let queued = if let Some(entry) = &entry {
+                self.db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM outbox WHERE file_id=?1 AND state='pending')",
+                    [&entry.file_id],
+                    |r| r.get::<_, bool>(0),
+                )?
+            } else {
+                false
+            };
             if !queued {
-                let content = fs::read(self.resolve(&entry.path)?)?;
-                self.write(&entry.path, &entry.hash, &content, "local")?;
+                let source = self.resolve(&path)?;
+                let (digest, size) = crate::payloads::sync_file_info(&source, &path)?;
+                let operation = Uuid::new_v4().to_string();
+                self.store_payload_file(&operation, &source, &digest)?;
+                self.write_spooled_with_identity(
+                    &path,
+                    &digest,
+                    (&digest, size),
+                    "local",
+                    &operation,
+                    None,
+                )?;
             }
         }
         self.db.execute(

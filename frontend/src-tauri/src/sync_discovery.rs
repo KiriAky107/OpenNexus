@@ -1,7 +1,7 @@
 //! Reconcile externally edited files against committed snapshots, never against UI read caches.
-use crate::workspace::{hash, HostError, Result, Workspace};
+use crate::workspace::{HostError, Result, Workspace};
 use rusqlite::{params, OptionalExtension};
-use std::{collections::HashSet, fs, io::Read, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 use uuid::Uuid;
 /// File transport only. Logical records receive their own versioned whitelist separately.
 pub fn allowed(path: &str) -> bool {
@@ -93,20 +93,7 @@ impl Workspace {
         let mut changes = 0;
         for path in paths {
             let target = self.resolve(&path)?;
-            if fs::metadata(&target)?.len() > 104857600 {
-                return Err(HostError::new("FILE_TOO_LARGE"));
-            }
-            let mut bytes = Vec::new();
-            fs::File::open(&target)?
-                .take(104857601)
-                .read_to_end(&mut bytes)?;
-            if bytes.len() > 104857600 {
-                return Err(HostError::new("FILE_TOO_LARGE"));
-            }
-            if crate::records::is_record(&path) {
-                crate::records::validate(&path, &bytes)?;
-            }
-            let digest = hash(&bytes);
+            let (digest, _) = crate::payloads::sync_file_info(&target, &path)?;
             let previous = self.entry(&path)?;
             let observed: Option<(String, String, bool)> = if let Some(entry) = &previous {
                 self.db
@@ -129,9 +116,8 @@ impl Workspace {
                 continue;
             }
             // Confirm the snapshot without writing back over an external editor.
-            crate::payloads::verify(&target, &digest, bytes.len() as u64)?;
             let operation = Uuid::new_v4().to_string();
-            self.store_payload(&operation, &bytes)?;
+            self.store_payload_file(&operation, &target, &digest)?;
             let file_id = previous.map_or_else(|| Uuid::new_v4().to_string(), |e| e.file_id);
             let tx = self.db.transaction()?;
             tx.execute("INSERT INTO files VALUES (?1,?2,?3,1,0) ON CONFLICT(path) DO UPDATE SET hash=excluded.hash,revision=files.revision+1,deleted=0",params![file_id,path,digest])?;

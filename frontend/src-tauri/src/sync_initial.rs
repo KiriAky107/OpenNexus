@@ -6,7 +6,9 @@ use crate::{
 };
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fs};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::fs;
 use uuid::Uuid;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -36,17 +38,11 @@ impl Workspace {
             .into_iter()
             .map(|path| {
                 let source = self.resolve(&path)?;
-                if fs::metadata(&source)?.len() > 104857600 {
-                    return Err(HostError::new("FILE_TOO_LARGE"));
-                }
-                let bytes = fs::read(source)?;
-                if crate::records::is_record(&path) {
-                    crate::records::validate(&path, &bytes)?;
-                }
+                let (hash, size) = crate::payloads::sync_file_info(&source, &path)?;
                 Ok(Local {
                     path,
-                    hash: hash(&bytes),
-                    size: bytes.len(),
+                    hash,
+                    size: size as usize,
                 })
             })
             .collect()
@@ -131,11 +127,14 @@ impl Workspace {
         let mut prepared = Vec::new();
         for item in local {
             let operation = Uuid::new_v4().to_string();
-            let bytes = fs::read(self.resolve(&item.path)?)?;
-            if hash(&bytes) != item.hash {
-                return Err(HostError::new("SYNC_PREVIEW_CHANGED"));
-            }
-            self.store_payload(&operation, &bytes)?;
+            self.store_payload_file(&operation, &self.resolve(&item.path)?, &item.hash)
+                .map_err(|error| {
+                    if error.code == "REVISION_CONFLICT" {
+                        HostError::new("SYNC_PREVIEW_CHANGED")
+                    } else {
+                        error
+                    }
+                })?;
             let old = self.entry(&item.path)?;
             let remote = snapshot
                 .items
@@ -268,6 +267,98 @@ mod tests {
             hash: Some(hash(content)),
             size: content.len() as i64,
             operation_id: Uuid::new_v4().to_string(),
+        }
+    }
+    #[test]
+    fn hundred_mib_discovery_preview_and_rebinding_preserve_all_current_files() {
+        use std::io::{Seek, SeekFrom, Write};
+        for initial in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            fs::create_dir(root.path().join("attachments")).unwrap();
+            let source = root.path().join("large.md");
+            let mut file = fs::File::create(&source).unwrap();
+            let block = vec![b'a'; 64 * 1024];
+            for _ in 0..1600 {
+                file.write_all(&block).unwrap();
+            }
+            file.sync_all().unwrap();
+            drop(file);
+            fs::copy(&source, root.path().join("attachments/large.bin")).unwrap();
+            let mut ws = Workspace::open(root.path()).unwrap();
+            let snapshot = Snapshot {
+                boundary: 0,
+                items: Vec::new(),
+            };
+            let binding = if initial {
+                let preview = ws
+                    .sync_preview("https://sync.example", "remote", "account", &snapshot)
+                    .unwrap();
+                let mut file = fs::OpenOptions::new().write(true).open(&source).unwrap();
+                file.seek(SeekFrom::End(-1)).unwrap();
+                file.write_all(b"b").unwrap();
+                file.sync_all().unwrap();
+                drop(file);
+                assert_eq!(
+                    ws.sync_bind_initial(
+                        "https://sync.example",
+                        "remote",
+                        "account",
+                        &snapshot,
+                        &preview.fingerprint
+                    )
+                    .err()
+                    .unwrap()
+                    .code,
+                    "SYNC_PREVIEW_CHANGED"
+                );
+                let preview = ws
+                    .sync_preview("https://sync.example", "remote", "account", &snapshot)
+                    .unwrap();
+                ws.sync_bind_initial(
+                    "https://sync.example",
+                    "remote",
+                    "account",
+                    &snapshot,
+                    &preview.fingerprint,
+                )
+                .unwrap()
+            } else {
+                ws.sync_bind_empty("https://sync.example", "remote", "account")
+                    .unwrap()
+            };
+            assert_eq!(ws.sync_discover(&binding.id).unwrap(), 0);
+            ws.sync_capture(&binding.id).unwrap();
+            assert_eq!(ws.pending_count().unwrap(), 2);
+            let identity = ws.entry("large.md").unwrap().unwrap().file_id;
+            let mut file = fs::OpenOptions::new().write(true).open(&source).unwrap();
+            file.seek(SeekFrom::End(-1)).unwrap();
+            file.write_all(b"c").unwrap();
+            file.sync_all().unwrap();
+            drop(file);
+            ws.scan().unwrap();
+            assert_eq!(ws.sync_discover(&binding.id).unwrap(), 1);
+            assert_eq!(ws.entry("large.md").unwrap().unwrap().file_id, identity);
+            drop(ws);
+            ws = Workspace::open(root.path()).unwrap();
+            assert_eq!(ws.sync_discover(&binding.id).unwrap(), 0);
+            assert_eq!(ws.pending_count().unwrap(), 3);
+            ws.sync_unbind(&binding.id).unwrap();
+            let rebound = ws
+                .sync_bind_empty("https://sync.example", "another-vault", "another-account")
+                .unwrap();
+            assert_eq!(ws.pending_count().unwrap(), 2);
+            assert_eq!(
+                ws.db
+                    .query_row(
+                        "SELECT COUNT(*) FROM sync_jobs WHERE binding=?1",
+                        [&rebound.id],
+                        |r| r.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                2
+            );
+            assert_eq!(ws.sync_discover(&rebound.id).unwrap(), 0);
+            assert_eq!(ws.entry("large.md").unwrap().unwrap().file_id, identity);
         }
     }
     #[test]
