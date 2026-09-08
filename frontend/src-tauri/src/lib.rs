@@ -66,3 +66,6 @@ pub mod extension_process;
 
 #[cfg(windows)]
 pub mod extension_deadline;
+
+#[cfg(all(windows, feature = "desktop"))]
+pub mod extension_pinned;
