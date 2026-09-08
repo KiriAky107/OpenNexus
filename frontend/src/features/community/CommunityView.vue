@@ -4,6 +4,7 @@ import type { CommunityKey, CommunityRelease, CommunitySource, PackageKind } fro
 import { cachedCatalog, discoverSource, fetchCatalog, installRelease, loadSources, saveSources } from '@/services/communityService'
 import { isDesktop } from '@/services/platform/desktop'
 import { reviewTrust, confirmTrust, type TrustReview } from '@/services/extensionTrustService'
+import DesktopPackages from './DesktopPackages.vue'
 import AppDialog from '@/components/common/AppDialog.vue'
 
 const kinds: { id: PackageKind | ''; label: string }[] = [
@@ -11,6 +12,7 @@ const kinds: { id: PackageKind | ''; label: string }[] = [
   { id: 'plugin', label: 'Plugin' }, { id: 'mcp', label: 'MCP 配置' }, { id: 'persona', label: '人设' },
   { id: 'template', label: '笔记模板' }, { id: 'model', label: '模型方案' },
 ]
+const stagedRefresh = ref(0)
 const sources = ref(loadSources()), selectedSource = ref(sources.value[0]?.id ?? '')
 const url = ref(''), query = ref(''), kind = ref<PackageKind | ''>('')
 const items = ref<CommunityRelease[]>([]), detail = ref<CommunityRelease | null>(null)
@@ -76,7 +78,7 @@ function install() {
   const selected = detail.value, selectedRegistry = source()
   void run(async (signal, current) => {
     const result = await installRelease(selectedRegistry, selected, signal)
-    if (current() || (signal.aborted && controller?.signal === signal)) { notice.value = result; refreshCandidates() }
+    if (current() || (signal.aborted && controller?.signal === signal)) { notice.value = result; refreshCandidates(); stagedRefresh.value++ }
   })
 }
 function toggleSource() {
@@ -121,6 +123,7 @@ function toggleSource() {
       </button>
     </div>
     </section>
+    <DesktopPackages v-if="isDesktop()" :refresh-key="stagedRefresh" />
     <section v-if="candidates.length">
       <h2>已保存的声明式候选</h2><p>这些候选尚未应用到人设、MCP 或模型运行配置。</p>
       <details v-for="item in candidates" :key="item.key"><summary>{{ item.key.replace('community-candidate:', '') }}</summary><pre>{{ item.value }}</pre><button class="btn" @click="removeCandidate(item.key)">删除候选</button></details>

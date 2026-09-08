@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-extension-staged"
+description = "Enables the extension_staged command without any pre-configured scope."
+commands.allow = ["extension_staged"]
+
+[[permission]]
+identifier = "deny-extension-staged"
+description = "Denies the extension_staged command without any pre-configured scope."
+commands.deny = ["extension_staged"]
