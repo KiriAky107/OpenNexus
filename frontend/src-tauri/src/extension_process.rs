@@ -148,6 +148,9 @@ impl<'a> Suspended<'a> {
         startup.lpAttributeList = attributes.buffer.as_mut_ptr().cast();
         // Keep both the handle array and the owning pipe ends alive across
         // CreateProcessW. No arbitrary inheritable Host handle is admitted.
+        let io = io
+            .map(crate::extension_stdio::ChildIo::inherit)
+            .transpose()?;
         let inherited = io.as_ref().map(|value| value.handles());
         if let Some(handles) = &inherited {
             if unsafe {

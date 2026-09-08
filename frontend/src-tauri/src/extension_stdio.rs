@@ -46,13 +46,6 @@ impl ChildIo {
             output,
             error,
         };
-        for handle in child.handles() {
-            if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) }
-                == 0
-            {
-                return Err(HostError::new("EXTENSION_PIPE_CREATE_FAILED"));
-            }
-        }
         Ok((
             child,
             HostIo {
@@ -62,12 +55,39 @@ impl ChildIo {
             },
         ))
     }
+    /// Own both the pipe ends and the launch lock. Field drop order closes all
+    /// inheritable ends before allowing a competing Host launch to proceed.
+    pub(crate) fn inherit(self) -> Result<InheritedIo> {
+        let lock = crate::process_creation::lock().map_err(HostError::new)?;
+        let guarded = InheritedIo {
+            child: self,
+            _creation: lock,
+        };
+        for handle in guarded.handles() {
+            if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) }
+                == 0
+            {
+                return Err(HostError::new("EXTENSION_PIPE_CREATE_FAILED"));
+            }
+        }
+        Ok(guarded)
+    }
     pub(crate) fn handles(&self) -> [HANDLE; 3] {
         [
             self.input.as_raw_handle(),
             self.output.as_raw_handle(),
             self.error.as_raw_handle(),
         ]
+    }
+}
+
+pub(crate) struct InheritedIo {
+    child: ChildIo,
+    _creation: std::sync::MutexGuard<'static, ()>,
+}
+impl InheritedIo {
+    pub(crate) fn handles(&self) -> [HANDLE; 3] {
+        self.child.handles()
     }
 }
 
@@ -148,7 +168,7 @@ pub fn write_frame(writer: &mut impl std::io::Write, frame: &[u8]) -> Result<()>
 mod tests {
     use super::*;
     #[test]
-    fn only_child_ends_are_inheritable_and_all_streams_are_distinct() {
+    fn pipes_are_private_until_the_serialized_creation_window() {
         let (child, host) = ChildIo::create().unwrap();
         let ends = child
             .handles()
@@ -159,12 +179,39 @@ mod tests {
                 host.error.as_raw_handle(),
             ])
             .collect::<Vec<_>>();
+        for handle in &ends {
+            let mut flags = 0;
+            assert_ne!(unsafe { GetHandleInformation(*handle, &mut flags) }, 0);
+            assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+        }
+        let child = child.inherit().unwrap();
         for (index, handle) in ends.iter().enumerate() {
             let mut flags = 0;
             assert_ne!(unsafe { GetHandleInformation(*handle, &mut flags) }, 0);
             assert_eq!(flags & HANDLE_FLAG_INHERIT != 0, index < 3);
             assert!(!ends[..index].contains(handle));
         }
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let _creation = crate::process_creation::lock().unwrap();
+            acquired_tx.send(()).unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(acquired_rx
+            .recv_timeout(std::time::Duration::from_millis(30))
+            .is_err());
+        drop(child);
+        acquired_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        worker.join().unwrap();
+        // The last writer was closed before the lock was released; no child
+        // process was launched in this ownership test, so Host sees EOF.
+        use std::io::Read;
+        let mut output = host.output;
+        assert_eq!(output.read(&mut [0; 1]).unwrap(), 0);
     }
     #[test]
     fn frames_are_bounded_across_fragmentation_and_poison_after_errors() {

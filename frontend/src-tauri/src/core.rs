@@ -325,7 +325,11 @@ impl CoreSupervisor {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-        let child = command.group_spawn().map_err(|_| "CORE_SPAWN_FAILED")?;
+        let child = {
+            #[cfg(windows)]
+            let _creation = crate::process_creation::lock()?;
+            command.group_spawn().map_err(|_| "CORE_SPAWN_FAILED")?
+        };
         let mut session = Session {
             child,
             lifetime: Arc::new(Mutex::new(None)),
