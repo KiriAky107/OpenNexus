@@ -39,3 +39,6 @@ pub mod extension_dependencies;
 
 #[cfg(feature = "desktop")]
 pub mod extension_unpack;
+
+#[cfg(feature = "desktop")]
+pub mod extension_permit;
