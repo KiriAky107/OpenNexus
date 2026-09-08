@@ -290,7 +290,7 @@ impl Workspace {
         let path = local_path.as_deref().unwrap_or(&revision.path);
         let local = self.resolve(path)?;
         let current = if local.is_file() {
-            hash(&fs::read(&local)?)
+            crate::payloads::hash_file(&local)?
         } else {
             String::new()
         };
@@ -329,18 +329,14 @@ impl Workspace {
                     "remote",
                 )?;
             }
-            let content = fs::read(
-                self.sync_spool(
-                    revision
-                        .hash
-                        .as_deref()
-                        .ok_or_else(|| HostError::new("SYNC_RESPONSE_INVALID"))?,
-                )?,
-            )?;
-            self.write_with_identity(
+            let digest = revision
+                .hash
+                .as_deref()
+                .ok_or_else(|| HostError::new("SYNC_RESPONSE_INVALID"))?;
+            self.write_spooled_with_identity(
                 &revision.path,
                 &current,
-                &content,
+                (digest, revision.size as u64),
                 "remote",
                 &operation_id,
                 Some(&revision.file_id),
