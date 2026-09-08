@@ -3,6 +3,20 @@ use crate::workspace::{HostError, Result};
 use serde::Deserialize;
 use serde_json::Value;
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DialoguePair {
+    user: String,
+    assistant: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Persona {
+    version: u64,
+    name: String,
+    system_prompt: String,
+    dialogue_pairs: Vec<DialoguePair>,
+}
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Layout {
     primary_expanded: bool,
@@ -91,6 +105,16 @@ fn markdown(value: &Markdown) -> bool {
 }
 pub fn validate(kind: &str, value: &Value) -> Result<()> {
     let valid = match kind {
+        "persona" => {
+            let value: Persona = decode(value)?;
+            value.version <= 9007199254740991
+                && value.name.chars().count() <= 128
+                && value.system_prompt.chars().count() <= 16000
+                && value.dialogue_pairs.len() <= 20
+                && value.dialogue_pairs.iter().all(|pair| {
+                    pair.user.chars().count() <= 8000 && pair.assistant.chars().count() <= 8000
+                })
+        }
         "layout" => {
             let value: Layout = decode(value)?;
             let _ = value.primary_expanded;
