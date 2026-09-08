@@ -30,3 +30,6 @@ pub mod extension_package;
 
 #[cfg(feature = "desktop")]
 pub mod extension_manifest;
+
+#[cfg(feature = "desktop")]
+pub mod extension_store;
