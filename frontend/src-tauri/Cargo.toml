@@ -2,7 +2,7 @@
 name = "notesagent-desktop"
 version = "0.3.0-alpha.1"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [lib]
 name = "notesagent_host"
@@ -37,6 +37,10 @@ iota_stronghold = "2.1"
 argon2 = "0.5"
 chacha20poly1305 = "0.10"
 fernet = { version = "0.2", default-features = false, features = ["rustcrypto"] }
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std"] }
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
+unicode-normalization = "0.1"
+unicode-casefold = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_RemoteDesktop", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader"] }
