@@ -143,7 +143,7 @@ impl LaunchData {
         result.environment.push(0);
         Ok(result)
     }
-    pub fn command_mut(&mut self) -> &mut [u16] {
+    pub(crate) fn command_mut(&mut self) -> &mut [u16] {
         &mut self.command
     }
     /// Pass with CREATE_UNICODE_ENVIRONMENT; never substitute a null pointer.

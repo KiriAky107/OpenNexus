@@ -60,3 +60,6 @@ pub mod extension_container;
 
 #[cfg(windows)]
 pub mod extension_launch_data;
+
+#[cfg(windows)]
+pub mod extension_process;
