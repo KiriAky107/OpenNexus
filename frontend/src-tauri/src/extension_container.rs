@@ -764,17 +764,98 @@ mod tests {
                 container_data: &folder,
                 scratch: &folder.join("Temp"),
             };
-            let data = context
-                .build(&authority, &permit, &claims, &bound_entry, &broker, 2)
+            let prepared = context
+                .prepare(&authority, &permit, &claims, &bound_entry, &broker, 2)
                 .unwrap();
-            let suspended =
-                crate::extension_process::Suspended::create_bound(&profile, &bound_entry, data)
-                    .unwrap();
+            let suspended = prepared.create_suspended(&profile, &bound_entry).unwrap();
             let running = unsafe { suspended.resume().unwrap() };
             assert_eq!(
                 running.wait(std::time::Duration::from_secs(5)).unwrap(),
                 Some(0)
             );
+            drop(running);
+            for cause in [
+                "before_create",
+                "before_resume",
+                "permit",
+                "credential",
+                "owner_drop",
+                "expiry",
+            ] {
+                let mut issuer = Authority::default();
+                let mut waiting = claims.clone();
+                waiting.arguments = vec!["wait_tree".into()];
+                waiting.expires_at_ms = if cause == "expiry" { 2_002 } else { 120_000 };
+                let permit = issuer.issue(&waiting, 1).unwrap();
+                let prepared = context
+                    .prepare(&issuer, &permit, &waiting, &bound_entry, &broker, 2)
+                    .unwrap();
+                if cause == "before_create" {
+                    issuer.invalidate_all();
+                    assert_eq!(
+                        prepared
+                            .create_suspended(&profile, &bound_entry)
+                            .err()
+                            .unwrap()
+                            .code,
+                        "EXTENSION_PERMIT_REVOKED"
+                    );
+                    continue;
+                }
+                let suspended = prepared.create_suspended(&profile, &bound_entry).unwrap();
+                if cause == "before_resume" {
+                    issuer.invalidate_all();
+                    assert_eq!(
+                        unsafe { suspended.resume() }.err().unwrap().code,
+                        "EXTENSION_PERMIT_REVOKED"
+                    );
+                    continue;
+                }
+                let running = unsafe { suspended.resume().unwrap() };
+                let started = std::time::Instant::now();
+                while running.active_test_processes().unwrap() != 2
+                    && started.elapsed() < std::time::Duration::from_secs(5)
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                assert_eq!(running.active_test_processes().unwrap(), 2);
+                let revoked = std::time::Instant::now();
+                match cause {
+                    "permit" => issuer.invalidate_all(),
+                    "credential" => broker.lock(),
+                    "expiry" => {}
+                    _ => drop(issuer),
+                }
+                // The monitor must act without check_authorization or tool polling.
+                assert!(running
+                    .wait(std::time::Duration::from_secs(5))
+                    .unwrap()
+                    .is_some());
+                while running.active_test_processes().unwrap() != 0
+                    && revoked.elapsed() < std::time::Duration::from_secs(5)
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                assert_eq!(running.active_test_processes().unwrap(), 0);
+                assert!(revoked.elapsed() < std::time::Duration::from_secs(5));
+                let expected = match cause {
+                    "credential" => "CREDENTIALS_LOCKED",
+                    "expiry" => "EXTENSION_PERMIT_EXPIRED",
+                    _ => "EXTENSION_PERMIT_REVOKED",
+                };
+                assert_eq!(running.check_authorization().unwrap_err().code, expected);
+                assert_eq!(running.start_tool_call().err().unwrap().code, expected);
+                eprintln!(
+                    "instance revocation {cause}: tree empty after {:?}",
+                    revoked.elapsed()
+                );
+                drop(running);
+                if cause == "credential" {
+                    broker
+                        .unlock(Zeroizing::new(b"native fixture passphrase".to_vec()))
+                        .unwrap();
+                }
+            }
         }
         #[cfg(not(feature = "desktop"))]
         assert_eq!(
