@@ -165,6 +165,21 @@ pub(crate) fn validate_record(file: &mut fs::File, path: &str, size: u64) -> Res
     Ok(())
 }
 pub(crate) fn hash_file(path: &Path) -> Result<String> {
+    hash_file_info(path).map(|(digest, _)| digest)
+}
+pub(crate) fn sync_file_info(source: &Path, path: &str) -> Result<(String, u64)> {
+    if crate::records::is_record(path) {
+        let mut bytes = Vec::new();
+        fs::File::open(source)?
+            .take(1024 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        crate::records::validate(path, &bytes)?;
+        Ok((hash(&bytes), bytes.len() as u64))
+    } else {
+        hash_file_info(source)
+    }
+}
+fn hash_file_info(path: &Path) -> Result<(String, u64)> {
     let mut file = fs::File::open(path)?;
     let mut buffer = vec![0u8; VERIFY_BUFFER_BYTES];
     let mut hasher = Sha256::new();
@@ -180,7 +195,7 @@ pub(crate) fn hash_file(path: &Path) -> Result<String> {
         }
         hasher.update(&buffer[..count]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok((format!("{:x}", hasher.finalize()), total))
 }
 pub(crate) fn verify(path: &Path, digest: &str, size: u64) -> Result<()> {
     open_verified(path, digest, size).map(drop)
