@@ -264,6 +264,56 @@ impl ExtensionStore {
             _lock: lock,
         })
     }
+    /// Online installation gate. The source identity and staged signing key must
+    /// originate from Host trust settings; this never accepts a replacement key.
+    pub async fn switch_online(
+        &mut self,
+        operation: &str,
+        vault_id: &str,
+        source_id: &str,
+        changes: &[crate::extension_transaction::Change],
+    ) -> Result<crate::extension_transaction::Receipt> {
+        if changes.is_empty() || changes.len() > 200 {
+            return Err(HostError::new("EXTENSION_TRANSACTION_INVALID"));
+        }
+        let mut verified = Vec::new();
+        let mut origin = None;
+        for change in changes {
+            let (source, json, key): (String, String, Vec<u8>) = self.db.query_row(
+                "SELECT source,release,signer FROM versions WHERE package_key=?1",
+                [&change.target.package_key],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            if origin.as_ref().is_some_and(|s| s != &source) {
+                return Err(HostError::new("EXTENSION_SOURCE_INVALID"));
+            }
+            origin = Some(source.clone());
+            let release: Release = serde_json::from_str(&json)
+                .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+            let key: [u8; 32] = key
+                .try_into()
+                .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+            let client = crate::extension_trust::Client::new(&source)?;
+            let checked = client
+                .check(
+                    crate::extension_trust::Pin {
+                        source_id,
+                        key_id: &release.key_id,
+                        namespace: &release.namespace,
+                        public_key: &key,
+                    },
+                    &release,
+                )
+                .await?;
+            verified.push((checked, source, release, key));
+        }
+        self.switch_prepared_inner(operation, vault_id, changes, || {
+            for (checked, source, release, key) in &verified {
+                checked.matches(source, release, key)?;
+            }
+            Ok(())
+        })
+    }
     /// Atomically selects a prepared group after installer policy checks. This
     /// method does not stop processes, validate configuration schemas or issue permits.
     pub fn switch_prepared(
@@ -271,6 +321,15 @@ impl ExtensionStore {
         operation: &str,
         vault_id: &str,
         changes: &[crate::extension_transaction::Change],
+    ) -> Result<crate::extension_transaction::Receipt> {
+        self.switch_prepared_inner(operation, vault_id, changes, || Ok(()))
+    }
+    fn switch_prepared_inner(
+        &mut self,
+        operation: &str,
+        vault_id: &str,
+        changes: &[crate::extension_transaction::Change],
+        check_fresh: impl FnOnce() -> Result<()>,
     ) -> Result<crate::extension_transaction::Receipt> {
         use cap_fs_ext::DirExt;
         let vault = Uuid::parse_str(vault_id)
@@ -322,6 +381,7 @@ impl ExtensionStore {
                 return Err(HostError::new("EXTENSION_STORE_CORRUPT"));
             }
         }
+        check_fresh()?;
         crate::extension_transaction::switch(&mut self.db, operation, changes)
     }
     pub fn finish_installation(
