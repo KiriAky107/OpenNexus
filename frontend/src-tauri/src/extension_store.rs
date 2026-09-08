@@ -236,14 +236,17 @@ impl ExtensionStore {
                 ordinary(&sidecar)?;
             }
         }
-        let db = Connection::open(database)?;
+        let mut db = Connection::open(database)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 2 {
+        if version > 3 {
             return Err(HostError::new("EXTENSION_SCHEMA_INCOMPATIBLE"));
         }
-        if version == 1 {
-            let backup = root.join(format!("extensions.schema1.{}.sqlite3", Uuid::new_v4()));
+        if (1..3).contains(&version) {
+            let backup = root.join(format!(
+                "extensions.schema{version}.{}.sqlite3",
+                Uuid::new_v4()
+            ));
             db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
             OpenOptions::new().write(true).open(backup)?.sync_all()?;
         }
@@ -251,12 +254,87 @@ impl ExtensionStore {
             CREATE TABLE IF NOT EXISTS versions (package_key TEXT PRIMARY KEY,source TEXT NOT NULL,namespace TEXT NOT NULL,package_id TEXT NOT NULL,version TEXT NOT NULL,fingerprint TEXT NOT NULL,release TEXT NOT NULL,manifest TEXT NOT NULL,inventory TEXT NOT NULL,archive_hash TEXT NOT NULL,size INTEGER NOT NULL,signer BLOB NOT NULL,state TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS stage_operations (id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,receipt TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS prepared_packages (package_key TEXT PRIMARY KEY REFERENCES versions(package_key),directory TEXT NOT NULL UNIQUE,tree_sha256 TEXT NOT NULL);
-            PRAGMA user_version=2; COMMIT;")?;
+            CREATE TABLE IF NOT EXISTS extension_active(slot TEXT PRIMARY KEY,target TEXT NOT NULL,revision TEXT NOT NULL,pending_operation TEXT);
+            CREATE TABLE IF NOT EXISTS extension_transactions(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,before_state TEXT NOT NULL,after_state TEXT NOT NULL,state TEXT NOT NULL);
+            PRAGMA user_version=3; COMMIT;")?;
+        crate::extension_transaction::recover(&mut db)?;
         Ok(Self {
             root,
             db,
             _lock: lock,
         })
+    }
+    /// Atomically selects a prepared group after installer policy checks. This
+    /// method does not stop processes, validate configuration schemas or issue permits.
+    pub fn switch_prepared(
+        &mut self,
+        operation: &str,
+        vault_id: &str,
+        changes: &[crate::extension_transaction::Change],
+    ) -> Result<crate::extension_transaction::Receipt> {
+        use cap_fs_ext::DirExt;
+        let vault = Uuid::parse_str(vault_id)
+            .map_err(|_| HostError::new("VAULT_INVALID"))?
+            .to_string();
+        if vault != vault_id || changes.is_empty() || changes.len() > 200 {
+            return Err(HostError::new("EXTENSION_TRANSACTION_INVALID"));
+        }
+        let root = cap_std::fs::Dir::open_ambient_dir(&self.root, cap_std::ambient_authority())?;
+        let prepared = root.open_dir_nofollow("prepared")?;
+        for change in changes {
+            let (source, json, key, directory, tree): (String,String,Vec<u8>,String,String) = self.db.query_row(
+                "SELECT v.source,v.release,v.signer,p.directory,p.tree_sha256 FROM versions v JOIN prepared_packages p ON p.package_key=v.package_key WHERE v.package_key=?1",
+                [&change.target.package_key], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
+            let release: Release = serde_json::from_str(&json)
+                .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+            let public: [u8; 32] = key
+                .try_into()
+                .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+            let (inventory, _) = release.verify_package(
+                &public,
+                &release.key_id,
+                &release.namespace,
+                false,
+                false,
+                &self.archive(&change.target.package_key)?,
+            )?;
+            let slot = hash(
+                &serde_json::to_vec(&(&vault, &source, &release.namespace, &release.package_id))
+                    .unwrap(),
+            );
+            if change.target.slot != slot
+                || change.target.directory != directory
+                || change.target.tree_sha256 != tree
+                || Uuid::parse_str(&directory)
+                    .map(|v| v.to_string())
+                    .ok()
+                    .as_ref()
+                    != Some(&directory)
+            {
+                return Err(HostError::new("EXTENSION_INSTALL_CONFLICT"));
+            }
+            if crate::extension_unpack::verify_tree(
+                &prepared.open_dir_nofollow(&directory)?,
+                &inventory,
+            )? != tree
+            {
+                return Err(HostError::new("EXTENSION_STORE_CORRUPT"));
+            }
+        }
+        crate::extension_transaction::switch(&mut self.db, operation, changes)
+    }
+    pub fn finish_installation(
+        &mut self,
+        operation: &str,
+        healthy: bool,
+    ) -> Result<crate::extension_transaction::Receipt> {
+        crate::extension_transaction::finish(&mut self.db, operation, healthy)
+    }
+    pub fn active_installation(
+        &self,
+        slot: &str,
+    ) -> Result<Option<crate::extension_transaction::Active>> {
+        crate::extension_transaction::active(&self.db, slot)
     }
     /// Prepare a verified staged package. The caller supplies current signer/revocation
     /// policy; persisted preparation does not bypass that policy on replay.
@@ -542,6 +620,93 @@ mod tests {
             withdrawn: false,
             archive,
         }
+    }
+    #[test]
+    fn prepared_switch_rechecks_content_vault_binding_and_recovers_on_open() {
+        use crate::extension_transaction::{Change, Target};
+        let temp = tempfile::tempdir().unwrap();
+        let (release, archive, key) = fixture();
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        let staged = store
+            .stage(request(
+                &Uuid::new_v4().to_string(),
+                &release,
+                &archive,
+                &key,
+            ))
+            .unwrap();
+        let prepared = store
+            .prepare(
+                &staged.package_key,
+                Signer {
+                    public_key: &key,
+                    key_id: "test-key",
+                    namespace: "examples",
+                    revoked: false,
+                },
+                false,
+            )
+            .unwrap();
+        let vault = Uuid::new_v4().to_string();
+        let slot = hash(
+            &serde_json::to_vec(&(
+                &vault,
+                "https://catalog.example/",
+                &release.namespace,
+                &release.package_id,
+            ))
+            .unwrap(),
+        );
+        let changes = vec![Change {
+            target: Target {
+                slot: slot.clone(),
+                package_key: staged.package_key,
+                directory: prepared.directory.clone(),
+                tree_sha256: prepared.tree_sha256,
+                configuration: serde_json::json!({"review":true}),
+            },
+            expected_revision: None,
+        }];
+        assert!(store
+            .switch_prepared(
+                &Uuid::new_v4().to_string(),
+                &Uuid::new_v4().to_string(),
+                &changes
+            )
+            .is_err());
+        let operation = Uuid::new_v4().to_string();
+        store.switch_prepared(&operation, &vault, &changes).unwrap();
+        assert!(store
+            .active_installation(&slot)
+            .unwrap()
+            .unwrap()
+            .pending_operation
+            .is_some());
+        drop(store);
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        assert!(store.active_installation(&slot).unwrap().is_none());
+        assert_eq!(
+            store.finish_installation(&operation, true).unwrap().state,
+            "rolled_back"
+        );
+        let operation = Uuid::new_v4().to_string();
+        store.switch_prepared(&operation, &vault, &changes).unwrap();
+        store.finish_installation(&operation, true).unwrap();
+        drop(store);
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        assert_eq!(
+            store.active_installation(&slot).unwrap().unwrap().target,
+            changes[0].target
+        );
+        fs::write(
+            temp.path()
+                .join("prepared")
+                .join(&prepared.directory)
+                .join("persona.json"),
+            b"bad",
+        )
+        .unwrap();
+        assert!(store.switch_prepared(&operation, &vault, &changes).is_err());
     }
     #[test]
     fn schema_one_upgrade_preserves_versions_and_creates_readable_backup() {

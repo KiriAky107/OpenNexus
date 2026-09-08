@@ -42,3 +42,6 @@ pub mod extension_unpack;
 
 #[cfg(feature = "desktop")]
 pub mod extension_permit;
+
+#[cfg(feature = "desktop")]
+pub mod extension_transaction;
