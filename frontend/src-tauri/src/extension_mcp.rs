@@ -420,6 +420,9 @@ impl<'a, 'p> Session<'a, 'p> {
             }
         }
     }
+    pub(crate) fn is_failed(&self) -> bool {
+        self.failed
+    }
     pub fn take_tools_changed(&mut self) -> bool {
         std::mem::take(&mut self.tools_changed)
     }

@@ -44,6 +44,13 @@ fn bounded(value: &Value, bytes: usize, schema: bool) -> Result<()> {
     }
     Ok(())
 }
+pub(crate) fn argument_bounds(value: &Value) -> Result<()> {
+    bounded(value, 256 * 1024, false)?;
+    if !value.is_object() {
+        return Err(HostError::new("EXTENSION_MCP_ARGUMENTS_INVALID"));
+    }
+    Ok(())
+}
 fn compile(schema: &Value) -> Result<jsonschema::Validator> {
     bounded(schema, 64 * 1024, true)?;
     if !schema.is_object()

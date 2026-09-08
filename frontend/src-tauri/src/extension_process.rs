@@ -298,6 +298,10 @@ impl Running<'_> {
         Ok(())
     }
     #[cfg(test)]
+    pub(crate) fn test_job(&self) -> Result<crate::extension_job::Job> {
+        self.process.job.clone_for_deadline()
+    }
+    #[cfg(test)]
     pub(crate) fn active_test_processes(&self) -> Result<u32> {
         self.process.job.active_processes()
     }
