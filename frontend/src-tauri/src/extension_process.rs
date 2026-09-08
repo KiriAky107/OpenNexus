@@ -239,6 +239,7 @@ impl<'a> Suspended<'a> {
     /// broker and all resource policy requirements immediately before this call.
     /// None of those authorization checks is supplied by this low-level module.
     pub unsafe fn resume(self) -> Result<Running<'a>> {
+        self.0.job.check_resources()?;
         if unsafe { ResumeThread(self.0.handles.thread.as_raw_handle()) } != 1 {
             return Err(HostError::new("EXTENSION_PROCESS_RESUME_FAILED"));
         }
@@ -261,6 +262,7 @@ impl<'a> Suspended<'a> {
     ) -> Result<Running<'a>> {
         let watch = crate::extension_revocation::Watch::arm(&self.0.job, lease)?;
         watch.check()?;
+        self.0.job.check_resources()?;
         if unsafe { ResumeThread(self.0.handles.thread.as_raw_handle()) } != 1 {
             return Err(HostError::new("EXTENSION_PROCESS_RESUME_FAILED"));
         }
@@ -291,6 +293,7 @@ impl Running<'_> {
     }
 
     pub fn check_authorization(&self) -> Result<()> {
+        self.process.job.check_resources()?;
         #[cfg(feature = "desktop")]
         if let Some(watch) = &self.revocation {
             return watch.check();
