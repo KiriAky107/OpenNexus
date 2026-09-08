@@ -24,6 +24,40 @@ impl Workspace {
         }
         self.register_payload(operation, &digest, content.len() as u64)
     }
+    pub(crate) fn store_payload_file(
+        &self,
+        operation: &str,
+        source: &Path,
+        expected: &str,
+    ) -> Result<()> {
+        let size = fs::metadata(source)?.len();
+        if size > 100 * 1024 * 1024 {
+            return Err(HostError::new("FILE_TOO_LARGE"));
+        }
+        let mut input = open_verified(source, expected, size).map_err(|error| {
+            if error.code == "SYNC_SPOOL_CORRUPT" {
+                HostError::new("REVISION_CONFLICT")
+            } else {
+                error
+            }
+        })?;
+        let target = self.sync_spool(expected)?;
+        if target.exists() {
+            verify(&target, expected, size)?;
+        } else {
+            let parent = target
+                .parent()
+                .ok_or_else(|| HostError::new("UNSAFE_PATH"))?;
+            let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+            copy_verified(&mut input, &mut temp, expected, size)?;
+            temp.as_file().sync_all()?;
+            temp.persist_noclobber(&target)
+                .map_err(|_| HostError::new("SYNC_SPOOL_FAILED"))?;
+            #[cfg(unix)]
+            fs::File::open(parent)?.sync_all()?;
+        }
+        self.register_payload(operation, expected, size)
+    }
     fn register_payload(&self, operation: &str, digest: &str, size: u64) -> Result<()> {
         let old: Option<(String, i64)> = self
             .db
