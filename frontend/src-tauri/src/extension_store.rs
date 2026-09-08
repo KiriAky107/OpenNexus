@@ -600,6 +600,57 @@ impl ExtensionStore {
         )?;
         Ok(preview.changes)
     }
+    pub async fn stage_online(
+        &mut self,
+        operation: &str,
+        source_url: &str,
+        release: &Release,
+    ) -> Result<Receipt> {
+        Uuid::parse_str(operation).map_err(|_| HostError::new("OPERATION_ID_INVALID"))?;
+        let origin = source(source_url)?;
+        let trusted = self
+            .trust_setting(&origin, &release.namespace, &release.key_id)?
+            .ok_or_else(|| HostError::new("EXTENSION_SOURCE_UNTRUSTED"))?;
+        if !trusted.enabled {
+            return Err(HostError::new("EXTENSION_SOURCE_UNTRUSTED"));
+        }
+        self.check_not_revoked(&origin, release, &trusted.public_key)?;
+        let client = crate::extension_trust::Client::new(&origin)?;
+        let result = client
+            .check(
+                crate::extension_trust::Pin {
+                    source_id: &trusted.source_id,
+                    key_id: &trusted.key_id,
+                    namespace: &trusted.namespace,
+                    public_key: &trusted.public_key,
+                },
+                release,
+            )
+            .await;
+        let checked = match result {
+            Ok(checked) => checked,
+            Err(error) => {
+                self.remember_revocation(&origin, release, &trusted.public_key, &error.code)?;
+                return Err(error);
+            }
+        };
+        let archive = client
+            .download(&checked, release, &trusted.public_key)
+            .await?;
+        self.stage(Stage {
+            operation_id: operation,
+            source: &origin,
+            release,
+            archive: &archive,
+            withdrawn: false,
+            signer: Signer {
+                public_key: &trusted.public_key,
+                key_id: &trusted.key_id,
+                namespace: &trusted.namespace,
+                revoked: false,
+            },
+        })
+    }
     /// Online installation gate, using confirmed Host trust settings only.
     pub async fn switch_online(
         &mut self,

@@ -146,6 +146,36 @@ pub async fn extension_install_preview(
     .map_err(|_| "EXTENSION_PREVIEW_FAILED".to_string())?
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StageRequest {
+    operation_id: String,
+    source: String,
+    release: notesagent_host::extension_package::Release,
+}
+#[tauri::command]
+pub async fn extension_stage(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+    request: StageRequest,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let extensions = host.extensions.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = extensions.lock().map_err(|_| "HOST_BUSY")?;
+        let store = store.as_mut().ok_or("EXTENSIONS_NOT_READY")?;
+        let receipt = tauri::async_runtime::block_on(store.stage_online(
+            &request.operation_id,
+            &request.source,
+            &request.release,
+        ))
+        .map_err(|e| e.code)?;
+        serde_json::to_value(receipt).map_err(|_| "EXTENSION_STAGE_FAILED".into())
+    })
+    .await
+    .map_err(|_| "EXTENSION_STAGE_FAILED".to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

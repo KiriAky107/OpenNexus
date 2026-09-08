@@ -52,6 +52,7 @@
     "allow-record-write",
     "allow-extension-trust-review",
     "allow-extension-trust-confirm",
-    "allow-extension-install-preview"
+    "allow-extension-install-preview",
+    "allow-extension-stage"
   ]
 }

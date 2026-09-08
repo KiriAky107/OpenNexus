@@ -850,6 +850,7 @@ fn main() {
             extension_trust_review,
             extension_trust_confirm,
             extension_install_preview,
+            extension_stage,
             record_get,
             record_write,
             sync_login,

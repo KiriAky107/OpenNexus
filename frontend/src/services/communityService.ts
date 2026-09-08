@@ -1,6 +1,8 @@
 /** 只请求用户配置来源；公钥固定、签名及摘要检查先于任何安装 API。 */
 import type { CommunityCatalog, CommunityRelease, CommunitySource, CommunityKey } from '@/contracts/community'
 import { valid, gt, lt } from 'semver'
+import { invoke } from '@tauri-apps/api/core'
+import { isDesktop } from './platform/desktop'
 import appPackage from '../../package.json'
 import { decodeThemePackage, inspectThemePackage, installTheme } from './themePackageService'
 import { installSkill } from './skillService'
@@ -89,6 +91,14 @@ export async function verifyRelease(release: CommunityRelease, pinned: Community
 }
 
 export async function installRelease(source: CommunitySource, selected: CommunityRelease, signal?: AbortSignal): Promise<string> {
+  if (isDesktop()) {
+    signal?.throwIfAborted()
+    if (!source.enabled || selected.withdrawn) throw new Error('来源已停用或发行已撤回')
+    const release = { ...selected } as Partial<CommunityRelease>
+    delete release.release_id; delete release.withdrawn; delete release.download_path
+    await invoke('extension_stage', { request: { operation_id: crypto.randomUUID(), source: source.url, release } })
+    return '已校验并暂存到桌面安装库，尚未安装或启用'
+  }
   const catalog = await fetchCatalog(source, '', selected.type, signal)
   const release = catalog.items.find(item => item.release_id === selected.release_id)
   if (!release || release.sha256 !== selected.sha256 || release.withdrawn) throw new Error('发行已变更或撤回，请刷新目录')
