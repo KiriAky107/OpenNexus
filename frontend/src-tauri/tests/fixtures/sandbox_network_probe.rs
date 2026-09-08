@@ -3,8 +3,18 @@ use std::net::{SocketAddr, TcpStream, UdpSocket};
 use std::time::Duration;
 fn main() {
     let args: Vec<_> = std::env::args().collect();
+    if args.get(1).is_some_and(|s| s == "wait_tree") {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("wait")
+            .spawn()
+            .unwrap();
+        std::thread::sleep(Duration::from_secs(120));
+        let _ = child.kill();
+        let _ = child.wait();
+        std::process::exit(84);
+    }
     if args.get(1).is_some_and(|s| s == "wait") {
-        std::thread::sleep(Duration::from_secs(60));
+        std::thread::sleep(Duration::from_secs(120));
         std::process::exit(84);
     }
     if args.get(1).is_some_and(|s| s == "launch") {
