@@ -51,6 +51,39 @@ pub struct PreparedPackage {
     pub directory: String,
     pub tree_sha256: String,
 }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TrustSetting {
+    pub source: String,
+    pub source_id: String,
+    pub namespace: String,
+    pub key_id: String,
+    pub public_key: [u8; 32],
+    pub enabled: bool,
+}
+impl TrustSetting {
+    pub fn fingerprint(&self) -> Result<String> {
+        if source(&self.source)? != self.source
+            || self.source_id.is_empty()
+            || self.source_id.len() > 128
+            || self.source_id.chars().any(char::is_control)
+            || self.namespace.len() < 2
+            || self.namespace.len() > 64
+            || !self
+                .namespace
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            || !self.namespace.as_bytes()[0].is_ascii_alphanumeric()
+            || self.key_id.is_empty()
+            || self.key_id.len() > 128
+            || self.key_id.chars().any(char::is_control)
+            || ed25519_dalek::VerifyingKey::from_bytes(&self.public_key).is_err()
+        {
+            return Err(HostError::new("EXTENSION_TRUST_INVALID"));
+        }
+        Ok(hash(&serde_json::to_vec(self).unwrap()))
+    }
+}
 pub struct ExtensionStore {
     root: PathBuf,
     db: Connection,
@@ -239,10 +272,10 @@ impl ExtensionStore {
         let mut db = Connection::open(database)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 3 {
+        if version > 4 {
             return Err(HostError::new("EXTENSION_SCHEMA_INCOMPATIBLE"));
         }
-        if (1..3).contains(&version) {
+        if (1..4).contains(&version) {
             let backup = root.join(format!(
                 "extensions.schema{version}.{}.sqlite3",
                 Uuid::new_v4()
@@ -256,7 +289,8 @@ impl ExtensionStore {
             CREATE TABLE IF NOT EXISTS prepared_packages (package_key TEXT PRIMARY KEY REFERENCES versions(package_key),directory TEXT NOT NULL UNIQUE,tree_sha256 TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS extension_active(slot TEXT PRIMARY KEY,target TEXT NOT NULL,revision TEXT NOT NULL,pending_operation TEXT);
             CREATE TABLE IF NOT EXISTS extension_transactions(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,before_state TEXT NOT NULL,after_state TEXT NOT NULL,state TEXT NOT NULL);
-            PRAGMA user_version=3; COMMIT;")?;
+            CREATE TABLE IF NOT EXISTS extension_trust(source TEXT NOT NULL,namespace TEXT NOT NULL,key_id TEXT NOT NULL,setting TEXT NOT NULL,revision TEXT NOT NULL,PRIMARY KEY(source,namespace,key_id));
+            PRAGMA user_version=4; COMMIT;")?;
         crate::extension_transaction::recover(&mut db)?;
         Ok(Self {
             root,
@@ -264,13 +298,69 @@ impl ExtensionStore {
             _lock: lock,
         })
     }
-    /// Online installation gate. The source identity and staged signing key must
-    /// originate from Host trust settings; this never accepts a replacement key.
+    pub fn trust_setting(
+        &self,
+        source_url: &str,
+        namespace: &str,
+        key_id: &str,
+    ) -> Result<Option<TrustSetting>> {
+        let row:Option<(String,String)>=self.db.query_row("SELECT setting,revision FROM extension_trust WHERE source=?1 AND namespace=?2 AND key_id=?3",
+            params![source(source_url)?,namespace,key_id],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+        row.map(|(json, revision)| {
+            let setting: TrustSetting = serde_json::from_str(&json)
+                .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+            if setting.fingerprint()? != revision
+                || setting.source != source(source_url)?
+                || setting.namespace != namespace
+                || setting.key_id != key_id
+            {
+                return Err(HostError::new("EXTENSION_STORE_CORRUPT"));
+            }
+            Ok(setting)
+        })
+        .transpose()
+    }
+    /// Called after the user confirms the displayed fingerprint. A concurrent
+    /// setting change requires a fresh review; refresh never calls this method.
+    pub fn confirm_trust(
+        &mut self,
+        setting: &TrustSetting,
+        expected_revision: Option<&str>,
+        confirmed_fingerprint: &str,
+    ) -> Result<String> {
+        let revision = setting.fingerprint()?;
+        if confirmed_fingerprint != revision {
+            return Err(HostError::new("EXTENSION_TRUST_CONFIRMATION"));
+        }
+        let old = self.trust_setting(&setting.source, &setting.namespace, &setting.key_id)?;
+        let old_revision = old.as_ref().map(TrustSetting::fingerprint).transpose()?;
+        if old.as_ref() == Some(setting) {
+            return Ok(revision);
+        }
+        if old_revision.as_deref() != expected_revision {
+            return Err(HostError::new("EXTENSION_TRUST_CONFLICT"));
+        }
+        // Prevent one canonical URL from silently acquiring a second source identity.
+        let mut statement = self
+            .db
+            .prepare("SELECT setting FROM extension_trust WHERE source=?1")?;
+        for row in statement.query_map([&setting.source], |r| r.get::<_, String>(0))? {
+            let peer: TrustSetting = serde_json::from_str(&row?)
+                .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+            if peer.source_id != setting.source_id {
+                return Err(HostError::new("EXTENSION_TRUST_CHANGED"));
+            }
+        }
+        drop(statement);
+        self.db.execute("INSERT INTO extension_trust VALUES (?1,?2,?3,?4,?5) ON CONFLICT(source,namespace,key_id) DO UPDATE SET setting=excluded.setting,revision=excluded.revision",
+            params![setting.source,setting.namespace,setting.key_id,serde_json::to_string(setting).unwrap(),revision])?;
+        Ok(revision)
+    }
+    /// Online installation gate, using confirmed Host trust settings only.
     pub async fn switch_online(
         &mut self,
         operation: &str,
         vault_id: &str,
-        source_id: &str,
         changes: &[crate::extension_transaction::Change],
     ) -> Result<crate::extension_transaction::Receipt> {
         if changes.is_empty() || changes.len() > 200 {
@@ -293,11 +383,17 @@ impl ExtensionStore {
             let key: [u8; 32] = key
                 .try_into()
                 .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+            let trusted = self
+                .trust_setting(&source, &release.namespace, &release.key_id)?
+                .ok_or_else(|| HostError::new("EXTENSION_SOURCE_UNTRUSTED"))?;
+            if !trusted.enabled || trusted.public_key != key {
+                return Err(HostError::new("EXTENSION_SOURCE_UNTRUSTED"));
+            }
             let client = crate::extension_trust::Client::new(&source)?;
             let checked = client
                 .check(
                     crate::extension_trust::Pin {
-                        source_id,
+                        source_id: &trusted.source_id,
                         key_id: &release.key_id,
                         namespace: &release.namespace,
                         public_key: &key,
@@ -681,6 +777,136 @@ mod tests {
             withdrawn: false,
             archive,
         }
+    }
+    #[tokio::test]
+    async fn online_switch_never_trusts_the_staged_signer_implicitly() {
+        let temp = tempfile::tempdir().unwrap();
+        let (release, archive, key) = fixture();
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        let staged = store
+            .stage(request(
+                &Uuid::new_v4().to_string(),
+                &release,
+                &archive,
+                &key,
+            ))
+            .unwrap();
+        let changes = vec![crate::extension_transaction::Change {
+            target: crate::extension_transaction::Target {
+                slot: "a".repeat(64),
+                package_key: staged.package_key,
+                directory: Uuid::new_v4().to_string(),
+                tree_sha256: "a".repeat(64),
+                configuration: serde_json::json!({}),
+            },
+            expected_revision: None,
+        }];
+        let id = Uuid::new_v4().to_string();
+        let vault = Uuid::new_v4().to_string();
+        assert_eq!(
+            store
+                .switch_online(&id, &vault, &changes)
+                .await
+                .unwrap_err()
+                .code,
+            "EXTENSION_SOURCE_UNTRUSTED"
+        );
+        let mut setting = TrustSetting {
+            source: "https://catalog.example/".into(),
+            source_id: "catalog".into(),
+            namespace: "examples".into(),
+            key_id: "test-key".into(),
+            public_key: key,
+            enabled: false,
+        };
+        let disabled = setting.fingerprint().unwrap();
+        store.confirm_trust(&setting, None, &disabled).unwrap();
+        assert_eq!(
+            store
+                .switch_online(&id, &vault, &changes)
+                .await
+                .unwrap_err()
+                .code,
+            "EXTENSION_SOURCE_UNTRUSTED"
+        );
+        setting.enabled = true;
+        setting.public_key = SigningKey::from_bytes(&[8; 32]).verifying_key().to_bytes();
+        store
+            .confirm_trust(&setting, Some(&disabled), &setting.fingerprint().unwrap())
+            .unwrap();
+        assert_eq!(
+            store
+                .switch_online(&id, &vault, &changes)
+                .await
+                .unwrap_err()
+                .code,
+            "EXTENSION_SOURCE_UNTRUSTED"
+        );
+        assert_eq!(
+            store
+                .db
+                .query_row("SELECT COUNT(*) FROM extension_transactions", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+    #[test]
+    fn confirmed_trust_survives_reopen_and_rotation_requires_matching_review() {
+        let temp = tempfile::tempdir().unwrap();
+        let (_, _, key) = fixture();
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        let mut setting = TrustSetting {
+            source: "https://catalog.example/".into(),
+            source_id: "catalog".into(),
+            namespace: "examples".into(),
+            key_id: "test-key".into(),
+            public_key: key,
+            enabled: true,
+        };
+        let fingerprint = setting.fingerprint().unwrap();
+        assert!(store
+            .trust_setting(&setting.source, &setting.namespace, &setting.key_id)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .confirm_trust(&setting, None, "not-confirmed")
+            .is_err());
+        store.confirm_trust(&setting, None, &fingerprint).unwrap();
+        drop(store);
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        assert_eq!(
+            store
+                .trust_setting(&setting.source, &setting.namespace, &setting.key_id)
+                .unwrap(),
+            Some(setting.clone())
+        );
+        setting.public_key = SigningKey::from_bytes(&[8; 32]).verifying_key().to_bytes();
+        let rotated = setting.fingerprint().unwrap();
+        assert!(store.confirm_trust(&setting, None, &rotated).is_err());
+        assert!(store
+            .confirm_trust(&setting, Some(&fingerprint), &fingerprint)
+            .is_err());
+        store
+            .confirm_trust(&setting, Some(&fingerprint), &rotated)
+            .unwrap();
+        setting.enabled = false;
+        let disabled = setting.fingerprint().unwrap();
+        store
+            .confirm_trust(&setting, Some(&rotated), &disabled)
+            .unwrap();
+        assert!(
+            !store
+                .trust_setting(&setting.source, &setting.namespace, &setting.key_id)
+                .unwrap()
+                .unwrap()
+                .enabled
+        );
+        setting.key_id = "another-key".into();
+        setting.source_id = "different".into();
+        assert!(store
+            .confirm_trust(&setting, None, &setting.fingerprint().unwrap())
+            .is_err());
     }
     #[test]
     fn prepared_switch_rechecks_content_vault_binding_and_recovers_on_open() {
