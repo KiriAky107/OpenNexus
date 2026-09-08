@@ -327,6 +327,16 @@ mod tests {
         command: Option<String>,
         mut data: Option<crate::extension_launch_data::LaunchData>,
     ) -> Option<u32> {
+        if let Some(data) = data.take() {
+            let suspended =
+                crate::extension_process::Suspended::create(profile, executable, data).unwrap();
+            // Controlled test fixture only; no user extension is authorized here.
+            let running = unsafe { suspended.resume().unwrap() };
+            let result = running.wait(std::time::Duration::from_secs(10)).unwrap();
+            assert!(result.is_some());
+            running.terminate().unwrap();
+            return result;
+        }
         let resume = command.is_some() || data.is_some();
         let mut attributes = Attributes::new();
         let caps = SECURITY_CAPABILITIES {
@@ -677,6 +687,32 @@ mod tests {
             checked_executable_data(&profile, &executable, None, Some(data)),
             Some(0)
         );
+        let data = crate::extension_launch_data::LaunchData::new(
+            &executable,
+            &["wait".to_owned()],
+            &system,
+            &folder,
+            &folder.join("Temp"),
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        let suspended =
+            crate::extension_process::Suspended::create(&profile, &executable, data).unwrap();
+        let running = unsafe { suspended.resume().unwrap() };
+        assert_eq!(running.wait(std::time::Duration::ZERO).unwrap(), None);
+        assert_eq!(
+            running
+                .wait(std::time::Duration::from_millis(60001))
+                .unwrap_err()
+                .code,
+            "EXTENSION_PROCESS_WAIT_INVALID"
+        );
+        running.terminate().unwrap();
+        assert!(running
+            .wait(std::time::Duration::from_secs(5))
+            .unwrap()
+            .is_some());
+        drop(running);
         for ip in ["127.0.0.1:0", "[::1]:0"] {
             let tcp = TcpListener::bind(ip).unwrap();
             let udp = UdpSocket::bind(ip).unwrap();
@@ -702,11 +738,19 @@ mod tests {
                     assert_eq!(&bytes[..5], b"probe");
                     udp.set_nonblocking(true).unwrap();
                 }
-                let command = format!("\"{}\" {mode} {address}", executable.display());
+                let data = crate::extension_launch_data::LaunchData::new(
+                    &executable,
+                    &[mode.to_owned(), address.clone()],
+                    &system,
+                    &folder,
+                    &folder.join("Temp"),
+                    &std::collections::BTreeMap::new(),
+                )
+                .unwrap();
                 // Loopback isolation can silently drop packets. TCP must
                 // explicitly report denial or timeout; UDP send may succeed,
                 // but no datagram may reach the controlled listener below.
-                let exit = checked_executable(&profile, &executable, Some(command));
+                let exit = checked_executable_data(&profile, &executable, None, Some(data));
                 eprintln!("container network probe {mode} {address}: {exit:?}");
                 if mode == "tcp" {
                     assert!(matches!(exit, Some(77 | 80)), "{mode} {address}: {exit:?}");
