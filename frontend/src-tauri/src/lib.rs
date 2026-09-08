@@ -51,3 +51,6 @@ pub mod extension_config;
 
 #[cfg(feature = "desktop")]
 pub mod extension_trust;
+
+#[cfg(windows)]
+pub mod extension_job;
