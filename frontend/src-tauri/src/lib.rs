@@ -24,3 +24,6 @@ pub mod workspace;
 pub mod workspace_broker;
 
 pub mod sync_retry;
+
+#[cfg(feature = "desktop")]
+pub mod extension_package;
