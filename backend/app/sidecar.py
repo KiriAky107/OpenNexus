@@ -77,7 +77,16 @@ class SessionAuth:
                                         (b"cache-control", b"no-store")]})
                 await send({"type": "http.response.body", "body": body})
             return
-        await self.app(scope, receive, send)
+        from app import host_bridge
+        vault = single(b"x-opennexus-vault").decode("ascii", errors="replace")
+        token = host_bridge.vault_id.set(vault if re.fullmatch(r"[0-9a-f-]{36}", vault) else None)
+        operation = single(b"x-request-id").decode("ascii", errors="replace")
+        operation_token = host_bridge.operation_id.set(operation if re.fullmatch(r"[0-9a-f-]{36}", operation) else None)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            host_bridge.vault_id.reset(token)
+            host_bridge.operation_id.reset(operation_token)
 
 
 def main() -> int:

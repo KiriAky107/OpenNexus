@@ -61,6 +61,10 @@ def serialized_vault_mutation(operation):
     @wraps(operation)
     async def wrapped(*args, **kwargs):
         async with vault_mutation_lock():
+            from app.config import get_settings
+            if get_settings().environment == 'desktop' and operation.__module__ == 'app.services.note_service':
+                from app.services.desktop_notes import mutate
+                return await mutate(operation.__name__, *args, **kwargs)
             with web_vault_ownership():
                 return await operation(*args, **kwargs)
 

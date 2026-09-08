@@ -135,8 +135,13 @@ impl Workspace {
         let db = Connection::open(db_path)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 1 {
+        if version > 2 {
             return Err(HostError::new("SCHEMA_INCOMPATIBLE"));
+        }
+        if version == 1 {
+            // Independent, complete SQLite backup before the schema ownership change.
+            let backup = managed.join(format!("host-schema1-{}.sqlite3", Uuid::new_v4()));
+            db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
         }
         db.execute_batch("BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS identity (id TEXT NOT NULL);
@@ -144,7 +149,8 @@ impl Workspace {
             CREATE TABLE IF NOT EXISTS journal (operation_id TEXT PRIMARY KEY,file_id TEXT NOT NULL,path TEXT NOT NULL,expected TEXT NOT NULL,content BLOB NOT NULL,origin TEXT NOT NULL,state TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS file_ops (id TEXT PRIMARY KEY,kind TEXT NOT NULL,path TEXT NOT NULL,destination TEXT NOT NULL,hash TEXT NOT NULL,content BLOB NOT NULL,state TEXT NOT NULL DEFAULT 'pending');
             CREATE TABLE IF NOT EXISTS outbox (operation_id TEXT PRIMARY KEY,file_id TEXT NOT NULL,revision INTEGER NOT NULL,path TEXT NOT NULL,hash TEXT NOT NULL,operation TEXT NOT NULL,content BLOB NOT NULL,state TEXT NOT NULL DEFAULT 'pending');
-            PRAGMA user_version=1; COMMIT;")?;
+            CREATE TABLE IF NOT EXISTS operations (operation_id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,state TEXT NOT NULL,result TEXT);
+            PRAGMA user_version=2; COMMIT;")?;
         let vault_id: String = db
             .query_row("SELECT id FROM identity", [], |r| r.get(0))
             .optional()?
@@ -281,15 +287,34 @@ impl Workspace {
     }
 
     pub fn read(&mut self, path: &str) -> Result<Document> {
-        self.scan()?;
+        let content = fs::read_to_string(self.resolve(path)?)?;
+        let digest = hash(content.as_bytes());
+        let previous = self.entry(path)?;
+        if previous
+            .as_ref()
+            .is_none_or(|entry| entry.hash != digest || entry.deleted)
+        {
+            let id = previous.map_or_else(|| Uuid::new_v4().to_string(), |entry| entry.file_id);
+            self.db.execute("INSERT INTO files VALUES (?1,?2,?3,1,0) ON CONFLICT(path) DO UPDATE SET hash=excluded.hash,revision=files.revision+1,deleted=0", params![id,path,digest])?;
+        }
         let entry = self
             .entry(path)?
             .ok_or_else(|| HostError::new("FILE_NOT_FOUND"))?;
-        let content = fs::read_to_string(self.resolve(path)?)?;
         if hash(content.as_bytes()) != entry.hash {
             return Err(HostError::new("REVISION_CONFLICT"));
         }
         Ok(Document { entry, content })
+    }
+
+    pub fn path_for_id(&self, file_id: &str) -> Result<String> {
+        self.db
+            .query_row(
+                "SELECT path FROM files WHERE id=?1 AND deleted=0",
+                [file_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| HostError::new("FILE_NOT_FOUND"))
     }
 
     pub fn write(
@@ -299,11 +324,72 @@ impl Workspace {
         content: &[u8],
         origin: &str,
     ) -> Result<Entry> {
+        self.write_operation(path, expected, content, origin, &Uuid::new_v4().to_string())
+    }
+
+    pub fn operation(&self, operation_id: &str) -> Result<Option<serde_json::Value>> {
+        let value: Option<(String, Option<String>)> = self
+            .db
+            .query_row(
+                "SELECT state,result FROM operations WHERE operation_id=?1",
+                [operation_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        value
+            .map(|(state, result)| {
+                let result: Option<Entry> = result
+                    .map(|value| {
+                        serde_json::from_str(&value).map_err(|_| HostError::new("DATABASE_ERROR"))
+                    })
+                    .transpose()?;
+                Ok(serde_json::json!({"operation_id":operation_id,"state":state,"result":result}))
+            })
+            .transpose()
+    }
+
+    pub fn write_operation(
+        &mut self,
+        path: &str,
+        expected: &str,
+        content: &[u8],
+        origin: &str,
+        operation_id: &str,
+    ) -> Result<Entry> {
+        if Uuid::parse_str(operation_id).is_err() {
+            return Err(HostError::new("OPERATION_ID_INVALID"));
+        }
         if content.len() > 100 * 1024 * 1024 {
             return Err(HostError::new("FILE_TOO_LARGE"));
         }
         if origin != "local" && origin != "remote" {
             return Err(HostError::new("INVALID_ORIGIN"));
+        }
+        let fingerprint = hash(
+            &serde_json::to_vec(&(path, expected, hash(content), origin))
+                .map_err(|_| HostError::new("INVALID_OPERATION"))?,
+        );
+        let previous: Option<String> = self
+            .db
+            .query_row(
+                "SELECT fingerprint FROM operations WHERE operation_id=?1",
+                [operation_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(previous) = previous {
+            if previous != fingerprint {
+                return Err(HostError::new("OPERATION_PAYLOAD_CONFLICT"));
+            }
+            self.recover()?;
+            let receipt = self
+                .operation(operation_id)?
+                .ok_or_else(|| HostError::new("DATABASE_ERROR"))?;
+            if receipt["state"] != "committed" {
+                return Err(HostError::new("RECOVERY_CONFLICT"));
+            }
+            return serde_json::from_value(receipt["result"].clone())
+                .map_err(|_| HostError::new("DATABASE_ERROR"));
         }
         let target = self.resolve(path)?;
         let current = if target.exists() {
@@ -317,12 +403,17 @@ impl Workspace {
         let file_id = self
             .entry(path)?
             .map_or_else(|| Uuid::new_v4().to_string(), |e| e.file_id);
-        let operation_id = Uuid::new_v4().to_string();
-        self.db.execute(
+        let tx = self.db.transaction()?;
+        tx.execute(
+            "INSERT INTO operations VALUES (?1,?2,'pending',NULL)",
+            params![operation_id, fingerprint],
+        )?;
+        tx.execute(
             "INSERT INTO journal VALUES (?1,?2,?3,?4,?5,?6,'pending')",
             params![operation_id, file_id, path, expected, content, origin],
         )?;
-        self.apply_journal(&operation_id, &file_id, path, expected, content, origin)?;
+        tx.commit()?;
+        self.apply_journal(operation_id, &file_id, path, expected, content, origin)?;
         self.entry(path)?
             .ok_or_else(|| HostError::new("FILE_NOT_FOUND"))
     }
@@ -344,10 +435,16 @@ impl Workspace {
             String::new()
         };
         if current != expected && current != digest {
-            self.db.execute(
+            let tx = self.db.transaction()?;
+            tx.execute(
                 "UPDATE journal SET state='conflict' WHERE operation_id=?1",
                 [operation_id],
             )?;
+            tx.execute(
+                "UPDATE operations SET state='conflict' WHERE operation_id=?1",
+                [operation_id],
+            )?;
+            tx.commit()?;
             return Err(HostError::new("RECOVERY_CONFLICT"));
         }
         if current != digest {
@@ -369,6 +466,25 @@ impl Workspace {
         if origin == "local" {
             tx.execute("INSERT OR IGNORE INTO outbox SELECT ?1,id,revision,path,hash,'put',?2,'pending' FROM files WHERE path=?3", params![operation_id,content,path])?;
         }
+        let entry = tx.query_row(
+            "SELECT id,path,hash,revision,deleted FROM files WHERE path=?1",
+            [path],
+            |row| {
+                Ok(Entry {
+                    file_id: row.get(0)?,
+                    path: row.get(1)?,
+                    hash: row.get(2)?,
+                    revision: row.get(3)?,
+                    deleted: row.get(4)?,
+                    is_folder: false,
+                })
+            },
+        )?;
+        let result = serde_json::to_string(&entry).map_err(|_| HostError::new("DATABASE_ERROR"))?;
+        tx.execute(
+            "UPDATE operations SET state='committed',result=?2 WHERE operation_id=?1",
+            params![operation_id, result],
+        )?;
         tx.execute("DELETE FROM journal WHERE operation_id=?1", [operation_id])?;
         tx.commit()?;
         Ok(())
@@ -451,6 +567,76 @@ impl Workspace {
         destination: &str,
         expected: &str,
     ) -> Result<String> {
+        self.prepare_file_op_with_id(
+            kind,
+            path,
+            destination,
+            expected,
+            &Uuid::new_v4().to_string(),
+        )
+    }
+
+    pub fn mutate_operation(
+        &mut self,
+        kind: &str,
+        path: &str,
+        destination: &str,
+        expected: &str,
+        operation_id: &str,
+    ) -> Result<serde_json::Value> {
+        let id = self.prepare_file_op_with_id(kind, path, destination, expected, operation_id)?;
+        if self
+            .operation(&id)?
+            .is_some_and(|v| v["state"] == "committed")
+        {
+            return self
+                .operation(&id)?
+                .ok_or_else(|| HostError::new("DATABASE_ERROR"));
+        }
+        self.apply_file_op(&id)?;
+        self.operation(&id)?
+            .ok_or_else(|| HostError::new("DATABASE_ERROR"))
+    }
+
+    fn prepare_file_op_with_id(
+        &mut self,
+        kind: &str,
+        path: &str,
+        destination: &str,
+        expected: &str,
+        id: &str,
+    ) -> Result<String> {
+        if !matches!(kind, "rename" | "delete") || Uuid::parse_str(id).is_err() {
+            return Err(HostError::new("INVALID_OPERATION"));
+        }
+        let fingerprint = hash(
+            &serde_json::to_vec(&(kind, path, destination, expected))
+                .map_err(|_| HostError::new("INVALID_OPERATION"))?,
+        );
+        let previous: Option<String> = self
+            .db
+            .query_row(
+                "SELECT fingerprint FROM operations WHERE operation_id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(previous) = previous {
+            if previous != fingerprint {
+                return Err(HostError::new("OPERATION_PAYLOAD_CONFLICT"));
+            }
+            self.recover()?;
+            if self
+                .operation(id)?
+                .is_some_and(|v| v["state"] == "conflict")
+            {
+                return Err(HostError::new("RECOVERY_CONFLICT"));
+            }
+            return Ok(id.to_owned());
+        }
+        if kind == "rename" && self.resolve(destination)?.exists() {
+            return Err(HostError::new("PATH_CONFLICT"));
+        }
         let source = self.resolve(path)?;
         if !source.is_file() {
             return Err(HostError::new("FILE_NOT_FOUND"));
@@ -461,12 +647,17 @@ impl Workspace {
         }
         self.entry(path)?
             .ok_or_else(|| HostError::new("FILE_NOT_FOUND"))?;
-        let id = Uuid::new_v4().to_string();
-        self.db.execute(
+        let tx = self.db.transaction()?;
+        tx.execute(
+            "INSERT INTO operations VALUES (?1,?2,'pending',NULL)",
+            params![id, fingerprint],
+        )?;
+        tx.execute(
             "INSERT INTO file_ops VALUES (?1,?2,?3,?4,?5,?6,'pending')",
             params![id, kind, path, destination, expected, content],
         )?;
-        Ok(id)
+        tx.commit()?;
+        Ok(id.to_owned())
     }
 
     fn apply_file_op(&mut self, id: &str) -> Result<()> {
@@ -499,8 +690,13 @@ impl Workspace {
         let target_conflict =
             target.exists() && (linked(&target)? || hash(&fs::read(&target)?) != expected);
         if source_conflict || target_conflict {
-            self.db
-                .execute("UPDATE file_ops SET state='conflict' WHERE id=?1", [id])?;
+            let tx = self.db.transaction()?;
+            tx.execute("UPDATE file_ops SET state='conflict' WHERE id=?1", [id])?;
+            tx.execute(
+                "UPDATE operations SET state='conflict' WHERE operation_id=?1",
+                [id],
+            )?;
+            tx.commit()?;
             return Err(HostError::new("RECOVERY_CONFLICT"));
         }
         // journal 保留完整内容，目标刷盘后才删除来源；两处崩溃均可幂等重放。
@@ -533,6 +729,20 @@ impl Workspace {
             tx.execute("INSERT INTO outbox SELECT ?1,id,revision,path,'','delete',X'','pending' FROM files WHERE id=?2", params![id,previous.file_id])?;
         }
         tx.execute("DELETE FROM file_ops WHERE id=?1", [id])?;
+        let mut result = previous;
+        result.revision += 1;
+        if kind == "rename" {
+            result.path = destination;
+        } else {
+            result.deleted = true;
+        }
+        tx.execute(
+            "UPDATE operations SET state='committed',result=?2 WHERE operation_id=?1",
+            params![
+                id,
+                serde_json::to_string(&result).map_err(|_| HostError::new("DATABASE_ERROR"))?
+            ],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -597,6 +807,68 @@ mod tests {
         let mut ws = Workspace::open(dir.path()).unwrap();
         assert_eq!(ws.read("中文/笔记.md").unwrap().content, "second");
         assert_eq!(ws.pending_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn operation_receipt_survives_reopen_and_replay_after_later_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let operation = Uuid::new_v4().to_string();
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        let first = ws
+            .write_operation("a.md", "", b"first", "local", &operation)
+            .unwrap();
+        ws.write("a.md", &first.hash, b"second", "local").unwrap();
+        drop(ws);
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        for _ in 0..100 {
+            let replay = ws
+                .write_operation("a.md", "", b"first", "local", &operation)
+                .unwrap();
+            assert_eq!(replay.revision, first.revision);
+            assert_eq!(replay.hash, first.hash);
+        }
+        assert_eq!(ws.read("a.md").unwrap().content, "second");
+        assert_eq!(ws.pending_count().unwrap(), 2);
+        assert_eq!(
+            ws.operation(&operation).unwrap().unwrap()["state"],
+            "committed"
+        );
+        assert_eq!(
+            ws.write_operation("a.md", "", b"changed-payload", "local", &operation)
+                .unwrap_err()
+                .code,
+            "OPERATION_PAYLOAD_CONFLICT"
+        );
+    }
+
+    #[test]
+    fn schema_upgrade_preserves_a_readable_previous_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        ws.write("a.md", "", b"old-data", "local").unwrap();
+        ws.db
+            .execute_batch("DROP TABLE operations; PRAGMA user_version=1;")
+            .unwrap();
+        drop(ws);
+        let ws = Workspace::open(dir.path()).unwrap();
+        assert_eq!(ws.pending_count().unwrap(), 1);
+        let backup = fs::read_dir(dir.path().join(".ainote"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .find(|e| e.file_name().to_string_lossy().starts_with("host-schema1-"))
+            .unwrap();
+        let old = Connection::open(backup.path()).unwrap();
+        assert_eq!(
+            old.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            old.query_row("SELECT COUNT(*) FROM outbox", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
     }
 
     #[test]
