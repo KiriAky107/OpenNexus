@@ -44,7 +44,7 @@ unicode-casefold = "0.2"
 serde-saphyr = { version = "1.2", default-features = false, features = ["deserialize"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_RemoteDesktop", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_RemoteDesktop", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader"] }
 
 [build-dependencies]
 tauri-build = { version = "2", optional = true , features = [] }
