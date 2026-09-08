@@ -28,6 +28,8 @@ pub enum Event {
 }
 struct State {
     stopped: AtomicBool,
+    #[cfg(test)]
+    writing: AtomicBool,
     error: Mutex<Option<String>>,
     job: Job,
 }
@@ -106,6 +108,8 @@ impl Pump {
     pub(crate) fn start(io: HostIo, job: Job) -> Result<Self> {
         let state = Arc::new(State {
             stopped: AtomicBool::new(false),
+            #[cfg(test)]
+            writing: AtomicBool::new(false),
             error: Mutex::new(None),
             job,
         });
@@ -130,7 +134,11 @@ impl Pump {
                     match writes.recv_timeout(Duration::from_millis(20)) {
                         Ok(frame) => {
                             state.check()?;
+                            #[cfg(test)]
+                            state.writing.store(true, Ordering::Release);
                             write_frame(&mut input, &frame)?;
+                            #[cfg(test)]
+                            state.writing.store(false, Ordering::Release);
                         }
                         Err(RecvTimeoutError::Timeout) => {}
                         Err(RecvTimeoutError::Disconnected) => return Ok(()),
@@ -201,7 +209,15 @@ impl Pump {
     }
     /// Nonblocking admission; at most one pending write plus one in progress.
     pub fn send(&self, frame: Vec<u8>) -> Result<()> {
+        self.send_wait(frame, Duration::ZERO)
+    }
+    /// Bounded admission for serial protocol notifications immediately followed
+    /// by a request; retries retain the same frame, without allocating copies.
+    pub(crate) fn send_wait(&self, mut frame: Vec<u8>, timeout: Duration) -> Result<()> {
         self.state.check()?;
+        if timeout > Duration::from_secs(1) {
+            return Err(HostError::new("EXTENSION_IO_TIMEOUT_INVALID"));
+        }
         if frame.is_empty()
             || frame.len() > MAX_FRAME_BYTES
             || frame.contains(&b'\n')
@@ -209,11 +225,25 @@ impl Pump {
         {
             return Err(HostError::new("EXTENSION_PIPE_INVALID_FRAME"));
         }
-        self.input
+        let sender = self
+            .input
             .as_ref()
-            .ok_or_else(|| HostError::new("EXTENSION_IO_INPUT_CLOSED"))?
-            .try_send(frame)
-            .map_err(|_| HostError::new("EXTENSION_IO_INPUT_BACKPRESSURE"))
+            .ok_or_else(|| HostError::new("EXTENSION_IO_INPUT_CLOSED"))?;
+        let started = Instant::now();
+        loop {
+            self.state.check()?;
+            match sender.try_send(frame) {
+                Ok(()) => return Ok(()),
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    return Err(HostError::new("EXTENSION_IO_INPUT_CLOSED"))
+                }
+                Err(mpsc::TrySendError::Full(value)) => frame = value,
+            }
+            if started.elapsed() >= timeout {
+                return Err(HostError::new("EXTENSION_IO_INPUT_BACKPRESSURE"));
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
     pub fn close_input(&mut self) {
         self.input.take();
@@ -318,7 +348,7 @@ mod tests {
                     );
                     pending != 0
                 });
-                if pending {
+                if pending && pump.state.writing.load(Ordering::Acquire) {
                     break;
                 }
                 assert!(

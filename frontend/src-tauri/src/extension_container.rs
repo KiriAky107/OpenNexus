@@ -620,6 +620,15 @@ mod tests {
     }
     #[test]
     fn real_container_cannot_reach_ipv4_or_ipv6_loopback_listeners() {
+        real_native_protocol_probes(false);
+    }
+    #[cfg(feature = "desktop")]
+    #[test]
+    #[ignore = "real MCP tools/call 60-second deadline acceptance; run explicitly"]
+    fn real_mcp_tool_deadline_terminates_hung_server_and_host_can_save() {
+        real_native_protocol_probes(true);
+    }
+    fn real_native_protocol_probes(_mcp_deadline: bool) {
         use std::{
             net::{TcpListener, UdpSocket},
             os::windows::fs::OpenOptionsExt,
@@ -855,6 +864,138 @@ mod tests {
                     workspace.read("fixture.md").unwrap().content,
                     "from host broker"
                 );
+            }
+            let mut mcp_modes = vec![
+                "mcp",
+                "mcp_wrong_id",
+                "mcp_cancel",
+                "mcp_remote_error",
+                "mcp_bad_version",
+            ];
+            if _mcp_deadline {
+                mcp_modes.push("mcp_deadline");
+            }
+            for mode in mcp_modes {
+                use std::sync::{
+                    atomic::{AtomicBool, Ordering},
+                    Arc,
+                };
+                let mut mcp = claims.clone();
+                mcp.arguments = vec![mode.into()];
+                mcp.expires_at_ms = 120_000;
+                let permit = authority.issue(&mcp, 1).unwrap();
+                let prepared = context
+                    .prepare(&authority, &permit, &mcp, &bound_entry, &broker, 2)
+                    .unwrap();
+                let (suspended, io) = prepared
+                    .create_suspended_with_stdio(&profile, &bound_entry)
+                    .unwrap();
+                let running = unsafe { suspended.resume().unwrap() };
+                let mut session = crate::extension_mcp::Session::new(&running, io).unwrap();
+                let cancel = Arc::new(AtomicBool::new(false));
+                assert_eq!(
+                    session
+                        .call_tool("echo", serde_json::json!({}), &cancel)
+                        .unwrap_err()
+                        .code,
+                    "EXTENSION_MCP_NOT_INITIALIZED"
+                );
+                if mode == "mcp_bad_version" {
+                    assert_eq!(
+                        session.initialize(&cancel).unwrap_err().code,
+                        "EXTENSION_MCP_INITIALIZATION_INVALID"
+                    );
+                } else {
+                    assert_eq!(
+                        session.initialize(&cancel).unwrap(),
+                        crate::extension_mcp::PROTOCOL_VERSION
+                    );
+                    assert_eq!(
+                        session.list_tools(None, &cancel).unwrap()["tools"][0]["name"],
+                        "echo"
+                    );
+                    let cancellation = if mode == "mcp_cancel" {
+                        let flag = Arc::clone(&cancel);
+                        Some(std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            flag.store(true, Ordering::Release);
+                        }))
+                    } else {
+                        None
+                    };
+                    let tool_started = std::time::Instant::now();
+                    let result = session.call_tool("echo", serde_json::json!({}), &cancel);
+                    match mode {
+                        "mcp_deadline" => {
+                            assert_eq!(
+                                result.unwrap_err().code,
+                                "EXTENSION_TOOL_DEADLINE_EXCEEDED"
+                            );
+                            let elapsed = tool_started.elapsed();
+                            assert!(
+                                elapsed >= std::time::Duration::from_secs(59)
+                                    && elapsed < std::time::Duration::from_secs(65)
+                            );
+                            eprintln!("real MCP tools/call deadline: {elapsed:?}");
+                            let vault = tempfile::tempdir().unwrap();
+                            let mut workspace =
+                                crate::workspace::Workspace::open(vault.path()).unwrap();
+                            workspace
+                                .write(
+                                    "after-timeout.md",
+                                    "",
+                                    b"Host save after actual MCP deadline",
+                                    "local",
+                                )
+                                .unwrap();
+                            drop(workspace);
+                            let mut workspace =
+                                crate::workspace::Workspace::open(vault.path()).unwrap();
+                            assert_eq!(
+                                workspace.read("after-timeout.md").unwrap().content,
+                                "Host save after actual MCP deadline"
+                            );
+                        }
+                        "mcp_wrong_id" => assert_eq!(
+                            result.unwrap_err().code,
+                            "EXTENSION_MCP_RESPONSE_ID_MISMATCH"
+                        ),
+                        "mcp_cancel" => {
+                            assert_eq!(result.unwrap_err().code, "EXTENSION_MCP_CANCELLED");
+                            cancellation.unwrap().join().unwrap();
+                        }
+                        "mcp_remote_error" => {
+                            assert_eq!(result.unwrap_err().code, "EXTENSION_MCP_REMOTE_ERROR");
+                            assert_eq!(
+                                session
+                                    .call_tool("echo", serde_json::json!({}), &cancel)
+                                    .unwrap()["content"][0]["text"],
+                                "native MCP success"
+                            );
+                        }
+                        _ => {
+                            assert_eq!(result.unwrap()["content"][0]["text"], "native MCP success");
+                            assert!(session.take_tools_changed());
+                            assert!(!session.take_tools_changed());
+                        }
+                    }
+                    if mode == "mcp_cancel" || mode == "mcp_wrong_id" {
+                        assert_eq!(
+                            session.list_tools(None, &cancel).unwrap_err().code,
+                            "EXTENSION_MCP_SESSION_FAILED"
+                        );
+                    }
+                }
+                session.shutdown().unwrap();
+                assert!(running
+                    .wait(std::time::Duration::from_secs(5))
+                    .unwrap()
+                    .is_some());
+                let started = std::time::Instant::now();
+                while running.active_test_processes().unwrap() != 0 {
+                    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
             }
             for mode in ["wait_tree", "stderr_flood", "stdout_flood"] {
                 let mut io_claims = claims.clone();

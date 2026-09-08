@@ -84,3 +84,6 @@ pub mod extension_stdio;
 
 #[cfg(all(windows, feature = "desktop"))]
 pub mod extension_io;
+
+#[cfg(all(windows, feature = "desktop"))]
+pub mod extension_mcp;
