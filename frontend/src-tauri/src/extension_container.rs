@@ -304,6 +304,20 @@ mod tests {
     // Only tests use cmd.exe, with fixed commands and controlled temporary paths.
     // A production extension launcher must use a verified entry, never a shell.
     fn checked_process(profile: &Profile, command: Option<&str>) -> Option<u32> {
+        let executable = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32/cmd.exe");
+        checked_executable(
+            profile,
+            &executable,
+            command.map(|c| format!("cmd.exe /d /c {c}")),
+        )
+    }
+
+    fn checked_executable(
+        profile: &Profile,
+        executable: &std::path::Path,
+        command: Option<String>,
+    ) -> Option<u32> {
         let mut attributes = Attributes::new();
         let caps = SECURITY_CAPABILITIES {
             AppContainerSid: profile.sid(),
@@ -328,8 +342,6 @@ mod tests {
         let mut startup = STARTUPINFOEXW::default();
         startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
         startup.lpAttributeList = attributes.buffer.as_mut_ptr().cast();
-        let executable = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
-            .join("System32/cmd.exe");
         let executable: Vec<u16> = executable
             .as_os_str()
             .encode_wide()
@@ -346,12 +358,8 @@ mod tests {
         .encode_utf16()
         .collect();
         let mut command_line: Vec<u16> = command
-            .map(|command| {
-                format!("cmd.exe /d /c {command}")
-                    .encode_utf16()
-                    .chain(Some(0))
-                    .collect()
-            })
+            .as_ref()
+            .map(|command| command.encode_utf16().chain(Some(0)).collect())
             .unwrap_or_default();
         let mut info = PROCESS_INFORMATION::default();
         assert_ne!(
@@ -579,6 +587,107 @@ mod tests {
         );
         assert_eq!(std::fs::read(&alias).unwrap(), b"unchanged");
         drop(handle);
+        profile.remove().unwrap();
+    }
+    #[test]
+    fn real_container_cannot_reach_ipv4_or_ipv6_loopback_listeners() {
+        use std::{
+            net::{TcpListener, UdpSocket},
+            os::windows::fs::OpenOptionsExt,
+        };
+        use windows_sys::Win32::Storage::FileSystem::*;
+        let profile = Profile::create().unwrap();
+        let package = tempfile::tempdir().unwrap();
+        let executable = package.path().join("network-probe.exe");
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/sandbox_network_probe.rs");
+        let compile = std::process::Command::new("rustc")
+            .arg("--edition=2021")
+            .arg(&fixture)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            compile.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+        let open = |path: &std::path::Path| {
+            std::fs::OpenOptions::new()
+                .access_mode(READ_CONTROL | WRITE_DAC)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(path)
+                .unwrap()
+        };
+        let root = open(package.path());
+        let entry = open(&executable);
+        profile.grant_package_read_execute(&root).unwrap();
+        profile.grant_package_read_execute(&entry).unwrap();
+        for ip in ["127.0.0.1:0", "[::1]:0"] {
+            let tcp = TcpListener::bind(ip).unwrap();
+            let udp = UdpSocket::bind(ip).unwrap();
+            for (mode, address) in [
+                ("tcp", tcp.local_addr().unwrap()),
+                ("udp", udp.local_addr().unwrap()),
+            ] {
+                let address = address.to_string();
+                // The exact executable and target work outside containment.
+                assert!(std::process::Command::new(&executable)
+                    .args([mode, &address])
+                    .status()
+                    .unwrap()
+                    .success());
+                if mode == "tcp" {
+                    tcp.set_nonblocking(true).unwrap();
+                    tcp.accept().unwrap();
+                } else {
+                    udp.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                        .unwrap();
+                    let mut bytes = [0u8; 8];
+                    assert_eq!(udp.recv(&mut bytes).unwrap(), 5);
+                    assert_eq!(&bytes[..5], b"probe");
+                    udp.set_nonblocking(true).unwrap();
+                }
+                let command = format!("\"{}\" {mode} {address}", executable.display());
+                // Loopback isolation can silently drop packets. TCP must
+                // explicitly report denial or timeout; UDP send may succeed,
+                // but no datagram may reach the controlled listener below.
+                let exit = checked_executable(&profile, &executable, Some(command));
+                eprintln!("container network probe {mode} {address}: {exit:?}");
+                if mode == "tcp" {
+                    assert!(matches!(exit, Some(77 | 80)), "{mode} {address}: {exit:?}");
+                } else {
+                    assert!(matches!(exit, Some(0 | 77)), "{mode} {address}: {exit:?}");
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                if mode == "tcp" {
+                    assert_eq!(
+                        tcp.accept().unwrap_err().kind(),
+                        std::io::ErrorKind::WouldBlock
+                    );
+                } else {
+                    assert_eq!(
+                        udp.recv(&mut [0u8; 8]).unwrap_err().kind(),
+                        std::io::ErrorKind::WouldBlock
+                    );
+                }
+                assert!(std::process::Command::new(&executable)
+                    .args([mode, &address])
+                    .status()
+                    .unwrap()
+                    .success());
+                if mode == "tcp" {
+                    tcp.accept().unwrap();
+                } else {
+                    udp.set_nonblocking(false).unwrap();
+                    assert_eq!(udp.recv(&mut [0u8; 8]).unwrap(), 5);
+                }
+            }
+        }
+        drop(entry);
+        drop(root);
         profile.remove().unwrap();
     }
 }
