@@ -22,3 +22,5 @@ pub mod sync_resolution;
 pub mod sync_state;
 pub mod workspace;
 pub mod workspace_broker;
+
+pub mod sync_retry;

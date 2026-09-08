@@ -13,7 +13,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Mutex,
     },
-    time::{Duration, Instant},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::State;
 use zeroize::Zeroizing;
@@ -26,10 +26,6 @@ pub struct Runtime {
 #[derive(Default)]
 struct Progress {
     running: bool,
-    error: Option<String>,
-    failures: u32,
-    retry: Option<Instant>,
-    halted: bool,
 }
 impl Runtime {
     pub fn cancel(&self) {
@@ -63,6 +59,21 @@ pub async fn sync_login(host: State<'_, Host>, request: Login) -> Result<Connect
     )
     .await
     .map_err(|e| e.code)?;
+    with_workspace(&host, |ws| {
+        if let Some(binding) = ws.sync_binding()? {
+            if binding.endpoint == endpoint && binding.account == request.account {
+                ws.sync_retry_clear(&binding.id)?;
+            }
+        }
+        Ok(())
+    })
+    .or_else(|error| {
+        if error == "VAULT_NOT_OPEN" {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    })?;
     host.sync.status.lock().map_err(|_| "HOST_BUSY")?.clear();
     Ok(Connection {
         endpoint,
@@ -223,7 +234,13 @@ pub fn sync_unbind(host: State<'_, Host>, binding_id: String) -> Result<(), Stri
 #[tauri::command]
 pub fn sync_pause(host: State<'_, Host>, binding_id: String, paused: bool) -> Result<(), String> {
     host.sync.cancel();
-    with_workspace(&host, |ws| ws.sync_pause(&binding_id, paused))?;
+    with_workspace(&host, |ws| {
+        ws.sync_pause(&binding_id, paused)?;
+        if !paused {
+            ws.sync_retry_clear(&binding_id)?;
+        }
+        Ok(())
+    })?;
     host.sync
         .status
         .lock()
@@ -247,13 +264,18 @@ pub fn sync_status(host: State<'_, Host>) -> Result<Value, String> {
             .unwrap_or_default();
         Ok((
             ws.vault_id.clone(),
-            binding,
+            binding.clone(),
             paused,
             conflicts,
             ws.pending_count()?,
+            binding
+                .as_ref()
+                .map(|b| ws.sync_retry(&b.id))
+                .transpose()?
+                .unwrap_or_default(),
         ))
     })?;
-    let (vault_id, binding, paused, conflicts, pending) = snapshot;
+    let (vault_id, binding, paused, conflicts, pending, retry) = snapshot;
     let credential_state = if let Some(b) = &binding {
         sync_auth::available(&host.credentials, &b.endpoint, &b.account)
             .map(|exists| {
@@ -271,7 +293,7 @@ pub fn sync_status(host: State<'_, Host>) -> Result<Value, String> {
     let statuses = host.sync.status.lock().map_err(|_| "HOST_BUSY")?;
     let status = binding.as_ref().and_then(|b| statuses.get(&b.id));
     Ok(
-        json!({"vault_id":vault_id,"binding":binding,"paused":paused,"pending":pending,"conflicts":conflicts,"credential_state":credential_state,"running":status.is_some_and(|s|s.running),"error":status.and_then(|s|s.error.as_ref()),"retry_in":status.and_then(|s|s.retry).map(|time|time.saturating_duration_since(Instant::now()).as_secs())}),
+        json!({"vault_id":vault_id,"binding":binding,"paused":paused,"pending":pending,"conflicts":conflicts,"credential_state":credential_state,"running":status.is_some_and(|s|s.running),"error":retry.error,"retry_in":retry.retry_at.map(|_| retry.remaining(now())),"failures":retry.failures,"halted":retry.halted}),
     )
 }
 #[tauri::command]
@@ -315,49 +337,54 @@ pub async fn run(host: &Host, manual: bool) -> Result<(), String> {
     if with_workspace(host, |ws| ws.sync_paused(&binding.id))? {
         return Err("SYNC_PAUSED".into());
     }
-    {
-        let mut statuses = host.sync.status.lock().map_err(|_| "HOST_BUSY")?;
-        let state = statuses.entry(binding.id.clone()).or_default();
-        if !manual && (state.halted || state.retry.is_some_and(|v| v > Instant::now())) {
-            return Ok(());
-        }
-        state.running = true;
-        state.error = None;
+    let retry = with_workspace(host, |ws| ws.sync_retry(&binding.id))?;
+    if !manual && (retry.halted || retry.remaining(now()) > 0) {
+        return Ok(());
     }
+    host.sync
+        .status
+        .lock()
+        .map_err(|_| "HOST_BUSY")?
+        .entry(binding.id.clone())
+        .or_default()
+        .running = true;
     let result = cycle(host, &binding).await;
-    let mut statuses = host.sync.status.lock().map_err(|_| "HOST_BUSY")?;
-    let state = statuses.entry(binding.id.clone()).or_default();
-    state.running = false;
+    host.sync
+        .status
+        .lock()
+        .map_err(|_| "HOST_BUSY")?
+        .entry(binding.id.clone())
+        .or_default()
+        .running = false;
     match result {
-        Ok(()) => {
-            *state = Progress::default();
-            Ok(())
-        }
+        Ok(()) => with_workspace(host, |ws| ws.sync_retry_clear(&binding.id)),
         Err(error) => {
-            state.failures = if error.code == "CREDENTIALS_LOCKED" {
-                0
-            } else {
-                state.failures.saturating_add(1)
-            };
-            state.error = Some(error.code.clone());
-            state.halted = matches!(error.status, 401 | 403 | 413 | 426 | 507)
-                || matches!(
-                    error.code.as_str(),
-                    "PROTOCOL_INCOMPATIBLE" | "SYNC_LOGIN_REQUIRED"
-                );
-            state.retry = Some(
-                Instant::now()
-                    + Duration::from_secs(
-                        error
-                            .retry_after
-                            .unwrap_or(2u64.saturating_pow(state.failures.min(8)))
-                            .clamp(1, 3600),
-                    ),
-            );
+            if !matches!(
+                error.code.as_str(),
+                "SYNC_CANCELLED" | "SYNC_BINDING_CHANGED" | "VAULT_CHANGED"
+            ) {
+                with_workspace(host, |ws| {
+                    ws.sync_retry_fail(
+                        &binding.id,
+                        &error.code,
+                        error.status,
+                        error.retry_after,
+                        now(),
+                    )
+                })?;
+            }
             Err(error.code)
         }
     }
 }
+fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .min(i64::MAX as u64) as i64
+}
+
 async fn cycle(host: &Host, binding: &Binding) -> Result<(), SyncError> {
     let epoch = host.sync.epoch.load(Ordering::SeqCst);
     let work = async {
