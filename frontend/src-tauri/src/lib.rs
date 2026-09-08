@@ -27,3 +27,6 @@ pub mod sync_retry;
 
 #[cfg(feature = "desktop")]
 pub mod extension_package;
+
+#[cfg(feature = "desktop")]
+pub mod extension_manifest;
