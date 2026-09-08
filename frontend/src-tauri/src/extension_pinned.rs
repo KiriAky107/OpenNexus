@@ -18,11 +18,18 @@ pub struct PinnedPackage {
 /// The package borrow and all ancestor handles must outlive the process using
 /// this path. Only files present in the verified package can produce this guard.
 pub struct BoundEntry<'a> {
+    name: String,
     path: std::path::PathBuf,
     _ancestors: Vec<File>,
     _package: &'a PinnedPackage,
 }
 impl BoundEntry<'_> {
+    pub fn relative_name(&self) -> &str {
+        &self.name
+    }
+    pub fn tree_sha256(&self) -> &str {
+        self._package.tree_sha256()
+    }
     pub fn path(&self) -> &std::path::Path {
         &self.path
     }
@@ -228,6 +235,7 @@ impl PinnedPackage {
             return Err(bad());
         }
         Ok(BoundEntry {
+            name: name.to_owned(),
             path: current,
             _ancestors: handles,
             _package: self,
