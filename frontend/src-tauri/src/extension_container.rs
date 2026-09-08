@@ -681,15 +681,20 @@ mod tests {
     }
     #[test]
     fn real_container_cannot_reach_ipv4_or_ipv6_loopback_listeners() {
-        real_native_protocol_probes(false);
+        real_native_protocol_probes(false, false);
     }
     #[cfg(feature = "desktop")]
     #[test]
     #[ignore = "real MCP tools/call 60-second deadline acceptance; run explicitly"]
     fn real_mcp_tool_deadline_terminates_hung_server_and_host_can_save() {
-        real_native_protocol_probes(true);
+        real_native_protocol_probes(true, false);
     }
-    fn real_native_protocol_probes(_mcp_deadline: bool) {
+    #[test]
+    #[ignore = "real AppContainer MCP descendant CPU pressure; run explicitly"]
+    fn real_mcp_cpu_pressure_reports_resource_error_and_reaps_tree() {
+        real_native_protocol_probes(false, true);
+    }
+    fn real_native_protocol_probes(_mcp_deadline: bool, cpu: bool) {
         use std::{
             net::{TcpListener, UdpSocket},
             os::windows::fs::OpenOptionsExt,
@@ -966,6 +971,9 @@ mod tests {
             if _mcp_deadline {
                 mcp_modes.push("mcp_deadline");
             }
+            if cpu {
+                mcp_modes.push("mcp_cpu");
+            }
             for mode in mcp_modes {
                 use std::sync::{
                     atomic::{AtomicBool, Ordering},
@@ -1083,6 +1091,40 @@ mod tests {
                                 "EXTENSION_MCP_CATALOG_REQUIRED"
                             );
                             assert!(session.take_tools_changed());
+                        }
+                        "mcp_cpu" => {
+                            assert_eq!(result.unwrap_err().code, "EXTENSION_RESOURCE_CPU_EXCEEDED");
+                            let elapsed = tool_started.elapsed();
+                            assert!(elapsed < std::time::Duration::from_secs(20));
+                            eprintln!("AppContainer MCP descendant CPU error: {elapsed:?}");
+                            assert_eq!(
+                                session.refresh_tools(&cancel).err().unwrap().code,
+                                "EXTENSION_MCP_SESSION_FAILED"
+                            );
+                            assert_eq!(
+                                running.check_authorization().unwrap_err().code,
+                                "EXTENSION_RESOURCE_CPU_EXCEEDED"
+                            );
+                            let vault = tempfile::tempdir().unwrap();
+                            let mut workspace =
+                                crate::workspace::Workspace::open(vault.path()).unwrap();
+                            workspace
+                                .write(
+                                    "cpu-recovery.md",
+                                    "",
+                                    b"Host saved after descendant CPU termination",
+                                    "local",
+                                )
+                                .unwrap();
+                            drop(workspace);
+                            assert_eq!(
+                                crate::workspace::Workspace::open(vault.path())
+                                    .unwrap()
+                                    .read("cpu-recovery.md")
+                                    .unwrap()
+                                    .content,
+                                "Host saved after descendant CPU termination"
+                            );
                         }
                         "mcp_deadline" => {
                             assert_eq!(

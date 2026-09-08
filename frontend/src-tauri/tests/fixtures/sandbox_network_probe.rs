@@ -3,6 +3,22 @@ use std::net::{SocketAddr, TcpStream, UdpSocket};
 use std::time::Duration;
 fn main() {
     let args: Vec<_> = std::env::args().collect();
+    if args.get(1).is_some_and(|s| s == "cpu_burn") {
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    let until = std::time::Instant::now() + Duration::from_secs(120);
+                    let mut value = 1u64;
+                    while std::time::Instant::now() < until {
+                        for _ in 0..10000 {
+                            value = std::hint::black_box(value.wrapping_mul(6364136223846793005).wrapping_add(1));
+                        }
+                    }
+                });
+            }
+        });
+        return;
+    }
     if args.get(1).is_some_and(|s| s.starts_with("mcp")) {
         use std::io::{BufRead, Write};
         fn read(reader: &mut impl BufRead) -> String { let mut line = String::new(); reader.read_line(&mut line).unwrap(); line }
@@ -25,8 +41,8 @@ fn main() {
         }
         let mut request = read(&mut input);
         assert!(request.contains("tools/call"));
-        if args[1] == "mcp_cancel" || args[1] == "mcp_deadline" {
-            let _child = std::process::Command::new(std::env::current_exe().unwrap()).arg("wait").spawn().unwrap();
+        if args[1] == "mcp_cancel" || args[1] == "mcp_deadline" || args[1] == "mcp_cpu" {
+            let _child = std::process::Command::new(std::env::current_exe().unwrap()).arg(if args[1] == "mcp_cpu" { "cpu_burn" } else { "wait" }).spawn().unwrap();
             std::thread::sleep(Duration::from_secs(120));
             return;
         }

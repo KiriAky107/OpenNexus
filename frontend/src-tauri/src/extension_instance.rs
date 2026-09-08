@@ -511,6 +511,14 @@ mod tests {
     }
     #[test]
     fn native_worker_routes_reviews_cancels_calls_and_reaps_generations() {
+        native_worker_lifecycle(false);
+    }
+    #[test]
+    #[ignore = "real background MCP descendant CPU exhaustion and restart; run explicitly"]
+    fn native_cpu_failure_is_reported_reaped_and_replacement_can_start() {
+        native_worker_lifecycle(true);
+    }
+    fn native_worker_lifecycle(cpu: bool) {
         let temp = tempfile::tempdir().unwrap();
         let package = temp.path().join("package");
         std::fs::create_dir(&package).unwrap();
@@ -724,6 +732,87 @@ mod tests {
                 .unwrap(),
             0
         );
+        if cpu {
+            let exhausted = unsafe { registry.start(make("mcp_cpu")) }.unwrap();
+            wait_for(|| exhausted.snapshot().status != Status::Starting);
+            assert_eq!(exhausted.snapshot().status, Status::Ready);
+            let old_identity =
+                serde_json::to_value(exhausted.snapshot().identity.unwrap()).unwrap();
+            let review = exhausted
+                .review("echo".into(), json!({}))
+                .unwrap()
+                .wait(Duration::from_secs(5))
+                .unwrap();
+            let started = Instant::now();
+            assert_eq!(
+                exhausted
+                    .invoke_confirmed(review.review_id)
+                    .unwrap()
+                    .wait(Duration::from_secs(20))
+                    .unwrap_err()
+                    .code,
+                "EXTENSION_RESOURCE_CPU_EXCEEDED"
+            );
+            eprintln!("background CPU call error after {:?}", started.elapsed());
+            wait_for(|| {
+                registry.reap();
+                registry.entries.is_empty()
+            });
+            assert_eq!(exhausted.snapshot().status, Status::Failed);
+            assert_eq!(
+                exhausted.snapshot().error.as_deref(),
+                Some("EXTENSION_RESOURCE_CPU_EXCEEDED")
+            );
+            assert_eq!(exhausted.snapshot().tool_count, 0);
+            assert!(exhausted.review("echo".into(), json!({})).is_err());
+            assert_eq!(
+                exhausted
+                    .control
+                    .job
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .active_processes()
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                crate::extension_container::test_acl_entries(&acl_file),
+                file_acl
+            );
+            assert_eq!(
+                crate::extension_container::test_acl_entries(&acl_root),
+                root_acl
+            );
+            let replacement = unsafe { registry.start(make("mcp")) }.unwrap();
+            wait_for(|| replacement.snapshot().status != Status::Starting);
+            assert_eq!(replacement.snapshot().status, Status::Ready);
+            assert_ne!(
+                serde_json::to_value(replacement.snapshot().identity.unwrap()).unwrap()
+                    ["instance_id"],
+                old_identity["instance_id"]
+            );
+            let review = replacement
+                .review("echo".into(), json!({}))
+                .unwrap()
+                .wait(Duration::from_secs(5))
+                .unwrap();
+            assert_eq!(
+                replacement
+                    .invoke_confirmed(review.review_id)
+                    .unwrap()
+                    .wait(Duration::from_secs(5))
+                    .unwrap()["content"][0]["text"],
+                "native MCP success"
+            );
+            replacement.stop();
+            wait_for(|| {
+                registry.reap();
+                registry.entries.is_empty()
+            });
+            assert_eq!(replacement.snapshot().status, Status::Stopped);
+        }
         let called = Arc::new(AtomicBool::new(false));
         let marker = Arc::clone(&called);
         let mut denied = make("mcp");
