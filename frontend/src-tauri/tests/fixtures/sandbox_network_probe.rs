@@ -41,6 +41,24 @@ fn main() {
         }
         let mut request = read(&mut input);
         assert!(request.contains("tools/call"));
+        if args[1] == "mcp_memory" {
+            let mut excessive = Vec::<u8>::new();
+            let _ = excessive.try_reserve_exact(600 * 1024 * 1024);
+            std::thread::sleep(Duration::from_secs(120));
+            return;
+        }
+        if args[1] == "mcp_processes" {
+            let mut children = Vec::new();
+            for _ in 0..24 {
+                match std::process::Command::new(std::env::current_exe().unwrap()).arg("wait").spawn() {
+                    Ok(child) => children.push(child),
+                    Err(_) => break,
+                }
+            }
+            std::thread::sleep(Duration::from_secs(120));
+            for mut child in children { let _ = child.kill(); let _ = child.wait(); }
+            return;
+        }
         if args[1] == "mcp_cancel" || args[1] == "mcp_deadline" || args[1] == "mcp_cpu" {
             let _child = std::process::Command::new(std::env::current_exe().unwrap()).arg(if args[1] == "mcp_cpu" { "cpu_burn" } else { "wait" }).spawn().unwrap();
             std::thread::sleep(Duration::from_secs(120));

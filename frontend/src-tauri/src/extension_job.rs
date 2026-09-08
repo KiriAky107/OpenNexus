@@ -12,13 +12,13 @@ use windows_sys::Win32::System::{
 pub struct Job {
     handle: OwnedHandle,
     state: std::sync::Arc<std::sync::atomic::AtomicU8>,
-    _cpu: Option<CpuMonitor>,
+    _monitor: Option<ResourceMonitor>,
 }
 impl Job {
     pub(crate) fn clone_for_deadline(&self) -> Result<Self> {
         Ok(Self {
             state: std::sync::Arc::clone(&self.state),
-            _cpu: None,
+            _monitor: None,
             handle: self
                 .handle
                 .try_clone()
@@ -36,7 +36,7 @@ impl Job {
         let mut job = Self {
             handle: unsafe { OwnedHandle::from_raw_handle(raw) },
             state: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
-            _cpu: None,
+            _monitor: None,
         };
         let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
             BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
@@ -63,7 +63,7 @@ impl Job {
             },
         };
         job.set(JobObjectCpuRateControlInformation, &cpu)?;
-        job._cpu = Some(CpuMonitor::arm(&job)?);
+        job._monitor = Some(ResourceMonitor::arm(&job)?);
         Ok(job)
     }
     pub fn check_resources(&self) -> Result<()> {
@@ -72,6 +72,8 @@ impl Job {
             0 => Ok(()),
             1 => Err(HostError::new("EXTENSION_RESOURCE_CPU_EXCEEDED")),
             3 => Err(HostError::new("EXTENSION_RESOURCE_TERMINATE_FAILED")),
+            4 => Err(HostError::new("EXTENSION_RESOURCE_MEMORY_EXCEEDED")),
+            5 => Err(HostError::new("EXTENSION_RESOURCE_PROCESSES_EXCEEDED")),
             _ => Err(HostError::new("EXTENSION_RESOURCE_MONITOR_FAILED")),
         }
     }
@@ -130,12 +132,14 @@ impl Job {
 /// The Windows notification uses a ten-second window and ToleranceHigh (60%
 /// over budget). This is not a measurement of ten uninterrupted busy seconds.
 /// Only the original Job owns this monitor; observation/deadline clones do not.
+const JOB_MEMORY_LIMIT: u32 = 10; // JOB_OBJECT_MSG_JOB_MEMORY_LIMIT
+const JOB_PROCESS_LIMIT: u32 = 3; // JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT
 const JOB_NOTIFICATION_LIMIT: u32 = 11; // JOB_OBJECT_MSG_NOTIFICATION_LIMIT (Windows SDK)
-struct CpuMonitor {
+struct ResourceMonitor {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
 }
-impl CpuMonitor {
+impl ResourceMonitor {
     fn arm(job: &Job) -> Result<Self> {
         use std::sync::{
             atomic::{AtomicBool, Ordering},
@@ -172,7 +176,7 @@ impl CpuMonitor {
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
         let worker = std::thread::Builder::new()
-            .name("extension-cpu".into())
+            .name("extension-resources".into())
             .spawn(move || {
                 // All exits, including a caught panic or completion-port failure,
                 // terminate the tree while this worker still owns a Job handle.
@@ -198,6 +202,14 @@ impl CpuMonitor {
                         }
                         if key != 1 {
                             return 2;
+                        }
+                        // These hard-limit notifications are best effort on Windows;
+                        // the kernel still enforces the configured allocation caps.
+                        if code == JOB_MEMORY_LIMIT {
+                            return 4;
+                        }
+                        if code == JOB_PROCESS_LIMIT {
+                            return 5;
                         }
                         if code != JOB_NOTIFICATION_LIMIT {
                             continue;
@@ -234,7 +246,7 @@ impl CpuMonitor {
         })
     }
 }
-impl Drop for CpuMonitor {
+impl Drop for ResourceMonitor {
     fn drop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::Release);
         if let Some(worker) = self.worker.take() {
@@ -449,16 +461,48 @@ mod tests {
             job.assign_suspended(child.process.as_handle()).unwrap();
             assert_ne!(ResumeThread(child.thread.as_raw_handle()), u32::MAX);
         }
-        assert_eq!(
-            unsafe { WaitForSingleObject(child.process.as_raw_handle(), 10000) },
-            WAIT_OBJECT_0
-        );
-        let mut code = 1;
-        assert_ne!(
-            unsafe { GetExitCodeProcess(child.process.as_raw_handle(), &mut code) },
-            0
-        );
-        assert_eq!(code, 0);
+        assert_resource_cleanup(&job, "EXTENSION_RESOURCE_MEMORY_EXCEEDED");
+    }
+    fn assert_resource_cleanup(job: &Job, expected: &str) {
+        let started = std::time::Instant::now();
+        while job.check_resources().is_ok() && started.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(job.check_resources().unwrap_err().code, expected);
+        while job.active_processes().unwrap() != 0 && started.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(job.active_processes().unwrap(), 0);
+    }
+    #[test]
+    #[ignore = "helper attempts to exceed production child process budget"]
+    fn worker_processes() {
+        let mut children = Vec::new();
+        for _ in 0..24 {
+            match std::process::Command::new(std::env::current_exe().unwrap())
+                .creation_flags(CREATE_NO_WINDOW)
+                .args(["--ignored", "--exact", "extension_job::tests::worker_wait"])
+                .spawn()
+            {
+                Ok(child) => children.push(child),
+                Err(_) => break,
+            }
+        }
+        std::thread::sleep(Duration::from_secs(30));
+        for mut child in children {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    #[test]
+    fn descendant_process_exhaustion_terminates_production_job() {
+        let job = Job::new().unwrap();
+        let child = worker_named("worker_processes");
+        unsafe {
+            job.assign_suspended(child.process.as_handle()).unwrap();
+            assert_ne!(ResumeThread(child.thread.as_raw_handle()), u32::MAX);
+        }
+        assert_resource_cleanup(&job, "EXTENSION_RESOURCE_PROCESSES_EXCEEDED");
     }
     #[test]
     fn managed_descendants_terminate_with_their_job() {
@@ -494,18 +538,10 @@ mod tests {
         assert_eq!(job.active_processes().unwrap(), 1);
         let second = worker();
         assert!(unsafe { job.assign_suspended(second.process.as_handle()) }.is_err());
-        // The second process has never been resumed, even after assignment failure.
+        // Both processes were still suspended. The attempted limit violation
+        // now revokes the entire first job, rather than leaving it runnable.
         drop(second);
-        assert_ne!(
-            unsafe { ResumeThread(first.thread.as_raw_handle()) },
-            u32::MAX
-        );
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while job.active_processes().unwrap() != 1 && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert_eq!(job.active_processes().unwrap(), 1);
-        drop(job);
+        assert_resource_cleanup(&job, "EXTENSION_RESOURCE_PROCESSES_EXCEEDED");
         assert_eq!(
             unsafe { WaitForSingleObject(first.process.as_raw_handle(), 5000) },
             WAIT_OBJECT_0

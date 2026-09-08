@@ -514,11 +514,11 @@ mod tests {
         native_worker_lifecycle(false);
     }
     #[test]
-    #[ignore = "real background MCP descendant CPU exhaustion and restart; run explicitly"]
-    fn native_cpu_failure_is_reported_reaped_and_replacement_can_start() {
+    #[ignore = "real background MCP CPU/memory/process exhaustion and restart; run explicitly"]
+    fn native_resource_failures_are_reaped_and_replacements_can_start() {
         native_worker_lifecycle(true);
     }
-    fn native_worker_lifecycle(cpu: bool) {
+    fn native_worker_lifecycle(resources: bool) {
         let temp = tempfile::tempdir().unwrap();
         let package = temp.path().join("package");
         std::fs::create_dir(&package).unwrap();
@@ -732,8 +732,16 @@ mod tests {
                 .unwrap(),
             0
         );
-        if cpu {
-            let exhausted = unsafe { registry.start(make("mcp_cpu")) }.unwrap();
+        for (mode, expected) in if resources {
+            vec![
+                ("mcp_cpu", "EXTENSION_RESOURCE_CPU_EXCEEDED"),
+                ("mcp_memory", "EXTENSION_RESOURCE_MEMORY_EXCEEDED"),
+                ("mcp_processes", "EXTENSION_RESOURCE_PROCESSES_EXCEEDED"),
+            ]
+        } else {
+            Vec::new()
+        } {
+            let exhausted = unsafe { registry.start(make(mode)) }.unwrap();
             wait_for(|| exhausted.snapshot().status != Status::Starting);
             assert_eq!(exhausted.snapshot().status, Status::Ready);
             let old_identity =
@@ -748,21 +756,18 @@ mod tests {
                 exhausted
                     .invoke_confirmed(review.review_id)
                     .unwrap()
-                    .wait(Duration::from_secs(20))
+                    .wait(Duration::from_secs(if mode == "mcp_cpu" { 20 } else { 10 }))
                     .unwrap_err()
                     .code,
-                "EXTENSION_RESOURCE_CPU_EXCEEDED"
+                expected
             );
-            eprintln!("background CPU call error after {:?}", started.elapsed());
+            eprintln!("background {mode} call error after {:?}", started.elapsed());
             wait_for(|| {
                 registry.reap();
                 registry.entries.is_empty()
             });
             assert_eq!(exhausted.snapshot().status, Status::Failed);
-            assert_eq!(
-                exhausted.snapshot().error.as_deref(),
-                Some("EXTENSION_RESOURCE_CPU_EXCEEDED")
-            );
+            assert_eq!(exhausted.snapshot().error.as_deref(), Some(expected));
             assert_eq!(exhausted.snapshot().tool_count, 0);
             assert!(exhausted.review("echo".into(), json!({})).is_err());
             assert_eq!(
