@@ -36,6 +36,16 @@
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-start-dragging",
-    "allow-editor-capabilities"
+    "allow-editor-capabilities",
+    "allow-sync-login",
+    "allow-sync-vaults",
+    "allow-sync-create-vault",
+    "allow-sync-bind",
+    "allow-sync-unbind",
+    "allow-sync-pause",
+    "allow-sync-status",
+    "allow-sync-resolve",
+    "allow-sync-logout",
+    "allow-sync-run"
   ]
 }

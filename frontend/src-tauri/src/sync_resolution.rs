@@ -35,6 +35,7 @@ impl Workspace {
             let (path,remote): (String,String) = self.db.query_row("SELECT local_path,remote FROM sync_conflicts WHERE binding=?1 AND sequence=?2 AND state='open'",params![binding,sequence],|r| Ok((r.get(0)?,r.get(1)?)))?;
             let revision: RemoteRevision = serde_json::from_str(&remote)
                 .map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?;
+            let path = self.path_for_id(&revision.file_id).unwrap_or(path);
             let source = self.resolve(&path)?;
             let current = if source.is_file() {
                 self.sync_store_bytes(&fs::read(source)?)?
