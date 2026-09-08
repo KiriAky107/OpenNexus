@@ -30,6 +30,20 @@ impl SyncError {
     }
 }
 type Result<T> = std::result::Result<T, SyncError>;
+struct Attempt<'a, W: WorkspaceAccess> {
+    workspace: &'a W,
+    job: &'a Job,
+    finished: bool,
+}
+impl<W: WorkspaceAccess> Drop for Attempt<'_, W> {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self
+                .workspace
+                .access(|ws| ws.sync_attempt_interrupt(self.job));
+        }
+    }
+}
 pub trait WorkspaceAccess: Send + Sync {
     fn access<T>(
         &self,
@@ -309,19 +323,36 @@ impl SyncClient {
         if job.state == "conflict" {
             return Err(SyncError::new("REVISION_CONFLICT"));
         }
-        if job.operation == "put" && job.base_revision.is_none() {
-            self.upload(workspace, binding, &job).await?;
+        workspace.access(|ws| ws.sync_attempt_start(&job))?;
+        let mut attempt = Attempt {
+            workspace,
+            job: &job,
+            finished: false,
+        };
+        let result = async {
+            if job.operation == "put" && job.base_revision.is_none() {
+                self.upload(workspace, binding, &job).await?;
+            }
+            let payload = workspace.access(|ws| ws.sync_commit_payload(&job))?;
+            let revision = self
+                .json(
+                    Method::POST,
+                    &format!("sync/v1/vaults/{}/revisions", binding.remote_vault),
+                    Some(payload),
+                )
+                .await?;
+            workspace.access(|ws| ws.sync_ack(&job, &revision))?;
+            Ok(true)
         }
-        let payload = workspace.access(|ws| ws.sync_commit_payload(&job))?;
-        let revision = self
-            .json(
-                Method::POST,
-                &format!("sync/v1/vaults/{}/revisions", binding.remote_vault),
-                Some(payload),
+        .await;
+        workspace.access(|ws| {
+            ws.sync_attempt_finish(
+                &job,
+                result.as_ref().err().map(|e: &SyncError| e.code.as_str()),
             )
-            .await?;
-        workspace.access(|ws| ws.sync_ack(&job, &revision))?;
-        Ok(true)
+        })?;
+        attempt.finished = true;
+        result
     }
     pub async fn pull_page(
         &self,
@@ -576,4 +607,41 @@ fn identifier(value: &str) -> Result<()> {
         return Err(SyncError::new("SYNC_IDENTIFIER_INVALID"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn dropping_a_pending_attempt_marks_interruption_without_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        ws.write("cancel.md", "", b"retained", "local").unwrap();
+        let binding = ws
+            .sync_bind_empty("https://sync.example", "remote", "account")
+            .unwrap();
+        let job = ws.sync_next(&binding.id).unwrap().unwrap();
+        let workspace = Arc::new(Mutex::new(ws));
+        let future = async {
+            workspace.access(|ws| ws.sync_attempt_start(&job)).unwrap();
+            let _attempt = Attempt {
+                workspace: &workspace,
+                job: &job,
+                finished: false,
+            };
+            std::future::pending::<()>().await;
+        };
+        assert!(tokio::time::timeout(Duration::from_millis(10), future)
+            .await
+            .is_err());
+        let rows = workspace
+            .access(|ws| ws.sync_attempts(&binding.id))
+            .unwrap();
+        assert_eq!(rows[0]["outcome"], "interrupted");
+        assert_eq!(rows[0]["attempts"], 1);
+        assert_eq!(
+            workspace.access(|ws| ws.read("cancel.md")).unwrap().content,
+            "retained"
+        );
+    }
 }

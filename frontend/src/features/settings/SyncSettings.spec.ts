@@ -71,3 +71,13 @@ it('shows a persisted halt without suggesting an automatic retry countdown', asy
   expect(wrapper.text()).not.toContain('120s')
   wrapper.unmount()
 })
+
+it('shows persisted per-job interruption counts without starting work from the view', async () => {
+  vi.mocked(hostInvoke).mockResolvedValue({ ...empty(), binding: { id: 'binding', endpoint: 'https://test.example/', account: 'test', remote_vault: 'remote', cursor: 7 }, attempts: [{ operation_id: 'op', path: 'attachments/large.pdf', attempts: 11, outcome: 'interrupted', error: null }] })
+  const wrapper = mount(SyncSettings); await flushPromises()
+  expect(wrapper.text()).toContain('attachments/large.pdf')
+  expect(wrapper.text()).toContain('尝试次数 11')
+  expect(wrapper.text()).toContain('从已确认位置恢复')
+  expect(vi.mocked(hostInvoke).mock.calls.every(([command]) => command === 'sync_status')).toBe(true)
+  wrapper.unmount()
+})
