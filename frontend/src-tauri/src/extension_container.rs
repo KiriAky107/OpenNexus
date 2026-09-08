@@ -707,12 +707,51 @@ mod tests {
                 .code,
             "EXTENSION_PROCESS_WAIT_INVALID"
         );
-        running.terminate().unwrap();
+        let completed = running.start_tool_call().unwrap();
+        completed.finish().unwrap();
+        assert_eq!(running.wait(std::time::Duration::ZERO).unwrap(), None);
+        let deadline = running
+            .start_test_tool_call(std::time::Duration::from_millis(100))
+            .unwrap();
+        // No check() or finish() drives expiration; wait only on the OS process.
+        assert!(running
+            .wait(std::time::Duration::from_secs(5))
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            deadline.finish().unwrap_err().code,
+            "EXTENSION_TOOL_DEADLINE_EXCEEDED"
+        );
         assert!(running
             .wait(std::time::Duration::from_secs(5))
             .unwrap()
             .is_some());
         drop(running);
+        for explicit_cancel in [false, true] {
+            let data = crate::extension_launch_data::LaunchData::new(
+                &executable,
+                &["wait".to_owned()],
+                &system,
+                &folder,
+                &folder.join("Temp"),
+                &std::collections::BTreeMap::new(),
+            )
+            .unwrap();
+            let suspended =
+                crate::extension_process::Suspended::create(&profile, &executable, data).unwrap();
+            let running = unsafe { suspended.resume().unwrap() };
+            let deadline = running.start_tool_call().unwrap();
+            assert_eq!(running.wait(std::time::Duration::ZERO).unwrap(), None);
+            if explicit_cancel {
+                deadline.cancel().unwrap();
+            } else {
+                drop(deadline);
+            }
+            assert!(running
+                .wait(std::time::Duration::from_secs(5))
+                .unwrap()
+                .is_some());
+        }
         for ip in ["127.0.0.1:0", "[::1]:0"] {
             let tcp = TcpListener::bind(ip).unwrap();
             let udp = UdpSocket::bind(ip).unwrap();

@@ -63,3 +63,6 @@ pub mod extension_launch_data;
 
 #[cfg(windows)]
 pub mod extension_process;
+
+#[cfg(windows)]
+pub mod extension_deadline;

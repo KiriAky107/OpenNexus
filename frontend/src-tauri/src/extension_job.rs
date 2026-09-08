@@ -13,6 +13,14 @@ pub struct Job {
     handle: OwnedHandle,
 }
 impl Job {
+    pub(crate) fn clone_for_deadline(&self) -> Result<Self> {
+        Ok(Self {
+            handle: self
+                .handle
+                .try_clone()
+                .map_err(|_| HostError::new("EXTENSION_RESOURCE_UNAVAILABLE"))?,
+        })
+    }
     pub fn new() -> Result<Self> {
         Self::with_process_limit(16)
     }
