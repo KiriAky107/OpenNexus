@@ -66,6 +66,21 @@ fn version(s: &str) -> bool {
         })
 }
 impl Release {
+    /// Full offline package check. Online revocation freshness and runtime permissions remain Host responsibilities.
+    pub fn verify_package(
+        &self,
+        pinned: &[u8; 32],
+        key_id: &str,
+        namespace: &str,
+        revoked: bool,
+        withdrawn: bool,
+        archive: &[u8],
+    ) -> Result<(Inventory, Value)> {
+        self.verify(pinned, key_id, namespace, revoked, withdrawn, archive)?;
+        let inventory = inspect(self, archive)?;
+        let manifest = crate::extension_manifest::read(self, archive, &inventory)?;
+        Ok((inventory, manifest))
+    }
     pub fn validate(&self) -> Result<()> {
         let valid = self.schema_version == 1
             && identity(&self.namespace)
@@ -470,6 +485,10 @@ mod tests {
             .unwrap();
         let inventory = inspect(&release, &bytes).unwrap();
         assert_eq!(inventory.manifest, "persona.json");
+        let (_, manifest) = release
+            .verify_package(&key, "test-key", "examples", false, false, &bytes)
+            .unwrap();
+        assert!(manifest["system_prompt"].is_string());
         let value = serde_json::to_value(&release).unwrap();
         for field in value
             .as_object()
