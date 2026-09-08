@@ -30,6 +30,15 @@ impl Workspace {
         source: &Path,
         expected: &str,
     ) -> Result<()> {
+        let size = self.snapshot_file(source, expected)?;
+        self.register_payload(operation, expected, size)
+    }
+    pub(crate) fn sync_store_file(&self, source: &Path) -> Result<String> {
+        let digest = hash_file(source)?;
+        self.snapshot_file(source, &digest)?;
+        Ok(digest)
+    }
+    fn snapshot_file(&self, source: &Path, expected: &str) -> Result<u64> {
         let size = fs::metadata(source)?.len();
         if size > 100 * 1024 * 1024 {
             return Err(HostError::new("FILE_TOO_LARGE"));
@@ -56,7 +65,7 @@ impl Workspace {
             #[cfg(unix)]
             fs::File::open(parent)?.sync_all()?;
         }
-        self.register_payload(operation, expected, size)
+        Ok(size)
     }
     fn register_payload(&self, operation: &str, digest: &str, size: u64) -> Result<()> {
         let old: Option<(String, i64)> = self
