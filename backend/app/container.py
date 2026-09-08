@@ -13,6 +13,7 @@ from app.providers.credentials import (
     ChainedCredentialResolver,
     EncryptedCredentialStore,
     EnvironmentCredentialResolver,
+    HostCredentialStore,
 )
 
 
@@ -21,7 +22,7 @@ class ApplicationContainer:
     providers: ProviderRegistry
     provider_factory: ProviderFactory
     model_routing: ModelRoutingService
-    credentials: EncryptedCredentialStore
+    credentials: EncryptedCredentialStore | HostCredentialStore
     tools: ToolRegistry
     permissions: PermissionManager
     skills: SkillRuntime
@@ -32,9 +33,9 @@ class ApplicationContainer:
 
 def build_container() -> ApplicationContainer:
     settings = get_settings()
-    credentials = EncryptedCredentialStore()
+    credentials = HostCredentialStore() if settings.environment == "desktop" else EncryptedCredentialStore()
     provider_factory = ProviderFactory(
-        ChainedCredentialResolver(credentials, EnvironmentCredentialResolver())
+        credentials if settings.environment == "desktop" else ChainedCredentialResolver(credentials, EnvironmentCredentialResolver())
     )
     providers = ProviderRegistry(provider_factory)
     providers.register(

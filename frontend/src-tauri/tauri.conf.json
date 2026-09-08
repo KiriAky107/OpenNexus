@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "NotesAgent Preview",
+  "productName": "OpenNexus",
   "version": "0.3.0-alpha.1",
   "identifier": "cc.kronecker.notesagent",
   "build": {
@@ -10,9 +10,9 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{"label": "main", "title": "NotesAgent Preview", "width": 1280, "height": 960, "minWidth": 720, "minHeight": 700, "center": true, "decorations": false}],
+    "windows": [{"label": "main", "title": "OpenNexus", "width": 1280, "height": 960, "minWidth": 720, "minHeight": 700, "center": true, "decorations": false}],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://127.0.0.1:8000; font-src 'self' data:; connect-src ipc: http://ipc.localhost http://127.0.0.1:8000; frame-src 'self' blob:; object-src 'none'; base-uri 'self'",
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src ipc: http://ipc.localhost; frame-src 'self' blob:; object-src 'none'; base-uri 'self'",
       "capabilities": ["main"]
     }
   },

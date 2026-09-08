@@ -25,6 +25,9 @@ dependencies = [
 dev = [
     "pytest>=8.4,<9.0",
 ]
+packaging = [
+    "pyinstaller>=6.16,<7",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

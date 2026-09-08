@@ -34,7 +34,7 @@ const pageTitle = computed(() => {
     logs: t('运行日志', 'Operation Logs'),
     media: t('音视频转写', 'Media Transcription'),
   }
-  return titles[name] || 'NotesAgent'
+  return titles[name] || 'OpenNexus'
 })
 
 const currentFileName = computed(() => {
@@ -63,7 +63,7 @@ function toggleFromTitlebar(event: MouseEvent) {
       </span>
     </div>
     <div class="titlebar-center" data-tauri-drag-region>
-      <span class="app-name" data-tauri-drag-region>NotesAgent</span>
+      <span class="app-name" data-tauri-drag-region>OpenNexus</span>
     </div>
     <div class="titlebar-right">
       <button class="icon-btn" @click="themeStore.toggleTheme()" :title="themeStore.isDark ? t('切换浅色主题', 'Switch to light theme') : t('切换深色主题', 'Switch to dark theme')">

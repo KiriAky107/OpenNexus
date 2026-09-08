@@ -2,17 +2,36 @@
 import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { apiClient } from '@/services/apiClient'
+import { isDesktop } from '@/services/platform/desktop'
 import { useRoute } from 'vue-router'
 import { mediaService, createMediaSubmission, type MediaJob } from '@/services/mediaService'
 import { localeTag, t } from '@/i18n'
 import FilePicker from '@/components/common/FilePicker.vue'
 
 const route = useRoute()
+const maxUploadMiB = isDesktop() ? 64 : 128
 const submission = createMediaSubmission()
 const updateExisting = ref(false)
 const jobs = ref<MediaJob[]>([])
 const selected = ref<MediaJob | null>(null)
+const audioSource = ref('')
+watch(() => selected.value?.attachment_id, async (id, _old, onCleanup) => {
+  let stale = false
+  let objectUrl: string | undefined
+  onCleanup(() => { stale = true; if (objectUrl) URL.revokeObjectURL(objectUrl) })
+  audioSource.value = ''
+  if (!id) return
+  if (!isDesktop()) { audioSource.value = mediaService.audio(id); return }
+  try {
+    const response = await apiClient.get<Response>(`/api/media/attachments/${encodeURIComponent(id)}`)
+    const blob = await response.blob()
+    if (stale) return
+    objectUrl = URL.createObjectURL(blob)
+    audioSource.value = objectUrl
+  } catch (e) { if (!stale) error.value = (e as Error).message }
+})
 const file = ref<File | null>(null)
 const reference = ref<File | null>(null)
 const matchResult = ref('')
@@ -62,7 +81,7 @@ async function action(work: () => Promise<void>) {
 async function submit() {
   if (!file.value) return
   await action(async () => {
-    if (file.value!.size > 128 * 1024 * 1024) throw new Error(t('文件不能超过 128 MiB。', 'Files cannot exceed 128 MiB.'))
+    if (file.value!.size > maxUploadMiB * 1024 * 1024) throw new Error(t(`文件不能超过 ${maxUploadMiB} MiB。`, `Files cannot exceed ${maxUploadMiB} MiB.`))
     if (file.value!.size > 25 * 1024 * 1024 && !localOnly.value) throw new Error(t('超过 25 MiB 的录音请先启用仅本地处理。', 'Enable local-only processing for audio above 25 MiB.'))
     let terms = {}
     if (terminology.value.trim()) {
@@ -119,7 +138,7 @@ onUnmounted(() => { stopped = true; clearTimeout(timer) })
       <p>{{ t('无参考转写或说话人标注时，只能验证功能与耗时，不能据此判断准确率。请通过播放与人工校对确认内容。', 'Without reference transcripts or speaker labels, runs validate functionality and timing, not accuracy. Review the audio and correct the transcript.') }}</p>
     </details>
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
-    <header class="feature-header"><div><h1>{{ t('音视频转写', 'Media Transcription') }}</h1><p class="subtle">{{ t('上传音频或视频音轨，转写、校对后保存到知识库。最多 128 MiB；超过 25 MiB 请启用仅本地处理。音轨最长 1 小时。', 'Upload audio or a video soundtrack, transcribe and correct it, then save it to the knowledge base. Up to 128 MiB; enable local-only processing above 25 MiB. Audio duration is limited to one hour.') }}</p></div></header>
+    <header class="feature-header"><div><h1>{{ t('音视频转写', 'Media Transcription') }}</h1><p class="subtle">{{ t(`上传音频或视频音轨，转写、校对后保存到知识库。最多 ${maxUploadMiB} MiB；超过 25 MiB 请启用仅本地处理。音轨最长 1 小时。`, `Upload audio or a video soundtrack, transcribe and correct it, then save it to the knowledge base. Up to ${maxUploadMiB} MiB; enable local-only processing above 25 MiB. Audio duration is limited to one hour.`) }}</p></div></header>
     <div v-if="error" class="error-banner" role="alert">{{ error }}</div><p v-if="notice" role="status">{{ notice }}</p>
     <form class="panel upload" @submit.prevent="submit">
       <FilePicker :file="file" :label="t('选择附件', 'Choose attachment')" :empty-label="t('尚未选择文件', 'No file selected')" accept=".wav,.mp3,.flac,.ogg,.m4a,.mp4,.webm,.txt,.md" @select="file = $event" />
@@ -141,7 +160,7 @@ onUnmounted(() => { stopped = true; clearTimeout(timer) })
       <article v-if="selected" class="panel transcript">
         <header><h2>{{ labels[selected.status] }}</h2><span class="badge">{{ t('修订', 'Revision') }} {{ selected.revision }}</span></header>
         <progress v-if="active(selected) && selected.progress !== null" :value="selected.progress" :max="1" :aria-label="t('转写进度', 'Transcription progress')" />
-        <audio ref="player" controls :src="mediaService.audio(selected.attachment_id)" @loadedmetadata="loaded" @timeupdate="position = player?.currentTime || 0" />
+        <audio ref="player" controls :src="audioSource || undefined" @loadedmetadata="loaded" @timeupdate="position = player?.currentTime || 0" />
         <label>{{ t('播放速度', 'Playback speed') }}<select v-model.number="speed" class="select" @change="player && (player.playbackRate = speed)"><option v-for="value in [0.5, 0.75, 1, 1.25, 1.5, 2]" :key="value" :value="value">{{ value }}×</option></select></label>
         <p v-if="selected.error_message" class="error-banner">{{ selected.error_message }} · {{ selected.error_code }}</p>
         <p v-if="selected.fallback_reason" class="subtle">{{ t('已回退：', 'Fallback: ') }}{{ selected.fallback_reason }}</p>

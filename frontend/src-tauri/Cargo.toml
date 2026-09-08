@@ -28,6 +28,19 @@ tauri = { version = "2", optional = true, features = ["tray-icon"] }
 rfd = { version = "0.15", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
 base64 = { version = "0.22", optional = true }
+hmac = { version = "0.12", default-features = false }
+rand = { version = "0.8", default-features = false, features = ["getrandom"] }
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
+command-group = { version = "5", default-features = false }
+iota_stronghold = "2.1"
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+fernet = { version = "0.2", default-features = false, features = ["rustcrypto"] }
 
 [build-dependencies]
 tauri-build = { version = "2", optional = true , features = [] }
+
+# Cryptographic KDFs retain their production work factors in debug/test runs.
+# Optimize dependencies rather than weakening those factors for local execution.
+[profile.dev.package."*"]
+opt-level = 2

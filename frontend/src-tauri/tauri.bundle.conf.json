@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "resources": {"../../.build/sidecar/dist/opennexus-core/": "core/"}
+  }
+}

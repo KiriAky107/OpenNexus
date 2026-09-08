@@ -63,7 +63,7 @@ async function openFolderPicker() {
     <div class="entry-container">
       <div class="brand-section">
         <div class="logo"><AppIcon :icon="Document" :size="56" /></div>
-        <h1 class="app-title">NotesAgent</h1>
+        <h1 class="app-title">OpenNexus</h1>
         <p class="app-subtitle">{{ t('本地优先的 AI 笔记软件', 'A local-first AI note-taking app') }}</p>
       </div>
 
