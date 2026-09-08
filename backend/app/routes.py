@@ -1624,6 +1624,12 @@ def get_global_persona():
     return load_persona()
 
 
+@router.get("/settings/persona/legacy", tags=["Settings"])
+def get_legacy_persona_preview():
+    from app.services.persona_settings import legacy_persona_preview
+    return legacy_persona_preview()
+
+
 @router.put("/settings/persona", response_model=PersonaSettings, tags=["Settings"])
 def put_global_persona(request: PersonaSettings):
     return save_persona(request)

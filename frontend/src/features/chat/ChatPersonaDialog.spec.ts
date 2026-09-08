@@ -69,3 +69,48 @@ it('sends the loaded persona revision and refuses a form from another Vault', as
     expect(wrapper.text()).toContain('工作区已切换')
   } finally { wrapper.unmount(); desktopMode.mockRestore() }
 })
+
+
+it('previews legacy content without writing and preserves the Vault CAS when copied', async () => {
+  const desktopMode = vi.spyOn(desktop, 'isDesktop').mockReturnValue(true)
+  useWorkspaceStore().vaultId = 'import-target'
+  vi.mocked(apiClient.put).mockClear()
+  vi.mocked(apiClient.get).mockImplementation(async url => url.endsWith('/legacy')
+    ? { available: true, persona: { version: 90, name: 'Old', system_prompt: 'Legacy prompt', dialogue_pairs: [{ user: 'Question', assistant: 'Answer' }] } }
+    : { version: 3, revision: 'c'.repeat(64), name: 'Current', system_prompt: 'Current prompt', dialogue_pairs: [] })
+  const wrapper = mount(ChatPersonaDialog)
+  try {
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text().includes('查看旧全局人设'))!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Legacy prompt')
+    expect((wrapper.get('.persona-prompt').element as HTMLTextAreaElement).value).toBe('Current prompt')
+    expect(apiClient.put).not.toHaveBeenCalled()
+    await wrapper.findAll('button').find(button => button.text().includes('填入当前表单'))!.trigger('click')
+    expect(apiClient.put).not.toHaveBeenCalled()
+    expect((wrapper.get('.persona-prompt').element as HTMLTextAreaElement).value).toBe('Legacy prompt')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(apiClient.put).toHaveBeenCalledWith('/api/settings/persona', expect.objectContaining({ version: 3, revision: 'c'.repeat(64), name: 'Old', system_prompt: 'Legacy prompt' }))
+  } finally { wrapper.unmount(); desktopMode.mockRestore() }
+})
+
+it('discards a late legacy preview after switching Vaults', async () => {
+  const desktopMode = vi.spyOn(desktop, 'isDesktop').mockReturnValue(true)
+  const workspace = useWorkspaceStore()
+  workspace.vaultId = 'before'
+  let complete!: (value: unknown) => void
+  vi.mocked(apiClient.get).mockImplementation(async url => url.endsWith('/legacy')
+    ? await new Promise(resolve => { complete = resolve })
+    : { version: 0, revision: '', name: '', system_prompt: '', dialogue_pairs: [] })
+  const wrapper = mount(ChatPersonaDialog)
+  try {
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text().includes('查看旧全局人设'))!.trigger('click')
+    workspace.vaultId = 'after'
+    complete({ available: true, persona: { version: 1, name: 'Late', system_prompt: 'Stale source', dialogue_pairs: [] } })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('Stale source')
+    expect(wrapper.findAll('button').some(button => button.text().includes('填入当前表单'))).toBe(false)
+  } finally { wrapper.unmount(); desktopMode.mockRestore() }
+})

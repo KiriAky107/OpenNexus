@@ -42,6 +42,21 @@ def load_persona():
         return PersonaSettings.model_validate_json(row[0]) if row else PersonaSettings()
 
 
+def legacy_persona_preview():
+    """Explicit read-only import source; no automatic Vault ownership inference."""
+    from app.errors import ApiError
+    from app.services.desktop_notes import call
+    if not _desktop():
+        raise ApiError(404, 'RESOURCE_NOT_FOUND', '此入口仅用于桌面人设导入。')
+    call('persona.get', id='default')  # Revalidate the authenticated Vault at Host.
+    with closing(connection()) as conn:
+        row = conn.execute("SELECT data FROM global_persona WHERE id=1").fetchone()
+        if not row:
+            return {'available': False, 'persona': None}
+        source = PersonaSettings.model_validate_json(row[0])
+        return {'available': True, 'persona': source.model_dump(exclude={'revision'})}
+
+
 def save_persona(settings):
     if _desktop():
         from uuid import uuid4
