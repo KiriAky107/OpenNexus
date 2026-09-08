@@ -89,3 +89,33 @@ def test_desktop_missing_persona_does_not_import_unowned_global_data(monkeypatch
     monkeypatch.setattr(persona_settings, '_desktop', lambda: True)
     monkeypatch.setattr(desktop_notes, 'call', lambda *args, **kwargs: None)
     assert load_persona() == PersonaSettings()
+
+
+def test_legacy_preview_requires_host_scope_and_never_mutates_source(monkeypatch):
+    from app.services import persona_settings, desktop_notes
+    original = save_persona(PersonaSettings(system_prompt='legacy preview', version=0))
+    monkeypatch.setattr(persona_settings, '_desktop', lambda: True)
+    calls = []
+    def allowed(method, **params):
+        calls.append((method, params))
+        return None
+    monkeypatch.setattr(desktop_notes, 'call', allowed)
+    preview = persona_settings.legacy_persona_preview()
+    assert preview['available'] is True
+    assert preview['persona']['system_prompt'] == 'legacy preview'
+    assert 'revision' not in preview['persona']
+    assert calls == [('persona.get', {'id': 'default'})]
+    def denied(*args, **kwargs):
+        raise ApiError(409, 'VAULT_PERMISSION_CHANGED', 'controlled')
+    monkeypatch.setattr(desktop_notes, 'call', denied)
+    with pytest.raises(ApiError):
+        persona_settings.legacy_persona_preview()
+    monkeypatch.setattr(persona_settings, '_desktop', lambda: False)
+    assert load_persona() == original
+
+
+def test_legacy_preview_reports_no_source_without_creating_persona(monkeypatch):
+    from app.services import persona_settings, desktop_notes
+    monkeypatch.setattr(persona_settings, '_desktop', lambda: True)
+    monkeypatch.setattr(desktop_notes, 'call', lambda *args, **kwargs: None)
+    assert persona_settings.legacy_persona_preview() == {'available': False, 'persona': None}
