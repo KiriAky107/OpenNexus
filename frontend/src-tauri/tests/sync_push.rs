@@ -303,4 +303,59 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
             );
         }
     }
+    // Host sessions survive encrypted storage reopen and refresh on the actual service.
+    use notesagent_host::{credentials::CredentialBroker, sync_auth};
+    let credential_root = tempfile::tempdir().unwrap();
+    let credential_path = credential_root.path().join("credentials.onxcred");
+    let mut broker = CredentialBroker::new(credential_path.clone());
+    broker
+        .unlock(Zeroizing::new(b"fixture-stronghold-password".to_vec()))
+        .unwrap();
+    let credentials = Arc::new(Mutex::new(Some(broker)));
+    let canonical = sync_auth::login(
+        &credentials,
+        &endpoint,
+        "rust-fixture",
+        Zeroizing::new("controlled-fixture-password".into()),
+        "Encrypted Host",
+        true,
+    )
+    .await
+    .unwrap();
+    let host_client = sync_auth::client(&credentials, &canonical, "rust-fixture", true)
+        .await
+        .unwrap();
+    assert!(host_client
+        .json(reqwest::Method::GET, "sync/v1/vaults", None)
+        .await
+        .unwrap()["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v["id"] == remote));
+    credentials.lock().unwrap().as_mut().unwrap().lock();
+    *credentials.lock().unwrap() = Some(CredentialBroker::new(credential_path));
+    credentials
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .unlock(Zeroizing::new(b"fixture-stronghold-password".to_vec()))
+        .unwrap();
+    let restored = sync_auth::client(&credentials, &canonical, "rust-fixture", false)
+        .await
+        .unwrap();
+    restored.handshake().await.unwrap();
+    sync_auth::logout(&credentials, &canonical, "rust-fixture")
+        .await
+        .unwrap();
+    assert!(!sync_auth::available(&credentials, &canonical, "rust-fixture").unwrap());
+    assert_eq!(
+        restored
+            .json(reqwest::Method::GET, "sync/v1/vaults", None)
+            .await
+            .unwrap_err()
+            .status,
+        401
+    );
 }

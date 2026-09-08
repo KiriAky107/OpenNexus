@@ -21,7 +21,7 @@ pub struct SyncError {
     pub retry_after: Option<u64>,
 }
 impl SyncError {
-    fn new(code: &str) -> Self {
+    pub(crate) fn new(code: &str) -> Self {
         Self {
             code: code.into(),
             status: 0,
@@ -195,6 +195,19 @@ impl SyncClient {
         device_name: &str,
     ) -> Result<Session> {
         let value = self.json(Method::POST, "sync/v1/auth/sessions", Some(json!({"username":username,"password":password.as_str(),"device_name":device_name}))).await?;
+        serde_json::from_value(value).map_err(|_| SyncError::new("SYNC_RESPONSE_INVALID"))
+    }
+    pub fn endpoint(&self) -> &str {
+        self.endpoint.as_str()
+    }
+    pub async fn refresh(&self, refresh_token: &str) -> Result<Session> {
+        let value = self
+            .json(
+                Method::POST,
+                "sync/v1/auth/refresh",
+                Some(json!({"refresh_token":refresh_token})),
+            )
+            .await?;
         serde_json::from_value(value).map_err(|_| SyncError::new("SYNC_RESPONSE_INVALID"))
     }
     pub async fn handshake(&self) -> Result<()> {

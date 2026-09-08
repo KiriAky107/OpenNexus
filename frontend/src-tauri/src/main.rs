@@ -2,6 +2,9 @@
 
 //! 预览 Host 只开放本地文件命令；未接通的 AI / 同步 / 凭据能力明确返回不可用。
 
+mod sync_commands;
+use sync_commands::*;
+
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use notesagent_host::core::CoreSupervisor;
 use notesagent_host::credentials::CredentialBroker;
@@ -18,6 +21,7 @@ use zeroize::Zeroizing;
 #[derive(Default)]
 struct Host {
     requests: Requests,
+    sync: Arc<sync_commands::Runtime>,
     workspace: Arc<Mutex<Option<Workspace>>>,
     recent: Mutex<Option<RecentVaultStore>>,
     core: Arc<Mutex<Option<CoreSupervisor>>>,
@@ -57,7 +61,7 @@ fn host_capabilities(host: State<'_, Host>) -> serde_json::Value {
         .ok()
         .and_then(|mut core| core.as_mut().map(|c| c.available()))
         .unwrap_or(false);
-    serde_json::json!({"protocol":1,"workspace":true,"core":ready,"sync":false,"credentials":true,"extensions":false,"release":"preview","product":"OpenNexus"})
+    serde_json::json!({"protocol":1,"workspace":true,"core":ready,"sync":true,"credentials":true,"extensions":false,"release":"preview","product":"OpenNexus"})
 }
 
 #[derive(serde::Serialize)]
@@ -568,6 +572,7 @@ fn workspace_choose(host: State<'_, Host>) -> Result<Option<RecentVault>, String
         .as_mut()
         .ok_or("HOST_NOT_READY")?
         .remember(&result)?;
+    host.sync.cancel();
     *guard = Some(workspace);
     Ok(Some(result))
 }
@@ -592,6 +597,7 @@ fn workspace_open(host: State<'_, Host>, path: String) -> Result<RecentVault, St
     }
     let workspace = Workspace::open(Path::new(&authorized.path)).map_err(|e| e.code)?;
     let result = info(&workspace);
+    host.sync.cancel();
     *guard = Some(workspace);
     Ok(result)
 }
@@ -617,6 +623,7 @@ fn workspace_revoke(host: State<'_, Host>) -> Result<(), String> {
             .ok_or("HOST_NOT_READY")?
             .revoke(&active.root)?;
     }
+    host.sync.cancel();
     *workspace = None;
     Ok(())
 }
@@ -800,6 +807,14 @@ fn main() {
                     }
                 }
             });
+            let sync_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(5));
+                loop {
+                    interval.tick().await;
+                    let _ = sync_commands::run(&sync_handle.state::<Host>(), false).await;
+                }
+            });
             Ok(())
         })
         .on_menu_event(|app, event| {
@@ -816,6 +831,16 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             host_capabilities,
+            sync_login,
+            sync_vaults,
+            sync_create_vault,
+            sync_bind,
+            sync_unbind,
+            sync_pause,
+            sync_status,
+            sync_resolve,
+            sync_logout,
+            sync_run,
             credentials_status,
             credentials_unlock,
             credentials_lock,

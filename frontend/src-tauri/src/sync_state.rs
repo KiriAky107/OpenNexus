@@ -28,6 +28,23 @@ pub struct Job {
 }
 
 impl Workspace {
+    pub fn sync_paused(&self, binding: &str) -> Result<bool> {
+        self.check_binding(binding)?;
+        Ok(self
+            .db
+            .query_row(
+                "SELECT paused FROM sync_preferences WHERE binding=?1",
+                [binding],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(false))
+    }
+    pub fn sync_pause(&mut self, binding: &str, paused: bool) -> Result<()> {
+        self.check_binding(binding)?;
+        self.db.execute("INSERT INTO sync_preferences VALUES (?1,?2) ON CONFLICT(binding) DO UPDATE SET paused=excluded.paused",params![binding,paused])?;
+        Ok(())
+    }
     pub fn sync_binding(&self) -> Result<Option<Binding>> {
         Ok(self.db.query_row("SELECT id,endpoint,remote_vault,account,cursor FROM sync_bindings WHERE state='active'", [], |r| {
             Ok(Binding { id:r.get(0)?, endpoint:r.get(1)?, remote_vault:r.get(2)?, account:r.get(3)?, cursor:r.get(4)? })

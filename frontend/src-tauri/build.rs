@@ -16,6 +16,16 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "host_capabilities",
+            "sync_login",
+            "sync_vaults",
+            "sync_create_vault",
+            "sync_bind",
+            "sync_unbind",
+            "sync_pause",
+            "sync_status",
+            "sync_resolve",
+            "sync_logout",
+            "sync_run",
             "credentials_status",
             "credentials_unlock",
             "credentials_lock",

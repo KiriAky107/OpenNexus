@@ -506,6 +506,7 @@ impl CredentialBroker {
         self.unlocked.as_ref().ok_or("CREDENTIALS_LOCKED".into())
     }
     pub fn lock(&mut self) {
+        self.lock_epoch.fetch_add(1, Ordering::SeqCst);
         self.unlocked.take();
         self.ownership.take();
     }

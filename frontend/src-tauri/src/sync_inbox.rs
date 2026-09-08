@@ -335,7 +335,10 @@ impl Workspace {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         rows.into_iter().map(|(sequence,file_id,local_path,local_hash,remote)| {
             let remote: Value = serde_json::from_str(&remote).map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?;
-            Ok(serde_json::json!({"sequence":sequence,"file_id":file_id,"local_path":local_path,"local_hash":local_hash,"remote":remote}))
+            let current_path=self.path_for_id(&file_id).unwrap_or_else(|_|local_path.clone());
+            let source=self.resolve(&current_path)?;
+            let current_hash=if source.is_file() {hash(&fs::read(source)?)} else {String::new()};
+            Ok(serde_json::json!({"sequence":sequence,"file_id":file_id,"local_path":local_path,"local_hash":local_hash,"current_path":current_path,"current_hash":current_hash,"remote":remote}))
         }).collect()
     }
 }

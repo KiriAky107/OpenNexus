@@ -9,6 +9,8 @@ mod runtime_compat;
 #[cfg(windows)]
 pub mod session_lock;
 #[cfg(feature = "desktop")]
+pub mod sync_auth;
+#[cfg(feature = "desktop")]
 pub mod sync_client;
 pub mod sync_inbox;
 pub mod sync_resolution;
