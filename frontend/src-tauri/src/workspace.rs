@@ -5,6 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
+#[cfg(test)]
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
@@ -872,13 +873,12 @@ impl Workspace {
         if !source.is_file() {
             return Err(HostError::new("FILE_NOT_FOUND"));
         }
-        let content = fs::read(source)?;
-        if hash(&content) != expected {
+        if crate::payloads::hash_file(&source)? != expected {
             return Err(HostError::new("REVISION_CONFLICT"));
         }
         self.entry(path)?
             .ok_or_else(|| HostError::new("FILE_NOT_FOUND"))?;
-        self.store_payload(id, &content)?;
+        self.store_payload_file(id, &source, expected)?;
         let tx = self.db.transaction()?;
         tx.execute(
             "INSERT INTO operations VALUES (?1,?2,'pending',NULL)",
@@ -922,13 +922,22 @@ impl Workspace {
                 ))
             },
         )?;
-        let content = self.payload(id, &content)?;
-        self.store_payload(id, &content)?;
+        if self.payload_ref(id)?.is_none() {
+            self.store_payload(id, &content)?;
+        }
+        let (digest, size) = self
+            .payload_ref(id)?
+            .ok_or_else(|| HostError::new("SYNC_SPOOL_CORRUPT"))?;
+        if digest != expected || !(0..=100 * 1024 * 1024).contains(&size) {
+            return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
+        }
+        let mut payload =
+            crate::payloads::open_verified(&self.sync_spool(&digest)?, &digest, size as u64)?;
         let source = self.resolve(&path)?;
         let previous = self
             .entry(&path)?
             .ok_or_else(|| HostError::new("FILE_NOT_FOUND"))?;
-        let source_conflict = source.exists() && hash(&fs::read(&source)?) != expected;
+        let source_conflict = source.exists() && crate::payloads::hash_file(&source)? != expected;
         let target = if kind == "rename" {
             self.resolve(&destination)?
         } else {
@@ -939,8 +948,8 @@ impl Workspace {
             fs::create_dir_all(&trash)?;
             trash.join(id)
         };
-        let target_conflict =
-            target.exists() && (linked(&target)? || hash(&fs::read(&target)?) != expected);
+        let target_conflict = target.exists()
+            && (linked(&target)? || crate::payloads::hash_file(&target)? != expected);
         if source_conflict || target_conflict {
             let tx = self.db.transaction()?;
             tx.execute("UPDATE file_ops SET state='conflict' WHERE id=?1", [id])?;
@@ -951,14 +960,14 @@ impl Workspace {
             tx.commit()?;
             return Err(HostError::new("RECOVERY_CONFLICT"));
         }
-        // journal 保留完整内容，目标刷盘后才删除来源；两处崩溃均可幂等重放。
+        // The durable payload remains available after removing the source.
         if !target.exists() {
             let parent = target
                 .parent()
                 .ok_or_else(|| HostError::new("UNSAFE_PATH"))?;
             fs::create_dir_all(parent)?;
             let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-            temp.write_all(&content)?;
+            crate::payloads::copy_verified(&mut payload, &mut temp, &digest, size as u64)?;
             temp.as_file().sync_all()?;
             temp.persist_noclobber(&target)
                 .map_err(|_| HostError::new("PATH_CONFLICT"))?;
@@ -1041,6 +1050,108 @@ mod tests {
             b"safe"
         );
         assert_eq!(ws.pending_count().unwrap(), 3);
+    }
+
+    #[test]
+    fn hundred_mib_file_operations_recover_each_copy_stage_without_duplicate_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        fs::create_dir(dir.path().join("attachments")).unwrap();
+        let mut path = "attachments/source.bin".to_owned();
+        let mut source = File::create(dir.path().join(&path)).unwrap();
+        let block = vec![23u8; 64 * 1024];
+        for _ in 0..1600 {
+            source.write_all(&block).unwrap();
+        }
+        source.sync_all().unwrap();
+        drop(source);
+        let digest = crate::payloads::hash_file(&dir.path().join(&path)).unwrap();
+        let seed = Uuid::new_v4().to_string();
+        ws.store_payload_file(&seed, &dir.path().join(&path), &digest)
+            .unwrap();
+        let identity = Uuid::new_v4().to_string();
+        ws.write_spooled_with_identity(
+            &path,
+            &digest,
+            (&digest, 100 * 1024 * 1024),
+            "remote",
+            &Uuid::new_v4().to_string(),
+            Some(&identity),
+        )
+        .unwrap();
+        for stage in 0..3 {
+            let target = format!("attachments/stage-{stage}.bin");
+            let operation = ws
+                .prepare_file_op("rename", &path, &target, &digest)
+                .unwrap();
+            if stage >= 1 {
+                fs::copy(dir.path().join(&path), dir.path().join(&target)).unwrap();
+            }
+            if stage == 2 {
+                fs::remove_file(dir.path().join(&path)).unwrap();
+            }
+            drop(ws);
+            ws = Workspace::open(dir.path()).unwrap();
+            assert!(!dir.path().join(&path).exists());
+            assert_eq!(
+                crate::payloads::hash_file(&dir.path().join(&target)).unwrap(),
+                digest
+            );
+            assert_eq!(ws.entry(&target).unwrap().unwrap().file_id, identity);
+            assert_eq!(
+                ws.operation(&operation).unwrap().unwrap()["state"],
+                "committed"
+            );
+            let revision = ws.entry(&target).unwrap().unwrap().revision;
+            drop(ws);
+            ws = Workspace::open(dir.path()).unwrap();
+            assert_eq!(ws.entry(&target).unwrap().unwrap().revision, revision);
+            assert_eq!(
+                ws.db
+                    .query_row(
+                        "SELECT COUNT(*) FROM outbox WHERE operation_id=?1",
+                        [&operation],
+                        |r| r.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                1
+            );
+            path = target;
+        }
+        let deletion = ws.prepare_file_op("delete", &path, "", &digest).unwrap();
+        fs::remove_file(dir.path().join(&path)).unwrap();
+        drop(ws);
+        ws = Workspace::open(dir.path()).unwrap();
+        assert_eq!(
+            crate::payloads::hash_file(&dir.path().join(".ainote/trash").join(&deletion)).unwrap(),
+            digest
+        );
+        assert!(ws.entry(&path).unwrap().unwrap().deleted);
+        ws.recover().unwrap();
+        assert_eq!(ws.pending_count().unwrap(), 4);
+        let restored = "attachments/conflict.bin";
+        ws.write_spooled_with_identity(
+            restored,
+            "",
+            (&digest, 100 * 1024 * 1024),
+            "remote",
+            &Uuid::new_v4().to_string(),
+            None,
+        )
+        .unwrap();
+        let conflict = ws.prepare_file_op("delete", restored, "", &digest).unwrap();
+        fs::write(dir.path().join(restored), b"external edit").unwrap();
+        drop(ws);
+        ws = Workspace::open(dir.path()).unwrap();
+        assert_eq!(
+            fs::read(dir.path().join(restored)).unwrap(),
+            b"external edit"
+        );
+        assert_eq!(
+            ws.operation(&conflict).unwrap().unwrap()["state"],
+            "conflict"
+        );
+        assert_eq!(ws.pending_count().unwrap(), 4);
     }
 
     #[test]
