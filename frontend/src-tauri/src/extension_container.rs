@@ -690,11 +690,11 @@ mod tests {
         real_native_protocol_probes(true, false);
     }
     #[test]
-    #[ignore = "real AppContainer MCP descendant CPU pressure; run explicitly"]
-    fn real_mcp_cpu_pressure_reports_resource_error_and_reaps_tree() {
+    #[ignore = "real AppContainer MCP CPU/memory/process exhaustion; run explicitly"]
+    fn real_mcp_resource_pressure_reports_error_and_reaps_tree() {
         real_native_protocol_probes(false, true);
     }
-    fn real_native_protocol_probes(_mcp_deadline: bool, cpu: bool) {
+    fn real_native_protocol_probes(_mcp_deadline: bool, resources: bool) {
         use std::{
             net::{TcpListener, UdpSocket},
             os::windows::fs::OpenOptionsExt,
@@ -971,8 +971,8 @@ mod tests {
             if _mcp_deadline {
                 mcp_modes.push("mcp_deadline");
             }
-            if cpu {
-                mcp_modes.push("mcp_cpu");
+            if resources {
+                mcp_modes.extend(["mcp_cpu", "mcp_memory", "mcp_processes"]);
             }
             for mode in mcp_modes {
                 use std::sync::{
@@ -1092,27 +1092,36 @@ mod tests {
                             );
                             assert!(session.take_tools_changed());
                         }
-                        "mcp_cpu" => {
-                            assert_eq!(result.unwrap_err().code, "EXTENSION_RESOURCE_CPU_EXCEEDED");
+                        "mcp_cpu" | "mcp_memory" | "mcp_processes" => {
+                            let expected = match mode {
+                                "mcp_memory" => "EXTENSION_RESOURCE_MEMORY_EXCEEDED",
+                                "mcp_processes" => "EXTENSION_RESOURCE_PROCESSES_EXCEEDED",
+                                _ => "EXTENSION_RESOURCE_CPU_EXCEEDED",
+                            };
+                            assert_eq!(result.unwrap_err().code, expected);
                             let elapsed = tool_started.elapsed();
-                            assert!(elapsed < std::time::Duration::from_secs(20));
-                            eprintln!("AppContainer MCP descendant CPU error: {elapsed:?}");
+                            assert!(
+                                elapsed
+                                    < std::time::Duration::from_secs(if mode == "mcp_cpu" {
+                                        20
+                                    } else {
+                                        10
+                                    })
+                            );
+                            eprintln!("AppContainer {mode} resource error: {elapsed:?}");
                             assert_eq!(
                                 session.refresh_tools(&cancel).err().unwrap().code,
                                 "EXTENSION_MCP_SESSION_FAILED"
                             );
-                            assert_eq!(
-                                running.check_authorization().unwrap_err().code,
-                                "EXTENSION_RESOURCE_CPU_EXCEEDED"
-                            );
+                            assert_eq!(running.check_authorization().unwrap_err().code, expected);
                             let vault = tempfile::tempdir().unwrap();
                             let mut workspace =
                                 crate::workspace::Workspace::open(vault.path()).unwrap();
                             workspace
                                 .write(
-                                    "cpu-recovery.md",
+                                    "resource-recovery.md",
                                     "",
-                                    b"Host saved after descendant CPU termination",
+                                    b"Host saved after resource termination",
                                     "local",
                                 )
                                 .unwrap();
@@ -1120,10 +1129,10 @@ mod tests {
                             assert_eq!(
                                 crate::workspace::Workspace::open(vault.path())
                                     .unwrap()
-                                    .read("cpu-recovery.md")
+                                    .read("resource-recovery.md")
                                     .unwrap()
                                     .content,
-                                "Host saved after descendant CPU termination"
+                                "Host saved after resource termination"
                             );
                         }
                         "mcp_deadline" => {
