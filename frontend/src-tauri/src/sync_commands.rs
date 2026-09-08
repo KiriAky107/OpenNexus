@@ -321,6 +321,7 @@ async fn cycle(host: &Host, binding: &Binding) -> Result<(), SyncError> {
         .await?;
         let work = async {
             client.handshake().await?;
+            host.workspace.access(|ws| ws.sync_discover(&binding.id))?;
             for _ in 0..10 {
                 if client.pull_page(&host.workspace, binding).await? == 0 {
                     break;

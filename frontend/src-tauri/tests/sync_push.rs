@@ -303,6 +303,140 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
             );
         }
     }
+
+    // Kill the actual client process after each durable 10 MiB server offset,
+    // before its response reaches the client. The next process must query offset.
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
+    let large_remote = client
+        .json(
+            reqwest::Method::POST,
+            "sync/v1/vaults",
+            Some(json!({"name":"100 MiB resumable"})),
+        )
+        .await
+        .unwrap();
+    let large_remote = large_remote["vault_id"].as_str().unwrap();
+    let large_root = tempfile::tempdir().unwrap();
+    let mut large_ws = Workspace::open(large_root.path()).unwrap();
+    let large_binding = large_ws
+        .sync_bind_empty(&endpoint, large_remote, "rust-fixture")
+        .unwrap();
+    std::fs::create_dir(large_root.path().join("attachments")).unwrap();
+    let mut attachment =
+        std::fs::File::create(large_root.path().join("attachments/large.bin")).unwrap();
+    let block = vec![42u8; 1024 * 1024];
+    let mut hasher = Sha256::new();
+    for _ in 0..100 {
+        attachment.write_all(&block).unwrap();
+        hasher.update(&block);
+    }
+    attachment.sync_all().unwrap();
+    drop(attachment);
+    let expected_hash = format!("{:x}", hasher.finalize());
+    assert_eq!(large_ws.sync_discover(&large_binding.id).unwrap(), 1);
+    large_ws.sync_capture(&large_binding.id).unwrap();
+    let large_id = large_ws
+        .sync_next(&large_binding.id)
+        .unwrap()
+        .unwrap()
+        .file_id;
+    drop(large_ws);
+    std::fs::write(root.path().join("interrupt-upload"), b"controlled-fixture").unwrap();
+    for boundary in 1..=10 {
+        let mut worker = Server(
+            Command::new(std::env::current_exe().unwrap())
+                .args(["--ignored", "--exact", "resumable_upload_worker"])
+                .env("OPENNEXUS_SYNC_WORKER_ROOT", large_root.path())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        worker
+            .0
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(session.access_token.as_bytes())
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+        let marker = root.path().join("upload-boundary");
+        while !marker.exists() {
+            assert!(
+                worker.0.try_wait().unwrap().is_none(),
+                "upload worker exited before boundary {boundary}"
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "upload boundary timeout"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert_eq!(
+            std::fs::read_to_string(&marker)
+                .unwrap()
+                .parse::<usize>()
+                .unwrap(),
+            boundary * 10 * 1024 * 1024
+        );
+        worker.0.kill().unwrap();
+        worker.0.wait().unwrap();
+        std::fs::remove_file(marker).unwrap();
+    }
+    std::fs::remove_file(root.path().join("interrupt-upload")).unwrap();
+    let large_workspace = Arc::new(Mutex::new(Workspace::open(large_root.path()).unwrap()));
+    assert!(client
+        .push_one(&large_workspace, &large_binding)
+        .await
+        .unwrap());
+    assert!(!client
+        .push_one(&large_workspace, &large_binding)
+        .await
+        .unwrap());
+    let download_root = tempfile::tempdir().unwrap();
+    let download = Arc::new(Mutex::new(Workspace::open(download_root.path()).unwrap()));
+    let download_binding = download
+        .lock()
+        .unwrap()
+        .sync_bind_download(&endpoint, large_remote, "rust-fixture")
+        .unwrap();
+    assert_eq!(
+        client_b
+            .pull_page(&download, &download_binding)
+            .await
+            .unwrap(),
+        1
+    );
+    let received = std::fs::read(download_root.path().join("attachments/large.bin")).unwrap();
+    assert_eq!(received.len(), 104857600);
+    assert_eq!(format!("{:x}", Sha256::digest(&received)), expected_hash);
+    assert_eq!(
+        download.lock().unwrap().path_for_id(&large_id).unwrap(),
+        "attachments/large.bin"
+    );
+    assert_eq!(download.lock().unwrap().pending_count().unwrap(), 0);
+    assert_eq!(
+        download
+            .lock()
+            .unwrap()
+            .sync_discover(&download_binding.id)
+            .unwrap(),
+        0
+    );
+    // SQLite stores metadata, never the 100 MiB body.
+    for directory in [large_root.path(), download_root.path()] {
+        let managed = directory.join(".ainote");
+        for item in std::fs::read_dir(managed).unwrap().flatten() {
+            if item.file_type().unwrap().is_file() {
+                assert!(
+                    item.metadata().unwrap().len() < 5 * 1024 * 1024,
+                    "large body leaked into metadata storage"
+                );
+            }
+        }
+    }
     // Host sessions survive encrypted storage reopen and refresh on the actual service.
     use notesagent_host::{credentials::CredentialBroker, sync_auth};
     let credential_root = tempfile::tempdir().unwrap();
@@ -358,4 +492,21 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
             .status,
         401
     );
+}
+
+#[tokio::test]
+#[ignore = "helper process driven and killed by the parent fault test"]
+async fn resumable_upload_worker() {
+    let root = std::env::var("OPENNEXUS_SYNC_WORKER_ROOT").expect("controlled fixture root");
+    let ws = Arc::new(Mutex::new(Workspace::open(Path::new(&root)).unwrap()));
+    let binding = ws.lock().unwrap().sync_binding().unwrap().unwrap();
+    assert!(binding.endpoint.starts_with("http://127.0.0.1:"));
+    use std::io::Read;
+    let mut token = Zeroizing::new(String::new());
+    std::io::stdin()
+        .take(4096)
+        .read_to_string(&mut token)
+        .unwrap();
+    let client = SyncClient::new(&binding.endpoint, token, true).unwrap();
+    client.push_one(&ws, &binding).await.unwrap();
 }

@@ -2,6 +2,7 @@
 
 pub mod core;
 pub mod credentials;
+mod payloads;
 pub mod recent;
 #[cfg(feature = "desktop")]
 pub mod request_lifecycle;
@@ -12,6 +13,7 @@ pub mod session_lock;
 pub mod sync_auth;
 #[cfg(feature = "desktop")]
 pub mod sync_client;
+pub mod sync_discovery;
 pub mod sync_inbox;
 pub mod sync_resolution;
 pub mod sync_state;

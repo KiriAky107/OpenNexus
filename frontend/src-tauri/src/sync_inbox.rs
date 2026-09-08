@@ -47,6 +47,9 @@ impl RemoteRevision {
         {
             return Err(HostError::new("SYNC_RESPONSE_INVALID"));
         }
+        if !crate::sync_discovery::allowed(&self.path) {
+            return Err(HostError::new("SYNC_CLASS_UNSUPPORTED"));
+        }
         Ok(())
     }
 }
@@ -61,11 +64,7 @@ impl Workspace {
         if self.sync_binding()?.is_some() {
             return Err(HostError::new("SYNC_ALREADY_BOUND"));
         }
-        if self
-            .scan()?
-            .iter()
-            .any(|entry| !entry.is_folder && !entry.deleted)
-        {
+        if !self.sync_paths()?.is_empty() {
             return Err(HostError::new("SYNC_RECONCILIATION_REQUIRED"));
         }
         let id = Uuid::new_v4().to_string();

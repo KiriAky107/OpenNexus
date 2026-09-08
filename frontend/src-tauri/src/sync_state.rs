@@ -1,8 +1,8 @@
 //! Durable queue state. Network code never invents a remote base from a local revision.
-use crate::workspace::{hash, HostError, Result, Workspace};
+use crate::workspace::{HostError, Result, Workspace};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::{fs, io::Write, path::PathBuf};
+use std::{fs, path::PathBuf};
 use uuid::Uuid;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -147,28 +147,31 @@ impl Workspace {
             let Some((operation_id, file_id, path, digest, operation, content)) = pending else {
                 break;
             };
-            if operation == "put" {
-                if hash(&content) != digest {
+            if !crate::sync_discovery::allowed(&path) {
+                self.db.execute(
+                    "UPDATE outbox SET state='excluded' WHERE operation_id=?1",
+                    [&operation_id],
+                )?;
+                continue;
+            }
+            let size = if operation == "put" {
+                if self.payload_ref(&operation_id)?.is_none() {
+                    self.store_payload(&operation_id, &content)?;
+                }
+                let (stored, size) = self
+                    .payload_ref(&operation_id)?
+                    .ok_or_else(|| HostError::new("SYNC_SPOOL_CORRUPT"))?;
+                if stored != digest {
                     return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
                 }
-                let target = self.sync_spool(&digest)?;
-                if target.exists() {
-                    if fs::symlink_metadata(&target)?.file_type().is_symlink()
-                        || hash(&fs::read(&target)?) != digest
-                    {
-                        return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
-                    }
-                } else {
-                    let mut temp = tempfile::NamedTempFile::new_in(target.parent().unwrap())?;
-                    temp.write_all(&content)?;
-                    temp.as_file().sync_all()?;
-                    temp.persist_noclobber(target)
-                        .map_err(|_| HostError::new("SYNC_SPOOL_FAILED"))?;
-                }
-            }
+                crate::payloads::verify(&self.sync_spool(&digest)?, &digest, size as u64)?;
+                size
+            } else {
+                0
+            };
             let tx = self.db.transaction()?;
             tx.execute("INSERT OR IGNORE INTO sync_jobs VALUES (?1,?2,?3,?4,?5,?6,?7,'pending',NULL,NULL,NULL,NULL)",
-                params![binding,operation_id,file_id,path,digest,content.len() as i64,operation])?;
+                params![binding,operation_id,file_id,path,digest,size,operation])?;
             tx.execute(
                 "UPDATE outbox SET state='queued',content=X'' WHERE operation_id=?1",
                 [&operation_id],
@@ -179,9 +182,16 @@ impl Workspace {
     }
     pub fn sync_next(&self, binding: &str) -> Result<Option<Job>> {
         self.check_binding(binding)?;
-        Ok(self.db.query_row("SELECT binding,operation_id,file_id,path,hash,size,operation,state,base_revision,upload_id FROM sync_jobs WHERE binding=?1 AND state NOT IN ('acked','archived','conflict') AND NOT EXISTS (SELECT 1 FROM sync_conflicts c WHERE c.binding=sync_jobs.binding AND c.file_id=sync_jobs.file_id AND c.state='open') ORDER BY rowid LIMIT 1", [binding], |r| {
+        let job=self.db.query_row("SELECT binding,operation_id,file_id,path,hash,size,operation,state,base_revision,upload_id FROM sync_jobs WHERE binding=?1 AND state NOT IN ('acked','archived','conflict') AND NOT EXISTS (SELECT 1 FROM sync_conflicts c WHERE c.binding=sync_jobs.binding AND c.file_id=sync_jobs.file_id AND c.state='open') ORDER BY rowid LIMIT 1", [binding], |r| {
             Ok(Job { binding:r.get(0)?,operation_id:r.get(1)?,file_id:r.get(2)?,path:r.get(3)?,hash:r.get(4)?,size:r.get(5)?,operation:r.get(6)?,state:r.get(7)?,base_revision:r.get(8)?,upload_id:r.get(9)? })
-        }).optional()?)
+        }).optional()?;
+        if job
+            .as_ref()
+            .is_some_and(|job| !crate::sync_discovery::allowed(&job.path))
+        {
+            return Err(HostError::new("SYNC_CLASS_UNSUPPORTED"));
+        }
+        Ok(job)
     }
     fn check_job(&self, job: &Job) -> Result<()> {
         self.check_binding(&job.binding)?;
@@ -258,6 +268,7 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace::hash;
     #[test]
     fn queue_uses_remote_bases_and_keeps_retry_payload_across_restart() {
         let root = tempfile::tempdir().unwrap();
