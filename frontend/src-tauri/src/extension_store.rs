@@ -106,6 +106,77 @@ fn source(value: &str) -> Result<String> {
     Ok(url.to_string())
 }
 impl ExtensionStore {
+    /// Creates a lock preview from local staged packages. This does not replace online revocation checks.
+    pub fn dependency_plan(
+        &self,
+        root_key: &str,
+        app_version: &str,
+        platform: &str,
+        architecture: &str,
+    ) -> Result<crate::extension_dependencies::Plan> {
+        use crate::extension_dependencies::{plan, Candidate};
+        let source: String = self.db.query_row(
+            "SELECT source FROM versions WHERE package_key=?1 AND state='staged'",
+            [root_key],
+            |r| r.get(0),
+        )?;
+        let mut statement=self.db.prepare("SELECT package_key,release,signer FROM versions WHERE source=?1 AND state='staged' ORDER BY package_key LIMIT 4097")?;
+        let mut rows = statement.query([&source])?;
+        let mut candidates = Vec::new();
+        let mut keys = std::collections::BTreeMap::new();
+        let mut total = 0usize;
+        while let Some(row) = rows.next()? {
+            let key: String = row.get(0)?;
+            let raw: String = row.get(1)?;
+            let signer: Vec<u8> = row.get(2)?;
+            total = total.saturating_add(raw.len());
+            if raw.len() > 256 * 1024 || total > 64 * 1024 * 1024 || candidates.len() >= 4096 {
+                return Err(HostError::new("EXTENSION_DEPENDENCY_COMPLEXITY"));
+            }
+            let public: [u8; 32] = signer
+                .try_into()
+                .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+            let release: Release = serde_json::from_str(&raw)
+                .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+            if key
+                != hash(
+                    &serde_json::to_vec(&(
+                        &source,
+                        &release.namespace,
+                        &release.package_id,
+                        &release.version,
+                    ))
+                    .unwrap(),
+                )
+            {
+                return Err(HostError::new("EXTENSION_STORE_CORRUPT"));
+            }
+            keys.insert(key.clone(), public);
+            candidates.push(Candidate {
+                package_key: key,
+                source: source.clone(),
+                release,
+                signer_sha256: hash(&public),
+            });
+        }
+        let result = plan(&candidates, root_key, app_version, platform, architecture)?;
+        for locked in &result.packages {
+            let candidate = candidates
+                .iter()
+                .find(|c| c.package_key == locked.package_key)
+                .ok_or_else(|| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+            let release = &candidate.release;
+            release.verify_package(
+                &keys[&locked.package_key],
+                &release.key_id,
+                &release.namespace,
+                false,
+                false,
+                &self.archive(&locked.package_key)?,
+            )?;
+        }
+        Ok(result)
+    }
     pub fn staged(&self, offset: u32, limit: u32) -> Result<Vec<StagedPackage>> {
         if limit == 0 || limit > 200 {
             return Err(HostError::new("EXTENSION_PAGE_INVALID"));
@@ -358,6 +429,71 @@ mod tests {
             withdrawn: false,
             archive,
         }
+    }
+    #[test]
+    fn staged_dependency_preview_survives_reopen_and_rechecks_archive_integrity() {
+        let (mut release, archive, key) = fixture();
+        let root = tempfile::tempdir().unwrap();
+        let mut store = ExtensionStore::open(root.path()).unwrap();
+        for version in ["1.0.0", "2.0.0"] {
+            release.package_id = "dependency".into();
+            release.version = version.into();
+            release.signature = STANDARD.encode(
+                SigningKey::from_bytes(&[7; 32])
+                    .sign(&release.signed_payload().unwrap())
+                    .to_bytes(),
+            );
+            store
+                .stage(request(
+                    &Uuid::new_v4().to_string(),
+                    &release,
+                    &archive,
+                    &key,
+                ))
+                .unwrap();
+        }
+        release.package_id = "test-package".into();
+        release.version = "1.0.0".into();
+        release
+            .dependencies
+            .insert("dependency".into(), "^1.0.0".into());
+        release.signature = STANDARD.encode(
+            SigningKey::from_bytes(&[7; 32])
+                .sign(&release.signed_payload().unwrap())
+                .to_bytes(),
+        );
+        let receipt = store
+            .stage(request(
+                &Uuid::new_v4().to_string(),
+                &release,
+                &archive,
+                &key,
+            ))
+            .unwrap();
+        let plan = store
+            .dependency_plan(&receipt.package_key, "0.3.0", "windows", "x86_64")
+            .unwrap();
+        assert_eq!(plan.packages.len(), 2);
+        assert_eq!(plan.packages[0].package_id, "dependency");
+        assert_eq!(plan.packages[0].version, "1.0.0");
+        drop(store);
+        let store = ExtensionStore::open(root.path()).unwrap();
+        assert_eq!(
+            plan.fingerprint,
+            store
+                .dependency_plan(&receipt.package_key, "0.3.0", "windows", "x86_64")
+                .unwrap()
+                .fingerprint
+        );
+        assert!(store
+            .staged(0, 100)
+            .unwrap()
+            .iter()
+            .all(|v| v.state == "staged"));
+        fs::write(store.object_path(&release.sha256).unwrap(), b"changed").unwrap();
+        assert!(store
+            .dependency_plan(&receipt.package_key, "0.3.0", "windows", "x86_64")
+            .is_err());
     }
     #[test]
     fn staging_recovers_each_durable_boundary_twenty_times() {
