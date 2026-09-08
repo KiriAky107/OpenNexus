@@ -96,3 +96,6 @@ pub mod extension_call_authorization;
 
 #[cfg(all(windows, feature = "desktop"))]
 pub mod extension_instance;
+
+#[cfg(windows)]
+mod process_creation;
