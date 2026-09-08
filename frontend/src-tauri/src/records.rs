@@ -38,6 +38,7 @@ pub fn path_for(kind: &str, id: &str) -> Result<String> {
         ("theme_settings", "appearance") => {
             Ok("opennexus-records/v1/theme-settings/appearance.json".into())
         }
+        ("layout", "sidebars") => Ok("opennexus-records/v1/layout/sidebars.json".into()),
         ("preferences", "editor") => Ok("opennexus-records/v1/preferences/editor.json".into()),
         _ => Err(HostError::new("RECORD_ID_INVALID")),
     }
@@ -50,6 +51,7 @@ pub fn allowed(path_value: &str) -> bool {
         path_value,
         "opennexus-records/v1/theme-settings/appearance.json"
             | "opennexus-records/v1/preferences/editor.json"
+            | "opennexus-records/v1/layout/sidebars.json"
     ) {
         return true;
     }

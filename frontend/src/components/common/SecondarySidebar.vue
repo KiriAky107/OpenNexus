@@ -8,6 +8,7 @@ import TaskFiltersPanel from '@/features/tasks/TaskFiltersPanel.vue'
 import ExtensionListPanel from '@/components/common/ExtensionListPanel.vue'
 import { useRoute } from 'vue-router'
 import { t } from '@/i18n'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 
 const props = defineProps<{
   component: string | null
@@ -17,15 +18,19 @@ const route = useRoute()
 const routeName = computed(() => route.name as string)
 const sidebar = ref<HTMLElement | null>(null)
 const resizable = computed(() => ['file-tree', 'conversation-list'].includes(props.component ?? ''))
-const storageKey = computed(() => props.component === 'conversation-list' ? 'chat-sidebar-width' : 'workspace-sidebar-width')
+const layout = useLayoutPreferencesStore()
+const preferredWidth = computed(() => props.component === 'conversation-list' ? layout.chatWidth : layout.workspaceWidth)
 const width = ref(272)
 const maxWidth = ref(520)
 let dragging = false
-function saveWidth() { try { localStorage.setItem(storageKey.value, String(width.value)) } catch { /* Keep resizing available when storage is unavailable. */ } }
+function saveWidth() {
+  if (props.component === 'conversation-list') layout.chatWidth = width.value
+  else layout.workspaceWidth = width.value
+}
 function clampWidth(value: number) { return Math.max(200, Math.min(maxWidth.value, value)) }
 function updateBounds() {
   maxWidth.value = Math.max(200, Math.min(520, window.innerWidth - (sidebar.value?.getBoundingClientRect().left ?? 0) - 320))
-  width.value = clampWidth(width.value)
+  width.value = clampWidth(dragging ? width.value : preferredWidth.value)
 }
 function beginResize(event: PointerEvent) {
   if (event.button !== 0) return
@@ -46,11 +51,10 @@ function resizeWithKeyboard(event: KeyboardEvent) {
   saveWidth()
 }
 function restoreWidth() {
-  width.value = 272
-  try { const saved = Number(localStorage.getItem(storageKey.value)); if (saved >= 200 && Number.isFinite(saved)) width.value = saved } catch { /* Use default width. */ }
+  width.value = preferredWidth.value
   updateBounds()
 }
-watch(() => props.component, () => { dragging = false; restoreWidth() })
+watch([() => props.component, preferredWidth], () => { dragging = false; restoreWidth() })
 onMounted(() => {
   restoreWidth()
   window.addEventListener('resize', updateBounds)

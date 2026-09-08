@@ -2,6 +2,8 @@
 import { expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
+import { createPinia } from 'pinia'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import SecondarySidebar from './SecondarySidebar.vue'
 
 it('keeps conversation and file widths separate across route changes', async () => {
@@ -9,7 +11,7 @@ it('keeps conversation and file widths separate across route changes', async () 
   localStorage.setItem('workspace-sidebar-width', '240')
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
   await router.push('/')
-  const wrapper = mount(SecondarySidebar, {props:{component:'conversation-list'}, global:{plugins:[router],stubs:{ConversationListPanel:true,FileTreePanel:true}}})
+  const wrapper = mount(SecondarySidebar, {props:{component:'conversation-list'}, global:{plugins:[router, createPinia()],stubs:{ConversationListPanel:true,FileTreePanel:true}}})
   await wrapper.vm.$nextTick()
   expect(wrapper.get('aside').attributes('style')).toContain('320px')
   await wrapper.get('[role="separator"]').trigger('keydown', {key:'ArrowRight'})
@@ -27,7 +29,7 @@ it('resizes by keyboard, clamps bounds and restores the saved width', async () =
   localStorage.removeItem('workspace-sidebar-width')
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
   await router.push('/')
-  const options = { props: { component: 'file-tree' }, global: { plugins: [router], stubs: { FileTreePanel: true } } }
+  const options = { props: { component: 'file-tree' }, global: { plugins: [router, createPinia()], stubs: { FileTreePanel: true } } }
   let wrapper = mount(SecondarySidebar, options)
   await wrapper.get('[role="separator"]').trigger('keydown', { key: 'ArrowRight' })
   expect(localStorage.getItem('workspace-sidebar-width')).toBe('288')
@@ -39,4 +41,34 @@ it('resizes by keyboard, clamps bounds and restores the saved width', async () =
   expect(wrapper.get('aside').attributes('style')).toContain('200px')
   wrapper.unmount()
   localStorage.removeItem('workspace-sidebar-width')
+})
+
+
+it('applies remote widths but keeps viewport clamping out of portable preferences', async () => {
+  const pinia = createPinia()
+  const layout = useLayoutPreferencesStore(pinia)
+  layout.workspaceWidth = 480
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
+  await router.push('/')
+  const wrapper = mount(SecondarySidebar, { props: { component: 'file-tree' }, global: { plugins: [router, pinia], stubs: { FileTreePanel: true } } })
+  const original = window.innerWidth
+  try {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 600 })
+    window.dispatchEvent(new Event('resize'))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('aside').attributes('style')).toContain('280px')
+    expect(layout.workspaceWidth).toBe(480)
+    layout.workspaceWidth = 420
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('aside').attributes('style')).toContain('280px')
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1200 })
+    window.dispatchEvent(new Event('resize'))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('aside').attributes('style')).toContain('420px')
+    expect(layout.workspaceWidth).toBe(420)
+  } finally {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: original })
+    wrapper.unmount()
+    localStorage.clear()
+  }
 })
