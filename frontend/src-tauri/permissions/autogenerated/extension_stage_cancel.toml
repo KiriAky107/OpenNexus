@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-extension-stage-cancel"
+description = "Enables the extension_stage_cancel command without any pre-configured scope."
+commands.allow = ["extension_stage_cancel"]
+
+[[permission]]
+identifier = "deny-extension-stage-cancel"
+description = "Denies the extension_stage_cancel command without any pre-configured scope."
+commands.deny = ["extension_stage_cancel"]

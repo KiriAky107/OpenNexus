@@ -96,8 +96,21 @@ export async function installRelease(source: CommunitySource, selected: Communit
     if (!source.enabled || selected.withdrawn) throw new Error('来源已停用或发行已撤回')
     const release = { ...selected } as Partial<CommunityRelease>
     delete release.release_id; delete release.withdrawn; delete release.download_path
-    await invoke('extension_stage', { request: { operation_id: crypto.randomUUID(), source: source.url, release } })
-    return '已校验并暂存到桌面安装库，尚未安装或启用'
+    const operationId = crypto.randomUUID()
+    const requestId = await invoke<string>('extension_stage_prepare')
+    const cancel = () => { void invoke('extension_stage_cancel', { requestId }).catch(() => undefined) }
+    signal?.addEventListener('abort', cancel, { once: true })
+    try {
+      if (signal?.aborted) { cancel(); signal.throwIfAborted() }
+      await invoke('extension_stage', { request: { request_id: requestId, operation_id: operationId, source: source.url, release } })
+      return '已校验并暂存到桌面安装库，尚未安装或启用'
+    } catch (error) {
+      if (signal?.aborted) {
+        const receipt = await invoke<{ state: string } | null>('extension_stage_status', { operationId }).catch(() => null)
+        if (receipt?.state === 'staged') return '取消前已完成暂存，尚未安装或启用'
+      }
+      throw error
+    } finally { signal?.removeEventListener('abort', cancel); cancel() }
   }
   const catalog = await fetchCatalog(source, '', selected.type, signal)
   const release = catalog.items.find(item => item.release_id === selected.release_id)

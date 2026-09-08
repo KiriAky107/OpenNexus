@@ -606,6 +606,17 @@ impl ExtensionStore {
         source_url: &str,
         release: &Release,
     ) -> Result<Receipt> {
+        self.stage_online_checked(operation, source_url, release, || Ok(()))
+            .await
+    }
+    pub async fn stage_online_checked(
+        &mut self,
+        operation: &str,
+        source_url: &str,
+        release: &Release,
+        checkpoint: impl Fn() -> Result<()>,
+    ) -> Result<Receipt> {
+        checkpoint()?;
         Uuid::parse_str(operation).map_err(|_| HostError::new("OPERATION_ID_INVALID"))?;
         let origin = source(source_url)?;
         let trusted = self
@@ -637,19 +648,22 @@ impl ExtensionStore {
         let archive = client
             .download(&checked, release, &trusted.public_key)
             .await?;
-        self.stage(Stage {
-            operation_id: operation,
-            source: &origin,
-            release,
-            archive: &archive,
-            withdrawn: false,
-            signer: Signer {
-                public_key: &trusted.public_key,
-                key_id: &trusted.key_id,
-                namespace: &trusted.namespace,
-                revoked: false,
+        self.stage_inner(
+            Stage {
+                operation_id: operation,
+                source: &origin,
+                release,
+                archive: &archive,
+                withdrawn: false,
+                signer: Signer {
+                    public_key: &trusted.public_key,
+                    key_id: &trusted.key_id,
+                    namespace: &trusted.namespace,
+                    revoked: false,
+                },
             },
-        })
+            |_| checkpoint(),
+        )
     }
     /// Online installation gate, using confirmed Host trust settings only.
     pub async fn switch_online(
@@ -1015,6 +1029,21 @@ impl ExtensionStore {
         crate::payloads::verify(&path, digest, size)
             .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))
     }
+    pub fn stage_receipt(&self, operation: &str) -> Result<Option<Receipt>> {
+        Uuid::parse_str(operation).map_err(|_| HostError::new("OPERATION_ID_INVALID"))?;
+        let json: Option<String> = self
+            .db
+            .query_row(
+                "SELECT receipt FROM stage_operations WHERE id=?1",
+                [operation],
+                |r| r.get(0),
+            )
+            .optional()?;
+        json.map(|v| {
+            serde_json::from_str(&v).map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))
+        })
+        .transpose()
+    }
     pub fn archive(&self, package_key: &str) -> Result<Vec<u8>> {
         let (digest, size): (String, u64) = self.db.query_row(
             "SELECT archive_hash,size FROM versions WHERE package_key=?1",
@@ -1080,6 +1109,34 @@ mod tests {
             release,
             withdrawn: false,
             archive,
+        }
+    }
+    #[test]
+    fn cancelled_stage_reports_durable_commit_race_truthfully() {
+        let (release, archive, key) = fixture();
+        for boundary in ["object_stored", "receipt_recorded", "committed"] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut store = ExtensionStore::open(temp.path()).unwrap();
+            let operation = Uuid::new_v4().to_string();
+            assert_eq!(
+                store
+                    .stage_inner(request(&operation, &release, &archive, &key), |at| {
+                        if at == boundary {
+                            Err(HostError::new("REQUEST_CANCELLED"))
+                        } else {
+                            Ok(())
+                        }
+                    })
+                    .unwrap_err()
+                    .code,
+                "REQUEST_CANCELLED"
+            );
+            drop(store);
+            let store = ExtensionStore::open(temp.path()).unwrap();
+            assert_eq!(
+                store.stage_receipt(&operation).unwrap().is_some(),
+                boundary == "committed"
+            );
         }
     }
     #[tokio::test]
