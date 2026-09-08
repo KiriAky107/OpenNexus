@@ -55,6 +55,10 @@ class RetrievalEngine:
 
     @track_search
     async def search(self, request: SearchRequest) -> SearchResponse:
+        from app.config import get_settings
+        if get_settings().environment == 'desktop':
+            from app.services.desktop_projection import refresh
+            await refresh()
         if request.mode == SearchMode.fts:
             return self._search_fts(request)
 

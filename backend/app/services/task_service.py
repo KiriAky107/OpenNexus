@@ -9,7 +9,7 @@ from weakref import WeakKeyDictionary
 
 from app import repository
 from app.contracts import Task, TaskStatus
-from app.database.db import connect, transaction
+from app.database.db import connect_knowledge as connect, transaction
 from app.errors import ApiError
 from app.operation_logs import log_event
 
@@ -39,6 +39,13 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _prepare_note_link(note_id: str | None) -> None:
+    from app.config import get_settings
+    if note_id and get_settings().environment == 'desktop':
+        from app.services.desktop_projection import _refresh
+        _refresh()
+
+
 def _task_from_row(row) -> Task:
     return Task(
         task_id=row["task_id"],
@@ -56,6 +63,7 @@ def create_task(
     *, title: str, description: str = "", note_id: str | None = None,
     due_at: datetime | None = None,
 ) -> Task:
+    _prepare_note_link(note_id)
     if note_id and repository.get_note_record(note_id) is None:
         raise ApiError(404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id})
     task_id = f"task_{uuid4().hex}"
@@ -109,6 +117,7 @@ def update_task(task_id: str, values: dict[str, object]) -> Task:
         raise ApiError(404, "RESOURCE_NOT_FOUND", "task not found", {"task_id": task_id})
     if "note_id" in values and values["note_id"]:
         note_id = str(values["note_id"])
+        _prepare_note_link(note_id)
         if repository.get_note_record(note_id) is None:
             raise ApiError(404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id})
     if values.get("title") is None:
