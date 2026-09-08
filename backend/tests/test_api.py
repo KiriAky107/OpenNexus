@@ -77,6 +77,18 @@ def test_health() -> None:
     assert response.model_dump() == {"status": "ok"}
 
 
+@pytest.mark.parametrize("origin", ["http://tauri.localhost", "tauri://localhost"])
+def test_desktop_origins_can_read_streaming_api(origin: str) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    response = TestClient(app).get("/health", headers={"Origin": origin})
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+
+
 def test_mcp_create_and_trust_are_not_executed_on_event_loop(monkeypatch) -> None:
     from app import routes
     from app.contracts import McpServerCreateRequest, McpServerTrustRequest
