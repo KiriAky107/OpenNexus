@@ -16,6 +16,8 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "host_capabilities",
+            "record_get",
+            "record_write",
             "sync_login",
             "sync_vaults",
             "sync_create_vault",

@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, expect, it, vi } from 'vitest'
 import { hostInvoke } from '@/services/platform/desktop'
 import SyncSettings from './SyncSettings.vue'
+vi.mock('@/services/platform/preferenceSync', () => ({ preferenceSyncIssues: [], resolvePreferenceDraft: vi.fn(), seedCurrentPreferences: vi.fn() }))
 vi.mock('@/services/platform/desktop', () => ({ hostInvoke: vi.fn() }))
 const confirm = vi.hoisted(() => vi.fn())
 vi.mock('@/composables/useActionDialog', () => ({ useActionDialog: () => ({ actionDialog: null, resolveAction: vi.fn(), askConfirm: confirm }) }))

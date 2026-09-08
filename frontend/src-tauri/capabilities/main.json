@@ -47,6 +47,8 @@
     "allow-sync-resolve",
     "allow-sync-logout",
     "allow-sync-run",
-    "allow-sync-preview"
+    "allow-sync-preview",
+    "allow-record-get",
+    "allow-record-write"
   ]
 }

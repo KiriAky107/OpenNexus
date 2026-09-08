@@ -3,6 +3,7 @@
 pub mod core;
 pub mod credentials;
 mod payloads;
+mod preference_records;
 pub mod recent;
 pub mod records;
 #[cfg(feature = "desktop")]

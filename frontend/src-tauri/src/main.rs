@@ -2,6 +2,8 @@
 
 //! 预览 Host 只开放本地文件命令；未接通的 AI / 同步 / 凭据能力明确返回不可用。
 
+mod record_commands;
+use record_commands::*;
 mod sync_commands;
 use sync_commands::*;
 
@@ -831,6 +833,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             host_capabilities,
+            record_get,
+            record_write,
             sync_login,
             sync_vaults,
             sync_create_vault,

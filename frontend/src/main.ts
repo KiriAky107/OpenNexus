@@ -10,6 +10,7 @@ import { useSettingsStore } from './stores/settings'
 import { watch } from 'vue'
 import { appLocale } from './i18n'
 import { updateDocumentTitle } from './router'
+import { installPreferenceSync } from './services/platform/preferenceSync'
 import { installDesktopLifecycle } from './services/platform/lifecycle'
 
 const app = createApp(App)
@@ -20,7 +21,7 @@ app.use(router)
 
 const themeStore = useThemeStore()
 const settingsStore = useSettingsStore()
-void themeStore.initTheme()
+void themeStore.initTheme().then(installPreferenceSync, installPreferenceSync)
 watch(appLocale, () => updateDocumentTitle())
 watch(() => settingsStore.spellCheck, (enabled) => {
   document.body.spellcheck = enabled
