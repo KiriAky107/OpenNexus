@@ -26,11 +26,11 @@ struct Attributes {
     initialized: bool,
 }
 impl Attributes {
-    fn new() -> Result<Self> {
+    fn new(count: u32) -> Result<Self> {
         let bad = || HostError::new("EXTENSION_PROCESS_ATTRIBUTES_FAILED");
         let mut bytes = 0;
         unsafe {
-            InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut bytes);
+            InitializeProcThreadAttributeList(std::ptr::null_mut(), count, 0, &mut bytes);
         }
         if bytes == 0 || bytes > 65536 {
             return Err(bad());
@@ -40,7 +40,12 @@ impl Attributes {
             initialized: false,
         };
         if unsafe {
-            InitializeProcThreadAttributeList(value.buffer.as_mut_ptr().cast(), 1, 0, &mut bytes)
+            InitializeProcThreadAttributeList(
+                value.buffer.as_mut_ptr().cast(),
+                count,
+                0,
+                &mut bytes,
+            )
         } == 0
         {
             return Err(bad());
@@ -94,7 +99,15 @@ impl<'a> Suspended<'a> {
     /// Creates hidden, with no inherited handles and an explicit environment and
     /// current directory. The profile borrow prevents cleanup while this owner
     /// exists. This API never resumes extension instructions.
-    pub fn create(profile: &'a Profile, executable: &Path, mut data: LaunchData) -> Result<Self> {
+    pub fn create(profile: &'a Profile, executable: &Path, data: LaunchData) -> Result<Self> {
+        Self::create_inner(profile, executable, data, None)
+    }
+    fn create_inner(
+        profile: &'a Profile,
+        executable: &Path,
+        mut data: LaunchData,
+        io: Option<crate::extension_stdio::ChildIo>,
+    ) -> Result<Self> {
         let bad = || HostError::new("EXTENSION_PROCESS_CREATE_FAILED");
         if !executable.is_absolute() || data.command_mut().last() != Some(&0) {
             return Err(bad());
@@ -106,7 +119,7 @@ impl<'a> Suspended<'a> {
         let executable: Vec<_> = executable.into_iter().chain(Some(0)).collect();
         let folder = profile.folder()?;
         let directory: Vec<u16> = folder.as_os_str().encode_wide().chain(Some(0)).collect();
-        let mut attributes = Attributes::new()?;
+        let mut attributes = Attributes::new(if io.is_some() { 2 } else { 1 })?;
         let caps = SECURITY_CAPABILITIES {
             AppContainerSid: profile.sid(),
             Capabilities: std::ptr::null_mut(),
@@ -131,6 +144,29 @@ impl<'a> Suspended<'a> {
         let mut startup = STARTUPINFOEXW::default();
         startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
         startup.lpAttributeList = attributes.buffer.as_mut_ptr().cast();
+        // Keep both the handle array and the owning pipe ends alive across
+        // CreateProcessW. No arbitrary inheritable Host handle is admitted.
+        let inherited = io.as_ref().map(|value| value.handles());
+        if let Some(handles) = &inherited {
+            if unsafe {
+                UpdateProcThreadAttribute(
+                    attributes.buffer.as_mut_ptr().cast(),
+                    0,
+                    PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                    handles.as_ptr().cast(),
+                    size_of::<[windows_sys::Win32::Foundation::HANDLE; 3]>(),
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                )
+            } == 0
+            {
+                return Err(HostError::new("EXTENSION_PROCESS_ATTRIBUTES_FAILED"));
+            }
+            startup.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+            startup.StartupInfo.hStdInput = handles[0];
+            startup.StartupInfo.hStdOutput = handles[1];
+            startup.StartupInfo.hStdError = handles[2];
+        }
         let mut info = PROCESS_INFORMATION::default();
         let environment = data.environment().as_ptr();
         if unsafe {
@@ -139,7 +175,7 @@ impl<'a> Suspended<'a> {
                 data.command_mut().as_mut_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
-                0,
+                i32::from(io.is_some()),
                 CREATE_SUSPENDED
                     | CREATE_NO_WINDOW
                     | EXTENDED_STARTUPINFO_PRESENT
@@ -181,6 +217,19 @@ impl<'a> Suspended<'a> {
         let mut value = Self::create(profile, entry.path(), data)?;
         value.0._bound_entry = Some(entry);
         Ok(value)
+    }
+    /// Create instance-specific stdio without exposing an address or trusting a
+    /// self-reported process/package identity. Host endpoints are never inherited.
+    #[cfg(feature = "desktop")]
+    pub fn create_bound_with_stdio(
+        profile: &'a Profile,
+        entry: &'a crate::extension_pinned::BoundEntry<'a>,
+        data: LaunchData,
+    ) -> Result<(Self, crate::extension_stdio::HostIo)> {
+        let (child, host) = crate::extension_stdio::ChildIo::create()?;
+        let mut value = Self::create_inner(profile, entry.path(), data, Some(child))?;
+        value.0._bound_entry = Some(entry);
+        Ok((value, host))
     }
     /// # Safety
     /// Caller must hold the verified package/entry handles and revalidate the
