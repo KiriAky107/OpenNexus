@@ -143,7 +143,7 @@ function toggleSource() {
         <dl><dt>作者 / 来源</dt><dd>{{ detail.author_id }} / {{ detail.namespace }}</dd><dt>许可证</dt><dd>{{ detail.license }}</dd><dt>大小 / 摘要</dt><dd>{{ detail.size }} 字节<br />{{ detail.sha256 }}</dd><dt>兼容平台</dt><dd>{{ detail.platforms.join(', ') }} / {{ detail.architectures.join(', ') }}</dd><dt>权限</dt><dd>{{ detail.permissions.join(', ') || '无' }}</dd><dt>依赖</dt><dd>{{ JSON.stringify(detail.dependencies) }}</dd></dl>
         <pre>{{ detail.changelog }}</pre>
         <p>安装不会自动启用包或其依赖。人设、模板、MCP 与模型方案仅保存为可检查的候选。</p>
-        <button class="btn btn-primary" :disabled="busy || detail.withdrawn || offline" @click="install">校验并安装</button>
+        <button class="btn btn-primary" :disabled="busy || detail.withdrawn || offline" @click="install">{{ isDesktop() ? '校验并暂存' : '校验并安装' }}</button>
       </template>
     </AppDialog>
   </main>

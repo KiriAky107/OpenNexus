@@ -23,6 +23,7 @@ pub struct Checked {
     release_hash: String,
     key_hash: String,
     checked_at: Instant,
+    archive_path: String,
 }
 impl Checked {
     /// Monotonic freshness avoids a wall-clock rollback extending validity.
@@ -112,6 +113,55 @@ impl Client {
         }
         serde_json::from_slice(&bytes).map_err(|_| unavailable())
     }
+    pub async fn download(
+        &self,
+        checked: &Checked,
+        release: &Release,
+        key: &[u8; 32],
+    ) -> Result<Vec<u8>> {
+        checked.matches(self.source.as_str(), release, key)?;
+        let limit = if release.kind == "theme" {
+            5 * 1024 * 1024
+        } else {
+            10 * 1024 * 1024
+        };
+        if release.size > limit {
+            return Err(HostError::new("EXTENSION_ARCHIVE_LIMIT"));
+        }
+        let url = self
+            .source
+            .join(&checked.archive_path)
+            .map_err(|_| unavailable())?;
+        let mut response = self
+            .http
+            .get(url)
+            .header("Cache-Control", "no-cache, no-store")
+            .send()
+            .await
+            .map_err(|_| unavailable())?;
+        if response.status() != reqwest::StatusCode::OK
+            || response.content_length().is_some_and(|n| n != release.size)
+        {
+            return Err(unavailable());
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| unavailable())? {
+            if bytes.len() as u64 + chunk.len() as u64 > release.size {
+                return Err(HostError::new("EXTENSION_ARCHIVE_LIMIT"));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        release.verify_package(
+            key,
+            &release.key_id,
+            &release.namespace,
+            false,
+            false,
+            &bytes,
+        )?;
+        checked.matches(self.source.as_str(), release, key)?;
+        Ok(bytes)
+    }
     pub async fn check(&self, pin: Pin<'_>, release: &Release) -> Result<Checked> {
         release.validate()?;
         let started = Instant::now();
@@ -163,17 +213,33 @@ impl Client {
                 .remove("withdrawn")
                 .and_then(|v| v.as_bool())
                 .ok_or_else(unavailable)?;
-            for field in ["release_id", "download_path"] {
-                if map
-                    .remove(field)
-                    .and_then(|v| v.as_str().map(str::to_owned))
-                    .is_none()
-                {
-                    return Err(unavailable());
-                }
+            let release_id = map
+                .remove("release_id")
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .ok_or_else(unavailable)?;
+            if release_id.is_empty()
+                || release_id.len() > 128
+                || !release_id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
+                return Err(unavailable());
+            }
+            let archive_path = format!("catalog/v1/releases/{release_id}/archive");
+            if map
+                .remove("download_path")
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .as_deref()
+                != Some(format!("/{archive_path}").as_str())
+            {
+                return Err(unavailable());
             }
             let remote: Release = serde_json::from_value(item).map_err(|_| unavailable())?;
-            found.push((hash(&serde_json::to_vec(&remote).unwrap()), withdrawn));
+            found.push((
+                hash(&serde_json::to_vec(&remote).unwrap()),
+                withdrawn,
+                archive_path,
+            ));
         }
         let release_hash = hash(&serde_json::to_vec(release).unwrap());
         if found.len() != 1 || found[0].0 != release_hash {
@@ -187,6 +253,7 @@ impl Client {
             release_hash,
             key_hash: hash(pin.public_key),
             checked_at: started,
+            archive_path: found[0].2.clone(),
         };
         checked.matches(self.source.as_str(), release, pin.public_key)?;
         Ok(checked)
@@ -303,6 +370,69 @@ mod tests {
             worker.join().unwrap();
         }
         assert!(Client::new("http://catalog.example").is_err());
+    }
+    #[tokio::test]
+    async fn archive_download_verifies_real_fixture_and_enforces_stream_size() {
+        let mut fixture: Value = serde_json::from_str(include_str!(
+            "../../src/services/fixtures/community-python-vector.json"
+        ))
+        .unwrap();
+        let key: [u8; 32] = STANDARD
+            .decode(fixture["key"]["public_key"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let bytes = STANDARD
+            .decode(fixture["archive_base64"].as_str().unwrap())
+            .unwrap();
+        for field in ["release_id", "withdrawn", "download_path"] {
+            fixture["release"].as_object_mut().unwrap().remove(field);
+        }
+        let release: Release = serde_json::from_value(fixture["release"].clone()).unwrap();
+        for case in ["ok", "corrupt", "overlong", "redirect"] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let source = format!("http://{}/", listener.local_addr().unwrap());
+            let mut body = bytes.clone();
+            if case == "corrupt" {
+                body[0] ^= 1;
+            }
+            if case == "overlong" {
+                body.push(0);
+            }
+            let worker = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buffer = [0; 8192];
+                let mut count = 0;
+                while !buffer[..count].windows(4).any(|b| b == b"\r\n\r\n") {
+                    let n = stream.read(&mut buffer[count..]).unwrap();
+                    assert!(n > 0);
+                    count += n;
+                }
+                let status = if case == "redirect" {
+                    "302 Found"
+                } else {
+                    "200 OK"
+                };
+                // No content length: exercise the streaming cap independently.
+                write!(stream, "HTTP/1.1 {status}\r\nConnection: close\r\n\r\n").unwrap();
+                stream.write_all(&body).unwrap();
+            });
+            let mut client = Client::new("https://catalog.example/").unwrap();
+            client.source = reqwest::Url::parse(&source).unwrap();
+            let checked = Checked {
+                source,
+                release_hash: hash(&serde_json::to_vec(&release).unwrap()),
+                key_hash: hash(&key),
+                checked_at: Instant::now(),
+                archive_path: "catalog/v1/releases/fixture/archive".into(),
+            };
+            let result = client.download(&checked, &release, &key).await;
+            assert_eq!(result.is_ok(), case == "ok", "{case}");
+            if let Ok(actual) = result {
+                assert_eq!(actual, bytes);
+            }
+            worker.join().unwrap();
+        }
     }
     fn json_source(public: &[u8; 32]) -> Value {
         serde_json::json!({"schema_version":1,"source_id":"fixture","keys":[{"key_id":"test-key","namespace":"examples","public_key":STANDARD.encode(public),"revoked":false}]})
