@@ -135,10 +135,10 @@ impl Workspace {
         let db = Connection::open(db_path)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 4 {
+        if version > 5 {
             return Err(HostError::new("SCHEMA_INCOMPATIBLE"));
         }
-        if (1..4).contains(&version) {
+        if (1..5).contains(&version) {
             // Independent, complete SQLite backup before the schema ownership change.
             let backup = managed.join(format!("host-schema{version}-{}.sqlite3", Uuid::new_v4()));
             db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
@@ -156,7 +156,8 @@ impl Workspace {
             CREATE TABLE IF NOT EXISTS sync_heads (binding TEXT NOT NULL,file_id TEXT NOT NULL,revision INTEGER NOT NULL,path TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(binding,file_id));
             CREATE TABLE IF NOT EXISTS sync_windows (binding TEXT PRIMARY KEY,boundary INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS sync_inbox (binding TEXT NOT NULL,sequence INTEGER NOT NULL,revision TEXT NOT NULL,operation_id TEXT NOT NULL,rename_id TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(binding,sequence));
-            CREATE TABLE IF NOT EXISTS sync_conflicts (binding TEXT NOT NULL,sequence INTEGER NOT NULL,file_id TEXT NOT NULL,local_path TEXT NOT NULL,local_hash TEXT NOT NULL,remote TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(binding,sequence));")?;
+            CREATE TABLE IF NOT EXISTS sync_conflicts (binding TEXT NOT NULL,sequence INTEGER NOT NULL,file_id TEXT NOT NULL,local_path TEXT NOT NULL,local_hash TEXT NOT NULL,remote TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(binding,sequence));
+            CREATE TABLE IF NOT EXISTS sync_resolutions (binding TEXT NOT NULL,sequence INTEGER NOT NULL,choice TEXT NOT NULL,destination TEXT NOT NULL,expected TEXT NOT NULL,operation_id TEXT NOT NULL,rename_id TEXT NOT NULL,copy_id TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(binding,sequence));")?;
         let has_origin: bool = db.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('file_ops') WHERE name='origin')",
             [],
@@ -168,7 +169,7 @@ impl Workspace {
                 [],
             )?;
         }
-        db.execute_batch("PRAGMA user_version=4; COMMIT;")?;
+        db.execute_batch("PRAGMA user_version=5; COMMIT;")?;
         let vault_id: String = db
             .query_row("SELECT id FROM identity", [], |r| r.get(0))
             .optional()?
@@ -429,7 +430,41 @@ impl Workspace {
         if current != expected {
             return Err(HostError::new("REVISION_CONFLICT"));
         }
-        let previous = self.entry(path)?;
+        let mut previous = self.entry(path)?;
+        if let Some(id) = identity {
+            // Tombstone metadata can yield its old path to a new remote identity.
+            if let Some(retired) = previous
+                .as_ref()
+                .filter(|entry| entry.deleted && entry.file_id != id)
+            {
+                self.db.execute(
+                    "UPDATE files SET path=?2 WHERE id=?1 AND deleted=1",
+                    params![
+                        retired.file_id,
+                        format!(".ainote/retired/{}", retired.file_id)
+                    ],
+                )?;
+                previous = None;
+            }
+            if previous.is_none() {
+                let retired: Option<(String, bool)> = self
+                    .db
+                    .query_row("SELECT path,deleted FROM files WHERE id=?1", [id], |r| {
+                        Ok((r.get(0)?, r.get(1)?))
+                    })
+                    .optional()?;
+                if let Some((_, deleted)) = retired {
+                    if !deleted {
+                        return Err(HostError::new("PATH_CONFLICT"));
+                    }
+                    self.db.execute(
+                        "UPDATE files SET path=?2 WHERE id=?1 AND deleted=1",
+                        params![id, path],
+                    )?;
+                    previous = self.entry(path)?;
+                }
+            }
+        }
         if identity.is_some_and(|id| previous.as_ref().is_some_and(|entry| entry.file_id != id)) {
             return Err(HostError::new("PATH_CONFLICT"));
         }

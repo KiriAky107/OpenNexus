@@ -220,4 +220,87 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
             .cursor,
         21
     );
+    // All three explicit choices converge; the local copy gets an independent file ID.
+    for (iteration, choice) in ["local", "remote", "copy"].into_iter().enumerate() {
+        if iteration > 0 {
+            for (ws, content) in [(&workspace, "next-a"), (&workspace_b, "next-b")] {
+                let mut ws = ws.lock().unwrap();
+                let current = ws.read("note.md").unwrap();
+                ws.write("note.md", &current.entry.hash, content.as_bytes(), "local")
+                    .unwrap();
+            }
+            assert!(client.push_one(&workspace, &binding).await.unwrap());
+            assert_eq!(
+                client_b.pull_page(&workspace_b, &binding_b).await.unwrap(),
+                1
+            );
+        }
+        {
+            let mut ws = workspace_b.lock().unwrap();
+            let conflict = ws.sync_conflicts(&binding_b.id).unwrap().remove(0);
+            let sequence = conflict["sequence"].as_i64().unwrap();
+            let expected = ws.read("note.md").unwrap().entry.hash;
+            assert_eq!(
+                ws.sync_resolve(
+                    &binding_b.id,
+                    sequence,
+                    choice,
+                    if choice == "copy" { "copy.md" } else { "" },
+                    "wrong"
+                )
+                .unwrap_err()
+                .code,
+                "REVISION_CONFLICT"
+            );
+            ws.sync_resolve(
+                &binding_b.id,
+                sequence,
+                choice,
+                if choice == "copy" { "copy.md" } else { "" },
+                &expected,
+            )
+            .unwrap();
+            assert!(ws.sync_conflicts(&binding_b.id).unwrap().is_empty());
+            // Repeating a persisted decision is harmless.
+            ws.sync_resolve(
+                &binding_b.id,
+                sequence,
+                choice,
+                if choice == "copy" { "copy.md" } else { "" },
+                &expected,
+            )
+            .unwrap();
+        }
+        while client_b.push_one(&workspace_b, &binding_b).await.unwrap() {}
+        client.pull_page(&workspace, &binding).await.unwrap();
+        client_b.pull_page(&workspace_b, &binding_b).await.unwrap();
+        let expected = if choice == "local" {
+            "offline-b"
+        } else {
+            "next-a"
+        };
+        assert_eq!(
+            workspace.lock().unwrap().read("note.md").unwrap().content,
+            expected
+        );
+        assert_eq!(
+            workspace_b.lock().unwrap().read("note.md").unwrap().content,
+            expected
+        );
+        if choice == "copy" {
+            let copy = workspace.lock().unwrap().read("copy.md").unwrap();
+            assert_eq!(copy.content, "next-b");
+            assert_ne!(copy.entry.file_id, first.file_id);
+            assert_eq!(
+                copy.entry.file_id,
+                workspace_b
+                    .lock()
+                    .unwrap()
+                    .read("copy.md")
+                    .unwrap()
+                    .entry
+                    .file_id
+            );
+        }
+    }
 }
