@@ -45,6 +45,12 @@ pub struct StagedPackage {
     pub archive_sha256: String,
     pub state: String,
 }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PreparedPackage {
+    pub package_key: String,
+    pub directory: String,
+    pub tree_sha256: String,
+}
 pub struct ExtensionStore {
     root: PathBuf,
     db: Connection,
@@ -233,18 +239,125 @@ impl ExtensionStore {
         let db = Connection::open(database)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 1 {
+        if version > 2 {
             return Err(HostError::new("EXTENSION_SCHEMA_INCOMPATIBLE"));
+        }
+        if version == 1 {
+            let backup = root.join(format!("extensions.schema1.{}.sqlite3", Uuid::new_v4()));
+            db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
+            OpenOptions::new().write(true).open(backup)?.sync_all()?;
         }
         db.execute_batch("BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS versions (package_key TEXT PRIMARY KEY,source TEXT NOT NULL,namespace TEXT NOT NULL,package_id TEXT NOT NULL,version TEXT NOT NULL,fingerprint TEXT NOT NULL,release TEXT NOT NULL,manifest TEXT NOT NULL,inventory TEXT NOT NULL,archive_hash TEXT NOT NULL,size INTEGER NOT NULL,signer BLOB NOT NULL,state TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS stage_operations (id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,receipt TEXT NOT NULL);
-            PRAGMA user_version=1; COMMIT;")?;
+            CREATE TABLE IF NOT EXISTS prepared_packages (package_key TEXT PRIMARY KEY REFERENCES versions(package_key),directory TEXT NOT NULL UNIQUE,tree_sha256 TEXT NOT NULL);
+            PRAGMA user_version=2; COMMIT;")?;
         Ok(Self {
             root,
             db,
             _lock: lock,
         })
+    }
+    /// Prepare a verified staged package. The caller supplies current signer/revocation
+    /// policy; persisted preparation does not bypass that policy on replay.
+    pub fn prepare(
+        &mut self,
+        package_key: &str,
+        signer: Signer<'_>,
+        withdrawn: bool,
+    ) -> Result<PreparedPackage> {
+        self.prepare_inner(package_key, signer, withdrawn, |_| Ok(()))
+    }
+    fn prepare_inner(
+        &mut self,
+        package_key: &str,
+        signer: Signer<'_>,
+        withdrawn: bool,
+        mut checkpoint: impl FnMut(&str) -> Result<()>,
+    ) -> Result<PreparedPackage> {
+        use cap_fs_ext::DirExt;
+        let (json, stored_key): (String, Vec<u8>) = self.db.query_row(
+            "SELECT release,signer FROM versions WHERE package_key=?1",
+            [package_key],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if stored_key.as_slice() != signer.public_key {
+            return Err(HostError::new("EXTENSION_SIGNER_MISMATCH"));
+        }
+        let release: Release =
+            serde_json::from_str(&json).map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+        let archive = self.archive(package_key)?;
+        let (inventory, _) = release.verify_package(
+            signer.public_key,
+            signer.key_id,
+            signer.namespace,
+            signer.revoked,
+            withdrawn,
+            &archive,
+        )?;
+        let root = cap_std::fs::Dir::open_ambient_dir(&self.root, cap_std::ambient_authority())?;
+        match root.create_dir("prepared") {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.into()),
+        }
+        #[cfg(unix)]
+        root.try_clone()?.into_std_file().sync_all()?;
+        let staging = root.open_dir_nofollow("prepared")?;
+        let existing: Option<(String, String)> = self
+            .db
+            .query_row(
+                "SELECT directory,tree_sha256 FROM prepared_packages WHERE package_key=?1",
+                [package_key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        if let Some((directory, tree_sha256)) = existing {
+            // Database data never supplies an arbitrary relative path.
+            if Uuid::parse_str(&directory)
+                .map(|id| id.to_string())
+                .ok()
+                .as_ref()
+                != Some(&directory)
+            {
+                return Err(HostError::new("EXTENSION_STORE_CORRUPT"));
+            }
+            let actual = crate::extension_unpack::verify_tree(
+                &staging.open_dir_nofollow(&directory)?,
+                &inventory,
+            )?;
+            if actual != tree_sha256 {
+                return Err(HostError::new("EXTENSION_STORE_CORRUPT"));
+            }
+            return Ok(PreparedPackage {
+                package_key: package_key.into(),
+                directory,
+                tree_sha256,
+            });
+        }
+        let prepared = crate::extension_unpack::prepare(
+            &staging,
+            &release,
+            signer.public_key,
+            signer.key_id,
+            signer.namespace,
+            &archive,
+        )?;
+        checkpoint("tree_prepared")?;
+        let receipt = PreparedPackage {
+            package_key: package_key.into(),
+            directory: prepared.directory,
+            tree_sha256: prepared.tree_sha256,
+        };
+        let transaction = self.db.transaction()?;
+        transaction.execute(
+            "INSERT INTO prepared_packages VALUES (?1,?2,?3)",
+            params![receipt.package_key, receipt.directory, receipt.tree_sha256],
+        )?;
+        checkpoint("preparation_recorded")?;
+        transaction.commit()?;
+        checkpoint("preparation_committed")?;
+        Ok(receipt)
     }
     pub fn stage(&mut self, request: Stage<'_>) -> Result<Receipt> {
         self.stage_inner(request, |_| Ok(()))
@@ -428,6 +541,131 @@ mod tests {
             release,
             withdrawn: false,
             archive,
+        }
+    }
+    #[test]
+    fn schema_one_upgrade_preserves_versions_and_creates_readable_backup() {
+        let temp = tempfile::tempdir().unwrap();
+        let (release, archive, key) = fixture();
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        let receipt = store
+            .stage(request(
+                &Uuid::new_v4().to_string(),
+                &release,
+                &archive,
+                &key,
+            ))
+            .unwrap();
+        store
+            .db
+            .execute_batch("DROP TABLE prepared_packages; PRAGMA user_version=1;")
+            .unwrap();
+        drop(store);
+        let store = ExtensionStore::open(temp.path()).unwrap();
+        assert_eq!(store.archive(&receipt.package_key).unwrap(), archive);
+        let backups: Vec<_> = fs::read_dir(temp.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("extensions.schema1.")
+            })
+            .collect();
+        assert_eq!(backups.len(), 1);
+        let backup = Connection::open(&backups[0]).unwrap();
+        assert_eq!(
+            backup
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            backup
+                .query_row("SELECT COUNT(*) FROM versions", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        drop(backup);
+        drop(store);
+        let _store = ExtensionStore::open(temp.path()).unwrap();
+        assert_eq!(
+            fs::read_dir(temp.path())
+                .unwrap()
+                .filter(|e| e
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("extensions.schema1."))
+                .count(),
+            1
+        );
+    }
+    #[test]
+    fn preparation_replays_checks_policy_and_recovers_each_boundary() {
+        let (release, archive, key) = fixture();
+        for boundary in [
+            "tree_prepared",
+            "preparation_recorded",
+            "preparation_committed",
+        ] {
+            for _ in 0..20 {
+                let root = tempfile::tempdir().unwrap();
+                let mut store = ExtensionStore::open(root.path()).unwrap();
+                let staged = store
+                    .stage(request(
+                        &Uuid::new_v4().to_string(),
+                        &release,
+                        &archive,
+                        &key,
+                    ))
+                    .unwrap();
+                let signer = || Signer {
+                    public_key: &key,
+                    key_id: "test-key",
+                    namespace: "examples",
+                    revoked: false,
+                };
+                assert!(store
+                    .prepare_inner(&staged.package_key, signer(), false, |at| {
+                        if at == boundary {
+                            Err(HostError::new("INJECTED"))
+                        } else {
+                            Ok(())
+                        }
+                    })
+                    .is_err());
+                drop(store);
+                let mut store = ExtensionStore::open(root.path()).unwrap();
+                let prepared = store.prepare(&staged.package_key, signer(), false).unwrap();
+                assert_eq!(
+                    prepared,
+                    store.prepare(&staged.package_key, signer(), false).unwrap()
+                );
+                assert_eq!(
+                    store
+                        .db
+                        .query_row("SELECT COUNT(*) FROM prepared_packages", [], |r| r
+                            .get::<_, i64>(0))
+                        .unwrap(),
+                    1
+                );
+                assert!(store.prepare(&staged.package_key, signer(), true).is_err());
+                let mut revoked = signer();
+                revoked.revoked = true;
+                assert!(store.prepare(&staged.package_key, revoked, false).is_err());
+                fs::write(
+                    root.path()
+                        .join("prepared")
+                        .join(&prepared.directory)
+                        .join("persona.json"),
+                    b"changed",
+                )
+                .unwrap();
+                assert!(store.prepare(&staged.package_key, signer(), false).is_err());
+            }
         }
     }
     #[test]
