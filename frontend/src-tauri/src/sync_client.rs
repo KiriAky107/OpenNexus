@@ -222,6 +222,50 @@ impl SyncClient {
         }
         Ok(())
     }
+    pub async fn snapshot(&self, remote_vault: &str) -> Result<crate::sync_initial::Snapshot> {
+        identifier(remote_vault)?;
+        let mut cursor = 0i64;
+        let mut boundary = None;
+        let mut heads = std::collections::BTreeMap::new();
+        loop {
+            let mut path =
+                format!("sync/v1/vaults/{remote_vault}/changes?cursor={cursor}&limit=500");
+            if let Some(end) = boundary {
+                path.push_str(&format!("&boundary={end}"));
+            }
+            let page = self.json(Method::GET, &path, None).await?;
+            let end = page["boundary"]
+                .as_i64()
+                .ok_or_else(|| SyncError::new("SYNC_RESPONSE_INVALID"))?;
+            if end < cursor || boundary.is_some_and(|old| old != end) || end > 100000 {
+                return Err(SyncError::new("SYNC_SNAPSHOT_LIMIT"));
+            }
+            boundary = Some(end);
+            let items = page["items"]
+                .as_array()
+                .filter(|v| v.len() <= 500)
+                .ok_or_else(|| SyncError::new("SYNC_RESPONSE_INVALID"))?;
+            if items.is_empty() && cursor != end {
+                return Err(SyncError::new("SYNC_RESPONSE_INVALID"));
+            }
+            for item in items {
+                let revision: crate::sync_inbox::RemoteRevision =
+                    serde_json::from_value(item.clone())
+                        .map_err(|_| SyncError::new("SYNC_RESPONSE_INVALID"))?;
+                if revision.sequence != cursor + 1 || revision.sequence > end {
+                    return Err(SyncError::new("SYNC_RESPONSE_INVALID"));
+                }
+                cursor = revision.sequence;
+                heads.insert(revision.file_id.clone(), revision);
+            }
+            if cursor == end {
+                return Ok(crate::sync_initial::Snapshot {
+                    boundary: end,
+                    items: heads.into_values().collect(),
+                });
+            }
+        }
+    }
     pub async fn verify_empty(&self, remote_vault: &str) -> Result<()> {
         identifier(remote_vault)?;
         let page = self
@@ -248,6 +292,12 @@ impl SyncClient {
             return Err(SyncError::new("SYNC_BINDING_CHANGED"));
         }
         identifier(&binding.remote_vault)?;
+        if workspace
+            .access(|ws| ws.sync_initial_pending(&binding.id))?
+            .is_some()
+        {
+            return Ok(false);
+        }
         let job = workspace.access(|ws| {
             ws.sync_resume_resolutions(&binding.id)?;
             ws.sync_capture(&binding.id)?;
@@ -290,6 +340,20 @@ impl SyncClient {
             while ws.sync_apply_pending(&binding.id)? {}
             Ok(())
         })?;
+        if let Some(initial) = workspace.access(|ws| ws.sync_initial_pending(&binding.id))? {
+            let count = initial.len().min(100);
+            for revision in initial.iter().take(count) {
+                if revision.operation == "put" {
+                    self.download(workspace, binding, revision).await?;
+                }
+                workspace.access(|ws| {
+                    ws.sync_stage(&binding.id, revision)?;
+                    ws.sync_apply_pending(&binding.id)?;
+                    Ok(())
+                })?;
+            }
+            return Ok(count);
+        }
         let (cursor, boundary) = workspace.access(|ws| {
             ws.check_binding(&binding.id)?;
             Ok((

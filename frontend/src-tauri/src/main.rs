@@ -835,6 +835,7 @@ fn main() {
             sync_vaults,
             sync_create_vault,
             sync_bind,
+            sync_preview,
             sync_unbind,
             sync_pause,
             sync_status,

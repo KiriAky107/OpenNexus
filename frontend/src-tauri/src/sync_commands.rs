@@ -119,6 +119,37 @@ pub struct Bind {
     account: String,
     remote_vault: String,
     mode: String,
+    #[serde(default)]
+    fingerprint: Option<String>,
+}
+#[tauri::command]
+pub async fn sync_preview(
+    host: State<'_, Host>,
+    request: Bind,
+) -> Result<notesagent_host::sync_initial::Preview, String> {
+    let _guard = host.sync.gate.lock().await;
+    let client = sync_auth::client(
+        &host.credentials,
+        &request.endpoint,
+        &request.account,
+        false,
+    )
+    .await
+    .map_err(|e| e.code)?;
+    let snapshot = sync_auth::guarded(&host.credentials, client.snapshot(&request.remote_vault))
+        .await
+        .map_err(|e| e.code)?;
+    with_workspace(&host, |ws| {
+        if ws.vault_id != request.vault_id {
+            return Err(notesagent_host::workspace::HostError::new("VAULT_CHANGED"));
+        }
+        ws.sync_preview(
+            &request.endpoint,
+            &request.remote_vault,
+            &request.account,
+            &snapshot,
+        )
+    })
 }
 #[tauri::command]
 pub async fn sync_bind(host: State<'_, Host>, request: Bind) -> Result<Binding, String> {
@@ -131,6 +162,24 @@ pub async fn sync_bind(host: State<'_, Host>, request: Bind) -> Result<Binding, 
     )
     .await
     .map_err(|e| e.code)?;
+    if request.mode == "merge" {
+        let snapshot =
+            sync_auth::guarded(&host.credentials, client.snapshot(&request.remote_vault))
+                .await
+                .map_err(|e| e.code)?;
+        return with_workspace(&host, |ws| {
+            if ws.vault_id != request.vault_id {
+                return Err(notesagent_host::workspace::HostError::new("VAULT_CHANGED"));
+            }
+            ws.sync_bind_initial(
+                &request.endpoint,
+                &request.remote_vault,
+                &request.account,
+                &snapshot,
+                request.fingerprint.as_deref().unwrap_or(""),
+            )
+        });
+    }
     if request.mode == "upload" {
         sync_auth::guarded(
             &host.credentials,

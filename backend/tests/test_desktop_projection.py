@@ -74,3 +74,23 @@ def test_desktop_semantic_rebuild_preserves_host_file_id(tmp_path, monkeypatch):
         assert [record.note_id for record in repository.list_note_locations()] == ['stable-host-id']
     finally:
         host_bridge.vault_id.reset(token)
+
+
+def test_host_identity_adoption_keeps_existing_task_links(tmp_path, monkeypatch):
+    settings = replace(get_settings(), environment='desktop', data_dir=tmp_path, db_path=tmp_path/'global.sqlite3')
+    monkeypatch.setattr(db, 'get_settings', lambda: settings)
+    monkeypatch.setattr('app.config.get_settings', lambda: settings)
+    document = {'file_id': 'before-merge', 'path': 'same.md', 'hash': sha256(b'test').hexdigest(), 'content': 'test', 'created_at': 0, 'updated_at': 1}
+    monkeypatch.setattr(desktop_notes, 'call', lambda method, **params: {'items': [document], 'total': 1} if method == 'list' else document)
+    from app.services import task_service
+    token = host_bridge.vault_id.set(str(uuid4()))
+    try:
+        task = task_service.create_task(title='Preserve link', note_id='before-merge')
+        document['file_id'] = 'after-merge'
+        document['aliases'] = ['before-merge']
+        asyncio.run(desktop_projection.refresh())
+        assert task_service.get_task(task.task_id).note_id == 'after-merge'
+        assert repository.get_note_record('before-merge') is None
+        assert repository.get_note_record('after-merge') is not None
+    finally:
+        host_bridge.vault_id.reset(token)

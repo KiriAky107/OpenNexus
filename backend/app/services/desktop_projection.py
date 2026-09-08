@@ -35,6 +35,11 @@ def _refresh():
         removed = set(old) - {entry['file_id'] for entry in current}
         # Content is verified before starting the projection transaction. No model/network IO inside.
         with transaction(conn):
+            task_links = []
+            for entry in current:
+                for alias in entry.get('aliases', []):
+                    if alias in removed:
+                        task_links.extend((entry['file_id'], row['task_id']) for row in conn.execute('SELECT task_id FROM tasks WHERE note_id=?', [alias]))
             for file_id in removed:
                 for block_id in repository.delete_note(file_id, conn=conn):
                     conn.execute('DELETE FROM vec_blocks WHERE block_id=?', [block_id])
@@ -47,6 +52,8 @@ def _refresh():
                     conn.execute('DELETE FROM vec_blocks WHERE block_id=?', [block_id])
                 conn.execute('UPDATE blocks SET embedding_local_only=? WHERE note_id=?', (int(parsed.embedding_local_only), parsed.note_id))
                 conn.execute('INSERT OR REPLACE INTO host_projection VALUES (?,?,?)', (parsed.note_id, document['hash'], parsed.file_path))
+            for file_id, task_id in task_links:
+                conn.execute('UPDATE tasks SET note_id=? WHERE task_id=? AND note_id IS NULL', [file_id, task_id])
             if removed or changed:
                 repository.set_index_meta({'workspace_vectors_pending': '1'}, conn=conn)
     finally:

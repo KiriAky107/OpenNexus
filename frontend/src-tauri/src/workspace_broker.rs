@@ -64,9 +64,19 @@ pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
             entries.retain(|e| !e.deleted && !e.is_folder);
             entries.sort_by(|a, b| a.path.cmp(&b.path));
             let total = entries.len();
-            Ok(
-                json!({"items":entries.into_iter().skip(p.offset).take(p.limit).collect::<Vec<_>>(),"total":total}),
-            )
+            let items = entries
+                .into_iter()
+                .skip(p.offset)
+                .take(p.limit)
+                .map(|entry| {
+                    let aliases = ws.aliases_for_id(&entry.file_id).map_err(|e| e.code)?;
+                    let mut value = serde_json::to_value(entry)
+                        .map_err(|_| "HOST_SERIALIZE_FAILED".to_owned())?;
+                    value["aliases"] = json!(aliases);
+                    Ok(value)
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(json!({"items":items,"total":total}))
         }
         "workspace.read" => {
             let p: Read = decode(params)?;

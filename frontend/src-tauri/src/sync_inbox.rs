@@ -136,7 +136,13 @@ impl Workspace {
             .ok_or_else(|| HostError::new("SYNC_BINDING_CHANGED"))?;
         revision.validate(&active)?;
         self.resolve(&revision.path)?;
-        if revision.sequence != active.cursor + 1
+        let encoded =
+            serde_json::to_string(revision).map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?;
+        if let Some(initial) = self.initial_revision(binding, revision.sequence)? {
+            if initial != encoded {
+                return Err(HostError::new("SYNC_REVISION_CHANGED"));
+            }
+        } else if revision.sequence != active.cursor + 1
             || self
                 .sync_boundary(binding)?
                 .is_none_or(|end| revision.sequence > end)
@@ -177,18 +183,38 @@ impl Workspace {
     fn sync_finish(&mut self, binding: &str, revision: &RemoteRevision, state: &str) -> Result<()> {
         self.check_binding(binding)?;
         let tx = self.db.transaction()?;
-        let changed = tx.execute(
-            "UPDATE sync_bindings SET cursor=?2 WHERE id=?1 AND state='active' AND cursor=?3",
-            params![binding, revision.sequence, revision.sequence - 1],
-        )?;
-        if changed != 1 {
-            return Err(HostError::new("SYNC_CURSOR_INVALID"));
+        let initial: Option<i64> = tx
+            .query_row(
+                "SELECT boundary FROM sync_initial WHERE binding=?1",
+                [binding],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if initial.is_none() {
+            let changed = tx.execute(
+                "UPDATE sync_bindings SET cursor=?2 WHERE id=?1 AND state='active' AND cursor=?3",
+                params![binding, revision.sequence, revision.sequence - 1],
+            )?;
+            if changed != 1 {
+                return Err(HostError::new("SYNC_CURSOR_INVALID"));
+            }
         }
         tx.execute("INSERT INTO sync_heads VALUES (?1,?2,?3,?4,?5) ON CONFLICT(binding,file_id) DO UPDATE SET revision=excluded.revision,path=excluded.path,hash=excluded.hash WHERE sync_heads.revision<excluded.revision", params![binding,revision.file_id,revision.sequence,revision.path,revision.hash.as_deref().unwrap_or("")])?;
         tx.execute(
             "UPDATE sync_inbox SET state=?3 WHERE binding=?1 AND sequence=?2",
             params![binding, revision.sequence, state],
         )?;
+        if let Some(boundary) = initial {
+            let pending:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM sync_initial_items i WHERE i.binding=?1 AND NOT EXISTS(SELECT 1 FROM sync_inbox n WHERE n.binding=i.binding AND n.sequence=i.sequence AND n.state!='pending'))",[binding],|r|r.get(0))?;
+            if !pending {
+                tx.execute(
+                    "UPDATE sync_bindings SET cursor=?2 WHERE id=?1",
+                    params![binding, boundary],
+                )?;
+                tx.execute("DELETE FROM sync_initial WHERE binding=?1", [binding])?;
+                tx.execute("DELETE FROM sync_initial_items WHERE binding=?1", [binding])?;
+            }
+        }
         tx.execute(
             "DELETE FROM sync_windows WHERE binding=?1 AND boundary=?2",
             params![binding, revision.sequence],
@@ -223,7 +249,7 @@ impl Workspace {
                 remote
             ],
         )?;
-        tx.execute("UPDATE sync_jobs SET state='conflict' WHERE binding=?1 AND file_id=?2 AND state NOT IN ('acked','archived')", params![binding,revision.file_id])?;
+        tx.execute("UPDATE sync_jobs SET state='conflict' WHERE binding=?1 AND (file_id=?2 OR path=?3) AND state NOT IN ('acked','archived')", params![binding,revision.file_id,local_path])?;
         tx.commit()?;
         self.sync_finish(binding, revision, "conflict")
     }
@@ -252,6 +278,18 @@ impl Workspace {
             .operation(&operation_id)?
             .is_some_and(|value| value["state"] == "committed")
         {
+            self.sync_finish(binding, &revision, "applied")?;
+            return Ok(true);
+        }
+        let known: Option<i64> = self
+            .db
+            .query_row(
+                "SELECT revision FROM sync_heads WHERE binding=?1 AND file_id=?2",
+                params![binding, revision.file_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if known.is_some_and(|head| head >= revision.sequence) {
             self.sync_finish(binding, &revision, "applied")?;
             return Ok(true);
         }

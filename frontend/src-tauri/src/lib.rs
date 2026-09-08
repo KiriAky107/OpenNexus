@@ -15,6 +15,7 @@ pub mod sync_auth;
 pub mod sync_client;
 pub mod sync_discovery;
 pub mod sync_inbox;
+pub mod sync_initial;
 pub mod sync_resolution;
 pub mod sync_state;
 pub mod workspace;

@@ -135,10 +135,10 @@ impl Workspace {
         let db = Connection::open(db_path)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 7 {
+        if version > 8 {
             return Err(HostError::new("SCHEMA_INCOMPATIBLE"));
         }
-        if (1..7).contains(&version) {
+        if (1..8).contains(&version) {
             // Independent, complete SQLite backup before the schema ownership change.
             let backup = managed.join(format!("host-schema{version}-{}.sqlite3", Uuid::new_v4()));
             db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
@@ -157,6 +157,9 @@ impl Workspace {
             CREATE TABLE IF NOT EXISTS sync_windows (binding TEXT PRIMARY KEY,boundary INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS sync_inbox (binding TEXT NOT NULL,sequence INTEGER NOT NULL,revision TEXT NOT NULL,operation_id TEXT NOT NULL,rename_id TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(binding,sequence));
             CREATE TABLE IF NOT EXISTS sync_conflicts (binding TEXT NOT NULL,sequence INTEGER NOT NULL,file_id TEXT NOT NULL,local_path TEXT NOT NULL,local_hash TEXT NOT NULL,remote TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(binding,sequence));
+            CREATE TABLE IF NOT EXISTS file_aliases (alias TEXT PRIMARY KEY,file_id TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS sync_initial (binding TEXT PRIMARY KEY,boundary INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS sync_initial_items (binding TEXT NOT NULL,sequence INTEGER NOT NULL,revision TEXT NOT NULL,PRIMARY KEY(binding,sequence));
             CREATE TABLE IF NOT EXISTS payloads (operation_id TEXT PRIMARY KEY,hash TEXT NOT NULL,size INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS sync_observed (file_id TEXT PRIMARY KEY,path TEXT NOT NULL,hash TEXT NOT NULL,deleted INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS sync_preferences (binding TEXT PRIMARY KEY,paused INTEGER NOT NULL DEFAULT 0);
@@ -175,7 +178,7 @@ impl Workspace {
         if version < 7 {
             db.execute_batch("INSERT OR IGNORE INTO sync_observed SELECT f.id,COALESCE((SELECT o.path FROM outbox o WHERE o.file_id=f.id AND o.state IN ('pending','queued') ORDER BY rowid DESC LIMIT 1),(SELECT h.path FROM sync_heads h JOIN sync_bindings b ON h.binding=b.id WHERE h.file_id=f.id AND b.state='active'),f.path),COALESCE((SELECT o.hash FROM outbox o WHERE o.file_id=f.id AND o.state IN ('pending','queued') ORDER BY rowid DESC LIMIT 1),(SELECT h.hash FROM sync_heads h JOIN sync_bindings b ON h.binding=b.id WHERE h.file_id=f.id AND b.state='active'),f.hash),f.deleted FROM files f;")?;
         }
-        db.execute_batch("PRAGMA user_version=7; COMMIT;")?;
+        db.execute_batch("PRAGMA user_version=8; COMMIT;")?;
         let vault_id: String = db
             .query_row("SELECT id FROM identity", [], |r| r.get(0))
             .optional()?
@@ -331,10 +334,19 @@ impl Workspace {
         Ok(Document { entry, content })
     }
 
+    pub fn aliases_for_id(&self, file_id: &str) -> Result<Vec<String>> {
+        let mut statement = self
+            .db
+            .prepare("SELECT alias FROM file_aliases WHERE file_id=?1 ORDER BY alias")?;
+        let rows = statement
+            .query_map([file_id], |r| r.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
     pub fn path_for_id(&self, file_id: &str) -> Result<String> {
         self.db
             .query_row(
-                "SELECT path FROM files WHERE id=?1 AND deleted=0",
+                "SELECT path FROM files WHERE deleted=0 AND (id=?1 OR id=(SELECT file_id FROM file_aliases WHERE alias=?1)) ORDER BY id=?1 DESC LIMIT 1",
                 [file_id],
                 |row| row.get(0),
             )

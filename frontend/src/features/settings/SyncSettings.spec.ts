@@ -35,3 +35,29 @@ it('cancels destructive choices and binds accepted conflict decisions to their s
   expect(wrapper.get('input[type=url]').attributes('disabled')).toBeDefined()
   wrapper.unmount()
 })
+
+it('requires a reviewed merge fingerprint and invalidates preview when the remote changes', async () => {
+  vi.mocked(hostInvoke).mockImplementation(async command => {
+    if (command === 'sync_status') return empty()
+    if (command === 'sync_login') return { endpoint: 'https://test.example/', account: 'test' }
+    if (command === 'sync_vaults') return { items: [{ id: 'one', name: 'One', sequence: 2 }, { id: 'two', name: 'Two', sequence: 3 }] }
+    if (command === 'sync_preview') return { fingerprint: 'reviewed-snapshot', boundary: 2, items: [{ path: 'same.md', action: 'conflict' }] }
+    return null
+  })
+  const wrapper = mount(SyncSettings); await flushPromises()
+  await wrapper.get('input[type=url]').setValue('https://test.example/')
+  await wrapper.get('input[autocomplete=username]').setValue('test')
+  await wrapper.get('input[type=password]').setValue('fixture')
+  await wrapper.get('form').trigger('submit'); await flushPromises()
+  await wrapper.get('select').setValue('one')
+  await wrapper.findAll('button').find(button => button.text() === '预览合并')!.trigger('click'); await flushPromises()
+  expect(wrapper.text()).toContain('same.md')
+  await wrapper.get('select').setValue('two')
+  expect(wrapper.text()).not.toContain('same.md')
+  await wrapper.get('select').setValue('one')
+  await wrapper.findAll('button').find(button => button.text() === '预览合并')!.trigger('click'); await flushPromises()
+  confirm.mockResolvedValue(true)
+  await wrapper.findAll('button').find(button => button.text() === '确认合并并绑定')!.trigger('click'); await flushPromises()
+  expect(hostInvoke).toHaveBeenCalledWith('sync_bind', { request: { vault_id: 'local', endpoint: 'https://test.example/', account: 'test', remote_vault: 'one', mode: 'merge', fingerprint: 'reviewed-snapshot' } })
+  wrapper.unmount()
+})
