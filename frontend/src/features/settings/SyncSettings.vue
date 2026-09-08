@@ -8,7 +8,7 @@ import { t } from '@/i18n'
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 interface Binding { id: string; endpoint: string; account: string; remote_vault: string; cursor: number }
 interface Conflict { sequence: number; local_path: string; local_hash: string; current_hash?: string; current_path?: string; remote: { path: string; operation: string } }
-interface Status { vault_id: string; binding: Binding | null; paused: boolean; pending: number; conflicts: Conflict[]; credential_state: string; running: boolean; error: string | null; retry_in: number | null }
+interface Status { vault_id: string; binding: Binding | null; paused: boolean; pending: number; conflicts: Conflict[]; credential_state: string; running: boolean; error: string | null; retry_in: number | null; failures: number; halted: boolean }
 interface RemoteVault { id: string; name: string; sequence: number; used: number; quota: number }
 const status = ref<Status | null>(null)
 const endpoint = ref('https://'), account = ref(''), password = ref(''), device = ref('OpenNexus Desktop'), testHttp = ref(false)
@@ -120,9 +120,9 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
     </div>
     <div v-if="status?.binding" class="sync-bound">
       <p>{{ status.binding.endpoint }} · {{ status.binding.account }} · {{ status.binding.remote_vault }}</p>
-      <p aria-live="polite">{{ status.paused ? t('已暂停', 'Paused') : status.running ? t('同步中', 'Syncing') : t('等待下一轮同步', 'Waiting for next sync') }} · {{ t('待上传', 'Pending') }} {{ status.pending }} · cursor {{ status.binding.cursor }}</p>
+      <p aria-live="polite">{{ status.paused ? t('已暂停', 'Paused') : status.running ? t('同步中', 'Syncing') : status.halted ? t('自动同步已停止，请处理错误后重试', 'Automatic sync stopped; resolve the error and retry') : t('等待下一轮同步', 'Waiting for next sync') }} · {{ t('待上传', 'Pending') }} {{ status.pending }} · cursor {{ status.binding.cursor }}</p>
       <p v-if="status.credential_state !== 'ready'" role="status">{{ status.credential_state }}</p>
-      <p v-if="status.error" role="alert">{{ status.error }}<span v-if="status.retry_in"> · {{ status.retry_in }}s</span></p>
+      <p v-if="status.error" role="alert">{{ status.error }}<span v-if="status.retry_in && !status.halted"> · {{ status.retry_in }}s</span></p>
       <div class="inline-actions">
         <button :disabled="busy || status.running || status.paused" @click="act(async () => { await hostInvoke('sync_run') })">{{ t('立即同步', 'Sync now') }}</button>
         <button :disabled="busy" @click="act(async () => { await hostInvoke('sync_pause', { bindingId: status!.binding!.id, paused: !status!.paused }) })">{{ status.paused ? t('继续同步', 'Resume sync') : t('暂停同步', 'Pause sync') }}</button>

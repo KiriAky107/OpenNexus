@@ -62,3 +62,12 @@ it('requires a reviewed merge fingerprint and invalidates preview when the remot
   expect(hostInvoke).toHaveBeenCalledWith('sync_bind', { request: { vault_id: 'local', endpoint: 'https://test.example/', account: 'test', remote_vault: 'one', mode: 'merge', fingerprint: 'reviewed-snapshot' } })
   wrapper.unmount()
 })
+
+it('shows a persisted halt without suggesting an automatic retry countdown', async () => {
+  vi.mocked(hostInvoke).mockResolvedValue({ ...empty(), binding: { id: 'binding', endpoint: 'https://test.example/', account: 'test', remote_vault: 'remote', cursor: 7 }, halted: true, failures: 3, error: 'UNAUTHORIZED', retry_in: 120 })
+  const wrapper = mount(SyncSettings); await flushPromises()
+  expect(wrapper.text()).toContain('自动同步已停止')
+  expect(wrapper.text()).toContain('UNAUTHORIZED')
+  expect(wrapper.text()).not.toContain('120s')
+  wrapper.unmount()
+})
