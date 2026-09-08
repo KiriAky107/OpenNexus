@@ -259,6 +259,141 @@ impl SyncClient {
         workspace.access(|ws| ws.sync_ack(&job, &revision))?;
         Ok(true)
     }
+    pub async fn pull_page(
+        &self,
+        workspace: &impl WorkspaceAccess,
+        binding: &Binding,
+    ) -> Result<usize> {
+        if Url::parse(&binding.endpoint)
+            .ok()
+            .is_none_or(|url| url != self.endpoint)
+        {
+            return Err(SyncError::new("SYNC_BINDING_CHANGED"));
+        }
+        identifier(&binding.remote_vault)?;
+        workspace.access(|ws| {
+            while ws.sync_apply_pending(&binding.id)? {}
+            Ok(())
+        })?;
+        let (cursor, boundary) = workspace.access(|ws| {
+            ws.check_binding(&binding.id)?;
+            Ok((
+                ws.sync_binding()?
+                    .ok_or_else(|| crate::workspace::HostError::new("SYNC_BINDING_CHANGED"))?
+                    .cursor,
+                ws.sync_boundary(&binding.id)?,
+            ))
+        })?;
+        let mut path = format!(
+            "sync/v1/vaults/{}/changes?cursor={cursor}&limit=100",
+            binding.remote_vault
+        );
+        if let Some(end) = boundary {
+            path.push_str(&format!("&boundary={end}"));
+        }
+        let page = self.json(Method::GET, &path, None).await?;
+        let end = page["boundary"]
+            .as_i64()
+            .ok_or_else(|| SyncError::new("SYNC_RESPONSE_INVALID"))?;
+        let items = page["items"]
+            .as_array()
+            .filter(|items| items.len() <= 100)
+            .ok_or_else(|| SyncError::new("SYNC_RESPONSE_INVALID"))?;
+        if items.is_empty() {
+            if end != cursor {
+                return Err(SyncError::new("SYNC_RESPONSE_INVALID"));
+            }
+            return Ok(0);
+        }
+        workspace.access(|ws| ws.sync_set_boundary(&binding.id, end))?;
+        for (index, item) in items.iter().enumerate() {
+            let revision: crate::sync_inbox::RemoteRevision = serde_json::from_value(item.clone())
+                .map_err(|_| SyncError::new("SYNC_RESPONSE_INVALID"))?;
+            revision.validate(binding)?;
+            if revision.sequence != cursor + index as i64 + 1 || revision.sequence > end {
+                return Err(SyncError::new("SYNC_RESPONSE_INVALID"));
+            }
+            if revision.operation == "put" {
+                self.download(workspace, binding, &revision).await?;
+            }
+            workspace.access(|ws| {
+                ws.sync_stage(&binding.id, &revision)?;
+                ws.sync_apply_pending(&binding.id)?;
+                Ok(())
+            })?;
+        }
+        Ok(items.len())
+    }
+    async fn download(
+        &self,
+        workspace: &impl WorkspaceAccess,
+        binding: &Binding,
+        revision: &crate::sync_inbox::RemoteRevision,
+    ) -> Result<()> {
+        let digest = revision
+            .hash
+            .as_deref()
+            .ok_or_else(|| SyncError::new("SYNC_RESPONSE_INVALID"))?;
+        let target = workspace.access(|ws| {
+            ws.check_binding(&binding.id)?;
+            ws.sync_spool(digest)
+        })?;
+        if target.exists() {
+            let bytes = std::fs::read(&target)?;
+            if bytes.len() as i64 == revision.size && crate::workspace::hash(&bytes) == digest {
+                return Ok(());
+            }
+            return Err(SyncError::new("SYNC_SPOOL_CORRUPT"));
+        }
+        let url = self
+            .endpoint
+            .join(&format!(
+                "sync/v1/vaults/{}/objects/{digest}",
+                binding.remote_vault
+            ))
+            .map_err(|_| SyncError::new("SYNC_PATH_INVALID"))?;
+        let mut response = self
+            .client
+            .get(url)
+            .bearer_auth(self.token.as_str())
+            .send()
+            .await
+            .map_err(|_| SyncError::new("SYNC_NETWORK_ERROR"))?;
+        if !response.status().is_success() {
+            return Err(SyncError {
+                code: "SYNC_DOWNLOAD_FAILED".into(),
+                status: response.status().as_u16(),
+                retry_after: None,
+            });
+        }
+        let mut file = tempfile::NamedTempFile::new_in(
+            target
+                .parent()
+                .ok_or_else(|| SyncError::new("SYNC_SPOOL_FAILED"))?,
+        )?;
+        let mut hasher = Sha256::new();
+        let mut length = 0u64;
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| SyncError::new("SYNC_NETWORK_ERROR"))?
+        {
+            length += chunk.len() as u64;
+            if length > revision.size as u64 {
+                return Err(SyncError::new("SYNC_OBJECT_CORRUPT"));
+            }
+            workspace.access(|ws| ws.check_binding(&binding.id))?;
+            std::io::Write::write_all(&mut file, &chunk)?;
+            hasher.update(&chunk);
+        }
+        if length != revision.size as u64 || format!("{:x}", hasher.finalize()) != digest {
+            return Err(SyncError::new("SYNC_OBJECT_CORRUPT"));
+        }
+        file.as_file().sync_all()?;
+        file.persist_noclobber(target)
+            .map_err(|_| SyncError::new("SYNC_SPOOL_FAILED"))?;
+        Ok(())
+    }
     async fn upload(
         &self,
         workspace: &impl WorkspaceAccess,
