@@ -318,6 +318,16 @@ mod tests {
         executable: &std::path::Path,
         command: Option<String>,
     ) -> Option<u32> {
+        checked_executable_data(profile, executable, command, None)
+    }
+
+    fn checked_executable_data(
+        profile: &Profile,
+        executable: &std::path::Path,
+        command: Option<String>,
+        mut data: Option<crate::extension_launch_data::LaunchData>,
+    ) -> Option<u32> {
+        let resume = command.is_some() || data.is_some();
         let mut attributes = Attributes::new();
         let caps = SECURITY_CAPABILITIES {
             AppContainerSid: profile.sid(),
@@ -361,16 +371,25 @@ mod tests {
             .as_ref()
             .map(|command| command.encode_utf16().chain(Some(0)).collect())
             .unwrap_or_default();
+        let environment_ptr = data
+            .as_ref()
+            .map_or(environment.as_ptr(), |d| d.environment().as_ptr());
+        let command_ptr = data.as_mut().map_or_else(
+            || {
+                if command_line.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    command_line.as_mut_ptr()
+                }
+            },
+            |d| d.command_mut().as_mut_ptr(),
+        );
         let mut info = PROCESS_INFORMATION::default();
         assert_ne!(
             unsafe {
                 CreateProcessW(
                     executable.as_ptr(),
-                    if command_line.is_empty() {
-                        std::ptr::null_mut()
-                    } else {
-                        command_line.as_mut_ptr()
-                    },
+                    command_ptr,
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
@@ -378,7 +397,7 @@ mod tests {
                         | CREATE_NO_WINDOW
                         | EXTENDED_STARTUPINFO_PRESENT
                         | CREATE_UNICODE_ENVIRONMENT,
-                    environment.as_ptr().cast(),
+                    environment_ptr.cast(),
                     std::ptr::null(),
                     &startup.StartupInfo,
                     &mut info,
@@ -475,7 +494,7 @@ mod tests {
         );
         assert_eq!(unsafe { *capabilities.as_ptr().cast::<u32>() }, 0);
 
-        let exit = command.map(|_| {
+        let exit = resume.then(|| {
             assert_ne!(
                 unsafe { ResumeThread(process._thread.as_raw_handle()) },
                 u32::MAX
@@ -625,6 +644,39 @@ mod tests {
         let entry = open(&executable);
         profile.grant_package_read_execute(&root).unwrap();
         profile.grant_package_read_execute(&entry).unwrap();
+        // Exercise the actual builder, not a test-side quote decoder. The child
+        // compares argv and its entire environment without logging values.
+        let args = [
+            "launch",
+            "",
+            "space value",
+            "引号🦀",
+            "trailing\\",
+            "a\"b",
+            "slash\\\"quote",
+            "&|%PATH%",
+            "line\nbreak",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+        let folder = profile.folder().unwrap();
+        let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+        let data = crate::extension_launch_data::LaunchData::new(
+            &executable,
+            &args,
+            &system,
+            &folder,
+            &folder.join("Temp"),
+            &[("CUSTOM".to_owned(), "declared=值".to_owned())]
+                .into_iter()
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(
+            checked_executable_data(&profile, &executable, None, Some(data)),
+            Some(0)
+        );
         for ip in ["127.0.0.1:0", "[::1]:0"] {
             let tcp = TcpListener::bind(ip).unwrap();
             let udp = UdpSocket::bind(ip).unwrap();

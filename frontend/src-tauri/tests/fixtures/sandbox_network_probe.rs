@@ -3,6 +3,37 @@ use std::net::{SocketAddr, TcpStream, UdpSocket};
 use std::time::Duration;
 fn main() {
     let args: Vec<_> = std::env::args().collect();
+    if args.get(1).is_some_and(|s| s == "launch") {
+        let expected = [
+            "launch",
+            "",
+            "space value",
+            "引号🦀",
+            "trailing\\",
+            "a\"b",
+            "slash\\\"quote",
+            "&|%PATH%",
+            "line\nbreak",
+        ];
+        if args[1..] != expected {
+            std::process::exit(82);
+        }
+        let environment: std::collections::BTreeMap<_, _> = std::env::vars_os().collect();
+        let names: std::collections::BTreeSet<_> =
+            environment.keys().map(|k| k.to_str().unwrap()).collect();
+        if names
+            != ["CUSTOM", "LOCALAPPDATA", "SYSTEMROOT", "TEMP", "TMP"]
+                .into_iter()
+                .collect()
+            || std::env::var("CUSTOM").as_deref() != Ok("declared=值")
+            || std::env::var_os("TEMP") != std::env::var_os("TMP")
+            || std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Temp")
+                != std::path::PathBuf::from(std::env::var_os("TEMP").unwrap())
+        {
+            std::process::exit(83);
+        }
+        std::process::exit(0);
+    }
     if args.len() != 3 {
         std::process::exit(79);
     }
