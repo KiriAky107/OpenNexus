@@ -76,6 +76,8 @@ struct Process<'a> {
     handles: Handles,
     job: Job,
     _profile: &'a Profile,
+    #[cfg(feature = "desktop")]
+    _bound_entry: Option<&'a crate::extension_pinned::BoundEntry<'a>>,
 }
 impl Drop for Process<'_> {
     fn drop(&mut self) {
@@ -158,9 +160,23 @@ impl<'a> Suspended<'a> {
             handles,
             job,
             _profile: profile,
+            #[cfg(feature = "desktop")]
+            _bound_entry: None,
         };
         verify_identity(&process.handles, profile)?;
         Ok(Self(process))
+    }
+    /// Package launch path: retain the entry guard (and its package/ancestor
+    /// handles) for the entire suspended/running process lifetime.
+    #[cfg(feature = "desktop")]
+    pub fn create_bound(
+        profile: &'a Profile,
+        entry: &'a crate::extension_pinned::BoundEntry<'a>,
+        data: LaunchData,
+    ) -> Result<Self> {
+        let mut value = Self::create(profile, entry.path(), data)?;
+        value.0._bound_entry = Some(entry);
+        Ok(value)
     }
     /// # Safety
     /// Caller must hold the verified package/entry handles and revalidate the

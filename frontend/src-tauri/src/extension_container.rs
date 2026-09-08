@@ -675,6 +675,10 @@ mod tests {
             pinned.grant_read_execute(&profile).unwrap();
             pinned
         };
+        #[cfg(feature = "desktop")]
+        let bound_entry = _pinned.bind_entry("network-probe.exe").unwrap();
+        #[cfg(feature = "desktop")]
+        let executable = bound_entry.path().to_owned();
         #[cfg(not(feature = "desktop"))]
         {
             profile.grant_package_read_execute(&root).unwrap();
@@ -709,6 +713,18 @@ mod tests {
                 .collect(),
         )
         .unwrap();
+        #[cfg(feature = "desktop")]
+        {
+            let suspended =
+                crate::extension_process::Suspended::create_bound(&profile, &bound_entry, data)
+                    .unwrap();
+            let running = unsafe { suspended.resume().unwrap() };
+            assert_eq!(
+                running.wait(std::time::Duration::from_secs(5)).unwrap(),
+                Some(0)
+            );
+        }
+        #[cfg(not(feature = "desktop"))]
         assert_eq!(
             checked_executable_data(&profile, &executable, None, Some(data)),
             Some(0)
@@ -909,6 +925,10 @@ mod tests {
             pinned.grant_read_execute(&profile).unwrap();
             pinned
         };
+        #[cfg(feature = "desktop")]
+        let bound_entry = _pinned.bind_entry("network-probe.exe").unwrap();
+        #[cfg(feature = "desktop")]
+        let executable = bound_entry.path().to_owned();
         #[cfg(not(feature = "desktop"))]
         {
             profile.grant_package_read_execute(&root).unwrap();
