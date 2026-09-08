@@ -10,7 +10,7 @@ beforeEach(() => { vi.clearAllMocks(); localStorage.clear() })
 it('requires explicit confirmation and does not save when Host rejects it', async () => {
   service.discover.mockResolvedValue({ source_id: 'catalog', keys: [{ key_id: 'key', namespace: 'examples', public_key: 'public', revoked: false }] })
   service.review.mockResolvedValue([{ review_id: 'review', fingerprint: 'visible-digest', previous: null, proposed: { namespace: 'examples', key_id: 'key' } }])
-  const wrapper = mount(CommunityView, { global: { stubs: { AppDialog: { template: '<section><slot /></section>' } } } })
+  const wrapper = mount(CommunityView, { global: { stubs: { DesktopPackages: true, AppDialog: { template: '<section><slot /></section>' } } } })
   await wrapper.get('input').setValue('https://catalog.example')
   await wrapper.findAll('button').find(b => b.text() === '检查来源与公钥')!.trigger('click')
   await flushPromises()

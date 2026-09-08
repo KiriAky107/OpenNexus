@@ -855,6 +855,7 @@ fn main() {
             extension_stage_prepare,
             extension_stage_cancel,
             extension_stage_status,
+            extension_staged,
             record_get,
             record_write,
             sync_login,

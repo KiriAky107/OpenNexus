@@ -225,6 +225,28 @@ pub fn extension_stage_status(
     serde_json::to_value(receipt).map_err(|_| "EXTENSION_STATUS_FAILED".into())
 }
 
+#[tauri::command]
+pub async fn extension_staged(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+    offset: u32,
+    limit: u32,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let extensions = host.extensions.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = extensions.lock().map_err(|_| "HOST_BUSY")?;
+        let items = store
+            .as_ref()
+            .ok_or("EXTENSIONS_NOT_READY")?
+            .staged(offset, limit)
+            .map_err(|e| e.code)?;
+        serde_json::to_value(items).map_err(|_| "EXTENSION_LIST_FAILED".into())
+    })
+    .await
+    .map_err(|_| "EXTENSION_LIST_FAILED".to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
