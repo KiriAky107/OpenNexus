@@ -535,6 +535,121 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
             .unwrap()["record"]["data"]["fontEditorSize"],
         24
     );
+    // Portable records traverse real HTTP, including equal display versions with
+    // different contents. A numeric persona version cannot replace content CAS.
+    for (kind, id, data, field) in [
+        (
+            "persona",
+            "default",
+            json!({"version":1,"name":"initial","system_prompt":"Scoped prompt","dialogue_pairs":[]}),
+            "name",
+        ),
+        (
+            "layout",
+            "sidebars",
+            json!({"primaryExpanded":true,"workspaceWidth":272,"chatWidth":320}),
+            "workspaceWidth",
+        ),
+    ] {
+        let path = notesagent_host::records::path_for(kind, id).unwrap();
+        let record = json!({"schema":1,"kind":kind,"id":id,"data":data});
+        workspace
+            .lock()
+            .unwrap()
+            .write(&path, "", &serde_json::to_vec(&record).unwrap(), "local")
+            .unwrap();
+        while client.push_one(&workspace, &binding).await.unwrap() {}
+        client_b.pull_page(&workspace_b, &binding_b).await.unwrap();
+        for round in 0..20 {
+            let mut hashes = Vec::new();
+            for (side, target) in [(0, &workspace), (1, &workspace_b)] {
+                let mut ws = target.lock().unwrap();
+                let current = ws.record_get_kind(kind, id).unwrap().unwrap();
+                let mut next = current["record"].clone();
+                next["data"][field] = if kind == "persona" {
+                    json!(format!("side-{side}-round-{round}"))
+                } else {
+                    json!(300 + round * 2 + side)
+                };
+                let entry = ws
+                    .write(
+                        &path,
+                        current["hash"].as_str().unwrap(),
+                        &serde_json::to_vec(&next).unwrap(),
+                        "local",
+                    )
+                    .unwrap();
+                hashes.push(entry.hash);
+            }
+            while client.push_one(&workspace, &binding).await.unwrap() {}
+            client_b.pull_page(&workspace_b, &binding_b).await.unwrap();
+            let choice = if round % 2 == 0 { "local" } else { "remote" };
+            {
+                let mut ws = workspace_b.lock().unwrap();
+                let conflicts = ws.sync_conflicts(&binding_b.id).unwrap();
+                assert_eq!(conflicts.len(), 1);
+                let sequence = conflicts[0]["sequence"].as_i64().unwrap();
+                assert_eq!(ws.read(&path).unwrap().entry.hash, hashes[1]);
+                assert_eq!(
+                    ws.sync_resolve(&binding_b.id, sequence, choice, "", &hashes[0])
+                        .unwrap_err()
+                        .code,
+                    "REVISION_CONFLICT"
+                );
+                ws.sync_resolve(&binding_b.id, sequence, choice, "", &hashes[1])
+                    .unwrap();
+                ws.sync_resolve(&binding_b.id, sequence, choice, "", &hashes[1])
+                    .unwrap();
+            }
+            while client_b.push_one(&workspace_b, &binding_b).await.unwrap() {}
+            client.pull_page(&workspace, &binding).await.unwrap();
+            client_b.pull_page(&workspace_b, &binding_b).await.unwrap();
+            let a = workspace
+                .lock()
+                .unwrap()
+                .record_get_kind(kind, id)
+                .unwrap()
+                .unwrap();
+            let b = workspace_b
+                .lock()
+                .unwrap()
+                .record_get_kind(kind, id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(a, b);
+            assert_eq!(a["hash"], hashes[usize::from(choice == "local")]);
+            assert!(workspace
+                .lock()
+                .unwrap()
+                .sync_next(&binding.id)
+                .unwrap()
+                .is_none());
+            assert!(workspace_b
+                .lock()
+                .unwrap()
+                .sync_next(&binding_b.id)
+                .unwrap()
+                .is_none());
+        }
+    }
+    drop(workspace_b);
+    let workspace_b = Arc::new(Mutex::new(Workspace::open(root_b.path()).unwrap()));
+    assert_eq!(
+        client_b.pull_page(&workspace_b, &binding_b).await.unwrap(),
+        0
+    );
+    assert!(!client_b.push_one(&workspace_b, &binding_b).await.unwrap());
+    for (kind, id) in [("persona", "default"), ("layout", "sidebars")] {
+        assert_eq!(
+            workspace.lock().unwrap().record_get_kind(kind, id).unwrap(),
+            workspace_b
+                .lock()
+                .unwrap()
+                .record_get_kind(kind, id)
+                .unwrap()
+        );
+    }
+
     // Kill the actual client process after each durable 10 MiB server offset,
     // before its response reaches the client. The next process must query offset.
     use sha2::{Digest, Sha256};

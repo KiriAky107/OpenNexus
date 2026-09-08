@@ -289,4 +289,84 @@ async fn real_core_notes_roundtrip_only_through_bound_host_and_confirm_commits()
         .path()
         .join("core/unbound-vault/Core fixture.md")
         .exists());
+    // The actual Python HTTP handler must round-trip revision through Host pipes,
+    // including repeat requests after a successful commit.
+    let path = "/api/settings/persona";
+    let (status, empty) = request(
+        &mut core,
+        "GET",
+        path,
+        &vault,
+        &uuid::Uuid::new_v4().to_string(),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{empty}");
+    assert_eq!(empty["revision"], "");
+    let operation = uuid::Uuid::new_v4().to_string();
+    let mut body = empty.clone();
+    body["system_prompt"] = json!("Host persona fixture");
+    let (status, first) = request(
+        &mut core,
+        "PUT",
+        path,
+        &vault,
+        &operation,
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(status, 200, "{first}");
+    assert_eq!(first["revision"].as_str().unwrap().len(), 64);
+    for _ in 0..20 {
+        let (status, replay) = request(
+            &mut core,
+            "PUT",
+            path,
+            &vault,
+            &operation,
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(status, 200, "{replay}");
+        assert_eq!(replay, first);
+    }
+    let (status, stale) = request(
+        &mut core,
+        "PUT",
+        path,
+        &vault,
+        &uuid::Uuid::new_v4().to_string(),
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(status, 409, "{stale}");
+    let (status, wrong_vault) = request(
+        &mut core,
+        "GET",
+        path,
+        &uuid::Uuid::new_v4().to_string(),
+        &uuid::Uuid::new_v4().to_string(),
+        None,
+    )
+    .await;
+    assert_eq!(status, 409, "{wrong_vault}");
+    let (status, loaded) = request(
+        &mut core,
+        "GET",
+        path,
+        &vault,
+        &uuid::Uuid::new_v4().to_string(),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{loaded}");
+    assert_eq!(loaded, first);
+    let stored = workspace
+        .lock()
+        .unwrap()
+        .record_get_kind("persona", "default")
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored["hash"], first["revision"]);
+    assert_eq!(workspace.lock().unwrap().pending_count().unwrap(), 9);
 }
