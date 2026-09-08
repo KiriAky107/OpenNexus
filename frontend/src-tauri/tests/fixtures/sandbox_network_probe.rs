@@ -15,7 +15,14 @@ fn main() {
         assert!(read(&mut input).contains("notifications/initialized"));
         let request = read(&mut input);
         assert!(request.contains("tools/list"));
-        reply(id(&request), r#"{"tools":[{"name":"echo","inputSchema":{"type":"object"}}]}"#);
+        if args[1] == "mcp_pages" {
+            reply(id(&request), r#"{"tools":[],"nextCursor":"second"}"#);
+            let page = read(&mut input);
+            assert!(page.contains("tools/list") && page.contains("second"));
+            reply(id(&page), r#"{"tools":[{"name":"echo","inputSchema":{"type":"object","additionalProperties":false},"outputSchema":{"type":"object","required":["ok"],"properties":{"ok":{"type":"boolean"}}}}]}"#);
+        } else {
+        reply(id(&request), r#"{"tools":[{"name":"echo","inputSchema":{"type":"object","additionalProperties":false},"outputSchema":{"type":"object","required":["ok"],"properties":{"ok":{"type":"boolean"}}}}]}"#);
+        }
         let mut request = read(&mut input);
         assert!(request.contains("tools/call"));
         if args[1] == "mcp_cancel" || args[1] == "mcp_deadline" {
@@ -33,8 +40,16 @@ fn main() {
         std::io::stdout().flush().unwrap();
         let ping = read(&mut input);
         assert!(ping.contains("server-ping") && ping.contains("result"));
-        println!(r#"{{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}}"#);
-        reply(if args[1] == "mcp_wrong_id" { "wrong-request" } else { id(&request) }, r#"{"content":[{"type":"text","text":"native MCP success"}]}"#);
+        if args[1] != "mcp_idle_change" { println!(r#"{{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}}"#); }
+        reply(if args[1] == "mcp_wrong_id" { "wrong-request" } else { id(&request) }, if args[1] == "mcp_bad_result" { r#"{"content":[],"structuredContent":{"ok":"wrong type"}}"# } else { r#"{"content":[{"type":"text","text":"native MCP success"}],"structuredContent":{"ok":true}}"# });
+        if args[1] == "mcp_idle_change" {
+            std::thread::sleep(Duration::from_millis(50));
+            println!(r#"{{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}}"#);
+            std::io::stdout().flush().unwrap();
+            let stale = read(&mut input);
+            if !stale.is_empty() { reply(id(&stale), r#"{"content":[],"structuredContent":{"ok":true}}"#); }
+            return;
+        }
         // MCP server remains alive between calls until Host closes stdin.
         while !read(&mut input).is_empty() {}
         return;
