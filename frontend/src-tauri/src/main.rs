@@ -850,6 +850,7 @@ fn main() {
             host_capabilities,
             extension_trust_review,
             extension_trust_confirm,
+            extension_trust_confirm_group,
             extension_install_preview,
             extension_stage,
             extension_stage_prepare,
