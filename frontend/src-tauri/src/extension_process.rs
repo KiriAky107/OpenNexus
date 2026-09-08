@@ -175,6 +175,18 @@ impl<'a> Suspended<'a> {
     }
 }
 impl Running<'_> {
+    /// Arm before dispatching a tool request; finish after receiving its result.
+    /// Failure to arm must prevent dispatch. This does not time server lifetime.
+    pub fn start_tool_call(&self) -> Result<crate::extension_deadline::ToolDeadline> {
+        crate::extension_deadline::ToolDeadline::arm(&self.0.job)
+    }
+    #[cfg(test)]
+    pub(crate) fn start_test_tool_call(
+        &self,
+        budget: Duration,
+    ) -> Result<crate::extension_deadline::ToolDeadline> {
+        crate::extension_deadline::ToolDeadline::arm_test(&self.0.job, budget)
+    }
     /// A bounded observation only. The runtime must enforce the tool deadline.
     pub fn wait(&self, timeout: Duration) -> Result<Option<u32>> {
         let milliseconds = u32::try_from(timeout.as_millis())
