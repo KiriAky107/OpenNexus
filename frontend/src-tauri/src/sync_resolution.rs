@@ -18,6 +18,19 @@ impl Workspace {
         expected: &str,
     ) -> Result<()> {
         self.check_binding(binding)?;
+        let scope_path: Option<String> = self
+            .db
+            .query_row(
+                "SELECT local_path FROM sync_conflicts WHERE binding=?1 AND sequence=?2",
+                params![binding, sequence],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(path) = scope_path {
+            if !self.sync_path_enabled(&path)? {
+                return Err(HostError::new("SYNC_SCOPE_DISABLED"));
+            }
+        }
         if !matches!(choice, "local" | "remote" | "copy") {
             return Err(HostError::new("SYNC_RESOLUTION_INVALID"));
         }
@@ -107,6 +120,9 @@ impl Workspace {
         )?;
         let revision: RemoteRevision =
             serde_json::from_str(&remote).map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?;
+        if !self.sync_path_enabled(&revision.path)? {
+            return Ok(());
+        }
         let head: i64 = self.db.query_row(
             "SELECT revision FROM sync_heads WHERE binding=?1 AND file_id=?2",
             params![binding, revision.file_id],
@@ -279,6 +295,11 @@ mod tests {
     fn invalid_record_copy_destination_does_not_freeze_conflict_decision() {
         let root = tempfile::tempdir().unwrap();
         let mut ws = Workspace::open(root.path()).unwrap();
+        ws.sync_set_optional_scope(crate::sync_scope::OptionalScope {
+            persona: true,
+            layout: true,
+        })
+        .unwrap();
         let binding = ws
             .sync_bind_download("https://sync.example", "remote-vault", "account")
             .unwrap();

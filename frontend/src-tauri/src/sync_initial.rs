@@ -72,7 +72,7 @@ impl Workspace {
             if item.sequence > snapshot.boundary {
                 return Err(HostError::new("SYNC_RESPONSE_INVALID"));
             }
-            if item.operation == "put" {
+            if item.operation == "put" && self.sync_path_enabled(&item.path)? {
                 paths.insert(item.path.clone(), "download");
             }
         }
@@ -93,8 +93,16 @@ impl Workspace {
             );
         }
         let fingerprint = hash(
-            &serde_json::to_vec(&(&self.vault_id, endpoint, remote, account, &local, snapshot))
-                .map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?,
+            &serde_json::to_vec(&(
+                &self.vault_id,
+                endpoint,
+                remote,
+                account,
+                &local,
+                snapshot,
+                self.sync_optional_scope()?,
+            ))
+            .map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?,
         );
         Ok(Preview {
             fingerprint,

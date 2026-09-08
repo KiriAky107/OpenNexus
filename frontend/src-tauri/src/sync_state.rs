@@ -163,7 +163,7 @@ impl Workspace {
             let Some((operation_id, file_id, path, digest, operation, content)) = pending else {
                 break;
             };
-            if !crate::sync_discovery::allowed(&path) {
+            if !self.sync_path_enabled(&path)? {
                 self.db.execute(
                     "UPDATE outbox SET state='excluded' WHERE operation_id=?1",
                     [&operation_id],
@@ -201,19 +201,34 @@ impl Workspace {
     }
     pub fn sync_next(&self, binding: &str) -> Result<Option<Job>> {
         self.check_binding(binding)?;
-        let job=self.db.query_row("SELECT binding,operation_id,file_id,path,hash,size,operation,state,base_revision,upload_id FROM sync_jobs WHERE binding=?1 AND state NOT IN ('acked','archived','conflict') AND NOT EXISTS (SELECT 1 FROM sync_conflicts c WHERE c.binding=sync_jobs.binding AND (c.file_id=sync_jobs.file_id OR c.local_path=sync_jobs.path) AND c.state='open') ORDER BY rowid LIMIT 1", [binding], |r| {
+        loop {
+            let job=self.db.query_row("SELECT binding,operation_id,file_id,path,hash,size,operation,state,base_revision,upload_id FROM sync_jobs WHERE binding=?1 AND state NOT IN ('acked','archived','conflict') AND NOT EXISTS (SELECT 1 FROM sync_conflicts c WHERE c.binding=sync_jobs.binding AND (c.file_id=sync_jobs.file_id OR c.local_path=sync_jobs.path) AND c.state='open') ORDER BY rowid LIMIT 1", [binding], |r| {
             Ok(Job { binding:r.get(0)?,operation_id:r.get(1)?,file_id:r.get(2)?,path:r.get(3)?,hash:r.get(4)?,size:r.get(5)?,operation:r.get(6)?,state:r.get(7)?,base_revision:r.get(8)?,upload_id:r.get(9)? })
         }).optional()?;
-        if job
-            .as_ref()
-            .is_some_and(|job| !crate::sync_discovery::allowed(&job.path))
-        {
-            return Err(HostError::new("SYNC_CLASS_UNSUPPORTED"));
+            if job
+                .as_ref()
+                .is_some_and(|job| !crate::sync_discovery::allowed(&job.path))
+            {
+                return Err(HostError::new("SYNC_CLASS_UNSUPPORTED"));
+            }
+            if let Some(ref excluded) = job {
+                if !self.sync_path_enabled(&excluded.path)? {
+                    self.db.execute("UPDATE sync_jobs SET state='archived' WHERE binding=?1 AND operation_id=?2",params![binding,excluded.operation_id])?;
+                    self.db.execute(
+                        "UPDATE outbox SET state='excluded' WHERE operation_id=?1",
+                        [&excluded.operation_id],
+                    )?;
+                    continue;
+                }
+            }
+            return Ok(job);
         }
-        Ok(job)
     }
     pub(crate) fn check_job(&self, job: &Job) -> Result<()> {
         self.check_binding(&job.binding)?;
+        if !self.sync_path_enabled(&job.path)? {
+            return Err(HostError::new("SYNC_SCOPE_DISABLED"));
+        }
         let state: String = self.db.query_row(
             "SELECT state FROM sync_jobs WHERE binding=?1 AND operation_id=?2",
             params![job.binding, job.operation_id],

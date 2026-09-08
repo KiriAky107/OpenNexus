@@ -95,7 +95,7 @@ async function save() {
   <dialog ref="dialog" class="modal persona-dialog" aria-labelledby="persona-title" @cancel.prevent="emit('close')" @click="($event.target === dialog) && emit('close')">
     <form @submit.prevent="save">
       <div class="persona-heading"><h2 id="persona-title">{{ t('人设与头像', 'Persona and avatars') }}</h2><button type="button" class="button-secondary" @click="emit('close')">{{ t('关闭', 'Close') }}</button></div>
-      <p class="notice-banner">{{ isDesktop() ? t('工作区人设 · 随当前 Vault 同步，应用于此工作区的对话与智能体。旧全局人设不会自动导入。', 'Workspace persona · Syncs with this Vault and applies to its chats and agents. Legacy global personas are not imported automatically.') : t('全局人设 · 应用于连接此 AI Core 的所有对话与智能体。留空的提示词和对话示例不会拼入请求。', 'Global persona · Applies to all chats and agents connected to this AI Core. Empty prompts and examples are omitted.') }}</p>
+      <p class="notice-banner">{{ isDesktop() ? t('工作区人设 · 可在同步设置中选择随当前 Vault 同步，应用于此工作区的对话与智能体。旧全局人设不会自动导入。', 'Workspace persona · Optionally syncs with this Vault and applies to its chats and agents. Legacy global personas are not imported automatically.') : t('全局人设 · 应用于连接此 AI Core 的所有对话与智能体。留空的提示词和对话示例不会拼入请求。', 'Global persona · Applies to all chats and agents connected to this AI Core. Empty prompts and examples are omitted.') }}</p>
       <p v-if="!ready" role="status">{{ t('正在加载全局设置', 'Loading global settings') }} <button type="button" class="button-secondary" @click="loadGlobal">{{ t('重试', 'Retry') }}</button></p>
       <section v-if="isDesktop()" class="legacy-persona">
         <button type="button" class="button-secondary" :disabled="!ready || saving || legacyLoading" @click="previewLegacy">{{ t('查看旧全局人设', 'Preview legacy global persona') }}</button>

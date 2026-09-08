@@ -8,7 +8,7 @@ import { t } from '@/i18n'
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 interface Binding { id: string; endpoint: string; account: string; remote_vault: string; cursor: number }
 interface Conflict { sequence: number; local_path: string; local_hash: string; current_hash?: string; current_path?: string; remote: { path: string; operation: string } }
-interface Status { vault_id: string; binding: Binding | null; paused: boolean; pending: number; conflicts: Conflict[]; credential_state: string; running: boolean; error: string | null; retry_in: number | null; failures: number; halted: boolean; attempts?: Array<{ operation_id: string; path: string; attempts: number; outcome: string; error: string | null }> }
+interface Status { optional_scope?: { persona: boolean; layout: boolean }; vault_id: string; binding: Binding | null; paused: boolean; pending: number; conflicts: Conflict[]; credential_state: string; running: boolean; error: string | null; retry_in: number | null; failures: number; halted: boolean; attempts?: Array<{ operation_id: string; path: string; attempts: number; outcome: string; error: string | null }> }
 interface RemoteVault { id: string; name: string; sequence: number; used: number; quota: number }
 const status = ref<Status | null>(null)
 const endpoint = ref('https://'), account = ref(''), password = ref(''), device = ref('OpenNexus Desktop'), testHttp = ref(false)
@@ -41,6 +41,15 @@ async function act(action: () => Promise<void>) {
   try { await action(); await refresh() }
   catch (error) { message.value = error instanceof Error ? error.message : 'SYNC_FAILED' }
   finally { busy.value = false }
+}
+function setScope(kind: 'persona' | 'layout', event: Event) {
+  const current = status.value
+  if (!current || current.binding) return
+  const input = event.target as HTMLInputElement
+  const scope = { persona: false, layout: false, ...current.optional_scope, [kind]: input.checked }
+  input.checked = current.optional_scope?.[kind] ?? false
+  preview.value = null
+  return act(async () => { await hostInvoke('sync_set_scope', { vaultId: current.vault_id, scope }) })
 }
 async function listVaults() {
   const result = await hostInvoke<{ items: RemoteVault[] }>('sync_vaults', { endpoint: endpoint.value, account: account.value })
@@ -118,6 +127,12 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
         <div class="inline-actions"><button :disabled="previewPage === 0" @click="previewPage--">{{ t('上一页', 'Previous') }}</button><button :disabled="(previewPage + 1) * 100 >= preview.items.length" @click="previewPage++">{{ t('下一页', 'Next') }}</button><button :disabled="busy" @click="merge">{{ t('确认合并并绑定', 'Confirm merge and bind') }}</button></div>
       </div>
     </div>
+    <fieldset v-if="status" :disabled="busy || !!status.binding" class="sync-scope">
+      <legend>{{ t('可选同步内容', 'Optional sync content') }}</legend>
+      <label><input type="checkbox" :checked="status.optional_scope?.persona ?? false" @change="setScope('persona', $event)" />{{ t('工作区人设', 'Workspace persona') }}</label>
+      <label><input type="checkbox" :checked="status.optional_scope?.layout ?? false" @change="setScope('layout', $event)" />{{ t('侧栏布局', 'Sidebar layout') }}</label>
+      <p>{{ t('默认仅保存在本机。修改已绑定范围时，请先解除绑定，再重新预览合并；关闭选项不会删除远端内容。', 'Kept locally by default. Unbind before changing scope, then preview a new merge. Disabling an option does not delete remote content.') }}</p>
+    </fieldset>
     <div v-if="status?.binding" class="sync-bound">
       <p>{{ status.binding.endpoint }} · {{ status.binding.account }} · {{ status.binding.remote_vault }}</p>
       <p aria-live="polite">{{ status.paused ? t('已暂停', 'Paused') : status.running ? t('同步中', 'Syncing') : status.halted ? t('自动同步已停止，请处理错误后重试', 'Automatic sync stopped; resolve the error and retry') : t('等待下一轮同步', 'Waiting for next sync') }} · {{ t('待上传', 'Pending') }} {{ status.pending }} · cursor {{ status.binding.cursor }}</p>

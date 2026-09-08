@@ -145,8 +145,10 @@ impl Workspace {
         {
             return Err(HostError::new("SYNC_CURSOR_INVALID"));
         }
-        if let Some(digest) = &revision.hash {
-            crate::payloads::verify(&self.sync_spool(digest)?, digest, revision.size as u64)?;
+        if self.sync_path_enabled(&revision.path)? {
+            if let Some(digest) = &revision.hash {
+                crate::payloads::verify(&self.sync_spool(digest)?, digest, revision.size as u64)?;
+            }
         }
         let encoded =
             serde_json::to_string(revision).map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?;
@@ -254,6 +256,10 @@ impl Workspace {
         };
         let revision: RemoteRevision =
             serde_json::from_str(&encoded).map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?;
+        if !self.sync_path_enabled(&revision.path)? {
+            self.sync_finish(binding, &revision, "excluded")?;
+            return Ok(true);
+        }
         let own: Option<Job> = self.db.query_row("SELECT binding,operation_id,file_id,path,hash,size,operation,state,base_revision,upload_id FROM sync_jobs WHERE binding=?1 AND operation_id=?2", params![binding,revision.operation_id], |r| {
             Ok(Job { binding:r.get(0)?,operation_id:r.get(1)?,file_id:r.get(2)?,path:r.get(3)?,hash:r.get(4)?,size:r.get(5)?,operation:r.get(6)?,state:r.get(7)?,base_revision:r.get(8)?,upload_id:r.get(9)? })
         }).optional()?;

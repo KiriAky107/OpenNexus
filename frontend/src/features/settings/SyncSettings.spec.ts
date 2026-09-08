@@ -81,3 +81,15 @@ it('shows persisted per-job interruption counts without starting work from the v
   expect(vi.mocked(hostInvoke).mock.calls.every(([command]) => command === 'sync_status')).toBe(true)
   wrapper.unmount()
 })
+
+
+it('keeps optional records off until an explicit unbound scope change', async () => {
+  vi.mocked(hostInvoke).mockResolvedValue({ ...empty(), optional_scope: { persona: false, layout: false } })
+  const wrapper = mount(SyncSettings); await flushPromises()
+  const options = wrapper.findAll('.sync-scope input[type=checkbox]')
+  expect(options).toHaveLength(2)
+  expect((options[0]!.element as HTMLInputElement).checked).toBe(false)
+  await options[0]!.setValue(true); await flushPromises()
+  expect(hostInvoke).toHaveBeenCalledWith('sync_set_scope', { vaultId: empty().vault_id, scope: { persona: true, layout: false } })
+  wrapper.unmount()
+})

@@ -75,7 +75,7 @@ impl Workspace {
                 let resolved = ws.resolve(&path)?;
                 if item.file_type()?.is_dir() {
                     walk(ws, &resolved, paths)?;
-                } else if allowed(&path) && item.file_type()?.is_file() {
+                } else if ws.sync_path_enabled(&path)? && item.file_type()?.is_file() {
                     paths.push(path);
                 }
             }
@@ -137,7 +137,10 @@ impl Workspace {
             rows
         };
         for (file_id, path) in previous {
-            if seen.contains(&file_id) || !allowed(&path) || self.resolve(&path)?.exists() {
+            if seen.contains(&file_id)
+                || !self.sync_path_enabled(&path)?
+                || self.resolve(&path)?.exists()
+            {
                 continue;
             }
             let operation = Uuid::new_v4().to_string();
