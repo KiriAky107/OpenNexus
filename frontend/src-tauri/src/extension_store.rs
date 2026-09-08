@@ -272,10 +272,10 @@ impl ExtensionStore {
         let mut db = Connection::open(database)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 4 {
+        if version > 5 {
             return Err(HostError::new("EXTENSION_SCHEMA_INCOMPATIBLE"));
         }
-        if (1..4).contains(&version) {
+        if (1..5).contains(&version) {
             let backup = root.join(format!(
                 "extensions.schema{version}.{}.sqlite3",
                 Uuid::new_v4()
@@ -290,7 +290,8 @@ impl ExtensionStore {
             CREATE TABLE IF NOT EXISTS extension_active(slot TEXT PRIMARY KEY,target TEXT NOT NULL,revision TEXT NOT NULL,pending_operation TEXT);
             CREATE TABLE IF NOT EXISTS extension_transactions(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,before_state TEXT NOT NULL,after_state TEXT NOT NULL,state TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS extension_trust(source TEXT NOT NULL,namespace TEXT NOT NULL,key_id TEXT NOT NULL,setting TEXT NOT NULL,revision TEXT NOT NULL,PRIMARY KEY(source,namespace,key_id));
-            PRAGMA user_version=4; COMMIT;")?;
+            CREATE TABLE IF NOT EXISTS extension_blocks(identity TEXT PRIMARY KEY,reason TEXT NOT NULL);
+            PRAGMA user_version=5; COMMIT;")?;
         crate::extension_transaction::recover(&mut db)?;
         Ok(Self {
             root,
@@ -356,6 +357,80 @@ impl ExtensionStore {
             params![setting.source,setting.namespace,setting.key_id,serde_json::to_string(setting).unwrap(),revision])?;
         Ok(revision)
     }
+    fn block_identity(
+        source_url: &str,
+        release: &Release,
+        public_key: &[u8; 32],
+        key: bool,
+    ) -> Result<String> {
+        let origin = source(source_url)?;
+        let identity = if key {
+            serde_json::json!([
+                "key",
+                origin,
+                release.namespace,
+                release.key_id,
+                hash(public_key)
+            ])
+        } else {
+            serde_json::json!([
+                "release",
+                origin,
+                release.namespace,
+                release.package_id,
+                release.version
+            ])
+        };
+        Ok(hash(&serde_json::to_vec(&identity).unwrap()))
+    }
+    /// A persisted denial is independent of rollback and renewed source consent.
+    pub fn check_not_revoked(
+        &self,
+        source_url: &str,
+        release: &Release,
+        public_key: &[u8; 32],
+    ) -> Result<()> {
+        for key in [true, false] {
+            let identity = Self::block_identity(source_url, release, public_key, key)?;
+            let reason: Option<String> = self
+                .db
+                .query_row(
+                    "SELECT reason FROM extension_blocks WHERE identity=?1",
+                    [identity],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(reason) = reason {
+                if !matches!(
+                    reason.as_str(),
+                    "EXTENSION_KEY_REVOKED" | "EXTENSION_RELEASE_WITHDRAWN"
+                ) {
+                    return Err(HostError::new("EXTENSION_STORE_CORRUPT"));
+                }
+                return Err(HostError::new(&reason));
+            }
+        }
+        Ok(())
+    }
+    fn remember_revocation(
+        &mut self,
+        source_url: &str,
+        release: &Release,
+        public_key: &[u8; 32],
+        code: &str,
+    ) -> Result<()> {
+        let key = match code {
+            "EXTENSION_KEY_REVOKED" => true,
+            "EXTENSION_RELEASE_WITHDRAWN" => false,
+            _ => return Ok(()),
+        };
+        let identity = Self::block_identity(source_url, release, public_key, key)?;
+        self.db.execute(
+            "INSERT INTO extension_blocks VALUES (?1,?2) ON CONFLICT(identity) DO NOTHING",
+            params![identity, code],
+        )?;
+        Ok(())
+    }
     /// Online installation gate, using confirmed Host trust settings only.
     pub async fn switch_online(
         &mut self,
@@ -389,6 +464,7 @@ impl ExtensionStore {
             if !trusted.enabled || trusted.public_key != key {
                 return Err(HostError::new("EXTENSION_SOURCE_UNTRUSTED"));
             }
+            self.check_not_revoked(&source, &release, &key)?;
             let client = crate::extension_trust::Client::new(&source)?;
             let checked = client
                 .check(
@@ -400,7 +476,14 @@ impl ExtensionStore {
                     },
                     &release,
                 )
-                .await?;
+                .await;
+            let checked = match checked {
+                Ok(checked) => checked,
+                Err(error) => {
+                    self.remember_revocation(&source, &release, &key, &error.code)?;
+                    return Err(error);
+                }
+            };
             verified.push((checked, source, release, key));
         }
         self.switch_prepared_inner(operation, vault_id, changes, || {
@@ -445,6 +528,7 @@ impl ExtensionStore {
             let public: [u8; 32] = key
                 .try_into()
                 .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+            self.check_not_revoked(&source, &release, &public)?;
             let (inventory, manifest) = release.verify_package(
                 &public,
                 &release.key_id,
@@ -777,6 +861,66 @@ mod tests {
             withdrawn: false,
             archive,
         }
+    }
+    #[test]
+    fn revocations_survive_restart_and_consent_without_overblocking_other_releases() {
+        let temp = tempfile::tempdir().unwrap();
+        let (release, _, key) = fixture();
+        let source = "https://catalog.example/";
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        store
+            .remember_revocation(source, &release, &key, "EXTENSION_TRUST_UNAVAILABLE")
+            .unwrap();
+        store.check_not_revoked(source, &release, &key).unwrap();
+        store
+            .remember_revocation(source, &release, &key, "EXTENSION_RELEASE_WITHDRAWN")
+            .unwrap();
+        drop(store);
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        let setting = TrustSetting {
+            source: source.into(),
+            source_id: "catalog".into(),
+            namespace: release.namespace.clone(),
+            key_id: release.key_id.clone(),
+            public_key: key,
+            enabled: true,
+        };
+        store
+            .confirm_trust(&setting, None, &setting.fingerprint().unwrap())
+            .unwrap();
+        assert_eq!(
+            store
+                .check_not_revoked(source, &release, &key)
+                .unwrap_err()
+                .code,
+            "EXTENSION_RELEASE_WITHDRAWN"
+        );
+        let mut next = release.clone();
+        next.version = "2.0.0".into();
+        store.check_not_revoked(source, &next, &key).unwrap();
+        store
+            .remember_revocation(source, &release, &key, "EXTENSION_KEY_REVOKED")
+            .unwrap();
+        assert_eq!(
+            store
+                .check_not_revoked(source, &next, &key)
+                .unwrap_err()
+                .code,
+            "EXTENSION_KEY_REVOKED"
+        );
+        store
+            .check_not_revoked("https://other.example/", &next, &key)
+            .unwrap();
+        let replacement = SigningKey::from_bytes(&[8; 32]).verifying_key().to_bytes();
+        store
+            .check_not_revoked(source, &next, &replacement)
+            .unwrap();
+        assert!(store
+            .check_not_revoked(source, &release, &replacement)
+            .is_err());
+        drop(store);
+        let store = ExtensionStore::open(temp.path()).unwrap();
+        assert!(store.check_not_revoked(source, &next, &key).is_err());
     }
     #[tokio::test]
     async fn online_switch_never_trusts_the_staged_signer_implicitly() {

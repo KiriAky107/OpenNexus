@@ -132,15 +132,15 @@ impl Client {
             return Err(HostError::new("EXTENSION_TRUST_CHANGED"));
         }
         let key = matching[0];
-        if key.revoked {
-            return Err(HostError::new("EXTENSION_REVOKED"));
-        }
         if key.namespace != pin.namespace
             || release.namespace != pin.namespace
             || release.key_id != pin.key_id
             || STANDARD.decode(&key.public_key).ok().as_deref() != Some(pin.public_key.as_slice())
         {
             return Err(HostError::new("EXTENSION_TRUST_CHANGED"));
+        }
+        if key.revoked {
+            return Err(HostError::new("EXTENSION_KEY_REVOKED"));
         }
         let list: Releases = serde_json::from_value(
             self.json(&format!(
@@ -163,9 +163,6 @@ impl Client {
                 .remove("withdrawn")
                 .and_then(|v| v.as_bool())
                 .ok_or_else(unavailable)?;
-            if withdrawn {
-                return Err(HostError::new("EXTENSION_REVOKED"));
-            }
             for field in ["release_id", "download_path"] {
                 if map
                     .remove(field)
@@ -176,11 +173,14 @@ impl Client {
                 }
             }
             let remote: Release = serde_json::from_value(item).map_err(|_| unavailable())?;
-            found.push(hash(&serde_json::to_vec(&remote).unwrap()));
+            found.push((hash(&serde_json::to_vec(&remote).unwrap()), withdrawn));
         }
         let release_hash = hash(&serde_json::to_vec(release).unwrap());
-        if found != [release_hash.clone()] {
+        if found.len() != 1 || found[0].0 != release_hash {
             return Err(HostError::new("EXTENSION_TRUST_CHANGED"));
+        }
+        if found[0].1 {
+            return Err(HostError::new("EXTENSION_RELEASE_WITHDRAWN"));
         }
         let checked = Checked {
             source: self.source.to_string(),
@@ -286,6 +286,15 @@ mod tests {
                 )
                 .await;
             assert_eq!(result.is_ok(), case == "ok", "{case}");
+            if case == "revoked" {
+                assert_eq!(result.as_ref().err().unwrap().code, "EXTENSION_KEY_REVOKED");
+            }
+            if case == "withdrawn" {
+                assert_eq!(
+                    result.as_ref().err().unwrap().code,
+                    "EXTENSION_RELEASE_WITHDRAWN"
+                );
+            }
             if let Ok(mut checked) = result {
                 checked.matches(&url, &release, &public).unwrap();
                 checked.checked_at = Instant::now() - Duration::from_secs(31);
