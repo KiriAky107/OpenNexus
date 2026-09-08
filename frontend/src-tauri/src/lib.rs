@@ -93,3 +93,6 @@ pub mod extension_mcp_tools;
 
 #[cfg(all(windows, feature = "desktop"))]
 pub mod extension_call_authorization;
+
+#[cfg(all(windows, feature = "desktop"))]
+pub mod extension_instance;
