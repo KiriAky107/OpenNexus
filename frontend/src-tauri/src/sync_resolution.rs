@@ -1,7 +1,8 @@
 //! User decisions are durable before changing files; journal IDs make restart replay safe.
+use crate::workspace::hash;
 use crate::{
     sync_inbox::RemoteRevision,
-    workspace::{hash, Entry, HostError, Result, Workspace},
+    workspace::{Entry, HostError, Result, Workspace},
 };
 use rusqlite::{params, OptionalExtension};
 use std::fs;
@@ -38,7 +39,7 @@ impl Workspace {
             let path = self.path_for_id(&revision.file_id).unwrap_or(path);
             let source = self.resolve(&path)?;
             let current = if source.is_file() {
-                self.sync_store_bytes(&fs::read(source)?)?
+                self.sync_store_file(&source)?
             } else {
                 String::new()
             };
@@ -110,7 +111,7 @@ impl Workspace {
         {
             let source = self.resolve(&path)?;
             let mut current = if source.is_file() {
-                hash(&fs::read(source)?)
+                crate::payloads::hash_file(&source)?
             } else {
                 String::new()
             };
@@ -121,8 +122,15 @@ impl Workspace {
                 return Err(HostError::new("REVISION_CONFLICT"));
             }
             if choice == "copy" {
-                let content = fs::read(self.sync_spool(&expected)?)?;
-                self.write_operation(&destination, "", &content, "local", &copy)?;
+                let size = fs::metadata(self.sync_spool(&expected)?)?.len();
+                self.write_spooled_with_identity(
+                    &destination,
+                    "",
+                    (&expected, size),
+                    "local",
+                    &copy,
+                    None,
+                )?;
             }
             if self
                 .entry(&path)?
@@ -135,11 +143,11 @@ impl Workspace {
                 if expected.is_empty() {
                     self.sync_delete_intent(&revision, &operation)?;
                 } else {
-                    let content = fs::read(self.sync_spool(&expected)?)?;
-                    self.write_with_identity(
+                    let size = fs::metadata(self.sync_spool(&expected)?)?.len();
+                    self.write_spooled_with_identity(
                         &path,
                         &current,
-                        &content,
+                        (&expected, size),
                         "local",
                         &operation,
                         Some(&revision.file_id),
@@ -160,18 +168,14 @@ impl Workspace {
                         "remote",
                     )?;
                 }
-                let content = fs::read(
-                    self.sync_spool(
-                        revision
-                            .hash
-                            .as_deref()
-                            .ok_or_else(|| HostError::new("SYNC_RESPONSE_INVALID"))?,
-                    )?,
-                )?;
-                self.write_with_identity(
+                let digest = revision
+                    .hash
+                    .as_deref()
+                    .ok_or_else(|| HostError::new("SYNC_RESPONSE_INVALID"))?;
+                self.write_spooled_with_identity(
                     &revision.path,
                     &current,
-                    &content,
+                    (digest, revision.size as u64),
                     "remote",
                     &operation,
                     Some(&revision.file_id),
@@ -259,6 +263,110 @@ mod tests {
         ws.sync_set_boundary(binding, revision.sequence).unwrap();
         ws.sync_stage(binding, revision).unwrap();
         ws.sync_apply_pending(binding).unwrap();
+    }
+    #[test]
+    fn hundred_mib_conflicts_resolve_all_choices_and_reopen_without_duplicate_jobs() {
+        use std::io::Write;
+        let fixtures = tempfile::tempdir().unwrap();
+        for (name, value) in [("local", 31u8), ("remote", 47u8)] {
+            let mut file = fs::File::create(fixtures.path().join(name)).unwrap();
+            let block = vec![value; 64 * 1024];
+            for _ in 0..1600 {
+                file.write_all(&block).unwrap();
+            }
+            file.sync_all().unwrap();
+        }
+        for choice in ["local", "remote", "copy"] {
+            let root = tempfile::tempdir().unwrap();
+            let mut ws = Workspace::open(root.path()).unwrap();
+            let binding = ws
+                .sync_bind_download("https://sync.example", "remote-vault", "account")
+                .unwrap();
+            let mut revision = RemoteRevision {
+                vault_id: "remote-vault".into(),
+                sequence: 1,
+                file_id: Uuid::new_v4().to_string(),
+                base_revision: 0,
+                path: "attachments/large.bin".into(),
+                operation: "put".into(),
+                hash: Some(ws.sync_store_bytes(b"base").unwrap()),
+                size: 4,
+                operation_id: Uuid::new_v4().to_string(),
+            };
+            receive(&mut ws, &binding.id, &revision);
+            let local_hash = ws.sync_store_file(&fixtures.path().join("local")).unwrap();
+            let remote_hash = ws.sync_store_file(&fixtures.path().join("remote")).unwrap();
+            ws.write_spooled_with_identity(
+                &revision.path,
+                revision.hash.as_deref().unwrap(),
+                (&local_hash, 100 * 1024 * 1024),
+                "local",
+                &Uuid::new_v4().to_string(),
+                Some(&revision.file_id),
+            )
+            .unwrap();
+            ws.sync_capture(&binding.id).unwrap();
+            let stale = ws.sync_next(&binding.id).unwrap().unwrap();
+            revision.sequence = 2;
+            revision.base_revision = 1;
+            revision.hash = Some(remote_hash.clone());
+            revision.size = 100 * 1024 * 1024;
+            revision.operation_id = Uuid::new_v4().to_string();
+            receive(&mut ws, &binding.id, &revision);
+            assert_eq!(
+                ws.sync_conflicts(&binding.id).unwrap()[0]["current_hash"],
+                local_hash
+            );
+            let destination = if choice == "copy" {
+                "attachments/copy.bin"
+            } else {
+                ""
+            };
+            assert_eq!(
+                ws.sync_resolve(&binding.id, 2, choice, destination, &hash(b"stale"))
+                    .unwrap_err()
+                    .code,
+                "REVISION_CONFLICT"
+            );
+            ws.sync_resolve(&binding.id, 2, choice, destination, &local_hash)
+                .unwrap();
+            drop(ws);
+            let mut ws = Workspace::open(root.path()).unwrap();
+            ws.sync_resume_resolutions(&binding.id).unwrap();
+            ws.sync_resolve(&binding.id, 2, choice, destination, &local_hash)
+                .unwrap();
+            assert!(ws.sync_conflicts(&binding.id).unwrap().is_empty());
+            assert_eq!(
+                crate::payloads::hash_file(&root.path().join(&revision.path)).unwrap(),
+                if choice == "local" {
+                    local_hash.clone()
+                } else {
+                    remote_hash
+                }
+            );
+            assert_eq!(
+                ws.pending_count().unwrap(),
+                if choice == "remote" { 0 } else { 1 }
+            );
+            assert_eq!(
+                ws.entry(&revision.path).unwrap().unwrap().file_id,
+                revision.file_id
+            );
+            if choice == "copy" {
+                assert_eq!(
+                    crate::payloads::hash_file(&root.path().join(destination)).unwrap(),
+                    local_hash
+                );
+                assert_ne!(
+                    ws.entry(destination).unwrap().unwrap().file_id,
+                    revision.file_id
+                );
+            }
+            assert_eq!(
+                ws.sync_commit_payload(&stale).unwrap_err().code,
+                "SYNC_OPERATION_SUPERSEDED"
+            );
+        }
     }
     #[test]
     fn decisions_recover_after_file_commit_without_duplicate_outbox() {

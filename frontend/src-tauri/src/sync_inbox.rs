@@ -6,7 +6,7 @@ use crate::{
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fs, io::Write};
+use std::io::Write;
 use uuid::Uuid;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -223,7 +223,7 @@ impl Workspace {
     ) -> Result<()> {
         let path = self.resolve(local_path)?;
         let digest = if path.is_file() {
-            self.sync_store_bytes(&fs::read(path)?)?
+            self.sync_store_file(&path)?
         } else {
             String::new()
         };
@@ -363,7 +363,7 @@ impl Workspace {
             let remote: Value = serde_json::from_str(&remote).map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?;
             let current_path=self.path_for_id(&file_id).unwrap_or_else(|_|local_path.clone());
             let source=self.resolve(&current_path)?;
-            let current_hash=if source.is_file() {hash(&fs::read(source)?)} else {String::new()};
+            let current_hash=if source.is_file() {crate::payloads::hash_file(&source)?} else {String::new()};
             Ok(serde_json::json!({"sequence":sequence,"file_id":file_id,"local_path":local_path,"local_hash":local_hash,"current_path":current_path,"current_hash":current_hash,"remote":remote}))
         }).collect()
     }
