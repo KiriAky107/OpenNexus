@@ -652,8 +652,34 @@ mod tests {
         };
         let root = open(package.path());
         let entry = open(&executable);
-        profile.grant_package_read_execute(&root).unwrap();
-        profile.grant_package_read_execute(&entry).unwrap();
+        #[cfg(feature = "desktop")]
+        let _pinned = {
+            use sha2::{Digest, Sha256};
+            let bytes = std::fs::read(&executable).unwrap();
+            let inventory = crate::extension_package::Inventory {
+                files: [(
+                    "network-probe.exe".to_owned(),
+                    format!("{:x}", Sha256::digest(&bytes)),
+                )]
+                .into_iter()
+                .collect(),
+                expanded_size: bytes.len() as u64,
+                manifest: "network-probe.exe".to_owned(),
+            };
+            let dir =
+                cap_std::fs::Dir::open_ambient_dir(package.path(), cap_std::ambient_authority())
+                    .unwrap();
+            let hash = crate::extension_unpack::verify_tree(&dir, &inventory).unwrap();
+            let pinned =
+                crate::extension_pinned::PinnedPackage::open(&dir, &inventory, &hash).unwrap();
+            pinned.grant_read_execute(&profile).unwrap();
+            pinned
+        };
+        #[cfg(not(feature = "desktop"))]
+        {
+            profile.grant_package_read_execute(&root).unwrap();
+            profile.grant_package_read_execute(&entry).unwrap();
+        }
         // Exercise the actual builder, not a test-side quote decoder. The child
         // compares argv and its entire environment without logging values.
         let args = [
@@ -860,8 +886,34 @@ mod tests {
         };
         let root = open(package.path());
         let entry = open(&executable);
-        profile.grant_package_read_execute(&root).unwrap();
-        profile.grant_package_read_execute(&entry).unwrap();
+        #[cfg(feature = "desktop")]
+        let _pinned = {
+            use sha2::{Digest, Sha256};
+            let bytes = std::fs::read(&executable).unwrap();
+            let inventory = crate::extension_package::Inventory {
+                files: [(
+                    "network-probe.exe".to_owned(),
+                    format!("{:x}", Sha256::digest(&bytes)),
+                )]
+                .into_iter()
+                .collect(),
+                expanded_size: bytes.len() as u64,
+                manifest: "network-probe.exe".to_owned(),
+            };
+            let dir =
+                cap_std::fs::Dir::open_ambient_dir(package.path(), cap_std::ambient_authority())
+                    .unwrap();
+            let hash = crate::extension_unpack::verify_tree(&dir, &inventory).unwrap();
+            let pinned =
+                crate::extension_pinned::PinnedPackage::open(&dir, &inventory, &hash).unwrap();
+            pinned.grant_read_execute(&profile).unwrap();
+            pinned
+        };
+        #[cfg(not(feature = "desktop"))]
+        {
+            profile.grant_package_read_execute(&root).unwrap();
+            profile.grant_package_read_execute(&entry).unwrap();
+        }
 
         let folder = profile.folder().unwrap();
         let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
