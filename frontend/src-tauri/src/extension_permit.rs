@@ -198,6 +198,13 @@ impl Claims {
     }
 }
 impl Authority {
+    /// Host event wiring only; never expose this signal through IPC.
+    pub fn revocation_signal(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.generation)
+    }
+    pub fn revoke(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+    }
     /// Call only after consent and live trust validation. This authenticates the
     /// decision; it does not establish sandbox availability or grant broker access.
     pub fn issue(&self, claims: &Claims, now_ms: u64) -> Result<Permit> {
@@ -246,7 +253,7 @@ impl Authority {
     /// Lock/logout/policy invalidation may discard all permits. Restart creates a
     /// fresh key, so an old process token cannot silently revive authorization.
     pub fn invalidate_all(&mut self) {
-        self.generation.fetch_add(1, Ordering::SeqCst);
+        self.revoke();
         self.key.zeroize();
         rand::rngs::OsRng.fill_bytes(&mut self.key);
     }
@@ -332,5 +339,25 @@ mod tests {
         let mut c = claims();
         c.source = "http://catalog.example".into();
         assert!(authority.issue(&c, 100).is_err());
+    }
+    #[test]
+    fn external_host_signal_invalidates_mac_and_lease_without_key_rotation() {
+        let authority = Authority::default();
+        let claims = claims();
+        let old = authority.issue(&claims, 1).unwrap();
+        let lease = authority.lease(&old, &claims, 1).unwrap();
+        authority.revocation_signal().fetch_add(1, Ordering::SeqCst);
+        assert_eq!(
+            authority.verify(&old, &claims, 2).unwrap_err().code,
+            "EXTENSION_PERMIT_REVOKED"
+        );
+        assert_eq!(lease.check().unwrap_err().code, "EXTENSION_PERMIT_REVOKED");
+        let fresh = authority.issue(&claims, 2).unwrap();
+        authority.verify(&fresh, &claims, 3).unwrap();
+        authority.revoke();
+        assert_eq!(
+            authority.verify(&fresh, &claims, 3).unwrap_err().code,
+            "EXTENSION_PERMIT_REVOKED"
+        );
     }
 }
