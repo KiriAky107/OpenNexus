@@ -18,7 +18,7 @@ pub struct HostError {
 pub type Result<T> = std::result::Result<T, HostError>;
 
 impl HostError {
-    fn new(code: &str) -> Self {
+    pub(crate) fn new(code: &str) -> Self {
         Self {
             code: code.into(),
             message: code.into(),
@@ -100,7 +100,7 @@ pub fn portable_path_string(path: &Path) -> String {
 pub struct Workspace {
     pub root: PathBuf,
     pub vault_id: String,
-    db: Connection,
+    pub(crate) db: Connection,
     _lock: File,
 }
 
@@ -135,12 +135,12 @@ impl Workspace {
         let db = Connection::open(db_path)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 2 {
+        if version > 3 {
             return Err(HostError::new("SCHEMA_INCOMPATIBLE"));
         }
-        if version == 1 {
+        if (1..3).contains(&version) {
             // Independent, complete SQLite backup before the schema ownership change.
-            let backup = managed.join(format!("host-schema1-{}.sqlite3", Uuid::new_v4()));
+            let backup = managed.join(format!("host-schema{version}-{}.sqlite3", Uuid::new_v4()));
             db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
         }
         db.execute_batch("BEGIN IMMEDIATE;
@@ -150,7 +150,11 @@ impl Workspace {
             CREATE TABLE IF NOT EXISTS file_ops (id TEXT PRIMARY KEY,kind TEXT NOT NULL,path TEXT NOT NULL,destination TEXT NOT NULL,hash TEXT NOT NULL,content BLOB NOT NULL,state TEXT NOT NULL DEFAULT 'pending');
             CREATE TABLE IF NOT EXISTS outbox (operation_id TEXT PRIMARY KEY,file_id TEXT NOT NULL,revision INTEGER NOT NULL,path TEXT NOT NULL,hash TEXT NOT NULL,operation TEXT NOT NULL,content BLOB NOT NULL,state TEXT NOT NULL DEFAULT 'pending');
             CREATE TABLE IF NOT EXISTS operations (operation_id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,state TEXT NOT NULL,result TEXT);
-            PRAGMA user_version=2; COMMIT;")?;
+            CREATE TABLE IF NOT EXISTS sync_bindings (id TEXT PRIMARY KEY,endpoint TEXT NOT NULL,remote_vault TEXT NOT NULL,account TEXT NOT NULL,state TEXT NOT NULL,cursor INTEGER NOT NULL DEFAULT 0);
+            CREATE UNIQUE INDEX IF NOT EXISTS sync_active ON sync_bindings(state) WHERE state='active';
+            CREATE TABLE IF NOT EXISTS sync_jobs (binding TEXT NOT NULL,operation_id TEXT NOT NULL,file_id TEXT NOT NULL,path TEXT NOT NULL,hash TEXT NOT NULL,size INTEGER NOT NULL,operation TEXT NOT NULL,state TEXT NOT NULL,base_revision INTEGER,upload_id TEXT,remote_revision INTEGER,error TEXT,PRIMARY KEY(binding,operation_id));
+            CREATE TABLE IF NOT EXISTS sync_heads (binding TEXT NOT NULL,file_id TEXT NOT NULL,revision INTEGER NOT NULL,path TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(binding,file_id));
+            PRAGMA user_version=3; COMMIT;")?;
         let vault_id: String = db
             .query_row("SELECT id FROM identity", [], |r| r.get(0))
             .optional()?
@@ -533,7 +537,7 @@ impl Workspace {
 
     pub fn pending_count(&self) -> Result<i64> {
         Ok(self.db.query_row(
-            "SELECT COUNT(*) FROM outbox WHERE state='pending'",
+            "SELECT COUNT(*) FROM outbox WHERE state IN ('pending','queued')",
             [],
             |r| r.get(0),
         )?)

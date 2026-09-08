@@ -8,5 +8,8 @@ pub mod request_lifecycle;
 mod runtime_compat;
 #[cfg(windows)]
 pub mod session_lock;
+#[cfg(feature = "desktop")]
+pub mod sync_client;
+pub mod sync_state;
 pub mod workspace;
 pub mod workspace_broker;
