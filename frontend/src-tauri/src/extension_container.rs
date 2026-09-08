@@ -874,6 +874,7 @@ mod tests {
                 "mcp_pages",
                 "mcp_bad_result",
                 "mcp_idle_change",
+                "mcp_review_lock",
             ];
             if _mcp_deadline {
                 mcp_modes.push("mcp_deadline");
@@ -898,7 +899,7 @@ mod tests {
                 let cancel = Arc::new(AtomicBool::new(false));
                 assert_eq!(
                     session
-                        .call_tool("echo", serde_json::json!({}), &cancel)
+                        .test_call_tool("echo", serde_json::json!({}), &cancel)
                         .unwrap_err()
                         .code,
                     "EXTENSION_MCP_NOT_INITIALIZED"
@@ -915,7 +916,7 @@ mod tests {
                     );
                     assert_eq!(
                         session
-                            .call_tool("echo", serde_json::json!({}), &cancel)
+                            .test_call_tool("echo", serde_json::json!({}), &cancel)
                             .unwrap_err()
                             .code,
                         "EXTENSION_MCP_CATALOG_REQUIRED"
@@ -923,14 +924,14 @@ mod tests {
                     assert_eq!(session.refresh_tools(&cancel).unwrap()[0].name, "echo");
                     assert_eq!(
                         session
-                            .call_tool("missing", serde_json::json!({}), &cancel)
+                            .test_call_tool("missing", serde_json::json!({}), &cancel)
                             .unwrap_err()
                             .code,
                         "EXTENSION_MCP_TOOL_NOT_FOUND"
                     );
                     assert_eq!(
                         session
-                            .call_tool("echo", serde_json::json!({"unexpected":1}), &cancel)
+                            .test_call_tool("echo", serde_json::json!({"unexpected":1}), &cancel)
                             .unwrap_err()
                             .code,
                         "EXTENSION_MCP_ARGUMENTS_INVALID"
@@ -944,9 +945,42 @@ mod tests {
                     } else {
                         None
                     };
+                    let mut earlier = None;
+                    if mode == "mcp" {
+                        let review = session.review_call("echo", serde_json::json!({})).unwrap();
+                        let identity = serde_json::to_value(&review.identity).unwrap();
+                        assert_eq!(identity["package_id"], mcp.package_id);
+                        assert_eq!(identity["vault_id"], mcp.vault_id);
+                        assert_eq!(identity["source"], mcp.source);
+                        assert_eq!(identity["execution_digest"].as_str().unwrap().len(), 64);
+                        earlier = Some(session.confirm_call(&review.review_id).unwrap());
+                    }
                     let tool_started = std::time::Instant::now();
-                    let result = session.call_tool("echo", serde_json::json!({}), &cancel);
+                    let result = if mode == "mcp" {
+                        let mut review =
+                            session.review_call("echo", serde_json::json!({})).unwrap();
+                        review.arguments = serde_json::json!({"unexpected":1});
+                        let approved = session.confirm_call(&review.review_id).unwrap();
+                        session.call_tool(approved, &cancel)
+                    } else if mode == "mcp_review_lock" {
+                        let review = session.review_call("echo", serde_json::json!({})).unwrap();
+                        let approved = session.confirm_call(&review.review_id).unwrap();
+                        broker.lock();
+                        session.call_tool(approved, &cancel)
+                    } else {
+                        session.test_call_tool("echo", serde_json::json!({}), &cancel)
+                    };
                     match mode {
+                        "mcp_review_lock" => {
+                            assert_eq!(result.unwrap_err().code, "CREDENTIALS_LOCKED");
+                            broker
+                                .unlock(Zeroizing::new(b"native fixture passphrase".to_vec()))
+                                .unwrap();
+                            assert_eq!(
+                                session.refresh_tools(&cancel).err().unwrap().code,
+                                "EXTENSION_MCP_SESSION_FAILED"
+                            );
+                        }
                         "mcp_bad_result" => assert_eq!(
                             result.unwrap_err().code,
                             "EXTENSION_MCP_TOOL_RESULT_INVALID"
@@ -956,7 +990,7 @@ mod tests {
                             std::thread::sleep(std::time::Duration::from_millis(200));
                             assert_eq!(
                                 session
-                                    .call_tool("echo", serde_json::json!({}), &cancel)
+                                    .test_call_tool("echo", serde_json::json!({}), &cancel)
                                     .unwrap_err()
                                     .code,
                                 "EXTENSION_MCP_CATALOG_REQUIRED"
@@ -1005,7 +1039,7 @@ mod tests {
                             assert_eq!(result.unwrap_err().code, "EXTENSION_MCP_REMOTE_ERROR");
                             assert_eq!(
                                 session
-                                    .call_tool("echo", serde_json::json!({}), &cancel)
+                                    .test_call_tool("echo", serde_json::json!({}), &cancel)
                                     .unwrap()["content"][0]["text"],
                                 "native MCP success"
                             );
@@ -1014,9 +1048,15 @@ mod tests {
                             assert_eq!(result.unwrap()["content"][0]["text"], "native MCP success");
                             assert!(session.take_tools_changed());
                             assert!(!session.take_tools_changed());
+                            if let Some(approved) = earlier {
+                                assert_eq!(
+                                    session.call_tool(approved, &cancel).unwrap_err().code,
+                                    "EXTENSION_CALL_CATALOG_CHANGED"
+                                );
+                            }
                             assert_eq!(
                                 session
-                                    .call_tool("echo", serde_json::json!({}), &cancel)
+                                    .test_call_tool("echo", serde_json::json!({}), &cancel)
                                     .unwrap_err()
                                     .code,
                                 "EXTENSION_MCP_CATALOG_REQUIRED"

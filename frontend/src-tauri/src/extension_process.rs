@@ -94,6 +94,8 @@ pub struct Running<'a> {
     process: Process<'a>,
     #[cfg(feature = "desktop")]
     revocation: Option<crate::extension_revocation::Watch>,
+    #[cfg(feature = "desktop")]
+    identity: Option<crate::extension_call_authorization::Identity>,
 }
 impl<'a> Suspended<'a> {
     /// Creates hidden, with no inherited handles and an explicit environment and
@@ -244,15 +246,18 @@ impl<'a> Suspended<'a> {
             process: self.0,
             #[cfg(feature = "desktop")]
             revocation: None,
+            #[cfg(feature = "desktop")]
+            identity: None,
         })
     }
     /// # Safety
     /// The same complete resource/broker/trust preconditions as resume apply.
     /// This additionally arms revocation monitoring before any instruction resumes.
     #[cfg(feature = "desktop")]
-    pub unsafe fn resume_with_lease(
+    pub(crate) unsafe fn resume_with_lease(
         self,
         lease: crate::extension_permit::Lease,
+        identity: crate::extension_call_authorization::Identity,
     ) -> Result<Running<'a>> {
         let watch = crate::extension_revocation::Watch::arm(&self.0.job, lease)?;
         watch.check()?;
@@ -262,12 +267,20 @@ impl<'a> Suspended<'a> {
         let running = Running {
             process: self.0,
             revocation: Some(watch),
+            identity: Some(identity),
         };
         running.check_authorization()?;
         Ok(running)
     }
 }
 impl Running<'_> {
+    #[cfg(feature = "desktop")]
+    pub(crate) fn call_identity(&self) -> Result<crate::extension_call_authorization::Identity> {
+        self.check_authorization()?;
+        self.identity
+            .clone()
+            .ok_or_else(|| HostError::new("EXTENSION_CALL_BINDING_REQUIRED"))
+    }
     #[cfg(feature = "desktop")]
     pub fn start_io(
         &self,
