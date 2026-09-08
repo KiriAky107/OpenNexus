@@ -50,6 +50,17 @@ impl Workspace {
                 if current.is_empty() || self.resolve(destination)?.exists() {
                     return Err(HostError::new("PATH_CONFLICT"));
                 }
+                if !crate::sync_discovery::allowed(destination) {
+                    return Err(HostError::new("SYNC_PATH_DENIED"));
+                }
+                // Validate the intended record path before freezing the decision.
+                // A typo must not leave an unchangeable, unappliable resolution.
+                if crate::records::is_record(destination) {
+                    let spool = self.sync_spool(&current)?;
+                    let size = fs::metadata(&spool)?.len();
+                    let mut file = crate::payloads::open_verified(&spool, &current, size)?;
+                    crate::payloads::validate_record(&mut file, destination, size)?;
+                }
             } else if !destination.is_empty() {
                 return Err(HostError::new("SYNC_RESOLUTION_INVALID"));
             }
@@ -263,6 +274,72 @@ mod tests {
         ws.sync_set_boundary(binding, revision.sequence).unwrap();
         ws.sync_stage(binding, revision).unwrap();
         ws.sync_apply_pending(binding).unwrap();
+    }
+    #[test]
+    fn invalid_record_copy_destination_does_not_freeze_conflict_decision() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let binding = ws
+            .sync_bind_download("https://sync.example", "remote-vault", "account")
+            .unwrap();
+        let record = |name: &str| {
+            serde_json::to_vec(&serde_json::json!({"schema":1,"kind":"persona","id":"default","data":{"version":1,"name":name,"system_prompt":"","dialogue_pairs":[]}})).unwrap()
+        };
+        let base = record("base");
+        let local = record("local");
+        let remote = record("remote");
+        let path = crate::records::path_for("persona", "default").unwrap();
+        let mut revision = RemoteRevision {
+            vault_id: "remote-vault".into(),
+            sequence: 1,
+            file_id: Uuid::new_v4().to_string(),
+            base_revision: 0,
+            path: path.clone(),
+            operation: "put".into(),
+            hash: Some(ws.sync_store_bytes(&base).unwrap()),
+            size: base.len() as i64,
+            operation_id: Uuid::new_v4().to_string(),
+        };
+        receive(&mut ws, &binding.id, &revision);
+        let local_hash = ws
+            .write(&path, revision.hash.as_deref().unwrap(), &local, "local")
+            .unwrap()
+            .hash;
+        revision.sequence = 2;
+        revision.base_revision = 1;
+        revision.hash = Some(ws.sync_store_bytes(&remote).unwrap());
+        revision.size = remote.len() as i64;
+        revision.operation_id = Uuid::new_v4().to_string();
+        receive(&mut ws, &binding.id, &revision);
+        for destination in ["copy.json", "opennexus-records/v1/layout/sidebars.json"] {
+            assert!(ws
+                .sync_resolve(&binding.id, 2, "copy", destination, &local_hash)
+                .is_err());
+            assert_eq!(
+                ws.db
+                    .query_row("SELECT COUNT(*) FROM sync_resolutions", [], |r| r
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            assert_eq!(fs::read(root.path().join(&path)).unwrap(), local);
+        }
+        ws.sync_resolve(
+            &binding.id,
+            2,
+            "copy",
+            "attachments/persona-copy.txt",
+            &local_hash,
+        )
+        .unwrap();
+        drop(ws);
+        let ws = Workspace::open(root.path()).unwrap();
+        assert_eq!(
+            fs::read(root.path().join("attachments/persona-copy.txt")).unwrap(),
+            local
+        );
+        assert_eq!(fs::read(root.path().join(path)).unwrap(), remote);
+        assert!(ws.sync_conflicts(&binding.id).unwrap().is_empty());
     }
     #[test]
     fn hundred_mib_conflicts_resolve_all_choices_and_reopen_without_duplicate_jobs() {

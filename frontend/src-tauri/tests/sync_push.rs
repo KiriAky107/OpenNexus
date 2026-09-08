@@ -560,7 +560,7 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
             .unwrap();
         while client.push_one(&workspace, &binding).await.unwrap() {}
         client_b.pull_page(&workspace_b, &binding_b).await.unwrap();
-        for round in 0..20 {
+        for round in 0..60 {
             let mut hashes = Vec::new();
             for (side, target) in [(0, &workspace), (1, &workspace_b)] {
                 let mut ws = target.lock().unwrap();
@@ -583,7 +583,9 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
             }
             while client.push_one(&workspace, &binding).await.unwrap() {}
             client_b.pull_page(&workspace_b, &binding_b).await.unwrap();
-            let choice = if round % 2 == 0 { "local" } else { "remote" };
+            let choice = ["local", "remote", "copy"][round % 3];
+            let copy = format!("attachments/{kind}-copy-{round}.txt");
+            let destination = if choice == "copy" { copy.as_str() } else { "" };
             {
                 let mut ws = workspace_b.lock().unwrap();
                 let conflicts = ws.sync_conflicts(&binding_b.id).unwrap();
@@ -591,14 +593,14 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
                 let sequence = conflicts[0]["sequence"].as_i64().unwrap();
                 assert_eq!(ws.read(&path).unwrap().entry.hash, hashes[1]);
                 assert_eq!(
-                    ws.sync_resolve(&binding_b.id, sequence, choice, "", &hashes[0])
+                    ws.sync_resolve(&binding_b.id, sequence, choice, destination, &hashes[0])
                         .unwrap_err()
                         .code,
                     "REVISION_CONFLICT"
                 );
-                ws.sync_resolve(&binding_b.id, sequence, choice, "", &hashes[1])
+                ws.sync_resolve(&binding_b.id, sequence, choice, destination, &hashes[1])
                     .unwrap();
-                ws.sync_resolve(&binding_b.id, sequence, choice, "", &hashes[1])
+                ws.sync_resolve(&binding_b.id, sequence, choice, destination, &hashes[1])
                     .unwrap();
             }
             while client_b.push_one(&workspace_b, &binding_b).await.unwrap() {}
@@ -618,6 +620,14 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
                 .unwrap();
             assert_eq!(a, b);
             assert_eq!(a["hash"], hashes[usize::from(choice == "local")]);
+            if choice == "copy" {
+                let copy_a = workspace.lock().unwrap().read(&copy).unwrap();
+                let copy_b = workspace_b.lock().unwrap().read(&copy).unwrap();
+                assert_eq!(copy_a.content, copy_b.content);
+                assert_eq!(copy_a.entry.hash, hashes[1]);
+                assert_eq!(copy_a.entry.file_id, copy_b.entry.file_id);
+                assert_ne!(copy_a.entry.file_id, a["file_id"].as_str().unwrap());
+            }
             assert!(workspace
                 .lock()
                 .unwrap()
