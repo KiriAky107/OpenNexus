@@ -50,6 +50,30 @@ impl PreparedLaunch {
             lease: self.lease,
         })
     }
+    pub fn create_suspended_with_stdio<'a>(
+        self,
+        profile: &'a crate::extension_container::Profile,
+        entry: &'a BoundEntry<'a>,
+    ) -> Result<(LeasedSuspended<'a>, crate::extension_stdio::HostIo)> {
+        self.lease.check()?;
+        if self.path != entry.path()
+            || self.entry != entry.relative_name()
+            || self.tree != entry.tree_sha256()
+        {
+            return Err(HostError::new("EXTENSION_ENTRY_PERMIT_MISMATCH"));
+        }
+        let (process, io) = crate::extension_process::Suspended::create_bound_with_stdio(
+            profile, entry, self.data,
+        )?;
+        self.lease.check()?;
+        Ok((
+            LeasedSuspended {
+                process,
+                lease: self.lease,
+            },
+            io,
+        ))
+    }
 }
 impl<'a> LeasedSuspended<'a> {
     /// # Safety

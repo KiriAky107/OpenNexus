@@ -19,7 +19,7 @@ use std::{
 };
 use windows_sys::Win32::Storage::FileSystem::*;
 
-pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
+pub use crate::extension_stdio::MAX_FRAME_BYTES;
 pub const MAX_NOTE_BYTES: usize = 1024 * 1024;
 const REQUESTS_PER_SECOND: u32 = 32;
 #[derive(Deserialize)]

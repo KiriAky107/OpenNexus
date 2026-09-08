@@ -774,6 +774,90 @@ mod tests {
                 Some(0)
             );
             drop(running);
+            // Actual native RPC: the child cannot name an identity or connect to
+            // a shared endpoint; only its own stdio pipe reaches this broker.
+            {
+                use std::{
+                    io::{BufReader, Read},
+                    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+                };
+                let sentinel = unsafe {
+                    windows_sys::Win32::System::Threading::CreateEventW(
+                        std::ptr::null(),
+                        1,
+                        0,
+                        std::ptr::null(),
+                    )
+                };
+                assert!(!sentinel.is_null());
+                let sentinel = unsafe { OwnedHandle::from_raw_handle(sentinel) };
+                assert_ne!(
+                    unsafe {
+                        windows_sys::Win32::Foundation::SetHandleInformation(
+                            sentinel.as_raw_handle(),
+                            windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT,
+                            windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT,
+                        )
+                    },
+                    0
+                );
+                let vault = tempfile::tempdir().unwrap();
+                let mut workspace = crate::workspace::Workspace::open(vault.path()).unwrap();
+                workspace
+                    .write("fixture.md", "", b"from host broker", "local")
+                    .unwrap();
+                let mut rpc = claims.clone();
+                rpc.vault_id = workspace.vault_id.clone();
+                rpc.arguments = vec![
+                    "file_rpc".into(),
+                    (sentinel.as_raw_handle() as usize).to_string(),
+                ];
+                rpc.permissions.insert("notes.read".into());
+                rpc.expires_at_ms = 10_000;
+                let permit = authority.issue(&rpc, 1).unwrap();
+                let rpc_context = Context {
+                    vault_id: &rpc.vault_id,
+                    ..context
+                };
+                let prepared = rpc_context
+                    .prepare(&authority, &permit, &rpc, &bound_entry, &broker, 2)
+                    .unwrap();
+                let mut files = crate::extension_file_broker::Broker::bind(
+                    &authority, &permit, &rpc, &broker, &workspace, "1", 2,
+                )
+                .unwrap();
+                let (suspended, io) = prepared
+                    .create_suspended_with_stdio(&profile, &bound_entry)
+                    .unwrap();
+                let running = unsafe { suspended.resume().unwrap() };
+                let crate::extension_stdio::HostIo {
+                    mut input,
+                    output,
+                    mut error,
+                } = io;
+                let mut output = crate::extension_stdio::Frames::new(BufReader::new(output));
+                let request = output.read().unwrap().unwrap();
+                let response = files.dispatch(&mut workspace, &request).unwrap();
+                crate::extension_stdio::write_frame(
+                    &mut input,
+                    &serde_json::to_vec(&response).unwrap(),
+                )
+                .unwrap();
+                drop(input);
+                assert_eq!(
+                    running.wait(std::time::Duration::from_secs(5)).unwrap(),
+                    Some(0)
+                );
+                assert_eq!(output.read().unwrap().unwrap(), b"{\"ok\":true}");
+                assert!(output.read().unwrap().is_none());
+                let mut diagnostic = String::new();
+                error.read_to_string(&mut diagnostic).unwrap();
+                assert_eq!(diagnostic.trim(), "fixture diagnostic");
+                assert_eq!(
+                    workspace.read("fixture.md").unwrap().content,
+                    "from host broker"
+                );
+            }
             for cause in [
                 "before_create",
                 "before_resume",

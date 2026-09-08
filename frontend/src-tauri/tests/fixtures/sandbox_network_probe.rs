@@ -3,6 +3,22 @@ use std::net::{SocketAddr, TcpStream, UdpSocket};
 use std::time::Duration;
 fn main() {
     let args: Vec<_> = std::env::args().collect();
+    if args.get(1).is_some_and(|s| s == "file_rpc") {
+        use std::io::{Read, Write};
+        #[link(name = "kernel32")]
+        extern "system" { fn GetHandleInformation(handle: *mut std::ffi::c_void, flags: *mut u32) -> i32; }
+        let sentinel: usize = args[2].parse().unwrap();
+        let mut flags = 0;
+        if unsafe { GetHandleInformation(sentinel as *mut _, &mut flags) } != 0 { std::process::exit(85); }
+        println!("{{\"method\":\"notes.read\",\"path\":\"fixture.md\"}}");
+        std::io::stdout().flush().unwrap();
+        let mut response = String::new();
+        std::io::stdin().take(4096).read_to_string(&mut response).unwrap();
+        if !response.contains("\"content\":\"from host broker\"") { std::process::exit(86); }
+        println!("{{\"ok\":true}}");
+        eprintln!("fixture diagnostic");
+        return;
+    }
     if args.get(1).is_some_and(|s| s == "wait_tree") {
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .arg("wait")
