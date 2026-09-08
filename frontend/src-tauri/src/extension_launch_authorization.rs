@@ -118,12 +118,11 @@ impl Context<'_> {
         now_ms: u64,
     ) -> Result<PreparedLaunch> {
         let mut lease = authority.lease(permit, claims, now_ms)?;
-        if claims
-            .environment
-            .values()
-            .any(|v| matches!(v, Environment::CredentialScope(_)))
-        {
-            lease.bind_credential(broker.lock_signal());
+        // Locking the Host session gates all third-party execution, including
+        // packages that do not request environment secrets.
+        lease.bind_credential(broker.lock_signal());
+        if broker.is_locked() {
+            return Err(HostError::new("CREDENTIALS_LOCKED"));
         }
         let data = self.build(authority, permit, claims, entry, broker, now_ms)?;
         lease.check()?;
@@ -137,7 +136,7 @@ impl Context<'_> {
     }
     /// Caller must still recheck live trust/permit/session state immediately
     /// before resume; returning encoded data is not an execution lease.
-    pub fn build(
+    fn build(
         &self,
         authority: &Authority,
         permit: &Permit,
@@ -258,6 +257,24 @@ mod tests {
         let authority = Authority::default();
         let permit = authority.issue(&claims, 1).unwrap();
         let mut broker = CredentialBroker::new(temp.path().join("credentials.v1"));
+        let mut public_claims = claims.clone();
+        public_claims.environment.clear();
+        let public_permit = authority.issue(&public_claims, 1).unwrap();
+        assert_eq!(
+            context
+                .prepare(
+                    &authority,
+                    &public_permit,
+                    &public_claims,
+                    &entry,
+                    &broker,
+                    2
+                )
+                .err()
+                .unwrap()
+                .code,
+            "CREDENTIALS_LOCKED"
+        );
         broker
             .unlock(Zeroizing::new(b"fixture passphrase 123".to_vec()))
             .unwrap();
@@ -349,7 +366,43 @@ mod tests {
                 .code,
             "EXTENSION_CREDENTIAL_ENCODING_INVALID"
         );
+        let public_prepared = context
+            .prepare(
+                &authority,
+                &public_permit,
+                &public_claims,
+                &entry,
+                &broker,
+                2,
+            )
+            .unwrap();
         broker.lock();
+        let profile = crate::extension_container::Profile::create().unwrap();
+        assert_eq!(
+            public_prepared
+                .create_suspended(&profile, &entry)
+                .err()
+                .unwrap()
+                .code,
+            "CREDENTIALS_LOCKED"
+        );
+        profile.remove().unwrap();
+        let fresh_while_locked = authority.issue(&public_claims, 2).unwrap();
+        assert_eq!(
+            context
+                .prepare(
+                    &authority,
+                    &fresh_while_locked,
+                    &public_claims,
+                    &entry,
+                    &broker,
+                    3
+                )
+                .err()
+                .unwrap()
+                .code,
+            "CREDENTIALS_LOCKED"
+        );
         assert_eq!(
             context
                 .build(&authority, &permit, &claims, &entry, &broker, 2)
