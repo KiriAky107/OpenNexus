@@ -702,6 +702,7 @@ mod tests {
         .collect::<Vec<_>>();
         let folder = profile.folder().unwrap();
         let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+        #[cfg(not(feature = "desktop"))]
         let data = crate::extension_launch_data::LaunchData::new(
             &executable,
             &args,
@@ -715,6 +716,57 @@ mod tests {
         .unwrap();
         #[cfg(feature = "desktop")]
         {
+            use crate::extension_launch_authorization::{credential_id, Context};
+            use crate::extension_permit::{Authority, Claims, Environment, ExecutionKind};
+            use zeroize::Zeroizing;
+            let credential_directory = tempfile::tempdir().unwrap();
+            let mut broker = crate::credentials::CredentialBroker::new(
+                credential_directory.path().join("credentials.v1"),
+            );
+            broker
+                .unlock(Zeroizing::new(b"native fixture passphrase".to_vec()))
+                .unwrap();
+            let claims = Claims {
+                kind: ExecutionKind::Mcp,
+                source: "https://catalog.example/".into(),
+                namespace: "examples".into(),
+                package_id: "native-probe".into(),
+                version: "1.0.0".into(),
+                archive_sha256: "a".repeat(64),
+                tree_sha256: bound_entry.tree_sha256().into(),
+                signer_sha256: "b".repeat(64),
+                entry: bound_entry.relative_name().into(),
+                arguments: args,
+                environment: [(
+                    "CUSTOM".into(),
+                    Environment::CredentialScope("custom".into()),
+                )]
+                .into_iter()
+                .collect(),
+                permissions: Default::default(),
+                vault_id: uuid::Uuid::new_v4().to_string(),
+                platform: "windows".into(),
+                policy_version: "1".into(),
+                expires_at_ms: 1000,
+            };
+            broker
+                .put(
+                    &credential_id(&claims, "custom").unwrap(),
+                    Zeroizing::new("declared=值".as_bytes().to_vec()),
+                )
+                .unwrap();
+            let authority = Authority::default();
+            let permit = authority.issue(&claims, 1).unwrap();
+            let context = Context {
+                vault_id: &claims.vault_id,
+                policy_version: "1",
+                system_root: &system,
+                container_data: &folder,
+                scratch: &folder.join("Temp"),
+            };
+            let data = context
+                .build(&authority, &permit, &claims, &bound_entry, &broker, 2)
+                .unwrap();
             let suspended =
                 crate::extension_process::Suspended::create_bound(&profile, &bound_entry, data)
                     .unwrap();

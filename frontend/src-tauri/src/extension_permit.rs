@@ -12,13 +12,21 @@ use zeroize::Zeroize;
 #[serde(tag = "kind", content = "value", deny_unknown_fields)]
 pub enum Environment {
     Literal(String),
-    // A scoped credential declaration, never resolved secret plaintext.
+    // An opaque credential reference in the Host-derived package scope, never plaintext.
     CredentialScope(String),
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionKind {
+    Plugin,
+    Mcp,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Claims {
+    pub kind: ExecutionKind,
     pub source: String,
     pub namespace: String,
     pub package_id: String,
@@ -176,6 +184,7 @@ mod tests {
     use super::*;
     fn claims() -> Claims {
         Claims {
+            kind: ExecutionKind::Mcp,
             source: "https://catalog.example/".into(),
             namespace: "examples".into(),
             package_id: "note-reviewer".into(),
@@ -205,6 +214,7 @@ mod tests {
             match &mut changed[field] {
                 serde_json::Value::String(s) => {
                     *s = match field.as_str() {
+                        "kind" => "plugin".into(),
                         "source" => "https://other.example/".into(),
                         "version" => "1.0.1".into(),
                         "archive_sha256" | "tree_sha256" | "signer_sha256" => "d".repeat(64),

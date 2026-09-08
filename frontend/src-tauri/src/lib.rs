@@ -69,3 +69,6 @@ pub mod extension_deadline;
 
 #[cfg(all(windows, feature = "desktop"))]
 pub mod extension_pinned;
+
+#[cfg(all(windows, feature = "desktop"))]
+pub mod extension_launch_authorization;
