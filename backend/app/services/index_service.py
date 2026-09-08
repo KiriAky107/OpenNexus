@@ -16,7 +16,7 @@ from app.contracts import IndexJob, IndexRebuildRequest, IndexStatus
 from app.errors import ApiError
 from app.knowledge.parser import parse_note
 from app.services.note_service import index_note, prepare_note_index
-from app.database.db import connect, transaction
+from app.database.db import connect_knowledge as connect, transaction
 from app.services.coordination import vault_mutation_lock
 from app.retrieval.vectorstore import SqliteVecStore
 from app.local_models.runtime import LocalEmbedding
@@ -47,6 +47,14 @@ def _scan_vault() -> list[tuple[str, str, str, datetime, datetime]]:
 
     先读入内存：若文件读取失败，rebuild 尚未清空旧索引，不会造成数据损失。
     """
+    if get_settings().environment == 'desktop':
+        from app.services.desktop_projection import entries
+        from app.services import desktop_notes
+        result = []
+        for entry in entries():
+            note = desktop_notes.note_from_document(desktop_notes.call('read', file_id=entry['file_id']))
+            result.append((note.file_path, note.file_path.rpartition('/')[0], note.markdown, note.created_at, note.updated_at))
+        return result
     vault = get_settings().vault_path.resolve()
     result: list[tuple[str, str, str, datetime, datetime]] = []
     if not vault.exists():
@@ -80,8 +88,12 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
             {"scope": request.scope, "note_ids": request.note_ids},
         )
 
+    if get_settings().environment == 'desktop':
+        from app.services.desktop_projection import refresh
+        await refresh()
     docs = _scan_vault()
-    saved_records = {key: repository.get_note_record(key) for key in _pending_notes()}
+    record_ids = [entry.note_id for entry in repository.list_note_locations()] if get_settings().environment == 'desktop' else _pending_notes()
+    saved_records = {key: repository.get_note_record(key) for key in record_ids}
     saved_paths = {record.file_path: record for record in saved_records.values() if record is not None}
 
     _active_job_id = job_id
@@ -117,7 +129,8 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
         # All network/model awaits precede the transaction. The concrete SQLite
         # methods below complete synchronously despite their async interfaces.
         async with vault_mutation_lock():
-            if _scan_vault() != docs or saved_records != {key: repository.get_note_record(key) for key in _pending_notes()}:
+            current_ids = [entry.note_id for entry in repository.list_note_locations()] if get_settings().environment == 'desktop' else _pending_notes()
+            if _scan_vault() != docs or saved_records != {key: repository.get_note_record(key) for key in current_ids}:
                 raise ApiError(409, "INDEX_SNAPSHOT_CHANGED", "笔记在计算期间发生变化，稍后重新计算。")
             conn = connect()
             try:

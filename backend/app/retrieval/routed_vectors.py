@@ -17,7 +17,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.database.db import connect, transaction
+from app.database.db import connect_knowledge as connect, transaction
 from app.errors import ApiError
 from app.operation_logs import log_event
 from app.retrieval.vectorstore import VectorHit

@@ -1,0 +1,65 @@
+"""Rebuildable per-Vault FTS projection, sourced only through the Host broker."""
+from __future__ import annotations
+import asyncio
+from app import repository
+from app.database.db import connect_knowledge, transaction
+from app.knowledge.parser import parse_note
+from app.services import desktop_notes
+from app.services.coordination import vault_mutation_lock
+
+
+def entries():
+    result, offset = [], 0
+    while True:
+        page = desktop_notes.call('list', offset=offset, limit=1000)
+        result.extend(page['items'])
+        offset += len(page['items'])
+        if offset >= page['total'] or not page['items']: return result
+
+
+def _refresh():
+    current = entries()  # Always validates authorization, including when the cache is current.
+    conn = connect_knowledge()
+    try:
+        conn.execute('CREATE TABLE IF NOT EXISTS host_projection (file_id TEXT PRIMARY KEY, hash TEXT NOT NULL, path TEXT NOT NULL)')
+        old = {row['file_id']: (row['hash'], row['path']) for row in conn.execute('SELECT * FROM host_projection')}
+        changed = []
+        for entry in current:
+            if old.get(entry['file_id']) == (entry['hash'], entry['path']): continue
+            document = desktop_notes.call('read', file_id=entry['file_id'])
+            note = desktop_notes.note_from_document(document)
+            parsed = parse_note(markdown=note.markdown, file_path=note.file_path,
+                                folder=note.file_path.rpartition('/')[0], note_id=note.note_id,
+                                tags=note.tags, created_at=note.created_at, updated_at=note.updated_at)
+            changed.append((document, parsed))
+        removed = set(old) - {entry['file_id'] for entry in current}
+        # Content is verified before starting the projection transaction. No model/network IO inside.
+        with transaction(conn):
+            for file_id in removed:
+                for block_id in repository.delete_note(file_id, conn=conn):
+                    conn.execute('DELETE FROM vec_blocks WHERE block_id=?', [block_id])
+                conn.execute('DELETE FROM host_projection WHERE file_id=?', [file_id])
+            for document, parsed in changed:
+                old_ids = repository.replace_note_metadata(conn=conn, note_id=parsed.note_id, title=parsed.title,
+                    file_path=parsed.file_path, folder=parsed.folder, tags=parsed.tags, created_at=parsed.created_at,
+                    updated_at=parsed.updated_at, blocks=parsed.blocks)
+                for block_id in old_ids:
+                    conn.execute('DELETE FROM vec_blocks WHERE block_id=?', [block_id])
+                conn.execute('UPDATE blocks SET embedding_local_only=? WHERE note_id=?', (int(parsed.embedding_local_only), parsed.note_id))
+                conn.execute('INSERT OR REPLACE INTO host_projection VALUES (?,?,?)', (parsed.note_id, document['hash'], parsed.file_path))
+            if removed or changed:
+                repository.set_index_meta({'workspace_vectors_pending': '1'}, conn=conn)
+    finally:
+        conn.close()
+
+
+async def refresh():
+    async with vault_mutation_lock():
+        work = asyncio.create_task(asyncio.to_thread(_refresh))
+        # Keep the projection gate until the worker has finished even if the request is cancelled.
+        cancelled = False
+        while not work.done():
+            try: await asyncio.shield(work)
+            except asyncio.CancelledError: cancelled = True
+        work.result()
+        if cancelled: raise asyncio.CancelledError

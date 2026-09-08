@@ -13,7 +13,7 @@ from typing import Protocol, runtime_checkable
 
 import sqlite_vec
 
-from app.database.db import connect, transaction
+from app.database.db import connect_knowledge as connect, transaction
 
 
 @dataclass

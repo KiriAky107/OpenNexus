@@ -71,6 +71,17 @@ async fn real_core_notes_roundtrip_only_through_bound_host_and_confirm_commits()
     let original = workspace.lock().unwrap().read("Core fixture.md").unwrap();
     assert_eq!(original.entry.file_id, file_id);
     assert!(original.content.contains("original"));
+    let (status, search) = request(
+        &mut core,
+        "POST",
+        "/api/search",
+        &vault,
+        &uuid::Uuid::new_v4().to_string(),
+        Some(json!({"query":"original","mode":"fts"})),
+    )
+    .await;
+    assert_eq!(status, 200, "{search}");
+    assert!(search.to_string().contains(file_id));
     assert_eq!(
         workspace
             .lock()
@@ -146,6 +157,17 @@ async fn real_core_notes_roundtrip_only_through_bound_host_and_confirm_commits()
     .await;
     assert_eq!(status, 200, "{deleted}");
     assert!(!root.join("nested/Core fixture.md").exists());
+    let (status, search) = request(
+        &mut core,
+        "POST",
+        "/api/search",
+        &vault,
+        &uuid::Uuid::new_v4().to_string(),
+        Some(json!({"query":"original","mode":"fts"})),
+    )
+    .await;
+    assert_eq!(status, 200, "{search}");
+    assert!(!search.to_string().contains(file_id));
     assert_eq!(workspace.lock().unwrap().pending_count().unwrap(), 4);
     assert!(!temp
         .path()

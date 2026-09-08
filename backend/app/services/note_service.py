@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from app import repository
 from app.contracts import Note, NoteBlock, NoteSummary
-from app.database.db import connect, transaction
+from app.database.db import connect_knowledge as connect, transaction
 from app.errors import ApiError
 from app.knowledge.parser import ParsedNote, parse_note
 from app.local_models.runtime import LocalEmbedding, background_embeddings

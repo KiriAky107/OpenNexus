@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.contracts import NoteBlock
-from app.database.db import connect, transaction
+from app.database.db import connect_knowledge as connect, transaction
 from app.textutils import segment
 
 
