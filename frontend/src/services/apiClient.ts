@@ -2,7 +2,7 @@ import type { ApiError, ErrorResponse } from '@/contracts'
 import { hostInvoke, isDesktop } from './platform/desktop'
 
 // 所有 HTTP 请求都经过此边界，以统一地址、请求追踪和错误契约。
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE ?? (isDesktop() ? 'http://127.0.0.1:8000' : '')
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE ?? ''
 
 interface DesktopCoreResponse {
   status: number
@@ -82,12 +82,22 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   try {
     if (isDesktop()) {
-      const parsed = new URL(url)
+      const parsed = new URL(url, 'http://localhost')
+      let bodyBase64: string | undefined
+      if (rest.body instanceof Blob) {
+        if (rest.body.size > 64 * 1024 * 1024) throw new ApiErrorClass('CORE_REQUEST_TOO_LARGE', '上传文件超过 64 MiB')
+        const bytes = new Uint8Array(await rest.body.arrayBuffer())
+        const parts: string[] = []
+        for (let offset = 0; offset < bytes.length; offset += 16384) parts.push(String.fromCharCode(...bytes.subarray(offset, offset + 16384)))
+        bodyBase64 = btoa(parts.join(''))
+      }
       const response = await hostInvoke<DesktopCoreResponse>('core_request', {
         method: rest.method ?? 'GET',
         path: `${parsed.pathname}${parsed.search}`,
         body: typeof rest.body === 'string' ? JSON.parse(rest.body) : undefined,
-        authorization: token ? `Bearer ${token}` : undefined,
+        bodyBase64,
+        contentType: new Headers(reqHeaders).get('Content-Type'),
+        idempotencyKey: new Headers(reqHeaders).get('Idempotency-Key') ?? undefined,
       })
       if (response.status >= 200 && response.status < 300) {
         if (response.status === 204) return undefined as T
@@ -136,8 +146,8 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 
 export const apiClient = {
-  postBinary<T>(path: string, body: Blob) {
-    return request<T>(path, { method: 'POST', body, headers: { 'Content-Type': 'application/zip' } })
+  postBinary<T>(path: string, body: Blob, headers: Record<string, string> = { 'Content-Type': 'application/zip' }) {
+    return request<T>(path, { method: 'POST', body, headers })
   },
   get<T>(path: string, options?: Omit<RequestOptions, 'method'>) {
     return request<T>(path, { ...options, method: 'GET' })

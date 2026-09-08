@@ -258,7 +258,7 @@ def test_mcp_lifecycle_lock_contention_keeps_event_loop_responsive(
 def test_service_status() -> None:
     response = asyncio.run(service_status())
 
-    assert response.name == "Notes Agent AI Core"
+    assert response.name == "OpenNexus AI Core"
     assert response.status == "ok"
 
 

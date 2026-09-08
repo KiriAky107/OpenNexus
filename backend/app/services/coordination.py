@@ -11,6 +11,8 @@ def web_vault_ownership():
     """与 Rust fs2 使用同一 OS 文件锁，避免首次切换时两套写入者重叠。"""
     from app.config import get_settings
     from app.errors import ApiError
+    if get_settings().environment == 'desktop':
+        raise ApiError(409, 'WORKSPACE_OWNER_DESKTOP', '桌面笔记写入必须通过 Rust Host')
     root = get_settings().vault_path
     managed = root / '.ainote'
     if managed.is_symlink() or (hasattr(managed, 'is_junction') and managed.is_junction()):

@@ -1,0 +1,68 @@
+<script setup lang="ts">
+import { onMounted, ref } from 'vue'
+import { hostInvoke } from '@/services/platform/desktop'
+import { t } from '@/i18n'
+
+const locked = ref(true)
+const busy = ref(false)
+const password = ref('')
+const confirmation = ref('')
+const message = ref('')
+async function refresh() {
+  const state = await hostInvoke<{ locked: boolean }>('credentials_status')
+  locked.value = state.locked
+}
+async function importLegacy() {
+  busy.value = true; message.value = ''
+  try {
+    const count = await hostInvoke<number | null>('credentials_import')
+    if (count !== null) message.value = t(`已迁移并验证 ${count} 条凭据；旧文件仍保留。`, `Imported and verified ${count} credentials. Legacy files are retained.`)
+  } catch (error) { message.value = error instanceof Error ? error.message : 'MIGRATION_FAILED' }
+  finally { busy.value = false }
+}
+async function act(action: 'unlock' | 'lock' | 'change_password') {
+  if (busy.value) return
+  message.value = ''
+  if (action === 'change_password' && password.value !== confirmation.value) {
+    message.value = t('两次口令不一致。', 'The passwords do not match.'); return
+  }
+  busy.value = true
+  const value = password.value
+  password.value = ''; confirmation.value = ''
+  try {
+    await hostInvoke(`credentials_${action}`, action === 'lock' ? undefined : { password: value })
+    await refresh()
+    message.value = action === 'change_password' ? t('口令已更新。', 'Password updated.') : ''
+  } catch (error) { message.value = error instanceof Error ? error.message : 'CREDENTIAL_STORE_FAILED' }
+  finally { busy.value = false }
+}
+onMounted(() => refresh().catch(error => { message.value = String(error) }))
+</script>
+
+<template>
+  <section class="panel settings-section credential-vault" aria-labelledby="credential-vault-title">
+    <h2 id="credential-vault-title">{{ t('设备凭据保险库', 'Device credential vault') }}</h2>
+    <p>{{ locked ? t('已锁定：使用模型密钥前请解锁。首次解锁将创建本机保险库。', 'Locked: unlock before using provider credentials. The first unlock creates this device’s vault.') : t('已解锁：密钥仅由本机受控调用使用。', 'Unlocked: credentials are available to authorized local calls.') }}</p>
+    <p class="subtle">{{ t('口令至少12个字符。遗失口令后需恢复备份或重新配置密钥；笔记仍可使用。', 'Use at least 12 characters. A lost password requires a backup or re-entering credentials; notes remain available.') }}</p>
+    <form @submit.prevent="act(locked ? 'unlock' : 'change_password')">
+      <label>{{ locked ? t('解锁口令', 'Vault password') : t('新口令', 'New password') }}
+        <input v-model="password" type="password" minlength="12" maxlength="1024" required autocomplete="off" :disabled="busy" />
+      </label>
+      <label v-if="!locked">{{ t('确认新口令', 'Confirm new password') }}
+        <input v-model="confirmation" type="password" minlength="12" maxlength="1024" required autocomplete="off" :disabled="busy" />
+      </label>
+      <div class="inline-actions">
+        <button class="button-primary" type="submit" :disabled="busy">{{ busy ? t('处理中…', 'Working…') : locked ? t('解锁', 'Unlock') : t('更改口令', 'Change password') }}</button>
+        <button v-if="!locked" class="button-secondary" type="button" :disabled="busy" @click="act('lock')">{{ t('立即锁定', 'Lock now') }}</button>
+        <button v-if="!locked" class="button-secondary" type="button" :disabled="busy" @click="importLegacy">{{ t('迁移旧凭据…', 'Import legacy credentials…') }}</button>
+      </div>
+    </form>
+    <p v-if="message" role="status">{{ message }}</p>
+  </section>
+</template>
+
+<style scoped>
+.credential-vault form { display: grid; gap: 12px; max-width: 480px; }
+.credential-vault label { display: grid; gap: 6px; }
+.credential-vault input { color: var(--text-primary); background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px; }
+</style>

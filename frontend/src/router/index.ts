@@ -94,7 +94,7 @@ router.beforeEach((to) => {
 })
 
 export function updateDocumentTitle(to = router.currentRoute.value) {
-  const baseTitle = 'NotesAgent'
+  const baseTitle = 'OpenNexus'
   const titles: Record<string, string> = {
     logs: t('运行日志', 'Operation logs'),
     media: t('音视频转写', 'Media Transcription'),

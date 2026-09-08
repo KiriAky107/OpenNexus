@@ -3,17 +3,24 @@
 //! 预览 Host 只开放本地文件命令；未接通的 AI / 同步 / 凭据能力明确返回不可用。
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use notesagent_host::core::CoreSupervisor;
+use notesagent_host::credentials::CredentialBroker;
 use notesagent_host::recent::{RecentVault, RecentVaultStore};
 use notesagent_host::workspace::{portable_path_string, Document, Entry, Workspace};
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{Emitter, Manager, State};
+use zeroize::Zeroizing;
 
 #[derive(Default)]
 struct Host {
     workspace: Mutex<Option<Workspace>>,
     recent: Mutex<Option<RecentVaultStore>>,
+    core: Arc<Mutex<Option<CoreSupervisor>>>,
+    credentials: Arc<Mutex<Option<CredentialBroker>>>,
+    streams: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
 }
 
 fn info(ws: &Workspace) -> RecentVault {
@@ -39,8 +46,14 @@ fn with_workspace<T>(
 }
 
 #[tauri::command]
-fn host_capabilities() -> serde_json::Value {
-    serde_json::json!({"protocol":1,"workspace":true,"core":true,"sync":false,"credentials":false,"extensions":false,"release":"preview"})
+fn host_capabilities(host: State<'_, Host>) -> serde_json::Value {
+    let ready = host
+        .core
+        .try_lock()
+        .ok()
+        .and_then(|mut core| core.as_mut().map(|c| c.available()))
+        .unwrap_or(false);
+    serde_json::json!({"protocol":1,"workspace":true,"core":ready,"sync":false,"credentials":true,"extensions":false,"release":"preview","product":"OpenNexus"})
 }
 
 #[derive(serde::Serialize)]
@@ -65,14 +78,9 @@ fn is_json_content_type(content_type: &str) -> bool {
     media_type == "application/json" || media_type.ends_with("+json")
 }
 
+#[cfg(test)]
 fn core_url(path: &str) -> Result<String, String> {
-    if (!path.starts_with("/api/") && path != "/api" && path != "/health")
-        || path.contains("..")
-        || path.contains(['\r', '\n'])
-    {
-        return Err("CORE_PATH_DENIED".into());
-    }
-    Ok(format!("http://127.0.0.1:8000{path}"))
+    notesagent_host::core::checked_url(8000, path)
 }
 
 #[cfg(test)]
@@ -108,14 +116,28 @@ mod core_proxy_tests {
     }
 }
 
-/// 预览版只代理固定回环地址，避免 WebView CORS 与任意地址转发。
+/// Authenticated process-local transport; session headers are owned by Rust.
 #[tauri::command]
 async fn core_request(
     method: String,
     path: String,
     body: Option<serde_json::Value>,
-    authorization: Option<String>,
+    body_base64: Option<String>,
+    content_type: Option<String>,
+    idempotency_key: Option<String>,
+    host: State<'_, Host>,
 ) -> Result<CoreResponse, String> {
+    let core = host.core.clone();
+    let core_path = path.clone();
+    let session = tauri::async_runtime::spawn_blocking(move || {
+        core.lock()
+            .map_err(|_| "HOST_BUSY")?
+            .as_mut()
+            .ok_or("CORE_UNAVAILABLE")?
+            .request_session(&core_path)
+    })
+    .await
+    .map_err(|_| "CORE_UNAVAILABLE")??;
     let method =
         reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| "CORE_METHOD_DENIED")?;
     if !matches!(
@@ -130,16 +152,47 @@ async fn core_request(
     }
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .build()
         .map_err(|_| "CORE_CLIENT_ERROR")?;
-    let mut request = client.request(method, core_url(&path)?);
+    let mut request = client
+        .request(method, &session.url)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            session.authorization.as_str(),
+        )
+        .header("X-Core-Generation", &session.generation);
     if let Some(value) = body {
         request = request.json(&value);
     }
-    if let Some(value) = authorization {
-        request = request.header(reqwest::header::AUTHORIZATION, value);
+    if let Some(encoded) = body_base64 {
+        if encoded.len() > MAX_CORE_RESPONSE_BYTES * 4 / 3 + 4 {
+            return Err("CORE_REQUEST_TOO_LARGE".into());
+        }
+        let bytes = BASE64_STANDARD
+            .decode(encoded)
+            .map_err(|_| "CORE_BODY_INVALID")?;
+        if bytes.len() > MAX_CORE_RESPONSE_BYTES {
+            return Err("CORE_REQUEST_TOO_LARGE".into());
+        }
+        let content_type = content_type
+            .as_deref()
+            .unwrap_or("application/octet-stream");
+        if !matches!(content_type, "application/octet-stream" | "application/zip") {
+            return Err("CORE_CONTENT_TYPE_DENIED".into());
+        }
+        request = request
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(bytes);
     }
-    let response = request.send().await.map_err(|_| "CORE_UNAVAILABLE")?;
+    if let Some(key) = idempotency_key {
+        if key.len() > 128 || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+            return Err("CORE_HEADER_INVALID".into());
+        }
+        request = request.header("Idempotency-Key", key);
+    }
+    let mut response = request.send().await.map_err(|_| "CORE_UNAVAILABLE")?;
     let status = response.status().as_u16();
     let content_type = response
         .headers()
@@ -153,9 +206,12 @@ async fn core_request(
     {
         return Err("CORE_RESPONSE_TOO_LARGE".into());
     }
-    let bytes = response.bytes().await.map_err(|_| "CORE_RESPONSE_ERROR")?;
-    if bytes.len() > MAX_CORE_RESPONSE_BYTES {
-        return Err("CORE_RESPONSE_TOO_LARGE".into());
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "CORE_RESPONSE_ERROR")? {
+        if bytes.len().saturating_add(chunk.len()) > MAX_CORE_RESPONSE_BYTES {
+            return Err("CORE_RESPONSE_TOO_LARGE".into());
+        }
+        bytes.extend_from_slice(&chunk);
     }
     let (body, body_base64) = if is_json_content_type(&content_type) {
         (
@@ -171,6 +227,182 @@ async fn core_request(
         body,
         body_base64,
     })
+}
+
+#[tauri::command]
+fn core_stream_cancel(host: State<'_, Host>, request_id: String) -> Result<(), String> {
+    if let Some(task) = host
+        .streams
+        .lock()
+        .map_err(|_| "HOST_BUSY")?
+        .remove(&request_id)
+    {
+        task.abort();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn core_stream(
+    host: State<'_, Host>,
+    request_id: String,
+    path: String,
+    method: String,
+    body: Option<serde_json::Value>,
+    last_event_id: Option<String>,
+    channel: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<(), String> {
+    uuid::Uuid::parse_str(&request_id).map_err(|_| "CORE_REQUEST_ID_INVALID")?;
+    if !matches!(method.as_str(), "GET" | "POST") {
+        return Err("CORE_METHOD_DENIED".into());
+    }
+    if body
+        .as_ref()
+        .is_some_and(|b| b.to_string().len() > 1024 * 1024)
+    {
+        return Err("CORE_REQUEST_TOO_LARGE".into());
+    }
+    if last_event_id
+        .as_ref()
+        .is_some_and(|s| s.len() > 128 || s.contains(['\r', '\n']))
+    {
+        return Err("CORE_HEADER_INVALID".into());
+    }
+    let core = host.core.clone();
+    let streams = host.streams.clone();
+    let mut running = host.streams.lock().map_err(|_| "HOST_BUSY")?;
+    if running.len() >= 16 || running.contains_key(&request_id) {
+        return Err("CORE_STREAM_LIMIT".into());
+    }
+    let id = request_id.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        let result: Result<(), String> = async {
+            let session = tauri::async_runtime::spawn_blocking(move || {
+                core.lock().map_err(|_| "HOST_BUSY")?.as_mut().ok_or("CORE_UNAVAILABLE")?.request_session(&path)
+            }).await.map_err(|_| "CORE_UNAVAILABLE")??;
+            let client = reqwest::Client::builder().no_proxy()
+                .redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(600))
+                .build().map_err(|_| "CORE_CLIENT_ERROR")?;
+            let mut request = client.request(reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| "CORE_METHOD_DENIED")?, session.url)
+                .header("Authorization", session.authorization.as_str())
+                .header("X-Core-Generation", session.generation).header("Accept", "text/event-stream");
+            if let Some(body) = body { request = request.json(&body); }
+            if let Some(id) = last_event_id { request = request.header("Last-Event-ID", id); }
+            let mut response = request.send().await.map_err(|_| "CORE_UNAVAILABLE")?;
+            channel.send(serde_json::json!({"kind":"headers","status":response.status().as_u16()})).map_err(|_| "CORE_STREAM_CLOSED")?;
+            let mut size = 0usize;
+            while let Some(bytes) = response.chunk().await.map_err(|_| "CORE_RESPONSE_ERROR")? {
+                size = size.saturating_add(bytes.len());
+                if size > MAX_CORE_RESPONSE_BYTES { return Err("CORE_RESPONSE_TOO_LARGE".into()); }
+                for chunk in bytes.chunks(16384) {
+                    channel.send(serde_json::json!({"kind":"chunk","data":BASE64_STANDARD.encode(chunk)})).map_err(|_| "CORE_STREAM_CLOSED")?;
+                }
+            }
+            Ok(())
+        }.await;
+        match result {
+            Ok(()) => {
+                let _ = channel.send(serde_json::json!({"kind":"done"}));
+            }
+            Err(code) => {
+                let _ = channel.send(serde_json::json!({"kind":"error","code":code}));
+            }
+        }
+        if let Ok(mut running) = streams.lock() {
+            running.remove(&id);
+        }
+    });
+    running.insert(request_id, task);
+    Ok(())
+}
+
+#[tauri::command]
+fn credentials_status(host: State<'_, Host>) -> Result<serde_json::Value, String> {
+    let broker = host
+        .credentials
+        .try_lock()
+        .map_err(|_| "CREDENTIALS_BUSY")?;
+    let broker = broker.as_ref().ok_or("HOST_NOT_READY")?;
+    Ok(serde_json::json!({"locked":broker.is_locked()}))
+}
+
+#[tauri::command]
+async fn credentials_unlock(host: State<'_, Host>, password: String) -> Result<(), String> {
+    let broker = host.credentials.clone();
+    let password = Zeroizing::new(password.into_bytes());
+    tauri::async_runtime::spawn_blocking(move || {
+        broker
+            .lock()
+            .map_err(|_| "HOST_BUSY")?
+            .as_mut()
+            .ok_or("HOST_NOT_READY")?
+            .unlock(password)
+    })
+    .await
+    .map_err(|_| "HOST_BUSY")?
+}
+
+#[tauri::command]
+fn credentials_lock(host: State<'_, Host>) -> Result<(), String> {
+    host.credentials
+        .lock()
+        .map_err(|_| "HOST_BUSY")?
+        .as_mut()
+        .ok_or("HOST_NOT_READY")?
+        .lock();
+    Ok(())
+}
+
+#[tauri::command]
+async fn credentials_import(host: State<'_, Host>) -> Result<Option<usize>, String> {
+    let Some(path) = rfd::FileDialog::new()
+        .set_title("选择旧版本的 credentials.json（不会删除原文件）")
+        .add_filter("Fernet credentials", &["json"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    if path.file_name().and_then(|n| n.to_str()) != Some("credentials.json") {
+        return Err("MIGRATION_SOURCE_INVALID".into());
+    }
+    let directory = path
+        .parent()
+        .ok_or("MIGRATION_SOURCE_INVALID")?
+        .to_path_buf();
+    let broker = host.credentials.clone();
+    let environment_key = std::env::var("APP_CREDENTIAL_MASTER_KEY")
+        .ok()
+        .map(Zeroizing::new);
+    tauri::async_runtime::spawn_blocking(move || {
+        broker
+            .lock()
+            .map_err(|_| "HOST_BUSY")?
+            .as_mut()
+            .ok_or("HOST_NOT_READY")?
+            .import_fernet(&directory, environment_key)
+            .map(Some)
+    })
+    .await
+    .map_err(|_| "HOST_BUSY")?
+}
+
+#[tauri::command]
+async fn credentials_change_password(
+    host: State<'_, Host>,
+    password: String,
+) -> Result<(), String> {
+    let broker = host.credentials.clone();
+    let password = Zeroizing::new(password.into_bytes());
+    tauri::async_runtime::spawn_blocking(move || {
+        broker
+            .lock()
+            .map_err(|_| "HOST_BUSY")?
+            .as_mut()
+            .ok_or("HOST_NOT_READY")?
+            .change_password(password)
+    })
+    .await
+    .map_err(|_| "HOST_BUSY")?
 }
 
 #[tauri::command]
@@ -314,6 +546,65 @@ fn main() {
                 .lock()
                 .map_err(|_| std::io::Error::other("HOST_BUSY"))? =
                 Some(RecentVaultStore::open(&state_path).map_err(std::io::Error::other)?);
+            let credential_state = app.state::<Host>().credentials.clone();
+            *credential_state
+                .lock()
+                .map_err(|_| std::io::Error::other("HOST_BUSY"))? = Some(CredentialBroker::new(
+                app.path().app_data_dir()?.join("credentials/stronghold.v1"),
+            ));
+            let data_dir = app.path().app_data_dir()?.join("core-data");
+            // Debug builds use this worktree's interpreter; release builds only use bundled Core.
+            let core = if cfg!(debug_assertions) {
+                let backend = Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../backend")
+                    .canonicalize()?;
+                let python = backend.join(if cfg!(windows) {
+                    ".venv/Scripts/python.exe"
+                } else {
+                    ".venv/bin/python"
+                });
+                CoreSupervisor::new(
+                    python,
+                    vec!["-m".into(), "app.sidecar".into()],
+                    backend,
+                    data_dir,
+                )
+            } else {
+                let root = app.path().resource_dir()?.join("core");
+                CoreSupervisor::new(
+                    root.join(if cfg!(windows) {
+                        "opennexus-core.exe"
+                    } else {
+                        "opennexus-core"
+                    }),
+                    vec![],
+                    root,
+                    data_dir,
+                )
+                .with_bundle_manifest(
+                    include_str!(concat!(env!("OUT_DIR"), "/core-manifest.json")).to_owned(),
+                )
+            };
+            let core = core.with_broker(Arc::new(move |request| {
+                credential_state
+                    .lock()
+                    .map_err(|_| "HOST_BUSY")?
+                    .as_mut()
+                    .ok_or("HOST_NOT_READY")?
+                    .dispatch(request)
+            }));
+            *app.state::<Host>()
+                .core
+                .lock()
+                .map_err(|_| std::io::Error::other("HOST_BUSY"))? = Some(core);
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                if let Ok(mut core) = handle.state::<Host>().core.lock() {
+                    if let Some(core) = core.as_mut() {
+                        let _ = core.start();
+                    }
+                }
+            });
             Ok(())
         })
         .on_menu_event(|app, event| {
@@ -330,7 +621,14 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             host_capabilities,
+            credentials_status,
+            credentials_unlock,
+            credentials_lock,
+            credentials_change_password,
+            credentials_import,
             core_request,
+            core_stream,
+            core_stream_cancel,
             editor_capabilities,
             workspace_choose,
             workspace_open,
@@ -343,6 +641,16 @@ fn main() {
             workspace_delete,
             workspace_mkdir
         ])
-        .run(tauri::generate_context!())
-        .expect("桌面 Host 启动失败");
+        .build(tauri::generate_context!())
+        .expect("桌面 Host 启动失败")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Ok(mut broker) = app.state::<Host>().credentials.lock() {
+                    broker.take();
+                }
+                if let Ok(mut core) = app.state::<Host>().core.lock() {
+                    core.take();
+                }
+            }
+        });
 }

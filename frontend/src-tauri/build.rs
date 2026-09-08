@@ -1,9 +1,29 @@
 fn main() {
+    let manifest = std::path::Path::new("../../.build/sidecar/manifest.json");
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    let content = if std::env::var("PROFILE").as_deref() == Ok("release") {
+        std::fs::read(manifest)
+            .expect("Build Core with scripts/build-core.py before a release Host")
+    } else {
+        b"{}".to_vec()
+    };
+    std::fs::write(
+        std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("core-manifest.json"),
+        content,
+    )
+    .unwrap();
     #[cfg(feature = "desktop")]
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "host_capabilities",
+            "credentials_status",
+            "credentials_unlock",
+            "credentials_lock",
+            "credentials_change_password",
+            "credentials_import",
             "core_request",
+            "core_stream",
+            "core_stream_cancel",
             "editor_capabilities",
             "workspace_choose",
             "workspace_open",
