@@ -268,6 +268,15 @@ impl<'a> Suspended<'a> {
     }
 }
 impl Running<'_> {
+    #[cfg(feature = "desktop")]
+    pub fn start_io(
+        &self,
+        io: crate::extension_stdio::HostIo,
+    ) -> Result<crate::extension_io::Pump> {
+        self.check_authorization()?;
+        crate::extension_io::Pump::start(io, self.process.job.clone_for_deadline()?)
+    }
+
     pub fn check_authorization(&self) -> Result<()> {
         #[cfg(feature = "desktop")]
         if let Some(watch) = &self.revocation {
