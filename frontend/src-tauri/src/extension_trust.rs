@@ -256,7 +256,13 @@ mod tests {
                 for body in responses {
                     let (mut stream, _) = listener.accept().unwrap();
                     let mut bytes = [0; 8192];
-                    stream.read(&mut bytes).unwrap();
+                    let mut count = 0;
+                    while !bytes[..count].windows(4).any(|w| w == b"\r\n\r\n") {
+                        assert!(count < bytes.len());
+                        let n = stream.read(&mut bytes[count..]).unwrap();
+                        assert!(n > 0);
+                        count += n;
+                    }
                     let body = body.to_string();
                     let status = match case {
                         "offline" => "503 Unavailable",
