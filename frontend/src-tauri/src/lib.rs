@@ -6,4 +6,6 @@ pub mod recent;
 #[cfg(feature = "desktop")]
 pub mod request_lifecycle;
 mod runtime_compat;
+#[cfg(windows)]
+pub mod session_lock;
 pub mod workspace;

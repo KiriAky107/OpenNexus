@@ -15,6 +15,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use zeroize::Zeroizing;
 
 type Result<T> = std::result::Result<T, String>;
@@ -204,6 +208,8 @@ pub struct CredentialBroker {
     // Separate stable inode: snapshots are atomically replaced, so locking the
     // snapshot itself would not protect the next writer after replacement.
     ownership: Option<fs::File>,
+    lock_epoch: Arc<AtomicU64>,
+    unlocked_epoch: u64,
 }
 
 impl CredentialBroker {
@@ -268,7 +274,7 @@ impl CredentialBroker {
             .ok_or("MIGRATION_KEY_MISSING")?;
         let fernet =
             Zeroizing::new(fernet::Fernet::new(key.trim()).ok_or("MIGRATION_KEY_INVALID")?);
-        let session = self.unlocked.as_ref().ok_or("CREDENTIALS_LOCKED")?;
+        let session = self.session()?;
         let mut decoded = Vec::new();
         for (id, token) in &tokens {
             let key = CredentialId::legacy(id).key()?;
@@ -381,7 +387,7 @@ impl CredentialBroker {
         let method = request["rpc"].as_str().ok_or("HOST_REQUEST_INVALID")?;
         let params = &request["params"];
         if method == "credentials.delete_many" || method == "credentials.move_many" {
-            let session = self.unlocked.as_ref().ok_or("CREDENTIALS_LOCKED")?;
+            let session = self.session()?;
             let result = (|| {
                 let mut removed = Vec::new();
                 if method.ends_with("delete_many") {
@@ -483,10 +489,21 @@ impl CredentialBroker {
             path,
             unlocked: None,
             ownership: None,
+            lock_epoch: Arc::new(AtomicU64::new(0)),
+            unlocked_epoch: 0,
         }
     }
     pub fn is_locked(&self) -> bool {
-        self.unlocked.is_none()
+        self.unlocked.is_none() || self.lock_epoch.load(Ordering::SeqCst) != self.unlocked_epoch
+    }
+    pub fn lock_signal(&self) -> Arc<AtomicU64> {
+        self.lock_epoch.clone()
+    }
+    fn session(&self) -> Result<&Unlocked> {
+        if self.is_locked() {
+            return Err("CREDENTIALS_LOCKED".into());
+        }
+        self.unlocked.as_ref().ok_or("CREDENTIALS_LOCKED".into())
     }
     pub fn lock(&mut self) {
         self.unlocked.take();
@@ -494,11 +511,36 @@ impl CredentialBroker {
     }
     pub fn unlock(&mut self, password: Zeroizing<Vec<u8>>) -> Result<()> {
         self.lock();
+        let epoch = self.lock_epoch.load(Ordering::SeqCst);
+        let ownership = Self::acquire_ownership(&self.path)?;
+        let session = if self.path.exists() {
+            Self::load_snapshot(&self.path, &password)?
+        } else {
+            let mut salt = [0u8; 32];
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut salt)
+                .map_err(|_| "CREDENTIAL_ENTROPY_FAILED")?;
+            let session = Unlocked::derive(&password, salt)?;
+            session
+                .stronghold
+                .create_client(CLIENT)
+                .map_err(|_| "CREDENTIAL_STORE_FAILED")?;
+            session.persist(&self.path)?;
+            session
+        };
+        if self.lock_epoch.load(Ordering::SeqCst) != epoch {
+            return Err("CREDENTIALS_LOCKED".into());
+        }
+        self.unlocked_epoch = epoch;
+        self.unlocked = Some(session);
+        self.ownership = Some(ownership);
+        Ok(())
+    }
+    fn acquire_ownership(path: &Path) -> Result<fs::File> {
         use fs2::FileExt;
-        let parent = self.path.parent().ok_or("CREDENTIAL_PATH_INVALID")?;
+        let parent = path.parent().ok_or("CREDENTIAL_PATH_INVALID")?;
         fs::create_dir_all(parent).map_err(|_| "CREDENTIAL_IO_FAILED")?;
-        let mut lock_name = self
-            .path
+        let mut lock_name = path
             .file_name()
             .ok_or("CREDENTIAL_PATH_INVALID")?
             .to_os_string();
@@ -534,54 +576,96 @@ impl CredentialBroker {
         ownership
             .try_lock_exclusive()
             .map_err(|_| "CREDENTIALS_BUSY")?;
-        let session = if self.path.exists() {
+        Ok(ownership)
+    }
+    fn load_snapshot(path: &Path, password: &[u8]) -> Result<Unlocked> {
+        let metadata = fs::symlink_metadata(path).map_err(|_| "CREDENTIAL_IO_FAILED")?;
+        if !metadata.is_file() || metadata.len() > MAX_FILE {
+            return Err("CREDENTIAL_STORE_CORRUPT".into());
+        }
+        let data = fs::read(path).map_err(|_| "CREDENTIAL_IO_FAILED")?;
+        if data.len() < 40 || &data[..8] != MAGIC {
+            return Err("SCHEMA_INCOMPATIBLE".into());
+        }
+        let mut salt = [0u8; 32];
+        salt.copy_from_slice(&data[8..40]);
+        let session = Unlocked::derive(password, salt)?;
+        // Backups can be on read-only media. This temporary file contains ciphertext only.
+        let mut temp = tempfile::NamedTempFile::new().map_err(|_| "CREDENTIAL_IO_FAILED")?;
+        temp.write_all(&data[40..])
+            .map_err(|_| "CREDENTIAL_IO_FAILED")?;
+        session
+            .stronghold
+            .load_client_from_snapshot(
+                CLIENT,
+                &session.provider()?,
+                &SnapshotPath::from_path(temp.path()),
+            )
+            .map_err(|_| "CREDENTIAL_UNLOCK_FAILED")?;
+        Ok(session)
+    }
+
+    /// Native picker selected destination; backup is encrypted and never overwrites.
+    pub fn backup(&self, destination: &Path) -> Result<()> {
+        self.session()?;
+        let parent = destination.parent().ok_or("CREDENTIAL_PATH_INVALID")?;
+        let mut target =
+            tempfile::NamedTempFile::new_in(parent).map_err(|_| "CREDENTIAL_IO_FAILED")?;
+        let bytes = fs::read(&self.path).map_err(|_| "CREDENTIAL_IO_FAILED")?;
+        target
+            .write_all(&bytes)
+            .and_then(|_| target.as_file().sync_all())
+            .map_err(|_| "CREDENTIAL_IO_FAILED")?;
+        target
+            .persist_noclobber(destination)
+            .map_err(|_| "CREDENTIAL_BACKUP_EXISTS")?;
+        Ok(())
+    }
+
+    /// Validate every record before atomic replacement; preserve the previous encrypted file.
+    /// Caller must obtain explicit confirmation through the native dialog.
+    pub fn restore(&mut self, source: &Path, password: Zeroizing<Vec<u8>>) -> Result<usize> {
+        if !self.is_locked() {
+            return Err("CREDENTIALS_MUST_LOCK".into());
+        }
+        self.lock();
+        let _ownership = Self::acquire_ownership(&self.path)?;
+        let session = Self::load_snapshot(source, &password)?;
+        let keys = session
+            .store()?
+            .keys()
+            .map_err(|_| "CREDENTIAL_STORE_FAILED")?;
+        for key in &keys {
+            let id: CredentialId =
+                serde_json::from_slice(key).map_err(|_| "CREDENTIAL_STORE_CORRUPT")?;
+            if id.key()? != *key || session.read(key)?.is_none() {
+                return Err("CREDENTIAL_STORE_CORRUPT".into());
+            }
+        }
+        let parent = self.path.parent().ok_or("CREDENTIAL_PATH_INVALID")?;
+        if self.path.exists() {
             let metadata = fs::symlink_metadata(&self.path).map_err(|_| "CREDENTIAL_IO_FAILED")?;
             if !metadata.is_file() || metadata.len() > MAX_FILE {
                 return Err("CREDENTIAL_STORE_CORRUPT".into());
             }
-            let data = fs::read(&self.path).map_err(|_| "CREDENTIAL_IO_FAILED")?;
-            if data.len() < 40 || &data[..8] != MAGIC {
-                return Err("SCHEMA_INCOMPATIBLE".into());
-            }
-            let mut salt = [0u8; 32];
-            salt.copy_from_slice(&data[8..40]);
-            let session = Unlocked::derive(&password, salt)?;
-            let mut temp = tempfile::NamedTempFile::new_in(
-                self.path.parent().ok_or("CREDENTIAL_PATH_INVALID")?,
-            )
-            .map_err(|_| "CREDENTIAL_IO_FAILED")?;
-            temp.write_all(&data[40..])
+            let mut previous = tempfile::Builder::new()
+                .prefix("pre-restore-")
+                .suffix(".onxcred")
+                .tempfile_in(parent)
                 .map_err(|_| "CREDENTIAL_IO_FAILED")?;
-            session
-                .stronghold
-                .load_client_from_snapshot(
-                    CLIENT,
-                    &session.provider()?,
-                    &SnapshotPath::from_path(temp.path()),
-                )
-                .map_err(|_| "CREDENTIAL_UNLOCK_FAILED")?;
-            session
-        } else {
-            let mut salt = [0u8; 32];
-            rand::rngs::OsRng
-                .try_fill_bytes(&mut salt)
-                .map_err(|_| "CREDENTIAL_ENTROPY_FAILED")?;
-            let session = Unlocked::derive(&password, salt)?;
-            session
-                .stronghold
-                .create_client(CLIENT)
-                .map_err(|_| "CREDENTIAL_STORE_FAILED")?;
-            session.persist(&self.path)?;
-            session
-        };
-        self.unlocked = Some(session);
-        self.ownership = Some(ownership);
-        Ok(())
+            previous
+                .write_all(&fs::read(&self.path).map_err(|_| "CREDENTIAL_IO_FAILED")?)
+                .and_then(|_| previous.as_file().sync_all())
+                .map_err(|_| "CREDENTIAL_IO_FAILED")?;
+            previous.keep().map_err(|_| "CREDENTIAL_IO_FAILED")?;
+        }
+        session.persist(&self.path)?;
+        // Restoration deliberately leaves the vault locked; no implicit permission grant.
+        Ok(keys.len())
     }
+
     pub fn list(&self) -> Result<Vec<CredentialId>> {
-        self.unlocked
-            .as_ref()
-            .ok_or("CREDENTIALS_LOCKED")?
+        self.session()?
             .store()?
             .keys()
             .map_err(|_| "CREDENTIAL_STORE_FAILED")?
@@ -590,7 +674,7 @@ impl CredentialBroker {
             .collect()
     }
     pub fn put(&mut self, id: &CredentialId, value: Zeroizing<Vec<u8>>) -> Result<()> {
-        let session = self.unlocked.as_ref().ok_or("CREDENTIALS_LOCKED")?;
+        let session = self.session()?;
         let result = session
             .write(id.key()?, &value)
             .and_then(|_| session.persist(&self.path));
@@ -600,7 +684,7 @@ impl CredentialBroker {
         result
     }
     pub fn delete(&mut self, id: &CredentialId) -> Result<()> {
-        let session = self.unlocked.as_ref().ok_or("CREDENTIALS_LOCKED")?;
+        let session = self.session()?;
         session
             .store()?
             .delete(&id.key()?)
@@ -617,13 +701,10 @@ impl CredentialBroker {
         if caller != &id.scope {
             return Err("CREDENTIAL_SCOPE_DENIED".into());
         }
-        self.unlocked
-            .as_ref()
-            .ok_or("CREDENTIALS_LOCKED")?
-            .read(&id.key()?)
+        self.session()?.read(&id.key()?)
     }
     pub fn change_password(&mut self, password: Zeroizing<Vec<u8>>) -> Result<()> {
-        let previous = self.unlocked.as_ref().ok_or("CREDENTIALS_LOCKED")?;
+        let previous = self.session()?;
         let mut salt = [0u8; 32];
         rand::rngs::OsRng
             .try_fill_bytes(&mut salt)
@@ -651,6 +732,78 @@ mod tests {
     use super::*;
     fn password() -> Zeroizing<Vec<u8>> {
         Zeroizing::new(b"test-only-password-123".to_vec())
+    }
+    #[test]
+    fn encrypted_backup_restores_corrupt_store_without_overwrite_on_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("credentials.v1");
+        let backup = temp.path().join("backup.onxcred");
+        let mut broker = CredentialBroker::new(path.clone());
+        broker.unlock(password()).unwrap();
+        let id = CredentialId::legacy("test-provider");
+        broker
+            .put(&id, Zeroizing::new(b"backup-test-secret".to_vec()))
+            .unwrap();
+        broker.backup(&backup).unwrap();
+        assert_eq!(
+            broker.backup(&backup).unwrap_err(),
+            "CREDENTIAL_BACKUP_EXISTS"
+        );
+        assert_eq!(
+            broker.restore(&backup, password()).unwrap_err(),
+            "CREDENTIALS_MUST_LOCK"
+        );
+        broker.lock();
+        fs::write(&path, b"corrupt-original").unwrap();
+        assert!(broker
+            .restore(&backup, Zeroizing::new(b"wrong-test-password".to_vec()))
+            .is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"corrupt-original");
+        assert_eq!(broker.restore(&backup, password()).unwrap(), 1);
+        assert!(broker.is_locked());
+        let saved = fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .find(|e| e.file_name().to_string_lossy().starts_with("pre-restore-"))
+            .unwrap();
+        assert_eq!(fs::read(saved.path()).unwrap(), b"corrupt-original");
+        broker.unlock(password()).unwrap();
+        assert_eq!(
+            broker
+                .resolve(&Scope::Provider, &id)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            b"backup-test-secret"
+        );
+        assert!(!fs::read(backup)
+            .unwrap()
+            .windows(18)
+            .any(|w| w == b"backup-test-secret"));
+    }
+    #[test]
+    fn session_revocation_denies_new_resolves_and_mutations() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut broker = CredentialBroker::new(temp.path().join("credentials.v1"));
+        broker.unlock(password()).unwrap();
+        let id = CredentialId::legacy("test-provider");
+        broker
+            .put(&id, Zeroizing::new(b"test-value".to_vec()))
+            .unwrap();
+        broker.lock_signal().fetch_add(1, Ordering::SeqCst);
+        assert!(broker.is_locked());
+        assert_eq!(
+            broker.resolve(&Scope::Provider, &id).unwrap_err(),
+            "CREDENTIALS_LOCKED"
+        );
+        assert_eq!(
+            broker
+                .put(&id, Zeroizing::new(b"new-value".to_vec()))
+                .unwrap_err(),
+            "CREDENTIALS_LOCKED"
+        );
+        broker.unlock(password()).unwrap();
+        assert!(!broker.is_locked());
     }
     #[test]
     fn python_fernet_migration_is_verified_idempotent_and_preserves_sources() {
