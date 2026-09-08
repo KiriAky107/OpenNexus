@@ -3,6 +3,42 @@ use std::net::{SocketAddr, TcpStream, UdpSocket};
 use std::time::Duration;
 fn main() {
     let args: Vec<_> = std::env::args().collect();
+    if args.get(1).is_some_and(|s| s.starts_with("mcp")) {
+        use std::io::{BufRead, Write};
+        fn read(reader: &mut impl BufRead) -> String { let mut line = String::new(); reader.read_line(&mut line).unwrap(); line }
+        fn id(line: &str) -> &str { line.split("\"id\":\"").nth(1).unwrap().split('"').next().unwrap() }
+        fn reply(id: &str, result: &str) { println!("{{\"jsonrpc\":\"2.0\",\"id\":\"{id}\",\"result\":{result}}}"); std::io::stdout().flush().unwrap(); }
+        let mut input = std::io::stdin().lock();
+        let request = read(&mut input);
+        assert!(request.contains("\"method\":\"initialize\""));
+        reply(id(&request), if args[1] == "mcp_bad_version" { r#"{"protocolVersion":"unknown","capabilities":{},"serverInfo":{"name":"fixture","version":"1"}}"# } else { r#"{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}}"# });
+        assert!(read(&mut input).contains("notifications/initialized"));
+        let request = read(&mut input);
+        assert!(request.contains("tools/list"));
+        reply(id(&request), r#"{"tools":[{"name":"echo","inputSchema":{"type":"object"}}]}"#);
+        let mut request = read(&mut input);
+        assert!(request.contains("tools/call"));
+        if args[1] == "mcp_cancel" || args[1] == "mcp_deadline" {
+            let _child = std::process::Command::new(std::env::current_exe().unwrap()).arg("wait").spawn().unwrap();
+            std::thread::sleep(Duration::from_secs(120));
+            return;
+        }
+        if args[1] == "mcp_remote_error" {
+            println!("{{\"jsonrpc\":\"2.0\",\"id\":\"{}\",\"error\":{{\"code\":-32602,\"message\":\"fixture error\"}}}}", id(&request));
+            std::io::stdout().flush().unwrap();
+            request = read(&mut input);
+            assert!(request.contains("tools/call"));
+        }
+        println!(r#"{{"jsonrpc":"2.0","id":"server-ping","method":"ping"}}"#);
+        std::io::stdout().flush().unwrap();
+        let ping = read(&mut input);
+        assert!(ping.contains("server-ping") && ping.contains("result"));
+        println!(r#"{{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}}"#);
+        reply(if args[1] == "mcp_wrong_id" { "wrong-request" } else { id(&request) }, r#"{"content":[{"type":"text","text":"native MCP success"}]}"#);
+        // MCP server remains alive between calls until Host closes stdin.
+        while !read(&mut input).is_empty() {}
+        return;
+    }
     if args.get(1).is_some_and(|s| s == "stderr_flood" || s == "stdout_flood") {
         use std::io::Write;
         let _child = std::process::Command::new(std::env::current_exe().unwrap()).arg("wait").spawn().unwrap();
