@@ -54,3 +54,6 @@ pub mod extension_trust;
 
 #[cfg(windows)]
 pub mod extension_job;
+
+#[cfg(windows)]
+pub mod extension_container;
