@@ -7,12 +7,13 @@ import { useHeadingAppearanceStore, normalizeHeadingAppearance } from '@/stores/
 import { useMarkdownPreferencesStore, normalizeMarkdownPreferences } from '@/stores/markdownPreferences'
 import { hostInvoke, isDesktop } from './desktop'
 import { RecordBinding } from './recordBinding'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 interface Controller { label: string; binding: Pick<RecordBinding<never>, 'capture' | 'poll' | 'seed' | 'stop' | 'keepLocal' | 'useRemote' | 'error' | 'hasDraft'> }
 export const preferenceSyncIssues = ref<Array<{ kind: string; label: string; error: string; hasDraft: boolean }>>([])
 let controllers = new Map<string, Controller>(), activeVault = '', installed = false
 export async function seedCurrentPreferences(vaultId: string) {
   if (!isDesktop()) return
-  if (vaultId !== activeVault || controllers.size !== 2) throw new Error('PREFERENCE_BINDING_NOT_READY')
+  if (vaultId !== activeVault || controllers.size !== 3) throw new Error('PREFERENCE_BINDING_NOT_READY')
   for (const { binding } of controllers.values()) {
     await binding.seed()
     if (binding.error) throw new Error(binding.error)
@@ -29,6 +30,8 @@ export function installPreferenceSync() {
   installed = true
   const workspace = useWorkspaceStore(), theme = useThemeStore(), settings = useSettingsStore()
   const headings = useHeadingAppearanceStore(), markdown = useMarkdownPreferencesStore()
+  const layout = useLayoutPreferencesStore()
+  const readLayout = () => ({ primaryExpanded: layout.primaryExpanded, workspaceWidth: layout.workspaceWidth, chatWidth: layout.chatWidth })
   let applying = 0
   const readTheme = () => ({ themeId: theme.currentThemeId, fontEditorSize: theme.fontEditorSize, fontEditorFamily: theme.fontEditorFamily, lineHeight: theme.lineHeight, codeBlockTheme: theme.codeBlockTheme, headings: normalizeHeadingAppearance(headings.preferences) })
   const readPreferences = () => ({ restoreLastVault: settings.restoreLastVault, autoSaveInterval: settings.autoSaveInterval, language: settings.language, defaultEditorMode: settings.defaultEditorMode, editorLineWidth: settings.editorLineWidth, spellCheck: settings.spellCheck, markdown: normalizeMarkdownPreferences(markdown.preferences), presets: markdown.customPresets.map(preset => ({ name: preset.name, preferences: normalizeMarkdownPreferences(preset.preferences) })) })
@@ -49,9 +52,13 @@ export function installPreferenceSync() {
       settings.defaultEditorMode = data.defaultEditorMode; settings.editorLineWidth = data.editorLineWidth; settings.spellCheck = data.spellCheck
       markdown.apply(data.markdown); markdown.customPresets = data.presets.map(preset => ({ name: preset.name, preferences: normalizeMarkdownPreferences(preset.preferences) }))
     }) }) })
+    controllers.set('layout', { label: '侧栏布局', binding: new RecordBinding({ ...common, kind: 'layout', id: 'sidebars', read: readLayout, apply: data => apply(() => {
+      layout.primaryExpanded = data.primaryExpanded; layout.workspaceWidth = data.workspaceWidth; layout.chatWidth = data.chatWidth
+    }) }) })
     changed()
     for (const value of controllers.values()) void value.binding.poll()
   }, { immediate: true, flush: 'sync' })
+  watch(readLayout, () => { if (!applying) controllers.get('layout')?.binding.capture() }, { deep: true, flush: 'sync' })
   watch(readTheme, () => { if (!applying) controllers.get('theme_settings')?.binding.capture() }, { deep: true, flush: 'sync' })
   watch(readPreferences, () => { if (!applying) controllers.get('preferences')?.binding.capture() }, { deep: true, flush: 'sync' })
   setInterval(() => { for (const value of controllers.values()) void value.binding.poll() }, 1500)

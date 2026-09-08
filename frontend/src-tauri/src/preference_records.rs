@@ -4,6 +4,13 @@ use serde::Deserialize;
 use serde_json::Value;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct Layout {
+    primary_expanded: bool,
+    workspace_width: f64,
+    chat_width: f64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Level {
     size: f64,
     weight: u16,
@@ -84,6 +91,12 @@ fn markdown(value: &Markdown) -> bool {
 }
 pub fn validate(kind: &str, value: &Value) -> Result<()> {
     let valid = match kind {
+        "layout" => {
+            let value: Layout = decode(value)?;
+            let _ = value.primary_expanded;
+            (200.0..=520.0).contains(&value.workspace_width)
+                && (200.0..=520.0).contains(&value.chat_width)
+        }
         "theme_settings" => {
             let value: Theme = decode(value)?;
             let _ = value.headings.custom;
@@ -143,6 +156,23 @@ pub fn validate(kind: &str, value: &Value) -> Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn layout_schema_limits_widths_and_rejects_device_fields() {
+        let good = json!({"primaryExpanded":true,"workspaceWidth":400.5,"chatWidth":320});
+        let path = crate::records::path_for("layout", "sidebars").unwrap();
+        assert!(crate::records::allowed(&path));
+        let record = json!({"schema":1,"kind":"layout","id":"sidebars","data":good});
+        crate::records::validate(&path, &serde_json::to_vec(&record).unwrap()).unwrap();
+        for invalid in [199.0, 521.0, -1.0] {
+            let mut data = good.clone();
+            data["workspaceWidth"] = json!(invalid);
+            assert!(validate("layout", &data).is_err());
+        }
+        let mut bad = good;
+        bad["windowPath"] = json!("private-device-path");
+        assert!(validate("layout", &bad).is_err());
+        assert!(crate::records::path_for("layout", "other").is_err());
+    }
     #[test]
     fn portable_preferences_reject_unowned_nested_fields_and_invalid_values() {
         let theme = json!({"themeId":"dark","fontEditorSize":18,"fontEditorFamily":"system-ui","lineHeight":1.7,"codeBlockTheme":"auto","headings":{"custom":false,"family":"inherit","levels":([32,28,24,21,18,16].map(|size|json!({"size":size,"weight":700})))}});

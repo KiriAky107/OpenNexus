@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
+import { storeToRefs } from 'pinia'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import { ArrowLeftBold, ArrowRightBold, Brush, ChatDotRound, CircleCheck, Connection, Cpu, Document, FolderOpened, Lightning, Monitor, Search, Setting } from '@element-plus/icons-vue'
 import AppIcon from './AppIcon.vue'
 import { t } from '@/i18n'
 
 const route = useRoute()
 const router = useRouter()
-const expanded = ref(localStorage.getItem('primary-sidebar-expanded') === 'true')
+const { primaryExpanded: expanded } = storeToRefs(useLayoutPreferencesStore())
 
 const navItems = computed(() => [
   { name: 'workspace', icon: FolderOpened, label: t('工作区', 'Workspace') },
@@ -36,7 +38,6 @@ function navigate(name: string) {
 
 function toggleExpanded() {
   expanded.value = !expanded.value
-  localStorage.setItem('primary-sidebar-expanded', String(expanded.value))
 }
 </script>
 
