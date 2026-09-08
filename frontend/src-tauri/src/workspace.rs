@@ -449,22 +449,56 @@ impl Workspace {
         operation_id: &str,
         authorization: (Option<&str>, &dyn Fn() -> Result<()>),
     ) -> Result<Entry> {
+        self.write_source(
+            path,
+            expected,
+            crate::payloads::WritePayload::Inline(content),
+            origin,
+            operation_id,
+            authorization,
+        )
+    }
+    pub(crate) fn write_spooled_with_identity(
+        &mut self,
+        path: &str,
+        expected: &str,
+        payload: (&str, u64),
+        origin: &str,
+        operation_id: &str,
+        identity: Option<&str>,
+    ) -> Result<Entry> {
+        self.write_source(
+            path,
+            expected,
+            crate::payloads::WritePayload::Stored {
+                digest: payload.0,
+                size: payload.1,
+            },
+            origin,
+            operation_id,
+            (identity, &|| Ok(())),
+        )
+    }
+    fn write_source(
+        &mut self,
+        path: &str,
+        expected: &str,
+        content: crate::payloads::WritePayload<'_>,
+        origin: &str,
+        operation_id: &str,
+        authorization: (Option<&str>, &dyn Fn() -> Result<()>),
+    ) -> Result<Entry> {
         let (identity, authorize) = authorization;
         authorize()?;
         if Uuid::parse_str(operation_id).is_err() {
             return Err(HostError::new("OPERATION_ID_INVALID"));
         }
-        if crate::records::is_record(path) {
-            crate::records::validate(path, content)?;
-        }
-        if content.len() > 100 * 1024 * 1024 {
-            return Err(HostError::new("FILE_TOO_LARGE"));
-        }
+        content.validate(self, path)?;
         if origin != "local" && origin != "remote" {
             return Err(HostError::new("INVALID_ORIGIN"));
         }
         let fingerprint = hash(
-            &serde_json::to_vec(&(path, expected, hash(content), origin))
+            &serde_json::to_vec(&(path, expected, content.digest(), origin))
                 .map_err(|_| HostError::new("INVALID_OPERATION"))?,
         );
         let previous: Option<String> = self
@@ -491,7 +525,7 @@ impl Workspace {
         }
         let target = self.resolve(path)?;
         let current = if target.exists() {
-            hash(&fs::read(&target)?)
+            crate::payloads::hash_file(&target)?
         } else {
             String::new()
         };
@@ -544,7 +578,7 @@ impl Workspace {
             },
             |entry| entry.file_id,
         );
-        self.store_payload(operation_id, content)?;
+        content.store(self, operation_id)?;
         let tx = self.db.transaction()?;
         tx.execute(
             "INSERT INTO operations VALUES (?1,?2,'pending',NULL)",
@@ -565,7 +599,7 @@ impl Workspace {
         // outbox entry is published. An unreferenced payload is never replayed.
         authorize()?;
         tx.commit()?;
-        self.apply_journal(operation_id, &file_id, path, expected, content, origin)?;
+        self.apply_stored_journal(operation_id, &file_id, path, expected, origin)?;
         self.entry(path)?
             .ok_or_else(|| HostError::new("FILE_NOT_FOUND"))
     }
@@ -582,10 +616,29 @@ impl Workspace {
         if crate::records::is_record(path) {
             crate::records::validate(path, content)?;
         }
+        self.store_payload(operation_id, content)?;
+        self.apply_stored_journal(operation_id, file_id, path, expected, origin)
+    }
+    fn apply_stored_journal(
+        &mut self,
+        operation_id: &str,
+        file_id: &str,
+        path: &str,
+        expected: &str,
+        origin: &str,
+    ) -> Result<()> {
+        let (digest, size) = self
+            .payload_ref(operation_id)?
+            .ok_or_else(|| HostError::new("SYNC_SPOOL_CORRUPT"))?;
+        if !(0..=100 * 1024 * 1024).contains(&size) {
+            return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
+        }
+        let mut source =
+            crate::payloads::open_verified(&self.sync_spool(&digest)?, &digest, size as u64)?;
+        crate::payloads::validate_record(&mut source, path, size as u64)?;
         let target = self.resolve(path)?;
-        let digest = hash(content);
         let current = if target.exists() {
-            hash(&fs::read(&target)?)
+            crate::payloads::hash_file(&target)?
         } else {
             String::new()
         };
@@ -608,15 +661,13 @@ impl Workspace {
                 .ok_or_else(|| HostError::new("UNSAFE_PATH"))?;
             fs::create_dir_all(parent)?;
             let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-            temp.write_all(content)?;
+            crate::payloads::copy_verified(&mut source, &mut temp, &digest, size as u64)?;
             temp.as_file().sync_all()?;
             temp.persist(&target)
                 .map_err(|_| HostError::new("ATOMIC_REPLACE_FAILED"))?;
             #[cfg(unix)]
             File::open(parent)?.sync_all()?;
         }
-        // Upgrade legacy inline journal payloads before publishing an outbox reference.
-        self.store_payload(operation_id, content)?;
         // 文件成功但 DB 未提交时，重启凭 journal 补齐同一 operation_id，避免丢 outbox。
         let tx = self.db.transaction()?;
         tx.execute("INSERT INTO files VALUES (?1,?2,?3,1,0) ON CONFLICT(path) DO UPDATE SET hash=excluded.hash,revision=files.revision+1,deleted=0", params![file_id,path,digest])?;
@@ -681,8 +732,12 @@ impl Workspace {
             result
         };
         for (op, id, path, expected, content, origin) in pending {
-            let content = self.payload(&op, &content)?;
-            match self.apply_journal(&op, &id, &path, &expected, &content, &origin) {
+            let result = if self.payload_ref(&op)?.is_some() {
+                self.apply_stored_journal(&op, &id, &path, &expected, &origin)
+            } else {
+                self.apply_journal(&op, &id, &path, &expected, &content, &origin)
+            };
+            match result {
                 Err(e) if e.code == "RECOVERY_CONFLICT" => {}
                 result => result?,
             }
@@ -1041,6 +1096,130 @@ mod tests {
                 .code,
             "OPERATION_PAYLOAD_CONFLICT"
         );
+    }
+
+    #[test]
+    fn hundred_mib_spooled_writes_and_journal_recovery_keep_receipts_exactly_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        let block = vec![19u8; 64 * 1024];
+        let size = 100 * 1024 * 1024u64;
+        let mut hasher = Sha256::new();
+        for _ in 0..size / block.len() as u64 {
+            hasher.update(&block);
+        }
+        let digest = format!("{:x}", hasher.finalize());
+        let spool = ws.sync_spool(&digest).unwrap();
+        let mut file = File::create(&spool).unwrap();
+        for _ in 0..size / block.len() as u64 {
+            file.write_all(&block).unwrap();
+        }
+        file.sync_all().unwrap();
+        drop(file);
+        let operation = Uuid::new_v4().to_string();
+        let identity = Uuid::new_v4().to_string();
+        let first = ws
+            .write_spooled_with_identity(
+                "attachments/direct.bin",
+                "",
+                (&digest, size),
+                "remote",
+                &operation,
+                Some(&identity),
+            )
+            .unwrap();
+        assert_eq!(first.file_id, identity);
+        assert_eq!(ws.pending_count().unwrap(), 0);
+        assert_eq!(
+            ws.write_spooled_with_identity(
+                "attachments/direct.bin",
+                "",
+                (&digest, size),
+                "remote",
+                &operation,
+                Some(&identity)
+            )
+            .unwrap()
+            .revision,
+            first.revision
+        );
+        assert_eq!(
+            crate::payloads::hash_file(&dir.path().join("attachments/direct.bin")).unwrap(),
+            digest
+        );
+        let other = ws.sync_store_bytes(b"different payload").unwrap();
+        assert_eq!(
+            ws.write_spooled_with_identity(
+                "attachments/direct.bin",
+                "",
+                (&other, 17),
+                "remote",
+                &operation,
+                Some(&identity)
+            )
+            .unwrap_err()
+            .code,
+            "OPERATION_PAYLOAD_CONFLICT"
+        );
+        for already_replaced in [false, true] {
+            let operation = Uuid::new_v4().to_string();
+            let identity = Uuid::new_v4().to_string();
+            let path = format!("attachments/recovery-{already_replaced}.bin");
+            let fingerprint = hash(&serde_json::to_vec(&(&path, "", &digest, "local")).unwrap());
+            ws.db
+                .execute(
+                    "INSERT INTO payloads VALUES (?1,?2,?3)",
+                    params![operation, digest, size],
+                )
+                .unwrap();
+            ws.db
+                .execute(
+                    "INSERT INTO operations VALUES (?1,?2,'pending',NULL)",
+                    params![operation, fingerprint],
+                )
+                .unwrap();
+            ws.db
+                .execute(
+                    "INSERT INTO journal VALUES (?1,?2,?3,'',?4,'local','pending')",
+                    params![operation, identity, path, b"".as_slice()],
+                )
+                .unwrap();
+            if already_replaced {
+                fs::copy(&spool, dir.path().join(&path)).unwrap();
+            }
+            drop(ws);
+            ws = Workspace::open(dir.path()).unwrap();
+            assert_eq!(
+                ws.operation(&operation).unwrap().unwrap()["state"],
+                "committed"
+            );
+            assert_eq!(ws.entry(&path).unwrap().unwrap().revision, 1);
+            assert_eq!(
+                crate::payloads::hash_file(&dir.path().join(&path)).unwrap(),
+                digest
+            );
+            let count: i64 = ws
+                .db
+                .query_row(
+                    "SELECT COUNT(*) FROM outbox WHERE operation_id=?1",
+                    [&operation],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1);
+            drop(ws);
+            ws = Workspace::open(dir.path()).unwrap();
+            assert_eq!(ws.entry(&path).unwrap().unwrap().revision, 1);
+            let count: i64 = ws
+                .db
+                .query_row(
+                    "SELECT COUNT(*) FROM outbox WHERE operation_id=?1",
+                    [&operation],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1);
+        }
     }
 
     #[test]

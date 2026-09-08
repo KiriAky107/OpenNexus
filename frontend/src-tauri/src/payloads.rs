@@ -22,6 +22,9 @@ impl Workspace {
             #[cfg(unix)]
             fs::File::open(target.parent().unwrap())?.sync_all()?;
         }
+        self.register_payload(operation, &digest, content.len() as u64)
+    }
+    fn register_payload(&self, operation: &str, digest: &str, size: u64) -> Result<()> {
         let old: Option<(String, i64)> = self
             .db
             .query_row(
@@ -30,12 +33,12 @@ impl Workspace {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        if old.is_some_and(|v| v != (digest.clone(), content.len() as i64)) {
+        if old.is_some_and(|v| v != (digest.to_owned(), size as i64)) {
             return Err(HostError::new("OPERATION_PAYLOAD_CONFLICT"));
         }
         self.db.execute(
             "INSERT OR IGNORE INTO payloads VALUES (?1,?2,?3)",
-            params![operation, digest, content.len() as i64],
+            params![operation, digest, size as i64],
         )?;
         Ok(())
     }
@@ -57,6 +60,84 @@ impl Workspace {
             )
             .optional()?)
     }
+}
+/// A new write either supplies bytes or references an existing immutable spool.
+pub(crate) enum WritePayload<'a> {
+    Inline(&'a [u8]),
+    Stored { digest: &'a str, size: u64 },
+}
+impl WritePayload<'_> {
+    pub(crate) fn size(&self) -> u64 {
+        match self {
+            Self::Inline(bytes) => bytes.len() as u64,
+            Self::Stored { size, .. } => *size,
+        }
+    }
+    pub(crate) fn digest(&self) -> String {
+        match self {
+            Self::Inline(bytes) => hash(bytes),
+            Self::Stored { digest, .. } => (*digest).to_owned(),
+        }
+    }
+    pub(crate) fn validate(&self, ws: &Workspace, path: &str) -> Result<()> {
+        if crate::records::is_record(path) && self.size() > 1024 * 1024 {
+            return Err(HostError::new("RECORD_TOO_LARGE"));
+        }
+        if self.size() > 100 * 1024 * 1024 {
+            return Err(HostError::new("FILE_TOO_LARGE"));
+        }
+        match self {
+            Self::Inline(bytes) => {
+                if crate::records::is_record(path) {
+                    crate::records::validate(path, bytes)?;
+                }
+            }
+            Self::Stored { digest, size } => {
+                let mut file = open_verified(&ws.sync_spool(digest)?, digest, *size)?;
+                validate_record(&mut file, path, *size)?;
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn store(&self, ws: &Workspace, operation: &str) -> Result<()> {
+        match self {
+            Self::Inline(bytes) => ws.store_payload(operation, bytes),
+            Self::Stored { digest, size } => {
+                verify(&ws.sync_spool(digest)?, digest, *size)?;
+                ws.register_payload(operation, digest, *size)
+            }
+        }
+    }
+}
+pub(crate) fn validate_record(file: &mut fs::File, path: &str, size: u64) -> Result<()> {
+    if crate::records::is_record(path) {
+        if size > 1024 * 1024 {
+            return Err(HostError::new("RECORD_TOO_LARGE"));
+        }
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        crate::records::validate(path, &bytes)?;
+        file.seek(SeekFrom::Start(0))?;
+    }
+    Ok(())
+}
+pub(crate) fn hash_file(path: &Path) -> Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut buffer = vec![0u8; VERIFY_BUFFER_BYTES];
+    let mut hasher = Sha256::new();
+    let mut total = 0u64;
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        total += count as u64;
+        if total > 100 * 1024 * 1024 {
+            return Err(HostError::new("FILE_TOO_LARGE"));
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 pub(crate) fn verify(path: &Path, digest: &str, size: u64) -> Result<()> {
     open_verified(path, digest, size).map(drop)
@@ -85,6 +166,14 @@ pub(crate) fn open_verified(path: &Path, digest: &str, size: u64) -> Result<fs::
 }
 const VERIFY_BUFFER_BYTES: usize = 64 * 1024;
 fn verify_reader(stream: &mut impl Read, digest: &str, size: u64) -> Result<()> {
+    copy_verified(stream, &mut std::io::sink(), digest, size)
+}
+pub(crate) fn copy_verified(
+    stream: &mut impl Read,
+    target: &mut impl Write,
+    digest: &str,
+    size: u64,
+) -> Result<()> {
     let mut hasher = Sha256::new();
     let mut buffer = vec![0; VERIFY_BUFFER_BYTES];
     let mut length = 0u64;
@@ -104,6 +193,7 @@ fn verify_reader(stream: &mut impl Read, digest: &str, size: u64) -> Result<()> 
             return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
         }
         hasher.update(&buffer[..count]);
+        target.write_all(&buffer[..count])?;
     }
     if length != size || format!("{:x}", hasher.finalize()) != digest {
         return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
@@ -171,6 +261,21 @@ mod tests {
             "SYNC_SPOOL_CORRUPT"
         );
         verify_reader(&mut &[][..], &hash(&[]), 0).unwrap();
+    }
+    #[test]
+    fn copying_rechecks_source_changed_after_initial_verification() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("source");
+        fs::write(&path, b"original").unwrap();
+        let mut source = open_verified(&path, &hash(b"original"), 8).unwrap();
+        fs::write(&path, b"modified").unwrap();
+        let mut destination = tempfile::NamedTempFile::new_in(temp.path()).unwrap();
+        assert_eq!(
+            copy_verified(&mut source, &mut destination, &hash(b"original"), 8)
+                .unwrap_err()
+                .code,
+            "SYNC_SPOOL_CORRUPT"
+        );
     }
     #[test]
     fn verified_file_is_rewound_and_corruption_is_rejected() {
