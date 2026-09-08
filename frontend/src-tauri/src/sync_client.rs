@@ -236,6 +236,7 @@ impl SyncClient {
         }
         identifier(&binding.remote_vault)?;
         let job = workspace.access(|ws| {
+            ws.sync_resume_resolutions(&binding.id)?;
             ws.sync_capture(&binding.id)?;
             ws.sync_next(&binding.id)
         })?;
@@ -272,6 +273,7 @@ impl SyncClient {
         }
         identifier(&binding.remote_vault)?;
         workspace.access(|ws| {
+            ws.sync_resume_resolutions(&binding.id)?;
             while ws.sync_apply_pending(&binding.id)? {}
             Ok(())
         })?;

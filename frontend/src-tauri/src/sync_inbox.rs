@@ -224,7 +224,7 @@ impl Workspace {
                 remote
             ],
         )?;
-        tx.execute("UPDATE sync_jobs SET state='conflict' WHERE binding=?1 AND file_id=?2 AND state!='acked'", params![binding,revision.file_id])?;
+        tx.execute("UPDATE sync_jobs SET state='conflict' WHERE binding=?1 AND file_id=?2 AND state NOT IN ('acked','archived')", params![binding,revision.file_id])?;
         tx.commit()?;
         self.sync_finish(binding, revision, "conflict")
     }
@@ -239,7 +239,8 @@ impl Workspace {
         let own: Option<Job> = self.db.query_row("SELECT binding,operation_id,file_id,path,hash,size,operation,state,base_revision,upload_id FROM sync_jobs WHERE binding=?1 AND operation_id=?2", params![binding,revision.operation_id], |r| {
             Ok(Job { binding:r.get(0)?,operation_id:r.get(1)?,file_id:r.get(2)?,path:r.get(3)?,hash:r.get(4)?,size:r.get(5)?,operation:r.get(6)?,state:r.get(7)?,base_revision:r.get(8)?,upload_id:r.get(9)? })
         }).optional()?;
-        if let Some(job) = own {
+        if let Some(job) = own.filter(|job| !matches!(job.state.as_str(), "archived" | "conflict"))
+        {
             self.sync_ack(
                 &job,
                 &serde_json::to_value(&revision)
