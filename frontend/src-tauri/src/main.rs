@@ -29,6 +29,8 @@ struct Host {
     extensions: Arc<Mutex<Option<notesagent_host::extension_store::ExtensionStore>>>,
     extension_reviews: extension_commands::Reviews,
     extension_requests: Requests,
+    extension_authority: notesagent_host::extension_permit::Authority,
+    credential_signal: std::sync::OnceLock<Arc<std::sync::atomic::AtomicU64>>,
     sync: Arc<sync_commands::Runtime>,
     workspace: Arc<Mutex<Option<Workspace>>>,
     recent: Mutex<Option<RecentVaultStore>>,
@@ -37,6 +39,28 @@ struct Host {
     #[cfg(windows)]
     session_monitor: Mutex<Option<notesagent_host::session_lock::SessionMonitor>>,
     streams: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
+}
+
+impl Host {
+    fn replace_workspace(&self, active: &mut Option<Workspace>, next: Option<Workspace>) {
+        self.extension_authority.revoke();
+        self.sync.cancel();
+        *active = next;
+    }
+    fn lock_credentials(&self) -> Result<(), String> {
+        // These do not wait for an in-flight unlock/KDF or credential operation.
+        self.extension_authority.revoke();
+        if let Some(signal) = self.credential_signal.get() {
+            signal.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.credentials
+            .lock()
+            .map_err(|_| "HOST_BUSY")?
+            .as_mut()
+            .ok_or("HOST_NOT_READY")?
+            .lock();
+        Ok(())
+    }
 }
 
 fn info(ws: &Workspace) -> RecentVault {
@@ -433,13 +457,7 @@ async fn credentials_unlock(host: State<'_, Host>, password: String) -> Result<(
 
 #[tauri::command]
 fn credentials_lock(host: State<'_, Host>) -> Result<(), String> {
-    host.credentials
-        .lock()
-        .map_err(|_| "HOST_BUSY")?
-        .as_mut()
-        .ok_or("HOST_NOT_READY")?
-        .lock();
-    Ok(())
+    host.lock_credentials()
 }
 
 #[tauri::command]
@@ -580,8 +598,7 @@ fn workspace_choose(host: State<'_, Host>) -> Result<Option<RecentVault>, String
         .as_mut()
         .ok_or("HOST_NOT_READY")?
         .remember(&result)?;
-    host.sync.cancel();
-    *guard = Some(workspace);
+    host.replace_workspace(&mut guard, Some(workspace));
     Ok(Some(result))
 }
 
@@ -605,8 +622,7 @@ fn workspace_open(host: State<'_, Host>, path: String) -> Result<RecentVault, St
     }
     let workspace = Workspace::open(Path::new(&authorized.path)).map_err(|e| e.code)?;
     let result = info(&workspace);
-    host.sync.cancel();
-    *guard = Some(workspace);
+    host.replace_workspace(&mut guard, Some(workspace));
     Ok(result)
 }
 
@@ -623,6 +639,7 @@ fn workspace_recent(host: State<'_, Host>) -> Result<Vec<RecentVault>, String> {
 #[tauri::command]
 fn workspace_revoke(host: State<'_, Host>) -> Result<(), String> {
     let mut workspace = host.workspace.lock().map_err(|_| "HOST_BUSY")?;
+    host.extension_authority.revoke();
     if let Some(active) = workspace.as_ref() {
         host.recent
             .lock()
@@ -631,8 +648,7 @@ fn workspace_revoke(host: State<'_, Host>) -> Result<(), String> {
             .ok_or("HOST_NOT_READY")?
             .revoke(&active.root)?;
     }
-    host.sync.cancel();
-    *workspace = None;
+    host.replace_workspace(&mut workspace, None);
     Ok(())
 }
 
@@ -729,19 +745,27 @@ fn main() {
                 .map_err(|_| std::io::Error::other("HOST_BUSY"))? = Some(CredentialBroker::new(
                 app.path().app_data_dir()?.join("credentials/stronghold.v1"),
             ));
+            let signal = credential_state
+                .lock()
+                .map_err(|_| std::io::Error::other("HOST_BUSY"))?
+                .as_ref()
+                .ok_or_else(|| std::io::Error::other("HOST_NOT_READY"))?
+                .lock_signal();
+            app.state::<Host>()
+                .credential_signal
+                .set(signal.clone())
+                .map_err(|_| std::io::Error::other("HOST_ALREADY_INITIALIZED"))?;
             #[cfg(windows)]
             {
-                let signal = credential_state
-                    .lock()
-                    .map_err(|_| std::io::Error::other("HOST_BUSY"))?
-                    .as_ref()
-                    .ok_or_else(|| std::io::Error::other("HOST_NOT_READY"))?
-                    .lock_signal();
                 *app.state::<Host>()
                     .session_monitor
                     .lock()
                     .map_err(|_| std::io::Error::other("HOST_BUSY"))? =
-                    notesagent_host::session_lock::SessionMonitor::start(signal).ok();
+                    notesagent_host::session_lock::SessionMonitor::start_many(vec![
+                        signal,
+                        app.state::<Host>().extension_authority.revocation_signal(),
+                    ])
+                    .ok();
             }
             let weak_credentials = Arc::downgrade(&credential_state);
             std::thread::spawn(move || {
@@ -907,4 +931,53 @@ fn main() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+    #[test]
+    fn workspace_replacement_and_close_revoke_host_execution_generation() {
+        let host = Host::default();
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let signal = host.extension_authority.revocation_signal();
+        let mut active = host.workspace.lock().unwrap();
+        host.replace_workspace(&mut active, Some(Workspace::open(first.path()).unwrap()));
+        let initial = signal.load(Ordering::SeqCst);
+        host.replace_workspace(&mut active, Some(Workspace::open(second.path()).unwrap()));
+        assert!(signal.load(Ordering::SeqCst) > initial);
+        let changed = signal.load(Ordering::SeqCst);
+        host.replace_workspace(&mut active, None);
+        assert!(active.is_none());
+        assert!(signal.load(Ordering::SeqCst) > changed);
+    }
+    #[test]
+    fn manual_lock_revokes_before_waiting_for_credential_mutex() {
+        let host = Host::default();
+        let temp = tempfile::tempdir().unwrap();
+        let broker = CredentialBroker::new(temp.path().join("credentials.v1"));
+        let credentials = broker.lock_signal();
+        host.credential_signal.set(credentials.clone()).unwrap();
+        *host.credentials.lock().unwrap() = Some(broker);
+        let extension = host.extension_authority.revocation_signal();
+        let held = host.credentials.lock().unwrap();
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| host.lock_credentials());
+            let start = std::time::Instant::now();
+            while credentials.load(Ordering::SeqCst) == 0
+                && start.elapsed() < Duration::from_secs(2)
+            {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let observed = credentials.load(Ordering::SeqCst);
+            let revoked = extension.load(Ordering::SeqCst);
+            // Release before asserting, so an assertion cannot deadlock scope join.
+            drop(held);
+            worker.join().unwrap().unwrap();
+            assert!(observed > 0);
+            assert!(revoked > 0);
+        });
+    }
 }

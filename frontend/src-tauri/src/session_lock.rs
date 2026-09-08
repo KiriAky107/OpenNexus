@@ -11,7 +11,7 @@ use windows_sys::Win32::{
     UI::WindowsAndMessaging::*,
 };
 
-thread_local! { static SIGNAL: RefCell<Option<Arc<AtomicU64>>> = const { RefCell::new(None) }; }
+thread_local! { static SIGNALS: RefCell<Vec<Arc<AtomicU64>>> = const { RefCell::new(Vec::new()) }; }
 
 unsafe extern "system" fn window_proc(
     hwnd: HWND,
@@ -25,8 +25,8 @@ unsafe extern "system" fn window_proc(
             WTS_SESSION_LOCK | WTS_SESSION_LOGOFF | WTS_CONSOLE_DISCONNECT | WTS_REMOTE_DISCONNECT
         )
     {
-        SIGNAL.with(|s| {
-            if let Some(signal) = s.borrow().as_ref() {
+        SIGNALS.with(|s| {
+            for signal in s.borrow().iter() {
                 signal.fetch_add(1, Ordering::SeqCst);
             }
         });
@@ -45,58 +45,73 @@ pub struct SessionMonitor {
 }
 impl SessionMonitor {
     pub fn start(signal: Arc<AtomicU64>) -> Result<Self, String> {
+        Self::start_many(vec![signal])
+    }
+    pub fn start_many(signals: Vec<Arc<AtomicU64>>) -> Result<Self, String> {
+        if signals.is_empty()
+            || signals.len() > 8
+            || signals
+                .iter()
+                .enumerate()
+                .any(|(i, signal)| signals[..i].iter().any(|other| Arc::ptr_eq(signal, other)))
+        {
+            return Err("SESSION_MONITOR_UNAVAILABLE".into());
+        }
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let thread = std::thread::spawn(move || unsafe {
-            SIGNAL.with(|s| *s.borrow_mut() = Some(signal));
-            let class: Vec<u16> = format!("OpenNexusSession-{}\0", uuid::Uuid::new_v4())
-                .encode_utf16()
-                .collect();
-            let module = GetModuleHandleW(std::ptr::null());
-            let descriptor = WNDCLASSW {
-                lpfnWndProc: Some(window_proc),
-                hInstance: module,
-                lpszClassName: class.as_ptr(),
-                ..std::mem::zeroed()
-            };
-            if RegisterClassW(&descriptor) == 0 {
-                let _ = tx.send(Err("SESSION_MONITOR_UNAVAILABLE".to_string()));
-                return;
-            }
-            let window = CreateWindowExW(
-                0,
-                class.as_ptr(),
-                class.as_ptr(),
-                0,
-                0,
-                0,
-                0,
-                0,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                module,
-                std::ptr::null(),
-            );
-            if window.is_null()
-                || WTSRegisterSessionNotification(window, NOTIFY_FOR_THIS_SESSION) == 0
-            {
-                if !window.is_null() {
+        let thread = std::thread::Builder::new()
+            .name("host-session-monitor".into())
+            .spawn(move || unsafe {
+                SIGNALS.with(|s| *s.borrow_mut() = signals);
+                let class: Vec<u16> = format!("OpenNexusSession-{}\0", uuid::Uuid::new_v4())
+                    .encode_utf16()
+                    .collect();
+                let module = GetModuleHandleW(std::ptr::null());
+                let descriptor = WNDCLASSW {
+                    lpfnWndProc: Some(window_proc),
+                    hInstance: module,
+                    lpszClassName: class.as_ptr(),
+                    ..std::mem::zeroed()
+                };
+                if RegisterClassW(&descriptor) == 0 {
+                    let _ = tx.send(Err("SESSION_MONITOR_UNAVAILABLE".to_string()));
+                    return;
+                }
+                let window = CreateWindowExW(
+                    0,
+                    class.as_ptr(),
+                    class.as_ptr(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    module,
+                    std::ptr::null(),
+                );
+                if window.is_null()
+                    || WTSRegisterSessionNotification(window, NOTIFY_FOR_THIS_SESSION) == 0
+                {
+                    if !window.is_null() {
+                        DestroyWindow(window);
+                    }
+                    UnregisterClassW(class.as_ptr(), module);
+                    let _ = tx.send(Err("SESSION_MONITOR_UNAVAILABLE".to_string()));
+                    return;
+                }
+                if tx.send(Ok(window as usize)).is_err() {
                     DestroyWindow(window);
+                } else {
+                    let mut message: MSG = std::mem::zeroed();
+                    while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
+                        TranslateMessage(&message);
+                        DispatchMessageW(&message);
+                    }
                 }
                 UnregisterClassW(class.as_ptr(), module);
-                let _ = tx.send(Err("SESSION_MONITOR_UNAVAILABLE".to_string()));
-                return;
-            }
-            if tx.send(Ok(window as usize)).is_err() {
-                DestroyWindow(window);
-            } else {
-                let mut message: MSG = std::mem::zeroed();
-                while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
-                    TranslateMessage(&message);
-                    DispatchMessageW(&message);
-                }
-            }
-            UnregisterClassW(class.as_ptr(), module);
-        });
+            })
+            .map_err(|_| "SESSION_MONITOR_UNAVAILABLE".to_string())?;
         match rx
             .recv()
             .map_err(|_| "SESSION_MONITOR_UNAVAILABLE".to_string())?
@@ -149,5 +164,43 @@ mod tests {
             );
         }
         assert_eq!(signal.load(Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn native_lock_logoff_and_disconnect_revoke_every_bound_domain() {
+        let credential = Arc::new(AtomicU64::new(0));
+        let extension = Arc::new(AtomicU64::new(0));
+        assert!(SessionMonitor::start_many(vec![credential.clone(), credential.clone()]).is_err());
+        let monitor =
+            SessionMonitor::start_many(vec![credential.clone(), extension.clone()]).unwrap();
+        for (index, event) in [
+            WTS_SESSION_LOCK,
+            WTS_SESSION_LOGOFF,
+            WTS_CONSOLE_DISCONNECT,
+            WTS_REMOTE_DISCONNECT,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            unsafe {
+                SendMessageW(
+                    monitor.window as HWND,
+                    WM_WTSSESSION_CHANGE,
+                    event as usize,
+                    0,
+                );
+            }
+            assert_eq!(credential.load(Ordering::SeqCst), index as u64 + 1);
+            assert_eq!(extension.load(Ordering::SeqCst), index as u64 + 1);
+        }
+        unsafe {
+            SendMessageW(
+                monitor.window as HWND,
+                WM_WTSSESSION_CHANGE,
+                WTS_SESSION_UNLOCK as usize,
+                0,
+            );
+        }
+        assert_eq!(credential.load(Ordering::SeqCst), 4);
+        assert_eq!(extension.load(Ordering::SeqCst), 4);
     }
 }
