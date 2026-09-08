@@ -146,6 +146,122 @@ async fn real_core_notes_roundtrip_only_through_bound_host_and_confirm_commits()
     .await;
     assert_eq!(status, 409, "{denied}");
     assert_eq!(denied["error"]["code"], "VAULT_PERMISSION_CHANGED");
+
+    let legacy_database = rusqlite::Connection::open(
+        temp.path()
+            .join("core/vault-state")
+            .join(&vault)
+            .join("core.sqlite3"),
+    )
+    .unwrap();
+    legacy_database.execute("INSERT INTO tasks VALUES ('task_00000000000000000000000000000002','Legacy task','','todo',?1,NULL,'2026-09-08T00:00:00+00:00','2026-09-08T00:00:00+00:00')",[file_id]).unwrap();
+    let task_operation = uuid::Uuid::new_v4().to_string();
+    let task_body = json!({"title":"Host task","note_id":file_id});
+    let (status, task) = request(
+        &mut core,
+        "POST",
+        "/api/tasks",
+        &vault,
+        &task_operation,
+        Some(task_body.clone()),
+    )
+    .await;
+    assert_eq!(status, 200, "{task}");
+    let task_id = task["task_id"].as_str().unwrap();
+    for _ in 0..20 {
+        let (status, replay) = request(
+            &mut core,
+            "POST",
+            "/api/tasks",
+            &vault,
+            &task_operation,
+            Some(task_body.clone()),
+        )
+        .await;
+        assert_eq!(status, 200, "{replay}");
+        assert_eq!(replay, task);
+    }
+    let (status, changed_request) = request(
+        &mut core,
+        "POST",
+        "/api/tasks",
+        &vault,
+        &task_operation,
+        Some(json!({"title":"changed","note_id":file_id})),
+    )
+    .await;
+    assert_eq!(status, 409, "{changed_request}");
+    let record_path = root.join(format!("opennexus-records/v1/tasks/{task_id}.json"));
+    assert!(record_path.is_file());
+    let (status, task_updated) = request(
+        &mut core,
+        "PATCH",
+        &format!("/api/tasks/{task_id}"),
+        &vault,
+        &uuid::Uuid::new_v4().to_string(),
+        Some(json!({"status":"done"})),
+    )
+    .await;
+    assert_eq!(status, 200, "{task_updated}");
+    assert_eq!(task_updated["status"], "done");
+    let (status, tasks) = request(
+        &mut core,
+        "GET",
+        "/api/tasks",
+        &vault,
+        &uuid::Uuid::new_v4().to_string(),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{tasks}");
+    assert_eq!(tasks["items"].as_array().unwrap().len(), 2);
+    let (status, task_denied) = request(
+        &mut core,
+        "GET",
+        "/api/tasks",
+        &uuid::Uuid::new_v4().to_string(),
+        &uuid::Uuid::new_v4().to_string(),
+        None,
+    )
+    .await;
+    assert_eq!(status, 409, "{task_denied}");
+    let deletion = uuid::Uuid::new_v4().to_string();
+    for _ in 0..2 {
+        let (status, result) = request(
+            &mut core,
+            "DELETE",
+            &format!("/api/tasks/{task_id}"),
+            &vault,
+            &deletion,
+            None,
+        )
+        .await;
+        assert_eq!(status, 200, "{result}");
+    }
+    assert!(!record_path.exists());
+    let source: String = legacy_database
+        .query_row(
+            "SELECT title FROM tasks WHERE task_id='task_00000000000000000000000000000002'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(source, "Legacy task");
+    legacy_database
+        .execute("DELETE FROM index_meta WHERE key='tasks_host_owned_v1'", [])
+        .unwrap();
+    let (status, after_migration) = request(
+        &mut core,
+        "GET",
+        "/api/tasks",
+        &vault,
+        &uuid::Uuid::new_v4().to_string(),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{after_migration}");
+    assert_eq!(after_migration["items"].as_array().unwrap().len(), 1);
+
     let (status, deleted) = request(
         &mut core,
         "DELETE",
@@ -168,7 +284,7 @@ async fn real_core_notes_roundtrip_only_through_bound_host_and_confirm_commits()
     .await;
     assert_eq!(status, 200, "{search}");
     assert!(!search.to_string().contains(file_id));
-    assert_eq!(workspace.lock().unwrap().pending_count().unwrap(), 4);
+    assert_eq!(workspace.lock().unwrap().pending_count().unwrap(), 8);
     assert!(!temp
         .path()
         .join("core/unbound-vault/Core fixture.md")

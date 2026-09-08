@@ -258,10 +258,11 @@ impl Workspace {
                 .map_err(|_| HostError::new("UNSAFE_PATH"))?
                 .to_string_lossy()
                 .replace('\\', "/");
-            if relative
-                .split('/')
-                .any(|s| s.eq_ignore_ascii_case(".ainote") || s.eq_ignore_ascii_case(".git"))
-                || linked(&path)?
+            if relative.split('/').any(|s| {
+                s.eq_ignore_ascii_case(".ainote")
+                    || s.eq_ignore_ascii_case(".git")
+                    || s.eq_ignore_ascii_case("opennexus-records")
+            }) || linked(&path)?
             {
                 continue;
             }
@@ -407,6 +408,9 @@ impl Workspace {
         if Uuid::parse_str(operation_id).is_err() {
             return Err(HostError::new("OPERATION_ID_INVALID"));
         }
+        if crate::records::is_record(path) {
+            crate::records::validate(path, content)?;
+        }
         if content.len() > 100 * 1024 * 1024 {
             return Err(HostError::new("FILE_TOO_LARGE"));
         }
@@ -526,6 +530,9 @@ impl Workspace {
         content: &[u8],
         origin: &str,
     ) -> Result<()> {
+        if crate::records::is_record(path) {
+            crate::records::validate(path, content)?;
+        }
         let target = self.resolve(path)?;
         let digest = hash(content);
         let current = if target.exists() {

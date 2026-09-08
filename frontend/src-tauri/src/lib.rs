@@ -4,6 +4,7 @@ pub mod core;
 pub mod credentials;
 mod payloads;
 pub mod recent;
+pub mod records;
 #[cfg(feature = "desktop")]
 pub mod request_lifecycle;
 mod runtime_compat;

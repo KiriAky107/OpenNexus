@@ -5,6 +5,9 @@ use std::{collections::HashSet, fs, io::Read, path::Path};
 use uuid::Uuid;
 /// File transport only. Logical records receive their own versioned whitelist separately.
 pub fn allowed(path: &str) -> bool {
+    if crate::records::is_record(path) {
+        return crate::records::allowed(path);
+    }
     let parts: Vec<_> = path.split('/').collect();
     if parts.iter().any(|part| {
         part.starts_with('.')
@@ -99,6 +102,9 @@ impl Workspace {
                 .read_to_end(&mut bytes)?;
             if bytes.len() > 104857600 {
                 return Err(HostError::new("FILE_TOO_LARGE"));
+            }
+            if crate::records::is_record(&path) {
+                crate::records::validate(&path, &bytes)?;
             }
             let digest = hash(&bytes);
             let previous = self.entry(&path)?;
