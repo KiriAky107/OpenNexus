@@ -99,3 +99,5 @@ pub mod extension_instance;
 
 #[cfg(windows)]
 mod process_creation;
+
+pub mod sync_scope;
