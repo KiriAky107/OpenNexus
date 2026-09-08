@@ -201,6 +201,9 @@ impl Unlocked {
 pub struct CredentialBroker {
     path: PathBuf,
     unlocked: Option<Unlocked>,
+    // Separate stable inode: snapshots are atomically replaced, so locking the
+    // snapshot itself would not protect the next writer after replacement.
+    ownership: Option<fs::File>,
 }
 
 impl CredentialBroker {
@@ -479,6 +482,7 @@ impl CredentialBroker {
         Self {
             path,
             unlocked: None,
+            ownership: None,
         }
     }
     pub fn is_locked(&self) -> bool {
@@ -486,9 +490,50 @@ impl CredentialBroker {
     }
     pub fn lock(&mut self) {
         self.unlocked.take();
+        self.ownership.take();
     }
     pub fn unlock(&mut self, password: Zeroizing<Vec<u8>>) -> Result<()> {
         self.lock();
+        use fs2::FileExt;
+        let parent = self.path.parent().ok_or("CREDENTIAL_PATH_INVALID")?;
+        fs::create_dir_all(parent).map_err(|_| "CREDENTIAL_IO_FAILED")?;
+        let mut lock_name = self
+            .path
+            .file_name()
+            .ok_or("CREDENTIAL_PATH_INVALID")?
+            .to_os_string();
+        lock_name.push(".lock");
+        let lock_path = parent.join(lock_name);
+        if let Ok(metadata) = fs::symlink_metadata(&lock_path) {
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err("CREDENTIAL_PATH_INVALID".into());
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if metadata.file_attributes() & 0x400 != 0 {
+                    return Err("CREDENTIAL_PATH_INVALID".into());
+                }
+            }
+        }
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.share_mode(0x1 | 0x2); // Do not allow replacing the held lock file.
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let ownership = options
+            .open(&lock_path)
+            .map_err(|_| "CREDENTIAL_IO_FAILED")?;
+        ownership
+            .try_lock_exclusive()
+            .map_err(|_| "CREDENTIALS_BUSY")?;
         let session = if self.path.exists() {
             let metadata = fs::symlink_metadata(&self.path).map_err(|_| "CREDENTIAL_IO_FAILED")?;
             if !metadata.is_file() || metadata.len() > MAX_FILE {
@@ -530,6 +575,7 @@ impl CredentialBroker {
             session
         };
         self.unlocked = Some(session);
+        self.ownership = Some(ownership);
         Ok(())
     }
     pub fn list(&self) -> Result<Vec<CredentialId>> {

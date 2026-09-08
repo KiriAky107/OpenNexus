@@ -63,10 +63,10 @@ describe('EditorPane file switching', () => {
     wrapper = mount(EditorPane, { attachTo: document.body })
     await nextTick()
 
-    await vi.waitFor(() => expect(wrapper!.find('.cm-content').exists()).toBe(true))
+    await vi.waitFor(() => expect(wrapper!.find('.cm-content').exists()).toBe(true), { timeout: 10000 })
     const textarea = wrapper.get('.cm-content')
     expect(textarea.attributes('spellcheck')).toBe('true')
     expect(textarea.attributes('lang')).toBe('en')
     expect(textarea.attributes('aria-label')).toBe('Markdown source editor')
-  })
+  }, 15000) // Lazy source-editor module transforms need the same cold-start budget.
 })

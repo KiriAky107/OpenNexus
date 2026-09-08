@@ -6,7 +6,10 @@ vi.mock('./platform/desktop', () => ({ isDesktop: () => true, hostInvoke }))
 
 import apiClient from './apiClient'
 
-beforeEach(() => hostInvoke.mockReset())
+beforeEach(() => {
+  hostInvoke.mockReset()
+  hostInvoke.mockResolvedValueOnce('test-reservation')
+})
 
 it('restores binary desktop responses as browser-compatible response objects', async () => {
   hostInvoke.mockResolvedValue({

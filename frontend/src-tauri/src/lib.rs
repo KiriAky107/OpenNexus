@@ -3,5 +3,7 @@
 pub mod core;
 pub mod credentials;
 pub mod recent;
+#[cfg(feature = "desktop")]
+pub mod request_lifecycle;
 mod runtime_compat;
 pub mod workspace;

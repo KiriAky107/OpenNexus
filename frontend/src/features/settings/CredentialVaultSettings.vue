@@ -8,6 +8,12 @@ const busy = ref(false)
 const password = ref('')
 const confirmation = ref('')
 const message = ref('')
+function failureMessage(error: unknown, fallback: string) {
+  const code = error instanceof Error ? error.message : fallback
+  return code === 'CREDENTIALS_BUSY'
+    ? t('保险库正在使用中，请等待当前操作完成，或在其他 OpenNexus 实例中锁定后重试。', 'The vault is busy. Wait for the current operation, or lock it in the other OpenNexus instance before retrying.')
+    : code
+}
 async function refresh() {
   const state = await hostInvoke<{ locked: boolean }>('credentials_status')
   locked.value = state.locked
@@ -17,7 +23,7 @@ async function importLegacy() {
   try {
     const count = await hostInvoke<number | null>('credentials_import')
     if (count !== null) message.value = t(`已迁移并验证 ${count} 条凭据；旧文件仍保留。`, `Imported and verified ${count} credentials. Legacy files are retained.`)
-  } catch (error) { message.value = error instanceof Error ? error.message : 'MIGRATION_FAILED' }
+  } catch (error) { message.value = failureMessage(error, 'MIGRATION_FAILED') }
   finally { busy.value = false }
 }
 async function act(action: 'unlock' | 'lock' | 'change_password') {
@@ -33,7 +39,7 @@ async function act(action: 'unlock' | 'lock' | 'change_password') {
     await hostInvoke(`credentials_${action}`, action === 'lock' ? undefined : { password: value })
     await refresh()
     message.value = action === 'change_password' ? t('口令已更新。', 'Password updated.') : ''
-  } catch (error) { message.value = error instanceof Error ? error.message : 'CREDENTIAL_STORE_FAILED' }
+  } catch (error) { message.value = failureMessage(error, 'CREDENTIAL_STORE_FAILED') }
   finally { busy.value = false }
 }
 onMounted(() => refresh().catch(error => { message.value = String(error) }))
