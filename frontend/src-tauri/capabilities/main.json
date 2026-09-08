@@ -53,6 +53,9 @@
     "allow-extension-trust-review",
     "allow-extension-trust-confirm",
     "allow-extension-install-preview",
-    "allow-extension-stage"
+    "allow-extension-stage",
+    "allow-extension-stage-prepare",
+    "allow-extension-stage-cancel",
+    "allow-extension-stage-status"
   ]
 }

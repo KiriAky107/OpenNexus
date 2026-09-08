@@ -76,7 +76,7 @@ function install() {
   const selected = detail.value, selectedRegistry = source()
   void run(async (signal, current) => {
     const result = await installRelease(selectedRegistry, selected, signal)
-    if (current()) { notice.value = result; refreshCandidates() }
+    if (current() || (signal.aborted && controller?.signal === signal)) { notice.value = result; refreshCandidates() }
   })
 }
 function toggleSource() {

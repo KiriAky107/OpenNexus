@@ -149,6 +149,7 @@ pub async fn extension_install_preview(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StageRequest {
+    request_id: String,
     operation_id: String,
     source: String,
     release: notesagent_host::extension_package::Release,
@@ -160,20 +161,68 @@ pub async fn extension_stage(
     request: StageRequest,
 ) -> Result<Value, String> {
     main_window(&window)?;
+    let mut lease = host.extension_requests.claim(&request.request_id)?;
+    let checkpoint = lease.checkpoint();
     let extensions = host.extensions.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut store = extensions.lock().map_err(|_| "HOST_BUSY")?;
+        let mut store = loop {
+            checkpoint()?;
+            match extensions.try_lock() {
+                Ok(guard) => break guard,
+                Err(std::sync::TryLockError::Poisoned(_)) => return Err("HOST_BUSY".into()),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
+            }
+        };
         let store = store.as_mut().ok_or("EXTENSIONS_NOT_READY")?;
-        let receipt = tauri::async_runtime::block_on(store.stage_online(
-            &request.operation_id,
-            &request.source,
-            &request.release,
-        ))
-        .map_err(|e| e.code)?;
+        let receipt = tauri::async_runtime::block_on(lease.run(async {
+            checkpoint()?;
+            store
+                .stage_online_checked(
+                    &request.operation_id,
+                    &request.source,
+                    &request.release,
+                    || {
+                        checkpoint()
+                            .map_err(|code| notesagent_host::workspace::HostError::new(&code))
+                    },
+                )
+                .await
+                .map_err(|e| e.code)
+        }))?;
         serde_json::to_value(receipt).map_err(|_| "EXTENSION_STAGE_FAILED".into())
     })
     .await
     .map_err(|_| "EXTENSION_STAGE_FAILED".to_string())?
+}
+
+#[tauri::command]
+pub fn extension_stage_prepare(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+) -> Result<String, String> {
+    main_window(&window)?;
+    host.extension_requests.prepare(60_000)
+}
+#[tauri::command]
+pub fn extension_stage_cancel(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+    request_id: String,
+) -> Result<(), String> {
+    main_window(&window)?;
+    host.extension_requests.cancel(&request_id)
+}
+#[tauri::command]
+pub fn extension_stage_status(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+    operation_id: String,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let receipt = store(&host, |s| s.stage_receipt(&operation_id))?;
+    serde_json::to_value(receipt).map_err(|_| "EXTENSION_STATUS_FAILED".into())
 }
 
 #[cfg(test)]
