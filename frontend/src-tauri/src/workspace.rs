@@ -407,6 +407,50 @@ impl Workspace {
         operation_id: &str,
         identity: Option<&str>,
     ) -> Result<Entry> {
+        self.write_authorized(
+            path,
+            expected,
+            content,
+            origin,
+            operation_id,
+            (identity, &|| Ok(())),
+        )
+    }
+
+    /// Revalidate the caller before work and immediately before committing the
+    /// durable write intent. Once accepted, recovery must finish that intent.
+    /// The caller must serialize the authorization boundary if strict atomic
+    /// ordering with concurrent revocation is required.
+    #[cfg(any(test, all(windows, feature = "desktop")))]
+    pub(crate) fn write_operation_guarded(
+        &mut self,
+        path: &str,
+        expected: &str,
+        content: &[u8],
+        operation_id: &str,
+        authorize: impl Fn() -> Result<()>,
+    ) -> Result<Entry> {
+        self.write_authorized(
+            path,
+            expected,
+            content,
+            "local",
+            operation_id,
+            (None, &authorize),
+        )
+    }
+
+    fn write_authorized(
+        &mut self,
+        path: &str,
+        expected: &str,
+        content: &[u8],
+        origin: &str,
+        operation_id: &str,
+        authorization: (Option<&str>, &dyn Fn() -> Result<()>),
+    ) -> Result<Entry> {
+        let (identity, authorize) = authorization;
+        authorize()?;
         if Uuid::parse_str(operation_id).is_err() {
             return Err(HostError::new("OPERATION_ID_INVALID"));
         }
@@ -517,6 +561,9 @@ impl Workspace {
                 origin
             ],
         )?;
+        // Rejection drops the uncommitted transaction: no recoverable write or
+        // outbox entry is published. An unreferenced payload is never replayed.
+        authorize()?;
         tx.commit()?;
         self.apply_journal(operation_id, &file_id, path, expected, content, origin)?;
         self.entry(path)?
@@ -1080,5 +1127,49 @@ mod tests {
             .query_row("SELECT state FROM journal", [], |r| r.get(0))
             .unwrap();
         assert_eq!(state, "conflict");
+    }
+    #[test]
+    fn rejected_write_intent_is_not_recovered_and_can_retry() {
+        use std::cell::Cell;
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        let initial = ws.write("note.md", "", b"original", "local").unwrap();
+        let pending = ws.pending_count().unwrap();
+        let id = Uuid::new_v4().to_string();
+        let checks = Cell::new(0);
+        let error = ws
+            .write_operation_guarded("note.md", &initial.hash, b"update", &id, || {
+                checks.set(checks.get() + 1);
+                if checks.get() == 2 {
+                    Err(HostError::new("EXTENSION_PERMIT_REVOKED"))
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "EXTENSION_PERMIT_REVOKED");
+        assert_eq!(checks.get(), 2);
+        assert!(ws.operation(&id).unwrap().is_none());
+        assert_eq!(ws.pending_count().unwrap(), pending);
+        drop(ws);
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        assert_eq!(ws.read("note.md").unwrap().content, "original");
+        assert_eq!(ws.pending_count().unwrap(), pending);
+        assert!(ws.operation(&id).unwrap().is_none());
+        let committed = ws
+            .write_operation_guarded("note.md", &initial.hash, b"update", &id, || Ok(()))
+            .unwrap();
+        assert_eq!(committed.revision, initial.revision + 1);
+        assert_eq!(ws.pending_count().unwrap(), pending + 1);
+        // Revoked callers cannot obtain an existing successful receipt either.
+        assert_eq!(
+            ws.write_operation_guarded("note.md", &initial.hash, b"update", &id, || Err(
+                HostError::new("EXTENSION_PERMIT_REVOKED")
+            ))
+            .unwrap_err()
+            .code,
+            "EXTENSION_PERMIT_REVOKED"
+        );
+        assert_eq!(ws.read("note.md").unwrap().content, "update");
     }
 }
