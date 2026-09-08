@@ -423,6 +423,67 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
             .content,
         "only-local"
     );
+
+    let task_id = "task_00000000000000000000000000000001";
+    let task_path = format!("opennexus-records/v1/tasks/{task_id}.json");
+    let task_record = json!({"schema":1,"kind":"task","id":task_id,"data":{"title":"Synchronized task","description":"","status":"todo","note_id":first.file_id,"due_at_ms":null,"created_at_ms":0,"updated_at_ms":0}});
+    workspace
+        .lock()
+        .unwrap()
+        .write(
+            &task_path,
+            "",
+            &serde_json::to_vec(&task_record).unwrap(),
+            "local",
+        )
+        .unwrap();
+    client.push_one(&workspace, &binding).await.unwrap();
+    client_b.pull_page(&workspace_b, &binding_b).await.unwrap();
+    {
+        let mut ws = workspace_b.lock().unwrap();
+        let task = ws.record_get(task_id).unwrap().unwrap();
+        assert_eq!(task["record"], task_record);
+        let mut next = task["record"].clone();
+        next["data"]["status"] = json!("done");
+        ws.write(
+            &task_path,
+            task["hash"].as_str().unwrap(),
+            &serde_json::to_vec(&next).unwrap(),
+            "local",
+        )
+        .unwrap();
+    }
+    client_b.push_one(&workspace_b, &binding_b).await.unwrap();
+    client.pull_page(&workspace, &binding).await.unwrap();
+    assert_eq!(
+        workspace
+            .lock()
+            .unwrap()
+            .record_get(task_id)
+            .unwrap()
+            .unwrap()["record"]["data"]["status"],
+        "done"
+    );
+    {
+        let mut ws = workspace_b.lock().unwrap();
+        let task = ws.record_get(task_id).unwrap().unwrap();
+        ws.mutate_operation(
+            "delete",
+            &task_path,
+            "",
+            task["hash"].as_str().unwrap(),
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .unwrap();
+    }
+    client_b.push_one(&workspace_b, &binding_b).await.unwrap();
+    client.pull_page(&workspace, &binding).await.unwrap();
+    assert!(workspace
+        .lock()
+        .unwrap()
+        .record_get(task_id)
+        .unwrap()
+        .is_none());
     // Kill the actual client process after each durable 10 MiB server offset,
     // before its response reaches the client. The next process must query offset.
     use sha2::{Digest, Sha256};

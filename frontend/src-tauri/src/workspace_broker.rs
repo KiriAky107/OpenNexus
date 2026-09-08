@@ -42,6 +42,28 @@ struct Mutation {
     kind: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordRead {
+    vault_id: String,
+    id: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordDelete {
+    vault_id: String,
+    id: String,
+    expected: String,
+    operation_id: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordWrite {
+    vault_id: String,
+    record: Value,
+    expected: String,
+    operation_id: String,
+}
 fn bound(ws: &Workspace, vault_id: &str) -> Result<(), String> {
     if ws.vault_id != vault_id {
         return Err("VAULT_PERMISSION_CHANGED".into());
@@ -54,6 +76,47 @@ fn decode<T: serde::de::DeserializeOwned>(value: &Value) -> Result<T, String> {
 pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
     let params = &request["params"];
     match request["rpc"].as_str().unwrap_or_default() {
+        "workspace.records.list" => {
+            let p: List = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            ws.record_list(p.offset, p.limit).map_err(|e| e.code)
+        }
+        "workspace.records.get" => {
+            let p: RecordRead = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            ws.record_get(&p.id)
+                .map(|v| v.unwrap_or(Value::Null))
+                .map_err(|e| e.code)
+        }
+        "workspace.records.operation" => {
+            let p: Operation = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            ws.record_operation(&p.operation_id)
+                .map(|v| v.unwrap_or(Value::Null))
+                .map_err(|e| e.code)
+        }
+        "workspace.records.delete" => {
+            let p: RecordDelete = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            let path = crate::records::path(&p.id).map_err(|e| e.code)?;
+            ws.mutate_operation("delete", &path, "", &p.expected, &p.operation_id)
+                .map_err(|e| e.code)?;
+            ws.record_operation(&p.operation_id)
+                .map(|v| v.unwrap_or(Value::Null))
+                .map_err(|e| e.code)
+        }
+        "workspace.records.write" => {
+            let p: RecordWrite = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            let path =
+                crate::records::path(p.record["id"].as_str().unwrap_or("")).map_err(|e| e.code)?;
+            let bytes = serde_json::to_vec(&p.record).map_err(|_| "RECORD_SCHEMA_INVALID")?;
+            ws.write_operation(&path, &p.expected, &bytes, "local", &p.operation_id)
+                .map_err(|e| e.code)?;
+            ws.record_operation(&p.operation_id)
+                .map(|v| v.unwrap_or(Value::Null))
+                .map_err(|e| e.code)
+        }
         "workspace.list" => {
             let p: List = decode(params)?;
             bound(ws, &p.vault_id)?;

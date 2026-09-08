@@ -140,6 +140,7 @@ impl Workspace {
     }
     pub fn sync_capture(&mut self, binding: &str) -> Result<()> {
         self.check_binding(binding)?;
+        self.normalize_record_links()?;
         loop {
             let pending = self.db.query_row("SELECT operation_id,file_id,path,hash,operation,content FROM outbox WHERE state='pending' ORDER BY rowid LIMIT 1", [], |r| {
                 Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Vec<u8>>(5)?))
@@ -165,6 +166,9 @@ impl Workspace {
                     return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
                 }
                 crate::payloads::verify(&self.sync_spool(&digest)?, &digest, size as u64)?;
+                if crate::records::is_record(&path) {
+                    crate::records::validate(&path, &self.payload(&operation_id, &content)?)?;
+                }
                 size
             } else {
                 0

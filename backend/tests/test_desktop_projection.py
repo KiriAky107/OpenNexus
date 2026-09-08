@@ -40,18 +40,19 @@ def test_projection_isolates_same_path_and_refreshes_changed_deleted_content(tmp
     assert 'file-a' not in search(first, 'replacementtoken').model_dump_json()
     assert (tmp_path/'vault-state'/first/'core.sqlite3').is_file()
     assert (tmp_path/'vault-state'/second/'core.sqlite3').is_file()
-    from app.services import task_service
     token = host_bridge.vault_id.set(second)
     try:
-        task = task_service.create_task(title='Scoped task', note_id='file-b')
-        assert task.note_id == 'file-b'
-    finally:
-        host_bridge.vault_id.reset(token)
+        conn = db.connect_knowledge()
+        with db.transaction(conn):
+            conn.execute("INSERT INTO tasks VALUES ('legacy-task','Scoped task','','todo','file-b',NULL,'2026-09-08T00:00:00+00:00','2026-09-08T00:00:00+00:00')")
+        conn.close()
+    finally: host_bridge.vault_id.reset(token)
     token = host_bridge.vault_id.set(first)
     try:
-        assert task_service.get_task(task.task_id) is None
-    finally:
-        host_bridge.vault_id.reset(token)
+        conn = db.connect_knowledge()
+        assert conn.execute("SELECT * FROM tasks WHERE task_id='legacy-task'").fetchone() is None
+        conn.close()
+    finally: host_bridge.vault_id.reset(token)
 
 
 def test_desktop_semantic_rebuild_preserves_host_file_id(tmp_path, monkeypatch):
@@ -82,14 +83,19 @@ def test_host_identity_adoption_keeps_existing_task_links(tmp_path, monkeypatch)
     monkeypatch.setattr('app.config.get_settings', lambda: settings)
     document = {'file_id': 'before-merge', 'path': 'same.md', 'hash': sha256(b'test').hexdigest(), 'content': 'test', 'created_at': 0, 'updated_at': 1}
     monkeypatch.setattr(desktop_notes, 'call', lambda method, **params: {'items': [document], 'total': 1} if method == 'list' else document)
-    from app.services import task_service
     token = host_bridge.vault_id.set(str(uuid4()))
     try:
-        task = task_service.create_task(title='Preserve link', note_id='before-merge')
+        asyncio.run(desktop_projection.refresh())
+        conn = db.connect_knowledge()
+        with db.transaction(conn):
+            conn.execute("INSERT INTO tasks VALUES ('legacy-task','Preserve link','','todo','before-merge',NULL,'2026-09-08T00:00:00+00:00','2026-09-08T00:00:00+00:00')")
+        conn.close()
         document['file_id'] = 'after-merge'
         document['aliases'] = ['before-merge']
         asyncio.run(desktop_projection.refresh())
-        assert task_service.get_task(task.task_id).note_id == 'after-merge'
+        conn = db.connect_knowledge()
+        assert conn.execute("SELECT note_id FROM tasks WHERE task_id='legacy-task'").fetchone()['note_id'] == 'after-merge'
+        conn.close()
         assert repository.get_note_record('before-merge') is None
         assert repository.get_note_record('after-merge') is not None
     finally:

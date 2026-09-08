@@ -13,6 +13,11 @@ from app.database.db import connect_knowledge as connect, transaction
 from app.errors import ApiError
 from app.operation_logs import log_event
 
+def _desktop():
+    from app.config import get_settings
+    return get_settings().environment == 'desktop'
+
+
 _write_locks = WeakKeyDictionary()
 
 
@@ -63,6 +68,9 @@ def create_task(
     *, title: str, description: str = "", note_id: str | None = None,
     due_at: datetime | None = None,
 ) -> Task:
+    if _desktop():
+        from app.services import desktop_tasks
+        return desktop_tasks.create(title=title, description=description, note_id=note_id, due_at=due_at)
     _prepare_note_link(note_id)
     if note_id and repository.get_note_record(note_id) is None:
         raise ApiError(404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id})
@@ -90,6 +98,9 @@ def create_task(
 
 
 def get_task(task_id: str) -> Task | None:
+    if _desktop():
+        from app.services import desktop_tasks
+        return desktop_tasks.get(task_id)
     conn = connect()
     try:
         row = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
@@ -99,6 +110,9 @@ def get_task(task_id: str) -> Task | None:
 
 
 def list_tasks(*, limit: int, offset: int) -> tuple[list[Task], int]:
+    if _desktop():
+        from app.services import desktop_tasks
+        return desktop_tasks.list_tasks(limit=limit, offset=offset)
     conn = connect()
     try:
         total = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
@@ -112,6 +126,9 @@ def list_tasks(*, limit: int, offset: int) -> tuple[list[Task], int]:
 
 
 def update_task(task_id: str, values: dict[str, object]) -> Task:
+    if _desktop():
+        from app.services import desktop_tasks
+        return desktop_tasks.update(task_id, values)
     current = get_task(task_id)
     if current is None:
         raise ApiError(404, "RESOURCE_NOT_FOUND", "task not found", {"task_id": task_id})
@@ -154,6 +171,9 @@ def update_task(task_id: str, values: dict[str, object]) -> Task:
 
 
 def delete_task(task_id: str) -> bool:
+    if _desktop():
+        from app.services import desktop_tasks
+        return desktop_tasks.delete(task_id)
     conn = connect()
     try:
         with transaction(conn):
