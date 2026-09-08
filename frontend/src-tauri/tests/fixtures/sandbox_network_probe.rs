@@ -3,6 +3,14 @@ use std::net::{SocketAddr, TcpStream, UdpSocket};
 use std::time::Duration;
 fn main() {
     let args: Vec<_> = std::env::args().collect();
+    if args.get(1).is_some_and(|s| s == "stderr_flood" || s == "stdout_flood") {
+        use std::io::Write;
+        let _child = std::process::Command::new(std::env::current_exe().unwrap()).arg("wait").spawn().unwrap();
+        if args[1] == "stderr_flood" { std::io::stderr().write_all(&vec![b'x'; 2 * 1024 * 1024]).unwrap(); }
+        else { std::io::stdout().write_all(&vec![b'x'; 2 * 1024 * 1024 + 1]).unwrap(); }
+        std::thread::sleep(Duration::from_secs(120));
+        return;
+    }
     if args.get(1).is_some_and(|s| s == "file_rpc") {
         use std::io::{Read, Write};
         #[link(name = "kernel32")]

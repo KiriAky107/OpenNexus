@@ -81,3 +81,6 @@ pub mod extension_file_broker;
 
 #[cfg(windows)]
 pub mod extension_stdio;
+
+#[cfg(all(windows, feature = "desktop"))]
+pub mod extension_io;

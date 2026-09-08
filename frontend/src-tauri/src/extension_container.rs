@@ -777,10 +777,7 @@ mod tests {
             // Actual native RPC: the child cannot name an identity or connect to
             // a shared endpoint; only its own stdio pipe reaches this broker.
             {
-                use std::{
-                    io::{BufReader, Read},
-                    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
-                };
+                use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
                 let sentinel = unsafe {
                     windows_sys::Win32::System::Threading::CreateEventW(
                         std::ptr::null(),
@@ -830,32 +827,84 @@ mod tests {
                     .create_suspended_with_stdio(&profile, &bound_entry)
                     .unwrap();
                 let running = unsafe { suspended.resume().unwrap() };
-                let crate::extension_stdio::HostIo {
-                    mut input,
-                    output,
-                    mut error,
-                } = io;
-                let mut output = crate::extension_stdio::Frames::new(BufReader::new(output));
-                let request = output.read().unwrap().unwrap();
+                let mut pump = running.start_io(io).unwrap();
+                let crate::extension_io::Event::Frame(request) =
+                    pump.receive(std::time::Duration::from_secs(5)).unwrap()
+                else {
+                    panic!("missing RPC request")
+                };
                 let response = files.dispatch(&mut workspace, &request).unwrap();
-                crate::extension_stdio::write_frame(
-                    &mut input,
-                    &serde_json::to_vec(&response).unwrap(),
-                )
-                .unwrap();
-                drop(input);
+                pump.send(serde_json::to_vec(&response).unwrap()).unwrap();
+                pump.close_input();
+                let crate::extension_io::Event::Frame(reply) =
+                    pump.receive(std::time::Duration::from_secs(5)).unwrap()
+                else {
+                    panic!("missing RPC reply")
+                };
+                assert_eq!(reply, b"{\"ok\":true}");
+                assert!(matches!(
+                    pump.receive(std::time::Duration::from_secs(5)).unwrap(),
+                    crate::extension_io::Event::Closed
+                ));
                 assert_eq!(
                     running.wait(std::time::Duration::from_secs(5)).unwrap(),
                     Some(0)
                 );
-                assert_eq!(output.read().unwrap().unwrap(), b"{\"ok\":true}");
-                assert!(output.read().unwrap().is_none());
-                let mut diagnostic = String::new();
-                error.read_to_string(&mut diagnostic).unwrap();
-                assert_eq!(diagnostic.trim(), "fixture diagnostic");
+                pump.shutdown().unwrap();
                 assert_eq!(
                     workspace.read("fixture.md").unwrap().content,
                     "from host broker"
+                );
+            }
+            for mode in ["wait_tree", "stderr_flood", "stdout_flood"] {
+                let mut io_claims = claims.clone();
+                io_claims.arguments = vec![mode.into()];
+                io_claims.expires_at_ms = 120_000;
+                let permit = authority.issue(&io_claims, 1).unwrap();
+                let prepared = context
+                    .prepare(&authority, &permit, &io_claims, &bound_entry, &broker, 2)
+                    .unwrap();
+                let (suspended, io) = prepared
+                    .create_suspended_with_stdio(&profile, &bound_entry)
+                    .unwrap();
+                let running = unsafe { suspended.resume().unwrap() };
+                let pump = running.start_io(io).unwrap();
+                if mode == "wait_tree" {
+                    pump.send(vec![b'x'; crate::extension_stdio::MAX_FRAME_BYTES])
+                        .unwrap();
+                    let started = std::time::Instant::now();
+                    while running.active_test_processes().unwrap() < 2 {
+                        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                } else {
+                    let started = std::time::Instant::now();
+                    while pump.check().is_ok() {
+                        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    assert_eq!(
+                        pump.check().unwrap_err().code,
+                        if mode == "stderr_flood" {
+                            "EXTENSION_STDERR_LIMIT_EXCEEDED"
+                        } else {
+                            "EXTENSION_BROKER_REQUEST_TOO_LARGE"
+                        }
+                    );
+                }
+                let started = std::time::Instant::now();
+                pump.shutdown().unwrap();
+                assert!(running
+                    .wait(std::time::Duration::from_secs(5))
+                    .unwrap()
+                    .is_some());
+                while running.active_test_processes().unwrap() != 0 {
+                    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                eprintln!(
+                    "native IO {mode}: shutdown/tree empty in {:?}",
+                    started.elapsed()
                 );
             }
             for cause in [
