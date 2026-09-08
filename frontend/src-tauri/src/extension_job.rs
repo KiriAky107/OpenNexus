@@ -11,10 +11,14 @@ use windows_sys::Win32::System::{
 
 pub struct Job {
     handle: OwnedHandle,
+    state: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    _cpu: Option<CpuMonitor>,
 }
 impl Job {
     pub(crate) fn clone_for_deadline(&self) -> Result<Self> {
         Ok(Self {
+            state: std::sync::Arc::clone(&self.state),
+            _cpu: None,
             handle: self
                 .handle
                 .try_clone()
@@ -29,8 +33,10 @@ impl Job {
         if raw.is_null() {
             return Err(HostError::new("EXTENSION_RESOURCE_UNAVAILABLE"));
         }
-        let job = Self {
+        let mut job = Self {
             handle: unsafe { OwnedHandle::from_raw_handle(raw) },
+            state: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
+            _cpu: None,
         };
         let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
             BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
@@ -49,13 +55,25 @@ impl Job {
             return Err(HostError::new("EXTENSION_RESOURCE_UNAVAILABLE"));
         }
         let cpu = JOBOBJECT_CPU_RATE_CONTROL_INFORMATION {
-            ControlFlags: JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
+            ControlFlags: JOB_OBJECT_CPU_RATE_CONTROL_ENABLE
+                | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP
+                | JOB_OBJECT_CPU_RATE_CONTROL_NOTIFY,
             Anonymous: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0 {
                 CpuRate: (10000 / processors).max(1),
             },
         };
         job.set(JobObjectCpuRateControlInformation, &cpu)?;
+        job._cpu = Some(CpuMonitor::arm(&job)?);
         Ok(job)
+    }
+    pub fn check_resources(&self) -> Result<()> {
+        use std::sync::atomic::Ordering;
+        match self.state.load(Ordering::Acquire) {
+            0 => Ok(()),
+            1 => Err(HostError::new("EXTENSION_RESOURCE_CPU_EXCEEDED")),
+            3 => Err(HostError::new("EXTENSION_RESOURCE_TERMINATE_FAILED")),
+            _ => Err(HostError::new("EXTENSION_RESOURCE_MONITOR_FAILED")),
+        }
     }
     fn set<T>(&self, class: JOBOBJECTINFOCLASS, value: &T) -> Result<()> {
         if unsafe {
@@ -77,6 +95,7 @@ impl Job {
     /// Caller must own an unresumed CREATE_SUSPENDED process and terminate it on
     /// any error. Resume only after all AppContainer/handle/permission checks pass.
     pub unsafe fn assign_suspended(&self, process: BorrowedHandle<'_>) -> Result<()> {
+        self.check_resources()?;
         if unsafe { AssignProcessToJobObject(self.handle.as_raw_handle(), process.as_raw_handle()) }
             == 0
         {
@@ -105,6 +124,122 @@ impl Job {
             return Err(HostError::new("EXTENSION_RESOURCE_QUERY_FAILED"));
         }
         Ok(accounting.ActiveProcesses)
+    }
+}
+
+/// The Windows notification uses a ten-second window and ToleranceHigh (60%
+/// over budget). This is not a measurement of ten uninterrupted busy seconds.
+/// Only the original Job owns this monitor; observation/deadline clones do not.
+const JOB_NOTIFICATION_LIMIT: u32 = 11; // JOB_OBJECT_MSG_NOTIFICATION_LIMIT (Windows SDK)
+struct CpuMonitor {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+impl CpuMonitor {
+    fn arm(job: &Job) -> Result<Self> {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        use windows_sys::Win32::{Foundation::INVALID_HANDLE_VALUE, System::IO::*};
+        let raw =
+            unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 1) };
+        if raw.is_null() {
+            return Err(HostError::new("EXTENSION_RESOURCE_MONITOR_UNAVAILABLE"));
+        }
+        let port = unsafe { OwnedHandle::from_raw_handle(raw) };
+        job.set(
+            JobObjectAssociateCompletionPortInformation,
+            &JOBOBJECT_ASSOCIATE_COMPLETION_PORT {
+                CompletionKey: std::ptr::dangling_mut::<u8>().cast(),
+                CompletionPort: port.as_raw_handle(),
+            },
+        )?;
+        job.set(
+            JobObjectNotificationLimitInformation,
+            &JOBOBJECT_NOTIFICATION_LIMIT_INFORMATION {
+                LimitFlags: JOB_OBJECT_LIMIT_RATE_CONTROL,
+                RateControlTolerance: ToleranceHigh,
+                RateControlToleranceInterval: ToleranceIntervalShort,
+                ..Default::default()
+            },
+        )?;
+        let owned_job = job
+            .handle
+            .try_clone()
+            .map_err(|_| HostError::new("EXTENSION_RESOURCE_MONITOR_UNAVAILABLE"))?;
+        let state = Arc::clone(&job.state);
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let worker = std::thread::Builder::new()
+            .name("extension-cpu".into())
+            .spawn(move || {
+                // All exits, including a caught panic or completion-port failure,
+                // terminate the tree while this worker still owns a Job handle.
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    while !thread_stop.load(Ordering::Acquire) {
+                        let (mut code, mut key, mut pointer) = (0, 0, std::ptr::null_mut());
+                        let ok = unsafe {
+                            GetQueuedCompletionStatus(
+                                port.as_raw_handle(),
+                                &mut code,
+                                &mut key,
+                                &mut pointer,
+                                100,
+                            )
+                        };
+                        if ok == 0 {
+                            if unsafe { windows_sys::Win32::Foundation::GetLastError() }
+                                == windows_sys::Win32::Foundation::WAIT_TIMEOUT
+                            {
+                                continue;
+                            }
+                            return 2;
+                        }
+                        if key != 1 {
+                            return 2;
+                        }
+                        if code != JOB_NOTIFICATION_LIMIT {
+                            continue;
+                        }
+                        let mut info = JOBOBJECT_LIMIT_VIOLATION_INFORMATION::default();
+                        if unsafe {
+                            QueryInformationJobObject(
+                                owned_job.as_raw_handle(),
+                                JobObjectLimitViolationInformation,
+                                (&mut info as *mut JOBOBJECT_LIMIT_VIOLATION_INFORMATION).cast(),
+                                size_of::<JOBOBJECT_LIMIT_VIOLATION_INFORMATION>() as u32,
+                                std::ptr::null_mut(),
+                            )
+                        } == 0
+                        {
+                            return 2;
+                        }
+                        if info.ViolationLimitFlags & JOB_OBJECT_LIMIT_RATE_CONTROL != 0 {
+                            return 1;
+                        }
+                    }
+                    0
+                }))
+                .unwrap_or(2);
+                state.store(outcome, Ordering::Release);
+                if unsafe { TerminateJobObject(owned_job.as_raw_handle(), 1) } == 0 {
+                    state.store(3, Ordering::Release);
+                }
+            })
+            .map_err(|_| HostError::new("EXTENSION_RESOURCE_MONITOR_UNAVAILABLE"))?;
+        Ok(Self {
+            stop,
+            worker: Some(worker),
+        })
+    }
+}
+impl Drop for CpuMonitor {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -197,6 +332,114 @@ mod tests {
         assert_eq!(normal[normal.len() - 1], 1);
         let mut excessive = Vec::<u8>::new();
         assert!(excessive.try_reserve_exact(600 * 1024 * 1024).is_err());
+    }
+    #[test]
+    #[ignore = "helper consumes CPU inside the parent controlled job"]
+    fn worker_cpu() {
+        let end = std::time::Instant::now() + Duration::from_secs(40);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(move || {
+                    let mut n = 1u64;
+                    while std::time::Instant::now() < end {
+                        for _ in 0..10000 {
+                            n = std::hint::black_box(
+                                n.wrapping_mul(6364136223846793005).wrapping_add(1),
+                            );
+                        }
+                    }
+                });
+            }
+        });
+    }
+    #[test]
+    #[ignore = "real ten-second CPU pressure and Host save acceptance; run explicitly"]
+    fn cpu_pressure_terminates_job_and_host_can_save() {
+        let idle_job = Job::new().unwrap();
+        let idle = worker();
+        unsafe {
+            idle_job.assign_suspended(idle.process.as_handle()).unwrap();
+            assert_ne!(ResumeThread(idle.thread.as_raw_handle()), u32::MAX);
+        }
+        let job = Job::new().unwrap();
+        let mut rate = JOBOBJECT_CPU_RATE_CONTROL_INFORMATION::default();
+        assert_ne!(
+            unsafe {
+                QueryInformationJobObject(
+                    job.handle.as_raw_handle(),
+                    JobObjectCpuRateControlInformation,
+                    (&mut rate as *mut JOBOBJECT_CPU_RATE_CONTROL_INFORMATION).cast(),
+                    size_of::<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>() as u32,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        assert_eq!(
+            rate.ControlFlags,
+            JOB_OBJECT_CPU_RATE_CONTROL_ENABLE
+                | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP
+                | JOB_OBJECT_CPU_RATE_CONTROL_NOTIFY
+        );
+        assert_eq!(
+            unsafe { rate.Anonymous.CpuRate },
+            (10000 / unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) }).max(1)
+        );
+        let child = worker_named("worker_cpu");
+        let start = std::time::Instant::now();
+        unsafe {
+            job.assign_suspended(child.process.as_handle()).unwrap();
+            assert_ne!(ResumeThread(child.thread.as_raw_handle()), u32::MAX);
+        }
+        let vault = tempfile::tempdir().unwrap();
+        let mut workspace = crate::workspace::Workspace::open(vault.path()).unwrap();
+        workspace
+            .write("cpu.md", "", b"while CPU is busy", "local")
+            .unwrap();
+        while job.check_resources().is_ok() && start.elapsed() < Duration::from_secs(20) {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(
+            job.check_resources().unwrap_err().code,
+            "EXTENSION_RESOURCE_CPU_EXCEEDED"
+        );
+        let detected = start.elapsed();
+        let cleanup = std::time::Instant::now();
+        while job.active_processes().unwrap() != 0 && cleanup.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(job.active_processes().unwrap(), 0);
+        let saved = workspace.read("cpu.md").unwrap();
+        workspace
+            .write("cpu.md", &saved.entry.hash, b"after CPU cleanup", "local")
+            .unwrap();
+        drop(workspace);
+        assert_eq!(
+            crate::workspace::Workspace::open(vault.path())
+                .unwrap()
+                .read("cpu.md")
+                .unwrap()
+                .content,
+            "after CPU cleanup"
+        );
+        eprintln!(
+            "CPU pressure detected at {detected:?}; Job empty after {:?}",
+            cleanup.elapsed()
+        );
+        idle_job.check_resources().unwrap();
+        assert!(idle_job.active_processes().unwrap() > 0);
+        // An observation handle must not keep the monitor alive after its owner
+        // is dropped, or keep the idle process running indefinitely.
+        let observation = idle_job.clone_for_deadline().unwrap();
+        let stop = std::time::Instant::now();
+        drop(idle_job);
+        assert!(stop.elapsed() < Duration::from_secs(2));
+        while observation.active_processes().unwrap() != 0
+            && stop.elapsed() < Duration::from_secs(5)
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(observation.active_processes().unwrap(), 0);
     }
     #[test]
     fn actual_allocation_above_job_memory_budget_is_refused() {
@@ -306,7 +549,9 @@ mod tests {
         );
         assert_eq!(
             cpu.ControlFlags,
-            JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP
+            JOB_OBJECT_CPU_RATE_CONTROL_ENABLE
+                | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP
+                | JOB_OBJECT_CPU_RATE_CONTROL_NOTIFY
         );
         let child = worker();
         unsafe {
