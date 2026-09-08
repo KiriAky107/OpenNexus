@@ -92,6 +92,7 @@ pub struct Session<'a, 'p> {
     tools: bool,
     failed: bool,
     tools_changed: bool,
+    catalog: Option<crate::extension_mcp_tools::Catalog>,
 }
 impl<'a, 'p> Session<'a, 'p> {
     pub fn new(process: &'a Running<'p>, io: HostIo) -> Result<Self> {
@@ -103,6 +104,7 @@ impl<'a, 'p> Session<'a, 'p> {
             tools: false,
             failed: false,
             tools_changed: false,
+            catalog: None,
         })
     }
     pub fn initialize(&mut self, cancel: &AtomicBool) -> Result<String> {
@@ -140,7 +142,43 @@ impl<'a, 'p> Session<'a, 'p> {
         self.ready = true;
         Ok(version.unwrap().into())
     }
-    pub fn list_tools(&mut self, cursor: Option<&str>, cancel: &AtomicBool) -> Result<Value> {
+    pub fn refresh_tools(
+        &mut self,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<crate::extension_mcp_tools::Description>> {
+        self.require_tools()?;
+        self.drain_pending()?;
+        self.catalog = None;
+        self.tools_changed = false;
+        let started = Instant::now();
+        let catalog = crate::extension_mcp_tools::Catalog::discover(|cursor| {
+            let remaining = Duration::from_secs(20).saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return Err(HostError::new("EXTENSION_MCP_CATALOG_TIMEOUT"));
+            }
+            self.list_tools_page(cursor, cancel, remaining.min(Duration::from_secs(10)))
+        });
+        let catalog = match catalog {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                self.abort();
+                return Err(error);
+            }
+        };
+        self.drain_pending()?;
+        if self.tools_changed {
+            return Err(HostError::new("EXTENSION_MCP_CATALOG_CHANGED"));
+        }
+        let descriptions = catalog.descriptions();
+        self.catalog = Some(catalog);
+        Ok(descriptions)
+    }
+    fn list_tools_page(
+        &mut self,
+        cursor: Option<&str>,
+        cancel: &AtomicBool,
+        budget: Duration,
+    ) -> Result<Value> {
         self.require_tools()?;
         if cursor.is_some_and(|s| s.is_empty() || s.len() > 1024) {
             return Err(invalid());
@@ -148,7 +186,7 @@ impl<'a, 'p> Session<'a, 'p> {
         let value = self.request(
             "tools/list",
             cursor.map_or_else(|| json!({}), |c| json!({"cursor":c})),
-            Duration::from_secs(10),
+            budget,
             cancel,
         )?;
         if !value["tools"]
@@ -170,6 +208,7 @@ impl<'a, 'p> Session<'a, 'p> {
         cancel: &AtomicBool,
     ) -> Result<Value> {
         self.require_tools()?;
+        self.drain_pending()?;
         if name.is_empty()
             || name.len() > 256
             || name.chars().any(char::is_control)
@@ -177,18 +216,21 @@ impl<'a, 'p> Session<'a, 'p> {
         {
             return Err(invalid());
         }
+        let tool = self
+            .catalog
+            .as_ref()
+            .ok_or_else(|| HostError::new("EXTENSION_MCP_CATALOG_REQUIRED"))?
+            .tool(name)?;
+        tool.validate_arguments(&arguments)?;
         let value = self.request(
             "tools/call",
             json!({"name":name,"arguments":arguments}),
             Duration::from_secs(60),
             cancel,
         )?;
-        if !value["content"].is_array()
-            || value.get("isError").is_some_and(|v| !v.is_boolean())
-            || serde_json::to_vec(&value).map_err(|_| invalid())?.len() > 256 * 1024
-        {
+        if let Err(error) = tool.validate_result(&value) {
             self.abort();
-            return Err(HostError::new("EXTENSION_MCP_TOOL_RESULT_INVALID"));
+            return Err(error);
         }
         Ok(value)
     }
@@ -203,6 +245,46 @@ impl<'a, 'p> Session<'a, 'p> {
             return Err(HostError::new("EXTENSION_MCP_TOOLS_UNAVAILABLE"));
         }
         Ok(())
+    }
+    fn server_message(&mut self, message: &Envelope) -> Result<bool> {
+        let Some(method) = &message.method else {
+            return Ok(false);
+        };
+        if let Some(id) = &message.id {
+            self.send(if method == "ping" { json!({"jsonrpc":"2.0","id":id,"result":{}}) }
+                else { json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Method not supported"}}) })?;
+        } else if method == "notifications/tools/list_changed" {
+            self.tools_changed = true;
+            self.catalog = None;
+        }
+        Ok(true)
+    }
+    /// Apply already-received notifications before selecting a cached contract.
+    /// The eventual registry loop must also call this while the instance is idle.
+    pub fn drain_pending(&mut self) -> Result<()> {
+        let result = (|| {
+            for _ in 0..128 {
+                self.process.check_authorization()?;
+                match self.pump.receive(Duration::ZERO) {
+                    Err(error) if error.code == "EXTENSION_IO_TIMEOUT" => return Ok(()),
+                    Err(error) => return Err(error),
+                    Ok(Event::Closed) => {
+                        return Err(HostError::new("EXTENSION_MCP_CONNECTION_CLOSED"))
+                    }
+                    Ok(Event::Frame(bytes)) => {
+                        let message = decode(&bytes)?;
+                        if !self.server_message(&message)? {
+                            return Err(HostError::new("EXTENSION_MCP_UNEXPECTED_RESPONSE"));
+                        }
+                    }
+                }
+            }
+            Err(HostError::new("EXTENSION_IO_RATE_LIMITED"))
+        })();
+        if result.is_err() {
+            self.abort();
+        }
+        result
     }
     fn send(&self, value: Value) -> Result<()> {
         self.pump.send_wait(
@@ -259,14 +341,7 @@ impl<'a, 'p> Session<'a, 'p> {
                     Err(error) => return Err(error),
                 };
                 let message = decode(&bytes)?;
-                if let Some(method) = message.method {
-                    if let Some(id) = message.id {
-                        // No sampling/roots/elicitation capability was advertised.
-                        self.send(if method == "ping" { json!({"jsonrpc":"2.0","id":id,"result":{}}) }
-                            else { json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Method not supported"}}) })?;
-                    } else if method == "notifications/tools/list_changed" {
-                        self.tools_changed = true;
-                    }
+                if self.server_message(&message)? {
                     continue;
                 }
                 if message.id != Some(json!(id)) {

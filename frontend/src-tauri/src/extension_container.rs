@@ -871,6 +871,9 @@ mod tests {
                 "mcp_cancel",
                 "mcp_remote_error",
                 "mcp_bad_version",
+                "mcp_pages",
+                "mcp_bad_result",
+                "mcp_idle_change",
             ];
             if _mcp_deadline {
                 mcp_modes.push("mcp_deadline");
@@ -911,8 +914,26 @@ mod tests {
                         crate::extension_mcp::PROTOCOL_VERSION
                     );
                     assert_eq!(
-                        session.list_tools(None, &cancel).unwrap()["tools"][0]["name"],
-                        "echo"
+                        session
+                            .call_tool("echo", serde_json::json!({}), &cancel)
+                            .unwrap_err()
+                            .code,
+                        "EXTENSION_MCP_CATALOG_REQUIRED"
+                    );
+                    assert_eq!(session.refresh_tools(&cancel).unwrap()[0].name, "echo");
+                    assert_eq!(
+                        session
+                            .call_tool("missing", serde_json::json!({}), &cancel)
+                            .unwrap_err()
+                            .code,
+                        "EXTENSION_MCP_TOOL_NOT_FOUND"
+                    );
+                    assert_eq!(
+                        session
+                            .call_tool("echo", serde_json::json!({"unexpected":1}), &cancel)
+                            .unwrap_err()
+                            .code,
+                        "EXTENSION_MCP_ARGUMENTS_INVALID"
                     );
                     let cancellation = if mode == "mcp_cancel" {
                         let flag = Arc::clone(&cancel);
@@ -926,6 +947,22 @@ mod tests {
                     let tool_started = std::time::Instant::now();
                     let result = session.call_tool("echo", serde_json::json!({}), &cancel);
                     match mode {
+                        "mcp_bad_result" => assert_eq!(
+                            result.unwrap_err().code,
+                            "EXTENSION_MCP_TOOL_RESULT_INVALID"
+                        ),
+                        "mcp_idle_change" => {
+                            assert_eq!(result.unwrap()["structuredContent"]["ok"], true);
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            assert_eq!(
+                                session
+                                    .call_tool("echo", serde_json::json!({}), &cancel)
+                                    .unwrap_err()
+                                    .code,
+                                "EXTENSION_MCP_CATALOG_REQUIRED"
+                            );
+                            assert!(session.take_tools_changed());
+                        }
                         "mcp_deadline" => {
                             assert_eq!(
                                 result.unwrap_err().code,
@@ -977,11 +1014,18 @@ mod tests {
                             assert_eq!(result.unwrap()["content"][0]["text"], "native MCP success");
                             assert!(session.take_tools_changed());
                             assert!(!session.take_tools_changed());
+                            assert_eq!(
+                                session
+                                    .call_tool("echo", serde_json::json!({}), &cancel)
+                                    .unwrap_err()
+                                    .code,
+                                "EXTENSION_MCP_CATALOG_REQUIRED"
+                            );
                         }
                     }
                     if mode == "mcp_cancel" || mode == "mcp_wrong_id" {
                         assert_eq!(
-                            session.list_tools(None, &cancel).unwrap_err().code,
+                            session.refresh_tools(&cancel).err().unwrap().code,
                             "EXTENSION_MCP_SESSION_FAILED"
                         );
                     }
