@@ -136,7 +136,8 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
       <article v-for="conflict in status.conflicts" :key="conflict.sequence" class="sync-conflict">
         <h3>{{ conflict.local_path }}</h3><p>{{ t('远端版本', 'Remote revision') }} {{ conflict.sequence }} · {{ conflict.remote.operation }} · {{ conflict.remote.path }}</p>
         <div class="inline-actions"><button :disabled="busy" @click="resolve(conflict, 'local')">{{ t('保留本地', 'Keep local') }}</button><button :disabled="busy" @click="resolve(conflict, 'remote')">{{ t('采用远端', 'Use remote') }}</button></div>
-        <label>{{ t('副本相对路径', 'Relative copy path') }}<input v-model="copies[conflict.sequence]" placeholder="conflicts/note-copy.md" /></label><button :disabled="busy || !copies[conflict.sequence]" @click="resolve(conflict, 'copy')">{{ t('另存本地副本并采用远端', 'Save local copy and use remote') }}</button>
+        <p v-if="conflict.local_path.startsWith('opennexus-records/')">{{ t('可将本地设置保留为 attachments 目录下的文本副本；副本供查看和恢复，不会自动应用。', 'Keep local settings as a text copy under attachments for inspection and recovery; the copy is not applied automatically.') }}</p>
+        <label>{{ t('副本相对路径', 'Relative copy path') }}<input v-model="copies[conflict.sequence]" :placeholder="conflict.local_path.startsWith('opennexus-records/') ? 'attachments/settings-copy.txt' : 'conflicts/note-copy.md'" /></label><button :disabled="busy || !copies[conflict.sequence]" @click="resolve(conflict, 'copy')">{{ t('另存本地副本并采用远端', 'Save local copy and use remote') }}</button>
       </article>
     </div>
   </section>
