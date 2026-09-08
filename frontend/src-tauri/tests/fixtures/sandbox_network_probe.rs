@@ -64,11 +64,25 @@ fn main() {
     }
     if args.get(1).is_some_and(|s| s == "file_rpc") {
         use std::io::{Read, Write};
+        #[repr(C)]
+        struct FileIdentity { volume: u64, id: [u8; 16] }
         #[link(name = "kernel32")]
-        extern "system" { fn GetHandleInformation(handle: *mut std::ffi::c_void, flags: *mut u32) -> i32; }
+        extern "system" {
+            fn GetFileInformationByHandleEx(handle: *mut std::ffi::c_void,
+                class: i32, info: *mut std::ffi::c_void, size: u32) -> i32;
+        }
         let sentinel: usize = args[2].parse().unwrap();
-        let mut flags = 0;
-        if unsafe { GetHandleInformation(sentinel as *mut _, &mut flags) } != 0 { std::process::exit(85); }
+        let mut identity = FileIdentity { volume: 0, id: [0; 16] };
+        // Numeric handles may alias unrelated child objects. Compare the actual
+        // file identity without reading from a possibly aliased pipe handle.
+        if unsafe { GetFileInformationByHandleEx(sentinel as *mut _, 18,
+            (&mut identity as *mut FileIdentity).cast(),
+            std::mem::size_of::<FileIdentity>() as u32) } != 0 {
+            let hex: String = identity.id.iter().map(|b| format!("{b:02x}")).collect();
+            if format!("{}:{}", identity.volume, hex) == args[3] {
+                std::process::exit(85);
+            }
+        }
         println!("{{\"method\":\"notes.read\",\"path\":\"fixture.md\"}}");
         std::io::stdout().flush().unwrap();
         let mut response = String::new();
