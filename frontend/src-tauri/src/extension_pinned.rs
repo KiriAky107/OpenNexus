@@ -1,5 +1,5 @@
 //! Windows package handles retained across verification and launch. This pins
-//! existing objects; it is not a read-only mount or an ancestor-path proof.
+//! existing objects; it is not a read-only filesystem mount.
 use crate::{
     extension_container::Profile,
     extension_package::Inventory,
@@ -14,6 +14,63 @@ pub struct PinnedPackage {
     directories: BTreeMap<String, Dir>,
     files: BTreeMap<String, File>,
     tree_sha256: String,
+}
+/// The package borrow and all ancestor handles must outlive the process using
+/// this path. Only files present in the verified package can produce this guard.
+pub struct BoundEntry<'a> {
+    path: std::path::PathBuf,
+    _ancestors: Vec<File>,
+    _package: &'a PinnedPackage,
+}
+impl BoundEntry<'_> {
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+fn identity(file: &File) -> Result<(u32, u32, u32)> {
+    use std::os::windows::io::AsRawHandle;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0
+        || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || info.nNumberOfLinks != 1
+    {
+        return Err(HostError::new("EXTENSION_ENTRY_BINDING_FAILED"));
+    }
+    Ok((
+        info.dwVolumeSerialNumber,
+        info.nFileIndexHigh,
+        info.nFileIndexLow,
+    ))
+}
+fn final_volume_path(file: &File) -> Result<std::path::PathBuf> {
+    use std::os::windows::{ffi::OsStringExt, io::AsRawHandle};
+    let bad = || HostError::new("EXTENSION_ENTRY_BINDING_FAILED");
+    let length = unsafe {
+        GetFinalPathNameByHandleW(
+            file.as_raw_handle(),
+            std::ptr::null_mut(),
+            0,
+            VOLUME_NAME_GUID,
+        )
+    };
+    if length == 0 || length >= 32767 {
+        return Err(bad());
+    }
+    let mut buffer = vec![0u16; length as usize + 1];
+    let written = unsafe {
+        GetFinalPathNameByHandleW(
+            file.as_raw_handle(),
+            buffer.as_mut_ptr(),
+            buffer.len() as u32,
+            VOLUME_NAME_GUID,
+        )
+    };
+    if written == 0 || written as usize >= buffer.len() {
+        return Err(bad());
+    }
+    Ok(std::path::PathBuf::from(std::ffi::OsString::from_wide(
+        &buffer[..written as usize],
+    )))
 }
 fn options() -> OpenOptions {
     let mut options = OpenOptions::new();
@@ -103,6 +160,79 @@ impl PinnedPackage {
         }
         Ok(pinned)
     }
+    /// Resolve through the owned file handle, then pin the volume-rooted path
+    /// component by component and compare native file identity. No drive-letter
+    /// or UNC fallback is permitted if volume GUID lookup is unavailable.
+    pub fn bind_entry(&self, name: &str) -> Result<BoundEntry<'_>> {
+        use std::{
+            os::windows::fs::OpenOptionsExt as _,
+            path::{Component, Prefix},
+        };
+        let bad = || HostError::new("EXTENSION_ENTRY_BINDING_FAILED");
+        let expected = self.files.get(name).ok_or_else(bad)?;
+        let path = final_volume_path(expected)?;
+        let mut components = path.components();
+        let Some(Component::Prefix(prefix)) = components.next() else {
+            return Err(bad());
+        };
+        let Prefix::Verbatim(volume) = prefix.kind() else {
+            return Err(bad());
+        };
+        let volume = volume.to_str().ok_or_else(bad)?;
+        let guid = volume
+            .strip_prefix("Volume{")
+            .and_then(|s| s.strip_suffix('}'))
+            .ok_or_else(bad)?;
+        uuid::Uuid::parse_str(guid).map_err(|_| bad())?;
+        if components.next() != Some(Component::RootDir) {
+            return Err(bad());
+        }
+        let parts = components
+            .map(|part| match part {
+                Component::Normal(part) => Ok(part.to_owned()),
+                _ => Err(bad()),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if parts.is_empty() || parts.len() > 256 {
+            return Err(bad());
+        }
+        let mut current = std::path::PathBuf::from(format!(r"\\?\{volume}\"));
+        let mut handles = Vec::new();
+        let open = |path: &std::path::Path| -> Result<File> {
+            std::fs::OpenOptions::new()
+                .access_mode(FILE_READ_ATTRIBUTES)
+                .share_mode(FILE_SHARE_READ)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(path)
+                .map_err(|_| bad())
+        };
+        let volume_handle = open(&current)?;
+        let metadata = volume_handle.metadata().map_err(|_| bad())?;
+        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(bad());
+        }
+        handles.push(volume_handle);
+        for (index, part) in parts.iter().enumerate() {
+            current.push(part);
+            let handle = open(&current)?;
+            let metadata = handle.metadata().map_err(|_| bad())?;
+            if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                || (index + 1 == parts.len() && !metadata.is_file())
+                || (index + 1 < parts.len() && !metadata.is_dir())
+            {
+                return Err(bad());
+            }
+            handles.push(handle);
+        }
+        if identity(handles.last().ok_or_else(bad)?)? != identity(expected)? {
+            return Err(bad());
+        }
+        Ok(BoundEntry {
+            path: current,
+            _ancestors: handles,
+            _package: self,
+        })
+    }
     pub fn tree_sha256(&self) -> &str {
         &self.tree_sha256
     }
@@ -168,5 +298,45 @@ mod tests {
         std::fs::hard_link(&file, outside.path().join("alias.exe")).unwrap();
         assert!(PinnedPackage::open(&root, &inventory, &hash).is_err());
         std::fs::write(file, b"unlocked after failures").unwrap();
+    }
+    #[test]
+    fn bound_entry_uses_volume_identity_and_holds_ancestor_rename_locks() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let package = parent.join("package");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("entry.exe"), b"verified bytes").unwrap();
+        let root = Dir::open_ambient_dir(&package, cap_std::ambient_authority()).unwrap();
+        let inventory = Inventory {
+            files: [(
+                "entry.exe".into(),
+                format!("{:x}", Sha256::digest(b"verified bytes")),
+            )]
+            .into_iter()
+            .collect(),
+            expanded_size: 14,
+            manifest: "entry.exe".into(),
+        };
+        let hash = crate::extension_unpack::verify_tree(&root, &inventory).unwrap();
+        let pinned = PinnedPackage::open(&root, &inventory, &hash).unwrap();
+        assert!(pinned.bind_entry("../entry.exe").is_err());
+        assert!(pinned.bind_entry("missing.exe").is_err());
+        let bound = pinned.bind_entry("entry.exe").unwrap();
+        assert!(bound
+            .path()
+            .as_os_str()
+            .to_string_lossy()
+            .starts_with(r"\\?\Volume{"));
+        assert_eq!(std::fs::read(bound.path()).unwrap(), b"verified bytes");
+        let moved = temp.path().join("moved");
+        assert!(std::fs::rename(&parent, &moved).is_err());
+        drop(bound);
+        drop(pinned);
+        drop(root);
+        std::fs::rename(&parent, &moved).unwrap();
+        assert_eq!(
+            std::fs::read(moved.join("package/entry.exe")).unwrap(),
+            b"verified bytes"
+        );
     }
 }
