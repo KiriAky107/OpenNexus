@@ -2,6 +2,9 @@
 
 //! 预览 Host 只开放本地文件命令；未接通的 AI / 同步 / 凭据能力明确返回不可用。
 
+mod extension_commands;
+use extension_commands::*;
+
 mod record_commands;
 use record_commands::*;
 mod sync_commands;
@@ -23,6 +26,8 @@ use zeroize::Zeroizing;
 #[derive(Default)]
 struct Host {
     requests: Requests,
+    extensions: Arc<Mutex<Option<notesagent_host::extension_store::ExtensionStore>>>,
+    extension_reviews: extension_commands::Reviews,
     sync: Arc<sync_commands::Runtime>,
     workspace: Arc<Mutex<Option<Workspace>>>,
     recent: Mutex<Option<RecentVaultStore>>,
@@ -708,6 +713,15 @@ fn main() {
                 .lock()
                 .map_err(|_| std::io::Error::other("HOST_BUSY"))? =
                 Some(RecentVaultStore::open(&state_path).map_err(std::io::Error::other)?);
+            let extension_root = app.path().app_data_dir()?.join("extensions-host");
+            std::fs::create_dir_all(&extension_root)?;
+            *app.state::<Host>()
+                .extensions
+                .lock()
+                .map_err(|_| std::io::Error::other("HOST_BUSY"))? = Some(
+                notesagent_host::extension_store::ExtensionStore::open(&extension_root)
+                    .map_err(|error| std::io::Error::other(error.code))?,
+            );
             let credential_state = app.state::<Host>().credentials.clone();
             *credential_state
                 .lock()
@@ -833,6 +847,9 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             host_capabilities,
+            extension_trust_review,
+            extension_trust_confirm,
+            extension_install_preview,
             record_get,
             record_write,
             sync_login,

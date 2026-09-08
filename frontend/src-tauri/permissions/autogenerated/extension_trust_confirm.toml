@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-extension-trust-confirm"
+description = "Enables the extension_trust_confirm command without any pre-configured scope."
+commands.allow = ["extension_trust_confirm"]
+
+[[permission]]
+identifier = "deny-extension-trust-confirm"
+description = "Denies the extension_trust_confirm command without any pre-configured scope."
+commands.deny = ["extension_trust_confirm"]

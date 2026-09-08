@@ -16,6 +16,9 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "host_capabilities",
+            "extension_trust_review",
+            "extension_trust_confirm",
+            "extension_install_preview",
             "record_get",
             "record_write",
             "sync_login",

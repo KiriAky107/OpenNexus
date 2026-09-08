@@ -49,6 +49,9 @@
     "allow-sync-run",
     "allow-sync-preview",
     "allow-record-get",
-    "allow-record-write"
+    "allow-record-write",
+    "allow-extension-trust-review",
+    "allow-extension-trust-confirm",
+    "allow-extension-install-preview"
   ]
 }
