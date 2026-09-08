@@ -1620,12 +1620,12 @@ async def cancel_export(job_id: str) -> OperationResponse:
 
 
 @router.get("/settings/persona", response_model=PersonaSettings, tags=["Settings"])
-async def get_global_persona():
+def get_global_persona():
     return load_persona()
 
 
 @router.put("/settings/persona", response_model=PersonaSettings, tags=["Settings"])
-async def put_global_persona(request: PersonaSettings):
+def put_global_persona(request: PersonaSettings):
     return save_persona(request)
 
 

@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import { lockDialogScroll } from '@/components/common/dialogScroll'
-import { onMounted, onBeforeUnmount, reactive, ref } from 'vue'
+import { onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useChatPreferences, validAvatar } from '@/stores/chatPreferences'
 import { t } from '@/i18n'
 import { apiClient } from '@/services/apiClient'
-interface GlobalPersona { version: number; name: string; system_prompt: string; dialogue_pairs: Array<{user:string;assistant:string}> }
+import { useWorkspaceStore } from '@/stores/workspace'
+import { isDesktop } from '@/services/platform/desktop'
+interface GlobalPersona { version: number; revision?: string; name: string; system_prompt: string; dialogue_pairs: Array<{user:string;assistant:string}> }
 const emit = defineEmits<{ close: [] }>()
 const preferences = useChatPreferences()
 const draft = reactive({ ...preferences.settings })
 const error = ref('')
 const remote = reactive<GlobalPersona>({version:0,name:'',system_prompt:'',dialogue_pairs:[]})
+const workspace = useWorkspaceStore()
+let loadedVault = workspace.vaultId
+watch(() => workspace.vaultId, () => { if (isDesktop()) { ready.value = false; error.value = t('工作区已切换，请重新打开人设设置。', 'Workspace changed. Reopen persona settings.') } })
 const ready = ref(false)
 const saving = ref(false)
 const loading = ref(0)
@@ -20,7 +25,8 @@ let active = true
 const generations = { aiAvatar: 0, userAvatar: 0 }
 async function loadGlobal() {
   error.value = ''; ready.value = false
-  try { const result = await apiClient.get<GlobalPersona>('/api/settings/persona'); if (active) { Object.assign(remote,result); ready.value = true } }
+  const vault = workspace.vaultId
+  try { const result = await apiClient.get<GlobalPersona>('/api/settings/persona'); if (active && (!isDesktop() || vault === workspace.vaultId)) { Object.assign(remote,result); loadedVault = vault; ready.value = true } }
   catch { if (active) error.value = t('无法加载全局人设，请重试。', 'Could not load global persona. Retry.') }
 }
 onMounted(() => { if (dialog.value) restoreScroll = lockDialogScroll(dialog.value); dialog.value?.showModal(); void loadGlobal() })
@@ -48,7 +54,7 @@ async function chooseAvatar(event: Event, field: 'aiAvatar' | 'userAvatar') {
 }
 function clearAvatar(field: 'aiAvatar' | 'userAvatar') { generations[field]++; draft[field] = '' }
 async function save() {
-  if (loading.value || saving.value || !ready.value) return
+  if (loading.value || saving.value || !ready.value || (isDesktop() && loadedVault !== workspace.vaultId)) return
   saving.value = true; error.value = ''
   try {
     const updated = await apiClient.put<GlobalPersona>('/api/settings/persona', JSON.parse(JSON.stringify(remote)))
@@ -66,7 +72,7 @@ async function save() {
   <dialog ref="dialog" class="modal persona-dialog" aria-labelledby="persona-title" @cancel.prevent="emit('close')" @click="($event.target === dialog) && emit('close')">
     <form @submit.prevent="save">
       <div class="persona-heading"><h2 id="persona-title">{{ t('人设与头像', 'Persona and avatars') }}</h2><button type="button" class="button-secondary" @click="emit('close')">{{ t('关闭', 'Close') }}</button></div>
-      <p class="notice-banner">{{ t('全局人设 · 应用于连接此 AI Core 的所有对话与智能体。留空的提示词和对话示例不会拼入请求。', 'Global persona · Applies to all chats and agents connected to this AI Core. Empty prompts and examples are omitted.') }}</p>
+      <p class="notice-banner">{{ isDesktop() ? t('工作区人设 · 随当前 Vault 同步，应用于此工作区的对话与智能体。旧全局人设不会自动导入。', 'Workspace persona · Syncs with this Vault and applies to its chats and agents. Legacy global personas are not imported automatically.') : t('全局人设 · 应用于连接此 AI Core 的所有对话与智能体。留空的提示词和对话示例不会拼入请求。', 'Global persona · Applies to all chats and agents connected to this AI Core. Empty prompts and examples are omitted.') }}</p>
       <p v-if="!ready" role="status">{{ t('正在加载全局设置', 'Loading global settings') }} <button type="button" class="button-secondary" @click="loadGlobal">{{ t('重试', 'Retry') }}</button></p>
       <fieldset :disabled="!ready || saving" class="persona-columns">
         <div class="persona-primary">

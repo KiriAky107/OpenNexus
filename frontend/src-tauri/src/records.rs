@@ -38,6 +38,7 @@ pub fn path_for(kind: &str, id: &str) -> Result<String> {
         ("theme_settings", "appearance") => {
             Ok("opennexus-records/v1/theme-settings/appearance.json".into())
         }
+        ("persona", "default") => Ok("opennexus-records/v1/persona/default.json".into()),
         ("layout", "sidebars") => Ok("opennexus-records/v1/layout/sidebars.json".into()),
         ("preferences", "editor") => Ok("opennexus-records/v1/preferences/editor.json".into()),
         _ => Err(HostError::new("RECORD_ID_INVALID")),
@@ -52,6 +53,7 @@ pub fn allowed(path_value: &str) -> bool {
         "opennexus-records/v1/theme-settings/appearance.json"
             | "opennexus-records/v1/preferences/editor.json"
             | "opennexus-records/v1/layout/sidebars.json"
+            | "opennexus-records/v1/persona/default.json"
     ) {
         return true;
     }
@@ -195,7 +197,7 @@ impl Workspace {
         let bytes = self.payload(operation, &[])?;
         let record = validate(path, &bytes)?;
         Ok(Some(
-            json!({"record":record,"deleted":receipt["result"]["deleted"],"state":receipt["state"]}),
+            json!({"record":record,"hash":crate::workspace::hash(&bytes),"deleted":receipt["result"]["deleted"],"state":receipt["state"]}),
         ))
     }
 }

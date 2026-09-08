@@ -3,6 +3,8 @@ import { beforeEach, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ChatPersonaDialog from './ChatPersonaDialog.vue'
+import * as desktop from '@/services/platform/desktop'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { useChatPreferences } from '@/stores/chatPreferences'
 
 import { apiClient } from '@/services/apiClient'
@@ -43,4 +45,27 @@ it('persists separate local avatars and rejects remote avatar URLs', () => {
   expect(useChatPreferences().settings).toMatchObject({aiAvatar,userAvatar})
   expect(() => useChatPreferences().save({...preferences.settings,aiAvatar:'https://example.com/avatar.png'})).toThrow()
   expect(useChatPreferences().settings.aiAvatar).toBe(aiAvatar)
+})
+
+
+it('sends the loaded persona revision and refuses a form from another Vault', async () => {
+  const desktopMode = vi.spyOn(desktop, 'isDesktop').mockReturnValue(true)
+  const workspace = useWorkspaceStore()
+  workspace.vaultId = 'first'
+  vi.mocked(apiClient.get).mockResolvedValue({ version: 2, revision: 'a'.repeat(64), name: '', system_prompt: '', dialogue_pairs: [] })
+  vi.mocked(apiClient.put).mockClear()
+  const wrapper = mount(ChatPersonaDialog)
+  try {
+    await flushPromises()
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(apiClient.put).toHaveBeenCalledWith('/api/settings/persona', expect.objectContaining({ revision: 'a'.repeat(64) }))
+    vi.mocked(apiClient.put).mockClear()
+    workspace.vaultId = 'second'
+    await wrapper.vm.$nextTick()
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(apiClient.put).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('工作区已切换')
+  } finally { wrapper.unmount(); desktopMode.mockRestore() }
 })

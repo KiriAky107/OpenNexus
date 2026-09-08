@@ -46,3 +46,46 @@ def test_existing_provider_reads_latest_global_persona_for_complete_and_stream(m
     asyncio.run(run())
     assert len(seen) == 2
     assert all(text.count("全局人设 / Global persona") == 1 for text in seen)
+
+
+def test_desktop_persona_uses_bound_host_cas_and_retains_legacy(monkeypatch):
+    from app.services import persona_settings, desktop_notes
+    from app import host_bridge
+    save_persona(PersonaSettings(system_prompt="legacy global"))
+    monkeypatch.setattr(persona_settings, '_desktop', lambda: True)
+    calls = []
+    document = {'record': {'data': {'version': 7, 'name': 'Vault persona',
+                'system_prompt': 'Scoped prompt', 'dialogue_pairs': []}}, 'hash': 'a' * 64}
+    def call(method, **params):
+        calls.append((method, params))
+        if method == 'persona.get':
+            return document
+        if params['expected'] != document['hash']:
+            raise ApiError(409, 'REVISION_CONFLICT', 'controlled stale hash')
+        return {'record': params['record'], 'hash': 'b' * 64}
+    monkeypatch.setattr(desktop_notes, 'call', call)
+    loaded = load_persona()
+    assert loaded.revision == 'a' * 64
+    assert apply_global_persona(request()).system.endswith('Scoped prompt')
+    token = host_bridge.operation_id.set('controlled-operation')
+    try:
+        saved = save_persona(loaded.model_copy(update={'name': 'Edited'}))
+    finally:
+        host_bridge.operation_id.reset(token)
+    assert saved.version == 8 and saved.revision == 'b' * 64
+    method, params = calls[-1]
+    assert method == 'persona.write' and params['operation_id'] == 'controlled-operation'
+    assert 'revision' not in params['record']['data']
+    with pytest.raises(ApiError) as error:
+        save_persona(loaded.model_copy(update={'revision': 'c' * 64}))
+    assert error.value.code == 'PERSONA_VERSION_CONFLICT'
+    monkeypatch.setattr(persona_settings, '_desktop', lambda: False)
+    assert load_persona().system_prompt == 'legacy global'
+
+
+def test_desktop_missing_persona_does_not_import_unowned_global_data(monkeypatch):
+    from app.services import persona_settings, desktop_notes
+    save_persona(PersonaSettings(system_prompt='unowned global data'))
+    monkeypatch.setattr(persona_settings, '_desktop', lambda: True)
+    monkeypatch.setattr(desktop_notes, 'call', lambda *args, **kwargs: None)
+    assert load_persona() == PersonaSettings()

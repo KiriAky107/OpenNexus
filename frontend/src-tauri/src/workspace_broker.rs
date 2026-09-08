@@ -81,6 +81,28 @@ pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
             bound(ws, &p.vault_id)?;
             ws.record_list(p.offset, p.limit).map_err(|e| e.code)
         }
+        "workspace.persona.get" => {
+            let p: RecordRead = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            ws.record_get_kind("persona", &p.id)
+                .map(|v| v.unwrap_or(Value::Null))
+                .map_err(|e| e.code)
+        }
+        "workspace.persona.write" => {
+            let p: RecordWrite = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            if p.record["kind"] != "persona" {
+                return Err("RECORD_SCHEMA_UNSUPPORTED".into());
+            }
+            let path = crate::records::path_for("persona", p.record["id"].as_str().unwrap_or(""))
+                .map_err(|e| e.code)?;
+            let bytes = serde_json::to_vec(&p.record).map_err(|_| "RECORD_SCHEMA_INVALID")?;
+            ws.write_operation(&path, &p.expected, &bytes, "local", &p.operation_id)
+                .map_err(|e| e.code)?;
+            ws.record_operation(&p.operation_id)
+                .map(|v| v.unwrap_or(Value::Null))
+                .map_err(|e| e.code)
+        }
         "workspace.records.get" => {
             let p: RecordRead = decode(params)?;
             bound(ws, &p.vault_id)?;
@@ -211,6 +233,43 @@ pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn persona_is_vault_bound_durable_and_cas_protected() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let value = json!({"schema":1,"kind":"persona","id":"default","data":{"version":1,"name":"老师","system_prompt":"解释","dialogue_pairs":[{"user":"你好","assistant":"您好"}]}});
+        let mut request = json!({"rpc":"workspace.persona.write","params":{"vault_id":ws.vault_id,"record":value,"expected":"","operation_id":uuid::Uuid::new_v4().to_string()}});
+        let first = dispatch(&mut ws, &request).unwrap();
+        assert_eq!(first["record"], value);
+        assert_eq!(dispatch(&mut ws, &request).unwrap(), first);
+        drop(ws);
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let read =
+            json!({"rpc":"workspace.persona.get","params":{"vault_id":ws.vault_id,"id":"default"}});
+        assert_eq!(dispatch(&mut ws, &read).unwrap()["hash"], first["hash"]);
+        request["params"]["operation_id"] = json!(uuid::Uuid::new_v4().to_string());
+        request["params"]["record"]["data"]["name"] = json!("不同人设");
+        assert_eq!(
+            dispatch(&mut ws, &request).unwrap_err(),
+            "REVISION_CONFLICT"
+        );
+        request["params"]["expected"] = first["hash"].clone();
+        request["params"]["record"]["data"]["api_key"] = json!("forbidden");
+        assert_eq!(
+            dispatch(&mut ws, &request).unwrap_err(),
+            "RECORD_SCHEMA_INVALID"
+        );
+        request["params"]["record"]["data"]
+            .as_object_mut()
+            .unwrap()
+            .remove("api_key");
+        request["params"]["vault_id"] = json!("different-vault");
+        assert_eq!(
+            dispatch(&mut ws, &request).unwrap_err(),
+            "VAULT_PERMISSION_CHANGED"
+        );
+        assert_eq!(ws.pending_count().unwrap(), 1);
+    }
     #[test]
     fn rejects_stale_vault_and_unowned_fields_before_writes() {
         let root = tempfile::tempdir().unwrap();
