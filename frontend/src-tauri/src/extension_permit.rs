@@ -6,6 +6,13 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
 use zeroize::Zeroize;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -46,12 +53,46 @@ pub struct Claims {
 
 /// Opaque authenticator; the Host retains claims separately. No paths, arguments
 /// or credential declarations need to be passed to a renderer with the token.
-pub struct Permit([u8; 32]);
+pub struct Permit {
+    mac: [u8; 32],
+    generation: u64,
+}
+#[derive(Clone)]
+pub struct Lease {
+    generation: (Arc<AtomicU64>, u64),
+    credential: Option<(Arc<AtomicU64>, u64)>,
+    expires: Instant,
+}
+impl Lease {
+    pub fn check(&self) -> Result<()> {
+        if self.generation.0.load(Ordering::SeqCst) != self.generation.1 {
+            return Err(HostError::new("EXTENSION_PERMIT_REVOKED"));
+        }
+        if self
+            .credential
+            .as_ref()
+            .is_some_and(|(signal, epoch)| signal.load(Ordering::SeqCst) != *epoch)
+        {
+            return Err(HostError::new("CREDENTIALS_LOCKED"));
+        }
+        if Instant::now() >= self.expires {
+            return Err(HostError::new("EXTENSION_PERMIT_EXPIRED"));
+        }
+        Ok(())
+    }
+    #[cfg(windows)]
+    pub(crate) fn bind_credential(&mut self, signal: Arc<AtomicU64>) {
+        let epoch = signal.load(Ordering::SeqCst);
+        self.credential = Some((signal, epoch));
+    }
+}
 pub struct Authority {
     key: [u8; 32],
+    generation: Arc<AtomicU64>,
 }
 impl Drop for Authority {
     fn drop(&mut self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
         self.key.zeroize();
     }
 }
@@ -59,7 +100,10 @@ impl Default for Authority {
     fn default() -> Self {
         let mut key = [0; 32];
         rand::rngs::OsRng.fill_bytes(&mut key);
-        Self { key }
+        Self {
+            key,
+            generation: Arc::new(AtomicU64::new(0)),
+        }
     }
 }
 impl Claims {
@@ -157,23 +201,52 @@ impl Authority {
     /// Call only after consent and live trust validation. This authenticates the
     /// decision; it does not establish sandbox availability or grant broker access.
     pub fn issue(&self, claims: &Claims, now_ms: u64) -> Result<Permit> {
+        let generation = self.generation.load(Ordering::SeqCst);
         let encoded = claims.encoded(now_ms)?;
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.key).expect("HMAC key");
-        mac.update(b"OpenNexus execution permit v1\0");
+        mac.update(b"OpenNexus execution permit v2\0");
+        mac.update(&generation.to_be_bytes());
         mac.update(&encoded);
-        Ok(Permit(mac.finalize().into_bytes().into()))
+        Ok(Permit {
+            mac: mac.finalize().into_bytes().into(),
+            generation,
+        })
     }
     pub fn verify(&self, permit: &Permit, actual: &Claims, now_ms: u64) -> Result<()> {
+        let generation = self.generation.load(Ordering::SeqCst);
+        if generation != permit.generation {
+            return Err(HostError::new("EXTENSION_PERMIT_REVOKED"));
+        }
         let encoded = actual.encoded(now_ms)?;
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.key).expect("HMAC key");
-        mac.update(b"OpenNexus execution permit v1\0");
+        mac.update(b"OpenNexus execution permit v2\0");
+        mac.update(&generation.to_be_bytes());
         mac.update(&encoded);
-        mac.verify_slice(&permit.0)
-            .map_err(|_| HostError::new("EXTENSION_PERMIT_MISMATCH"))
+        mac.verify_slice(&permit.mac)
+            .map_err(|_| HostError::new("EXTENSION_PERMIT_MISMATCH"))?;
+        if generation != self.generation.load(Ordering::SeqCst) {
+            return Err(HostError::new("EXTENSION_PERMIT_REVOKED"));
+        }
+        Ok(())
+    }
+    pub fn lease(&self, permit: &Permit, claims: &Claims, now_ms: u64) -> Result<Lease> {
+        let started = Instant::now();
+        self.verify(permit, claims, now_ms)?;
+        let expires = started
+            .checked_add(Duration::from_millis(claims.expires_at_ms - now_ms))
+            .ok_or_else(|| HostError::new("EXTENSION_PERMIT_INVALID"))?;
+        let lease = Lease {
+            generation: (Arc::clone(&self.generation), permit.generation),
+            credential: None,
+            expires,
+        };
+        lease.check()?;
+        Ok(lease)
     }
     /// Lock/logout/policy invalidation may discard all permits. Restart creates a
     /// fresh key, so an old process token cannot silently revive authorization.
     pub fn invalidate_all(&mut self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
         self.key.zeroize();
         rand::rngs::OsRng.fill_bytes(&mut self.key);
     }

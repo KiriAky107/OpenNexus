@@ -19,6 +19,46 @@ pub struct Context<'a> {
     pub container_data: &'a Path,
     pub scratch: &'a Path,
 }
+pub struct PreparedLaunch {
+    data: LaunchData,
+    lease: crate::extension_permit::Lease,
+    path: std::path::PathBuf,
+    entry: String,
+    tree: String,
+}
+pub struct LeasedSuspended<'a> {
+    process: crate::extension_process::Suspended<'a>,
+    lease: crate::extension_permit::Lease,
+}
+impl PreparedLaunch {
+    pub fn create_suspended<'a>(
+        self,
+        profile: &'a crate::extension_container::Profile,
+        entry: &'a BoundEntry<'a>,
+    ) -> Result<LeasedSuspended<'a>> {
+        self.lease.check()?;
+        if self.path != entry.path()
+            || self.entry != entry.relative_name()
+            || self.tree != entry.tree_sha256()
+        {
+            return Err(HostError::new("EXTENSION_ENTRY_PERMIT_MISMATCH"));
+        }
+        let process = crate::extension_process::Suspended::create_bound(profile, entry, self.data)?;
+        self.lease.check()?;
+        Ok(LeasedSuspended {
+            process,
+            lease: self.lease,
+        })
+    }
+}
+impl<'a> LeasedSuspended<'a> {
+    /// # Safety
+    /// Live trust, active installation, broker and all sandbox resource policy
+    /// requirements must also hold. A lease does not establish those conditions.
+    pub unsafe fn resume(self) -> Result<crate::extension_process::Running<'a>> {
+        unsafe { self.process.resume_with_lease(self.lease) }
+    }
+}
 struct EnvironmentValues(BTreeMap<String, String>);
 impl Drop for EnvironmentValues {
     fn drop(&mut self) {
@@ -66,6 +106,35 @@ pub fn credential_id(claims: &Claims, reference: &str) -> Result<CredentialId> {
     })
 }
 impl Context<'_> {
+    /// Capture epochs before resolving credentials; never adopt a newer lock
+    /// generation for launch bytes prepared under an earlier session.
+    pub fn prepare(
+        &self,
+        authority: &Authority,
+        permit: &Permit,
+        claims: &Claims,
+        entry: &BoundEntry<'_>,
+        broker: &CredentialBroker,
+        now_ms: u64,
+    ) -> Result<PreparedLaunch> {
+        let mut lease = authority.lease(permit, claims, now_ms)?;
+        if claims
+            .environment
+            .values()
+            .any(|v| matches!(v, Environment::CredentialScope(_)))
+        {
+            lease.bind_credential(broker.lock_signal());
+        }
+        let data = self.build(authority, permit, claims, entry, broker, now_ms)?;
+        lease.check()?;
+        Ok(PreparedLaunch {
+            data,
+            lease,
+            path: entry.path().to_owned(),
+            entry: entry.relative_name().to_owned(),
+            tree: entry.tree_sha256().to_owned(),
+        })
+    }
     /// Caller must still recheck live trust/permit/session state immediately
     /// before resume; returning encoded data is not an execution lease.
     pub fn build(

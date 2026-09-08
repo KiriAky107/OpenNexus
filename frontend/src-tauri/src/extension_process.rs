@@ -85,7 +85,11 @@ impl Drop for Process<'_> {
     }
 }
 pub struct Suspended<'a>(Process<'a>);
-pub struct Running<'a>(Process<'a>);
+pub struct Running<'a> {
+    process: Process<'a>,
+    #[cfg(feature = "desktop")]
+    revocation: Option<crate::extension_revocation::Watch>,
+}
 impl<'a> Suspended<'a> {
     /// Creates hidden, with no inherited handles and an explicit environment and
     /// current directory. The profile borrow prevents cleanup while this owner
@@ -187,25 +191,57 @@ impl<'a> Suspended<'a> {
         if unsafe { ResumeThread(self.0.handles.thread.as_raw_handle()) } != 1 {
             return Err(HostError::new("EXTENSION_PROCESS_RESUME_FAILED"));
         }
-        Ok(Running(self.0))
+        Ok(Running {
+            process: self.0,
+            #[cfg(feature = "desktop")]
+            revocation: None,
+        })
+    }
+    /// # Safety
+    /// The same complete resource/broker/trust preconditions as resume apply.
+    /// This additionally arms revocation monitoring before any instruction resumes.
+    #[cfg(feature = "desktop")]
+    pub unsafe fn resume_with_lease(
+        self,
+        lease: crate::extension_permit::Lease,
+    ) -> Result<Running<'a>> {
+        let watch = crate::extension_revocation::Watch::arm(&self.0.job, lease)?;
+        watch.check()?;
+        if unsafe { ResumeThread(self.0.handles.thread.as_raw_handle()) } != 1 {
+            return Err(HostError::new("EXTENSION_PROCESS_RESUME_FAILED"));
+        }
+        let running = Running {
+            process: self.0,
+            revocation: Some(watch),
+        };
+        running.check_authorization()?;
+        Ok(running)
     }
 }
 impl Running<'_> {
+    pub fn check_authorization(&self) -> Result<()> {
+        #[cfg(feature = "desktop")]
+        if let Some(watch) = &self.revocation {
+            return watch.check();
+        }
+        Ok(())
+    }
     #[cfg(test)]
     pub(crate) fn active_test_processes(&self) -> Result<u32> {
-        self.0.job.active_processes()
+        self.process.job.active_processes()
     }
     /// Arm before dispatching a tool request; finish after receiving its result.
     /// Failure to arm must prevent dispatch. This does not time server lifetime.
     pub fn start_tool_call(&self) -> Result<crate::extension_deadline::ToolDeadline> {
-        crate::extension_deadline::ToolDeadline::arm(&self.0.job)
+        self.check_authorization()?;
+        crate::extension_deadline::ToolDeadline::arm(&self.process.job)
     }
     #[cfg(test)]
     pub(crate) fn start_test_tool_call(
         &self,
         budget: Duration,
     ) -> Result<crate::extension_deadline::ToolDeadline> {
-        crate::extension_deadline::ToolDeadline::arm_test(&self.0.job, budget)
+        crate::extension_deadline::ToolDeadline::arm_test(&self.process.job, budget)
     }
     /// A bounded observation only. The runtime must enforce the tool deadline.
     pub fn wait(&self, timeout: Duration) -> Result<Option<u32>> {
@@ -213,12 +249,15 @@ impl Running<'_> {
             .ok()
             .filter(|n| *n <= 60000)
             .ok_or_else(|| HostError::new("EXTENSION_PROCESS_WAIT_INVALID"))?;
-        match unsafe { WaitForSingleObject(self.0.handles.process.as_raw_handle(), milliseconds) } {
+        match unsafe {
+            WaitForSingleObject(self.process.handles.process.as_raw_handle(), milliseconds)
+        } {
             WAIT_TIMEOUT => Ok(None),
             WAIT_OBJECT_0 => {
                 let mut code = 0;
-                if unsafe { GetExitCodeProcess(self.0.handles.process.as_raw_handle(), &mut code) }
-                    == 0
+                if unsafe {
+                    GetExitCodeProcess(self.process.handles.process.as_raw_handle(), &mut code)
+                } == 0
                 {
                     return Err(HostError::new("EXTENSION_PROCESS_QUERY_FAILED"));
                 }
@@ -229,7 +268,7 @@ impl Running<'_> {
     }
     /// Terminates the entire managed group, including descendants.
     pub fn terminate(&self) -> Result<()> {
-        self.0.job.terminate()
+        self.process.job.terminate()
     }
 }
 fn verify_identity(handles: &Handles, profile: &Profile) -> Result<()> {
