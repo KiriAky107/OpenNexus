@@ -15,6 +15,27 @@ pub struct PinnedPackage {
     files: BTreeMap<String, File>,
     tree_sha256: String,
 }
+/// Scoped ACL ownership, created before any mutation. Release only after all
+/// instance processes/handles have closed; drop retries cleanup on error/unwind.
+pub struct PackageAccess<'a> {
+    package: &'a PinnedPackage,
+    profile: &'a Profile,
+    active: bool,
+}
+impl PackageAccess<'_> {
+    pub fn finish(mut self) -> Result<()> {
+        self.package.revoke_access(self.profile)?;
+        self.active = false;
+        Ok(())
+    }
+}
+impl Drop for PackageAccess<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.package.revoke_access(self.profile);
+        }
+    }
+}
 /// The package borrow and all ancestor handles must outlive the process using
 /// this path. Only files present in the verified package can produce this guard.
 pub struct BoundEntry<'a> {
@@ -244,6 +265,49 @@ impl PinnedPackage {
     pub fn tree_sha256(&self) -> &str {
         &self.tree_sha256
     }
+    pub fn access<'a>(&'a self, profile: &'a Profile) -> Result<PackageAccess<'a>> {
+        self.access_with(profile, || self.grant_read_execute(profile))
+    }
+    fn access_with<'a>(
+        &'a self,
+        profile: &'a Profile,
+        grant: impl FnOnce() -> Result<()>,
+    ) -> Result<PackageAccess<'a>> {
+        let guard = PackageAccess {
+            package: self,
+            profile,
+            active: true,
+        };
+        if let Err(error) = grant() {
+            guard.finish()?;
+            return Err(error);
+        }
+        Ok(guard)
+    }
+    fn revoke_access(&self, profile: &Profile) -> Result<()> {
+        let mut failed = false;
+        for dir in self.directories.values() {
+            if dir
+                .try_clone()
+                .map(|dir| dir.into_std_file())
+                .map_err(HostError::from)
+                .and_then(|file| profile.revoke_package_access(&file))
+                .is_err()
+            {
+                failed = true;
+            }
+        }
+        for file in self.files.values() {
+            if profile.revoke_package_access(file).is_err() {
+                failed = true;
+            }
+        }
+        if failed {
+            Err(HostError::new("EXTENSION_CONTAINER_ACL_REVOKE_FAILED"))
+        } else {
+            Ok(())
+        }
+    }
     pub fn grant_read_execute(&self, profile: &Profile) -> Result<()> {
         for dir in self.directories.values() {
             profile.grant_package_read_execute(&dir.try_clone()?.into_std_file())?;
@@ -346,5 +410,42 @@ mod tests {
             std::fs::read(moved.join("package/entry.exe")).unwrap(),
             b"verified bytes"
         );
+    }
+    #[test]
+    fn scoped_access_restores_all_acl_entries_and_preserves_other_instances() {
+        let (_temp, root, inventory, hash) = fixture();
+        let pinned = PinnedPackage::open(&root, &inventory, &hash).unwrap();
+        let snapshot = || {
+            let mut result = Vec::new();
+            for dir in pinned.directories.values() {
+                result.push(crate::extension_container::test_acl_entries(
+                    &dir.try_clone().unwrap().into_std_file(),
+                ));
+            }
+            for file in pinned.files.values() {
+                result.push(crate::extension_container::test_acl_entries(file));
+            }
+            result
+        };
+        let before = snapshot();
+        let first = Profile::create().unwrap();
+        let second = Profile::create().unwrap();
+        let other = pinned.access(&second).unwrap();
+        let other_acl = snapshot();
+        assert_ne!(other_acl, before);
+        let access = pinned.access(&first).unwrap();
+        assert_ne!(snapshot(), other_acl);
+        access.finish().unwrap();
+        assert_eq!(snapshot(), other_acl);
+        let failed = pinned.access_with(&first, || {
+            first.grant_package_read_execute(pinned.files.values().next().unwrap())?;
+            Err(HostError::new("INJECTED_PARTIAL_GRANT"))
+        });
+        assert_eq!(failed.err().unwrap().code, "INJECTED_PARTIAL_GRANT");
+        assert_eq!(snapshot(), other_acl);
+        drop(other);
+        assert_eq!(snapshot(), before);
+        first.remove().unwrap();
+        second.remove().unwrap();
     }
 }

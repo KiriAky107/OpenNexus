@@ -355,6 +355,7 @@ impl Registry {
                             matches!(
                                 code,
                                 "EXTENSION_CONTAINER_CLEANUP_FAILED"
+                                    | "EXTENSION_CONTAINER_ACL_REVOKE_FAILED"
                                     | "EXTENSION_RESOURCE_TERMINATE_FAILED"
                                     | "EXTENSION_INSTANCE_WORKER_FAILED"
                             )
@@ -398,7 +399,18 @@ fn run_in_profile(
     profile: &Profile,
 ) -> Result<()> {
     let pinned = PinnedPackage::open(&spec.package, &spec.inventory, &spec.claims.tree_sha256)?;
-    pinned.grant_read_execute(profile)?;
+    let access = pinned.access(profile)?;
+    let result = run_with_access(spec, control, receiver, profile, &pinned);
+    access.finish()?;
+    result
+}
+fn run_with_access(
+    spec: LaunchSpec,
+    control: &Control,
+    receiver: Receiver<Command>,
+    profile: &Profile,
+    pinned: &PinnedPackage,
+) -> Result<()> {
     let entry = pinned.bind_entry(&spec.claims.entry)?;
     let folder = profile.folder()?;
     let scratch = folder.join("Temp");
@@ -524,6 +536,10 @@ mod tests {
                 .collect();
         let dir =
             cap_std::fs::Dir::open_ambient_dir(&package, cap_std::ambient_authority()).unwrap();
+        let acl_file = std::fs::File::open(&executable).unwrap();
+        let acl_root = dir.try_clone().unwrap().into_std_file();
+        let file_acl = crate::extension_container::test_acl_entries(&acl_file);
+        let root_acl = crate::extension_container::test_acl_entries(&acl_root);
         let inventory = || Inventory {
             files: files.clone(),
             expanded_size: bytes.len() as u64,
@@ -751,6 +767,14 @@ mod tests {
                 .active_processes()
                 .unwrap(),
             0
+        );
+        assert_eq!(
+            crate::extension_container::test_acl_entries(&acl_file),
+            file_acl
+        );
+        assert_eq!(
+            crate::extension_container::test_acl_entries(&acl_root),
+            root_acl
         );
     }
     fn channel() -> (Endpoint, Receiver<Command>) {

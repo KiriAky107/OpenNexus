@@ -6,6 +6,8 @@ use windows_sys::Win32::Security::{
     PSID,
 };
 
+static PACKAGE_ACL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub struct Profile {
     name: Vec<u16>,
     sid: PSID,
@@ -60,6 +62,18 @@ impl Profile {
     /// is used: every directory and file must be checked and granted separately.
     /// This adds an ACE; it does not sanitize pre-existing permissions.
     pub fn grant_package_read_execute(&self, object: &std::fs::File) -> Result<()> {
+        self.update_package_access(object, false)
+    }
+    /// Remove only this freshly-created instance's allowed ACEs, using the
+    /// original held object handle. Other principals keep their current ACLs.
+    pub fn revoke_package_access(&self, object: &std::fs::File) -> Result<()> {
+        self.update_package_access(object, true)
+    }
+    fn update_package_access(&self, object: &std::fs::File, revoke: bool) -> Result<()> {
+        // Serialize Host read/merge/write operations across concurrent instances.
+        let _lock = PACKAGE_ACL_LOCK
+            .lock()
+            .map_err(|_| HostError::new("EXTENSION_CONTAINER_ACL_FAILED"))?;
         use std::os::windows::{fs::MetadataExt, io::AsRawHandle};
         use windows_sys::Win32::{
             Foundation::LocalFree,
@@ -82,12 +96,13 @@ impl Profile {
         let metadata = object
             .metadata()
             .map_err(|_| HostError::new("EXTENSION_CONTAINER_ACL_FAILED"))?;
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-            || !(metadata.is_file() || metadata.is_dir())
+        if !revoke
+            && (metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                || !(metadata.is_file() || metadata.is_dir()))
         {
             return Err(HostError::new("EXTENSION_CONTAINER_ACL_OBJECT_INVALID"));
         }
-        if metadata.is_file() {
+        if metadata.is_file() && !revoke {
             let mut info = BY_HANDLE_FILE_INFORMATION::default();
             if unsafe { GetFileInformationByHandle(object.as_raw_handle(), &mut info) } == 0
                 || info.nNumberOfLinks != 1
@@ -117,7 +132,7 @@ impl Profile {
         }
         let entry = EXPLICIT_ACCESS_W {
             grfAccessPermissions: FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
-            grfAccessMode: GRANT_ACCESS,
+            grfAccessMode: if revoke { REVOKE_ACCESS } else { GRANT_ACCESS },
             grfInheritance: 0,
             Trustee: TRUSTEE_W {
                 TrusteeForm: TRUSTEE_IS_SID,
@@ -215,6 +230,52 @@ impl Drop for Profile {
             self.sid = std::ptr::null_mut();
         }
     }
+}
+
+#[cfg(all(test, feature = "desktop"))]
+pub(crate) fn test_acl_entries(object: &std::fs::File) -> Vec<Vec<u8>> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::{
+        Foundation::LocalFree,
+        Security::{Authorization::*, *},
+    };
+    struct Allocation(*mut core::ffi::c_void);
+    impl Drop for Allocation {
+        fn drop(&mut self) {
+            unsafe {
+                LocalFree(self.0);
+            }
+        }
+    }
+    let mut acl = std::ptr::null_mut();
+    let mut descriptor = std::ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            GetSecurityInfo(
+                object.as_raw_handle(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut acl,
+                std::ptr::null_mut(),
+                &mut descriptor,
+            )
+        },
+        0
+    );
+    let _descriptor = Allocation(descriptor);
+    assert!(!acl.is_null());
+    let mut entries = Vec::new();
+    for index in 0..unsafe { (*acl).AceCount } {
+        let mut ace = std::ptr::null_mut();
+        assert_ne!(unsafe { GetAce(acl, u32::from(index), &mut ace) }, 0);
+        let length = unsafe { (*(ace as *const ACE_HEADER)).AceSize };
+        entries.push(
+            unsafe { std::slice::from_raw_parts(ace.cast::<u8>(), usize::from(length)) }.to_vec(),
+        );
+    }
+    entries
 }
 
 #[cfg(test)]
@@ -786,17 +847,39 @@ mod tests {
             // Actual native RPC: the child cannot name an identity or connect to
             // a shared endpoint; only its own stdio pipe reaches this broker.
             {
-                use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-                let sentinel = unsafe {
-                    windows_sys::Win32::System::Threading::CreateEventW(
-                        std::ptr::null(),
-                        1,
-                        0,
-                        std::ptr::null(),
-                    )
+                use std::os::windows::io::AsRawHandle;
+                use windows_sys::Win32::Storage::FileSystem::{
+                    FileIdInfo, GetFileInformationByHandleEx, FILE_ID_INFO,
                 };
-                assert!(!sentinel.is_null());
-                let sentinel = unsafe { OwnedHandle::from_raw_handle(sentinel) };
+                let sentinel_dir = tempfile::tempdir().unwrap();
+                let sentinel = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .open(sentinel_dir.path().join("host-only-sentinel"))
+                    .unwrap();
+                let mut identity: FILE_ID_INFO = unsafe { std::mem::zeroed() };
+                assert_ne!(
+                    unsafe {
+                        GetFileInformationByHandleEx(
+                            sentinel.as_raw_handle(),
+                            FileIdInfo,
+                            (&mut identity as *mut FILE_ID_INFO).cast(),
+                            std::mem::size_of::<FILE_ID_INFO>() as u32,
+                        )
+                    },
+                    0
+                );
+                let sentinel_identity = format!(
+                    "{}:{}",
+                    identity.VolumeSerialNumber,
+                    identity
+                        .FileId
+                        .Identifier
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
+                );
                 assert_ne!(
                     unsafe {
                         windows_sys::Win32::Foundation::SetHandleInformation(
@@ -817,6 +900,7 @@ mod tests {
                 rpc.arguments = vec![
                     "file_rpc".into(),
                     (sentinel.as_raw_handle() as usize).to_string(),
+                    sentinel_identity,
                 ];
                 rpc.permissions.insert("notes.read".into());
                 rpc.expires_at_ms = 10_000;
@@ -840,7 +924,10 @@ mod tests {
                 let crate::extension_io::Event::Frame(request) =
                     pump.receive(std::time::Duration::from_secs(5)).unwrap()
                 else {
-                    panic!("missing RPC request")
+                    panic!(
+                        "missing RPC request; child exit: {:?}",
+                        running.wait(std::time::Duration::from_secs(1))
+                    )
                 };
                 let response = files.dispatch(&mut workspace, &request).unwrap();
                 pump.send(serde_json::to_vec(&response).unwrap()).unwrap();
