@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from 'vue'
 import type { CommunityKey, CommunityRelease, CommunitySource, PackageKind } from '@/contracts/community'
-import { cachedCatalog, discoverKeys, fetchCatalog, installRelease, loadSources, saveSources } from '@/services/communityService'
+import { cachedCatalog, discoverSource, fetchCatalog, installRelease, loadSources, saveSources } from '@/services/communityService'
+import { isDesktop } from '@/services/platform/desktop'
+import { reviewTrust, confirmTrust, type TrustReview } from '@/services/extensionTrustService'
 import AppDialog from '@/components/common/AppDialog.vue'
 
 const kinds: { id: PackageKind | ''; label: string }[] = [
@@ -13,6 +15,7 @@ const sources = ref(loadSources()), selectedSource = ref(sources.value[0]?.id ??
 const url = ref(''), query = ref(''), kind = ref<PackageKind | ''>('')
 const items = ref<CommunityRelease[]>([]), detail = ref<CommunityRelease | null>(null)
 const candidateKeys = ref<CommunityKey[]>([]), candidateUrl = ref('')
+const candidateSourceId = ref(''), candidateEnabled = ref(true), trustReviews = ref<TrustReview[]>([])
 const busy = ref(false), error = ref(''), notice = ref(''), offline = ref(false)
 let controller: AbortController | undefined
 let version = 0
@@ -38,14 +41,22 @@ async function run(action: (signal: AbortSignal, current: () => boolean) => Prom
 }
 function inspectSource() {
   const snapshot = url.value.trim()
-  void run(async (signal, current) => { const keys = await discoverKeys(snapshot, signal); if (current()) { candidateKeys.value = keys; candidateUrl.value = snapshot } })
+  void run(async (signal, current) => {
+    const discovered = await discoverSource(snapshot, signal)
+    const reviews = isDesktop() ? await reviewTrust(snapshot, discovered.source_id, discovered.keys, true) : []
+    if (current()) { candidateKeys.value = discovered.keys; candidateSourceId.value = discovered.source_id; candidateEnabled.value = true; trustReviews.value = reviews; candidateUrl.value = snapshot }
+  })
 }
 function trustSource() {
-  const existing = sources.value.find(item => item.url === candidateUrl.value)
-  const value: CommunitySource = { id: existing?.id ?? crypto.randomUUID(), url: candidateUrl.value, enabled: true, keys: candidateKeys.value, fetchedAt: new Date().toISOString() }
-  sources.value = [...sources.value.filter(item => item.id !== value.id), value]
-  saveSources(sources.value); selectedSource.value = value.id; candidateUrl.value = ''; candidateKeys.value = []
-  search()
+  const snapshot = { url: candidateUrl.value, keys: candidateKeys.value, sourceId: candidateSourceId.value, enabled: candidateEnabled.value, reviews: trustReviews.value }
+  void run(async (_signal, current) => {
+    if (isDesktop()) await confirmTrust(snapshot.reviews)
+    const existing = sources.value.find(item => item.url === snapshot.url)
+    const value: CommunitySource = { id: existing?.id ?? crypto.randomUUID(), source_id: snapshot.sourceId, url: snapshot.url, enabled: snapshot.enabled, keys: snapshot.keys, fetchedAt: new Date().toISOString() }
+    sources.value = [...sources.value.filter(item => item.id !== value.id), value]
+    saveSources(sources.value)
+    if (current()) { selectedSource.value = value.id; candidateUrl.value = ''; candidateKeys.value = []; trustReviews.value = []; notice.value = snapshot.enabled ? '来源公钥已固定。可以搜索目录。' : '来源已停用。'; items.value = [] }
+  })
 }
 function search() {
   void run(async (signal, current) => {
@@ -69,8 +80,13 @@ function install() {
   })
 }
 function toggleSource() {
-  const selected = source(); selected.enabled = !selected.enabled; saveSources(sources.value)
-  items.value = []; cancel()
+  const selected = source()
+  if (!isDesktop()) { selected.enabled = !selected.enabled; saveSources(sources.value); items.value = []; cancel(); return }
+  if (!selected.source_id) { error.value = '请先重新检查此来源并确认公钥，将旧来源设置迁入桌面信任库。'; return }
+  void run(async (_signal, current) => {
+    const reviews = await reviewTrust(selected.url, selected.source_id!, selected.keys, !selected.enabled)
+    if (current()) { candidateKeys.value = selected.keys; candidateSourceId.value = selected.source_id!; candidateEnabled.value = !selected.enabled; trustReviews.value = reviews; candidateUrl.value = selected.url }
+  })
 }
 </script>
 
@@ -109,10 +125,17 @@ function toggleSource() {
       <h2>已保存的声明式候选</h2><p>这些候选尚未应用到人设、MCP 或模型运行配置。</p>
       <details v-for="item in candidates" :key="item.key"><summary>{{ item.key.replace('community-candidate:', '') }}</summary><pre>{{ item.value }}</pre><button class="btn" @click="removeCandidate(item.key)">删除候选</button></details>
     </section>
-    <AppDialog v-if="candidateUrl" label="核对来源公钥" @close="candidateUrl = ''">
-      <p>{{ candidateUrl }}</p><p>请与来源维护者公布的公钥核对。确认后固定这些公钥；密钥改变时不会自动信任。</p>
+    <AppDialog v-if="candidateUrl" label="核对来源公钥" @close="candidateUrl = ''; trustReviews = []">
+      <p v-if="error" role="alert">{{ error }}</p><p>{{ candidateUrl }}</p><p>请与来源维护者公布的公钥核对。确认后固定这些公钥；密钥改变时不会自动信任。</p>
+      <p>来源标识：{{ candidateSourceId }} · {{ candidateEnabled ? '启用' : '停用' }}</p>
       <pre>{{ JSON.stringify(candidateKeys, null, 2) }}</pre>
-      <button class="btn btn-primary" :disabled="!candidateKeys.length" @click="trustSource">确认并固定公钥</button>
+      <div v-for="review in trustReviews" :key="review.review_id">
+        <p>{{ review.proposed.namespace }} / {{ review.proposed.key_id }}：{{ review.previous ? '更新已有信任设置' : '首次确认' }}</p>
+        <details v-if="review.previous"><summary>原有公钥与状态</summary><pre>{{ JSON.stringify(review.previous, null, 2) }}</pre></details>
+        <p>确认摘要：{{ review.fingerprint }}</p>
+      </div>
+      <p v-if="trustReviews.length">确认在两分钟内有效。过期或设置已改变时，请关闭对话框并重新检查来源。</p>
+      <button class="btn btn-primary" :disabled="busy || !candidateKeys.length" @click="trustSource">确认来源设置</button>
     </AppDialog>
     <AppDialog v-if="detail" label="发行详情与安装" @close="detail = null">
       <template v-if="detail">

@@ -47,11 +47,14 @@ async function download(source: CommunitySource, path: string, maxSize: number, 
   } finally { clearTimeout(timeout); signal?.removeEventListener('abort', abort) }
 }
 
-export async function discoverKeys(url: string, signal?: AbortSignal): Promise<CommunityKey[]> {
+export async function discoverSource(url: string, signal?: AbortSignal): Promise<{ source_id: string; keys: CommunityKey[] }> {
   const source: CommunitySource = { id: 'candidate', url, enabled: true, keys: [] }
   const value = JSON.parse(new TextDecoder().decode(await download(source, '/catalog/v1/sources', 1024 * 1024, signal)))
-  if (value.schema_version !== 1 || !Array.isArray(value.keys)) throw new Error('不支持的社区来源协议')
-  return value.keys
+  if (value.schema_version !== 1 || typeof value.source_id !== 'string' || !value.source_id || !Array.isArray(value.keys) || value.keys.length > 64) throw new Error('不支持的社区来源协议')
+  return { source_id: value.source_id, keys: value.keys }
+}
+export async function discoverKeys(url: string, signal?: AbortSignal): Promise<CommunityKey[]> {
+  return (await discoverSource(url, signal)).keys
 }
 
 export async function fetchCatalog(source: CommunitySource, q = '', kind = '', signal?: AbortSignal): Promise<CommunityCatalog> {

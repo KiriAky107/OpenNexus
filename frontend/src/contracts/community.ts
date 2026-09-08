@@ -1,7 +1,7 @@
 /** 社区协议 v1；签名元数据与安装运行状态分离。 */
 export type PackageKind = 'theme' | 'skill' | 'plugin' | 'mcp' | 'persona' | 'template' | 'model'
 export interface CommunityKey { key_id: string; namespace: string; public_key: string; revoked: boolean }
-export interface CommunitySource { id: string; url: string; enabled: boolean; keys: CommunityKey[]; fetchedAt?: string }
+export interface CommunitySource { source_id?: string; id: string; url: string; enabled: boolean; keys: CommunityKey[]; fetchedAt?: string }
 export interface CommunityRelease {
   schema_version: 1; namespace: string; package_id: string; type: PackageKind; version: string
   name: string; author_id: string; license: string; description: string; sha256: string; size: number

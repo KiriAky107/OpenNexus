@@ -21,7 +21,7 @@ describe('社区 Python / TypeScript 签名契约', () => {
     await expect(verifyRelease(release, { ...vector.key, revoked: true }, bytes)).rejects.toThrow('撤回')
   })
   it('不携带凭据、拒绝重定向并支持取消', async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ schema_version: 1, keys: [] })))
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ schema_version: 1, source_id: "fixture", keys: [] })))
     vi.stubGlobal('fetch', fetch)
     await discoverKeys('https://example.org')
     expect(fetch.mock.calls[0]?.[1]).toMatchObject({ credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer' })
