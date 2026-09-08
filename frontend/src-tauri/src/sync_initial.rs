@@ -40,6 +40,9 @@ impl Workspace {
                     return Err(HostError::new("FILE_TOO_LARGE"));
                 }
                 let bytes = fs::read(source)?;
+                if crate::records::is_record(&path) {
+                    crate::records::validate(&path, &bytes)?;
+                }
                 Ok(Local {
                     path,
                     hash: hash(&bytes),

@@ -484,6 +484,57 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
         .record_get(task_id)
         .unwrap()
         .is_none());
+
+    let preference_path = "opennexus-records/v1/theme-settings/appearance.json";
+    let preference_record = json!({"schema":1,"kind":"theme_settings","id":"appearance","data":{"themeId":"dark","fontEditorSize":18,"fontEditorFamily":"system-ui","lineHeight":1.7,"codeBlockTheme":"auto","headings":{"custom":false,"family":"inherit","levels":([32,28,24,21,18,16].map(|size|json!({"size":size,"weight":700})))}}});
+    workspace
+        .lock()
+        .unwrap()
+        .write(
+            preference_path,
+            "",
+            &serde_json::to_vec(&preference_record).unwrap(),
+            "local",
+        )
+        .unwrap();
+    client.push_one(&workspace, &binding).await.unwrap();
+    client_b.pull_page(&workspace_b, &binding_b).await.unwrap();
+    assert_eq!(
+        workspace_b
+            .lock()
+            .unwrap()
+            .record_get_kind("theme_settings", "appearance")
+            .unwrap()
+            .unwrap()["record"],
+        preference_record
+    );
+    {
+        let mut ws = workspace_b.lock().unwrap();
+        let stored = ws
+            .record_get_kind("theme_settings", "appearance")
+            .unwrap()
+            .unwrap();
+        let mut record = stored["record"].clone();
+        record["data"]["fontEditorSize"] = json!(24);
+        ws.write(
+            preference_path,
+            stored["hash"].as_str().unwrap(),
+            &serde_json::to_vec(&record).unwrap(),
+            "local",
+        )
+        .unwrap();
+    }
+    client_b.push_one(&workspace_b, &binding_b).await.unwrap();
+    client.pull_page(&workspace, &binding).await.unwrap();
+    assert_eq!(
+        workspace
+            .lock()
+            .unwrap()
+            .record_get_kind("theme_settings", "appearance")
+            .unwrap()
+            .unwrap()["record"]["data"]["fontEditorSize"],
+        24
+    );
     // Kill the actual client process after each durable 10 MiB server offset,
     // before its response reaches the client. The next process must query offset.
     use sha2::{Digest, Sha256};

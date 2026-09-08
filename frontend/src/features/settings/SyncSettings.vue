@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch, computed } from 'vue'
+import { preferenceSyncIssues, resolvePreferenceDraft, seedCurrentPreferences } from '@/services/platform/preferenceSync'
 import { hostInvoke } from '@/services/platform/desktop'
 import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
@@ -18,6 +19,7 @@ const preview = ref<Preview | null>(null), previewPage = ref(0)
 const previewItems = computed(() => preview.value?.items.slice(previewPage.value * 100, (previewPage.value + 1) * 100) ?? [])
 watch([endpoint, account, selected, () => status.value?.vault_id], () => { preview.value = null; previewPage.value = 0 })
 function previewMerge() { return act(async () => {
+  await seedCurrentPreferences(status.value!.vault_id)
   preview.value = await hostInvoke<Preview>('sync_preview', { request: { vault_id: status.value!.vault_id, endpoint: endpoint.value, account: account.value, remote_vault: selected.value, mode: 'merge' } })
 }) }
 async function merge() {
@@ -61,7 +63,10 @@ async function bind(mode: 'upload' | 'download') {
   const remote = selected.value
   if (!vaultId || !remote) return
   if (!(await askConfirm(mode === 'upload' ? t('将当前本地笔记上传到所选空远端库？', 'Upload current notes to the selected empty remote vault?') : t('将所选远端库下载到当前空本地库？', 'Download the selected remote vault into this empty local vault?')))) return
-  await act(async () => { await hostInvoke('sync_bind', { request: { vault_id: vaultId, endpoint: endpoint.value, account: account.value, remote_vault: remote, mode } }) })
+  await act(async () => {
+    if (mode === 'upload') await seedCurrentPreferences(vaultId)
+    await hostInvoke('sync_bind', { request: { vault_id: vaultId, endpoint: endpoint.value, account: account.value, remote_vault: remote, mode } })
+  })
 }
 async function unbind() {
   const binding = status.value?.binding
@@ -86,8 +91,13 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <h2 id="sync-title">OpenNexus Sync</h2>
     <p>{{ t('同步当前 Vault 的 Markdown 与常用附件。登录前请先解锁设备凭据保险库。', 'Sync Markdown and supported attachments in the current vault. Unlock the device credential vault before signing in.') }}</p>
-    <p class="subtle">{{ t('两边都有文件时先预览合并。内容冲突会保留两端版本；任务和配置记录同步仍在开发中。', 'Preview a merge when both vaults contain files. Conflicts retain both versions; task and configuration record sync is still under development.') }}</p>
+    <p class="subtle">{{ t('默认同步笔记、附件、任务、主题设置和编辑器偏好。两边都有数据时先预览合并；密钥、权限和本机路径不随设置同步。', 'Notes, attachments, tasks, theme settings and editor preferences sync by default. Preview a merge when both vaults contain data. Secrets, permissions and device paths stay local.') }}</p>
     <p v-if="message" class="error-banner" role="alert">{{ message }}</p>
+    <article v-for="issue in preferenceSyncIssues" :key="issue.kind" class="sync-conflict" role="status">
+      <h3>{{ issue.label }}</h3><p>{{ issue.error }}</p>
+      <p>{{ t('本机待提交设置已保留，请选择使用哪一份。', 'The local preference draft is retained. Choose which version to use.') }}</p>
+      <div v-if="issue.hasDraft" class="inline-actions"><button :disabled="busy" @click="act(() => resolvePreferenceDraft(issue.kind, 'local'))">{{ t('保留本机设置', 'Keep local settings') }}</button><button :disabled="busy" @click="act(() => resolvePreferenceDraft(issue.kind, 'remote'))">{{ t('采用工作区设置', 'Use workspace settings') }}</button></div>
+    </article>
     <form class="sync-form" @submit.prevent="login">
       <label>{{ t('服务器地址', 'Server URL') }}<input v-model="endpoint" required :disabled="!!status?.binding || busy" type="url" autocomplete="url" /></label>
       <label>{{ t('账户', 'Account') }}<input v-model="account" required :disabled="!!status?.binding || busy" autocomplete="username" /></label>

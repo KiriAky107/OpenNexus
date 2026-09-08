@@ -19,7 +19,7 @@ pub struct Record {
     pub schema: u32,
     pub kind: String,
     pub id: String,
-    pub data: TaskData,
+    pub data: Value,
 }
 pub fn path(id: &str) -> Result<String> {
     if !id.starts_with("task_")
@@ -32,10 +32,27 @@ pub fn path(id: &str) -> Result<String> {
     }
     Ok(format!("opennexus-records/v1/tasks/{id}.json"))
 }
+pub fn path_for(kind: &str, id: &str) -> Result<String> {
+    match (kind, id) {
+        ("task", id) => path(id),
+        ("theme_settings", "appearance") => {
+            Ok("opennexus-records/v1/theme-settings/appearance.json".into())
+        }
+        ("preferences", "editor") => Ok("opennexus-records/v1/preferences/editor.json".into()),
+        _ => Err(HostError::new("RECORD_ID_INVALID")),
+    }
+}
 pub fn is_record(path: &str) -> bool {
     path.starts_with("opennexus-records/")
 }
 pub fn allowed(path_value: &str) -> bool {
+    if matches!(
+        path_value,
+        "opennexus-records/v1/theme-settings/appearance.json"
+            | "opennexus-records/v1/preferences/editor.json"
+    ) {
+        return true;
+    }
     path_value
         .strip_prefix("opennexus-records/v1/tasks/")
         .and_then(|v| v.strip_suffix(".json"))
@@ -48,10 +65,15 @@ pub fn validate(path_value: &str, content: &[u8]) -> Result<Record> {
     let record: Record =
         serde_json::from_slice(content).map_err(|_| HostError::new("RECORD_SCHEMA_INVALID"))?;
     let time = |value: i64| (0..=253402300799999).contains(&value);
-    if record.schema != 1 || record.kind != "task" || path(&record.id)? != path_value {
+    if record.schema != 1 || path_for(&record.kind, &record.id)? != path_value {
         return Err(HostError::new("RECORD_SCHEMA_UNSUPPORTED"));
     }
-    let data = &record.data;
+    if record.kind != "task" {
+        crate::preference_records::validate(&record.kind, &record.data)?;
+        return Ok(record);
+    }
+    let data: TaskData = serde_json::from_value(record.data.clone())
+        .map_err(|_| HostError::new("RECORD_SCHEMA_INVALID"))?;
     if data.title.trim().is_empty()
         || data.title.len() > 4096
         || data.description.len() > 262144
@@ -76,15 +98,19 @@ pub fn validate(path_value: &str, content: &[u8]) -> Result<Record> {
 }
 impl Workspace {
     pub(crate) fn normalize_record_links(&mut self) -> Result<()> {
-        for path in self.sync_paths()?.into_iter().filter(|v| allowed(v)) {
+        for path in self
+            .sync_paths()?
+            .into_iter()
+            .filter(|v| v.starts_with("opennexus-records/v1/tasks/") && allowed(v))
+        {
             let bytes = std::fs::read(self.resolve(&path)?)?;
             let original = validate(&path, &bytes)?;
-            if let Some(note_id) = original.data.note_id.as_ref() {
+            if let Some(note_id) = original.data["note_id"].as_str() {
                 if let Ok(note_path) = self.path_for_id(note_id) {
                     if let Some(entry) = self.entry(&note_path)? {
-                        if &entry.file_id != note_id {
+                        if entry.file_id != note_id {
                             let mut record = original;
-                            record.data.note_id = Some(entry.file_id);
+                            record.data["note_id"] = json!(entry.file_id);
                             self.write(
                                 &path,
                                 &crate::workspace::hash(&bytes),
@@ -100,7 +126,10 @@ impl Workspace {
         Ok(())
     }
     pub fn record_get(&mut self, id: &str) -> Result<Option<Value>> {
-        let path = path(id)?;
+        self.record_get_kind("task", id)
+    }
+    pub fn record_get_kind(&mut self, kind: &str, id: &str) -> Result<Option<Value>> {
+        let path = path_for(kind, id)?;
         if !self.resolve(&path)?.is_file() {
             return Ok(None);
         }
@@ -109,10 +138,10 @@ impl Workspace {
         }
         let document = self.read(&path)?;
         let mut record = validate(&path, document.content.as_bytes())?;
-        if let Some(note_id) = record.data.note_id.as_ref() {
+        if let Some(note_id) = record.data["note_id"].as_str() {
             if let Ok(path) = self.path_for_id(note_id) {
                 if let Some(entry) = self.entry(&path)? {
-                    record.data.note_id = Some(entry.file_id);
+                    record.data["note_id"] = json!(entry.file_id);
                 }
             }
         }
@@ -127,7 +156,7 @@ impl Workspace {
         let paths = self
             .sync_paths()?
             .into_iter()
-            .filter(|path| allowed(path))
+            .filter(|path| path.starts_with("opennexus-records/v1/tasks/") && allowed(path))
             .collect::<Vec<_>>();
         let total = paths.len();
         let mut items = Vec::new();
