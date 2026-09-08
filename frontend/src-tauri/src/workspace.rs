@@ -135,10 +135,10 @@ impl Workspace {
         let db = Connection::open(db_path)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 3 {
+        if version > 4 {
             return Err(HostError::new("SCHEMA_INCOMPATIBLE"));
         }
-        if (1..3).contains(&version) {
+        if (1..4).contains(&version) {
             // Independent, complete SQLite backup before the schema ownership change.
             let backup = managed.join(format!("host-schema{version}-{}.sqlite3", Uuid::new_v4()));
             db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
@@ -154,7 +154,21 @@ impl Workspace {
             CREATE UNIQUE INDEX IF NOT EXISTS sync_active ON sync_bindings(state) WHERE state='active';
             CREATE TABLE IF NOT EXISTS sync_jobs (binding TEXT NOT NULL,operation_id TEXT NOT NULL,file_id TEXT NOT NULL,path TEXT NOT NULL,hash TEXT NOT NULL,size INTEGER NOT NULL,operation TEXT NOT NULL,state TEXT NOT NULL,base_revision INTEGER,upload_id TEXT,remote_revision INTEGER,error TEXT,PRIMARY KEY(binding,operation_id));
             CREATE TABLE IF NOT EXISTS sync_heads (binding TEXT NOT NULL,file_id TEXT NOT NULL,revision INTEGER NOT NULL,path TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(binding,file_id));
-            PRAGMA user_version=3; COMMIT;")?;
+            CREATE TABLE IF NOT EXISTS sync_windows (binding TEXT PRIMARY KEY,boundary INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS sync_inbox (binding TEXT NOT NULL,sequence INTEGER NOT NULL,revision TEXT NOT NULL,operation_id TEXT NOT NULL,rename_id TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(binding,sequence));
+            CREATE TABLE IF NOT EXISTS sync_conflicts (binding TEXT NOT NULL,sequence INTEGER NOT NULL,file_id TEXT NOT NULL,local_path TEXT NOT NULL,local_hash TEXT NOT NULL,remote TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(binding,sequence));")?;
+        let has_origin: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('file_ops') WHERE name='origin')",
+            [],
+            |r| r.get(0),
+        )?;
+        if !has_origin {
+            db.execute(
+                "ALTER TABLE file_ops ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'",
+                [],
+            )?;
+        }
+        db.execute_batch("PRAGMA user_version=4; COMMIT;")?;
         let vault_id: String = db
             .query_row("SELECT id FROM identity", [], |r| r.get(0))
             .optional()?
@@ -360,6 +374,17 @@ impl Workspace {
         origin: &str,
         operation_id: &str,
     ) -> Result<Entry> {
+        self.write_with_identity(path, expected, content, origin, operation_id, None)
+    }
+    pub(crate) fn write_with_identity(
+        &mut self,
+        path: &str,
+        expected: &str,
+        content: &[u8],
+        origin: &str,
+        operation_id: &str,
+        identity: Option<&str>,
+    ) -> Result<Entry> {
         if Uuid::parse_str(operation_id).is_err() {
             return Err(HostError::new("OPERATION_ID_INVALID"));
         }
@@ -404,9 +429,18 @@ impl Workspace {
         if current != expected {
             return Err(HostError::new("REVISION_CONFLICT"));
         }
-        let file_id = self
-            .entry(path)?
-            .map_or_else(|| Uuid::new_v4().to_string(), |e| e.file_id);
+        let previous = self.entry(path)?;
+        if identity.is_some_and(|id| previous.as_ref().is_some_and(|entry| entry.file_id != id)) {
+            return Err(HostError::new("PATH_CONFLICT"));
+        }
+        let file_id = previous.map_or_else(
+            || {
+                identity
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| Uuid::new_v4().to_string())
+            },
+            |entry| entry.file_id,
+        );
         let tx = self.db.transaction()?;
         tx.execute(
             "INSERT INTO operations VALUES (?1,?2,'pending',NULL)",
@@ -577,6 +611,7 @@ impl Workspace {
             destination,
             expected,
             &Uuid::new_v4().to_string(),
+            "local",
         )
     }
 
@@ -588,7 +623,19 @@ impl Workspace {
         expected: &str,
         operation_id: &str,
     ) -> Result<serde_json::Value> {
-        let id = self.prepare_file_op_with_id(kind, path, destination, expected, operation_id)?;
+        self.mutate_with_origin(kind, path, destination, expected, operation_id, "local")
+    }
+    pub(crate) fn mutate_with_origin(
+        &mut self,
+        kind: &str,
+        path: &str,
+        destination: &str,
+        expected: &str,
+        operation_id: &str,
+        origin: &str,
+    ) -> Result<serde_json::Value> {
+        let id =
+            self.prepare_file_op_with_id(kind, path, destination, expected, operation_id, origin)?;
         if self
             .operation(&id)?
             .is_some_and(|v| v["state"] == "committed")
@@ -609,12 +656,16 @@ impl Workspace {
         destination: &str,
         expected: &str,
         id: &str,
+        origin: &str,
     ) -> Result<String> {
-        if !matches!(kind, "rename" | "delete") || Uuid::parse_str(id).is_err() {
+        if !matches!(origin, "local" | "remote")
+            || !matches!(kind, "rename" | "delete")
+            || Uuid::parse_str(id).is_err()
+        {
             return Err(HostError::new("INVALID_OPERATION"));
         }
         let fingerprint = hash(
-            &serde_json::to_vec(&(kind, path, destination, expected))
+            &serde_json::to_vec(&(kind, path, destination, expected, origin))
                 .map_err(|_| HostError::new("INVALID_OPERATION"))?,
         );
         let previous: Option<String> = self
@@ -657,24 +708,34 @@ impl Workspace {
             params![id, fingerprint],
         )?;
         tx.execute(
-            "INSERT INTO file_ops VALUES (?1,?2,?3,?4,?5,?6,'pending')",
-            params![id, kind, path, destination, expected, content],
+            "INSERT INTO file_ops VALUES (?1,?2,?3,?4,?5,?6,'pending',?7)",
+            params![id, kind, path, destination, expected, content, origin],
         )?;
         tx.commit()?;
         Ok(id.to_owned())
     }
 
     fn apply_file_op(&mut self, id: &str) -> Result<()> {
-        let (kind, path, destination, expected, content): (
+        let (kind, path, destination, expected, content, origin): (
             String,
             String,
             String,
             String,
             Vec<u8>,
+            String,
         ) = self.db.query_row(
-            "SELECT kind,path,destination,hash,content FROM file_ops WHERE id=?1",
+            "SELECT kind,path,destination,hash,content,origin FROM file_ops WHERE id=?1",
             [id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
         )?;
         let source = self.resolve(&path)?;
         let previous = self
@@ -724,13 +785,17 @@ impl Workspace {
                 "UPDATE files SET path=?1,revision=revision+1 WHERE id=?2",
                 params![destination, previous.file_id],
             )?;
-            tx.execute("INSERT INTO outbox SELECT ?1,id,revision,path,hash,'put',?2,'pending' FROM files WHERE id=?3", params![id,content,previous.file_id])?;
+            if origin == "local" {
+                tx.execute("INSERT INTO outbox SELECT ?1,id,revision,path,hash,'put',?2,'pending' FROM files WHERE id=?3", params![id,content,previous.file_id])?;
+            }
         } else {
             tx.execute(
                 "UPDATE files SET deleted=1,revision=revision+1 WHERE id=?1",
                 [&previous.file_id],
             )?;
-            tx.execute("INSERT INTO outbox SELECT ?1,id,revision,path,'','delete',X'','pending' FROM files WHERE id=?2", params![id,previous.file_id])?;
+            if origin == "local" {
+                tx.execute("INSERT INTO outbox SELECT ?1,id,revision,path,'','delete',X'','pending' FROM files WHERE id=?2", params![id,previous.file_id])?;
+            }
         }
         tx.execute("DELETE FROM file_ops WHERE id=?1", [id])?;
         let mut result = previous;

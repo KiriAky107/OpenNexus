@@ -136,4 +136,88 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
         client.verify_empty(remote).await.unwrap_err().code,
         "SYNC_RECONCILIATION_REQUIRED"
     );
+    let session_b = public
+        .login(
+            "rust-fixture",
+            Zeroizing::new("controlled-fixture-password".into()),
+            "Device B",
+        )
+        .await
+        .unwrap();
+    let client_b = SyncClient::new(
+        &endpoint,
+        Zeroizing::new(session_b.access_token.clone()),
+        true,
+    )
+    .unwrap();
+    let root_b = tempfile::tempdir().unwrap();
+    let workspace_b = Arc::new(Mutex::new(Workspace::open(root_b.path()).unwrap()));
+    let binding_b = workspace_b
+        .lock()
+        .unwrap()
+        .sync_bind_download(&endpoint, remote, "rust-fixture")
+        .unwrap();
+    assert_eq!(
+        client_b.pull_page(&workspace_b, &binding_b).await.unwrap(),
+        20
+    );
+    assert_eq!(
+        workspace_b.lock().unwrap().read("note.md").unwrap().content,
+        "fixture-19"
+    );
+    assert_eq!(workspace_b.lock().unwrap().pending_count().unwrap(), 0);
+    assert_eq!(
+        workspace_b
+            .lock()
+            .unwrap()
+            .read("note.md")
+            .unwrap()
+            .entry
+            .file_id,
+        first.file_id
+    );
+    // Receiving one's historical commits never rolls back newer local edits.
+    {
+        let mut ws = workspace.lock().unwrap();
+        let current = ws.read("note.md").unwrap();
+        ws.write("note.md", &current.entry.hash, b"new-a", "local")
+            .unwrap();
+    }
+    assert_eq!(client.pull_page(&workspace, &binding).await.unwrap(), 20);
+    assert_eq!(
+        workspace.lock().unwrap().read("note.md").unwrap().content,
+        "new-a"
+    );
+    {
+        let mut ws = workspace_b.lock().unwrap();
+        let current = ws.read("note.md").unwrap();
+        ws.write("note.md", &current.entry.hash, b"offline-b", "local")
+            .unwrap();
+    }
+    client.push_one(&workspace, &binding).await.unwrap();
+    assert_eq!(
+        client_b.pull_page(&workspace_b, &binding_b).await.unwrap(),
+        1
+    );
+    assert_eq!(
+        workspace_b.lock().unwrap().read("note.md").unwrap().content,
+        "offline-b"
+    );
+    let conflicts = workspace_b
+        .lock()
+        .unwrap()
+        .sync_conflicts(&binding_b.id)
+        .unwrap();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0]["remote"]["sequence"], 21);
+    assert_eq!(
+        workspace_b
+            .lock()
+            .unwrap()
+            .sync_binding()
+            .unwrap()
+            .unwrap()
+            .cursor,
+        21
+    );
 }

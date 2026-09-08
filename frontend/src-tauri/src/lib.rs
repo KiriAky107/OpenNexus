@@ -10,6 +10,7 @@ mod runtime_compat;
 pub mod session_lock;
 #[cfg(feature = "desktop")]
 pub mod sync_client;
+pub mod sync_inbox;
 pub mod sync_state;
 pub mod workspace;
 pub mod workspace_broker;
