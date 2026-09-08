@@ -22,6 +22,7 @@ pub struct Context<'a> {
 pub struct PreparedLaunch {
     data: LaunchData,
     lease: crate::extension_permit::Lease,
+    identity: crate::extension_call_authorization::Identity,
     path: std::path::PathBuf,
     entry: String,
     tree: String,
@@ -29,6 +30,7 @@ pub struct PreparedLaunch {
 pub struct LeasedSuspended<'a> {
     process: crate::extension_process::Suspended<'a>,
     lease: crate::extension_permit::Lease,
+    identity: crate::extension_call_authorization::Identity,
 }
 impl PreparedLaunch {
     pub fn create_suspended<'a>(
@@ -48,6 +50,7 @@ impl PreparedLaunch {
         Ok(LeasedSuspended {
             process,
             lease: self.lease,
+            identity: self.identity,
         })
     }
     pub fn create_suspended_with_stdio<'a>(
@@ -70,6 +73,7 @@ impl PreparedLaunch {
             LeasedSuspended {
                 process,
                 lease: self.lease,
+                identity: self.identity,
             },
             io,
         ))
@@ -80,7 +84,7 @@ impl<'a> LeasedSuspended<'a> {
     /// Live trust, active installation, broker and all sandbox resource policy
     /// requirements must also hold. A lease does not establish those conditions.
     pub unsafe fn resume(self) -> Result<crate::extension_process::Running<'a>> {
-        unsafe { self.process.resume_with_lease(self.lease) }
+        unsafe { self.process.resume_with_lease(self.lease, self.identity) }
     }
 }
 struct EnvironmentValues(BTreeMap<String, String>);
@@ -153,6 +157,7 @@ impl Context<'_> {
         Ok(PreparedLaunch {
             data,
             lease,
+            identity: crate::extension_call_authorization::Identity::from_claims(claims)?,
             path: entry.path().to_owned(),
             entry: entry.relative_name().to_owned(),
             tree: entry.tree_sha256().to_owned(),

@@ -77,6 +77,9 @@ pub struct Tool {
     output: Option<jsonschema::Validator>,
 }
 impl Tool {
+    pub(crate) fn description(&self) -> Description {
+        self.description.clone()
+    }
     fn parse(value: &Value) -> Result<Self> {
         bounded(value, 192 * 1024, false)?;
         let name = value["name"]

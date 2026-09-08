@@ -1,5 +1,5 @@
-//! Serial MCP session over an already-authorized native instance. Package trust,
-//! tool consent/schema validation and registry routing remain Host responsibilities.
+//! Serial MCP session over an already-authorized native instance. The Host
+//! approval route still must establish user consent and current installation/trust.
 use crate::{
     extension_io::{Event, Pump},
     extension_process::Running,
@@ -93,6 +93,7 @@ pub struct Session<'a, 'p> {
     failed: bool,
     tools_changed: bool,
     catalog: Option<crate::extension_mcp_tools::Catalog>,
+    calls: crate::extension_call_authorization::Gate,
 }
 impl<'a, 'p> Session<'a, 'p> {
     pub fn new(process: &'a Running<'p>, io: HostIo) -> Result<Self> {
@@ -105,6 +106,7 @@ impl<'a, 'p> Session<'a, 'p> {
             failed: false,
             tools_changed: false,
             catalog: None,
+            calls: crate::extension_call_authorization::Gate::new(process.call_identity()?),
         })
     }
     pub fn initialize(&mut self, cancel: &AtomicBool) -> Result<String> {
@@ -149,6 +151,7 @@ impl<'a, 'p> Session<'a, 'p> {
         self.require_tools()?;
         self.drain_pending()?;
         self.catalog = None;
+        self.calls.invalidate();
         self.tools_changed = false;
         let started = Instant::now();
         let catalog = crate::extension_mcp_tools::Catalog::discover(|cursor| {
@@ -201,12 +204,62 @@ impl<'a, 'p> Session<'a, 'p> {
         }
         Ok(value)
     }
+    pub fn review_call(
+        &mut self,
+        name: &str,
+        arguments: Value,
+    ) -> Result<crate::extension_call_authorization::Review> {
+        self.require_tools()?;
+        self.drain_pending()?;
+        let tool = self
+            .catalog
+            .as_ref()
+            .ok_or_else(|| HostError::new("EXTENSION_MCP_CATALOG_REQUIRED"))?
+            .tool(name)?;
+        self.calls.review(&tool, arguments)
+    }
+    /// Only invoke from an authenticated Host route after the user approved this
+    /// exact review. This method is not registered as a renderer/Core command.
+    pub fn confirm_call(
+        &mut self,
+        review_id: &str,
+    ) -> Result<crate::extension_call_authorization::ApprovedCall> {
+        self.require_tools()?;
+        self.drain_pending()?;
+        self.calls.confirm(review_id)
+    }
     pub fn call_tool(
+        &mut self,
+        approved: crate::extension_call_authorization::ApprovedCall,
+        cancel: &AtomicBool,
+    ) -> Result<Value> {
+        self.require_tools()?;
+        self.drain_pending()?;
+        let call = self.calls.consume(approved)?;
+        let tool = self
+            .catalog
+            .as_ref()
+            .ok_or_else(|| HostError::new("EXTENSION_MCP_CATALOG_REQUIRED"))?
+            .tool(&call.name)?;
+        if crate::extension_call_authorization::contract_digest(&tool.description())?
+            != call.contract_digest
+        {
+            return Err(HostError::new("EXTENSION_CALL_CATALOG_CHANGED"));
+        }
+        self.invoke_tool(&call.name, call.arguments, cancel)
+    }
+    #[cfg(test)]
+    pub(crate) fn test_call_tool(
         &mut self,
         name: &str,
         arguments: Value,
         cancel: &AtomicBool,
     ) -> Result<Value> {
+        let review = self.review_call(name, arguments)?;
+        let approved = self.confirm_call(&review.review_id)?;
+        self.call_tool(approved, cancel)
+    }
+    fn invoke_tool(&mut self, name: &str, arguments: Value, cancel: &AtomicBool) -> Result<Value> {
         self.require_tools()?;
         self.drain_pending()?;
         if name.is_empty()
@@ -256,6 +309,7 @@ impl<'a, 'p> Session<'a, 'p> {
         } else if method == "notifications/tools/list_changed" {
             self.tools_changed = true;
             self.catalog = None;
+            self.calls.invalidate();
         }
         Ok(true)
     }
@@ -294,6 +348,7 @@ impl<'a, 'p> Session<'a, 'p> {
     }
     fn abort(&mut self) {
         self.failed = true;
+        self.calls.invalidate();
         let _ = self.process.terminate();
     }
     fn request(
