@@ -38,6 +38,9 @@ argon2 = "0.5"
 chacha20poly1305 = "0.10"
 fernet = { version = "0.2", default-features = false, features = ["rustcrypto"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_RemoteDesktop", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader"] }
+
 [build-dependencies]
 tauri-build = { version = "2", optional = true , features = [] }
 

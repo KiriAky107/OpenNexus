@@ -22,6 +22,8 @@ struct Host {
     recent: Mutex<Option<RecentVaultStore>>,
     core: Arc<Mutex<Option<CoreSupervisor>>>,
     credentials: Arc<Mutex<Option<CredentialBroker>>>,
+    #[cfg(windows)]
+    session_monitor: Mutex<Option<notesagent_host::session_lock::SessionMonitor>>,
     streams: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
 }
 
@@ -378,6 +380,15 @@ fn credentials_status(host: State<'_, Host>) -> Result<serde_json::Value, String
 
 #[tauri::command]
 async fn credentials_unlock(host: State<'_, Host>, password: String) -> Result<(), String> {
+    #[cfg(windows)]
+    if host
+        .session_monitor
+        .lock()
+        .map_err(|_| "HOST_BUSY")?
+        .is_none()
+    {
+        return Err("SESSION_MONITOR_UNAVAILABLE".into());
+    }
     let broker = host.credentials.clone();
     let password = Zeroizing::new(password.into_bytes());
     tauri::async_runtime::spawn_blocking(move || {
@@ -450,6 +461,62 @@ async fn credentials_change_password(
             .as_mut()
             .ok_or("HOST_NOT_READY")?
             .change_password(password)
+    })
+    .await
+    .map_err(|_| "HOST_BUSY")?
+}
+
+#[tauri::command]
+async fn credentials_backup(host: State<'_, Host>) -> Result<bool, String> {
+    let Some(path) = rfd::FileDialog::new()
+        .set_title("导出加密凭据备份（请选择新文件）")
+        .set_file_name("OpenNexus.onxcred")
+        .add_filter("OpenNexus credential backup", &["onxcred"])
+        .save_file()
+    else {
+        return Ok(false);
+    };
+    let broker = host.credentials.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        broker
+            .lock()
+            .map_err(|_| "HOST_BUSY")?
+            .as_ref()
+            .ok_or("HOST_NOT_READY")?
+            .backup(&path)?;
+        Ok(true)
+    })
+    .await
+    .map_err(|_| "HOST_BUSY")?
+}
+
+#[tauri::command]
+async fn credentials_restore(
+    host: State<'_, Host>,
+    password: String,
+) -> Result<Option<usize>, String> {
+    let password = Zeroizing::new(password.into_bytes());
+    let Some(path) = rfd::FileDialog::new()
+        .set_title("选择加密凭据备份")
+        .add_filter("OpenNexus credential backup", &["onxcred"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    if rfd::MessageDialog::new().set_title("恢复凭据备份")
+        .set_description("恢复将替换本机凭据库。当前加密文件会另存为恢复前备份；恢复后仍需解锁。笔记不会被替换。是否继续？")
+        .set_buttons(rfd::MessageButtons::YesNo).show() != rfd::MessageDialogResult::Yes {
+        return Ok(None);
+    }
+    let broker = host.credentials.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        broker
+            .lock()
+            .map_err(|_| "HOST_BUSY")?
+            .as_mut()
+            .ok_or("HOST_NOT_READY")?
+            .restore(&path, password)
+            .map(Some)
     })
     .await
     .map_err(|_| "HOST_BUSY")?
@@ -602,6 +669,34 @@ fn main() {
                 .map_err(|_| std::io::Error::other("HOST_BUSY"))? = Some(CredentialBroker::new(
                 app.path().app_data_dir()?.join("credentials/stronghold.v1"),
             ));
+            #[cfg(windows)]
+            {
+                let signal = credential_state
+                    .lock()
+                    .map_err(|_| std::io::Error::other("HOST_BUSY"))?
+                    .as_ref()
+                    .ok_or_else(|| std::io::Error::other("HOST_NOT_READY"))?
+                    .lock_signal();
+                *app.state::<Host>()
+                    .session_monitor
+                    .lock()
+                    .map_err(|_| std::io::Error::other("HOST_BUSY"))? =
+                    notesagent_host::session_lock::SessionMonitor::start(signal).ok();
+            }
+            let weak_credentials = Arc::downgrade(&credential_state);
+            std::thread::spawn(move || {
+                while let Some(state) = weak_credentials.upgrade() {
+                    if let Ok(mut broker) = state.try_lock() {
+                        if let Some(broker) = broker.as_mut() {
+                            if broker.is_locked() {
+                                broker.lock();
+                            }
+                        }
+                    }
+                    drop(state);
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            });
             let data_dir = app.path().app_data_dir()?.join("core-data");
             // Debug builds use this worktree's interpreter; release builds only use bundled Core.
             let core = if cfg!(debug_assertions) {
@@ -676,6 +771,8 @@ fn main() {
             credentials_lock,
             credentials_change_password,
             credentials_import,
+            credentials_backup,
+            credentials_restore,
             core_request,
             core_request_prepare,
             core_request_cancel,

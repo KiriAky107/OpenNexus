@@ -13,6 +13,8 @@
     "allow-credentials-lock",
     "allow-credentials-change-password",
     "allow-credentials-import",
+    "allow-credentials-backup",
+    "allow-credentials-restore",
     "allow-core-request",
     "allow-core-request-prepare",
     "allow-core-request-cancel",

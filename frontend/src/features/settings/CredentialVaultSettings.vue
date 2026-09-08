@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { hostInvoke } from '@/services/platform/desktop'
 import { t } from '@/i18n'
 
@@ -26,6 +26,25 @@ async function importLegacy() {
   } catch (error) { message.value = failureMessage(error, 'MIGRATION_FAILED') }
   finally { busy.value = false }
 }
+async function backup() {
+  busy.value = true; message.value = ''
+  try {
+    if (await hostInvoke<boolean>('credentials_backup')) message.value = t('已导出加密备份，请保留备份时使用的口令。', 'Encrypted backup exported. Keep the password used for this backup.')
+  } catch (error) { message.value = failureMessage(error, 'CREDENTIAL_BACKUP_FAILED') }
+  finally { busy.value = false }
+}
+async function restore() {
+  if (password.value.length < 12) { message.value = t('请输入备份的口令。', 'Enter the backup password.'); return }
+  busy.value = true; message.value = ''
+  const value = password.value
+  password.value = ''; confirmation.value = ''
+  try {
+    const count = await hostInvoke<number | null>('credentials_restore', { password: value })
+    if (count !== null) message.value = t(`已恢复 ${count} 条凭据，请使用备份口令解锁。`, `Restored ${count} credentials. Unlock with the backup password.`)
+    await refresh()
+  } catch (error) { message.value = failureMessage(error, 'CREDENTIAL_RESTORE_FAILED') }
+  finally { busy.value = false }
+}
 async function act(action: 'unlock' | 'lock' | 'change_password') {
   if (busy.value) return
   message.value = ''
@@ -42,7 +61,12 @@ async function act(action: 'unlock' | 'lock' | 'change_password') {
   } catch (error) { message.value = failureMessage(error, 'CREDENTIAL_STORE_FAILED') }
   finally { busy.value = false }
 }
-onMounted(() => refresh().catch(error => { message.value = String(error) }))
+let statusTimer: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  void refresh().catch(error => { message.value = String(error) })
+  statusTimer = setInterval(() => { if (!busy.value) void refresh().catch(() => {}) }, 500)
+})
+onUnmounted(() => clearInterval(statusTimer))
 </script>
 
 <template>
@@ -61,6 +85,8 @@ onMounted(() => refresh().catch(error => { message.value = String(error) }))
         <button class="button-primary" type="submit" :disabled="busy">{{ busy ? t('处理中…', 'Working…') : locked ? t('解锁', 'Unlock') : t('更改口令', 'Change password') }}</button>
         <button v-if="!locked" class="button-secondary" type="button" :disabled="busy" @click="act('lock')">{{ t('立即锁定', 'Lock now') }}</button>
         <button v-if="!locked" class="button-secondary" type="button" :disabled="busy" @click="importLegacy">{{ t('迁移旧凭据…', 'Import legacy credentials…') }}</button>
+        <button v-if="!locked" class="button-secondary" type="button" :disabled="busy" @click="backup">{{ t('导出加密备份…', 'Export encrypted backup…') }}</button>
+        <button v-if="locked" class="button-secondary" type="button" :disabled="busy" @click="restore">{{ t('使用此口令恢复备份…', 'Restore backup with this password…') }}</button>
       </div>
     </form>
     <p v-if="message" role="status">{{ message }}</p>

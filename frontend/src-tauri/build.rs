@@ -21,6 +21,8 @@ fn main() {
             "credentials_lock",
             "credentials_change_password",
             "credentials_import",
+            "credentials_backup",
+            "credentials_restore",
             "core_request",
             "core_request_prepare",
             "core_request_cancel",
