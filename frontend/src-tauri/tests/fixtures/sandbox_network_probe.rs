@@ -87,8 +87,15 @@ fn main() {
         std::io::stdout().flush().unwrap();
         let ping = read(&mut input);
         assert!(ping.contains("server-ping") && ping.contains("result"));
-        if args[1] != "mcp_idle_change" { println!(r#"{{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}}"#); }
+        if args[1] != "mcp_idle_change" && args[1] != "mcp_twenty" { println!(r#"{{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}}"#); }
         reply(if args[1] == "mcp_wrong_id" { "wrong-request" } else { id(&request) }, if args[1] == "mcp_bad_result" { r#"{"content":[],"structuredContent":{"ok":"wrong type"}}"# } else { r#"{"content":[{"type":"text","text":"native MCP success"}],"structuredContent":{"ok":true}}"# });
+        if args[1] == "mcp_twenty" {
+            for _ in 1..20 {
+                let request = read(&mut input);
+                assert!(request.contains("tools/call"));
+                reply(id(&request), r#"{"content":[{"type":"text","text":"native MCP success"}],"structuredContent":{"ok":true}}"#);
+            }
+        }
         if args[1] == "mcp_idle_change" {
             std::thread::sleep(Duration::from_millis(50));
             println!(r#"{{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}}"#);
@@ -148,12 +155,24 @@ fn main() {
         let _ = child.wait();
         std::process::exit(84);
     }
+    if args.get(1).is_some_and(|s| s == "child_udp_100") {
+        for _ in 0..100 {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["udp", &args[2]])
+                .status()
+                .unwrap();
+            if !matches!(status.code(), Some(0 | 77)) {
+                std::process::exit(87);
+            }
+        }
+        std::process::exit(0);
+    }
     if args.get(1).is_some_and(|s| s == "wait") {
         std::thread::sleep(Duration::from_secs(120));
         std::process::exit(84);
     }
     if args.get(1).is_some_and(|s| s == "launch") {
-        let expected = [
+        let mut expected = [
             "launch",
             "",
             "space value",
@@ -163,7 +182,13 @@ fn main() {
             "slash\\\"quote",
             "&|%PATH%",
             "line\nbreak",
-        ];
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+        expected.extend((8..100).map(|index| {
+            format!(r#"attack-{index} & | < > ^ %COMSPEC% $(echo injected) \" \\"#)
+        }));
         if args[1..] != expected {
             std::process::exit(82);
         }

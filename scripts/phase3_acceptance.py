@@ -90,6 +90,22 @@ CASE_DRIVERS: dict[str, dict[str, Any]] = {
         ),
         "platform_profiles": ("windows-11-x64",),
     },
+    "C-02": {
+        "driver": "scripts/acceptance_cases/c02_sandbox.py",
+        "timeout_seconds": 900,
+        "required_metrics": (
+            "shell_argument_rounds",
+            "environment_injection_rounds",
+            "child_escape_rounds",
+            "link_race_rounds",
+            "dns_rebinding_rounds",
+            "redirect_rounds",
+            "authorized_file_reads",
+            "authorized_tool_calls",
+            "authorized_https_calls",
+        ),
+        "platform_profiles": ("windows-11-x64",),
+    },
     "C-04": {
         "driver": "scripts/acceptance_cases/c04_resources.py",
         "timeout_seconds": 900,

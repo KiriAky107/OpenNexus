@@ -799,6 +799,12 @@ mod tests {
         .into_iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+        let mut args = args;
+        args.extend(
+            (8..100).map(|index| {
+                format!(r#"attack-{index} & | < > ^ %COMSPEC% $(echo injected) \" \\"#)
+            }),
+        );
         let folder = profile.folder().unwrap();
         let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
         #[cfg(not(feature = "desktop"))]
@@ -998,6 +1004,7 @@ mod tests {
                 "mcp_bad_result",
                 "mcp_idle_change",
                 "mcp_review_lock",
+                "mcp_twenty",
             ];
             if _mcp_deadline {
                 mcp_modes.push("mcp_deadline");
@@ -1213,6 +1220,18 @@ mod tests {
                                     .unwrap()["content"][0]["text"],
                                 "native MCP success"
                             );
+                        }
+                        "mcp_twenty" => {
+                            assert_eq!(result.unwrap()["structuredContent"]["ok"], true);
+                            for _ in 1..20 {
+                                assert_eq!(
+                                    session
+                                        .test_call_tool("echo", serde_json::json!({}), &cancel)
+                                        .unwrap()["structuredContent"]["ok"],
+                                    true
+                                );
+                            }
+                            assert!(!session.take_tools_changed());
                         }
                         _ => {
                             assert_eq!(result.unwrap()["content"][0]["text"], "native MCP success");
@@ -1526,6 +1545,28 @@ mod tests {
                 }
             }
         }
+        let descendant_listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+        descendant_listener.set_nonblocking(true).unwrap();
+        let data = crate::extension_launch_data::LaunchData::new(
+            &executable,
+            &[
+                "child_udp_100".to_owned(),
+                descendant_listener.local_addr().unwrap().to_string(),
+            ],
+            &system,
+            &folder,
+            &folder.join("Temp"),
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            checked_executable_data(&profile, &executable, None, Some(data)),
+            Some(0)
+        );
+        assert_eq!(
+            descendant_listener.recv(&mut [0u8; 8]).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
         drop(entry);
         drop(root);
         profile.remove().unwrap();
