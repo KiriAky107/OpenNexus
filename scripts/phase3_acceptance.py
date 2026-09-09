@@ -83,6 +83,18 @@ CASE_DRIVERS: dict[str, dict[str, Any]] = {
         "required_metrics": ("successful_commits", "conflict_responses", "worker_count"),
         "required_artifacts": ("postgres_initdb", "minio_server"),
     },
+    "S-05": {
+        "driver": "scripts/acceptance_cases/s05_sync_uploads.py",
+        "timeout_seconds": 900,
+        "required_metrics": (
+            "offset_races",
+            "response_loss_recoveries",
+            "cleanup_races",
+            "max_cleanup_latency_ms",
+            "worker_count",
+        ),
+        "required_artifacts": ("postgres_initdb", "minio_server"),
+    },
 }
 ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{2,127}")
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{2,63}")
