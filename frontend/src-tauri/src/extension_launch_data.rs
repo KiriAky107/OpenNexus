@@ -262,4 +262,33 @@ mod tests {
         assert_eq!(local, Path::new(r"C:\Users\tester\AppData\Local"));
         assert_eq!(scratch, Path::new(r"C:\Users\tester\AppData\Local\Temp"));
     }
+
+    #[test]
+    fn shell_arguments_and_environment_injection_pass_hundred_round_matrix() {
+        let arguments = (0..100)
+            .map(|index| format!(r#"attack-{index} & | < > ^ %COMSPEC% $(echo injected) \" \\"#))
+            .collect::<Vec<_>>();
+        let mut launch = build(&arguments, &BTreeMap::new()).unwrap();
+        let encoded = launch.command_mut();
+        assert!(encoded
+            .windows(9)
+            .any(|value| value == "attack-99".encode_utf16().collect::<Vec<_>>()));
+
+        for index in 0..100 {
+            let name = match index % 5 {
+                0 => "TEMP".to_owned(),
+                1 => "tmp".to_owned(),
+                2 => "SystemRoot".to_owned(),
+                3 => "LOCALAPPDATA".to_owned(),
+                _ => format!("BAD={index}"),
+            };
+            assert_eq!(
+                build(&[], &BTreeMap::from([(name, "injected".into())]))
+                    .err()
+                    .unwrap()
+                    .code,
+                "EXTENSION_LAUNCH_DATA_INVALID"
+            );
+        }
+    }
 }

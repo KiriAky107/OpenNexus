@@ -280,6 +280,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read["content"], "original");
+        for _ in 1..20 {
+            assert_eq!(
+                call(
+                    &mut broker,
+                    &mut ws,
+                    json!({"method":"notes.read","path":"note.md"}),
+                )
+                .unwrap()["content"],
+                "original"
+            );
+        }
         let operation = uuid::Uuid::new_v4().to_string();
         let write = json!({"method":"notes.write","path":"note.md","expected_hash":read["expected_hash"],"content":"extension update","operation_id":operation});
         let receipt = call(&mut broker, &mut ws, write.clone()).unwrap();
@@ -395,16 +406,54 @@ mod tests {
         );
         let outside = tempfile::tempdir().unwrap();
         std::fs::hard_link(ws.root.join("note.md"), outside.path().join("alias.md")).unwrap();
-        assert_eq!(
-            call(
-                &mut broker,
-                &mut ws,
-                json!({"method":"notes.read","path":"note.md"})
-            )
-            .unwrap_err()
-            .code,
-            "UNSAFE_PATH"
-        );
+        for _ in 0..100 {
+            let mut linked =
+                Broker::bind(&authority, &permit, &claims, &credentials, &ws, "1", 2).unwrap();
+            assert_eq!(
+                call(
+                    &mut linked,
+                    &mut ws,
+                    json!({"method":"notes.read","path":"note.md"})
+                )
+                .unwrap_err()
+                .code,
+                "UNSAFE_PATH"
+            );
+        }
+        let alternate = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.md"), b"outside-one").unwrap();
+        std::fs::write(alternate.path().join("secret.md"), b"outside-two").unwrap();
+        let redirect = ws.root.join("redirect");
+        for round in 0..100 {
+            if redirect.exists() {
+                std::fs::remove_dir(&redirect).unwrap();
+            }
+            let target = if round % 2 == 0 {
+                outside.path()
+            } else {
+                alternate.path()
+            };
+            let created = std::process::Command::new("cmd.exe")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(&redirect)
+                .arg(target)
+                .output()
+                .unwrap();
+            assert!(created.status.success());
+            let mut linked =
+                Broker::bind(&authority, &permit, &claims, &credentials, &ws, "1", 2).unwrap();
+            assert_eq!(
+                call(
+                    &mut linked,
+                    &mut ws,
+                    json!({"method":"notes.read","path":"redirect/secret.md"})
+                )
+                .unwrap_err()
+                .code,
+                "UNSAFE_PATH"
+            );
+        }
+        std::fs::remove_dir(&redirect).unwrap();
         let second = tempfile::tempdir().unwrap();
         let mut other = Workspace::open(second.path()).unwrap();
         assert_eq!(
