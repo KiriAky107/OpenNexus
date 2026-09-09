@@ -101,6 +101,20 @@ fn real_core_credential_api_uses_host_stronghold_without_plaintext_response() {
         "credential API did not succeed"
     );
     assert!(!response.contains("fixture-credential-via-host-pipe"));
+    let status_session = core
+        .request_session("/api/credentials/fixture-provider")
+        .unwrap();
+    let mut socket = std::net::TcpStream::connect(endpoint).unwrap();
+    socket
+        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .unwrap();
+    write!(socket, "GET /api/credentials/fixture-provider HTTP/1.1\r\nHost: {endpoint}\r\nAuthorization: {}\r\nX-Core-Generation: {}\r\nConnection: close\r\n\r\n", status_session.authorization.as_str(), status_session.generation).unwrap();
+    let mut status_response = String::new();
+    socket.read_to_string(&mut status_response).unwrap();
+    assert!(status_response.starts_with("HTTP/1.1 200"));
+    assert!(status_response.contains("\"credential_id\":\"fixture-provider\""));
+    assert!(status_response.contains("\"configured\":true"));
+    assert!(!status_response.contains("fixture-credential-via-host-pipe"));
     let id = CredentialId {
         scope: Scope::Provider,
         id: "fixture-provider".into(),
