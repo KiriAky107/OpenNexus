@@ -502,6 +502,83 @@ class SkillListResponse(Contract):
     items: list[Skill] = Field(default_factory=list)
 
 
+class UserSkillData(Contract):
+    version: int = Field(ge=1, le=9007199254740991)
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="", max_length=2000)
+    prompt: str = Field(default="", max_length=64000)
+    tools: list[str] = Field(default_factory=list, max_length=64)
+    permissions: list[str] = Field(default_factory=list, max_length=32)
+    retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
+    required_capabilities: list[ModelCapability] = Field(default_factory=list, max_length=16)
+    created_at_ms: int = Field(ge=0, le=253402300799999)
+    updated_at_ms: int = Field(ge=0, le=253402300799999)
+
+    @field_validator("name")
+    @classmethod
+    def user_skill_name_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name must not be blank")
+        return value
+
+    @field_validator("tools", "permissions")
+    @classmethod
+    def user_skill_identifiers(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("identifiers must be unique")
+        if any(
+            not value
+            or len(value) > 128
+            or any(not (char.isascii() and (char.isalnum() or char in "._-")) for char in value)
+            for value in values
+        ):
+            raise ValueError("identifier is invalid")
+        return values
+
+    @model_validator(mode="after")
+    def user_skill_timestamps(self):
+        if self.updated_at_ms < self.created_at_ms:
+            raise ValueError("updated_at_ms precedes created_at_ms")
+        return self
+
+
+class UserSkillWriteRequest(Contract):
+    revision: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="", max_length=2000)
+    prompt: str = Field(default="", max_length=64000)
+    tools: list[str] = Field(default_factory=list, max_length=64)
+    permissions: list[str] = Field(default_factory=list, max_length=32)
+    retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
+    required_capabilities: list[ModelCapability] = Field(default_factory=list, max_length=16)
+
+    @field_validator("name")
+    @classmethod
+    def user_skill_write_name_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name must not be blank")
+        return value
+
+    @field_validator("tools", "permissions")
+    @classmethod
+    def user_skill_write_identifiers(cls, values: list[str]) -> list[str]:
+        return UserSkillData.user_skill_identifiers(values)
+
+
+class UserSkill(Contract):
+    skill_id: str = Field(pattern=r"^user_skill_[0-9a-f]{32}$")
+    revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    data: UserSkillData
+    status: Literal["ready", "dependency_missing", "permission_required"]
+    missing_dependencies: list[str] = Field(default_factory=list)
+    undeclared_permissions: list[str] = Field(default_factory=list)
+
+
+class UserSkillListResponse(Contract):
+    items: list[UserSkill] = Field(default_factory=list)
+    page: PageMeta = Field(default_factory=PageMeta)
+
+
 class ExtensionInstallRequest(Contract):
     package_path: str
 

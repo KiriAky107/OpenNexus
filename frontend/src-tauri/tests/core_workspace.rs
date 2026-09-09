@@ -368,5 +368,149 @@ async fn real_core_notes_roundtrip_only_through_bound_host_and_confirm_commits()
         .unwrap()
         .unwrap();
     assert_eq!(stored["hash"], first["revision"]);
-    assert_eq!(workspace.lock().unwrap().pending_count().unwrap(), 9);
+
+    // User-created Skills are Vault records, use Host CAS/idempotency, and are
+    // resolved by the actual Agent route without copying package paths or grants.
+    let create_skill_operation = uuid::Uuid::new_v4();
+    let skill_body = json!({
+        "revision":"", "name":"Vault reviewer", "description":"portable",
+        "prompt":"Answer with the exact phrase user-skill-active.", "tools":[],
+        "permissions":[], "retrieval":{"top_k":10,"rerank":true,"citation":true},
+        "required_capabilities":["chat"]
+    });
+    let (status, user_skill) = request(
+        &mut core,
+        "POST",
+        "/api/user-skills",
+        &vault,
+        &create_skill_operation.to_string(),
+        Some(skill_body.clone()),
+    )
+    .await;
+    assert_eq!(status, 201, "{user_skill}");
+    let skill_id = user_skill["skill_id"].as_str().unwrap();
+    assert_eq!(
+        skill_id,
+        format!("user_skill_{}", create_skill_operation.simple())
+    );
+    assert_eq!(user_skill["status"], "ready");
+    for _ in 0..20 {
+        let (status, replay) = request(
+            &mut core,
+            "POST",
+            "/api/user-skills",
+            &vault,
+            &create_skill_operation.to_string(),
+            Some(skill_body.clone()),
+        )
+        .await;
+        assert_eq!(status, 201, "{replay}");
+        assert_eq!(replay, user_skill);
+    }
+    let mut changed = skill_body.clone();
+    changed["name"] = json!("Changed replay");
+    let (status, conflict) = request(
+        &mut core,
+        "POST",
+        "/api/user-skills",
+        &vault,
+        &create_skill_operation.to_string(),
+        Some(changed),
+    )
+    .await;
+    assert_eq!(status, 409, "{conflict}");
+    assert_eq!(conflict["error"]["code"], "USER_SKILL_OPERATION_CONFLICT");
+    let (status, listed) = request(
+        &mut core,
+        "GET",
+        "/api/user-skills?limit=100&offset=0",
+        &vault,
+        &uuid::Uuid::new_v4().to_string(),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{listed}");
+    assert_eq!(listed["items"][0]["skill_id"], skill_id);
+    let (status, denied) = request(
+        &mut core,
+        "GET",
+        "/api/user-skills?limit=100&offset=0",
+        &uuid::Uuid::new_v4().to_string(),
+        &uuid::Uuid::new_v4().to_string(),
+        None,
+    )
+    .await;
+    assert_eq!(status, 409, "{denied}");
+    assert_eq!(denied["error"]["code"], "VAULT_PERMISSION_CHANGED");
+    let mut update_body = skill_body.clone();
+    update_body["revision"] = user_skill["revision"].clone();
+    update_body["name"] = json!("Updated reviewer");
+    let update_operation = uuid::Uuid::new_v4().to_string();
+    let (status, updated_skill) = request(
+        &mut core,
+        "PUT",
+        &format!("/api/user-skills/{skill_id}"),
+        &vault,
+        &update_operation,
+        Some(update_body.clone()),
+    )
+    .await;
+    assert_eq!(status, 200, "{updated_skill}");
+    assert_eq!(updated_skill["data"]["version"], 2);
+    let (status, stale) = request(
+        &mut core,
+        "PUT",
+        &format!("/api/user-skills/{skill_id}"),
+        &vault,
+        &uuid::Uuid::new_v4().to_string(),
+        Some(update_body.clone()),
+    )
+    .await;
+    assert_eq!(status, 409, "{stale}");
+    assert_eq!(stale["error"]["code"], "USER_SKILL_REVISION_CONFLICT");
+    for _ in 0..2 {
+        let (status, replay) = request(
+            &mut core,
+            "PUT",
+            &format!("/api/user-skills/{skill_id}"),
+            &vault,
+            &update_operation,
+            Some(update_body.clone()),
+        )
+        .await;
+        assert_eq!(status, 200, "{replay}");
+        assert_eq!(replay, updated_skill);
+    }
+    let (status, run) = request(
+        &mut core,
+        "POST",
+        "/api/agent/runs",
+        &vault,
+        &uuid::Uuid::new_v4().to_string(),
+        Some(json!({"input":"Confirm the Skill configuration","provider_id":"mock","model":"mock-1","skill_id":skill_id})),
+    )
+    .await;
+    assert_eq!(status, 202, "{run}");
+    assert_eq!(run["skill_id"], skill_id);
+    let delete_operation = uuid::Uuid::new_v4().to_string();
+    let delete_path = format!(
+        "/api/user-skills/{skill_id}?revision={}",
+        updated_skill["revision"].as_str().unwrap()
+    );
+    for _ in 0..2 {
+        let (status, deleted) = request(
+            &mut core,
+            "DELETE",
+            &delete_path,
+            &vault,
+            &delete_operation,
+            None,
+        )
+        .await;
+        assert_eq!(status, 200, "{deleted}");
+    }
+    assert!(!root
+        .join(format!("opennexus-records/v1/user-skills/{skill_id}.json"))
+        .exists());
+    assert_eq!(workspace.lock().unwrap().pending_count().unwrap(), 12);
 }

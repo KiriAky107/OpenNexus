@@ -103,6 +103,57 @@ pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
                 .map(|v| v.unwrap_or(Value::Null))
                 .map_err(|e| e.code)
         }
+        "workspace.user_skills.list" => {
+            let p: List = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            ws.record_list_kind("user_skill", p.offset, p.limit)
+                .map_err(|e| e.code)
+        }
+        "workspace.user_skills.get" => {
+            let p: RecordRead = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            ws.record_get_kind("user_skill", &p.id)
+                .map(|v| v.unwrap_or(Value::Null))
+                .map_err(|e| e.code)
+        }
+        "workspace.user_skills.write" => {
+            let p: RecordWrite = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            if p.record["kind"] != "user_skill" {
+                return Err("RECORD_SCHEMA_UNSUPPORTED".into());
+            }
+            let path =
+                crate::records::path_for("user_skill", p.record["id"].as_str().unwrap_or(""))
+                    .map_err(|e| e.code)?;
+            let bytes = serde_json::to_vec(&p.record).map_err(|_| "RECORD_SCHEMA_INVALID")?;
+            ws.write_operation(&path, &p.expected, &bytes, "local", &p.operation_id)
+                .map_err(|e| e.code)?;
+            ws.record_operation(&p.operation_id)
+                .map(|v| v.unwrap_or(Value::Null))
+                .map_err(|e| e.code)
+        }
+        "workspace.user_skills.delete" => {
+            let p: RecordDelete = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            let path = crate::records::user_skill_path(&p.id).map_err(|e| e.code)?;
+            ws.mutate_operation("delete", &path, "", &p.expected, &p.operation_id)
+                .map_err(|e| e.code)?;
+            ws.record_operation(&p.operation_id)
+                .map(|v| v.unwrap_or(Value::Null))
+                .map_err(|e| e.code)
+        }
+        "workspace.user_skills.operation" => {
+            let p: Operation = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            let value = ws.record_operation(&p.operation_id).map_err(|e| e.code)?;
+            if value
+                .as_ref()
+                .is_some_and(|receipt| receipt["record"]["kind"] != "user_skill")
+            {
+                return Err("RECORD_OPERATION_DENIED".into());
+            }
+            Ok(value.unwrap_or(Value::Null))
+        }
         "workspace.records.get" => {
             let p: RecordRead = decode(params)?;
             bound(ws, &p.vault_id)?;
@@ -233,6 +284,54 @@ pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn user_skills_are_vault_bound_listed_and_deleted_as_logical_records() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let id = "user_skill_00000000000000000000000000000001";
+        let record = json!({"schema":1,"kind":"user_skill","id":id,"data":{"version":1,"name":"Review","description":"","prompt":"Review carefully","tools":["notes.read"],"permissions":["notes.read"],"retrieval":{"top_k":10,"rerank":true,"citation":true},"required_capabilities":["chat"],"created_at_ms":1,"updated_at_ms":1}});
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let write = json!({"rpc":"workspace.user_skills.write","params":{"vault_id":ws.vault_id,"record":record,"expected":"","operation_id":operation_id}});
+        let receipt = dispatch(&mut ws, &write).unwrap();
+        assert_eq!(receipt["expected"], "");
+        assert_eq!(receipt["deleted"], false);
+        assert_eq!(dispatch(&mut ws, &write).unwrap(), receipt);
+        let list = json!({"rpc":"workspace.user_skills.list","params":{"vault_id":ws.vault_id,"offset":0,"limit":100}});
+        let listed = dispatch(&mut ws, &list).unwrap();
+        assert_eq!(listed["total"], 1);
+        assert_eq!(listed["items"][0]["record"], record);
+        drop(ws);
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let delete = json!({"rpc":"workspace.user_skills.delete","params":{"vault_id":ws.vault_id,"id":id,"expected":receipt["hash"],"operation_id":uuid::Uuid::new_v4().to_string()}});
+        let deleted = dispatch(&mut ws, &delete).unwrap();
+        assert_eq!(deleted["deleted"], true);
+        assert_eq!(dispatch(&mut ws, &delete).unwrap(), deleted);
+        assert_eq!(dispatch(&mut ws, &list).unwrap()["total"], 0);
+        assert_eq!(ws.pending_count().unwrap(), 2);
+        let persona = json!({"schema":1,"kind":"persona","id":"default","data":{"version":1,"name":"private","system_prompt":"","dialogue_pairs":[]}});
+        let persona_operation = uuid::Uuid::new_v4().to_string();
+        ws.write_operation(
+            "opennexus-records/v1/persona/default.json",
+            "",
+            &serde_json::to_vec(&persona).unwrap(),
+            "local",
+            &persona_operation,
+        )
+        .unwrap();
+        let smuggle = json!({"rpc":"workspace.user_skills.operation","params":{"vault_id":ws.vault_id,"operation_id":persona_operation}});
+        assert_eq!(
+            dispatch(&mut ws, &smuggle).unwrap_err(),
+            "RECORD_OPERATION_DENIED"
+        );
+        let mut denied = write;
+        denied["params"]["vault_id"] = json!("other-vault");
+        denied["params"]["operation_id"] = json!(uuid::Uuid::new_v4().to_string());
+        assert_eq!(
+            dispatch(&mut ws, &denied).unwrap_err(),
+            "VAULT_PERMISSION_CHANGED"
+        );
+        assert_eq!(ws.pending_count().unwrap(), 3);
+    }
     #[test]
     fn persona_is_vault_bound_durable_and_cas_protected() {
         let root = tempfile::tempdir().unwrap();

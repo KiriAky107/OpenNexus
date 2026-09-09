@@ -1,5 +1,6 @@
 //! Versioned logical records: explicit fields only, never raw application databases/config.
 use crate::workspace::{HostError, Result, Workspace};
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 #[derive(Serialize, Deserialize)]
@@ -32,6 +33,18 @@ pub fn path(id: &str) -> Result<String> {
     }
     Ok(format!("opennexus-records/v1/tasks/{id}.json"))
 }
+
+pub fn user_skill_path(id: &str) -> Result<String> {
+    if !id.starts_with("user_skill_")
+        || id.len() != 43
+        || !id[11..]
+            .bytes()
+            .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
+    {
+        return Err(HostError::new("RECORD_ID_INVALID"));
+    }
+    Ok(format!("opennexus-records/v1/user-skills/{id}.json"))
+}
 pub fn path_for(kind: &str, id: &str) -> Result<String> {
     match (kind, id) {
         ("task", id) => path(id),
@@ -41,6 +54,7 @@ pub fn path_for(kind: &str, id: &str) -> Result<String> {
         ("persona", "default") => Ok("opennexus-records/v1/persona/default.json".into()),
         ("layout", "sidebars") => Ok("opennexus-records/v1/layout/sidebars.json".into()),
         ("preferences", "editor") => Ok("opennexus-records/v1/preferences/editor.json".into()),
+        ("user_skill", id) => user_skill_path(id),
         _ => Err(HostError::new("RECORD_ID_INVALID")),
     }
 }
@@ -57,10 +71,17 @@ pub fn allowed(path_value: &str) -> bool {
     ) {
         return true;
     }
-    path_value
+    if path_value
         .strip_prefix("opennexus-records/v1/tasks/")
         .and_then(|v| v.strip_suffix(".json"))
         .is_some_and(|id| path(id).is_ok())
+    {
+        return true;
+    }
+    path_value
+        .strip_prefix("opennexus-records/v1/user-skills/")
+        .and_then(|v| v.strip_suffix(".json"))
+        .is_some_and(|id| user_skill_path(id).is_ok())
 }
 pub fn validate(path_value: &str, content: &[u8]) -> Result<Record> {
     if content.len() > 1024 * 1024 {
@@ -154,23 +175,31 @@ impl Workspace {
         ))
     }
     pub fn record_list(&mut self, offset: usize, limit: usize) -> Result<Value> {
+        self.record_list_kind("task", offset, limit)
+    }
+    pub fn record_list_kind(&mut self, kind: &str, offset: usize, limit: usize) -> Result<Value> {
         if limit == 0 || limit > 1000 {
             return Err(HostError::new("RECORD_LIMIT_INVALID"));
         }
+        let prefix = match kind {
+            "task" => "opennexus-records/v1/tasks/",
+            "user_skill" => "opennexus-records/v1/user-skills/",
+            _ => return Err(HostError::new("RECORD_SCHEMA_UNSUPPORTED")),
+        };
         let paths = self
             .sync_paths()?
             .into_iter()
-            .filter(|path| path.starts_with("opennexus-records/v1/tasks/") && allowed(path))
+            .filter(|path| path.starts_with(prefix) && allowed(path))
             .collect::<Vec<_>>();
         let total = paths.len();
         let mut items = Vec::new();
         let mut bytes = 0;
         for path in paths.into_iter().skip(offset).take(limit) {
             let id = path
-                .strip_prefix("opennexus-records/v1/tasks/")
+                .strip_prefix(prefix)
                 .and_then(|v| v.strip_suffix(".json"))
                 .ok_or_else(|| HostError::new("RECORD_ID_INVALID"))?;
-            if let Some(value) = self.record_get(id)? {
+            if let Some(value) = self.record_get_kind(kind, id)? {
                 let size = serde_json::to_vec(&value)
                     .map_err(|_| HostError::new("RECORD_SCHEMA_INVALID"))?
                     .len();
@@ -196,8 +225,27 @@ impl Workspace {
         }
         let bytes = self.payload(operation, &[])?;
         let record = validate(path, &bytes)?;
+        let expected = receipt["result"]["expected"]
+            .as_str()
+            .map(str::to_owned)
+            .or(self
+                .db
+                .query_row(
+                    "SELECT expected FROM journal WHERE operation_id=?1",
+                    [operation],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?)
+            .or(self
+                .db
+                .query_row(
+                    "SELECT hash FROM file_ops WHERE id=?1",
+                    [operation],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?);
         Ok(Some(
-            json!({"record":record,"hash":crate::workspace::hash(&bytes),"deleted":receipt["result"]["deleted"],"state":receipt["state"]}),
+            json!({"record":record,"hash":crate::workspace::hash(&bytes),"expected":expected,"deleted":receipt["result"]["deleted"],"state":receipt["state"]}),
         ))
     }
 }

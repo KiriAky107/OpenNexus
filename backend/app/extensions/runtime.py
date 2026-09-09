@@ -100,6 +100,12 @@ class SkillRuntime:
         except ValidationError as exc:
             raise _manifest_error("skill", exc) from exc
         _validate_id("skill", manifest.skill_id)
+        if manifest.skill_id.startswith("user_skill_"):
+            raise ExtensionError(
+                "SKILL_ID_RESERVED",
+                "The user_skill_ prefix is reserved for Vault-owned user Skills.",
+                status_code=422,
+            )
         _validate_permissions("skill", manifest.permissions)
         if manifest.skill_id in self._records:
             raise ExtensionError(

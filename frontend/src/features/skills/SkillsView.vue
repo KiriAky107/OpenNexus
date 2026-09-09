@@ -9,6 +9,7 @@ import ExtensionInstallDialog from '@/components/common/ExtensionInstallDialog.v
 import { onMounted, ref } from 'vue'
 import { useSkillStore } from '@/stores/skill'
 import { t } from '@/i18n'
+import UserSkillEditor from './UserSkillEditor.vue'
 
 const skillStore = useSkillStore()
 const actionError = ref('')
@@ -31,6 +32,7 @@ async function uninstall(skillId: string, name: string) {
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <ExtensionInstallDialog v-if="showInstall" kind="Skill" :install="skillStore.installSkill" @close="showInstall = false" @installed="showInstall = false; actionError = ''" />
     <header class="feature-header"><div><h1>{{ t('Skill 管理', 'Skill Management') }}</h1><p>{{ t('查看工作流使用的 Tool、权限、检索配置和模型要求。', 'Review the tools, permissions, retrieval settings, and model requirements used by workflows.') }}</p></div><button class="button-primary" @click="showInstall = true">{{ t('安装 Skill', 'Install Skill') }}</button></header>
+    <UserSkillEditor />
     <div v-if="skillStore.error || actionError" class="error-banner">{{ skillStore.error || actionError }}</div>
     <div v-if="skillStore.selectedSkill" class="panel detail-panel">
       <div class="detail-head"><div><span class="badge" :class="{ success: skillStore.selectedSkill.status === 'ready', error: skillStore.selectedSkill.status === 'error', warning: skillStore.selectedSkill.status.includes('missing') }">{{ skillStore.selectedSkill.status }}</span><h2>{{ skillStore.selectedSkill.icon }} {{ skillStore.selectedSkill.name }}</h2><p class="muted">v{{ skillStore.selectedSkill.version }} · {{ skillStore.selectedSkill.author || t('未知作者', 'Unknown author') }}</p></div><div class="inline-actions"><button class="button-secondary" @click="toggle(skillStore.selectedSkill.skill_id, skillStore.selectedSkill.enabled)">{{ skillStore.selectedSkill.enabled ? t('停用', 'Disable') : t('启用', 'Enable') }}</button><button class="button-danger" @click="uninstall(skillStore.selectedSkill.skill_id, skillStore.selectedSkill.name)">{{ t('卸载', 'Uninstall') }}</button></div></div>

@@ -253,6 +253,41 @@ export interface Skill {
   enabled: boolean
 }
 
+export type UserSkillStatus = 'ready' | 'dependency_missing' | 'permission_required'
+
+export interface UserSkillData {
+  version: number
+  name: string
+  description: string
+  prompt: string
+  tools: string[]
+  permissions: string[]
+  retrieval: { top_k: number; rerank: boolean; citation: boolean }
+  required_capabilities: string[]
+  created_at_ms: number
+  updated_at_ms: number
+}
+
+export interface UserSkill {
+  skill_id: string
+  revision: string
+  data: UserSkillData
+  status: UserSkillStatus
+  missing_dependencies: string[]
+  undeclared_permissions: string[]
+}
+
+export interface UserSkillWriteRequest {
+  revision: string
+  name: string
+  description: string
+  prompt: string
+  tools: string[]
+  permissions: string[]
+  retrieval: { top_k: number; rerank: boolean; citation: boolean }
+  required_capabilities: string[]
+}
+
 // ============ Plugin ============
 
 export type PluginStatus =

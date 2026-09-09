@@ -95,6 +95,9 @@ from app.contracts import (
     SearchResponse,
     Skill,
     SkillListResponse,
+    UserSkill,
+    UserSkillListResponse,
+    UserSkillWriteRequest,
     Task,
     TaskCreateRequest,
     TaskListResponse,
@@ -677,6 +680,52 @@ async def list_tools() -> ToolListResponse:
 
 
 # Skills
+@router.get("/user-skills", response_model=UserSkillListResponse, tags=["Skills"])
+async def list_user_skills(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> UserSkillListResponse:
+    from app.services.user_skills import list_user_skills as list_records
+
+    items, total = await asyncio.to_thread(
+        list_records, container.tools, limit=limit, offset=offset
+    )
+    return UserSkillListResponse(
+        items=items, page=PageMeta(total=total, limit=limit, offset=offset)
+    )
+
+
+@router.get("/user-skills/{skill_id}", response_model=UserSkill, tags=["Skills"])
+async def get_user_skill(skill_id: str) -> UserSkill:
+    from app.services.user_skills import get_user_skill as get_record
+
+    return await asyncio.to_thread(get_record, skill_id, container.tools)
+
+
+@router.post("/user-skills", response_model=UserSkill, status_code=201, tags=["Skills"])
+async def create_user_skill(request: UserSkillWriteRequest) -> UserSkill:
+    from app.services.user_skills import create_user_skill as create_record
+
+    return await asyncio.to_thread(create_record, request, container.tools)
+
+
+@router.put("/user-skills/{skill_id}", response_model=UserSkill, tags=["Skills"])
+async def update_user_skill(skill_id: str, request: UserSkillWriteRequest) -> UserSkill:
+    from app.services.user_skills import update_user_skill as update_record
+
+    return await asyncio.to_thread(update_record, skill_id, request, container.tools)
+
+
+@router.delete(
+    "/user-skills/{skill_id}", response_model=OperationResponse, tags=["Skills"]
+)
+async def delete_user_skill(skill_id: str, revision: str = Query()) -> OperationResponse:
+    from app.services.user_skills import delete_user_skill as delete_record
+
+    await asyncio.to_thread(delete_record, skill_id, revision)
+    return OperationResponse(status="completed", resource_id=skill_id, message="deleted")
+
+
 @router.get("/skills", response_model=SkillListResponse, tags=["Skills"])
 async def list_skills() -> SkillListResponse:
     return SkillListResponse(items=container.skills.list())
