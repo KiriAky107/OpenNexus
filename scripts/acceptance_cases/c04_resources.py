@@ -106,6 +106,7 @@ def main() -> int:
         "files": [
             {"path": relative, "sha256": sha256(ROOT / relative)}
             for relative in (
+                "frontend/src-tauri/src/extension_container.rs",
                 "frontend/src-tauri/src/extension_job.rs",
                 "frontend/src-tauri/src/extension_launch_data.rs",
                 "frontend/src-tauri/src/extension_process.rs",
