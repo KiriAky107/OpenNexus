@@ -32,6 +32,11 @@ ALL_CASES = tuple(case for cases in CASE_SUITES.values() for case in cases)
 # A case becomes executable only when a repository-owned driver is registered here.
 # Component/unit test commands are deliberately not treated as production acceptance.
 CASE_DRIVERS: dict[str, dict[str, Any]] = {
+    "A-02": {
+        "driver": "scripts/acceptance_cases/a02_sidecar.py",
+        "timeout_seconds": 900,
+        "required_metrics": (),
+    },
     "B-01": {
         "driver": "scripts/acceptance_cases/b01_credentials.py",
         "timeout_seconds": 900,
