@@ -4,6 +4,7 @@ import type { SaveStatus } from '@/contracts'
 import * as workspaceService from '@/services/workspaceService'
 import { t } from '@/i18n'
 import { ApiErrorClass } from '@/services/apiClient'
+import { DesktopError } from '@/services/platform/desktop'
 
 export const useEditorStore = defineStore('editor', () => {
   const mode = ref<'wysiwyg' | 'source'>('wysiwyg')
@@ -71,7 +72,7 @@ export const useEditorStore = defineStore('editor', () => {
           lastSavedAt.value = new Date().toISOString()
         }
       } catch (error) {
-        if (currentFilePath.value === targetPath) saveStatus.value = error instanceof ApiErrorClass && error.code === 'NOTE_CONTENT_CONFLICT' ? 'conflict' : 'save_failed'
+        if (currentFilePath.value === targetPath) saveStatus.value = (error instanceof ApiErrorClass && error.code === 'NOTE_CONTENT_CONFLICT') || (error instanceof DesktopError && error.code === 'REVISION_CONFLICT') ? 'conflict' : 'save_failed'
       } finally {
         pendingSave = null
         if (currentFilePath.value === targetPath && saveStatus.value === 'dirty') scheduleAutoSave()

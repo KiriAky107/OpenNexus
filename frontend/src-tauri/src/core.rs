@@ -1,0 +1,548 @@
+//! 可信的 Core 进程监管器；WebView 永远不会接触会话材料。
+use command_group::{CommandGroup, GroupChild};
+use hmac::{Hmac, Mac};
+use serde::Deserialize;
+use sha2::Sha256;
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{ChildStdin, Command, Stdio};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant};
+use zeroize::Zeroizing;
+
+type Result<T> = std::result::Result<T, String>;
+pub type Broker = Arc<dyn Fn(&serde_json::Value) -> Result<serde_json::Value> + Send + Sync>;
+
+/// 清单在构建时嵌入到 Host 中，从未从安装中加载。
+pub fn verify_bundle(root: &Path, manifest: &str) -> Result<()> {
+    use sha2::Digest;
+    use std::collections::BTreeMap;
+    #[derive(Deserialize)]
+    struct Manifest {
+        protocol: u32,
+        product: String,
+        files: BTreeMap<String, String>,
+    }
+    let expected: Manifest = serde_json::from_str(manifest).map_err(|_| "CORE_MANIFEST_INVALID")?;
+    if expected.protocol != 1 || expected.product != "OpenNexus" || expected.files.is_empty() {
+        return Err("CORE_MANIFEST_INVALID".into());
+    }
+    fn inventory(
+        root: &Path,
+        directory: &Path,
+        files: &mut BTreeMap<String, String>,
+    ) -> Result<()> {
+        let metadata = std::fs::symlink_metadata(directory).map_err(|_| "CORE_INTEGRITY_FAILED")?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x400 != 0 {
+                return Err("CORE_INTEGRITY_FAILED".into());
+            }
+        }
+        if metadata.file_type().is_symlink() {
+            return Err("CORE_INTEGRITY_FAILED".into());
+        }
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(directory).map_err(|_| "CORE_INTEGRITY_FAILED")? {
+                inventory(
+                    root,
+                    &entry.map_err(|_| "CORE_INTEGRITY_FAILED")?.path(),
+                    files,
+                )?;
+            }
+        } else if metadata.is_file() {
+            let mut file = std::fs::File::open(directory).map_err(|_| "CORE_INTEGRITY_FAILED")?;
+            let mut hash = Sha256::new();
+            let mut buffer = [0u8; 65536];
+            loop {
+                let count = file
+                    .read(&mut buffer)
+                    .map_err(|_| "CORE_INTEGRITY_FAILED")?;
+                if count == 0 {
+                    break;
+                }
+                hash.update(&buffer[..count]);
+            }
+            let name = directory
+                .strip_prefix(root)
+                .map_err(|_| "CORE_INTEGRITY_FAILED")?
+                .to_str()
+                .ok_or("CORE_INTEGRITY_FAILED")?
+                .replace('\\', "/");
+            files.insert(name, format!("{:x}", hash.finalize()));
+        } else {
+            return Err("CORE_INTEGRITY_FAILED".into());
+        }
+        Ok(())
+    }
+    let mut actual = BTreeMap::new();
+    inventory(root, root, &mut actual)?;
+    if actual != expected.files {
+        return Err("CORE_INTEGRITY_FAILED".into());
+    }
+    Ok(())
+}
+
+fn random_hex() -> Result<String> {
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut bytes)
+        .map_err(|_| "CORE_ENTROPY_UNAVAILABLE")?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+fn decode_hex(value: &str) -> Result<Vec<u8>> {
+    if value.len() != 64 || !value.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err("CORE_HANDSHAKE_INVALID".into());
+    }
+    (0..64)
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&value[i..i + 2], 16).map_err(|_| "CORE_HANDSHAKE_INVALID".into())
+        })
+        .collect()
+}
+
+#[derive(Deserialize)]
+struct Ready {
+    protocol: u32,
+    pid: u32,
+    launcher_pid: u32,
+    port: u16,
+    generation: String,
+    proof: String,
+}
+
+fn verify_ready(
+    line: &[u8],
+    secret: &str,
+    challenge: &str,
+    generation: &str,
+    pid: u32,
+) -> Result<u16> {
+    let ready: Ready = serde_json::from_slice(line).map_err(|_| "CORE_HANDSHAKE_INVALID")?;
+    if ready.protocol != 1 {
+        return Err("PROTOCOL_INCOMPATIBLE".into());
+    }
+    if ready.launcher_pid != pid
+        || ready.pid == 0
+        || ready.port == 0
+        || ready.generation != generation
+    {
+        return Err("CORE_HANDSHAKE_INVALID".into());
+    }
+    let mut mac = Hmac::<Sha256>::new_from_slice(&decode_hex(secret)?)
+        .map_err(|_| "CORE_HANDSHAKE_INVALID")?;
+    mac.update(
+        format!(
+            "1:{challenge}:{generation}:{pid}:{}:{}",
+            ready.pid, ready.port
+        )
+        .as_bytes(),
+    );
+    mac.verify_slice(&decode_hex(&ready.proof)?)
+        .map_err(|_| "CORE_HANDSHAKE_INVALID")?;
+    Ok(ready.port)
+}
+
+pub fn checked_url(port: u16, path: &str) -> Result<String> {
+    let resource = path.split('?').next().unwrap_or("");
+    if !(resource.starts_with("/api/") || resource == "/api" || resource == "/health")
+        || path.contains(['\\', '\r', '\n', '#'])
+        || resource.contains('%')
+        || resource.split('/').any(|part| part == "." || part == "..")
+        || resource.contains("//")
+        || path.len() > 8192
+    {
+        return Err("CORE_PATH_DENIED".into());
+    }
+    Ok(format!("http://127.0.0.1:{port}{path}"))
+}
+
+pub struct Session {
+    child: GroupChild,
+    lifetime: Arc<Mutex<Option<ChildStdin>>>,
+    secret: Zeroizing<String>,
+    generation: String,
+    port: u16,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        if let Ok(mut pipe) = self.lifetime.lock() {
+            pipe.take();
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if self.child.try_wait().ok().flatten().is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        // 即使主进程已经退出，也要终止整个进程组。
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+pub struct CoreSupervisor {
+    executable: PathBuf,
+    arguments: Vec<String>,
+    working_dir: PathBuf,
+    data_dir: PathBuf,
+    session: Option<Session>,
+    attempts: VecDeque<Instant>,
+    next_attempt: Option<Instant>,
+    broker: Option<Broker>,
+    bundle_manifest: Option<String>,
+}
+
+/// 仅 Host 请求上下文；特意既不序列化也不调试。
+pub struct RequestSession {
+    pub url: String,
+    pub authorization: Zeroizing<String>,
+    pub generation: String,
+}
+
+impl CoreSupervisor {
+    pub fn new(
+        executable: PathBuf,
+        arguments: Vec<String>,
+        working_dir: PathBuf,
+        data_dir: PathBuf,
+    ) -> Self {
+        Self {
+            executable,
+            arguments,
+            working_dir,
+            data_dir,
+            session: None,
+            attempts: VecDeque::new(),
+            next_attempt: None,
+            broker: None,
+            bundle_manifest: None,
+        }
+    }
+
+    pub fn with_broker(mut self, broker: Broker) -> Self {
+        self.broker = Some(broker);
+        self
+    }
+
+    pub fn with_bundle_manifest(mut self, manifest: String) -> Self {
+        self.bundle_manifest = Some(manifest);
+        self
+    }
+
+    pub fn available(&mut self) -> bool {
+        self.session
+            .as_mut()
+            .is_some_and(|s| matches!(s.child.try_wait(), Ok(None)))
+    }
+
+    pub fn request_session(&mut self, path: &str) -> Result<RequestSession> {
+        checked_url(1, path)?;
+        if !self.available() {
+            self.start()?;
+        }
+        let session = self.session.as_ref().ok_or("CORE_UNAVAILABLE")?;
+        Ok(RequestSession {
+            url: checked_url(session.port, path)?,
+            authorization: Zeroizing::new(format!("Bearer {}", session.secret.as_str())),
+            generation: session.generation.clone(),
+        })
+    }
+
+    pub fn start(&mut self) -> Result<()> {
+        if self.available() {
+            return Ok(());
+        }
+        self.session.take();
+        let now = Instant::now();
+        self.attempts
+            .retain(|t| now.duration_since(*t) < Duration::from_secs(300));
+        if self.attempts.len() >= 5 {
+            return Err("CORE_RESTART_LIMIT".into());
+        }
+        if self.next_attempt.is_some_and(|t| now < t) {
+            return Err("CORE_RESTART_BACKOFF".into());
+        }
+        self.attempts.push_back(now);
+        self.next_attempt = Some(now + Duration::from_secs(1 << (self.attempts.len() - 1)));
+        if let Some(manifest) = &self.bundle_manifest {
+            verify_bundle(&self.working_dir, manifest)?;
+        }
+        let session = Self::spawn(
+            &self.executable,
+            &self.arguments,
+            &self.working_dir,
+            &self.data_dir,
+            self.broker.clone(),
+        )?;
+        self.session = Some(session);
+        Ok(())
+    }
+
+    fn spawn(
+        executable: &Path,
+        args: &[String],
+        working_dir: &Path,
+        data_dir: &Path,
+        broker: Option<Broker>,
+    ) -> Result<Session> {
+        let secret = Zeroizing::new(random_hex()?);
+        let generation = random_hex()?;
+        let challenge = random_hex()?;
+        let mut command = Command::new(executable);
+        command
+            .args(args)
+            .current_dir(working_dir)
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        // 这里只复制运行时必需项，绝不复制提供商令牌或通用 PATH。
+        for key in [
+            "SystemRoot",
+            "WINDIR",
+            "TEMP",
+            "TMP",
+            "LANG",
+            "HOME",
+            "USERPROFILE",
+            "LOCALAPPDATA",
+        ] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        command.env("PYTHONUTF8", "1").env("PYTHONUNBUFFERED", "1");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000); // 使用 CREATE_NO_WINDOW
+        }
+        let child = {
+            #[cfg(windows)]
+            let _creation = crate::process_creation::lock()?;
+            command.group_spawn().map_err(|_| "CORE_SPAWN_FAILED")?
+        };
+        let mut session = Session {
+            child,
+            lifetime: Arc::new(Mutex::new(None)),
+            secret,
+            generation,
+            port: 0,
+        };
+        let stdout = session
+            .child
+            .inner()
+            .stdout
+            .take()
+            .ok_or("CORE_PIPE_FAILED")?;
+        *session.lifetime.lock().map_err(|_| "CORE_PIPE_FAILED")? =
+            session.child.inner().stdin.take();
+        let mut payload = Zeroizing::new(
+            serde_json::to_vec(&serde_json::json!({
+                "protocol": 1, "launcher_pid": session.child.id(), "secret": session.secret.as_str(), "challenge": challenge,
+                "generation": session.generation, "data_dir": data_dir,
+            }))
+            .map_err(|_| "CORE_BOOTSTRAP_INVALID")?,
+        );
+        payload.push(b'\n');
+        session
+            .lifetime
+            .lock()
+            .map_err(|_| "CORE_PIPE_FAILED")?
+            .as_mut()
+            .ok_or("CORE_PIPE_FAILED")?
+            .write_all(&payload)
+            .map_err(|_| "CORE_PIPE_FAILED")?;
+        let (tx, rx) = mpsc::channel();
+        let (activation_tx, activation_rx) = mpsc::channel();
+        let lifetime = session.lifetime.clone();
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut activated = false;
+            loop {
+                let mut line = Zeroizing::new(Vec::new());
+                match reader
+                    .by_ref()
+                    .take(8 * 1024 * 1024 + 1)
+                    .read_until(b'\n', &mut line)
+                {
+                    Ok(0) | Err(_) => break,
+                    _ => {}
+                }
+                if line.len() > 8 * 1024 * 1024 {
+                    break;
+                }
+                let Ok(message) = serde_json::from_slice::<serde_json::Value>(&line) else {
+                    break;
+                };
+                if message.get("rpc").is_none() {
+                    if activated
+                        || tx
+                            .send(Ok::<Vec<u8>, std::io::Error>(line.to_vec()))
+                            .is_err()
+                    {
+                        break;
+                    }
+                    match activation_rx.recv() {
+                        Ok(true) => activated = true,
+                        _ => break,
+                    }
+                    continue;
+                }
+                // 子级在其就绪帧通过协议、身份、生成和 HMAC 检查之前没有代理权限。
+                if !activated {
+                    break;
+                }
+                let request_id = message
+                    .get("request_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let result = broker
+                    .as_ref()
+                    .ok_or_else(|| "HOST_BROKER_UNAVAILABLE".to_string())
+                    .and_then(|b| b(&message));
+                let response = match result {
+                    Ok(result) => serde_json::json!({"request_id":request_id,"result":result}),
+                    Err(error) => serde_json::json!({"request_id":request_id,"error":error}),
+                };
+                let Ok(bytes) = serde_json::to_vec(&response) else {
+                    break;
+                };
+                let mut bytes = Zeroizing::new(bytes);
+                if bytes.len() > 8 * 1024 * 1024 {
+                    break;
+                }
+                bytes.push(b'\n');
+                let Ok(mut pipe) = lifetime.lock() else {
+                    break;
+                };
+                let Some(pipe) = pipe.as_mut() else {
+                    break;
+                };
+                if pipe.write_all(&bytes).is_err() {
+                    break;
+                }
+            }
+        });
+        let line = rx
+            .recv_timeout(Duration::from_secs(30))
+            .map_err(|_| "CORE_READY_TIMEOUT")?
+            .map_err(|_| "CORE_HANDSHAKE_INVALID")?;
+        if line.len() > 16384 {
+            let _ = activation_tx.send(false);
+            return Err("CORE_HANDSHAKE_INVALID".into());
+        }
+        let port = verify_ready(
+            &line,
+            &session.secret,
+            &challenge,
+            &session.generation,
+            session.child.id(),
+        );
+        match port {
+            Ok(port) => {
+                session.port = port;
+                activation_tx.send(true).map_err(|_| "CORE_PIPE_FAILED")?;
+            }
+            Err(error) => {
+                let _ = activation_tx.send(false);
+                return Err(error);
+            }
+        }
+        Ok(session)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn paths_cannot_redirect_or_escape() {
+        for path in [
+            "https://evil/api",
+            "/api/../x",
+            "/api/%2e%2e/x",
+            "/api//x",
+            "/api/a\\b",
+            "/api/a#x",
+            "/api/a\r\nHost:x",
+        ] {
+            assert!(checked_url(4321, path).is_err(), "{path}");
+        }
+        assert_eq!(
+            checked_url(4321, "/api/search?q=%E4%B8%AD").unwrap(),
+            "http://127.0.0.1:4321/api/search?q=%E4%B8%AD"
+        );
+    }
+    #[test]
+    fn proof_has_python_compatible_framing_and_binds_identity() {
+        let secret = "01".repeat(32);
+        let challenge = "02".repeat(32);
+        let generation = "03".repeat(32);
+        let mut mac = Hmac::<Sha256>::new_from_slice(&[1; 32]).unwrap();
+        mac.update(format!("1:{challenge}:{generation}:123:123:4567").as_bytes());
+        let signature: String = mac
+            .finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let payload = serde_json::to_vec(&serde_json::json!({"protocol":1,"launcher_pid":123,"pid":123,"port":4567,"generation":generation,"proof":signature})).unwrap();
+        assert_eq!(
+            verify_ready(&payload, &secret, &challenge, &generation, 123).unwrap(),
+            4567
+        );
+        assert!(verify_ready(&payload, &secret, &challenge, &generation, 124).is_err());
+        assert!(verify_ready(&payload, &secret, &"04".repeat(32), &generation, 123).is_err());
+    }
+
+    #[test]
+    fn protocol_incompatibility_rejects_pre_ready_broker_requests() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let backend = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../backend")
+            .canonicalize()
+            .unwrap();
+        let python = backend.join(if cfg!(windows) {
+            ".venv/Scripts/python.exe"
+        } else {
+            ".venv/bin/python"
+        });
+        assert!(python.is_file(), "backend virtual environment is required");
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = temp.path().join("incompatible.py");
+        std::fs::write(
+            &fixture,
+            r#"import json, os, sys, time
+config = json.loads(sys.stdin.buffer.readline())
+print(json.dumps({"protocol": 2, "launcher_pid": config["launcher_pid"], "pid": os.getpid(), "port": 1, "generation": config["generation"], "proof": "00" * 32}), flush=True)
+print(json.dumps({"rpc": "workspace.write", "request_id": "must-not-run", "params": {}}), flush=True)
+time.sleep(5)
+"#,
+        )
+        .unwrap();
+        let broker_calls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&broker_calls);
+        let mut core = CoreSupervisor::new(
+            python,
+            vec![fixture.to_string_lossy().into_owned()],
+            backend,
+            temp.path().join("data"),
+        )
+        .with_broker(Arc::new(move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Err("BUSINESS_CALL_MUST_NOT_RUN".into())
+        }));
+        assert_eq!(core.start().unwrap_err(), "PROTOCOL_INCOMPATIBLE");
+        assert_eq!(broker_calls.load(Ordering::SeqCst), 0);
+    }
+}

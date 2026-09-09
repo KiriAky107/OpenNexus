@@ -11,8 +11,7 @@ export function mergeImportedSecrets(config: McpServerInput, previous: ImportedS
     const keys = item.kind === 'header' ? config.secret_header_keys : config.secret_environment_keys
     const declared = keys.find(key => normalize(key) === normalize(item.key))
     if (declared === undefined) continue
-    // HTTP identity is case-insensitive, but the Secret API requires the current
-    // declared spelling. New inline values replace older drafts of that identity.
+    // HTTP 身份不区分大小写，但 Secret API 需要当前声明的拼写。新的内联值取代了该身份的旧草稿。
     merged.set(`${item.kind}:${normalize(declared)}`, { ...item, key: declared })
   }
   return [...merged.values()]
@@ -50,7 +49,7 @@ function timeout(value: unknown, fallback: number, max: number, label: string): 
   return value
 }
 
-// Do not silently rewrite executable arguments or secret values copied from chat.
+// 不要默默地重写从聊天复制的可执行参数或秘密值。
 function checkUrl(value: string, label: string) {
   if (/^\[https?:\/\//i.test(value)) throw new Error(`${label}${t('请填写纯 URL，不要粘贴 Markdown 链接', ': enter a plain URL instead of a Markdown link')}`)
 }
@@ -62,9 +61,7 @@ export function parseMcpJson(raw: string, fallbackName = '', requireConnection =
   return normalizeMcpConfig(parsed, fallbackName, requireConnection)
 }
 
-/** Normalize external client JSON before it reaches either the form or the API.
- * Inline secrets leave the public config here and are sent only to the Secret API.
- */
+/** 在外部客户端 JSON 到达表单或 API 之前对其进行标准化。内联机密在此处保留公共配置，并且仅发送到机密 API。 */
 export function normalizeMcpConfig(parsed: unknown, fallbackName = '', requireConnection = true) {
   let raw = object(parsed, t('服务器配置', 'Server configuration'))
   if ('mcpServers' in raw) {
@@ -75,7 +72,7 @@ export function normalizeMcpConfig(parsed: unknown, fallbackName = '', requireCo
   }
   const allowed = new Set([...Object.keys(emptyMcpConfig()), 'version', 'env', 'type', 'timeout', 'sse_read_timeout'])
   if (Object.keys(raw).some(key => !allowed.has(key))) {
-    // Never echo arbitrary unknown keys: pasted secrets sometimes become JSON keys.
+    // 永远不要回显任意未知密钥：粘贴的秘密有时会变成 JSON 密钥。
     throw new Error(t('服务器配置含不支持的字段；API Key 请放在 env/environment 的对应变量中，不要放在顶层', 'The server configuration contains unsupported fields. Put API keys in the corresponding env/environment variables, not at the top level.'))
   }
   if (raw.env !== undefined && raw.environment !== undefined) throw new Error(t('env 与 environment 请只保留一个，避免覆盖配置', 'Keep either env or environment, not both'))
@@ -100,7 +97,7 @@ export function normalizeMcpConfig(parsed: unknown, fallbackName = '', requireCo
   config.secret_header_keys = [...new Set(strings(raw.secret_header_keys, 'secret_header_keys'))]
   config.permissions = strings(raw.permissions, 'permissions')
   config.startup_timeout_seconds = timeout(raw.startup_timeout_seconds ?? raw.timeout, 15, 120, t('启动超时', 'Startup timeout'))
-  // Compatibility policy: legacy read timeout becomes the tool wait budget, not an SSE transport setting.
+  // 兼容性策略：旧的读取超时成为工具等待预算，而不是 SSE 传输设置。
   config.tool_timeout_seconds = timeout(raw.tool_timeout_seconds ?? raw.sse_read_timeout, 30, 300, t('工具超时', 'Tool timeout'))
   if (config.transport === 'stdio') {
     if (requireConnection && !config.command) throw new Error(t('stdio 配置必须填写 command', 'stdio configuration requires command'))

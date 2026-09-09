@@ -6,9 +6,7 @@ import { appendDiagramControls } from '@/utils/diagramControls'
 
 let previewId = 0
 export function createMermaidPreview(source: string, dark: boolean, applyPreview: (value: HTMLElement) => void, kind = 'mermaid', themeId = 'light'): HTMLElement {
-  // Each revision owns its element, so a slow render cannot replace newer content.
-  // Milkdown sanitizes Element input to its inner HTML; retain the revision
-  // marker and controls inside an otherwise disposable envelope.
+  // 每个修订版本都拥有其元素，因此缓慢的渲染无法替换较新的内容。 Milkdown 清理其内部 HTML 的 Element 输入；将修订标记和控件保留在一次性信封内。
   const envelope = document.createElement('div')
   const container = document.createElement('div')
   envelope.append(container)
@@ -19,12 +17,10 @@ export function createMermaidPreview(source: string, dark: boolean, applyPreview
   container.textContent = t('正在渲染图表…', 'Rendering diagram…')
   const publish = async () => {
     await nextTick()
-    // Milkdown sanitizes and copies this element. Publish only if its revision
-    // still exists; edits, language changes and unmounts remove the old marker.
+    // Milkdown 清理并复制该元素。仅当其修订版本仍然存在时才发布；编辑、语言更改和卸载会删除旧标记。
     const visible = document.getElementById(container.id)
     if (visible) {
-      // PreviewPanel copies HTML instead of retaining the supplied element.
-      // Update the current copy through Milkdown's reactive callback.
+      // PreviewPanel 复制 HTML，而不是保留提供的元素。通过 Milkdown 的反应式回调更新当前副本。
       applyPreview(envelope.cloneNode(true) as HTMLElement)
     }
   }
@@ -38,7 +34,7 @@ export function createMermaidPreview(source: string, dark: boolean, applyPreview
       void publish()
       return
     }
-    // Mermaid runs in strict mode; Milkdown sanitizes the preview before insertion.
+    // Mermaid以严格模式运行； Milkdown 在插入之前清理预览。
     container.innerHTML = result.svg
     appendDiagramControls(container)
     if (result.warnings.length) { const warning = document.createElement('p'); warning.textContent = result.warnings.join('\n'); warning.setAttribute('role', 'status'); container.append(warning) }

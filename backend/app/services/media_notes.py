@@ -1,4 +1,4 @@
-"""Idempotent transcript export without overwriting an edited note."""
+"""幂等转录本导出，无需覆盖已编辑的笔记。"""
 import asyncio
 import hashlib
 from contextlib import closing
@@ -44,7 +44,7 @@ async def create_transcript_note(job_id, options):
         else:
             lines.append(job.text or "")
         if job.local_only:
-            # Persist the indexing policy in the Vault, including later rebuilds.
+            # 保留 Vault 中的索引策略，包括以后的重建。
             lines = ["---", "embedding_local_only: true", "---", "", *lines]
         markdown = "\n".join(lines)
         if options.update_existing:
@@ -53,7 +53,7 @@ async def create_transcript_note(job_id, options):
             current = await note_service.get_note(previous[0])
             if current is None:
                 raise ApiError(404, "RESOURCE_NOT_FOUND", "已导出笔记不存在。")
-            # Recover a successful update if linking failed after the Vault write.
+            # 如果 Vault 写入后链接失败，则恢复成功更新。
             if current.markdown == markdown:
                 note = current
             else:
@@ -72,7 +72,7 @@ async def _create_note(title, markdown, options, marker):
     except ApiError as exc:
         if exc.code != "RESOURCE_CONFLICT" or "note_id" not in exc.details:
             raise
-        # Recover a crash between successful note creation and linking the job.
+        # 恢复笔记创建成功后、关联任务前发生的崩溃。
         note = await note_service.get_note(exc.details["note_id"])
         if note is None or marker not in note.markdown:
             raise

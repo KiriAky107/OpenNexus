@@ -40,7 +40,7 @@ async def validation_error_handler(_: Request, exc: RequestValidationError) -> J
         error=ErrorDetail(
             code="VALIDATION_ERROR",
             message="Request validation failed.",
-            # Pydantic ctx can contain exception objects; input may contain API keys.
+            # Pydantic ctx可以包含异常对象；输入可能包含 API 键。
             details={"errors": [
                 {key: error[key] for key in ("type", "loc", "msg") if key in error}
                 for error in exc.errors()

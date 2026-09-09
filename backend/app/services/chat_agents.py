@@ -1,4 +1,4 @@
-"""Chat delegation reuses the persistent Agent runtime and its permission gates."""
+"""聊天委托重用持久 Agent 运行时及其权限门。"""
 import json
 from pydantic import BaseModel, ConfigDict, Field
 from app.contracts import AgentRunCreateRequest, ToolDefinition, ToolCall
@@ -15,7 +15,7 @@ TOOLS = [
     ToolDefinition(name="agent.create", description="Create and start a persistent Agent for work explicitly requested by the user. Return its run ID; do not claim work is completed. File changes still require Agent permission confirmation. No network tools.", parameters=CreateArguments.model_json_schema()),
     ToolDefinition(name="agent.status", description="Read an Agent run's current status and result. If waiting_permission, tell the user to open the run and review it.", parameters=StatusArguments.model_json_schema()),
 ]
-ALLOWED_TOOLS = ['chat-policy.plan', 'notes.search', 'rag.search', 'notes.read', 'notes.list', 'notes.create', 'notes.update', 'notes.move', 'notes.patch_markdown', 'markdown.catalog', 'markdown.compose', 'tasks.create', 'tasks.update', 'tasks.list']
+ALLOWED_TOOLS = ['chat-policy.plan', 'notes.search', 'rag.search', 'notes.read', 'notes.list', 'notes.create', 'notes.update', 'notes.move', 'notes.rename', 'notes.delete', 'notes.patch_markdown', 'markdown.catalog', 'markdown.compose', 'function_plot.compose', 'tasks.create', 'tasks.update', 'tasks.list', 'tasks.read', 'tasks.delete', 'attachments.read', 'audio.transcribe', 'audio.transcription_status', 'skills.list', 'skills.create', 'skills.update', 'plugins.list', 'plugins.create']
 
 async def execute(call, request):
     from app.container import container

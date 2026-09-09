@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-extension-trust-review"
+description = "Enables the extension_trust_review command without any pre-configured scope."
+commands.allow = ["extension_trust_review"]
+
+[[permission]]
+identifier = "deny-extension-trust-review"
+description = "Denies the extension_trust_review command without any pre-configured scope."
+commands.deny = ["extension_trust_review"]

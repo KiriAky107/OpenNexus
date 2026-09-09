@@ -1,4 +1,4 @@
-"""Offline reference scoring. No inference, uploads or fabricated reference labels."""
+"""离线参考评分；不执行推理、不上传内容，也不伪造参考标签。"""
 from __future__ import annotations
 import math
 import unicodedata
@@ -53,7 +53,7 @@ def speaker_score(reference, hypothesis):
         for a in r:
             for b in h:
                 weights[refs.index(a)][hyps.index(b)] += duration
-    # Exact maximum-weight one-to-one mapping, padded with silent dummy speakers.
+    # 精确的最大权重一对一映射，填充无声虚拟扬声器。
     dp = {0: 0.0}
     for index in range(count):
         next_dp = {}

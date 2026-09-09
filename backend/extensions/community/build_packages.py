@@ -1,4 +1,4 @@
-"""Reproducible, explicit-file-list community package builder; standard library only."""
+"""可重复的、显式文件列表社区包构建器；仅标准库。"""
 import hashlib
 import json
 import re

@@ -1,4 +1,4 @@
-"""Explicit resumable downloads; inference itself never fetches weights."""
+"""由用户显式触发、支持断点续传的下载；推理过程本身绝不下载权重。"""
 from __future__ import annotations
 
 import asyncio

@@ -1,8 +1,4 @@
-"""Bounded, asynchronous operational diagnostics, separate from business/Trace data.
-
-Only explicitly allowed metadata is stored. Never store prompts, tool arguments,
-provider response bodies or raw exception messages in this diagnostic channel.
-"""
+"""有界的异步操作诊断，与业务/Trace 数据分开。仅存储明确允许的元数据。切勿在此诊断通道中存储提示、工具参数、提供程序响应正文或原始异常消息。"""
 from __future__ import annotations
 
 import json
@@ -157,7 +153,7 @@ def log_event(module: str, event: str, *, level='INFO', error: BaseException | N
     try:
         get_store().emit(level, module, event, details)
     except Exception:
-        # Logging must not turn a successful save/run into a business failure.
+        # 日志记录不得将成功的保存/运行变成业务失败。
         logging.getLogger('operation_log_storage').error('Operational log storage unavailable')
 
 
@@ -166,15 +162,14 @@ class ApplicationLogHandler(logging.Handler):
         if record.name == 'operation_log_storage' or getattr(record, '_notes_operation_logged', False):
             return
         record._notes_operation_logged = True
-        # Legacy log messages can include note text/credentials, even in f-strings.
-        # Preserve source location and error class; structured call sites carry IDs.
+        # 旧日志消息可能包含笔记文本或凭据，f-string 也不例外。保留源码位置与错误类型；结构化调用点负责携带 ID。
         log_event(record.name, 'application.warning' if record.levelno < 40 else 'application.error',
                   level=record.levelname, error=record.exc_info[1] if record.exc_info else None,
                   frames=f'{Path(record.pathname).name}:{record.lineno}:{record.funcName}')
 
 
 def install_logging():
-    # Uvicorn's default logger stops propagation before the root logger.
+    # Uvicorn 的默认记录器在根记录器之前停止传播。
     for name in ('', 'uvicorn'):
         logger = logging.getLogger(name)
         if not any(isinstance(h, ApplicationLogHandler) for h in logger.handlers):

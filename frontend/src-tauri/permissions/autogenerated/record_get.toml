@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-record-get"
+description = "Enables the record_get command without any pre-configured scope."
+commands.allow = ["record_get"]
+
+[[permission]]
+identifier = "deny-record-get"
+description = "Denies the record_get command without any pre-configured scope."
+commands.deny = ["record_get"]

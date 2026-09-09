@@ -21,7 +21,7 @@ const documents: Record<string, string> = {
   minimax: 'https://platform.minimaxi.com/docs/api-reference/text-openai-api',
   stepfun: 'https://platform.stepfun.com/docs/zh/guides/models/overview',
 }
-// Exact documented model IDs only; an unrecognised model is always manual.
+// 仅准确记录的型号 ID；无法识别的模型始终是手动的。
 const documentedWindow = computed(() => {
   if (props.preset === 'minimax') {
     if (props.model === 'MiniMax-M3') return 1000000

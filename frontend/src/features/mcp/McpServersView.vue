@@ -115,8 +115,7 @@ function formPayload(): McpServerInput {
 function payload(requireConnection = true): McpServerInput {
   const { config, secrets } = editorMode.value === 'form'
     ? normalizeMcpConfig(formPayload(), '', requireConnection) : parseMcpJson(rawConfig.value, form.name, requireConnection)
-  // Keep only still-declared drafts. A mode switch must not discard imported keys,
-  // and editing the declaration must not later send a removed key to the Secret API.
+  // 仅保留仍声明的草稿。模式开关不得丢弃导入的密钥，并且编辑声明后不得将删除的密钥发送到 Secret API。
   importedSecrets.value = mergeImportedSecrets(config, importedSecrets.value, secrets)
   if (editingId.value) config.version = form.version
   if (editorMode.value === 'json') rawConfig.value = JSON.stringify(config, null, 2)
@@ -149,8 +148,7 @@ async function save() {
     if (editingOriginal.value && executionChanged(editingOriginal.value, input) && !(await askConfirm(t('连接命令、地址或认证配置已变化，保存后旧测试与授权会失效。是否保存？', 'The command, address, or authentication settings changed. Previous tests and authorization will be invalidated. Save?')))) return
     busy.value = 'save'
     saved = editingId.value ? await service.updateMcpServer(editingId.value, input) : await service.createMcpServer(input)
-    // Commit the returned ID/version before saving secrets so a partial failure can
-    // retry this server instead of creating a duplicate or sending a stale version.
+    // 在保存机密之前提交返回的 ID/版本，以便部分失败可以重试此服务器，而不是创建重复版本或发送过时的版本。
     editingId.value = saved.server_id
     editingOriginal.value = saved
     resetEditor({ ...input, version: saved.version })
@@ -258,11 +256,11 @@ onMounted(load)
           <label>{{ t('服务器名称', 'Server name') }}<input v-model="form.name" maxlength="80" :placeholder="t('例如：文件系统工具', 'For example: Filesystem tools')"></label>
           <div class="template-row"><span>{{ t('服务器配置', 'Server configuration') }}</span><button type="button" class="template" :class="{ active: form.transport === 'stdio' }" @click="applyTemplate('stdio')">stdio {{ t('模板', 'template') }}</button><button type="button" class="template" :class="{ active: form.transport === 'streamable_http' }" @click="applyTemplate('streamable_http')">Streamable HTTP</button><button type="button" class="template" :class="{ active: form.transport === 'sse' }" @click="applyTemplate('sse')">SSE {{ t('（兼容）', '(legacy)') }}</button></div>
           <template v-if="form.transport === 'stdio'"><label>{{ t('可执行命令', 'Executable command') }}<input v-model="form.command" :placeholder="t('uvx、npx 或可信可执行文件路径', 'uvx, npx, or a trusted executable path')"></label><label>{{ t('参数（每行一项）', 'Arguments (one per line)') }}<textarea v-model="argsText" rows="5"></textarea></label><div class="two-columns"><label>{{ t('普通环境变量（JSON）', 'Environment variables (JSON)') }}<textarea v-model="environmentText" rows="5"></textarea></label><label>{{ t('敏感环境变量名（每行一项）', 'Secret environment names (one per line)') }}<textarea v-model="secretKeysText" rows="5" placeholder="API_KEY"></textarea></label></div></template>
-          <template v-else><label>MCP URL<input v-model="form.url" placeholder="https://example.com/mcp"></label><div class="two-columns"><label>{{ t('普通 Header（JSON）', 'Headers (JSON)') }}<textarea v-model="headersText" rows="5" placeholder='{"X-Client":"NotesAgent"}'></textarea></label><label>{{ t('敏感 Header 名（每行一项）', 'Secret header names (one per line)') }}<textarea v-model="secretHeaderKeysText" rows="5" placeholder="Authorization"></textarea></label></div></template>
+          <template v-else><label>MCP URL<input v-model="form.url" placeholder="https://example.com/mcp"></label><div class="two-columns"><label>{{ t('普通 Header（JSON）', 'Headers (JSON)') }}<textarea v-model="headersText" rows="5" placeholder='{"X-Client":"OpenNexus"}'></textarea></label><label>{{ t('敏感 Header 名（每行一项）', 'Secret header names (one per line)') }}<textarea v-model="secretHeaderKeysText" rows="5" placeholder="Authorization"></textarea></label></div></template>
           <label>{{ t('声明权限（逗号分隔，可选）', 'Declared permissions (comma-separated, optional)') }}<input v-model="permissionsText" placeholder="network.request, notes.read"></label>
           <div class="two-columns"><label>{{ t('启动超时（秒）', 'Startup timeout (seconds)') }}<input v-model.number="form.startup_timeout_seconds" type="number" min="1" max="120"></label><label>{{ t('工具超时（秒）', 'Tool timeout (seconds)') }}<input v-model.number="form.tool_timeout_seconds" type="number" min="1" max="300"></label></div>
         </template>
-        <label v-else>{{ t('服务器 JSON 配置', 'Server JSON configuration') }}<textarea v-model="rawConfig" class="json-editor" rows="22" spellcheck="false"></textarea><small>{{ t('支持 NotesAgent 配置、command/args/env 和单服务器 mcpServers 配置。已声明的 Secret 及常见 API Key、Token、Authorization 会拆分后加密保存。其他敏感值请显式声明；不要把密钥放入命令或参数。', 'Supports NotesAgent, command/args/env, and single-server mcpServers configurations. Declared secrets and common API key, token, and authorization values are separated and encrypted. Declare other sensitive values explicitly; never place secrets in commands or arguments.') }}</small><small>{{ t('兼容导入 timeout 为启动超时，sse_read_timeout 为工具等待上限（不保留 SSE 读取超时语义）。', 'For compatible imports, timeout maps to startup timeout and sse_read_timeout maps to the tool wait limit.') }}</small></label>
+        <label v-else>{{ t('服务器 JSON 配置', 'Server JSON configuration') }}<textarea v-model="rawConfig" class="json-editor" rows="22" spellcheck="false"></textarea><small>{{ t('支持 OpenNexus 配置、command/args/env 和单服务器 mcpServers 配置。已声明的 Secret 及常见 API Key、Token、Authorization 会拆分后加密保存。其他敏感值请显式声明；不要把密钥放入命令或参数。', 'Supports OpenNexus, command/args/env, and single-server mcpServers configurations. Declared secrets and common API key, token, and authorization values are separated and encrypted. Declare other sensitive values explicitly; never place secrets in commands or arguments.') }}</small><small>{{ t('兼容导入 timeout 为启动超时，sse_read_timeout 为工具等待上限（不保留 SSE 读取超时语义）。', 'For compatible imports, timeout maps to startup timeout and sse_read_timeout maps to the tool wait limit.') }}</small></label>
         <footer><button type="button" class="button-secondary" @click="closeEditor">{{ t('取消', 'Cancel') }}</button><button class="button-primary" :disabled="busy === 'save'">{{ t('保存', 'Save') }}</button></footer>
         </fieldset>
       </form>

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-extension-stage-prepare"
+description = "Enables the extension_stage_prepare command without any pre-configured scope."
+commands.allow = ["extension_stage_prepare"]
+
+[[permission]]
+identifier = "deny-extension-stage-prepare"
+description = "Denies the extension_stage_prepare command without any pre-configured scope."
+commands.deny = ["extension_stage_prepare"]

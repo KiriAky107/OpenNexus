@@ -35,3 +35,17 @@ servers.json
 .vscode/
 .DS_Store
 Thumbs.db
+
+# 第三阶段隔离验证、服务数据及原生编译产物。
+.build/
+**/__pycache__/
+**/.pytest_cache/
+server sync/.venv/
+server sync/.env
+server sync/console/node_modules/
+community-server/.venv/
+community-server/.env
+frontend/src-tauri/target/
+frontend/src-tauri/gen/
+# Rust Workspace Service 在所选 Vault 内生成的锁与事务数据库。
+**/.ainote/

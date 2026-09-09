@@ -1,4 +1,4 @@
-"""Native Anthropic Messages protocol with incrementally decoded content blocks."""
+"""原生 Anthropic Messages 协议，支持增量解码内容块。"""
 
 import json
 from contextlib import aclosing
@@ -135,7 +135,7 @@ class AnthropicMessagesProvider(OpenAICompatibleProvider):
                         fragment = string_value(delta.get("partial_json"))
                         block["arguments"] += fragment
                         yield ModelEventType.tool_call_delta, {"tool_call_id": block["id"], "arguments_delta": fragment}
-                    # Signatures and future delta types have no representation in ModelEvent.
+                    # 签名和未来​​的增量类型在 ModelEvent 中没有表示。
                 elif kind == "content_block_stop":
                     block = blocks.get(token_count(data.get("index")))
                     if block is None or block["closed"]:

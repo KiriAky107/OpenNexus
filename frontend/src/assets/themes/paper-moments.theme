@@ -286,7 +286,7 @@ license: MIT
 
 
 /* Shared paper surfaces across settings, search, agents, media and extensions. */
-[data-theme="paper-moments"] :is(.panel, .item-card, .event-card, .citation-card, .routing-card, .vault-card, .modal-card, .modal, .usage-chart) {
+[data-theme="paper-moments"] :is(.panel, .item-card, .event-card, .citation-card, .routing-card, .vault-card, .modal-card, .modal, .usage-chart, .community-card, .tool-choice, .user-skill-card, .metric-card, .workspace-chat) {
   position: relative;
   border: 1px solid #b5a693;
   border-radius: 8px 14px 8px 8px;
@@ -296,7 +296,7 @@ license: MIT
   background-image: repeating-linear-gradient(transparent 0 31px, #b6c7bd18 31px 32px);
   box-shadow: 3px 4px 0 #d8e6e2, 6px 7px 0 #f0d8cf;
 }
-[data-theme="paper-moments"] :is(.panel, .item-card, .event-card, .citation-card, .routing-card, .vault-card, .modal-card, .modal)::before {
+[data-theme="paper-moments"] :is(.panel, .item-card, .event-card, .citation-card, .routing-card, .vault-card, .modal-card, .modal, .community-card, .tool-choice, .user-skill-card, .metric-card, .workspace-chat)::before {
   content: '';
   position: absolute;
   inset: 0 24px auto auto;
@@ -307,7 +307,7 @@ license: MIT
   background: repeating-linear-gradient(45deg, #c5dfe0b0 0 6px, #daeceba0 6px 12px);
   pointer-events: none;
 }
-[data-theme="paper-moments"] :is(.item-card, .event-card, .citation-card, .routing-card):nth-child(2n)::before {
+[data-theme="paper-moments"] :is(.item-card, .event-card, .citation-card, .routing-card, .community-card, .tool-choice, .user-skill-card, .metric-card):nth-child(2n)::before {
   background: repeating-linear-gradient(45deg, #e7bcb3b0 0 6px, #f2d4cba0 6px 12px);
 }
 [data-theme="paper-moments"] :is(.panel, .item-card, .routing-card, .vault-card) :is(h2, h3, h4) {

@@ -1,4 +1,4 @@
-"""Wire-level provider tests: no credentials, SDKs, clocks, or network services."""
+"""线路级提供商测试：无凭据、SDK、时钟或网络服务。"""
 
 import asyncio
 import json
@@ -400,7 +400,7 @@ def test_incremental_delivery_cancellation_and_explicit_close(protocol, cancel):
             seen.append(event)
             if event.event == E.text_delta:
                 break
-        # The first token arrives while the response is still open and blocked.
+        # 第一个令牌到达，而响应仍处于打开状态并被阻止。
         assert seen[-1].data["text"] == "你好"
         assert not body.closed
         if cancel:
@@ -472,7 +472,7 @@ def test_native_structured_format_mapping(protocol):
 @pytest.mark.parametrize("protocol", NATIVE)
 def test_invalid_tool_arguments_and_unclosed_tool(protocol):
     frames = responses_tool_events() if protocol == "responses" else anthropic_tool_events()
-    # A syntactically valid terminal cannot rescue an unfinished tool block.
+    # 语法上有效的终端无法挽救未完成的工具块。
     index = next(i for i, frame in enumerate(frames)
                  if frame["type"] in {"response.function_call_arguments.delta", "content_block_delta"}
                  and (frame.get("output_index") == 2 or frame.get("index") == 2))

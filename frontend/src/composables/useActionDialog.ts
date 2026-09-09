@@ -2,7 +2,7 @@ import { nextTick, onBeforeUnmount, shallowRef } from 'vue'
 
 export interface ActionDialogRequest { message: string; mode: 'confirm' | 'prompt'; initialValue: string }
 
-/** Requests belong to the invoking view; leaving it cancels pending work. */
+/** 请求属于调用视图；离开它会取消待处理的工作。 */
 export function useActionDialog() {
   const actionDialog = shallowRef<ActionDialogRequest | null>(null)
   let pending: ((value: string | null) => void) | undefined
@@ -11,7 +11,7 @@ export function useActionDialog() {
     const resolve = pending
     pending = undefined
     actionDialog.value = null
-    await nextTick() // Restore focus and release the modal before the caller continues.
+    await nextTick() // 在调用者继续之前恢复焦点并释放模式。
     resolve?.(disposed ? null : value)
   }
   function request(mode: ActionDialogRequest['mode'], message: string, initialValue = '') {

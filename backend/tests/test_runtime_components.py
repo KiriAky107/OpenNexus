@@ -79,7 +79,7 @@ def test_interpreter_keeps_cpu_default_and_respects_explicit_override(monkeypatc
     (components.ROOT / 'ready.json').write_text('{}')
     monkeypatch.setattr(runtime, 'configuration', lambda: runtime.RuntimeConfig(device='cpu'))
     assert runtime.interpreter() != python
-    # A queued attempt keeps its frozen device even after the saved setting changes.
+    # 即使保存的设置随后改变，已排队的尝试仍使用冻结的提供商配置。
     assert runtime.interpreter(runtime.RuntimeConfig(device='cuda')) == python
     assert runtime.interpreter(runtime.RuntimeConfig(device='cpu')) != python
     monkeypatch.setenv('APP_MODEL_PYTHON', 'explicit-python.exe')

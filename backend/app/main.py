@@ -62,7 +62,12 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_origins=[
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://tauri.localhost",
+        "tauri://localhost",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -96,7 +101,7 @@ async def operation_log(request, call_next):
         failure = exc
         raise
     finally:
-        # Do not record query strings, request/response bodies or arbitrary URLs.
+        # 不记录查询字符串、请求/响应正文或任意 URL。
         route = getattr(request.scope.get('route'), 'path', 'unmatched')
         if not route.startswith('/api/logs') and (request.method not in {'GET', 'HEAD', 'OPTIONS'} or status >= 400 or perf_counter() - started > 1):
             log_event('http', 'request.finished', level='ERROR' if status >= 500 else 'WARNING' if status >= 400 else 'INFO',

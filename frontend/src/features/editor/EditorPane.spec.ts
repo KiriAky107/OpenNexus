@@ -52,7 +52,7 @@ describe('EditorPane file switching', () => {
 
     expect(store.currentFilePath).toBe('/数据结构/红黑树.md')
     expect(wrapper.text()).not.toContain('祝你写作愉快')
-  }, 15000) // Real Milkdown is now imported lazily; cold module transforms count toward this integration test.
+  }, 15000) // 真正的Milkdown现在被延迟导入；冷模块将计数转换为此集成测试。
 
   it('applies the saved spell-check and language settings to source mode', async () => {
     const editor = useEditorStore()
@@ -63,9 +63,10 @@ describe('EditorPane file switching', () => {
     wrapper = mount(EditorPane, { attachTo: document.body })
     await nextTick()
 
-    const textarea = wrapper.get('textarea')
+    await vi.waitFor(() => expect(wrapper!.find('.cm-content').exists()).toBe(true), { timeout: 10000 })
+    const textarea = wrapper.get('.cm-content')
     expect(textarea.attributes('spellcheck')).toBe('true')
     expect(textarea.attributes('lang')).toBe('en')
     expect(textarea.attributes('aria-label')).toBe('Markdown source editor')
-  })
+  }, 15000) // 惰性源编辑器模块转换需要相同的冷启动预算。
 })

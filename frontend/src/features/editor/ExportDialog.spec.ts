@@ -1,12 +1,33 @@
 // @vitest-environment jsdom
 import {mount,flushPromises} from '@vue/test-utils'
-import {it,expect,vi} from 'vitest'
+import {it,expect,vi,beforeEach} from 'vitest'
 import ExportDialog from './ExportDialog.vue'
 import {apiClient} from '@/services/apiClient'
 vi.mock('@/stores/editor',()=>({useEditorStore:()=>({content:'# snapshot',currentFilePath:'note.md'})}))
 vi.mock('@/stores/theme',()=>({useThemeStore:()=>({currentThemeId:'light'})}))
 vi.mock('@/services/mermaidService',()=>({renderMermaid:vi.fn()}))
 vi.mock('@/services/apiClient',()=>({apiClient:{post:vi.fn(),get:vi.fn()}}))
+beforeEach(()=>{vi.useRealTimers();vi.clearAllMocks()})
+it('starts each dialog with no completed history while retaining active background jobs',async()=>{
+ vi.useFakeTimers()
+ vi.mocked(apiClient.get)
+  .mockResolvedValueOnce({items:[
+   {job_id:'old',status:'completed',warnings:[],error:null,file:{file_name:'old.pdf',size:1}},
+   {job_id:'active',status:'running',warnings:[],error:null,file:null},
+  ]})
+  .mockResolvedValueOnce({items:[
+   {job_id:'old',status:'completed',warnings:[],error:null,file:{file_name:'old.pdf',size:1}},
+   {job_id:'active',status:'completed',warnings:[],error:null,file:{file_name:'active.pdf',size:1}},
+  ]})
+ const wrapper=mount(ExportDialog,{global:{stubs:{AppDialog:{template:'<div><slot /></div>'}}}})
+ await flushPromises()
+ expect(wrapper.text()).not.toContain('old.pdf')
+ expect(wrapper.text()).toContain('active')
+ await vi.advanceTimersByTimeAsync(1500)
+ await flushPromises()
+ expect(wrapper.text()).toContain('active.pdf')
+ wrapper.unmount()
+})
 it('closing the dialog after submitting preserves the background export',async()=>{
  let finish!:(value:unknown)=>void
  vi.mocked(apiClient.get).mockImplementation(async(path:string)=>path==='/api/exports'?{items:[]}:{job_id:'closing-job',status:'cancelled',warnings:[],error:null,file:null})

@@ -1,7 +1,7 @@
-"""Explicit, bounded connection smoke against an already configured local Provider.
+"""对已配置的本地提供商执行显式、有界的连接冒烟测试。
 
-Defaults to a plan. --execute performs one test request, never reads credentials.
-The output deliberately keeps untested protocol scenarios pending.
+默认仅生成计划；--execute 会发送一次测试请求，但不会读取凭据。
+输出会将尚未验证的协议场景保留为待处理状态。
 """
 import argparse
 from datetime import datetime, timezone
@@ -39,7 +39,7 @@ def main():
             result['latency_ms'] = payload.get('latency_ms')
         except HTTPError as error:
             result['connection'] = 'failed'
-            result['http_status'] = error.code  # Do not persist remote error bodies or headers.
+            result['http_status'] = error.code  # 不保存远程错误正文或响应头。
         except (URLError, TimeoutError, ValueError):
             result['connection'] = 'unavailable'
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')

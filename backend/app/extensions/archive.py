@@ -1,4 +1,4 @@
-"""Bounded ZIP extraction for packages uploaded to the AI Core host."""
+"""上传到 AI Core 主机的包的有限 ZIP 提取。"""
 from __future__ import annotations
 
 import io
@@ -31,7 +31,7 @@ def install_zip(data: bytes, kind: str, storage: Path, install: Callable[[Path],
     if kind not in ('skill', 'plugin'):
         raise ValueError('Unknown extension kind')
     storage.mkdir(parents=True, exist_ok=True)
-    # Retain successful extraction: Plugin commands and resources use this directory.
+    # 保留成功提取：Plugin 命令和资源使用此目录。
     destination = Path(tempfile.mkdtemp(prefix=f'{kind}-', dir=storage))
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:

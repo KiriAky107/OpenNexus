@@ -1,10 +1,10 @@
-/* Semantic tokens inherit every installed theme, including imported themes. */
+/* 语义标记继承每个已安装的主题，包括导入的主题。 */
 :where(.markdown-callout) { --callout-color: var(--color-callout-info, var(--color-info)); }
 .markdown-callout, .milkdown .ProseMirror blockquote.markdown-callout {
   border: 1px solid color-mix(in srgb, var(--callout-color) 35%, transparent);
   border-inline-start: 4px solid var(--callout-color);
   border-radius: var(--radius-md, 8px);
-  background: color-mix(in srgb, var(--callout-color) 8%, var(--color-surface-primary, var(--paper, #fffdf7)));
+  background: color-mix(in srgb, var(--callout-color) 8%, var(--color-surface-primary));
   color: var(--color-text-primary, var(--ink, inherit));
   margin: 12px 0; padding: 12px 16px; min-width: 0;
 }

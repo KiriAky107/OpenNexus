@@ -55,11 +55,22 @@ const toolLabels: Record<string, string> = {
   'notes.update': '更新笔记',
   'notes.list': '列出笔记',
   'notes.move': '移动笔记',
+  'notes.rename': '重命名笔记',
+  'notes.delete': '删除笔记',
   'tasks.create': '创建任务',
   'tasks.update': '更新任务',
   'tasks.list': '列出任务',
+  'tasks.read': '读取任务',
+  'tasks.delete': '删除任务',
   'attachments.read': '读取附件',
   'audio.transcribe': '音频转写',
+  'audio.transcription_status': '读取转写结果',
+  'function_plot.compose': '生成函数图',
+  'skills.list': '列出自定义 Skill',
+  'skills.create': '创建自定义 Skill',
+  'skills.update': '更新自定义 Skill',
+  'plugins.list': '列出 Plugin',
+  'plugins.create': '创建声明式 Plugin',
   'text.uppercase': '文本转大写',
 }
 
@@ -76,16 +87,26 @@ const toolDescriptions: Record<string, string> = {
   'notes.update': '更新已有 Markdown 笔记。',
   'notes.list': '按文件夹和标签筛选并列出笔记摘要。',
   'notes.move': '移动笔记到其他文件夹并保留笔记 ID。',
+  'notes.rename': '重命名 Markdown 文件并保留笔记 ID 和索引身份。',
+  'notes.delete': '删除当前知识库中的指定笔记。',
   'tasks.create': '创建并持久化任务。',
   'tasks.update': '更新已有任务。',
   'tasks.list': '列出已持久化的任务。',
+  'tasks.read': '根据任务 ID 读取完整任务。',
+  'tasks.delete': '删除指定的持久化任务。',
   'attachments.read': '读取由宿主管理的 UTF-8 附件。',
   'audio.transcribe': '将音频转写为文本，按模型路由使用 API 或本地后端。',
+  'audio.transcription_status': '读取转写任务状态、文本、分段和错误信息。',
+  'function_plot.compose': '根据表达式生成并校验安全的 function-plot Markdown 代码块。',
+  'skills.list': '列出当前知识库中的自定义 Skill 及依赖状态。',
+  'skills.create': '把提示词、工具和权限声明保存为当前知识库的自定义 Skill。',
+  'skills.update': '使用当前版本号更新自定义 Skill，防止覆盖并发修改。',
+  'plugins.list': '列出已安装 Plugin 及生命周期状态。',
+  'plugins.create': '生成并安装仅使用宿主白名单处理器的声明式 Plugin；创建后需在 Plugin 页面检查并启用。',
   'text.uppercase': '将输入文本中的字母转换为大写。',
 }
 
-// MCP IDs contain a server-specific namespace. Localize the remote tool name
-// for presentation only; requests must keep using the complete original ID.
+// MCP ID 包含特定于服务器的命名空间。本地化远程工具名称仅用于演示；要求必须继续使用完整的原装ID。
 const mcpTools: Record<string, { label: string; description: string }> = {
   web_search: {
     label: '网页搜索',
@@ -105,9 +126,12 @@ const permissionLabels: Record<string, string> = {
   'notes.search': '搜索笔记',
   'notes.read': '读取笔记',
   'notes.write': '修改笔记',
+  'notes.delete': '删除笔记',
   'tasks.read': '读取任务',
   'tasks.write': '修改任务',
   'attachments.read': '读取附件',
+  'skills.write': '创建或更新自定义 Skill',
+  'plugins.write': '创建声明式 Plugin',
   'network.request': '访问网络',
   'secrets.use': '使用密钥',
 }

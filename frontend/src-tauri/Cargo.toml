@@ -1,0 +1,58 @@
+[package]
+name = "notesagent-desktop"
+version = "0.3.0-alpha.1"
+edition = "2021"
+rust-version = "1.89"
+
+[lib]
+name = "notesagent_host"
+
+[[bin]]
+name = "notesagent-desktop"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[features]
+default = []
+desktop = ["dep:tauri", "dep:tauri-build", "dep:rfd", "dep:reqwest", "dep:base64", "dep:tokio"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+tempfile = "3"
+fs2 = "0.4"
+tauri = { version = "2", optional = true, features = ["tray-icon"] }
+rfd = { version = "0.15", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+base64 = { version = "0.22", optional = true }
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"], optional = true }
+hmac = { version = "0.12", default-features = false }
+rand = { version = "0.8", default-features = false, features = ["getrandom"] }
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
+command-group = { version = "5", default-features = false }
+iota_stronghold = "2.1"
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+fernet = { version = "0.2", default-features = false, features = ["rustcrypto"] }
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std"] }
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
+unicode-normalization = "0.1"
+unicode-casefold = "0.2"
+serde-saphyr = { version = "1.2", default-features = false, features = ["deserialize"] }
+semver = { version = "1", features = ["serde"] }
+cap-std = "4.0.2"
+cap-fs-ext = "4.0.2"
+jsonschema = { version = "0.55", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Isolation", "Win32_Security_Authorization", "Win32_System_Com", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_Pipes", "Win32_System_IO", "Win32_System_SystemInformation", "Win32_Storage_FileSystem", "Win32_System_RemoteDesktop", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader"] }
+
+[build-dependencies]
+tauri-build = { version = "2", optional = true , features = [] }
+
+# 加密 KDF 在调试/测试运行中保留其生产工作因素。优化依赖关系，而不是削弱本地执行的这些因素。
+[profile.dev.package."*"]
+opt-level = 2

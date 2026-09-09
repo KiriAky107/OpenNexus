@@ -77,7 +77,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       collect(fileTree.value)
       const restore = (nodes: FileNode[]) => nodes.forEach(node => { if (node.type === 'folder') node.is_open = open.get(node.path) ?? false; if (node.children) restore(node.children) })
       restore(fresh)
-      // Avoid redrawing an unchanged tree on every background check.
+      // 避免在每次背景检查时重绘未更改的树。
       if (JSON.stringify(fresh) !== JSON.stringify(fileTree.value)) fileTree.value = fresh
       treeRefreshError.value = null
     } catch (error) {
@@ -91,10 +91,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     isLoading.value = true
     try {
       const info = await workspaceService.openVault(path)
+      const tree = await workspaceService.getFileTree()
       vaultPath.value = info.path
       vaultId.value = info.vault_id
       vaultName.value = info.name
-      fileTree.value = await workspaceService.getFileTree()
+      fileTree.value = tree
+      openFiles.value = []
+      activeFilePath.value = null
       hasVault.value = true
       localStorage.setItem('last-vault-path', info.path)
     } finally {
@@ -107,10 +110,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     isLoading.value = true
     try {
       const info = await workspaceService.createVault(path, name)
+      const tree = await workspaceService.getFileTree()
       vaultPath.value = info.path
       vaultId.value = info.vault_id
       vaultName.value = info.name
-      fileTree.value = await workspaceService.getFileTree()
+      fileTree.value = tree
+      openFiles.value = []
+      activeFilePath.value = null
       hasVault.value = true
       localStorage.setItem('last-vault-path', info.path)
     } finally {

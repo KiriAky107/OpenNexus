@@ -50,8 +50,7 @@ export const useAgentStore = defineStore('agent', () => {
   )
 
   const currentStep = computed(() => {
-    const tc = events.value.filter((e) => e.event === 'ToolCall').length
-    return tc
+    return activeRun.value?.current_step ?? 0
   })
 
   async function loadTools() {
@@ -79,6 +78,7 @@ export const useAgentStore = defineStore('agent', () => {
   async function loadRun(runId: string) {
     const version = ++selectionVersion
     stopStream()
+    error.value = null
     activeRunId.value = runId
     resetEvents()
     permissionRequest.value = null
@@ -91,7 +91,36 @@ export const useAgentStore = defineStore('agent', () => {
     events.value = []
     toolCalls.value = []
     permissionRequest.value = null
+    try {
+      await loadPersistedTrace(runId, () => version === selectionVersion && activeRunId.value === runId)
+      error.value = null
+    } catch (cause) {
+      if (version !== selectionVersion || activeRunId.value !== runId) return
+      error.value = cause instanceof Error ? cause.message : String(cause)
+    }
+    if (version !== selectionVersion || activeRunId.value !== runId) return
+    if (terminal(activeRun.value?.status)) {
+      connectionState.value = 'idle'
+      return
+    }
     subscribe(runId)
+  }
+
+  async function loadPersistedTrace(runId: string, current: () => boolean) {
+    let cursor = lastSequence
+    do {
+      const trace = await agentService.getAgentTrace(runId, {
+        after_sequence: cursor,
+        limit: 500,
+      })
+      if (!current()) return
+      trace.items.forEach(processEvent)
+      const run = runs.value.find((item) => item.run_id === runId)
+      if (run) run.status = trace.status
+      if (!trace.has_more) return
+      if (trace.next_sequence <= cursor) throw new Error(t('运行轨迹分页游标未前进', 'Agent trace cursor did not advance'))
+      cursor = trace.next_sequence
+    } while (current())
   }
 
   function processEvent(event: AgentEvent) {
@@ -107,7 +136,10 @@ export const useAgentStore = defineStore('agent', () => {
     const data = event.data
     const run = runs.value.find((item) => item.run_id === event.run_id)
     if (event.event === 'RunStarted' && run) run.status = 'running'
-    if (event.event === 'ToolCall') {
+    if (event.event === 'ModelCallStarted' && run) {
+      const step = Number(data.step)
+      if (Number.isFinite(step)) run.current_step = Math.max(run.current_step, step)
+    } else if (event.event === 'ToolCall') {
       toolCalls.value.push({
         tool_call_id: String(data.tool_call_id ?? ''),
         name: String(data.name ?? 'unknown'),
@@ -168,11 +200,17 @@ export const useAgentStore = defineStore('agent', () => {
       retryTimer = setTimeout(async () => {
         retryTimer = null
         try {
+          await loadPersistedTrace(runId, current)
+          if (!current()) return
           const run = await agentService.getAgentRun(runId)
           if (!current()) return
           const index = runs.value.findIndex(item => item.run_id === runId)
           if (index >= 0) runs.value[index] = run
-          // 即使已结束仍续读一次缺失的尾部事件，保留完整 Trace。
+          if (terminal(run.status)) {
+            isRunning.value = false
+            connectionState.value = 'idle'
+            return
+          }
           subscribe(runId)
         } catch (cause) {
           if (current()) interrupted(cause instanceof Error ? cause : new Error(String(cause)))

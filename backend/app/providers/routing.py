@@ -1,7 +1,6 @@
-"""Capability routing: validated remote results, then an explicit local backend.
+"""能力路由：先验证远程结果，再显式回退到本地后端。
 
-Production injects installed CPU/CUDA backends. Deterministic embeddings remain
-available only for explicitly injected tests and protocol fixtures.
+生产环境注入已安装的 CPU/CUDA 后端；确定性嵌入只供显式注入的测试与协议夹具使用。
 """
 from __future__ import annotations
 
@@ -226,7 +225,7 @@ class ModelRoutingService:
             try:
                 vectors = []
                 dimension = binding.dimensions
-                # Freeze the origin across batches, even if the user edits the provider.
+                # 跨批次冻结源，即使用户编辑提供程序也是如此。
                 remote = self._remote(binding)
                 provider_config = self.providers.get(binding.provider_id).config.model_copy(deep=True)
                 for start in range(0, len(texts), 32):
@@ -351,7 +350,7 @@ class ModelRoutingService:
         reason = None
         if binding:
             try:
-                # Explicit application contract, not an OpenAI-standard endpoint.
+                # 这是应用自身定义的接口约定，并非 OpenAI 标准端点。
                 with self._media_file(source) as audio, self._media_file(reference) as sample:
                     data, _ = await self._request(binding, data={"model": binding.model}, files={
                         "file": (source.name, audio, "application/octet-stream"),

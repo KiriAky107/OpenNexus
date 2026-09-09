@@ -90,7 +90,7 @@ const maximum = computed(() => Math.max(1, ...props.buckets.flatMap(bucket => so
 <style scoped>
 .usage-bar.stacked { display: flex; flex-direction: column-reverse; background: transparent; overflow: hidden; }
 .model-segment { width: 100%; flex-shrink: 0; border-top: 1px solid var(--color-surface-primary); box-sizing: border-box; }
-.api .model-segment { background-image: repeating-linear-gradient(45deg, transparent 0 4px, #ffffff30 4px 7px); }
+.api .model-segment { background-image: repeating-linear-gradient(45deg, transparent 0 4px, var(--color-highlight-overlay) 4px 7px); }
 .model-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; margin-top: 14px; }.model-legend span { display: inline-flex; align-items: center; gap: 5px; overflow-wrap: anywhere; }.model-legend i { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }.model-readout { display: block; }
 
 .chart-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr); gap: 24px; margin-top: 16px; }

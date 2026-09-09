@@ -1,4 +1,4 @@
-"""Media storage and durable transcription controls."""
+"""媒体存储和持久的转录控制。"""
 from __future__ import annotations
 
 import asyncio
@@ -141,7 +141,7 @@ async def stream_events(job_id: str, request: Request, after: int = Query(-1, ge
             if len(batch) == 200:
                 continue
             if jobs.require_job(job_id).status in jobs.TERMINAL:
-                # Re-read once: completion may have been committed after this batch was read.
+                # 重新读取一次：读取该批次后可能已提交完成。
                 if jobs.events(job_id, cursor):
                     continue
                 return

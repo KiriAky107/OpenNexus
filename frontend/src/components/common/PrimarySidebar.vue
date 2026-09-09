@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
+import { storeToRefs } from 'pinia'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import { ArrowLeftBold, ArrowRightBold, Brush, ChatDotRound, CircleCheck, Connection, Cpu, Document, FolderOpened, Lightning, Monitor, Search, Setting } from '@element-plus/icons-vue'
 import AppIcon from './AppIcon.vue'
 import { t } from '@/i18n'
 
 const route = useRoute()
 const router = useRouter()
-const expanded = ref(localStorage.getItem('primary-sidebar-expanded') === 'true')
+const { primaryExpanded: expanded } = storeToRefs(useLayoutPreferencesStore())
 
 const navItems = computed(() => [
   { name: 'workspace', icon: FolderOpened, label: t('工作区', 'Workspace') },
@@ -20,6 +22,7 @@ const navItems = computed(() => [
   { name: 'plugins', icon: Connection, label: 'Plugin' },
   { name: 'mcp-servers', icon: Monitor, label: 'MCP' },
   { name: 'themes', icon: Brush, label: t('主题', 'Themes') },
+  { name: 'community', icon: Connection, label: t('社区', 'Community') },
   { name: 'benchmarks', icon: Monitor, label: 'Benchmark' },
   { name: 'logs', icon: Document, label: t('日志', 'Logs') },
   { name: 'settings', icon: Setting, label: t('设置', 'Settings') },
@@ -35,14 +38,14 @@ function navigate(name: string) {
 
 function toggleExpanded() {
   expanded.value = !expanded.value
-  localStorage.setItem('primary-sidebar-expanded', String(expanded.value))
 }
 </script>
 
 <template>
   <aside class="primary-sidebar" :class="{ expanded }">
     <nav class="nav-list">
-      <div
+      <button
+        type="button"
         v-for="item in navItems"
         :key="item.name"
         class="nav-item"
@@ -52,7 +55,7 @@ function toggleExpanded() {
       >
         <AppIcon class="nav-icon" :icon="item.icon" :size="20" />
         <span class="nav-label">{{ item.label }}</span>
-      </div>
+      </button>
     </nav>
     <div class="sidebar-footer">
       <button class="nav-item collapse-button" type="button" :title="expanded ? t('收起导航', 'Collapse navigation') : t('展开导航', 'Expand navigation')" @click="toggleExpanded">
@@ -89,6 +92,9 @@ function toggleExpanded() {
 }
 
 .nav-item {
+  border: 0;
+  background: transparent;
+  font: inherit;
   display: flex;
   flex-direction: column;
   align-items: center;

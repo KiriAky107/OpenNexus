@@ -17,8 +17,8 @@ const source = computed(() => {
 </template>
 
 <style scoped>
-.provider-logo { display: inline-flex; flex: 0 0 28px; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 7px; background: #fff; color: #252b36; }
+.provider-logo { display: inline-flex; flex: 0 0 28px; align-items: center; justify-content: center; width: 28px; height: 28px; border: 1px solid var(--color-border-subtle); border-radius: 7px; background: var(--color-brand-surface); color: var(--color-brand-ink); }
 img { display: block; object-fit: contain; }
-.dark-logo { background: #111; }
+.dark-logo { background: var(--color-brand-surface-dark); }
 .custom-logo { font-size: 23px; line-height: 1; }
 </style>

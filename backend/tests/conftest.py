@@ -19,7 +19,7 @@ def _isolate_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_VAULT_PATH", str(tmp_path / "vault"))
     # 清除 lru 缓存，让本次测试内的 get_settings() 读到临时目录
     get_settings.cache_clear()
-    # Unit tests explicitly inject deterministic embeddings. Production uses real models.
+    # 单元测试显式注入确定性嵌入。生产使用真实模型。
     from app import container as container_module
     from app.services import note_service
     from app.retrieval.engine import engine

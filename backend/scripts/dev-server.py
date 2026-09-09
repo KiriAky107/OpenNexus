@@ -1,4 +1,4 @@
-"""Development reload watches application code, never imported extension packages."""
+"""开发重载手表应用代码，从未导入扩展包。"""
 from pathlib import Path
 import uvicorn
 

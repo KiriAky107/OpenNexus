@@ -46,3 +46,76 @@ def test_existing_provider_reads_latest_global_persona_for_complete_and_stream(m
     asyncio.run(run())
     assert len(seen) == 2
     assert all(text.count("全局人设 / Global persona") == 1 for text in seen)
+
+
+def test_desktop_persona_uses_bound_host_cas_and_retains_legacy(monkeypatch):
+    from app.services import persona_settings, desktop_notes
+    from app import host_bridge
+    save_persona(PersonaSettings(system_prompt="legacy global"))
+    monkeypatch.setattr(persona_settings, '_desktop', lambda: True)
+    calls = []
+    document = {'record': {'data': {'version': 7, 'name': 'Vault persona',
+                'system_prompt': 'Scoped prompt', 'dialogue_pairs': []}}, 'hash': 'a' * 64}
+    def call(method, **params):
+        calls.append((method, params))
+        if method == 'persona.get':
+            return document
+        if params['expected'] != document['hash']:
+            raise ApiError(409, 'REVISION_CONFLICT', 'controlled stale hash')
+        return {'record': params['record'], 'hash': 'b' * 64}
+    monkeypatch.setattr(desktop_notes, 'call', call)
+    loaded = load_persona()
+    assert loaded.revision == 'a' * 64
+    assert apply_global_persona(request()).system.endswith('Scoped prompt')
+    token = host_bridge.operation_id.set('controlled-operation')
+    try:
+        saved = save_persona(loaded.model_copy(update={'name': 'Edited'}))
+    finally:
+        host_bridge.operation_id.reset(token)
+    assert saved.version == 8 and saved.revision == 'b' * 64
+    method, params = calls[-1]
+    assert method == 'persona.write' and params['operation_id'] == 'controlled-operation'
+    assert 'revision' not in params['record']['data']
+    with pytest.raises(ApiError) as error:
+        save_persona(loaded.model_copy(update={'revision': 'c' * 64}))
+    assert error.value.code == 'PERSONA_VERSION_CONFLICT'
+    monkeypatch.setattr(persona_settings, '_desktop', lambda: False)
+    assert load_persona().system_prompt == 'legacy global'
+
+
+def test_desktop_missing_persona_does_not_import_unowned_global_data(monkeypatch):
+    from app.services import persona_settings, desktop_notes
+    save_persona(PersonaSettings(system_prompt='unowned global data'))
+    monkeypatch.setattr(persona_settings, '_desktop', lambda: True)
+    monkeypatch.setattr(desktop_notes, 'call', lambda *args, **kwargs: None)
+    assert load_persona() == PersonaSettings()
+
+
+def test_legacy_preview_requires_host_scope_and_never_mutates_source(monkeypatch):
+    from app.services import persona_settings, desktop_notes
+    original = save_persona(PersonaSettings(system_prompt='legacy preview', version=0))
+    monkeypatch.setattr(persona_settings, '_desktop', lambda: True)
+    calls = []
+    def allowed(method, **params):
+        calls.append((method, params))
+        return None
+    monkeypatch.setattr(desktop_notes, 'call', allowed)
+    preview = persona_settings.legacy_persona_preview()
+    assert preview['available'] is True
+    assert preview['persona']['system_prompt'] == 'legacy preview'
+    assert 'revision' not in preview['persona']
+    assert calls == [('persona.get', {'id': 'default'})]
+    def denied(*args, **kwargs):
+        raise ApiError(409, 'VAULT_PERMISSION_CHANGED', 'controlled')
+    monkeypatch.setattr(desktop_notes, 'call', denied)
+    with pytest.raises(ApiError):
+        persona_settings.legacy_persona_preview()
+    monkeypatch.setattr(persona_settings, '_desktop', lambda: False)
+    assert load_persona() == original
+
+
+def test_legacy_preview_reports_no_source_without_creating_persona(monkeypatch):
+    from app.services import persona_settings, desktop_notes
+    monkeypatch.setattr(persona_settings, '_desktop', lambda: True)
+    monkeypatch.setattr(desktop_notes, 'call', lambda *args, **kwargs: None)
+    assert persona_settings.legacy_persona_preview() == {'available': False, 'persona': None}

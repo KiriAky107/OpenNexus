@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from app.agent import AgentRuntime, PermissionManager, PermissionPolicy, ToolRegistry
 from app.agent.builtin_tools import register_builtin_tools
+from app.agent.service_tools import register_service_tools
 from app.contracts import ModelCapability, ProviderConfig, ProviderType
 from app.config import BACKEND_DIR, get_settings
 from app.extensions import PluginRuntime, SkillRuntime
@@ -13,6 +14,7 @@ from app.providers.credentials import (
     ChainedCredentialResolver,
     EncryptedCredentialStore,
     EnvironmentCredentialResolver,
+    HostCredentialStore,
 )
 
 
@@ -21,7 +23,7 @@ class ApplicationContainer:
     providers: ProviderRegistry
     provider_factory: ProviderFactory
     model_routing: ModelRoutingService
-    credentials: EncryptedCredentialStore
+    credentials: EncryptedCredentialStore | HostCredentialStore
     tools: ToolRegistry
     permissions: PermissionManager
     skills: SkillRuntime
@@ -32,9 +34,9 @@ class ApplicationContainer:
 
 def build_container() -> ApplicationContainer:
     settings = get_settings()
-    credentials = EncryptedCredentialStore()
+    credentials = HostCredentialStore() if settings.environment == "desktop" else EncryptedCredentialStore()
     provider_factory = ProviderFactory(
-        ChainedCredentialResolver(credentials, EnvironmentCredentialResolver())
+        credentials if settings.environment == "desktop" else ChainedCredentialResolver(credentials, EnvironmentCredentialResolver())
     )
     providers = ProviderRegistry(provider_factory)
     providers.register(
@@ -69,6 +71,9 @@ def build_container() -> ApplicationContainer:
     plugins.enable("chat-policy")
     plugins = InstalledRuntime(plugins, 'plugin', settings.data_dir)
     plugins.restore()
+
+    # 这些工具依赖于完全构建的 Plugin 运行时。在加载 Skills 之前注册它们，以便 Skill 依赖性检查看到完整的目录。
+    register_service_tools(tools, plugins)
 
     mcp_servers = McpServerRegistry(
         tools,

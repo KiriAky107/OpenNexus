@@ -34,8 +34,7 @@ function anchorZoom(svg: SVGSVGElement, event: WheelEvent) {
   anchorUntil = performance.now() + 240
   const follow = () => {
     if (!svg.isConnected) return
-    // Inner horizontal overflow and the editor's outer vertical scroll may differ.
-    // Re-measure after each scroll, letting the outer container take the remainder.
+    // 内部水平溢出和编辑器的外部垂直滚动可能不同。每次滚动后重新测量，让外容器带走剩余的部分。
     for (const node of scrollers) {
       const current = svg.getBoundingClientRect()
       node.scrollLeft += current.left + x * current.width - screenX
@@ -134,8 +133,7 @@ async function interact(event: MouseEvent) {
     disarm()
     opener = button
     const intrinsicWidth = widthOf(svg)
-    // Mermaid HTML labels live in SVG foreignObject nodes. Preserve that
-    // integration point while still sanitizing the embedded HTML and handlers.
+    // Mermaid HTML 标签位于 SVGforeignObject 节点中。保留该集成点，同时仍然清理嵌入式 HTML 和处理程序。
     const copy = svg.cloneNode(true) as SVGSVGElement
     for (const label of copy.querySelectorAll('foreignObject, foreignobject')) {
       label.innerHTML = DOMPurify.sanitize(label.innerHTML, { USE_PROFILES: { html: true } })
@@ -151,8 +149,7 @@ async function interact(event: MouseEvent) {
     const viewport = viewer.value?.querySelector<HTMLElement>('.diagram-viewer-scroll')
     const box = svg.getAttribute('viewBox')?.trim().split(/[ ,]+/).map(Number)
     const intrinsicHeight = box?.length === 4 && box[3]! > 0 ? box[3]! : svg.getBoundingClientRect().height
-    // Opening is independent of the inline preview's zoom and any previous modal scroll.
-    // Keep native size for small diagrams; fit wide/tall diagrams completely at 100%.
+    // 打开独立于内联预览的缩放和任何先前的模式滚动。保持小图表的原始大小； 100% 完全适合宽/高图表。
     baseWidth.value = Math.min(intrinsicWidth, viewport?.clientWidth || intrinsicWidth,
       intrinsicHeight > 0 && viewport?.clientHeight ? viewport.clientHeight * intrinsicWidth / intrinsicHeight : intrinsicWidth)
     await nextTick()
@@ -203,7 +200,7 @@ function close() { disarm(); viewer.value?.close(); svgHtml.value = ''; opener?.
 .diagram-viewer header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-sm); flex-shrink: 0; }
 .diagram-viewer header .diagram-controls { flex-wrap: wrap; }
 .diagram-viewer-scroll { display: flex; flex: 1; min-height: 0; overflow: auto; }
-/* Auto margins center small diagrams and become zero on overflow, keeping all edges reachable. */
+/* 自动边距使小图居中并在溢出时变为零，从而保持所有边缘可达。 */
 .diagram-viewer-image { flex: 0 0 auto; margin: auto; transition: width 180ms ease-out; }
 .diagram-viewer-image svg { display: block; width: 100% !important; max-width: none !important; height: auto !important; }
 </style>

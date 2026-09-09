@@ -1,5 +1,6 @@
 import { apiClient, resolveApiUrl } from './apiClient'
 import { t } from '@/i18n'
+import { isDesktop } from './platform/desktop'
 
 export interface Segment { segment_id: string; start_time: number; end_time: number; text: string; speaker: string | null; language?: string }
 export interface MediaJob {
@@ -24,6 +25,10 @@ export const mediaService = {
   impact: (id: string) => apiClient.get<{message:string;retained_note_ids:string[]}>(`/api/media/attachments/${encodeURIComponent(id)}/cleanup-impact`),
   purge: (id: string) => apiClient.delete(`/api/media/attachments/${encodeURIComponent(id)}`),
   async upload(file: File, idempotencyKey?: string) {
+    if (isDesktop()) return apiClient.postBinary<{ attachment_id: string }>(
+      `/api/media/attachments?filename=${encodeURIComponent(file.name)}`, file,
+      {'Content-Type': 'application/octet-stream', ...(idempotencyKey ? {'Idempotency-Key': idempotencyKey} : {})},
+    )
     const response = await fetch(resolveApiUrl(`/api/media/attachments?filename=${encodeURIComponent(file.name)}`), {
       method: 'POST', headers: {'Content-Type': 'application/octet-stream', ...(idempotencyKey ? {'Idempotency-Key': idempotencyKey} : {})}, body: file,
     })
@@ -32,8 +37,7 @@ export const mediaService = {
   },
 }
 
-// Keep one identity until the input/options change, including a lost HTTP response.
-// Payloads remain in memory; durable uploads/jobs are owned by the backend.
+// 保留一个身份，直到输入/选项发生变化，包括丢失 HTTP 响应。有效负载保留在内存中；持久上传/作业归后端所有。
 export function createMediaSubmission() {
   let pending: {file: File; options: string; uploadKey: string; jobKey: string; attachmentId?: string} | null = null
   return {

@@ -3,7 +3,7 @@ import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
 const { actionDialog, resolveAction, askPrompt } = useActionDialog()
 import DiagramInteractions from '@/components/common/DiagramInteractions.vue'
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Link, Fold, Expand } from '@element-plus/icons-vue'
 import { Crepe } from '@milkdown/crepe'
 import { codeBlockConfig } from '@milkdown/kit/component/code-block'
@@ -28,9 +28,11 @@ import {
   toggleStrongCommand,
   turnIntoTextCommand,
   wrapInBulletListCommand,
+  wrapInBlockquoteCommand,
   wrapInHeadingCommand,
   wrapInOrderedListCommand,
 } from '@milkdown/kit/preset/commonmark'
+import { toggleStrikethroughCommand } from '@milkdown/kit/preset/gfm'
 import { commandsCtx, editorViewCtx, parserCtx, remarkStringifyOptionsCtx } from '@milkdown/kit/core'
 import { Slice } from '@milkdown/kit/prose/model'
 import { registerEditorCommands, type CommandHandler, type EditorCommandId } from '@/services/editorCommandService'
@@ -113,6 +115,27 @@ function installCommands() {
     handlers[`editor.${command}`] = () => { runCommand(command); return { ok: true } }
   }
   handlers['editor.paragraph'] = () => { crepe!.editor.action(callCommand(turnIntoTextCommand.key)); return { ok: true } }
+  handlers['editor.strikethrough'] = () => { crepe!.editor.action(callCommand(toggleStrikethroughCommand.key)); return { ok: true } }
+  handlers['editor.blockquote'] = () => { crepe!.editor.action(callCommand(wrapInBlockquoteCommand.key)); return { ok: true } }
+  handlers['editor.task-list'] = () => { insertMarkdown('- [ ] '); return { ok: true } }
+  handlers['editor.horizontal-rule'] = () => { insertMarkdown('\n---\n'); return { ok: true } }
+  handlers['editor.hard-break'] = () => { insertMarkdown('  \n'); return { ok: true } }
+  handlers['editor.table'] = () => { insertMarkdown('| 列 1 | 列 2 |\n| --- | --- |\n|  |  |'); return { ok: true } }
+  handlers['editor.link'] = async () => { await applyLink(); return { ok: true } }
+  handlers['editor.metadata.edit'] = async () => {
+    if (!metadata.value) {
+      const body = crepe!.editor.action(getMarkdown())
+      const filename = (editorStore.currentFilePath?.split('/').at(-1) ?? '未命名').replace(/\.md$/i, '')
+      const source = `---\ntitle: ${JSON.stringify(filename)}\ntags: []\n---\n${body}`
+      metadata.value = splitNoteMetadata(source)
+      editorStore.updateContent(source)
+      editorStore.scheduleAutoSave(settingsStore.autoSaveInterval)
+      await nextTick()
+    }
+    const input = editorRoot.value?.closest<HTMLElement>('.milkdown-host')?.querySelector<HTMLElement>('.note-metadata input')
+    if (!input) return { ok: false, reason: 'unavailable' }
+    input.scrollIntoView({ block: 'center' }); input.focus(); return { ok: true }
+  }
   handlers['editor.heading'] = params => {
     if (!Number.isInteger(params) || Number(params) < 1 || Number(params) > 6) return { ok: false, reason: 'invalid-params' }
     crepe!.editor.action(callCommand(wrapInHeadingCommand.key, Number(params)))
@@ -327,8 +350,8 @@ onMounted(async () => {
       },
     },
   })
-  // Crepe's defaultsDeep merges language arrays and theme extension internals.
-  // Replace both AFTER feature configuration to avoid default grammar collisions.
+  // Crepe 的 defaultsDeep 会合并语言数组与主题扩展内部配置。
+  // 必须在功能配置完成后同时替换两者，以免默认语法发生冲突。
   crepe.editor.config(ctx => ctx.update(codeBlockConfig.key, config => ({
     ...config,
     languages: shikiLanguages(themeStore.resolvedCodeBlockTheme),
@@ -368,7 +391,7 @@ onMounted(async () => {
         const sections = headingSections(current.state.doc)
         const folded = headingFoldKey.getState(current.state)
         hasFoldableHeadings.value = sections.length > 0
-        // Hidden descendants retain their own state but are not visible expanded sections.
+        // 被隐藏的后代节点保留自身状态，但不算作可见的展开章节。
         let hiddenUntil = -1
         allHeadingsFolded.value = sections.length > 0 && sections.every(section => {
           if (section.from < hiddenUntil) return true
@@ -562,8 +585,7 @@ defineExpose({ getEditor: () => crepe?.editor })
 .milkdown-host :deep(.ProseMirror) { box-sizing: border-box; width: min(100%, var(--editor-line-width, 80ch)); min-height: 100%; margin: 0 auto; padding: var(--space-3xl) var(--space-xl); outline: none; font-family: var(--font-editor-sans); font-size: var(--font-editor-size); line-height: var(--font-editor-line-height); caret-color: var(--color-accent-primary); }
 .milkdown-host :deep(.ProseMirror-selectednode) { outline-color: var(--color-accent-primary); }
 .milkdown-host :deep(.ProseMirror p) { font-weight: 400; }
-/* Mermaid measures HTML labels outside the editor. Crepe's paragraph padding
-   must not enlarge them after insertion into fixed-size SVG foreignObjects. */
+/* Mermaid 在编辑器外部测量 HTML 标签。 Crepe 的段落填充在插入固定大小的 SVGforeignObjects 后不得放大它们。 */
 .milkdown-host :deep(.editor-mermaid-preview svg foreignObject p) { margin: 0; padding: 0; line-height: inherit; font-weight: inherit; }
 .milkdown-host :deep(.ProseMirror h1), .milkdown-host :deep(.ProseMirror h2), .milkdown-host :deep(.ProseMirror h3), .milkdown-host :deep(.ProseMirror h4), .milkdown-host :deep(.ProseMirror h5), .milkdown-host :deep(.ProseMirror h6) { font-weight: 700; }
 .milkdown-host :deep(.font-size-marker) { display: none; }

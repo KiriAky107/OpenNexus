@@ -97,7 +97,7 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_agent_events_type
         ON agent_events(run_id, event, sequence);
     """,
-    # v4: durable media jobs, replayable events and revisions.
+    # v4：持久媒体作业、可重播事件和修订。
     """
     CREATE TABLE media_jobs (
         job_id TEXT PRIMARY KEY, status TEXT NOT NULL, job_json TEXT NOT NULL,
@@ -121,18 +121,18 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY(job_id, revision, options_hash)
     );
     """,
-    # v5: application-owned search history, shared by web and desktop clients.
+    # v5：应用程序拥有的搜索历史记录，由 Web 和桌面客户端共享。
     """
     CREATE TABLE IF NOT EXISTS search_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         query TEXT NOT NULL UNIQUE
     );
     """,
-    # v6: persist each block's embedding policy for partitioned retrieval.
+    # v6：保留每个块的嵌入策略以进行分区检索。
     """
     ALTER TABLE blocks ADD COLUMN embedding_local_only INTEGER NOT NULL DEFAULT 0;
     """,
-    # v7: application-owned chat conversations and messages, shared by web and desktop clients.
+    # v7：应用程序拥有的聊天对话和消息，由 Web 和桌面客户端共享。
     """
     CREATE TABLE IF NOT EXISTS chat_conversations (
         conversation_id TEXT PRIMARY KEY,
@@ -176,7 +176,7 @@ MIGRATIONS: list[str] = [
 
 
 def _statements(script: str):
-    """Split complete SQLite statements without executescript's implicit COMMIT."""
+    """拆分完整的 SQLite 语句，避免 executescript 隐式执行 COMMIT。"""
     pending = ""
     for char in script:
         pending += char
@@ -200,14 +200,14 @@ def migrate(conn) -> None:
             continue
         conn.execute("BEGIN IMMEDIATE")
         try:
-            # Another connection may have migrated while this one waited.
+            # 在此连接等待时，另一个连接可能已迁移。
             if not conn.execute("SELECT 1 FROM schema_migrations WHERE version=?", (idx,)).fetchone():
                 recovered_v6 = False
                 if idx == 6:
                     column = next((row for row in conn.execute("PRAGMA table_info(blocks)")
                                    if row["name"] == "embedding_local_only"), None)
                     if column is not None:
-                        # Recover the precise partial state left by the old v6 runner.
+                        # 精确恢复旧版 v6 执行器遗留的中间状态。
                         if column["type"].upper() != "INTEGER" or column["notnull"] != 1 or column["dflt_value"] != "0":
                             raise sqlite3.DatabaseError("Unexpected embedding_local_only column schema")
                         recovered_v6 = True

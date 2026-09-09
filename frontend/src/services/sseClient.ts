@@ -1,4 +1,6 @@
 import { resolveApiUrl } from './apiClient'
+import { isDesktop } from './platform/desktop'
+import { coreStream } from './platform/coreStream'
 
 export type SseEventHandler = (
   event: string,
@@ -47,12 +49,13 @@ export class SseClient {
         headers['Last-Event-ID'] = lastEventId
       }
 
-      const resp = await fetch(resolveApiUrl(url), {
+      const init: RequestInit = {
         method,
         headers,
         body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: this.controller.signal,
-      })
+      }
+      const resp = isDesktop() ? await coreStream(url, init) : await fetch(resolveApiUrl(url), init)
 
       if (!resp.ok || !resp.body) {
         throw new Error(`SSE connection failed: ${resp.status}`)

@@ -383,7 +383,7 @@ class McpStdioClient:
 
 
 class McpHttpClient:
-    """MCP Streamable HTTP client supporting JSON and SSE POST responses."""
+    """MCP 可流式 HTTP 客户端，支持 JSON 和 SSE POST 响应。"""
 
     def __init__(
         self,
@@ -722,7 +722,7 @@ class McpHttpClient:
 
 
 class McpLegacySseClient(McpHttpClient):
-    """Compatibility client for the deprecated 2024-11-05 HTTP+SSE transport."""
+    """已弃用的 2024 年 11 月 5 日 HTTP+SSE 传输的兼容性客户端。"""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -744,7 +744,7 @@ class McpLegacySseClient(McpHttpClient):
         self._endpoint = endpoint
 
     def start_event_stream(self) -> None:
-        """The legacy client already owns its single GET event stream."""
+        """旧客户端已拥有其单个 GET 事件流。"""
 
         return
 
@@ -1387,11 +1387,7 @@ def _bounded_json_response(response: httpx.Response) -> dict[str, Any]:
 
 
 def _bounded_sse_lines(response: httpx.Response):
-    """Split UTF-8 lines without httpx.iter_lines()'s unbounded line buffer.
-
-    Check each segment before appending it, including partial/no-newline input.
-    SSE allows LF, CR and CRLF; a CRLF pair can span network chunks.
-    """
+    """在没有 httpx.iter_lines() 的无限行缓冲区的情况下分割 UTF-8 行。在附加之前检查每个段，包括部分/无换行输入。 SSE 允许 LF、CR 和 CRLF； CRLF 对可以跨越网络块。"""
 
     pending = bytearray()
     event_size = 0

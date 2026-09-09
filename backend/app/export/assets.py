@@ -114,6 +114,7 @@ def plot_png(plot):
     """按 SVG/PDF 共用的裁剪几何，以二倍分辨率生成 DOCX 图像。"""
     from app.plot.render import compute_geometry, _sx, _sy, _fmt_num
     from PIL import ImageDraw, ImageFont
+    from app.plot.math_label import expression_latex, render_math_mask
     geo = compute_geometry(plot)
     image = Image.new('RGB', (geo.width * 2, (geo.height + ((len(plot.expressions)+1)//2)*24) * 2), 'white')
     draw = ImageDraw.Draw(image)
@@ -140,6 +141,13 @@ def plot_png(plot):
         # 纵轴标题横排在左上边距，避免 CJK 文本在 Word 中旋转后不可读。
         draw.text((24, 24), geo.ylabel, fill='#1f2328', font=font)
     for index, expression in enumerate(plot.expressions):
-        draw.text((48+(index%2)*620,geo.height*2+index//2*48),expression.label or 'y = '+expression.expression,fill=geo.colors[index],font=font)
+        position = (48 + (index % 2) * 620, geo.height * 2 + 8 + (index // 2) * 48)
+        if expression.label:
+            draw.text(position, expression.label, fill=geo.colors[index], font=font)
+        else:
+            mask_width, mask_height, mask_bytes = render_math_mask(expression_latex(expression.expression))
+            mask = Image.frombytes('L', (mask_width, mask_height), mask_bytes)
+            ink = Image.new('RGB', mask.size, geo.colors[index])
+            image.paste(ink, position, mask)
     out=BytesIO(); image.save(out,'PNG')
     return out.getvalue(), geo.warnings

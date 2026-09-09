@@ -1,4 +1,4 @@
-"""Finalization regressions: device recovery, durable facts and guarded writes."""
+"""最终回归：设备恢复、持久事实和受保护的写入。"""
 import asyncio
 import json
 import sys

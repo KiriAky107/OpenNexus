@@ -16,7 +16,7 @@ export const configureCalloutSerialization: Parameters<Editor['config']>[0] = ct
       tracker.shift(2)
       const result = state.indentLines(state.containerFlow(node, tracker.current()), (line, _index, blank) => `>${blank ? '' : ' '}${line}`)
       exit()
-      // Only remove escaping from a leading callout marker, never body literals.
+      // 仅删除前导标注标记的转义，绝不删除正文文字。
       return result.replace(/^(> )\\\[!([\w-]+)\\?\]/, '$1[!$2]')
     } },
   }))
@@ -36,8 +36,7 @@ function calloutMarkers(doc: ProseNode) {
   return markers
 }
 
-// Keep native blockquotes in the document: typing, undo and Markdown serialization
-// remain Milkdown transactions; the view never rewrites a user's callout source.
+// 在文档中保留本机块引用：键入、撤消和 Markdown 序列化保留 Milkdown 事务；该视图永远不会重写用户的标注源。
 export const calloutPlugin = $prose(() => new Plugin({
   props: {
     decorations(state) {

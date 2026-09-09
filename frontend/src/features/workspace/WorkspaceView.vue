@@ -33,7 +33,7 @@ const workspaceStore = useWorkspaceStore()
 </template>
 
 <style scoped>
-.workspace-chat-launcher { position: absolute; right: 24px; bottom: 76px; z-index: 11; width: 42px; height: 42px; border-radius: var(--radius-full); background: var(--color-editor-scroll-background); color: var(--color-editor-scroll-text); box-shadow: var(--shadow-sm); }
+.workspace-chat-launcher { position: absolute; right: 72px; bottom: 24px; z-index: 11; width: 42px; height: 42px; border-radius: var(--radius-full); background: var(--color-editor-scroll-background); color: var(--color-editor-scroll-text); box-shadow: var(--shadow-sm); }
 
 .workspace-view {
   position: relative;

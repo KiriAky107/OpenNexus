@@ -13,7 +13,7 @@ function validate(value: ChatPreferences) {
 }
 export const useChatPreferences = defineStore('chatPreferences', () => {
   const settings = ref<ChatPreferences>(empty())
-  try { const stored = localStorage.getItem(storageKey); if (stored) settings.value = validate(JSON.parse(stored)) } catch { /* Invalid or unavailable local settings use defaults. */ }
+  try { const stored = localStorage.getItem(storageKey); if (stored) settings.value = validate(JSON.parse(stored)) } catch { /* 无效或不可用的本地设置使用默认值。 */ }
   function save(value: ChatPreferences) {
     const next = validate(value)
     localStorage.setItem(storageKey, JSON.stringify(next))

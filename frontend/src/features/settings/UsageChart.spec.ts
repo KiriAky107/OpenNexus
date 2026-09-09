@@ -29,7 +29,7 @@ it('shades by consumed metric and gives equal usage equal shades', async () => {
   expect(segments[0]!.attributes('style')).not.toBe(segments[1]!.attributes('style'))
   expect(wrapper.get('.model-legend').text()).toContain('model-1')
   expect(segments[0]!.attributes('title')).toContain('100')
-  // happy-dom drops color-mix declarations; inspect the bound color values.
+  // happy-dom 删除颜色混合声明；检查绑定的颜色值。
   const colors = wrapper.vm as unknown as {modelColor:(key:string,source:'api') => string}
   expect(colors.modelColor('m0','api')).toContain('67.5%')
   expect(colors.modelColor('m1','api')).toContain('95%')
