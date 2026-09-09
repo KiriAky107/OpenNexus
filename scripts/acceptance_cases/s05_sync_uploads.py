@@ -225,11 +225,11 @@ def main() -> int:
                 "dependencies": True,
                 "postgres_version": stack.postgres_version,
                 "minio_version": stack.minio_version,
-                "worker_count": len(stack.worker_ids()),
             }
         )
-        assert facts["worker_count"] == 2
         auth, base, vault_id = stack.create_vault("S-05 isolated")
+        facts["worker_count"] = len(stack.worker_ids())
+        assert facts["worker_count"] == 2
         committed: dict[str, bytes] = {}
         cleaned: dict[str, bytes] = {}
         expected_used = 0
