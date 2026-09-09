@@ -8,7 +8,8 @@ import { t } from '@/i18n'
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 interface Binding { id: string; endpoint: string; account: string; remote_vault: string; cursor: number }
 interface Conflict { sequence: number; local_path: string; local_hash: string; current_hash?: string; current_path?: string; remote: { path: string; operation: string } }
-interface Status { optional_scope?: { persona: boolean; layout: boolean }; vault_id: string; binding: Binding | null; paused: boolean; pending: number; conflicts: Conflict[]; credential_state: string; running: boolean; error: string | null; retry_in: number | null; failures: number; halted: boolean; attempts?: Array<{ operation_id: string; path: string; attempts: number; outcome: string; error: string | null }> }
+type OptionalScope = { persona: boolean; layout: boolean; conversations: boolean; agent_history: boolean; provider_settings: boolean; extension_installations: boolean }
+interface Status { optional_scope?: OptionalScope; vault_id: string; binding: Binding | null; paused: boolean; pending: number; conflicts: Conflict[]; credential_state: string; running: boolean; error: string | null; retry_in: number | null; failures: number; halted: boolean; attempts?: Array<{ operation_id: string; path: string; attempts: number; outcome: string; error: string | null }> }
 interface RemoteVault { id: string; name: string; sequence: number; used: number; quota: number }
 const status = ref<Status | null>(null)
 const endpoint = ref('https://'), account = ref(''), password = ref(''), device = ref('OpenNexus Desktop'), testHttp = ref(false)
@@ -42,11 +43,11 @@ async function act(action: () => Promise<void>) {
   catch (error) { message.value = error instanceof Error ? error.message : 'SYNC_FAILED' }
   finally { busy.value = false }
 }
-function setScope(kind: 'persona' | 'layout', event: Event) {
+function setScope(kind: keyof OptionalScope, event: Event) {
   const current = status.value
   if (!current || current.binding) return
   const input = event.target as HTMLInputElement
-  const scope = { persona: false, layout: false, ...current.optional_scope, [kind]: input.checked }
+  const scope: OptionalScope = { persona: false, layout: false, conversations: false, agent_history: false, provider_settings: false, extension_installations: false, ...current.optional_scope, [kind]: input.checked }
   input.checked = current.optional_scope?.[kind] ?? false
   preview.value = null
   return act(async () => { await hostInvoke('sync_set_scope', { vaultId: current.vault_id, scope }) })
@@ -131,6 +132,10 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
       <legend>{{ t('可选同步内容', 'Optional sync content') }}</legend>
       <label><input type="checkbox" :checked="status.optional_scope?.persona ?? false" @change="setScope('persona', $event)" />{{ t('工作区人设', 'Workspace persona') }}</label>
       <label><input type="checkbox" :checked="status.optional_scope?.layout ?? false" @change="setScope('layout', $event)" />{{ t('侧栏布局', 'Sidebar layout') }}</label>
+      <label><input type="checkbox" :checked="status.optional_scope?.conversations ?? false" @change="setScope('conversations', $event)" />{{ t('对话记录', 'Conversation history') }}</label>
+      <label><input type="checkbox" :checked="status.optional_scope?.agent_history ?? false" @change="setScope('agent_history', $event)" />{{ t('已结束的 Agent 历史', 'Completed agent history') }}</label>
+      <label><input type="checkbox" :checked="status.optional_scope?.provider_settings ?? false" @change="setScope('provider_settings', $event)" />{{ t('Provider 通用参数（不含凭据）', 'Provider parameters (credentials excluded)') }}</label>
+      <label><input type="checkbox" :checked="status.optional_scope?.extension_installations ?? false" @change="setScope('extension_installations', $event)" />{{ t('扩展安装清单（需重新下载和授权）', 'Extension list (download and authorize again)') }}</label>
       <p>{{ t('默认仅保存在本机。修改已绑定范围时，请先解除绑定，再重新预览合并；关闭选项不会删除远端内容。', 'Kept locally by default. Unbind before changing scope, then preview a new merge. Disabling an option does not delete remote content.') }}</p>
     </fieldset>
     <div v-if="status?.binding" class="sync-bound">

@@ -45,6 +45,17 @@ pub fn user_skill_path(id: &str) -> Result<String> {
     }
     Ok(format!("opennexus-records/v1/user-skills/{id}.json"))
 }
+fn portable_id_path(id: &str, prefix: &str, directory: &str) -> Result<String> {
+    if !id.starts_with(prefix)
+        || id.len() != prefix.len() + 32
+        || !id[prefix.len()..]
+            .bytes()
+            .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
+    {
+        return Err(HostError::new("RECORD_ID_INVALID"));
+    }
+    Ok(format!("opennexus-records/v1/{directory}/{id}.json"))
+}
 pub fn path_for(kind: &str, id: &str) -> Result<String> {
     match (kind, id) {
         ("task", id) => path(id),
@@ -55,6 +66,12 @@ pub fn path_for(kind: &str, id: &str) -> Result<String> {
         ("layout", "sidebars") => Ok("opennexus-records/v1/layout/sidebars.json".into()),
         ("preferences", "editor") => Ok("opennexus-records/v1/preferences/editor.json".into()),
         ("user_skill", id) => user_skill_path(id),
+        ("conversation", id) => portable_id_path(id, "conversation_", "conversations"),
+        ("agent_history", id) => portable_id_path(id, "agent_run_", "agent-history"),
+        ("provider_settings", id) => portable_id_path(id, "provider_", "provider-settings"),
+        ("extension_installation", id) => {
+            portable_id_path(id, "extension_", "extension-installations")
+        }
         _ => Err(HostError::new("RECORD_ID_INVALID")),
     }
 }
@@ -78,10 +95,32 @@ pub fn allowed(path_value: &str) -> bool {
     {
         return true;
     }
-    path_value
+    if path_value
         .strip_prefix("opennexus-records/v1/user-skills/")
         .and_then(|v| v.strip_suffix(".json"))
         .is_some_and(|id| user_skill_path(id).is_ok())
+    {
+        return true;
+    }
+    [
+        ("conversation", "opennexus-records/v1/conversations/"),
+        ("agent_history", "opennexus-records/v1/agent-history/"),
+        (
+            "provider_settings",
+            "opennexus-records/v1/provider-settings/",
+        ),
+        (
+            "extension_installation",
+            "opennexus-records/v1/extension-installations/",
+        ),
+    ]
+    .iter()
+    .any(|(kind, prefix)| {
+        path_value
+            .strip_prefix(prefix)
+            .and_then(|value| value.strip_suffix(".json"))
+            .is_some_and(|id| path_for(kind, id).is_ok())
+    })
 }
 pub fn validate(path_value: &str, content: &[u8]) -> Result<Record> {
     if content.len() > 1024 * 1024 {
@@ -184,6 +223,10 @@ impl Workspace {
         let prefix = match kind {
             "task" => "opennexus-records/v1/tasks/",
             "user_skill" => "opennexus-records/v1/user-skills/",
+            "conversation" => "opennexus-records/v1/conversations/",
+            "agent_history" => "opennexus-records/v1/agent-history/",
+            "provider_settings" => "opennexus-records/v1/provider-settings/",
+            "extension_installation" => "opennexus-records/v1/extension-installations/",
             _ => return Err(HostError::new("RECORD_SCHEMA_UNSUPPORTED")),
         };
         let paths = self
@@ -293,6 +336,40 @@ mod tests {
         assert_eq!(
             ws.record_operation(&operation).unwrap().unwrap()["record"],
             value
+        );
+    }
+
+    #[test]
+    fn s08_incompatible_remote_schema_preserves_local_file_and_upload_queue() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let current = fixture();
+        let path = path(current["id"].as_str().unwrap()).unwrap();
+        let entry = ws
+            .write(&path, "", &serde_json::to_vec(&current).unwrap(), "local")
+            .unwrap();
+        assert_eq!(ws.pending_count().unwrap(), 1);
+
+        let mut future = current.clone();
+        future["schema"] = json!(2);
+        future["data"]["title"] = json!("future remote value");
+        assert_eq!(
+            ws.write(
+                &path,
+                &entry.hash,
+                &serde_json::to_vec(&future).unwrap(),
+                "remote",
+            )
+            .unwrap_err()
+            .code,
+            "RECORD_SCHEMA_UNSUPPORTED"
+        );
+        assert_eq!(ws.pending_count().unwrap(), 1);
+        assert_eq!(
+            ws.record_get(current["id"].as_str().unwrap())
+                .unwrap()
+                .unwrap()["record"],
+            current
         );
     }
 }
