@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -377,7 +378,12 @@ def _validate_driver_result(case_id: str, result: Any, required_metrics: tuple[s
     else:
         for name in required_metrics:
             value = metrics.get(name)
-            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or value < 0
+            ):
                 errors.append(f"RESULT_METRIC_MISSING:{name}")
     for name in ("files", "revisions"):
         if not isinstance(result.get(name), list):

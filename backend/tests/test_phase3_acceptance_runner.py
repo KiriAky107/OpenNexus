@@ -107,6 +107,24 @@ def test_driver_result_must_supply_assertions_metrics_and_zero_exit(tmp_path):
         runner.ROOT = original_root
 
 
+def test_driver_result_accepts_finite_nonnegative_float_metrics():
+    base = {
+        "schema": 1,
+        "case_id": "S-09",
+        "status": "PASSED",
+        "assertions": [{"name": "latency", "status": "PASSED"}],
+        "metrics": {"api_p95_ms": 61.4481},
+        "files": [],
+        "revisions": [],
+    }
+    assert runner._validate_driver_result("S-09", base, ("api_p95_ms",)) == []
+    for invalid in (float("nan"), float("inf"), -0.1, True):
+        base["metrics"]["api_p95_ms"] = invalid
+        assert runner._validate_driver_result("S-09", base, ("api_p95_ms",)) == [
+            "RESULT_METRIC_MISSING:api_p95_ms"
+        ]
+
+
 def test_valid_driver_passes_and_its_log_is_redacted(tmp_path):
     driver = tmp_path / "driver.py"
     driver.write_text(
