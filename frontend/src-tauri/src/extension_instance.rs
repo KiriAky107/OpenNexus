@@ -433,6 +433,20 @@ fn run_with_access(
             now_ms()?,
         )?
     };
+    let network = {
+        let credentials = spec
+            .credentials
+            .lock()
+            .map_err(|_| HostError::new("CREDENTIALS_LOCKED"))?;
+        let mut lease = spec
+            .authority
+            .lease(&spec.permit, &spec.claims, now_ms()?)?;
+        lease.bind_credential(credentials.lock_signal());
+        if credentials.is_locked() {
+            return Err(HostError::new("CREDENTIALS_LOCKED"));
+        }
+        crate::extension_network_broker::Broker::new(lease, &spec.claims)?
+    };
     let (suspended, io) = prepared.create_suspended_with_stdio(profile, &entry)?;
     (spec.before_resume)(&spec.claims)?;
     if control.stop.load(Ordering::Acquire) {
@@ -444,7 +458,7 @@ fn run_with_access(
     {
         *control.job.lock().unwrap() = Some(running.test_job()?);
     }
-    let mut session = Session::new(&running, io)?;
+    let mut session = Session::new_with_network(&running, io, Some(network))?;
     session.initialize(&control.stop)?;
     let tools = session.refresh_tools(&control.stop)?;
     *control.identity.lock().unwrap_or_else(|e| e.into_inner()) = Some(running.call_identity()?);
@@ -575,7 +589,13 @@ mod tests {
                 entry: "entry.exe".into(),
                 arguments: vec![mode.into()],
                 environment: BTreeMap::new(),
-                permissions: Default::default(),
+                permissions: if mode == "mcp_network_denied" {
+                    ["network.https:https://127.0.0.1/".into()]
+                        .into_iter()
+                        .collect()
+                } else {
+                    Default::default()
+                },
                 vault_id: vault_id.clone(),
                 platform: "windows".into(),
                 policy_version: "1".into(),
@@ -657,6 +677,24 @@ mod tests {
                 .unwrap(),
             0
         );
+        let denied_network = unsafe { registry.start(make("mcp_network_denied")) }.unwrap();
+        wait_for(|| denied_network.snapshot().status != Status::Starting);
+        assert_eq!(denied_network.snapshot().status, Status::Ready);
+        let review = denied_network
+            .review("echo".into(), json!({}))
+            .unwrap()
+            .wait(Duration::from_secs(5))
+            .unwrap();
+        assert!(denied_network
+            .invoke_confirmed(review.review_id)
+            .unwrap()
+            .wait(Duration::from_secs(5))
+            .is_ok());
+        denied_network.stop();
+        wait_for(|| {
+            registry.reap();
+            registry.entries.is_empty()
+        });
         let second = unsafe { registry.start(make("mcp_cancel")) }.unwrap();
         wait_for(|| second.snapshot().status != Status::Starting);
         assert_eq!(

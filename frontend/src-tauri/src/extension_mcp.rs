@@ -93,9 +93,17 @@ pub struct Session<'a, 'p> {
     tools_changed: bool,
     catalog: Option<crate::extension_mcp_tools::Catalog>,
     calls: crate::extension_call_authorization::Gate,
+    network: Option<crate::extension_network_broker::Broker>,
 }
 impl<'a, 'p> Session<'a, 'p> {
     pub fn new(process: &'a Running<'p>, io: HostIo) -> Result<Self> {
+        Self::new_with_network(process, io, None)
+    }
+    pub fn new_with_network(
+        process: &'a Running<'p>,
+        io: HostIo,
+        network: Option<crate::extension_network_broker::Broker>,
+    ) -> Result<Self> {
         Ok(Self {
             process,
             pump: process.start_io(io)?,
@@ -106,6 +114,7 @@ impl<'a, 'p> Session<'a, 'p> {
             tools_changed: false,
             catalog: None,
             calls: crate::extension_call_authorization::Gate::new(process.call_identity()?),
+            network,
         })
     }
     pub fn initialize(&mut self, cancel: &AtomicBool) -> Result<String> {
@@ -303,8 +312,30 @@ impl<'a, 'p> Session<'a, 'p> {
             return Ok(false);
         };
         if let Some(id) = &message.id {
-            self.send(if method == "ping" { json!({"jsonrpc":"2.0","id":id,"result":{}}) }
-                else { json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Method not supported"}}) })?;
+            let response = if method == "ping" {
+                json!({"jsonrpc":"2.0","id":id,"result":{}})
+            } else if method == "opennexus/network.fetch" {
+                let result = message
+                    .params
+                    .clone()
+                    .ok_or_else(invalid)
+                    .and_then(|params| serde_json::from_value(params).map_err(|_| invalid()))
+                    .and_then(|request| {
+                        self.network
+                            .as_mut()
+                            .ok_or_else(|| HostError::new("EXTENSION_NETWORK_PERMISSION_DENIED"))?
+                            .fetch(request)
+                    });
+                match result {
+                    Ok(value) => json!({"jsonrpc":"2.0","id":id,"result":value}),
+                    Err(error) => {
+                        json!({"jsonrpc":"2.0","id":id,"error":{"code":-32001,"message":error.code}})
+                    }
+                }
+            } else {
+                json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Method not supported"}})
+            };
+            self.send(response)?;
         } else if method == "notifications/tools/list_changed" {
             self.tools_changed = true;
             self.catalog = None;
