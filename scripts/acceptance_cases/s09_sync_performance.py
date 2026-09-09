@@ -29,6 +29,44 @@ CHUNK = 1024 * 1024
 UPLOAD_BYTES = 100 * CHUNK
 RSS_LIMIT = 2 * 1024**3
 NETWORK_RTT_SECONDS = 0.020
+MAX_SCHEDULE_GAP_SECONDS = 1.0
+
+
+class WindowsExecutionGuard:
+    """Keep the benchmark host awake while wall-clock acceptance is running."""
+
+    ES_CONTINUOUS = 0x80000000
+    ES_SYSTEM_REQUIRED = 0x00000001
+
+    def __init__(self):
+        self.kernel = None
+        self.active = False
+
+    def start(self) -> None:
+        if os.name != "nt":
+            raise RuntimeError("S09_WINDOWS_POWER_GUARD_REQUIRED")
+        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel.SetThreadExecutionState.argtypes = [wintypes.DWORD]
+        self.kernel.SetThreadExecutionState.restype = wintypes.DWORD
+        previous = self.kernel.SetThreadExecutionState(
+            self.ES_CONTINUOUS | self.ES_SYSTEM_REQUIRED
+        )
+        if previous == 0:
+            raise OSError("S09_POWER_GUARD_FAILED")
+        self.active = True
+
+    def stop(self) -> None:
+        if self.active and self.kernel is not None:
+            self.kernel.SetThreadExecutionState(self.ES_CONTINUOUS)
+            self.active = False
+
+
+def write_checkpoint(path: Path, payload: dict) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    os.replace(temporary, path)
 
 
 def percentile(values: list[float], proportion: float) -> float:
@@ -521,7 +559,9 @@ def run_convergence(client: dict, content_hash: str, cursor: int) -> dict:
     return {"samples": len(latencies), "p95_ms": percentile(latencies, 0.95)}
 
 
-def run_sustained_load(stack: SyncProductionStack, clients: list[dict], duration: int) -> dict:
+def run_sustained_load(
+    stack: SyncProductionStack, clients: list[dict], duration: int, checkpoint: Path
+) -> dict:
     total = duration * LOAD_RATE
     started = time.monotonic()
     starts = []
@@ -567,9 +607,37 @@ def run_sustained_load(stack: SyncProductionStack, clients: list[dict], duration
                 if now >= target:
                     break
                 time.sleep(min(0.01, target - now))
-            starts.append(time.monotonic())
+            actual = time.monotonic()
+            schedule_lag = actual - target
+            if schedule_lag > MAX_SCHEDULE_GAP_SECONDS:
+                write_checkpoint(
+                    checkpoint,
+                    {
+                        "stage": "schedule-interrupted",
+                        "scheduled_requests": global_index,
+                        "expected_requests": total,
+                        "elapsed_seconds": actual - started,
+                        "schedule_lag_seconds": schedule_lag,
+                    },
+                )
+                raise RuntimeError("S09_SCHEDULE_GAP")
+            starts.append(actual)
             futures.append(pool.submit(commit, global_index))
             elapsed = starts[-1] - started
+            if (global_index + 1) % (LOAD_RATE * 60) == 0:
+                write_checkpoint(
+                    checkpoint,
+                    {
+                        "stage": "sustained-load",
+                        "scheduled_requests": global_index + 1,
+                        "expected_requests": total,
+                        "elapsed_seconds": elapsed,
+                        "max_schedule_lag_ms": max(
+                            (scheduled - (started + index / LOAD_RATE)) * 1000
+                            for index, scheduled in enumerate(starts)
+                        ),
+                    },
+                )
             if elapsed >= next_refresh and len(refreshes) < 2:
                 if refreshes:
                     refreshes[-1].result(timeout=60)
@@ -581,6 +649,15 @@ def run_sustained_load(stack: SyncProductionStack, clients: list[dict], duration
         results = [future.result(timeout=180) for future in futures]
         for refresh in refreshes:
             refresh.result(timeout=60)
+    write_checkpoint(
+        checkpoint,
+        {
+            "stage": "load-validation",
+            "scheduled_requests": len(starts),
+            "expected_requests": total,
+            "elapsed_seconds": time.monotonic() - started,
+        },
+    )
     elapsed = time.monotonic() - started
     codes = [item[0] for item in results]
     latencies = [item[1] for item in results]
@@ -607,7 +684,8 @@ def result(case_id: str, status: str, reason: str, facts: dict) -> dict:
             "the oracle uses real PostgreSQL, MinIO, two workers, and ten clients",
             facts.get("dependencies") is True
             and facts.get("worker_count") == 2
-            and facts.get("client_count") == LOAD_CLIENTS,
+            and facts.get("client_count") == LOAD_CLIENTS
+            and facts.get("sleep_inhibited") is True,
         ),
         (
             "ten clients sustain 20 4 KiB commits per second for 30 minutes",
@@ -691,6 +769,7 @@ def result(case_id: str, status: str, reason: str, facts: dict) -> dict:
                 "minio": facts.get("minio_version"),
                 "os": platform.platform(),
                 "logical_processors": os.cpu_count(),
+                "sleep_inhibited": facts.get("sleep_inhibited", False),
             },
             {
                 "scope": "network profile",
@@ -734,10 +813,14 @@ def main() -> int:
     reason = ""
     status = "FAILED"
     stack = None
+    execution_guard = WindowsExecutionGuard()
     try:
         config = json.loads(Path(args.config).read_text(encoding="utf-8"))
         data_root = Path(os.environ["OPENNEXUS_ACCEPTANCE_DATA_ROOT"]).resolve()
         data_root.mkdir(parents=True, exist_ok=True)
+        execution_guard.start()
+        facts["sleep_inhibited"] = True
+        write_checkpoint(data_root / "s09-progress.json", {"stage": "starting"})
         stack = SyncProductionStack(config, data_root, "s09").start()
         facts.update(
             {
@@ -811,7 +894,9 @@ def main() -> int:
             )
             load_clients.append(client)
         facts["client_count"] = len(load_clients)
-        load = run_sustained_load(stack, load_clients, args.duration_seconds)
+        load = run_sustained_load(
+            stack, load_clients, args.duration_seconds, data_root / "s09-progress.json"
+        )
         facts.update(
             {
                 "load_duration_seconds": load["duration_seconds"],
@@ -841,6 +926,10 @@ def main() -> int:
         )
         facts["validated_commits"] = validated["validated"]
         facts.update({"active_stage": "complete", "active_iteration": expected_requests})
+        write_checkpoint(
+            data_root / "s09-progress.json",
+            {"stage": "complete", "validated_requests": validated["validated"]},
+        )
         assert validated["validated"] == expected_requests
         stack.assert_running()
         if args.duration_seconds == LOAD_SECONDS and args.note_count == INITIAL_NOTES:
@@ -849,9 +938,16 @@ def main() -> int:
             reason = "DEVELOPMENT_PROFILE_COMPLETE"
     except BaseException as error:
         reason = "S09_ORACLE_FAILED:" + type(error).__name__
+        if str(error) in {
+            "S09_SCHEDULE_GAP",
+            "S09_POWER_GUARD_FAILED",
+            "S09_WINDOWS_POWER_GUARD_REQUIRED",
+        }:
+            reason += ":" + str(error)
     finally:
         if stack is not None:
             stack.stop()
+        execution_guard.stop()
     payload = result(
         case_id,
         status if case_id == "S-09" else "FAILED",
