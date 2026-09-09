@@ -147,6 +147,14 @@ class SyncProductionStack:
         self.service_env = {}
 
     def start(self) -> "SyncProductionStack":
+        self.start_dependencies()
+        self.initialize()
+        self.add_user_with_password(self.username, self.password)
+        self.start_sync()
+        wait_http(self.origin + "/ready", timeout=60)
+        return self
+
+    def start_dependencies(self) -> "SyncProductionStack":
         self.stack.mkdir()
         self.minio_data.mkdir()
         self.staging.mkdir()
@@ -214,22 +222,22 @@ class SyncProductionStack:
                 "ACCEPTANCE_PASSWORD": self.password,
             }
         )
+        return self
+
+    def initialize(self) -> None:
         subprocess.run(
-            [
-                str(self.server_python),
-                "-c",
-                "import os,boto3; from sync_server.database import Database; "
-                "d=Database(os.environ['SYNC_DATABASE_URL']); d.migrate(); "
-                "d.add_user(os.environ['ACCEPTANCE_USERNAME'],os.environ['ACCEPTANCE_PASSWORD']); "
-                "boto3.client('s3',endpoint_url=os.environ['SYNC_S3_ENDPOINT']).create_bucket(Bucket=os.environ['SYNC_S3_BUCKET'])",
-            ],
+            [str(self.server_python), "-m", "sync_server", "initialize"],
             cwd=SERVICE,
             env=self.service_env,
             stdout=self.sync_log,
             stderr=subprocess.STDOUT,
             check=True,
-            timeout=60,
+            timeout=90,
         )
+
+    def start_sync(self) -> None:
+        if self.sync is not None and self.sync.poll() is None:
+            return
         self.sync = subprocess.Popen(
             [str(self.server_python), "-m", "sync_server", "serve", "--workers", "2"],
             cwd=SERVICE,
@@ -237,8 +245,10 @@ class SyncProductionStack:
             stdout=self.sync_log,
             stderr=subprocess.STDOUT,
         )
-        wait_http(self.origin + "/ready", timeout=60)
-        return self
+
+    def stop_sync(self) -> None:
+        stop_tree(self.sync)
+        self.sync = None
 
     def login(self, username: str, password: str, label: str) -> dict:
         session = None
@@ -293,6 +303,10 @@ class SyncProductionStack:
     def add_user(self, prefix: str) -> tuple[str, str]:
         username = prefix + "-" + secrets.token_hex(8)
         password = secrets.token_urlsafe(32)
+        self.add_user_with_password(username, password)
+        return username, password
+
+    def add_user_with_password(self, username: str, password: str) -> None:
         environment = dict(self.service_env)
         environment.update(
             {"ACCEPTANCE_EXTRA_USERNAME": username, "ACCEPTANCE_EXTRA_PASSWORD": password}
@@ -312,7 +326,6 @@ class SyncProductionStack:
             check=True,
             timeout=30,
         )
-        return username, password
 
     def start_postgres(self) -> None:
         subprocess.run(
@@ -419,7 +432,7 @@ class SyncProductionStack:
             raise RuntimeError("PRODUCTION_STACK_EXITED")
 
     def stop(self) -> None:
-        stop_tree(self.sync)
+        self.stop_sync()
         self.stop_minio()
         if self.postgres_started:
             try:
