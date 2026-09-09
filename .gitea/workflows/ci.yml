@@ -38,6 +38,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: pnpm, cache-dependency-path: "server sync/console/pnpm-lock.yaml" }
+      - run: corepack enable && corepack prepare pnpm@10.28.0 --activate
+      - run: pnpm install --frozen-lockfile && pnpm build
+        working-directory: server sync/console
+      - run: git diff --exit-code -- "server sync/sync_server/static"
       - run: pip install uv==0.9.24
       - run: uv sync --frozen
         working-directory: backend

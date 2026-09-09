@@ -42,6 +42,7 @@ Thumbs.db
 **/.pytest_cache/
 server sync/.venv/
 server sync/.env
+server sync/console/node_modules/
 community-server/.venv/
 community-server/.env
 frontend/src-tauri/target/
