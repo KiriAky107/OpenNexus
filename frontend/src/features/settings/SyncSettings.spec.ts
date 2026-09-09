@@ -83,13 +83,14 @@ it('shows persisted per-job interruption counts without starting work from the v
 })
 
 
-it('keeps optional records off until an explicit unbound scope change', async () => {
-  vi.mocked(hostInvoke).mockResolvedValue({ ...empty(), optional_scope: { persona: false, layout: false } })
+it('keeps every optional record class off until an explicit unbound scope change', async () => {
+  const optionalScope = { persona: false, layout: false, conversations: false, agent_history: false, provider_settings: false, extension_installations: false }
+  vi.mocked(hostInvoke).mockResolvedValue({ ...empty(), optional_scope: optionalScope })
   const wrapper = mount(SyncSettings); await flushPromises()
   const options = wrapper.findAll('.sync-scope input[type=checkbox]')
-  expect(options).toHaveLength(2)
-  expect((options[0]!.element as HTMLInputElement).checked).toBe(false)
+  expect(options).toHaveLength(6)
+  expect(options.every(option => !(option.element as HTMLInputElement).checked)).toBe(true)
   await options[0]!.setValue(true); await flushPromises()
-  expect(hostInvoke).toHaveBeenCalledWith('sync_set_scope', { vaultId: empty().vault_id, scope: { persona: true, layout: false } })
+  expect(hostInvoke).toHaveBeenCalledWith('sync_set_scope', { vaultId: empty().vault_id, scope: { ...optionalScope, persona: true } })
   wrapper.unmount()
 })

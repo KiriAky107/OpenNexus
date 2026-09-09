@@ -136,10 +136,10 @@ impl Workspace {
         let db = Connection::open(db_path)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 12 {
+        if version > 13 {
             return Err(HostError::new("SCHEMA_INCOMPATIBLE"));
         }
-        if (1..12).contains(&version) {
+        if (1..13).contains(&version) {
             // Independent, complete SQLite backup before the schema ownership change.
             let backup = managed.join(format!("host-schema{version}-{}.sqlite3", Uuid::new_v4()));
             db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
@@ -166,7 +166,7 @@ impl Workspace {
             CREATE TABLE IF NOT EXISTS sync_attempts (binding TEXT NOT NULL,operation_id TEXT NOT NULL,attempts INTEGER NOT NULL,outcome TEXT NOT NULL,error TEXT,PRIMARY KEY(binding,operation_id));
             CREATE TABLE IF NOT EXISTS sync_retry (binding TEXT PRIMARY KEY,error TEXT,failures INTEGER NOT NULL,retry_at INTEGER,halted INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS sync_preferences (binding TEXT PRIMARY KEY,paused INTEGER NOT NULL DEFAULT 0);
-            CREATE TABLE IF NOT EXISTS sync_optional_scope (id INTEGER PRIMARY KEY CHECK(id=1),persona INTEGER NOT NULL CHECK(persona IN (0,1)),layout INTEGER NOT NULL CHECK(layout IN (0,1)));
+            CREATE TABLE IF NOT EXISTS sync_optional_scope (id INTEGER PRIMARY KEY CHECK(id=1),persona INTEGER NOT NULL CHECK(persona IN (0,1)),layout INTEGER NOT NULL CHECK(layout IN (0,1)),conversations INTEGER NOT NULL DEFAULT 0 CHECK(conversations IN (0,1)),agent_history INTEGER NOT NULL DEFAULT 0 CHECK(agent_history IN (0,1)),provider_settings INTEGER NOT NULL DEFAULT 0 CHECK(provider_settings IN (0,1)),extension_installations INTEGER NOT NULL DEFAULT 0 CHECK(extension_installations IN (0,1)));
             CREATE TABLE IF NOT EXISTS sync_resolutions (binding TEXT NOT NULL,sequence INTEGER NOT NULL,choice TEXT NOT NULL,destination TEXT NOT NULL,expected TEXT NOT NULL,operation_id TEXT NOT NULL,rename_id TEXT NOT NULL,copy_id TEXT NOT NULL,state TEXT NOT NULL,retire_id TEXT NOT NULL,restore_id TEXT NOT NULL,PRIMARY KEY(binding,sequence));")?;
         let has_origin: bool = db.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('file_ops') WHERE name='origin')",
@@ -201,10 +201,30 @@ impl Workspace {
                 [],
             )?;
         }
+        for column in [
+            "conversations",
+            "agent_history",
+            "provider_settings",
+            "extension_installations",
+        ] {
+            let exists: bool = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('sync_optional_scope') WHERE name=?1)",
+                [column],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                db.execute(
+                    &format!(
+                        "ALTER TABLE sync_optional_scope ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0 CHECK({column} IN (0,1))"
+                    ),
+                    [],
+                )?;
+            }
+        }
         if version < 7 {
             db.execute_batch("INSERT OR IGNORE INTO sync_observed SELECT f.id,COALESCE((SELECT o.path FROM outbox o WHERE o.file_id=f.id AND o.state IN ('pending','queued') ORDER BY rowid DESC LIMIT 1),(SELECT h.path FROM sync_heads h JOIN sync_bindings b ON h.binding=b.id WHERE h.file_id=f.id AND b.state='active'),f.path),COALESCE((SELECT o.hash FROM outbox o WHERE o.file_id=f.id AND o.state IN ('pending','queued') ORDER BY rowid DESC LIMIT 1),(SELECT h.hash FROM sync_heads h JOIN sync_bindings b ON h.binding=b.id WHERE h.file_id=f.id AND b.state='active'),f.hash),f.deleted FROM files f;")?;
         }
-        db.execute_batch("UPDATE sync_attempts SET outcome=CASE WHEN EXISTS(SELECT 1 FROM sync_jobs j WHERE j.binding=sync_attempts.binding AND j.operation_id=sync_attempts.operation_id AND j.state='acked') THEN 'succeeded' ELSE 'interrupted' END WHERE outcome='running'; PRAGMA user_version=12; COMMIT;")?;
+        db.execute_batch("UPDATE sync_attempts SET outcome=CASE WHEN EXISTS(SELECT 1 FROM sync_jobs j WHERE j.binding=sync_attempts.binding AND j.operation_id=sync_attempts.operation_id AND j.state='acked') THEN 'succeeded' ELSE 'interrupted' END WHERE outcome='running'; PRAGMA user_version=13; COMMIT;")?;
         let vault_id: String = db
             .query_row("SELECT id FROM identity", [], |r| r.get(0))
             .optional()?
@@ -1398,7 +1418,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_eleven_upgrade_adds_durable_conflict_operation_ids() {
+    fn schema_eleven_upgrade_adds_durable_conflict_and_scope_fields() {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::open(dir.path()).unwrap();
         ws.db
@@ -1415,7 +1435,7 @@ mod tests {
             ws.db
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            12
+            13
         );
         for column in ["retire_id", "restore_id"] {
             assert!(ws
@@ -1441,6 +1461,54 @@ mod tests {
         assert!(!old
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_table_info('sync_resolutions') WHERE name='retire_id')",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap());
+    }
+
+    #[test]
+    fn schema_twelve_upgrade_adds_optional_categories_without_consent() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::open(dir.path()).unwrap();
+        ws.db
+            .execute_batch(
+                "DROP TABLE sync_optional_scope;
+                 CREATE TABLE sync_optional_scope (id INTEGER PRIMARY KEY CHECK(id=1),persona INTEGER NOT NULL CHECK(persona IN (0,1)),layout INTEGER NOT NULL CHECK(layout IN (0,1)));
+                 INSERT INTO sync_optional_scope VALUES (1,1,0);
+                 PRAGMA user_version=12;",
+            )
+            .unwrap();
+        drop(ws);
+
+        let ws = Workspace::open(dir.path()).unwrap();
+        let scope = ws.sync_optional_scope().unwrap();
+        assert!(scope.persona);
+        assert!(!scope.layout);
+        assert!(!scope.conversations);
+        assert!(!scope.agent_history);
+        assert!(!scope.provider_settings);
+        assert!(!scope.extension_installations);
+        assert_eq!(
+            ws.db
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            13
+        );
+        let backup = fs::read_dir(dir.path().join(".ainote"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("host-schema12-")
+            })
+            .unwrap();
+        let old = Connection::open(backup.path()).unwrap();
+        assert!(!old
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('sync_optional_scope') WHERE name='conversations')",
                 [],
                 |row| row.get::<_, bool>(0),
             )

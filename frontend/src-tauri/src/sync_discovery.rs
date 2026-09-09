@@ -206,6 +206,11 @@ mod tests {
             "attachments/tool.exe",
             "attachments/plugin.zip",
             "settings.json",
+            "index.sqlite3",
+            "vectors.bin",
+            "cache/index.md",
+            "logs/agent.md",
+            "models/embedding.md",
         ] {
             assert!(!allowed(path), "{path}");
         }
@@ -214,6 +219,8 @@ mod tests {
             "attachments/movie.mp4",
             "attachments/image.png",
             "attachments/fixture.bin",
+            "opennexus-records/v1/conversations/conversation_00000000000000000000000000000001.json",
+            "opennexus-records/v1/extension-installations/extension_00000000000000000000000000000001.json",
         ] {
             assert!(allowed(path), "{path}");
         }

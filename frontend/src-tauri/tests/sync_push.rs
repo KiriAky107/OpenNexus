@@ -81,6 +81,7 @@ async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempoten
         .sync_set_optional_scope(notesagent_host::sync_scope::OptionalScope {
             persona: true,
             layout: true,
+            ..Default::default()
         })
         .unwrap();
     let binding = {
@@ -211,6 +212,7 @@ async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempoten
         .sync_set_optional_scope(notesagent_host::sync_scope::OptionalScope {
             persona: true,
             layout: true,
+            ..Default::default()
         })
         .unwrap();
     let binding_b = workspace_b
@@ -810,6 +812,7 @@ async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempoten
             .sync_set_optional_scope(notesagent_host::sync_scope::OptionalScope {
                 persona: true,
                 layout: true,
+                ..Default::default()
             })
             .unwrap();
     }

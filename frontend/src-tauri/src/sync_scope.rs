@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 pub struct OptionalScope {
     pub persona: bool,
     pub layout: bool,
+    pub conversations: bool,
+    pub agent_history: bool,
+    pub provider_settings: bool,
+    pub extension_installations: bool,
 }
 
 impl OptionalScope {
@@ -15,6 +19,14 @@ impl OptionalScope {
         match path {
             "opennexus-records/v1/persona/default.json" => self.persona,
             "opennexus-records/v1/layout/sidebars.json" => self.layout,
+            path if path.starts_with("opennexus-records/v1/conversations/") => self.conversations,
+            path if path.starts_with("opennexus-records/v1/agent-history/") => self.agent_history,
+            path if path.starts_with("opennexus-records/v1/provider-settings/") => {
+                self.provider_settings
+            }
+            path if path.starts_with("opennexus-records/v1/extension-installations/") => {
+                self.extension_installations
+            }
             _ => true,
         }
     }
@@ -29,12 +41,16 @@ impl Workspace {
         Ok(self
             .db
             .query_row(
-                "SELECT persona,layout FROM sync_optional_scope WHERE id=1",
+                "SELECT persona,layout,conversations,agent_history,provider_settings,extension_installations FROM sync_optional_scope WHERE id=1",
                 [],
                 |row| {
                     Ok(OptionalScope {
                         persona: row.get(0)?,
                         layout: row.get(1)?,
+                        conversations: row.get(2)?,
+                        agent_history: row.get(3)?,
+                        provider_settings: row.get(4)?,
+                        extension_installations: row.get(5)?,
                     })
                 },
             )
@@ -47,8 +63,8 @@ impl Workspace {
             return Err(HostError::new("SYNC_SCOPE_REBIND_REQUIRED"));
         }
         self.db.execute(
-            "INSERT INTO sync_optional_scope VALUES (1,?1,?2) ON CONFLICT(id) DO UPDATE SET persona=excluded.persona,layout=excluded.layout",
-            rusqlite::params![scope.persona, scope.layout],
+            "INSERT INTO sync_optional_scope (id,persona,layout,conversations,agent_history,provider_settings,extension_installations) VALUES (1,?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET persona=excluded.persona,layout=excluded.layout,conversations=excluded.conversations,agent_history=excluded.agent_history,provider_settings=excluded.provider_settings,extension_installations=excluded.extension_installations",
+            rusqlite::params![scope.persona, scope.layout, scope.conversations, scope.agent_history, scope.provider_settings, scope.extension_installations],
         )?;
         Ok(())
     }
@@ -65,6 +81,7 @@ mod tests {
         ws.sync_set_optional_scope(OptionalScope {
             persona: true,
             layout: false,
+            ..OptionalScope::default()
         })
         .unwrap();
         let data = serde_json::to_vec(&serde_json::json!({"schema":1,"kind":"persona","id":"default","data":{"version":0,"name":"local","system_prompt":"private","dialogue_pairs":[]}})).unwrap();
@@ -135,6 +152,7 @@ mod tests {
         ws.sync_set_optional_scope(OptionalScope {
             persona: true,
             layout: false,
+            ..OptionalScope::default()
         })
         .unwrap();
         assert_eq!(
@@ -176,7 +194,7 @@ mod tests {
             ws.db
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            12
+            13
         );
     }
     #[test]
@@ -187,10 +205,24 @@ mod tests {
         let off = ws.sync_optional_scope().unwrap();
         assert!(!off.includes("opennexus-records/v1/persona/default.json"));
         assert!(!off.includes("opennexus-records/v1/layout/sidebars.json"));
+        assert!(!off.includes(
+            "opennexus-records/v1/conversations/conversation_00000000000000000000000000000001.json"
+        ));
+        assert!(!off.includes(
+            "opennexus-records/v1/agent-history/agent_run_00000000000000000000000000000001.json"
+        ));
+        assert!(!off.includes(
+            "opennexus-records/v1/provider-settings/provider_00000000000000000000000000000001.json"
+        ));
+        assert!(!off.includes("opennexus-records/v1/extension-installations/extension_00000000000000000000000000000001.json"));
         assert!(off.includes("notes/example.md"));
         let chosen = OptionalScope {
             persona: true,
             layout: false,
+            conversations: true,
+            agent_history: true,
+            provider_settings: true,
+            extension_installations: true,
         };
         ws.sync_set_optional_scope(chosen).unwrap();
         assert_eq!(ws.pending_count().unwrap(), 0);
@@ -220,7 +252,7 @@ mod tests {
     #[test]
     fn scope_rejects_unknown_fields_instead_of_authorizing_future_categories() {
         assert!(serde_json::from_str::<OptionalScope>(
-            r#"{"persona":true,"layout":false,"credentials":true}"#
+            r#"{"persona":true,"layout":false,"conversations":false,"agent_history":false,"provider_settings":false,"extension_installations":false,"credentials":true}"#
         )
         .is_err());
     }

@@ -419,6 +419,7 @@ mod tests {
         ws.sync_set_optional_scope(crate::sync_scope::OptionalScope {
             persona: true,
             layout: true,
+            ..Default::default()
         })
         .unwrap();
         let binding = ws
