@@ -141,6 +141,13 @@ impl Drop for SessionMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::credentials::{CredentialBroker, CredentialId, Scope};
+    use std::time::{Duration, Instant};
+    use zeroize::Zeroizing;
+
+    fn password() -> Zeroizing<Vec<u8>> {
+        Zeroizing::new(b"b03-test-password-123".to_vec())
+    }
     #[test]
     fn native_message_revokes_without_unlocking_on_session_return() {
         let signal = Arc::new(AtomicU64::new(0));
@@ -164,6 +171,39 @@ mod tests {
             );
         }
         assert_eq!(signal.load(Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn b03_native_and_manual_lock_reject_new_resolves_within_one_second() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut broker = CredentialBroker::new(temp.path().join("credentials.v1"));
+        broker.unlock(password()).unwrap();
+        let id = CredentialId::legacy("b03-provider");
+        broker
+            .put(&id, Zeroizing::new(b"b03-lock-fixture".to_vec()))
+            .unwrap();
+        let signal = broker.lock_signal();
+        let monitor = SessionMonitor::start(signal).unwrap();
+
+        let started = Instant::now();
+        unsafe {
+            SendMessageW(
+                monitor.window as HWND,
+                WM_WTSSESSION_CHANGE,
+                WTS_SESSION_LOCK as usize,
+                0,
+            );
+        }
+        let error = broker.resolve(&Scope::Provider, &id).unwrap_err();
+        assert_eq!(error, "CREDENTIALS_LOCKED");
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        broker.unlock(password()).unwrap();
+        let started = Instant::now();
+        broker.lock();
+        let error = broker.resolve(&Scope::Provider, &id).unwrap_err();
+        assert_eq!(error, "CREDENTIALS_LOCKED");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(monitor);
     }
     #[test]
     fn native_lock_logoff_and_disconnect_revoke_every_bound_domain() {

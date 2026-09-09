@@ -1118,4 +1118,40 @@ mod tests {
         assert!(broker.unlock(password()).is_err());
         assert_eq!(fs::read(path).unwrap(), b"corrupt");
     }
+    #[test]
+    fn b03_unrecoverable_store_does_not_block_local_editing() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("credentials.v1");
+        fs::write(&path, b"unrecoverable-credential-store").unwrap();
+        let mut broker = CredentialBroker::new(path.clone());
+        assert_eq!(
+            broker.unlock(password()).unwrap_err(),
+            "SCHEMA_INCOMPATIBLE"
+        );
+        assert!(broker.is_locked());
+        assert_eq!(fs::read(&path).unwrap(), b"unrecoverable-credential-store");
+
+        let vault = tempfile::tempdir().unwrap();
+        let mut workspace = crate::workspace::Workspace::open(vault.path()).unwrap();
+        let saved = workspace
+            .write(
+                "still-editable.md",
+                "",
+                b"local notes remain available",
+                "local",
+            )
+            .unwrap();
+        assert_eq!(
+            workspace.read("still-editable.md").unwrap().content,
+            "local notes remain available"
+        );
+        assert_eq!(
+            fs::read(vault.path().join("still-editable.md")).unwrap(),
+            b"local notes remain available"
+        );
+        assert_eq!(
+            saved.hash,
+            crate::workspace::hash(b"local notes remain available")
+        );
+    }
 }
