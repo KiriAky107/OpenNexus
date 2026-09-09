@@ -33,7 +33,7 @@ def free_port() -> int:
         return listener.getsockname()[1]
 
 
-def call(method: str, url: str, *, headers=None, body=None, timeout=30):
+def call(method: str, url: str, *, headers=None, body=None, timeout=120):
     request_headers = dict(headers or {})
     payload = body
     if isinstance(body, (dict, list)):

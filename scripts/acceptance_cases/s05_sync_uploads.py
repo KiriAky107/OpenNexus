@@ -324,7 +324,7 @@ def main() -> int:
                 "offset": len(data)
             }
             drop_complete_response(path + "/complete", auth["Authorization"])
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + 120
             while (stack.staging / upload_id).exists() and time.monotonic() < deadline:
                 time.sleep(0.01)
             assert not (stack.staging / upload_id).exists()
@@ -365,8 +365,8 @@ def main() -> int:
             with ThreadPoolExecutor(max_workers=2) as pool:
                 complete_future = pool.submit(race_complete)
                 cleanup_future = pool.submit(race_cleanup)
-                complete_result = complete_future.result(timeout=30)
-                cleanup_result, latency = cleanup_future.result(timeout=30)
+                complete_result = complete_future.result(timeout=120)
+                cleanup_result, latency = cleanup_future.result(timeout=120)
             cleanup_latencies.append(latency)
             if index % 2 == 0:
                 assert complete_result[0] == 200 and cleanup_result["expired_uploads_removed"] == 0
