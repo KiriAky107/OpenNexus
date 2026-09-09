@@ -362,9 +362,11 @@ impl CoreSupervisor {
             .write_all(&payload)
             .map_err(|_| "CORE_PIPE_FAILED")?;
         let (tx, rx) = mpsc::channel();
+        let (activation_tx, activation_rx) = mpsc::channel();
         let lifetime = session.lifetime.clone();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
+            let mut activated = false;
             loop {
                 let mut line = Zeroizing::new(Vec::new());
                 match reader
@@ -382,8 +384,23 @@ impl CoreSupervisor {
                     break;
                 };
                 if message.get("rpc").is_none() {
-                    let _ = tx.send(Ok::<Vec<u8>, std::io::Error>(line.to_vec()));
+                    if activated
+                        || tx
+                            .send(Ok::<Vec<u8>, std::io::Error>(line.to_vec()))
+                            .is_err()
+                    {
+                        break;
+                    }
+                    match activation_rx.recv() {
+                        Ok(true) => activated = true,
+                        _ => break,
+                    }
                     continue;
+                }
+                // A child has no broker authority until its ready frame has
+                // passed the protocol, identity, generation, and HMAC checks.
+                if !activated {
+                    break;
                 }
                 let request_id = message
                     .get("request_id")
@@ -421,15 +438,26 @@ impl CoreSupervisor {
             .map_err(|_| "CORE_READY_TIMEOUT")?
             .map_err(|_| "CORE_HANDSHAKE_INVALID")?;
         if line.len() > 16384 {
+            let _ = activation_tx.send(false);
             return Err("CORE_HANDSHAKE_INVALID".into());
         }
-        session.port = verify_ready(
+        let port = verify_ready(
             &line,
             &session.secret,
             &challenge,
             &session.generation,
             session.child.id(),
-        )?;
+        );
+        match port {
+            Ok(port) => {
+                session.port = port;
+                activation_tx.send(true).map_err(|_| "CORE_PIPE_FAILED")?;
+            }
+            Err(error) => {
+                let _ = activation_tx.send(false);
+                return Err(error);
+            }
+        }
         Ok(session)
     }
 }
@@ -475,5 +503,47 @@ mod tests {
         );
         assert!(verify_ready(&payload, &secret, &challenge, &generation, 124).is_err());
         assert!(verify_ready(&payload, &secret, &"04".repeat(32), &generation, 123).is_err());
+    }
+
+    #[test]
+    fn protocol_incompatibility_rejects_pre_ready_broker_requests() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let backend = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../backend")
+            .canonicalize()
+            .unwrap();
+        let python = backend.join(if cfg!(windows) {
+            ".venv/Scripts/python.exe"
+        } else {
+            ".venv/bin/python"
+        });
+        assert!(python.is_file(), "backend virtual environment is required");
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = temp.path().join("incompatible.py");
+        std::fs::write(
+            &fixture,
+            r#"import json, os, sys, time
+config = json.loads(sys.stdin.buffer.readline())
+print(json.dumps({"protocol": 2, "launcher_pid": config["launcher_pid"], "pid": os.getpid(), "port": 1, "generation": config["generation"], "proof": "00" * 32}), flush=True)
+print(json.dumps({"rpc": "workspace.write", "request_id": "must-not-run", "params": {}}), flush=True)
+time.sleep(5)
+"#,
+        )
+        .unwrap();
+        let broker_calls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&broker_calls);
+        let mut core = CoreSupervisor::new(
+            python,
+            vec![fixture.to_string_lossy().into_owned()],
+            backend,
+            temp.path().join("data"),
+        )
+        .with_broker(Arc::new(move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Err("BUSINESS_CALL_MUST_NOT_RUN".into())
+        }));
+        assert_eq!(core.start().unwrap_err(), "PROTOCOL_INCOMPATIBLE");
+        assert_eq!(broker_calls.load(Ordering::SeqCst), 0);
     }
 }
