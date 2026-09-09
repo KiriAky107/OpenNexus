@@ -18,7 +18,7 @@ impl Drop for Server {
 }
 
 #[tokio::test]
-async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicates() {
+async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempotency() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join(".opennexus-test"), b"fixture").unwrap();
     let service = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -100,13 +100,55 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
         ws.sync_bind_empty(&endpoint, remote, "rust-fixture")
             .unwrap()
     };
+    assert_eq!(workspace.lock().unwrap().pending_count().unwrap(), 20);
     let first = workspace
         .lock()
         .unwrap()
         .sync_next(&binding.id)
         .unwrap()
         .unwrap();
-    assert!(client.push_one(&workspace, &binding).await.unwrap());
+    // Commit the first revision, then kill the client before the response can
+    // acknowledge the local journal. Reopen must keep all pending operations.
+    std::fs::write(
+        root.path().join("interrupt-revision"),
+        b"controlled-fixture",
+    )
+    .unwrap();
+    drop(workspace);
+    let mut lost_response = Server(
+        Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "revision_response_loss_worker"])
+            .env("OPENNEXUS_SYNC_WORKER_ROOT", local.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap(),
+    );
+    use std::io::Write;
+    lost_response
+        .0
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(session.access_token.as_bytes())
+        .unwrap();
+    let committed = root.path().join("revision-committed");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !committed.exists() {
+        assert!(lost_response.0.try_wait().unwrap().is_none());
+        assert!(
+            std::time::Instant::now() < deadline,
+            "revision commit timeout"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    lost_response.0.kill().unwrap();
+    lost_response.0.wait().unwrap();
+    std::fs::remove_file(root.path().join("interrupt-revision")).unwrap();
+    std::fs::remove_file(committed).unwrap();
+    let workspace = Arc::new(Mutex::new(Workspace::open(local.path()).unwrap()));
+    assert_eq!(workspace.lock().unwrap().pending_count().unwrap(), 20);
     let payload = workspace
         .lock()
         .unwrap()
@@ -123,6 +165,9 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
             .unwrap();
         assert_eq!(replay["sequence"], 1);
     }
+    assert_eq!(workspace.lock().unwrap().pending_count().unwrap(), 20);
+    assert!(client.push_one(&workspace, &binding).await.unwrap());
+    assert_eq!(workspace.lock().unwrap().pending_count().unwrap(), 19);
     for _ in 1..20 {
         assert!(client.push_one(&workspace, &binding).await.unwrap());
     }
@@ -189,6 +234,22 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
             .read("note.md")
             .unwrap()
             .entry
+            .hash,
+        workspace
+            .lock()
+            .unwrap()
+            .read("note.md")
+            .unwrap()
+            .entry
+            .hash
+    );
+    assert_eq!(
+        workspace_b
+            .lock()
+            .unwrap()
+            .read("note.md")
+            .unwrap()
+            .entry
             .file_id,
         first.file_id
     );
@@ -207,9 +268,20 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
     {
         let mut ws = workspace_b.lock().unwrap();
         let current = ws.read("note.md").unwrap();
-        ws.write("note.md", &current.entry.hash, b"offline-b", "local")
-            .unwrap();
+        let mut digest = current.entry.hash;
+        for index in 0..20 {
+            digest = ws
+                .write(
+                    "note.md",
+                    &digest,
+                    format!("offline-b-{index}").as_bytes(),
+                    "local",
+                )
+                .unwrap()
+                .hash;
+        }
     }
+    assert_eq!(workspace_b.lock().unwrap().pending_count().unwrap(), 20);
     client.push_one(&workspace, &binding).await.unwrap();
     assert_eq!(
         client_b.pull_page(&workspace_b, &binding_b).await.unwrap(),
@@ -217,7 +289,7 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
     );
     assert_eq!(
         workspace_b.lock().unwrap().read("note.md").unwrap().content,
-        "offline-b"
+        "offline-b-19"
     );
     let conflicts = workspace_b
         .lock()
@@ -291,7 +363,7 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
         client.pull_page(&workspace, &binding).await.unwrap();
         client_b.pull_page(&workspace_b, &binding_b).await.unwrap();
         let expected = if choice == "local" {
-            "offline-b"
+            "offline-b-19"
         } else {
             "next-a"
         };
@@ -781,7 +853,6 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
     // Kill the actual client process after each durable 10 MiB server offset,
     // before its response reaches the client. The next process must query offset.
     use sha2::{Digest, Sha256};
-    use std::io::Write;
     let large_remote = client
         .json(
             reqwest::Method::POST,
@@ -1056,6 +1127,23 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
 #[tokio::test]
 #[ignore = "helper process driven and killed by the parent fault test"]
 async fn resumable_upload_worker() {
+    let root = std::env::var("OPENNEXUS_SYNC_WORKER_ROOT").expect("controlled fixture root");
+    let ws = Arc::new(Mutex::new(Workspace::open(Path::new(&root)).unwrap()));
+    let binding = ws.lock().unwrap().sync_binding().unwrap().unwrap();
+    assert!(binding.endpoint.starts_with("http://127.0.0.1:"));
+    use std::io::Read;
+    let mut token = Zeroizing::new(String::new());
+    std::io::stdin()
+        .take(4096)
+        .read_to_string(&mut token)
+        .unwrap();
+    let client = SyncClient::new(&binding.endpoint, token, true).unwrap();
+    client.push_one(&ws, &binding).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "helper process killed after the server commits but before response delivery"]
+async fn revision_response_loss_worker() {
     let root = std::env::var("OPENNEXUS_SYNC_WORKER_ROOT").expect("controlled fixture root");
     let ws = Arc::new(Mutex::new(Workspace::open(Path::new(&root)).unwrap()));
     let binding = ws.lock().unwrap().sync_binding().unwrap().unwrap();
