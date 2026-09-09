@@ -916,13 +916,17 @@ fn main() {
                 Some(RecentVaultStore::open(&state_path).map_err(std::io::Error::other)?);
             let extension_root = app.path().app_data_dir()?.join("extensions-host");
             std::fs::create_dir_all(&extension_root)?;
+            let app_data_dir = app.path().app_data_dir()?;
+            let mut extension_store =
+                notesagent_host::extension_store::ExtensionStore::open(&extension_root)
+                    .map_err(|error| std::io::Error::other(error.code))?;
+            extension_store
+                .import_legacy_installations(&app_data_dir)
+                .map_err(|error| std::io::Error::other(error.code))?;
             *app.state::<Host>()
                 .extensions
                 .lock()
-                .map_err(|_| std::io::Error::other("HOST_BUSY"))? = Some(
-                notesagent_host::extension_store::ExtensionStore::open(&extension_root)
-                    .map_err(|error| std::io::Error::other(error.code))?,
-            );
+                .map_err(|_| std::io::Error::other("HOST_BUSY"))? = Some(extension_store);
             let credential_state = app.state::<Host>().credentials.clone();
             *credential_state
                 .lock()
