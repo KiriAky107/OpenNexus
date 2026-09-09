@@ -77,6 +77,12 @@ fn main() {
             request = read(&mut input);
             assert!(request.contains("tools/call"));
         }
+        if args[1] == "mcp_network_denied" {
+            println!("{}", r#"{"jsonrpc":"2.0","id":"network-request","method":"opennexus/network.fetch","params":{"url":"https://127.0.0.1/","method":"GET"}}"#);
+            std::io::stdout().flush().unwrap();
+            let response = read(&mut input);
+            assert!(response.contains("network-request") && response.contains("EXTENSION_NETWORK_ADDRESS_DENIED"));
+        }
         println!(r#"{{"jsonrpc":"2.0","id":"server-ping","method":"ping"}}"#);
         std::io::stdout().flush().unwrap();
         let ping = read(&mut input);
