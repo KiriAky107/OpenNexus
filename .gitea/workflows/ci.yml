@@ -30,6 +30,7 @@ jobs:
         working-directory: backend
       - run: uv run pytest
         working-directory: backend
+      - run: python scripts/phase3-production-acceptance.py --list-cases --json
 
   service-test:
     runs-on: ubuntu-latest
