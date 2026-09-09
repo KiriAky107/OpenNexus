@@ -1,4 +1,4 @@
-//! Main-window commands. Every ongoing run is bound to one Workspace and one account.
+//! 主窗口命令。每次正在进行的运行都绑定到一个工作区和一个帐户。
 use super::{with_workspace, Host};
 use notesagent_host::{
     sync_auth,
@@ -420,7 +420,7 @@ async fn cycle(host: &Host, binding: &Binding) -> Result<(), SyncError> {
                     break;
                 }
             }
-            // Finish the fixed incoming window before freezing any new remote base.
+            // 在冻结任何新的远程基地之前完成固定的传入窗口。
             if host
                 .workspace
                 .access(|ws| ws.sync_boundary(&binding.id))?

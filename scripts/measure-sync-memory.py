@@ -1,9 +1,4 @@
-"""Windows component measurements, not the S-09 service/release benchmark.
-
-Build the current Rust library test executable, then run each fixed workload in
-its own process. Reports observed OS cumulative peaks, with sampling coverage.
-No third-party Python packages required. Usage: python scripts/measure-sync-memory.py
-"""
+"""Windows 组件测量，不是 S-09 服务/发布基准。构建当前的 Rust 库测试可执行文件，然后在其自己的进程中运行每个固定工作负载。报告观察到OS累积峰值，具有采样覆盖率。无需第三方 Python 软件包。用法： python 脚本/measure-sync-memory.py"""
 from __future__ import annotations
 import argparse
 import ctypes as c

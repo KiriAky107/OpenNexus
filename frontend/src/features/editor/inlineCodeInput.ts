@@ -7,8 +7,7 @@ function reconcile(view: EditorView) {
   const { $from } = view.state.selection
   if (!$from.parent.isTextblock || $from.parent.type.spec.code) return
   const text = $from.parent.textBetween(0, $from.parent.content.size, '\n', '\ufffc')
-  // Also inspect the closing delimiter AFTER the caret: users commonly type
-  // a pair of backticks first, move left, and then fill in the code.
+  // 还要检查结束分隔符 AFTER 插入符号：用户通常首先键入一对反引号，向左移动，然后填写代码。
   const spans = /(^|[^\\`])`([^`\n\ufffc]+)`(?!`)/g
   let candidate: { start: number; end: number } | undefined
   for (const match of text.matchAll(spans)) {

@@ -1,4 +1,4 @@
-//! Atomic package/configuration pointers. A pointer is never a runtime permission.
+//! 原子包/配置指针。指针从来都不是运行时权限。
 use crate::workspace::{hash, HostError, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -143,8 +143,7 @@ fn switch_inner(
     })
 }
 
-/// `healthy` must come from the Host's matching package/config health probe.
-/// Recovery calls this with false; it never reissues any execution permits.
+/// “healthy”必须来自 Host 的匹配包/配置运行状况探测。恢复称其为 false；它从不重新签发任何执行许可证。
 pub fn finish(db: &mut Connection, operation: &str, healthy: bool) -> Result<Receipt> {
     let tx = db.transaction()?;
     let (before, after, state): (String, String, String) = tx.query_row(

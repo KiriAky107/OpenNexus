@@ -180,7 +180,7 @@ def _content_start(markdown: str) -> int:
 
 
 def _frontmatter(markdown: str) -> tuple[str, int] | None:
-    """Return YAML text and body character offset without changing original text."""
+    """返回YAML文本和正文字符偏移量，而不改变原始文本。"""
     start = 1 if markdown.startswith("\ufeff") else 0
     opening = re.match(r"---[ \t]*(?:\r\n|\n|\r|\Z)", markdown[start:])
     if opening is None:
@@ -192,7 +192,7 @@ def _frontmatter(markdown: str) -> tuple[str, int] | None:
             candidate = markdown[content_start:offset]
             if not candidate.strip() or _metadata_intent(candidate):
                 return candidate, offset + len(raw)
-            return None  # Ordinary Markdown between thematic breaks.
+            return None  # 分隔线之间的普通 Markdown 内容。
         offset += len(raw)
     if not _metadata_intent(markdown[content_start:]):
         return None
@@ -200,8 +200,8 @@ def _frontmatter(markdown: str) -> tuple[str, int] | None:
 
 
 def _metadata_intent(content: str) -> bool:
-    """A thematic break alone is not a declaration of YAML metadata."""
-    # An explicit policy must fail closed even when other header lines are broken.
+    """单独的主题中断并不是 YAML 元数据的声明。"""
+    # 即使其他头部行已损坏，显式策略也必须按拒绝原则处理。
     fence_marker = None
     for line in content.splitlines():
         fence = _FENCE_RE.match(line)
@@ -222,7 +222,7 @@ def _metadata_intent(content: str) -> bool:
         pass
     first = next((line.strip() for line in content.splitlines()
                   if line.strip() and not line.lstrip().startswith("#")), "")
-    # Preserve errors for incomplete key/value headers, including flow mappings.
+    # 保留不完整键/值标头的错误，包括流映射。
     return bool(re.match(r"(?:[\w.-]+|[\"'][^\"']+[\"'])\s*:(?:\s|$)", first)
                 or (first.startswith("{") and ":" in first))
 
@@ -236,8 +236,7 @@ def _embedding_policy(markdown: str) -> bool:
     if header is None:
         return False
     try:
-        # Compose nodes without constructing objects. This accepts YAML comments,
-        # quoted keys and indentation while retaining duplicate-key information.
+        # 组合节点而不构造对象。这接受 YAML 注释、引用的键和缩进，同时保留重复的键信息。
         node = yaml.compose(header[0], Loader=yaml.SafeLoader)
     except yaml.YAMLError as exc:
         raise ApiError(422, "INVALID_EMBEDDING_POLICY", "Frontmatter YAML 无效，无法确认本地索引策略。") from exc
@@ -261,7 +260,7 @@ def _embedding_policy(markdown: str) -> bool:
 
 
 def _extract_frontmatter(markdown: str) -> dict[str, str | list[str]]:
-    """Read YAML scalars and tag sequences without constructing arbitrary objects."""
+    """读取 YAML 标量和标签序列，无需构造任意对象。"""
     header = _frontmatter(markdown)
     if header is None:
         return {}
@@ -271,7 +270,7 @@ def _extract_frontmatter(markdown: str) -> dict[str, str | list[str]]:
         raise ApiError(422, "INVALID_EMBEDDING_POLICY", "Frontmatter YAML 无效，无法确认本地索引策略。") from exc
     meta: dict[str, str | list[str]] = {}
     if not isinstance(node, yaml.MappingNode):
-        return meta  # The policy validation below handles unsupported documents.
+        return meta  # 下面的策略验证处理不受支持的文档。
     for key, value in node.value:
         if not isinstance(key, yaml.ScalarNode):
             continue
@@ -279,7 +278,7 @@ def _extract_frontmatter(markdown: str) -> dict[str, str | list[str]]:
         if name not in {"title", "tags"}:
             continue
         if isinstance(value, yaml.ScalarNode):
-            # Keep lexical values: YAML 1.1 would otherwise turn tags like on/yes into booleans.
+            # 保留词汇值：YAML 1.1 否则会将 on/yes 等标签转换为布尔值。
             meta[name] = "" if value.tag == "tag:yaml.org,2002:null" else value.value
         elif name == "tags" and isinstance(value, yaml.SequenceNode):
             meta[name] = [item.value for item in value.value if isinstance(item, yaml.ScalarNode)]

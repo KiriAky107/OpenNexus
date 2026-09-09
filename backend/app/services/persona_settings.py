@@ -1,4 +1,4 @@
-"""One persistent persona for all configured chat/agent providers on this AI Core."""
+"""此 AI Core 上所有配置的聊天/代理提供商的一个持久角色。"""
 from contextlib import closing
 from pydantic import BaseModel, ConfigDict, Field
 from app.database.db import connect
@@ -43,12 +43,12 @@ def load_persona():
 
 
 def legacy_persona_preview():
-    """Explicit read-only import source; no automatic Vault ownership inference."""
+    """显式只读导入源；没有自动 Vault 所有权推断。"""
     from app.errors import ApiError
     from app.services.desktop_notes import call
     if not _desktop():
         raise ApiError(404, 'RESOURCE_NOT_FOUND', '此入口仅用于桌面人设导入。')
-    call('persona.get', id='default')  # Revalidate the authenticated Vault at Host.
+    call('persona.get', id='default')  # 在 Host 重新验证经过验证的 Vault。
     with closing(connection()) as conn:
         row = conn.execute("SELECT data FROM global_persona WHERE id=1").fetchone()
         if not row:

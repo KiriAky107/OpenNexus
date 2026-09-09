@@ -177,7 +177,7 @@ def test_agent_parameter_matching_is_independent_of_call_order(order):
     run = NS(status=NS(value='completed'),tool_results=[],output='',citations=[],run_id='test',current_step=1,token_usage=0,error_code=None)
     result = score(case, run, events, 1, 0)
     assert result.success and result.accurate_calls == result.selected_calls == 2
-    # Two expectations cannot reuse one matching call.
+    # 两个期望不能重复使用一个匹配的调用。
     result = score(case, run, events[:1], 1, 0)
     assert not result.success and result.accurate_calls == 1
 

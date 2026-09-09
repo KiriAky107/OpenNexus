@@ -1,4 +1,4 @@
-//! Binding-scoped retry decisions survive restart; wall time is bounded after clock changes.
+//! 绑定范围内的重试决定在重启后仍然有效；系统时钟变化后也会约束实际经过时间。
 use crate::workspace::{Result, Workspace};
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
@@ -105,7 +105,7 @@ impl Workspace {
         if code == "SYNC_CANCELLED" {
             return Ok(());
         }
-        // Only retain a bounded machine code, never an arbitrary remote response string.
+        // 仅保留有界机器代码，从不保留任意远程响应字符串。
         let code = machine_code(code);
         let failures = if code == "CREDENTIALS_LOCKED" {
             0

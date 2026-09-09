@@ -1,4 +1,4 @@
-"""Pipe adapter for event loops without asyncio subprocess support (Windows reload)."""
+"""用于没有异步子进程支持的事件循环的管道适配器（Windows 重新加载）。"""
 from __future__ import annotations
 
 import asyncio
@@ -33,14 +33,14 @@ class _Output:
         self.limit = limit
 
     async def readline(self):
-        # Bound allocations even when the worker produces a malformed line.
+        # 即使工作线程生成格式错误的行，分配也会受到限制。
         return await asyncio.to_thread(self.pipe.readline, self.limit + 1)
 
 
 class ThreadedProcess:
     def __init__(self, args, *, env, limit, creationflags=0):
-        # Spawn synchronously so cancellation cannot leave an unowned process.
-        # Blocking pipe I/O and reaping run in threads, never on the server loop.
+        # 同步创建进程，避免取消操作留下无人管理的子进程。阻塞式管道 I/O 与进程回收在线程中执行，
+        # 不占用服务器事件循环。
         self.process = subprocess.Popen(
             args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, env=env, creationflags=creationflags,

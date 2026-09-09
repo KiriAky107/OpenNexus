@@ -12,23 +12,23 @@ export const useSettingsStore = defineStore('settings', () => {
     try { return JSON.parse(localStorage.getItem('app-settings') ?? '{}') as Record<string, unknown> }
     catch { localStorage.removeItem('app-settings'); return {} }
   })()
-  // General
+  // 一般
   const restoreLastVault = ref(saved.restoreLastVault !== false)
   const autoSaveInterval = ref(typeof saved.autoSaveInterval === 'number' ? saved.autoSaveInterval : 1500)
   const language = appLocale
   const appVersion = ref(packageInfo.version)
   const aiCoreVersion = ref('—')
 
-  // Editor
+  // 编辑
   const defaultEditorMode = ref<'wysiwyg' | 'source'>(saved.defaultEditorMode === 'source' ? 'source' : 'wysiwyg')
   const editorLineWidth = ref(typeof saved.editorLineWidth === 'number' ? saved.editorLineWidth : 80)
   const spellCheck = ref(saved.spellCheck === true)
 
-  // AI Core
+  // AI 核心
   const aiCoreStatus = ref<AiCoreStatus>('unknown')
   const aiCoreAddress = ref(resolveApiUrl('/api') || '/api')
 
-  // Index
+  // 索引
   const emptyIndex = (): IndexStatus => ({ status: 'unknown', pending_jobs: 0, total_notes: null, total_blocks: null })
   const indexStatus = ref<IndexStatus>(emptyIndex())
   const indexStatusLabel = computed(() => {
@@ -41,7 +41,7 @@ export const useSettingsStore = defineStore('settings', () => {
     return t('索引就绪', 'Index ready')
   })
 
-  // Permissions
+  // 权限
   const permissionPolicy = ref<Record<string, 'allow' | 'confirm' | 'deny'>>({})
   const diagnosticsError = ref<string | null>(null)
 

@@ -22,8 +22,7 @@ _write_locks = WeakKeyDictionary()
 
 
 async def write_in_background(operation, *args, **kwargs):
-    # SQLite has one writer. Queue cooperatively instead of letting many worker
-    # threads fight over the file lock and starve unrelated model work.
+    # SQLite 有 1 个写入器。协作排队，而不是让许多工作线程争夺文件锁并导致不相关的模型工作匮乏。
     loop = asyncio.get_running_loop()
     lock = _write_locks.setdefault(loop, asyncio.Lock())
     async with lock:

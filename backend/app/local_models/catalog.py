@@ -1,4 +1,4 @@
-"""Reviewed model identities. Runtime never resolves a moving model revision."""
+"""经过审核的模型标识；运行时绝不解析浮动的模型版本。"""
 from dataclasses import asdict, dataclass
 
 

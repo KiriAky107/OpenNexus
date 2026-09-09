@@ -1,4 +1,4 @@
-"""Isolated PostgreSQL, MinIO, and multi-worker Sync acceptance stack."""
+"""隔离的 PostgreSQL、MinIO 与多工作进程 Sync 验收栈。"""
 
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ def stop_tree(process: subprocess.Popen | None) -> None:
 
 
 class SyncProductionStack:
-    """Own a disposable production dependency stack for one acceptance case."""
+    """拥有一个验收案例的一次性生产依赖堆栈。"""
 
     def __init__(self, config: dict, data_root: Path, case_tag: str):
         self.config = config
@@ -420,8 +420,7 @@ class SyncProductionStack:
             except (OSError, TimeoutError, URLError):
                 return None
 
-        # A small pool is enough to reach both workers without exhausting the
-        # Windows ephemeral-port/backlog budget before the fault matrix starts.
+        # 一个小池足以覆盖两个工作线程，而不会在故障矩阵启动之前耗尽 Windows 临时端口/积压预算。
         with ThreadPoolExecutor(max_workers=8) as pool:
             return {value for value in pool.map(probe, range(attempts)) if value}
 

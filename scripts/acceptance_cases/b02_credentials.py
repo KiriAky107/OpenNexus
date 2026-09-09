@@ -1,4 +1,4 @@
-"""B-02 Fernet-to-Stronghold migration acceptance driver."""
+"""B-02：Fernet 到 Stronghold 的迁移验收驱动。"""
 
 from __future__ import annotations
 

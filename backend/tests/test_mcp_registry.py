@@ -205,7 +205,7 @@ def test_old_failure_callback_cannot_stop_replacement_host(monkeypatch) -> None:
             old_callback(f"mcp.{created.server_id}", "delayed old failure")
             callback_finished.set()
 
-        # Queue the old callback while a replacement owns the lifecycle lock.
+        # 将旧回调排队，而替换者拥有生命周期锁。
         with service._lifecycle_lock:
             callback_thread = threading.Thread(target=delayed_failure, daemon=True)
             callback_thread.start()
@@ -305,7 +305,7 @@ def test_ambiguous_legacy_credentials_are_not_assigned_to_two_variables() -> Non
     assert current.last_test_succeeded is None
     assert migrated.credentials.has(
         legacy_id
-    )  # Keep the original ciphertext recoverable.
+    )  # 保持原始密文可恢复。
     migrated.put_secret(created.server_id, "TOKEN", "upper")
     migrated.put_secret(created.server_id, "token", "lower")
     assert registry().get(created.server_id).secret_environment == {

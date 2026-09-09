@@ -1,4 +1,4 @@
-"""D-03 crash, storage, configuration, dependency, and permission acceptance."""
+"""D-03：崩溃、存储、配置、依赖与权限验收。"""
 
 from __future__ import annotations
 

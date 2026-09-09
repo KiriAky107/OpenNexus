@@ -79,10 +79,10 @@ PreparedIndex = tuple[list[list[float]], routed_vectors.RemoteEmbeddings | None]
 
 @background_embeddings
 async def prepare_note_index(parsed: ParsedNote, *, strict=False) -> PreparedIndex:
-    """Compute vectors before opening a write transaction (including API I/O)."""
+    """在打开写入事务（包括 API I/O）之前计算向量。"""
     texts = [block.content for block in parsed.blocks]
     if isinstance(embedding, LocalEmbedding):
-        # One routed invocation: API first, validated local fallback. No hash vectors.
+        # 一个路由调用：首先是 API，经过验证的本地回退。没有哈希向量。
         remote = await routed_vectors.embed_remote(texts, accept_local=True, strict=strict, local_only=parsed.embedding_local_only)
         return [], remote
     vectors = await embedding.embed_documents(texts)
@@ -220,7 +220,7 @@ async def update_note(
                         file_path=parsed.file_path, folder=parsed.folder, tags=parsed.tags,
                         created_at=parsed.created_at, updated_at=parsed.updated_at, blocks=parsed.blocks,
                     )
-                    # Saved content is immediately searchable; old vectors must not describe it.
+                    # 保存的内容可立即搜索；旧向量一定不能描述它。
                     await vector_store.delete(old_ids, conn=conn)
                     conn.execute('UPDATE blocks SET embedding_local_only=? WHERE note_id=?',
                                  (int(parsed.embedding_local_only), parsed.note_id))

@@ -1,4 +1,4 @@
-"""S-04 real PostgreSQL, MinIO, and two-worker transaction acceptance."""
+"""S-04：真实 PostgreSQL、MinIO 与双工作进程事务验收。"""
 
 from __future__ import annotations
 

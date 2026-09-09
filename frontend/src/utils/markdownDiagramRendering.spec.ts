@@ -8,7 +8,7 @@ it('preserves diagram labels, switches preview/source, and copies original Merma
   const source = 'graph TD; A-->B'
   const html = await renderMarkdown('```mermaid\n' + source + '\n```')
   const wrapper = mount(DiagramInteractions, { slots: { default: '<div></div>' }, attachTo: document.body })
-  // Preserve SVG foreignObject namespace while injecting sanitized rendered HTML.
+  // 在注入清理后的渲染 HTML 时保留 SVGforeignObject 命名空间。
   wrapper.element.firstElementChild!.innerHTML = html
   expect(wrapper.text()).toContain('系统验证')
   expect(wrapper.find('[onerror]').exists()).toBe(false)

@@ -1,9 +1,4 @@
-"""Agent tools backed by existing OpenNexus application services.
-
-The tools in this module stay inside the same validation, permission and audit
-pipeline as the original note tools.  Plugin authoring is deliberately limited
-to the host's declarative handlers: it cannot write or launch arbitrary code.
-"""
+"""基于现有 OpenNexus 应用服务的 Agent 工具。本模块中的工具沿用原笔记工具的验证、权限与审计流程。Plugin 编写仅限 Host 提供的声明式处理器，不能写入或启动任意代码。"""
 
 from __future__ import annotations
 
@@ -184,7 +179,7 @@ def _register(registry: ToolRegistry, name: str, description: str, model: type[B
 
 
 def register_service_tools(registry: ToolRegistry, plugins) -> None:
-    """Register tools that need the completed Plugin runtime or the current registry."""
+    """注册需要完整的Plugin运行时或当前注册表的工具。"""
 
     async def rename_note(arguments: NoteRenameArguments, _: ToolExecutionContext) -> dict:
         return (await note_service.rename_note(arguments.note_id, file_name=arguments.file_name)).model_dump(mode="json")

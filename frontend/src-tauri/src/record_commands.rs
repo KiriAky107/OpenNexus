@@ -1,4 +1,4 @@
-//! Main-window preference records; no generic credential or application-state accessor.
+//! 主窗口偏好记录；没有通用凭证或应用程序状态访问器。
 use super::{with_workspace, Host};
 use notesagent_host::{
     records,

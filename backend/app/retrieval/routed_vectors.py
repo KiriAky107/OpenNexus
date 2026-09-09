@@ -1,10 +1,8 @@
-"""Optional API embeddings, isolated from the stable hash/sqlite-vec index.
+"""可选的 API 嵌入，与稳定的 hash/sqlite-vec 索引相互隔离。
 
-The runtime's model_id is the authoritative space ID (including provider URL,
-endpoint, model and dimensions); equal dimensions alone never imply compatibility.
-Durable vectors are reused to build per-space/dimension sqlite-vec indexes lazily.
-Native exact KNN avoids Python JSON decoding and dot products on every search.
-Coverage checks and ranking share one transaction.
+运行时的 model_id 是权威空间标识，涵盖提供商 URL、端点、模型与维度；维度相同并不表示兼容。
+持久化向量用于按需构建各空间和维度的 sqlite-vec 索引。原生精确 KNN 避免每次搜索都由 Python
+解码 JSON 并计算点积。覆盖率检查与排序使用同一事务。
 """
 
 from __future__ import annotations
@@ -49,7 +47,7 @@ class RemoteEmbeddings:
 
 
 def get_model_routing() -> EmbeddingRuntime | None:
-    """Lazy integration hook; tests can inject a runtime without any network I/O."""
+    """惰性集成钩子；测试可以注入运行时而无需任何网络 I/O。"""
     from app.container import container
 
     return getattr(container, "model_routing", None)
@@ -65,18 +63,14 @@ def _unit_vector(vector: list[float], dimensions: int) -> list[float]:
     scale = max(abs(value) for value in vector)
     if scale == 0:
         raise ValueError("embedding must be nonzero")
-    # Scaling first avoids overflow/underflow for finite but extreme API values.
+    # 缩放首先避免有限但极端的 API 值的上溢/下溢。
     scaled = [value / scale for value in vector]
     norm = math.sqrt(math.fsum(value * value for value in scaled))
     return [value / norm for value in scaled]
 
 
 async def embed_remote(texts: list[str], *, accept_local=False, strict=False, local_only=False) -> RemoteEmbeddings | None:
-    """Return validated API vectors, or None to use the caller's local baseline.
-
-    Do not use the runtime's local result: the caller may have injected its own
-    embedding/store pair. Exception deliberately excludes cancellation.
-    """
+    """返回经过验证的 API 向量，或 None 以使用调用者的本地基线。不要使用运行时的本地结果：调用者可能已经注入了自己的嵌入/存储对。异常特意排除取消。"""
     if not texts:
         return None
     try:
@@ -104,7 +98,7 @@ async def embed_remote(texts: list[str], *, accept_local=False, strict=False, lo
     except Exception as exc:
         log_event('vectors', 'embedding.failed', level='ERROR' if strict else 'WARNING', error=exc,
                   count=len(texts), fallback='none' if strict else 'local_index')
-        # Avoid logging provider exceptions containing credentials or note text.
+        # 避免记录包含凭据或笔记文本的提供程序异常。
         record_embedding(fallback_reason="REMOTE_EMBEDDING_UNAVAILABLE")
         logger.warning("Remote embedding unavailable (%s); using local index", type(exc).__name__)
         if strict:
@@ -139,10 +133,10 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
 def store_remote(
     conn: sqlite3.Connection, block_ids: list[str], batch: RemoteEmbeddings | None,
 ) -> None:
-    """Best-effort side-index write inside the caller's metadata transaction.
+    """在调用方的元数据事务内尽力写入辅助索引。
 
-    A savepoint prevents partial remote batches and isolates storage failures from
-    note saving. Replacing/deleting blocks cascades all old spaces automatically.
+    savepoint 可阻止只写入部分远程批次，并将存储故障与笔记保存隔离；替换或删除内容块时，
+    所有旧空间都会自动级联清理。
     """
     if batch is None:
         return
@@ -173,11 +167,7 @@ def store_remote(
 
 
 async def search_remote(query: str, *, top_k: int, accept_local=False, strict=False) -> list[VectorHit] | None:
-    """None means fallback, including any missing/invalid current-block vector.
-
-    Read coverage and vectors together so concurrent note updates cannot produce
-    an apparently complete subset. Never fill missing remote hits with local hits.
-    """
+    """None 表示回退，包括任何丢失/无效的当前块向量。将覆盖率和向量一起读取，以便并发笔记更新无法生成明显完整的子集。切勿用本地命中来填补缺失的远程命中。"""
     if accept_local:
         conn = connect()
         try:
@@ -207,8 +197,7 @@ async def _prepare_indexes(batches):
             conn.close()
     if await asyncio.to_thread(prepare, True):
         return
-    # Share the cooperative gate with saves: never block the event loop on a
-    # SQLite write lock while a migration owns it in another thread.
+    # 与保存共享协作门：当迁移在另一个线程中拥有 SQLite 写锁时，永远不会阻塞 SQLite 写锁上的事件循环。
     async with vault_mutation_lock():
         work = asyncio.create_task(asyncio.to_thread(prepare))
         cancelled = False
@@ -266,7 +255,7 @@ def _search_space(batch, top_k, strict):
 
 
 async def _search_partitioned(query: str, policies: set[bool], *, top_k: int, strict: bool):
-    """Embed per policy; rank each space independently and fuse ranks, not vectors."""
+    """按策略嵌入；独立对每个空间进行排名并融合排名，而不是向量。"""
     batches = {}
     for policy in sorted(policies):
         batch = await embed_remote([query], accept_local=True, strict=strict, local_only=policy)
@@ -282,7 +271,7 @@ def _search_partitions(batches, policies, top_k, strict):
     conn = connect()
     try:
         with transaction(conn):
-            # Query vectors are ready before opening the single read snapshot.
+            # 在打开单个读取快照之前，查询向量已准备就绪。
             current = {bool(row[0]) for row in conn.execute("SELECT DISTINCT embedding_local_only FROM blocks")}
             if current != policies:
                 raise ValueError("embedding policies changed while querying")

@@ -18,7 +18,7 @@ def zipped(files):
         for name, value in files:
             if isinstance(name, str) and '\\' in name:
                 entry = zipfile.ZipInfo()
-                entry.filename = name  # Keep malicious separators on Windows too.
+                entry.filename = name  # Windows 上也保留恶意分隔符。
                 name = entry
             archive.writestr(name, value)
     return output.getvalue()

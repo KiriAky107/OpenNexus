@@ -1,4 +1,4 @@
-//! Reserve before dispatch so cancellation cannot race a delayed IPC invocation.
+//! 调度前保留，因此取消不能与延迟的 IPC 调用竞争。
 use std::{
     collections::HashMap,
     future::Future,
@@ -71,7 +71,7 @@ impl Requests {
     }
 }
 impl Lease {
-    /// Recheck after synchronous encoding/validation, immediately before network IO.
+    /// 同步编码/验证后、紧接网络 IO 之前重新检查。
     pub fn checkpoint(&self) -> impl Fn() -> Result<(), String> + Send + 'static {
         let cancel = self.cancel.clone();
         let deadline = self.deadline;

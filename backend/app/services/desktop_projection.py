@@ -1,4 +1,4 @@
-"""Rebuildable per-Vault FTS projection, sourced only through the Host broker."""
+"""每个 Vault 独立、可重建的 FTS 投影，仅通过 Host 代理读取源数据。"""
 from __future__ import annotations
 import asyncio
 from app import repository
@@ -18,7 +18,7 @@ def entries():
 
 
 def _refresh():
-    current = entries()  # Always validates authorization, including when the cache is current.
+    current = entries()  # 始终验证授权，包括缓存处于最新状态时。
     conn = connect_knowledge()
     try:
         conn.execute('CREATE TABLE IF NOT EXISTS host_projection (file_id TEXT PRIMARY KEY, hash TEXT NOT NULL, path TEXT NOT NULL)')
@@ -33,7 +33,7 @@ def _refresh():
                                 tags=note.tags, created_at=note.created_at, updated_at=note.updated_at)
             changed.append((document, parsed))
         removed = set(old) - {entry['file_id'] for entry in current}
-        # Content is verified before starting the projection transaction. No model/network IO inside.
+        # 启动投影事务前先验证内容；事务内部不执行模型或网络 I/O。
         with transaction(conn):
             task_links = []
             for entry in current:
@@ -63,7 +63,7 @@ def _refresh():
 async def refresh():
     async with vault_mutation_lock():
         work = asyncio.create_task(asyncio.to_thread(_refresh))
-        # Keep the projection gate until the worker has finished even if the request is cancelled.
+        # 即使请求被取消，也要保留投影门直到工作人员完成。
         cancelled = False
         while not work.done():
             try: await asyncio.shield(work)

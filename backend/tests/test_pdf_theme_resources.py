@@ -1,4 +1,4 @@
-"""PDF theme and resource policy regressions; no real providers or user files."""
+"""PDF主题和资源政策回归；没有真正的提供者或用户文件。"""
 import asyncio
 import base64
 from io import BytesIO

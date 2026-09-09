@@ -1,1 +1,1 @@
-"""Optional local inference; importing this package does not load model libraries."""
+"""可选的本地推理；导入此包不会加载模型库。"""

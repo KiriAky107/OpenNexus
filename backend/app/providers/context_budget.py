@@ -1,4 +1,4 @@
-"""Opt-in, model-scoped text context checks. Estimates are not vendor token counts."""
+"""按需启用、限定模型范围的文本上下文检查；估算值不等同于供应商的 token 计数。"""
 import json
 import math
 
@@ -7,8 +7,8 @@ from app.providers.base import ProviderError
 
 
 def estimate(request):
-    # Include system, tool schemas and call arguments. A conservative UTF-8 heuristic
-    # still cannot replace the model's tokenizer or account for hidden reasoning.
+    # 统计系统提示、工具结构与调用参数。保守的 UTF-8 启发式无法取代模型分词器，
+    # 也无法计入隐藏推理。
     body = {"system": request.system, "messages": [m.model_dump(mode="json") for m in request.messages],
             "tools": [t.model_dump(mode="json") for t in request.tools], "format": request.response_format}
     return math.ceil(len(json.dumps(body, ensure_ascii=False).encode("utf-8")) / 2) + 64
@@ -42,8 +42,8 @@ async def prepare_context(request, config, complete, *, stream=False):
     message = f"上下文估算约 {before:,} Token，输入预算 {budget:,}，已达到 {policy.threshold:.0%} 阈值。"
     if policy.mode == "detect":
         raise ProviderError("CONTEXT_COMPRESSION_REQUIRED", message + " 请在 Provider 表单启用历史摘要压缩，或新建对话。")
-    # Only compact completed plain-text turns. Tool chains have protocol-specific
-    # reasoning state; never split them or silently discard their signed content.
+    # 只压缩已经完成的纯文本轮次。工具调用链包含协议特定的推理状态，
+    # 不得拆分，也不能静默丢弃其签名内容。
     if any(m.tool_calls or m.role == MessageRole.tool for m in request.messages):
         raise ProviderError("CONTEXT_COMPRESSION_UNSUPPORTED", message + " 工具调用历史需完整保留，请新建对话。")
     users = [i for i, m in enumerate(request.messages) if m.role == MessageRole.user]
@@ -59,7 +59,7 @@ async def prepare_context(request, config, complete, *, stream=False):
         system=policy.prompt, messages=[Message(role=MessageRole.user,
             content=json.dumps([m.model_dump(mode="json") for m in history], ensure_ascii=False))],
         max_tokens=min(policy.output_reserve, 2048), metadata={**request.metadata, "purpose": "context_compression"})
-    # Detect oversize summarization itself before sending. No truncation or retry loop.
+    # 发送前检查摘要本身是否超限；不执行截断或循环重试。
     if estimate(summary_request) + reserve >= policy.context_window:
         raise ProviderError("CONTEXT_COMPRESSION_REQUIRED", message + " 历史过长，摘要请求也会超限，请新建对话或缩短历史。")
     from app.services.usage_service import usage_context
@@ -76,7 +76,7 @@ async def prepare_context(request, config, complete, *, stream=False):
     if not result.text or not result.text.strip() or result.tool_calls:
         raise ProviderError("CONTEXT_COMPRESSION_FAILED", "模型未返回有效摘要，原对话未修改。")
     prepared = request.model_copy(deep=True)
-    # Summary is conversation data, never promoted to system instructions.
+    # 摘要是对话数据，从未提升为系统指令。
     prepared.messages = [*systems, Message(role=MessageRole.user, content="历史对话摘要（仅供参考）：\n" + result.text),
                          Message(role=MessageRole.assistant, content="已记录历史摘要。"), *retained]
     if estimate(prepared) >= budget or estimate(prepared) >= before:

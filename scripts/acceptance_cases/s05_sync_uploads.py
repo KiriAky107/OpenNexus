@@ -1,4 +1,4 @@
-"""S-05 upload durability and cleanup races on the production stack."""
+"""S-05：生产栈上的上传持久性与清理竞争验收。"""
 
 from __future__ import annotations
 
@@ -159,7 +159,7 @@ def drop_complete_response(url: str, authorization: str) -> None:
     with socket.create_connection((parsed.hostname, parsed.port), timeout=10) as stream:
         stream.sendall(request)
         stream.shutdown(socket.SHUT_WR)
-        # The request is complete, but the client deliberately never reads its response.
+        # 请求已完成，但客户端特意不读取其响应。
         time.sleep(0.01)
 
 

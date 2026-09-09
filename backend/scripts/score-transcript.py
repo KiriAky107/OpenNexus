@@ -1,4 +1,4 @@
-"""Score authorized reference/hypothesis JSON segment arrays without a model or network."""
+"""在没有模型或网络的情况下对授权参考/假设 JSON 段阵列进行评分。"""
 import argparse
 import json
 import sys

@@ -1,5 +1,4 @@
-//! Bounded IO for Host-created anonymous pipes. Never run shutdown on the UI
-//! thread: cancellation waits for the native pipe operations to acknowledge it.
+//! 用于 Host 创建的匿名管道的有界 IO。切勿在 UI 线程上运行关闭：取消等待本机管道操作确认它。
 use crate::{
     extension_job::Job,
     extension_stdio::{write_frame, Frames, HostIo, MAX_FRAME_BYTES},

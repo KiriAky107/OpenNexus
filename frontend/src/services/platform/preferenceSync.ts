@@ -1,4 +1,4 @@
-/** Portable preference records are bound to the active Vault; local drafts retain their own Vault key. */
+/** 可移植偏好记录与主用Vault绑定；本地草稿保留自己的 Vault 密钥。 */
 import { ref, watch, nextTick } from 'vue'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useThemeStore } from '@/stores/theme'

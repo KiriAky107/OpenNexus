@@ -1,4 +1,4 @@
-"""Phase E route integration: deterministic runtimes, isolated DBs, no network."""
+"""E 阶段路由集成：确定性运行时间、隔离数据库、无网络。"""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from app.services import index_service, note_service
 @dataclass
 class FakeRuntime:
     model_id: str = "space-a"
-    dimensions: int = 3  # Deliberately differs from sqlite-vec's fixed 128.
+    dimensions: int = 3  # 特意与 sqlite-vec 的固定 128 不同。
     source: str = "api"
     error: BaseException | None = None
     calls: list[list[str]] = field(default_factory=list)
@@ -38,7 +38,7 @@ class FakeRuntime:
             return self.result_override
         vectors = []
         for text in texts:
-            # The API associates "apple" with banana; hash retrieval picks apple.
+            # API 将“苹果”与香蕉联系起来；哈希检索选择了苹果。
             first = text == "apple orchard"
             if self.model_id == "space-b":
                 first = not first
@@ -78,7 +78,7 @@ def test_native_spaces_isolate_dimensions_and_reuse_without_json_scan(runtime, m
             assert conn.execute('SELECT COUNT(DISTINCT dimensions) FROM routed_block_vectors').fetchone()[0] == 2
         finally:
             conn.close()
-        # A new connection uses the persistent native index, without reading vector JSON.
+        # 新连接使用持久性本机索引，不读取向量 JSON。
         def forbidden(*args, **kwargs):
             raise AssertionError('query decoded stored JSON')
         monkeypatch.setattr(space_index.json, 'loads', forbidden)
@@ -159,7 +159,7 @@ def test_concurrent_first_search_serializes_migration_and_warm_search_is_read_on
             first, other = await asyncio.gather(*tasks)
             assert first == other and len(first) == 2
             assert len(calls) == 1
-            # Prepared indexes are reusable even with SQLite query_only enforced.
+            # 即使强制执行 SQLite query_only，准备好的索引也可以重用。
             original_connect = routed_vectors.connect
             def read_only():
                 connection = original_connect()
@@ -195,7 +195,7 @@ def test_save_waits_for_migration_even_when_search_is_cancelled(runtime, monkeyp
             assert release.wait(5)
             return original(*args)
         monkeypatch.setattr(space_index, 'ensure', slow)
-        # Keep the subsequent vector job queued; test saving and its durable marker.
+        # 保持后续向量作业排队；测试保存及其耐用标记。
         monkeypatch.setattr(index_service, 'schedule_workspace_rebuild', lambda: None)
         query = asyncio.create_task(routed_vectors.search_remote('apple orchard', top_k=2, strict=True))
         save = None
@@ -211,7 +211,7 @@ def test_save_waits_for_migration_even_when_search_is_cancelled(runtime, monkeyp
             assert saved.markdown == 'Saved during migration'
             assert (await note_service.get_note(apple.note_id)).markdown == saved.markdown
             assert repository.get_index_meta()[f'note_vectors_pending:{apple.note_id}'] == '1'
-            # Query may observe the saved revision's pending index, but saving must succeed.
+            # 查询可以观察已保存修订的挂起索引，但保存必须成功。
             result = (await asyncio.gather(query, return_exceptions=True))[0]
             if cancel_search:
                 assert isinstance(result, asyncio.CancelledError)
@@ -338,7 +338,7 @@ def test_rebuild_failure_preserves_concurrent_configuration_and_all_indexes(runt
                                 name="saved during rebuild", base_url="https://unused.invalid/v1")
         container.providers.register(config, container.provider_factory.build(config))
         task_service.update_task(task.task_id, {"title": "saved during rebuild"})
-        # Preparation keeps the old searchable index intact while API I/O is pending.
+        # 当 API I/O 待处理时，准备工作会保持旧的可搜索索引完好无损。
         assert repository.stats()["notes"] == 2
         if failure == "cancel":
             rebuilding.cancel()
@@ -577,7 +577,7 @@ def test_fts_skips_routing_and_hybrid_uses_routed_vector_channel(runtime, monkey
         runtime.calls.clear()
         await engine.search(request(SearchMode.fts))
         assert runtime.calls == []
-        # Empty lexical channel isolates the vector contribution to hybrid fusion.
+        # 空词汇通道隔离了向量对混合融合的贡献。
         monkeypatch.setattr(repository, "fts_search", lambda *_: [])
 
         class PreserveOrder:

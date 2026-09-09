@@ -1,4 +1,4 @@
-// ============ Notes & Blocks ============
+// ============ 笔记与内容块 ============
 
 export interface Note {
   note_id: string
@@ -34,7 +34,7 @@ export interface FileNode {
   is_external_changed?: boolean
 }
 
-// ============ Search ============
+// ============ 搜索 ============
 
 export interface SearchRequest {
   query: string
@@ -58,7 +58,7 @@ export interface SearchResult {
   tags?: string[]
 }
 
-// ============ Chat ============
+// ============ 对话 ============
 
 export interface Conversation {
   conversation_id: string
@@ -101,7 +101,7 @@ export interface Citation {
   }
 }
 
-// ============ Model Events (SSE) ============
+// ============ 模型事件（SSE） ============
 
 export type ModelEventType =
   | 'ContextStatus'
@@ -122,7 +122,7 @@ export interface ModelEvent {
   timestamp: string
 }
 
-// ============ Agent ============
+// ============ 智能体 ============
 
 export type AgentRunStatus =
   | 'queued'
@@ -221,7 +221,7 @@ export interface TokenUsage {
   total_tokens: number
 }
 
-// ============ Skill ============
+// ============ Skill（技能） ============
 
 export type SkillStatus =
   | 'installed'
@@ -288,7 +288,7 @@ export interface UserSkillWriteRequest {
   required_capabilities: string[]
 }
 
-// ============ Plugin ============
+// ============ Plugin（插件） ============
 
 export type PluginStatus =
   | 'installed'
@@ -420,7 +420,7 @@ export interface Plugin {
   dependent_skills?: string[]
 }
 
-// ============ Provider ============
+// ============ 提供商 ============
 
 export type ProviderType = ApiProviderType
 
@@ -514,7 +514,7 @@ export interface ModelRoutingResponse {
   }>
 }
 
-// ============ Tasks ============
+// ============ 任务 ============
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled'
 export type TaskPriority = 'low' | 'medium' | 'high'
@@ -534,7 +534,7 @@ export interface TaskItem {
   updated_at: string
 }
 
-// ============ Theme ============
+// ============ 主题 ============
 
 export interface ThemeConfig {
   theme_id: string
@@ -547,7 +547,7 @@ export interface ThemeConfig {
   code_theme?: 'github-light' | 'github-dark'
 }
 
-// ============ Index ============
+// ============ 索引 ============
 
 export interface IndexStatus {
   running_jobs?: number
@@ -568,7 +568,7 @@ export interface IndexStatus {
   error?: string
 }
 
-// ============ System ============
+// ============ 系统 ============
 
 export interface ApiError {
   code: string
@@ -598,9 +598,9 @@ export type SaveStatus =
 
 export type AiCoreStatus = 'unknown' | 'starting' | 'running' | 'stopped' | 'error'
 
-// ============ FastAPI wire contracts ============
-// UI view models above may contain presentation-only fields. Services must use
-// these DTOs at the HTTP boundary and explicitly map them to view models.
+// ============ FastAPI 传输契约 ============
+// 上方的 UI 视图模型可能含有仅用于展示的字段。服务必须在 HTTP 边界使用这些 DTO，
+// 并将其显式映射为视图模型。
 
 export interface PageMeta {
   total: number
@@ -871,7 +871,7 @@ export interface ApiIndexJob {
   created_at: string
 }
 
-// ============ Theme Package (Phase 2) ============
+// ============ 主题包（第二阶段） ============
 
 export interface ThemeManifest {
   theme_id: string
@@ -924,7 +924,7 @@ export type ThemeErrorCode =
   | 'THEME_INSTALL_FAILED'
   | 'THEME_UNINSTALL_FAILED'
 
-// ============ Mermaid Renderer (Phase 2) ============
+// ============ Mermaid 渲染器（第二阶段） ============
 
 export interface MermaidRenderResult {
   svg: string
@@ -939,7 +939,7 @@ export interface MermaidParseError {
   column?: number
 }
 
-// ============ Agent Trace Node (Phase 2 visualization) ============
+// ============ Agent Trace 节点（第二阶段可视化） ============
 
 export type TraceNodeType =
   | 'run'

@@ -1,4 +1,4 @@
-"""Synchronous, bounded RPC over the inherited Host pipes (never HTTP or env secrets)."""
+"""继承的 Host 管道上的同步、有界 RPC（绝不是 HTTP 或 env 机密）。"""
 from __future__ import annotations
 import json
 import queue
@@ -66,7 +66,7 @@ class HostBridge:
 
 active: HostBridge | None = None
 
-# Set only by authenticated Host HTTP transport; inherited by Agent tasks.
+# 仅由经过身份验证的 Host HTTP 传输设置；由Agent任务继承。
 from contextvars import ContextVar
 vault_id: ContextVar[str | None] = ContextVar("host_vault_id", default=None)
 operation_id: ContextVar[str | None] = ContextVar("host_operation_id", default=None)

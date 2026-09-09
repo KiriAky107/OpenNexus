@@ -89,7 +89,7 @@ def _create_and_wait(request: ExportRequest) -> object:
 
 
 # --------------------------------------------------------------------------- #
-# markdown → Document AST
+# Markdown → 文档 AST
 # --------------------------------------------------------------------------- #
 def _types(nodes) -> list[str]:
     return [n.type for n in nodes]
@@ -158,7 +158,7 @@ def test_parse_document_function_plot_dash_alias() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# HtmlExporter
+# HtmlExporter 导出器
 # --------------------------------------------------------------------------- #
 async def _render(markdown: str, *, title: str = "") -> str:
     doc = parse_document(markdown)
@@ -232,7 +232,7 @@ def test_html_exporter_include_title_and_metadata() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# ExportService
+# 导出服务
 # --------------------------------------------------------------------------- #
 def _markdown_request(markdown: str, *, format: ExportFormat = ExportFormat.html) -> ExportRequest:
     return ExportRequest(

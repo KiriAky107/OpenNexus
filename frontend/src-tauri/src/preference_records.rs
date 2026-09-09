@@ -1,4 +1,4 @@
-//! Portable settings may declare required permissions, but never carry device grants, paths or secrets.
+//! 可移植设置可以声明所需的权限，但绝不携带设备授权、路径或秘密。
 use crate::workspace::{HostError, Result};
 use serde::Deserialize;
 use serde_json::Value;

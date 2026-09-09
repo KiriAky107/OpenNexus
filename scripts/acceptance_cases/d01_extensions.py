@@ -1,4 +1,4 @@
-"""D-01 signed package, ZIP limits, and safe extraction acceptance driver."""
+"""D-01：签名包、ZIP 限制与安全解压验收驱动。"""
 
 from __future__ import annotations
 

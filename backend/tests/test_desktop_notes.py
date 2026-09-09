@@ -1,4 +1,4 @@
-"""Host-only adapter contracts use fake documents; process coverage lives in Rust."""
+"""Host-only适配器约定使用虚假文档；流程覆盖位于 Rust 中。"""
 from types import SimpleNamespace
 import pytest
 import asyncio

@@ -1,7 +1,7 @@
-"""Build an onedir Core from the frozen packaging environment, then inventory it.
+"""在冻结依赖的打包环境中构建 onedir Core，并生成文件清单。
 
-Run: uv run --directory backend --group packaging python ../scripts/build-core.py
-Outputs remain in this worktree's ignored .build directory.
+运行：uv run --directory backend --group packaging python ../scripts/build-core.py
+输出保留在当前工作树中已忽略的 .build 目录内。
 """
 from __future__ import annotations
 import hashlib

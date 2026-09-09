@@ -147,7 +147,7 @@ export async function readFileContent(filePath: string): Promise<string> {
   return note.markdown
 }
 
-/** Resolve the backend note identity already associated with a workspace path. */
+/** 解析已与工作空间路径关联的后端笔记标识。 */
 export async function getNoteId(filePath: string): Promise<string> {
   return requireNoteId(filePath)
 }
@@ -163,7 +163,7 @@ export async function saveFileContent(filePath: string, content: string, expecte
   await noteService.updateNote(await requireNoteId(filePath), {
     markdown: content,
     ...(expectedHash ? { expected_content_hash: expectedHash } : {}),
-    // Explicit [] clears the index; absent tags retain API-managed tags.
+    // 显式[]清除索引；缺失的标签保留 API 管理的标签。
     ...(metadata?.hasTags ? { tags: metadata.tags } : {}),
   })
 }

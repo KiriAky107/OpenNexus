@@ -108,8 +108,7 @@ async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempoten
         .sync_next(&binding.id)
         .unwrap()
         .unwrap();
-    // Commit the first revision, then kill the client before the response can
-    // acknowledge the local journal. Reopen must keep all pending operations.
+    // 提交第一个修订，然后在响应确认本地日志之前终止客户端。重新打开必须保留所有挂起的操作。
     std::fs::write(
         root.path().join("interrupt-revision"),
         b"controlled-fixture",
@@ -255,7 +254,7 @@ async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempoten
             .file_id,
         first.file_id
     );
-    // Receiving one's historical commits never rolls back newer local edits.
+    // 接收历史提交永远不会回滚较新的本地编辑。
     {
         let mut ws = workspace.lock().unwrap();
         let current = ws.read("note.md").unwrap();
@@ -310,7 +309,7 @@ async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempoten
             .cursor,
         21
     );
-    // All three explicit choices converge; the local copy gets an independent file ID.
+    // 所有三个显式选择都收敛；本地副本获得独立文件 ID。
     for (iteration, choice) in ["local", "remote", "copy"].into_iter().enumerate() {
         if iteration > 0 {
             for (ws, content) in [(&workspace, "next-a"), (&workspace_b, "next-b")] {
@@ -351,7 +350,7 @@ async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempoten
             )
             .unwrap();
             assert!(ws.sync_conflicts(&binding_b.id).unwrap().is_empty());
-            // Repeating a persisted decision is harmless.
+            // 重复提交同一个已持久化决定不会产生副作用。
             ws.sync_resolve(
                 &binding_b.id,
                 sequence,
@@ -447,7 +446,7 @@ async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempoten
             .file_id
     );
 
-    // Initial merge reviews a fixed snapshot and preserves conflicting local content.
+    // 初始合并会检查固定快照并保留冲突的本地内容。
     let merge_root = tempfile::tempdir().unwrap();
     let merge_ws = Arc::new(Mutex::new(Workspace::open(merge_root.path()).unwrap()));
     let snapshot = client.snapshot(remote).await.unwrap();
@@ -625,8 +624,8 @@ async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempoten
             .unwrap()["record"]["data"]["fontEditorSize"],
         24
     );
-    // Portable records traverse real HTTP, including equal display versions with
-    // different contents. A numeric persona version cannot replace content CAS.
+    // 可移植记录通过真实 HTTP 传输，包括显示版本相同但内容不同的情况；
+    // 数值型角色版本不能取代内容 CAS。
     for (kind, id, data, field) in [
         (
             "persona",
@@ -760,8 +759,8 @@ async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempoten
         );
     }
 
-    // A default-off device consumes history metadata without downloading either
-    // optional record. Rebinding after opt-in must fetch the already-seen heads.
+    // 默认关闭该功能的设备只读取历史元数据，不下载任何可选记录；启用后重新绑定时，
+    // 必须获取先前已经见过的最新版本。
     let excluded_root = tempfile::tempdir().unwrap();
     let excluded_ws = Arc::new(Mutex::new(Workspace::open(excluded_root.path()).unwrap()));
     let excluded_binding = excluded_ws
@@ -853,8 +852,7 @@ async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempoten
         .await
         .unwrap());
 
-    // Kill the actual client process after each durable 10 MiB server offset,
-    // before its response reaches the client. The next process must query offset.
+    // 在每个持久的 10 MiB 服务器偏移之后，在其响应到达客户端之前，终止实际的客户端进程。下一个进程必须查询偏移量。
     use sha2::{Digest, Sha256};
     let large_remote = client
         .json(
@@ -981,7 +979,7 @@ async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempoten
             .unwrap(),
         0
     );
-    // SQLite stores metadata, never the 100 MiB body.
+    // SQLite 存储元数据，而不是 100 MiB 主体。
     for directory in [large_root.path(), download_root.path()] {
         let managed = directory.join(".ainote");
         for item in std::fs::read_dir(managed).unwrap().flatten() {
@@ -993,7 +991,7 @@ async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempoten
             }
         }
     }
-    // Host sessions survive encrypted storage reopen and refresh on the actual service.
+    // Host 会话可以在实际服务上重新打开加密存储并刷新。
     use notesagent_host::{credentials::CredentialBroker, sync_auth};
     let credential_root = tempfile::tempdir().unwrap();
     let credential_path = credential_root.path().join("credentials.onxcred");
@@ -1032,7 +1030,7 @@ async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempoten
         .unwrap()
         .unlock(Zeroizing::new(b"fixture-stronghold-password".to_vec()))
         .unwrap();
-    // Expire the access token early in this isolated fixture; the refresh token stays valid.
+    // 在此隔离装置中尽早使访问令牌过期；刷新令牌保持有效。
     let database = rusqlite::Connection::open(root.path().join("sync.sqlite3")).unwrap();
     database
         .execute("UPDATE sessions SET expires=0", [])
@@ -1054,7 +1052,7 @@ async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempoten
         .unwrap()
         .iter()
         .any(|v| v["id"] == remote));
-    // Even a repeated 401 must stop after one rotation, rather than refresh indefinitely.
+    // 即使再次收到 401，也只能轮换一次令牌，不能无限刷新。
     attempts.store(0, std::sync::atomic::Ordering::SeqCst);
     let denied = sync_auth::authenticated(&credentials, &canonical, "rust-fixture", |_client| {
         attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);

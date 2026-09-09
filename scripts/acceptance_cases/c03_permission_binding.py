@@ -1,4 +1,4 @@
-"""C-03 execution-permit binding and legacy-launch rejection oracle."""
+"""C-03：执行许可绑定与旧版启动拒绝判定器。"""
 
 from __future__ import annotations
 

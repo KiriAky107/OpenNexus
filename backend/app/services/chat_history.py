@@ -173,8 +173,7 @@ def _append_message_in_transaction(
         "SELECT 1 FROM chat_conversations WHERE conversation_id=?", (conversation_id,)
     ).fetchone()
     if conversation is None:
-        # A stream may finish after deletion. Check under BEGIN IMMEDIATE so
-        # deletion and assistant persistence cannot recreate an orphaned chat.
+        # 删除后流可能会结束。在 BEGIN IMMEDIATE 下进行检查，以便删除和助手持久性无法重新创建孤立的聊天。
         if role == "assistant":
             return
         conn.execute(
@@ -219,7 +218,7 @@ def _append_message_in_transaction(
     conn.execute('UPDATE chat_messages SET workspace_context_json=? WHERE message_id=?', (json.dumps(workspace_context, ensure_ascii=False) if workspace_context is not None else None, message_id))
     conn.execute('UPDATE chat_messages SET attachments_json=? WHERE message_id=?', (json.dumps(attachments or []),message_id))
     conn.execute('UPDATE chat_messages SET context_captured=? WHERE message_id=?', (int(context_captured), message_id))
-    # A late stream may be persisted, but must not steal the selected branch.
+    # 可以保留延迟的流，但不得窃取所选分支。
     response_id = conn.execute('SELECT active_response_id FROM chat_conversations WHERE conversation_id=?', (conversation_id,)).fetchone()[0]
     if active_leaf == parent and (role != 'assistant' or response_id is None or response_id == message_id):
         conn.execute('UPDATE chat_conversations SET active_leaf=? WHERE conversation_id=?', (message_id, conversation_id))

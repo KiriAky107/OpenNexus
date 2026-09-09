@@ -1,4 +1,4 @@
-"""A-03 protocol, transport-limit, cancellation, and commit acceptance driver."""
+"""A-03：协议、传输限制、取消与提交验收驱动。"""
 
 from __future__ import annotations
 

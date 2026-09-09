@@ -115,8 +115,7 @@ function formPayload(): McpServerInput {
 function payload(requireConnection = true): McpServerInput {
   const { config, secrets } = editorMode.value === 'form'
     ? normalizeMcpConfig(formPayload(), '', requireConnection) : parseMcpJson(rawConfig.value, form.name, requireConnection)
-  // Keep only still-declared drafts. A mode switch must not discard imported keys,
-  // and editing the declaration must not later send a removed key to the Secret API.
+  // 仅保留仍声明的草稿。模式开关不得丢弃导入的密钥，并且编辑声明后不得将删除的密钥发送到 Secret API。
   importedSecrets.value = mergeImportedSecrets(config, importedSecrets.value, secrets)
   if (editingId.value) config.version = form.version
   if (editorMode.value === 'json') rawConfig.value = JSON.stringify(config, null, 2)
@@ -149,8 +148,7 @@ async function save() {
     if (editingOriginal.value && executionChanged(editingOriginal.value, input) && !(await askConfirm(t('连接命令、地址或认证配置已变化，保存后旧测试与授权会失效。是否保存？', 'The command, address, or authentication settings changed. Previous tests and authorization will be invalidated. Save?')))) return
     busy.value = 'save'
     saved = editingId.value ? await service.updateMcpServer(editingId.value, input) : await service.createMcpServer(input)
-    // Commit the returned ID/version before saving secrets so a partial failure can
-    // retry this server instead of creating a duplicate or sending a stale version.
+    // 在保存机密之前提交返回的 ID/版本，以便部分失败可以重试此服务器，而不是创建重复版本或发送过时的版本。
     editingId.value = saved.server_id
     editingOriginal.value = saved
     resetEditor({ ...input, version: saved.version })

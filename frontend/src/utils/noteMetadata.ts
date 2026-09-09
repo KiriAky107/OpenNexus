@@ -11,7 +11,7 @@ export interface NoteMetadata {
 
 function parseProperties(yaml: string) {
   const document = parseDocument(yaml)
-  // Unsupported YAML stays available in source mode without partial rewriting.
+  // 不支持的 YAML 在源模式下保持可用，无需部分重写。
   if (document.errors.length || document.warnings.length || !isMap(document.contents)) return null
   return document
 }
@@ -27,7 +27,7 @@ export function splitNoteMetadata(source: string): NoteMetadata | null {
   const tagNode = document.get('tags', true)
   let tags: string[] = []
   if (isSeq(tagNode)) {
-    // Do not remove anchored list items that other properties may reference.
+    // 不要删除其他属性可能引用的锚定列表项。
     if (!tagNode.items.every(item => isScalar(item) && typeof item.value === 'string' && !item.anchor)) return null
     tags = tagNode.items.map(item => (item as { value: string }).value)
   } else if (isScalar(tagNode)) {

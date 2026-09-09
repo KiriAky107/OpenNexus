@@ -119,7 +119,7 @@ def token_count(value: object) -> int:
 
 
 def remote_error(value: object) -> ProviderError:
-    # Never reflect upstream messages, URLs, request bodies or credentials.
+    # 绝不反映上游消息、URL、请求正文或凭据。
     error = value if isinstance(value, dict) else {}
     code = error.get("code") or error.get("type")
     mapping = {
@@ -144,7 +144,7 @@ def check_error(data: dict) -> None:
 
 
 class UsageTracker:
-    """Merge cumulative snapshots, including partial usage updates."""
+    """合并累积快照，包括部分使用情况更新。"""
 
     def __init__(self, input_key: str = "input_tokens", output_key: str = "output_tokens",
                  *, cache_tokens: bool = False) -> None:
@@ -173,7 +173,7 @@ class EventStreamingMixin:
         status = "completed"
         try:
             request, originals = prepare_tool_names(request)
-            # Closing the public iterator must synchronously close every nested iterator.
+            # 关闭公共迭代器必须同步关闭每个嵌套迭代器。
             async with aclosing(self._events(request)) as events:
                 async for kind, data in events:
                     if kind == ModelEventType.tool_call_start and "name" in data:
@@ -196,14 +196,14 @@ class EventStreamingMixin:
                              data={"code": error.code, "message": error.message},
                              timestamp=datetime.now(timezone.utc))
             sequence += 1
-        # CancelledError and GeneratorExit deliberately propagate without a Done event.
+        # CancelledError 和 GeneratorExit 特意在没有 Done 事件的情况下传播。
         yield ModelEvent(event=ModelEventType.done, sequence=sequence,
                          data={"status": status},
                          timestamp=datetime.now(timezone.utc))
 
 
 async def sse_objects(response: httpx.Response) -> AsyncIterator[dict]:
-    """Read SSE frames, accepting the adjacent data lines used by some gateways."""
+    """读取SSE帧，接受某些网关使用的相邻数据线。"""
     parts: list[str] = []
     event_name = ""
 
@@ -235,7 +235,7 @@ async def sse_objects(response: httpx.Response) -> AsyncIterator[dict]:
             event_name = line[6:].strip()
         elif line.startswith("data:"):
             if parts:
-                # Legacy compatible endpoints sometimes omit blank separators.
+                # 传统兼容端点有时会省略空白分隔符。
                 try:
                     json.loads("\n".join(parts))
                 except ValueError:

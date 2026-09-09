@@ -1,4 +1,4 @@
-//! Trusted Core process supervisor. The WebView never receives session material.
+//! 可信的 Core 进程监管器；WebView 永远不会接触会话材料。
 use command_group::{CommandGroup, GroupChild};
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
@@ -14,7 +14,7 @@ use zeroize::Zeroizing;
 type Result<T> = std::result::Result<T, String>;
 pub type Broker = Arc<dyn Fn(&serde_json::Value) -> Result<serde_json::Value> + Send + Sync>;
 
-/// The manifest is embedded in the Host at build time, never loaded from the installation.
+/// 清单在构建时嵌入到 Host 中，从未从安装中加载。
 pub fn verify_bundle(root: &Path, manifest: &str) -> Result<()> {
     use sha2::Digest;
     use std::collections::BTreeMap;
@@ -182,7 +182,7 @@ impl Drop for Session {
             }
             std::thread::sleep(Duration::from_millis(25));
         }
-        // Kill the entire group even if its leader has exited.
+        // 即使主进程已经退出，也要终止整个进程组。
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -200,7 +200,7 @@ pub struct CoreSupervisor {
     bundle_manifest: Option<String>,
 }
 
-/// Host-only request context; deliberately neither Serialize nor Debug.
+/// 仅 Host 请求上下文；特意既不序列化也不调试。
 pub struct RequestSession {
     pub url: String,
     pub authorization: Zeroizing<String>,
@@ -304,7 +304,7 @@ impl CoreSupervisor {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        // Runtime requirements only; never copy Provider tokens or general PATH.
+        // 这里只复制运行时必需项，绝不复制提供商令牌或通用 PATH。
         for key in [
             "SystemRoot",
             "WINDIR",
@@ -323,7 +323,7 @@ impl CoreSupervisor {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            command.creation_flags(0x08000000); // 使用 CREATE_NO_WINDOW
         }
         let child = {
             #[cfg(windows)]
@@ -397,8 +397,7 @@ impl CoreSupervisor {
                     }
                     continue;
                 }
-                // A child has no broker authority until its ready frame has
-                // passed the protocol, identity, generation, and HMAC checks.
+                // 子级在其就绪帧通过协议、身份、生成和 HMAC 检查之前没有代理权限。
                 if !activated {
                     break;
                 }

@@ -115,7 +115,7 @@ class OpenAICompatibleProvider(EventStreamingMixin, HTTPProviderMixin):
             if not call["name"]:
                 raise invalid_response()
             decode_tool_arguments(call["arguments"] or "{}")
-            # A name can span multiple chunks; publish only the complete identity.
+            # 一个名称可以跨越多个块；仅公布完整身份。
             call["id"] = call["id"] or f"call_{uuid4().hex}"
             yield ModelEventType.tool_call_start, {"tool_call_id": call["id"], "name": call["name"]}
             yield ModelEventType.tool_call_delta, {"tool_call_id": call["id"], "arguments_delta": call["arguments"] or "{}"}
@@ -130,8 +130,8 @@ class OpenAICompatibleProvider(EventStreamingMixin, HTTPProviderMixin):
 
     @staticmethod
     def _model_capabilities(model: str) -> list[ModelCapability]:
-        # /models does not advertise capabilities. Avoid known non-chat families;
-        # these are discovery hints, not a guarantee of support by a gateway.
+        # /models 不会声明能力，因此排除已知的非聊天模型系列；这些仅用于辅助发现，
+        # 不能保证网关实际支持。
         name = model.lower()
         if "embed" in name or name.startswith(("bge-", "bge/")):
             return [ModelCapability.embedding]

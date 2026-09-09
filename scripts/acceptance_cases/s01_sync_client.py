@@ -1,4 +1,4 @@
-"""S-01 two-client offline chain and idempotent response-loss driver."""
+"""S-01：双客户端离线链与响应丢失幂等性验收驱动。"""
 
 from __future__ import annotations
 

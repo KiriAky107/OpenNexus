@@ -1,4 +1,4 @@
-//! Per-instance AppContainer profile ownership. No existing profile is adopted.
+//! 每个实例独占其 AppContainer 配置，不接管任何已有配置。
 use crate::workspace::{HostError, Result};
 use windows_sys::Win32::Security::{
     FreeSid, IsValidSid,
@@ -34,7 +34,7 @@ impl Profile {
             )
         };
         if status < 0 {
-            // In particular, ERROR_ALREADY_EXISTS must not transfer ownership.
+            // 特别是，ERROR_ALREADY_EXISTS 不得转让所有权。
             if !sid.is_null() {
                 unsafe {
                     FreeSid(sid);
@@ -52,25 +52,22 @@ impl Profile {
         }
         Ok(profile)
     }
-    /// Borrowed SID for SECURITY_CAPABILITIES. Valid only while this owner lives.
+    /// 为 SECURITY_CAPABILITIES 借用的 SID，仅在此所有者对象存续期间有效。
     pub fn sid(&self) -> PSID {
         self.sid
     }
-    /// Grant this instance read/execute access to one Host-owned package object.
-    /// The caller must open it without following reparse points and retain the
-    /// verified package handles for the entire launch. No recursive inheritance
-    /// is used: every directory and file must be checked and granted separately.
-    /// This adds an ACE; it does not sanitize pre-existing permissions.
+    /// 授予当前实例读取和执行一个 Host 所有包对象的权限。调用方打开对象时不得跟随重解析点，
+    /// 并须在整个启动期间持有已验证的包句柄。这里不使用递归继承，每个目录和文件都要分别检查、授权。
+    /// 此操作只会添加一条 ACE，不会清理已有权限。
     pub fn grant_package_read_execute(&self, object: &std::fs::File) -> Result<()> {
         self.update_package_access(object, false)
     }
-    /// Remove only this freshly-created instance's allowed ACEs, using the
-    /// original held object handle. Other principals keep their current ACLs.
+    /// 使用最初持有的对象句柄，仅移除这个新实例对应的允许 ACE；其他安全主体的 ACL 保持不变。
     pub fn revoke_package_access(&self, object: &std::fs::File) -> Result<()> {
         self.update_package_access(object, true)
     }
     fn update_package_access(&self, object: &std::fs::File, revoke: bool) -> Result<()> {
-        // Serialize Host read/merge/write operations across concurrent instances.
+        // 跨并发实例序列化 Host 读/合并/写操作。
         let _lock = PACKAGE_ACL_LOCK
             .lock()
             .map_err(|_| HostError::new("EXTENSION_CONTAINER_ACL_FAILED"))?;
@@ -125,8 +122,7 @@ impl Profile {
             )
         };
         let _descriptor = LocalAllocation(descriptor);
-        // A null DACL grants everyone full access, so fail closed rather than
-        // silently treating it as a suitably isolated package object.
+        // 空 DACL 会向所有人授予完全访问权限，因此这里必须拒绝处理，不能误判为已妥善隔离的包对象。
         if status != 0 || old_acl.is_null() {
             return Err(HostError::new("EXTENSION_CONTAINER_ACL_FAILED"));
         }
@@ -205,7 +201,7 @@ impl Profile {
         }
         result
     }
-    /// Stop all container processes and close their handles before removal.
+    /// 在删除之前停止所有容器进程并关闭其句柄。
     pub fn remove(mut self) -> Result<()> {
         self.remove_inner()
     }
@@ -221,7 +217,7 @@ impl Profile {
 }
 impl Drop for Profile {
     fn drop(&mut self) {
-        // Explicit remove reports failures; drop is a final best-effort retry.
+        // 显式删除报告失败； drop 是最后的尽力重试。
         let _ = self.remove_inner();
         if !self.sid.is_null() {
             unsafe {
@@ -302,7 +298,7 @@ mod tests {
         assert_eq!(unsafe { EqualSid(one.sid(), two.sid()) }, 0);
         let name = String::from_utf16(&one.name[..one.name.len() - 1]).unwrap();
         assert!(Profile::create_named(name.clone()).is_err());
-        // Repeated collision must still fail: the failing owner did not delete it.
+        // 重复发生名称冲突时仍须失败：创建失败的一方并不拥有该配置，也无权删除它。
         assert!(Profile::create_named(name.clone()).is_err());
         one.remove().unwrap();
         Profile::create_named(name).unwrap().remove().unwrap();
@@ -362,8 +358,7 @@ mod tests {
         profile.remove().unwrap();
     }
 
-    // Only tests use cmd.exe, with fixed commands and controlled temporary paths.
-    // A production extension launcher must use a verified entry, never a shell.
+    // 只有测试会通过 cmd.exe 运行固定命令和受控临时路径；生产扩展启动器必须使用已验证入口，不能调用 shell。
     fn checked_process(profile: &Profile, command: Option<&str>) -> Option<u32> {
         let executable = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
             .join("System32/cmd.exe");
@@ -391,7 +386,7 @@ mod tests {
         if let Some(data) = data.take() {
             let suspended =
                 crate::extension_process::Suspended::create(profile, executable, data).unwrap();
-            // Controlled test fixture only; no user extension is authorized here.
+            // 仅用于受控测试夹具；此处没有授权任何用户扩展。
             let running = unsafe { suspended.resume().unwrap() };
             let result = running.wait(std::time::Duration::from_secs(10)).unwrap();
             assert!(result.is_some());
@@ -612,7 +607,7 @@ mod tests {
         let read = format!("set /p value=<\"{}\"", payload.display());
         assert_ne!(checked_process(&profile, Some(&read)), Some(0));
         profile.grant_package_read_execute(&root_handle).unwrap();
-        // The directory ACE does not propagate to existing children.
+        // 目录 ACE 不会传播到现有子级。
         assert_ne!(checked_process(&profile, Some(&read)), Some(0));
         profile.grant_package_read_execute(&file_handle).unwrap();
         assert_eq!(checked_process(&profile, Some(&read)), Some(0));
@@ -759,8 +754,7 @@ mod tests {
             profile.grant_package_read_execute(&root).unwrap();
             profile.grant_package_read_execute(&entry).unwrap();
         }
-        // Exercise the actual builder, not a test-side quote decoder. The child
-        // compares argv and its entire environment without logging values.
+        // 测试真实构建器，而不是在测试侧另写引号解码器；子进程会比较 argv 和完整环境，但不会记录具体值。
         let args = [
             "launch",
             "",
@@ -822,9 +816,8 @@ mod tests {
                 vault_id: uuid::Uuid::new_v4().to_string(),
                 platform: "windows".into(),
                 policy_version: "1".into(),
-                // This probe checks argv/environment, not expiry. Keep its permit
-                // longer than the bounded process observation under parallel load.
-                // The dedicated expiry probe below still uses a two-second lease.
+                // 此探测器检查 argv 与环境，不验证过期行为。许可有效期须覆盖并行负载下的有界进程观测；
+                // 下方专用的过期探测仍使用两秒租期。
                 expires_at_ms: 120_000,
             };
             broker
@@ -858,8 +851,7 @@ mod tests {
                 running.active_test_processes().ok(),
             );
             drop(running);
-            // Actual native RPC: the child cannot name an identity or connect to
-            // a shared endpoint; only its own stdio pipe reaches this broker.
+            // 实际本机 RPC：子进程无法命名身份或连接到共享端点；只有它自己的 stdio 管道才能到达该代理。
             {
                 use std::os::windows::io::AsRawHandle;
                 use windows_sys::Win32::Storage::FileSystem::{
@@ -1335,7 +1327,7 @@ mod tests {
                     "expiry" => {}
                     _ => drop(issuer),
                 }
-                // The monitor must act without check_authorization or tool polling.
+                // 监视器必须在没有 check_authorization 或工具轮询的情况下运行。
                 assert!(running
                     .wait(std::time::Duration::from_secs(5))
                     .unwrap()
@@ -1397,7 +1389,7 @@ mod tests {
         let deadline = running
             .start_test_tool_call(std::time::Duration::from_millis(100))
             .unwrap();
-        // No check() or finish() drives expiration; wait only on the OS process.
+        // 过期处理不依赖 check() 或 finish() 驱动；这里只等待 OS 进程退出。
         assert!(running
             .wait(std::time::Duration::from_secs(5))
             .unwrap()
@@ -1444,7 +1436,7 @@ mod tests {
                 ("udp", udp.local_addr().unwrap()),
             ] {
                 let address = address.to_string();
-                // The exact executable and target work outside containment.
+                // 验证同一个可执行文件与目标在容器隔离之外能够正常工作。
                 assert!(std::process::Command::new(&executable)
                     .args([mode, &address])
                     .status()
@@ -1470,9 +1462,7 @@ mod tests {
                     &std::collections::BTreeMap::new(),
                 )
                 .unwrap();
-                // Loopback isolation can silently drop packets. TCP must
-                // explicitly report denial or timeout; UDP send may succeed,
-                // but no datagram may reach the controlled listener below.
+                // 环回隔离可以静默丢弃数据包。 TCP必须明确报告拒绝或超时； UDP 发送可能会成功，但没有数据报可能到达下面的受控侦听器。
                 let exit = checked_executable_data(&profile, &executable, None, Some(data));
                 eprintln!("container network probe {mode} {address}: {exit:?}");
                 if mode == "tcp" {

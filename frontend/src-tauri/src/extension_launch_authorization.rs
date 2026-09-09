@@ -1,5 +1,5 @@
-//! Derive launch bytes from a verified permit and Host-bound entry/context.
-//! This preparation step does not authorize resume or establish sandbox readiness.
+//! 根据已验证许可及 Host 绑定的入口和上下文生成启动数据；
+//! 此准备步骤既不授权恢复执行，也不表示沙箱已经就绪。
 use crate::{
     credentials::{CredentialBroker, CredentialId, Scope},
     extension_launch_data::LaunchData,
@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path, sync::atomic::Ordering};
 use zeroize::Zeroize;
 
-/// Only the Host's selected workspace, policy and container supply these values.
+/// 只有 Host 选定的工作区、策略和容器提供这些值。
 pub struct Context<'a> {
     pub vault_id: &'a str,
     pub policy_version: &'a str,
@@ -80,9 +80,7 @@ impl PreparedLaunch {
     }
 }
 impl<'a> LeasedSuspended<'a> {
-    /// # Safety
-    /// Live trust, active installation, broker and all sandbox resource policy
-    /// requirements must also hold. A lease does not establish those conditions.
+    /// # Safety Live 信任、主动安装、代理和所有沙箱资源策略要求也必须满足。租约不规定这些条件。
     pub unsafe fn resume(self) -> Result<crate::extension_process::Running<'a>> {
         unsafe { self.process.resume_with_lease(self.lease, self.identity) }
     }
@@ -146,8 +144,7 @@ impl Context<'_> {
         now_ms: u64,
     ) -> Result<PreparedLaunch> {
         let mut lease = authority.lease(permit, claims, now_ms)?;
-        // Locking the Host session gates all third-party execution, including
-        // packages that do not request environment secrets.
+        // 锁定 Host 会话会限制所有第三方执行，包括不请求环境机密的包。
         lease.bind_credential(broker.lock_signal());
         if broker.is_locked() {
             return Err(HostError::new("CREDENTIALS_LOCKED"));
@@ -163,8 +160,7 @@ impl Context<'_> {
             tree: entry.tree_sha256().to_owned(),
         })
     }
-    /// Caller must still recheck live trust/permit/session state immediately
-    /// before resume; returning encoded data is not an execution lease.
+    /// 调用者仍必须在恢复之前立即重新检查实时信任/许可/会话状态；返回编码数据不是执行租约。
     fn build(
         &self,
         authority: &Authority,

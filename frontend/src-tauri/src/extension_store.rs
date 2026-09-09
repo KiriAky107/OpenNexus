@@ -1,4 +1,4 @@
-//! Durable verified-package staging. Staging never enables a package or grants permissions.
+//! 持久的验证包暂存。暂存从不启用包或授予权限。
 use crate::{
     extension_package::Release,
     workspace::{hash, HostError, Result},
@@ -161,7 +161,7 @@ fn source(value: &str) -> Result<String> {
     Ok(url.to_string())
 }
 impl ExtensionStore {
-    /// Creates a lock preview from local staged packages. This does not replace online revocation checks.
+    /// 从本地暂存包创建锁定预览。这不会取代在线撤销检查。
     pub fn dependency_plan(
         &self,
         root_key: &str,
@@ -250,7 +250,7 @@ impl ExtensionStore {
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
-    /// Host supplies an existing application-owned directory, never a package-supplied path.
+    /// Host 提供现有应用程序拥有的目录，而不是包提供的路径。
     pub fn open(root: &Path) -> Result<Self> {
         ordinary(root)?;
         if !root.is_dir() {
@@ -338,8 +338,7 @@ impl ExtensionStore {
         })
         .transpose()
     }
-    /// Called after the user confirms the displayed fingerprint. A concurrent
-    /// setting change requires a fresh review; refresh never calls this method.
+    /// 用户确认显示的指纹后调用。并发设置更改需要重新审核；刷新从不调用此方法。
     pub fn confirm_trust(
         &mut self,
         setting: &TrustSetting,
@@ -358,7 +357,7 @@ impl ExtensionStore {
         if old_revision.as_deref() != expected_revision {
             return Err(HostError::new("EXTENSION_TRUST_CONFLICT"));
         }
-        // Prevent one canonical URL from silently acquiring a second source identity.
+        // 防止同一个规范化 URL 在无提示的情况下获得第二个来源标识。
         let mut statement = self
             .db
             .prepare("SELECT setting FROM extension_trust WHERE source=?1")?;
@@ -433,7 +432,7 @@ impl ExtensionStore {
         };
         Ok(hash(&serde_json::to_vec(&identity).unwrap()))
     }
-    /// A persisted denial is independent of rollback and renewed source consent.
+    /// 持续拒绝与回滚和更新源同意无关。
     pub fn check_not_revoked(
         &self,
         source_url: &str,
@@ -481,8 +480,7 @@ impl ExtensionStore {
         )?;
         Ok(())
     }
-    /// Builds the complete consent payload; staging work is allowed, but active
-    /// pointers, running instances and permissions are untouched.
+    /// 构建完整的同意有效负载；允许暂存工作，但活动指针、运行实例和权限不受影响。
     pub fn installation_preview(&mut self, request: &InstallRequest) -> Result<InstallPreview> {
         use crate::extension_transaction::{Change, Target};
         let vault = Uuid::parse_str(&request.vault_id)
@@ -586,8 +584,7 @@ impl ExtensionStore {
             changes,
         })
     }
-    /// Recompute the exact reviewed payload before online checks. The main-window
-    /// confirmation UI must supply this digest; this method alone is not consent.
+    /// 在线检查之前重新计算准确的已审核有效负载。主窗口确认 UI 必须提供此摘要；仅此方法并不表示同意。
     pub async fn install_confirmed(
         &mut self,
         operation: &str,
@@ -698,7 +695,7 @@ impl ExtensionStore {
             |_| checkpoint(),
         )
     }
-    /// Online installation gate, using confirmed Host trust settings only.
+    /// 在线安装检查点，只使用已确认的 Host 信任设置。
     pub async fn switch_online(
         &mut self,
         operation: &str,
@@ -760,8 +757,7 @@ impl ExtensionStore {
             Ok(())
         })
     }
-    /// Atomically selects a prepared group after installer policy checks. This
-    /// method does not stop processes, validate configuration schemas or issue permits.
+    /// 安装器策略检查通过后，以原子方式选定已准备的分组。此方法不会停止进程、验证配置结构或颁发许可。
     pub fn switch_prepared(
         &mut self,
         operation: &str,
@@ -844,8 +840,7 @@ impl ExtensionStore {
     ) -> Result<Option<crate::extension_transaction::Active>> {
         crate::extension_transaction::active(&self.db, slot)
     }
-    /// Prepare a verified staged package. The caller supplies current signer/revocation
-    /// policy; persisted preparation does not bypass that policy on replay.
+    /// 准备经过验证的暂存包。调用者提供当前的签名者/撤销策略；持久准备不会在重放时绕过该策略。
     pub fn prepare(
         &mut self,
         package_key: &str,
@@ -899,7 +894,7 @@ impl ExtensionStore {
             )
             .optional()?;
         if let Some((directory, tree_sha256)) = existing {
-            // Database data never supplies an arbitrary relative path.
+            // 数据库数据从不提供任意相对路径。
             if Uuid::parse_str(&directory)
                 .map(|id| id.to_string())
                 .ok()

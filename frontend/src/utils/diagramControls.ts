@@ -1,4 +1,4 @@
-/** Markup survives Milkdown's preview copying; the enclosing Vue component handles clicks. */
+/** 标记会在 Milkdown 复制预览时保留下来；外层 Vue 组件负责处理点击事件。 */
 export function appendDiagramControls(container: HTMLElement) {
   const controls = document.createElement('div')
   controls.className = 'diagram-controls'

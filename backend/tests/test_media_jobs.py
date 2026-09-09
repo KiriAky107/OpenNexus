@@ -1,4 +1,4 @@
-"""Durability, cancellation and optimistic editing without model downloads."""
+"""无需模型下载的耐久性、取消和乐观编辑。"""
 import asyncio
 from contextlib import closing
 
@@ -57,7 +57,7 @@ def test_cancel_before_start_retry_and_restart_recovery():
         assert next_job.job_id != job.job_id
         await jobs._tasks[jobs.task_key(next_job.job_id)]
         assert jobs.require_job(next_job.job_id).status == "completed"
-        # Simulate a persisted job left behind by a stopped process.
+        # 模拟已停止进程留下的持久作业。
         cancelled.status = "running"
         jobs.save(cancelled, "TranscriptionStarted")
         jobs.recover_interrupted()

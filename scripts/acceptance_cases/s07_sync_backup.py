@@ -1,4 +1,4 @@
-"""S-07 empty deployment, backup/restore, and migration safety acceptance."""
+"""S-07：空部署、备份与恢复、迁移安全验收。"""
 
 from __future__ import annotations
 

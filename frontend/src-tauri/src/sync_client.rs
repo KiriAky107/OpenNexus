@@ -1,4 +1,4 @@
-//! Bounded Sync v1 transport. No redirects, no token-bearing URLs, no implicit retries.
+//! 有界同步 v1 传输。没有重定向，没有带有令牌的 URL，没有隐式重试。
 use crate::{
     sync_state::{Binding, Job},
     workspace::Workspace,
@@ -83,7 +83,7 @@ impl From<std::io::Error> for SyncError {
     }
 }
 
-/// Persist only via the Stronghold Sync scope, never as an IPC response.
+/// 仅通过 Stronghold Sync 范围持续，绝不作为 IPC 响应。
 #[derive(Serialize, Deserialize)]
 pub struct Session {
     pub access_token: String,

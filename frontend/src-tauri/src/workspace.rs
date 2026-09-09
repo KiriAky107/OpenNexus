@@ -152,7 +152,7 @@ impl Workspace {
             return Err(HostError::new("SCHEMA_INCOMPATIBLE"));
         }
         if (1..13).contains(&version) {
-            // Independent, complete SQLite backup before the schema ownership change.
+            // 模式所有权更改之前独立、完整的 SQLite 备份。
             let backup = managed.join(format!("host-schema{version}-{}.sqlite3", Uuid::new_v4()));
             db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
         }
@@ -476,10 +476,7 @@ impl Workspace {
         )
     }
 
-    /// Revalidate the caller before work and immediately before committing the
-    /// durable write intent. Once accepted, recovery must finish that intent.
-    /// The caller must serialize the authorization boundary if strict atomic
-    /// ordering with concurrent revocation is required.
+    /// 在工作之前和提交持久写入意图之前重新验证调用者。一旦接受，恢复必须完成该意图。如果需要并发撤销的严格原子排序，调用者必须序列化授权边界。
     #[cfg(any(test, all(windows, feature = "desktop")))]
     pub(crate) fn write_operation_guarded(
         &mut self,

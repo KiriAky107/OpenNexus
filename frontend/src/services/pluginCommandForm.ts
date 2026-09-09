@@ -67,7 +67,7 @@ export function coerceArgument(field: CommandField, raw: string): unknown {
     return Number.isNaN(parsed) ? undefined : parsed
   }
   if (field.type === 'object' || field.type === 'array') {
-    try { return JSON.parse(raw) } catch { return raw } // Backend reports the schema error without discarding the input.
+    try { return JSON.parse(raw) } catch { return raw } // 后端报告模式错误而不丢弃输入。
   }
   return raw
 }

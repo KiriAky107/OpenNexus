@@ -1,4 +1,4 @@
-"""Desktop Task records are committed by Host before returning to Core callers."""
+"""桌面 Task 记录由 Host 提交，然后返回到 Core 调用者。"""
 from __future__ import annotations
 from datetime import datetime, timezone
 import re
@@ -39,7 +39,7 @@ def _replay(operation, task_id=None, values=None, deleted=False):
     return task
 
 def _migrate():
-    # Only the already scoped Vault database is eligible; unassigned legacy global data stays untouched.
+    # 只有已限定到当前 Vault 的数据库才符合条件；未分配的旧版全局数据保持不变。
     conn = connect_knowledge()
     try:
         if conn.execute("SELECT value FROM index_meta WHERE key='tasks_host_owned_v1'").fetchone(): return

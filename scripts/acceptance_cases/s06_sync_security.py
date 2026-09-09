@@ -1,4 +1,4 @@
-"""S-06 authorization, revocation, rate-limit, and readiness acceptance."""
+"""S-06：授权、撤销、速率限制与就绪状态验收。"""
 
 from __future__ import annotations
 

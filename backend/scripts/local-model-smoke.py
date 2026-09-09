@@ -1,4 +1,4 @@
-"""Explicit real-model smoke: run with the backend Python, never part of unit tests."""
+"""显式真实模型烟雾：与后端 Python 一起运行，绝不是单元测试的一部分。"""
 import argparse
 import asyncio
 import json

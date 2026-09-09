@@ -1,5 +1,4 @@
-//! Windows package handles retained across verification and launch. This pins
-//! existing objects; it is not a read-only filesystem mount.
+//! Windows 包句柄在验证和启动过程中保留。这会固定现有对象；它不是只读文件系统挂载。
 use crate::{
     extension_container::Profile,
     extension_package::Inventory,
@@ -15,8 +14,8 @@ pub struct PinnedPackage {
     files: BTreeMap<String, File>,
     tree_sha256: String,
 }
-/// Scoped ACL ownership, created before any mutation. Release only after all
-/// instance processes/handles have closed; drop retries cleanup on error/unwind.
+/// 在任何变更前建立限定作用域的 ACL 所有权。只有所有实例进程与句柄均已关闭后才能释放；
+/// 若发生错误或栈展开，Drop 会再次尝试清理。
 pub struct PackageAccess<'a> {
     package: &'a PinnedPackage,
     profile: &'a Profile,
@@ -119,9 +118,7 @@ fn directory(parent: &Dir, name: &str) -> Result<Dir> {
     Ok(Dir::from_std_file(handle))
 }
 impl PinnedPackage {
-    /// `root` and inventory originate from the verified Host store. Keep this
-    /// owner until the instance stops; no renderer-supplied filesystem path is
-    /// accepted here. Callers must also constrain ancestors used by native launch.
+    /// `root` 与清单来自已验证的 Host 存储。实例停止前必须保留此所有者；此处不接受渲染进程提供的文件系统路径。调用方还必须限制原生启动所使用的祖先目录。
     pub fn open(root: &Dir, inventory: &Inventory, expected_tree: &str) -> Result<Self> {
         let bad = || HostError::new("EXTENSION_STORE_CORRUPT");
         if inventory.files.is_empty()
@@ -179,8 +176,7 @@ impl PinnedPackage {
             }
             pinned.files.insert(path.clone(), handle);
         }
-        // All existing objects are already pinned when verification reopens
-        // them. Sharing violations or hash mismatches release the entire set.
+        // 当验证重新打开它们时，所有现有对象都已被固定。共享违规或哈希不匹配会释放整个集合。
         pinned.tree_sha256 =
             crate::extension_unpack::verify_tree(&pinned.directories[""], inventory)?;
         if pinned.tree_sha256 != expected_tree {
@@ -188,9 +184,7 @@ impl PinnedPackage {
         }
         Ok(pinned)
     }
-    /// Resolve through the owned file handle, then pin the volume-rooted path
-    /// component by component and compare native file identity. No drive-letter
-    /// or UNC fallback is permitted if volume GUID lookup is unavailable.
+    /// 通过拥有的文件句柄进行解析，然后逐个组件固定卷根路径并比较本机文件标识。如果卷 GUID 查找不可用，则不允许驱动器号或 UNC 回退。
     pub fn bind_entry(&self, name: &str) -> Result<BoundEntry<'_>> {
         use std::{
             os::windows::fs::OpenOptionsExt as _,

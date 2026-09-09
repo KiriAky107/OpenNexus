@@ -53,7 +53,7 @@ async function run() {
   if (missingRequiredFields(command, args.value).length) { error.value = t('请填写必填参数', 'Complete required fields'); return }
   busy.value = true; error.value = ''
   try {
-    // Runtime rechecks enabled state, schema, when conditions and permissions.
+    // 运行时重新检查启用状态、架构、条件和权限。
     const result = await executePluginCommand(command.command_id, cleanArguments(args.value), { ...snapshot.value })
     await applyCommandEffect(result.effect, {
       navigate: path => router.push(path),

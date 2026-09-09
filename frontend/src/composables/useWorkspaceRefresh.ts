@@ -2,7 +2,7 @@ import { onMounted, onUnmounted } from 'vue'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useEditorStore } from '@/stores/editor'
 
-/** Web fallback until the desktop host supplies filesystem events. No overlapping polls. */
+/** Web 回退，直到桌面主机提供文件系统事件。没有重叠的民意调查。 */
 export function useWorkspaceRefresh() {
   const workspace = useWorkspaceStore()
   const editor = useEditorStore()
@@ -21,7 +21,7 @@ export function useWorkspaceRefresh() {
           else await editor.checkExternalFile()
         }
       }
-    } catch { /* Keep the existing tree; the store exposes the error and retries. */ }
+    } catch { /* 保留现有树；商店暴露错误并重试。 */ }
     finally {
       running = false
       if (!stopped) timer = setTimeout(refresh, 2000)

@@ -1,4 +1,4 @@
-//! Bounded declarative manifest inspection. No includes, environment interpolation or code execution.
+//! 有界声明性清单检查。无包含、环境插值或代码执行。
 use crate::{
     extension_package::{Inventory, Release},
     workspace::{HostError, Result},

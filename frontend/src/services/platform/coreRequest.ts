@@ -2,7 +2,7 @@ import { hostInvoke } from './desktop'
 
 export interface RequestProgress { issued: boolean; requestId?: string }
 
-/** A reservation makes cancel-before-dispatch definitive even across IPC ordering. */
+/** 即使在 IPC 订购中，预订也可以确保发货前取消。 */
 export function coreRequest<T>(args: Record<string, unknown>, signal: AbortSignal, timeoutMs: number, progress: RequestProgress): Promise<T> {
   return new Promise((resolve, reject) => {
     let settled = false
@@ -31,7 +31,7 @@ export function coreRequest<T>(args: Record<string, unknown>, signal: AbortSigna
         if (!settled) { settled = true; reject(error) }
       } finally {
         signal.removeEventListener('abort', abort)
-        // Also discard a reservation if dispatch failed before Rust claimed it.
+        // 如果在 Rust 声明保留之前调度失败，则也丢弃保留。
         cancel()
       }
     })()

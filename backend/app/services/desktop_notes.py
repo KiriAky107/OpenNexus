@@ -1,7 +1,4 @@
-"""Desktop note adapter: Markdown and stable identities are owned only by Rust.
-
-No fallback to the Core's unbound Vault or its stale SQLite note projection.
-"""
+"""桌面笔记适配器：Markdown 内容与稳定标识仅由 Rust 管理；不得回退到 Core 中未绑定的 Vault 或过期的 SQLite 笔记投影。"""
 from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone

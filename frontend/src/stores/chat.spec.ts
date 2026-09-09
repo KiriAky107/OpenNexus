@@ -385,7 +385,7 @@ it('restores each answer context after history reload, including explicitly abse
   vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
   await s.retryMessage(s.messages[1]!.message_id,undefined,null)
   vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
-  // API serializes absent captured context as null; do not fall back to the original user snapshot.
+  // API 将缺失的捕获上下文序列化为 null；不要回退到原始用户快照。
   vi.mocked(listConversationMessages).mockResolvedValue({items:JSON.parse(JSON.stringify(s.messages)),page:{total:2,limit:500,offset:0}})
   await s.setActiveConversation(s.activeConversationId!)
   await s.sendMessage('continue')

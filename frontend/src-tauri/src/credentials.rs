@@ -1,7 +1,7 @@
-//! Device-local Stronghold broker. No public IPC returns secret bytes.
+//! 设备本地 Stronghold 代理；任何公开 IPC 都不会返回机密字节。
 //!
-//! Stronghold Store contains AEAD ciphertext, including while unlocked. Snapshot
-//! and salt are one atomic envelope, so password changes cannot tear two files.
+//! Stronghold 存储即使在解锁期间也只包含 AEAD 密文。快照与盐构成一个原子整体，
+//! 避免密码变更使两个文件处于不一致状态。
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::{
     aead::{Aead, Payload},
@@ -157,8 +157,7 @@ pub struct CredentialId {
 }
 
 impl CredentialId {
-    /// Preserve opaque legacy references. Hashed Plugin/MCP IDs remain isolated
-    /// from Provider IDs; only the trusted Core adapter can use these aliases.
+    /// 保留不透明的遗留引用。散列 Plugin/MCP ID 与提供商 ID 保持隔离；只有受信任的 Core 适配器才能使用这些别名。
     pub fn legacy(id: &str) -> Self {
         let scope = if let Some(owner) = id.strip_prefix("plugin.") {
             Scope::Plugin(owner.into())
@@ -348,16 +347,14 @@ fn verify_migration_backup(
 pub struct CredentialBroker {
     path: PathBuf,
     unlocked: Option<Unlocked>,
-    // Separate stable inode: snapshots are atomically replaced, so locking the
-    // snapshot itself would not protect the next writer after replacement.
+    // 单独的稳定索引节点：快照被原子替换，因此锁定快照本身不会保护替换后的下一个写入者。
     ownership: Option<fs::File>,
     lock_epoch: Arc<AtomicU64>,
     unlocked_epoch: u64,
 }
 
 impl CredentialBroker {
-    /// Source comes from the native file picker, never a raw WebView path.
-    /// Import is idempotent; conflicting IDs stop the entire transaction.
+    /// 源来自本机文件选择器，而不是原始 WebView 路径。导入是幂等的；冲突的 ID 会停止整个事务。
     pub fn import_fernet(
         &mut self,
         directory: &Path,
@@ -459,8 +456,7 @@ impl CredentialBroker {
             }
         }
         fs::create_dir_all(&backup).map_err(|_| "MIGRATION_BACKUP_FAILED")?;
-        // Backups contain ciphertext; the legacy key is sealed under the already
-        // unlocked device key, rather than adding another plaintext master.key.
+        // 备份包含密文；旧密钥被密封在已解锁的设备密钥下，而不是添加另一个明文 master.key。
         let mut nonce = [0u8; 12];
         rand::rngs::OsRng
             .try_fill_bytes(&mut nonce)
@@ -506,7 +502,7 @@ impl CredentialBroker {
             state.state = "copied".into();
             persist_state(&journal, &state)?;
             checkpoint("copied")?;
-            // Re-open the committed Stronghold snapshot, not the in-memory cache.
+            // 重新打开提交的 Stronghold 快照，而不是内存缓存。
             let envelope = fs::read(&self.path).map_err(|_| "MIGRATION_VERIFY_FAILED")?;
             let mut temporary =
                 tempfile::NamedTempFile::new_in(&backup).map_err(|_| "MIGRATION_VERIFY_FAILED")?;
@@ -552,8 +548,7 @@ impl CredentialBroker {
         result
     }
 
-    /// Deletes only the verified legacy files and this migration's encrypted backup.
-    /// The native Host must obtain explicit user confirmation for source_sha256 first.
+    /// 仅删除已验证的旧文件和此迁移的加密备份。本机 Host 必须首先获得 source_sha256 的明确用户确认。
     pub fn cleanup_fernet(
         &mut self,
         directory: &Path,
@@ -733,7 +728,7 @@ impl CredentialBroker {
                         let source = CredentialId::legacy(old);
                         let target =
                             CredentialId::legacy(new.as_str().ok_or("HOST_REQUEST_INVALID")?);
-                        // ID migrations cannot change Provider/Plugin/MCP families.
+                        // ID 迁移无法更改提供商/Plugin/MCP 系列。
                         if std::mem::discriminant(&source.scope)
                             != std::mem::discriminant(&target.scope)
                         {
@@ -750,8 +745,7 @@ impl CredentialBroker {
                             moves.push((source_key, target_key, value));
                         }
                     }
-                    // Reject cycles/overlapping source+destination rather than deleting
-                    // a newly written value midway through a multi-ID migration.
+                    // 拒绝循环/重叠源+目标，而不是在多 ID 迁移中途删除新写入的值。
                     if moves.iter().any(|(old, new, _)| {
                         old != new && moves.iter().any(|(source, _, _)| source == new)
                     }) {
@@ -879,7 +873,7 @@ impl CredentialBroker {
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;
-            options.share_mode(0x1 | 0x2); // Do not allow replacing the held lock file.
+            options.share_mode(0x1 | 0x2); // 不允许替换保留的锁定文件。
         }
         #[cfg(unix)]
         {
@@ -906,7 +900,7 @@ impl CredentialBroker {
         let mut salt = [0u8; 32];
         salt.copy_from_slice(&data[8..40]);
         let session = Unlocked::derive(password, salt)?;
-        // Backups can be on read-only media. This temporary file contains ciphertext only.
+        // 备份可以位于只读介质上。该临时文件仅包含密文。
         let mut temp = tempfile::NamedTempFile::new().map_err(|_| "CREDENTIAL_IO_FAILED")?;
         temp.write_all(&data[40..])
             .map_err(|_| "CREDENTIAL_IO_FAILED")?;
@@ -921,7 +915,7 @@ impl CredentialBroker {
         Ok(session)
     }
 
-    /// Native picker selected destination; backup is encrypted and never overwrites.
+    /// 本机选择器选择的目的地；备份已加密并且永远不会覆盖。
     pub fn backup(&self, destination: &Path) -> Result<()> {
         self.session()?;
         let parent = destination.parent().ok_or("CREDENTIAL_PATH_INVALID")?;
@@ -938,8 +932,7 @@ impl CredentialBroker {
         Ok(())
     }
 
-    /// Validate every record before atomic replacement; preserve the previous encrypted file.
-    /// Caller must obtain explicit confirmation through the native dialog.
+    /// 在原子替换之前验证每条记录；保留之前的加密文件。调用者必须通过本机对话框获得明确的确认。
     pub fn restore(&mut self, source: &Path, password: Zeroizing<Vec<u8>>) -> Result<usize> {
         if !self.is_locked() {
             return Err("CREDENTIALS_MUST_LOCK".into());
@@ -976,7 +969,7 @@ impl CredentialBroker {
             previous.keep().map_err(|_| "CREDENTIAL_IO_FAILED")?;
         }
         session.persist(&self.path)?;
-        // Restoration deliberately leaves the vault locked; no implicit permission grant.
+        // 恢复特意将金库锁定；没有隐式许可授予。
         Ok(keys.len())
     }
 
@@ -996,7 +989,7 @@ impl CredentialBroker {
             .and_then(|_| session.persist(&self.path));
         if result.is_err() {
             self.lock();
-        } // Never serve uncommitted memory after disk failure.
+        } // 磁盘故障后切勿服务未提交的内存。
         result
     }
     pub fn delete(&mut self, id: &CredentialId) -> Result<()> {
@@ -1011,8 +1004,7 @@ impl CredentialBroker {
         }
         result
     }
-    /// Internal consumers must supply the scope established by the Host dispatcher.
-    /// This method must never be registered as a Tauri command.
+    /// 内部消费者必须提供 Host 调度程序建立的范围。此方法绝不能注册为 Tauri 命令。
     pub fn resolve(&self, caller: &Scope, id: &CredentialId) -> Result<Option<Zeroizing<Vec<u8>>>> {
         if caller != &id.scope {
             return Err("CREDENTIAL_SCOPE_DENIED".into());

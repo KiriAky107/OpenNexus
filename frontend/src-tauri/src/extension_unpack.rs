@@ -1,4 +1,4 @@
-//! Private, capability-relative extraction. Prepared trees are not executable installs.
+//! 私有的、与能力相关的提取。准备好的树不是可执行安装。
 use crate::{
     extension_package::{Inventory, Release},
     workspace::{HostError, Result},
@@ -95,7 +95,7 @@ fn collect(
     Ok(())
 }
 
-/// Re-read the exact file set and all content through directory capabilities.
+/// 通过目录功能重新读取确切的文件集和所有内容。
 pub fn verify_tree(root: &Dir, inventory: &Inventory) -> Result<String> {
     let mut found = BTreeSet::new();
     collect(root, "", &mut found, &mut 10000, inventory)?;
@@ -162,8 +162,7 @@ pub fn verify_tree(root: &Dir, inventory: &Inventory) -> Result<String> {
     Ok(format!("{:x}", tree.finalize()))
 }
 
-/// `root` must be an application-owned private staging directory. Trust freshness
-/// and permission grants remain installation-layer responsibilities.
+/// “root”必须是应用程序拥有的私有暂存目录。信任新鲜度和权限授予仍然是安装层的责任。
 pub fn prepare(
     root: &Dir,
     release: &Release,
@@ -207,7 +206,7 @@ pub fn prepare(
         }
     }
     let tree_sha256 = verify_tree(&target, &inventory)?;
-    // Failed preparations remain isolated UUID directories; never expose them as current.
+    // 失败的准备工作仍然隔离UUID目录；切勿将它们暴露为当前状态。
     Ok(Prepared {
         directory,
         tree_sha256,

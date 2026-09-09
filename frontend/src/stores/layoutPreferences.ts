@@ -15,7 +15,7 @@ export const useLayoutPreferencesStore = defineStore('layoutPreferences', () => 
       localStorage.setItem('primary-sidebar-expanded', String(primaryExpanded.value))
       localStorage.setItem('workspace-sidebar-width', String(workspaceWidth.value))
       localStorage.setItem('chat-sidebar-width', String(chatWidth.value))
-    } catch { /* Keep the current layout usable when local storage is unavailable. */ }
+    } catch { /* 当本地存储不可用时，保持当前布局可用。 */ }
   }, { flush: 'sync' })
   return { primaryExpanded, workspaceWidth, chatWidth }
 })

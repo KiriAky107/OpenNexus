@@ -1,4 +1,4 @@
-"""Vault-owned user Skill records and their declarative Agent configuration."""
+"""Vault 拥有的用户 Skill 记录及其声明性 Agent 配置。"""
 from __future__ import annotations
 
 from time import time_ns

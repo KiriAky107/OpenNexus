@@ -1,8 +1,4 @@
-"""Authenticated desktop entry point. Bootstrap secrets travel only over stdin.
-
-stdout is reserved for the bounded handshake; application output goes to stderr.
-The parent keeps stdin open for the lifetime of the Core. EOF shuts it down.
-"""
+"""经过身份验证的桌面入口点。 Bootstrap 秘密仅通过标准输入传输。 stdout 保留用于有界握手；应用程序输出发送至 stderr。父级在 Core 的生命周期内保持标准输入打开。 EOF 将其关闭。"""
 from __future__ import annotations
 
 import asyncio
@@ -48,7 +44,7 @@ def proof(secret: str, challenge: str, generation: str, pid: int, port: int, lau
 
 
 class SessionAuth:
-    """Outermost ASGI layer: unauthenticated input never reaches business logs."""
+    """最外层 ASGI 层：未经身份验证的输入永远不会到达业务日志。"""
 
     def __init__(self, app, secret: str, generation: str, port: int):
         self.app = app
@@ -67,7 +63,7 @@ class SessionAuth:
             hmac.compare_digest(single(b"authorization"), self.expected)
             and hmac.compare_digest(single(b"x-core-generation"), self.generation)
             and single(b"host") == self.host
-            # Host transport does not send Origin. Browser traffic is never trusted.
+            # Host 传输不发送 Origin。浏览器流量永远不可信。
             and not any(k.lower() == b"origin" for k, _ in headers)
         )
         if not authorized:
@@ -83,9 +79,7 @@ class SessionAuth:
         from app import host_bridge
         vault = single(b"x-opennexus-vault").decode("ascii", errors="replace")
         token = host_bridge.vault_id.set(vault if UUID_PATTERN.fullmatch(vault) else None)
-        # Mutating clients may retain a UUID across an ambiguous response. Other
-        # endpoint-specific idempotency tokens remain available to the route but
-        # do not enter the Host journal unless they are valid operation UUIDs.
+        # 变异客户端可能会在不明确的响应中保留 UUID。其他端点特定的幂等性令牌仍然可用于路由，但不会输入 Host 日志，除非它们是有效的操作 UUID。
         idempotency = single(b"idempotency-key").decode("ascii", errors="replace")
         operation = (
             idempotency
@@ -112,7 +106,7 @@ def main() -> int:
     handshake = sys.stdout
     sys.stdout = sys.stderr
     root = Path(config["data_dir"])
-    # Override every data path before importing the application/container.
+    # 在导入应用程序/容器之前覆盖每个数据路径。
     os.environ.update({
         "APP_ENVIRONMENT": "desktop", "APP_DATA_DIR": str(root),
         "APP_DB_PATH": str(root / "app.db"),

@@ -49,7 +49,7 @@ impl Host {
         *active = next;
     }
     fn lock_credentials(&self) -> Result<(), String> {
-        // These do not wait for an in-flight unlock/KDF or credential operation.
+        // 这些不等待进行中解锁/KDF 或凭证操作。
         self.extension_authority.revoke();
         if let Some(signal) = self.credential_signal.get() {
             signal.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1159,7 +1159,7 @@ mod lifecycle_tests {
             }
             let observed = credentials.load(Ordering::SeqCst);
             let revoked = extension.load(Ordering::SeqCst);
-            // Release before asserting, so an assertion cannot deadlock scope join.
+            // 在断言之前释放，因此断言不能死锁作用域连接。
             drop(held);
             worker.join().unwrap().unwrap();
             assert!(observed > 0);

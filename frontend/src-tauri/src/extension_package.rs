@@ -1,4 +1,4 @@
-//! Offline verification primitives. Passing these checks does not authorize installation or execution.
+//! 离线验证原语。通过这些检查并不意味着授权安装或执行。
 use crate::workspace::{hash, HostError, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -66,7 +66,7 @@ fn version(s: &str) -> bool {
         })
 }
 impl Release {
-    /// Full offline package check. Online revocation freshness and runtime permissions remain Host responsibilities.
+    /// 完整执行离线包检查；在线撤销信息的时效性与运行时权限仍由 Host 负责。
     pub fn verify_package(
         &self,
         pinned: &[u8; 32],
@@ -165,7 +165,7 @@ impl Release {
         }
         Ok(canonical(&value).into_bytes())
     }
-    /// `pinned` must come from the Host trust store, never from the archive or a WebView assertion.
+    /// `pinned` 必须来自 Host 信任存储，不能取自归档内容或 WebView 声明。
     pub fn verify(
         &self,
         pinned: &[u8; 32],
@@ -204,8 +204,8 @@ pub struct Inventory {
     pub expanded_size: u64,
     pub manifest: String,
 }
-// ZipArchive stores names in a map and can hide duplicate central entries. Inspect the
-// bounded central directory before handing the archive to its decompressor.
+// ZipArchive 使用映射保存名称，可能掩盖重复的中央目录条目。因此在将归档交给解压器前，
+// 必须先检查有界的中央目录。
 fn directory(bytes: &[u8], max_entries: usize) -> Result<()> {
     let bad = || HostError::new("EXTENSION_ZIP_INVALID");
     let u16at = |p: usize| -> Result<usize> {
@@ -311,8 +311,7 @@ fn path(name: &str) -> Result<String> {
     }
     Ok(name.to_owned())
 }
-/// Checks all bytes (including CRC), without creating any package files.
-/// Type-specific manifest schema/identity validation must follow before staging.
+/// 检查全部字节（包括 CRC），且不创建任何包文件。暂存前还必须执行对应类型的清单结构与身份校验。
 pub fn inspect(release: &Release, bytes: &[u8]) -> Result<Inventory> {
     release.validate()?;
     if bytes.len() as u64 != release.size || hash(bytes) != release.sha256 {
@@ -340,7 +339,7 @@ pub fn inspect(release: &Release, bytes: &[u8]) -> Result<Inventory> {
             .by_index(index)
             .map_err(|_| HostError::new("EXTENSION_ZIP_INVALID"))?;
         let name = path(file.name())?;
-        // Include current Rust Unicode case mappings as well as full multi-character folds.
+        // 包括当前的 Rust Unicode 大小写映射以及完整的多字符折叠。
         let folded: String = name
             .case_fold()
             .flat_map(char::to_uppercase)

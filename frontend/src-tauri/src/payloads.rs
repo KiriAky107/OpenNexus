@@ -1,4 +1,4 @@
-//! Immutable payloads are fsynced before any SQLite reference becomes visible.
+//! 在任何 SQLite 引用变得可见之前，不可变的有效负载会被 fsync。
 use crate::workspace::{hash, HostError, Result, Workspace};
 use rusqlite::{params, OptionalExtension};
 use sha2::{Digest, Sha256};
@@ -104,7 +104,7 @@ impl Workspace {
             .optional()?)
     }
 }
-/// A new write either supplies bytes or references an existing immutable spool.
+/// 新写入要么直接提供字节，要么引用现有的不可变暂存文件。
 pub(crate) enum WritePayload<'a> {
     Inline(&'a [u8]),
     Stored { digest: &'a str, size: u64 },
@@ -200,8 +200,8 @@ fn hash_file_info(path: &Path) -> Result<(String, u64)> {
 pub(crate) fn verify(path: &Path, digest: &str, size: u64) -> Result<()> {
     open_verified(path, digest, size).map(drop)
 }
-/// Return the verified handle, rewound for use by a streaming caller.
-/// Path containment is the caller's responsibility; this is not a sandbox opener.
+/// 返回已经验证并回绕到起始位置的句柄，供流式调用方使用。
+/// 路径约束由调用方负责；此函数并不负责建立沙箱。
 pub(crate) fn open_verified(path: &Path, digest: &str, size: u64) -> Result<fs::File> {
     let meta = fs::symlink_metadata(path)?;
     if meta.file_type().is_symlink() || !meta.is_file() || meta.len() != size {
@@ -236,8 +236,7 @@ pub(crate) fn copy_verified(
     let mut buffer = vec![0; VERIFY_BUFFER_BYTES];
     let mut length = 0u64;
     loop {
-        // Even if a file grows after metadata inspection, consume at most the
-        // declared payload plus one byte, never an unbounded changing stream.
+        // 即使文件在元数据检查后增长，最多消耗声明的有效负载加上一个字节，而不是无限变化的流。
         let limit = size
             .saturating_sub(length)
             .saturating_add(1)

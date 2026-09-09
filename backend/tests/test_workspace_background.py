@@ -55,7 +55,7 @@ def test_open_returns_before_vectors_and_deduplicates_background(monkeypatch):
             await asyncio.wait_for(workspace_service.open_workspace(None), 1)
             assert index_service._background_task is task
             assert index_service.get_status().status == 'running'
-            # A mutation still completes while the model is waiting.
+            # 模型等待时，突变仍会完成。
             await asyncio.wait_for(workspace_service.create_folder('/', 'new-folder'), 1)
             assert repository.list_note_locations()[0].note_id == snapshot.items[0].note_id
             release.set()

@@ -1,5 +1,5 @@
-//! Host-memory call reviews. The UI/registry must establish actual user consent
-//! before confirm; no renderer command or automatic-consent policy is added here.
+//! Host 内存中的调用审核。UI 或注册表必须先确认用户确已授权，再执行确认；
+//! 此处不提供渲染进程命令，也不设置自动授权策略。
 use crate::{
     extension_mcp_tools::{Description, Tool},
     extension_permit::{Claims, ExecutionKind},
@@ -26,7 +26,7 @@ pub struct Identity {
     execution_digest: String,
 }
 impl Identity {
-    /// Only called after launch permit/entry/context validation.
+    /// 仅在启动许可/条目/上下文验证后调用。
     pub(crate) fn from_claims(claims: &Claims) -> Result<Self> {
         let bytes = Zeroizing::new(
             serde_json::to_vec(claims)
@@ -64,8 +64,7 @@ struct Pending {
     expires: Instant,
     bytes: usize,
 }
-/// An in-process, non-cloneable, non-serializable, single-consumption capability.
-/// Tool name and arguments cannot be replaced after review confirmation.
+/// 进程内、不可克隆、不可序列化、单次消耗功能。审核确认后，工具名称和参数无法更换。
 pub struct ApprovedCall {
     instance: String,
     epoch: String,
@@ -127,7 +126,7 @@ impl Gate {
             valid_for_seconds: 120,
         })
     }
-    /// The authenticated Host approval route must verify user consent first.
+    /// 经过身份验证的 Host 批准路线必​​须首先验证用户同意。
     pub(crate) fn confirm(&mut self, review_id: &str) -> Result<ApprovedCall> {
         let call = self
             .pending

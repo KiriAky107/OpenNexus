@@ -1,5 +1,4 @@
-//! Windows session notifications. Revocation is atomic and never waits for a KDF.
-//! https://learn.microsoft.com/en-us/windows/win32/termserv/wm-wtssession-change
+//! Windows 会话通知。撤销是原子性的，永远不会等待 KDF。 https://learn.microsoft.com/en-us/windows/win32/termserv/wm-wtssession-change
 use std::cell::RefCell;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -152,7 +151,7 @@ mod tests {
     fn native_message_revokes_without_unlocking_on_session_return() {
         let signal = Arc::new(AtomicU64::new(0));
         let monitor = SessionMonitor::start(signal.clone()).unwrap();
-        // Inject only into our hidden test window; never lock the user's desktop.
+        // 仅注入到我们的隐藏测试窗口中；永远不要锁定用户的桌面。
         unsafe {
             SendMessageW(
                 monitor.window as HWND,

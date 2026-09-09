@@ -1,4 +1,4 @@
-/* Semantic tokens inherit every installed theme, including imported themes. */
+/* 语义标记继承每个已安装的主题，包括导入的主题。 */
 :where(.markdown-callout) { --callout-color: var(--color-callout-info, var(--color-info)); }
 .markdown-callout, .milkdown .ProseMirror blockquote.markdown-callout {
   border: 1px solid color-mix(in srgb, var(--callout-color) 35%, transparent);

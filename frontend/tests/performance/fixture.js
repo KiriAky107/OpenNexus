@@ -1,4 +1,4 @@
-/** Deterministic CJK prose plus headings, tables, code and callouts; no user documents. */
+/** 确定性 CJK 散文加上标题、表格、代码和标注；没有用户文档。 */
 export function makeStressDocument(minHan = 25000) {
   const prose = '本地知识库保存课程记录与项目思考，编辑时需要稳定响应。长篇文档包含章节结构和引用信息，阅读过程中可以随时折叠展开。这里使用生成的测试内容验证渲染性能，不读取真实笔记。'
   let source = '# 长文渲染压力测试\n\n', han = 0, section = 0

@@ -18,7 +18,7 @@ watch(appLocale, (value) => {
   if (typeof document !== 'undefined') document.documentElement.lang = value
 }, { immediate: true })
 
-/** Keep the Chinese source beside its English translation while the UI is migrated. */
+/** 迁移 UI 时，将中文源保留在英文翻译旁边。 */
 export function t(zh: string, en: string): string {
   return appLocale.value === 'en' ? en : zh
 }

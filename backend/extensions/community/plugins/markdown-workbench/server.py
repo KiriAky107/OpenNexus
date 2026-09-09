@@ -1,4 +1,4 @@
-"""Markdown checks over MCP stdio; Python standard library only, no I/O tools."""
+"""Markdown 检查 MCP stdio；仅 Python 标准库，无 I/O 工具。"""
 from __future__ import annotations
 
 import json
@@ -33,7 +33,7 @@ def inspect_markdown(text: str) -> dict:
         if marker and not (marker[1][0] == '`' and '`' in marker[2]):
             fence = (marker[1][0], len(marker[1]), number)
             continue
-        # Indented code and blockquotes are excluded from these line-based checks.
+        # 缩进代码和块引用被排除在这些基于行的检查之外。
         if line.startswith(('    ', '\t', '>')):
             continue
         heading = re.match(r'^ {0,3}(#{1,6})(?:\s+(.*)|$)', line)

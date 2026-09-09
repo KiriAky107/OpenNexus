@@ -26,7 +26,7 @@ class CredentialResolver(Protocol):
 
 
 class HostCredentialStore:
-    """Desktop-only adapter. It cannot fall back to Fernet or environment keys."""
+    """仅限桌面适配器。它不能回退到 Fernet 或环境密钥。"""
     @staticmethod
     def _call(method, **params):
         from app.host_bridge import active

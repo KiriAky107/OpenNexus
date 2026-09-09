@@ -1,5 +1,4 @@
-//! Bounded, offline MCP tool contracts. Descriptions/annotations are untrusted
-//! data and never confer permissions. URI content is validated, never fetched.
+//! 有界、离线 MCP 工具约定。描述/注释是不受信任的数据，永远不会授予权限。 URI 内容经过验证，从未获取。
 use crate::workspace::{HostError, Result};
 use base64::Engine;
 use serde::Serialize;

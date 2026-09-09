@@ -25,7 +25,7 @@ fn stale_writer_is_rejected_then_handoff_preserves_both_commits() {
     assert!(two.resolve(&Scope::Provider, &a).unwrap().is_some());
     two.put(&b, Zeroizing::new(b"fixture-b".to_vec())).unwrap();
     two.lock();
-    // A failed password attempt must release its ownership too.
+    // 失败的密码尝试也必须释放其所有权。
     assert!(one
         .unlock(Zeroizing::new(b"wrong-fixture-password".to_vec()))
         .is_err());
