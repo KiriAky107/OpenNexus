@@ -267,22 +267,45 @@ class SyncProductionStack:
         return self
 
     def create_vault(self, label: str):
-        code, session, _ = call(
-            "POST",
-            self.origin + "/sync/v1/auth/sessions",
-            body={
-                "username": self.username,
-                "password": self.password,
-                "device_name": label,
-            },
-        )
-        if code != 200:
+        session = None
+        for _ in range(5):
+            try:
+                code, candidate, _ = call(
+                    "POST",
+                    self.origin + "/sync/v1/auth/sessions",
+                    body={
+                        "username": self.username,
+                        "password": self.password,
+                        "device_name": label,
+                    },
+                    timeout=10,
+                )
+                if code == 200:
+                    session = candidate
+                    break
+            except (OSError, TimeoutError, URLError):
+                pass
+            time.sleep(0.2)
+        if session is None:
             raise RuntimeError("ACCEPTANCE_LOGIN_FAILED")
         auth = {"Authorization": "Bearer " + session["access_token"]}
-        code, vault, _ = call(
-            "POST", self.origin + "/sync/v1/vaults", headers=auth, body={"name": label}
-        )
-        if code != 200:
+        vault = None
+        for _ in range(5):
+            try:
+                code, candidate, _ = call(
+                    "POST",
+                    self.origin + "/sync/v1/vaults",
+                    headers=auth,
+                    body={"name": label},
+                    timeout=10,
+                )
+                if code == 200:
+                    vault = candidate
+                    break
+            except (OSError, TimeoutError, URLError):
+                pass
+            time.sleep(0.2)
+        if vault is None:
             raise RuntimeError("ACCEPTANCE_VAULT_FAILED")
         return auth, self.origin + "/sync/v1/vaults/" + vault["vault_id"], vault["vault_id"]
 
@@ -315,11 +338,19 @@ class SyncProductionStack:
         from concurrent.futures import ThreadPoolExecutor
 
         def probe(_):
-            return call(
-                "GET", self.origin + "/health", headers={"Connection": "close"}
-            )[2].get("x-opennexus-worker")
+            try:
+                return call(
+                    "GET",
+                    self.origin + "/health",
+                    headers={"Connection": "close"},
+                    timeout=10,
+                )[2].get("x-opennexus-worker")
+            except (OSError, TimeoutError, URLError):
+                return None
 
-        with ThreadPoolExecutor(max_workers=40) as pool:
+        # A small pool is enough to reach both workers without exhausting the
+        # Windows ephemeral-port/backlog budget before the fault matrix starts.
+        with ThreadPoolExecutor(max_workers=8) as pool:
             return {value for value in pool.map(probe, range(attempts)) if value}
 
     def assert_running(self) -> None:
