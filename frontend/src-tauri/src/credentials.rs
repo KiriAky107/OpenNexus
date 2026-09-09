@@ -1023,6 +1023,93 @@ mod tests {
         assert!(broker.resolve(&Scope::Provider, &id).unwrap().is_none());
     }
     #[test]
+    fn b01_domain_matrix_never_exposes_or_cross_resolves_secrets() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("credentials.v1");
+        let mut broker = CredentialBroker::new(file.clone());
+        broker.unlock(password()).unwrap();
+        let domains = [
+            ("provider", Scope::Provider),
+            ("plugin", Scope::Plugin("reviewer".into())),
+            ("mcp", Scope::Mcp("calendar".into())),
+            ("sync", Scope::Sync("server-account".into())),
+        ];
+        let mut records = Vec::new();
+        for (label, scope) in &domains {
+            for index in 0..3 {
+                let id = CredentialId {
+                    scope: scope.clone(),
+                    id: format!("b01-{label}-{index}"),
+                };
+                let secret = format!("b01-planted-{label}-{index}-value").into_bytes();
+                broker.put(&id, Zeroizing::new(secret.clone())).unwrap();
+                records.push((id, secret));
+            }
+        }
+        let callers = domains
+            .iter()
+            .map(|(_, scope)| scope.clone())
+            .collect::<Vec<_>>();
+        let mut public_errors = Vec::new();
+        for (id, secret) in &records {
+            for caller in &callers {
+                if caller == &id.scope {
+                    let resolved = broker.resolve(caller, id).unwrap().unwrap();
+                    assert!(resolved.as_slice() == secret, "same-domain secret mismatch");
+                } else {
+                    let error = broker.resolve(caller, id).unwrap_err();
+                    assert_eq!(error, "CREDENTIAL_SCOPE_DENIED");
+                    public_errors.push(error);
+                }
+            }
+            let wrong_owner = match &id.scope {
+                Scope::Plugin(_) => Some(Scope::Plugin("another-plugin".into())),
+                Scope::Mcp(_) => Some(Scope::Mcp("another-mcp".into())),
+                Scope::Sync(_) => Some(Scope::Sync("another-sync-account".into())),
+                Scope::Provider => None,
+            };
+            if let Some(wrong_owner) = wrong_owner {
+                let error = broker.resolve(&wrong_owner, id).unwrap_err();
+                assert_eq!(error, "CREDENTIAL_SCOPE_DENIED");
+                public_errors.push(error);
+            }
+        }
+        assert_eq!(records.len(), 12);
+        assert_eq!(public_errors.len(), 45);
+        assert_eq!(broker.list().unwrap().len(), 12);
+
+        let public_status = serde_json::to_vec(&serde_json::json!({
+            "locked": broker.is_locked(),
+            "credentials": broker.list().unwrap(),
+            "errors": public_errors,
+        }))
+        .unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let mut workspace = crate::workspace::Workspace::open(vault.path()).unwrap();
+        workspace
+            .write("note.md", "", b"safe note", "local")
+            .unwrap();
+        let binding = workspace
+            .sync_bind_empty("https://sync.example", "remote", "account")
+            .unwrap();
+        let job = workspace.sync_next(&binding.id).unwrap().unwrap();
+        let sync_payload =
+            serde_json::to_vec(&workspace.sync_commit_payload(&job).unwrap()).unwrap();
+        let encrypted = fs::read(&file).unwrap();
+        for (_, secret) in &records {
+            for exposed in [&encrypted, &public_status, &sync_payload] {
+                assert!(
+                    !exposed.windows(secret.len()).any(|window| window == secret),
+                    "secret appeared outside the scoped resolver"
+                );
+            }
+        }
+        broker.lock();
+        assert!(records.iter().all(|(id, _)| broker
+            .resolve(&id.scope, id)
+            .is_err_and(|error| error == "CREDENTIALS_LOCKED")));
+    }
+    #[test]
     fn corrupt_store_is_not_recreated() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("credentials.v1");
