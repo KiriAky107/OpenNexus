@@ -42,6 +42,11 @@ CASE_DRIVERS: dict[str, dict[str, Any]] = {
         "timeout_seconds": 900,
         "required_metrics": (),
     },
+    "D-01": {
+        "driver": "scripts/acceptance_cases/d01_extensions.py",
+        "timeout_seconds": 900,
+        "required_metrics": (),
+    },
     "S-01": {
         "driver": "scripts/acceptance_cases/s01_sync_client.py",
         "timeout_seconds": 900,
