@@ -378,6 +378,7 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     #[test]
     fn inbox_reopen_before_and_after_file_commit_never_advances_cursor_early() {
         for committed in [false, true] {
@@ -428,6 +429,133 @@ mod tests {
             assert_eq!(document.entry.revision, 1);
             assert_eq!(ws.pending_count().unwrap(), 0);
             assert!(!ws.sync_apply_pending(&binding.id).unwrap());
+        }
+    }
+
+    fn s02_revision(file_id: &str) -> RemoteRevision {
+        RemoteRevision {
+            vault_id: "remote-vault".into(),
+            sequence: 1,
+            file_id: file_id.into(),
+            base_revision: 0,
+            path: "nested/a.md".into(),
+            operation: "put".into(),
+            hash: Some(hash(b"remote-content")),
+            size: 14,
+            operation_id: Uuid::new_v4().to_string(),
+        }
+    }
+
+    #[test]
+    #[ignore = "helper process killed by the S-02 parent at a durable pull boundary"]
+    fn s02_pull_boundary_worker() {
+        let root = std::path::PathBuf::from(
+            std::env::var("OPENNEXUS_S02_ROOT").expect("controlled S-02 root"),
+        );
+        let boundary = std::env::var("OPENNEXUS_S02_BOUNDARY").expect("S-02 boundary");
+        let revision: RemoteRevision = serde_json::from_slice(
+            &fs::read(root.join(".s02-revision.json")).expect("S-02 revision fixture"),
+        )
+        .unwrap();
+        let mut ws = Workspace::open(&root).unwrap();
+        let binding = ws.sync_binding().unwrap().unwrap();
+        ws.sync_store_bytes(b"remote-content").unwrap();
+        if boundary != "spool" {
+            ws.sync_set_boundary(&binding.id, 1).unwrap();
+            ws.sync_stage(&binding.id, &revision).unwrap();
+        }
+        if boundary == "file" {
+            let operation: String = ws
+                .db
+                .query_row("SELECT operation_id FROM sync_inbox", [], |row| row.get(0))
+                .unwrap();
+            ws.write_with_identity(
+                "nested/a.md",
+                "",
+                b"remote-content",
+                "remote",
+                &operation,
+                Some(&revision.file_id),
+            )
+            .unwrap();
+        } else if boundary == "cursor" {
+            assert!(ws.sync_apply_pending(&binding.id).unwrap());
+        }
+        fs::write(root.join(".s02-boundary-ready"), boundary).unwrap();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+    }
+
+    #[test]
+    #[ignore = "80 real process kills; run through the S-02 production acceptance driver"]
+    fn s02_pull_each_persistence_boundary_survives_twenty_process_kills() {
+        use std::process::{Command, Stdio};
+        for boundary in ["spool", "stage", "file", "cursor"] {
+            for round in 0..20 {
+                let root = tempfile::tempdir().unwrap();
+                let mut ws = Workspace::open(root.path()).unwrap();
+                let binding = ws
+                    .sync_bind_download("https://sync.example", "remote-vault", "account")
+                    .unwrap();
+                let file_id = Uuid::new_v4().to_string();
+                let revision = s02_revision(&file_id);
+                fs::write(
+                    root.path().join(".s02-revision.json"),
+                    serde_json::to_vec(&revision).unwrap(),
+                )
+                .unwrap();
+                drop(ws);
+                let mut worker = Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--ignored",
+                        "--exact",
+                        "sync_inbox::tests::s02_pull_boundary_worker",
+                    ])
+                    .env("OPENNEXUS_S02_ROOT", root.path())
+                    .env("OPENNEXUS_S02_BOUNDARY", boundary)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap();
+                let marker = root.path().join(".s02-boundary-ready");
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while !marker.exists() {
+                    assert!(
+                        worker.try_wait().unwrap().is_none(),
+                        "S-02 {boundary} worker exited in round {round}"
+                    );
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "S-02 {boundary} timeout in round {round}"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                worker.kill().unwrap();
+                worker.wait().unwrap();
+                let mut ws = Workspace::open(root.path()).unwrap();
+                let expected_cursor = i64::from(boundary == "cursor");
+                assert_eq!(
+                    ws.sync_binding().unwrap().unwrap().cursor,
+                    expected_cursor,
+                    "cursor advanced early at {boundary} round {round}"
+                );
+                if expected_cursor == 0 {
+                    ws.sync_store_bytes(b"remote-content").unwrap();
+                    ws.sync_set_boundary(&binding.id, 1).unwrap();
+                    ws.sync_stage(&binding.id, &revision).unwrap();
+                    while ws.sync_apply_pending(&binding.id).unwrap() {}
+                } else {
+                    assert!(!ws.sync_apply_pending(&binding.id).unwrap());
+                }
+                assert_eq!(ws.sync_binding().unwrap().unwrap().cursor, 1);
+                let document = ws.read("nested/a.md").unwrap();
+                assert_eq!(document.content, "remote-content");
+                assert_eq!(document.entry.file_id, file_id);
+                assert_eq!(document.entry.hash, hash(b"remote-content"));
+                assert_eq!(ws.pending_count().unwrap(), 0);
+            }
         }
     }
 }
