@@ -213,6 +213,12 @@ pub fn recover(db: &mut Connection) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        path::Path,
+        process::{Command, Stdio},
+        thread,
+        time::{Duration, Instant},
+    };
     fn open(path: &std::path::Path) -> Connection {
         let db = Connection::open(path).unwrap();
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")
@@ -230,6 +236,41 @@ mod tests {
                 configuration: serde_json::json!({"version": version}),
             },
             expected_revision: previous,
+        }
+    }
+    fn seeded(path: &Path) -> (Vec<Change>, Vec<Change>) {
+        let mut db = open(path);
+        let old = vec![change('a', 1, None), change('b', 1, None)];
+        let id = uuid::Uuid::new_v4().to_string();
+        switch(&mut db, &id, &old).unwrap();
+        finish(&mut db, &id, true).unwrap();
+        let next = old
+            .iter()
+            .map(|current| {
+                change(
+                    current.target.slot.chars().next().unwrap(),
+                    2,
+                    Some(active(&db, &current.target.slot).unwrap().unwrap().revision),
+                )
+            })
+            .collect();
+        (old, next)
+    }
+    fn assert_complete_generation(db: &Connection) {
+        let active: Vec<_> = ['a', 'b']
+            .into_iter()
+            .map(|slot| active(db, &slot.to_string().repeat(64)).unwrap().unwrap())
+            .collect();
+        let versions: BTreeSet<_> = active
+            .iter()
+            .map(|item| item.target.configuration["version"].as_u64().unwrap())
+            .collect();
+        assert_eq!(versions.len(), 1, "package/config generations were mixed");
+        let version = *versions.first().unwrap();
+        assert!(matches!(version, 1 | 2));
+        for item in active {
+            assert_eq!(item.target.package_key, format!("{version:x}").repeat(64));
+            assert!(item.pending_operation.is_none());
         }
     }
     #[test]
@@ -273,6 +314,176 @@ mod tests {
                 assert_eq!(recover(&mut db).unwrap(), 0);
             }
         }
+    }
+    #[test]
+    #[ignore = "parent acceptance oracle hard-terminates this helper at a durable boundary"]
+    fn power_cut_worker() {
+        let Some(path) = std::env::var_os("OPENNEXUS_D03_DATABASE") else {
+            return;
+        };
+        let boundary = std::env::var("OPENNEXUS_D03_BOUNDARY").unwrap();
+        let marker = std::path::PathBuf::from(std::env::var_os("OPENNEXUS_D03_MARKER").unwrap());
+        let mut db = open(Path::new(&path));
+        let old: Vec<_> = ['a', 'b']
+            .into_iter()
+            .map(|slot| {
+                let current = active(&db, &slot.to_string().repeat(64)).unwrap().unwrap();
+                Change {
+                    target: current.target.clone(),
+                    expected_revision: Some(current.revision),
+                }
+            })
+            .collect();
+        let next: Vec<_> = old
+            .iter()
+            .map(|current| {
+                change(
+                    current.target.slot.chars().next().unwrap(),
+                    2,
+                    current.expected_revision.clone(),
+                )
+            })
+            .collect();
+        let operation = uuid::Uuid::new_v4().to_string();
+        let _ = switch_inner(&mut db, &operation, &next, |at| {
+            if at == boundary {
+                let file = std::fs::File::create(&marker).unwrap();
+                file.sync_all().unwrap();
+                loop {
+                    thread::sleep(Duration::from_secs(60));
+                }
+            }
+            Ok(())
+        });
+        panic!("power-cut helper passed the requested boundary");
+    }
+    #[test]
+    fn group_switch_survives_hard_termination_twenty_times_per_boundary() {
+        for boundary in ["journal_recorded", "pointer_recorded", "switch_committed"] {
+            for round in 0..20 {
+                let temp = tempfile::tempdir().unwrap();
+                let path = temp.path().join("state.sqlite3");
+                seeded(&path);
+                let marker = temp.path().join(format!("{boundary}-{round}.ready"));
+                let mut child = Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--ignored",
+                        "--exact",
+                        "extension_transaction::tests::power_cut_worker",
+                        "--nocapture",
+                    ])
+                    .env("OPENNEXUS_D03_DATABASE", &path)
+                    .env("OPENNEXUS_D03_BOUNDARY", boundary)
+                    .env("OPENNEXUS_D03_MARKER", &marker)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap();
+                let started = Instant::now();
+                while !marker.is_file() {
+                    assert!(
+                        child.try_wait().unwrap().is_none(),
+                        "helper exited before {boundary}"
+                    );
+                    assert!(
+                        started.elapsed() < Duration::from_secs(10),
+                        "helper did not reach {boundary}"
+                    );
+                    thread::sleep(Duration::from_millis(5));
+                }
+                child.kill().unwrap();
+                assert!(!child.wait().unwrap().success());
+                let mut db = open(&path);
+                recover(&mut db).unwrap();
+                assert_complete_generation(&db);
+                assert_eq!(recover(&mut db).unwrap(), 0);
+            }
+        }
+    }
+    #[test]
+    fn disk_full_and_configuration_migration_failures_cover_every_boundary() {
+        let mapped: HostError = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+            None,
+        )
+        .into();
+        assert_eq!(mapped.code, "QUOTA_EXCEEDED");
+        for failure in ["QUOTA_EXCEEDED", "EXTENSION_CONFIG_MIGRATION_FAILED"] {
+            for boundary in ["journal_recorded", "pointer_recorded", "switch_committed"] {
+                for _ in 0..20 {
+                    let temp = tempfile::tempdir().unwrap();
+                    let path = temp.path().join("state.sqlite3");
+                    let (_, next) = seeded(&path);
+                    let mut db = open(&path);
+                    let update = uuid::Uuid::new_v4().to_string();
+                    let error = switch_inner(&mut db, &update, &next, |at| {
+                        if at == boundary {
+                            Err(HostError::new(failure))
+                        } else {
+                            Ok(())
+                        }
+                    })
+                    .unwrap_err();
+                    assert_eq!(error.code, failure);
+                    drop(db);
+                    let mut db = open(&path);
+                    recover(&mut db).unwrap();
+                    assert_complete_generation(&db);
+                    assert_eq!(recover(&mut db).unwrap(), 0);
+                }
+            }
+        }
+    }
+    #[test]
+    fn failed_switch_cannot_expand_an_existing_execution_permit() {
+        use crate::extension_permit::{Authority, Claims, Environment, ExecutionKind};
+        use std::collections::BTreeMap;
+
+        let authority = Authority::default();
+        let mut claims = Claims {
+            kind: ExecutionKind::Mcp,
+            source: "https://catalog.example/".into(),
+            namespace: "examples".into(),
+            package_id: "note-reviewer".into(),
+            version: "1.0.0".into(),
+            archive_sha256: "a".repeat(64),
+            tree_sha256: "b".repeat(64),
+            signer_sha256: "c".repeat(64),
+            entry: "entry.exe".into(),
+            arguments: vec!["--stdio".into()],
+            environment: BTreeMap::from([(
+                "MODE".into(),
+                Environment::Literal("production".into()),
+            )]),
+            permissions: BTreeSet::from(["notes.read".into()]),
+            vault_id: uuid::Uuid::new_v4().to_string(),
+            platform: "windows".into(),
+            policy_version: "1".into(),
+            expires_at_ms: 10_000,
+        };
+        let permit = authority.issue(&claims, 1).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("state.sqlite3");
+        let (_, next) = seeded(&path);
+        let mut db = open(&path);
+        let error = switch_inner(&mut db, &uuid::Uuid::new_v4().to_string(), &next, |at| {
+            if at == "switch_committed" {
+                Err(HostError::new("EXTENSION_CONFIG_MIGRATION_FAILED"))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error.code, "EXTENSION_CONFIG_MIGRATION_FAILED");
+        recover(&mut db).unwrap();
+        authority.verify(&permit, &claims, 2).unwrap();
+        claims.permissions.insert("notes.write".into());
+        assert_eq!(
+            authority.verify(&permit, &claims, 2).unwrap_err().code,
+            "PERMISSION_CHANGED"
+        );
+        assert_complete_generation(&db);
     }
     #[test]
     fn cas_busy_replay_and_failed_first_install() {

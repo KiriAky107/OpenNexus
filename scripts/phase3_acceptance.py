@@ -68,6 +68,18 @@ CASE_DRIVERS: dict[str, dict[str, Any]] = {
         "timeout_seconds": 900,
         "required_metrics": (),
     },
+    "D-03": {
+        "driver": "scripts/acceptance_cases/d03_extension_transactions.py",
+        "timeout_seconds": 900,
+        "required_metrics": (
+            "power_cut_rounds",
+            "disk_full_rounds",
+            "configuration_failure_rounds",
+            "dependency_preflight_rejections",
+            "permission_expansions",
+        ),
+        "platform_profiles": ("windows-11-x64",),
+    },
     "S-01": {
         "driver": "scripts/acceptance_cases/s01_sync_client.py",
         "timeout_seconds": 900,

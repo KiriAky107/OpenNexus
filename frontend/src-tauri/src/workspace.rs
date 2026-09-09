@@ -33,7 +33,19 @@ impl From<std::io::Error> for HostError {
     }
 }
 impl From<rusqlite::Error> for HostError {
-    fn from(_: rusqlite::Error) -> Self {
+    fn from(error: rusqlite::Error) -> Self {
+        if matches!(
+            error,
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error {
+                    code: rusqlite::ErrorCode::DiskFull,
+                    ..
+                },
+                _
+            )
+        ) {
+            return Self::new("QUOTA_EXCEEDED");
+        }
         Self::new("DATABASE_ERROR")
     }
 }
