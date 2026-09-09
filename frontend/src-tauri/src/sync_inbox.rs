@@ -293,7 +293,8 @@ impl Workspace {
             return Ok(true);
         }
         let local_path = self.path_for_id(&revision.file_id).ok();
-        let path = local_path.as_deref().unwrap_or(&revision.path);
+        let conflict_path = self.sync_conflict_local_path(&revision)?;
+        let path = conflict_path.as_str();
         let local = self.resolve(path)?;
         let current = if local.is_file() {
             crate::payloads::hash_file(&local)?
@@ -309,10 +310,14 @@ impl Workspace {
                 |r| r.get(0),
             )
             .optional()?;
+        let target_collision = local_path
+            .as_deref()
+            .is_some_and(|previous| previous != revision.path)
+            && self.resolve(&revision.path)?.exists();
         let conflict = queued
             || (local_path.is_none() && local.exists())
             || (local_path.is_some() && head.as_deref() != Some(current.as_str()))
-            || (path != revision.path && self.resolve(&revision.path)?.exists());
+            || target_collision;
         if conflict {
             self.sync_preserve_conflict(binding, &revision, path)?;
             return Ok(true);
@@ -366,11 +371,10 @@ impl Workspace {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         rows.into_iter().map(|(sequence,file_id,local_path,local_hash,remote)| {
-            let remote: Value = serde_json::from_str(&remote).map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?;
-            let current_path=self.path_for_id(&file_id).unwrap_or_else(|_|local_path.clone());
-            let source=self.resolve(&current_path)?;
+            let revision: RemoteRevision = serde_json::from_str(&remote).map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?;
+            let source=self.resolve(&local_path)?;
             let current_hash=if source.is_file() {crate::payloads::hash_file(&source)?} else {String::new()};
-            Ok(serde_json::json!({"sequence":sequence,"file_id":file_id,"local_path":local_path,"local_hash":local_hash,"current_path":current_path,"current_hash":current_hash,"remote":remote}))
+            Ok(serde_json::json!({"sequence":sequence,"file_id":file_id,"local_path":local_path,"local_hash":local_hash,"current_path":local_path,"current_hash":current_hash,"remote":revision}))
         }).collect()
     }
 }
