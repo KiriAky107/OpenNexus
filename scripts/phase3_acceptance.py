@@ -53,6 +53,18 @@ CASE_DRIVERS: dict[str, dict[str, Any]] = {
         "timeout_seconds": 900,
         "required_metrics": (),
     },
+    "B-03": {
+        "driver": "scripts/acceptance_cases/b03_credentials.py",
+        "timeout_seconds": 900,
+        "required_metrics": (
+            "lock_deadline_ms",
+            "native_lock_events",
+            "manual_lock_events",
+            "restored_records",
+            "local_edit_successes",
+        ),
+        "platform_profiles": ("windows-11-x64",),
+    },
     "C-03": {
         "driver": "scripts/acceptance_cases/c03_permission_binding.py",
         "timeout_seconds": 900,

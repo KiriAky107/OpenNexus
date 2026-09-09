@@ -1081,7 +1081,7 @@ mod lifecycle_tests {
             let worker = scope.spawn(|| host.lock_credentials());
             let start = std::time::Instant::now();
             while credentials.load(Ordering::SeqCst) == 0
-                && start.elapsed() < Duration::from_secs(2)
+                && start.elapsed() < Duration::from_secs(1)
             {
                 std::thread::sleep(Duration::from_millis(1));
             }
@@ -1092,6 +1092,7 @@ mod lifecycle_tests {
             worker.join().unwrap().unwrap();
             assert!(observed > 0);
             assert!(revoked > 0);
+            assert!(start.elapsed() < Duration::from_secs(1));
         });
     }
 }
