@@ -1,4 +1,4 @@
-// Run with NODE_PATH pointing to the bundled Playwright package, or a local install.
+// 运行时让 NODE_PATH 指向随包提供的 Playwright，或使用本地安装。
 const { chromium } = require('playwright')
 const fs = require('node:fs/promises')
 const path = require('node:path')

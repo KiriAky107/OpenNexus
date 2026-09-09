@@ -152,7 +152,7 @@ pub struct Ticket<T> {
     cancel: Arc<AtomicBool>,
 }
 impl<T> Ticket<T> {
-    /// Background wait only; dropping a ticket cancels its queued/in-flight work.
+    /// 仅供后台等待；丢弃票据会取消排队中或执行中的工作。
     pub fn wait(self, timeout: Duration) -> Result<T> {
         if timeout > Duration::from_secs(65) {
             return Err(HostError::new("EXTENSION_INSTANCE_WAIT_INVALID"));
@@ -204,8 +204,8 @@ impl Endpoint {
             request,
         })
     }
-    /// Host route only: the user must have approved the exact saved review.
-    /// Confirmation and consumption happen together on the instance thread.
+    /// 仅供 Host 路由使用：用户必须批准完全一致的已保存审查。
+    /// 确认和消费在实例线程上同步发生。
     pub fn invoke_confirmed(&self, review_id: String) -> Result<Ticket<Value>> {
         if uuid::Uuid::parse_str(&review_id).is_err() || review_id.len() != 36 {
             return Err(HostError::new("EXTENSION_CALL_REVIEW_UNKNOWN"));
@@ -252,9 +252,9 @@ pub struct Registry {
 }
 impl Registry {
     /// # Safety
-    /// The caller must establish all sandbox limits and current install/user
-    /// authorization. before_resume must recheck live trust/active installation.
-    /// This API is not exposed to renderer/Core and does not enable extensions.
+    /// 调用方必须建立全部沙箱限制以及当前安装和用户授权。
+    /// before_resume 必须重新检查实时信任与活动安装状态。
+    /// 此 API 不向 renderer/Core 暴露，也不会自行启用扩展。
     pub unsafe fn start(&mut self, spec: LaunchSpec) -> Result<Endpoint> {
         self.reap();
         spec.authority
@@ -299,7 +299,7 @@ impl Registry {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     run(spec, &control, receiver)
                 }));
-                // All native stack owners have dropped before publishing terminal state.
+                // 发布终止状态前，所有原生调用栈所有者均已销毁。
                 let error = match result {
                     Ok(Ok(())) => None,
                     Ok(Err(error))
@@ -335,8 +335,7 @@ impl Registry {
         );
         Ok(endpoint)
     }
-    /// Reap only threads confirmed finished, so an old generation cannot overlap
-    /// a replacement merely because stop was requested or status was changed.
+    /// 只回收已确认结束的线程，不能仅因请求停止或状态改变就让旧代实例与替代实例重叠。
     pub fn reap(&mut self) {
         let done: Vec<_> = self
             .entries
@@ -439,7 +438,7 @@ fn run_with_access(
     if control.stop.load(Ordering::Acquire) {
         return Ok(());
     }
-    // Safety obligation belongs to Registry::start's caller, rechecked above.
+    // 安全义务属于 Registry::start 的调用方，并已在上方重新检查。
     let running = unsafe { suspended.resume()? };
     #[cfg(test)]
     {
@@ -736,6 +735,7 @@ mod tests {
                 ("mcp_cpu", "EXTENSION_RESOURCE_CPU_EXCEEDED"),
                 ("mcp_memory", "EXTENSION_RESOURCE_MEMORY_EXCEEDED"),
                 ("mcp_processes", "EXTENSION_RESOURCE_PROCESSES_EXCEEDED"),
+                ("mcp_scratch", "EXTENSION_RESOURCE_SCRATCH_EXCEEDED"),
             ]
         } else {
             Vec::new()

@@ -25,17 +25,15 @@ function reconcile(view: EditorView) {
   if (view.state.doc.rangeHasMark(start, end, mark)) return
   const tr = view.state.tr.delete(end - 1, end).delete(start, start + 1)
   tr.removeMark(start, end - 2).addMark(start, end - 2, mark.create())
-  // Filling an existing pair must keep subsequent letters inside code. Typing
-  // the closing delimiter explicitly should instead leave code as usual.
+// 补全已有成对标记时，后续字母必须留在行内代码中；显式输入结束标记则应像通常一样离开代码范围。
   if ($from.pos < end) tr.setStoredMarks([mark.create()])
   else tr.removeStoredMark(mark)
   view.dispatch(tr)
 }
 
-// DOM input can bypass handleTextInput (IME, replacement text, missing event.data).
-// Observe it in capture phase, then wait for ProseMirror's DOM observer and its
-// composition cleanup before inspecting the document. Never reconcile on load,
-// paste, undo, or a selection change alone.
+// DOM 输入可能绕过 handleTextInput（输入法、替换文本或缺少 event.data）。
+// 在捕获阶段观察输入，等待 ProseMirror 的 DOM 观察器和组合输入清理完成后再检查文档。
+// 加载、粘贴、撤销或仅改变选区时不执行协调。
 export const inlineCodeInputPlugin = $prose(() => new Plugin({
   view(view) {
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -67,7 +65,7 @@ export const inlineCodeInputPlugin = $prose(() => new Plugin({
     const start = () => { composing = true; cancel() }
     const end = () => { composing = false; pending = true; attempts = 0; schedule() }
     const keydown = (event: KeyboardEvent) => {
-      // ProseMirror handles undo/paste itself, so those actions need not emit input.
+// ProseMirror 会自行处理撤销和粘贴，因此这些操作无需触发 input。
       if (event.ctrlKey || event.metaKey || ['Backspace', 'Delete', 'Escape'].includes(event.key)) cancel()
       else if (pending && !composing && !view.composing && event.key === 'Enter') {
         cancel()

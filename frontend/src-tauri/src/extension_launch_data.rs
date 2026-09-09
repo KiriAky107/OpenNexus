@@ -1,11 +1,16 @@
 //! 本机 ​​argv/环境编码。这不会授权或启动进程。
 use crate::workspace::{HostError, Result};
-use std::{collections::BTreeMap, os::windows::ffi::OsStrExt, path::Path};
+use std::{
+    collections::BTreeMap,
+    os::windows::ffi::OsStrExt,
+    path::{Path, PathBuf},
+};
 use zeroize::Zeroize;
 
 pub struct LaunchData {
     command: Vec<u16>,
     environment: Vec<u16>,
+    scratch: PathBuf,
 }
 impl Drop for LaunchData {
     fn drop(&mut self) {
@@ -40,6 +45,7 @@ impl LaunchData {
         let mut result = Self {
             command: Vec::with_capacity(32767),
             environment: Vec::with_capacity(32767),
+            scratch: scratch.to_owned(),
         };
         result.command.push(34);
         result.command.extend(executable);
@@ -91,13 +97,17 @@ impl LaunchData {
         if result.command.len() > 32767 {
             return Err(bad());
         }
+        // AppContainer 会把用户 LocalAppData 下的逻辑路径重定向到配置文件的 AC 目录。
+        // 直接把物理 AC 路径交给子进程会被再次重定向，形成 AC\Packages\...\AC 的错误路径。
+        let (visible_local_app_data, visible_scratch) =
+            visible_container_paths(local_app_data, scratch);
         // ASCII 名称给出确定性的 Windows 不区分大小写的顺序。值在编码之前一直是借用的，因此不存在秘密克隆。
         let mut fields: BTreeMap<String, &std::ffi::OsStr> = BTreeMap::new();
         for (name, path) in [
             ("SYSTEMROOT", system_root),
-            ("LOCALAPPDATA", local_app_data),
-            ("TEMP", scratch),
-            ("TMP", scratch),
+            ("LOCALAPPDATA", visible_local_app_data.as_path()),
+            ("TEMP", visible_scratch.as_path()),
+            ("TMP", visible_scratch.as_path()),
         ] {
             if !path.is_absolute() {
                 return Err(bad());
@@ -146,6 +156,29 @@ impl LaunchData {
     pub fn environment(&self) -> &[u16] {
         &self.environment
     }
+    pub(crate) fn scratch(&self) -> &Path {
+        &self.scratch
+    }
+}
+
+fn visible_container_paths(local_app_data: &Path, scratch: &Path) -> (PathBuf, PathBuf) {
+    let is_ac = local_app_data
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("AC"));
+    let is_package = local_app_data
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .is_some_and(|name| name.eq_ignore_ascii_case("Packages"));
+    if is_ac && is_package {
+        if let (Some(base), Ok(relative)) = (
+            local_app_data.ancestors().nth(3),
+            scratch.strip_prefix(local_app_data),
+        ) {
+            return (base.to_owned(), base.join(relative));
+        }
+    }
+    (local_app_data.to_owned(), scratch.to_owned())
 }
 
 #[cfg(test)]
@@ -219,5 +252,14 @@ mod tests {
         .unwrap();
         assert!(data.environment().contains(&0xd800));
         assert!(data.environment().ends_with(&[0, 0]));
+    }
+    #[test]
+    fn converts_physical_appcontainer_paths_to_child_visible_paths() {
+        let (local, scratch) = visible_container_paths(
+            Path::new(r"C:\Users\tester\AppData\Local\Packages\OpenNexus.sandbox.id\AC"),
+            Path::new(r"C:\Users\tester\AppData\Local\Packages\OpenNexus.sandbox.id\AC\Temp"),
+        );
+        assert_eq!(local, Path::new(r"C:\Users\tester\AppData\Local"));
+        assert_eq!(scratch, Path::new(r"C:\Users\tester\AppData\Local\Temp"));
     }
 }
