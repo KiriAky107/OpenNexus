@@ -92,6 +92,10 @@ class SyncProductionStack:
         self.minio = None
         self.sync = None
         self.handles = []
+        self.pg_log = None
+        self.minio_log = None
+        self.sync_log = None
+        self.minio_env = {}
 
         initdb = Path(config["artifacts"]["postgres_initdb"]).resolve()
         self.pg_bin = initdb.parent
@@ -146,10 +150,10 @@ class SyncProductionStack:
         self.stack.mkdir()
         self.minio_data.mkdir()
         self.staging.mkdir()
-        pg_log = (self.stack / "postgres.log").open("wb")
-        minio_log = (self.stack / "minio.log").open("wb")
-        sync_log = (self.stack / "sync.log").open("wb")
-        self.handles.extend([pg_log, minio_log, sync_log])
+        self.pg_log = (self.stack / "postgres.log").open("wb")
+        self.minio_log = (self.stack / "minio.log").open("wb")
+        self.sync_log = (self.stack / "sync.log").open("wb")
+        self.handles.extend([self.pg_log, self.minio_log, self.sync_log])
 
         subprocess.run(
             [
@@ -164,29 +168,12 @@ class SyncProductionStack:
                 "-E",
                 "UTF8",
             ],
-            stdout=pg_log,
+            stdout=self.pg_log,
             stderr=subprocess.STDOUT,
             check=True,
             timeout=120,
         )
-        subprocess.run(
-            [
-                str(self.pg_ctl),
-                "-D",
-                str(self.postgres_data),
-                "-l",
-                str(self.stack / "postgres-server.log"),
-                "-o",
-                f"-p {self.pg_port} -h 127.0.0.1",
-                "-w",
-                "start",
-            ],
-            stdout=pg_log,
-            stderr=subprocess.STDOUT,
-            check=True,
-            timeout=60,
-        )
-        self.postgres_started = True
+        self.start_postgres()
         subprocess.run(
             [
                 str(self.createdb),
@@ -198,30 +185,17 @@ class SyncProductionStack:
                 "postgres",
                 "opennexus",
             ],
-            stdout=pg_log,
+            stdout=self.pg_log,
             stderr=subprocess.STDOUT,
             check=True,
             timeout=30,
         )
 
-        minio_env = os.environ.copy()
-        minio_env.update(
+        self.minio_env = os.environ.copy()
+        self.minio_env.update(
             {"MINIO_ROOT_USER": self.minio_user, "MINIO_ROOT_PASSWORD": self.minio_password}
         )
-        self.minio = subprocess.Popen(
-            [
-                str(self.minio_server),
-                "server",
-                str(self.minio_data),
-                "--address",
-                f"127.0.0.1:{self.minio_port}",
-                "--console-address",
-                f"127.0.0.1:{self.console_port}",
-            ],
-            stdout=minio_log,
-            stderr=subprocess.STDOUT,
-            env=minio_env,
-        )
+        self.start_minio()
         wait_http(f"http://127.0.0.1:{self.minio_port}/minio/health/ready")
 
         self.service_env = os.environ.copy()
@@ -251,7 +225,7 @@ class SyncProductionStack:
             ],
             cwd=SERVICE,
             env=self.service_env,
-            stdout=sync_log,
+            stdout=self.sync_log,
             stderr=subprocess.STDOUT,
             check=True,
             timeout=60,
@@ -260,13 +234,13 @@ class SyncProductionStack:
             [str(self.server_python), "-m", "sync_server", "serve", "--workers", "2"],
             cwd=SERVICE,
             env=self.service_env,
-            stdout=sync_log,
+            stdout=self.sync_log,
             stderr=subprocess.STDOUT,
         )
         wait_http(self.origin + "/ready", timeout=60)
         return self
 
-    def create_vault(self, label: str):
+    def login(self, username: str, password: str, label: str) -> dict:
         session = None
         for _ in range(5):
             try:
@@ -274,8 +248,8 @@ class SyncProductionStack:
                     "POST",
                     self.origin + "/sync/v1/auth/sessions",
                     body={
-                        "username": self.username,
-                        "password": self.password,
+                        "username": username,
+                        "password": password,
                         "device_name": label,
                     },
                     timeout=10,
@@ -288,7 +262,9 @@ class SyncProductionStack:
             time.sleep(0.2)
         if session is None:
             raise RuntimeError("ACCEPTANCE_LOGIN_FAILED")
-        auth = {"Authorization": "Bearer " + session["access_token"]}
+        return session
+
+    def create_vault_for_auth(self, auth: dict, label: str):
         vault = None
         for _ in range(5):
             try:
@@ -308,6 +284,89 @@ class SyncProductionStack:
         if vault is None:
             raise RuntimeError("ACCEPTANCE_VAULT_FAILED")
         return auth, self.origin + "/sync/v1/vaults/" + vault["vault_id"], vault["vault_id"]
+
+    def create_vault(self, label: str):
+        session = self.login(self.username, self.password, label)
+        auth = {"Authorization": "Bearer " + session["access_token"]}
+        return self.create_vault_for_auth(auth, label)
+
+    def add_user(self, prefix: str) -> tuple[str, str]:
+        username = prefix + "-" + secrets.token_hex(8)
+        password = secrets.token_urlsafe(32)
+        environment = dict(self.service_env)
+        environment.update(
+            {"ACCEPTANCE_EXTRA_USERNAME": username, "ACCEPTANCE_EXTRA_PASSWORD": password}
+        )
+        subprocess.run(
+            [
+                str(self.server_python),
+                "-c",
+                "import os; from sync_server.database import Database; "
+                "Database(os.environ['SYNC_DATABASE_URL']).add_user("
+                "os.environ['ACCEPTANCE_EXTRA_USERNAME'],os.environ['ACCEPTANCE_EXTRA_PASSWORD'])",
+            ],
+            cwd=SERVICE,
+            env=environment,
+            stdout=self.sync_log,
+            stderr=subprocess.STDOUT,
+            check=True,
+            timeout=30,
+        )
+        return username, password
+
+    def start_postgres(self) -> None:
+        subprocess.run(
+            [
+                str(self.pg_ctl),
+                "-D",
+                str(self.postgres_data),
+                "-l",
+                str(self.stack / "postgres-server.log"),
+                "-o",
+                f"-p {self.pg_port} -h 127.0.0.1",
+                "-w",
+                "start",
+            ],
+            stdout=self.pg_log,
+            stderr=subprocess.STDOUT,
+            check=True,
+            timeout=60,
+        )
+        self.postgres_started = True
+
+    def stop_postgres(self) -> None:
+        if not self.postgres_started:
+            return
+        subprocess.run(
+            [str(self.pg_ctl), "-D", str(self.postgres_data), "-m", "fast", "-w", "stop"],
+            stdout=self.pg_log,
+            stderr=subprocess.STDOUT,
+            check=True,
+            timeout=30,
+        )
+        self.postgres_started = False
+
+    def start_minio(self) -> None:
+        if self.minio is not None and self.minio.poll() is None:
+            return
+        self.minio = subprocess.Popen(
+            [
+                str(self.minio_server),
+                "server",
+                str(self.minio_data),
+                "--address",
+                f"127.0.0.1:{self.minio_port}",
+                "--console-address",
+                f"127.0.0.1:{self.console_port}",
+            ],
+            stdout=self.minio_log,
+            stderr=subprocess.STDOUT,
+            env=self.minio_env,
+        )
+
+    def stop_minio(self) -> None:
+        stop_tree(self.minio)
+        self.minio = None
 
     def sql_scalar(self, statement: str) -> int:
         output = subprocess.check_output(
@@ -361,22 +420,11 @@ class SyncProductionStack:
 
     def stop(self) -> None:
         stop_tree(self.sync)
-        stop_tree(self.minio)
+        self.stop_minio()
         if self.postgres_started:
-            subprocess.run(
-                [
-                    str(self.pg_ctl),
-                    "-D",
-                    str(self.postgres_data),
-                    "-m",
-                    "fast",
-                    "-w",
-                    "stop",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=30,
-            )
+            try:
+                self.stop_postgres()
+            except (OSError, subprocess.SubprocessError):
+                pass
         for handle in self.handles:
             handle.close()
