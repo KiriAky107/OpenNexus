@@ -9,6 +9,21 @@ use std::fs;
 use uuid::Uuid;
 
 impl Workspace {
+    pub(crate) fn sync_conflict_local_path(&self, revision: &RemoteRevision) -> Result<String> {
+        let identity_path = self.path_for_id(&revision.file_id).ok();
+        let destination_occupied = self
+            .entry(&revision.path)?
+            .is_some_and(|entry| !entry.deleted && entry.file_id != revision.file_id);
+        if destination_occupied
+            && identity_path
+                .as_deref()
+                .is_some_and(|path| path != revision.path)
+        {
+            return Ok(revision.path.clone());
+        }
+        Ok(identity_path.unwrap_or_else(|| revision.path.clone()))
+    }
+
     pub fn sync_resolve(
         &mut self,
         binding: &str,
@@ -46,10 +61,8 @@ impl Workspace {
                 return Err(HostError::new("SYNC_RESOLUTION_CHANGED"));
             }
         } else {
-            let (path,remote): (String,String) = self.db.query_row("SELECT local_path,remote FROM sync_conflicts WHERE binding=?1 AND sequence=?2 AND state='open'",params![binding,sequence],|r| Ok((r.get(0)?,r.get(1)?)))?;
-            let revision: RemoteRevision = serde_json::from_str(&remote)
-                .map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?;
-            let path = self.path_for_id(&revision.file_id).unwrap_or(path);
+            let stored_path: String = self.db.query_row("SELECT local_path FROM sync_conflicts WHERE binding=?1 AND sequence=?2 AND state='open'",params![binding,sequence],|r| r.get(0))?;
+            let path = stored_path;
             let source = self.resolve(&path)?;
             let current = if source.is_file() {
                 self.sync_store_file(&source)?
@@ -78,13 +91,15 @@ impl Workspace {
                 return Err(HostError::new("SYNC_RESOLUTION_INVALID"));
             }
             self.db.execute(
-                "INSERT INTO sync_resolutions VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'pending')",
+                "INSERT INTO sync_resolutions (binding,sequence,choice,destination,expected,operation_id,rename_id,copy_id,state,retire_id,restore_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'pending',?9,?10)",
                 params![
                     binding,
                     sequence,
                     choice,
                     destination,
                     expected,
+                    Uuid::new_v4().to_string(),
+                    Uuid::new_v4().to_string(),
                     Uuid::new_v4().to_string(),
                     Uuid::new_v4().to_string(),
                     Uuid::new_v4().to_string()
@@ -109,7 +124,22 @@ impl Workspace {
     }
     fn sync_apply_resolution(&mut self, binding: &str, sequence: i64) -> Result<()> {
         self.check_binding(binding)?;
-        let (choice,destination,expected,operation,rename,copy,state): (String,String,String,String,String,String,String) = self.db.query_row("SELECT choice,destination,expected,operation_id,rename_id,copy_id,state FROM sync_resolutions WHERE binding=?1 AND sequence=?2",params![binding,sequence],|r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?)))?;
+        let (choice,destination,expected,operation,rename,copy,state,mut retire,mut restore): (String,String,String,String,String,String,String,String,String) = self.db.query_row("SELECT choice,destination,expected,operation_id,rename_id,copy_id,state,retire_id,restore_id FROM sync_resolutions WHERE binding=?1 AND sequence=?2",params![binding,sequence],|r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?)))?;
+        if retire.is_empty() || restore.is_empty() {
+            retire = Uuid::new_v4().to_string();
+            restore = Uuid::new_v4().to_string();
+            self.db.execute(
+                "UPDATE sync_resolutions SET retire_id=CASE WHEN retire_id='' THEN ?3 ELSE retire_id END,restore_id=CASE WHEN restore_id='' THEN ?4 ELSE restore_id END WHERE binding=?1 AND sequence=?2",
+                params![binding, sequence, retire, restore],
+            )?;
+            let ids: (String, String) = self.db.query_row(
+                "SELECT retire_id,restore_id FROM sync_resolutions WHERE binding=?1 AND sequence=?2",
+                params![binding, sequence],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            retire = ids.0;
+            restore = ids.1;
+        }
         if state == "completed" {
             return Ok(());
         }
@@ -131,21 +161,26 @@ impl Workspace {
         if head != sequence {
             return Err(HostError::new("SYNC_CONFLICT_CHANGED"));
         }
-        let path = self.path_for_id(&revision.file_id).unwrap_or(stored_path);
+        // local_path is frozen when the conflict is recorded. Recomputing it from
+        // file identity after a partial resolution can select a different file.
+        let path = stored_path;
         if !self
             .operation(&operation)?
             .is_some_and(|value| value["state"] == "committed")
         {
-            let source = self.resolve(&path)?;
-            let mut current = if source.is_file() {
-                crate::payloads::hash_file(&source)?
+            let conflict_source = self.resolve(&path)?;
+            let current = if conflict_source.is_file() {
+                crate::payloads::hash_file(&conflict_source)?
             } else {
                 String::new()
             };
-            let retired = self.operation(&rename)?.is_some_and(|value| {
+            let target_retired = self.operation(&retire)?.is_some_and(|value| {
                 value["state"] == "committed" && value["result"]["deleted"] == true
             });
-            if current != if retired { "" } else { &expected } {
+            let source_renamed = self
+                .operation(&rename)?
+                .is_some_and(|value| value["state"] == "committed");
+            if current != expected && !target_retired && !source_renamed {
                 return Err(HostError::new("REVISION_CONFLICT"));
             }
             if choice == "copy" {
@@ -159,21 +194,60 @@ impl Workspace {
                     None,
                 )?;
             }
-            if self
-                .entry(&path)?
-                .is_some_and(|entry| !entry.deleted && entry.file_id != revision.file_id)
+            let target_collision = target_retired
+                || (path == revision.path
+                    && self
+                        .entry(&path)?
+                        .is_some_and(|entry| !entry.deleted && entry.file_id != revision.file_id));
+            if target_collision && !target_retired {
+                self.mutate_with_origin("delete", &path, "", &current, &retire, "remote")?;
+            }
+            let source_path = self
+                .path_for_id(&revision.file_id)
+                .unwrap_or_else(|_| revision.path.clone());
+            let source = self.resolve(&source_path)?;
+            let mut source_hash = if source.is_file() {
+                crate::payloads::hash_file(&source)?
+            } else {
+                String::new()
+            };
+            if target_collision
+                && source_path != revision.path
+                && !source_hash.is_empty()
+                && !source_renamed
             {
-                self.mutate_with_origin("delete", &path, "", &current, &rename, "remote")?;
-                current.clear();
+                // The deleted target still owns its unique database path until the
+                // final identity-aware write retires that tombstone. Retire the
+                // incoming identity at its old path, then resurrect it at the
+                // target with the frozen remote or chosen-local bytes.
+                self.mutate_with_origin(
+                    "delete",
+                    &source_path,
+                    "",
+                    &source_hash,
+                    &rename,
+                    "remote",
+                )?;
+                source_hash.clear();
             }
             if choice == "local" {
                 if expected.is_empty() {
                     self.sync_delete_intent(&revision, &operation)?;
                 } else {
+                    let destination = if target_collision {
+                        revision.path.as_str()
+                    } else {
+                        path.as_str()
+                    };
+                    let destination_hash = if target_collision {
+                        source_hash.as_str()
+                    } else {
+                        current.as_str()
+                    };
                     let size = fs::metadata(self.sync_spool(&expected)?)?.len();
                     self.write_spooled_with_identity(
-                        &path,
-                        &current,
+                        destination,
+                        destination_hash,
                         (&expected, size),
                         "local",
                         &operation,
@@ -181,19 +255,31 @@ impl Workspace {
                     )?;
                 }
             } else if revision.operation == "delete" {
-                if !current.is_empty() {
-                    self.mutate_with_origin("delete", &path, "", &current, &operation, "remote")?;
+                if !source_hash.is_empty() {
+                    self.mutate_with_origin(
+                        "delete",
+                        &source_path,
+                        "",
+                        &source_hash,
+                        &operation,
+                        "remote",
+                    )?;
                 }
             } else {
-                if path != revision.path && !current.is_empty() {
+                if !target_collision
+                    && source_path != revision.path
+                    && !source_hash.is_empty()
+                    && !source_renamed
+                {
                     self.mutate_with_origin(
                         "rename",
-                        &path,
+                        &source_path,
                         &revision.path,
-                        &current,
+                        &source_hash,
                         &rename,
                         "remote",
                     )?;
+                    source_hash = crate::payloads::hash_file(&self.resolve(&revision.path)?)?;
                 }
                 let digest = revision
                     .hash
@@ -201,7 +287,7 @@ impl Workspace {
                     .ok_or_else(|| HostError::new("SYNC_RESPONSE_INVALID"))?;
                 self.write_spooled_with_identity(
                     &revision.path,
-                    &current,
+                    &source_hash,
                     (digest, revision.size as u64),
                     "remote",
                     &operation,
@@ -209,21 +295,56 @@ impl Workspace {
                 )?;
             }
         }
-        let retired = self.operation(&rename)?.and_then(|value| {
+        let retired = self.operation(&retire)?.and_then(|value| {
             (value["state"] == "committed" && value["result"]["deleted"] == true)
                 .then(|| value["result"]["file_id"].as_str().map(str::to_owned))
                 .flatten()
         });
+        let mut restored_retired = false;
+        if let Some(retired_id) = retired.as_deref().filter(|id| *id != revision.file_id) {
+            let remote_head: Option<(String, String)> = self
+                .db
+                .query_row(
+                    "SELECT path,hash FROM sync_heads WHERE binding=?1 AND file_id=?2 AND hash!=''",
+                    params![binding, retired_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            if let Some((head_path, head_hash)) =
+                remote_head.filter(|(head_path, _)| head_path != &revision.path)
+            {
+                if !self
+                    .operation(&restore)?
+                    .is_some_and(|value| value["state"] == "committed")
+                {
+                    if self.resolve(&head_path)?.exists() {
+                        return Err(HostError::new("REVISION_CONFLICT"));
+                    }
+                    let size = fs::metadata(self.sync_spool(&head_hash)?)?.len();
+                    self.write_spooled_with_identity(
+                        &head_path,
+                        "",
+                        (&head_hash, size),
+                        "remote",
+                        &restore,
+                        Some(retired_id),
+                    )?;
+                }
+                restored_retired = true;
+            }
+        }
         let tx = self.db.transaction()?;
         if let Some(retired) = retired.filter(|id| id != &revision.file_id) {
-            tx.execute(
-                "UPDATE file_aliases SET file_id=?1 WHERE file_id=?2",
-                params![revision.file_id, retired],
-            )?;
-            tx.execute(
-                "INSERT OR REPLACE INTO file_aliases VALUES (?1,?2)",
-                params![retired, revision.file_id],
-            )?;
+            if !restored_retired {
+                tx.execute(
+                    "UPDATE file_aliases SET file_id=?1 WHERE file_id=?2",
+                    params![revision.file_id, retired],
+                )?;
+                tx.execute(
+                    "INSERT OR REPLACE INTO file_aliases VALUES (?1,?2)",
+                    params![retired, revision.file_id],
+                )?;
+            }
             tx.execute("UPDATE outbox SET state='archived' WHERE file_id=?1 AND state IN ('pending','queued')",[&retired])?;
             tx.execute("UPDATE sync_jobs SET state='archived' WHERE binding=?1 AND file_id=?2 AND state!='acked'",params![binding,retired])?;
         }
@@ -504,7 +625,7 @@ mod tests {
             let copy = Uuid::new_v4().to_string();
             ws.db
                 .execute(
-                    "INSERT INTO sync_resolutions VALUES (?1,2,?2,?3,?4,?5,?6,?7,'pending')",
+                    "INSERT INTO sync_resolutions (binding,sequence,choice,destination,expected,operation_id,rename_id,copy_id,state,retire_id,restore_id) VALUES (?1,2,?2,?3,?4,?5,?6,?7,'pending',?8,?9)",
                     params![
                         binding.id,
                         choice,
@@ -512,7 +633,9 @@ mod tests {
                         local.hash,
                         operation,
                         Uuid::new_v4().to_string(),
-                        copy
+                        copy,
+                        Uuid::new_v4().to_string(),
+                        Uuid::new_v4().to_string()
                     ],
                 )
                 .unwrap();
@@ -686,12 +809,13 @@ mod tests {
                         let operation = Uuid::new_v4().to_string();
                         let rename = Uuid::new_v4().to_string();
                         let copy = Uuid::new_v4().to_string();
-                        ws.db.execute("INSERT INTO sync_resolutions VALUES (?1,1,?2,?3,?4,?5,?6,?7,'pending')",params![binding.id,choice,if choice=="copy" {"copy.md"} else {""},local.hash,operation,rename,copy]).unwrap();
+                        let retire = Uuid::new_v4().to_string();
+                        ws.db.execute("INSERT INTO sync_resolutions (binding,sequence,choice,destination,expected,operation_id,rename_id,copy_id,state,retire_id,restore_id) VALUES (?1,1,?2,?3,?4,?5,?6,?7,'pending',?8,?9)",params![binding.id,choice,if choice=="copy" {"copy.md"} else {""},local.hash,operation,rename,copy,retire,Uuid::new_v4().to_string()]).unwrap();
                         if choice == "copy" {
                             ws.write_operation("copy.md", "", b"local", "local", &copy)
                                 .unwrap();
                         }
-                        ws.mutate_with_origin("delete", "a.md", "", &local.hash, &rename, "remote")
+                        ws.mutate_with_origin("delete", "a.md", "", &local.hash, &retire, "remote")
                             .unwrap();
                         drop(ws);
                         ws = Workspace::open(root.path()).unwrap();
@@ -723,6 +847,95 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn same_target_renames_preserve_the_occupant_for_all_choices_twenty_rounds() {
+        for round in 0..20 {
+            let choice = ["local", "remote", "copy"][round % 3];
+            let root = tempfile::tempdir().unwrap();
+            let mut ws = Workspace::open(root.path()).unwrap();
+            let binding = ws
+                .sync_bind_download("https://sync.example", "remote-vault", "account")
+                .unwrap();
+            let mut left = RemoteRevision {
+                vault_id: "remote-vault".into(),
+                sequence: 1,
+                file_id: Uuid::new_v4().to_string(),
+                base_revision: 0,
+                path: "left.md".into(),
+                operation: "put".into(),
+                hash: Some(ws.sync_store_bytes(b"left-content").unwrap()),
+                size: 12,
+                operation_id: Uuid::new_v4().to_string(),
+            };
+            let right = RemoteRevision {
+                vault_id: "remote-vault".into(),
+                sequence: 2,
+                file_id: Uuid::new_v4().to_string(),
+                base_revision: 0,
+                path: "right.md".into(),
+                operation: "put".into(),
+                hash: Some(ws.sync_store_bytes(b"right-content").unwrap()),
+                size: 13,
+                operation_id: Uuid::new_v4().to_string(),
+            };
+            receive(&mut ws, &binding.id, &left);
+            receive(&mut ws, &binding.id, &right);
+            let right_hash = right.hash.as_deref().unwrap();
+            ws.rename("right.md", "target.md", right_hash).unwrap();
+
+            left.sequence = 3;
+            left.base_revision = 1;
+            left.path = "target.md".into();
+            left.operation_id = Uuid::new_v4().to_string();
+            receive(&mut ws, &binding.id, &left);
+
+            let conflict = ws.sync_conflicts(&binding.id).unwrap().remove(0);
+            assert_eq!(conflict["current_path"], "target.md");
+            assert_eq!(conflict["current_hash"], right_hash);
+            assert!(ws.sync_spool(right_hash).unwrap().is_file());
+            assert!(ws
+                .sync_spool(left.hash.as_deref().unwrap())
+                .unwrap()
+                .is_file());
+            let copy = format!("copies/target-{round}.md");
+            ws.sync_resolve(
+                &binding.id,
+                3,
+                choice,
+                if choice == "copy" { &copy } else { "" },
+                right_hash,
+            )
+            .unwrap();
+            drop(ws);
+
+            let mut ws = Workspace::open(root.path()).unwrap();
+            ws.sync_resume_resolutions(&binding.id).unwrap();
+            assert!(ws.sync_conflicts(&binding.id).unwrap().is_empty());
+            assert!(!root.path().join("left.md").exists());
+            let target = ws.read("target.md").unwrap();
+            assert_eq!(target.entry.file_id, left.file_id);
+            assert_eq!(
+                target.content,
+                if choice == "local" {
+                    "right-content"
+                } else {
+                    "left-content"
+                }
+            );
+            let restored = ws.read("right.md").unwrap();
+            assert_eq!(restored.entry.file_id, right.file_id);
+            assert_eq!(restored.content, "right-content");
+            if choice == "copy" {
+                assert_eq!(ws.read(&copy).unwrap().content, "right-content");
+            }
+            ws.sync_capture(&binding.id).unwrap();
+            assert_eq!(
+                ws.pending_count().unwrap(),
+                if choice == "remote" { 0 } else { 1 }
+            );
         }
     }
 }
