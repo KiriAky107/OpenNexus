@@ -304,7 +304,7 @@ mod core_proxy_tests {
     }
 }
 
-/// Authenticated process-local transport; session headers are owned by Rust.
+/// 经过认证的进程本地传输；会话请求头由 Rust 管理。
 #[tauri::command]
 fn core_request_prepare(host: State<'_, Host>, timeout_ms: u64) -> Result<String, String> {
     host.requests.prepare(timeout_ms)
@@ -966,7 +966,7 @@ fn main() {
                 }
             });
             let data_dir = app.path().app_data_dir()?.join("core-data");
-            // Debug builds use this worktree's interpreter; release builds only use bundled Core.
+            // 调试构建使用当前工作树的解释器；发布构建只使用随包提供的 Core。
             let core = if cfg!(debug_assertions) {
                 let backend = Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("../../backend")

@@ -59,6 +59,13 @@ fn main() {
             for mut child in children { let _ = child.kill(); let _ = child.wait(); }
             return;
         }
+        if args[1] == "mcp_scratch" {
+            let scratch = std::path::PathBuf::from(std::env::var_os("TEMP").unwrap());
+            let file = std::fs::File::create(scratch.join("quota-probe.bin")).unwrap();
+            file.set_len(300 * 1024 * 1024).unwrap();
+            std::thread::sleep(Duration::from_secs(120));
+            return;
+        }
         if args[1] == "mcp_cancel" || args[1] == "mcp_deadline" || args[1] == "mcp_cpu" {
             let _child = std::process::Command::new(std::env::current_exe().unwrap()).arg(if args[1] == "mcp_cpu" { "cpu_burn" } else { "wait" }).spawn().unwrap();
             std::thread::sleep(Duration::from_secs(120));

@@ -78,7 +78,7 @@ fn decode(bytes: &[u8]) -> Result<Envelope> {
         {
             return Err(invalid());
         }
-        // Error data is never propagated or logged; it may contain secrets.
+        // 错误数据可能包含秘密，因此绝不传播或记录。
         let _ = &error.data;
     }
     Ok(value)
@@ -217,8 +217,8 @@ impl<'a, 'p> Session<'a, 'p> {
             .tool(name)?;
         self.calls.review(&tool, arguments)
     }
-    /// Only invoke from an authenticated Host route after the user approved this
-    /// exact review. This method is not registered as a renderer/Core command.
+    /// 仅在用户批准完全一致的审查后由已认证 Host 路由调用。
+    /// 此方法不会注册为 renderer/Core 命令。
     pub fn confirm_call(
         &mut self,
         review_id: &str,
@@ -312,8 +312,7 @@ impl<'a, 'p> Session<'a, 'p> {
         }
         Ok(true)
     }
-    /// Apply already-received notifications before selecting a cached contract.
-    /// The eventual registry loop must also call this while the instance is idle.
+    /// 选择缓存契约前应用已收到的通知；最终注册表循环在实例空闲时也必须调用此方法。
     pub fn drain_pending(&mut self) -> Result<()> {
         let result = (|| {
             for _ in 0..128 {
@@ -373,7 +372,7 @@ impl<'a, 'p> Session<'a, 'p> {
                 self.process.check_authorization()?;
                 deadline.check()?;
                 if cancel.load(Ordering::Acquire) || started.elapsed() >= budget {
-                    // initialize cannot be cancelled at the protocol level.
+                    // initialize 无法在协议层取消。
                     if method != "initialize" {
                         let _ = self.send(json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":id}}));
                     }

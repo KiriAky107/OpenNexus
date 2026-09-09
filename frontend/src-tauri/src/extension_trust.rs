@@ -26,7 +26,7 @@ pub struct Checked {
     archive_path: String,
 }
 impl Checked {
-    /// Monotonic freshness avoids a wall-clock rollback extending validity.
+    /// 使用单调时钟判断新鲜度，避免系统时钟回拨延长有效期。
     pub fn matches(&self, source: &str, release: &Release, key: &[u8; 32]) -> Result<()> {
         if self.checked_at.elapsed() > Duration::from_secs(30) {
             return Err(HostError::new("EXTENSION_TRUST_STALE"));

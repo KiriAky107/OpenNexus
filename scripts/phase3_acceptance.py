@@ -90,6 +90,20 @@ CASE_DRIVERS: dict[str, dict[str, Any]] = {
         ),
         "platform_profiles": ("windows-11-x64",),
     },
+    "C-04": {
+        "driver": "scripts/acceptance_cases/c04_resources.py",
+        "timeout_seconds": 900,
+        "required_metrics": (
+            "memory_limit_bytes",
+            "scratch_limit_bytes",
+            "process_limit",
+            "tool_deadline_seconds",
+            "cleanup_deadline_ms",
+            "broker_requests_per_second",
+            "resource_failures_verified",
+        ),
+        "platform_profiles": ("windows-11-x64",),
+    },
     "D-01": {
         "driver": "scripts/acceptance_cases/d01_extensions.py",
         "timeout_seconds": 900,

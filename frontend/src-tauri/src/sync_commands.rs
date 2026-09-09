@@ -199,7 +199,7 @@ pub async fn sync_bind(host: State<'_, Host>, request: Bind) -> Result<Binding, 
         .await
         .map_err(|e| e.code)?;
     } else if request.mode == "download" {
-        // Verify account ownership before creating the durable binding.
+        // 创建持久绑定前验证账号所有权。
         let vaults = sync_auth::guarded(
             &host.credentials,
             client.json(reqwest::Method::GET, "sync/v1/vaults", None),

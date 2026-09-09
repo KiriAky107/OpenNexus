@@ -121,7 +121,7 @@ pub async fn extension_install_preview(
     let workspace = host.workspace.clone();
     let extensions = host.extensions.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Keep the workspace binding stable until this preview finishes.
+        // 在预览完成前保持工作区绑定不变。
         let workspace = workspace.lock().map_err(|_| "HOST_BUSY")?;
         if workspace.as_ref().ok_or("VAULT_NOT_OPEN")?.vault_id != request.vault_id {
             return Err("VAULT_CHANGED".into());
