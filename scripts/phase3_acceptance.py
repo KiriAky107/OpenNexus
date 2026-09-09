@@ -125,6 +125,24 @@ CASE_DRIVERS: dict[str, dict[str, Any]] = {
         ),
         "required_artifacts": ("postgres_initdb", "minio_server"),
     },
+    "S-09": {
+        "driver": "scripts/acceptance_cases/s09_sync_performance.py",
+        "timeout_seconds": 3000,
+        "required_metrics": (
+            "load_requests",
+            "api_p95_ms",
+            "unexpected_5xx_rate",
+            "validated_commits",
+            "service_peak_rss_bytes",
+            "upload_verified",
+            "initial_sync_ms",
+            "initial_verified_files",
+            "convergence_p95_ms",
+            "worker_count",
+            "client_count",
+        ),
+        "required_artifacts": ("postgres_initdb", "minio_server"),
+    },
 }
 ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{2,127}")
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{2,63}")
