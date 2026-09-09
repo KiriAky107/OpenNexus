@@ -42,6 +42,11 @@ CASE_DRIVERS: dict[str, dict[str, Any]] = {
         "timeout_seconds": 900,
         "required_metrics": (),
     },
+    "S-02": {
+        "driver": "scripts/acceptance_cases/s02_sync_client.py",
+        "timeout_seconds": 900,
+        "required_metrics": (),
+    },
 }
 ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{2,127}")
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{2,63}")
