@@ -807,22 +807,35 @@ mod tests {
         assert!(!broker.is_locked());
     }
     #[test]
-    fn python_fernet_migration_is_verified_idempotent_and_preserves_sources() {
+    fn b02_fernet_migration_matrix_is_atomic_verified_and_idempotent() {
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../tests/fixtures/fernet-python.json")).unwrap();
         let temp = tempfile::tempdir().unwrap();
         let old = temp.path().join("legacy");
         fs::create_dir(&old).unwrap();
         let source = serde_json::to_vec(&fixture["tokens"]).unwrap();
-        fs::write(old.join("credentials.json"), &source).unwrap();
-        fs::write(old.join("master.key"), fixture["key"].as_str().unwrap()).unwrap();
+        let source_path = old.join("credentials.json");
+        let key_path = old.join("master.key");
+        let legacy_key = fixture["key"].as_str().unwrap();
+        fs::write(&source_path, &source).unwrap();
+        fs::write(&key_path, legacy_key).unwrap();
         let mut broker = CredentialBroker::new(temp.path().join("new/stronghold.v1"));
         broker.unlock(password()).unwrap();
-        assert_eq!(broker.import_fernet(&old, None).unwrap(), 100);
-        assert_eq!(broker.import_fernet(&old, None).unwrap(), 100);
-        assert_eq!(broker.list().unwrap().len(), 100);
-        assert_eq!(fs::read(old.join("credentials.json")).unwrap(), source);
-        assert!(old.join("master.key").is_file());
+        for _ in 0..4 {
+            assert_eq!(broker.import_fernet(&old, None).unwrap(), 100);
+            assert_eq!(broker.list().unwrap().len(), 100);
+        }
+        assert_eq!(fs::read(&source_path).unwrap(), source);
+        assert_eq!(fs::read_to_string(&key_path).unwrap(), legacy_key);
+        let marker: serde_json::Value =
+            serde_json::from_slice(&fs::read(old.join(".opennexus-owner.json")).unwrap()).unwrap();
+        assert_eq!(marker["state"], "switched");
+        assert_eq!(marker["count"], 100);
+        assert_eq!(marker["environment_key"], false);
+        assert_eq!(
+            marker["source_sha256"],
+            format!("{:x}", Sha256::digest(&source))
+        );
         broker.lock();
         broker.unlock(password()).unwrap();
         for (id, value) in fixture["values"].as_object().unwrap() {
@@ -835,18 +848,129 @@ mod tests {
                 value.as_str().unwrap().as_bytes()
             );
         }
-        broker
+
+        let environment_source = temp.path().join("environment-source");
+        fs::create_dir(&environment_source).unwrap();
+        fs::write(environment_source.join("credentials.json"), &source).unwrap();
+        let mut environment_broker =
+            CredentialBroker::new(temp.path().join("environment-target/stronghold.v1"));
+        environment_broker.unlock(password()).unwrap();
+        assert_eq!(
+            environment_broker
+                .import_fernet(
+                    &environment_source,
+                    Some(Zeroizing::new(legacy_key.to_string())),
+                )
+                .unwrap(),
+            100
+        );
+        assert_eq!(environment_broker.list().unwrap().len(), 100);
+        assert!(!environment_source.join("master.key").exists());
+        assert_eq!(
+            fs::read(environment_source.join("credentials.json")).unwrap(),
+            source
+        );
+        let environment_marker: serde_json::Value = serde_json::from_slice(
+            &fs::read(environment_source.join(".opennexus-owner.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(environment_marker["environment_key"], true);
+
+        let empty_source = temp.path().join("empty-source");
+        fs::create_dir(&empty_source).unwrap();
+        fs::write(empty_source.join("credentials.json"), b"{}").unwrap();
+        fs::write(empty_source.join("master.key"), legacy_key).unwrap();
+        let mut empty_broker =
+            CredentialBroker::new(temp.path().join("empty-target/stronghold.v1"));
+        empty_broker.unlock(password()).unwrap();
+        assert_eq!(empty_broker.import_fernet(&empty_source, None).unwrap(), 0);
+        assert!(empty_broker.list().unwrap().is_empty());
+        assert_eq!(
+            fs::read(empty_source.join("credentials.json")).unwrap(),
+            b"{}"
+        );
+        let empty_marker: serde_json::Value =
+            serde_json::from_slice(&fs::read(empty_source.join(".opennexus-owner.json")).unwrap())
+                .unwrap();
+        assert_eq!(empty_marker["count"], 0);
+        assert_eq!(empty_marker["state"], "switched");
+
+        let missing_key_source = temp.path().join("missing-key-source");
+        fs::create_dir(&missing_key_source).unwrap();
+        fs::write(missing_key_source.join("credentials.json"), &source).unwrap();
+        let mut missing_key_broker =
+            CredentialBroker::new(temp.path().join("missing-key-target/stronghold.v1"));
+        missing_key_broker.unlock(password()).unwrap();
+        let missing_target_before = fs::read(&missing_key_broker.path).ok();
+        assert_eq!(
+            missing_key_broker
+                .import_fernet(&missing_key_source, None)
+                .unwrap_err(),
+            "MIGRATION_KEY_MISSING"
+        );
+        assert_eq!(
+            fs::read(&missing_key_broker.path).ok(),
+            missing_target_before
+        );
+        assert_eq!(
+            fs::read(missing_key_source.join("credentials.json")).unwrap(),
+            source
+        );
+        assert!(!missing_key_source.join(".opennexus-owner.json").exists());
+
+        let bad_source = temp.path().join("bad-token-source");
+        fs::create_dir(&bad_source).unwrap();
+        let mut bad_tokens = fixture["tokens"].clone();
+        bad_tokens["provider-050"] = serde_json::json!("invalid-fernet-token");
+        let bad_bytes = serde_json::to_vec(&bad_tokens).unwrap();
+        fs::write(bad_source.join("credentials.json"), &bad_bytes).unwrap();
+        fs::write(bad_source.join("master.key"), legacy_key).unwrap();
+        let mut bad_broker =
+            CredentialBroker::new(temp.path().join("bad-token-target/stronghold.v1"));
+        bad_broker.unlock(password()).unwrap();
+        let bad_target_before = fs::read(&bad_broker.path).ok();
+        assert_eq!(
+            bad_broker.import_fernet(&bad_source, None).unwrap_err(),
+            "MIGRATION_DECRYPT_FAILED"
+        );
+        assert_eq!(fs::read(&bad_broker.path).ok(), bad_target_before);
+        assert_eq!(
+            fs::read(bad_source.join("credentials.json")).unwrap(),
+            bad_bytes
+        );
+        assert!(!bad_source.join(".opennexus-owner.json").exists());
+
+        let conflict_source = temp.path().join("conflict-source");
+        fs::create_dir(&conflict_source).unwrap();
+        fs::write(conflict_source.join("credentials.json"), &source).unwrap();
+        fs::write(conflict_source.join("master.key"), legacy_key).unwrap();
+        let mut conflict_broker =
+            CredentialBroker::new(temp.path().join("conflict-target/stronghold.v1"));
+        conflict_broker.unlock(password()).unwrap();
+        conflict_broker
             .put(
                 &CredentialId::legacy("provider-000"),
                 Zeroizing::new(b"changed-new-value".to_vec()),
             )
             .unwrap();
+        let conflict_target_before = fs::read(&conflict_broker.path).unwrap();
         assert_eq!(
-            broker.import_fernet(&old, None).unwrap_err(),
+            conflict_broker
+                .import_fernet(&conflict_source, None)
+                .unwrap_err(),
             "MIGRATION_CONFLICT"
         );
         assert_eq!(
-            broker
+            fs::read(&conflict_broker.path).unwrap(),
+            conflict_target_before
+        );
+        assert_eq!(
+            fs::read(conflict_source.join("credentials.json")).unwrap(),
+            source
+        );
+        assert!(!conflict_source.join(".opennexus-owner.json").exists());
+        assert_eq!(
+            conflict_broker
                 .resolve(&Scope::Provider, &CredentialId::legacy("provider-000"))
                 .unwrap()
                 .unwrap()
