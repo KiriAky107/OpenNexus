@@ -53,20 +53,31 @@ onBeforeUnmount(() => ++generation)
 </script>
 
 <template>
-  <section class="desktop-packages" aria-label="桌面已暂存包">
-    <h2>桌面已暂存包</h2>
-    <p>暂存包保存在桌面安装库中，重启后仍可查看。暂存不代表已经安装或获得运行权限。</p>
-    <button class="btn" :disabled="busy" @click="refresh">刷新暂存列表</button>
-    <p v-if="error" role="alert">{{ error }}</p>
-    <p v-if="busy" role="status">正在检查…</p>
-    <p v-if="!busy && !packages.length">本页没有暂存包。</p>
-    <ul><li v-for="item in packages" :key="item.package_key">
-      <strong>{{ item.namespace }}/{{ item.package_id }} · {{ item.version }}</strong>
-      <p>{{ item.source }}</p><button class="btn" :disabled="busy" @click="choose(item)">查看安装预览</button>
-    </li></ul>
-    <button class="btn" :disabled="busy || page === 0" @click="page--; refresh()">上一页</button>
-    <span>第 {{ page + 1 }} 页</span>
-    <button class="btn" :disabled="busy || packages.length < 20" @click="page++; refresh()">下一页</button>
+  <section class="desktop-packages panel" aria-label="桌面已暂存包">
+    <header class="section-heading">
+      <div>
+        <h2>桌面已暂存包</h2>
+        <p>暂存包保存在桌面安装库中，重启后仍可查看。暂存不代表已经安装或获得运行权限。</p>
+      </div>
+      <button class="btn" :disabled="busy" @click="refresh">刷新暂存列表</button>
+    </header>
+    <p v-if="error" class="notice-banner error-message" role="alert">{{ error }}</p>
+    <p v-if="busy" class="notice-banner" role="status">正在检查…</p>
+    <div v-if="!busy && !packages.length" class="empty-state">
+      <strong>本页没有暂存包</strong>
+      <span>从社区目录校验并暂存包后，可在这里查看安装预览。</span>
+    </div>
+    <ul v-if="packages.length" class="package-list">
+      <li v-for="item in packages" :key="item.package_key" class="item-card">
+        <div><strong>{{ item.namespace }}/{{ item.package_id }} · {{ item.version }}</strong><p>{{ item.source }}</p></div>
+        <button class="btn" :disabled="busy" @click="choose(item)">查看安装预览</button>
+      </li>
+    </ul>
+    <nav class="pagination" aria-label="暂存包分页">
+      <button class="btn" :disabled="busy || page === 0" @click="page--; refresh()">上一页</button>
+      <span>第 {{ page + 1 }} 页</span>
+      <button class="btn" :disabled="busy || packages.length < 20" @click="page++; refresh()">下一页</button>
+    </nav>
     <AppDialog v-if="selected" label="桌面安装预览" @close="close">
       <h2>{{ selected.package_id }} · {{ selected.version }}</h2>
       <p v-if="!workspace.vaultId">请先打开要使用此包的笔记库。</p>
@@ -88,9 +99,16 @@ onBeforeUnmount(() => ++generation)
 </template>
 
 <style scoped>
-.desktop-packages { margin-block: var(--space-xl); }
-li { margin-block: var(--space-md); overflow-wrap: anywhere; }
+.desktop-packages { display: grid; gap: var(--space-lg); margin-block: var(--space-xl); padding: var(--space-xl); border: 1px solid var(--color-border-default); border-radius: var(--radius-lg); background: var(--color-surface-primary); }
+.section-heading { display: flex; align-items: start; justify-content: space-between; gap: var(--space-lg); }
+.section-heading h2, .section-heading p, .item-card p { margin: 0; }
+.section-heading p, .item-card p, .empty-state span { margin-top: var(--space-xs); color: var(--color-text-secondary); }
+.package-list { display: grid; gap: var(--space-md); margin: 0; padding: 0; list-style: none; }
+.item-card { display: flex; align-items: center; justify-content: space-between; gap: var(--space-lg); padding: var(--space-lg); color: var(--color-text-primary); background: var(--color-background-secondary); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); overflow-wrap: anywhere; }
+.empty-state { min-height: 120px; }
+.pagination { display: flex; align-items: center; gap: var(--space-sm); color: var(--color-text-secondary); }
 label { display: grid; gap: var(--space-xs); }
 textarea { width: 100%; color: var(--color-text-primary); background: var(--color-background-secondary); }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 700px) { .section-heading, .item-card { align-items: stretch; flex-direction: column; } }
 </style>
