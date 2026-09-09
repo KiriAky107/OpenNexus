@@ -108,6 +108,49 @@ struct CoreResponse {
 // 后端常规导出上限为 20 MiB；为 PDF 和未来的二进制接口保留余量，同时限制 IPC 内存占用。
 const MAX_CORE_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 
+fn validate_core_json_body(body: Option<&serde_json::Value>) -> Result<(), String> {
+    if body.is_some_and(|value| value.to_string().len() > MAX_CORE_RESPONSE_BYTES) {
+        return Err("CORE_REQUEST_TOO_LARGE".into());
+    }
+    Ok(())
+}
+
+fn decode_core_binary_body(encoded: String) -> Result<Vec<u8>, String> {
+    if encoded.len() > MAX_CORE_RESPONSE_BYTES * 4 / 3 + 4 {
+        return Err("CORE_REQUEST_TOO_LARGE".into());
+    }
+    let bytes = BASE64_STANDARD
+        .decode(encoded)
+        .map_err(|_| "CORE_BODY_INVALID")?;
+    if bytes.len() > MAX_CORE_RESPONSE_BYTES {
+        return Err("CORE_REQUEST_TOO_LARGE".into());
+    }
+    Ok(bytes)
+}
+
+fn checked_core_response_size(current: usize, additional: usize) -> Result<usize, String> {
+    let size = current.saturating_add(additional);
+    if size > MAX_CORE_RESPONSE_BYTES {
+        return Err("CORE_RESPONSE_TOO_LARGE".into());
+    }
+    Ok(size)
+}
+
+async fn read_core_response(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_CORE_RESPONSE_BYTES as u64)
+    {
+        return Err("CORE_RESPONSE_TOO_LARGE".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "CORE_RESPONSE_ERROR")? {
+        checked_core_response_size(bytes.len(), chunk.len())?;
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
 fn is_json_content_type(content_type: &str) -> bool {
     let media_type = content_type
         .split(';')
@@ -125,7 +168,10 @@ fn core_url(path: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod core_proxy_tests {
-    use super::{core_url, is_json_content_type};
+    use super::{
+        checked_core_response_size, core_url, decode_core_binary_body, is_json_content_type,
+        read_core_response, validate_core_json_body, MAX_CORE_RESPONSE_BYTES,
+    };
 
     #[test]
     fn request_dto_accepts_camel_case_and_rejects_unowned_headers() {
@@ -161,6 +207,99 @@ mod core_proxy_tests {
         assert!(!is_json_content_type(
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ));
+    }
+
+    #[tokio::test]
+    async fn a03_frozen_transfer_limits_and_failure_semantics() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let exact_json = serde_json::Value::String("x".repeat(MAX_CORE_RESPONSE_BYTES - 2));
+        validate_core_json_body(Some(&exact_json)).unwrap();
+        drop(exact_json);
+        let over_json = serde_json::Value::String("x".repeat(MAX_CORE_RESPONSE_BYTES - 1));
+        assert_eq!(
+            validate_core_json_body(Some(&over_json)).unwrap_err(),
+            "CORE_REQUEST_TOO_LARGE"
+        );
+        drop(over_json);
+
+        let encoded_length = MAX_CORE_RESPONSE_BYTES.div_ceil(3) * 4;
+        let mut exact_binary = "A".repeat(encoded_length - 2);
+        exact_binary.push_str("==");
+        assert_eq!(
+            decode_core_binary_body(exact_binary).unwrap().len(),
+            MAX_CORE_RESPONSE_BYTES
+        );
+        let mut over_binary = "A".repeat(encoded_length - 1);
+        over_binary.push('=');
+        assert_eq!(
+            decode_core_binary_body(over_binary).unwrap_err(),
+            "CORE_REQUEST_TOO_LARGE"
+        );
+        assert_eq!(
+            checked_core_response_size(MAX_CORE_RESPONSE_BYTES - 1, 1).unwrap(),
+            MAX_CORE_RESPONSE_BYTES
+        );
+        assert_eq!(
+            checked_core_response_size(MAX_CORE_RESPONSE_BYTES, 1).unwrap_err(),
+            "CORE_RESPONSE_TOO_LARGE"
+        );
+
+        fn server(declared: usize, sent: usize) -> (String, std::thread::JoinHandle<()>) {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/fixture", listener.local_addr().unwrap());
+            let worker = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {declared}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+                let block = [37u8; 64 * 1024];
+                let mut remaining = sent;
+                while remaining > 0 {
+                    let count = remaining.min(block.len());
+                    if socket.write_all(&block[..count]).is_err() {
+                        break;
+                    }
+                    remaining -= count;
+                }
+            });
+            (url, worker)
+        }
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let (url, worker) = server(MAX_CORE_RESPONSE_BYTES, MAX_CORE_RESPONSE_BYTES);
+        let bytes = read_core_response(client.get(url).send().await.unwrap())
+            .await
+            .unwrap();
+        assert_eq!(bytes.len(), MAX_CORE_RESPONSE_BYTES);
+        assert!(bytes.iter().all(|byte| *byte == 37));
+        worker.join().unwrap();
+
+        let (url, worker) = server(MAX_CORE_RESPONSE_BYTES + 1, 0);
+        assert_eq!(
+            read_core_response(client.get(url).send().await.unwrap())
+                .await
+                .unwrap_err(),
+            "CORE_RESPONSE_TOO_LARGE"
+        );
+        worker.join().unwrap();
+
+        let (url, worker) = server(8, 1);
+        assert_eq!(
+            read_core_response(client.get(url).send().await.unwrap())
+                .await
+                .unwrap_err(),
+            "CORE_RESPONSE_ERROR"
+        );
+        worker.join().unwrap();
     }
 }
 
@@ -211,12 +350,7 @@ async fn core_request(request: CoreRequest, host: State<'_, Host>) -> Result<Cor
             if body.is_some() && body_base64.is_some() {
                 return Err("CORE_BODY_INVALID".into());
             }
-            if body
-                .as_ref()
-                .is_some_and(|value| value.to_string().len() > MAX_CORE_RESPONSE_BYTES)
-            {
-                return Err("CORE_REQUEST_TOO_LARGE".into());
-            }
+            validate_core_json_body(body.as_ref())?;
             let core = host.core.clone();
             let core_path = path.clone();
             let session = tauri::async_runtime::spawn_blocking(move || {
@@ -261,21 +395,13 @@ async fn core_request(request: CoreRequest, host: State<'_, Host>) -> Result<Cor
                 request = request.json(&value);
             }
             if let Some(encoded) = body_base64 {
-                if encoded.len() > MAX_CORE_RESPONSE_BYTES * 4 / 3 + 4 {
-                    return Err("CORE_REQUEST_TOO_LARGE".into());
-                }
-                let bytes = BASE64_STANDARD
-                    .decode(encoded)
-                    .map_err(|_| "CORE_BODY_INVALID")?;
-                if bytes.len() > MAX_CORE_RESPONSE_BYTES {
-                    return Err("CORE_REQUEST_TOO_LARGE".into());
-                }
                 let content_type = content_type
                     .as_deref()
                     .unwrap_or("application/octet-stream");
                 if !matches!(content_type, "application/octet-stream" | "application/zip") {
                     return Err("CORE_CONTENT_TYPE_DENIED".into());
                 }
+                let bytes = decode_core_binary_body(encoded)?;
                 request = request
                     .header(reqwest::header::CONTENT_TYPE, content_type)
                     .body(bytes);
@@ -287,7 +413,7 @@ async fn core_request(request: CoreRequest, host: State<'_, Host>) -> Result<Cor
                 request = request.header("Idempotency-Key", key);
             }
             checkpoint()?;
-            let mut response = request.send().await.map_err(|_| "CORE_UNAVAILABLE")?;
+            let response = request.send().await.map_err(|_| "CORE_UNAVAILABLE")?;
             let status = response.status().as_u16();
             let content_type = response
                 .headers()
@@ -295,19 +421,7 @@ async fn core_request(request: CoreRequest, host: State<'_, Host>) -> Result<Cor
                 .and_then(|value| value.to_str().ok())
                 .unwrap_or("")
                 .to_owned();
-            if response
-                .content_length()
-                .is_some_and(|length| length > MAX_CORE_RESPONSE_BYTES as u64)
-            {
-                return Err("CORE_RESPONSE_TOO_LARGE".into());
-            }
-            let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(|_| "CORE_RESPONSE_ERROR")? {
-                if bytes.len().saturating_add(chunk.len()) > MAX_CORE_RESPONSE_BYTES {
-                    return Err("CORE_RESPONSE_TOO_LARGE".into());
-                }
-                bytes.extend_from_slice(&chunk);
-            }
+            let bytes = read_core_response(response).await?;
             let (body, body_base64) = if is_json_content_type(&content_type) {
                 (
                     String::from_utf8(bytes.to_vec()).map_err(|_| "CORE_RESPONSE_ERROR")?,
@@ -396,8 +510,7 @@ fn core_stream(
             channel.send(serde_json::json!({"kind":"headers","status":response.status().as_u16()})).map_err(|_| "CORE_STREAM_CLOSED")?;
             let mut size = 0usize;
             while let Some(bytes) = response.chunk().await.map_err(|_| "CORE_RESPONSE_ERROR")? {
-                size = size.saturating_add(bytes.len());
-                if size > MAX_CORE_RESPONSE_BYTES { return Err("CORE_RESPONSE_TOO_LARGE".into()); }
+                size = checked_core_response_size(size, bytes.len())?;
                 for chunk in bytes.chunks(16384) {
                     channel.send(serde_json::json!({"kind":"chunk","data":BASE64_STANDARD.encode(chunk)})).map_err(|_| "CORE_STREAM_CLOSED")?;
                 }

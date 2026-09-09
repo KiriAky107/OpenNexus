@@ -37,6 +37,11 @@ CASE_DRIVERS: dict[str, dict[str, Any]] = {
         "timeout_seconds": 900,
         "required_metrics": (),
     },
+    "A-03": {
+        "driver": "scripts/acceptance_cases/a03_transport.py",
+        "timeout_seconds": 900,
+        "required_metrics": (),
+    },
     "B-01": {
         "driver": "scripts/acceptance_cases/b01_credentials.py",
         "timeout_seconds": 900,
