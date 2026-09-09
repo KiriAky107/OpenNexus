@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import secrets
 import subprocess
 import sys
 import threading
@@ -51,6 +52,42 @@ def test_session_auth_covers_every_route_and_rejects_duplicate_headers():
     assert len(calls) == 6
 
 
+def test_session_auth_rejects_missing_wrong_and_old_generation_100_times_without_side_effects():
+    calls = []
+
+    async def app(scope, receive, send):
+        calls.append(scope["path"])
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+
+    secret = "ab" * 32
+    generation = "cd" * 32
+    auth = SessionAuth(app, secret, generation, 4567)
+    host = (b"host", b"127.0.0.1:4567")
+    authorization = (b"authorization", f"Bearer {secret}".encode())
+    current = (b"x-core-generation", generation.encode())
+    cases = {
+        "missing": [host, current],
+        "wrong": [host, (b"authorization", ("Bearer " + "ef" * 32).encode()), current],
+        "old": [host, authorization, (b"x-core-generation", ("01" * 32).encode())],
+    }
+
+    async def request(headers):
+        messages = []
+
+        async def send(message):
+            messages.append(message)
+
+        await auth({"type": "http", "headers": headers, "path": "/api/notes"}, None, send)
+        return messages
+
+    for name, headers in cases.items():
+        for _ in range(100):
+            messages = asyncio.run(request(headers))
+            assert messages[0]["status"] == 401, name
+            assert json.loads(messages[1]["body"])["error"]["code"] == "AUTH_REQUIRED"
+    assert calls == []
+
+
 def test_handshake_proof_binds_port_pid_generation_and_challenge():
     args = ["01" * 32, "02" * 32, "03" * 32, 123, 4567, 123]
     expected = proof(*args)
@@ -62,8 +99,8 @@ def test_handshake_proof_binds_port_pid_generation_and_challenge():
 
 
 def test_real_sidecar_bootstrap_auth_and_parent_eof(tmp_path):
-    config = dict(protocol=1, secret="01" * 32, challenge="02" * 32,
-                  generation="03" * 32, data_dir=str(tmp_path / "core"))
+    config = dict(protocol=1, secret=secrets.token_hex(32), challenge=secrets.token_hex(32),
+                  generation=secrets.token_hex(32), data_dir=str(tmp_path / "core"))
     executable = os.environ.get("OPENNEXUS_CORE_TEST_BINARY")
     command = [executable] if executable else [sys.executable, "-m", "app.sidecar"]
     diagnostics = (tmp_path / "core-stderr.log").open("wb")
@@ -73,6 +110,8 @@ def test_real_sidecar_bootstrap_auth_and_parent_eof(tmp_path):
                                stderr=diagnostics,
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     try:
+        assert config["secret"] not in "\0".join(command)
+        assert config["secret"] not in "\0".join(os.environ.values())
         config["launcher_pid"] = process.pid
         process.stdin.write(json.dumps(config).encode() + b"\n")
         process.stdin.flush()
@@ -96,8 +135,22 @@ def test_real_sidecar_bootstrap_auth_and_parent_eof(tmp_path):
         })
         with opener.open(request, timeout=5) as response:
             assert json.load(response)["status"] == "ok"
+        for disabled in ("/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"):
+            request = urllib.request.Request(url + disabled, headers={
+                "Authorization": "Bearer " + config["secret"],
+                "X-Core-Generation": config["generation"],
+            })
+            with pytest.raises(urllib.error.HTTPError) as error:
+                opener.open(request, timeout=5)
+            assert error.value.code == 404
         process.stdin.close()
         assert process.wait(timeout=10) == 0
+        diagnostics.flush()
+        planted = config["secret"].encode()
+        assert planted not in (tmp_path / "core-stderr.log").read_bytes()
+        for artifact in (tmp_path / "core").rglob("*"):
+            if artifact.is_file():
+                assert planted not in artifact.read_bytes(), artifact.name
     finally:
         if not process.stdin.closed:
             process.stdin.close()
