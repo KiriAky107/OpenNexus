@@ -210,7 +210,7 @@ function toggleFromTitlebar(event: MouseEvent) {
 
   &.close:hover {
     background: var(--color-error);
-    color: white;
+    color: var(--color-on-error);
   }
 }
 

@@ -47,6 +47,12 @@
   --color-error-soft: #ffebe9;
   --color-info: #0969da;
   --color-info-soft: #ddf4ff;
+  --color-on-error: #ffffff;
+  --color-on-success: #ffffff;
+  --color-brand-surface: #ffffff;
+  --color-brand-ink: #252b36;
+  --color-brand-surface-dark: #111111;
+  --color-highlight-overlay: #ffffff30;
 
   /* Border */
   --color-border-default: #e4e7eb;
@@ -128,6 +134,7 @@
 }
 
 [data-theme='light'] {
+  color-scheme: light;
   --color-callout-info: #175da6;
   --color-callout-success: #236b3b;
   --color-callout-warning: #855700;
@@ -193,6 +200,7 @@
 }
 
 [data-theme='sepia'] {
+  color-scheme: light;
   --color-callout-info: #396578;
   --color-callout-success: #496b3b;
   --color-callout-warning: #805918;

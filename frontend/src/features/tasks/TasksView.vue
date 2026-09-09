@@ -68,7 +68,7 @@ async function remove(task: TaskItem) {
 .task-card { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: var(--space-md); }
 .status-check { width: 28px; height: 28px; border: 2px solid var(--color-border-default); border-radius: var(--radius-full); transition: border-color var(--motion-fast), background-color var(--motion-fast), color var(--motion-fast), transform var(--motion-fast); }
 .status-check:hover { border-color: var(--color-success); transform: scale(1.06); }
-.status-check.done { border-color: var(--color-success); background: var(--color-success); color: white; box-shadow: 0 3px 10px color-mix(in srgb, var(--color-success) 24%, transparent); }
+.status-check.done { border-color: var(--color-success); background: var(--color-success); color: var(--color-on-success); box-shadow: 0 3px 10px color-mix(in srgb, var(--color-success) 24%, transparent); }
 .task-title { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-sm); }
 .task-content p { margin: var(--space-xs) 0; }
 .task-content .subtle { display: flex; flex-wrap: wrap; gap: var(--space-md); }

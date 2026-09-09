@@ -9,7 +9,7 @@ import { computed, reactive, ref, watch } from 'vue'
 
 const permissions = [
   'notes.read', 'notes.search', 'notes.write', 'notes.delete', 'tasks.read', 'tasks.write',
-  'attachments.read', 'network.request', 'secrets.use', 'ui.command', 'ui.settings', 'ui.sidebar',
+  'attachments.read', 'skills.write', 'plugins.write', 'network.request', 'secrets.use', 'ui.command', 'ui.settings', 'ui.sidebar',
 ]
 const capabilities = [
   'chat', 'vision', 'tool_calling', 'reasoning', 'streaming', 'structured_output',

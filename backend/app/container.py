@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from app.agent import AgentRuntime, PermissionManager, PermissionPolicy, ToolRegistry
 from app.agent.builtin_tools import register_builtin_tools
+from app.agent.service_tools import register_service_tools
 from app.contracts import ModelCapability, ProviderConfig, ProviderType
 from app.config import BACKEND_DIR, get_settings
 from app.extensions import PluginRuntime, SkillRuntime
@@ -70,6 +71,10 @@ def build_container() -> ApplicationContainer:
     plugins.enable("chat-policy")
     plugins = InstalledRuntime(plugins, 'plugin', settings.data_dir)
     plugins.restore()
+
+    # These tools depend on the fully constructed Plugin runtime. Register them
+    # before loading Skills so Skill dependency checks see the complete catalog.
+    register_service_tools(tools, plugins)
 
     mcp_servers = McpServerRegistry(
         tools,
