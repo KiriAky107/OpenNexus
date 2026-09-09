@@ -31,7 +31,13 @@ CASE_SUITES = {
 ALL_CASES = tuple(case for cases in CASE_SUITES.values() for case in cases)
 # A case becomes executable only when a repository-owned driver is registered here.
 # Component/unit test commands are deliberately not treated as production acceptance.
-CASE_DRIVERS: dict[str, dict[str, Any]] = {}
+CASE_DRIVERS: dict[str, dict[str, Any]] = {
+    "B-02": {
+        "driver": "scripts/acceptance_cases/b02_credentials.py",
+        "timeout_seconds": 900,
+        "required_metrics": (),
+    },
+}
 ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{2,127}")
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{2,63}")
 SENSITIVE_KEY = re.compile(r"(?:password|passwd|secret|token|api[_-]?key|credential)", re.I)
@@ -122,7 +128,7 @@ def load_config(path: Path, environ: dict[str, str] | None = None) -> dict[str, 
     if config.get("isolated") is not True or config.get("allow_destructive") is not True:
         raise AcceptanceError("CONFIG_ISOLATION_CONFIRMATION_REQUIRED")
     run_id = config.get("run_id")
-    if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id):
+    if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id) or run_id.startswith("replace-"):
         raise AcceptanceError("CONFIG_RUN_ID_INVALID")
     profile = config.get("platform_profile")
     if not isinstance(profile, str) or not profile.strip():
@@ -420,6 +426,26 @@ def _repository_evidence(config: dict[str, Any]) -> dict[str, Any]:
     return {"commit": commit or None, "lock_sha256": locks, "artifact_sha256": artifacts}
 
 
+def repository_changes() -> tuple[str, ...]:
+    paths: set[str] = set()
+    commands = (
+        ["git", "diff", "--name-only", "-z", "--", ".", ":(exclude)backend/data/vault"],
+        ["git", "diff", "--cached", "--name-only", "-z", "--", ".", ":(exclude)backend/data/vault"],
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+    )
+    for command in commands:
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, check=False)
+        if completed.returncode != 0:
+            raise AcceptanceError("SOURCE_STATE_UNAVAILABLE")
+        for raw in completed.stdout.split(b"\0"):
+            if not raw:
+                continue
+            path = raw.decode("utf-8", errors="replace").replace("\\", "/")
+            if path != "backend/data/vault" and not path.startswith("backend/data/vault/"):
+                paths.add(path)
+    return tuple(sorted(paths))
+
+
 def execute(args: argparse.Namespace, environ: dict[str, str] | None = None) -> int:
     environ = os.environ if environ is None else environ
     if args.list_cases:
@@ -431,6 +457,10 @@ def execute(args: argparse.Namespace, environ: dict[str, str] | None = None) -> 
     selected = select_cases(args.suite, args.case)
     config_path = Path(args.config).resolve()
     config = load_config(config_path, environ)
+    changes = repository_changes()
+    if changes:
+        preview = ",".join(changes[:10])
+        raise AcceptanceError(f"SOURCE_TREE_DIRTY: {preview}")
     if args.suite == "all" and not config.get("platform_profile"):
         raise AcceptanceError("CONFIG_PLATFORM_PROFILE_REQUIRED")
     prepare_isolated_root(config)

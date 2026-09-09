@@ -55,7 +55,7 @@ def test_config_rejects_personal_vault_plaintext_secrets_and_unconfirmed_roots(t
     assert (existing / "keep.txt").read_text(encoding="utf-8") == "keep"
 
 
-def test_missing_driver_is_a_junit_failure_and_never_a_skip(tmp_path):
+def test_missing_driver_is_a_junit_failure_and_never_a_skip(tmp_path, monkeypatch):
     data_root = tmp_path / "isolated"
     config_path = config(tmp_path / "config.json", data_root)
     report = tmp_path / "report"
@@ -63,6 +63,7 @@ def test_missing_driver_is_a_junit_failure_and_never_a_skip(tmp_path):
         suite="sidecar", case="A-01", config=str(config_path), report_dir=str(report),
         list_cases=False, json=False,
     )
+    monkeypatch.setattr(runner, "repository_changes", lambda: ())
     assert runner.execute(args, {}) == 1
     result = json.loads((report / "cases" / "A-01.json").read_text(encoding="utf-8"))
     summary = json.loads((report / "summary.json").read_text(encoding="utf-8"))
@@ -72,6 +73,18 @@ def test_missing_driver_is_a_junit_failure_and_never_a_skip(tmp_path):
     assert summary["contains_credentials"] is False
     assert '<failure type="NOT_IMPLEMENTED">' in junit
     assert "skipped=\"0\"" in junit
+
+
+def test_execution_rejects_uncommitted_non_vault_source(tmp_path, monkeypatch):
+    config_path = config(tmp_path / "config.json", tmp_path / "isolated")
+    args = Namespace(
+        suite="sidecar", case="A-01", config=str(config_path), report_dir=str(tmp_path / "report"),
+        list_cases=False, json=False,
+    )
+    monkeypatch.setattr(runner, "repository_changes", lambda: ("scripts/changed.py",))
+    with pytest.raises(runner.AcceptanceError, match="SOURCE_TREE_DIRTY"):
+        runner.execute(args, {})
+    assert not (tmp_path / "report").exists()
 
 
 def test_driver_result_must_supply_assertions_metrics_and_zero_exit(tmp_path):
