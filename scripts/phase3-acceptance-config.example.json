@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "run_id": "replace-with-unique-run-id",
+  "isolated": true,
+  "allow_destructive": true,
+  "platform_profile": "windows-11-x64",
+  "data_root_env": "OPENNEXUS_ACCEPTANCE_DATA_ROOT",
+  "seed": 20260908,
+  "allow_http_test_services": true,
+  "service_urls": {
+    "sync": "http://127.0.0.1:18080"
+  },
+  "artifacts": {},
+  "secret_env": {}
+}
