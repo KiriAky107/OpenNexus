@@ -110,6 +110,21 @@ CASE_DRIVERS: dict[str, dict[str, Any]] = {
         ),
         "required_artifacts": ("postgres_initdb", "minio_server"),
     },
+    "S-07": {
+        "driver": "scripts/acceptance_cases/s07_sync_backup.py",
+        "timeout_seconds": 3600,
+        "required_metrics": (
+            "file_count",
+            "object_count",
+            "object_bytes",
+            "verified_objects",
+            "rto_ms",
+            "backup_age_seconds",
+            "initialization_runs",
+            "migration_failures",
+        ),
+        "required_artifacts": ("postgres_initdb", "minio_server"),
+    },
 }
 ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{2,127}")
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{2,63}")
