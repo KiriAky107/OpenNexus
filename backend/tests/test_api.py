@@ -152,7 +152,7 @@ def test_mcp_split_config_and_secret_requests_persist_without_plaintext(
         "startup_timeout_seconds": 120,
         "tool_timeout_seconds": 300,
     }
-    # Reproduce the old frontend payload. The backend still enforces separation.
+    # 重现旧的前端有效负载。后端仍然强制分离。
     invalid = client.post(
         "/api/mcp/servers",
         json={
@@ -179,7 +179,7 @@ def test_mcp_split_config_and_secret_requests_persist_without_plaintext(
     assert "synthetic-only" not in service._path.read_text(encoding="utf-8")
     _, credentials_path = service.credentials._paths()
     assert "synthetic-only" not in credentials_path.read_text(encoding="utf-8")
-    assert not current.json()["enabled"]  # Saving never starts a third-party process.
+    assert not current.json()["enabled"]  # 保存永远不会启动第三方进程。
     client.close()
 
 
@@ -223,8 +223,7 @@ def test_mcp_lifecycle_lock_contention_keeps_event_loop_responsive(
     monkeypatch.setattr(service, operation, observed)
     holder = threading.Thread(target=hold_lifecycle_lock, daemon=True)
     holder.start()
-    # An independent watchdog lets the test fail rather than hang if a regression
-    # blocks the event loop itself (an asyncio timeout alone cannot catch that).
+    # 如果回归阻止事件循环本身，独立的看门狗会让测试失败而不是挂起（单独的异步超时无法捕获该情况）。
     watchdog = threading.Timer(5, release.set)
     watchdog.start()
 

@@ -1,6 +1,4 @@
-//! Instance-bound file RPC policy. Transport must bind one Broker to one
-//! authenticated instance. Write commits currently use Workspace's transaction;
-//! full handle-relative write hardening is required before untrusted activation.
+//! 实例绑定文件 RPC 策略。 Transport 必须将一个 Broker 绑定到一个经过身份验证的实例。写入提交当前使用 Workspace 的事务；在不受信任的激活之前，需要完全的句柄相关的写强化。
 use crate::{
     credentials::CredentialBroker,
     extension_permit::{Authority, Claims, Lease, Permit},
@@ -45,7 +43,7 @@ pub struct Broker {
     requests: u32,
 }
 impl Broker {
-    /// Called by the Host after instance identity binding; never an IPC command.
+    /// 实例身份绑定后由Host调用；绝不是 IPC 命令。
     pub fn bind(
         authority: &Authority,
         permit: &Permit,
@@ -108,8 +106,7 @@ impl Broker {
         }
         self.lease.check()
     }
-    /// The transport must apply MAX_FRAME_BYTES while reading, before allocation.
-    /// Hold the Host workspace lock throughout dispatch and commit.
+    /// 传输在分配之前读取时必须应用 MAX_FRAME_BYTES。在整个调度和提交过程中保持 Host 工作区锁。
     pub fn dispatch(&mut self, workspace: &mut Workspace, bytes: &[u8]) -> Result<Value> {
         self.lease.check()?;
         if workspace.vault_id != self.vault {
@@ -295,7 +292,7 @@ mod tests {
             call(&mut broker, &mut ws, altered).unwrap_err().code,
             "OPERATION_PAYLOAD_CONFLICT"
         );
-        // Build a stale CAS with a genuinely new operation ID.
+        // 使用真正的新操作 ID 构建过期的 CAS。
         let mut stale = write.clone();
         stale["operation_id"] = json!(uuid::Uuid::new_v4().to_string());
         assert_eq!(

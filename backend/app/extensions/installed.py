@@ -1,4 +1,4 @@
-"""Local installation journal. Only explicitly managed ZIP roots may be removed."""
+"""本地安装日志。只能删除显式管理的 ZIP 根。"""
 from __future__ import annotations
 
 import hashlib
@@ -83,7 +83,7 @@ class InstalledRuntime:
     def install(self, package_path, *, managed_root=None):
         with self.lock:
             root = Path(package_path).resolve()
-            package_digest(root)  # Check before changing runtime state.
+            package_digest(root)  # 更改运行时状态之前检查。
             if managed_root is not None:
                 owned = Path(managed_root).resolve()
                 if owned.parent != self.storage or not root.is_relative_to(owned):
@@ -100,7 +100,7 @@ class InstalledRuntime:
 
     def enable(self, identifier):
         with self.lock:
-            # Changed packages must be reinstalled to re-parse their declarations.
+            # 必须重新安装更改的软件包以重新解析其声明。
             saved = self._read(identifier)
             root = self.runtime._record(identifier).package_path
             if saved and saved.get('digest') != package_digest(root):
@@ -132,7 +132,7 @@ class InstalledRuntime:
     def _cleanup(self, saved):
         raw = saved.get('managed_root')
         if not raw:
-            return  # Directory installs belong to the user.
+            return  # 目录安装属于用户。
         path = Path(raw)
         if path.is_symlink() or path.resolve().parent != self.storage:
             raise ValueError('Refusing to remove an unmanaged package directory')

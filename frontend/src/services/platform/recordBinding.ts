@@ -1,4 +1,4 @@
-/** A durable preference draft keeps its original CAS base until the user resolves a conflict. */
+/** 持久偏好草案保留其原始 CAS 基础，直到用户解决冲突。 */
 export interface LogicalRecord<T> { schema: 1; kind: string; id: string; data: T }
 export interface RecordDocument<T> { record: LogicalRecord<T>; hash: string; file_id: string }
 interface Draft<T> { record: LogicalRecord<T>; expected: string; operation_id: string }
@@ -40,7 +40,7 @@ export class RecordBinding<T> {
     if (this.stopped) return
     const data = JSON.parse(JSON.stringify(this.options.read())) as T
     if (!this.draft && this.remote && JSON.stringify(data) === JSON.stringify(this.remote.record.data)) return
-    // New edits while a request runs get a new operation, but preserve the unresolved base.
+    // 请求运行时的新编辑会获取新操作，但保留未解析的基础。
     this.draft = { record: { schema: 1, kind: this.options.kind, id: this.options.id, data }, expected: this.draft?.expected ?? this.remote?.hash ?? '', operation_id: crypto.randomUUID() }
     this.restored = false; this.invalidDraft = false
     try { this.persist(); if (this.error === 'PREFERENCE_DRAFT_STORE_FAILED') this.error = '' } catch { this.error = 'PREFERENCE_DRAFT_STORE_FAILED'; this.options.changed?.() }
@@ -71,7 +71,7 @@ export class RecordBinding<T> {
         if (this.draft.operation_id === draft.operation_id) {
           this.persist(null); this.draft = null; this.appliedHash = committed.hash
         } else {
-          // The next local edit follows the just-confirmed predecessor, not its older CAS base.
+          // 下一个本地编辑遵循刚刚确认的前身，而不是其较旧的 CAS 基础。
           this.draft.expected = committed.hash; this.persist()
         }
       } else if (this.remote && this.remote.hash !== this.appliedHash) {

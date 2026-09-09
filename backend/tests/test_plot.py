@@ -107,7 +107,7 @@ def test_render_svg_contains_polyline_and_axes() -> None:
     assert "<line" in svg  # 坐标轴/网格
     assert "<script" not in svg
     assert rendered.width == 640
-    assert rendered.height == 504  # Includes the legend row.
+    assert rendered.height == 504  # 包括图例行。
 
 
 def test_render_svg_multiple_functions() -> None:
@@ -319,7 +319,7 @@ def test_function_plot_static_renderer_renders_svg() -> None:
     assert "<polyline" in result.content
     assert result.mime_type == "image/svg+xml"
     assert result.width == 640
-    assert result.height == 504  # Includes the legend row.
+    assert result.height == 504  # 包括图例行。
 
 
 def test_function_plot_static_renderer_parse_exposes_node_count() -> None:
@@ -513,7 +513,7 @@ def test_visible_midpoint_does_not_bridge_a_pole():
         for px, py in seg:
             x = (px-_PLOT_X0)/(_PLOT_X1-_PLOT_X0)*2
             y = 1-(py-_PLOT_Y0)/(_PLOT_Y1-_PLOT_Y0)*2
-            # On the visible branch, 1000*t + .001/t - 1.5 >= .5.
+            # 在可见分支上，1000*t + .001/t - 1.5 >= .5。
             assert x > .001
             assert y >= .5-1e-8
             assert y == pytest.approx(1000*(x-.0025)+.001/(x-.001),abs=.002)
@@ -544,7 +544,7 @@ def test_refinement_budget_is_shared_by_both_subtrees(monkeypatch):
     monkeypatch.setattr(rendering, 'evaluate', oscillate)
     samples = rendering._refine_crossing(None, (0,-2), (1,2), -1,1)
     assert len(calls) == rendering._REFINE_MAX_EVALUATIONS
-    assert None in samples  # Exhaustion leaves gaps, never unchecked chords.
+    assert None in samples  # 疲惫会留下间隙，永远不会不受控制的和弦。
 
 
 @pytest.mark.parametrize('factor,pole', [(0.0001,.001),(-0.0001,.001),(.001,.001),(.0001,.0025),(.0001,.00419)])

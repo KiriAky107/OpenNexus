@@ -135,7 +135,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     try {
       errBody = (await resp.json()) as ErrorResponse
     } catch {
-      /* ignore */
+      /* 忽略 */
     }
 
     const code = errBody?.error?.code || `HTTP_${resp.status}`

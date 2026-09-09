@@ -1,4 +1,4 @@
-"""Task-local observations of the embedding path actually used by a search."""
+"""Task-搜索实际使用的嵌入路径的局部观察。"""
 from contextlib import contextmanager
 from contextvars import ContextVar
 

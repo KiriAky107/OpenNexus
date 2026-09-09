@@ -1,4 +1,4 @@
-//! Device-local choices for optional logical data; never exported as sync records.
+//! 可选逻辑数据的设备本地选择；从未导出为同步记录。
 use crate::workspace::{HostError, Result, Workspace};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
@@ -91,7 +91,7 @@ mod tests {
             .sync_bind_empty("https://sync.example", "remote", "account")
             .unwrap();
         let job = ws.sync_next(&binding.id).unwrap().unwrap();
-        // Models a pre-scope database's pending job after schema migration.
+        // 对模式迁移后范围内数据库的待处理作业进行建模。
         ws.db
             .execute("DELETE FROM sync_optional_scope", [])
             .unwrap();

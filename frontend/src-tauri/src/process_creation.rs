@@ -1,5 +1,4 @@
-//! Coordinate Host-controlled Windows launches while inheritable handles exist.
-//! This does not serialize foreign libraries that bypass this Host boundary.
+//! 在存在可继承手柄的情况下协调 Host 控制的 Windows 启动。这不会序列化绕过此 Host 边界的外部库。
 use std::sync::{Mutex, MutexGuard};
 static CREATION: Mutex<()> = Mutex::new(());
 

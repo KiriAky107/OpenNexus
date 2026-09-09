@@ -1,4 +1,4 @@
-//! Deterministic, bounded dependency planning; no mutation, activation or automatic downloads.
+//! 确定性、有界依赖规划；没有突变、激活或自动下载。
 use crate::{
     extension_package::Release,
     workspace::{hash, HostError, Result},
@@ -410,7 +410,7 @@ mod tests {
             resolve(&candidates).unwrap_err().code,
             "EXTENSION_DEPENDENCY_COMPLEXITY"
         );
-        // A valid-size graph with oversized permission metadata must not create an unbounded IPC result.
+        // 节点数合法但权限元数据过大的依赖图，也不能产生无界的 IPC 结果。
         let mut wide = vec![candidate("root", "1.0.0", &[])];
         for i in 0..100 {
             let id = format!("leaf-{i:03}");
@@ -421,7 +421,7 @@ mod tests {
                 .collect();
             wide.push(leaf);
         }
-        // Split the direct dependencies to respect the per-release 64-entry limit.
+        // 拆分直接依赖项以遵守每个版本 64 个条目的限制。
         let second = wide[0].release.dependencies.split_off("leaf-050");
         wide[0]
             .release

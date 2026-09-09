@@ -1,4 +1,4 @@
-"""Export palettes are fixed data; arbitrary theme CSS is never executed."""
+"""导出调色板是固定数据；任意主题 CSS 永远不会执行。"""
 PALETTES = {
     'ocean-blue': ('#edf5fa','#ffffff','#183a50','#46667a','#e6f1f8','#a6c5d9','#086b9c'),
     'light': ('#f6f7f9','#ffffff','#1f2328','#57606a','#eaeef2','#d0d7de','#0969da'),
@@ -19,7 +19,7 @@ def print_theme_warning(options, warnings, format_name):
     if options.theme_id != 'light':
         warnings.append(f'{format_name} 使用浅色打印样式，不支持主题 {options.theme_id}；需要主题配色请导出 HTML')
 
-# Semantic type, portable title symbol and contrasting print color.
+# 语义类型、通用标题符号以及具有足够对比度的打印颜色。
 CALLOUTS = {
     'note': ('i','#0969da'), 'abstract': ('=','#7041a0'),
     'info': ('i','#0969da'), 'todo': ('[ ]','#0969da'),

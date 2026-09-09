@@ -1,5 +1,5 @@
-//! Native instance workers. Construct/drop this manager off the UI thread.
-//! Production callers must still satisfy the complete launch policy contract.
+//! 原生实例工作线程。必须在 UI 线程之外创建和销毁此管理器；
+//! 生产调用方仍须满足完整的启动策略约定。
 use crate::{
     credentials::CredentialBroker,
     extension_call_authorization::{Identity, Review},
@@ -46,8 +46,7 @@ pub struct LaunchSpec {
     pub vault_id: String,
     pub policy_version: String,
     pub system_root: PathBuf,
-    /// Revalidate active install/current trust and all external policy immediately
-    /// before resume, after expensive package checks. Errors prohibit execution.
+    /// 在昂贵的软件包检查之后，在恢复之前立即重新验证活动安装/当前信任和所有外部策略。错误禁止执行。
     pub before_resume: ResumeCheck,
 }
 #[derive(Clone, Copy, Serialize, PartialEq, Eq, Debug)]

@@ -1,4 +1,4 @@
-//! Signed, offline configuration schemas. Credentials belong to the vault broker.
+//! 已签名的离线配置结构；凭据由 Vault 代理管理。
 use crate::workspace::{HostError, Result};
 use serde_json::{json, Value};
 
@@ -11,7 +11,7 @@ fn walk(value: &Value, depth: usize, nodes: &mut usize, schema: bool) -> Result<
         Value::Object(map) => {
             for (key, value) in map {
                 if schema && matches!(key.as_str(), "$ref" | "$dynamicRef" | "$recursiveRef") {
-                    // Recursive/unbounded schema execution is not allowed in the Host.
+                    // Host 中不允许递归/无界模式执行。
                     return Err(HostError::new("EXTENSION_CONFIG_REFERENCE"));
                 }
                 if !schema
@@ -44,8 +44,7 @@ fn walk(value: &Value, depth: usize, nodes: &mut usize, schema: bool) -> Result<
     Ok(())
 }
 
-// Examine every applicable schema branch; an alternative branch must not
-// turn a secret declaration back into persistable plaintext.
+// 检查每个适用的模式分支；替代分支不得将秘密声明转回可持久的明文。
 fn reject_secrets(schema: &Value, instance: &Value) -> Result<()> {
     let Some(map) = schema.as_object() else {
         return Ok(());
@@ -124,7 +123,7 @@ fn reject_secrets(schema: &Value, instance: &Value) -> Result<()> {
     Ok(())
 }
 
-/// Schema is read from the verified manifest, never from the proposed configuration.
+/// 架构是从已验证的清单中读取的，而不是从建议的配置中读取的。
 pub fn validate(manifest: &Value, configuration: &Value) -> Result<()> {
     if !configuration.is_object() {
         return Err(HostError::new("EXTENSION_CONFIG_INVALID"));

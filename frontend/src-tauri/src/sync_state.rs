@@ -1,4 +1,4 @@
-//! Durable queue state. Network code never invents a remote base from a local revision.
+//! 持久队列状态。网络代码永远不会从本地版本创建远程基础。
 use crate::workspace::{HostError, Result, Workspace};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -56,7 +56,7 @@ impl Workspace {
         }
         Ok(())
     }
-    /// Caller verifies an empty remote and obtains a reconciliation confirmation first.
+    /// 调用者验证空远程并首先获得协调确认。
     pub fn sync_bind_empty(
         &mut self,
         endpoint: &str,
@@ -73,7 +73,7 @@ impl Workspace {
                 })?;
         let paths = self.sync_paths()?;
         let id = Uuid::new_v4().to_string();
-        // Rebinding explicitly starts from the current snapshot, never an old account's queue.
+        // 重新绑定显式从当前快照开始，而不是旧帐户的队列。
         if had_binding {
             self.db.execute(
                 "UPDATE outbox SET state='archived' WHERE state IN ('pending','queued')",
@@ -246,7 +246,7 @@ impl Workspace {
     }
     pub fn sync_commit_payload(&self, job: &Job) -> Result<serde_json::Value> {
         self.check_job(job)?;
-        // The base is frozen exactly once. A response loss reuses the byte-equivalent payload.
+        // 基准快照只冻结一次；响应丢失后复用字节完全相同的负载。
         self.db.execute("UPDATE sync_jobs SET state='committing',base_revision=COALESCE((SELECT revision FROM sync_heads WHERE binding=?1 AND file_id=?3),0) WHERE binding=?1 AND operation_id=?2 AND base_revision IS NULL",
             params![job.binding,job.operation_id,job.file_id])?;
         let base: i64 = self.db.query_row(

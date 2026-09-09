@@ -72,8 +72,7 @@ def build_container() -> ApplicationContainer:
     plugins = InstalledRuntime(plugins, 'plugin', settings.data_dir)
     plugins.restore()
 
-    # These tools depend on the fully constructed Plugin runtime. Register them
-    # before loading Skills so Skill dependency checks see the complete catalog.
+    # 这些工具依赖于完全构建的 Plugin 运行时。在加载 Skills 之前注册它们，以便 Skill 依赖性检查看到完整的目录。
     register_service_tools(tools, plugins)
 
     mcp_servers = McpServerRegistry(

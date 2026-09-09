@@ -22,7 +22,7 @@ async function load(reset = false, older = false) {
   const viewport = scroller.value
   const oldHeight = viewport?.scrollHeight ?? 0
   const oldTop = viewport?.scrollTop ?? 0
-  // Preserve a visible row when adding history and trimming the opposite edge.
+  // 添加历史记录并修剪相对边缘时保留可见行。
   const anchor = older && viewport ? [...viewport.querySelectorAll<HTMLElement>('[data-log-id]')].find(row => row.getBoundingClientRect().bottom > viewport.getBoundingClientRect().top) : undefined
   const anchorTop = anchor?.getBoundingClientRect().top
   const anchorId = anchor?.dataset.logId
@@ -30,7 +30,7 @@ async function load(reset = false, older = false) {
   try {
     const result = await apiClient.get<LogPage>('/api/logs', { params: { limit: 50, before: older ? page.value.next_cursor ?? undefined : undefined, ...applied } })
     if (version !== revision) return
-    // If the reader scrolled away during a refresh, leave their view untouched.
+    // 如果读者在刷新期间滚动离开，请保持他们的视图不变。
     if (!reset && !older && !following.value) return
     const previous = page.value.items
     const overlaps = result.items.some(item => previous.some(old => old.id === item.id))

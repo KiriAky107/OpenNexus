@@ -1,4 +1,4 @@
-//! Only the local main window may review Host trust or prepared installations.
+//! 只有本地主窗口可以检查 Host 信任或准备的安装。
 use super::Host;
 use notesagent_host::extension_store::{ExtensionStore, InstallRequest, TrustSetting};
 use serde::Deserialize;

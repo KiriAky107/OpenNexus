@@ -1,4 +1,4 @@
-"""Fail-closed runner for the OpenNexus phase-three production acceptance IDs."""
+"""OpenNexus 第三阶段生产验收 ID 的默认拒绝型执行器。"""
 
 from __future__ import annotations
 
@@ -30,8 +30,7 @@ CASE_SUITES = {
     "e2e": tuple(f"E-{number:02d}" for number in range(1, 6)),
 }
 ALL_CASES = tuple(case for cases in CASE_SUITES.values() for case in cases)
-# A case becomes executable only when a repository-owned driver is registered here.
-# Component/unit test commands are deliberately not treated as production acceptance.
+# 只有在此注册了仓库自有驱动的案例才能执行；组件或单元测试命令不计入生产验收。
 CASE_DRIVERS: dict[str, dict[str, Any]] = {
     "A-02": {
         "driver": "scripts/acceptance_cases/a02_sidecar.py",
@@ -202,7 +201,7 @@ MAX_LOG_BYTES = 10 * 1024 * 1024
 
 
 class AcceptanceError(ValueError):
-    """A stable, user-actionable runner configuration error."""
+    """一个稳定的、用户可操作的运行器配置错误。"""
 
 
 def _utc_now() -> str:

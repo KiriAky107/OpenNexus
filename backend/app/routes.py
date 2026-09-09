@@ -148,7 +148,7 @@ async def get_permission_policy() -> dict[str, str]:
 
 
 async def mcp_call_async(operation):
-    """Even registry reads can wait on lifecycle locks; keep all MCP work off the event loop."""
+    """甚至注册表读取也可以等待生命周期锁；让所有 MCP 工作脱离事件循环。"""
     try:
         return await asyncio.to_thread(operation)
     except McpRegistryError as exc:
@@ -223,7 +223,7 @@ async def extension_call_async(operation):
         raise ApiError(exc.status_code, exc.code, exc.message, exc.details) from exc
 
 
-# Workspace (single configured Vault in Web development mode)
+# 工作区（Web开发模式下单个配置的Vault）
 @router.get("/workspace", response_model=WorkspaceInfo, tags=["Workspace"])
 async def get_workspace() -> WorkspaceInfo:
     return workspace_service.get_workspace_info()
@@ -258,7 +258,7 @@ async def delete_workspace_folder(request: FolderDeleteRequest) -> OperationResp
     return await workspace_service.delete_folder(request.path)
 
 
-# Notes
+# 笔记
 @router.get("/notes", response_model=NoteListResponse, tags=["Notes"])
 async def list_notes(
     limit: int = Query(default=50, ge=1, le=100),
@@ -321,7 +321,7 @@ async def rename_note(note_id: str, request: NoteRenameRequest) -> Note:
     return await note_service.rename_note(note_id, file_name=request.file_name)
 
 
-# Retrieval and chat
+# 检索和聊天
 @router.post("/search", response_model=SearchResponse, tags=["Search"])
 async def search_notes(request: SearchRequest) -> SearchResponse:
     from app.services import search_history
@@ -531,7 +531,7 @@ async def select_chat_version(conversation_id: str, message_id: str):
     return {'status': 'completed'}
 
 
-# Agent
+# 智能体
 @router.get("/agent/runs", response_model=AgentRunListResponse, tags=["Agent"])
 async def list_agent_runs(
     limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0)
@@ -679,7 +679,7 @@ async def list_tools() -> ToolListResponse:
     return ToolListResponse(items=container.tools.definitions())
 
 
-# Skills
+# 技能
 @router.get("/user-skills", response_model=UserSkillListResponse, tags=["Skills"])
 async def list_user_skills(
     limit: int = Query(default=100, ge=1, le=1000),
@@ -802,7 +802,7 @@ async def uninstall_skill(skill_id: str) -> OperationResponse:
     )
 
 
-# Independent MCP Server Registry
+# 独立的 MCP 服务器注册表
 @router.get("/mcp/servers", response_model=McpServerListResponse, tags=["MCP Servers"])
 async def list_mcp_servers() -> McpServerListResponse:
     return McpServerListResponse(items=await mcp_call_async(container.mcp_servers.list))
@@ -913,7 +913,7 @@ async def delete_mcp_server_secret(
     )
 
 
-# Plugins
+# 插件
 @router.get("/plugins", response_model=PluginListResponse, tags=["Plugins"])
 async def list_plugins() -> PluginListResponse:
     return PluginListResponse(items=container.plugins.list())
@@ -1013,7 +1013,7 @@ async def uninstall_plugin(plugin_id: str) -> OperationResponse:
     )
 
 
-# Plugin Command / Settings Contributions
+# Plugin 命令/设置贡献
 @router.get(
     "/plugin-contributions/commands",
     response_model=PluginCommandListResponse,
@@ -1091,7 +1091,7 @@ async def delete_plugin_setting_secret(plugin_id: str, key: str) -> PluginSecret
     )
 
 
-# Providers
+# 提供商
 @router.get(
     "/credentials/{credential_id}",
     response_model=CredentialStatus,
@@ -1302,7 +1302,7 @@ async def test_provider(request: ProviderTestRequest) -> ProviderTestResponse:
     return await container.providers.test(request.provider_id, request.model)
 
 
-# Tasks
+# 任务
 @router.get("/tasks", response_model=TaskListResponse, tags=["Tasks"])
 async def list_tasks(
     limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0)
@@ -1346,7 +1346,7 @@ async def delete_task(task_id: str) -> OperationResponse:
     return OperationResponse(status="completed", resource_id=task_id, message="deleted")
 
 
-# Media and index
+# 媒体和索引
 @router.get("/model-routing", response_model=ModelRoutingResponse, tags=["Providers"])
 async def get_model_routing() -> ModelRoutingResponse:
     return container.model_routing.describe()
@@ -1421,7 +1421,7 @@ async def get_index_job(job_id: str) -> IndexJob:
     return job
 
 
-# Benchmark
+# 基准
 @router.get(
     "/benchmarks/datasets",
     response_model=BenchmarkDatasetListResponse,

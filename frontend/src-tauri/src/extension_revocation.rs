@@ -1,4 +1,4 @@
-//! Native instance monitor; revocation does not depend on the caller polling.
+//! 本机实例监视器；撤销不依赖于调用者轮询。
 use crate::{
     extension_job::Job,
     extension_permit::Lease,

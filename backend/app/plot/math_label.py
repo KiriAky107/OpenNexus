@@ -1,4 +1,4 @@
-"""Safe AST-to-LaTeX conversion and vector math layout for plot labels."""
+"""安全的 AST 到 LaTeX 转换和绘图标签的矢量数学布局。"""
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ def _latex(node: ast.AST, parent_precedence: int = 0) -> str:
 
 
 def expression_latex(expression: str) -> str:
-    """Convert one already-supported function expression to MathText-compatible LaTeX."""
+    """将一个已支持的函数表达式转换为 MathText 兼容的 LaTeX。"""
     return "y = " + _latex(parse_expression(expression).body)
 
 
@@ -90,7 +90,7 @@ def _offset(values: tuple[float, ...], x: float, y: float) -> tuple[float, ...]:
 
 @lru_cache(maxsize=256)
 def math_layout(latex: str, size: float = 12.0) -> MathLayout:
-    """Lay out LaTeX as reusable vector paths; calls are cached and serialized for FT2Font."""
+    """将 LaTeX 布局为可重用的矢量路径； FT2Font 的调用被缓存和序列化。"""
     with _MATH_LOCK:
         parsed = _MATH_PARSER.parse(f"${latex}$", dpi=72, prop=FontProperties(size=size))
         paths: list[VectorPath] = []
@@ -125,7 +125,7 @@ def _svg_path(path: VectorPath) -> str:
 
 
 def render_math_svg(latex: str, *, x: float, top: float, class_name: str, color: str) -> str:
-    """Return a script-free SVG group containing MathText vector glyphs."""
+    """返回包含 MathText 矢量字形的无脚本 SVG 组。"""
     layout = math_layout(latex)
     baseline = top + layout.height - layout.depth
     accessible = html.escape(latex, quote=True)
@@ -145,7 +145,7 @@ def render_math_svg(latex: str, *, x: float, top: float, class_name: str, color:
 
 
 def render_math_reportlab(latex: str, *, x: float, visual_top: float, color: object):
-    """Return a reportlab Group containing the same LaTeX glyph geometry as the SVG."""
+    """返回包含与 SVG 相同的 LaTeX 字形几何形状的 reportlab 组。"""
     from reportlab.graphics.shapes import Group, Path, Rect
 
     layout = math_layout(latex)
@@ -181,7 +181,7 @@ def render_math_reportlab(latex: str, *, x: float, visual_top: float, color: obj
 
 @lru_cache(maxsize=256)
 def render_math_mask(latex: str, size: float = 12.0, dpi: float = 144.0) -> tuple[int, int, bytes]:
-    """Rasterize LaTeX to an 8-bit alpha mask for DOCX/PNG export."""
+    """将 LaTeX 光栅化为 8 位 alpha 掩码以用于 DOCX/PNG 导出。"""
     with _MATH_LOCK:
         parsed = _RASTER_PARSER.parse(f"${latex}$", dpi=dpi, prop=FontProperties(size=size))
         image = parsed.image

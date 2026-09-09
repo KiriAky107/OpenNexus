@@ -31,7 +31,7 @@ export default defineConfig({
     },
     rollupOptions: {
       output: {
-        // Keep lazy languages/diagrams independent; do not collect every vendor into one bundle.
+        // 保持惰性语言/图表独立；不要将每个供应商收集到一个捆绑包中。
         onlyExplicitManualChunks: true,
         manualChunks(id) {
           const module = id.replace(/\\/g, '/')

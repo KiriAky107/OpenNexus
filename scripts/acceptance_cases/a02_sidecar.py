@@ -1,4 +1,4 @@
-"""A-02 authenticated Core transport and secret-exposure acceptance driver."""
+"""A-02：Core 认证传输与机密泄露验收驱动。"""
 
 from __future__ import annotations
 

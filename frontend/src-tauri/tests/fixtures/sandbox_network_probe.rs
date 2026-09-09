@@ -1,4 +1,4 @@
-//! Standalone native test probe; never shipped or used to launch extensions.
+//! 独立本机测试探针；从未发货或用于启动扩展。
 use std::net::{SocketAddr, TcpStream, UdpSocket};
 use std::time::Duration;
 fn main() {
@@ -84,7 +84,7 @@ fn main() {
             if !stale.is_empty() { reply(id(&stale), r#"{"content":[],"structuredContent":{"ok":true}}"#); }
             return;
         }
-        // MCP server remains alive between calls until Host closes stdin.
+        // MCP 服务器在调用之间保持活动状态，直到 Host 关闭标准输入。
         while !read(&mut input).is_empty() {}
         return;
     }
@@ -107,8 +107,7 @@ fn main() {
         }
         let sentinel: usize = args[2].parse().unwrap();
         let mut identity = FileIdentity { volume: 0, id: [0; 16] };
-        // Numeric handles may alias unrelated child objects. Compare the actual
-        // file identity without reading from a possibly aliased pipe handle.
+        // 数字句柄可能会为不相关的子对象起别名。比较实际文件标识，而不读取可能有别名的管道句柄。
         if unsafe { GetFileInformationByHandleEx(sentinel as *mut _, 18,
             (&mut identity as *mut FileIdentity).cast(),
             std::mem::size_of::<FileIdentity>() as u32) } != 0 {

@@ -1,4 +1,4 @@
-"""B-04 transactional credential migration and confirmed cleanup oracle."""
+"""B-04：事务化凭据迁移与确认清理的判定器。"""
 
 from __future__ import annotations
 

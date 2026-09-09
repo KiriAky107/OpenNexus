@@ -1,4 +1,4 @@
-"""One offline inference process. Heavy libraries stay out of the API process."""
+"""单个离线推理进程；重量级依赖不会加载到 API 进程中。"""
 from __future__ import annotations
 
 import contextlib
@@ -26,7 +26,7 @@ def decode(path, *, limit_seconds=3600, warnings=None):
                 corrupt += 1
                 if corrupt > 100:
                     raise ValueError("Too many damaged audio packets")
-                # Retain the missing packet's duration as silence so later timestamps do not shift.
+                # 将丢失数据包的持续时间保留为静音，以便后面的时间戳不会发生变化。
                 missing = max(0, round(float((packet.duration or 0) * (packet.time_base or 0)) * 16000))
                 samples += missing
                 if samples > limit_seconds * 16000:
@@ -58,7 +58,7 @@ def decode(path, *, limit_seconds=3600, warnings=None):
 
 
 def speech_regions(audio):
-    """Energy-based segmentation, not word alignment; retain original sample offsets."""
+    """基于能量的切分，而不是词对齐；保留原始样本偏移量。"""
     import numpy as np
     window = 480
     energies = [float(np.sqrt(np.mean(audio[i:i + window] ** 2))) for i in range(0, len(audio), window)]
@@ -140,7 +140,7 @@ def run(request):
                                         model_kwargs={"attn_implementation": "sdpa"})
             loaded = time.monotonic()
             result = model.encode(payload["texts"], batch_size=4, normalize_embeddings=True, show_progress_bar=False).tolist()
-            # Count the tokenizer's actual encoded input, not characters or words.
+            # 计算分词器的实际编码输入，而不是字符或单词。
             usage = {"input_tokens": int(model.tokenize(payload["texts"])["attention_mask"].sum())}
         elif operation == "transcription":
             from qwen_asr import Qwen3ASRModel
@@ -166,7 +166,7 @@ def run(request):
             loaded = time.monotonic()
             first = voice_embedding(model, decode(payload["source"]), device)
             second = voice_embedding(model, decode(payload["reference"]), device)
-            # Similarity, not a calibrated identity probability.
+            # 相似性，不是校准的身份概率。
             result = {"score": max(0.0, min(1.0, float(torch.dot(first, second))))}
         elif operation == "diarization":
             model = speaker_model(path, device)
@@ -198,14 +198,14 @@ def run(request):
 
 if __name__ == "__main__":
     request = json.loads(sys.stdin.buffer.read())
-    # Third-party progress/logging must never corrupt the protocol or leak into API errors.
+    # 第三方进度/日志记录绝不能破坏协议或泄漏到 API 错误。
     with contextlib.redirect_stdout(sys.stderr):
         try:
             response = run(request)
         except (ImportError, ModuleNotFoundError):
             response = {"error_code": "LOCAL_RUNTIME_DEPENDENCY_MISSING", "message": "本地模型运行依赖不完整，请重新运行安装脚本。"}
         except Exception as exc:
-            # Only device failures allow the host to retry once in a fresh CPU process.
+            # 只有设备故障才允许主机在新的 CPU 进程中重试一次。
             import torch
             cuda_failure = isinstance(exc, CudaInitializationError)
             cuda_oom = request.get("_actual_device") == "cuda:0" and isinstance(exc, torch.cuda.OutOfMemoryError)

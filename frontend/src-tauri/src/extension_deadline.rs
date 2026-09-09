@@ -1,4 +1,4 @@
-//! Per-tool-call deadline. A persistent server does not have a 60-second lifetime.
+//! 每个工具调用的截止时间。持久服务器的生命周期不是 60 秒。
 use crate::{
     extension_job::Job,
     workspace::{HostError, Result},
@@ -18,10 +18,7 @@ struct State {
     wake: Condvar,
     outcome: AtomicU8,
 }
-/// Host-owned guard, created before dispatching a tool call. Finish it only when
-/// the call completes. Expiration kills the entire instance group even if the
-/// caller never polls. Dropping without finish aborts the instance; only explicit
-/// successful completion cancels the timer while preserving the server.
+/// Host 拥有的防护，在调度工具调用之前创建。仅当呼叫完成时才完成。即使调用者从不轮询，过期也会杀死整个实例组。未完成就丢弃会中止实例；只有显式成功完成才能取消计时器，同时保留服务器。
 pub struct ToolDeadline {
     state: Arc<State>,
     job: Arc<Job>,
@@ -91,8 +88,7 @@ impl ToolDeadline {
             _ => Ok(()),
         }
     }
-    /// Completion cannot cancel an already elapsed budget, even if the timer
-    /// thread has not yet been scheduled to observe expiration.
+    /// 完成无法取消已用完的预算，即使尚未安排计时器线程来观察到期情况。
     pub fn finish(mut self) -> Result<()> {
         self.stop();
         match self.state.outcome.load(Ordering::Acquire) {
@@ -102,7 +98,7 @@ impl ToolDeadline {
             _ => Err(HostError::new("EXTENSION_TOOL_DEADLINE_EXCEEDED")),
         }
     }
-    /// Explicit abandonment terminates the instance and reports kill failures.
+    /// 显式放弃终止实例并报告终止失败。
     pub fn cancel(mut self) -> Result<()> {
         let result = self.job.terminate();
         self.stop();

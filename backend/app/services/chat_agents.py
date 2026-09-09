@@ -1,4 +1,4 @@
-"""Chat delegation reuses the persistent Agent runtime and its permission gates."""
+"""聊天委托重用持久 Agent 运行时及其权限门。"""
 import json
 from pydantic import BaseModel, ConfigDict, Field
 from app.contracts import AgentRunCreateRequest, ToolDefinition, ToolCall

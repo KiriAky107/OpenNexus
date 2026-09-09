@@ -1,4 +1,4 @@
-"""S-08 sync classification and logical-record compatibility acceptance driver."""
+"""S-08：同步分类与逻辑记录兼容性验收驱动。"""
 
 from __future__ import annotations
 

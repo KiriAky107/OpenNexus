@@ -10,8 +10,8 @@ const panel = ref<HTMLElement | null>(null)
 const storageKey = 'notes-agent.workspace-chat.bounds.v1'
 const width = ref(640), height = ref(680)
 const x = ref(Math.max(8, window.innerWidth - 660)), y = ref(64)
-try { const saved = JSON.parse(localStorage.getItem(storageKey) ?? 'null'); if (saved && [saved.x,saved.y,saved.width,saved.height].every(Number.isFinite)) { x.value=saved.x; y.value=saved.y; width.value=saved.width; height.value=saved.height } } catch { /* storage unavailable */ }
-function save() { try { localStorage.setItem(storageKey, JSON.stringify({x:x.value,y:y.value,width:width.value,height:height.value})) } catch { /* storage unavailable */ } }
+try { const saved = JSON.parse(localStorage.getItem(storageKey) ?? 'null'); if (saved && [saved.x,saved.y,saved.width,saved.height].every(Number.isFinite)) { x.value=saved.x; y.value=saved.y; width.value=saved.width; height.value=saved.height } } catch { /* 存储不可用 */ }
+function save() { try { localStorage.setItem(storageKey, JSON.stringify({x:x.value,y:y.value,width:width.value,height:height.value})) } catch { /* 存储不可用 */ } }
 function reset() { width.value=640; height.value=680; x.value=window.innerWidth-660; y.value=32; clamp(); save() }
 let resizing: { x:number; y:number; width:number; height:number } | null = null
 function resizeStart(e: PointerEvent) { if (e.button !== 0) return; resizing={x:e.clientX,y:e.clientY,width:width.value,height:height.value}; (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); e.preventDefault() }

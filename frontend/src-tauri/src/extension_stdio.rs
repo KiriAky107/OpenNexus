@@ -1,5 +1,4 @@
-//! Per-launch anonymous pipes. Only child ends enter the explicit inheritance
-//! list. The runtime owns Host ends and must bound frames and cancel blocked IO.
+//! 每次启动的匿名管道。只有子端进入显式继承列表。运行时拥有 Host 端，必须绑定帧并取消阻塞的 IO。
 use crate::workspace::{HostError, Result};
 #[cfg(any(feature = "desktop", test))]
 use std::os::windows::io::FromRawHandle;
@@ -55,8 +54,8 @@ impl ChildIo {
             },
         ))
     }
-    /// Own both the pipe ends and the launch lock. Field drop order closes all
-    /// inheritable ends before allowing a competing Host launch to proceed.
+    /// 同时持有管道端点与启动锁。字段的销毁顺序会先关闭所有可继承端点，
+    /// 再允许其他并发 Host 启动继续执行。
     pub(crate) fn inherit(self) -> Result<InheritedIo> {
         let lock = crate::process_creation::lock().map_err(HostError::new)?;
         let guarded = InheritedIo {

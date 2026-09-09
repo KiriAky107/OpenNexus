@@ -6,10 +6,7 @@ import { isMap, parseDocument } from 'yaml'
 
 export const THEME_APP_VERSION = appPackage.version
 
-/**
- * Semantic colors every page and component may consume. Theme packages can
- * override any subset; the compatibility layer supplies the rest.
- */
+/** 每个页面和组件可能消耗的语义颜色。主题包可以覆盖任何子集；兼容层提供其余部分。 */
 export const REQUIRED_THEME_COLOR_TOKENS = [
   'background-primary', 'background-secondary', 'background-tertiary', 'background-hover', 'background-active', 'background-overlay',
   'surface-primary', 'surface-secondary', 'surface-elevated',
@@ -29,7 +26,7 @@ const STORAGE_KEY = 'installed-themes'
 const ACTIVE_CUSTOM_KEY = 'active-custom-theme'
 export const MAX_THEME_BYTES = 5 * 1024 * 1024
 
-/** Normalize all transports to the existing single-file inspection format. */
+/** 将所有传输标准化为现有的单文件检查格式。 */
 export async function decodeThemePackage(bytes: Uint8Array): Promise<string> {
   if (bytes.length > MAX_THEME_BYTES) throw new Error('主题包不能超过 5 MB')
   const decode = (data: Uint8Array) => new TextDecoder('utf-8', { fatal: true }).decode(data)
@@ -180,7 +177,7 @@ function applyThemeCss(themeId: string, css: string) {
 
 const THEME_CONTRACT_MARKER = '/* opennexus-theme-contract */'
 
-/** Fill incomplete third-party themes with an accessible semantic palette. */
+/** 使用可访问的语义调色板填充不完整的第三方主题。 */
 export function withThemeContract(themeId: string, isDark: boolean, css: string): string {
   if (css.includes(THEME_CONTRACT_MARKER)) return css
   const selector = `[data-theme="${themeId}"]`
@@ -408,7 +405,7 @@ export function setActiveCustomTheme(themeId: string | null) {
   const theme = themeId ? loadStoredThemes().find(item => item.theme_id === themeId) : undefined
   const storedCss = themeId ? localStorage.getItem(`${STORAGE_KEY}-css-${themeId}`) : null
   const css = themeId && theme && storedCss ? withThemeContract(themeId, theme.is_dark, storedCss) : storedCss
-  // Validate before changing the current page. Only the selected theme owns a style node.
+  // 更改当前页面之前进行验证。只有选定的主题才拥有样式节点。
   if (css) validateCssSafety(css)
   document.head.querySelectorAll('style[id^="theme-style-"]').forEach(style => style.remove())
   if (themeId && css) applyThemeCss(themeId, css)

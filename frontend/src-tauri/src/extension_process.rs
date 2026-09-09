@@ -1,5 +1,4 @@
-//! Windows process ownership primitive. A suspended process is not execution
-//! authorization; the extension runtime must complete its checks before resume.
+//! Windows 进程所有权原语。暂停的进程不是执行授权；扩展运行时必须在恢复之前完成其检查。
 use crate::{
     extension_container::Profile,
     extension_job::Job,
@@ -51,8 +50,7 @@ impl Attributes {
             return Err(bad());
         }
         value.initialized = true;
-        // The attribute stores a pointer to SECURITY_CAPABILITIES. The caller
-        // updates it with storage that remains alive until CreateProcessW.
+        // 该属性存储指向SECURITY_CAPABILITIES的指针。调用者使用在 CreateProcessW 之前保持活动状态的存储来更新它。
         Ok(value)
     }
 }
@@ -223,8 +221,7 @@ impl<'a> Suspended<'a> {
         value.0._bound_entry = Some(entry);
         Ok(value)
     }
-    /// Create instance-specific stdio without exposing an address or trusting a
-    /// self-reported process/package identity. Host endpoints are never inherited.
+    /// 创建特定于实例的 stdio，而不暴露地址或信任自我报告的进程/包身份。 Host 端点永远不会被继承。
     #[cfg(feature = "desktop")]
     pub fn create_bound_with_stdio(
         profile: &'a Profile,
@@ -254,9 +251,8 @@ impl<'a> Suspended<'a> {
             identity: None,
         })
     }
-    /// # Safety
-    /// The same complete resource/broker/trust preconditions as resume apply.
-    /// This additionally arms revocation monitoring before any instruction resumes.
+    /// # 安全性
+    /// 必须满足与 resume 相同的完整资源、代理与信任前提；此外还要在恢复执行任何指令前启用撤销监控。
     #[cfg(feature = "desktop")]
     pub(crate) unsafe fn resume_with_lease(
         self,
@@ -311,8 +307,7 @@ impl Running<'_> {
     pub(crate) fn active_test_processes(&self) -> Result<u32> {
         self.process.job.active_processes()
     }
-    /// Arm before dispatching a tool request; finish after receiving its result.
-    /// Failure to arm must prevent dispatch. This does not time server lifetime.
+    /// 发送工具请求前启动计时，收到结果后结束。若启动计时失败，必须阻止调度；该计时不限制服务器生命周期。
     pub fn start_tool_call(&self) -> Result<crate::extension_deadline::ToolDeadline> {
         self.check_authorization()?;
         crate::extension_deadline::ToolDeadline::arm(&self.process.job)
@@ -324,7 +319,7 @@ impl Running<'_> {
     ) -> Result<crate::extension_deadline::ToolDeadline> {
         crate::extension_deadline::ToolDeadline::arm_test(&self.process.job, budget)
     }
-    /// A bounded observation only. The runtime must enforce the tool deadline.
+    /// 此处只进行有界观测；工具截止时间必须由运行时强制执行。
     pub fn wait(&self, timeout: Duration) -> Result<Option<u32>> {
         let milliseconds = u32::try_from(timeout.as_millis())
             .ok()
@@ -347,7 +342,7 @@ impl Running<'_> {
             _ => Err(HostError::new("EXTENSION_PROCESS_WAIT_FAILED")),
         }
     }
-    /// Terminates the entire managed group, including descendants.
+    /// 终止整个托管组，包括后代。
     pub fn terminate(&self) -> Result<()> {
         self.process.job.terminate()
     }
@@ -458,7 +453,7 @@ mod tests {
             unsafe { WaitForSingleObject(observer.as_raw_handle(), 0) },
             WAIT_TIMEOUT
         );
-        drop(suspended); // Never resumed any command interpreter instruction.
+        drop(suspended); // 从未恢复任何命令解释器指令。
         assert_eq!(
             unsafe { WaitForSingleObject(observer.as_raw_handle(), 5000) },
             WAIT_OBJECT_0

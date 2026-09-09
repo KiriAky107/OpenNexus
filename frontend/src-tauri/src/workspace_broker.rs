@@ -1,4 +1,4 @@
-//! Narrow Core RPC. Every request is bound to the Vault captured by the Host transport.
+//! 受限的 Core RPC；每个请求都绑定到 Host 传输捕获的 Vault。
 use crate::workspace::Workspace;
 use serde::Deserialize;
 use serde_json::{json, Value};

@@ -1,4 +1,4 @@
-"""Bounded read-only retrieval turns within a streaming chat response."""
+"""流式聊天响应中的有限只读检索轮流。"""
 import asyncio
 import json
 from contextlib import aclosing
@@ -28,7 +28,7 @@ async def stream(request, provider):
         request = await prepare_attachments(request, provider)
         warnings = [warning for item in request.metadata.get('chat_attachment_context',[]) for warning in item.get('warnings',[])]
         yield event(E.context_status, {'message':'附件处理完成' + ('：' + '；'.join(warnings) if warnings else '')})
-    # Never run retrieval on the first-token path. Only model tool calls search.
+    # 不要在首个 token 的响应路径中执行检索；只有模型发起工具调用时才搜索。
     grounded = request
     if request.workspace_context:
         snapshot = json.dumps(request.workspace_context.model_dump(), ensure_ascii=False)
@@ -61,7 +61,7 @@ async def stream(request, provider):
             config = container.skills.build_agent_configuration('chat-operator', provider.config.capabilities)
             grounded = grounded.model_copy(update={'system': (grounded.system or '') + '\n' + config.system_prompt})
     except ExtensionError:
-        pass  # Optional built-in package may have been disabled or uninstalled.
+        pass  # 可选的内置包可能已被禁用或卸载。
     created_agent = False
     messages = list(grounded.messages)
     totals = {"input_tokens": 0, "output_tokens": 0}
@@ -102,7 +102,7 @@ async def stream(request, provider):
                                 raise ValueError("Retrieval arguments too large")
                         if isinstance(data.get("arguments"), dict):
                             calls[call_id].arguments.update(data["arguments"])
-                # Provider ToolCallEnd means arguments finished, not execution finished.
+                # Provider ToolCallEnd 表示参数已完成，但未执行完成。
                 if item.event != E.tool_call_end:
                     yield item
         for key in totals:
@@ -146,7 +146,7 @@ async def stream(request, provider):
                         sources.append(source)
                         yield event(E.citation, source)
                         known = source
-                    # Keep internal locating IDs in Citation events, never offer competing IDs to the model.
+                    # 在引文事件中保留内部定位 ID，切勿向模型提供竞争 ID。
                     result.append({key: known.get(key) for key in ("number", "file_path", "heading_path", "content")})
                 output = {"sources": result}
                 log_event("chat", "retrieval.completed", count=len(result), turn=turn + 1)
@@ -156,7 +156,7 @@ async def stream(request, provider):
             messages.append(Message(role=MessageRole.tool, name=call.name, tool_call_id=call.tool_call_id, content=json.dumps(output, ensure_ascii=False)))
             yield event(E.tool_call_end, {"tool_call_id": call.tool_call_id, "status": "failed" if "error" in output else "completed"})
         if text.strip():
-            # Separate prose from the next generation round, preserving Markdown paragraphs.
+            # 将正文与下一轮生成分开，同时保留 Markdown 段落结构。
             yield event(E.text_delta, {"text": "\n\n"})
     yield event(E.usage, totals)
     yield event(E.error, {"code": "CHAT_RETRIEVAL_LIMIT", "message": "已达到检索轮次上限。"})

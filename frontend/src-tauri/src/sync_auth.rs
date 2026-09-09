@@ -1,4 +1,4 @@
-//! Device-local Sync sessions. The serialized record never crosses IPC.
+//! 设备本地同步会话。序列化记录从未跨越IPC。
 use crate::{
     credentials::{CredentialBroker, CredentialId, Scope},
     sync_client::{Session, SyncClient, SyncError},
@@ -64,7 +64,7 @@ pub fn available(credentials: &Credentials, endpoint: &str, account: &str) -> Re
         .map(|v| v.is_some())
     })
 }
-/// Dropping a guarded HTTP future closes the in-flight operation on any lock epoch change.
+/// 删除受保护的 HTTP 未来会关闭任何锁定纪元更改的正在进行的操作。
 pub async fn guarded<T>(
     credentials: &Credentials,
     future: impl Future<Output = Result<T>>,
@@ -123,7 +123,7 @@ pub async fn login(
     })
     .await
 }
-/// The caller serializes refreshes with the coordinator gate.
+/// 调用者使用协调器门来串行刷新。
 pub async fn client(
     credentials: &Credentials,
     endpoint: &str,
@@ -158,8 +158,7 @@ pub async fn client(
         saved.allow_test_http,
     )
 }
-/// The coordinator must serialize calls. Only use for read-only or durably idempotent work:
-/// a 401 repeats the operation once with the same device after rotating its session.
+/// 协调器必须序列化调用。仅用于只读或持久幂等工作：401 在轮换其会话后使用同一设备重复该操作一次。
 pub async fn authenticated<T, F, Fut>(
     credentials: &Credentials,
     endpoint: &str,
@@ -181,7 +180,7 @@ where
 }
 pub async fn logout(credentials: &Credentials, endpoint: &str, account: &str) -> Result<()> {
     let client = client(credentials, endpoint, account, false).await?;
-    // A failed server revocation is reported; the encrypted record remains available for retry.
+    // 报告服务器吊销失败；加密记录仍可供重试。
     guarded(
         credentials,
         client.json(reqwest::Method::DELETE, "sync/v1/auth/sessions", None),

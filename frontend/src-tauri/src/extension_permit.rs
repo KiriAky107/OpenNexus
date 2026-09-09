@@ -1,5 +1,5 @@
-//! Host-only execution permit binding. No IPC caller can mint these permits.
-//! The installer must complete user consent and current trust checks before issue.
+//! 仅 Host 可以绑定执行许可，IPC 调用方无法伪造许可；
+//! 安装器签发许可前必须完成用户授权与当前信任检查。
 use crate::workspace::{HostError, Result};
 use hmac::{Hmac, Mac};
 use rand::RngCore;
@@ -19,7 +19,7 @@ use zeroize::Zeroize;
 #[serde(tag = "kind", content = "value", deny_unknown_fields)]
 pub enum Environment {
     Literal(String),
-    // An opaque credential reference in the Host-derived package scope, never plaintext.
+    // Host 派生包范围中的不透明凭证引用，绝不是明文。
     CredentialScope(String),
 }
 
@@ -51,8 +51,7 @@ pub struct Claims {
     pub expires_at_ms: u64,
 }
 
-/// Opaque authenticator; the Host retains claims separately. No paths, arguments
-/// or credential declarations need to be passed to a renderer with the token.
+/// 不透明验证器； Host 保留单独的权利要求。不需要使用令牌将路径、参数或凭据声明传递给渲染器。
 pub struct Permit {
     mac: [u8; 32],
     generation: u64,
@@ -198,15 +197,14 @@ impl Claims {
     }
 }
 impl Authority {
-    /// Host event wiring only; never expose this signal through IPC.
+    /// 仅 Host 事件接线；切勿通过 IPC 暴露此信号。
     pub fn revocation_signal(&self) -> Arc<AtomicU64> {
         Arc::clone(&self.generation)
     }
     pub fn revoke(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
     }
-    /// Call only after consent and live trust validation. This authenticates the
-    /// decision; it does not establish sandbox availability or grant broker access.
+    /// 仅在同意和实时信任验证后才能调用。这证实了该决定；它不会建立沙箱可用性或授予代理访问权限。
     pub fn issue(&self, claims: &Claims, now_ms: u64) -> Result<Permit> {
         let generation = self.generation.load(Ordering::SeqCst);
         let encoded = claims.encoded(now_ms)?;
@@ -250,8 +248,7 @@ impl Authority {
         lease.check()?;
         Ok(lease)
     }
-    /// Lock/logout/policy invalidation may discard all permits. Restart creates a
-    /// fresh key, so an old process token cannot silently revive authorization.
+    /// 锁定/注销/策略失效可能会丢弃所有许可。重新启动会创建一个新密钥，因此旧进程令牌无法静默恢复授权。
     pub fn invalidate_all(&mut self) {
         self.revoke();
         self.key.zeroize();

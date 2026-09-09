@@ -1,4 +1,4 @@
-//! Windows resource containment only. This is NOT a filesystem/network sandbox.
+//! 仅负责 Windows 资源隔离，不构成文件系统或网络沙箱。
 use crate::workspace::{HostError, Result};
 use std::{
     mem::size_of,
@@ -91,11 +91,11 @@ impl Job {
         }
         Ok(())
     }
-    /// Attach before any extension instruction executes. No breakaway flags are enabled.
+    /// 在任何扩展指令执行之前附加。没有启用任何分离标志。
     ///
-    /// # Safety
-    /// Caller must own an unresumed CREATE_SUSPENDED process and terminate it on
-    /// any error. Resume only after all AppContainer/handle/permission checks pass.
+    /// # 安全性
+    /// 调用方必须拥有尚未恢复执行的 CREATE_SUSPENDED 进程，并在出现任何错误时终止该进程。
+    /// 只有 AppContainer、句柄与权限检查全部通过后，才能恢复执行。
     pub unsafe fn assign_suspended(&self, process: BorrowedHandle<'_>) -> Result<()> {
         self.check_resources()?;
         if unsafe { AssignProcessToJobObject(self.handle.as_raw_handle(), process.as_raw_handle()) }

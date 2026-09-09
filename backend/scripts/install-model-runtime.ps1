@@ -12,10 +12,10 @@ if (!(Test-Path -LiteralPath $runtimePython)) {
     & uv venv --python 3.12 $runtimeRoot
     if ($LASTEXITCODE -ne 0) { throw '无法创建模型运行环境' }
 }
-# CPU is the default. CUDA wheels include the runtime, not the NVIDIA driver.
+# CPU 是默认值。 CUDA 轮子包括运行时，而不是 NVIDIA 驱动程序。
 $torchIndex = if ($Device -eq 'cuda') { 'https://download.pytorch.org/whl/cu128' } else { 'https://download.pytorch.org/whl/cpu' }
 $wheelVariant = if ($Device -eq 'cuda') { 'cu128' } else { 'cpu' }
-# Pin the local version too: ==2.9.1 alone also accepts an already-installed CPU wheel.
+# 也固定本地版本：==2.9.1 单独也接受已安装的 CPU 轮。
 Write-Output 'COMPONENT:torch'
 & uv @uvOptions pip install --python $runtimePython --index-url $torchIndex "torch==2.9.1+$wheelVariant" "torchaudio==2.9.1+$wheelVariant"
 if ($LASTEXITCODE -ne 0) { throw 'PyTorch 安装失败' }

@@ -53,7 +53,6 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 [build-dependencies]
 tauri-build = { version = "2", optional = true , features = [] }
 
-# Cryptographic KDFs retain their production work factors in debug/test runs.
-# Optimize dependencies rather than weakening those factors for local execution.
+# 加密 KDF 在调试/测试运行中保留其生产工作因素。优化依赖关系，而不是削弱本地执行的这些因素。
 [profile.dev.package."*"]
 opt-level = 2

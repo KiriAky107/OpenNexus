@@ -39,7 +39,7 @@ class OperationResponse(Contract):
     message: str | None = None
 
 
-# Workspace boundary (single configured Vault in Web development mode)
+# 工作区边界（Web 开发模式下仅使用一个已配置的 Vault）
 class WorkspaceInfo(Contract):
     vault_id: str = "default"
     name: str
@@ -81,7 +81,7 @@ class FolderDeleteRequest(Contract):
     path: str
 
 
-# Notes and retrieval
+# 笔记与检索
 class NoteBlock(Contract):
     block_id: str
     note_id: str
@@ -194,7 +194,7 @@ class SearchResponse(Contract):
     page: PageMeta = Field(default_factory=PageMeta)
 
 
-# Model, chat and tools
+# 模型、聊天和工具
 class MessageRole(str, Enum):
     system = "system"
     user = "user"
@@ -361,7 +361,7 @@ class ModelEvent(Contract):
     timestamp: datetime
 
 
-# Agent
+# 智能体
 class AgentRunStatus(str, Enum):
     queued = "queued"
     running = "running"
@@ -460,7 +460,7 @@ class PermissionDecisionRequest(Contract):
     decision: Literal["allow_once", "allow_session", "deny"]
 
 
-# Skills and plugins
+# Skills 和插件
 class RetrievalConfig(Contract):
     top_k: int = Field(default=10, ge=1, le=100)
     rerank: bool = True
@@ -655,8 +655,7 @@ class PluginHostStatus(Contract):
     error: str | None = None
 
 
-# Independent user-managed MCP Server Registry. This is deliberately separate
-# from Plugin manifests: a server can contribute tools without being a Plugin.
+# 独立的用户管理的 MCP 服务器注册表。这特意与 Plugin 清单分开：服务器可以在不成为 Plugin 的情况下贡献工具。
 class McpServerTransport(str, Enum):
     stdio = "stdio"
     streamable_http = "streamable_http"
@@ -916,7 +915,7 @@ class PluginPermissionGrantRequest(Contract):
     permissions: list[str] = Field(default_factory=list)
 
 
-# Providers
+# 提供商
 class ProviderType(str, Enum):
     mock = "mock"
     openai_responses = "openai_responses"
@@ -1028,7 +1027,7 @@ class ModelBinding(Contract):
     @field_validator("endpoint")
     @classmethod
     def relative_endpoint(cls, value: str) -> str:
-        # An endpoint is a path on the selected provider, never a second origin.
+        # 端点是所选提供商下的路径，不能是另一个源站。
         import re
         if not re.fullmatch(r"/[A-Za-z0-9_/-]+", value) or value.startswith("//"):
             raise ValueError("endpoint must be an absolute API path on the provider")
@@ -1128,7 +1127,7 @@ class ProviderTestResponse(Contract):
     message: str
 
 
-# Tasks, media and index
+# 任务、媒体和索引
 class TaskStatus(str, Enum):
     todo = "todo"
     in_progress = "in_progress"
@@ -1271,7 +1270,7 @@ class IndexJob(Contract):
     created_at: datetime
 
 
-# Benchmark
+# 基准
 class BenchmarkKind(str, Enum):
     rag = "rag"
     agent = "agent"

@@ -1,4 +1,4 @@
-//! Fresh Community state checked against Host-pinned keys; never TOFU on refresh.
+//! 根据 Host 固定密钥检查新的社区状态；刷新时绝不会 TOFU。
 use crate::{
     extension_package::Release,
     workspace::{hash, HostError, Result},
@@ -413,7 +413,7 @@ mod tests {
                 } else {
                     "200 OK"
                 };
-                // No content length: exercise the streaming cap independently.
+                // 没有 Content-Length 时，单独验证流式传输上限。
                 write!(stream, "HTTP/1.1 {status}\r\nConnection: close\r\n\r\n").unwrap();
                 stream.write_all(&body).unwrap();
             });

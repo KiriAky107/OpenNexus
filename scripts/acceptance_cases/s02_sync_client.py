@@ -1,4 +1,4 @@
-"""S-02 resumable attachment and pull-boundary crash driver."""
+"""S-02：附件断点续传与拉取边界崩溃验收驱动。"""
 
 from __future__ import annotations
 

@@ -106,7 +106,7 @@ class ProviderFactory:
                 requires_credential=False,
             ),
         ]
-        # General API endpoints. Coding-plan endpoints and keys are separate products.
+        # 通用 API 端点。编码计划端点和密钥是单独的产品。
         domestic = [
             ("kimi", "Kimi / 月之暗面", "https://api.moonshot.cn/v1", [], "长上下文对话；模型以账号权限为准。"),
             ("qwen", "阿里云百炼", "https://dashscope.aliyuncs.com/compatible-mode/v1", [ModelCapability.embedding], "中国内地兼容接口；海外地域需修改地址。"),

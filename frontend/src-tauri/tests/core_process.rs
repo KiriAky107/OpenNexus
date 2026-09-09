@@ -1,4 +1,4 @@
-//! Executes the real worktree Core, with no personal data or external Provider.
+//! 执行真实的工作树Core，没有个人数据或外部提供者。
 use notesagent_host::core::CoreSupervisor;
 use notesagent_host::credentials::{CredentialBroker, CredentialId, Scope};
 use std::path::Path;

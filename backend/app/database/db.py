@@ -30,7 +30,7 @@ def connect() -> sqlite3.Connection:
 
 
 def connect_knowledge() -> sqlite3.Connection:
-    """Desktop projections never share note or vector rows between Vaults."""
+    """桌面投影不得在不同 Vault 之间共享笔记或向量记录。"""
     settings = get_settings()
     if settings.environment != 'desktop':
         return connect()
@@ -41,7 +41,7 @@ def connect_knowledge() -> sqlite3.Connection:
         vault = str(UUID(host_bridge.vault_id.get() or ''))
     except ValueError:
         raise ApiError(409, 'WORKSPACE_NOT_OPEN', '请先打开授权工作区。') from None
-    # This database also holds durable logical records (tasks); never delete it as a cache.
+    # 该数据库还保存持久的逻辑记录（任务）；切勿将其作为缓存删除。
     return _connect_path(settings.data_dir / 'vault-state' / vault / 'core.sqlite3')
 
 

@@ -1,4 +1,4 @@
-//! Native argv/environment encoding. This does not authorize or launch a process.
+//! 本机 ​​argv/环境编码。这不会授权或启动进程。
 use crate::workspace::{HostError, Result};
 use std::{collections::BTreeMap, os::windows::ffi::OsStrExt, path::Path};
 use zeroize::Zeroize;
@@ -14,9 +14,7 @@ impl Drop for LaunchData {
     }
 }
 impl LaunchData {
-    /// The Host supplies verified absolute paths and explicitly declared/resolved
-    /// environment values. Never reads the parent environment. CRT argv rules
-    /// apply to native executables, not cmd.exe, batch files or shell interpreters.
+    /// Host 提供经过验证的绝对路径和显式声明/解析的环境值。从不读取父环境。 CRT argv 规则适用于本机可执行文件，而不是 cmd.exe、批处理文件或 shell 解释器。
     pub fn new(
         executable: &Path,
         arguments: &[String],
@@ -50,8 +48,7 @@ impl LaunchData {
             if argument.len() > 8192 || argument.contains('\0') {
                 return Err(bad());
             }
-            // Reserve the full bounded buffers once: do not leave earlier
-            // copies of resolved values behind through Vec reallocations.
+            // 保留一次完整的有界缓冲区：不要通过 Vec 重新分配留下解析值的早期副本。
             let mut encoded_len = 0;
             let mut trailing = 0;
             for unit in argument.encode_utf16() {
@@ -94,8 +91,7 @@ impl LaunchData {
         if result.command.len() > 32767 {
             return Err(bad());
         }
-        // ASCII names give a deterministic Windows case-insensitive order.
-        // Values remain borrowed until encoded so there are no secret clones.
+        // ASCII 名称给出确定性的 Windows 不区分大小写的顺序。值在编码之前一直是借用的，因此不存在秘密克隆。
         let mut fields: BTreeMap<String, &std::ffi::OsStr> = BTreeMap::new();
         for (name, path) in [
             ("SYSTEMROOT", system_root),
@@ -146,7 +142,7 @@ impl LaunchData {
     pub(crate) fn command_mut(&mut self) -> &mut [u16] {
         &mut self.command
     }
-    /// Pass with CREATE_UNICODE_ENVIRONMENT; never substitute a null pointer.
+    /// 通过CREATE_UNICODE_ENVIRONMENT；切勿替换空指针。
     pub fn environment(&self) -> &[u16] {
         &self.environment
     }

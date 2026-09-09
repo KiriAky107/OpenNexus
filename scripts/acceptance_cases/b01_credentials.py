@@ -1,4 +1,4 @@
-"""B-01 scoped Stronghold and plaintext-exposure acceptance driver."""
+"""B-01：限定作用域的 Stronghold 与明文泄露验收驱动。"""
 
 from __future__ import annotations
 

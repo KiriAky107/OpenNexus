@@ -1,4 +1,4 @@
-"""Persistent vec0 indexes derived from durable routed vectors, one per space/dimension."""
+"""从持久路由向量派生的持久 vec0 索引，每个空间/维度一个。"""
 import hashlib
 import json
 import threading
@@ -17,12 +17,12 @@ def is_ready(conn, batches):
 
 
 def prepare(conn, batches):
-    """Finish lazy writes before opening a search snapshot. Warm searches do not write."""
+    """打开搜索快照前完成延迟写入；索引预热后的搜索不再写入。"""
     from app.retrieval.routed_vectors import _ensure_table
     batches = list(batches)
     if is_ready(conn, batches):
         return
-    # Waiting holds no read transaction, so a concurrent migration can commit.
+    # 等待不保留任何读取事务，因此可以提交并发迁移。
     with _migration_lock:
         if is_ready(conn, batches):
             return
@@ -71,7 +71,7 @@ def upsert(conn, block_ids, batch):
 
 def search(conn, batch, top_k, policy=None):
     table = table_name(batch.space_id, batch.dimensions)
-    # Coverage checks stay relational; no JSON decoding or Python dot products on the hot path.
+    # 覆盖范围检查保持相关性；热路径上没有 JSON 解码或 Python 点积。
     where = '' if policy is None else ' AND b.embedding_local_only=?'
     params = () if policy is None else (int(policy),)
     missing = conn.execute(f'''SELECT 1 FROM blocks b LEFT JOIN routed_block_vectors r

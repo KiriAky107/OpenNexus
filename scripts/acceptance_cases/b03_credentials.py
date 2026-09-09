@@ -1,4 +1,4 @@
-"""B-03 credential locking, password rotation, recovery, and edit availability."""
+"""B-03：凭据锁定、密码轮换、恢复与编辑可用性验收。"""
 
 from __future__ import annotations
 

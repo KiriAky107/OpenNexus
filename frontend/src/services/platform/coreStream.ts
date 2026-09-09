@@ -4,7 +4,7 @@ import { hostInvoke } from './desktop'
 type Message = { kind: 'headers'; status: number } | { kind: 'chunk'; data: string }
   | { kind: 'done' } | { kind: 'error'; code: string }
 
-/** Native session credentials stay in Rust; this channel carries response bytes only. */
+/** 本机会话凭证保留在 Rust 中；该通道仅承载响应字节。 */
 export function coreStream(path: string, init: RequestInit): Promise<Response> {
   return new Promise((resolve, reject) => {
     const requestId = crypto.randomUUID()
@@ -33,7 +33,7 @@ export function coreStream(path: string, init: RequestInit): Promise<Response> {
       if (message.kind === 'chunk') {
         const bytes = Uint8Array.from(atob(message.data), c => c.charCodeAt(0))
         controller.enqueue(bytes)
-        // Bound queued data if a consumer stops reading without cancelling.
+        // 如果消费者停止读取而不取消，则绑定排队数据。
         if ((controller.desiredSize ?? 0) < -4096) fail(new Error('CORE_STREAM_BACKPRESSURE'))
       }
       if (message.kind === 'error') fail(new Error(message.code))

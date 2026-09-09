@@ -1,8 +1,4 @@
-"""Offline model-routing contracts, HTTP validation, media lifetimes and persistence.
-
-All HTTP uses MockTransport (or the in-process API). Credentials, models and
-attachments are fakes, and conftest redirects all storage to temporary paths.
-"""
+"""离线模型路由约定、HTTP 验证、介质生命周期和持久性。所有HTTP都使用MockTransport（或进程内API）。凭证、模型和附件都是假的，conftest 将所有存储重定向到临时路径。"""
 
 from __future__ import annotations
 
@@ -31,7 +27,7 @@ def run(awaitable):
 
 
 def response(data, status=200):
-    # Raw JSON intentionally permits NaN/Infinity to exercise hostile API output.
+    # 原始 JSON 特意允许 NaN/Infinity，用于测试恶意 API 输出。
     return httpx.Response(status, content=json.dumps(data).encode(), headers={"content-type": "application/json"})
 
 
@@ -512,7 +508,7 @@ def test_config_references_require_existing_supported_providers(rig, capability,
 
 @pytest.fixture
 def api(monkeypatch, no_real_http, _isolate_data_dir):
-    # Import the production container only after temporary storage is configured.
+    # 配置临时存储后才导入生产容器。
     from app import container as container_module, routes
     from app.main import app
 
@@ -656,7 +652,7 @@ def test_api_speech_failure_reports_reason_in_503_and_transcription_job(api):
 
 @pytest.mark.parametrize("capability", ["embedding", "speaker_matching"])
 def test_out_of_float_range_json_number_is_invalid_remote_and_falls_back(rig, audio, capability):
-    """JSON integers may be finite but too large to convert to a Python float."""
+    """JSON 整数可能是有限的，但太大而无法转换为 Python 浮点数。"""
     bind(rig, capability)
     data = {"data": [{"index": 0, "embedding": [10 ** 400, 1]}]} if capability == "embedding" else {"score": 10 ** 400}
     rig.http.handler = lambda request: response(data)

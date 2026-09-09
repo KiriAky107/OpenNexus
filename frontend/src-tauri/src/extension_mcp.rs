@@ -1,5 +1,4 @@
-//! Serial MCP session over an already-authorized native instance. The Host
-//! approval route still must establish user consent and current installation/trust.
+//! 通过已授权的本机实例进行串行 MCP 会话。 Host 批准途径仍必须建立用户同意和当前安装/信任。
 use crate::{
     extension_io::{Event, Pump},
     extension_process::Running,

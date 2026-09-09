@@ -1,4 +1,4 @@
-"""Documented command entry point for the production acceptance runner."""
+"""生产验收执行器的命令入口。"""
 
 from phase3_acceptance import main
 

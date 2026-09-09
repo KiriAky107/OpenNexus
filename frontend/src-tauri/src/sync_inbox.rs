@@ -1,4 +1,4 @@
-//! Persist received revisions before Workspace writes; cursor advancement follows application.
+//! 在Workspace写入之前保留收到的修订；光标前进跟随应用程序。
 use crate::{
     sync_state::{Binding, Job},
     workspace::{hash, HostError, Result, Workspace},

@@ -350,8 +350,8 @@ onMounted(async () => {
       },
     },
   })
-  // Crepe's defaultsDeep merges language arrays and theme extension internals.
-  // Replace both AFTER feature configuration to avoid default grammar collisions.
+  // Crepe 的 defaultsDeep 会合并语言数组与主题扩展内部配置。
+  // 必须在功能配置完成后同时替换两者，以免默认语法发生冲突。
   crepe.editor.config(ctx => ctx.update(codeBlockConfig.key, config => ({
     ...config,
     languages: shikiLanguages(themeStore.resolvedCodeBlockTheme),
@@ -391,7 +391,7 @@ onMounted(async () => {
         const sections = headingSections(current.state.doc)
         const folded = headingFoldKey.getState(current.state)
         hasFoldableHeadings.value = sections.length > 0
-        // Hidden descendants retain their own state but are not visible expanded sections.
+        // 被隐藏的后代节点保留自身状态，但不算作可见的展开章节。
         let hiddenUntil = -1
         allHeadingsFolded.value = sections.length > 0 && sections.every(section => {
           if (section.from < hiddenUntil) return true
@@ -585,8 +585,7 @@ defineExpose({ getEditor: () => crepe?.editor })
 .milkdown-host :deep(.ProseMirror) { box-sizing: border-box; width: min(100%, var(--editor-line-width, 80ch)); min-height: 100%; margin: 0 auto; padding: var(--space-3xl) var(--space-xl); outline: none; font-family: var(--font-editor-sans); font-size: var(--font-editor-size); line-height: var(--font-editor-line-height); caret-color: var(--color-accent-primary); }
 .milkdown-host :deep(.ProseMirror-selectednode) { outline-color: var(--color-accent-primary); }
 .milkdown-host :deep(.ProseMirror p) { font-weight: 400; }
-/* Mermaid measures HTML labels outside the editor. Crepe's paragraph padding
-   must not enlarge them after insertion into fixed-size SVG foreignObjects. */
+/* Mermaid 在编辑器外部测量 HTML 标签。 Crepe 的段落填充在插入固定大小的 SVGforeignObjects 后不得放大它们。 */
 .milkdown-host :deep(.editor-mermaid-preview svg foreignObject p) { margin: 0; padding: 0; line-height: inherit; font-weight: inherit; }
 .milkdown-host :deep(.ProseMirror h1), .milkdown-host :deep(.ProseMirror h2), .milkdown-host :deep(.ProseMirror h3), .milkdown-host :deep(.ProseMirror h4), .milkdown-host :deep(.ProseMirror h5), .milkdown-host :deep(.ProseMirror h6) { font-weight: 700; }
 .milkdown-host :deep(.font-size-marker) { display: none; }

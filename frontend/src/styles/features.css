@@ -189,7 +189,7 @@ progress:not([value]) { background: linear-gradient(90deg, var(--color-backgroun
 }
 
 
-/* Shared select and disclosure chrome, including the expanded surface. */
+/* 共享选择和显示镶边，包括扩展表面。 */
 :where(select:not([multiple]):not([size])), .select:not([multiple]):not([size]) {
   appearance: none;
   box-sizing: border-box;

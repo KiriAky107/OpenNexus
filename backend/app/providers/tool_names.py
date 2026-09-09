@@ -1,4 +1,4 @@
-"""Keep internal namespaced tools compatible with providers' 64-character names."""
+"""保持内部命名空间工具与提供程序的 64 字符名称兼容。"""
 import hashlib
 import re
 from functools import wraps

@@ -165,10 +165,10 @@ async function save() {
     if (!form.name.trim() || !form.base_url.trim()) throw new Error(t('请填写名称和 Base URL。', 'Enter a name and Base URL.'))
     if (!requestJsonValid.value) throw new Error(t('请先修正自定义请求 JSON。', 'Fix the custom request JSON first.'))
     if (selectedPreset.value?.requires_credential && !apiKey.value.trim() && !configured.value) throw new Error(t('请输入 API Key。密钥将由后端加密保存。', 'Enter an API key. It will be encrypted by the backend.'))
-    // Snapshot before awaiting: closing/unmounting must never create a provider with a changed draft.
+    // 等待之前的快照：关闭/卸载绝不能创建草稿已更改的提供程序。
     const data = { provider_type: form.provider_type, name: form.name.trim(), base_url: form.base_url.trim() || undefined, default_model: form.default_model.trim(), enabled: form.enabled, capabilities: {}, has_credential: false, request_overrides: requestOverrides.value, context_policies: JSON.parse(JSON.stringify(contextPolicies.value)) }
     if (apiKey.value.trim()) {
-      // Rotate even an existing reference: older installations may share preset credential IDs.
+      // 甚至轮换现有参考：较旧的安装可能共享预设的凭据 ID。
       const nextId = newCredentialId()
       const request = service.putCredential(nextId, apiKey.value.trim())
       apiKey.value = ''
@@ -178,7 +178,7 @@ async function save() {
       configured.value = true
     }
     const reference = configured.value ? credentialId.value : undefined
-    // A failed status check must not silently unlink the provider's existing credential.
+    // 失败的状态检查不得以静默方式取消链接提供者的现有凭证。
     if (credentialError.value && !reference) throw new Error(credentialError.value)
     const saved = props.provider
       ? await service.updateProvider(props.provider.provider_id, { ...data, version: props.provider.version, credential_id: reference ?? null })

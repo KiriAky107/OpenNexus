@@ -32,7 +32,7 @@ const desktop = isDesktop()
 let statusTimer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
 async function pollIndex() {
-  try { const status = await getIndexStatus(); if (!disposed) settingsStore.indexStatus = status } catch { /* retain last status; retry */ }
+  try { const status = await getIndexStatus(); if (!disposed) settingsStore.indexStatus = status } catch { /* 保留最后状态；重试 */ }
   const busy = settingsStore.indexStatus.status === 'indexing' || settingsStore.indexStatus.active_searches
   if (!disposed) statusTimer = setTimeout(pollIndex, busy || route.name === 'settings' || route.name === 'search' ? 1000 : 5000)
 }

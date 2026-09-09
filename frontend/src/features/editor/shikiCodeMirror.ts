@@ -7,8 +7,7 @@ type CodeTheme = 'github-light' | 'github-dark'
 
 export async function shikiLanguage(language: string, theme: CodeTheme): Promise<LanguageSupport> {
   const tokenize = await getCodeTokenizer(theme, language)
-  // Milkdown recreates off-screen CodeMirror views. Reuse immutable ranges for
-  // identical code within this language/theme, with a bounded retention budget.
+  // Milkdown 重新创建屏幕外 CodeMirror 视图。在该语言/主题内重复使用相同代码的不可变范围，并保留有限的预算。
   const cache = new Map<string, DecorationSet>()
   let cachedCharacters = 0
   const highlights = ViewPlugin.fromClass(class {
@@ -53,7 +52,7 @@ export async function shikiLanguage(language: string, theme: CodeTheme): Promise
     }
   }, { decorations: value => value.decorations })
 
-  // CodeMirror still owns selection, input and undo. Shiki owns token colors.
+  // CodeMirror仍然拥有选择、输入和撤消功能。 Shiki拥有令牌颜色。
   const parser = StreamLanguage.define({ token(stream) { stream.skipToEnd(); return null } })
   return new LanguageSupport(parser, highlights)
 }

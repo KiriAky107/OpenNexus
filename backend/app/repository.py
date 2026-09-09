@@ -461,7 +461,7 @@ def get_index_meta() -> dict[str, str]:
 
 
 def clear_all(*, conn: sqlite3.Connection | None = None) -> None:
-    """Clear rebuildable metadata using the caller's transaction when provided."""
+    """使用调用者的事务（如果提供）清除可重建元数据。"""
     owns = conn is None
     conn = conn or connect()
     try:

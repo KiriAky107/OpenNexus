@@ -106,8 +106,7 @@ const toolDescriptions: Record<string, string> = {
   'text.uppercase': '将输入文本中的字母转换为大写。',
 }
 
-// MCP IDs contain a server-specific namespace. Localize the remote tool name
-// for presentation only; requests must keep using the complete original ID.
+// MCP ID 包含特定于服务器的命名空间。本地化远程工具名称仅用于演示；要求必须继续使用完整的原装ID。
 const mcpTools: Record<string, { label: string; description: string }> = {
   web_search: {
     label: '网页搜索',

@@ -1,4 +1,4 @@
-//! User decisions are durable before changing files; journal IDs make restart replay safe.
+//! 用户决策在更改文件之前是持久的；日志 ID 使重新启动重放变得安全。
 use crate::workspace::hash;
 use crate::{
     sync_inbox::RemoteRevision,
@@ -79,8 +79,7 @@ impl Workspace {
                 if !crate::sync_discovery::allowed(destination) {
                     return Err(HostError::new("SYNC_PATH_DENIED"));
                 }
-                // Validate the intended record path before freezing the decision.
-                // A typo must not leave an unchangeable, unappliable resolution.
+                // 在冻结决定之前验证预期的记录路径。拼写错误不得留下不可更改、不适用的解决方案。
                 if crate::records::is_record(destination) {
                     let spool = self.sync_spool(&current)?;
                     let size = fs::metadata(&spool)?.len();
@@ -161,8 +160,7 @@ impl Workspace {
         if head != sequence {
             return Err(HostError::new("SYNC_CONFLICT_CHANGED"));
         }
-        // local_path is frozen when the conflict is recorded. Recomputing it from
-        // file identity after a partial resolution can select a different file.
+        // 记录冲突时local_path被冻结。部分解析后根据文件标识重新计算可以选择不同的文件。
         let path = stored_path;
         if !self
             .operation(&operation)?
@@ -216,10 +214,8 @@ impl Workspace {
                 && !source_hash.is_empty()
                 && !source_renamed
             {
-                // The deleted target still owns its unique database path until the
-                // final identity-aware write retires that tombstone. Retire the
-                // incoming identity at its old path, then resurrect it at the
-                // target with the frozen remote or chosen-local bytes.
+                // 被删除的目标仍占用其唯一数据库路径，直到最后一次感知身份的写入撤销该逻辑删除记录。
+                // 先在旧路径停用传入标识，再用冻结的远程内容或用户选择的本地内容在目标路径恢复它。
                 self.mutate_with_origin(
                     "delete",
                     &source_path,
@@ -640,7 +636,7 @@ mod tests {
                     ],
                 )
                 .unwrap();
-            // Simulate a crash after the filesystem journal commits but before the resolution transaction.
+            // 在文件系统日志提交之后但在解析事务之前模拟崩溃。
             if choice == "copy" {
                 ws.write_operation("copy.md", "", b"local", "local", &copy)
                     .unwrap();
@@ -732,7 +728,7 @@ mod tests {
             remote.operation_id = Uuid::new_v4().to_string();
             receive(&mut ws, &binding.id, &remote);
             assert_eq!(ws.read("a.md").unwrap().entry.file_id, remote.file_id);
-            // A tombstoned identity can reappear at another free path.
+            // 已标记为删除的标识可以在另一个空闲路径重新出现。
             remote.sequence = 4;
             remote.base_revision = 2;
             remote.file_id = original.clone();

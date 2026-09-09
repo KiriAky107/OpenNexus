@@ -1,4 +1,4 @@
-//! Versioned logical records: explicit fields only, never raw application databases/config.
+//! 版本化逻辑记录：仅显式字段，从不原始应用程序数据库/配置。
 use crate::workspace::{HostError, Result, Workspace};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};

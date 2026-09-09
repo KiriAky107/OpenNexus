@@ -1,4 +1,4 @@
-//! Initial merge uses a confirmed fixed remote snapshot and never replays obsolete paths.
+//! 初始合并使用已确认的固定远程快照，并且从不重播过时的路径。
 use crate::{
     sync_inbox::RemoteRevision,
     sync_state::Binding,

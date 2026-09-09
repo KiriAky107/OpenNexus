@@ -37,8 +37,7 @@ export const mediaService = {
   },
 }
 
-// Keep one identity until the input/options change, including a lost HTTP response.
-// Payloads remain in memory; durable uploads/jobs are owned by the backend.
+// 保留一个身份，直到输入/选项发生变化，包括丢失 HTTP 响应。有效负载保留在内存中；持久上传/作业归后端所有。
 export function createMediaSubmission() {
   let pending: {file: File; options: string; uploadKey: string; jobKey: string; attachmentId?: string} | null = null
   return {

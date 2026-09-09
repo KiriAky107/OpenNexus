@@ -50,7 +50,7 @@ def web_vault_ownership():
 
 
 def vault_mutation_lock():
-    # Service/test lifecycle restarts must not reuse a lock bound to a closed loop.
+    # 服务或测试生命周期重启时，不得复用绑定到已关闭事件循环的锁。
     loop = asyncio.get_running_loop()
     return _vault_locks.setdefault(loop, asyncio.Lock())
 

@@ -1,4 +1,4 @@
-"""Declarative request-body extensions with explicit host-owned field conflicts."""
+"""声明性请求主体扩展与显式主机拥有的字段冲突。"""
 import copy
 import json
 from typing import Literal
@@ -61,7 +61,7 @@ def deep_merge(base, extension):
 def apply_overrides(payload, rules, capability, *, stream=False):
     selected = [rule for rule in rules if rule.capability == capability and rule.model in (None, payload.get("model"))
                 and (rule.stream is None or rule.stream == stream)]
-    # General defaults precede model overrides; explicit stream conditions are most specific.
+    # 一般默认值先于模型覆盖；显式流条件是最具体的。
     selected.sort(key=lambda rule: (rule.model is not None, rule.stream is not None))
     for rule in selected:
         payload = deep_merge(payload, rule.body)

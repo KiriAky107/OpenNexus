@@ -1,4 +1,4 @@
-/** GitHub alerts and Obsidian callouts share the same portable Markdown syntax. */
+/** GitHub 警报和 Obsidian 标注共享相同的可移植 Markdown 语法。 */
 export const calloutTypes = {
   note: ['note'], abstract: ['abstract', 'summary', 'tldr'], info: ['info'],
   todo: ['todo'], tip: ['tip', 'hint'], important: ['important'], success: ['success', 'check', 'done'],

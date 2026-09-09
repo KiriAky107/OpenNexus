@@ -1,4 +1,4 @@
-"""Process-local retrieval activity, shared by search, RAG and Agent callers."""
+"""进程本地检索活动，由搜索、RAG 和 Agent 调用者共享。"""
 import asyncio
 from functools import wraps
 

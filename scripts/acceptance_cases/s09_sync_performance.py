@@ -1,4 +1,4 @@
-"""S-09 sustained load, bounded upload RSS, and initial-sync acceptance."""
+"""S-09：持续负载、有界上传 RSS 与首次同步验收。"""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ MAX_SCHEDULE_GAP_SECONDS = 1.0
 
 
 class WindowsExecutionGuard:
-    """Keep the benchmark host awake while wall-clock acceptance is running."""
+    """执行按实际时间计量的验收期间，保持基准测试主机唤醒。"""
 
     ES_CONTINUOUS = 0x80000000
     ES_SYSTEM_REQUIRED = 0x00000001
@@ -259,7 +259,7 @@ def run_memory_uploads(stack: SyncProductionStack, clients: list[dict]) -> dict:
             )
             time.sleep(NETWORK_RTT_SECONDS / 2)
             assert response[0] == 200 and response[1]["offset"] == offset + CHUNK
-            # Four equal streams share an aggregate 100 Mbps client-side ceiling.
+            # 四个相等的流共享总计 100 Mbps 客户端上限。
             delay = (CHUNK * 8 * 4 / 100_000_000) - (time.monotonic() - started)
             if delay > 0:
                 time.sleep(delay)

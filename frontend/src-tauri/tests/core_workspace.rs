@@ -1,5 +1,5 @@
 #![cfg(feature = "desktop")]
-//! Real Python Core + Host pipes + isolated Workspace; no personal data or Provider.
+//! 真正的Python Core + Host管道+隔离工作区；没有个人数据或提供商。
 use notesagent_host::{core::CoreSupervisor, workspace::Workspace, workspace_broker};
 use serde_json::{json, Value};
 use std::{
@@ -289,8 +289,7 @@ async fn real_core_notes_roundtrip_only_through_bound_host_and_confirm_commits()
         .path()
         .join("core/unbound-vault/Core fixture.md")
         .exists());
-    // The actual Python HTTP handler must round-trip revision through Host pipes,
-    // including repeat requests after a successful commit.
+    // 实际的 Python HTTP 处理程序必须通过 Host 管道进行往返修订，包括成功提交后的重复请求。
     let path = "/api/settings/persona";
     let (status, empty) = request(
         &mut core,
@@ -369,8 +368,7 @@ async fn real_core_notes_roundtrip_only_through_bound_host_and_confirm_commits()
         .unwrap();
     assert_eq!(stored["hash"], first["revision"]);
 
-    // User-created Skills are Vault records, use Host CAS/idempotency, and are
-    // resolved by the actual Agent route without copying package paths or grants.
+    // 用户创建的Skills是Vault记录，使用Host CAS/幂等性，并通过实际的Agent路由解析，无需复制包路径或授权。
     let create_skill_operation = uuid::Uuid::new_v4();
     let skill_body = json!({
         "revision":"", "name":"Vault reviewer", "description":"portable",

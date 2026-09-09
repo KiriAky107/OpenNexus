@@ -1,4 +1,4 @@
-"""Markdown authoring tools. Composition is pure; persistence uses note permissions/CAS."""
+"""Markdown 编写工具；内容组合不产生副作用，持久化操作遵循笔记权限与 CAS。"""
 import hashlib
 import re
 from typing import Literal

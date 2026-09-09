@@ -126,8 +126,7 @@ async def rebuild(request: IndexRebuildRequest) -> IndexJob:
                     raise ApiError(409, "EMBEDDING_SPACE_CHANGED", "重建期间 Embedding 模型发生切换，原索引已保留，请待模型服务稳定后重试。")
                 semantic_spaces[policy] = space
             prepared_notes.append((parsed, prepared))
-        # All network/model awaits precede the transaction. The concrete SQLite
-        # methods below complete synchronously despite their async interfaces.
+        # 所有网络/模型都在事务之前等待。下面的具体 SQLite 方法尽管具有异步接口，但仍同步完成。
         async with vault_mutation_lock():
             current_ids = [entry.note_id for entry in repository.list_note_locations()] if get_settings().environment == 'desktop' else _pending_notes()
             if _scan_vault() != docs or saved_records != {key: repository.get_note_record(key) for key in current_ids}:
@@ -191,7 +190,7 @@ def get_status() -> IndexStatus:
     notes_pending = len(_pending_notes())
     vector_refresh_required = workspace_pending or bool(notes_pending)
     running = int(_active_job_id is not None)
-    # An entire-vault rebuild is one job, not one job per block/note.
+    # 整个保管库重建是一项作业，而不是每个块/笔记一项作业。
     pending = 1 if running and _active_scope == 'all' else (1 + running if workspace_pending else max(notes_pending, running))
     activity_fields = dict(running_jobs=running, active_searches=activity.active,
                            completed_searches=activity.completed, failed_searches=activity.failed,
@@ -279,20 +278,19 @@ async def _refresh_saved_note(note_id: str) -> None:
         async with vault_mutation_lock():
             current = repository.get_note_record(note_id)
             if current != record or note_service._read_markdown(record.file_path) != markdown:
-                # Another save or rename won the race; leave the durable queue entry intact.
+                # 另一次保存或重命名已先完成；保留持久队列条目不变。
                 return
             conn = connect()
             try:
                 with transaction(conn):
                     existing_ids = {row[0] for row in conn.execute('SELECT block_id FROM blocks WHERE note_id=?', (note_id,))}
                     if existing_ids != {block.block_id for block in parsed.blocks}:
-                        # An external editor changed a newly registered note while inference ran.
-                        # Reconcile that note only; the snapshot check above protects newer saves.
+                        # 在推理运行时，外部编辑器更改了新注册的笔记。仅核对该笔记；上面的快照检查可以保护较新的保存。
                         parsed.title = parse_note(markdown=markdown, file_path=record.file_path,
                             folder=record.folder, tags=record.tags, created_at=record.created_at,
                             updated_at=record.updated_at, note_id=note_id).title
                         await index_note(parsed, prepared=prepared, conn=conn)
-                    # Write only vectors: metadata and FTS already represent the saved revision.
+                    # 只写向量：元数据和 FTS 已经代表保存的修订。
                     vectors, remote = prepared
                     from app.retrieval.vectorstore import VectorRecord
                     from app.retrieval import routed_vectors

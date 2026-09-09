@@ -1,4 +1,4 @@
-"""Independent, user-managed MCP server registry for development builds."""
+"""用于开发构建的独立的、用户管理的 MCP 服务器注册表。"""
 
 from __future__ import annotations
 
@@ -46,18 +46,14 @@ _MAX_MCP_SERVERS = 256
 
 
 class _McpConnectionBackend(PluginBackend):
-    """Bridge adapter for the independent server's float timeout contract.
-
-    Plugin manifests retain their integer/60-second startup restrictions.
-    Reusing that validation here used to reject valid 120-second server configs.
-    """
+    """适配独立服务器浮点超时约定的桥接器。Plugin 清单仍采用整数和 60 秒启动限制；这里若复用该校验，会错误拒绝有效的 120 秒服务器配置。"""
 
     startup_timeout_seconds: float = Field(default=15, ge=1, le=120)
     tool_timeout_seconds: float = Field(default=30, ge=1, le=300)
 
 
 class _McpServerRecord(McpServerConfig):
-    """Validated on-disk representation with defaults for older C.1 records."""
+    """已验证磁盘上的表示形式以及旧 C.1 记录的默认值。"""
 
     version: int = Field(default=1, ge=1)
     secret_environment_version: Literal[1, 2] = 1
@@ -81,7 +77,7 @@ class McpRegistryError(RuntimeError):
 
 
 def _serialized_lifecycle(method):
-    """Serialize lifecycle mutations without blocking MCP failure callbacks."""
+    """序列化生命周期变更而不阻止 MCP 失败回调。"""
 
     @wraps(method)
     def wrapped(self, *args, **kwargs):
@@ -92,7 +88,7 @@ def _serialized_lifecycle(method):
 
 
 class McpServerRegistry:
-    """Persists configuration and owns stdio host/tool lifecycles."""
+    """保留配置并拥有 stdio 主机/工具生命周期。"""
 
     def __init__(
         self,
@@ -480,7 +476,7 @@ class McpServerRegistry:
                 )
             headers[key] = value
         host_id = self._host_id(server_id)
-        # A queued callback from the previous process must not affect its replacement.
+        # 来自前一进程的排队回调不得影响其替换。
         generation = object()
         self._generations[server_id] = generation
         self.bridge.remove(host_id)
@@ -528,8 +524,7 @@ class McpServerRegistry:
         self.tools.register(definition, arguments_model, executor)
 
     def _unavailable(self, server_id: str, generation: object, message: str) -> None:
-        # A failure may race with enable(). Waiting for the lifecycle mutation makes
-        # sure tools registered immediately before the callback are also removed.
+        # 故障可能与 enable() 发生竞争；等待生命周期变更完成，可确保回调前刚注册的工具也被移除。
         with self._lifecycle_lock:
             if self._generations.get(server_id) is not generation:
                 return
@@ -548,9 +543,7 @@ class McpServerRegistry:
                         }
                         self._write()
             finally:
-                # broken() can run on the client's reader/event thread. stop() does
-                # not join that thread, and setting _stopping before closing the
-                # transport prevents the close itself from reporting another failure.
+                # broken() 可能在客户端的读取器/事件线程中运行。stop() 不会等待该线程；关闭传输前先设置 _stopping，可避免关闭操作再次报告故障。
                 self.bridge.remove(self._host_id(server_id))
 
     def _require_launch_allowed(
@@ -807,7 +800,7 @@ class McpServerRegistry:
     def _secret_ids(self, server_id: str, keys: list[str], kind: str) -> set[str]:
         ids = {self._secret_id(server_id, key, kind) for key in keys}
         if kind == "environment":
-            # Include retained ambiguous legacy ciphertext when its last declaration is removed.
+            # 当删除最后一个声明时，包括保留的不明确的遗留密文。
             ids.update(
                 self._legacy_environment_secret_id(server_id, key) for key in keys
             )
@@ -861,9 +854,7 @@ class McpServerRegistry:
                     "status": PluginHostState.error,
                     "error": "环境变量密钥名称曾发生大小写冲突，请分别重新录入密钥并测试连接。",
                 }
-            # Persist a migration marker even when legacy values were ambiguous.
-            # Otherwise a later key removal could make that old shared value look
-            # unambiguous and resurrect a deleted credential on the next restart.
+            # 即使旧值不明确，也保留迁移标记。否则，稍后删除密钥可能会使旧的共享值看起来明确，并在下次重新启动时恢复已删除的凭据。
             for server_id in legacy_records:
                 self._records[server_id]["secret_environment_version"] = 2
             self._write()
@@ -924,7 +915,7 @@ class McpServerRegistry:
             ) from exc
 
     def _invalidate_test(self, server_id: str) -> None:
-        """Make credential changes safe before touching the encrypted store."""
+        """在接触加密存储之前确保凭证更改的安全。"""
 
         with self._lock:
             record = self._record(server_id)

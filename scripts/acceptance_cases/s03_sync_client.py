@@ -1,4 +1,4 @@
-"""S-03 conflict matrix, first-bind, and rebind isolation acceptance driver."""
+"""S-03：冲突矩阵、首次绑定与重新绑定隔离验收驱动。"""
 
 from __future__ import annotations
 

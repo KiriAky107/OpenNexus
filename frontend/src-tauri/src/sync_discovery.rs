@@ -1,9 +1,9 @@
-//! Reconcile externally edited files against committed snapshots, never against UI read caches.
+//! 根据已提交的快照协调外部编辑的文件，而不是根据 UI 读取缓存。
 use crate::workspace::{HostError, Result, Workspace};
 use rusqlite::{params, OptionalExtension};
 use std::{collections::HashSet, fs, path::Path};
 use uuid::Uuid;
-/// File transport only. Logical records receive their own versioned whitelist separately.
+/// 仅文件传输。逻辑记录单独接收自己的版本白名单。
 pub fn allowed(path: &str) -> bool {
     if crate::records::is_record(path) {
         return crate::records::allowed(path);
@@ -115,7 +115,7 @@ impl Workspace {
             {
                 continue;
             }
-            // Confirm the snapshot without writing back over an external editor.
+            // 确认快照而不通过外部编辑器回写。
             let operation = Uuid::new_v4().to_string();
             self.store_payload_file(&operation, &target, &digest)?;
             let file_id = previous.map_or_else(|| Uuid::new_v4().to_string(), |e| e.file_id);

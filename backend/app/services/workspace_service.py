@@ -106,7 +106,7 @@ def get_workspace_tree() -> list[WorkspaceEntry]:
 
 
 async def refresh_workspace_tree() -> list[WorkspaceEntry]:
-    """Observe external creates/deletes without waiting for vector inference."""
+    """观察外部创建/删除而不等待向量推断。"""
     if get_workspace_info().requires_refresh:
         await _register_workspace_files()
         index_service.schedule_workspace_rebuild()
