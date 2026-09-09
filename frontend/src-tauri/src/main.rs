@@ -16,6 +16,7 @@ use notesagent_host::credentials::CredentialBroker;
 use notesagent_host::recent::{RecentVault, RecentVaultStore};
 use notesagent_host::request_lifecycle::Requests;
 use notesagent_host::workspace::{portable_path_string, Document, Entry, Workspace};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -606,6 +607,76 @@ async fn credentials_import(host: State<'_, Host>) -> Result<Option<usize>, Stri
     .map_err(|_| "HOST_BUSY")?
 }
 
+#[derive(Serialize)]
+struct CredentialCleanupResult {
+    count: usize,
+    already_clean: bool,
+}
+
+#[tauri::command]
+async fn credentials_cleanup(
+    host: State<'_, Host>,
+) -> Result<Option<CredentialCleanupResult>, String> {
+    let Some(directory) = rfd::FileDialog::new()
+        .set_title("选择已完成凭据迁移的旧版本目录")
+        .pick_folder()
+    else {
+        return Ok(None);
+    };
+    let broker = host.credentials.clone();
+    let preview_directory = directory.clone();
+    let preview = tauri::async_runtime::spawn_blocking(move || {
+        broker
+            .lock()
+            .map_err(|_| "HOST_BUSY")?
+            .as_ref()
+            .ok_or("HOST_NOT_READY")?
+            .cleanup_fernet_preview(&preview_directory)
+    })
+    .await
+    .map_err(|_| "HOST_BUSY")??;
+    if preview.cleanup_complete {
+        return Ok(Some(CredentialCleanupResult {
+            count: preview.count,
+            already_clean: true,
+        }));
+    }
+    let key_description = if preview.environment_key {
+        "外部环境密钥不会被修改。"
+    } else {
+        "旧目录内由本次迁移管理的 master.key 也会被删除。"
+    };
+    let description = format!(
+        "已验证 {} 条凭据。将永久删除旧 credentials.json 和本次迁移创建的加密备份。{}\n\n源文件 SHA-256：{}\n\n是否继续？",
+        preview.count, key_description, preview.source_sha256
+    );
+    if rfd::MessageDialog::new()
+        .set_title("清理已迁移的旧凭据")
+        .set_description(description)
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        != rfd::MessageDialogResult::Yes
+    {
+        return Ok(None);
+    }
+    let broker = host.credentials.clone();
+    let source_sha256 = preview.source_sha256;
+    tauri::async_runtime::spawn_blocking(move || {
+        broker
+            .lock()
+            .map_err(|_| "HOST_BUSY")?
+            .as_mut()
+            .ok_or("HOST_NOT_READY")?
+            .cleanup_fernet(&directory, &source_sha256)
+    })
+    .await
+    .map_err(|_| "HOST_BUSY")??;
+    Ok(Some(CredentialCleanupResult {
+        count: preview.count,
+        already_clean: false,
+    }))
+}
+
 #[tauri::command]
 async fn credentials_change_password(
     host: State<'_, Host>,
@@ -1013,6 +1084,7 @@ fn main() {
             credentials_lock,
             credentials_change_password,
             credentials_import,
+            credentials_cleanup,
             credentials_backup,
             credentials_restore,
             core_request,

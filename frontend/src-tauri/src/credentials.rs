@@ -26,6 +26,121 @@ const CLIENT: &[u8] = b"opennexus.credentials.v1";
 const MAGIC: &[u8] = b"ONXCRED1";
 const MAX_FILE: u64 = 16 * 1024 * 1024;
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct MigrationState {
+    schema: u32,
+    owner: String,
+    state: String,
+    source_sha256: String,
+    count: usize,
+    environment_key: bool,
+    migration_id: String,
+}
+
+impl MigrationState {
+    fn validate(&self) -> Result<()> {
+        if self.schema != 1
+            || self.owner != "OpenNexus"
+            || !matches!(
+                self.state.as_str(),
+                "backed_up"
+                    | "copied"
+                    | "verified"
+                    | "switched"
+                    | "cleanup_authorized"
+                    | "cleanup_confirmed"
+            )
+            || self.source_sha256.len() != 64
+            || !self
+                .source_sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || self.migration_id.len() != 64
+            || !self
+                .migration_id
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err("MIGRATION_STATE_INVALID".into());
+        }
+        Ok(())
+    }
+
+    fn same_migration(&self, other: &Self) -> bool {
+        self.schema == other.schema
+            && self.owner == other.owner
+            && self.source_sha256 == other.source_sha256
+            && self.count == other.count
+            && self.environment_key == other.environment_key
+            && self.migration_id == other.migration_id
+    }
+}
+
+#[derive(Clone, Serialize)]
+pub struct MigrationCleanupPreview {
+    pub source_sha256: String,
+    pub count: usize,
+    pub environment_key: bool,
+    pub cleanup_complete: bool,
+}
+
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
+fn ordinary_file(path: &Path, maximum: u64, error: &str) -> Result<fs::Metadata> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| error.to_string())?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || is_reparse_point(&metadata)
+        || metadata.len() > maximum
+    {
+        return Err(error.into());
+    }
+    Ok(metadata)
+}
+
+fn ordinary_directory(path: &Path, error: &str) -> Result<fs::Metadata> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| error.to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
+        return Err(error.into());
+    }
+    Ok(metadata)
+}
+
+fn persist_state(path: &Path, state: &MigrationState) -> Result<()> {
+    state.validate()?;
+    let parent = path.parent().ok_or("MIGRATION_STATE_INVALID")?;
+    fs::create_dir_all(parent).map_err(|_| "MIGRATION_SWITCH_FAILED")?;
+    let bytes = serde_json::to_vec(state).map_err(|_| "MIGRATION_STATE_INVALID")?;
+    let mut file =
+        tempfile::NamedTempFile::new_in(parent).map_err(|_| "MIGRATION_SWITCH_FAILED")?;
+    file.write_all(&bytes)
+        .and_then(|_| file.as_file().sync_all())
+        .map_err(|_| "MIGRATION_SWITCH_FAILED")?;
+    file.persist(path).map_err(|_| "MIGRATION_SWITCH_FAILED")?;
+    Ok(())
+}
+
+fn read_state(path: &Path) -> Result<MigrationState> {
+    ordinary_file(path, 64 * 1024, "MIGRATION_STATE_INVALID")?;
+    let state: MigrationState =
+        serde_json::from_slice(&fs::read(path).map_err(|_| "MIGRATION_STATE_INVALID")?)
+            .map_err(|_| "MIGRATION_STATE_INVALID")?;
+    state.validate()?;
+    Ok(state)
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", content = "owner", rename_all = "snake_case")]
 pub enum Scope {
@@ -202,6 +317,34 @@ impl Unlocked {
     }
 }
 
+fn verify_migration_backup(
+    session: &Unlocked,
+    backup: &Path,
+    source_sha256: &str,
+) -> Result<Zeroizing<Vec<u8>>> {
+    ordinary_directory(backup, "MIGRATION_BACKUP_FAILED")?;
+    let source_backup = backup.join("credentials.json");
+    let key_backup = backup.join("master-key.sealed");
+    ordinary_file(&source_backup, MAX_FILE, "MIGRATION_BACKUP_FAILED")?;
+    ordinary_file(&key_backup, MAX_FILE, "MIGRATION_BACKUP_FAILED")?;
+    if format!(
+        "{:x}",
+        Sha256::digest(fs::read(source_backup).map_err(|_| "MIGRATION_BACKUP_FAILED")?)
+    ) != source_sha256
+    {
+        return Err("MIGRATION_BACKUP_FAILED".into());
+    }
+    let sealed = fs::read(key_backup).map_err(|_| "MIGRATION_BACKUP_FAILED")?;
+    if sealed.len() <= 51 || &sealed[..7] != b"ONXFBK1" || sealed[7..39] != session.salt {
+        return Err("MIGRATION_BACKUP_FAILED".into());
+    }
+    session
+        .cipher()?
+        .decrypt(Nonce::from_slice(&sealed[39..51]), &sealed[51..])
+        .map(Zeroizing::new)
+        .map_err(|_| "MIGRATION_BACKUP_FAILED".into())
+}
+
 pub struct CredentialBroker {
     path: PathBuf,
     unlocked: Option<Unlocked>,
@@ -220,18 +363,21 @@ impl CredentialBroker {
         directory: &Path,
         environment_key: Option<Zeroizing<String>>,
     ) -> Result<usize> {
+        self.import_fernet_inner(directory, environment_key, |_| Ok(()))
+    }
+    fn import_fernet_inner(
+        &mut self,
+        directory: &Path,
+        environment_key: Option<Zeroizing<String>>,
+        mut checkpoint: impl FnMut(&str) -> Result<()>,
+    ) -> Result<usize> {
         use fs2::FileExt;
         let directory = directory
             .canonicalize()
             .map_err(|_| "MIGRATION_SOURCE_INVALID")?;
         let source = directory.join("credentials.json");
         let key_path = directory.join("master.key");
-        if !fs::symlink_metadata(&source)
-            .map_err(|_| "MIGRATION_SOURCE_INVALID")?
-            .is_file()
-        {
-            return Err("MIGRATION_SOURCE_INVALID".into());
-        }
+        ordinary_file(&source, MAX_FILE, "MIGRATION_SOURCE_INVALID")?;
         let lock = fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -241,13 +387,6 @@ impl CredentialBroker {
             .map_err(|_| "MIGRATION_SOURCE_BUSY")?;
         lock.try_lock_exclusive()
             .map_err(|_| "MIGRATION_SOURCE_BUSY")?;
-        if fs::metadata(&source)
-            .map_err(|_| "MIGRATION_SOURCE_INVALID")?
-            .len()
-            > MAX_FILE
-        {
-            return Err("MIGRATION_SOURCE_INVALID".into());
-        }
         let source_bytes = fs::read(&source).map_err(|_| "MIGRATION_SOURCE_INVALID")?;
         let source_hash = format!("{:x}", Sha256::digest(&source_bytes));
         let tokens: BTreeMap<String, String> =
@@ -256,12 +395,7 @@ impl CredentialBroker {
             return Err("MIGRATION_SOURCE_INVALID".into());
         }
         let local_key = if environment_key.is_none() {
-            if !fs::symlink_metadata(&key_path)
-                .map_err(|_| "MIGRATION_KEY_MISSING")?
-                .is_file()
-            {
-                return Err("MIGRATION_KEY_MISSING".into());
-            }
+            ordinary_file(&key_path, 4096, "MIGRATION_KEY_MISSING")?;
             Some(Zeroizing::new(
                 fs::read_to_string(&key_path).map_err(|_| "MIGRATION_KEY_MISSING")?,
             ))
@@ -303,6 +437,27 @@ impl CredentialBroker {
             .ok_or("CREDENTIAL_PATH_INVALID")?
             .join("migration-backups")
             .join(&migration_id);
+        let journal = self
+            .path
+            .parent()
+            .ok_or("CREDENTIAL_PATH_INVALID")?
+            .join("migration-state")
+            .join(format!("{migration_id}.json"));
+        let owner_path = directory.join(".opennexus-owner.json");
+        if owner_path.exists() {
+            let owner = read_state(&owner_path)?;
+            if owner.state == "cleanup_authorized" || owner.state == "cleanup_confirmed" {
+                return Err("MIGRATION_CLEANUP_ALREADY_AUTHORIZED".into());
+            }
+            if owner.state != "switched"
+                || owner.source_sha256 != source_hash
+                || owner.count != decoded.len()
+                || owner.environment_key != environment_key.is_some()
+                || owner.migration_id != migration_id
+            {
+                return Err("MIGRATION_SOURCE_CHANGED".into());
+            }
+        }
         fs::create_dir_all(&backup).map_err(|_| "MIGRATION_BACKUP_FAILED")?;
         // Backups contain ciphertext; the legacy key is sealed under the already
         // unlocked device key, rather than adding another plaintext master.key.
@@ -332,11 +487,25 @@ impl CredentialBroker {
                 .persist(backup.join(name))
                 .map_err(|_| "MIGRATION_BACKUP_FAILED")?;
         }
+        let mut state = MigrationState {
+            schema: 1,
+            owner: "OpenNexus".into(),
+            state: "backed_up".into(),
+            source_sha256: source_hash.clone(),
+            count: decoded.len(),
+            environment_key: environment_key.is_some(),
+            migration_id: migration_id.clone(),
+        };
+        persist_state(&journal, &state)?;
+        checkpoint("backed_up")?;
         let result = (|| {
             for (key, value) in &decoded {
                 session.write(key.clone(), value)?;
             }
             session.persist(&self.path)?;
+            state.state = "copied".into();
+            persist_state(&journal, &state)?;
+            checkpoint("copied")?;
             // Re-open the committed Stronghold snapshot, not the in-memory cache.
             let envelope = fs::read(&self.path).map_err(|_| "MIGRATION_VERIFY_FAILED")?;
             let mut temporary =
@@ -365,23 +534,169 @@ impl CredentialBroker {
             if fs::read(&source).map_err(|_| "MIGRATION_SOURCE_CHANGED")? != source_bytes {
                 return Err("MIGRATION_SOURCE_CHANGED".into());
             }
-            let marker = serde_json::json!({"schema":1,"owner":"OpenNexus","state":"switched","source_sha256":source_hash,"count":decoded.len(),"environment_key":environment_key.is_some()});
-            let bytes = serde_json::to_vec(&marker).map_err(|_| "MIGRATION_VERIFY_FAILED")?;
-            let mut marker_file = tempfile::NamedTempFile::new_in(&directory)
-                .map_err(|_| "MIGRATION_SWITCH_FAILED")?;
-            marker_file
-                .write_all(&bytes)
-                .and_then(|_| marker_file.as_file().sync_all())
-                .map_err(|_| "MIGRATION_SWITCH_FAILED")?;
-            marker_file
-                .persist(directory.join(".opennexus-owner.json"))
-                .map_err(|_| "MIGRATION_SWITCH_FAILED")?;
+            state.state = "verified".into();
+            persist_state(&journal, &state)?;
+            checkpoint("verified")?;
+            let mut owner = state.clone();
+            owner.state = "switched".into();
+            persist_state(&owner_path, &owner)?;
+            checkpoint("ownership_committed")?;
+            state.state = "switched".into();
+            persist_state(&journal, &state)?;
+            checkpoint("switched")?;
             Ok(decoded.len())
         })();
         if result.is_err() {
             self.lock();
         }
         result
+    }
+
+    /// Deletes only the verified legacy files and this migration's encrypted backup.
+    /// The native Host must obtain explicit user confirmation for source_sha256 first.
+    pub fn cleanup_fernet(
+        &mut self,
+        directory: &Path,
+        confirmed_source_sha256: &str,
+    ) -> Result<()> {
+        self.cleanup_fernet_inner(directory, confirmed_source_sha256, |_| Ok(()))
+    }
+
+    pub fn cleanup_fernet_preview(&self, directory: &Path) -> Result<MigrationCleanupPreview> {
+        self.session()?;
+        let directory = directory
+            .canonicalize()
+            .map_err(|_| "MIGRATION_SOURCE_INVALID")?;
+        ordinary_directory(&directory, "MIGRATION_SOURCE_INVALID")?;
+        let state = read_state(&directory.join(".opennexus-owner.json"))?;
+        if !matches!(
+            state.state.as_str(),
+            "switched" | "cleanup_authorized" | "cleanup_confirmed"
+        ) {
+            return Err("MIGRATION_STATE_INVALID".into());
+        }
+        Ok(MigrationCleanupPreview {
+            source_sha256: state.source_sha256,
+            count: state.count,
+            environment_key: state.environment_key,
+            cleanup_complete: state.state == "cleanup_confirmed",
+        })
+    }
+
+    fn cleanup_fernet_inner(
+        &mut self,
+        directory: &Path,
+        confirmed_source_sha256: &str,
+        mut checkpoint: impl FnMut(&str) -> Result<()>,
+    ) -> Result<()> {
+        use fs2::FileExt;
+        let session = self.session()?;
+        let directory = directory
+            .canonicalize()
+            .map_err(|_| "MIGRATION_SOURCE_INVALID")?;
+        ordinary_directory(&directory, "MIGRATION_SOURCE_INVALID")?;
+        let lock_path = directory.join(".migration.lock");
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .map_err(|_| "MIGRATION_SOURCE_BUSY")?;
+        lock.try_lock_exclusive()
+            .map_err(|_| "MIGRATION_SOURCE_BUSY")?;
+        let owner_path = directory.join(".opennexus-owner.json");
+        let mut state = read_state(&owner_path)?;
+        if state.state == "cleanup_confirmed" {
+            return Ok(());
+        }
+        if !matches!(state.state.as_str(), "switched" | "cleanup_authorized")
+            || state.source_sha256 != confirmed_source_sha256
+        {
+            return Err("MIGRATION_CLEANUP_CONFIRMATION".into());
+        }
+        let source = directory.join("credentials.json");
+        let parent = self.path.parent().ok_or("CREDENTIAL_PATH_INVALID")?;
+        let journal = parent
+            .join("migration-state")
+            .join(format!("{}.json", state.migration_id));
+        let journal_state = read_state(&journal)?;
+        if !journal_state.same_migration(&state)
+            || !matches!(
+                journal_state.state.as_str(),
+                "switched" | "cleanup_authorized" | "cleanup_confirmed"
+            )
+        {
+            return Err("MIGRATION_STATE_INVALID".into());
+        }
+        let backup = parent.join("migration-backups").join(&state.migration_id);
+        let sealed_key = if backup.exists() {
+            Some(verify_migration_backup(
+                session,
+                &backup,
+                &state.source_sha256,
+            )?)
+        } else {
+            None
+        };
+        if state.state == "switched" && sealed_key.is_none() {
+            return Err("MIGRATION_BACKUP_FAILED".into());
+        }
+        if source.exists() {
+            ordinary_file(&source, MAX_FILE, "MIGRATION_SOURCE_CHANGED")?;
+            if format!(
+                "{:x}",
+                Sha256::digest(fs::read(&source).map_err(|_| "MIGRATION_SOURCE_CHANGED")?)
+            ) != state.source_sha256
+            {
+                return Err("MIGRATION_SOURCE_CHANGED".into());
+            }
+        } else if state.state == "switched" {
+            return Err("MIGRATION_SOURCE_CHANGED".into());
+        }
+        let key_path = directory.join("master.key");
+        if !state.environment_key && key_path.exists() {
+            ordinary_file(&key_path, 4096, "MIGRATION_CLEANUP_FAILED")?;
+            let expected_key = sealed_key.as_ref().ok_or("MIGRATION_CLEANUP_FAILED")?;
+            if fs::read(&key_path).map_err(|_| "MIGRATION_CLEANUP_FAILED")?
+                != expected_key.as_slice()
+            {
+                return Err("MIGRATION_CLEANUP_FAILED".into());
+            }
+        }
+        if state.state == "cleanup_authorized"
+            && sealed_key.is_none()
+            && (source.exists() || (!state.environment_key && key_path.exists()))
+        {
+            return Err("MIGRATION_CLEANUP_FAILED".into());
+        }
+        if state.state == "switched" {
+            state.state = "cleanup_authorized".into();
+            persist_state(&owner_path, &state)?;
+            checkpoint("cleanup_authorized")?;
+            persist_state(&journal, &state)?;
+        }
+        if source.exists() {
+            ordinary_file(&source, MAX_FILE, "MIGRATION_CLEANUP_FAILED")?;
+            fs::remove_file(&source).map_err(|_| "MIGRATION_CLEANUP_FAILED")?;
+        }
+        checkpoint("source_removed")?;
+        if !state.environment_key && key_path.exists() {
+            ordinary_file(&key_path, 4096, "MIGRATION_CLEANUP_FAILED")?;
+            fs::remove_file(key_path).map_err(|_| "MIGRATION_CLEANUP_FAILED")?;
+        }
+        checkpoint("key_removed")?;
+        if backup.exists() {
+            ordinary_directory(&backup, "MIGRATION_CLEANUP_FAILED")?;
+            fs::remove_dir_all(&backup).map_err(|_| "MIGRATION_CLEANUP_FAILED")?;
+        }
+        checkpoint("backup_removed")?;
+        state.state = "cleanup_confirmed".into();
+        persist_state(&journal, &state)?;
+        checkpoint("cleanup_recorded")?;
+        persist_state(&owner_path, &state)?;
+        checkpoint("cleanup_confirmed")?;
+        Ok(())
     }
     pub fn dispatch(&mut self, request: &serde_json::Value) -> Result<serde_json::Value> {
         let method = request["rpc"].as_str().ok_or("HOST_REQUEST_INVALID")?;
@@ -734,6 +1049,32 @@ mod tests {
     fn password() -> Zeroizing<Vec<u8>> {
         Zeroizing::new(b"test-only-password-123".to_vec())
     }
+    fn b04_fixture() -> (Vec<u8>, String, BTreeMap<String, String>) {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/fernet-python.json")).unwrap();
+        let mut tokens = BTreeMap::new();
+        let mut values = BTreeMap::new();
+        for id in ["provider-000", "provider-001", "provider-002"] {
+            tokens.insert(
+                id.to_string(),
+                fixture["tokens"][id].as_str().unwrap().to_string(),
+            );
+            values.insert(
+                id.to_string(),
+                fixture["values"][id].as_str().unwrap().to_string(),
+            );
+        }
+        (
+            serde_json::to_vec(&tokens).unwrap(),
+            fixture["key"].as_str().unwrap().to_string(),
+            values,
+        )
+    }
+    fn b04_write_source(directory: &Path, source: &[u8], key: &str) {
+        fs::create_dir_all(directory).unwrap();
+        fs::write(directory.join("credentials.json"), source).unwrap();
+        fs::write(directory.join("master.key"), key).unwrap();
+    }
     #[test]
     fn encrypted_backup_restores_corrupt_store_without_overwrite_on_failure() {
         let temp = tempfile::tempdir().unwrap();
@@ -977,6 +1318,204 @@ mod tests {
                 .as_slice(),
             b"changed-new-value"
         );
+    }
+    #[test]
+    #[ignore = "parent acceptance oracle hard-terminates this helper at a durable boundary"]
+    fn b04_migration_boundary_worker() {
+        let Some(source) = std::env::var_os("OPENNEXUS_B04_SOURCE") else {
+            return;
+        };
+        let target = PathBuf::from(std::env::var_os("OPENNEXUS_B04_TARGET").unwrap());
+        let boundary = std::env::var("OPENNEXUS_B04_BOUNDARY").unwrap();
+        let marker = PathBuf::from(std::env::var_os("OPENNEXUS_B04_MARKER").unwrap());
+        let mut broker = CredentialBroker::new(target);
+        broker.unlock(password()).unwrap();
+        let _ = broker.import_fernet_inner(Path::new(&source), None, |at| {
+            if at == boundary {
+                let file = fs::File::create(&marker).unwrap();
+                file.sync_all().unwrap();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(60));
+                }
+            }
+            Ok(())
+        });
+        panic!("B-04 helper passed the requested boundary");
+    }
+    #[test]
+    fn b04_migration_survives_twenty_hard_terminations_per_boundary() {
+        let (source, legacy_key, expected) = b04_fixture();
+        for boundary in [
+            "backed_up",
+            "copied",
+            "verified",
+            "ownership_committed",
+            "switched",
+        ] {
+            for round in 0..20 {
+                let temp = tempfile::tempdir().unwrap();
+                let legacy = temp.path().join("legacy");
+                let target = temp.path().join("new/stronghold.v1");
+                b04_write_source(&legacy, &source, &legacy_key);
+                let marker = temp.path().join(format!("{boundary}-{round}.ready"));
+                let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--ignored",
+                        "--exact",
+                        "credentials::tests::b04_migration_boundary_worker",
+                        "--nocapture",
+                    ])
+                    .env("OPENNEXUS_B04_SOURCE", &legacy)
+                    .env("OPENNEXUS_B04_TARGET", &target)
+                    .env("OPENNEXUS_B04_BOUNDARY", boundary)
+                    .env("OPENNEXUS_B04_MARKER", &marker)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .unwrap();
+                let started = std::time::Instant::now();
+                while !marker.is_file() {
+                    assert!(
+                        child.try_wait().unwrap().is_none(),
+                        "helper exited before {boundary}"
+                    );
+                    assert!(
+                        started.elapsed() < std::time::Duration::from_secs(30),
+                        "helper did not reach {boundary}"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                child.kill().unwrap();
+                assert!(!child.wait().unwrap().success());
+                assert_eq!(fs::read(legacy.join("credentials.json")).unwrap(), source);
+                assert_eq!(
+                    fs::read_to_string(legacy.join("master.key")).unwrap(),
+                    legacy_key
+                );
+
+                let owner_exists = legacy.join(".opennexus-owner.json").is_file();
+                let mut broker = CredentialBroker::new(target);
+                broker.unlock(password()).unwrap();
+                let before_count = broker.list().unwrap().len();
+                assert!(before_count == 0 || before_count == expected.len());
+                if owner_exists {
+                    assert_eq!(before_count, expected.len());
+                }
+                assert_eq!(broker.import_fernet(&legacy, None).unwrap(), expected.len());
+                assert_eq!(broker.list().unwrap().len(), expected.len());
+                for (id, value) in &expected {
+                    assert_eq!(
+                        broker
+                            .resolve(&Scope::Provider, &CredentialId::legacy(id))
+                            .unwrap()
+                            .unwrap()
+                            .as_slice(),
+                        value.as_bytes()
+                    );
+                }
+                let owner = read_state(&legacy.join(".opennexus-owner.json")).unwrap();
+                let journal = read_state(
+                    &broker
+                        .path
+                        .parent()
+                        .unwrap()
+                        .join("migration-state")
+                        .join(format!("{}.json", owner.migration_id)),
+                )
+                .unwrap();
+                assert_eq!(owner.state, "switched");
+                assert_eq!(journal, owner);
+            }
+        }
+    }
+    #[test]
+    fn b04_cleanup_is_confirmed_scoped_and_resumable() {
+        let (source, legacy_key, expected) = b04_fixture();
+        for boundary in [
+            "cleanup_authorized",
+            "source_removed",
+            "key_removed",
+            "backup_removed",
+            "cleanup_recorded",
+            "cleanup_confirmed",
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let legacy = temp.path().join("legacy");
+            b04_write_source(&legacy, &source, &legacy_key);
+            let mut broker = CredentialBroker::new(temp.path().join("new/stronghold.v1"));
+            broker.unlock(password()).unwrap();
+            broker.import_fernet(&legacy, None).unwrap();
+            let state = read_state(&legacy.join(".opennexus-owner.json")).unwrap();
+            let backup = broker
+                .path
+                .parent()
+                .unwrap()
+                .join("migration-backups")
+                .join(&state.migration_id);
+            assert!(legacy.join("credentials.json").is_file());
+            assert!(legacy.join("master.key").is_file());
+            assert!(backup.is_dir());
+            assert_eq!(
+                broker.cleanup_fernet(&legacy, &"0".repeat(64)).unwrap_err(),
+                "MIGRATION_CLEANUP_CONFIRMATION"
+            );
+            assert!(legacy.join("credentials.json").is_file());
+            assert!(legacy.join("master.key").is_file());
+            assert!(backup.is_dir());
+
+            let mut stopped = false;
+            assert_eq!(
+                broker
+                    .cleanup_fernet_inner(&legacy, &state.source_sha256, |at| {
+                        if at == boundary && !stopped {
+                            stopped = true;
+                            return Err("POWER_CUT".into());
+                        }
+                        Ok(())
+                    })
+                    .unwrap_err(),
+                "POWER_CUT"
+            );
+            broker
+                .cleanup_fernet(&legacy, &state.source_sha256)
+                .unwrap();
+            assert!(!legacy.join("credentials.json").exists());
+            assert!(!legacy.join("master.key").exists());
+            assert!(!backup.exists());
+            let completed = read_state(&legacy.join(".opennexus-owner.json")).unwrap();
+            assert_eq!(completed.state, "cleanup_confirmed");
+            assert_eq!(completed.count, expected.len());
+            broker
+                .cleanup_fernet(&legacy, &state.source_sha256)
+                .unwrap();
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let legacy = temp.path().join("environment-legacy");
+        let external_key_file = temp.path().join("external-environment-key.txt");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("credentials.json"), &source).unwrap();
+        fs::write(legacy.join("master.key"), b"unmanaged-sentinel").unwrap();
+        fs::write(&external_key_file, &legacy_key).unwrap();
+        let external_before = fs::read(&external_key_file).unwrap();
+        let mut broker = CredentialBroker::new(temp.path().join("environment/stronghold.v1"));
+        broker.unlock(password()).unwrap();
+        broker
+            .import_fernet(&legacy, Some(Zeroizing::new(legacy_key)))
+            .unwrap();
+        let state = read_state(&legacy.join(".opennexus-owner.json")).unwrap();
+        assert!(state.environment_key);
+        broker
+            .cleanup_fernet(&legacy, &state.source_sha256)
+            .unwrap();
+        assert!(!legacy.join("credentials.json").exists());
+        assert_eq!(
+            fs::read(legacy.join("master.key")).unwrap(),
+            b"unmanaged-sentinel"
+        );
+        assert_eq!(fs::read(external_key_file).unwrap(), external_before);
+        assert_eq!(broker.list().unwrap().len(), expected.len());
     }
     #[test]
     fn stronghold_roundtrip_scope_lock_and_password_rotation() {
