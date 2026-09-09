@@ -2,7 +2,7 @@ id: chat-operator
 name: 聊天委托助手
 version: 1.0.0
 description: 规范聊天检索、工具使用和智能体执行，先读取证据、局部修改、再核验结果。
-permissions: [notes.search, notes.read, notes.write, tasks.read, tasks.write]
-tools: [chat-policy.plan, notes.search, rag.search, notes.read, notes.list, notes.create, notes.update, notes.move, notes.patch_markdown, markdown.catalog, markdown.compose, tasks.create, tasks.update, tasks.list]
+permissions: [notes.search, notes.read, notes.write, notes.delete, tasks.read, tasks.write, attachments.read, skills.write, plugins.write]
+tools: [chat-policy.plan, notes.search, rag.search, notes.read, notes.list, notes.create, notes.update, notes.move, notes.rename, notes.delete, notes.patch_markdown, markdown.catalog, markdown.compose, function_plot.compose, tasks.create, tasks.update, tasks.list, tasks.read, tasks.delete, attachments.read, audio.transcribe, audio.transcription_status, skills.list, skills.create, skills.update, plugins.list, plugins.create]
 model:
   required_capabilities: [chat, tool_calling]

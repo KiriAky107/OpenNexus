@@ -332,6 +332,7 @@ onBeforeUnmount(() => {
         <button data-menu-item role="menuitem" @click="navigate('/logs')"><span>{{ t('运行日志', 'Operation logs') }}</span></button>
         <button data-menu-item role="menuitem" @click="navigate('/benchmarks')"><span>{{ t('Benchmark 评测', 'Benchmarks') }}</span></button>
         <button data-menu-item role="menuitem" @click="navigate('/community')"><span>{{ t('社区目录', 'Community catalog') }}</span></button>
+        <button data-help-function-plot data-menu-item role="menuitem" @click="navigate('/help/function-plot')"><span>{{ t('Function Plot 教程', 'Function Plot tutorial') }}</span></button>
         <span class="menu-separator" role="separator" />
         <button data-menu-item role="menuitem" :disabled="!workspace.hasVault" @click="navigate('/settings')"><span>{{ t('设置与诊断…', 'Settings and diagnostics…') }}</span></button>
       </div>

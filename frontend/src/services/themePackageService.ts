@@ -6,6 +6,25 @@ import { isMap, parseDocument } from 'yaml'
 
 export const THEME_APP_VERSION = appPackage.version
 
+/**
+ * Semantic colors every page and component may consume. Theme packages can
+ * override any subset; the compatibility layer supplies the rest.
+ */
+export const REQUIRED_THEME_COLOR_TOKENS = [
+  'background-primary', 'background-secondary', 'background-tertiary', 'background-hover', 'background-active', 'background-overlay',
+  'surface-primary', 'surface-secondary', 'surface-elevated',
+  'text-primary', 'text-secondary', 'text-tertiary', 'text-inverse', 'text-link', 'text-disabled',
+  'accent-primary', 'accent-primary-hover', 'accent-primary-active', 'accent-secondary', 'accent-soft', 'accent-soft-hover',
+  'success', 'success-soft', 'warning', 'warning-soft', 'error', 'error-soft', 'info', 'info-soft',
+  'border-default', 'border-subtle', 'border-focus', 'border-disabled',
+  'markdown-selection', 'markdown-grid', 'markdown-marker', 'markdown-table-header',
+  'editor-scroll-background', 'editor-scroll-text',
+  'callout-info', 'callout-success', 'callout-warning', 'callout-danger', 'callout-important', 'callout-quote',
+  'plot-background', 'plot-text', 'plot-axis', 'plot-grid',
+  'plot-curve-0', 'plot-curve-1', 'plot-curve-2', 'plot-curve-3', 'plot-curve-4', 'plot-curve-5',
+  'on-error', 'on-success', 'brand-surface', 'brand-ink', 'brand-surface-dark', 'highlight-overlay',
+] as const
+
 const STORAGE_KEY = 'installed-themes'
 const ACTIVE_CUSTOM_KEY = 'active-custom-theme'
 export const MAX_THEME_BYTES = 5 * 1024 * 1024
@@ -159,6 +178,47 @@ function applyThemeCss(themeId: string, css: string) {
   styleEl.textContent = css
 }
 
+const THEME_CONTRACT_MARKER = '/* opennexus-theme-contract */'
+
+/** Fill incomplete third-party themes with an accessible semantic palette. */
+export function withThemeContract(themeId: string, isDark: boolean, css: string): string {
+  if (css.includes(THEME_CONTRACT_MARKER)) return css
+  const selector = `[data-theme="${themeId}"]`
+  const base = isDark ? {
+    bg: '#0d1117', bg2: '#161b22', bg3: '#21262d', hover: '#1f2630', active: '#2d333b', overlay: '#000000a6',
+    surface: '#161b22', surface2: '#0d1117', elevated: '#1c2128', text: '#e6edf3', text2: '#9ba6b2', text3: '#768390', inverse: '#0d1117', disabled: '#58616b',
+    accent: '#7d8bff', accentHover: '#909cff', soft: '#1e2352', border: '#30363d', subtle: '#21262d',
+    success: '#3fb950', successSoft: '#033a16', warning: '#d29922', warningSoft: '#4d3a00', error: '#f85149', errorSoft: '#5c1318', info: '#58a6ff', infoSoft: '#051d4d',
+    calloutInfo: '#8bbdff', calloutSuccess: '#80ce93', calloutWarning: '#efc66f', calloutDanger: '#ff9b9b', calloutImportant: '#c8a5ff', calloutQuote: '#abb6c2',
+    curves: ['#79c0ff', '#ff9b9b', '#7ee787', '#d2a8ff', '#f2cc60', '#ffa657'],
+  } : {
+    bg: '#ffffff', bg2: '#f7f8fa', bg3: '#eef0f3', hover: '#f0f2f5', active: '#e4e7eb', overlay: '#00000073',
+    surface: '#ffffff', surface2: '#fafbfc', elevated: '#ffffff', text: '#1f2328', text2: '#656d76', text3: '#7b838c', inverse: '#ffffff', disabled: '#9aa0a8',
+    accent: '#5b67f1', accentHover: '#4a55e0', soft: '#eef0ff', border: '#d8dce2', subtle: '#e9ebef',
+    success: '#2da44e', successSoft: '#dafbe3', warning: '#9a6700', warningSoft: '#fff5c2', error: '#cf222e', errorSoft: '#ffebe9', info: '#0969da', infoSoft: '#ddf4ff',
+    calloutInfo: '#175da6', calloutSuccess: '#236b3b', calloutWarning: '#855700', calloutDanger: '#ad2935', calloutImportant: '#7443ad', calloutQuote: '#59636e',
+    curves: ['#0969da', '#d1242f', '#1a7f37', '#8250df', '#9a6700', '#bc4c00'],
+  }
+  return `${THEME_CONTRACT_MARKER}
+${selector} {
+  color-scheme: ${isDark ? 'dark' : 'light'};
+  --color-background-primary: ${base.bg}; --color-background-secondary: ${base.bg2}; --color-background-tertiary: ${base.bg3};
+  --color-background-hover: ${base.hover}; --color-background-active: ${base.active}; --color-background-overlay: ${base.overlay};
+  --color-surface-primary: ${base.surface}; --color-surface-secondary: ${base.surface2}; --color-surface-elevated: ${base.elevated};
+  --color-text-primary: ${base.text}; --color-text-secondary: ${base.text2}; --color-text-tertiary: ${base.text3}; --color-text-inverse: ${base.inverse}; --color-text-link: var(--color-accent-primary); --color-text-disabled: ${base.disabled};
+  --color-accent-primary: ${base.accent}; --color-accent-primary-hover: ${base.accentHover}; --color-accent-primary-active: color-mix(in srgb, var(--color-accent-primary) 80%, var(--color-text-primary)); --color-accent-secondary: var(--color-accent-primary); --color-accent-soft: ${base.soft}; --color-accent-soft-hover: color-mix(in srgb, var(--color-accent-soft) 80%, var(--color-accent-primary));
+  --color-success: ${base.success}; --color-success-soft: ${base.successSoft}; --color-warning: ${base.warning}; --color-warning-soft: ${base.warningSoft}; --color-error: ${base.error}; --color-error-soft: ${base.errorSoft}; --color-info: ${base.info}; --color-info-soft: ${base.infoSoft};
+  --color-border-default: ${base.border}; --color-border-subtle: ${base.subtle}; --color-border-focus: var(--color-accent-primary); --color-border-disabled: var(--color-border-subtle);
+  --color-markdown-selection: color-mix(in srgb, var(--color-accent-primary) 24%, var(--color-background-primary)); --color-markdown-grid: var(--color-border-default); --color-markdown-marker: var(--color-text-secondary); --color-markdown-table-header: var(--color-background-tertiary);
+  --color-editor-scroll-background: var(--color-surface-elevated); --color-editor-scroll-text: var(--color-accent-primary);
+  --color-callout-info: ${base.calloutInfo}; --color-callout-success: ${base.calloutSuccess}; --color-callout-warning: ${base.calloutWarning}; --color-callout-danger: ${base.calloutDanger}; --color-callout-important: ${base.calloutImportant}; --color-callout-quote: ${base.calloutQuote};
+  --color-plot-background: var(--color-surface-primary); --color-plot-text: var(--color-text-primary); --color-plot-axis: var(--color-text-secondary); --color-plot-grid: var(--color-border-default);
+  --color-plot-curve-0: ${base.curves[0]}; --color-plot-curve-1: ${base.curves[1]}; --color-plot-curve-2: ${base.curves[2]}; --color-plot-curve-3: ${base.curves[3]}; --color-plot-curve-4: ${base.curves[4]}; --color-plot-curve-5: ${base.curves[5]};
+  --color-on-error: #ffffff; --color-on-success: #ffffff; --color-brand-surface: #ffffff; --color-brand-ink: #252b36; --color-brand-surface-dark: #111111; --color-highlight-overlay: #ffffff30;
+}
+${css}`
+}
+
 function removeThemeCss(themeId: string) {
   const styleEl = document.getElementById(`theme-style-${themeId}`)
   if (styleEl) styleEl.remove()
@@ -294,7 +354,7 @@ export async function installTheme(
   const idx = existing.findIndex((t) => t.theme_id === manifest.theme_id)
   if (idx >= 0) existing[idx] = installed
   else existing.push(installed)
-  localStorage.setItem(`${STORAGE_KEY}-css-${manifest.theme_id}`, cssContent)
+  localStorage.setItem(`${STORAGE_KEY}-css-${manifest.theme_id}`, withThemeContract(manifest.theme_id, manifest.is_dark, cssContent))
   saveThemes(existing)
   return installed
 }
@@ -345,7 +405,9 @@ export function setActiveCustomTheme(themeId: string | null) {
     if (!theme) throw new Error('THEME_PACKAGE_NOT_FOUND')
     validateManifest(theme.manifest as unknown as Record<string, unknown>)
   }
-  const css = themeId ? localStorage.getItem(`${STORAGE_KEY}-css-${themeId}`) : null
+  const theme = themeId ? loadStoredThemes().find(item => item.theme_id === themeId) : undefined
+  const storedCss = themeId ? localStorage.getItem(`${STORAGE_KEY}-css-${themeId}`) : null
+  const css = themeId && theme && storedCss ? withThemeContract(themeId, theme.is_dark, storedCss) : storedCss
   // Validate before changing the current page. Only the selected theme owns a style node.
   if (css) validateCssSafety(css)
   document.head.querySelectorAll('style[id^="theme-style-"]').forEach(style => style.remove())
@@ -458,10 +520,10 @@ export async function installCommunityTheme(themeId: string): Promise<InstalledT
 }
 
 export function getCommunityThemePreviewCss(themeId: string): string {
-  if (themeId === 'paper-moments') return paperMoments.css
+  if (themeId === 'paper-moments') return withThemeContract(themeId, false, paperMoments.css)
   const t = mockCommunityThemes.find((m) => m.theme_id === themeId)
   if (!t) return ''
-  return buildCommunityThemeCss(themeId, t.is_dark) + `
+  return withThemeContract(themeId, t.is_dark, buildCommunityThemeCss(themeId, t.is_dark) + `
 [data-theme="${themeId}"] {
   color-scheme: ${t.is_dark ? 'dark' : 'light'};
   --color-markdown-selection: ${t.is_dark ? '#443252' : '#d4eaf5'};
@@ -483,5 +545,5 @@ export function getCommunityThemePreviewCss(themeId: string): string {
   --color-markdown-grid: var(--color-border-default);
   --color-markdown-marker: var(--color-text-secondary);
   --color-markdown-table-header: var(--color-background-tertiary);
-}`
+}`)
 }
