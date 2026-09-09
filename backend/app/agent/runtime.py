@@ -96,11 +96,21 @@ class AgentRuntime:
         provider = self.providers.get(request.provider_id)
         skill_config = None
         if request.skill_id:
-            if self.skills is None:
-                raise RuntimeError("Skill Runtime is not configured.")
-            skill_config = self.skills.build_agent_configuration(
-                request.skill_id, provider.config.capabilities
-            )
+            if request.skill_id.startswith("user_skill_"):
+                from app.services.user_skills import build_agent_configuration
+
+                skill_config = await asyncio.to_thread(
+                    build_agent_configuration,
+                    request.skill_id,
+                    provider.config.capabilities,
+                    self.tools,
+                )
+            else:
+                if self.skills is None:
+                    raise RuntimeError("Skill Runtime is not configured.")
+                skill_config = self.skills.build_agent_configuration(
+                    request.skill_id, provider.config.capabilities
+                )
         now = datetime.now(timezone.utc)
         run = AgentRun(
             run_id=f"run_{uuid4().hex}",

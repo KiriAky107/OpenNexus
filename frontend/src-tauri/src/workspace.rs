@@ -379,9 +379,13 @@ impl Workspace {
             .optional()?;
         value
             .map(|(state, result)| {
-                let result: Option<Entry> = result
+                let result: Option<serde_json::Value> = result
                     .map(|value| {
-                        serde_json::from_str(&value).map_err(|_| HostError::new("DATABASE_ERROR"))
+                        let parsed: serde_json::Value = serde_json::from_str(&value)
+                            .map_err(|_| HostError::new("DATABASE_ERROR"))?;
+                        serde_json::from_value::<Entry>(parsed.clone())
+                            .map_err(|_| HostError::new("DATABASE_ERROR"))?;
+                        Ok::<serde_json::Value, HostError>(parsed)
                     })
                     .transpose()?;
                 Ok(serde_json::json!({"operation_id":operation_id,"state":state,"result":result}))
@@ -690,7 +694,11 @@ impl Workspace {
                 })
             },
         )?;
-        let result = serde_json::to_string(&entry).map_err(|_| HostError::new("DATABASE_ERROR"))?;
+        let mut result =
+            serde_json::to_value(&entry).map_err(|_| HostError::new("DATABASE_ERROR"))?;
+        result["expected"] = serde_json::json!(expected);
+        let result =
+            serde_json::to_string(&result).map_err(|_| HostError::new("DATABASE_ERROR"))?;
         tx.execute(
             "UPDATE operations SET state='committed',result=?2 WHERE operation_id=?1",
             params![operation_id, result],
@@ -1002,11 +1010,15 @@ impl Workspace {
         } else {
             result.deleted = true;
         }
+        let mut operation_result =
+            serde_json::to_value(&result).map_err(|_| HostError::new("DATABASE_ERROR"))?;
+        operation_result["expected"] = serde_json::json!(expected);
         tx.execute(
             "UPDATE operations SET state='committed',result=?2 WHERE operation_id=?1",
             params![
                 id,
-                serde_json::to_string(&result).map_err(|_| HostError::new("DATABASE_ERROR"))?
+                serde_json::to_string(&operation_result)
+                    .map_err(|_| HostError::new("DATABASE_ERROR"))?
             ],
         )?;
         tx.commit()?;

@@ -1,5 +1,5 @@
 import apiClient from './apiClient'
-import type { ApiSkill, OperationResponse, Skill } from '@/contracts'
+import type { ApiSkill, OperationResponse, Skill, UserSkill, UserSkillWriteRequest } from '@/contracts'
 
 function toSkill(skill: ApiSkill): Skill {
   const { manifest } = skill
@@ -44,4 +44,28 @@ export async function disableSkill(skillId: string): Promise<Skill> {
 
 export async function uninstallSkill(skillId: string): Promise<OperationResponse> {
   return apiClient.delete(`/api/skills/${skillId}`)
+}
+
+export async function listUserSkills(): Promise<UserSkill[]> {
+  const items: UserSkill[] = []
+  for (let page = 0; page < 100; page += 1) {
+    const response = await apiClient.get<{ items: UserSkill[]; page?: { total: number } }>('/api/user-skills', { params: { limit: 100, offset: items.length } })
+    items.push(...response.items)
+    if (!response.items.length || items.length >= (response.page?.total ?? items.length)) return items
+  }
+  throw new Error('USER_SKILL_LIST_LIMIT_EXCEEDED')
+}
+
+export async function createUserSkill(request: UserSkillWriteRequest, operationId: string = crypto.randomUUID()): Promise<UserSkill> {
+  return apiClient.post('/api/user-skills', request, { headers: { 'Idempotency-Key': operationId } })
+}
+
+export async function updateUserSkill(skillId: string, request: UserSkillWriteRequest, operationId: string = crypto.randomUUID()): Promise<UserSkill> {
+  return apiClient.put(`/api/user-skills/${skillId}`, request, { headers: { 'Idempotency-Key': operationId } })
+}
+
+export async function deleteUserSkill(skillId: string, revision: string, operationId: string = crypto.randomUUID()): Promise<OperationResponse> {
+  return apiClient.delete(`/api/user-skills/${skillId}`, {
+    params: { revision }, headers: { 'Idempotency-Key': operationId },
+  })
 }

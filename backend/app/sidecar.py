@@ -18,6 +18,9 @@ import threading
 
 PROTOCOL = 1
 MAX_BOOTSTRAP = 16384
+UUID_PATTERN = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
 
 
 def bootstrap(line: bytes) -> dict:
@@ -79,9 +82,19 @@ class SessionAuth:
             return
         from app import host_bridge
         vault = single(b"x-opennexus-vault").decode("ascii", errors="replace")
-        token = host_bridge.vault_id.set(vault if re.fullmatch(r"[0-9a-f-]{36}", vault) else None)
-        operation = single(b"x-request-id").decode("ascii", errors="replace")
-        operation_token = host_bridge.operation_id.set(operation if re.fullmatch(r"[0-9a-f-]{36}", operation) else None)
+        token = host_bridge.vault_id.set(vault if UUID_PATTERN.fullmatch(vault) else None)
+        # Mutating clients may retain a UUID across an ambiguous response. Other
+        # endpoint-specific idempotency tokens remain available to the route but
+        # do not enter the Host journal unless they are valid operation UUIDs.
+        idempotency = single(b"idempotency-key").decode("ascii", errors="replace")
+        operation = (
+            idempotency
+            if UUID_PATTERN.fullmatch(idempotency)
+            else single(b"x-request-id").decode("ascii", errors="replace")
+        )
+        operation_token = host_bridge.operation_id.set(
+            operation if UUID_PATTERN.fullmatch(operation) else None
+        )
         try:
             await self.app(scope, receive, send)
         finally:

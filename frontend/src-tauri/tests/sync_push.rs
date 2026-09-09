@@ -566,6 +566,12 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
             json!({"primaryExpanded":true,"workspaceWidth":272,"chatWidth":320}),
             "workspaceWidth",
         ),
+        (
+            "user_skill",
+            "user_skill_00000000000000000000000000000001",
+            json!({"version":1,"name":"initial","description":"portable","prompt":"Review carefully","tools":["notes.read"],"permissions":["notes.read"],"retrieval":{"top_k":10,"rerank":true,"citation":true},"required_capabilities":["chat"],"created_at_ms":1,"updated_at_ms":1}),
+            "name",
+        ),
     ] {
         let path = notesagent_host::records::path_for(kind, id).unwrap();
         let record = json!({"schema":1,"kind":kind,"id":id,"data":data});
@@ -582,7 +588,7 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
                 let mut ws = target.lock().unwrap();
                 let current = ws.record_get_kind(kind, id).unwrap().unwrap();
                 let mut next = current["record"].clone();
-                next["data"][field] = if kind == "persona" {
+                next["data"][field] = if kind != "layout" {
                     json!(format!("side-{side}-round-{round}"))
                 } else {
                     json!(300 + round * 2 + side)
@@ -665,7 +671,11 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
         0
     );
     assert!(!client_b.push_one(&workspace_b, &binding_b).await.unwrap());
-    for (kind, id) in [("persona", "default"), ("layout", "sidebars")] {
+    for (kind, id) in [
+        ("persona", "default"),
+        ("layout", "sidebars"),
+        ("user_skill", "user_skill_00000000000000000000000000000001"),
+    ] {
         assert_eq!(
             workspace.lock().unwrap().record_get_kind(kind, id).unwrap(),
             workspace_b
@@ -691,6 +701,18 @@ async fn actual_service_accepts_ordered_push_and_repeat_commit_without_duplicate
         .unwrap()
         > 0
     {}
+    assert_eq!(
+        excluded_ws
+            .lock()
+            .unwrap()
+            .record_get_kind("user_skill", "user_skill_00000000000000000000000000000001")
+            .unwrap(),
+        workspace
+            .lock()
+            .unwrap()
+            .record_get_kind("user_skill", "user_skill_00000000000000000000000000000001")
+            .unwrap()
+    );
     for (kind, id) in [("persona", "default"), ("layout", "sidebars")] {
         let original = workspace
             .lock()

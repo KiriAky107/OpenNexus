@@ -1,4 +1,4 @@
-//! Preference schemas contain portable values only; no paths, permissions, providers or secrets.
+//! Portable settings may declare required permissions, but never carry device grants, paths or secrets.
 use crate::workspace::{HostError, Result};
 use serde::Deserialize;
 use serde_json::Value;
@@ -15,6 +15,27 @@ struct Persona {
     name: String,
     system_prompt: String,
     dialogue_pairs: Vec<DialoguePair>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UserSkillRetrieval {
+    top_k: u8,
+    rerank: bool,
+    citation: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UserSkill {
+    version: u64,
+    name: String,
+    description: String,
+    prompt: String,
+    tools: Vec<String>,
+    permissions: Vec<String>,
+    retrieval: UserSkillRetrieval,
+    required_capabilities: Vec<String>,
+    created_at_ms: i64,
+    updated_at_ms: i64,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -103,6 +124,20 @@ fn markdown(value: &Markdown) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"_+-".contains(&b))
 }
+fn unique_bounded(values: &[String], max_items: usize, max_chars: usize) -> bool {
+    values.len() <= max_items
+        && values.iter().all(|value| {
+            !value.is_empty()
+                && value.chars().count() <= max_chars
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        })
+        && values
+            .iter()
+            .enumerate()
+            .all(|(index, value)| !values[..index].contains(value))
+}
 pub fn validate(kind: &str, value: &Value) -> Result<()> {
     let valid = match kind {
         "persona" => {
@@ -120,6 +155,56 @@ pub fn validate(kind: &str, value: &Value) -> Result<()> {
             let _ = value.primary_expanded;
             (200.0..=520.0).contains(&value.workspace_width)
                 && (200.0..=520.0).contains(&value.chat_width)
+        }
+        "user_skill" => {
+            let value: UserSkill = decode(value)?;
+            let _ = (value.retrieval.rerank, value.retrieval.citation);
+            let timestamp = |time: i64| (0..=253402300799999).contains(&time);
+            let known_permissions = [
+                "notes.read",
+                "notes.search",
+                "notes.write",
+                "notes.delete",
+                "tasks.read",
+                "tasks.write",
+                "attachments.read",
+                "network.request",
+                "secrets.use",
+                "ui.command",
+                "ui.settings",
+                "ui.sidebar",
+            ];
+            let known_capabilities = [
+                "chat",
+                "vision",
+                "tool_calling",
+                "reasoning",
+                "streaming",
+                "structured_output",
+                "embedding",
+                "transcription",
+                "speaker_matching",
+            ];
+            value.version <= 9007199254740991
+                && !value.name.trim().is_empty()
+                && value.name.chars().count() <= 128
+                && value.description.chars().count() <= 2000
+                && value.prompt.chars().count() <= 64000
+                && unique_bounded(&value.tools, 64, 128)
+                && unique_bounded(&value.permissions, 32, 64)
+                && value
+                    .permissions
+                    .iter()
+                    .all(|v| known_permissions.contains(&v.as_str()))
+                && unique_bounded(&value.required_capabilities, 16, 64)
+                && value
+                    .required_capabilities
+                    .iter()
+                    .all(|v| known_capabilities.contains(&v.as_str()))
+                && (1..=100).contains(&value.retrieval.top_k)
+                && timestamp(value.created_at_ms)
+                && timestamp(value.updated_at_ms)
+                && value.updated_at_ms >= value.created_at_ms
         }
         "theme_settings" => {
             let value: Theme = decode(value)?;
@@ -180,6 +265,37 @@ pub fn validate(kind: &str, value: &Value) -> Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn user_skill_schema_is_portable_strict_and_default_synced() {
+        let id = "user_skill_00000000000000000000000000000001";
+        let path = crate::records::path_for("user_skill", id).unwrap();
+        let data = json!({"version":1,"name":"Review","description":"Check a note","prompt":"Be precise.","tools":["notes.read"],"permissions":["notes.read"],"retrieval":{"top_k":10,"rerank":true,"citation":true},"required_capabilities":["chat","tool_calling"],"created_at_ms":1,"updated_at_ms":2});
+        let record = json!({"schema":1,"kind":"user_skill","id":id,"data":data});
+        crate::records::validate(&path, &serde_json::to_vec(&record).unwrap()).unwrap();
+        assert!(crate::records::allowed(&path));
+        assert!(crate::sync_scope::OptionalScope::default().includes(&path));
+        for field in [
+            "api_key",
+            "package_path",
+            "enabled",
+            "device_grants",
+            "environment",
+        ] {
+            let mut bad = data.clone();
+            bad[field] = json!("private");
+            assert_eq!(
+                validate("user_skill", &bad).unwrap_err().code,
+                "RECORD_SCHEMA_INVALID"
+            );
+        }
+        let mut bad = data.clone();
+        bad["permissions"] = json!(["notes.read", "unknown.permission"]);
+        assert_eq!(
+            validate("user_skill", &bad).unwrap_err().code,
+            "RECORD_DATA_INVALID"
+        );
+        assert!(crate::records::path_for("user_skill", "user_skill_ABCD").is_err());
+    }
     #[test]
     fn layout_schema_limits_widths_and_rejects_device_fields() {
         let good = json!({"primaryExpanded":true,"workspaceWidth":400.5,"chatWidth":320});
