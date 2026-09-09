@@ -115,6 +115,11 @@ def result(case_id: str, status: str, reason: str, facts: dict) -> dict:
                 "used_bytes": facts.get("used_bytes", 0),
                 "reserved_bytes": facts.get("reserved_bytes", -1),
             },
+            {
+                "scope": "last checkpoint",
+                "stage": facts.get("active_stage"),
+                "iteration": facts.get("active_iteration", -1),
+            },
         ],
     }
 
@@ -236,6 +241,7 @@ def main() -> int:
 
         offset_races = durable_offsets = 0
         for index in range(ROUNDS):
+            facts.update({"active_stage": "same-offset", "active_iteration": index})
             data = content("offset", index)
             digest, upload_id, path = begin(base, auth, data)
             with ThreadPoolExecutor(max_workers=2) as pool:
@@ -264,6 +270,7 @@ def main() -> int:
 
         disk_ahead = 0
         for index in range(ROUNDS):
+            facts.update({"active_stage": "disk-ahead", "active_iteration": index})
             data = content("ahead", index)
             digest, upload_id, path = begin(base, auth, data)
             local = stack.staging / upload_id
@@ -281,6 +288,7 @@ def main() -> int:
 
         disk_behind = 0
         for index in range(ROUNDS):
+            facts.update({"active_stage": "disk-behind", "active_iteration": index})
             data = content("behind", index)
             digest, upload_id, path = begin(base, auth, data)
             assert call("PUT", path + "?offset=0", headers=auth, body=data[:1])[1] == {
@@ -309,6 +317,7 @@ def main() -> int:
 
         response_loss_recoveries = 0
         for index in range(ROUNDS):
+            facts.update({"active_stage": "lost-complete", "active_iteration": index})
             data = content("lost-complete", index)
             digest, upload_id, path = begin(base, auth, data)
             assert call("PUT", path + "?offset=0", headers=auth, body=data)[1] == {
@@ -330,6 +339,7 @@ def main() -> int:
         cleanup_complete = cleanup_removed = 0
         cleanup_latencies = []
         for index in range(ROUNDS):
+            facts.update({"active_stage": "expiry-race", "active_iteration": index})
             data = content("cleanup", index)
             digest, upload_id, path = begin(base, auth, data)
             assert call("PUT", path + "?offset=0", headers=auth, body=data)[1] == {
@@ -400,12 +410,14 @@ def main() -> int:
         assert facts["object_count"] == len(committed)
 
         verified = 0
-        for digest, data in committed.items():
+        for index, (digest, data) in enumerate(committed.items()):
+            facts.update({"active_stage": "referenced-integrity", "active_iteration": index})
             response = call("GET", base + "/objects/" + digest, headers=auth)
             assert response[0] == 200 and response[1] == data
             verified += 1
         absent = 0
-        for digest in cleaned:
+        for index, digest in enumerate(cleaned):
+            facts.update({"active_stage": "cleaned-absence", "active_iteration": index})
             response = call("GET", base + "/objects/" + digest, headers=auth)
             assert response[0] == 404 and response[1]["error"]["code"] == "OBJECT_NOT_FOUND"
             absent += 1
@@ -416,6 +428,7 @@ def main() -> int:
         assert len(stack.worker_ids()) == 2
         assert facts["quota_exact"] and facts["receipt_count_exact"]
         assert facts["remaining_uploads"] == facts["reserved_bytes"] == facts["staging_files"] == 0
+        facts.update({"active_stage": "complete", "active_iteration": ROUNDS})
         status = "PASSED"
     except BaseException as error:
         reason = "S05_ORACLE_FAILED:" + type(error).__name__
