@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass
 
 from app.plot.model import FunctionPlot, StaticRenderResult
+from app.plot.math_label import expression_latex, render_math_svg
 from app.plot.parser import PlotParseError, evaluate, parse_expression
 
 _WIDTH = 640
@@ -491,9 +492,13 @@ def render_svg(plot: FunctionPlot, theme_id: str = 'light', unlimited: bool = Fa
     parts.append(_labels_svg(geo))
     for index, expression in enumerate(plot.expressions):
         x = 24 + (index % 2) * 310
-        y = geo.height + 18 + (index // 2) * 24
-        label = html.escape(expression.label or ('y = ' + expression.expression))
-        parts.append(f'<text x="{x}" y="{y}" font-size="12" fill="{geo.colors[index]}" class="plot-legend-{index % 6}">{label}</text>')
+        top = geo.height + 4 + (index // 2) * 24
+        if expression.label:
+            label = html.escape(expression.label)
+            parts.append(f'<text x="{x}" y="{top + 14}" font-size="12" fill="{geo.colors[index]}" class="plot-legend-{index % 6}">{label}</text>')
+        else:
+            parts.append(render_math_svg(expression_latex(expression.expression), x=x, top=top,
+                                         class_name=f"plot-legend-{index % 6}", color=geo.colors[index]))
     parts.append("</svg>")
 
     return StaticRenderResult(

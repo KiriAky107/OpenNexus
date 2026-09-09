@@ -124,7 +124,7 @@ function toggleSource() {
     </div>
     </section>
     <DesktopPackages v-if="isDesktop()" :refresh-key="stagedRefresh" />
-    <section v-if="candidates.length">
+    <section v-if="candidates.length" class="saved-candidates panel">
       <h2>已保存的声明式候选</h2><p>这些候选尚未应用到人设、MCP 或模型运行配置。</p>
       <details v-for="item in candidates" :key="item.key"><summary>{{ item.key.replace('community-candidate:', '') }}</summary><pre>{{ item.value }}</pre><button class="btn" @click="removeCandidate(item.key)">删除候选</button></details>
     </section>
@@ -163,5 +163,6 @@ label { display: grid; gap: var(--space-xs); }
 input, select { color: var(--color-text-primary); background: var(--color-background-secondary); border: 1px solid var(--color-border-subtle); padding: var(--space-sm); }
 .community-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: var(--space-md); }
 .community-card { display: grid; gap: var(--space-sm); text-align: left; padding: var(--space-lg); color: var(--color-text-primary); background: var(--color-background-secondary); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); overflow-wrap: anywhere; }
+.saved-candidates { margin-top: var(--space-xl); }
 pre, dd { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
 </style>

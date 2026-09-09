@@ -84,6 +84,7 @@ y = x^2 / 8
           <span class="step">03</span>
           <h2>{{ t('可用数学语法', 'Supported math syntax') }}</h2>
           <p>{{ t('支持 +、-、*、/、^，变量 x，常量 pi、e，以及以下单参数函数。2x、2(x+1) 等隐式乘法也可使用。', 'Use +, -, *, /, ^, variable x, constants pi and e, and the single-argument functions below. Implicit multiplication such as 2x and 2(x+1) is also supported.') }}</p>
+          <p>{{ t('图例会自动使用 LaTeX 数学排版：幂显示为上标，除法显示为分式，函数名使用数学字体。', 'Legends are typeset automatically with LaTeX: powers use superscripts, division uses fractions, and function names use mathematical typography.') }}</p>
           <div class="tag-list function-list">
             <code v-for="name in ['sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'exp', 'log', 'ln', 'log10', 'log2', 'sqrt', 'abs']" :key="name">{{ name }}(x)</code>
           </div>

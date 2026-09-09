@@ -12,6 +12,18 @@ import DesktopPackages from './DesktopPackages.vue'
 const item = { package_key: 'package-key', source: 'https://example.com/', namespace: 'examples', package_id: 'reviewer', version: '1.0.0', state: 'staged' }
 beforeEach(() => { native.invoke.mockReset(); native.workspace.vaultId = 'vault-one' })
 function component() { return mount(DesktopPackages, { props: { refreshKey: 0 }, global: { stubs: { AppDialog: { template: '<section><slot /></section>' } } } }) }
+it('uses themed surfaces for the section, empty state, and staged package rows', async () => {
+  native.invoke.mockResolvedValueOnce([])
+  const empty = component(); await flushPromises()
+  expect(empty.get('section.desktop-packages').classes()).toContain('panel')
+  expect(empty.get('.empty-state').text()).toContain('本页没有暂存包')
+  empty.unmount()
+
+  native.invoke.mockResolvedValueOnce([item])
+  const populated = component(); await flushPromises()
+  expect(populated.get('.package-list > li').classes()).toContain('item-card')
+  populated.unmount()
+})
 it('loads durable staged metadata and previews without issuing install commands', async () => {
   native.invoke.mockImplementation(async command => command === 'extension_staged' ? [item] : {
     fingerprint: 'fingerprint', dependencies: { packages: [{ ...item, permissions: ['notes.read'] }] }, changes: [{ target: { configuration: {} }, expected_revision: null }],

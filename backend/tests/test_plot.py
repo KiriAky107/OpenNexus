@@ -116,6 +116,25 @@ def test_render_svg_multiple_functions() -> None:
     assert rendered.content.count("<polyline") >= 2
 
 
+def test_render_svg_uses_latex_vector_paths_for_expression_legends() -> None:
+    plot = parse_source("y = sin(x)\ny = x^2 / 5").plot
+    svg = render_svg(plot).content
+    assert svg.count("plot-math-label") == 2
+    assert 'data-latex="y = \\sin\\left(x\\right)"' in svg
+    assert 'data-latex="y = \\frac{{x}^{2}}{5}"' in svg
+    assert "<path" in svg
+    assert ">y = sin(x)<" not in svg
+
+
+@pytest.mark.parametrize("expression", [
+    "asin(x)", "acos(x)", "atan(x)", "sinh(x)", "cosh(x)", "tanh(x)",
+    "exp(x)", "ln(x)", "log10(x)", "log2(x)", "sqrt(x)", "abs(x)",
+])
+def test_render_svg_latex_supports_every_plot_function(expression: str) -> None:
+    plot = parse_source(f"domain: 0.1, 1\ny = {expression}").plot
+    assert "plot-math-label" in render_svg(plot).content
+
+
 def test_render_svg_labels() -> None:
     plot = parse_source("xlabel: 时间\nylabel: 数值\ny = x").plot
     rendered = render_svg(plot)
@@ -367,6 +386,16 @@ def test_render_reportlab_builds_drawing() -> None:
     assert groups
     group_texts = [s.text for g in groups for s in g.contents if isinstance(s, String)]
     assert "数值" in group_texts
+
+
+def test_render_reportlab_uses_vector_latex_for_expression_legend() -> None:
+    from reportlab.graphics.shapes import Group, Path
+    from app.plot.render_reportlab import render_drawing
+
+    drawing = render_drawing(parse_source("y = x^2 / 5").plot)
+    math_groups = [item for item in drawing.contents if isinstance(item, Group)
+                   and any(isinstance(child, Path) for child in item.contents)]
+    assert math_groups
 
 
 def test_render_reportlab_curves_are_finite_and_bounded() -> None:

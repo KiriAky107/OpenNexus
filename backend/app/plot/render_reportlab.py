@@ -15,6 +15,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
 from app.plot.model import FunctionPlot
+from app.plot.math_label import expression_latex, render_math_reportlab
 from app.plot.render import PlotGeometry, _fmt_num, _sx, _sy, compute_geometry
 
 from app.export.fonts import FONT as _FONT
@@ -125,8 +126,14 @@ def render_drawing(plot: FunctionPlot, width: float | None = None, palette=None,
     legend_height = ((len(plot.expressions)+1)//2)*24
     drawing.height += legend_height
     for index, expression in enumerate(plot.expressions):
-        drawing.add(String(24+(index%2)*310,geo.height+legend_height-18-(index//2)*24,
-            expression.label or 'y = '+expression.expression,fontName=_FONT,fontSize=12,fillColor=HexColor(geo.colors[index])))
+        x = 24 + (index % 2) * 310
+        visual_top = drawing.height - 4 - (index // 2) * 24
+        if expression.label:
+            drawing.add(String(x, visual_top - 12, expression.label, fontName=_FONT, fontSize=12,
+                               fillColor=HexColor(geo.colors[index])))
+        else:
+            drawing.add(render_math_reportlab(expression_latex(expression.expression), x=x,
+                                               visual_top=visual_top, color=HexColor(geo.colors[index])))
     if width is not None and width > 0:
         drawing.renderScale = min(1.0, width / geo.width, max_height / drawing.height if max_height else 1.0)
     return drawing
