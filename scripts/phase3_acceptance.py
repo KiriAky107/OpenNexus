@@ -77,6 +77,12 @@ CASE_DRIVERS: dict[str, dict[str, Any]] = {
         "timeout_seconds": 900,
         "required_metrics": (),
     },
+    "S-04": {
+        "driver": "scripts/acceptance_cases/s04_sync_service.py",
+        "timeout_seconds": 900,
+        "required_metrics": ("successful_commits", "conflict_responses", "worker_count"),
+        "required_artifacts": ("postgres_initdb", "minio_server"),
+    },
 }
 ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{2,127}")
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{2,63}")
