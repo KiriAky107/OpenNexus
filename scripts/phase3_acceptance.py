@@ -125,6 +125,20 @@ CASE_DRIVERS: dict[str, dict[str, Any]] = {
         "timeout_seconds": 900,
         "required_metrics": (),
     },
+    "D-02": {
+        "driver": "scripts/acceptance_cases/d02_extension_migration.py",
+        "timeout_seconds": 900,
+        "required_metrics": (
+            "legacy_groups",
+            "migration_rounds",
+            "imported_records",
+            "duplicate_records",
+            "external_directory_changes",
+            "inherited_permissions",
+            "legacy_write_rejections",
+        ),
+        "platform_profiles": ("windows-11-x64",),
+    },
     "D-03": {
         "driver": "scripts/acceptance_cases/d03_extension_transactions.py",
         "timeout_seconds": 900,

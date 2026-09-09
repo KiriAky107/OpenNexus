@@ -308,6 +308,7 @@ impl ExtensionStore {
             CREATE TABLE IF NOT EXISTS extension_trust(source TEXT NOT NULL,namespace TEXT NOT NULL,key_id TEXT NOT NULL,setting TEXT NOT NULL,revision TEXT NOT NULL,PRIMARY KEY(source,namespace,key_id));
             CREATE TABLE IF NOT EXISTS extension_blocks(identity TEXT PRIMARY KEY,reason TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS extension_confirmations(operation_id TEXT PRIMARY KEY,request_hash TEXT NOT NULL,review_hash TEXT NOT NULL,changes TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS legacy_installations(kind TEXT NOT NULL,package_id TEXT NOT NULL,source_path TEXT NOT NULL,expected_digest TEXT NOT NULL,observed_digest TEXT,ownership TEXT NOT NULL,state TEXT NOT NULL,enabled INTEGER NOT NULL CHECK(enabled=0),permissions TEXT NOT NULL CHECK(permissions='[]'),source_db_digest TEXT NOT NULL,PRIMARY KEY(kind,package_id));
             PRAGMA user_version=6; COMMIT;")?;
         crate::extension_transaction::recover(&mut db)?;
         Ok(Self {
@@ -315,6 +316,14 @@ impl ExtensionStore {
             db,
             _lock: lock,
         })
+    }
+
+    /// 只读导入旧 Python 安装记录；导入结果始终禁用、无许可且未受信任。
+    pub fn import_legacy_installations(
+        &mut self,
+        legacy_data_root: &Path,
+    ) -> Result<Vec<crate::extension_legacy::LegacyImport>> {
+        crate::extension_legacy::import(&mut self.db, &self.root, legacy_data_root)
     }
     pub fn trust_setting(
         &self,

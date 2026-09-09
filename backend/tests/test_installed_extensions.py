@@ -66,3 +66,27 @@ def test_builtin_disabled_plugin_does_not_break_startup():
     assert third.skills.get('knowledge-assistant').enabled
     for container in (first, second, third):
         container.plugins.shutdown(); container.mcp_servers.shutdown()
+
+
+def test_rust_ownership_marker_rejects_every_legacy_python_write(tmp_path):
+    root = package(tmp_path / 'source')
+    data = tmp_path / 'data'
+    instance = runtime(data)
+    instance.install(root)
+    (data / 'extension-installations.rust-owned.json').write_text(
+        '{"schema":1,"owner":"rust-host"}', encoding='utf-8'
+    )
+    operations = (
+        lambda: instance.install(root),
+        lambda: instance.enable('audit'),
+        lambda: instance.disable('audit'),
+        lambda: instance.set_permissions('audit', []),
+        lambda: instance.uninstall('audit'),
+    )
+    for operation in operations:
+        with pytest.raises(Exception) as error:
+            operation()
+        assert getattr(error.value, 'code', None) == 'EXTENSION_HOST_OWNED'
+    restored = runtime(data)
+    restored.restore()
+    assert all(item.manifest.skill_id != 'audit' for item in restored.list())
