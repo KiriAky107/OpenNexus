@@ -65,6 +65,22 @@ CASE_DRIVERS: dict[str, dict[str, Any]] = {
         ),
         "platform_profiles": ("windows-11-x64",),
     },
+    "B-04": {
+        "driver": "scripts/acceptance_cases/b04_credentials.py",
+        "timeout_seconds": 1800,
+        "required_metrics": (
+            "migration_boundaries",
+            "hard_terminations",
+            "recovered_records",
+            "duplicate_records",
+            "cleanup_boundaries",
+            "managed_artifacts_remaining",
+            "external_key_changes",
+            "old_writer_rejections",
+            "native_confirmation_boundary",
+        ),
+        "platform_profiles": ("windows-11-x64",),
+    },
     "C-03": {
         "driver": "scripts/acceptance_cases/c03_permission_binding.py",
         "timeout_seconds": 900,

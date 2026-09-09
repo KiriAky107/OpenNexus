@@ -26,6 +26,15 @@ async function importLegacy() {
   } catch (error) { message.value = failureMessage(error, 'MIGRATION_FAILED') }
   finally { busy.value = false }
 }
+async function cleanupLegacy() {
+  busy.value = true; message.value = ''
+  try {
+    const result = await hostInvoke<{ count: number; already_clean: boolean } | null>('credentials_cleanup')
+    if (result?.already_clean) message.value = t('这次迁移的旧凭据已清理。', 'Legacy credentials for this migration are already cleaned up.')
+    else if (result) message.value = t(`已清理 ${result.count} 条已迁移凭据的旧文件。`, `Cleaned up legacy files for ${result.count} migrated credentials.`)
+  } catch (error) { message.value = failureMessage(error, 'MIGRATION_CLEANUP_FAILED') }
+  finally { busy.value = false }
+}
 async function backup() {
   busy.value = true; message.value = ''
   try {
@@ -85,6 +94,7 @@ onUnmounted(() => clearInterval(statusTimer))
         <button class="button-primary" type="submit" :disabled="busy">{{ busy ? t('处理中…', 'Working…') : locked ? t('解锁', 'Unlock') : t('更改口令', 'Change password') }}</button>
         <button v-if="!locked" class="button-secondary" type="button" :disabled="busy" @click="act('lock')">{{ t('立即锁定', 'Lock now') }}</button>
         <button v-if="!locked" class="button-secondary" type="button" :disabled="busy" @click="importLegacy">{{ t('迁移旧凭据…', 'Import legacy credentials…') }}</button>
+        <button v-if="!locked" class="button-secondary" type="button" :disabled="busy" @click="cleanupLegacy">{{ t('清理已迁移旧凭据…', 'Clean up migrated credentials…') }}</button>
         <button v-if="!locked" class="button-secondary" type="button" :disabled="busy" @click="backup">{{ t('导出加密备份…', 'Export encrypted backup…') }}</button>
         <button v-if="locked" class="button-secondary" type="button" :disabled="busy" @click="restore">{{ t('使用此口令恢复备份…', 'Restore backup with this password…') }}</button>
       </div>

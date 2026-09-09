@@ -35,3 +35,18 @@ it('clears the restore password and treats native cancellation as no change', as
   expect(wrapper.text()).not.toContain('已恢复')
   wrapper.unmount()
 })
+
+it('runs native-confirmed cleanup without exposing a path or confirmation to the WebView', async () => {
+  vi.mocked(hostInvoke).mockImplementation(async command => {
+    if (command === 'credentials_status') return { locked: false }
+    if (command === 'credentials_cleanup') return { count: 3, already_clean: false }
+    return null
+  })
+  const wrapper = mount(CredentialVaultSettings)
+  await flushPromises()
+  await wrapper.findAll('button').find(button => button.text().includes('清理已迁移'))!.trigger('click')
+  await flushPromises()
+  expect(hostInvoke).toHaveBeenCalledWith('credentials_cleanup')
+  expect(wrapper.text()).toContain('已清理 3 条已迁移凭据的旧文件')
+  wrapper.unmount()
+})
