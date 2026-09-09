@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenNexus",
+  "version": "0.3.0-alpha.1",
+  "identifier": "cc.kronecker.notesagent",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{"label": "main", "title": "OpenNexus", "width": 1280, "height": 960, "minWidth": 720, "minHeight": 700, "center": true, "decorations": false}],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src ipc: http://ipc.localhost; frame-src 'self' blob:; object-src 'none'; base-uri 'self'",
+      "capabilities": ["main"]
+    }
+  },
+  "bundle": {"active": false}
+}

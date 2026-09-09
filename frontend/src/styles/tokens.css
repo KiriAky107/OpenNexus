@@ -2,14 +2,14 @@
   --color-markdown-selection: color-mix(in srgb, var(--color-accent-primary) 24%, var(--color-background-primary));
   --color-editor-scroll-background: var(--color-surface-elevated);
   --color-editor-scroll-text: var(--color-accent-primary);
-  /* Callout heading colors also serve as borders; keep text readable on tint. */
+  /* 标注标题颜色也用作边框；保持文本在色调上可读。 */
   --color-callout-info: var(--color-info);
   --color-callout-success: var(--color-success);
   --color-callout-warning: var(--color-warning);
   --color-callout-danger: var(--color-error);
   --color-callout-important: var(--color-accent-secondary);
   --color-callout-quote: var(--color-text-secondary);
-  /* Background */
+  /* 背景 */
   --color-background-primary: #ffffff;
   --color-background-secondary: #f7f8fa;
   --color-background-tertiary: #eef0f3;
@@ -17,12 +17,12 @@
   --color-background-active: #e4e7eb;
   --color-background-overlay: rgba(0, 0, 0, 0.45);
 
-  /* Surface */
+  /* 表面 */
   --color-surface-primary: #ffffff;
   --color-surface-secondary: #fafbfc;
   --color-surface-elevated: #ffffff;
 
-  /* Text */
+  /* 文本 */
   --color-text-primary: #1f2328;
   --color-text-secondary: #656d76;
   --color-text-tertiary: #9198a0;
@@ -30,7 +30,7 @@
   --color-text-link: #5b67f1;
   --color-text-disabled: #b0b4ba;
 
-  /* Accent */
+  /* 口音 */
   --color-accent-primary: #5b67f1;
   --color-accent-primary-hover: #4a55e0;
   --color-accent-primary-active: #3d47cc;
@@ -38,7 +38,7 @@
   --color-accent-soft: #eef0ff;
   --color-accent-soft-hover: #e2e5ff;
 
-  /* Status */
+  /* 状态 */
   --color-success: #2da44e;
   --color-success-soft: #dafbe3;
   --color-warning: #d4a72c;
@@ -47,32 +47,38 @@
   --color-error-soft: #ffebe9;
   --color-info: #0969da;
   --color-info-soft: #ddf4ff;
+  --color-on-error: #ffffff;
+  --color-on-success: #ffffff;
+  --color-brand-surface: #ffffff;
+  --color-brand-ink: #252b36;
+  --color-brand-surface-dark: #111111;
+  --color-highlight-overlay: #ffffff30;
 
-  /* Border */
+  /* 边框 */
   --color-border-default: #e4e7eb;
   --color-border-subtle: #eef0f3;
   --color-border-focus: #5b67f1;
   --color-border-disabled: #eef0f3;
 
-  /* Markdown */
+  /* Markdown 相关设置 */
   --color-markdown-grid: #8b949e;
   --color-markdown-marker: #343b44;
   --color-markdown-table-header: #eef0f3;
 
-  /* Shadow */
+  /* 影子 */
   --shadow-sm: 0 1px 2px rgba(31, 35, 40, 0.05), 0 1px 5px rgba(31, 35, 40, 0.03);
   --shadow-md: 0 8px 22px rgba(31, 35, 40, 0.08), 0 2px 6px rgba(31, 35, 40, 0.04);
   --shadow-lg: 0 16px 36px rgba(31, 35, 40, 0.11), 0 4px 12px rgba(31, 35, 40, 0.05);
   --shadow-xl: 0 24px 64px rgba(31, 35, 40, 0.18), 0 8px 20px rgba(31, 35, 40, 0.08);
 
-  /* Radius */
+  /* 半径 */
   --radius-sm: 6px;
   --radius-md: 9px;
   --radius-lg: 13px;
   --radius-xl: 18px;
   --radius-full: 9999px;
 
-  /* Spacing */
+  /* 间距 */
   --space-xs: 4px;
   --space-sm: 8px;
   --space-md: 12px;
@@ -81,18 +87,18 @@
   --space-2xl: 28px;
   --space-3xl: 36px;
 
-  /* Typography - UI */
+  /* 版式 - UI */
   --font-ui-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', Helvetica, Arial, sans-serif;
   --font-ui-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, 'Cascadia Code', monospace;
 
-  /* Typography - Editor */
+  /* 版式 - 编辑器 */
   --font-editor-sans: var(--font-ui-sans);
   --font-editor-mono: var(--font-ui-mono);
   --font-editor-size: 15px;
   --font-editor-line-height: 1.7;
 
-  /* Font sizes */
+  /* 字体大小 */
   --font-size-xs: 12px;
   --font-size-sm: 13px;
   --font-size-md: 14px;
@@ -101,12 +107,12 @@
   --font-size-2xl: 20px;
   --font-size-3xl: 26px;
 
-  /* Line heights */
+  /* 行高 */
   --line-height-tight: 1.25;
   --line-height-normal: 1.5;
   --line-height-relaxed: 1.7;
 
-  /* Z-index */
+  /* Z索引 */
   --z-sidebar: 10;
   --z-dropdown: 100;
   --z-modal: 200;
@@ -114,12 +120,12 @@
   --z-notification: 400;
   --z-titlebar: 500;
 
-  /* Motion */
+  /* 运动 */
   --motion-fast: 120ms cubic-bezier(0.2, 0, 0, 1);
   --motion-normal: 190ms cubic-bezier(0.2, 0, 0, 1);
   --motion-slow: 260ms cubic-bezier(0.2, 0, 0, 1);
 
-  /* Layout */
+  /* 布局 */
   --titlebar-height: 42px;
   --sidebar-primary-width: 58px;
   --sidebar-primary-width-expanded: 180px;
@@ -128,6 +134,7 @@
 }
 
 [data-theme='light'] {
+  color-scheme: light;
   --color-callout-info: #175da6;
   --color-callout-success: #236b3b;
   --color-callout-warning: #855700;
@@ -193,6 +200,7 @@
 }
 
 [data-theme='sepia'] {
+  color-scheme: light;
   --color-callout-info: #396578;
   --color-callout-success: #496b3b;
   --color-callout-warning: #805918;
@@ -361,7 +369,7 @@ ol {
 }
 
 
-/* Native form controls share the same surfaces as component controls. */
+/* 本机表单控件与组件控件共享相同的表面。 */
 :where(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']), textarea, select) {
   background-color: var(--color-surface-primary);
   border-color: var(--color-border-default);

@@ -8,7 +8,7 @@ export const headingFoldKey = new PluginKey<Set<number>>('heading-folding')
 type Section = { from: number; body: number; end: number; level: number }
 const sectionCache = new WeakMap<Node, Section[]>()
 const decorationCache = new WeakMap<Node, WeakMap<Set<number>, DecorationSet>>()
-/** A section ends at the next sibling heading of the same or a higher rank. */
+/** 节以相同或更高级别的下一个同级标题结束。 */
 export function headingSections(doc: Node): Section[] {
   const cached = sectionCache.get(doc)
   if (cached) return cached
@@ -79,7 +79,7 @@ export const headingFoldingPlugin = $prose(() => new Plugin<Set<number>>({
         const result = tr.mapping.mapResult(old, 1)
         if (!result.deleted && positions.has(result.pos)) mapped.add(result.pos)
       }
-      // Outline jumps, find and keyboard navigation must never leave a hidden caret.
+      // 轮廓跳转、查找和键盘导航绝不能留下隐藏的插入符号。
       if (tr.selectionSet || tr.docChanged) {
         for (const section of sections) if (tr.selection.to >= section.body && tr.selection.from < section.end) mapped.delete(section.from)
       }

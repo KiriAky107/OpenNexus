@@ -1,4 +1,4 @@
-/** Mirror changed language labels without rescanning every code block on each DOM mutation. */
+/** 镜像更改的语言标签，无需重新扫描每个 DOM 突变上的每个代码块。 */
 export function installCodeBlockLabels(root: HTMLElement): () => void {
   const sync = (block: HTMLElement) => {
     const label = block.querySelector('.language-button')?.textContent?.trim() || 'Plain text'
@@ -13,7 +13,7 @@ export function installCodeBlockLabels(root: HTMLElement): () => void {
     const changed = new Set<HTMLElement>()
     for (const record of records) {
       const element = record.target instanceof Element ? record.target : record.target.parentElement
-      // CodeMirror viewport/text changes do not change the footer's language.
+      // CodeMirror 视口/文本更改不会更改页脚的语言。
       const label = element?.closest('.language-button')
       const block = label?.closest<HTMLElement>('.milkdown-code-block')
       if (block) changed.add(block)

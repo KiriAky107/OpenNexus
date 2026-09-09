@@ -36,6 +36,19 @@ def test_encrypted_credential_store_round_trip_without_plaintext_on_disk() -> No
     assert store.resolve("deepseek") is None
 
 
+def test_migrated_fernet_owner_blocks_old_reads_and_writes() -> None:
+    store = EncryptedCredentialStore()
+    store.put("fixture", "test-secret")
+    directory = get_settings().data_dir / "credentials"
+    before = (directory / "credentials.json").read_bytes()
+    (directory / ".opennexus-owner.json").write_text('{"state":"switched"}')
+    for operation in [lambda: store.resolve("fixture"), lambda: store.has("fixture"),
+                      lambda: store.put("fixture", "changed"), lambda: store.delete("fixture")]:
+        with pytest.raises(CredentialStoreError, match="CREDENTIAL_OWNER_DESKTOP"):
+            operation()
+    assert (directory / "credentials.json").read_bytes() == before
+
+
 def test_encrypted_credential_store_deletes_multiple_credentials_atomically() -> None:
     store = EncryptedCredentialStore()
     store.put("plugin.first", "first")

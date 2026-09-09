@@ -1,4 +1,4 @@
-"""Native /responses adapter; stateless history uses function_call/output items."""
+"""本机 /responses 适配器；无状态历史记录使用 function_call/输出项。"""
 
 import json
 from contextlib import aclosing

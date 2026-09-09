@@ -29,7 +29,7 @@ export const markdownPresets = {
 const key = 'markdown-preferences'
 export const useMarkdownPreferencesStore = defineStore('markdown-preferences', () => {
   let saved: Record<string, unknown> = {}
-  try { saved = JSON.parse(localStorage.getItem(key) ?? '{}') ?? {} } catch { /* defaults */ }
+  try { saved = JSON.parse(localStorage.getItem(key) ?? '{}') ?? {} } catch { /* 默认值 */ }
   const preferences = ref(normalizeMarkdownPreferences(saved.preferences))
   const customPresets = ref<{ name: string; preferences: MarkdownPreferences }[]>(Array.isArray(saved.presets)
     ? saved.presets.filter(item => item && typeof item.name === 'string').slice(0, 20).map(item => ({ name: item.name.slice(0, 40), preferences: normalizeMarkdownPreferences(item.preferences) })) : [])

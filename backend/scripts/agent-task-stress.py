@@ -1,4 +1,4 @@
-"""Offline Agent/runtime and task API load test; all state lives in a temporary directory."""
+"""离线Agent/运行时和任务API负载测试；所有状态都位于临时目录中。"""
 from __future__ import annotations
 
 import argparse
@@ -24,7 +24,7 @@ def stats(values):
 
 
 async def main(output):
-    # Set before importing any app modules: container has import-time initialization.
+    # 在导入任何应用程序模块之前设置：容器具有导入时初始化。
     with tempfile.TemporaryDirectory(prefix="notes-agent-task-stress-") as directory:
         root = pathlib.Path(directory)
         os.environ.update(APP_DATA_DIR=str(root / 'data'), APP_DB_PATH=str(root / 'app.db'),
@@ -105,7 +105,7 @@ async def main(output):
                         "terminal_recovery": True, "recovery_read_ms": round(recovery_read_ms,2), "retained_records": len(runtime._records)}
             save('agent_tool_runs', await measured(batch))
 
-        # Hold model calls so all 200 records remain active while testing admission.
+        # 保留模型调用，以便在测试准入时所有 200 条记录保持活动状态。
         gate = asyncio.Event()
         async def blocked(request):
             await gate.wait()

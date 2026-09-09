@@ -1,4 +1,4 @@
-"""User-triggered installation of the fixed optional CUDA runtime on Windows."""
+"""用户触发在 Windows 上安装固定的可选 CUDA 运行时。"""
 import asyncio
 import json
 import os

@@ -1,4 +1,5 @@
-/** Versioned frontend boundary for future native menus/shortcuts; no Tauri IPC yet. */
+/** 活动编辑器命令边界；原生菜单复用能力检测和处理器。 */
+import { hostInvoke, isDesktop } from './platform/desktop'
 export const editorCommandVersion = 1
 export const editorCommandIds = [
   'editor.bold', 'editor.italic', 'editor.strikethrough', 'editor.inline-code',
@@ -16,10 +17,27 @@ export type CommandResult = { ok: true } | { ok: false; reason: 'unsupported' | 
 export type CommandHandler = (params: unknown) => CommandResult | Promise<CommandResult>
 type Target = { available: () => boolean; handlers: Partial<Record<EditorCommandId, CommandHandler>> }
 let active: Target | undefined
+const capabilityListeners = new Set<() => void>()
+
+export function subscribeEditorCommandCapabilities(listener: () => void) {
+  capabilityListeners.add(listener)
+  return () => capabilityListeners.delete(listener)
+}
+
+function notifyCapabilityListeners() {
+  capabilityListeners.forEach(listener => listener())
+}
 
 export function registerEditorCommands(target: Target) {
   active = target
-  return () => { if (active === target) active = undefined }
+  updateNativeEditorMenu()
+  return () => { if (active === target) { active = undefined; updateNativeEditorMenu() } }
+}
+export function updateNativeEditorMenu() {
+  notifyCapabilityListeners()
+  const metadataEnabled = !!active?.available()
+    && (!!active.handlers['editor.import-note-properties'] || !!active.handlers['editor.metadata.edit'])
+  if (isDesktop()) void hostInvoke('editor_capabilities', { metadataEnabled }).catch(() => undefined)
 }
 export function getEditorCommandCapabilities() {
   return editorCommandIds.map(id => ({ id, supported: !!active?.handlers[id], enabled: !!active?.handlers[id] && active.available() }))

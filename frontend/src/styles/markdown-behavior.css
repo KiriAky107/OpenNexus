@@ -1,5 +1,4 @@
-/* Shared interaction layer: colors follow the active theme; syntax preferences
-   continue to be handled by the parser/editor rather than CSS-generated content. */
+/* 共享交互层：颜色遵循活动主题；语法首选项继续由解析器/编辑器处理，而不是由 CSS 生成的内容处理。 */
 :is(.markdown-content, .milkdown .ProseMirror) a:not(.callout-title) {
   color: var(--color-text-link); text-decoration: underline; text-underline-offset: .18em;
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
@@ -33,7 +32,7 @@
 .editor-scroll-buttons button:active { background: var(--color-accent-soft); }
 .editor-scroll-buttons button:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 2px; }
 
-/* The read-only renderer uses the same framed code surface as the workspace. */
+/* 只读渲染器使用与工作空间相同的框架代码表面。 */
 .markdown-content .markdown-code-block { position: relative; margin: .85em 0; padding: 8px 20px 16px; border: 1px solid var(--color-code-border); border-radius: 6px; background: var(--color-code-background); color: var(--color-code-text); }
 .markdown-content .markdown-code-block > .markdown-code-toolbar { display: flex; align-items: center; gap: 8px; padding: 0 0 8px; min-height: 28px; font: 12px/1.4 var(--font-ui-mono); color: var(--color-code-muted); }
 .markdown-content .markdown-code-block > .markdown-code-toolbar button { min-height: 24px; padding: 3px 10px; border: 0; border-radius: var(--radius-sm); box-shadow: none; background: var(--color-accent-soft); color: var(--color-code-muted); font: inherit; }

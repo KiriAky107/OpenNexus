@@ -1,4 +1,4 @@
-"""Application-observed usage per actual HTTP attempt; never an account bill."""
+"""应用观测到的每次实际 HTTP 尝试用量；这些数据不代表账户账单。"""
 from __future__ import annotations
 
 import json
@@ -31,7 +31,7 @@ def connection():
 
 
 def numeric_leaves(value, prefix=""):
-    """Keep known numerical counters only; vendor usage objects may contain arbitrary text."""
+    """只保留已知的数值计数器；供应商返回的用量对象可能含有任意文本。"""
     result = {}
     if not isinstance(value, dict):
         return result
@@ -122,7 +122,7 @@ def aggregate(start, end, provider_id=None, model=None, source=None, timezone_of
     with closing(connection()) as conn:
         rows = conn.execute(query, args).fetchall()
         options = conn.execute("SELECT DISTINCT provider_id,model,source FROM model_usage ORDER BY provider_id,model").fetchall()
-    # Calendar buckets use the caller's UTC offset; absent counters remain null.
+    # 日历分桶使用调用方的 UTC 偏移量；缺失的计数器保持为 null。
     zone = timezone(timedelta(minutes=timezone_offset))
     first = start.astimezone(zone).date()
     last = (end - timedelta(microseconds=1)).astimezone(zone).date()

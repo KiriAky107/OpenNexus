@@ -1,0 +1,39 @@
+{
+  "release": {
+    "schema_version": 1,
+    "namespace": "examples",
+    "package_id": "test-package",
+    "type": "persona",
+    "version": "1.0.0",
+    "name": "受控示例",
+    "author_id": "author",
+    "license": "MIT",
+    "description": "用于隔离验收",
+    "sha256": "d4a3dc84580c311e877f0b9c2f4022c14cb8923f757cb2309a55b75d0dd242f5",
+    "size": 167,
+    "platforms": [
+      "windows"
+    ],
+    "architectures": [
+      "x86_64"
+    ],
+    "min_app_version": "0.2.0",
+    "max_app_version": null,
+    "dependencies": {},
+    "permissions": [],
+    "changelog": "初始版本",
+    "published_at": "2026-09-07T00:00:00Z",
+    "key_id": "test-key",
+    "signature": "PwaYH7leaURJJryfBzmZXWNoNgZqCxsM16iYpIgCx5cvMNzm2tltlV5gz49ykNOW3WH/1u8SEGwdgiTnvNzkCg==",
+    "release_id": "fixture",
+    "withdrawn": false,
+    "download_path": "/catalog/v1/releases/fixture/archive"
+  },
+  "archive_base64": "UEsDBBQAAAAAAEOBJ11uLuwILQAAAC0AAAAMAAAAcGVyc29uYS5qc29ueyJzeXN0ZW1fcHJvbXB0IjogIlx1NTNkN1x1NjNhN1x1NjgzN1x1NGY4YiJ9UEsBAhQAFAAAAAAAQ4EnXW4u7AgtAAAALQAAAAwAAAAAAAAAAAAAAIABAAAAAHBlcnNvbmEuanNvblBLBQYAAAAAAQABADoAAABXAAAAAAA=",
+  "key": {
+    "key_id": "test-key",
+    "namespace": "examples",
+    "public_key": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+    "revoked": false
+  }
+}

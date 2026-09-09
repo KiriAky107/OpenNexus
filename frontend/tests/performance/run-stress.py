@@ -1,5 +1,7 @@
-"""Real Chromium benchmark. Run with backend/.venv/Scripts/python.exe; requires websockets.
-Vite must be serving the frontend. Uses an isolated disposable browser profile.
+"""真实 Chromium 基准测试。
+
+使用 backend/.venv/Scripts/python.exe 运行并开放网络套接字；前端必须由 Vite 提供服务。
+测试使用独立的一次性浏览器配置文件。
 """
 import argparse, asyncio, base64, json, pathlib, subprocess, tempfile, urllib.request
 import websockets

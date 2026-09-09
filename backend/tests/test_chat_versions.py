@@ -64,7 +64,7 @@ def test_regeneration_persists_context_per_answer_without_rewriting_original(mon
             yield ModelEvent(event=ModelEventType.text_delta, sequence=0, data={'text':'answer'}, timestamp=utc_now())
             yield ModelEvent(event=ModelEventType.done, sequence=1, data={}, timestamp=utc_now())
     monkeypatch.setattr('app.routes.provider_or_404',lambda _:SimpleNamespace(adapter=Adapter()))
-    # Keep attachment parsing out of this persistence test; the route must save raw IDs.
+    # 将附件解析排除在此持久性测试之外；路由必须保存原始 ID。
     async def prepare(request, provider):
         return request.model_copy(update={'attachments':[]})
     monkeypatch.setattr('app.services.chat_attachments.prepare',prepare)

@@ -175,7 +175,7 @@ export const useChatStore = defineStore('chat', () => {
     historyError.value = ''
     contextNotice.value = ''
     const conversation = addLocalConversation(t('新对话', 'New conversation'))
-    try { await persistConversation(conversation) } catch { /* exposed through historyError */ }
+    try { await persistConversation(conversation) } catch { /* 通过historyError暴露 */ }
   }
 
   async function sendMessage(text: string, retryMessageId?: string, workspaceContext?: WorkspaceContext | null) {
@@ -206,7 +206,7 @@ export const useChatStore = defineStore('chat', () => {
     finally {
       if (version === streamVersion) isPreparing.value = false
     }
-    // Switching, stopping or deleting cancels sends still waiting for creation.
+    // 切换、停止或删除会取消仍在等待创建的发送。
     if (version !== streamVersion || activeConversationId.value !== conversation.conversation_id) return
 
     const conversationId = conversation.conversation_id
@@ -279,7 +279,7 @@ export const useChatStore = defineStore('chat', () => {
           if (call && typeof event.data.arguments_delta === 'string') {
             const buffer = (argumentBuffers.get(call.tool_call_id) ?? '') + event.data.arguments_delta
             argumentBuffers.set(call.tool_call_id, buffer)
-            try { call.parameters = JSON.parse(buffer) } catch { /* incomplete JSON fragment */ }
+            try { call.parameters = JSON.parse(buffer) } catch { /* 不完整的JSON片段 */ }
           }
           if (call && event.data.arguments && typeof event.data.arguments === 'object') Object.assign(call.parameters, event.data.arguments)
         }

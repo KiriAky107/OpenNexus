@@ -1,4 +1,4 @@
-/** Editable anchors need explicit navigation; plain clicks keep editing the link. */
+/** 可编辑锚点需要显式导航；简单的点击即可继续编辑链接。 */
 export function installLinkNavigation(root: HTMLElement): () => void {
   const navigate = (event: MouseEvent) => {
     if (event.button !== 0 || !(event.ctrlKey || event.metaKey) || event.altKey) return
@@ -7,7 +7,7 @@ export function installLinkNavigation(root: HTMLElement): () => void {
     if (!link || !root.contains(link)) return
     const href = link.getAttribute('href')?.trim()
     if (!href) return
-    // Consume modified clicks before Milkdown's link editor or native navigation.
+    // 在 Milkdown 的链接编辑器或本机导航之前消耗修改的点击。
     event.preventDefault()
     event.stopPropagation()
     let url: URL

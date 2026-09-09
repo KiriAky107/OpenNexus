@@ -1,4 +1,4 @@
-"""Serialize and batch durable Trace writes off the asyncio event loop."""
+"""在 asyncio 事件循环之外串行、批量写入持久化 Trace。"""
 import asyncio
 from contextvars import copy_context
 
@@ -14,7 +14,7 @@ class AsyncTraceWriter:
         await self.queue.put((operation, args, future))
         if self.worker is None or self.worker.done():
             self.worker = asyncio.create_task(self._drain())
-        # Cancellation must not let an older snapshot commit after cancellation.
+        # 取消不得让较旧的快照在取消后提交。
         cancelled = False
         while not future.done():
             try:
@@ -32,8 +32,7 @@ class AsyncTraceWriter:
             try:
                 work = asyncio.get_running_loop().run_in_executor(
                     None, copy_context().run, self.repository.write_batch, [(op, args) for op, args, _ in batch])
-                # asyncio.run/shutdown may cancel every Task simultaneously. The
-                # executor Future survives; finish it and release all waiters.
+                # asyncio.run/shutdown 可能同时取消所有 Task；执行器 Future 仍会继续，因此应等待其完成并唤醒所有等待者。
                 while not work.done():
                     try:
                         await asyncio.shield(work)

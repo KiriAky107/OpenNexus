@@ -1,4 +1,4 @@
-"""Build bounded chat context from current indexed notes, with source metadata."""
+"""使用源元数据从当前索引笔记构建有界聊天上下文。"""
 import json
 
 from app import repository

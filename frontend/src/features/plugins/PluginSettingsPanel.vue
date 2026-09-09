@@ -355,7 +355,7 @@ watch(() => props.pluginId, load)
   height: 18px;
   border-radius: 50%;
   background: var(--color-text-inverse);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--color-text-primary) 20%, transparent);
   transition: transform var(--motion-fast);
 }
 

@@ -1,4 +1,4 @@
-"""Synthetic, isolated exact-search comparison; does not access the user Vault."""
+"""综合的、孤立的精确搜索比较；不访问用户Vault。"""
 import heapq
 import json
 import math

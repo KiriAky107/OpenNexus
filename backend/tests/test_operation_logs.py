@@ -37,7 +37,7 @@ def test_logs_exclude_content_and_legacy_exception_messages():
         record = logging.LogRecord('app.sample', logging.ERROR, __file__, 1,
                                    'private note and secret %s', ('credentials',), None)
         handler.emit(record)
-        handler.emit(record)  # a logger propagated to another installed handler
+        handler.emit(record)  # 记录器传播到另一个已安装的处理程序
         store = get_store()
         store.queue.join()
         data = json.dumps(store.query())
@@ -85,7 +85,7 @@ def test_trace_writer_batches_off_loop_and_survives_cancel():
         while not started.is_set():
             await asyncio.sleep(.001)
         pending.cancel()
-        writer.worker.cancel()  # simultaneous application shutdown
+        writer.worker.cancel()  # 同时应用程序关闭
         await asyncio.sleep(.005)
         assert not pending.done()
         release.set()

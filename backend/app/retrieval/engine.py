@@ -49,12 +49,15 @@ class RetrievalEngine:
         self.embedding = embedding
         self.reranker = reranker
         self.vector_store = vector_store
-        # Only the production instance opts in. Replaced test dependencies must
-        # remain authoritative, including monkeypatches on the singleton.
+        # 只有生产实例选择加入。替换的测试依赖项必须保持权威，包括单例上的 Monkeypatches。
         self._routed_defaults = (embedding, vector_store) if route_embeddings else None
 
     @track_search
     async def search(self, request: SearchRequest) -> SearchResponse:
+        from app.config import get_settings
+        if get_settings().environment == 'desktop':
+            from app.services.desktop_projection import refresh
+            await refresh()
         if request.mode == SearchMode.fts:
             return self._search_fts(request)
 
@@ -129,7 +132,7 @@ class RetrievalEngine:
         # 2. 取完整 Block 上下文（用于过滤、摘要与 Citation 定位）
         hits = {h.block_id: h for h in repository.get_block_hits(list(candidate_scores.keys()))}
 
-        # 3. Metadata Filter
+        # 3.元数据过滤器
         filtered = [h for h in hits.values() if self._matches(h, request)]
         if not filtered:
             return self._empty(request)
@@ -206,7 +209,7 @@ class RetrievalEngine:
                 if request.score_threshold > 1.0:
                     return self._empty(request)
             else:
-                # norm = (hi - bm25) / span；norm >= threshold ⟺ bm25 <= hi - threshold * span
+                # 范数 = (hi - bm25) / 跨度；范数 >= 阈值 ⟺ bm25 <= hi - 阈值 * 跨度
                 bm25_max = hi - request.score_threshold * span
 
         fts_hits, total = repository.fts_search_page(

@@ -1,4 +1,4 @@
-"""Bounded, cancellable model subprocesses with CPU as the default device."""
+"""有界、可取消的模型子流程，以 CPU 作为默认设备。"""
 from __future__ import annotations
 
 import asyncio
@@ -114,7 +114,7 @@ class Runtime:
             self.active[ticket] = key
             self.active_files[ticket] = {str(Path(payload[name]).resolve()) for name in ("source", "reference") if payload.get(name)}
             queue_seconds = time.monotonic() - queued_at
-            # Keep the reservation while replacing a failed CUDA process with CPU.
+            # 用 CPU 进程替换失败的 CUDA 进程时，继续占用原有资源配额。
             for device in (["cuda", "cpu"] if config.device == "cuda" else ["cpu"]):
                 started = time.monotonic()
                 diagnostics = dict(model=CATALOG[key].repository, revision=CATALOG[key].revision,

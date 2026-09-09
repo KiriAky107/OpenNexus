@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass
 
 from app.plot.model import FunctionPlot, StaticRenderResult
+from app.plot.math_label import expression_latex, render_math_svg
 from app.plot.parser import PlotParseError, evaluate, parse_expression
 
 _WIDTH = 640
@@ -225,13 +226,7 @@ _CURVE_MAX_REFINEMENT_EVALUATIONS = 8192
 
 
 def _refine_crossing(tree, left, right, ymin, ymax, budget=None):
-    """Adaptively check both halves of a crossing; None explicitly breaks a path.
-
-    A visible midpoint is not a continuity proof. Accept a visible chord only
-    when its midpoint error is within a quarter pixel; otherwise subdivide both
-    halves. Depth, evaluation and floating-point limits always break unresolved
-    intervals instead of joining them. Entirely off-screen triples can be culled.
-    """
+    """自适应检查路口的两半； None 明确中断了一条路径。可见的中点并不是连续性证明。仅当中点误差在四分之一像素以内时才接受可见弦；否则将两半细分。深度、求值和浮点限制总是打破未解决的间隔，而不是连接它们。完全不在屏幕外的三元组可以被剔除。"""
     remaining = _REFINE_MAX_EVALUATIONS
     if budget is None:
         budget = [_REFINE_MAX_EVALUATIONS]
@@ -254,12 +249,11 @@ def _refine_crossing(tree, left, right, ymin, ymax, budget=None):
         values = (a[1], y, b[1])
         if all(math.isfinite(v) for v in values):
             if max(values) < ymin or min(values) > ymax:
-                return [a, None, b]  # No visible chord; do not connect across it.
+                return [a, None, b]  # 无可见和弦；不要通过它连接。
             error = abs(y - (a[1] / 2 + b[1] / 2))
             if any(ymin <= v <= ymax for v in values) and error <= tolerance:
                 return [a, mid, b]
-        # Refine either side of a nonfinite midpoint too: dropping the whole
-        # interval would erase valid branches between the original samples.
+        # 也优化非有限中点的任一侧：删除整个间隔将擦除原始样本之间的有效分支。
         first = refine(a, mid, depth + 1)
         second = refine(mid, b, depth + 1)
         return first + second[1:]
@@ -308,7 +302,7 @@ def _sample_segments(
             continue
         if prev_y is not None:
             refined = _refine_crossing(tree, (prev_x, prev_y), (x, y), ymin, ymax, budget)
-            samples = refined[1:]  # The previous endpoint is already in points.
+            samples = refined[1:]  # 前一个端点已经以点为单位。
         else:
             samples = [(x, y)]
         for sample in samples:
@@ -491,9 +485,13 @@ def render_svg(plot: FunctionPlot, theme_id: str = 'light', unlimited: bool = Fa
     parts.append(_labels_svg(geo))
     for index, expression in enumerate(plot.expressions):
         x = 24 + (index % 2) * 310
-        y = geo.height + 18 + (index // 2) * 24
-        label = html.escape(expression.label or ('y = ' + expression.expression))
-        parts.append(f'<text x="{x}" y="{y}" font-size="12" fill="{geo.colors[index]}" class="plot-legend-{index % 6}">{label}</text>')
+        top = geo.height + 4 + (index // 2) * 24
+        if expression.label:
+            label = html.escape(expression.label)
+            parts.append(f'<text x="{x}" y="{top + 14}" font-size="12" fill="{geo.colors[index]}" class="plot-legend-{index % 6}">{label}</text>')
+        else:
+            parts.append(render_math_svg(expression_latex(expression.expression), x=x, top=top,
+                                         class_name=f"plot-legend-{index % 6}", color=geo.colors[index]))
     parts.append("</svg>")
 
     return StaticRenderResult(

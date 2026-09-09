@@ -117,10 +117,16 @@ class ToolRegistry:
                 duration_ms=round((perf_counter() - started) * 1000),
             )
 
+        from app import host_bridge
+        from uuid import NAMESPACE_URL, uuid5
+        operation = str(uuid5(NAMESPACE_URL, f'opennexus:{context.run_id}:{call.tool_call_id}'))
+        operation_token = host_bridge.operation_id.set(operation)
         try:
             output = registered.executor(arguments, context)
             if inspect.isawaitable(output):
                 output = await output
+            if host_bridge.active is not None and isinstance(output, dict) and call.name.startswith('notes.'):
+                output = {**output, 'operation_id': operation}
             return ToolResult(
                 tool_call_id=call.tool_call_id,
                 name=call.name,
@@ -146,3 +152,5 @@ class ToolRegistry:
                 error_message=str(exc),
                 duration_ms=round((perf_counter() - started) * 1000),
             )
+        finally:
+            host_bridge.operation_id.reset(operation_token)

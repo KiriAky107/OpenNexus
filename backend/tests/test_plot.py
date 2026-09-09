@@ -107,13 +107,32 @@ def test_render_svg_contains_polyline_and_axes() -> None:
     assert "<line" in svg  # 坐标轴/网格
     assert "<script" not in svg
     assert rendered.width == 640
-    assert rendered.height == 504  # Includes the legend row.
+    assert rendered.height == 504  # 包括图例行。
 
 
 def test_render_svg_multiple_functions() -> None:
     plot = parse_source("y = x^2\ny = sin(x)").plot
     rendered = render_svg(plot)
     assert rendered.content.count("<polyline") >= 2
+
+
+def test_render_svg_uses_latex_vector_paths_for_expression_legends() -> None:
+    plot = parse_source("y = sin(x)\ny = x^2 / 5").plot
+    svg = render_svg(plot).content
+    assert svg.count("plot-math-label") == 2
+    assert 'data-latex="y = \\sin\\left(x\\right)"' in svg
+    assert 'data-latex="y = \\frac{{x}^{2}}{5}"' in svg
+    assert "<path" in svg
+    assert ">y = sin(x)<" not in svg
+
+
+@pytest.mark.parametrize("expression", [
+    "asin(x)", "acos(x)", "atan(x)", "sinh(x)", "cosh(x)", "tanh(x)",
+    "exp(x)", "ln(x)", "log10(x)", "log2(x)", "sqrt(x)", "abs(x)",
+])
+def test_render_svg_latex_supports_every_plot_function(expression: str) -> None:
+    plot = parse_source(f"domain: 0.1, 1\ny = {expression}").plot
+    assert "plot-math-label" in render_svg(plot).content
 
 
 def test_render_svg_labels() -> None:
@@ -300,7 +319,7 @@ def test_function_plot_static_renderer_renders_svg() -> None:
     assert "<polyline" in result.content
     assert result.mime_type == "image/svg+xml"
     assert result.width == 640
-    assert result.height == 504  # Includes the legend row.
+    assert result.height == 504  # 包括图例行。
 
 
 def test_function_plot_static_renderer_parse_exposes_node_count() -> None:
@@ -367,6 +386,16 @@ def test_render_reportlab_builds_drawing() -> None:
     assert groups
     group_texts = [s.text for g in groups for s in g.contents if isinstance(s, String)]
     assert "数值" in group_texts
+
+
+def test_render_reportlab_uses_vector_latex_for_expression_legend() -> None:
+    from reportlab.graphics.shapes import Group, Path
+    from app.plot.render_reportlab import render_drawing
+
+    drawing = render_drawing(parse_source("y = x^2 / 5").plot)
+    math_groups = [item for item in drawing.contents if isinstance(item, Group)
+                   and any(isinstance(child, Path) for child in item.contents)]
+    assert math_groups
 
 
 def test_render_reportlab_curves_are_finite_and_bounded() -> None:
@@ -484,7 +513,7 @@ def test_visible_midpoint_does_not_bridge_a_pole():
         for px, py in seg:
             x = (px-_PLOT_X0)/(_PLOT_X1-_PLOT_X0)*2
             y = 1-(py-_PLOT_Y0)/(_PLOT_Y1-_PLOT_Y0)*2
-            # On the visible branch, 1000*t + .001/t - 1.5 >= .5.
+            # 在可见分支上，1000*t + .001/t - 1.5 >= .5。
             assert x > .001
             assert y >= .5-1e-8
             assert y == pytest.approx(1000*(x-.0025)+.001/(x-.001),abs=.002)
@@ -515,7 +544,7 @@ def test_refinement_budget_is_shared_by_both_subtrees(monkeypatch):
     monkeypatch.setattr(rendering, 'evaluate', oscillate)
     samples = rendering._refine_crossing(None, (0,-2), (1,2), -1,1)
     assert len(calls) == rendering._REFINE_MAX_EVALUATIONS
-    assert None in samples  # Exhaustion leaves gaps, never unchecked chords.
+    assert None in samples  # 疲惫会留下间隙，永远不会不受控制的和弦。
 
 
 @pytest.mark.parametrize('factor,pole', [(0.0001,.001),(-0.0001,.001),(.001,.001),(.0001,.0025),(.0001,.00419)])

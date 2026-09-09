@@ -525,7 +525,7 @@ def test_patch_tags_semantics(vault) -> None:
     )
     assert note.tags == ["a"]
 
-    updated = asyncio.run(note_service.update_note(note.note_id, title="改名"))  # tags=None
+    updated = asyncio.run(note_service.update_note(note.note_id, title="改名"))  # 标签=None
     assert updated.tags == ["a"]  # 省略 tags 保留原标签
 
     updated = asyncio.run(note_service.update_note(note.note_id, tags=["b"]))

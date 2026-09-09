@@ -1,4 +1,4 @@
-"""Real loopback HTTP task load with a separate, temporary Uvicorn process."""
+"""使用单独的临时 Uvicorn 进程进行真实环回 HTTP 任务负载。"""
 import argparse
 import asyncio
 import json

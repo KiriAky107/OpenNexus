@@ -1,12 +1,16 @@
-# Notes Agent（暂命名） 团队开发说明
+# OpenNexus 团队开发说明
 
 > 第二阶段收尾（开发分支，2026-09-07）：标准 Agent/RAG Benchmark 与报告页、函数图预览、三格式快照导出及真实 Provider/MCP 结果见[实现与验收记录](docs/development/第二阶段收尾实现与验收-2026-09-07.md)。当前分支尚未合并，不更改下文历史 main 基线。
 
 > 本文件用于团队开发期间快速配置环境、启动项目并了解当前实现状态，不是正式的项目 README。
 
-NotesAgent 是本地优先的 AI 笔记与知识库项目。当前可运行形态为 Vue/Vite Web 前端与 FastAPI AI Core：Markdown 和附件保存在本地 Vault，SQLite 管理元数据、全文索引、向量空间、搜索历史、AI 会话、任务、Agent Trace、多模态任务及运行诊断。AI 对话已接入知识库检索，会话与消息由后端持久化并供 Web 和桌面客户端共用。
+> 第三阶段分支状态（2026-09-07）：已加入 Tauri/Rust 原生 Vault 预览、Sync v1 服务原型、签名社区目录原型和七类社区入口。完整 Sidecar、Stronghold、生产插件隔离、同步客户端、升级回滚及三平台发布门禁仍未交付；详见[第三阶段实施与验收记录](docs/development/第三阶段实施与验收记录.md)。
+
+OpenNexus 是本地优先的 AI 笔记与知识库项目。当前可运行形态为 Vue/Vite Web 前端与 FastAPI AI Core：Markdown 和附件保存在本地 Vault，SQLite 管理元数据、全文索引、向量空间、搜索历史、AI 会话、任务、Agent Trace、多模态任务及运行诊断。AI 对话已接入知识库检索，会话与消息由后端持久化并供 Web 和桌面客户端共用。
 
 截至 2026-09-06，第一阶段及第二阶段 A～F 的工程范围已经合并到 `main`。当前已完成真实 Workspace、混合检索与知识库问答、Agent/Tool/Permission、Skill/Plugin、MCP 配置与调用、模型提供商与路由、RAG Benchmark，以及本地 Embedding、音频转写和片段级声纹聚类。Tauri/Rust Host、Stronghold、原生多 Vault 文件系统、生产级 MCP 沙箱和 Sync Server 尚未接入。
+
+> 正式名称：OpenNexus（2026-09-08）。旧应用标识 `cc.kronecker.notesagent`、数据库/凭据路径和协议标识保留兼容，不因品牌更名创建新数据目录。
 
 ## 目录
 
@@ -15,7 +19,8 @@ NotesAgent/
 ├── frontend/      Vue 3 + TypeScript + Vite 前端
 ├── backend/       FastAPI AI Core、SQLite 与本地模型运行管理
 ├── docs/          架构、契约、开发说明、协作规范与问题复盘
-└── server sync/   云同步服务预留目录，当前未实现
+├── community-server/  社区目录、签名发行与审核原型
+└── server sync/       独立 Sync v1 服务原型
 ```
 
 ## 当前能力

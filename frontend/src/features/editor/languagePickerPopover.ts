@@ -1,4 +1,4 @@
-/** Promote menus to the top layer; only open menus need scroll measurements. */
+/** 将菜单提升到顶层；只有打开的菜单才需要滚动测量。 */
 export function installLanguagePickerPopover(root: HTMLElement): () => void {
   const menus = new Set<HTMLElement>()
   const openMenus = new Set<HTMLElement>()
@@ -55,7 +55,7 @@ export function installLanguagePickerPopover(root: HTMLElement): () => void {
   }
   root.querySelectorAll<HTMLElement>('.language-picker').forEach(sync)
   observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-expanded'] })
-  // The outer editor viewport is an ancestor of root, so listen in capture on the document.
+  // 外部编辑器视口是根的祖先，因此在文档上侦听捕获。
   document.addEventListener('scroll', positionOpenMenus, { capture: true, passive: true })
   window.addEventListener('resize', positionOpenMenus)
   return () => {

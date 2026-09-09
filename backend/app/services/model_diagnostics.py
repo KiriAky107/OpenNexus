@@ -1,4 +1,4 @@
-"""Bounded, durable diagnostics. No payloads, paths, exception text or credentials."""
+"""有界、持久的诊断。没有有效负载、路径、异常文本或凭据。"""
 import json
 import logging
 import math

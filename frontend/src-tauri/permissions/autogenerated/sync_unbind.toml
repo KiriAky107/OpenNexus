@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sync-unbind"
+description = "Enables the sync_unbind command without any pre-configured scope."
+commands.allow = ["sync_unbind"]
+
+[[permission]]
+identifier = "deny-sync-unbind"
+description = "Denies the sync_unbind command without any pre-configured scope."
+commands.deny = ["sync_unbind"]

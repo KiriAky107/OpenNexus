@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-extension-install-preview"
+description = "Enables the extension_install_preview command without any pre-configured scope."
+commands.allow = ["extension_install_preview"]
+
+[[permission]]
+identifier = "deny-extension-install-preview"
+description = "Denies the extension_install_preview command without any pre-configured scope."
+commands.deny = ["extension_install_preview"]

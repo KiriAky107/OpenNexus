@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-// The application has a doctype; happy-dom otherwise reports quirks mode to KaTeX.
+// 应用程序有一个文档类型； happy-dom 否则会向 KaTeX 报告怪癖模式。
 vi.hoisted(() => { Object.defineProperty(document, 'compatMode', {value:'CSS1Compat',configurable:true}) })
 import { mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -29,7 +29,7 @@ async function waitForEditor(wrapper: VueWrapper): Promise<Editor> {
       try {
         editor.action(getMarkdown())
         return editor
-      } catch { /* editor is still creating */ }
+      } catch { /* 编辑器仍在创建 */ }
     }
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
@@ -196,6 +196,16 @@ describe('VisualMarkdownEditor formatting toolbars', () => {
     useEditorStore().saveStatus = 'conflict'
     expect(await executeEditorCommand('editor.bold')).toEqual({ ok: false, reason: 'unavailable' })
   })
+  it('creates editable front matter when the metadata shortcut has no existing block', async () => {
+    const store = useEditorStore(); store.currentFilePath = '/notes/示例.md'
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: '正文' }, attachTo: document.body })
+    mounted.push(wrapper)
+    await waitForEditor(wrapper)
+    expect(await executeEditorCommand('editor.metadata.edit')).toEqual({ ok: true })
+    expect(wrapper.find('.note-metadata').exists()).toBe(true)
+    expect(store.content).toContain('title: "示例"')
+    expect(store.content).toContain('tags: []')
+  })
   it('keeps code examples as ordinary quotes and renders newly typed markers', async () => {
     const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: '> `[!NOTE]`\n\n> text' }, attachTo: document.body })
     mounted.push(wrapper)
@@ -253,7 +263,7 @@ describe('VisualMarkdownEditor formatting toolbars', () => {
     const wrapper = mount(VisualMarkdownEditor, {props:{initialContent:''},attachTo:document.body})
     mounted.push(wrapper)
     const editor = await waitForEditor(wrapper)
-    // Chromium/IME can omit data and commit its DOM change after the input event.
+    // Chromium/IME 可以省略数据并在输入事件后提交其 DOM 更改。
     await wrapper.get('.ProseMirror').trigger('input', {inputType, data:null})
     await new Promise(resolve => setTimeout(resolve, 10))
     editor.action(ctx => ctx.get(editorViewCtx).dispatch(ctx.get(editorViewCtx).state.tr.insertText('`s`')))
@@ -282,8 +292,7 @@ describe('VisualMarkdownEditor formatting toolbars', () => {
     view.dispatch(view.state.tr.insertText('``'))
     await wrapper.get('.ProseMirror').trigger('input', {inputType:'insertText', data:'`'})
     await new Promise(resolve => setTimeout(resolve, 60))
-    // Empty pairs are serialized as escaped literal text, but that must not
-    // prevent recognition after the user moves back and fills in the content.
+    // 空对被序列化为转义文字文本，但这不得妨碍用户向后移动并填写内容后的识别。
     expect(editor.action(getMarkdown())).toContain('\\`')
     view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 2)).insertText('s'))
     await wrapper.get('.ProseMirror').trigger('input', {inputType:'insertText', data:'s'})
@@ -354,6 +363,25 @@ describe('VisualMarkdownEditor formatting toolbars', () => {
       const string = [...cm.dom.querySelectorAll<HTMLElement>('.shiki-token')].find(el => el.textContent?.includes('Hello'))
       expect(string?.style.color.toUpperCase()).toBe(theme === 'github-dark' ? '#9ECBFF' : '#032F62')
     } finally { cm.destroy() }
+  })
+  it.each(['github-light', 'github-dark'] as const)('renders Shiki %s tokens in the mounted Milkdown code block', async theme => {
+    useThemeStore().codeBlockTheme = theme
+    const wrapper = mount(VisualMarkdownEditor, {
+      props: { initialContent: '```python\ndef average(scores: list[float]) -> float | None:\n    return sum(scores) / len(scores)\n```' },
+      attachTo: document.body,
+    })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    editor.action(ctx => {
+      const view = ctx.get(editorViewCtx)
+      view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, 0)))
+    })
+    for (let attempt = 0; attempt < 100 && wrapper.findAll('.shiki-token').length < 4; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    const tokens = wrapper.findAll<HTMLElement>('.shiki-token')
+    expect(tokens.length).toBeGreaterThan(3)
+    expect(new Set(tokens.map(token => token.element.style.color).filter(Boolean)).size).toBeGreaterThan(2)
   })
   it('applies bold from the top toolbar to the selected text', async () => {
     const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: 'alpha beta' }, attachTo: document.body })

@@ -1,4 +1,4 @@
-// Reference counts keep the underlying page locked when dialogs are nested.
+// 当对话框嵌套时，引用计数会锁定底层页面。
 const locks = new WeakMap<HTMLElement, { count: number; value: string; priority: string }>()
 export function lockDialogScroll(dialog: HTMLElement): () => void {
   const elements: HTMLElement[] = []

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-// Vitest disables CSS by default, including CSS raw imports. Load the real files here.
+// Vitest 默认禁用 CSS，包括 CSS 原始导入。在这里加载真实的文件。
 vi.mock('@/styles/features.css?raw', async () => ({ default: (await import('node:fs')).readFileSync(process.cwd() + '/src/styles/features.css', 'utf8') }))
 vi.mock('@/styles/tokens.css?raw', async () => ({ default: (await import('node:fs')).readFileSync(process.cwd() + '/src/styles/tokens.css', 'utf8') }))
 vi.mock('@/styles/callouts.css?raw', async () => ({ default: (await import('node:fs')).readFileSync(process.cwd() + '/src/styles/callouts.css', 'utf8') }))
@@ -29,7 +29,7 @@ it.each(themes)('previews shared component states safely for $theme_id', theme =
     expect(doc.querySelector('style')!.textContent).toContain('.button-primary:hover')
     expect(doc.querySelector('style')!.textContent).not.toContain('color:white')
     const rules = Array.from(doc.styleSheets[0]!.cssRules) as CSSStyleRule[]
-    // The sandbox cannot inherit MarkdownContent's component stylesheet.
+    // 沙箱无法继承MarkdownContent的组件样式表。
     const codeRule = rules.find(rule => rule.selectorText === '.markdown-content .shiki code')!
     const lineRule = rules.find(rule => rule.selectorText === '.markdown-content .shiki .line')!
     expect(codeRule.style.getPropertyValue('display')).toBe('block')
@@ -37,7 +37,7 @@ it.each(themes)('previews shared component states safely for $theme_id', theme =
     expect(lineRule.style.getPropertyValue('min-height')).toBe('1lh')
     const rootRule = rules.filter(rule => rule.selectorText === 'html').pop()!
     const bodyRule = rules.filter(rule => rule.selectorText === 'body').pop()!
-    // The embedded document must override the app-shell overflow lock.
+    // 嵌入文档必须覆盖应用程序外壳溢出锁定。
     expect(rootRule.style.getPropertyValue('overflow-y')).toBe('auto')
     expect(rootRule.style.getPropertyPriority('overflow-y')).toBe('important')
     expect(bodyRule.style.getPropertyValue('height')).toBe('auto')

@@ -96,11 +96,21 @@ class AgentRuntime:
         provider = self.providers.get(request.provider_id)
         skill_config = None
         if request.skill_id:
-            if self.skills is None:
-                raise RuntimeError("Skill Runtime is not configured.")
-            skill_config = self.skills.build_agent_configuration(
-                request.skill_id, provider.config.capabilities
-            )
+            if request.skill_id.startswith("user_skill_"):
+                from app.services.user_skills import build_agent_configuration
+
+                skill_config = await asyncio.to_thread(
+                    build_agent_configuration,
+                    request.skill_id,
+                    provider.config.capabilities,
+                    self.tools,
+                )
+            else:
+                if self.skills is None:
+                    raise RuntimeError("Skill Runtime is not configured.")
+                skill_config = self.skills.build_agent_configuration(
+                    request.skill_id, provider.config.capabilities
+                )
         now = datetime.now(timezone.utc)
         run = AgentRun(
             run_id=f"run_{uuid4().hex}",
@@ -128,7 +138,7 @@ class AgentRuntime:
             skill_config=skill_config,
             allowed_tools=allowed_tools,
         )
-        # Reserve capacity before yielding to concurrent creators.
+        # 在让渡给并发创建者之前保留容量。
         self._records[run.run_id] = record
         try:
             cancelled = await self._writer.submit('create', run.model_copy(deep=True), request.model_copy(deep=True), self._config_snapshot(record))

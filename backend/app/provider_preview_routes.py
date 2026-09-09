@@ -24,7 +24,7 @@ class ProbeRequest(BaseModel):
 
 @router.post("/request-probe")
 async def probe(request: ProbeRequest):
-    """Explicit user-triggered inference; no vault context, tools or media uploads."""
+    """显式用户触发的推理；没有库上下文、工具或媒体上传。"""
     import asyncio
     from contextlib import aclosing
     from app.container import container

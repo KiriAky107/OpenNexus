@@ -30,6 +30,7 @@ const selectionSnapshot = ref<string | null>(null)
 interface Command { id: string; label: string; hint: string; run: () => void | Promise<void> }
 
 const builtinCommands = computed<Command[]>(() => [
+  { id: 'community', label: t('社区目录', 'Community catalog'), hint: t('导航', 'Navigation'), run: () => router.push('/community') },
   { id: 'themes', label: t('主题管理', 'Manage themes'), hint: t('导航', 'Navigation'), run: () => router.push('/themes') },
   { id: 'tasks', label: t('任务列表', 'Tasks'), hint: t('导航', 'Navigation'), run: () => router.push('/tasks') },
   { id: 'workspace', label: t('打开工作区', 'Open workspace'), hint: t('导航', 'Navigation'), run: () => router.push('/workspace') },

@@ -15,8 +15,7 @@ const props = defineProps<{ themeId: string; name?: string; css?: string }>()
 const emit = defineEmits<{ (event: 'close'): void }>()
 const theme = computed(() => props.name ? { name: props.name } : mockCommunityThemes.find(item => item.theme_id === props.themeId))
 const previewDocument = computed(() => {
-  // Both imported and bundled CSS are previewed in a script-free isolated document.
-  // Previewing never installs a theme or changes application styles/storage.
+  // 导入和捆绑的 CSS 都可以在无脚本的独立文档中预览。预览永远不会安装主题或更改应用程序样式/存储。
   const doc = document.implementation.createHTMLDocument(theme.value?.name ?? '')
   doc.documentElement.dataset.theme = props.themeId
   const policy = doc.createElement('meta')

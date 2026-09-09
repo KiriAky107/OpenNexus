@@ -1,4 +1,4 @@
-"""Persistent media jobs and replayable events; HTTP enqueues, tools await."""
+"""持久媒体作业和可重播事件； HTTP 排队，工具等待。"""
 from __future__ import annotations
 import asyncio
 import hashlib

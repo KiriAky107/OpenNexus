@@ -1,4 +1,4 @@
-"""Bound embedding result frames so large notes do not exceed pipe line limits."""
+"""绑定嵌入结果帧，因此大笔记不会超出管道限制。"""
 import json
 
 

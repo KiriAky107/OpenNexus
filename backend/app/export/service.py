@@ -44,7 +44,7 @@ MAX_JOBS = 100
 # 输入源（note / markdown）统一大小上限，防止未保存预览或超长笔记塞爆内存/产物
 MAX_MARKDOWN_CHARS = 200_000
 # 最终导出产物大小上限，防止超大 HTML 耗尽内存/磁盘
-MAX_EXPORT_BYTES = 20 * 1024 * 1024  # 20 MB
+MAX_EXPORT_BYTES = 20 * 1024 * 1024  # 上限为 20 MB
 # 并发渲染上限：解析/渲染是 CPU 密集的同步工作，限制同时执行的任务数，
 # 防止大量任务同时占满工作线程与内存
 MAX_CONCURRENT_RENDERS = 2

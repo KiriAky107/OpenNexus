@@ -4,6 +4,7 @@ import json
 import os
 import re
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import ClassVar, Protocol
 
@@ -22,6 +23,37 @@ class CredentialStoreError(RuntimeError):
 
 class CredentialResolver(Protocol):
     def resolve(self, credential_id: str | None) -> str | None: ...
+
+
+class HostCredentialStore:
+    """仅限桌面适配器。它不能回退到 Fernet 或环境密钥。"""
+    @staticmethod
+    def _call(method, **params):
+        from app.host_bridge import active
+        if active is None:
+            raise CredentialStoreError("HOST_UNAVAILABLE")
+        try:
+            return active.call("credentials." + method, **params)
+        except RuntimeError as exc:
+            raise CredentialStoreError(str(exc)) from None
+
+    def resolve(self, credential_id):
+        return self._call("resolve", id=credential_id) if credential_id else None
+
+    def has(self, credential_id):
+        return bool(self._call("has", id=credential_id))
+
+    def put(self, credential_id, secret):
+        self._call("put", id=credential_id, secret=secret)
+
+    def delete(self, credential_id):
+        return bool(self._call("delete", id=credential_id))
+
+    def delete_many(self, credential_ids):
+        return set(self._call("delete_many", ids=credential_ids))
+
+    def move_many(self, replacements):
+        self._call("move_many", replacements=replacements)
 
 
 def validate_provider_credential_id(credential_id: str | None) -> None:
@@ -61,6 +93,33 @@ class EncryptedCredentialStore:
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
+
+    @contextmanager
+    def _operation_lock(self):
+        with self._lock:
+            key_path, _ = self._paths()
+            key_path.parent.mkdir(parents=True, exist_ok=True)
+            with (key_path.parent / ".migration.lock").open("a+b") as stream:
+                stream.seek(0)
+                try:
+                    if os.name == "nt":
+                        import msvcrt
+                        msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    raise CredentialStoreError("MIGRATION_SOURCE_BUSY") from None
+                try:
+                    if (key_path.parent / ".opennexus-owner.json").exists():
+                        raise CredentialStoreError("CREDENTIAL_OWNER_DESKTOP")
+                    yield
+                finally:
+                    stream.seek(0)
+                    if os.name == "nt":
+                        msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
     @staticmethod
     def _validate_id(credential_id: str) -> None:
@@ -155,7 +214,7 @@ class EncryptedCredentialStore:
         self._validate_id(credential_id)
         if not secret:
             raise CredentialStoreError("Credential secret cannot be empty.")
-        with self._lock:
+        with self._operation_lock():
             tokens = self._read_tokens()
             token = self._fernet().encrypt(secret.encode("utf-8")).decode("ascii")
             tokens[credential_id] = token
@@ -165,7 +224,7 @@ class EncryptedCredentialStore:
         if not credential_id:
             return None
         self._validate_id(credential_id)
-        with self._lock:
+        with self._operation_lock():
             token = self._read_tokens().get(credential_id)
             if token is None:
                 return None
@@ -176,12 +235,12 @@ class EncryptedCredentialStore:
 
     def has(self, credential_id: str) -> bool:
         self._validate_id(credential_id)
-        with self._lock:
+        with self._operation_lock():
             return credential_id in self._read_tokens()
 
     def delete(self, credential_id: str) -> bool:
         self._validate_id(credential_id)
-        with self._lock:
+        with self._operation_lock():
             tokens = self._read_tokens()
             removed = tokens.pop(credential_id, None) is not None
             if removed:
@@ -193,7 +252,7 @@ class EncryptedCredentialStore:
 
         for credential_id in credential_ids:
             self._validate_id(credential_id)
-        with self._lock:
+        with self._operation_lock():
             tokens = self._read_tokens()
             removed = {
                 credential_id
@@ -212,7 +271,7 @@ class EncryptedCredentialStore:
         for old_id, new_id in replacements.items():
             self._validate_id(old_id)
             self._validate_id(new_id)
-        with self._lock:
+        with self._operation_lock():
             tokens = self._read_tokens()
             changed = False
             for old_id, new_id in replacements.items():

@@ -2,7 +2,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
-import { getCommunityThemePreviewCss, mockCommunityThemes } from '@/services/themePackageService'
+import { getCommunityThemePreviewCss, mockCommunityThemes, REQUIRED_THEME_COLOR_TOKENS, withThemeContract } from '@/services/themePackageService'
 const root = join(process.cwd(), 'src')
 const files = Object.fromEntries(readdirSync(root, { recursive: true }).map(String).filter(path => /\.(vue|css|ts|theme)$/.test(path)).map(path => [path, readFileSync(join(root, path), 'utf8')]))
 it('resolves semantic style token references throughout the component source tree', () => {
@@ -17,10 +17,26 @@ it('resolves semantic style token references throughout the component source tre
 })
 it.each(mockCommunityThemes)('provides interaction and Markdown colors in $theme_id', theme => {
   const css = getCommunityThemePreviewCss(theme.theme_id)
-  for (const token of ['accent-primary-active', 'accent-soft-hover', 'border-focus', 'text-inverse', 'markdown-grid', 'markdown-marker', 'markdown-table-header']) {
+  for (const token of REQUIRED_THEME_COLOR_TOKENS) {
     expect(css).toContain(`--color-${token}:`)
   }
   expect(css).toContain(`color-scheme: ${theme.is_dark ? 'dark' : 'light'}`)
+})
+
+it.each([false, true])('fills an incomplete custom theme with the complete semantic contract (dark=%s)', isDark => {
+  const css = withThemeContract('minimal', isDark, '[data-theme="minimal"] { --color-accent-primary: hotpink; }')
+  for (const token of REQUIRED_THEME_COLOR_TOKENS) expect(css).toContain(`--color-${token}:`)
+  expect(css).toContain(`color-scheme: ${isDark ? 'dark' : 'light'}`)
+  expect(css.endsWith('--color-accent-primary: hotpink; }')).toBe(true)
+})
+
+it('keeps page and component styles on semantic colors', () => {
+  const rawColors: string[] = []
+  for (const [path, source] of Object.entries(files)) {
+    if (!path.endsWith('.vue') || path.endsWith('.spec.ts') || path.includes('features/themes/ThemesView.vue') || path.includes('features\\themes\\ThemesView.vue')) continue
+    for (const match of source.matchAll(/(?:#[\da-f]{3,8}|rgba?\([^)]*\))/gi)) rawColors.push(`${path}: ${match[0]}`)
+  }
+  expect(rawColors).toEqual([])
 })
 
 const calloutThemes = ['light', 'dark', 'sepia', ...mockCommunityThemes.map(theme => theme.theme_id)]
