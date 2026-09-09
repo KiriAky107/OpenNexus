@@ -230,7 +230,7 @@ impl Authority {
         mac.update(&generation.to_be_bytes());
         mac.update(&encoded);
         mac.verify_slice(&permit.mac)
-            .map_err(|_| HostError::new("EXTENSION_PERMIT_MISMATCH"))?;
+            .map_err(|_| HostError::new("PERMISSION_CHANGED"))?;
         if generation != self.generation.load(Ordering::SeqCst) {
             return Err(HostError::new("EXTENSION_PERMIT_REVOKED"));
         }
@@ -311,15 +311,28 @@ mod tests {
             }
             let changed: Claims = serde_json::from_value(changed).unwrap();
             changed.encoded(100).unwrap();
-            assert!(
-                authority.verify(&token, &changed, 100).is_err(),
-                "unbound field {field}"
+            assert_eq!(
+                authority.verify(&token, &changed, 100).unwrap_err().code,
+                "PERMISSION_CHANGED",
+                "unbound field {field}",
             );
         }
-        assert!(authority.verify(&token, &original, 1000).is_err());
-        assert!(Authority::default().verify(&token, &original, 100).is_err());
+        assert_eq!(
+            authority.verify(&token, &original, 1000).unwrap_err().code,
+            "EXTENSION_PERMIT_EXPIRED"
+        );
+        assert_eq!(
+            Authority::default()
+                .verify(&token, &original, 100)
+                .unwrap_err()
+                .code,
+            "PERMISSION_CHANGED"
+        );
         authority.invalidate_all();
-        assert!(authority.verify(&token, &original, 100).is_err());
+        assert_eq!(
+            authority.verify(&token, &original, 100).unwrap_err().code,
+            "EXTENSION_PERMIT_REVOKED"
+        );
     }
     #[test]
     fn invalid_paths_environment_and_oversize_decisions_are_rejected() {

@@ -343,7 +343,7 @@ mod tests {
                 .err()
                 .unwrap()
                 .code,
-            "EXTENSION_PERMIT_MISMATCH"
+            "PERMISSION_CHANGED"
         );
         for field in ["kind", "source", "namespace", "package_id"] {
             let mut changed = claims.clone();
