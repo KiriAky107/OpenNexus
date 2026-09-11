@@ -708,6 +708,84 @@ mod tests {
     fn real_container_cannot_reach_ipv4_or_ipv6_loopback_listeners() {
         real_native_protocol_probes(false, false);
     }
+    #[test]
+    fn real_malicious_binary_cannot_read_or_write_four_ungranted_file_scopes() {
+        use sha2::{Digest, Sha256};
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::*;
+
+        let profile = Profile::create().unwrap();
+        let package = tempfile::tempdir().unwrap();
+        let executable = package.path().join("file-probe.exe");
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/sandbox_network_probe.rs");
+        let compile = std::process::Command::new("rustc")
+            .arg("--edition=2021")
+            .arg(&fixture)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            compile.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+        let open = |path: &std::path::Path| {
+            std::fs::OpenOptions::new()
+                .access_mode(READ_CONTROL | WRITE_DAC)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(path)
+                .unwrap()
+        };
+        let package_root = open(package.path());
+        let entry = open(&executable);
+        profile.grant_package_read_execute(&package_root).unwrap();
+        profile.grant_package_read_execute(&entry).unwrap();
+
+        let bait_root = tempfile::tempdir().unwrap();
+        let scopes = ["vault", "home", "credentials", "other-package"];
+        let bait: Vec<_> = scopes
+            .iter()
+            .map(|scope| {
+                let directory = bait_root.path().join(scope);
+                std::fs::create_dir(&directory).unwrap();
+                let path = directory.join("bait.txt");
+                std::fs::write(&path, format!("OpenNexus C-01 {scope} bait")).unwrap();
+                path
+            })
+            .collect();
+        let before: Vec<_> = bait
+            .iter()
+            .map(|path| Sha256::digest(std::fs::read(path).unwrap()))
+            .collect();
+        let folder = profile.folder().unwrap();
+        let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+        let mut arguments = vec!["file_denied_100".to_owned()];
+        arguments.extend(bait.iter().map(|path| path.to_string_lossy().into_owned()));
+        let data = crate::extension_launch_data::LaunchData::new(
+            &executable,
+            &arguments,
+            &system,
+            &folder,
+            &folder.join("Temp"),
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            checked_executable_data(&profile, &executable, None, Some(data)),
+            Some(0)
+        );
+        let after: Vec<_> = bait
+            .iter()
+            .map(|path| Sha256::digest(std::fs::read(path).unwrap()))
+            .collect();
+        assert_eq!(after, before);
+        drop(entry);
+        drop(package_root);
+        profile.remove().unwrap();
+    }
     #[cfg(feature = "desktop")]
     #[test]
     #[ignore = "real MCP tools/call 60-second deadline acceptance; run explicitly"]

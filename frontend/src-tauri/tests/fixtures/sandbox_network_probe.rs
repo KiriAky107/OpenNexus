@@ -3,6 +3,18 @@ use std::net::{SocketAddr, TcpStream, UdpSocket};
 use std::time::Duration;
 fn main() {
     let args: Vec<_> = std::env::args().collect();
+    if args.get(1).is_some_and(|value| value == "file_denied_100") {
+        for path in &args[2..] {
+            for _ in 0..100 {
+                if std::fs::File::open(path).is_ok()
+                    || std::fs::OpenOptions::new().write(true).open(path).is_ok()
+                {
+                    std::process::exit(88);
+                }
+            }
+        }
+        std::process::exit(0);
+    }
     if args.get(1).is_some_and(|s| s == "cpu_burn") {
         std::thread::scope(|scope| {
             for _ in 0..8 {
