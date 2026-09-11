@@ -32,6 +32,21 @@ CASE_SUITES = {
 ALL_CASES = tuple(case for cases in CASE_SUITES.values() for case in cases)
 # 只有在此注册了仓库自有驱动的案例才能执行；组件或单元测试命令不计入生产验收。
 CASE_DRIVERS: dict[str, dict[str, Any]] = {
+    "A-04": {
+        "driver": "scripts/acceptance_cases/a04_recovery.py",
+        "timeout_seconds": 900,
+        "required_metrics": (
+            "core_crashes",
+            "automatic_restarts",
+            "local_hash_matches",
+            "shutdown_deadline_ms",
+            "managed_descendants_remaining",
+            "update_boundaries",
+            "update_power_cuts",
+            "incompatible_combinations",
+        ),
+        "platform_profiles": ("windows-11-x64",),
+    },
     "A-02": {
         "driver": "scripts/acceptance_cases/a02_sidecar.py",
         "timeout_seconds": 900,
