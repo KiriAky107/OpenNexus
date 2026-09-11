@@ -1,0 +1,113 @@
+name: Windows RC
+
+on:
+  workflow_dispatch:
+
+jobs:
+  signed-rc:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+
+      - name: 准备锁定依赖
+        shell: pwsh
+        run: |
+          python -m pip install uv==0.9.24
+          uv sync --frozen --group packaging --directory backend
+          corepack enable
+          corepack prepare pnpm@10.28.0 --activate
+          pnpm --dir frontend install --frozen-lockfile
+
+      - name: 导入受控签名材料
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          CORE_SIGNING_KEY_PEM_BASE64: ${{ secrets.CORE_SIGNING_KEY_PEM_BASE64 }}
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE_BASE64 -or -not $env:WINDOWS_CERTIFICATE_PASSWORD -or -not $env:CORE_SIGNING_KEY_PEM_BASE64) {
+            throw '缺少 Windows RC 签名秘密'
+          }
+          $secretRoot = Join-Path $env:RUNNER_TEMP 'opennexus-signing'
+          New-Item -ItemType Directory -Force -Path $secretRoot | Out-Null
+          $pfx = Join-Path $secretRoot 'codesign.pfx'
+          $coreKey = Join-Path $secretRoot 'core-ed25519.pem'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          [IO.File]::WriteAllBytes($coreKey, [Convert]::FromBase64String($env:CORE_SIGNING_KEY_PEM_BASE64))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          if (-not $certificate.HasPrivateKey) { throw '代码签名证书没有私钥' }
+          "OPENNEXUS_CORE_SIGNING_KEY_FILE=$coreKey" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "OPENNEXUS_WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          Remove-Item -LiteralPath $pfx -Force
+
+      - name: 构建签名 Core
+        shell: pwsh
+        run: uv run --directory backend --group packaging python ../scripts/build-core.py --release
+
+      - name: 生成签名打包配置
+        shell: pwsh
+        run: |
+          $config = @{
+            bundle = @{
+              active = $true
+              targets = @('nsis')
+              resources = @{
+                '../../.build/sidecar/dist/opennexus-core/' = 'core/'
+              }
+              windows = @{
+                certificateThumbprint = $env:OPENNEXUS_WINDOWS_CERTIFICATE_THUMBPRINT
+                digestAlgorithm = 'sha256'
+                timestampUrl = 'http://timestamp.digicert.com'
+              }
+            }
+          } | ConvertTo-Json -Depth 5
+          $path = Join-Path $env:GITHUB_WORKSPACE 'frontend\src-tauri\tauri.rc.conf.json'
+          [IO.File]::WriteAllText($path, $config, [Text.UTF8Encoding]::new($false))
+          "OPENNEXUS_RC_CONFIG=$path" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: 构建 MSVC NSIS 安装包
+        shell: pwsh
+        run: pnpm --dir frontend exec tauri build --target x86_64-pc-windows-msvc --features desktop --config src-tauri/tauri.rc.conf.json
+
+      - name: 验证 RC 签名与大小
+        shell: pwsh
+        run: ./scripts/verify-windows-rc.ps1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenNexus-windows-x64-rc
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            frontend/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            .build/sidecar/manifest.json
+            .build/sidecar/manifest.sig
+            .build/sidecar/public-key.hex
+            .build/windows-rc-sha256.json
+
+      - name: 清理签名材料
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:OPENNEXUS_WINDOWS_CERTIFICATE_THUMBPRINT) {
+            Remove-Item -LiteralPath "Cert:\CurrentUser\My\$env:OPENNEXUS_WINDOWS_CERTIFICATE_THUMBPRINT" -Force -ErrorAction SilentlyContinue
+          }
+          Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'opennexus-signing') -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'frontend\src-tauri\tauri.rc.conf.json') -Force -ErrorAction SilentlyContinue
