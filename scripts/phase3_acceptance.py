@@ -151,6 +151,22 @@ CASE_DRIVERS: dict[str, dict[str, Any]] = {
         ),
         "platform_profiles": ("windows-11-x64",),
     },
+    "D-04": {
+        "driver": "scripts/acceptance_cases/d04_extension_lifecycle.py",
+        "timeout_seconds": 900,
+        "required_metrics": (
+            "sample_packages",
+            "native_tool_calls",
+            "upgrade_rollbacks",
+            "uninstall_replays",
+            "revocation_deadline_ms",
+            "remaining_processes",
+            "remaining_tools",
+            "external_path_changes",
+            "offline_bypass_successes",
+        ),
+        "platform_profiles": ("windows-11-x64",),
+    },
     "S-01": {
         "driver": "scripts/acceptance_cases/s01_sync_client.py",
         "timeout_seconds": 900,

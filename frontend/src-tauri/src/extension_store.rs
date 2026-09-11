@@ -1573,6 +1573,80 @@ mod tests {
             0
         );
     }
+    #[tokio::test]
+    async fn offline_new_install_is_rejected_before_creating_a_transaction() {
+        use crate::extension_transaction::{Change, Target};
+        let temp = tempfile::tempdir().unwrap();
+        let (release, archive, key) = fixture();
+        let source = "https://127.0.0.1:9/";
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        let staged = store
+            .stage(Stage {
+                operation_id: &Uuid::new_v4().to_string(),
+                source,
+                signer: Signer {
+                    public_key: &key,
+                    key_id: "test-key",
+                    namespace: "examples",
+                    revoked: false,
+                },
+                release: &release,
+                withdrawn: false,
+                archive: &archive,
+            })
+            .unwrap();
+        let setting = TrustSetting {
+            source: source.into(),
+            source_id: "offline-catalog".into(),
+            namespace: "examples".into(),
+            key_id: "test-key".into(),
+            public_key: key,
+            enabled: true,
+        };
+        store
+            .confirm_trust(&setting, None, &setting.fingerprint().unwrap())
+            .unwrap();
+        let prepared = store
+            .prepare(
+                &staged.package_key,
+                Signer {
+                    public_key: &key,
+                    key_id: "test-key",
+                    namespace: "examples",
+                    revoked: false,
+                },
+                false,
+            )
+            .unwrap();
+        let vault = Uuid::new_v4().to_string();
+        let slot = hash(
+            &serde_json::to_vec(&(&vault, source, &release.namespace, &release.package_id))
+                .unwrap(),
+        );
+        let changes = [Change {
+            target: Target {
+                slot,
+                package_key: staged.package_key,
+                directory: prepared.directory,
+                tree_sha256: prepared.tree_sha256,
+                configuration: serde_json::json!({}),
+            },
+            expected_revision: None,
+        }];
+        let error = store
+            .switch_online(&Uuid::new_v4().to_string(), &vault, &changes)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "EXTENSION_TRUST_UNAVAILABLE");
+        assert_eq!(
+            store
+                .db
+                .query_row("SELECT COUNT(*) FROM extension_transactions", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
     #[test]
     fn confirmed_trust_survives_reopen_and_rotation_requires_matching_review() {
         let temp = tempfile::tempdir().unwrap();
