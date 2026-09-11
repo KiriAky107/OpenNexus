@@ -288,10 +288,10 @@ impl ExtensionStore {
         let mut db = Connection::open(database)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 6 {
+        if version > 7 {
             return Err(HostError::new("EXTENSION_SCHEMA_INCOMPATIBLE"));
         }
-        if (1..6).contains(&version) {
+        if (1..7).contains(&version) {
             let backup = root.join(format!(
                 "extensions.schema{version}.{}.sqlite3",
                 Uuid::new_v4()
@@ -308,8 +308,9 @@ impl ExtensionStore {
             CREATE TABLE IF NOT EXISTS extension_trust(source TEXT NOT NULL,namespace TEXT NOT NULL,key_id TEXT NOT NULL,setting TEXT NOT NULL,revision TEXT NOT NULL,PRIMARY KEY(source,namespace,key_id));
             CREATE TABLE IF NOT EXISTS extension_blocks(identity TEXT PRIMARY KEY,reason TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS extension_confirmations(operation_id TEXT PRIMARY KEY,request_hash TEXT NOT NULL,review_hash TEXT NOT NULL,changes TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS extension_uninstalls(id TEXT PRIMARY KEY,slot TEXT NOT NULL,expected_revision TEXT NOT NULL,state TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS legacy_installations(kind TEXT NOT NULL,package_id TEXT NOT NULL,source_path TEXT NOT NULL,expected_digest TEXT NOT NULL,observed_digest TEXT,ownership TEXT NOT NULL,state TEXT NOT NULL,enabled INTEGER NOT NULL CHECK(enabled=0),permissions TEXT NOT NULL CHECK(permissions='[]'),source_db_digest TEXT NOT NULL,PRIMARY KEY(kind,package_id));
-            PRAGMA user_version=6; COMMIT;")?;
+            PRAGMA user_version=7; COMMIT;")?;
         crate::extension_transaction::recover(&mut db)?;
         Ok(Self {
             root,
@@ -848,6 +849,22 @@ impl ExtensionStore {
         slot: &str,
     ) -> Result<Option<crate::extension_transaction::Active>> {
         crate::extension_transaction::active(&self.db, slot)
+    }
+
+    pub fn rollback_changes(
+        &self,
+        operation: &str,
+    ) -> Result<Vec<crate::extension_transaction::Change>> {
+        crate::extension_transaction::rollback_changes(&self.db, operation)
+    }
+
+    pub fn uninstall_active(
+        &mut self,
+        operation: &str,
+        slot: &str,
+        expected_revision: &str,
+    ) -> Result<crate::extension_transaction::Receipt> {
+        crate::extension_transaction::uninstall(&mut self.db, operation, slot, expected_revision)
     }
     /// 准备经过验证的暂存包。调用者提供当前的签名者/撤销策略；持久准备不会在重放时绕过该策略。
     pub fn prepare(
