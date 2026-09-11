@@ -676,6 +676,7 @@ mod tests {
             "EXTENSION_CALL_REVIEW_UNKNOWN"
         );
         // 空闲实例也必须在许可撤销后自行退出并清空工具注册。
+        let revoked_at = Instant::now();
         authority.revoke();
         wait_for(|| {
             registry.reap();
@@ -688,6 +689,7 @@ mod tests {
             endpoint.snapshot().error
         );
         assert_eq!(endpoint.snapshot().tool_count, 0);
+        assert!(revoked_at.elapsed() < Duration::from_secs(5));
         assert_eq!(
             endpoint.snapshot().error.as_deref(),
             Some("EXTENSION_PERMIT_REVOKED")
