@@ -100,6 +100,15 @@ pub struct InstallPreview {
     pub dependencies: crate::extension_dependencies::Plan,
     pub changes: Vec<crate::extension_transaction::Change>,
 }
+pub struct RuntimePackage {
+    pub package: cap_std::fs::Dir,
+    pub inventory: crate::extension_package::Inventory,
+    pub release: Release,
+    pub manifest: serde_json::Value,
+    pub active: crate::extension_transaction::Active,
+    pub source: String,
+    pub signer_sha256: String,
+}
 pub struct ExtensionStore {
     root: PathBuf,
     db: Connection,
@@ -849,6 +858,91 @@ impl ExtensionStore {
         slot: &str,
     ) -> Result<Option<crate::extension_transaction::Active>> {
         crate::extension_transaction::active(&self.db, slot)
+    }
+
+    /// 重新验证活动指针、签名、信任、配置和展开树，并返回只能由 Host 消费的运行材料。
+    pub fn runtime_package(
+        &self,
+        slot: &str,
+        vault_id: &str,
+        pending_operation: Option<&str>,
+    ) -> Result<RuntimePackage> {
+        use cap_fs_ext::DirExt;
+        let vault = Uuid::parse_str(vault_id)
+            .map_err(|_| HostError::new("VAULT_INVALID"))?
+            .to_string();
+        if vault != vault_id {
+            return Err(HostError::new("VAULT_INVALID"));
+        }
+        let active = self
+            .active_installation(slot)?
+            .filter(|item| item.pending_operation.as_deref() == pending_operation)
+            .ok_or_else(|| HostError::new("EXTENSION_NOT_ACTIVE"))?;
+        let (source, release_json, signer, manifest_json, directory, tree): (
+            String,
+            String,
+            Vec<u8>,
+            String,
+            String,
+            String,
+        ) = self.db.query_row(
+            "SELECT v.source,v.release,v.signer,v.manifest,p.directory,p.tree_sha256 FROM versions v JOIN prepared_packages p ON p.package_key=v.package_key WHERE v.package_key=?1",
+            [&active.target.package_key],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        )?;
+        let release: Release = serde_json::from_str(&release_json)
+            .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+        let manifest: serde_json::Value = serde_json::from_str(&manifest_json)
+            .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+        let public: [u8; 32] = signer
+            .try_into()
+            .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+        let expected_slot = hash(
+            &serde_json::to_vec(&(&vault, &source, &release.namespace, &release.package_id))
+                .unwrap(),
+        );
+        if slot != expected_slot
+            || active.target.directory != directory
+            || active.target.tree_sha256 != tree
+        {
+            return Err(HostError::new("EXTENSION_INSTALL_CONFLICT"));
+        }
+        let trusted = self
+            .trust_setting(&source, &release.namespace, &release.key_id)?
+            .ok_or_else(|| HostError::new("EXTENSION_SOURCE_UNTRUSTED"))?;
+        if !trusted.enabled || trusted.public_key != public {
+            return Err(HostError::new("EXTENSION_SOURCE_UNTRUSTED"));
+        }
+        self.check_not_revoked(&source, &release, &public)?;
+        let archive = self.archive(&active.target.package_key)?;
+        let (inventory, verified_manifest) = release.verify_package(
+            &public,
+            &release.key_id,
+            &release.namespace,
+            false,
+            false,
+            &archive,
+        )?;
+        if verified_manifest != manifest {
+            return Err(HostError::new("EXTENSION_STORE_CORRUPT"));
+        }
+        crate::extension_config::validate(&manifest, &active.target.configuration)?;
+        let root = cap_std::fs::Dir::open_ambient_dir(&self.root, cap_std::ambient_authority())?;
+        let package = root
+            .open_dir_nofollow("prepared")?
+            .open_dir_nofollow(&directory)?;
+        if crate::extension_unpack::verify_tree(&package, &inventory)? != tree {
+            return Err(HostError::new("EXTENSION_STORE_CORRUPT"));
+        }
+        Ok(RuntimePackage {
+            package,
+            inventory,
+            release,
+            manifest,
+            active,
+            source,
+            signer_sha256: hash(&public),
+        })
     }
 
     pub fn rollback_changes(
@@ -1620,6 +1714,20 @@ mod tests {
         let operation = Uuid::new_v4().to_string();
         store.switch_prepared(&operation, &vault, &changes).unwrap();
         store.finish_installation(&operation, true).unwrap();
+        let setting = TrustSetting {
+            source: "https://catalog.example/".into(),
+            source_id: "catalog".into(),
+            namespace: release.namespace.clone(),
+            key_id: release.key_id.clone(),
+            public_key: key,
+            enabled: true,
+        };
+        store
+            .confirm_trust(&setting, None, &setting.fingerprint().unwrap())
+            .unwrap();
+        let runtime = store.runtime_package(&slot, &vault, None).unwrap();
+        assert_eq!(runtime.active.target, changes[0].target);
+        assert_eq!(runtime.release.package_id, release.package_id);
         drop(store);
         let mut store = ExtensionStore::open(temp.path()).unwrap();
         assert_eq!(

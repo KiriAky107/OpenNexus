@@ -7,7 +7,7 @@
 | Plugin | markdown-workbench | 标题、待办和格式检查；命令面板检查选中 Markdown |
 | Skill | note-reviewer | 搜索并读取指定笔记，调用 Plugin，返回带行号的只读检查报告 |
 
-在仓库根目录执行 `python backend/extensions/community/build_packages.py`，产物位于 `dist/`。构建采用明确文件列表、固定 ZIP 时间戳和 UTF-8/LF 文本，不打包缓存、密钥或本地环境。`dist/index.json` 提供类型、ID、版本、文件、大小、SHA-256 和依赖，可作为后续社区索引的数据样例；当前前端没有接入该社区索引。
+在仓库根目录执行 `python backend/extensions/community/build_packages.py`，产物位于 `dist/`。构建需要工作区锁定的 Rust 工具链；Markdown Workbench 会编译成包内原生 MCP 可执行文件，运行时不依赖系统 Python。构建采用明确文件列表、固定 ZIP 时间戳和确定性链接参数，不打包缓存、密钥或本地环境。`dist/index.json` 提供类型、ID、版本、文件、大小、SHA-256 和依赖，可作为后续社区索引的数据样例；当前前端没有接入该社区索引。
 
 先导入 Plugin ZIP 并启用，再导入 Skill ZIP 并启用。两种扩展都沿用现有 ZIP 安装入口；重启 AI Core 后仍需按当前运行时机制重新注册包。
 

@@ -30,9 +30,11 @@ struct Host {
     extensions: Arc<Mutex<Option<notesagent_host::extension_store::ExtensionStore>>>,
     extension_reviews: extension_commands::Reviews,
     extension_requests: Requests,
-    extension_authority: notesagent_host::extension_permit::Authority,
+    extension_authority: Arc<notesagent_host::extension_permit::Authority>,
     #[cfg(windows)]
     extension_instances: Mutex<notesagent_host::extension_instance::Registry>,
+    #[cfg(windows)]
+    extension_endpoints: Mutex<HashMap<String, notesagent_host::extension_instance::Endpoint>>,
     credential_signal: std::sync::OnceLock<Arc<std::sync::atomic::AtomicU64>>,
     sync: Arc<sync_commands::Runtime>,
     workspace: Arc<Mutex<Option<Workspace>>>,
@@ -51,6 +53,10 @@ impl Host {
         if let Ok(mut instances) = self.extension_instances.lock() {
             instances.stop_all_and_join();
         }
+        #[cfg(windows)]
+        if let Ok(mut endpoints) = self.extension_endpoints.lock() {
+            endpoints.clear();
+        }
         self.sync.cancel();
         *active = next;
     }
@@ -60,6 +66,10 @@ impl Host {
         #[cfg(windows)]
         if let Ok(mut instances) = self.extension_instances.lock() {
             instances.stop_all_and_join();
+        }
+        #[cfg(windows)]
+        if let Ok(mut endpoints) = self.extension_endpoints.lock() {
+            endpoints.clear();
         }
         if let Some(signal) = self.credential_signal.get() {
             signal.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1077,6 +1087,11 @@ fn main() {
             extension_install_confirm,
             extension_install_rollback,
             extension_uninstall,
+            extension_enable,
+            extension_instance_status,
+            extension_disable,
+            extension_call_review,
+            extension_call_confirm,
             extension_stage,
             extension_stage_prepare,
             extension_stage_cancel,

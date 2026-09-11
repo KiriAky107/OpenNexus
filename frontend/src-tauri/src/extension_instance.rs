@@ -42,7 +42,7 @@ pub struct LaunchSpec {
     pub claims: Claims,
     pub permit: Permit,
     pub authority: Arc<Authority>,
-    pub credentials: Arc<Mutex<CredentialBroker>>,
+    pub credentials: Arc<Mutex<Option<CredentialBroker>>>,
     pub vault_id: String,
     pub policy_version: String,
     pub system_root: PathBuf,
@@ -434,12 +434,15 @@ fn run_with_access(
             .credentials
             .lock()
             .map_err(|_| HostError::new("CREDENTIALS_LOCKED"))?;
+        let credentials = credentials
+            .as_ref()
+            .ok_or_else(|| HostError::new("CREDENTIALS_LOCKED"))?;
         context.prepare(
             &spec.authority,
             &spec.permit,
             &spec.claims,
             &entry,
-            &credentials,
+            credentials,
             now_ms()?,
         )?
     };
@@ -448,6 +451,9 @@ fn run_with_access(
             .credentials
             .lock()
             .map_err(|_| HostError::new("CREDENTIALS_LOCKED"))?;
+        let credentials = credentials
+            .as_ref()
+            .ok_or_else(|| HostError::new("CREDENTIALS_LOCKED"))?;
         let mut lease = spec
             .authority
             .lease(&spec.permit, &spec.claims, now_ms()?)?;
@@ -581,11 +587,13 @@ mod tests {
         };
         let tree = crate::extension_unpack::verify_tree(&dir, &inventory()).unwrap();
         let authority = Arc::new(Authority::default());
-        let credentials = Arc::new(Mutex::new(CredentialBroker::new(
+        let credentials = Arc::new(Mutex::new(Some(CredentialBroker::new(
             temp.path().join("credentials.v1"),
-        )));
+        ))));
         credentials
             .lock()
+            .unwrap()
+            .as_mut()
             .unwrap()
             .unlock(Zeroizing::new(b"instance fixture password".to_vec()))
             .unwrap();
@@ -897,7 +905,7 @@ mod tests {
         let locked = unsafe { registry.start(make("mcp")) }.unwrap();
         wait_for(|| locked.snapshot().status != Status::Starting);
         assert_eq!(locked.snapshot().status, Status::Ready);
-        credentials.lock().unwrap().lock();
+        credentials.lock().unwrap().as_mut().unwrap().lock();
         wait_for(|| {
             registry.reap();
             registry.entries.is_empty()

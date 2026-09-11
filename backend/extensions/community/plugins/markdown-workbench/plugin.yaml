@@ -9,7 +9,7 @@ contributes:
 backend:
   type: mcp
   transport: stdio
-  command: python
-  args: [-u, server.py]
+  command: ./markdown-workbench.exe
+  args: []
   startup_timeout_seconds: 10
   tool_timeout_seconds: 10
