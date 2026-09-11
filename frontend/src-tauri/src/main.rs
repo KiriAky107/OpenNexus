@@ -114,7 +114,7 @@ fn host_capabilities(host: State<'_, Host>) -> serde_json::Value {
         .ok()
         .and_then(|mut core| core.as_mut().map(|c| c.available()))
         .unwrap_or(false);
-    serde_json::json!({"protocol":1,"workspace":true,"core":ready,"sync":true,"credentials":true,"extensions":false,"release":"preview","product":"OpenNexus"})
+    serde_json::json!({"protocol":1,"workspace":true,"core":ready,"sync":true,"credentials":true,"extensions":cfg!(windows),"release":"preview","product":"OpenNexus"})
 }
 
 #[derive(serde::Serialize)]

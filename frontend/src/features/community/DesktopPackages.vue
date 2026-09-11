@@ -6,9 +6,10 @@ import AppDialog from '@/components/common/AppDialog.vue'
 const props = defineProps<{ refreshKey: number }>()
 const workspace = useWorkspaceStore()
 interface Package { package_key: string; source: string; namespace: string; package_id: string; version: string; state: string }
-interface Preview { fingerprint: string; dependencies: { packages: Array<{ package_key: string; namespace: string; package_id: string; version: string; permissions: string[] }> }; changes: Array<{ target: { configuration: unknown }; expected_revision: string | null }> }
+interface Preview { fingerprint: string; dependencies: { packages: Array<{ package_key: string; namespace: string; package_id: string; kind: string; version: string; permissions: string[] }> }; changes: Array<{ target: { slot: string; package_key: string; configuration: unknown }; expected_revision: string | null }> }
 const packages = ref<Package[]>([]), page = ref(0), busy = ref(false), error = ref('')
 const selected = ref<Package | null>(null), configuration = ref('{}'), preview = ref<Preview | null>(null)
+const completed = ref('')
 let generation = 0
 const errors: Record<string, string> = {
   VAULT_CHANGED: '笔记库已切换，请重新预览。', VAULT_NOT_OPEN: '请先打开笔记库。',
@@ -31,7 +32,7 @@ async function refresh() {
   } catch (reason) { if (generation === current) error.value = message(reason) }
   finally { if (generation === current) busy.value = false }
 }
-function choose(item: Package) { selected.value = item; configuration.value = '{}'; preview.value = null; error.value = '' }
+function choose(item: Package) { selected.value = item; configuration.value = '{}'; preview.value = null; error.value = ''; completed.value = '' }
 async function inspect() {
   if (!selected.value || !workspace.vaultId) return
   const vaultId = workspace.vaultId, rootKey = selected.value.package_key, current = ++generation
@@ -41,6 +42,31 @@ async function inspect() {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('配置必须是 JSON 对象。')
     const result = await hostInvoke<Preview>('extension_install_preview', { request: { root_key: rootKey, vault_id: vaultId, configurations: { [rootKey]: parsed } } })
     if (generation === current && workspace.vaultId === vaultId && selected.value?.package_key === rootKey) preview.value = result
+  } catch (reason) { if (generation === current) error.value = message(reason) }
+  finally { if (generation === current) busy.value = false }
+}
+async function install() {
+  if (!selected.value || !preview.value || !workspace.vaultId) return
+  const vaultId = workspace.vaultId, rootKey = selected.value.package_key, reviewed = preview.value
+  const current = ++generation; busy.value = true; error.value = ''; completed.value = ''
+  try {
+    const parsed = JSON.parse(configuration.value)
+    const requestId = await hostInvoke<string>('extension_stage_prepare')
+    const operationId = crypto.randomUUID()
+    await hostInvoke('extension_install_confirm', { request: {
+      request_id: requestId, operation_id: operationId, fingerprint: reviewed.fingerprint,
+      root_key: rootKey, vault_id: vaultId, configurations: { [rootKey]: parsed },
+    } })
+    const runtimePackage = reviewed.dependencies.packages.find(item => item.kind === 'plugin' || item.kind === 'mcp')
+    if (!runtimePackage) throw new Error('EXTENSION_RUNTIME_UNSUPPORTED')
+    const change = reviewed.changes.find(item => item.target.package_key === runtimePackage.package_key)
+    if (!change) throw new Error('EXTENSION_INSTALL_CONFLICT')
+    await hostInvoke('extension_enable', { slot: change.target.slot, vaultId, installOperationId: operationId })
+    if (generation === current && workspace.vaultId === vaultId) {
+      completed.value = '安装和运行健康检查已完成。'
+      preview.value = null
+      await refresh()
+    }
   } catch (reason) { if (generation === current) error.value = message(reason) }
   finally { if (generation === current) busy.value = false }
 }
@@ -85,6 +111,7 @@ onBeforeUnmount(() => ++generation)
       <p>未声明配置的包请保留空对象，不要填写密码或令牌。</p>
       <button class="btn" :disabled="busy || !workspace.vaultId" @click="inspect">检查依赖、权限与配置</button>
       <p v-if="error" role="alert">{{ error }}</p>
+      <p v-if="completed" class="notice-banner" role="status">{{ completed }}</p>
       <div v-if="preview">
         <h3>按安装顺序排列的包</h3>
         <ul><li v-for="item in preview.dependencies.packages" :key="item.package_key">
@@ -92,7 +119,8 @@ onBeforeUnmount(() => ++generation)
           <p>请求权限：{{ item.permissions.join('、') || '无' }}</p>
         </li></ul>
         <details><summary>检查配置</summary><pre>{{ JSON.stringify(preview.changes.map(change => change.target.configuration), null, 2) }}</pre></details>
-        <p>依赖和配置检查完成。安装执行暂未开放，此预览不会启用包。</p>
+        <p>确认后将按以上摘要安装，并只在原生沙箱运行健康后提交活动版本。</p>
+        <button class="btn primary" :disabled="busy" @click="install">确认安装并启用</button>
       </div>
     </AppDialog>
   </section>
