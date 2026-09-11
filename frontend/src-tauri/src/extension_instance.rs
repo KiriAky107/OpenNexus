@@ -372,13 +372,23 @@ impl Registry {
             entry.endpoint.stop();
         }
     }
-}
-impl Drop for Registry {
-    fn drop(&mut self) {
+
+    /// 请求停止并等待所有实例释放工具、进程、容器和包 ACL。
+    pub fn stop_all_and_join(&mut self) {
         self.stop_all();
         for (_, entry) in std::mem::take(&mut self.entries) {
             let _ = entry.worker.join();
         }
+    }
+
+    pub fn active_count(&mut self) -> usize {
+        self.reap();
+        self.entries.len()
+    }
+}
+impl Drop for Registry {
+    fn drop(&mut self) {
+        self.stop_all_and_join();
     }
 }
 fn run(spec: LaunchSpec, control: &Control, receiver: Receiver<Command>) -> Result<()> {
@@ -470,6 +480,9 @@ fn run_with_access(
         .status
         .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire);
     while !control.stop.load(Ordering::Acquire) {
+        // 撤销、锁定和工作区切换必须在空闲实例上也能生效，不能等待下一次工具调用。
+        spec.authority
+            .verify(&spec.permit, &spec.claims, now_ms()?)?;
         session.drain_pending()?;
         if session.take_tools_changed() {
             control
@@ -525,6 +538,7 @@ mod tests {
     fn native_worker_routes_reviews_cancels_calls_and_reaps_generations() {
         native_worker_lifecycle(false);
     }
+
     #[test]
     #[ignore = "real background MCP CPU/memory/process exhaustion and restart; run explicitly"]
     fn native_resource_failures_are_reaped_and_replacements_can_start() {
@@ -653,16 +667,22 @@ mod tests {
                 .code,
             "EXTENSION_CALL_REVIEW_UNKNOWN"
         );
-        endpoint.stop();
+        // 空闲实例也必须在许可撤销后自行退出并清空工具注册。
+        authority.revoke();
         wait_for(|| {
             registry.reap();
             registry.entries.is_empty()
         });
         assert_eq!(
             endpoint.snapshot().status,
-            Status::Stopped,
+            Status::Failed,
             "{:?}",
             endpoint.snapshot().error
+        );
+        assert_eq!(endpoint.snapshot().tool_count, 0);
+        assert_eq!(
+            endpoint.snapshot().error.as_deref(),
+            Some("EXTENSION_PERMIT_REVOKED")
         );
         assert!(endpoint.review("echo".into(), json!({})).is_err());
         assert_eq!(

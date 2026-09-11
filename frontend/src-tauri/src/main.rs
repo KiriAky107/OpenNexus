@@ -31,6 +31,8 @@ struct Host {
     extension_reviews: extension_commands::Reviews,
     extension_requests: Requests,
     extension_authority: notesagent_host::extension_permit::Authority,
+    #[cfg(windows)]
+    extension_instances: Mutex<notesagent_host::extension_instance::Registry>,
     credential_signal: std::sync::OnceLock<Arc<std::sync::atomic::AtomicU64>>,
     sync: Arc<sync_commands::Runtime>,
     workspace: Arc<Mutex<Option<Workspace>>>,
@@ -45,12 +47,20 @@ struct Host {
 impl Host {
     fn replace_workspace(&self, active: &mut Option<Workspace>, next: Option<Workspace>) {
         self.extension_authority.revoke();
+        #[cfg(windows)]
+        if let Ok(mut instances) = self.extension_instances.lock() {
+            instances.stop_all_and_join();
+        }
         self.sync.cancel();
         *active = next;
     }
     fn lock_credentials(&self) -> Result<(), String> {
         // 这些不等待进行中解锁/KDF 或凭证操作。
         self.extension_authority.revoke();
+        #[cfg(windows)]
+        if let Ok(mut instances) = self.extension_instances.lock() {
+            instances.stop_all_and_join();
+        }
         if let Some(signal) = self.credential_signal.get() {
             signal.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
@@ -1064,6 +1074,9 @@ fn main() {
             extension_trust_confirm,
             extension_trust_confirm_group,
             extension_install_preview,
+            extension_install_confirm,
+            extension_install_rollback,
+            extension_uninstall,
             extension_stage,
             extension_stage_prepare,
             extension_stage_cancel,
