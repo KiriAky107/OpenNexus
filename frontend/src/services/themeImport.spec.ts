@@ -5,6 +5,9 @@ import { decodeThemePackage, fetchThemePackage, inspectThemePackage, installThem
 import paper from '@/assets/themes/paper-moments.theme?raw'
 
 afterEach(() => vi.unstubAllGlobals())
+it('uses the desktop release version for compatibility checks', () => {
+  expect(THEME_APP_VERSION).toBe('0.3.0-alpha.1')
+})
 it.each(['999.0.0', 'bad', '0.2'])('rejects unsupported minimum app version %s at inspection and install', async version => {
   const source = paper.replace(/min_app_version:.*\r?\n/, `min_app_version: ${version}\n`)
   expect((await inspectThemePackage(source)).compatible).toBe(false)
