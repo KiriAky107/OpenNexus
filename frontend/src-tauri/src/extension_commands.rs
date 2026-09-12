@@ -4,7 +4,9 @@ use notesagent_host::extension_store::{ExtensionStore, InstallRequest, TrustSett
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, BTreeSet, HashMap},
+    path::PathBuf,
+    sync::Arc,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -121,7 +123,7 @@ pub async fn extension_install_preview(
     let workspace = host.workspace.clone();
     let extensions = host.extensions.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Keep the workspace binding stable until this preview finishes.
+        // 在预览完成前保持工作区绑定不变。
         let workspace = workspace.lock().map_err(|_| "HOST_BUSY")?;
         if workspace.as_ref().ok_or("VAULT_NOT_OPEN")?.vault_id != request.vault_id {
             return Err("VAULT_CHANGED".into());
@@ -144,6 +146,407 @@ pub async fn extension_install_preview(
     })
     .await
     .map_err(|_| "EXTENSION_PREVIEW_FAILED".to_string())?
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstallConfirmation {
+    request_id: String,
+    operation_id: String,
+    fingerprint: String,
+    root_key: String,
+    vault_id: String,
+    configurations: std::collections::BTreeMap<String, Value>,
+}
+
+#[tauri::command]
+pub async fn extension_install_confirm(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+    request: InstallConfirmation,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let mut lease = host.extension_requests.claim(&request.request_id)?;
+    let checkpoint = lease.checkpoint();
+    let workspace = host.workspace.clone();
+    let extensions = host.extensions.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let workspace = workspace.lock().map_err(|_| "HOST_BUSY")?;
+        if workspace.as_ref().ok_or("VAULT_NOT_OPEN")?.vault_id != request.vault_id {
+            return Err("VAULT_CHANGED".into());
+        }
+        let install = InstallRequest {
+            root_key: request.root_key,
+            vault_id: request.vault_id,
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            platform: std::env::consts::OS.into(),
+            architecture: std::env::consts::ARCH.into(),
+            configurations: request.configurations,
+        };
+        let mut store = extensions.lock().map_err(|_| "HOST_BUSY")?;
+        let receipt = tauri::async_runtime::block_on(lease.run(async {
+            checkpoint()?;
+            store
+                .as_mut()
+                .ok_or("EXTENSIONS_NOT_READY")?
+                .install_confirmed(&request.operation_id, &install, &request.fingerprint)
+                .await
+                .map_err(|error| error.code)
+        }))?;
+        serde_json::to_value(receipt).map_err(|_| "EXTENSION_INSTALL_FAILED".into())
+    })
+    .await
+    .map_err(|_| "EXTENSION_INSTALL_FAILED".to_string())?
+}
+
+#[tauri::command]
+pub async fn extension_install_rollback(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+    operation_id: String,
+    installed_operation_id: String,
+    vault_id: String,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let workspace = host.workspace.clone();
+    let extensions = host.extensions.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let workspace = workspace.lock().map_err(|_| "HOST_BUSY")?;
+        if workspace.as_ref().ok_or("VAULT_NOT_OPEN")?.vault_id != vault_id {
+            return Err("VAULT_CHANGED".into());
+        }
+        let mut store = extensions.lock().map_err(|_| "HOST_BUSY")?;
+        let store = store.as_mut().ok_or("EXTENSIONS_NOT_READY")?;
+        let changes = store
+            .rollback_changes(&installed_operation_id)
+            .map_err(|error| error.code)?;
+        let receipt =
+            tauri::async_runtime::block_on(store.switch_online(&operation_id, &vault_id, &changes))
+                .map_err(|error| error.code)?;
+        serde_json::to_value(receipt).map_err(|_| "EXTENSION_ROLLBACK_FAILED".into())
+    })
+    .await
+    .map_err(|_| "EXTENSION_ROLLBACK_FAILED".to_string())?
+}
+
+#[tauri::command]
+pub fn extension_uninstall(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+    operation_id: String,
+    slot: String,
+    expected_revision: String,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    host.extension_authority.revoke();
+    #[cfg(windows)]
+    host.extension_instances
+        .lock()
+        .map_err(|_| "HOST_BUSY")?
+        .stop_all_and_join();
+    #[cfg(windows)]
+    host.extension_endpoints
+        .lock()
+        .map_err(|_| "HOST_BUSY")?
+        .clear();
+    let receipt = store(&host, |s| {
+        s.uninstall_active(&operation_id, &slot, &expected_revision)
+    })?;
+    serde_json::to_value(receipt).map_err(|_| "EXTENSION_UNINSTALL_FAILED".into())
+}
+
+#[cfg(windows)]
+type RuntimeBackend = (
+    String,
+    Vec<String>,
+    BTreeMap<String, notesagent_host::extension_permit::Environment>,
+);
+
+#[cfg(windows)]
+fn runtime_backend(manifest: &Value) -> Result<RuntimeBackend, String> {
+    let backend = manifest.get("backend").unwrap_or(manifest);
+    if backend
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind != "mcp")
+        || backend.get("transport").and_then(Value::as_str) != Some("stdio")
+    {
+        return Err("EXTENSION_RUNTIME_UNSUPPORTED".into());
+    }
+    let entry = backend
+        .get("command")
+        .and_then(Value::as_str)
+        .ok_or("EXTENSION_ENTRY_INVALID")?
+        .trim_start_matches("./")
+        .to_owned();
+    let arguments = backend
+        .get("args")
+        .and_then(Value::as_array)
+        .ok_or("EXTENSION_ENTRY_INVALID")?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or("EXTENSION_ENTRY_INVALID".into())
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut environment = BTreeMap::new();
+    if let Some(values) = backend.get("environment") {
+        for (name, value) in values.as_object().ok_or("EXTENSION_ENTRY_INVALID")? {
+            let value = value.as_str().ok_or("EXTENSION_ENTRY_INVALID")?;
+            environment.insert(
+                name.clone(),
+                notesagent_host::extension_permit::Environment::Literal(value.to_owned()),
+            );
+        }
+    }
+    Ok((entry, arguments, environment))
+}
+
+#[cfg(windows)]
+fn rollback_pending(host: &Host, operation: Option<&str>) {
+    if let Some(operation) = operation {
+        let _ = store(host, |store| store.finish_installation(operation, false));
+    }
+}
+
+#[cfg(windows)]
+#[tauri::command]
+pub async fn extension_enable(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+    slot: String,
+    vault_id: String,
+    install_operation_id: Option<String>,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let workspace = host.workspace.lock().map_err(|_| "HOST_BUSY")?;
+    if workspace.as_ref().ok_or("VAULT_NOT_OPEN")?.vault_id != vault_id {
+        return Err("VAULT_CHANGED".into());
+    }
+    drop(workspace);
+    let runtime = store(&host, |store| {
+        store.runtime_package(&slot, &vault_id, install_operation_id.as_deref())
+    })?;
+    let (entry, arguments, environment) = match runtime_backend(&runtime.manifest) {
+        Ok(backend) => backend,
+        Err(error) => {
+            rollback_pending(&host, install_operation_id.as_deref());
+            return Err(error);
+        }
+    };
+    if !runtime.inventory.files.contains_key(&entry) {
+        rollback_pending(&host, install_operation_id.as_deref());
+        return Err("EXTENSION_ENTRY_INVALID".into());
+    }
+    let expires_at_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "EXTENSION_CLOCK_INVALID")?
+            .as_millis(),
+    )
+    .map_err(|_| "EXTENSION_CLOCK_INVALID")?
+        + 8 * 60 * 60 * 1000;
+    let claims = notesagent_host::extension_permit::Claims {
+        kind: if runtime.release.kind == "plugin" {
+            notesagent_host::extension_permit::ExecutionKind::Plugin
+        } else {
+            notesagent_host::extension_permit::ExecutionKind::Mcp
+        },
+        source: runtime.source.clone(),
+        namespace: runtime.release.namespace.clone(),
+        package_id: runtime.release.package_id.clone(),
+        version: runtime.release.version.clone(),
+        archive_sha256: runtime.release.sha256.clone(),
+        tree_sha256: runtime.active.target.tree_sha256.clone(),
+        signer_sha256: runtime.signer_sha256,
+        entry,
+        arguments,
+        environment,
+        permissions: runtime
+            .release
+            .permissions
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        vault_id: vault_id.clone(),
+        platform: std::env::consts::OS.into(),
+        policy_version: "1".into(),
+        expires_at_ms,
+    };
+    let permit = match host
+        .extension_authority
+        .issue(&claims, expires_at_ms - 8 * 60 * 60 * 1000)
+    {
+        Ok(permit) => permit,
+        Err(error) => {
+            rollback_pending(&host, install_operation_id.as_deref());
+            return Err(error.code);
+        }
+    };
+    let extensions = Arc::clone(&host.extensions);
+    let check_slot = slot.clone();
+    let check_vault = vault_id.clone();
+    let check_revision = runtime.active.revision.clone();
+    let check_package = runtime.active.target.package_key.clone();
+    let check_operation = install_operation_id.clone();
+    let Some(system_root) = std::env::var_os("SystemRoot") else {
+        rollback_pending(&host, install_operation_id.as_deref());
+        return Err("SYSTEM_ROOT_MISSING".into());
+    };
+    let spec = notesagent_host::extension_instance::LaunchSpec {
+        package: runtime.package,
+        inventory: runtime.inventory,
+        claims,
+        permit,
+        authority: Arc::clone(&host.extension_authority),
+        credentials: Arc::clone(&host.credentials),
+        vault_id,
+        policy_version: "1".into(),
+        system_root: PathBuf::from(system_root),
+        before_resume: Box::new(move |_| {
+            let store = extensions
+                .lock()
+                .map_err(|_| notesagent_host::workspace::HostError::new("HOST_BUSY"))?;
+            let current = store
+                .as_ref()
+                .ok_or_else(|| notesagent_host::workspace::HostError::new("EXTENSIONS_NOT_READY"))?
+                .runtime_package(&check_slot, &check_vault, check_operation.as_deref())?;
+            if current.active.revision != check_revision
+                || current.active.target.package_key != check_package
+            {
+                return Err(notesagent_host::workspace::HostError::new(
+                    "EXTENSION_INSTALL_CONFLICT",
+                ));
+            }
+            Ok(())
+        }),
+    };
+    let endpoint = unsafe {
+        host.extension_instances
+            .lock()
+            .map_err(|_| "HOST_BUSY")?
+            .start(spec)
+    };
+    let endpoint = match endpoint {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            rollback_pending(&host, install_operation_id.as_deref());
+            return Err(error.code);
+        }
+    };
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let snapshot = endpoint.snapshot();
+        if snapshot.status == notesagent_host::extension_instance::Status::Ready {
+            if let Some(operation) = &install_operation_id {
+                store(&host, |store| store.finish_installation(operation, true))?;
+            }
+            host.extension_endpoints
+                .lock()
+                .map_err(|_| "HOST_BUSY")?
+                .insert(slot, endpoint);
+            return serde_json::to_value(snapshot).map_err(|_| "EXTENSION_INSTANCE_INVALID".into());
+        }
+        if snapshot.status == notesagent_host::extension_instance::Status::Failed
+            || Instant::now() >= deadline
+        {
+            endpoint.stop();
+            rollback_pending(&host, install_operation_id.as_deref());
+            return Err(snapshot
+                .error
+                .unwrap_or_else(|| "EXTENSION_START_TIMEOUT".into()));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(windows)]
+#[tauri::command]
+pub fn extension_instance_status(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+    slot: String,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let endpoints = host.extension_endpoints.lock().map_err(|_| "HOST_BUSY")?;
+    let endpoint = endpoints.get(&slot).ok_or("EXTENSION_INSTANCE_NOT_READY")?;
+    serde_json::to_value(endpoint.snapshot()).map_err(|_| "EXTENSION_INSTANCE_INVALID".into())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+pub fn extension_disable(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+    slot: String,
+) -> Result<(), String> {
+    main_window(&window)?;
+    let endpoint = host
+        .extension_endpoints
+        .lock()
+        .map_err(|_| "HOST_BUSY")?
+        .remove(&slot)
+        .ok_or("EXTENSION_INSTANCE_NOT_READY")?;
+    endpoint.stop();
+    Ok(())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+pub async fn extension_call_review(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+    slot: String,
+    tool: String,
+    arguments: Value,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let endpoint = host
+        .extension_endpoints
+        .lock()
+        .map_err(|_| "HOST_BUSY")?
+        .get(&slot)
+        .cloned()
+        .ok_or("EXTENSION_INSTANCE_NOT_READY")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let review = endpoint
+            .review(tool, arguments)
+            .map_err(|error| error.code)?
+            .wait(Duration::from_secs(5))
+            .map_err(|error| error.code)?;
+        serde_json::to_value(review).map_err(|_| "EXTENSION_CALL_REVIEW_INVALID".into())
+    })
+    .await
+    .map_err(|_| "EXTENSION_CALL_REVIEW_INVALID".to_string())?
+}
+
+#[cfg(windows)]
+#[tauri::command]
+pub async fn extension_call_confirm(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+    slot: String,
+    review_id: String,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let endpoint = host
+        .extension_endpoints
+        .lock()
+        .map_err(|_| "HOST_BUSY")?
+        .get(&slot)
+        .cloned()
+        .ok_or("EXTENSION_INSTANCE_NOT_READY")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        endpoint
+            .invoke_confirmed(review_id)
+            .map_err(|error| error.code)?
+            .wait(Duration::from_secs(65))
+            .map_err(|error| error.code)
+    })
+    .await
+    .map_err(|_| "EXTENSION_CALL_FAILED".to_string())?
 }
 
 #[derive(Deserialize)]

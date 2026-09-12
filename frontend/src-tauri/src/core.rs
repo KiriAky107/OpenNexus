@@ -208,6 +208,25 @@ pub struct RequestSession {
 }
 
 impl CoreSupervisor {
+    fn record_failure(&mut self, now: Instant) {
+        self.attempts
+            .retain(|time| now.duration_since(*time) < Duration::from_secs(300));
+        self.attempts.push_back(now);
+        self.next_attempt = Some(now + Duration::from_secs(1 << (self.attempts.len() - 1).min(4)));
+    }
+
+    fn reap_failed_session(&mut self) -> bool {
+        let failed = self
+            .session
+            .as_mut()
+            .is_some_and(|session| !matches!(session.child.try_wait(), Ok(None)));
+        if failed {
+            self.session.take();
+            self.record_failure(Instant::now());
+        }
+        failed
+    }
+
     pub fn new(
         executable: PathBuf,
         arguments: Vec<String>,
@@ -238,9 +257,17 @@ impl CoreSupervisor {
     }
 
     pub fn available(&mut self) -> bool {
-        self.session
-            .as_mut()
-            .is_some_and(|s| matches!(s.child.try_wait(), Ok(None)))
+        self.reap_failed_session();
+        self.session.is_some()
+    }
+
+    /// 返回受 Host 管理的 Core 启动进程 ID，用于诊断和故障注入。
+    pub fn process_id(&mut self) -> Option<u32> {
+        if self.available() {
+            self.session.as_ref().map(|session| session.child.id())
+        } else {
+            None
+        }
     }
 
     pub fn request_session(&mut self, path: &str) -> Result<RequestSession> {
@@ -260,18 +287,15 @@ impl CoreSupervisor {
         if self.available() {
             return Ok(());
         }
-        self.session.take();
         let now = Instant::now();
         self.attempts
             .retain(|t| now.duration_since(*t) < Duration::from_secs(300));
-        if self.attempts.len() >= 5 {
+        if self.attempts.len() > 5 {
             return Err("CORE_RESTART_LIMIT".into());
         }
         if self.next_attempt.is_some_and(|t| now < t) {
             return Err("CORE_RESTART_BACKOFF".into());
         }
-        self.attempts.push_back(now);
-        self.next_attempt = Some(now + Duration::from_secs(1 << (self.attempts.len() - 1)));
         if let Some(manifest) = &self.bundle_manifest {
             verify_bundle(&self.working_dir, manifest)?;
         }
@@ -281,8 +305,10 @@ impl CoreSupervisor {
             &self.working_dir,
             &self.data_dir,
             self.broker.clone(),
-        )?;
+        )
+        .inspect_err(|_| self.record_failure(Instant::now()))?;
         self.session = Some(session);
+        self.next_attempt = None;
         Ok(())
     }
 

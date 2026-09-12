@@ -30,7 +30,11 @@ struct Host {
     extensions: Arc<Mutex<Option<notesagent_host::extension_store::ExtensionStore>>>,
     extension_reviews: extension_commands::Reviews,
     extension_requests: Requests,
-    extension_authority: notesagent_host::extension_permit::Authority,
+    extension_authority: Arc<notesagent_host::extension_permit::Authority>,
+    #[cfg(windows)]
+    extension_instances: Mutex<notesagent_host::extension_instance::Registry>,
+    #[cfg(windows)]
+    extension_endpoints: Mutex<HashMap<String, notesagent_host::extension_instance::Endpoint>>,
     credential_signal: std::sync::OnceLock<Arc<std::sync::atomic::AtomicU64>>,
     sync: Arc<sync_commands::Runtime>,
     workspace: Arc<Mutex<Option<Workspace>>>,
@@ -45,12 +49,28 @@ struct Host {
 impl Host {
     fn replace_workspace(&self, active: &mut Option<Workspace>, next: Option<Workspace>) {
         self.extension_authority.revoke();
+        #[cfg(windows)]
+        if let Ok(mut instances) = self.extension_instances.lock() {
+            instances.stop_all_and_join();
+        }
+        #[cfg(windows)]
+        if let Ok(mut endpoints) = self.extension_endpoints.lock() {
+            endpoints.clear();
+        }
         self.sync.cancel();
         *active = next;
     }
     fn lock_credentials(&self) -> Result<(), String> {
         // 这些不等待进行中解锁/KDF 或凭证操作。
         self.extension_authority.revoke();
+        #[cfg(windows)]
+        if let Ok(mut instances) = self.extension_instances.lock() {
+            instances.stop_all_and_join();
+        }
+        #[cfg(windows)]
+        if let Ok(mut endpoints) = self.extension_endpoints.lock() {
+            endpoints.clear();
+        }
         if let Some(signal) = self.credential_signal.get() {
             signal.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
@@ -94,7 +114,7 @@ fn host_capabilities(host: State<'_, Host>) -> serde_json::Value {
         .ok()
         .and_then(|mut core| core.as_mut().map(|c| c.available()))
         .unwrap_or(false);
-    serde_json::json!({"protocol":1,"workspace":true,"core":ready,"sync":true,"credentials":true,"extensions":false,"release":"preview","product":"OpenNexus"})
+    serde_json::json!({"protocol":1,"workspace":true,"core":ready,"sync":true,"credentials":true,"extensions":cfg!(windows),"release":"preview","product":"OpenNexus"})
 }
 
 #[derive(serde::Serialize)]
@@ -304,7 +324,7 @@ mod core_proxy_tests {
     }
 }
 
-/// Authenticated process-local transport; session headers are owned by Rust.
+/// 经过认证的进程本地传输；会话请求头由 Rust 管理。
 #[tauri::command]
 fn core_request_prepare(host: State<'_, Host>, timeout_ms: u64) -> Result<String, String> {
     host.requests.prepare(timeout_ms)
@@ -916,13 +936,17 @@ fn main() {
                 Some(RecentVaultStore::open(&state_path).map_err(std::io::Error::other)?);
             let extension_root = app.path().app_data_dir()?.join("extensions-host");
             std::fs::create_dir_all(&extension_root)?;
+            let app_data_dir = app.path().app_data_dir()?;
+            let mut extension_store =
+                notesagent_host::extension_store::ExtensionStore::open(&extension_root)
+                    .map_err(|error| std::io::Error::other(error.code))?;
+            extension_store
+                .import_legacy_installations(&app_data_dir)
+                .map_err(|error| std::io::Error::other(error.code))?;
             *app.state::<Host>()
                 .extensions
                 .lock()
-                .map_err(|_| std::io::Error::other("HOST_BUSY"))? = Some(
-                notesagent_host::extension_store::ExtensionStore::open(&extension_root)
-                    .map_err(|error| std::io::Error::other(error.code))?,
-            );
+                .map_err(|_| std::io::Error::other("HOST_BUSY"))? = Some(extension_store);
             let credential_state = app.state::<Host>().credentials.clone();
             *credential_state
                 .lock()
@@ -966,7 +990,7 @@ fn main() {
                 }
             });
             let data_dir = app.path().app_data_dir()?.join("core-data");
-            // Debug builds use this worktree's interpreter; release builds only use bundled Core.
+            // 调试构建使用当前工作树的解释器；发布构建只使用随包提供的 Core。
             let core = if cfg!(debug_assertions) {
                 let backend = Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("../../backend")
@@ -1060,6 +1084,14 @@ fn main() {
             extension_trust_confirm,
             extension_trust_confirm_group,
             extension_install_preview,
+            extension_install_confirm,
+            extension_install_rollback,
+            extension_uninstall,
+            extension_enable,
+            extension_instance_status,
+            extension_disable,
+            extension_call_review,
+            extension_call_confirm,
             extension_stage,
             extension_stage_prepare,
             extension_stage_cancel,

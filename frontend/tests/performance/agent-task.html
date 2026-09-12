@@ -17,8 +17,7 @@ window.prepareScrollBenchmark = async (size = 1000) => {
  document.documentElement.dataset.theme=theme
  const style=document.createElement('style');style.textContent=theme==='paper-moments'?getCommunityThemePreviewCss(theme):'';document.head.append(style)
  const pinia=createPinia(), store=useTaskStore(pinia), host=document.getElementById('app'), viewport=document.getElementById('viewport')
- // App tokens normally clip #app; the real Agent page provides its own scroller.
- // This standalone Trace mount uses #viewport in that role.
+// 应用样式通常会裁剪 #app；真实 Agent 页面自带滚动容器，此独立 Trace 挂载改用 #viewport。
  if(kind==='trace'){host.style.height='auto';host.style.overflow='visible'}
  const date='2026-09-06T00:00:00Z'
  const tasks=Array.from({length:size},(_,i)=>({task_id:`task_${i}`,title:`压测任务 ${i}`,description:'用于验证任务列表渲染与筛选，独立生成，不读取真实笔记。',status:i%3===0?'done':'todo',created_at:date,updated_at:date}))
@@ -27,7 +26,7 @@ window.prepareScrollBenchmark = async (size = 1000) => {
   return {run_id:'stress',sequence:i,event,timestamp:new Date(Date.parse(date)+i*10).toISOString(),data:{step,model_call_id:`m_${step}`,parent_model_call_id:`m_${step}`,tool_call_id:`t_${step}`,name:'system.echo',arguments:{text:`压力测试 ${step}`},output:{text:'工具返回内容'},success:true,duration_ms:10}}
  }))
  const originalFetch=window.fetch, requests=[]
- // Intercept every request in this isolated page: never fall through to the user's backend.
+// 拦截此隔离页面的每个请求，绝不转发到用户后端。
  window.fetch=async (input)=>{
   const url=new URL(typeof input==='string'?input:input.url,location.href);requests.push(url.pathname+url.search)
   if(url.pathname==='/api/tasks'){

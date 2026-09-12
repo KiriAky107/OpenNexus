@@ -35,8 +35,8 @@ impl Drop for PackageAccess<'_> {
         }
     }
 }
-/// The package borrow and all ancestor handles must outlive the process using
-/// this path. Only files present in the verified package can produce this guard.
+/// 包借用和所有祖先句柄的生命周期必须长于使用此路径的进程。
+/// 只有已验证包中存在的文件才能生成此守卫。
 pub struct BoundEntry<'a> {
     name: String,
     path: std::path::PathBuf,

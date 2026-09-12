@@ -42,7 +42,7 @@ pub struct LaunchSpec {
     pub claims: Claims,
     pub permit: Permit,
     pub authority: Arc<Authority>,
-    pub credentials: Arc<Mutex<CredentialBroker>>,
+    pub credentials: Arc<Mutex<Option<CredentialBroker>>>,
     pub vault_id: String,
     pub policy_version: String,
     pub system_root: PathBuf,
@@ -152,7 +152,7 @@ pub struct Ticket<T> {
     cancel: Arc<AtomicBool>,
 }
 impl<T> Ticket<T> {
-    /// Background wait only; dropping a ticket cancels its queued/in-flight work.
+    /// 仅供后台等待；丢弃票据会取消排队中或执行中的工作。
     pub fn wait(self, timeout: Duration) -> Result<T> {
         if timeout > Duration::from_secs(65) {
             return Err(HostError::new("EXTENSION_INSTANCE_WAIT_INVALID"));
@@ -204,8 +204,8 @@ impl Endpoint {
             request,
         })
     }
-    /// Host route only: the user must have approved the exact saved review.
-    /// Confirmation and consumption happen together on the instance thread.
+    /// 仅供 Host 路由使用：用户必须批准完全一致的已保存审查。
+    /// 确认和消费在实例线程上同步发生。
     pub fn invoke_confirmed(&self, review_id: String) -> Result<Ticket<Value>> {
         if uuid::Uuid::parse_str(&review_id).is_err() || review_id.len() != 36 {
             return Err(HostError::new("EXTENSION_CALL_REVIEW_UNKNOWN"));
@@ -252,9 +252,9 @@ pub struct Registry {
 }
 impl Registry {
     /// # Safety
-    /// The caller must establish all sandbox limits and current install/user
-    /// authorization. before_resume must recheck live trust/active installation.
-    /// This API is not exposed to renderer/Core and does not enable extensions.
+    /// 调用方必须建立全部沙箱限制以及当前安装和用户授权。
+    /// before_resume 必须重新检查实时信任与活动安装状态。
+    /// 此 API 不向 renderer/Core 暴露，也不会自行启用扩展。
     pub unsafe fn start(&mut self, spec: LaunchSpec) -> Result<Endpoint> {
         self.reap();
         spec.authority
@@ -299,7 +299,7 @@ impl Registry {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     run(spec, &control, receiver)
                 }));
-                // All native stack owners have dropped before publishing terminal state.
+                // 发布终止状态前，所有原生调用栈所有者均已销毁。
                 let error = match result {
                     Ok(Ok(())) => None,
                     Ok(Err(error))
@@ -335,8 +335,7 @@ impl Registry {
         );
         Ok(endpoint)
     }
-    /// Reap only threads confirmed finished, so an old generation cannot overlap
-    /// a replacement merely because stop was requested or status was changed.
+    /// 只回收已确认结束的线程，不能仅因请求停止或状态改变就让旧代实例与替代实例重叠。
     pub fn reap(&mut self) {
         let done: Vec<_> = self
             .entries
@@ -373,13 +372,23 @@ impl Registry {
             entry.endpoint.stop();
         }
     }
-}
-impl Drop for Registry {
-    fn drop(&mut self) {
+
+    /// 请求停止并等待所有实例释放工具、进程、容器和包 ACL。
+    pub fn stop_all_and_join(&mut self) {
         self.stop_all();
         for (_, entry) in std::mem::take(&mut self.entries) {
             let _ = entry.worker.join();
         }
+    }
+
+    pub fn active_count(&mut self) -> usize {
+        self.reap();
+        self.entries.len()
+    }
+}
+impl Drop for Registry {
+    fn drop(&mut self) {
+        self.stop_all_and_join();
     }
 }
 fn run(spec: LaunchSpec, control: &Control, receiver: Receiver<Command>) -> Result<()> {
@@ -425,27 +434,47 @@ fn run_with_access(
             .credentials
             .lock()
             .map_err(|_| HostError::new("CREDENTIALS_LOCKED"))?;
+        let credentials = credentials
+            .as_ref()
+            .ok_or_else(|| HostError::new("CREDENTIALS_LOCKED"))?;
         context.prepare(
             &spec.authority,
             &spec.permit,
             &spec.claims,
             &entry,
-            &credentials,
+            credentials,
             now_ms()?,
         )?
+    };
+    let network = {
+        let credentials = spec
+            .credentials
+            .lock()
+            .map_err(|_| HostError::new("CREDENTIALS_LOCKED"))?;
+        let credentials = credentials
+            .as_ref()
+            .ok_or_else(|| HostError::new("CREDENTIALS_LOCKED"))?;
+        let mut lease = spec
+            .authority
+            .lease(&spec.permit, &spec.claims, now_ms()?)?;
+        lease.bind_credential(credentials.lock_signal());
+        if credentials.is_locked() {
+            return Err(HostError::new("CREDENTIALS_LOCKED"));
+        }
+        crate::extension_network_broker::Broker::new(lease, &spec.claims)?
     };
     let (suspended, io) = prepared.create_suspended_with_stdio(profile, &entry)?;
     (spec.before_resume)(&spec.claims)?;
     if control.stop.load(Ordering::Acquire) {
         return Ok(());
     }
-    // Safety obligation belongs to Registry::start's caller, rechecked above.
+    // 安全义务属于 Registry::start 的调用方，并已在上方重新检查。
     let running = unsafe { suspended.resume()? };
     #[cfg(test)]
     {
         *control.job.lock().unwrap() = Some(running.test_job()?);
     }
-    let mut session = Session::new(&running, io)?;
+    let mut session = Session::new_with_network(&running, io, Some(network))?;
     session.initialize(&control.stop)?;
     let tools = session.refresh_tools(&control.stop)?;
     *control.identity.lock().unwrap_or_else(|e| e.into_inner()) = Some(running.call_identity()?);
@@ -457,6 +486,9 @@ fn run_with_access(
         .status
         .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire);
     while !control.stop.load(Ordering::Acquire) {
+        // 撤销、锁定和工作区切换必须在空闲实例上也能生效，不能等待下一次工具调用。
+        spec.authority
+            .verify(&spec.permit, &spec.claims, now_ms()?)?;
         session.drain_pending()?;
         if session.take_tools_changed() {
             control
@@ -512,6 +544,7 @@ mod tests {
     fn native_worker_routes_reviews_cancels_calls_and_reaps_generations() {
         native_worker_lifecycle(false);
     }
+
     #[test]
     #[ignore = "real background MCP CPU/memory/process exhaustion and restart; run explicitly"]
     fn native_resource_failures_are_reaped_and_replacements_can_start() {
@@ -554,11 +587,13 @@ mod tests {
         };
         let tree = crate::extension_unpack::verify_tree(&dir, &inventory()).unwrap();
         let authority = Arc::new(Authority::default());
-        let credentials = Arc::new(Mutex::new(CredentialBroker::new(
+        let credentials = Arc::new(Mutex::new(Some(CredentialBroker::new(
             temp.path().join("credentials.v1"),
-        )));
+        ))));
         credentials
             .lock()
+            .unwrap()
+            .as_mut()
             .unwrap()
             .unlock(Zeroizing::new(b"instance fixture password".to_vec()))
             .unwrap();
@@ -576,7 +611,13 @@ mod tests {
                 entry: "entry.exe".into(),
                 arguments: vec![mode.into()],
                 environment: BTreeMap::new(),
-                permissions: Default::default(),
+                permissions: if mode == "mcp_network_denied" {
+                    ["network.https:https://127.0.0.1/".into()]
+                        .into_iter()
+                        .collect()
+                } else {
+                    Default::default()
+                },
                 vault_id: vault_id.clone(),
                 platform: "windows".into(),
                 policy_version: "1".into(),
@@ -634,16 +675,24 @@ mod tests {
                 .code,
             "EXTENSION_CALL_REVIEW_UNKNOWN"
         );
-        endpoint.stop();
+        // 空闲实例也必须在许可撤销后自行退出并清空工具注册。
+        let revoked_at = Instant::now();
+        authority.revoke();
         wait_for(|| {
             registry.reap();
             registry.entries.is_empty()
         });
         assert_eq!(
             endpoint.snapshot().status,
-            Status::Stopped,
+            Status::Failed,
             "{:?}",
             endpoint.snapshot().error
+        );
+        assert_eq!(endpoint.snapshot().tool_count, 0);
+        assert!(revoked_at.elapsed() < Duration::from_secs(5));
+        assert_eq!(
+            endpoint.snapshot().error.as_deref(),
+            Some("EXTENSION_PERMIT_REVOKED")
         );
         assert!(endpoint.review("echo".into(), json!({})).is_err());
         assert_eq!(
@@ -658,6 +707,24 @@ mod tests {
                 .unwrap(),
             0
         );
+        let denied_network = unsafe { registry.start(make("mcp_network_denied")) }.unwrap();
+        wait_for(|| denied_network.snapshot().status != Status::Starting);
+        assert_eq!(denied_network.snapshot().status, Status::Ready);
+        let review = denied_network
+            .review("echo".into(), json!({}))
+            .unwrap()
+            .wait(Duration::from_secs(5))
+            .unwrap();
+        assert!(denied_network
+            .invoke_confirmed(review.review_id)
+            .unwrap()
+            .wait(Duration::from_secs(5))
+            .is_ok());
+        denied_network.stop();
+        wait_for(|| {
+            registry.reap();
+            registry.entries.is_empty()
+        });
         let second = unsafe { registry.start(make("mcp_cancel")) }.unwrap();
         wait_for(|| second.snapshot().status != Status::Starting);
         assert_eq!(
@@ -736,6 +803,7 @@ mod tests {
                 ("mcp_cpu", "EXTENSION_RESOURCE_CPU_EXCEEDED"),
                 ("mcp_memory", "EXTENSION_RESOURCE_MEMORY_EXCEEDED"),
                 ("mcp_processes", "EXTENSION_RESOURCE_PROCESSES_EXCEEDED"),
+                ("mcp_scratch", "EXTENSION_RESOURCE_SCRATCH_EXCEEDED"),
             ]
         } else {
             Vec::new()
@@ -839,7 +907,7 @@ mod tests {
         let locked = unsafe { registry.start(make("mcp")) }.unwrap();
         wait_for(|| locked.snapshot().status != Status::Starting);
         assert_eq!(locked.snapshot().status, Status::Ready);
-        credentials.lock().unwrap().lock();
+        credentials.lock().unwrap().as_mut().unwrap().lock();
         wait_for(|| {
             registry.reap();
             registry.entries.is_empty()

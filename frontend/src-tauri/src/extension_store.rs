@@ -100,6 +100,15 @@ pub struct InstallPreview {
     pub dependencies: crate::extension_dependencies::Plan,
     pub changes: Vec<crate::extension_transaction::Change>,
 }
+pub struct RuntimePackage {
+    pub package: cap_std::fs::Dir,
+    pub inventory: crate::extension_package::Inventory,
+    pub release: Release,
+    pub manifest: serde_json::Value,
+    pub active: crate::extension_transaction::Active,
+    pub source: String,
+    pub signer_sha256: String,
+}
 pub struct ExtensionStore {
     root: PathBuf,
     db: Connection,
@@ -288,10 +297,10 @@ impl ExtensionStore {
         let mut db = Connection::open(database)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 6 {
+        if version > 7 {
             return Err(HostError::new("EXTENSION_SCHEMA_INCOMPATIBLE"));
         }
-        if (1..6).contains(&version) {
+        if (1..7).contains(&version) {
             let backup = root.join(format!(
                 "extensions.schema{version}.{}.sqlite3",
                 Uuid::new_v4()
@@ -308,13 +317,23 @@ impl ExtensionStore {
             CREATE TABLE IF NOT EXISTS extension_trust(source TEXT NOT NULL,namespace TEXT NOT NULL,key_id TEXT NOT NULL,setting TEXT NOT NULL,revision TEXT NOT NULL,PRIMARY KEY(source,namespace,key_id));
             CREATE TABLE IF NOT EXISTS extension_blocks(identity TEXT PRIMARY KEY,reason TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS extension_confirmations(operation_id TEXT PRIMARY KEY,request_hash TEXT NOT NULL,review_hash TEXT NOT NULL,changes TEXT NOT NULL);
-            PRAGMA user_version=6; COMMIT;")?;
+            CREATE TABLE IF NOT EXISTS extension_uninstalls(id TEXT PRIMARY KEY,slot TEXT NOT NULL,expected_revision TEXT NOT NULL,state TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS legacy_installations(kind TEXT NOT NULL,package_id TEXT NOT NULL,source_path TEXT NOT NULL,expected_digest TEXT NOT NULL,observed_digest TEXT,ownership TEXT NOT NULL,state TEXT NOT NULL,enabled INTEGER NOT NULL CHECK(enabled=0),permissions TEXT NOT NULL CHECK(permissions='[]'),source_db_digest TEXT NOT NULL,PRIMARY KEY(kind,package_id));
+            PRAGMA user_version=7; COMMIT;")?;
         crate::extension_transaction::recover(&mut db)?;
         Ok(Self {
             root,
             db,
             _lock: lock,
         })
+    }
+
+    /// 只读导入旧 Python 安装记录；导入结果始终禁用、无许可且未受信任。
+    pub fn import_legacy_installations(
+        &mut self,
+        legacy_data_root: &Path,
+    ) -> Result<Vec<crate::extension_legacy::LegacyImport>> {
+        crate::extension_legacy::import(&mut self.db, &self.root, legacy_data_root)
     }
     pub fn trust_setting(
         &self,
@@ -839,6 +858,107 @@ impl ExtensionStore {
         slot: &str,
     ) -> Result<Option<crate::extension_transaction::Active>> {
         crate::extension_transaction::active(&self.db, slot)
+    }
+
+    /// 重新验证活动指针、签名、信任、配置和展开树，并返回只能由 Host 消费的运行材料。
+    pub fn runtime_package(
+        &self,
+        slot: &str,
+        vault_id: &str,
+        pending_operation: Option<&str>,
+    ) -> Result<RuntimePackage> {
+        use cap_fs_ext::DirExt;
+        let vault = Uuid::parse_str(vault_id)
+            .map_err(|_| HostError::new("VAULT_INVALID"))?
+            .to_string();
+        if vault != vault_id {
+            return Err(HostError::new("VAULT_INVALID"));
+        }
+        let active = self
+            .active_installation(slot)?
+            .filter(|item| item.pending_operation.as_deref() == pending_operation)
+            .ok_or_else(|| HostError::new("EXTENSION_NOT_ACTIVE"))?;
+        let (source, release_json, signer, manifest_json, directory, tree): (
+            String,
+            String,
+            Vec<u8>,
+            String,
+            String,
+            String,
+        ) = self.db.query_row(
+            "SELECT v.source,v.release,v.signer,v.manifest,p.directory,p.tree_sha256 FROM versions v JOIN prepared_packages p ON p.package_key=v.package_key WHERE v.package_key=?1",
+            [&active.target.package_key],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        )?;
+        let release: Release = serde_json::from_str(&release_json)
+            .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+        let manifest: serde_json::Value = serde_json::from_str(&manifest_json)
+            .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+        let public: [u8; 32] = signer
+            .try_into()
+            .map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+        let expected_slot = hash(
+            &serde_json::to_vec(&(&vault, &source, &release.namespace, &release.package_id))
+                .unwrap(),
+        );
+        if slot != expected_slot
+            || active.target.directory != directory
+            || active.target.tree_sha256 != tree
+        {
+            return Err(HostError::new("EXTENSION_INSTALL_CONFLICT"));
+        }
+        let trusted = self
+            .trust_setting(&source, &release.namespace, &release.key_id)?
+            .ok_or_else(|| HostError::new("EXTENSION_SOURCE_UNTRUSTED"))?;
+        if !trusted.enabled || trusted.public_key != public {
+            return Err(HostError::new("EXTENSION_SOURCE_UNTRUSTED"));
+        }
+        self.check_not_revoked(&source, &release, &public)?;
+        let archive = self.archive(&active.target.package_key)?;
+        let (inventory, verified_manifest) = release.verify_package(
+            &public,
+            &release.key_id,
+            &release.namespace,
+            false,
+            false,
+            &archive,
+        )?;
+        if verified_manifest != manifest {
+            return Err(HostError::new("EXTENSION_STORE_CORRUPT"));
+        }
+        crate::extension_config::validate(&manifest, &active.target.configuration)?;
+        let root = cap_std::fs::Dir::open_ambient_dir(&self.root, cap_std::ambient_authority())?;
+        let package = root
+            .open_dir_nofollow("prepared")?
+            .open_dir_nofollow(&directory)?;
+        if crate::extension_unpack::verify_tree(&package, &inventory)? != tree {
+            return Err(HostError::new("EXTENSION_STORE_CORRUPT"));
+        }
+        Ok(RuntimePackage {
+            package,
+            inventory,
+            release,
+            manifest,
+            active,
+            source,
+            signer_sha256: hash(&public),
+        })
+    }
+
+    pub fn rollback_changes(
+        &self,
+        operation: &str,
+    ) -> Result<Vec<crate::extension_transaction::Change>> {
+        crate::extension_transaction::rollback_changes(&self.db, operation)
+    }
+
+    pub fn uninstall_active(
+        &mut self,
+        operation: &str,
+        slot: &str,
+        expected_revision: &str,
+    ) -> Result<crate::extension_transaction::Receipt> {
+        crate::extension_transaction::uninstall(&mut self.db, operation, slot, expected_revision)
     }
     /// 准备经过验证的暂存包。调用者提供当前的签名者/撤销策略；持久准备不会在重放时绕过该策略。
     pub fn prepare(
@@ -1453,6 +1573,80 @@ mod tests {
             0
         );
     }
+    #[tokio::test]
+    async fn offline_new_install_is_rejected_before_creating_a_transaction() {
+        use crate::extension_transaction::{Change, Target};
+        let temp = tempfile::tempdir().unwrap();
+        let (release, archive, key) = fixture();
+        let source = "https://127.0.0.1:9/";
+        let mut store = ExtensionStore::open(temp.path()).unwrap();
+        let staged = store
+            .stage(Stage {
+                operation_id: &Uuid::new_v4().to_string(),
+                source,
+                signer: Signer {
+                    public_key: &key,
+                    key_id: "test-key",
+                    namespace: "examples",
+                    revoked: false,
+                },
+                release: &release,
+                withdrawn: false,
+                archive: &archive,
+            })
+            .unwrap();
+        let setting = TrustSetting {
+            source: source.into(),
+            source_id: "offline-catalog".into(),
+            namespace: "examples".into(),
+            key_id: "test-key".into(),
+            public_key: key,
+            enabled: true,
+        };
+        store
+            .confirm_trust(&setting, None, &setting.fingerprint().unwrap())
+            .unwrap();
+        let prepared = store
+            .prepare(
+                &staged.package_key,
+                Signer {
+                    public_key: &key,
+                    key_id: "test-key",
+                    namespace: "examples",
+                    revoked: false,
+                },
+                false,
+            )
+            .unwrap();
+        let vault = Uuid::new_v4().to_string();
+        let slot = hash(
+            &serde_json::to_vec(&(&vault, source, &release.namespace, &release.package_id))
+                .unwrap(),
+        );
+        let changes = [Change {
+            target: Target {
+                slot,
+                package_key: staged.package_key,
+                directory: prepared.directory,
+                tree_sha256: prepared.tree_sha256,
+                configuration: serde_json::json!({}),
+            },
+            expected_revision: None,
+        }];
+        let error = store
+            .switch_online(&Uuid::new_v4().to_string(), &vault, &changes)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "EXTENSION_TRUST_UNAVAILABLE");
+        assert_eq!(
+            store
+                .db
+                .query_row("SELECT COUNT(*) FROM extension_transactions", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
     #[test]
     fn confirmed_trust_survives_reopen_and_rotation_requires_matching_review() {
         let temp = tempfile::tempdir().unwrap();
@@ -1594,6 +1788,20 @@ mod tests {
         let operation = Uuid::new_v4().to_string();
         store.switch_prepared(&operation, &vault, &changes).unwrap();
         store.finish_installation(&operation, true).unwrap();
+        let setting = TrustSetting {
+            source: "https://catalog.example/".into(),
+            source_id: "catalog".into(),
+            namespace: release.namespace.clone(),
+            key_id: release.key_id.clone(),
+            public_key: key,
+            enabled: true,
+        };
+        store
+            .confirm_trust(&setting, None, &setting.fingerprint().unwrap())
+            .unwrap();
+        let runtime = store.runtime_package(&slot, &vault, None).unwrap();
+        assert_eq!(runtime.active.target, changes[0].target);
+        assert_eq!(runtime.release.package_id, release.package_id);
         drop(store);
         let mut store = ExtensionStore::open(temp.path()).unwrap();
         assert_eq!(

@@ -6,8 +6,8 @@
       "kind": "plugin",
       "version": "1.0.0",
       "file": "markdown-workbench-1.0.0.zip",
-      "bytes": 5444,
-      "sha256": "130f9c85ab08986c2101ec1b8f030da27120ff66309f3ccc25f26c5e39b46670",
+      "bytes": 405160,
+      "sha256": "cb48c4fe1ed095c4951170e6fe3f0569ad5d75a1894e3c24647bb8401d8f3160",
       "dependencies": [],
       "license": null,
       "publication_status": "local-preview"

@@ -82,7 +82,7 @@ async function loadCodeLanguage(requestedLanguage: string) {
   return { shiki, language }
 }
 
-// Bounded LRU of dual-theme HTML. Large one-off blocks never remain in the cache.
+// 双主题 HTML 使用有界 LRU；大型一次性代码块不会留在缓存中。
 const highlightedBlocks = new Map<string, string>()
 let highlightedCharacters = 0
 const highlightBudget = 1_000_000
@@ -101,7 +101,7 @@ export async function highlightCode(source: string, requestedLanguage = 'text'):
   })
   const cost = key.length + html.length
   if (cost <= highlightBudget / 4) {
-    // A concurrent caller may already have filled the same entry.
+// 并发调用方可能已经填充同一条目。
     const previous = highlightedBlocks.get(key)
     if (previous !== undefined) { highlightedCharacters -= key.length + previous.length; highlightedBlocks.delete(key) }
     while (highlightedBlocks.size && (highlightedBlocks.size >= 64 || highlightedCharacters + cost > highlightBudget)) {
@@ -114,7 +114,7 @@ export async function highlightCode(source: string, requestedLanguage = 'text'):
   return html
 }
 
-/** Share the initialized grammar/theme registry with editable code blocks. */
+/** 与可编辑代码块共享已初始化的语法和主题注册表。 */
 export async function getCodeTokenizer(theme: 'github-light' | 'github-dark', requestedLanguage = 'text') {
   const { shiki } = await loadCodeLanguage(requestedLanguage)
   return (source: string, requestedLanguage: string) => {
@@ -158,8 +158,7 @@ export async function renderMarkdown(source: string, options?: { themeId?: strin
     }
     const highlighted = await highlightCode(code.textContent ?? '', requestedLanguage)
     const fragment = document.createRange().createContextualFragment(highlighted)
-    // Shiki separates line spans with newlines. Block layout must not render those
-    // separators as additional blank rows; the untouched source remains available for copy.
+// Shiki 用换行符分隔行 span。块布局不能把分隔符渲染成额外空行；复制时仍使用未改动的源码。
     for (const node of [...(fragment.querySelector('code')?.childNodes ?? [])]) {
       if (node.nodeType === Node.TEXT_NODE && !node.textContent?.trim()) node.remove()
     }

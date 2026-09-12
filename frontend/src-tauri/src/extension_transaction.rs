@@ -31,7 +31,8 @@ pub struct Receipt {
 }
 pub fn schema(db: &Connection) -> Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS extension_active(slot TEXT PRIMARY KEY,target TEXT NOT NULL,revision TEXT NOT NULL,pending_operation TEXT);
-        CREATE TABLE IF NOT EXISTS extension_transactions(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,before_state TEXT NOT NULL,after_state TEXT NOT NULL,state TEXT NOT NULL);")?;
+        CREATE TABLE IF NOT EXISTS extension_transactions(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,before_state TEXT NOT NULL,after_state TEXT NOT NULL,state TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS extension_uninstalls(id TEXT PRIMARY KEY,slot TEXT NOT NULL,expected_revision TEXT NOT NULL,state TEXT NOT NULL);")?;
     Ok(())
 }
 pub fn active(db: &Connection, slot: &str) -> Result<Option<Active>> {
@@ -209,6 +210,95 @@ pub fn recover(db: &mut Connection) -> Result<usize> {
     Ok(ids.len())
 }
 
+/// 为已完成的升级生成回滚变更；回滚本身仍以新的 operation_id 执行和记录。
+pub fn rollback_changes(db: &Connection, operation: &str) -> Result<Vec<Change>> {
+    let (before, after, state): (String, String, String) = db
+        .query_row(
+            "SELECT before_state,after_state,state FROM extension_transactions WHERE id=?1",
+            [operation],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|_| HostError::new("EXTENSION_ROLLBACK_UNKNOWN"))?;
+    if state != "complete" {
+        return Err(HostError::new("EXTENSION_ROLLBACK_INVALID"));
+    }
+    let old: Vec<Option<Active>> =
+        serde_json::from_str(&before).map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+    let installed: Vec<Change> =
+        serde_json::from_str(&after).map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+    if old.len() != installed.len() || old.iter().any(Option::is_none) {
+        return Err(HostError::new("EXTENSION_ROLLBACK_INVALID"));
+    }
+    old.into_iter()
+        .zip(installed)
+        .map(|(previous, installed)| {
+            let previous = previous.unwrap();
+            let current = active(db, &installed.target.slot)?
+                .ok_or_else(|| HostError::new("EXTENSION_INSTALL_CONFLICT"))?;
+            if current.pending_operation.is_some() || current.target != installed.target {
+                return Err(HostError::new("EXTENSION_INSTALL_CONFLICT"));
+            }
+            Ok(Change {
+                target: previous.target,
+                expected_revision: Some(current.revision),
+            })
+        })
+        .collect()
+}
+
+/// 实例停止后原子移除活动指针。保留已验证对象，以便审计或显式回滚；不会触碰外部目录。
+pub fn uninstall(
+    db: &mut Connection,
+    operation: &str,
+    slot: &str,
+    expected_revision: &str,
+) -> Result<Receipt> {
+    if uuid::Uuid::parse_str(operation).is_err()
+        || slot.len() != 64
+        || expected_revision.len() != 64
+        || [slot, expected_revision].iter().any(|value| {
+            !value
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+    {
+        return Err(HostError::new("EXTENSION_TRANSACTION_INVALID"));
+    }
+    db.execute_batch("CREATE TABLE IF NOT EXISTS extension_uninstalls(id TEXT PRIMARY KEY,slot TEXT NOT NULL,expected_revision TEXT NOT NULL,state TEXT NOT NULL);")?;
+    let transaction = db.transaction()?;
+    let prior: Option<(String, String, String)> = transaction
+        .query_row(
+            "SELECT slot,expected_revision,state FROM extension_uninstalls WHERE id=?1",
+            [operation],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    if let Some((old_slot, old_revision, state)) = prior {
+        if old_slot != slot || old_revision != expected_revision {
+            return Err(HostError::new("OPERATION_REUSED"));
+        }
+        return Ok(Receipt {
+            operation_id: operation.into(),
+            state,
+        });
+    }
+    let current =
+        active(&transaction, slot)?.ok_or_else(|| HostError::new("EXTENSION_INSTALL_CONFLICT"))?;
+    if current.pending_operation.is_some() || current.revision != expected_revision {
+        return Err(HostError::new("EXTENSION_INSTALL_CONFLICT"));
+    }
+    transaction.execute(
+        "INSERT INTO extension_uninstalls VALUES (?1,?2,?3,'complete')",
+        params![operation, slot, expected_revision],
+    )?;
+    transaction.execute("DELETE FROM extension_active WHERE slot=?1", [slot])?;
+    transaction.commit()?;
+    Ok(Receipt {
+        operation_id: operation.into(),
+        state: "complete".into(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +361,50 @@ mod tests {
             assert_eq!(item.target.package_key, format!("{version:x}").repeat(64));
             assert!(item.pending_operation.is_none());
         }
+    }
+
+    #[test]
+    fn completed_upgrade_can_rollback_then_uninstall_idempotently() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut db = open(&temp.path().join("state.sqlite3"));
+        let initial = change('a', 1, None);
+        let install = uuid::Uuid::new_v4().to_string();
+        switch(&mut db, &install, std::slice::from_ref(&initial)).unwrap();
+        finish(&mut db, &install, true).unwrap();
+
+        let installed = active(&db, &initial.target.slot).unwrap().unwrap();
+        let upgrade = change('a', 2, Some(installed.revision));
+        let upgrade_id = uuid::Uuid::new_v4().to_string();
+        switch(&mut db, &upgrade_id, &[upgrade]).unwrap();
+        finish(&mut db, &upgrade_id, true).unwrap();
+
+        let rollback = rollback_changes(&db, &upgrade_id).unwrap();
+        let rollback_id = uuid::Uuid::new_v4().to_string();
+        switch(&mut db, &rollback_id, &rollback).unwrap();
+        finish(&mut db, &rollback_id, true).unwrap();
+        let restored = active(&db, &initial.target.slot).unwrap().unwrap();
+        assert_eq!(restored.target, initial.target);
+
+        let uninstall_id = uuid::Uuid::new_v4().to_string();
+        let receipt = uninstall(
+            &mut db,
+            &uninstall_id,
+            &restored.target.slot,
+            &restored.revision,
+        )
+        .unwrap();
+        assert_eq!(receipt.state, "complete");
+        assert_eq!(
+            uninstall(
+                &mut db,
+                &uninstall_id,
+                &restored.target.slot,
+                &restored.revision,
+            )
+            .unwrap(),
+            receipt
+        );
+        assert!(active(&db, &restored.target.slot).unwrap().is_none());
     }
     #[test]
     fn group_switch_crashes_recover_matching_packages_and_configuration() {
