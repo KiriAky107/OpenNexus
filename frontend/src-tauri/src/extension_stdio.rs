@@ -90,9 +90,8 @@ impl InheritedIo {
     }
 }
 
-/// NDJSON maximum excludes the line terminator. A protocol/IO error poisons
-/// the decoder; the runtime must terminate the instance and close its pipes.
-/// This synchronous decoder needs a separate IO cancellation/deadline owner.
+/// NDJSON 上限不含行结束符。协议或 IO 错误会使解码器失效；运行时必须终止实例并关闭管道。
+/// 此同步解码器需要独立的 IO 取消和期限所有者。
 pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
 pub struct Frames<R> {
     reader: R,
@@ -206,8 +205,7 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap();
         worker.join().unwrap();
-        // The last writer was closed before the lock was released; no child
-        // process was launched in this ownership test, so Host sees EOF.
+        // 最后一个写端在释放锁前关闭；此所有权测试没有启动子进程，因此 Host 会收到 EOF。
         use std::io::Read;
         let mut output = host.output;
         assert_eq!(output.read(&mut [0; 1]).unwrap(), 0);

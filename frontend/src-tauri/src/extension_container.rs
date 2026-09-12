@@ -60,13 +60,43 @@ impl Profile {
     /// 并须在整个启动期间持有已验证的包句柄。这里不使用递归继承，每个目录和文件都要分别检查、授权。
     /// 此操作只会添加一条 ACE，不会清理已有权限。
     pub fn grant_package_read_execute(&self, object: &std::fs::File) -> Result<()> {
-        self.update_package_access(object, false)
+        use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
+        self.update_access(
+            object,
+            false,
+            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+            0,
+            true,
+        )
+    }
+    /// 授予当前实例修改其专用 scratch 目录及新建子对象的权限。
+    pub fn grant_scratch_modify(&self, object: &std::fs::File) -> Result<()> {
+        use windows_sys::Win32::{
+            Security::SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+            Storage::FileSystem::{
+                DELETE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+            },
+        };
+        self.update_access(
+            object,
+            false,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+            SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+            false,
+        )
     }
     /// 使用最初持有的对象句柄，仅移除这个新实例对应的允许 ACE；其他安全主体的 ACL 保持不变。
     pub fn revoke_package_access(&self, object: &std::fs::File) -> Result<()> {
-        self.update_package_access(object, true)
+        self.update_access(object, true, 0, 0, false)
     }
-    fn update_package_access(&self, object: &std::fs::File, revoke: bool) -> Result<()> {
+    fn update_access(
+        &self,
+        object: &std::fs::File,
+        revoke: bool,
+        permissions: u32,
+        inheritance: u32,
+        reject_hardlinks: bool,
+    ) -> Result<()> {
         // 跨并发实例序列化 Host 读/合并/写操作。
         let _lock = PACKAGE_ACL_LOCK
             .lock()
@@ -77,7 +107,7 @@ impl Profile {
             Security::{Authorization::*, DACL_SECURITY_INFORMATION},
             Storage::FileSystem::{
                 GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-                FILE_ATTRIBUTE_REPARSE_POINT, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
+                FILE_ATTRIBUTE_REPARSE_POINT,
             },
         };
         struct LocalAllocation(*mut core::ffi::c_void);
@@ -99,7 +129,7 @@ impl Profile {
         {
             return Err(HostError::new("EXTENSION_CONTAINER_ACL_OBJECT_INVALID"));
         }
-        if metadata.is_file() && !revoke {
+        if metadata.is_file() && !revoke && reject_hardlinks {
             let mut info = BY_HANDLE_FILE_INFORMATION::default();
             if unsafe { GetFileInformationByHandle(object.as_raw_handle(), &mut info) } == 0
                 || info.nNumberOfLinks != 1
@@ -127,9 +157,9 @@ impl Profile {
             return Err(HostError::new("EXTENSION_CONTAINER_ACL_FAILED"));
         }
         let entry = EXPLICIT_ACCESS_W {
-            grfAccessPermissions: FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+            grfAccessPermissions: permissions,
             grfAccessMode: if revoke { REVOKE_ACCESS } else { GRANT_ACCESS },
-            grfInheritance: 0,
+            grfInheritance: inheritance,
             Trustee: TRUSTEE_W {
                 TrusteeForm: TRUSTEE_IS_SID,
                 TrusteeType: TRUSTEE_IS_UNKNOWN,
@@ -678,6 +708,84 @@ mod tests {
     fn real_container_cannot_reach_ipv4_or_ipv6_loopback_listeners() {
         real_native_protocol_probes(false, false);
     }
+    #[test]
+    fn real_malicious_binary_cannot_read_or_write_four_ungranted_file_scopes() {
+        use sha2::{Digest, Sha256};
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::*;
+
+        let profile = Profile::create().unwrap();
+        let package = tempfile::tempdir().unwrap();
+        let executable = package.path().join("file-probe.exe");
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/sandbox_network_probe.rs");
+        let compile = std::process::Command::new("rustc")
+            .arg("--edition=2021")
+            .arg(&fixture)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            compile.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+        let open = |path: &std::path::Path| {
+            std::fs::OpenOptions::new()
+                .access_mode(READ_CONTROL | WRITE_DAC)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(path)
+                .unwrap()
+        };
+        let package_root = open(package.path());
+        let entry = open(&executable);
+        profile.grant_package_read_execute(&package_root).unwrap();
+        profile.grant_package_read_execute(&entry).unwrap();
+
+        let bait_root = tempfile::tempdir().unwrap();
+        let scopes = ["vault", "home", "credentials", "other-package"];
+        let bait: Vec<_> = scopes
+            .iter()
+            .map(|scope| {
+                let directory = bait_root.path().join(scope);
+                std::fs::create_dir(&directory).unwrap();
+                let path = directory.join("bait.txt");
+                std::fs::write(&path, format!("OpenNexus C-01 {scope} bait")).unwrap();
+                path
+            })
+            .collect();
+        let before: Vec<_> = bait
+            .iter()
+            .map(|path| Sha256::digest(std::fs::read(path).unwrap()))
+            .collect();
+        let folder = profile.folder().unwrap();
+        let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+        let mut arguments = vec!["file_denied_100".to_owned()];
+        arguments.extend(bait.iter().map(|path| path.to_string_lossy().into_owned()));
+        let data = crate::extension_launch_data::LaunchData::new(
+            &executable,
+            &arguments,
+            &system,
+            &folder,
+            &folder.join("Temp"),
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            checked_executable_data(&profile, &executable, None, Some(data)),
+            Some(0)
+        );
+        let after: Vec<_> = bait
+            .iter()
+            .map(|path| Sha256::digest(std::fs::read(path).unwrap()))
+            .collect();
+        assert_eq!(after, before);
+        drop(entry);
+        drop(package_root);
+        profile.remove().unwrap();
+    }
     #[cfg(feature = "desktop")]
     #[test]
     #[ignore = "real MCP tools/call 60-second deadline acceptance; run explicitly"]
@@ -769,6 +877,12 @@ mod tests {
         .into_iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+        let mut args = args;
+        args.extend(
+            (8..100).map(|index| {
+                format!(r#"attack-{index} & | < > ^ %COMSPEC% $(echo injected) \" \\"#)
+            }),
+        );
         let folder = profile.folder().unwrap();
         let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
         #[cfg(not(feature = "desktop"))]
@@ -968,12 +1082,13 @@ mod tests {
                 "mcp_bad_result",
                 "mcp_idle_change",
                 "mcp_review_lock",
+                "mcp_twenty",
             ];
             if _mcp_deadline {
                 mcp_modes.push("mcp_deadline");
             }
             if resources {
-                mcp_modes.extend(["mcp_cpu", "mcp_memory", "mcp_processes"]);
+                mcp_modes.extend(["mcp_cpu", "mcp_memory", "mcp_processes", "mcp_scratch"]);
             }
             for mode in mcp_modes {
                 use std::sync::{
@@ -1093,10 +1208,11 @@ mod tests {
                             );
                             assert!(session.take_tools_changed());
                         }
-                        "mcp_cpu" | "mcp_memory" | "mcp_processes" => {
+                        "mcp_cpu" | "mcp_memory" | "mcp_processes" | "mcp_scratch" => {
                             let expected = match mode {
                                 "mcp_memory" => "EXTENSION_RESOURCE_MEMORY_EXCEEDED",
                                 "mcp_processes" => "EXTENSION_RESOURCE_PROCESSES_EXCEEDED",
+                                "mcp_scratch" => "EXTENSION_RESOURCE_SCRATCH_EXCEEDED",
                                 _ => "EXTENSION_RESOURCE_CPU_EXCEEDED",
                             };
                             assert_eq!(result.unwrap_err().code, expected);
@@ -1182,6 +1298,18 @@ mod tests {
                                     .unwrap()["content"][0]["text"],
                                 "native MCP success"
                             );
+                        }
+                        "mcp_twenty" => {
+                            assert_eq!(result.unwrap()["structuredContent"]["ok"], true);
+                            for _ in 1..20 {
+                                assert_eq!(
+                                    session
+                                        .test_call_tool("echo", serde_json::json!({}), &cancel)
+                                        .unwrap()["structuredContent"]["ok"],
+                                    true
+                                );
+                            }
+                            assert!(!session.take_tools_changed());
                         }
                         _ => {
                             assert_eq!(result.unwrap()["content"][0]["text"], "native MCP success");
@@ -1495,6 +1623,28 @@ mod tests {
                 }
             }
         }
+        let descendant_listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+        descendant_listener.set_nonblocking(true).unwrap();
+        let data = crate::extension_launch_data::LaunchData::new(
+            &executable,
+            &[
+                "child_udp_100".to_owned(),
+                descendant_listener.local_addr().unwrap().to_string(),
+            ],
+            &system,
+            &folder,
+            &folder.join("Temp"),
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            checked_executable_data(&profile, &executable, None, Some(data)),
+            Some(0)
+        );
+        assert_eq!(
+            descendant_listener.recv(&mut [0u8; 8]).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
         drop(entry);
         drop(root);
         profile.remove().unwrap();

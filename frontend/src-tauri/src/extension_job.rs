@@ -3,6 +3,7 @@ use crate::workspace::{HostError, Result};
 use std::{
     mem::size_of,
     os::windows::io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle},
+    path::{Path, PathBuf},
 };
 use windows_sys::Win32::System::{
     JobObjects::*,
@@ -26,9 +27,15 @@ impl Job {
         })
     }
     pub fn new() -> Result<Self> {
-        Self::with_process_limit(16)
+        Self::with_process_limit(16, None)
     }
-    fn with_process_limit(processes: u32) -> Result<Self> {
+    pub fn with_scratch(scratch: &Path) -> Result<Self> {
+        if !scratch.is_absolute() {
+            return Err(HostError::new("EXTENSION_RESOURCE_UNAVAILABLE"));
+        }
+        Self::with_process_limit(16, Some(scratch.to_owned()))
+    }
+    fn with_process_limit(processes: u32, scratch: Option<PathBuf>) -> Result<Self> {
         let raw = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if raw.is_null() {
             return Err(HostError::new("EXTENSION_RESOURCE_UNAVAILABLE"));
@@ -63,7 +70,7 @@ impl Job {
             },
         };
         job.set(JobObjectCpuRateControlInformation, &cpu)?;
-        job._monitor = Some(ResourceMonitor::arm(&job)?);
+        job._monitor = Some(ResourceMonitor::arm(&job, scratch)?);
         Ok(job)
     }
     pub fn check_resources(&self) -> Result<()> {
@@ -74,6 +81,7 @@ impl Job {
             3 => Err(HostError::new("EXTENSION_RESOURCE_TERMINATE_FAILED")),
             4 => Err(HostError::new("EXTENSION_RESOURCE_MEMORY_EXCEEDED")),
             5 => Err(HostError::new("EXTENSION_RESOURCE_PROCESSES_EXCEEDED")),
+            6 => Err(HostError::new("EXTENSION_RESOURCE_SCRATCH_EXCEEDED")),
             _ => Err(HostError::new("EXTENSION_RESOURCE_MONITOR_FAILED")),
         }
     }
@@ -93,7 +101,7 @@ impl Job {
     }
     /// 在任何扩展指令执行之前附加。没有启用任何分离标志。
     ///
-    /// # 安全性
+    /// # Safety
     /// 调用方必须拥有尚未恢复执行的 CREATE_SUSPENDED 进程，并在出现任何错误时终止该进程。
     /// 只有 AppContainer、句柄与权限检查全部通过后，才能恢复执行。
     pub unsafe fn assign_suspended(&self, process: BorrowedHandle<'_>) -> Result<()> {
@@ -129,18 +137,18 @@ impl Job {
     }
 }
 
-/// The Windows notification uses a ten-second window and ToleranceHigh (60%
-/// over budget). This is not a measurement of ten uninterrupted busy seconds.
-/// Only the original Job owns this monitor; observation/deadline clones do not.
+/// Windows 通知使用十秒窗口和 ToleranceHigh（允许超出预算 60%），不表示已经
+/// 测得连续十秒满载。只有原始 Job 拥有监视器，观察和期限副本不拥有。
 const JOB_MEMORY_LIMIT: u32 = 10; // JOB_OBJECT_MSG_JOB_MEMORY_LIMIT
 const JOB_PROCESS_LIMIT: u32 = 3; // JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT
 const JOB_NOTIFICATION_LIMIT: u32 = 11; // JOB_OBJECT_MSG_NOTIFICATION_LIMIT (Windows SDK)
+const SCRATCH_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
 struct ResourceMonitor {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
 }
 impl ResourceMonitor {
-    fn arm(job: &Job) -> Result<Self> {
+    fn arm(job: &Job, scratch: Option<PathBuf>) -> Result<Self> {
         use std::sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
@@ -178,10 +186,16 @@ impl ResourceMonitor {
         let worker = std::thread::Builder::new()
             .name("extension-resources".into())
             .spawn(move || {
-                // All exits, including a caught panic or completion-port failure,
-                // terminate the tree while this worker still owns a Job handle.
+                // 所有退出路径（包括捕获到的 panic 或完成端口错误）都会在本线程
+                // 仍持有 Job 句柄时终止整个进程树。
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     while !thread_stop.load(Ordering::Acquire) {
+                        if scratch
+                            .as_deref()
+                            .is_some_and(|path| scratch_usage(path).is_err())
+                        {
+                            return 6;
+                        }
                         let (mut code, mut key, mut pointer) = (0, 0, std::ptr::null_mut());
                         let ok = unsafe {
                             GetQueuedCompletionStatus(
@@ -203,8 +217,8 @@ impl ResourceMonitor {
                         if key != 1 {
                             return 2;
                         }
-                        // These hard-limit notifications are best effort on Windows;
-                        // the kernel still enforces the configured allocation caps.
+                        // 这些硬上限通知在 Windows 上是尽力投递；即使通知丢失，
+                        // 内核仍执行已配置的分配上限。
                         if code == JOB_MEMORY_LIMIT {
                             return 4;
                         }
@@ -245,6 +259,48 @@ impl ResourceMonitor {
             worker: Some(worker),
         })
     }
+}
+
+fn scratch_usage(root: &Path) -> Result<u64> {
+    if !root.is_absolute() {
+        return Err(HostError::new("EXTENSION_RESOURCE_SCRATCH_EXCEEDED"));
+    }
+    let mut total = 0u64;
+    let mut entries = 0usize;
+    let mut pending = vec![root.to_owned()];
+    while let Some(path) = pending.pop() {
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|_| HostError::new("EXTENSION_RESOURCE_SCRATCH_EXCEEDED"))?;
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 || metadata.file_type().is_symlink() {
+            return Err(HostError::new("EXTENSION_RESOURCE_SCRATCH_EXCEEDED"));
+        }
+        entries += 1;
+        if entries > 10_000 {
+            return Err(HostError::new("EXTENSION_RESOURCE_SCRATCH_EXCEEDED"));
+        }
+        if metadata.is_dir() {
+            for child in std::fs::read_dir(&path)
+                .map_err(|_| HostError::new("EXTENSION_RESOURCE_SCRATCH_EXCEEDED"))?
+            {
+                pending.push(
+                    child
+                        .map_err(|_| HostError::new("EXTENSION_RESOURCE_SCRATCH_EXCEEDED"))?
+                        .path(),
+                );
+            }
+        } else if metadata.is_file() {
+            total = total
+                .checked_add(metadata.len())
+                .ok_or_else(|| HostError::new("EXTENSION_RESOURCE_SCRATCH_EXCEEDED"))?;
+            if total > SCRATCH_LIMIT_BYTES {
+                return Err(HostError::new("EXTENSION_RESOURCE_SCRATCH_EXCEEDED"));
+            }
+        } else {
+            return Err(HostError::new("EXTENSION_RESOURCE_SCRATCH_EXCEEDED"));
+        }
+    }
+    Ok(total)
 }
 impl Drop for ResourceMonitor {
     fn drop(&mut self) {
@@ -440,8 +496,7 @@ mod tests {
         );
         idle_job.check_resources().unwrap();
         assert!(idle_job.active_processes().unwrap() > 0);
-        // An observation handle must not keep the monitor alive after its owner
-        // is dropped, or keep the idle process running indefinitely.
+        // 观察句柄不能在所有者销毁后继续维持监视器，也不能让空闲进程无限运行。
         let observation = idle_job.clone_for_deadline().unwrap();
         let stop = std::time::Instant::now();
         drop(idle_job);
@@ -530,7 +585,7 @@ mod tests {
     }
     #[test]
     fn actual_suspended_process_assignment_limits_and_close_cleanup() {
-        let job = Job::with_process_limit(1).unwrap();
+        let job = Job::with_process_limit(1, None).unwrap();
         let first = worker();
         unsafe {
             job.assign_suspended(first.process.as_handle()).unwrap();
@@ -538,8 +593,8 @@ mod tests {
         assert_eq!(job.active_processes().unwrap(), 1);
         let second = worker();
         assert!(unsafe { job.assign_suspended(second.process.as_handle()) }.is_err());
-        // Both processes were still suspended. The attempted limit violation
-        // now revokes the entire first job, rather than leaving it runnable.
+        // 两个进程仍处于暂停状态。触发上限后撤销整个首个 Job，不能把旧进程
+        // 留在可运行状态。
         drop(second);
         assert_resource_cleanup(&job, "EXTENSION_RESOURCE_PROCESSES_EXCEEDED");
         assert_eq!(

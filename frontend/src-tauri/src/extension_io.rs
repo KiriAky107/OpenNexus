@@ -84,9 +84,8 @@ impl Drop for Worker {
     fn drop(&mut self) {
         self.state.stopped.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
-            // Cancellation is not sticky: retry to cover the interval between
-            // the worker checking stopped and actually entering Read/WriteFile.
-            // These workers only issue anonymous-pipe IO, never arbitrary device IO.
+            // 取消状态不会自动作用于后续调用，因此需要重试，以覆盖工作线程检查停止状态到实际进入
+            // ReadFile/WriteFile 之间的窗口。这些线程只操作匿名管道，不访问任意设备。
             while !thread.is_finished() {
                 unsafe {
                     CancelSynchronousIo(thread.as_raw_handle());
@@ -185,8 +184,7 @@ impl Pump {
             &pump.state,
             "extension-stderr",
             move |state| {
-                // Drain without persisting possible secrets. Diagnostic retention
-                // needs an explicit redaction policy before it can be enabled.
+                // 清空数据但不持久化可能的秘密；只有明确配置脱敏策略后才能保留诊断信息。
                 let mut buffer = [0; 4096];
                 let mut total = 0;
                 while !state.stopped.load(Ordering::Acquire) {
@@ -206,12 +204,11 @@ impl Pump {
         )?);
         Ok(pump)
     }
-    /// Nonblocking admission; at most one pending write plus one in progress.
+    /// 非阻塞接收；最多允许一个等待写入和一个正在写入的请求。
     pub fn send(&self, frame: Vec<u8>) -> Result<()> {
         self.send_wait(frame, Duration::ZERO)
     }
-    /// Bounded admission for serial protocol notifications immediately followed
-    /// by a request; retries retain the same frame, without allocating copies.
+    /// 为协议通知紧接请求的串行场景提供有界接收；重试保留同一帧，不分配副本。
     pub(crate) fn send_wait(&self, mut frame: Vec<u8>, timeout: Duration) -> Result<()> {
         self.state.check()?;
         if timeout > Duration::from_secs(1) {
@@ -275,7 +272,7 @@ impl Pump {
     pub fn check(&self) -> Result<()> {
         self.state.check()
     }
-    /// Stop the process group first, then cancel and join every pipe worker.
+    /// 先停止进程组，再取消并等待所有管道工作线程。
     pub fn shutdown(mut self) -> Result<()> {
         let result = self.state.job.terminate();
         self.state.stopped.store(true, Ordering::Release);
@@ -364,8 +361,7 @@ mod tests {
             let started = Instant::now();
             pump.shutdown().unwrap();
             assert!(started.elapsed() < Duration::from_secs(2));
-            // The peer handles remained open throughout shutdown. No process
-            // exit or peer EOF is available to mask broken IO cancellation.
+            // 关闭期间对端句柄始终保持打开，不能用进程退出或对端 EOF 掩盖失效的 IO 取消。
             drop(peers);
         }
     }

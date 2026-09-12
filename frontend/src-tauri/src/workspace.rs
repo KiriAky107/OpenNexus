@@ -590,7 +590,7 @@ impl Workspace {
         }
         let mut previous = self.entry(path)?;
         if let Some(id) = identity {
-            // Tombstone metadata can yield its old path to a new remote identity.
+            // 墓碑元数据可以把旧路径让给新的远端身份。
             if let Some(retired) = previous
                 .as_ref()
                 .filter(|entry| entry.deleted && entry.file_id != id)
@@ -651,8 +651,7 @@ impl Workspace {
                 origin
             ],
         )?;
-        // Rejection drops the uncommitted transaction: no recoverable write or
-        // outbox entry is published. An unreferenced payload is never replayed.
+        // 拒绝会丢弃未提交事务：不会发布可恢复写入或 outbox 条目，也不会重放无引用载荷。
         authorize()?;
         tx.commit()?;
         self.apply_stored_journal(operation_id, &file_id, path, expected, origin)?;
@@ -1019,7 +1018,7 @@ impl Workspace {
             tx.commit()?;
             return Err(HostError::new("RECOVERY_CONFLICT"));
         }
-        // The durable payload remains available after removing the source.
+        // 删除来源后，持久载荷仍保持可用。
         if !target.exists() {
             let parent = target
                 .parent()
@@ -1612,7 +1611,7 @@ mod tests {
             .unwrap();
         assert_eq!(committed.revision, initial.revision + 1);
         assert_eq!(ws.pending_count().unwrap(), pending + 1);
-        // Revoked callers cannot obtain an existing successful receipt either.
+        // 已撤销的调用方也不能取得已有的成功回执。
         assert_eq!(
             ws.write_operation_guarded("note.md", &initial.hash, b"update", &id, || Err(
                 HostError::new("EXTENSION_PERMIT_REVOKED")

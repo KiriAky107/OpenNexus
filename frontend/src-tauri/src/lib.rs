@@ -1,6 +1,7 @@
 //! 原生文件所有权与持久化 outbox；本库不依赖 WebView，可独立执行破坏性故障测试。
 
 pub mod core;
+pub mod core_update;
 pub mod credentials;
 mod payloads;
 mod preference_records;
@@ -54,6 +55,7 @@ pub mod extension_trust;
 
 #[cfg(windows)]
 pub mod extension_job;
+pub mod extension_legacy;
 
 #[cfg(windows)]
 pub mod extension_container;
@@ -78,6 +80,9 @@ mod extension_revocation;
 
 #[cfg(all(windows, feature = "desktop"))]
 pub mod extension_file_broker;
+
+#[cfg(all(windows, feature = "desktop"))]
+pub mod extension_network_broker;
 
 #[cfg(windows)]
 pub mod extension_stdio;

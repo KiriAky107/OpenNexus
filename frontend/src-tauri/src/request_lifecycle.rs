@@ -89,7 +89,7 @@ impl Lease {
         &mut self,
         operation: impl Future<Output = Result<T, String>>,
     ) -> Result<T, String> {
-        // Check current state before polling an operation with possible side effects.
+        // 轮询可能产生副作用的操作前先检查当前状态。
         if *self.cancel.borrow() {
             return Err("REQUEST_CANCELLED".into());
         }

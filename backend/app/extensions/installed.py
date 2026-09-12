@@ -46,6 +46,15 @@ class InstalledRuntime:
         with self._db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS installations (kind TEXT, id TEXT, data TEXT, PRIMARY KEY(kind,id))')
 
+    def _require_python_owner(self):
+        """Rust Host 接管安装库后，旧 Python 入口只能读取，不能再改变扩展状态。"""
+        if (self.path.parent / 'extension-installations.rust-owned.json').is_file():
+            raise ExtensionError(
+                'EXTENSION_HOST_OWNED',
+                'Extension installation state is owned by the Rust Host.',
+                status_code=409,
+            )
+
     @contextmanager
     def _db(self):
         db = sqlite3.connect(self.path)
@@ -82,6 +91,7 @@ class InstalledRuntime:
 
     def install(self, package_path, *, managed_root=None):
         with self.lock:
+            self._require_python_owner()
             root = Path(package_path).resolve()
             package_digest(root)  # 更改运行时状态之前检查。
             if managed_root is not None:
@@ -100,6 +110,7 @@ class InstalledRuntime:
 
     def enable(self, identifier):
         with self.lock:
+            self._require_python_owner()
             # 必须重新安装更改的软件包以重新解析其声明。
             saved = self._read(identifier)
             root = self.runtime._record(identifier).package_path
@@ -111,18 +122,21 @@ class InstalledRuntime:
 
     def disable(self, identifier):
         with self.lock:
+            self._require_python_owner()
             item = self.runtime.disable(identifier)
             self._save(identifier)
             return item
 
     def set_permissions(self, identifier, permissions):
         with self.lock:
+            self._require_python_owner()
             item = self.runtime.set_permissions(identifier, permissions)
             self._save(identifier)
             return item
 
     def uninstall(self, identifier, *args, **kwargs):
         with self.lock:
+            self._require_python_owner()
             saved = self._read(identifier)
             self.runtime.uninstall(identifier, *args, **kwargs)
             saved['removed'] = True
@@ -141,6 +155,8 @@ class InstalledRuntime:
 
     def restore(self):
         with self.lock:
+            if (self.path.parent / 'extension-installations.rust-owned.json').is_file():
+                return
             with self._db() as db:
                 rows = db.execute('SELECT id,data FROM installations WHERE kind=?', (self.kind,)).fetchall()
             self.restoring = True

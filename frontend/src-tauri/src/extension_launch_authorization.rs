@@ -80,7 +80,8 @@ impl PreparedLaunch {
     }
 }
 impl<'a> LeasedSuspended<'a> {
-    /// # Safety Live 信任、主动安装、代理和所有沙箱资源策略要求也必须满足。租约不规定这些条件。
+    /// # Safety
+    /// 实时信任、主动安装、代理和所有沙箱资源策略要求也必须满足。租约不规定这些条件。
     pub unsafe fn resume(self) -> Result<crate::extension_process::Running<'a>> {
         unsafe { self.process.resume_with_lease(self.lease, self.identity) }
     }
@@ -93,8 +94,7 @@ impl Drop for EnvironmentValues {
         }
     }
 }
-/// Credential setup and execution must use the same derived identity. The
-/// reference is an opaque ID inside this package's domain, never a caller scope.
+/// 凭据设置和执行必须使用同一派生身份。引用是该包域内的不透明 ID，不能充当调用方作用域。
 pub fn credential_id(claims: &Claims, reference: &str) -> Result<CredentialId> {
     if reference.is_empty()
         || reference.len() > 128
@@ -132,8 +132,7 @@ pub fn credential_id(claims: &Claims, reference: &str) -> Result<CredentialId> {
     })
 }
 impl Context<'_> {
-    /// Capture epochs before resolving credentials; never adopt a newer lock
-    /// generation for launch bytes prepared under an earlier session.
+    /// 解析凭据前捕获代际；为旧会话准备的启动数据不得采用较新的锁代际。
     pub fn prepare(
         &self,
         authority: &Authority,
@@ -205,7 +204,7 @@ impl Context<'_> {
                         .ok_or_else(|| HostError::new("EXTENSION_CREDENTIAL_MISSING"))?;
                     let value = std::str::from_utf8(&value)
                         .map_err(|_| HostError::new("EXTENSION_CREDENTIAL_ENCODING_INVALID"))?;
-                    // Insert directly into the cleaning owner, never an error or log.
+                    // 直接写入负责清零的所有者，绝不写入错误或日志。
                     values.0.insert(name.clone(), value.to_owned());
                 }
             }

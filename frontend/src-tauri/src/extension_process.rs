@@ -96,9 +96,8 @@ pub struct Running<'a> {
     identity: Option<crate::extension_call_authorization::Identity>,
 }
 impl<'a> Suspended<'a> {
-    /// Creates hidden, with no inherited handles and an explicit environment and
-    /// current directory. The profile borrow prevents cleanup while this owner
-    /// exists. This API never resumes extension instructions.
+    /// 使用显式环境和工作目录创建隐藏进程，不继承任意句柄。Profile 借用会在
+    /// 所有者存活期间阻止清理；此 API 永远不会恢复扩展指令。
     pub fn create(profile: &'a Profile, executable: &Path, data: LaunchData) -> Result<Self> {
         Self::create_inner(profile, executable, data, None)
     }
@@ -118,6 +117,28 @@ impl<'a> Suspended<'a> {
         }
         let executable: Vec<_> = executable.into_iter().chain(Some(0)).collect();
         let folder = profile.folder()?;
+        std::fs::create_dir_all(data.scratch())
+            .map_err(|_| HostError::new("EXTENSION_RESOURCE_UNAVAILABLE"))?;
+        let scratch_metadata = std::fs::symlink_metadata(data.scratch())
+            .map_err(|_| HostError::new("EXTENSION_RESOURCE_UNAVAILABLE"))?;
+        use std::os::windows::fs::MetadataExt;
+        if !scratch_metadata.is_dir()
+            || scratch_metadata.file_attributes() & 0x400 != 0
+            || scratch_metadata.file_type().is_symlink()
+        {
+            return Err(HostError::new("EXTENSION_RESOURCE_UNAVAILABLE"));
+        }
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, READ_CONTROL, WRITE_DAC,
+        };
+        let scratch_handle = std::fs::OpenOptions::new()
+            .access_mode(READ_CONTROL | WRITE_DAC)
+            .share_mode(1 | 2 | 4)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(data.scratch())
+            .map_err(|_| HostError::new("EXTENSION_RESOURCE_UNAVAILABLE"))?;
+        profile.grant_scratch_modify(&scratch_handle)?;
         let directory: Vec<u16> = folder.as_os_str().encode_wide().chain(Some(0)).collect();
         let mut attributes = Attributes::new(if io.is_some() { 2 } else { 1 })?;
         let caps = SECURITY_CAPABILITIES {
@@ -140,12 +161,12 @@ impl<'a> Suspended<'a> {
         {
             return Err(HostError::new("EXTENSION_PROCESS_ATTRIBUTES_FAILED"));
         }
-        let job = Job::new()?;
+        let job = Job::with_scratch(data.scratch())?;
         let mut startup = STARTUPINFOEXW::default();
         startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
         startup.lpAttributeList = attributes.buffer.as_mut_ptr().cast();
-        // Keep both the handle array and the owning pipe ends alive across
-        // CreateProcessW. No arbitrary inheritable Host handle is admitted.
+        // 在 CreateProcessW 返回前同时保留句柄数组和管道所有者，不允许任意
+        // Host 可继承句柄进入扩展进程。
         let io = io
             .map(crate::extension_stdio::ChildIo::inherit)
             .transpose()?;
@@ -209,8 +230,7 @@ impl<'a> Suspended<'a> {
         verify_identity(&process.handles, profile)?;
         Ok(Self(process))
     }
-    /// Package launch path: retain the entry guard (and its package/ancestor
-    /// handles) for the entire suspended/running process lifetime.
+    /// 包启动路径在暂停和运行的整个生命周期内保留入口守卫及包祖先句柄。
     #[cfg(feature = "desktop")]
     pub fn create_bound(
         profile: &'a Profile,
@@ -234,10 +254,9 @@ impl<'a> Suspended<'a> {
         Ok((value, host))
     }
     /// # Safety
-    /// Caller must hold the verified package/entry handles and revalidate the
-    /// current execution permit, trust, Vault binding, environment declarations,
-    /// broker and all resource policy requirements immediately before this call.
-    /// None of those authorization checks is supplied by this low-level module.
+    /// 调用方必须持有已验证的包与入口句柄，并在调用前立即复核当前执行许可、信任、
+    /// Vault 绑定、环境声明、broker 以及全部资源策略要求。
+    /// 此底层模块不会代为执行上述授权检查。
     pub unsafe fn resume(self) -> Result<Running<'a>> {
         self.0.job.check_resources()?;
         if unsafe { ResumeThread(self.0.handles.thread.as_raw_handle()) } != 1 {

@@ -1,4 +1,4 @@
-// Visual fixtures only: all API traffic is intercepted; no provider calls or user data.
+// 仅使用视觉夹具：拦截全部 API 流量，不调用提供商，也不读取用户数据。
 const {chromium}=require('playwright');const fs=require('node:fs/promises');const path=require('node:path');
 (async()=>{
  const output=path.resolve(process.argv[2]||'.local-plans/phase2-review/themes');await fs.mkdir(output,{recursive:true});
