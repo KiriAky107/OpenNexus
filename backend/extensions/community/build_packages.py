@@ -42,7 +42,7 @@ def build(output: Path | None = None) -> dict:
             for name in sorted(files):
                 info = zipfile.ZipInfo(f'{identity}/{name}', date_time=(1980, 1, 1, 0, 0, 0))
                 info.create_system = 3
-                info.external_attr = 0o100644 << 16
+                info.external_attr = (0o100755 if name == 'markdown-workbench.exe' else 0o100644) << 16
                 info.compress_type = zipfile.ZIP_DEFLATED
                 content = generated.get(name)
                 if content is None:
