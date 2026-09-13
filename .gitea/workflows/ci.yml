@@ -76,5 +76,11 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --component rustfmt,clippy
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: 准备协议测试所需的后端环境
+        run: |
+          curl -LsSf https://astral.sh/uv/0.9.24/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          uv sync --frozen
+        working-directory: backend
       - run: cargo fmt --check && cargo test --lib --locked && cargo clippy --lib --locked -- -D warnings
         working-directory: frontend/src-tauri
