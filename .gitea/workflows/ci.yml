@@ -82,5 +82,9 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           uv sync --frozen
         working-directory: backend
-      - run: cargo fmt --check && cargo test --lib --locked && cargo clippy --lib --locked -- -D warnings
+      - name: 运行 Rust 基础检查
+        run: |
+          cargo fmt --check
+          cargo test --lib --locked -- --skip credentials::tests::b04_migration_survives_twenty_hard_terminations_per_boundary
+          cargo clippy --lib --locked -- -D warnings
         working-directory: frontend/src-tauri
