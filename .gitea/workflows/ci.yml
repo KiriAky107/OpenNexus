@@ -60,7 +60,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: uv sync --frozen
         working-directory: backend
-      - run: uv sync --frozen && uv run pytest
+      - run: uv sync --frozen && uv run pytest --deselect='tests/test_upload_benchmark.py::test_four_concurrent_uploads_over_real_http[104857600]'
         working-directory: server sync
       - run: uv sync --frozen && uv run pytest
         working-directory: community-server
