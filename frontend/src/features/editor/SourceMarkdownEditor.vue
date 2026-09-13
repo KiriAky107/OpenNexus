@@ -9,10 +9,12 @@ import { useSettingsStore } from '@/stores/settings'
 import { registerEditorCommands } from '@/services/editorCommandService'
 import { previewPropertyImport, type PropertyChoices, type PropertyConflict } from './importProperties'
 import AppDialog from '@/components/common/AppDialog.vue'
+import { storeWorkspaceImage, type WorkspaceAssetSource } from '@/services/workspaceService'
 
 const props = defineProps<{ initialContent: string }>()
 const editor = useEditorStore(), settings = useSettingsStore()
 const root = ref<HTMLElement | null>(null), error = ref('')
+const imageInput = ref<HTMLInputElement | null>(null)
 const conflicts = ref<PropertyConflict[]>([]), choices = ref<PropertyChoices>({})
 const proofing = new Compartment()
 let view: EditorView | undefined, dispose: (() => void) | undefined
@@ -22,6 +24,31 @@ function attributes() {
     'aria-label': settings.language === 'en' ? 'Markdown source editor' : 'Markdown 源码编辑器' })
 }
 function available() { return !!view && !!editor.currentFilePath && !['conflict', 'external_changed'].includes(editor.saveStatus) }
+function imageFiles(list: FileList | null): File[] {
+  return [...(list ?? [])].filter(file => file.type.startsWith('image/'))
+}
+async function insertImages(files: File[], source: WorkspaceAssetSource, position?: number) {
+  if (!view || !available() || !files.length) return
+  const targetView = view, targetPath = editor.currentFilePath
+  const at = position ?? targetView.state.selection.main.from
+  const document = targetView.state.doc
+  error.value = ''
+  try {
+    const assets = []
+    for (const file of files) assets.push(await storeWorkspaceImage(file, source, targetPath!, editor.currentNoteId))
+    if (view !== targetView || editor.currentFilePath !== targetPath || !available()) return
+    const markdown = assets.map(asset => `![${asset.original_name.replace(/[\]\\]/g, '\\$&')}](${asset.reference})`).join('\n\n')
+    const insertion = targetView.state.doc.eq(document) ? Math.min(at, targetView.state.doc.length) : targetView.state.selection.main.from
+    targetView.dispatch({ changes: { from: insertion, insert: markdown } })
+    targetView.focus()
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason) }
+}
+function chooseImages() { imageInput.value?.click() }
+function selectedImages(event: Event) {
+  const input = event.target as HTMLInputElement
+  void insertImages(imageFiles(input.files), 'upload')
+  input.value = ''
+}
 function importProperties() {
   if (!available() || !view) return { ok: false as const, reason: 'unavailable' as const }
   error.value = ''; choices.value = {}
@@ -57,6 +84,20 @@ onMounted(() => {
   view = new EditorView({ parent: root.value!, state: EditorState.create({ doc: props.initialContent, extensions: [
     history(), keymap.of([...defaultKeymap, ...historyKeymap]), lineNumbers(), markdown(), proofing.of(attributes()),
     EditorView.lineWrapping,
+    EditorView.domEventHandlers({
+      paste(event) {
+        const files = imageFiles(event.clipboardData?.files ?? null)
+        if (!files.length) return false
+        event.preventDefault(); void insertImages(files, 'paste'); return true
+      },
+      drop(event, currentView) {
+        const files = imageFiles(event.dataTransfer?.files ?? null)
+        if (!files.length) return false
+        event.preventDefault()
+        const position = currentView.posAtCoords({ x: event.clientX, y: event.clientY }) ?? currentView.state.selection.main.from
+        void insertImages(files, 'drop', position); return true
+      },
+    }),
     EditorView.updateListener.of(update => {
       if (update.docChanged) { editor.updateContent(update.state.doc.toString()); editor.scheduleAutoSave(settings.autoSaveInterval) }
     }),
@@ -82,7 +123,11 @@ onBeforeUnmount(() => { dispose?.(); view?.destroy(); pending = undefined })
 
 <template>
   <div class="source-container">
-    <div class="source-actions"><button class="btn" :disabled="!editor.currentFilePath || ['conflict', 'external_changed'].includes(editor.saveStatus)" @click="importProperties">导入为笔记属性…</button></div>
+    <div class="source-actions">
+      <button class="btn" :disabled="!editor.currentFilePath || ['conflict', 'external_changed'].includes(editor.saveStatus)" @click="importProperties">导入为笔记属性…</button>
+      <button class="btn" :disabled="!available()" @click="chooseImages">插入图片…</button>
+      <input ref="imageInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple @change="selectedImages" />
+    </div>
     <p v-if="error" role="alert">{{ error }}</p>
     <div ref="root" class="source-code" />
     <AppDialog v-if="conflicts.length" label="属性冲突预览" @close="conflicts = []; pending = undefined">
@@ -100,6 +145,7 @@ onBeforeUnmount(() => { dispose?.(); view?.destroy(); pending = undefined })
 <style scoped>
 .source-container { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .source-code { flex: 1; min-height: 0; overflow: hidden; }
-.source-actions { padding: var(--space-sm); border-bottom: 1px solid var(--color-border-subtle); }
+.source-actions { display: flex; gap: var(--space-sm); padding: var(--space-sm); border-bottom: 1px solid var(--color-border-subtle); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>

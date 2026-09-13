@@ -112,6 +112,8 @@ def test_workspace_openapi_paths_are_published() -> None:
         "/api/workspace/folders",
         "/api/workspace/folders/rename",
         "/api/workspace/folders/delete",
+        "/api/workspace/assets",
+        "/api/workspace/assets/content",
         "/api/notes/{note_id}/rename",
     } <= paths.keys()
 
