@@ -17,6 +17,7 @@ import { useEditorStore } from '@/stores/editor'
 import { executeEditorCommand } from '@/services/editorCommandService'
 import { headingFoldKey } from './headingFolding'
 import { useMarkdownPreferencesStore } from '@/stores/markdownPreferences'
+import * as workspace from '@/services/workspaceService'
 
 type EditorComponent = { getEditor: () => Editor | undefined }
 
@@ -52,9 +53,26 @@ beforeEach(() => {
 afterEach(() => {
   mounted.splice(0).forEach((wrapper) => wrapper.unmount())
   document.body.innerHTML = ''
+  vi.restoreAllMocks()
 })
 
 describe('VisualMarkdownEditor formatting toolbars', () => {
+  it('uploads a selected image and keeps a portable Markdown reference', async () => {
+    const store = useEditorStore(); store.currentFilePath = '/课程/笔记.md'; store.currentNoteId = 'note-image'
+    vi.spyOn(workspace, 'storeWorkspaceImage').mockResolvedValue({
+      asset_id: 'asset-image', path: 'attachments/aa/hash.png', content_hash: 'hash',
+      media_type: 'image/png', size: 12, original_name: '图.png', reference: '../attachments/aa/hash.png',
+    })
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: '' }, attachTo: document.body })
+    mounted.push(wrapper); const editor = await waitForEditor(wrapper)
+    const input = wrapper.get('input[type="file"]')
+    const file = new File(['png'], '图.png', { type: 'image/png' })
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
+    await input.trigger('change')
+    await vi.waitFor(() => expect(editor.action(getMarkdown())).toContain('![图.png](../attachments/aa/hash.png)'))
+    expect(workspace.storeWorkspaceImage).toHaveBeenCalledWith(file, 'upload', '/课程/笔记.md', 'note-image')
+  })
+
   it('opens a rendered Markdown link on Ctrl click without changing its source', async () => {
     const wrapper = mount(VisualMarkdownEditor, {
       props: { initialContent: '[**文档**](https://example.com/docs)' }, attachTo: document.body,

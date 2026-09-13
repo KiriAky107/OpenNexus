@@ -172,6 +172,28 @@ MIGRATIONS: list[str] = [
     """ALTER TABLE chat_messages ADD COLUMN workspace_context_json TEXT;""",
     """ALTER TABLE chat_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]';""",
     """ALTER TABLE chat_messages ADD COLUMN context_captured INTEGER NOT NULL DEFAULT 0;""",
+    # v13：工作区图片本体保存在 Vault；数据库只保存可检索元数据和笔记引用关系。
+    """
+    CREATE TABLE IF NOT EXISTS workspace_assets (
+        asset_id      TEXT PRIMARY KEY,
+        path          TEXT NOT NULL UNIQUE,
+        content_hash  TEXT NOT NULL UNIQUE,
+        media_type    TEXT NOT NULL,
+        size          INTEGER NOT NULL CHECK(size >= 0),
+        original_name TEXT NOT NULL,
+        created_at    TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS workspace_asset_links (
+        asset_id   TEXT NOT NULL REFERENCES workspace_assets(asset_id) ON DELETE CASCADE,
+        note_id    TEXT NOT NULL DEFAULT '',
+        note_path  TEXT NOT NULL,
+        source     TEXT NOT NULL CHECK(source IN ('paste', 'drop', 'upload', 'sync')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(asset_id, note_id, note_path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_workspace_asset_links_note
+        ON workspace_asset_links(note_id, note_path);
+    """,
 ]
 
 

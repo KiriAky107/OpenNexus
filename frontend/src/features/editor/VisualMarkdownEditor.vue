@@ -50,6 +50,7 @@ import { headingFoldingPlugin, headingFoldTransaction, headingFoldKey, headingSe
 import { useHeadingAppearanceStore } from '@/stores/headingAppearance'
 import { useMarkdownPreferencesStore } from '@/stores/markdownPreferences'
 import { t } from '@/i18n'
+import { loadWorkspaceImage, resolveWorkspaceAssetPath, storeWorkspaceImage, type WorkspaceAssetSource } from '@/services/workspaceService'
 import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/frame.css'
 
@@ -80,21 +81,90 @@ const loading = ref(true)
 const allHeadingsFolded = ref(false)
 const hasFoldableHeadings = ref(false)
 const fontSizeInput = ref(16)
+const imageInput = ref<HTMLInputElement | null>(null)
+const imageError = ref('')
 let crepe: Crepe | null = null
 let disposeLanguagePicker: (() => void) | undefined
 let disposeCodeLabels: (() => void) | undefined
 let disposeLinkNavigation: (() => void) | undefined
 let disposeCommands: (() => void) | undefined
 let disposed = false
+const imageUrls = new Set<string>()
 
-function insertMarkdown(source: string) {
+function insertMarkdown(source: string, position?: number) {
   crepe?.editor.action(ctx => {
     const doc = ctx.get(parserCtx)(source)
     if (!doc) throw new Error('Invalid Markdown')
     const view = ctx.get(editorViewCtx)
+    if (position !== undefined) view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, Math.min(position, view.state.doc.content.size))))
     view.dispatch(view.state.tr.replaceSelection(new Slice(doc.content, 0, 0)).scrollIntoView())
     view.focus()
   })
+}
+
+function imageFiles(list: FileList | null): File[] {
+  return [...(list ?? [])].filter(file => file.type.startsWith('image/'))
+}
+
+async function insertImages(files: File[], source: WorkspaceAssetSource, position?: number) {
+  if (!crepe || !editorStore.currentFilePath || !files.length) return
+  const target = crepe, targetPath = editorStore.currentFilePath
+  const document = target.editor.action(ctx => ctx.get(editorViewCtx).state.doc)
+  imageError.value = ''
+  try {
+    const assets = []
+    for (const file of files) assets.push(await storeWorkspaceImage(file, source, targetPath, editorStore.currentNoteId))
+    if (crepe !== target || editorStore.currentFilePath !== targetPath) return
+    const current = target.editor.action(ctx => ctx.get(editorViewCtx).state.doc)
+    insertMarkdown(assets.map(asset => `![${asset.original_name.replace(/[\]\\]/g, '\\$&')}](${asset.reference})`).join('\n\n'), current.eq(document) ? position : undefined)
+  } catch (reason) {
+    imageError.value = reason instanceof Error ? reason.message : String(reason)
+  }
+}
+
+function chooseImages() { imageInput.value?.click() }
+function selectedImages(event: Event) {
+  const input = event.target as HTMLInputElement
+  void insertImages(imageFiles(input.files), 'upload')
+  input.value = ''
+}
+
+function workspaceImageNodeView(node: { type: unknown; attrs: Record<string, unknown> }) {
+  const notePath = editorStore.currentFilePath
+  const dom = document.createElement('img')
+  let source = '', objectUrl = '', generation = 0
+  const apply = (next: typeof node) => {
+    const nextSource = String(next.attrs.src ?? '')
+    dom.alt = String(next.attrs.alt ?? '')
+    if (next.attrs.title) dom.title = String(next.attrs.title)
+    else dom.removeAttribute('title')
+    if (nextSource === source) return
+    source = nextSource
+    const current = ++generation
+    if (objectUrl) { URL.revokeObjectURL(objectUrl); imageUrls.delete(objectUrl); objectUrl = '' }
+    const path = notePath && resolveWorkspaceAssetPath(notePath, nextSource)
+    if (!path) { dom.src = nextSource; return }
+    dom.dataset.workspaceAsset = path
+    void loadWorkspaceImage(path, notePath, editorStore.currentNoteId).then(blob => {
+      const url = URL.createObjectURL(blob)
+      if (disposed || current !== generation) { URL.revokeObjectURL(url); return }
+      objectUrl = url; imageUrls.add(url); dom.src = url
+    }).catch(() => {
+      if (current === generation) dom.dataset.workspaceAssetError = 'true'
+    })
+  }
+  apply(node)
+  return {
+    dom,
+    update(next: typeof node) {
+      if (next.type !== node.type) return false
+      node = next; apply(next); return true
+    },
+    destroy() {
+      generation++
+      if (objectUrl) { URL.revokeObjectURL(objectUrl); imageUrls.delete(objectUrl) }
+    }
+  }
 }
 
 function insertCallout(event: Event) {
@@ -293,7 +363,12 @@ onMounted(async () => {
   crepe = new Crepe({
     root: editorRoot.value,
     defaultValue: metadata.value?.body ?? props.initialContent,
-    features: { [Crepe.Feature.TopBar]: false, [Crepe.Feature.Latex]: markdownPreferences.math },
+    // 使用标准 Markdown 图片节点，确保 alt 文本和相对路径可被其他编辑器直接读取。
+    features: {
+      [Crepe.Feature.TopBar]: false,
+      [Crepe.Feature.Latex]: markdownPreferences.math,
+      [Crepe.Feature.ImageBlock]: false,
+    },
     featureConfigs: {
       [Crepe.Feature.Placeholder]: { text: t('开始记录你的想法…', 'Start writing your thoughts…') },
       [Crepe.Feature.CodeMirror]: {
@@ -386,6 +461,23 @@ onMounted(async () => {
   if (markdownPreferences.callouts) crepe.editor.use(calloutPlugin)
   crepe.editor.use(headingFoldingPlugin)
   crepe.editor.use($prose(() => new Plugin({
+    props: {
+      nodeViews: { image: workspaceImageNodeView },
+      handlePaste(_view, event) {
+        const files = imageFiles(event.clipboardData?.files ?? null)
+        if (!files.length) return false
+        event.preventDefault(); void insertImages(files, 'paste'); return true
+      },
+      handleDrop(view, event) {
+        const files = imageFiles(event.dataTransfer?.files ?? null)
+        if (!files.length) return false
+        event.preventDefault()
+        const position = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos ?? view.state.selection.from
+        void insertImages(files, 'drop', position); return true
+      },
+    },
+  })))
+  crepe.editor.use($prose(() => new Plugin({
     view(view) {
       const sync = (current: typeof view) => {
         const sections = headingSections(current.state.doc)
@@ -438,7 +530,7 @@ watch(() => editorStore.headingRequest, request => {
   })
 })
 
-onBeforeUnmount(() => { disposed = true; disposeCommands?.(); diagramPreviews.clear(); disposeLinkNavigation?.(); disposeCodeLabels?.(); disposeLanguagePicker?.(); void crepe?.destroy() })
+onBeforeUnmount(() => { disposed = true; disposeCommands?.(); diagramPreviews.clear(); imageUrls.forEach(URL.revokeObjectURL); imageUrls.clear(); disposeLinkNavigation?.(); disposeCodeLabels?.(); disposeLanguagePicker?.(); void crepe?.destroy() })
 
 defineExpose({ getEditor: () => crepe?.editor })
 </script>
@@ -446,6 +538,7 @@ defineExpose({ getEditor: () => crepe?.editor })
 <template>
   <DiagramInteractions class="visual-editor" :class="{ 'hide-code-line-numbers': !markdownPreferences.lineNumbers }" :data-heading-style="headingAppearance.preferences.custom ? 'custom' : undefined" :style="headingAppearance.cssVariables">
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
+    <p v-if="imageError" class="image-error" role="alert">{{ imageError }}</p>
     <div class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
       <div class="section-actions">
         <button type="button" :disabled="loading || !hasFoldableHeadings"
@@ -489,6 +582,8 @@ defineExpose({ getEditor: () => crepe?.editor })
       <button v-if="markdownPreferences.math" type="button" :title="t('行内公式', 'Inline formula')" :aria-label="t('行内公式', 'Inline formula')" @pointerdown.prevent="runCommand('inline-math')"><span class="math-glyph">ƒx</span></button>
       <button v-if="markdownPreferences.math" type="button" :title="t('公式块', 'Formula block')" :aria-label="t('公式块', 'Formula block')" @pointerdown.prevent="runCommand('math-block')"><span class="math-glyph">∑</span></button>
       <button type="button" :title="t('插入链接', 'Insert link')" :aria-label="t('插入链接', 'Insert link')" @pointerdown.prevent="applyLink"><AppIcon :icon="Link" :size="17" /></button>
+      <button type="button" :title="t('插入工作区图片', 'Insert workspace image')" :aria-label="t('插入工作区图片', 'Insert workspace image')" @pointerdown.prevent="chooseImages"><span class="image-glyph">▧</span></button>
+      <input ref="imageInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple @change="selectedImages" />
       <label class="toolbar-select">
         <select v-if="markdownPreferences.callouts" :aria-label="t('插入警告框', 'Insert callout')" @change="insertCallout">
           <option value="">{{ t('提示框', 'Callout') }}</option>
@@ -514,6 +609,7 @@ defineExpose({ getEditor: () => crepe?.editor })
 
 <style scoped>
 .visual-editor { display: flex; flex: 1; min-height: 0; flex-direction: column; background: var(--color-background-primary); }
+.image-error { margin: 0; padding: var(--space-sm) var(--space-lg); color: var(--color-error); background: var(--color-error-soft); }
 .hide-code-line-numbers :deep(.cm-lineNumbers) { display: none; }
 .markdown-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; min-height: 42px; padding: 5px var(--space-lg); border-bottom: 1px solid var(--color-border-subtle); background: var(--color-surface-primary); }
 .markdown-toolbar button { display: inline-grid; place-items: center; min-width: 32px; min-height: 30px; padding: 4px 8px; border-radius: var(--radius-sm); color: var(--color-text-primary); }
@@ -532,6 +628,8 @@ defineExpose({ getEditor: () => crepe?.editor })
 .list-lines { overflow: hidden; width: 14px; font-size: 15px; line-height: 1; transform: scaleX(1.2); }
 .code-glyph, .block-glyph { padding: 0; background: transparent; color: inherit; font: 700 13px/1 var(--font-editor-mono); }
 .math-glyph { font: italic 700 16px/1 Georgia, 'Times New Roman', serif; }
+.image-glyph { font-size: 18px; line-height: 1; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .toolbar-select { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 3px 5px 3px 8px; border-radius: var(--radius-sm); color: var(--color-text-primary); }
 .toolbar-select select { min-width: 58px; border: 0; outline: 0; background: transparent; color: inherit; cursor: pointer; font-size: var(--font-size-sm); }
 .font-size-select select { min-width: 62px; }

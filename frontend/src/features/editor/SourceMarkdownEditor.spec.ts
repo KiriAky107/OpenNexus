@@ -47,3 +47,16 @@ it('冲突文档禁用命令，保持原始内容', async () => {
   expect(await executeEditorCommand('editor.import-note-properties')).toMatchObject({ ok: false, reason: 'unavailable' })
   expect(store.content).toBe(original)
 })
+
+it('选择图片后写入工作区并插入相对 Markdown 引用', async () => {
+  vi.spyOn(workspace, 'storeWorkspaceImage').mockResolvedValue({
+    asset_id: 'asset-fixture', path: 'attachments/aa/hash.png', content_hash: 'hash',
+    media_type: 'image/png', size: 12, original_name: '截图.png', reference: 'attachments/aa/hash.png',
+  })
+  const input = wrapper!.get('input[type="file"]')
+  const file = new File(['png'], '截图.png', { type: 'image/png' })
+  Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
+  await input.trigger('change')
+  await vi.waitFor(() => expect(useEditorStore().content).toContain('![截图.png](attachments/aa/hash.png)'))
+  expect(workspace.storeWorkspaceImage).toHaveBeenCalledWith(file, 'upload', '/fixture.md', 'note-fixture')
+})

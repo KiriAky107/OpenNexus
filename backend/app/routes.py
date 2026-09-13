@@ -3,9 +3,10 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from datetime import datetime, timezone
+from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Header, Query, Request
+from fastapi import APIRouter, Header, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.agent import AgentCapacityError, AgentRunNotFoundError
@@ -106,6 +107,7 @@ from app.contracts import (
     TranscriptionJob,
     TranscriptionRequest,
     WorkspaceEntry,
+    WorkspaceAsset,
     WorkspaceInfo,
     WorkspaceOpenRequest,
     WorkspaceSnapshot,
@@ -134,6 +136,7 @@ from app.services import (
     task_service,
     transcription_service,
     workspace_service,
+    workspace_asset_service,
 )
 from app.services.attachment_service import attachment_path
 
@@ -256,6 +259,36 @@ async def rename_workspace_folder(request: FolderRenameRequest) -> WorkspaceEntr
 )
 async def delete_workspace_folder(request: FolderDeleteRequest) -> OperationResponse:
     return await workspace_service.delete_folder(request.path)
+
+
+@router.post("/workspace/assets", response_model=WorkspaceAsset, tags=["Workspace"])
+async def create_workspace_asset(
+    request: Request,
+    filename: str = Query(min_length=1, max_length=255),
+    note_id: str = Query(default="", max_length=200),
+    note_path: str = Query(min_length=1, max_length=2000),
+    source: Literal["paste", "drop", "upload"] = Query(default="upload"),
+) -> WorkspaceAsset:
+    content = bytearray()
+    async for chunk in request.stream():
+        content.extend(chunk)
+        if len(content) > workspace_asset_service.MAX_IMAGE_BYTES:
+            raise ApiError(413, "WORKSPACE_IMAGE_TOO_LARGE", "工作区图片不能超过 5 MiB。")
+    result = workspace_asset_service.store(
+        bytes(content), original_name=filename, note_id=note_id,
+        note_path=note_path, source=source,
+    )
+    return WorkspaceAsset(**result)
+
+
+@router.get("/workspace/assets/content", tags=["Workspace"])
+async def get_workspace_asset_content(
+    path: str = Query(min_length=1, max_length=500),
+    note_id: str = Query(default="", max_length=200),
+    note_path: str = Query(default="", max_length=2000),
+) -> Response:
+    data, media_type = workspace_asset_service.read(path, note_id=note_id, note_path=note_path)
+    return Response(data, media_type=media_type, headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
 
 # 笔记
