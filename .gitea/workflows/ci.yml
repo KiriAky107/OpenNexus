@@ -12,6 +12,7 @@ env:
   RUSTUP_DIST_SERVER: https://rsproxy.cn
   RUSTUP_UPDATE_ROOT: https://rsproxy.cn/rustup
   UV_INSTALLER_GITHUB_BASE_URL: https://ghfast.top/https://github.com
+  UV_DEFAULT_INDEX: https://mirrors.aliyun.com/pypi/simple
 
 jobs:
   docs-check:
