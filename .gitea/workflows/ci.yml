@@ -26,6 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: 切换 Python 锁文件下载源
+        run: python3 scripts/prepare-ci-uv-mirror.py
       - name: 安装 Rust 工具链
         run: |
           curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
@@ -46,6 +48,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: 切换 Python 锁文件下载源
+        run: python3 scripts/prepare-ci-uv-mirror.py
       - run: corepack enable && corepack prepare pnpm@10.28.0 --activate
       - run: pnpm install --frozen-lockfile && pnpm build
         working-directory: server sync/console
@@ -76,6 +80,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: 切换 Python 锁文件下载源
+        run: python3 scripts/prepare-ci-uv-mirror.py
       - name: 安装 Rust 工具链
         run: |
           curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --component rustfmt,clippy
