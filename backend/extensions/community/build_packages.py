@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -24,12 +25,15 @@ def build(output: Path | None = None) -> dict:
         if identity == 'markdown-workbench':
             with tempfile.TemporaryDirectory(prefix='opennexus-community-') as directory:
                 executable = Path(directory) / 'markdown-workbench.exe'
-                subprocess.run([
+                rustc_command = [
                     'rustc', '--edition=2021', '--crate-name', 'markdown_workbench',
                     '-C', 'metadata=opennexus-community-v1', '-C', 'opt-level=s',
-                    '-C', 'strip=symbols', '-C', 'link-arg=-Wl,--no-insert-timestamp',
-                    str(source / 'server.rs'), '-o', str(executable),
-                ], check=True)
+                    '-C', 'strip=symbols',
+                ]
+                if sys.platform == 'win32':
+                    rustc_command.extend(['-C', 'link-arg=-Wl,--no-insert-timestamp'])
+                rustc_command.extend([str(source / 'server.rs'), '-o', str(executable)])
+                subprocess.run(rustc_command, check=True)
                 generated[executable.name] = executable.read_bytes()
         manifest = (source / f'{kind}.yaml').read_text(encoding='utf-8')
         version = re.search(r'^version: (\d+\.\d+\.\d+)$', manifest, re.M)[1]
@@ -38,7 +42,7 @@ def build(output: Path | None = None) -> dict:
             for name in sorted(files):
                 info = zipfile.ZipInfo(f'{identity}/{name}', date_time=(1980, 1, 1, 0, 0, 0))
                 info.create_system = 3
-                info.external_attr = 0o100644 << 16
+                info.external_attr = (0o100755 if name == 'markdown-workbench.exe' else 0o100644) << 16
                 info.compress_type = zipfile.ZIP_DEFLATED
                 content = generated.get(name)
                 if content is None:
