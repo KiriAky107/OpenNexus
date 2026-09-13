@@ -82,6 +82,8 @@ def install_zip(data: bytes, kind: str, storage: Path, install: Callable[[Path],
                         if written > MAX_EXPANDED_BYTES:
                             raise ApiError(413, 'EXTENSION_ZIP_TOO_LARGE', 'ZIP 解压后不能超过 50 MiB。')
                         output.write(chunk)
+                if (entry.external_attr >> 16) & 0o111:
+                    target.chmod(0o755)
             manifest = f'{kind}.yaml'
             root = destination
             if not (root / manifest).is_file():
