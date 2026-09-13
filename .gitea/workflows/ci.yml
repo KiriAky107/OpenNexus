@@ -12,39 +12,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
       - run: git diff --check
-      - run: python scripts/check-doc-links.py
+      - run: python3 scripts/check-doc-links.py
 
   backend-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - run: pip install uv==0.9.24
+      - run: python3 -m pip install uv==0.9.24
       - run: uv sync --frozen
         working-directory: backend
       - run: uv run python -m compileall -q app
         working-directory: backend
       - run: uv run pytest
         working-directory: backend
-      - run: python scripts/phase3-production-acceptance.py --list-cases --json
+      - run: python3 scripts/phase3-production-acceptance.py --list-cases --json
 
   service-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - uses: actions/setup-node@v4
-        with: { node-version: "22", cache: pnpm, cache-dependency-path: "server sync/console/pnpm-lock.yaml" }
       - run: corepack enable && corepack prepare pnpm@10.28.0 --activate
       - run: pnpm install --frozen-lockfile && pnpm build
         working-directory: server sync/console
       - run: git diff --exit-code -- "server sync/sync_server/static"
-      - run: pip install uv==0.9.24
+      - run: python3 -m pip install uv==0.9.24
       - run: uv sync --frozen
         working-directory: backend
       - run: uv sync --frozen && uv run pytest
@@ -57,8 +49,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: "22", cache: pnpm, cache-dependency-path: frontend/pnpm-lock.yaml }
       - run: corepack enable && corepack prepare pnpm@10.28.0 --activate
       - run: pnpm install --frozen-lockfile
         working-directory: frontend
@@ -69,7 +59,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with: { components: rustfmt, clippy }
+      - name: 安装 Rust 工具链
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --component rustfmt,clippy
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - run: cargo fmt --check && cargo test --lib --locked && cargo clippy --lib --locked -- -D warnings
         working-directory: frontend/src-tauri
