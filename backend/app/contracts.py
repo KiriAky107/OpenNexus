@@ -81,6 +81,15 @@ class FolderDeleteRequest(Contract):
     path: str
 
 
+class WorkspaceAsset(Contract):
+    asset_id: str
+    path: str
+    content_hash: str
+    media_type: str
+    size: int
+    original_name: str
+
+
 # 笔记与检索
 class NoteBlock(Contract):
     block_id: str
