@@ -34,6 +34,10 @@ flowchart LR
 
 ## 使用发布包
 
+本版提供 Windows x64 便携包和独立的 Server Sync 包，下载入口见 [v0.3.1-alpha.2 发布页](https://gitea.kronecker.cc/Kronecker/NotesAgentic/releases/tag/v0.3.1-alpha.2)。发布页同时附带 `SHA256.json`，用于核对文件完整性。
+
+便携包是干净的首次安装环境，不包含任何 Vault 或用户数据，也不预装已下载的社区主题、本地模型权重、CUDA 与 PyTorch 运行时。相关功能仍完整保留；需要时可在客户端内按需安装主题、选择模型或配置 CUDA 环境。程序自带的基础界面样式属于客户端资源，不视为社区主题。
+
 1. 下载 Windows x64 软件包，并核对发布页中的 SHA-256。
 2. 将便携版完整解压到可写目录，不要单独移动可执行文件。
 3. 启动 `OpenNexus.exe`，选择已有 Vault 或创建新 Vault。
@@ -129,6 +133,8 @@ uv run uvicorn sync_server.main:app --host 0.0.0.0 --port 18080
 ```
 
 管理控制台构建后由 Sync Server 一并提供。正式环境应使用 PostgreSQL、S3 兼容对象存储、独立密钥、TLS 终止、进程守护和定期备份；完整变量与部署方式见 [`server sync/README.md`](server%20sync/README.md)。
+
+新建 Sync 实例首次启动时会生成仅对本次启动有效的随机管理员密码。管理员首次登录后必须修改账户和密码；修改成功后凭据写入数据库，后续重启不再随机更换。升级已有实例会保留已固定的凭据、Vault、设备和修订记录。
 
 ## 仓库结构
 
