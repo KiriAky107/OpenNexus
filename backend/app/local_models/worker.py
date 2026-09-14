@@ -8,6 +8,23 @@ import sys
 import threading
 import time
 
+# Worker 在发布包的临时挂载目录中运行，不能留下会触发 Core 完整性校验的字节码。
+sys.dont_write_bytecode = True
+
+# 桌面 Host 只向 Core 传入最小环境。PyTorch 编译缓存会通过 getpass
+# 读取用户名；在 Windows 上缺少 USERNAME 时，它会误尝试导入 Unix 的 pwd。
+os.environ.setdefault(
+    "USERNAME", os.path.basename(os.environ.get("USERPROFILE", "OpenNexus"))
+)
+os.environ.setdefault(
+    "TORCHINDUCTOR_CACHE_DIR",
+    os.path.join(
+        os.environ.get("LOCALAPPDATA", os.environ.get("TEMP", ".")),
+        "OpenNexus",
+        "torchinductor",
+    ),
+)
+
 
 def decode(path, *, limit_seconds=3600, warnings=None):
     import av
