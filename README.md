@@ -2,7 +2,7 @@
 
 OpenNexus 是一款本地优先的 AI 笔记与知识中枢。它将 Markdown Vault、全文与向量检索、知识库问答、可审计 Agent、扩展系统和多设备同步整合在一个桌面应用中。笔记与索引由用户掌控；需要模型或同步服务时，再按需连接本地或远程服务。
 
-当前发布版本为 **0.3.0-alpha.1**，主要支持 Windows x64。Alpha 版本用于验证完整业务闭环和部署方案，升级前请备份 Vault。
+当前发布版本为 **0.3.1-alpha.2**，主要支持 Windows x64。Alpha 版本仍处于快速迭代阶段，升级前请备份 Vault。
 
 ## 主要能力
 
@@ -34,6 +34,10 @@ flowchart LR
 
 ## 使用发布包
 
+本版提供 Windows x64 便携包和独立的 Server Sync 包，下载入口见 [v0.3.1-alpha.2 发布页](https://gitea.kronecker.cc/Kronecker/NotesAgentic/releases/tag/v0.3.1-alpha.2)。发布页同时附带 `SHA256.json`，用于核对文件完整性。
+
+便携包是干净的首次安装环境，不包含任何 Vault 或用户数据，也不预装已下载的社区主题、本地模型权重、CUDA 与 PyTorch 运行时。相关功能仍完整保留；需要时可在客户端内按需安装主题、选择模型或配置 CUDA 环境。程序自带的基础界面样式属于客户端资源，不视为社区主题。
+
 1. 下载 Windows x64 软件包，并核对发布页中的 SHA-256。
 2. 将便携版完整解压到可写目录，不要单独移动可执行文件。
 3. 启动 `OpenNexus.exe`，选择已有 Vault 或创建新 Vault。
@@ -41,6 +45,12 @@ flowchart LR
 5. 如需多设备同步，在同步设置中填写管理员提供的 Sync Server 地址并登录。
 
 凭据不会写入前端 `localStorage`。首次试用建议复制一份现有笔记目录，再用副本验证索引和同步行为。
+
+### 工作区图片存储
+
+在源码或所见即所得编辑器中粘贴、拖入或选择 PNG、JPEG、GIF、WebP 图片后，OpenNexus 会按内容哈希保存到当前 Vault 的 `attachments/<哈希前两位>/<SHA-256>.<扩展名>`。Markdown 使用相对路径引用图片，因此笔记目录整体复制、导出或同步后仍可定位原图；单张图片上限为 5 MiB，相同内容只保存一份。
+
+图片二进制不写入 SQLite。数据库中的 `workspace_assets` 保存路径、SHA-256、媒体类型、大小和原始文件名，`workspace_asset_links` 保存图片与笔记的引用关系。另一台设备收到 Vault 文件后，会在首次显示图片时校验路径哈希并重建本机元数据。
 
 ## 开发环境
 
@@ -124,6 +134,8 @@ uv run uvicorn sync_server.main:app --host 0.0.0.0 --port 18080
 
 管理控制台构建后由 Sync Server 一并提供。正式环境应使用 PostgreSQL、S3 兼容对象存储、独立密钥、TLS 终止、进程守护和定期备份；完整变量与部署方式见 [`server sync/README.md`](server%20sync/README.md)。
 
+新建 Sync 实例首次启动时会生成仅对本次启动有效的随机管理员密码。管理员首次登录后必须修改账户和密码；修改成功后凭据写入数据库，后续重启不再随机更换。升级已有实例会保留已固定的凭据、Vault、设备和修订记录。
+
 ## 仓库结构
 
 ```text
@@ -150,7 +162,7 @@ OpenNexus/
 
 OpenNexus 将 Vault 内容、模型凭据和扩展权限视为敏感数据。请只安装可信来源的 Skill、Plugin 与主题包，并在授权前检查其权限。服务端部署不得使用示例密钥或开发数据库。
 
-正式发行物通过 Git 标签追踪，并在发布页提供校验和。Windows 安装包的生产门禁还会验证 Authenticode 和 Core 清单签名。无法通过签名门禁的构建只能作为预发布测试包分发。
+正式发行物通过 Git 标签追踪，并在发布页提供校验和。Windows 安装包的生产门禁还会验证 Authenticode 和 Core 清单签名。本版提供的便携包尚未进行 Authenticode 签名，Windows 可能显示未知发布者提示。
 
 ## 参与开发
 

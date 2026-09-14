@@ -1,5 +1,6 @@
 //! 受限的 Core RPC；每个请求都绑定到 Host 传输捕获的 Vault。
 use crate::workspace::Workspace;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -24,6 +25,47 @@ struct Write {
     expected: String,
     content: String,
     operation_id: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AssetWrite {
+    vault_id: String,
+    path: String,
+    content_base64: String,
+    operation_id: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AssetRead {
+    vault_id: String,
+    path: String,
+}
+
+const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+
+fn valid_asset_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    let parts: Vec<_> = normalized.split('/').collect();
+    parts.len() == 3
+        && parts[0] == "attachments"
+        && parts[1].len() == 2
+        && !parts
+            .iter()
+            .any(|part| part.is_empty() || *part == "." || *part == "..")
+        && ["png", "jpg", "gif", "webp"]
+            .iter()
+            .any(|suffix| normalized.ends_with(&format!(".{suffix}")))
+}
+
+fn valid_image_bytes(path: &str, bytes: &[u8]) -> bool {
+    let extension = path.rsplit('.').next().unwrap_or("");
+    match extension {
+        "png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "jpg" => bytes.starts_with(b"\xff\xd8\xff"),
+        "gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+        "webp" => bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
+        _ => false,
+    }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -253,6 +295,57 @@ pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
                 .map_err(|e| e.code)?;
             Ok(json!({"operation_id":p.operation_id,"state":"committed","result":entry}))
         }
+        "workspace.assets.write" => {
+            let p: AssetWrite = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            if !valid_asset_path(&p.path) {
+                return Err("WORKSPACE_REQUEST_INVALID".into());
+            }
+            let bytes = STANDARD
+                .decode(&p.content_base64)
+                .map_err(|_| "WORKSPACE_REQUEST_INVALID")?;
+            if bytes.is_empty()
+                || bytes.len() > MAX_IMAGE_BYTES
+                || !valid_image_bytes(&p.path, &bytes)
+                || crate::workspace::hash(&bytes)
+                    != p.path
+                        .split('/')
+                        .last()
+                        .unwrap_or("")
+                        .split('.')
+                        .next()
+                        .unwrap_or("")
+            {
+                return Err("WORKSPACE_REQUEST_INVALID".into());
+            }
+            let target = ws.resolve(&p.path).map_err(|e| e.code)?;
+            if target.exists() {
+                let existing = std::fs::read(target).map_err(|_| "FILESYSTEM_ERROR")?;
+                if existing != bytes {
+                    return Err("REVISION_CONFLICT".into());
+                }
+                return Ok(
+                    json!({"path":p.path,"hash":crate::workspace::hash(&bytes),"size":bytes.len()}),
+                );
+            }
+            let entry = ws
+                .write_operation(&p.path, "", &bytes, "local", &p.operation_id)
+                .map_err(|e| e.code)?;
+            Ok(json!({"path":entry.path,"hash":entry.hash,"size":bytes.len()}))
+        }
+        "workspace.assets.read" => {
+            let p: AssetRead = decode(params)?;
+            bound(ws, &p.vault_id)?;
+            if !valid_asset_path(&p.path) {
+                return Err("WORKSPACE_REQUEST_INVALID".into());
+            }
+            let bytes = std::fs::read(ws.resolve(&p.path).map_err(|e| e.code)?)
+                .map_err(|_| "FILE_NOT_FOUND")?;
+            if bytes.len() > MAX_IMAGE_BYTES {
+                return Err("CORE_NOTE_TOO_LARGE".into());
+            }
+            Ok(json!({"content_base64":STANDARD.encode(bytes)}))
+        }
         "workspace.operation" => {
             let p: Operation = decode(params)?;
             bound(ws, &p.vault_id)?;
@@ -284,6 +377,39 @@ pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn workspace_images_are_binary_content_addressed_and_vault_bound() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let bytes = b"\x89PNG\r\n\x1a\nfixture";
+        let digest = crate::workspace::hash(bytes);
+        let path = format!("attachments/{}/{}.png", &digest[..2], digest);
+        let write = json!({"rpc":"workspace.assets.write","params":{
+            "vault_id":ws.vault_id,"path":path,"content_base64":STANDARD.encode(bytes),
+            "operation_id":uuid::Uuid::new_v4().to_string()
+        }});
+        let stored = dispatch(&mut ws, &write).unwrap();
+        assert_eq!(stored["hash"], digest);
+        assert_eq!(dispatch(&mut ws, &write).unwrap()["hash"], digest);
+        let read =
+            json!({"rpc":"workspace.assets.read","params":{"vault_id":ws.vault_id,"path":path}});
+        assert_eq!(
+            STANDARD
+                .decode(
+                    dispatch(&mut ws, &read).unwrap()["content_base64"]
+                        .as_str()
+                        .unwrap()
+                )
+                .unwrap(),
+            bytes
+        );
+        let mut denied = write;
+        denied["params"]["vault_id"] = json!("other-vault");
+        assert_eq!(
+            dispatch(&mut ws, &denied).unwrap_err(),
+            "VAULT_PERMISSION_CHANGED"
+        );
+    }
     #[test]
     fn user_skills_are_vault_bound_listed_and_deleted_as_logical_records() {
         let root = tempfile::tempdir().unwrap();

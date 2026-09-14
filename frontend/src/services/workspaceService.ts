@@ -12,6 +12,17 @@ import * as noteService from './noteService'
 import { splitNoteMetadata } from '@/utils/noteMetadata'
 import { contentHash, hostInvoke, isDesktop, nativePath, nativeTree, type HostDocument, type HostEntry, type HostVault } from './platform/desktop'
 
+export interface WorkspaceAsset {
+  asset_id: string
+  path: string
+  content_hash: string
+  media_type: string
+  size: number
+  original_name: string
+}
+
+export type WorkspaceAssetSource = 'paste' | 'drop' | 'upload'
+
 /** Web 联调只连接 AI Core 配置的单一 Vault；多 Vault 选择由 Tauri Host 接管。 */
 export interface VaultInfo {
   vault_id: string
@@ -145,6 +156,41 @@ export async function readFileContent(filePath: string): Promise<string> {
   if (isDesktop()) return (await hostInvoke<HostDocument>('workspace_read', { path: nativePath(filePath) })).content
   const note = await noteService.getNote(await requireNoteId(filePath))
   return note.markdown
+}
+
+/** 将 Vault 根路径转换为相对当前笔记的可移植 Markdown 引用。 */
+export function workspaceAssetReference(notePath: string, assetPath: string): string {
+  const noteParts = relativePath(notePath).split('/').filter(Boolean)
+  noteParts.pop()
+  return `${'../'.repeat(noteParts.length)}${relativePath(assetPath)}`
+}
+
+/** 将笔记内的相对附件引用还原为 Vault 根路径。 */
+export function resolveWorkspaceAssetPath(notePath: string, reference: string): string | null {
+  if (/^(?:[a-z]+:|\/\/|#)/i.test(reference)) return null
+  const parts = [...relativePath(notePath).split('/').slice(0, -1)]
+  for (const part of reference.replace(/\\/g, '/').split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') { if (!parts.length) return null; parts.pop() }
+    else parts.push(part)
+  }
+  const path = parts.join('/')
+  return path.startsWith('attachments/') ? path : null
+}
+
+export async function storeWorkspaceImage(
+  file: Blob & { name?: string }, source: WorkspaceAssetSource,
+  notePath: string, noteId: string | null,
+): Promise<WorkspaceAsset & { reference: string }> {
+  const asset = await apiClient.postBinary<WorkspaceAsset>('/api/workspace/assets', file, { 'Content-Type': 'application/octet-stream' }, {
+    filename: file.name || 'image', note_id: noteId || '', note_path: notePath, source,
+  })
+  return { ...asset, reference: workspaceAssetReference(notePath, asset.path) }
+}
+
+export async function loadWorkspaceImage(path: string, notePath = '', noteId: string | null = null): Promise<Blob> {
+  const response = await apiClient.get<Response>('/api/workspace/assets/content', { params: { path, note_path: notePath, note_id: noteId || '' } })
+  return response.blob()
 }
 
 /** 解析已与工作空间路径关联的后端笔记标识。 */
