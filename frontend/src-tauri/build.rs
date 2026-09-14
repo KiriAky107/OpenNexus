@@ -35,6 +35,7 @@ fn main() {
             "sync_unbind",
             "sync_pause",
             "sync_status",
+            "sync_set_scope",
             "sync_resolve",
             "sync_logout",
             "sync_run",
