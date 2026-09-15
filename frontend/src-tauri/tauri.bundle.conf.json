@@ -1,7 +1,38 @@
 {
+  "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "resources": {"../../.build/sidecar/dist/opennexus-core/": "core/"}
+    "targets": [
+      "nsis"
+    ],
+    "publisher": "Kronecker",
+    "homepage": "https://gitea.kronecker.cc/Kronecker/NotesAgentic",
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../../.build/sidecar/dist/opennexus-core/": "core/"
+    },
+    "category": "Productivity",
+    "shortDescription": "本地优先的 AI 笔记与知识中枢",
+    "windows": {
+      "allowDowngrades": false,
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
+        "displayLanguageSelector": false,
+        "compression": "lzma",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "startMenuFolder": "OpenNexus"
+      }
+    }
   }
 }

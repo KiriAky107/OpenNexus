@@ -2,7 +2,7 @@
 
 OpenNexus 是一款本地优先的 AI 笔记与知识中枢。它将 Markdown Vault、全文与向量检索、知识库问答、可审计 Agent、扩展系统和多设备同步整合在一个桌面应用中。笔记与索引由用户掌控；需要模型或同步服务时，再按需连接本地或远程服务。
 
-当前发布版本为 **0.3.1-alpha.2**，主要支持 Windows x64。Alpha 版本仍处于快速迭代阶段，升级前请备份 Vault。
+当前发布版本为 **0.3.1-alpha.3**，主要支持 Windows x64。Alpha 版本仍处于快速迭代阶段，升级前请备份 Vault。
 
 ## 主要能力
 
@@ -34,13 +34,13 @@ flowchart LR
 
 ## 使用发布包
 
-本版提供 Windows x64 便携包和独立的 Server Sync 包，下载入口见 [v0.3.1-alpha.2 发布页](https://gitea.kronecker.cc/Kronecker/NotesAgentic/releases/tag/v0.3.1-alpha.2)。发布页同时附带 `SHA256.json`，用于核对文件完整性。
+本版提供 Windows x64 EXE 安装包和独立的 Server Sync 包，下载入口见 [v0.3.1-alpha.3 发布页](https://gitea.kronecker.cc/Kronecker/NotesAgentic/releases/tag/v0.3.1-alpha.3)。发布页同时附带 `SHA256.json`，用于核对文件完整性。
 
-便携包是干净的首次安装环境，不包含任何 Vault 或用户数据，也不预装已下载的社区主题、本地模型权重、CUDA 与 PyTorch 运行时。相关功能仍完整保留；需要时可在客户端内按需安装主题、选择模型或配置 CUDA 环境。程序自带的基础界面样式属于客户端资源，不视为社区主题。
+安装包不包含任何 Vault 或用户数据，也不预装已下载的社区主题、本地模型权重、CUDA 与 PyTorch 运行时。相关功能仍完整保留；需要时可在客户端内按需安装主题、选择模型或配置 CUDA 环境。程序自带的基础界面样式属于客户端资源，不视为社区主题。同一 Windows 用户下升级安装会继续使用 `%APPDATA%\cc.kronecker.notesagent` 中的既有配置和索引，以及用户此前选择的外部 Vault。
 
-1. 下载 Windows x64 软件包，并核对发布页中的 SHA-256。
-2. 将便携版完整解压到可写目录，不要单独移动可执行文件。
-3. 启动 `OpenNexus.exe`，选择已有 Vault 或创建新 Vault。
+1. 下载 Windows x64 EXE 安装包，并核对发布页中的 SHA-256。
+2. 运行安装程序，按向导完成当前用户安装；未签名的 Alpha 包可能触发 Windows 未知发布者提示。
+3. 从开始菜单启动 OpenNexus，选择已有 Vault 或创建新 Vault。
 4. 在“设置 → 模型提供商”中配置本地模型或远程模型凭据。
 5. 如需多设备同步，在同步设置中填写管理员提供的 Sync Server 地址并登录。
 
@@ -124,7 +124,22 @@ Gitea Actions 会在推送和合并请求时执行文档检查、后端测试、
 
 ## 部署 Sync Server
 
-开发或内网验证可直接运行：
+推荐使用 Docker Compose 启动 PostgreSQL、MinIO 和 Sync：
+
+```powershell
+cd "server sync"
+Copy-Item .env.example .env
+# 编辑 .env 并生成各项独立密钥
+docker compose up -d --build
+```
+
+隔离测试阶段如需直接开放 `18080` 明文端口，可使用 Docker Compose 2.24.4 或更高版本加载测试覆盖文件：
+
+```powershell
+docker compose -f compose.yaml -f compose.test.yaml up -d --build
+```
+
+不使用容器的开发联调也可直接运行：
 
 ```powershell
 cd "server sync"
@@ -162,7 +177,7 @@ OpenNexus/
 
 OpenNexus 将 Vault 内容、模型凭据和扩展权限视为敏感数据。请只安装可信来源的 Skill、Plugin 与主题包，并在授权前检查其权限。服务端部署不得使用示例密钥或开发数据库。
 
-正式发行物通过 Git 标签追踪，并在发布页提供校验和。Windows 安装包的生产门禁还会验证 Authenticode 和 Core 清单签名。本版提供的便携包尚未进行 Authenticode 签名，Windows 可能显示未知发布者提示。
+正式发行物通过 Git 标签追踪，并在发布页提供校验和。Windows 安装包的生产门禁还会验证 Authenticode 和 Core 清单签名。本版 EXE 安装包尚未进行 Authenticode 签名，Windows 可能显示未知发布者提示。
 
 ## 参与开发
 
