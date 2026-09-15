@@ -6,6 +6,7 @@ import { useEditorStore } from '@/stores/editor'
 import { useThemeStore } from '@/stores/theme'
 import { Moon, Sunny } from '@element-plus/icons-vue'
 import AppIcon from './AppIcon.vue'
+import appLogoUrl from '@/assets/opennexus-logo.svg'
 import { t } from '@/i18n'
 import { isDesktop } from '@/services/platform/desktop'
 import { minimizeWindow, requestWindowClose, toggleMaximizeWindow } from '@/services/platform/windowControls'
@@ -63,7 +64,7 @@ function toggleFromTitlebar(event: MouseEvent) {
       </span>
     </div>
     <div class="titlebar-center" data-tauri-drag-region>
-      <span class="app-name" data-tauri-drag-region>OpenNexus</span>
+      <span class="app-name" data-tauri-drag-region><img :src="appLogoUrl" alt="" />OpenNexus</span>
     </div>
     <div class="titlebar-right">
       <button class="icon-btn" @click="themeStore.toggleTheme()" :title="themeStore.isDark ? t('切换浅色主题', 'Switch to light theme') : t('切换深色主题', 'Switch to dark theme')">
@@ -142,6 +143,9 @@ function toggleFromTitlebar(event: MouseEvent) {
 }
 
 .app-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 3px 10px;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-full);
@@ -149,6 +153,11 @@ function toggleFromTitlebar(event: MouseEvent) {
   color: var(--color-text-secondary);
   font-weight: 650;
   letter-spacing: .04em;
+}
+
+.app-name img {
+  width: 18px;
+  height: 18px;
 }
 
 .titlebar-right {
