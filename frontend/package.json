@@ -1,12 +1,12 @@
 {
   "name": "notes-agent-frontend",
   "private": true,
-  "version": "0.3.1-alpha.2",
+  "version": "0.3.1-alpha.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "desktop:build": "tauri build --no-bundle --features desktop",
+    "desktop:build": "tauri build --features desktop --bundles nsis --config src-tauri/tauri.bundle.conf.json",
     "test": "vitest run",
     "preview": "vite preview",
     "type-check": "vue-tsc --noEmit -p tsconfig.app.json && vue-tsc --noEmit -p tsconfig.node.json",
