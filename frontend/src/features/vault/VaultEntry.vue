@@ -4,8 +4,9 @@ import { useRouter } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useThemeStore } from '@/stores/theme'
 import { useSettingsStore } from '@/stores/settings'
-import { ArrowRight, Document, Folder, FolderOpened, Moon, Sunny } from '@element-plus/icons-vue'
+import { ArrowRight, Folder, FolderOpened, Moon, Sunny } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
+import appLogoUrl from '@/assets/opennexus-logo.svg'
 import { t } from '@/i18n'
 import { ApiErrorClass } from '@/services/apiClient'
 import { isDesktop } from '@/services/platform/desktop'
@@ -62,7 +63,7 @@ async function openFolderPicker() {
     <div class="bg-decoration" />
     <div class="entry-container">
       <div class="brand-section">
-        <div class="logo"><AppIcon :icon="Document" :size="56" /></div>
+        <div class="logo"><img :src="appLogoUrl" alt="" /></div>
         <h1 class="app-title">OpenNexus</h1>
         <p class="app-subtitle">{{ t('本地优先的 AI 笔记软件', 'A local-first AI note-taking app') }}</p>
       </div>
@@ -109,7 +110,7 @@ async function openFolderPicker() {
       </div>
 
       <div class="footer-info">
-        <span>v0.1.0</span>
+        <span>v0.3.2-alpha.1</span>
         <button class="theme-toggle" @click="themeStore.toggleTheme()">
           <AppIcon :icon="themeStore.isDark ? Sunny : Moon" :size="15" />
           {{ themeStore.isDark ? t('浅色', 'Light') : t('深色', 'Dark') }}
@@ -164,11 +165,13 @@ async function openFolderPicker() {
   width: 84px;
   height: 84px;
   margin-bottom: 14px;
-  border: 1px solid color-mix(in srgb, var(--color-accent-primary) 18%, transparent);
-  border-radius: 24px;
-  background: var(--color-surface-primary);
-  color: var(--color-accent-primary);
   box-shadow: var(--shadow-lg);
+}
+
+.logo img {
+  display: block;
+  width: 84px;
+  height: 84px;
 }
 
 .app-title {

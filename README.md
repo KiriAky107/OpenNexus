@@ -2,7 +2,7 @@
 
 OpenNexus 是一款本地优先的 AI 笔记与知识中枢。它将 Markdown Vault、全文与向量检索、知识库问答、可审计 Agent、扩展系统和多设备同步整合在一个桌面应用中。笔记与索引由用户掌控；需要模型或同步服务时，再按需连接本地或远程服务。
 
-当前发布版本为 **0.3.1-alpha.3**，主要支持 Windows x64。Alpha 版本仍处于快速迭代阶段，升级前请备份 Vault。
+当前发布版本为 **0.3.2-alpha.1**，主要支持 Windows x64。Alpha 版本仍处于快速迭代阶段，升级前请备份 Vault。
 
 ## 主要能力
 
@@ -34,7 +34,7 @@ flowchart LR
 
 ## 使用发布包
 
-本版提供 Windows x64 EXE 安装包和独立的 Server Sync 包，下载入口见 [v0.3.1-alpha.3 发布页](https://gitea.kronecker.cc/Kronecker/NotesAgentic/releases/tag/v0.3.1-alpha.3)。发布页同时附带 `SHA256.json`，用于核对文件完整性。
+本版提供 Windows x64 EXE 安装包和独立的 Server Sync 包，下载入口见 [v0.3.2-alpha.1 发布页](https://gitea.kronecker.cc/Kronecker/NotesAgentic/releases/tag/v0.3.2-alpha.1)。发布页同时附带 `SHA256.json`，用于核对文件完整性。
 
 安装包不包含任何 Vault 或用户数据，也不预装已下载的社区主题、本地模型权重、CUDA 与 PyTorch 运行时。相关功能仍完整保留；需要时可在客户端内按需安装主题、选择模型或配置 CUDA 环境。程序自带的基础界面样式属于客户端资源，不视为社区主题。同一 Windows 用户下升级安装会继续使用 `%APPDATA%\cc.kronecker.notesagent` 中的既有配置和索引，以及用户此前选择的外部 Vault。
 

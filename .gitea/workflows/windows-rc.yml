@@ -68,6 +68,7 @@ jobs:
             bundle = @{
               active = $true
               targets = @('nsis')
+              icon = @('icons/icon.png', 'icons/icon.ico')
               resources = @{
                 '../../.build/sidecar/dist/opennexus-core/' = 'core/'
               }
@@ -75,6 +76,10 @@ jobs:
                 certificateThumbprint = $env:OPENNEXUS_WINDOWS_CERTIFICATE_THUMBPRINT
                 digestAlgorithm = 'sha256'
                 timestampUrl = 'http://timestamp.digicert.com'
+                nsis = @{
+                  installerIcon = 'icons/icon.ico'
+                  uninstallerIcon = 'icons/icon.ico'
+                }
               }
             }
           } | ConvertTo-Json -Depth 5

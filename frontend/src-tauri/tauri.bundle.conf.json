@@ -8,6 +8,7 @@
     "publisher": "Kronecker",
     "homepage": "https://gitea.kronecker.cc/Kronecker/NotesAgentic",
     "icon": [
+      "icons/icon.png",
       "icons/icon.ico"
     ],
     "resources": {
