@@ -174,6 +174,8 @@ async def _execute(job_id, request, routing=None):
                     for segment, speaker in zip(job.segments, result["speakers"], strict=True):
                         segment.speaker = speaker
                     job.warnings.append("DIARIZATION_SEGMENT_LEVEL")
+                    if result.get("unassigned_segments"):
+                        job.warnings.append("DIARIZATION_PARTIAL")
                 except ProviderError:
                     job.warnings.append("DIARIZATION_UNAVAILABLE")
             else:
