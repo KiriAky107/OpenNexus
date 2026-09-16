@@ -115,6 +115,91 @@ def voice_embedding(model, audio, device):
         return torch.nn.functional.normalize(vector, dim=0)
 
 
+def _normalized_vector(values):
+    """把声纹向量转成普通列表并归一化，便于在无 PyTorch 的 API 测试环境中验证聚类。"""
+    import math
+    values = [float(value) for value in values]
+    norm = math.sqrt(sum(value * value for value in values))
+    if not values or not math.isfinite(norm) or norm <= 1e-12:
+        raise ValueError("Invalid speaker embedding")
+    return [value / norm for value in values]
+
+
+def _similarity(left, right):
+    return sum(a * b for a, b in zip(left, right, strict=True))
+
+
+def cluster_speaker_embeddings(embeddings, segments, *, threshold=0.36):
+    """聚类片段声纹，并把过短片段交给相邻的稳定说话人。
+
+    质心在每次接收新样本后更新，避免第一段永久决定整簇。持续时间不超过
+    3 秒的孤立单例通常是停顿处的语气词；将它并入最相近的已有稳定簇，
+    同时保留由多个片段支持的第三位及更多说话人。
+    """
+    if len(embeddings) != len(segments):
+        raise ValueError("Speaker embeddings and segments must have the same length")
+    vectors = [None if value is None else _normalized_vector(value) for value in embeddings]
+    assignments = [None] * len(vectors)
+    clusters = []
+    for index, vector in enumerate(vectors):
+        if vector is None:
+            continue
+        similarities = [_similarity(vector, cluster["centroid"]) for cluster in clusters]
+        best = max(range(len(similarities)), key=similarities.__getitem__) if similarities else None
+        if best is None or similarities[best] < threshold:
+            best = len(clusters)
+            clusters.append({"members": [], "sum": [0.0] * len(vector), "centroid": vector})
+        cluster = clusters[best]
+        cluster["members"].append(index)
+        cluster["sum"] = [total + value for total, value in zip(cluster["sum"], vector, strict=True)]
+        cluster["centroid"] = _normalized_vector(cluster["sum"])
+        assignments[index] = best
+
+    # 短语气词可能形成只有一个片段的离群簇。仅合并短单例，不吞掉由多个
+    # 片段支持的真实少数说话人。
+    stable = [index for index, cluster in enumerate(clusters) if len(cluster["members"]) > 1]
+    for index, cluster in enumerate(clusters):
+        member = cluster["members"][0] if len(cluster["members"]) == 1 else None
+        if member is None or not stable:
+            continue
+        duration = float(segments[member]["end_time"]) - float(segments[member]["start_time"])
+        if duration > 3.0:
+            continue
+        target = max(stable, key=lambda other: _similarity(cluster["centroid"], clusters[other]["centroid"]))
+        assignments[member] = target
+
+    # 没有足够语音生成声纹的短片段继承时间上最近的稳定标签。同一说话人
+    # 两个片段之间的语气词会优先落回该说话人。
+    labeled = [index for index, value in enumerate(assignments) if value is not None]
+    for index, value in enumerate(assignments):
+        if value is not None or not labeled:
+            continue
+        previous = next((item for item in reversed(labeled) if item < index), None)
+        following = next((item for item in labeled if item > index), None)
+        if previous is not None and following is not None and assignments[previous] == assignments[following]:
+            assignments[index] = assignments[previous]
+            continue
+        candidates = []
+        if previous is not None:
+            distance = max(0.0, float(segments[index]["start_time"]) - float(segments[previous]["end_time"]))
+            candidates.append((distance, 0, assignments[previous]))
+        if following is not None:
+            distance = max(0.0, float(segments[following]["start_time"]) - float(segments[index]["end_time"]))
+            candidates.append((distance, 1, assignments[following]))
+        assignments[index] = min(candidates)[2] if candidates else None
+
+    # 合并后按首次出现顺序重新编号，避免 speaker_1、speaker_3 这样的空洞 ID。
+    remap = {}
+    speakers = []
+    for value in assignments:
+        if value is None:
+            speakers.append(None)
+            continue
+        remap.setdefault(value, len(remap) + 1)
+        speakers.append(f"speaker_{remap[value]}")
+    return speakers
+
+
 class CudaInitializationError(RuntimeError):
     pass
 
@@ -189,20 +274,15 @@ def run(request):
             model = speaker_model(path, device)
             loaded = time.monotonic()
             audio = decode(payload["source"])
-            centroids, speakers = [], []
+            embeddings = []
             for segment in payload["segments"]:
                 sample = audio[int(segment["start_time"] * 16000):int(segment["end_time"] * 16000)]
                 if len(sample) < 16000:
-                    speakers.append(None)
+                    embeddings.append(None)
                     continue
-                vector = voice_embedding(model, sample, device)
-                similarities = [float(torch.dot(vector, c)) for c in centroids]
-                best = max(range(len(similarities)), key=similarities.__getitem__) if similarities else None
-                if best is None or similarities[best] < 0.36:
-                    best = len(centroids)
-                    centroids.append(vector)
-                speakers.append(f"speaker_{best + 1}")
-            result = {"speakers": speakers}
+                embeddings.append(voice_embedding(model, sample, device).tolist())
+            speakers = cluster_speaker_embeddings(embeddings, payload["segments"])
+            result = {"speakers": speakers, "unassigned_segments": sum(speaker is None for speaker in speakers)}
         else:
             raise ValueError("Unknown inference operation")
         return {"result": result, "usage": usage, "audio_seconds": audio_seconds, "diagnostics": {"requested_device": requested, "actual_device": device,

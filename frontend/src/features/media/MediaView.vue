@@ -58,6 +58,7 @@ const warningLabel = (warning: string) => warning.startsWith('MEDIA_CORRUPT_PACK
   ? t(`已跳过 ${warning.split(':')[1]} 个损坏音频包；缺失时长以静音保留，请校对受影响内容。`, `Skipped ${warning.split(':')[1]} damaged audio packets; missing duration was retained as silence. Review the affected content.`)
   : ({
   DIARIZATION_UNAVAILABLE: t('当前无法分离说话人', 'Speaker identification is unavailable'),
+  DIARIZATION_PARTIAL: t('部分片段没有足够语音用于说话人识别，请人工校对', 'Some segments do not contain enough speech for speaker identification; review them manually'),
   WORD_TIMESTAMPS_UNAVAILABLE: t('未提供逐字时间戳', 'Word-level timestamps are unavailable'),
   DIARIZATION_SEGMENT_LEVEL: t('说话人按音频段估计，同段多人或重叠发言需人工校对', 'Speakers are estimated per segment; multiple or overlapping speakers require manual correction'),
 } as Record<string, string>)[warning] || warning
