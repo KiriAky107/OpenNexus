@@ -561,7 +561,10 @@ fn credentials_status(host: State<'_, Host>) -> Result<serde_json::Value, String
         .try_lock()
         .map_err(|_| "CREDENTIALS_BUSY")?;
     let broker = broker.as_ref().ok_or("HOST_NOT_READY")?;
-    Ok(serde_json::json!({"locked":broker.is_locked()}))
+    Ok(serde_json::json!({
+        "locked": broker.is_locked(),
+        "automatic": if cfg!(windows) { broker.has_system_unlock() } else { false }
+    }))
 }
 
 #[tauri::command]
@@ -578,12 +581,13 @@ async fn credentials_unlock(host: State<'_, Host>, password: String) -> Result<(
     let broker = host.credentials.clone();
     let password = Zeroizing::new(password.into_bytes());
     tauri::async_runtime::spawn_blocking(move || {
-        broker
-            .lock()
-            .map_err(|_| "HOST_BUSY")?
-            .as_mut()
-            .ok_or("HOST_NOT_READY")?
-            .unlock(password)
+        let mut guard = broker.lock().map_err(|_| "HOST_BUSY")?;
+        let broker = guard.as_mut().ok_or("HOST_NOT_READY")?;
+        let retained = Zeroizing::new(password.to_vec());
+        broker.unlock(password)?;
+        #[cfg(windows)]
+        broker.enable_system_unlock(&retained)?;
+        Ok(())
     })
     .await
     .map_err(|_| "HOST_BUSY")?
@@ -705,12 +709,13 @@ async fn credentials_change_password(
     let broker = host.credentials.clone();
     let password = Zeroizing::new(password.into_bytes());
     tauri::async_runtime::spawn_blocking(move || {
-        broker
-            .lock()
-            .map_err(|_| "HOST_BUSY")?
-            .as_mut()
-            .ok_or("HOST_NOT_READY")?
-            .change_password(password)
+        let mut guard = broker.lock().map_err(|_| "HOST_BUSY")?;
+        let broker = guard.as_mut().ok_or("HOST_NOT_READY")?;
+        let retained = Zeroizing::new(password.to_vec());
+        broker.change_password(password)?;
+        #[cfg(windows)]
+        broker.enable_system_unlock(&retained)?;
+        Ok(())
     })
     .await
     .map_err(|_| "HOST_BUSY")?
@@ -948,11 +953,15 @@ fn main() {
                 .lock()
                 .map_err(|_| std::io::Error::other("HOST_BUSY"))? = Some(extension_store);
             let credential_state = app.state::<Host>().credentials.clone();
+            let mut broker =
+                CredentialBroker::new(app.path().app_data_dir()?.join("credentials/stronghold.v1"));
+            #[cfg(windows)]
+            broker
+                .ensure_system_unlock()
+                .map_err(std::io::Error::other)?;
             *credential_state
                 .lock()
-                .map_err(|_| std::io::Error::other("HOST_BUSY"))? = Some(CredentialBroker::new(
-                app.path().app_data_dir()?.join("credentials/stronghold.v1"),
-            ));
+                .map_err(|_| std::io::Error::other("HOST_BUSY"))? = Some(broker);
             let signal = credential_state
                 .lock()
                 .map_err(|_| std::io::Error::other("HOST_BUSY"))?

@@ -96,6 +96,18 @@ def test_terminology_export_and_privacy_cleanup():
         first = client.post(f'/api/media/transcriptions/{job_id}/notes', json={'title':'课程'}).json()
         again = client.post(f'/api/media/transcriptions/{job_id}/notes', json={'title':'课程'}).json()
         assert first['note_id'] == again['note_id']
+        artifacts = client.post(f'/api/media/transcriptions/{job_id}/artifacts', json={
+            'title': '课程', 'knowledge_title': '课程知识点',
+            'provider_id': 'mock', 'model': 'mock-1',
+        })
+        assert artifacts.status_code == 201
+        assert artifacts.json()['transcript']['note_id'] == first['note_id']
+        assert artifacts.json()['knowledge_note']['note_id'] != first['note_id']
+        repeated = client.post(f'/api/media/transcriptions/{job_id}/artifacts', json={
+            'title': '课程', 'knowledge_title': '课程知识点',
+            'provider_id': 'mock', 'model': 'mock-1',
+        })
+        assert repeated.json()['knowledge_note']['note_id'] == artifacts.json()['knowledge_note']['note_id']
         response = client.delete('/api/media/attachments/lecture.txt')
         assert first['note_id'] in response.json()['retained_note_ids']
         cleaned = client.get(f'/api/media/transcriptions/{job_id}').json()

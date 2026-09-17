@@ -9,8 +9,10 @@ import { useRoute } from 'vue-router'
 import { mediaService, createMediaSubmission, type MediaJob } from '@/services/mediaService'
 import { localeTag, t } from '@/i18n'
 import FilePicker from '@/components/common/FilePicker.vue'
+import { useProviderStore } from '@/stores/provider'
 
 const route = useRoute()
+const providerStore = useProviderStore()
 const maxUploadMiB = isDesktop() ? 64 : 128
 const submission = createMediaSubmission()
 const updateExisting = ref(false)
@@ -44,6 +46,10 @@ const error = ref('')
 const notice = ref('')
 const dirty = ref(false)
 const title = ref(t('课堂转写', 'Class transcript'))
+const knowledgeTitle = ref(t('课堂知识点笔记', 'Class knowledge notes'))
+const providerId = ref('')
+const model = ref('')
+const models = computed(() => providerStore.modelsByProvider[providerId.value] ?? [])
 const player = ref<HTMLAudioElement | null>(null)
 const position = ref(0)
 const speed = ref(1)
@@ -121,23 +127,40 @@ async function compareSpeaker() {
     }
   })
 }
+async function createArtifacts() {
+  if (!selected.value || !providerId.value || !model.value.trim()) return
+  await action(async () => {
+    const result = await mediaService.artifacts(selected.value!.job_id, {
+      title: title.value,
+      knowledge_title: knowledgeTitle.value,
+      provider_id: providerId.value,
+      model: model.value,
+      update_existing: updateExisting.value,
+    })
+    notice.value = t(
+      `已生成完整转录稿“${result.transcript.title}”和知识点笔记“${result.knowledge_note.title}”。`,
+      `Created transcript “${result.transcript.title}” and knowledge notes “${result.knowledge_note.title}”.`,
+    )
+  })
+}
 function loaded() { if (player.value) player.value.playbackRate = speed.value; const seconds = Number(route.query.time || 0); if (Number.isFinite(seconds) && seconds >= 0) seek(seconds) }
 onMounted(async () => {
-  await refresh()
+  await Promise.all([refresh(), providerStore.loadProviders()])
+  providerId.value = providerStore.defaultProviderId
   if (typeof route.query.job === 'string') {
     try { selected.value = await mediaService.get(route.query.job) } catch (e) { error.value = (e as Error).message }
   }
+})
+watch(providerId, async (value) => {
+  model.value = providerStore.providers.find(item => item.provider_id === value)?.default_model ?? ''
+  if (!value) return
+  try { await providerStore.loadModels(value) } catch { /* 允许手动填写模型 ID。 */ }
 })
 onUnmounted(() => { stopped = true; clearTimeout(timer) })
 </script>
 
 <template>
   <section class="media-page">
-    <details class="ui-disclosure">
-      <summary>{{ t('当前转写能力与验收范围', 'Transcription capabilities and validation') }}</summary>
-      <p>{{ t('本地转写提供片段级时间戳与说话人聚类，不提供逐字强制对齐或重叠语音分离。聚类编号不代表已确认的真实人数。', 'Local transcription provides segment timestamps and speaker clusters, without forced word alignment or overlapping speech separation. Cluster IDs are not verified speaker counts.') }}</p>
-      <p>{{ t('无参考转写或说话人标注时，只能验证功能与耗时，不能据此判断准确率。请通过播放与人工校对确认内容。', 'Without reference transcripts or speaker labels, runs validate functionality and timing, not accuracy. Review the audio and correct the transcript.') }}</p>
-    </details>
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <header class="feature-header"><div><h1>{{ t('音视频转写', 'Media Transcription') }}</h1><p class="subtle">{{ t(`上传音频或视频音轨，转写、校对后保存到知识库。最多 ${maxUploadMiB} MiB；超过 25 MiB 请启用仅本地处理。音轨最长 1 小时。`, `Upload audio or a video soundtrack, transcribe and correct it, then save it to the knowledge base. Up to ${maxUploadMiB} MiB; enable local-only processing above 25 MiB. Audio duration is limited to one hour.`) }}</p></div></header>
     <div v-if="error" class="error-banner" role="alert">{{ error }}</div><p v-if="notice" role="status">{{ notice }}</p>
@@ -181,7 +204,16 @@ onUnmounted(() => { stopped = true; clearTimeout(timer) })
             <button class="button-secondary" @click="action(async () => { history = (await mediaService.revisions(selected!.job_id)).items })">{{ t('修订历史', 'Revision history') }}</button></div>
           <details class="ui-disclosure"><summary>{{ t('原始识别文本', 'Original recognition text') }}</summary><pre>{{ selected.original_text }}</pre></details>
           <details v-for="revision in history" :key="revision.revision" class="ui-disclosure"><summary>{{ t('修订', 'Revision') }} {{ revision.revision }}</summary><pre>{{ revision.text }}</pre></details>
-          <div class="inline-actions"><label><input v-model="updateExisting" type="checkbox" />{{ t('更新上次导出的笔记（已手动修改则拒绝）', 'Update the previously exported note (refuse if manually edited)') }}</label><input v-model="title" class="input" :aria-label="t('笔记标题', 'Note title')" /><button class="button-primary" :disabled="busy || dirty || !title.trim()" @click="action(async () => { const note = await mediaService.note(selected!.job_id, title, updateExisting); notice = `${t('已保存笔记：', 'Saved note: ')}${note.title}` })">{{ t('保存为笔记', 'Save as note') }}</button></div>
+          <section class="artifact-panel">
+            <div><h3>{{ t('生成课程材料', 'Create course materials') }}</h3><p class="subtle">{{ t('一次生成两份内容：带时间戳的完整转录稿，以及由所选模型提取的知识点笔记。', 'Create two outputs: a timestamped full transcript and knowledge notes extracted by the selected model.') }}</p></div>
+            <div class="artifact-grid">
+              <label>{{ t('转录稿标题', 'Transcript title') }}<input v-model="title" class="input" /></label>
+              <label>{{ t('知识点笔记标题', 'Knowledge-note title') }}<input v-model="knowledgeTitle" class="input" /></label>
+              <label>{{ t('模型提供商', 'Model provider') }}<select v-model="providerId" class="select"><option value="">{{ t('请选择', 'Select') }}</option><option v-for="item in providerStore.enabledProviders" :key="item.provider_id" :value="item.provider_id">{{ item.name }}</option></select></label>
+              <label>{{ t('知识提取模型', 'Knowledge extraction model') }}<input v-model="model" class="input" list="media-models" :placeholder="t('填写模型 ID', 'Enter model ID')" /><datalist id="media-models"><option v-for="item in models" :key="item.model_id" :value="item.model_id">{{ item.name }}</option></datalist></label>
+            </div>
+            <div class="inline-actions"><label><input v-model="updateExisting" type="checkbox" />{{ t('安全更新上次导出的转录稿', 'Safely update the last exported transcript') }}</label><button class="button-primary" :disabled="busy || dirty || !title.trim() || !knowledgeTitle.trim() || !providerId || !model.trim()" @click="createArtifacts">{{ busy ? t('生成中…', 'Creating…') : t('生成转录稿与知识点笔记', 'Create transcript and knowledge notes') }}</button></div>
+          </section>
         </template>
       </article>
       <div v-else class="panel subtle">{{ t('选择任务查看转写结果。', 'Select a job to view its transcript.') }}</div>
@@ -191,5 +223,5 @@ onUnmounted(() => { stopped = true; clearTimeout(timer) })
 
 <style scoped>
 .media-page > :is(.feature-header, .panel, .media-columns, .error-banner) { width: 100%; max-width: 1180px; margin-inline: auto; }
-.media-page{padding:28px;overflow:auto;height:100%;display:flex;flex-direction:column;gap:20px}.upload{display:grid;gap:12px;padding:20px}.upload-options{display:flex;flex-wrap:wrap;gap:16px}.upload-actions{justify-content:flex-end}.media-columns{display:grid;grid-template-columns:260px minmax(0,1fr);gap:20px}.panel{padding:20px}.job-row{display:flex;flex-direction:column;gap:6px;width:100%;text-align:left;padding:12px;background:transparent;border:1px solid var(--color-border-default);border-radius:10px;margin-bottom:8px;cursor:pointer;color:inherit}.job-row small{overflow:hidden;text-overflow:ellipsis;max-width:100%}.selected,.current{background:var(--color-background-hover);outline:1px solid var(--color-accent-primary)}.transcript{display:flex;flex-direction:column;gap:16px}.transcript header,.segment{display:flex;gap:12px;align-items:center}.transcript>.button-danger{align-self:flex-start}.transcript>label{white-space:nowrap}.transcript>label select{width:160px}.segment textarea{flex:1}.speaker-names{display:flex;flex-wrap:wrap;gap:10px}audio{width:100%;border-radius:var(--radius-md);accent-color:var(--color-accent-primary)}pre{white-space:pre-wrap;word-break:break-word}label{display:flex;gap:8px;align-items:center}@media(max-width:850px){.media-columns{grid-template-columns:1fr}.segment{flex-wrap:wrap}}@media(max-width:560px){.upload-actions>*{flex:1}.upload-options{flex-direction:column}}
+.media-page{padding:28px;overflow:auto;height:100%;display:flex;flex-direction:column;gap:20px}.upload{display:grid;gap:12px;padding:20px}.upload-options{display:flex;flex-wrap:wrap;gap:16px}.upload-actions{justify-content:flex-end}.media-columns{display:grid;grid-template-columns:260px minmax(0,1fr);gap:20px}.panel{padding:20px}.job-row{display:flex;flex-direction:column;gap:6px;width:100%;text-align:left;padding:12px;background:transparent;border:1px solid var(--color-border-default);border-radius:10px;margin-bottom:8px;cursor:pointer;color:inherit}.job-row small{overflow:hidden;text-overflow:ellipsis;max-width:100%}.selected,.current{background:var(--color-background-hover);outline:1px solid var(--color-accent-primary)}.transcript{display:flex;flex-direction:column;gap:16px}.transcript header,.segment{display:flex;gap:12px;align-items:center}.transcript>.button-danger{align-self:flex-start}.transcript>label{white-space:nowrap}.transcript>label select{width:160px}.segment textarea{flex:1}.speaker-names{display:flex;flex-wrap:wrap;gap:10px}.artifact-panel{display:grid;gap:14px;padding:18px;border:1px solid var(--color-border-default);border-radius:var(--radius-lg);background:var(--color-surface-secondary)}.artifact-panel h3,.artifact-panel p{margin:0}.artifact-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.artifact-grid label{align-items:stretch;flex-direction:column;color:var(--color-text-secondary)}.artifact-grid :is(.input,.select){background:var(--color-surface-primary);color:var(--color-text-primary)}audio{width:100%;border-radius:var(--radius-md);accent-color:var(--color-accent-primary)}pre{white-space:pre-wrap;word-break:break-word}label{display:flex;gap:8px;align-items:center}@media(max-width:850px){.media-columns{grid-template-columns:1fr}.segment{flex-wrap:wrap}}@media(max-width:620px){.artifact-grid{grid-template-columns:1fr}}@media(max-width:560px){.upload-actions>*{flex:1}.upload-options{flex-direction:column}}
 </style>

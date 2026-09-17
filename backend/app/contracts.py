@@ -1250,6 +1250,12 @@ class TranscriptNoteRequest(Contract):
     include_speakers: bool = True
 
 
+class TranscriptArtifactsRequest(TranscriptNoteRequest):
+    provider_id: str = Field(min_length=1, max_length=128)
+    model: str = Field(min_length=1, max_length=256)
+    knowledge_title: str | None = Field(default=None, min_length=1, max_length=200)
+
+
 class IndexStatus(Contract):
     running_jobs: int = 0
     active_searches: int = 0

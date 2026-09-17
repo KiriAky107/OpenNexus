@@ -39,7 +39,7 @@ export interface CreateAgentRunRequest {
   max_steps?: number
   tool_timeout_seconds?: number
   run_timeout_seconds?: number
-  token_budget?: number
+  token_budget?: number | null
   allow_network?: boolean
   max_concurrent_tools?: number
 }

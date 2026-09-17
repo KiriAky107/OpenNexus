@@ -4,6 +4,7 @@ import { hostInvoke } from '@/services/platform/desktop'
 import { t } from '@/i18n'
 
 const locked = ref(true)
+const automatic = ref(false)
 const busy = ref(false)
 const password = ref('')
 const confirmation = ref('')
@@ -15,8 +16,9 @@ function failureMessage(error: unknown, fallback: string) {
     : code
 }
 async function refresh() {
-  const state = await hostInvoke<{ locked: boolean }>('credentials_status')
+  const state = await hostInvoke<{ locked: boolean; automatic?: boolean }>('credentials_status')
   locked.value = state.locked
+  automatic.value = state.automatic === true
 }
 async function importLegacy() {
   busy.value = true; message.value = ''
@@ -81,8 +83,8 @@ onUnmounted(() => clearInterval(statusTimer))
 <template>
   <section class="panel settings-section credential-vault" aria-labelledby="credential-vault-title">
     <h2 id="credential-vault-title">{{ t('设备凭据保险库', 'Device credential vault') }}</h2>
-    <p>{{ locked ? t('已锁定：使用模型密钥前请解锁。首次解锁将创建本机保险库。', 'Locked: unlock before using provider credentials. The first unlock creates this device’s vault.') : t('已解锁：密钥仅由本机受控调用使用。', 'Unlocked: credentials are available to authorized local calls.') }}</p>
-    <p class="subtle">{{ t('口令至少12个字符。遗失口令后需恢复备份或重新配置密钥；笔记仍可使用。', 'Use at least 12 characters. A lost password requires a backup or re-entering credentials; notes remain available.') }}</p>
+    <p>{{ locked ? t('已锁定：使用模型密钥前请解锁。', 'Locked: unlock before using provider credentials.') : automatic ? t('已自动解锁：凭据由当前 Windows 用户的系统加密保护。', 'Automatically unlocked: credentials are protected for the current Windows user.') : t('已解锁：密钥仅由本机受控调用使用。', 'Unlocked: credentials are available to authorized local calls.') }}</p>
+    <p class="subtle">{{ automatic ? t('应用重启后会自动解锁；Windows 锁屏仍会立即撤销当前会话。', 'The vault unlocks automatically after an app restart; locking Windows still revokes the current session immediately.') : t('口令至少12个字符。成功解锁后将为当前 Windows 用户启用自动解锁。', 'Use at least 12 characters. A successful unlock enables automatic unlock for the current Windows user.') }}</p>
     <form @submit.prevent="act(locked ? 'unlock' : 'change_password')">
       <label>{{ locked ? t('解锁口令', 'Vault password') : t('新口令', 'New password') }}
         <input v-model="password" type="password" minlength="12" maxlength="1024" required autocomplete="off" :disabled="busy" />

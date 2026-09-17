@@ -11,7 +11,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Header, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
-from app.contracts import TranscriptEditRequest, TranscriptNoteRequest, TranscriptionJob
+from app.contracts import TranscriptArtifactsRequest, TranscriptEditRequest, TranscriptNoteRequest, TranscriptionJob
 from app.database.db import connect, transaction
 from app.errors import ApiError
 from app.services import transcription_service as jobs
@@ -158,6 +158,12 @@ async def stream_events(job_id: str, request: Request, after: int = Query(-1, ge
 async def create_note(job_id: str, request: TranscriptNoteRequest):
     from app.services.media_notes import create_transcript_note
     return await create_transcript_note(job_id, request)
+
+
+@router.post("/transcriptions/{job_id}/artifacts", status_code=201)
+async def create_artifacts(job_id: str, request: TranscriptArtifactsRequest):
+    from app.services.media_notes import create_transcript_artifacts
+    return await create_transcript_artifacts(job_id, request)
 
 
 @router.get("/attachments/{attachment_id}/cleanup-impact")

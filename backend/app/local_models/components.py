@@ -5,11 +5,14 @@ import os
 import shutil
 import subprocess
 
-from app.config import BACKEND_DIR
+from app.config import BACKEND_DIR, get_settings
 from app.errors import ApiError
 from app.local_models.process import ThreadedProcess
 
-ROOT = BACKEND_DIR / '.venv-models-cuda'
+# 模型运行环境会在安装与升级时写入大量文件，必须位于应用数据目录，
+# 不能写入受完整性清单保护的 Core 发布目录。
+DEFAULT_ROOT = get_settings().data_dir / 'model-runtime'
+ROOT = DEFAULT_ROOT
 state = {'status': 'unchecked', 'stage': '', 'cuda_available': None}
 task = None
 
