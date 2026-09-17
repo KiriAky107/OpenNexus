@@ -21,7 +21,7 @@ const { openCitation } = useCitationNavigation()
 const pageError = ref('')
 const form = reactive({
   input: '', provider_id: '', model: '', skill_id: '', max_steps: 10,
-  tool_timeout_seconds: 30, run_timeout_seconds: 300, token_budget: 8000,
+  tool_timeout_seconds: 30, run_timeout_seconds: 300, limit_token_budget: false, token_budget: 8000,
   allow_network: false, max_concurrent_tools: 1, allowed_tools: [] as string[],
 })
 
@@ -61,7 +61,7 @@ async function createRun() {
       input: form.input, provider_id: form.provider_id, model: form.model,
       skill_id: form.skill_id || undefined, allowed_tools: form.allowed_tools,
       max_steps: form.max_steps, tool_timeout_seconds: form.tool_timeout_seconds,
-      run_timeout_seconds: form.run_timeout_seconds, token_budget: form.token_budget,
+      run_timeout_seconds: form.run_timeout_seconds, token_budget: form.limit_token_budget ? form.token_budget : null,
       allow_network: form.allow_network, max_concurrent_tools: form.max_concurrent_tools,
     })
     await router.replace({ name: 'agent', params: { runId: run.run_id } })
@@ -101,7 +101,7 @@ async function handleOpenCitation(data: Record<string, unknown>) {
         <div class="field"><label>{{ t('最大步骤', 'Maximum steps') }}</label><input v-model.number="form.max_steps" class="input" type="number" min="1" max="100" /></div>
         <div class="field"><label>{{ t('工具超时（秒）', 'Tool timeout (seconds)') }}</label><input v-model.number="form.tool_timeout_seconds" class="input" type="number" min="1" /></div>
         <div class="field"><label>{{ t('运行超时（秒）', 'Run timeout (seconds)') }}</label><input v-model.number="form.run_timeout_seconds" class="input" type="number" min="1" /></div>
-        <div class="field"><label>{{ t('令牌预算', 'Token budget') }}</label><input v-model.number="form.token_budget" class="input" type="number" min="1" /></div>
+        <div class="field budget-field"><label><input v-model="form.limit_token_budget" type="checkbox" />{{ t('限制令牌消耗', 'Limit token usage') }}</label><input v-if="form.limit_token_budget" v-model.number="form.token_budget" class="input" type="number" min="1" :aria-label="t('令牌上限', 'Token limit')" /><small v-else class="subtle">{{ t('默认不限制；仍可随时取消运行。', 'Unlimited by default; the run can still be cancelled at any time.') }}</small></div>
         <div class="field"><label>{{ t('最大并发工具', 'Maximum concurrent tools') }}</label><input v-model.number="form.max_concurrent_tools" class="input" type="number" min="1" /></div>
       </div>
       <div class="field"><label>{{ t('允许使用的工具', 'Allowed tools') }}</label><div class="tool-grid"><ToolOption v-for="tool in agentStore.tools" :key="tool.name" :name="tool.name" :description="tool.description" :selected="form.allowed_tools.includes(tool.name)" @toggle="toggleTool" /></div></div>
@@ -150,6 +150,16 @@ async function handleOpenCitation(data: Record<string, unknown>) {
 <style scoped>
 .agent-page > * { width: min(100%, 1080px); margin-inline: auto; }
 .run-form { display: grid; gap: var(--space-xl); }
+.budget-field {
+  min-height: 78px;
+  align-content: center;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-secondary);
+}
+.budget-field > label { color: var(--color-text-primary); }
+.budget-field > .input { background: var(--color-surface-primary); }
 .tool-grid { display: grid; align-items: start; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: var(--space-sm); }
 .network { display: flex; gap: var(--space-sm); }
 .trace-layout { display: grid; gap: var(--space-lg); }

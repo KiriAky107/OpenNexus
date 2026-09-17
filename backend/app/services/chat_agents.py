@@ -41,7 +41,7 @@ async def execute(call, request):
         run = await container.agent.create_run(AgentRunCreateRequest(
             input=task, provider_id=request.provider_id, model=request.model,
             skill_id=skill_id,
-            allowed_tools=ALLOWED_TOOLS, max_steps=10, token_budget=16000,
+            allowed_tools=ALLOWED_TOOLS, max_steps=10, token_budget=None,
             allow_network=False, metadata={'source': 'chat', 'conversation_id': request.conversation_id},
         ))
     elif call.name == 'agent.status':

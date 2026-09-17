@@ -13,8 +13,6 @@ def isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(components, 'ROOT', tmp_path / 'cuda')
     monkeypatch.setattr(components, 'state', {'status': 'unchecked', 'stage': '', 'cuda_available': None})
     monkeypatch.setattr(components, 'task', None)
-
-
 def test_status_checks_without_installing_and_detects_existing_cuda(monkeypatch):
     python = components.ROOT / 'Scripts/python.exe'
     python.parent.mkdir(parents=True)

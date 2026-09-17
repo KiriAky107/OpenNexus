@@ -61,6 +61,13 @@ def main():
         "--name", "opennexus-core", "--distpath", str(output / "dist"),
         "--workpath", str(output / "work"), "--specpath", str(output),
         "--collect-submodules", "app", "--collect-all", "sqlite_vec",
+        # 本地模型使用独立 Python 进程执行；冻结后的 Core 必须保留可直接运行的 Worker 源文件。
+        "--add-data", str(ROOT / "backend" / "app" / "local_models" / "worker.py") + ":app/local_models",
+        "--add-data", str(ROOT / "backend" / "app" / "local_models" / "protocol.py") + ":app/local_models",
+        # 设置页可以在可写的数据目录中安装模型运行环境，安装器及其锁文件需随 Core 发布。
+        "--add-data", str(ROOT / "backend" / "scripts" / "install-model-runtime.ps1") + ":scripts",
+        "--add-data", str(ROOT / "backend" / "scripts" / "model-requirements.lock") + ":scripts",
+        "--add-data", str(ROOT / "backend" / "scripts" / "model-requirements.txt") + ":scripts",
         "--add-data", str(ROOT / "backend" / "extensions" / "plugins" / "text-tools") + ":extensions/plugins/text-tools",
         "--add-data", str(ROOT / "backend" / "extensions" / "plugins" / "chat-policy") + ":extensions/plugins/chat-policy",
         "--add-data", str(ROOT / "backend" / "extensions" / "skills" / "knowledge-assistant") + ":extensions/skills/knowledge-assistant",

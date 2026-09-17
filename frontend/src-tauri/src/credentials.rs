@@ -354,6 +354,52 @@ pub struct CredentialBroker {
 }
 
 impl CredentialBroker {
+    #[cfg(windows)]
+    fn auto_unlock_path(&self) -> Result<PathBuf> {
+        Ok(self
+            .path
+            .parent()
+            .ok_or("CREDENTIAL_PATH_INVALID")?
+            .join("auto-unlock.dpapi"))
+    }
+
+    /// Unlocks with a random secret protected by Windows DPAPI. A new vault is initialized
+    /// automatically; an existing password vault is never overwritten implicitly.
+    #[cfg(windows)]
+    pub fn ensure_system_unlock(&mut self) -> Result<bool> {
+        let key_path = self.auto_unlock_path()?;
+        if let Some(secret) = crate::credential_autounlock::load(&key_path)? {
+            self.unlock(secret)?;
+            return Ok(true);
+        }
+        if self.path.exists() {
+            return Ok(false);
+        }
+        let mut secret = Zeroizing::new(vec![0u8; 32]);
+        rand::rngs::OsRng
+            .try_fill_bytes(&mut secret)
+            .map_err(|_| "CREDENTIAL_ENTROPY_FAILED")?;
+        crate::credential_autounlock::save(&key_path, &secret)?;
+        self.unlock(secret)?;
+        Ok(true)
+    }
+
+    #[cfg(windows)]
+    pub fn enable_system_unlock(&self, password: &[u8]) -> Result<()> {
+        self.session()?;
+        crate::credential_autounlock::save(&self.auto_unlock_path()?, password)
+    }
+
+    #[cfg(windows)]
+    pub fn has_system_unlock(&self) -> bool {
+        self.auto_unlock_path().is_ok_and(|path| path.is_file())
+    }
+
+    #[cfg(not(windows))]
+    pub fn has_system_unlock(&self) -> bool {
+        false
+    }
+
     /// 源来自本机文件选择器，而不是原始 WebView 路径。导入是幂等的；冲突的 ID 会停止整个事务。
     pub fn import_fernet(
         &mut self,
@@ -1040,6 +1086,34 @@ mod tests {
     use super::*;
     fn password() -> Zeroizing<Vec<u8>> {
         Zeroizing::new(b"test-only-password-123".to_vec())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn system_unlock_survives_broker_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("credentials/stronghold.v1");
+        let id = CredentialId {
+            scope: Scope::Provider,
+            id: "provider-restart".into(),
+        };
+        {
+            let mut broker = CredentialBroker::new(path.clone());
+            assert!(broker.ensure_system_unlock().unwrap());
+            broker
+                .put(&id, Zeroizing::new(b"restart-secret".to_vec()))
+                .unwrap();
+        }
+        let mut restarted = CredentialBroker::new(path);
+        assert!(restarted.ensure_system_unlock().unwrap());
+        assert_eq!(
+            restarted
+                .resolve(&Scope::Provider, &id)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            b"restart-secret"
+        );
     }
     fn b04_fixture() -> (Vec<u8>, String, BTreeMap<String, String>) {
         let fixture: serde_json::Value =

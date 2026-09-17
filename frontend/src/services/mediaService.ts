@@ -21,6 +21,8 @@ export const mediaService = {
   }),
   revisions: (id: string) => apiClient.get<{items: MediaJob[]}>(`/api/media/transcriptions/${encodeURIComponent(id)}/revisions`),
   note: (id: string, title: string, update_existing = false) => apiClient.post<{note_id: string; title: string}>(`/api/media/transcriptions/${encodeURIComponent(id)}/notes`, { title, update_existing }),
+  artifacts: (id: string, body: {title: string; knowledge_title?: string; provider_id: string; model: string; update_existing?: boolean}) =>
+    apiClient.post<{transcript: {note_id: string; title: string}; knowledge_note: {note_id: string; title: string}}>(`/api/media/transcriptions/${encodeURIComponent(id)}/artifacts`, body),
   audio: (id: string) => resolveApiUrl(`/api/media/attachments/${encodeURIComponent(id)}`),
   impact: (id: string) => apiClient.get<{message:string;retained_note_ids:string[]}>(`/api/media/attachments/${encodeURIComponent(id)}/cleanup-impact`),
   purge: (id: string) => apiClient.delete(`/api/media/attachments/${encodeURIComponent(id)}`),
