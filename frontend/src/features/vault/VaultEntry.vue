@@ -110,7 +110,7 @@ async function openFolderPicker() {
       </div>
 
       <div class="footer-info">
-        <span>v0.5.0</span>
+        <span>v0.5.1-alpha</span>
         <button class="theme-toggle" @click="themeStore.toggleTheme()">
           <AppIcon :icon="themeStore.isDark ? Sunny : Moon" :size="15" />
           {{ themeStore.isDark ? t('浅色', 'Light') : t('深色', 'Dark') }}

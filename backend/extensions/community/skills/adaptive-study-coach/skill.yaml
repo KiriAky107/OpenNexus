@@ -1,0 +1,12 @@
+id: adaptive-study-coach
+name: 个性化学习冲刺教练
+version: 1.0.0
+description: 读取指定课程笔记，结合天数、每日时间、掌握度和薄弱点生成可执行计划，并可按用户要求创建任务。
+permissions: [notes.search, notes.read, tasks.write]
+tools: [notes.search, notes.read, tasks.create, study-plan-kit.build_sprint]
+retrieval:
+  top_k: 5
+  rerank: true
+  citation: true
+model:
+  required_capabilities: [chat, tool_calling]

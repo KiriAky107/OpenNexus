@@ -1,6 +1,7 @@
 """无需模型下载的耐久性、取消和乐观编辑。"""
 import asyncio
 from contextlib import closing
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -114,6 +115,38 @@ def test_terminology_export_and_privacy_cleanup():
         assert cleaned['text'] is None and cleaned['original_text'] is None and cleaned['corrections'] == []
         assert client.post(f'/api/media/transcriptions/{job_id}/retry').status_code == 409
         assert client.get('/api/media/attachments/lecture.txt').status_code == 404
+
+
+def test_media_note_links_do_not_depend_on_rebuildable_note_projection():
+    with closing(connect()) as conn:
+        foreign_tables = {row[2] for row in conn.execute("PRAGMA foreign_key_list(media_notes)")}
+    assert foreign_tables == {"media_jobs"}
+
+
+def test_desktop_revision_conflict_recovers_marker_matched_note(monkeypatch):
+    from app.services import note_service
+    from app.services.media_notes import _create_note
+
+    marker = "<!-- transcription:job:1:hash -->"
+    recovered = SimpleNamespace(note_id="stable-note", title="Generated", markdown=f"{marker}\nbody")
+
+    async def conflict(**_kwargs):
+        raise ApiError(409, "REVISION_CONFLICT", "already written")
+
+    monkeypatch.setattr(note_service, "create_note", conflict)
+    monkeypatch.setattr(
+        note_service, "list_notes",
+        lambda **_kwargs: ([SimpleNamespace(note_id="stable-note", title="Generated")], 1),
+    )
+
+    async def get_note(note_id):
+        return recovered if note_id == "stable-note" else None
+
+    monkeypatch.setattr(note_service, "get_note", get_note)
+    result = asyncio.run(_create_note(
+        "Generated", recovered.markdown, SimpleNamespace(folder=""), marker
+    ))
+    assert result is recovered
 
 
 def test_local_only_export_and_rebuild_keep_local_embedding_policy(monkeypatch):
