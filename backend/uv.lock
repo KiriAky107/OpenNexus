@@ -1108,7 +1108,7 @@ wheels = [
 
 [[package]]
 name = "notes-agent-backend"
-version = "0.5.0"
+version = "0.5.1-alpha"
 source = { virtual = "." }
 dependencies = [
     { name = "cryptography" },

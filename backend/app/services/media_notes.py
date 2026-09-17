@@ -187,11 +187,9 @@ async def create_transcript_artifacts(job_id, options):
                 return {"transcript": transcript_note, "knowledge_note": knowledge_note}
         markdown = await _knowledge_markdown(job, options.provider_id, options.model, knowledge_title)
         note_title = f"{knowledge_title} · {job_id[-8:]}-r{job.revision}-{signature[-6:]}"
-        knowledge_note = await note_service.create_note(
-            title=note_title,
-            markdown=markdown,
-            folder=options.folder,
-            tags=["课程笔记", "知识点"],
+        marker = markdown.splitlines()[0]
+        knowledge_note = await _create_note(
+            note_title, markdown, options, marker, tags=["课程笔记", "知识点"]
         )
         with closing(connect()) as conn, transaction(conn):
             conn.execute("INSERT OR IGNORE INTO media_notes VALUES (?,?,?,?)",
@@ -199,14 +197,30 @@ async def create_transcript_artifacts(job_id, options):
         return {"transcript": transcript_note, "knowledge_note": knowledge_note}
 
 
-async def _create_note(title, markdown, options, marker):
+async def _create_note(title, markdown, options, marker, *, tags=None):
     try:
-        note = await note_service.create_note(title=title, markdown=markdown, folder=options.folder, tags=["转写"])
+        note = await note_service.create_note(
+            title=title, markdown=markdown, folder=options.folder, tags=tags or ["转写"]
+        )
     except ApiError as exc:
-        if exc.code != "RESOURCE_CONFLICT" or "note_id" not in exc.details:
+        if exc.code == "RESOURCE_CONFLICT" and "note_id" in exc.details:
+            note = await note_service.get_note(exc.details["note_id"])
+        elif exc.code == "REVISION_CONFLICT":
+            # Rust Host 已完成写入、但 Core 尚未来得及保存关联时，重试会报告路径冲突。
+            # 只恢复标题和不可伪造的任务 marker 都匹配的文件，避免误认用户同名笔记。
+            summaries, _ = note_service.list_notes(
+                limit=1000, offset=0, folder=options.folder, tag=None
+            )
+            note = None
+            for summary in summaries:
+                if summary.title != title:
+                    continue
+                candidate = await note_service.get_note(summary.note_id)
+                if candidate is not None and marker in candidate.markdown:
+                    note = candidate
+                    break
+        else:
             raise
-        # 恢复笔记创建成功后、关联任务前发生的崩溃。
-        note = await note_service.get_note(exc.details["note_id"])
         if note is None or marker not in note.markdown:
             raise
     return note

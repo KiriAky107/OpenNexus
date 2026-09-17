@@ -194,6 +194,21 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_workspace_asset_links_note
         ON workspace_asset_links(note_id, note_path);
     """,
+    # v14：桌面端 Markdown 先由 Rust Host 落盘，notes 只是可重建的搜索投影。
+    # 媒体产物不能依赖投影已同步，否则文件创建成功后关联会因外键失败。
+    """
+    CREATE TABLE media_notes_v14 (
+        job_id TEXT NOT NULL REFERENCES media_jobs(job_id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL,
+        options_hash TEXT NOT NULL,
+        note_id TEXT NOT NULL,
+        PRIMARY KEY(job_id, revision, options_hash)
+    );
+    INSERT INTO media_notes_v14 (job_id, revision, options_hash, note_id)
+        SELECT job_id, revision, options_hash, note_id FROM media_notes;
+    DROP TABLE media_notes;
+    ALTER TABLE media_notes_v14 RENAME TO media_notes;
+    """,
 ]
 
 

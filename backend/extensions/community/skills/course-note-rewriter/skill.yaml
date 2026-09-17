@@ -1,0 +1,12 @@
+id: course-note-rewriter
+name: 课程讲义改编师
+version: 1.0.0
+description: 将真实课程转写改编为结构化复习讲义，并用本地 Markdown 工具检查生成结果；仅在用户明确要求时保存新笔记。
+permissions: [notes.search, notes.read, notes.write]
+tools: [notes.search, notes.read, notes.create, markdown-workbench.inspect_markdown]
+retrieval:
+  top_k: 5
+  rerank: true
+  citation: true
+model:
+  required_capabilities: [chat, tool_calling]

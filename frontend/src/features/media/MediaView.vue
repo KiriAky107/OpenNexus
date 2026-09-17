@@ -44,6 +44,8 @@ const terminology = ref('')
 const busy = ref(false)
 const error = ref('')
 const notice = ref('')
+const artifactError = ref('')
+const artifactNotice = ref('')
 const dirty = ref(false)
 const title = ref(t('课堂转写', 'Class transcript'))
 const knowledgeTitle = ref(t('课堂知识点笔记', 'Class knowledge notes'))
@@ -129,7 +131,11 @@ async function compareSpeaker() {
 }
 async function createArtifacts() {
   if (!selected.value || !providerId.value || !model.value.trim()) return
-  await action(async () => {
+  if (busy.value) return
+  busy.value = true
+  artifactError.value = ''
+  artifactNotice.value = ''
+  try {
     const result = await mediaService.artifacts(selected.value!.job_id, {
       title: title.value,
       knowledge_title: knowledgeTitle.value,
@@ -137,11 +143,15 @@ async function createArtifacts() {
       model: model.value,
       update_existing: updateExisting.value,
     })
-    notice.value = t(
+    artifactNotice.value = t(
       `已生成完整转录稿“${result.transcript.title}”和知识点笔记“${result.knowledge_note.title}”。`,
       `Created transcript “${result.transcript.title}” and knowledge notes “${result.knowledge_note.title}”.`,
     )
-  })
+  } catch (e) {
+    artifactError.value = (e as Error).message
+  } finally {
+    busy.value = false
+  }
 }
 function loaded() { if (player.value) player.value.playbackRate = speed.value; const seconds = Number(route.query.time || 0); if (Number.isFinite(seconds) && seconds >= 0) seek(seconds) }
 onMounted(async () => {
@@ -213,6 +223,8 @@ onUnmounted(() => { stopped = true; clearTimeout(timer) })
               <label>{{ t('知识提取模型', 'Knowledge extraction model') }}<input v-model="model" class="input" list="media-models" :placeholder="t('填写模型 ID', 'Enter model ID')" /><datalist id="media-models"><option v-for="item in models" :key="item.model_id" :value="item.model_id">{{ item.name }}</option></datalist></label>
             </div>
             <div class="inline-actions"><label><input v-model="updateExisting" type="checkbox" />{{ t('安全更新上次导出的转录稿', 'Safely update the last exported transcript') }}</label><button class="button-primary" :disabled="busy || dirty || !title.trim() || !knowledgeTitle.trim() || !providerId || !model.trim()" @click="createArtifacts">{{ busy ? t('生成中…', 'Creating…') : t('生成转录稿与知识点笔记', 'Create transcript and knowledge notes') }}</button></div>
+            <p v-if="artifactError" class="error-banner" role="alert">{{ artifactError }}</p>
+            <p v-if="artifactNotice" class="artifact-success" role="status">{{ artifactNotice }}</p>
           </section>
         </template>
       </article>
@@ -223,5 +235,5 @@ onUnmounted(() => { stopped = true; clearTimeout(timer) })
 
 <style scoped>
 .media-page > :is(.feature-header, .panel, .media-columns, .error-banner) { width: 100%; max-width: 1180px; margin-inline: auto; }
-.media-page{padding:28px;overflow:auto;height:100%;display:flex;flex-direction:column;gap:20px}.upload{display:grid;gap:12px;padding:20px}.upload-options{display:flex;flex-wrap:wrap;gap:16px}.upload-actions{justify-content:flex-end}.media-columns{display:grid;grid-template-columns:260px minmax(0,1fr);gap:20px}.panel{padding:20px}.job-row{display:flex;flex-direction:column;gap:6px;width:100%;text-align:left;padding:12px;background:transparent;border:1px solid var(--color-border-default);border-radius:10px;margin-bottom:8px;cursor:pointer;color:inherit}.job-row small{overflow:hidden;text-overflow:ellipsis;max-width:100%}.selected,.current{background:var(--color-background-hover);outline:1px solid var(--color-accent-primary)}.transcript{display:flex;flex-direction:column;gap:16px}.transcript header,.segment{display:flex;gap:12px;align-items:center}.transcript>.button-danger{align-self:flex-start}.transcript>label{white-space:nowrap}.transcript>label select{width:160px}.segment textarea{flex:1}.speaker-names{display:flex;flex-wrap:wrap;gap:10px}.artifact-panel{display:grid;gap:14px;padding:18px;border:1px solid var(--color-border-default);border-radius:var(--radius-lg);background:var(--color-surface-secondary)}.artifact-panel h3,.artifact-panel p{margin:0}.artifact-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.artifact-grid label{align-items:stretch;flex-direction:column;color:var(--color-text-secondary)}.artifact-grid :is(.input,.select){background:var(--color-surface-primary);color:var(--color-text-primary)}audio{width:100%;border-radius:var(--radius-md);accent-color:var(--color-accent-primary)}pre{white-space:pre-wrap;word-break:break-word}label{display:flex;gap:8px;align-items:center}@media(max-width:850px){.media-columns{grid-template-columns:1fr}.segment{flex-wrap:wrap}}@media(max-width:620px){.artifact-grid{grid-template-columns:1fr}}@media(max-width:560px){.upload-actions>*{flex:1}.upload-options{flex-direction:column}}
+.media-page{padding:28px;overflow:auto;height:100%;display:flex;flex-direction:column;gap:20px}.upload{display:grid;gap:12px;padding:20px}.upload-options{display:flex;flex-wrap:wrap;gap:16px}.upload-actions{justify-content:flex-end}.media-columns{display:grid;grid-template-columns:260px minmax(0,1fr);gap:20px}.panel{padding:20px}.job-row{display:flex;flex-direction:column;gap:6px;width:100%;text-align:left;padding:12px;background:transparent;border:1px solid var(--color-border-default);border-radius:10px;margin-bottom:8px;cursor:pointer;color:inherit}.job-row small{overflow:hidden;text-overflow:ellipsis;max-width:100%}.selected,.current{background:var(--color-background-hover);outline:1px solid var(--color-accent-primary)}.transcript{display:flex;flex-direction:column;gap:16px}.transcript header,.segment{display:flex;gap:12px;align-items:center}.transcript>.button-danger{align-self:flex-start}.transcript>label{white-space:nowrap}.transcript>label select{width:160px}.segment textarea{flex:1}.speaker-names{display:flex;flex-wrap:wrap;gap:10px}.artifact-panel{display:grid;gap:14px;padding:18px;border:1px solid var(--color-border-default);border-radius:var(--radius-lg);background:var(--color-surface-secondary)}.artifact-panel h3,.artifact-panel p{margin:0}.artifact-success{color:var(--color-success)}.artifact-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.artifact-grid label{align-items:stretch;flex-direction:column;color:var(--color-text-secondary)}.artifact-grid :is(.input,.select){background:var(--color-surface-primary);color:var(--color-text-primary)}audio{width:100%;border-radius:var(--radius-md);accent-color:var(--color-accent-primary)}pre{white-space:pre-wrap;word-break:break-word}label{display:flex;gap:8px;align-items:center}@media(max-width:850px){.media-columns{grid-template-columns:1fr}.segment{flex-wrap:wrap}}@media(max-width:620px){.artifact-grid{grid-template-columns:1fr}}@media(max-width:560px){.upload-actions>*{flex:1}.upload-options{flex-direction:column}}
 </style>

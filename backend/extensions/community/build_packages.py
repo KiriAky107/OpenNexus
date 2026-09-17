@@ -11,7 +11,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 PACKAGES = [
     ('plugin', 'markdown-workbench', ['plugin.yaml', 'commands.yaml', 'markdown-workbench.exe', 'example.md', 'README.md'], []),
+    ('plugin', 'study-plan-kit', ['plugin.yaml', 'study-plan-kit.exe', 'README.md'], []),
     ('skill', 'note-reviewer', ['skill.yaml', 'prompt.md', 'README.md'], ['markdown-workbench']),
+    ('skill', 'course-note-rewriter', ['skill.yaml', 'prompt.md', 'README.md'], ['markdown-workbench']),
+    ('skill', 'adaptive-study-coach', ['skill.yaml', 'prompt.md', 'README.md'], ['study-plan-kit']),
 ]
 
 
@@ -22,12 +25,15 @@ def build(output: Path | None = None) -> dict:
     for kind, identity, files, dependencies in PACKAGES:
         source = ROOT / f'{kind}s' / identity
         generated: dict[str, bytes] = {}
-        if identity == 'markdown-workbench':
+        executable_names = [name for name in files if name.endswith('.exe')]
+        if executable_names:
             with tempfile.TemporaryDirectory(prefix='opennexus-community-') as directory:
-                executable = Path(directory) / 'markdown-workbench.exe'
+                if len(executable_names) != 1:
+                    raise RuntimeError(f'{identity} must declare exactly one executable')
+                executable = Path(directory) / executable_names[0]
                 rustc_command = [
-                    'rustc', '--edition=2021', '--crate-name', 'markdown_workbench',
-                    '-C', 'metadata=opennexus-community-v1', '-C', 'opt-level=s',
+                    'rustc', '--edition=2021', '--crate-name', identity.replace('-', '_'),
+                    '-C', f'metadata=opennexus-community-{identity}-v1', '-C', 'opt-level=s',
                     '-C', 'strip=symbols',
                 ]
                 if sys.platform == 'win32':
@@ -42,7 +48,7 @@ def build(output: Path | None = None) -> dict:
             for name in sorted(files):
                 info = zipfile.ZipInfo(f'{identity}/{name}', date_time=(1980, 1, 1, 0, 0, 0))
                 info.create_system = 3
-                info.external_attr = (0o100755 if name == 'markdown-workbench.exe' else 0o100644) << 16
+                info.external_attr = (0o100755 if name.endswith('.exe') else 0o100644) << 16
                 info.compress_type = zipfile.ZIP_DEFLATED
                 content = generated.get(name)
                 if content is None:
