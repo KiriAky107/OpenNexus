@@ -5,11 +5,6 @@ description: 本地检查 Markdown 标题层级、重复标题、未完成任务
 permissions: []
 contributes:
   tools: [markdown-workbench.inspect_markdown]
-  commands: [markdown-workbench.inspect-selection]
 backend:
-  type: mcp
-  transport: stdio
-  command: ./markdown-workbench.exe
-  args: []
-  startup_timeout_seconds: 10
-  tool_timeout_seconds: 10
+  type: internal_rpc
+  transport: none

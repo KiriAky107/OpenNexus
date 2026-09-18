@@ -149,6 +149,130 @@ def test_desktop_revision_conflict_recovers_marker_matched_note(monkeypatch):
     assert result is recovered
 
 
+def test_transcript_export_recovers_link_from_another_vault(monkeypatch):
+    from app.contracts import TranscriptNoteRequest
+    from app.services import note_service
+    from app.services.media_notes import create_transcript_note
+
+    text_attachment()
+
+    async def scenario():
+        job = await jobs.create_transcription("lecture.txt")
+        options = TranscriptNoteRequest(title="跨库课程")
+        original = await create_transcript_note(job.job_id, options)
+        with closing(connect()) as conn:
+            conn.execute(
+                "UPDATE media_notes SET note_id=? WHERE job_id=?",
+                ("note-from-another-vault", job.job_id),
+            )
+            conn.commit()
+
+        real_get_note = note_service.get_note
+
+        async def get_note(note_id):
+            if note_id == "note-from-another-vault":
+                return None
+            return await real_get_note(note_id)
+
+        monkeypatch.setattr(note_service, "get_note", get_note)
+        recovered = await create_transcript_note(job.job_id, options)
+        assert recovered.note_id == original.note_id
+        with closing(connect()) as conn:
+            linked = conn.execute(
+                "SELECT note_id FROM media_notes WHERE job_id=?",
+                (job.job_id,),
+            ).fetchone()[0]
+        assert linked == original.note_id
+
+    asyncio.run(scenario())
+
+
+def test_artifact_host_writes_use_distinct_child_operations(monkeypatch):
+    from app import host_bridge
+    from app.contracts import TranscriptArtifactsRequest
+    from app.services import media_notes
+
+    operations = []
+    text_attachment()
+    job = asyncio.run(jobs.create_transcription("lecture.txt"))
+
+    async def transcript(_job_id, _options):
+        operations.append(host_bridge.operation_id.get())
+        return SimpleNamespace(note_id="transcript-note")
+
+    async def knowledge(*_args):
+        return "<!-- knowledge-note:test -->\n# Knowledge"
+
+    async def create(*_args, **_kwargs):
+        operations.append(host_bridge.operation_id.get())
+        return SimpleNamespace(note_id="knowledge-note")
+
+    monkeypatch.setattr(media_notes, "create_transcript_note", transcript)
+    monkeypatch.setattr(media_notes, "_knowledge_markdown", knowledge)
+    monkeypatch.setattr(media_notes, "_create_note", create)
+
+    token = host_bridge.operation_id.set("11111111-1111-4111-8111-111111111111")
+    try:
+        result = asyncio.run(media_notes.create_transcript_artifacts(
+            job.job_id,
+            TranscriptArtifactsRequest(
+                title="Transcript", knowledge_title="Knowledge",
+                provider_id="mock", model="mock-1",
+            ),
+        ))
+    finally:
+        host_bridge.operation_id.reset(token)
+
+    assert result["transcript"].note_id == "transcript-note"
+    assert result["knowledge_note"].note_id == "knowledge-note"
+    assert len(operations) == 2
+    assert operations[0] != operations[1]
+    assert all(operation and operation != "11111111-1111-4111-8111-111111111111" for operation in operations)
+
+
+def test_course_note_blocks_are_recomposed_with_markdown_and_plot_tools(monkeypatch):
+    from app.container import container
+    from app.services.media_notes import _compose_course_blocks
+
+    names = []
+    original = container.tools.execute
+
+    async def execute(call, context):
+        names.append(call.name)
+        return await original(call, context)
+
+    monkeypatch.setattr(container.tools, "execute", execute)
+    markdown = """## 算法
+```python
+left += 1
+```
+```mermaid
+flowchart LR
+  A --> B
+```
+```function_plot
+domain: -4, 4
+range: -1, 8
+y = x^2
+```"""
+    rendered = asyncio.run(_compose_course_blocks(markdown, "media-test"))
+    assert names == ["markdown.compose", "markdown.compose", "function_plot.compose"]
+    assert "```python\nleft += 1\n```" in rendered
+    assert "```mermaid\nflowchart LR" in rendered
+    assert "```function-plot\ndomain: -4, 4" in rendered
+
+
+def test_course_note_rejects_invalid_function_plot():
+    from app.services.media_notes import _compose_course_blocks
+
+    with pytest.raises(ApiError) as invalid:
+        asyncio.run(_compose_course_blocks(
+            "```function-plot\ndomain: -4, 4\ny = __import__('os')\n```",
+            "media-test",
+        ))
+    assert invalid.value.code == "KNOWLEDGE_NOTE_VISUAL_INVALID"
+
+
 def test_local_only_export_and_rebuild_keep_local_embedding_policy(monkeypatch):
     from types import SimpleNamespace
     from app.contracts import TranscriptNoteRequest, IndexRebuildRequest

@@ -1,0 +1,12 @@
+tools:
+  - name: markdown-workbench.inspect_markdown
+    description: 本地检查 Markdown 标题层级、重复标题、任务项与代码围栏，并返回原文行号。
+    handler: inspect_markdown
+    parameters:
+      type: object
+      properties:
+        text:
+          type: string
+          maxLength: 100000
+      required: [text]
+      additionalProperties: false
