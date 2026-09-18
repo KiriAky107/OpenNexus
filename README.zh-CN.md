@@ -15,12 +15,12 @@ OpenNexus 是一款本地优先的 AI 笔记与知识工作台，将 Markdown �
 
 ## 目录
 
+- [快速开始](#快速开始)
 - [项目定位](#项目定位)
 - [核心工作流](#核心工作流)
 - [系统架构](#系统架构)
 - [数据与持久化模型](#数据与持久化模型)
 - [仓库边界](#仓库边界)
-- [安装](#安装)
 - [开发环境](#开发环境)
 - [配置与数据](#配置与数据)
 - [测试](#测试)
@@ -31,6 +31,30 @@ OpenNexus 是一款本地优先的 AI 笔记与知识工作台，将 Markdown �
 - [许可证](#许可证)
 - [Issue 要求](#issue-要求)
 - [Pull Request 要求](#pull-request-要求)
+
+## 快速开始
+
+### 安装 Windows 发行版
+
+1. 从 [GitHub Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.2-alpha1) 下载 `OpenNexus_0.5.2-alpha1_x64-setup.exe`。
+2. 校验 SHA-256：
+
+   ```powershell
+   Get-FileHash .\OpenNexus_0.5.2-alpha1_x64-setup.exe -Algorithm SHA256
+   ```
+
+   当前发布安装包的预期值为：
+
+   ```text
+   F1B88FDF1D3AE0B48B3D2907818A52B843E39BF94E94B4A913EC6AFD26EC8786
+   ```
+
+3. 运行安装程序，从开始菜单启动 OpenNexus，然后选择已有 Markdown 知识库或创建新知识库。
+4. 打开“设置 → 模型提供商”，配置本地或远程模型。
+
+安装包不包含用户知识库、已下载模型权重、CUDA 运行时或预装社区包。覆盖安装时会保留当前 Windows 用户位于 `%APPDATA%\cc.kronecker.notesagent` 的应用数据。
+
+如需从源码运行，请继续阅读[开发环境](#开发环境)。
 
 ## 项目定位
 
@@ -395,28 +419,6 @@ sequenceDiagram
 | 社区原型 | [KiriAky107/Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus) |
 
 本仓库不得混入 Sync Server 或社区服务的部署代码。跨仓库变更需要注明兼容版本，并分别发布。
-
-## 安装
-
-### Windows 安装包
-
-1. 从 [GitHub Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.2-alpha1) 下载 `OpenNexus_0.5.2-alpha1_x64-setup.exe`。
-2. 校验 SHA-256：
-
-   ```powershell
-   Get-FileHash .\OpenNexus_0.5.2-alpha1_x64-setup.exe -Algorithm SHA256
-   ```
-
-   当前发布安装包的预期值为：
-
-   ```text
-   F1B88FDF1D3AE0B48B3D2907818A52B843E39BF94E94B4A913EC6AFD26EC8786
-   ```
-
-3. 运行安装程序，从开始菜单启动 OpenNexus，然后选择已有 Markdown 知识库或创建新知识库。
-4. 打开“设置 → 模型提供商”，配置本地或远程模型。
-
-安装包不包含用户知识库、已下载模型权重、CUDA 运行时或预装社区包。覆盖安装时会保留当前 Windows 用户位于 `%APPDATA%\cc.kronecker.notesagent` 的应用数据。
 
 ## 开发环境
 

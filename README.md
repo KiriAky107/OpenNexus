@@ -15,12 +15,12 @@ OpenNexus is a local-first AI notebook and knowledge workspace. It combines Mark
 
 ## Table of contents
 
+- [Get started](#get-started)
 - [Why OpenNexus](#why-opennexus)
 - [Core workflows](#core-workflows)
 - [Architecture](#architecture)
 - [Data and persistence model](#data-and-persistence-model)
 - [Repository boundaries](#repository-boundaries)
-- [Installation](#installation)
 - [Development](#development)
 - [Configuration and data](#configuration-and-data)
 - [Testing](#testing)
@@ -31,6 +31,30 @@ OpenNexus is a local-first AI notebook and knowledge workspace. It combines Mark
 - [License](#license)
 - [Issue requirements](#issue-requirements)
 - [Pull request requirements](#pull-request-requirements)
+
+## Get started
+
+### Install the Windows release
+
+1. Download `OpenNexus_0.5.2-alpha1_x64-setup.exe` from the [GitHub release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.2-alpha1).
+2. Verify its SHA-256 checksum:
+
+   ```powershell
+   Get-FileHash .\OpenNexus_0.5.2-alpha1_x64-setup.exe -Algorithm SHA256
+   ```
+
+   Expected value:
+
+   ```text
+   F1B88FDF1D3AE0B48B3D2907818A52B843E39BF94E94B4A913EC6AFD26EC8786
+   ```
+
+3. Run the installer, launch OpenNexus from the Start menu, and select or create a Markdown vault.
+4. Open **Settings → Model providers** and configure a local or remote provider.
+
+The installer does not contain a user vault, downloaded model weights, a CUDA runtime, or preinstalled community packages. An in-place upgrade keeps the current Windows user's application data under `%APPDATA%\cc.kronecker.notesagent`.
+
+To run OpenNexus from source, continue to [Development](#development).
 
 ## Why OpenNexus
 
@@ -395,28 +419,6 @@ Public components are maintained separately:
 | Community prototype | [KiriAky107/Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus) |
 
 This repository must not absorb Sync Server or community deployment code. Cross-repository changes should document compatible versions and be released independently.
-
-## Installation
-
-### Windows installer
-
-1. Download `OpenNexus_0.5.2-alpha1_x64-setup.exe` from the [GitHub release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.2-alpha1).
-2. Verify its SHA-256 checksum:
-
-   ```powershell
-   Get-FileHash .\OpenNexus_0.5.2-alpha1_x64-setup.exe -Algorithm SHA256
-   ```
-
-   Expected value:
-
-   ```text
-   F1B88FDF1D3AE0B48B3D2907818A52B843E39BF94E94B4A913EC6AFD26EC8786
-   ```
-
-3. Run the installer, launch OpenNexus from the Start menu, and select or create a Markdown vault.
-4. Open **Settings → Model providers** and configure a local or remote provider.
-
-The installer does not contain a user vault, downloaded model weights, a CUDA runtime, or preinstalled community packages. An in-place upgrade keeps the current Windows user's application data under `%APPDATA%\cc.kronecker.notesagent`.
 
 ## Development
 
