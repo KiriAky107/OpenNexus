@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PACKAGES = [
-    ('plugin', 'markdown-workbench', ['plugin.yaml', 'commands.yaml', 'markdown-workbench.exe', 'example.md', 'README.md'], []),
+    ('plugin', 'markdown-workbench', ['plugin.yaml', 'tools.yaml', 'example.md', 'README.md'], []),
     ('plugin', 'study-plan-kit', ['plugin.yaml', 'study-plan-kit.exe', 'README.md'], []),
     ('skill', 'note-reviewer', ['skill.yaml', 'prompt.md', 'README.md'], ['markdown-workbench']),
     ('skill', 'course-note-rewriter', ['skill.yaml', 'prompt.md', 'README.md'], ['markdown-workbench']),

@@ -248,7 +248,7 @@ class DeclarativeToolSpec(BaseModel):
     description: str
     parameters: dict[str, Any] = Field(default_factory=dict)
     permission: str | None = None
-    handler: Literal["echo", "uppercase", "execution_policy"]
+    handler: Literal["echo", "uppercase", "execution_policy", "inspect_markdown"]
 
 
 class DeclarativePluginHost:
@@ -270,6 +270,89 @@ class DeclarativePluginHost:
                     'requires_permission_policy':True,'completion_requires_verification':True}
         if handler == "uppercase":
             return {"text": str(values.get("text", "")).upper()}
+        if handler == "inspect_markdown":
+            text = str(values.get("text", ""))
+            if len(text) > 100_000:
+                raise ExtensionError(
+                    "PLUGIN_ARGUMENT_INVALID", "Markdown text exceeds 100000 characters"
+                )
+            headings: list[dict[str, Any]] = []
+            tasks: list[dict[str, Any]] = []
+            issues: list[dict[str, Any]] = []
+            seen: dict[str, int] = {}
+            previous_level = 0
+            fence_marker: str | None = None
+            fence_line = 0
+            for line_number, line in enumerate(text.splitlines(), start=1):
+                stripped = line.lstrip()
+                marker = stripped[:3]
+                if marker in {"```", "~~~"}:
+                    if fence_marker is None:
+                        fence_marker, fence_line = marker, line_number
+                    elif marker == fence_marker:
+                        fence_marker = None
+                    continue
+                if fence_marker is not None:
+                    continue
+                task_match = re.match(r"^\s*[-*+]\s+\[([ xX])\]\s+(.*)$", line)
+                if task_match:
+                    tasks.append(
+                        {
+                            "line": line_number,
+                            "completed": task_match.group(1).lower() == "x",
+                            "text": task_match.group(2).strip(),
+                        }
+                    )
+                heading_match = re.match(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$", line)
+                if not heading_match:
+                    continue
+                level = len(heading_match.group(1))
+                title = heading_match.group(2).strip()
+                headings.append({"line": line_number, "level": level, "title": title})
+                if previous_level and level > previous_level + 1:
+                    issues.append(
+                        {
+                            "line": line_number,
+                            "type": "heading_level_jump",
+                            "message": f"标题从 H{previous_level} 跳到 H{level}",
+                        }
+                    )
+                normalized = title.casefold()
+                if normalized in seen:
+                    issues.append(
+                        {
+                            "line": line_number,
+                            "type": "duplicate_heading",
+                            "message": f"标题与第 {seen[normalized]} 行重复",
+                        }
+                    )
+                else:
+                    seen[normalized] = line_number
+                previous_level = level
+            if fence_marker is not None:
+                issues.append(
+                    {
+                        "line": fence_line,
+                        "type": "unclosed_code_fence",
+                        "message": "代码围栏未闭合",
+                    }
+                )
+            open_tasks = sum(not item["completed"] for item in tasks)
+            return {
+                "summary": {
+                    "lines": len(text.splitlines()),
+                    "characters": len(text),
+                    "headings": len(headings),
+                    "tasks": len(tasks),
+                    "open_tasks": open_tasks,
+                    "issues": len(issues),
+                },
+                "headings": headings[:200],
+                "tasks": tasks[:200],
+                "issues": issues[:200],
+                "truncated": any(len(items) > 200 for items in (headings, tasks, issues)),
+                "method": "line-based Markdown checks; line numbers refer to the supplied text",
+            }
         raise ExtensionError("PLUGIN_HANDLER_UNSUPPORTED", f"Unsupported handler: {handler}")
 
     async def execute_command(

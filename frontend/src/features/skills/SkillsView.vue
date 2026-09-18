@@ -14,7 +14,14 @@ import UserSkillEditor from './UserSkillEditor.vue'
 const skillStore = useSkillStore()
 const actionError = ref('')
 const showInstall = ref(false)
+const restoreNoticeKey = ref(0)
 onMounted(() => { void skillStore.loadSkills() })
+
+function installed() {
+  showInstall.value = false
+  actionError.value = ''
+  restoreNoticeKey.value += 1
+}
 
 
 async function toggle(skillId: string, enabled: boolean) {
@@ -28,9 +35,9 @@ async function uninstall(skillId: string, name: string) {
 
 <template>
   <section class="feature-page">
-    <ExtensionRestoreNotice kind="skill" />
+    <ExtensionRestoreNotice :key="restoreNoticeKey" kind="skill" />
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
-    <ExtensionInstallDialog v-if="showInstall" kind="Skill" :install="skillStore.installSkill" @close="showInstall = false" @installed="showInstall = false; actionError = ''" />
+    <ExtensionInstallDialog v-if="showInstall" kind="Skill" :install="skillStore.installSkill" @close="showInstall = false" @installed="installed" />
     <header class="feature-header"><div><h1>{{ t('Skill 管理', 'Skill Management') }}</h1><p>{{ t('查看工作流使用的 Tool、权限、检索配置和模型要求。', 'Review the tools, permissions, retrieval settings, and model requirements used by workflows.') }}</p></div><button class="button-primary" @click="showInstall = true">{{ t('安装 Skill', 'Install Skill') }}</button></header>
     <UserSkillEditor />
     <div v-if="skillStore.error || actionError" class="error-banner">{{ skillStore.error || actionError }}</div>

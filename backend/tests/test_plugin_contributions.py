@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from app.agent import ToolRegistry
 from app.config import BACKEND_DIR, get_settings
@@ -89,6 +89,33 @@ def test_echo_command_returns_none_for_empty_message() -> None:
     assert isinstance(empty, PluginNoEffect)
     assert populated.type == "notification"
     assert populated.payload.message == "hello"
+
+
+def test_markdown_inspector_returns_line_based_findings() -> None:
+    class Arguments(BaseModel):
+        text: str
+
+    markdown = "# 课程\n### 跳级\n## 重复\n## 重复\n- [ ] 复习\n```python\nprint(1)"
+    result = run(
+        DeclarativePluginHost().execute(
+            "inspect_markdown", Arguments(text=markdown), None
+        )
+    )
+
+    assert result["summary"] == {
+        "lines": 7,
+        "characters": len(markdown),
+        "headings": 4,
+        "tasks": 1,
+        "open_tasks": 1,
+        "issues": 3,
+    }
+    assert [issue["type"] for issue in result["issues"]] == [
+        "heading_level_jump",
+        "duplicate_heading",
+        "unclosed_code_fence",
+    ]
+    assert [issue["line"] for issue in result["issues"]] == [2, 4, 6]
 
 
 @pytest.mark.parametrize(

@@ -20,6 +20,7 @@ const actionError = ref('')
 const showInstall = ref(false)
 const activeTab = ref<'info' | 'settings' | 'commands'>('info')
 const pluginCommands = ref<PluginCommand[]>([])
+const restoreNoticeKey = ref(0)
 
 onMounted(() => { void pluginStore.loadPlugins() })
 
@@ -40,6 +41,12 @@ async function toggle(id: string, enabled: boolean) {
   try {
     enabled ? await pluginStore.disablePlugin(id) : await pluginStore.enablePlugin(id)
   } catch (error) { actionError.value = error instanceof Error ? error.message : t('状态更新失败', 'Status update failed') }
+}
+
+function installed() {
+  showInstall.value = false
+  actionError.value = ''
+  restoreNoticeKey.value += 1
 }
 
 async function grant(id: string, permissions: string[]) {
@@ -65,9 +72,9 @@ const hasCommandContribution = computed(() =>
 
 <template>
   <section class="feature-page">
-    <ExtensionRestoreNotice kind="plugin" />
+    <ExtensionRestoreNotice :key="restoreNoticeKey" kind="plugin" />
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
-    <ExtensionInstallDialog v-if="showInstall" kind="Plugin" :install="pluginStore.installPlugin" @close="showInstall = false" @installed="showInstall = false; actionError = ''" />
+    <ExtensionInstallDialog v-if="showInstall" kind="Plugin" :install="pluginStore.installPlugin" @close="showInstall = false" @installed="installed" />
     <header class="feature-header">
       <div><h1>{{ t('Plugin 与 MCP', 'Plugins and MCP') }}</h1><p>{{ t('管理插件生命周期、MCP Host、权限和受控 Contribution。', 'Manage plugin lifecycles, MCP hosts, permissions, and controlled contributions.') }}</p></div>
       <button class="button-primary" @click="showInstall = true">{{ t('安装 Plugin', 'Install Plugin') }}</button>
