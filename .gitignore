@@ -4,11 +4,16 @@ frontend/dist/
 frontend/*.tsbuildinfo
 .pnpm-store/
 
+# Private project documentation and local submission materials
+/docs/
+/documents/
+
 # Backend
 backend/.venv/
 backend/.venv-models/
 backend/.venv-models-cuda/
 backend/data/models/
+/backend/data/
 backend/data/attachments/
 backend/.uv-cache/
 backend/.pytest_cache/
@@ -38,6 +43,8 @@ Thumbs.db
 
 # 第三阶段隔离验证、服务数据及原生编译产物。
 .build/
+.local-plans/
+.qa-*/
 **/__pycache__/
 **/.pytest_cache/
 server sync/.venv/

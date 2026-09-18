@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-export-save"
+description = "Enables the export_save command without any pre-configured scope."
+commands.allow = ["export_save"]
+
+[[permission]]
+identifier = "deny-export-save"
+description = "Denies the export_save command without any pre-configured scope."
+commands.deny = ["export_save"]

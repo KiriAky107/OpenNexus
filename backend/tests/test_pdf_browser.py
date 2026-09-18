@@ -1,10 +1,66 @@
 import asyncio
 from pathlib import Path
+import subprocess
+import sys
 import pytest
 from app.contracts import ExportRequest
 from app.export import service
 from app.export.document import ExportResult
+from app.export import browser_pdf
 from app.export.browser_pdf import render_snapshot, browser_executable
+
+
+def test_renderer_command_dispatches_frozen_build_to_sidecar_entry(monkeypatch, tmp_path):
+    source, output = tmp_path / 'snapshot.html', tmp_path / 'document.pdf'
+    monkeypatch.setattr(sys, 'frozen', True, raising=False)
+    assert browser_pdf.renderer_command(source, output, 'A4') == [
+        sys.executable, '--opennexus-pdf-render', str(source), str(output), 'A4'
+    ]
+
+
+def test_frozen_render_worker_isolated_from_core_bootstrap(monkeypatch):
+    calls = []
+    monkeypatch.setattr(sys, 'frozen', True, raising=False)
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        Path(command[3]).write_bytes(b'%PDF-frozen')
+        return subprocess.CompletedProcess(command, 0, '', '')
+
+    monkeypatch.setattr(browser_pdf.subprocess, 'run', run)
+    result = render_snapshot('<h1>Frozen</h1>', 'A4')
+    command, kwargs = calls[0]
+    assert command[1] == '--opennexus-pdf-render'
+    assert kwargs['stdin'] is subprocess.DEVNULL
+    assert kwargs['timeout'] == browser_pdf.PDF_RENDER_TIMEOUT_SECONDS
+    assert result.content == b'%PDF-frozen'
+
+
+def test_browser_render_timeout_is_bounded(monkeypatch):
+    def run(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+
+    monkeypatch.setattr(browser_pdf.subprocess, 'run', run)
+    with pytest.raises(RuntimeError, match='timed out'):
+        render_snapshot('<h1>Timeout</h1>', 'A4')
+
+
+def test_browser_render_falls_back_in_process_when_worker_fails(monkeypatch):
+    class Failed:
+        returncode = 1
+        stderr = 'desktop child launch failed'
+
+    monkeypatch.setattr(browser_pdf.subprocess, 'run', lambda *args, **kwargs: Failed())
+    called = {}
+
+    def fallback(source, output, page_size):
+        called['page_size'] = page_size
+        output.write_bytes(b'%PDF-fallback')
+
+    monkeypatch.setattr(browser_pdf, 'print_snapshot', fallback)
+    result = render_snapshot('<h1>Fallback</h1>', 'Letter')
+    assert result.content == b'%PDF-fallback'
+    assert called == {'page_size': 'Letter'}
 
 
 def test_browser_snapshot_uses_print_pipeline(monkeypatch):

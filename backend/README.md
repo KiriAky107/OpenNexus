@@ -1,7 +1,5 @@
 # NotesAgent Backend
 
-> 第二阶段收尾：标准 Agent/RAG Benchmark 与报告页、函数图预览、三格式快照导出及真实 Provider/MCP 结果见[实现与验收记录](../docs/development/第二阶段收尾实现与验收-2026-09-07.md)。当前分支尚未合并，不更改下文历史 main 基线。
-
 NotesAgent Backend 是基于 Python 3.11+、FastAPI、Pydantic v2 和 SQLite 的本地 AI Core / Agent Core，使用 uv 管理 API 依赖和虚拟环境。
 
 当前实现包含 Knowledge/Retrieval、Chat、Agent、Tool/Permission、Skill/Plugin、MCP、模型提供商、RAG Benchmark、多模态任务、本地模型调度、Token/音频用量和运行诊断。数据持久化位于后端 SQLite 与 Vault；Tauri Sidecar 生命周期、Stronghold 和操作系统级 Plugin 沙箱属于后续桌面阶段。
@@ -92,20 +90,10 @@ uv run pytest
 .venv/Scripts/python scripts/local-model-smoke.py eres2netv2 --download --audio C:/path/to/speech.wav --reference C:/path/to/reference.wav
 ```
 
-## 相关文档
-
-- [后端接口契约](../docs/contracts/后端接口契约-开发版.md)
-- [第二阶段接口契约](../docs/contracts/第二阶段接口契约-开发版.md)
-- [多模态管线与模型运行](../docs/development/多模态管线与模型运行开发说明.md)
-- [阶段 F 收尾验收](../docs/development/阶段F收尾验收记录.md)
-- [AI Core 与 Agent Core](../docs/development/AI-Core与Agent-Core开发说明.md)
-- [Knowledge 与 Retrieval Core](../docs/development/Knowledge与Retrieval-Core开发说明.md)
-- [阶段 F：Embedding 与知识库问题](../docs/retrospectives/阶段F-Embedding与知识库问题与解决方案.md)
-
 机器可读接口以运行中的 `/openapi.json` 为准。
 
 ## 工作区保存与扩展恢复（2026-09-06）
 
 HTTP 保存先写正文、元数据及 FTS，再调度后台向量更新；打开 Vault 的向量计算也不再阻塞入口。手动全量重建接口仍等待完成。待处理标记持久化，重新打开 Vault 可恢复处理；任务详情不是完整持久化队列。
 
-实现与验证见 [工作区后台索引与保存](../docs/development/工作区后台索引与保存开发说明.md)。扩展安装日志、ZIP 限制和社区包测试见 [扩展安装持久化与社区包](../docs/development/扩展安装持久化与社区包开发说明.md)。
+扩展安装日志、ZIP 限制和社区包行为由自动化测试覆盖。

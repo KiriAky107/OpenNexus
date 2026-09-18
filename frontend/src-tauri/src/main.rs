@@ -461,6 +461,92 @@ async fn core_request(request: CoreRequest, host: State<'_, Host>) -> Result<Cor
         .await
 }
 
+fn valid_export_job_id(value: &str) -> bool {
+    value.len() == 19
+        && value.starts_with("export_")
+        && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn export_file_name(value: &str) -> Result<(&str, &'static str), String> {
+    if value.len() > 120 || Path::new(value).file_name().and_then(|name| name.to_str()) != Some(value)
+    {
+        return Err("EXPORT_FILE_NAME_INVALID".into());
+    }
+    let extension = Path::new(value)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .ok_or("EXPORT_FILE_NAME_INVALID")?;
+    let label = match extension.as_str() {
+        "pdf" => "PDF",
+        "docx" => "Word document",
+        "html" => "HTML",
+        _ => return Err("EXPORT_FILE_NAME_INVALID".into()),
+    };
+    Ok((value, label))
+}
+
+/// 由原生保存对话框选择目标，再从已认证的本机 Core 直接写入产物。
+/// 文件内容不绕回 WebView，避免大文件重复 Base64 编解码。
+#[tauri::command]
+async fn export_save(
+    job_id: String,
+    file_name: String,
+    host: State<'_, Host>,
+) -> Result<Option<String>, String> {
+    if !valid_export_job_id(&job_id) {
+        return Err("EXPORT_JOB_ID_INVALID".into());
+    }
+    let (file_name, label) = export_file_name(&file_name)?;
+    let extension = Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .ok_or("EXPORT_FILE_NAME_INVALID")?;
+    let Some(path) = rfd::FileDialog::new()
+        .set_title("保存导出文件")
+        .set_file_name(file_name)
+        .add_filter(label, &[extension])
+        .save_file()
+    else {
+        return Ok(None);
+    };
+
+    let core = host.core.clone();
+    let core_path = format!("/api/exports/{job_id}/file");
+    let session = tauri::async_runtime::spawn_blocking(move || {
+        core.lock()
+            .map_err(|_| "HOST_BUSY")?
+            .as_mut()
+            .ok_or("CORE_UNAVAILABLE")?
+            .request_session(&core_path)
+    })
+    .await
+    .map_err(|_| "CORE_UNAVAILABLE")??;
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .build()
+        .map_err(|_| "CORE_CLIENT_ERROR")?
+        .get(&session.url)
+        .header(reqwest::header::AUTHORIZATION, session.authorization.as_str())
+        .header("X-Core-Generation", &session.generation)
+        .send()
+        .await
+        .map_err(|_| "CORE_UNAVAILABLE")?;
+    if !response.status().is_success() {
+        return Err("EXPORT_DOWNLOAD_FAILED".into());
+    }
+    let bytes = read_core_response(response).await?;
+    let saved = path.to_string_lossy().into_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::write(path, bytes).map_err(|_| "EXPORT_SAVE_FAILED")
+    })
+    .await
+    .map_err(|_| "EXPORT_SAVE_FAILED")??;
+    Ok(Some(saved))
+}
+
 #[tauri::command]
 fn core_stream_cancel(host: State<'_, Host>, request_id: String) -> Result<(), String> {
     if let Some(task) = host
@@ -1131,6 +1217,7 @@ fn main() {
             core_request,
             core_request_prepare,
             core_request_cancel,
+            export_save,
             core_stream,
             core_stream_cancel,
             editor_capabilities,

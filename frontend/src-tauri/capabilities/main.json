@@ -18,6 +18,7 @@
     "allow-core-request",
     "allow-core-request-prepare",
     "allow-core-request-cancel",
+    "allow-export-save",
     "allow-core-stream",
     "allow-core-stream-cancel",
     "allow-workspace-choose",

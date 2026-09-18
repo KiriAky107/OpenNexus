@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import {webcrypto} from 'node:crypto'
 import {describe,it,expect,vi,afterEach} from 'vitest'
+const native=vi.hoisted(()=>({isDesktop:vi.fn(()=>false),hostInvoke:vi.fn()}))
 vi.mock('./apiClient',()=>({apiClient:{post:vi.fn(),get:vi.fn()}}))
+vi.mock('./platform/desktop',()=>native)
 vi.mock('./mermaidService',()=>({renderMermaid:vi.fn()}))
 vi.mock('./pdfSnapshotService',()=>({preparePdfSnapshot:vi.fn().mockResolvedValue('<html>theme snapshot</html>')}))
 import {preparePdfSnapshot} from './pdfSnapshotService'
@@ -26,6 +28,14 @@ describe('export snapshot contract',()=>{
 const reviewOptions={theme_id:'light',include_title:true,page_size:'A4'}
 const queued={job_id:'review-job',status:'queued',warnings:[],file:null,error:null}
 afterEach(()=>{vi.restoreAllMocks();vi.unstubAllGlobals();vi.clearAllMocks()})
+it('uses the native save dialog for desktop export downloads',async()=>{
+  native.isDesktop.mockReturnValue(true)
+  native.hostInvoke.mockResolvedValue('D:/Exports/note.pdf')
+  await exportService.download({id:'export_0123456789ab',status:'completed',warnings:[],error:null,fileName:'note.pdf'})
+  expect(native.hostInvoke).toHaveBeenCalledWith('export_save',{jobId:'export_0123456789ab',fileName:'note.pdf'})
+  expect(apiClient.get).not.toHaveBeenCalled()
+  native.isDesktop.mockReturnValue(false)
+})
 it('cancels a created server job after an in-flight submission is aborted',async()=>{
   let finish!:(value:unknown)=>void
   vi.mocked(apiClient.post).mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve}) as never).mockResolvedValue({status:'completed'})

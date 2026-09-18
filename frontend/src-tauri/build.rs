@@ -50,6 +50,7 @@ fn main() {
             "core_request",
             "core_request_prepare",
             "core_request_cancel",
+            "export_save",
             "core_stream",
             "core_stream_cancel",
             "editor_capabilities",

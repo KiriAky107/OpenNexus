@@ -340,6 +340,11 @@ impl CoreSupervisor {
             "HOME",
             "USERPROFILE",
             "LOCALAPPDATA",
+            // PDF 浏览器渲染需要从系统安装目录定位 Edge/Chrome；这里只传
+            // 目录根，不放宽 PATH，也不携带任何凭据或用户配置。
+            "PROGRAMFILES",
+            "PROGRAMFILES(X86)",
+            "ProgramW6432",
         ] {
             if let Some(value) = std::env::var_os(key) {
                 command.env(key, value);
