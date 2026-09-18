@@ -38,7 +38,7 @@ flowchart LR
     COMMUNITY[Community prototype] --> EXT
 ```
 
-The desktop host owns local filesystem access, credentials, process supervision, and privileged extension operations. The AI Core runs as a separately supervised process over an authenticated local channel. The Sync Server and community prototype are optional components. The Gitea release mirror keeps all components in one monorepo; the public GitHub projects are maintained separately.
+The desktop host owns local filesystem access, credentials, process supervision, and privileged extension operations. The AI Core runs as a separately supervised process over an authenticated local channel. Optional Sync Server and community services are maintained in separate repositories.
 
 ## Repository layout
 
@@ -46,8 +46,6 @@ The desktop host owns local filesystem access, credentials, process supervision,
 | --- | --- |
 | `frontend/` | Vue 3 UI and Tauri/Rust desktop host |
 | `backend/` | FastAPI AI Core, retrieval, agents, media processing, and export |
-| `server sync/` | Sync v1 server and its Vue management console |
-| `community-server/` | Community catalog and moderation prototype |
 | `scripts/` | Build, acceptance, and release automation |
 | `tools/` | Local development and packaging utilities |
 
@@ -59,7 +57,7 @@ The desktop host owns local filesystem access, credentials, process supervision,
 | Sync Server | [KiriAky107/Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus) |
 | Community prototype | [KiriAky107/Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus) |
 
-The Gitea distribution repository remains a monorepo so a release can be built and demonstrated from one revision. GitHub keeps the three independently deployable components in separate repositories.
+This repository contains only the desktop application and AI Core. The two optional server components are versioned and deployed independently.
 
 ## Install the desktop app
 
@@ -133,23 +131,7 @@ cargo fmt --check
 cargo test --all-targets --features desktop
 cargo clippy --all-targets --features desktop -- -D warnings
 
-# Sync Server
-cd "../../../server sync"
-uv sync --frozen
-uv run pytest
 ```
-
-## Run the Sync Server
-
-The recommended deployment uses Docker Compose with PostgreSQL and S3-compatible object storage:
-
-```powershell
-cd "server sync"
-Copy-Item .env.example .env
-docker compose up -d --build
-```
-
-Use independent production secrets, TLS termination, process supervision, and regular backups. Plain HTTP options are intended only for isolated demonstrations and local testing.
 
 ## Security and privacy
 
