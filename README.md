@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="frontend/public/opennexus-logo.svg" alt="OpenNexus logo" width="112" height="112">
+</p>
+
 # OpenNexus
 
 [简体中文](README.zh-CN.md) | **English**
@@ -12,6 +16,12 @@
 OpenNexus is a local-first AI notebook and knowledge workspace. It combines Markdown vaults, hybrid retrieval, grounded chat, auditable agents, media-to-notes workflows, an extension runtime, and optional multi-device synchronization in a Windows desktop application.
 
 > The current release is **0.5.2-alpha1**. The project is usable for evaluation and demonstrations, but its storage schema and extension interfaces may still change. Back up important vaults before upgrading.
+
+<p align="center">
+  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus desktop workspace" width="1100">
+</p>
+
+<p align="center"><sub>The OpenNexus desktop workspace with local vault navigation and AI Core status.</sub></p>
 
 ## Table of contents
 

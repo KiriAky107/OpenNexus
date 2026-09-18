@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="frontend/public/opennexus-logo.svg" alt="OpenNexus Logo" width="112" height="112">
+</p>
+
 # OpenNexus
 
 **简体中文** | [English](README.md)
@@ -12,6 +16,12 @@
 OpenNexus 是一款本地优先的 AI 笔记与知识工作台，将 Markdown 知识库、混合检索、知识库问答、可审计智能体、音视频转笔记、扩展运行时和可选多设备同步整合在 Windows 桌面应用中。
 
 > 当前版本为 **0.5.2-alpha1**。本版本可用于评估和功能演示，但存储结构与扩展接口仍可能调整。升级前请备份重要知识库。
+
+<p align="center">
+  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 桌面工作区" width="1100">
+</p>
+
+<p align="center"><sub>OpenNexus 桌面工作区：首页展示本地知识库导航与 AI Core 运行状态。</sub></p>
 
 ## 目录
 
