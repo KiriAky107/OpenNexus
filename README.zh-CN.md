@@ -38,7 +38,7 @@ flowchart LR
     COMMUNITY[社区原型] --> EXT
 ```
 
-桌面宿主管理本地文件、凭据、进程监督和扩展的特权操作。AI Core 作为受监督的独立进程，通过经过认证的本机通道通信。Sync Server 与社区原型均为可选组件。Gitea 发布镜像继续使用单体仓库，公开的 GitHub 项目则分别维护。
+桌面宿主管理本地文件、凭据、进程监督和扩展的特权操作。AI Core 作为受监督的独立进程，通过经过认证的本机通道通信。可选的 Sync Server 与社区服务分别在独立仓库中维护。
 
 ## 仓库结构
 
@@ -46,8 +46,6 @@ flowchart LR
 | --- | --- |
 | `frontend/` | Vue 3 界面与 Tauri/Rust 桌面宿主 |
 | `backend/` | FastAPI AI Core、检索、Agent、媒体处理和导出 |
-| `server sync/` | Sync v1 服务及 Vue 管理控制台 |
-| `community-server/` | 社区目录与审核原型 |
 | `scripts/` | 构建、验收与发布自动化 |
 | `tools/` | 本地开发和打包工具 |
 
@@ -59,7 +57,7 @@ flowchart LR
 | Sync Server | [KiriAky107/Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus) |
 | 社区原型 | [KiriAky107/Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus) |
 
-Gitea 分发仓库保留单体结构，便于从同一修订构建和演示完整版本；GitHub 将三个可独立部署的组件拆分到不同仓库。
+本仓库只包含桌面主程序和 AI Core，两个可选服务组件分别独立维护和部署。
 
 ## 安装桌面端
 
@@ -133,23 +131,7 @@ cargo fmt --check
 cargo test --all-targets --features desktop
 cargo clippy --all-targets --features desktop -- -D warnings
 
-# Sync Server
-cd "../../../server sync"
-uv sync --frozen
-uv run pytest
 ```
-
-## 部署 Sync Server
-
-推荐使用 Docker Compose、PostgreSQL 和 S3 兼容对象存储：
-
-```powershell
-cd "server sync"
-Copy-Item .env.example .env
-docker compose up -d --build
-```
-
-正式环境应使用独立密钥、TLS 终止、进程守护和定期备份。明文 HTTP 选项仅用于隔离的演示与本地测试。
 
 ## 安全与隐私
 
