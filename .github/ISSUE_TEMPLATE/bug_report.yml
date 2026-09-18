@@ -1,0 +1,71 @@
+name: Bug report / 缺陷报告
+description: Report a reproducible OpenNexus defect / 报告可复现的 OpenNexus 缺陷
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, private vault content, personal information, or unpatched vulnerability details.
+        请勿提交凭据、私人 Vault 内容、个人信息或未修复漏洞细节。
+  - type: input
+    id: version
+    attributes:
+      label: OpenNexus version or commit / 版本或提交
+      placeholder: 0.5.2-alpha1 or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment / 环境
+      description: Windows version, installation type, and relevant hardware
+      placeholder: Windows 11 x64, GitHub setup.exe, CPU/GPU if relevant
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Reproduction surface / 复现环境
+      options:
+        - Packaged desktop application / 安装版桌面应用
+        - Web development mode / Web 开发模式
+        - Both / 两者
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Minimum reproduction steps / 最小复现步骤
+      placeholder: "1. ...\n2. ...\n3. ..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior / 预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior / 实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Sanitized logs and configuration / 脱敏日志与配置
+      description: Include provider/model, extension, MCP transport, or Sync Server version when relevant. Redact all secrets and personal data.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks / 提交检查
+      options:
+        - label: I searched existing Issues and Pull Requests. / 我已搜索现有 Issue 与 PR。
+          required: true
+        - label: I removed credentials, private content, and personal information. / 我已删除凭据、私人内容和个人信息。
+          required: true
+        - label: This is not an unpatched security vulnerability. / 这不是未修复安全漏洞。
+          required: true
