@@ -21,7 +21,7 @@ We are committed to making participation in OpenNexus a respectful, harassment-f
 - Deliberate disruption, spam, denial-of-service behavior, or attempts to bypass repository protections.
 - Publishing secrets, personal data, private logs, or security exploit details without authorization.
 - Impersonation, fabricated attribution, plagiarism, or manipulating contribution history to misrepresent authorship.
-- Pressuring contributors to reveal private accounts, infrastructure, school, employer, or competition identity.
+- Pressuring contributors to reveal private accounts, infrastructure, or other identifying information.
 
 ## Scope
 

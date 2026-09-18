@@ -13,9 +13,9 @@
 ![Core](https://img.shields.io/badge/core-FastAPI-05998b)
 [![License](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
 
-OpenNexus is a local-first AI notebook and knowledge workspace. It combines Markdown vaults, hybrid retrieval, grounded chat, auditable agents, media-to-notes workflows, an extension runtime, and optional multi-device synchronization in a Windows desktop application.
+OpenNexus is a local-first Windows desktop app for notes and knowledge work. It keeps Markdown vaults, retrieval, grounded chat, auditable agents, media-to-notes workflows, extensions, and optional device sync in one workspace.
 
-> The current release is **0.5.2-alpha1**. The project is usable for evaluation and demonstrations, but its storage schema and extension interfaces may still change. Back up important vaults before upgrading.
+> The current release is **0.5.2-alpha1**. It is an early alpha, and its storage schema and extension interfaces may still change. Back up important vaults before upgrading.
 
 <p align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus desktop workspace" width="1100">
@@ -68,9 +68,9 @@ To run OpenNexus from source, continue to [Development](#development).
 
 ## Why OpenNexus
 
-OpenNexus treats notes as portable files rather than records locked inside a hosted service. The desktop host owns privileged local operations, while the AI Core exposes a narrow local API for retrieval, generation, agents, transcription, and export. Remote services are optional and can be deployed independently.
+OpenNexus stores notes as portable files instead of locking them inside a hosted service. The desktop host handles privileged local operations. The AI Core exposes a narrow local API for retrieval, generation, agents, transcription, and export. Remote services are optional and deploy separately.
 
-The design focuses on four properties:
+In practice, this means:
 
 - **Local ownership:** notes remain ordinary Markdown files with relative, content-addressed attachments.
 - **Traceable AI:** retrieved context, tool permissions, task states, and agent execution records remain inspectable.
@@ -81,7 +81,7 @@ The design focuses on four properties:
 
 ### Course recordings to knowledge notes
 
-Import real audio or video, produce timestamped transcript segments, correct the transcript, and generate a separate knowledge-point note. When the material requires it, generated notes may include code blocks, mathematical formulas, Mermaid diagrams, and function plots. Transcription and note generation are separate stages so that the source transcript remains reviewable.
+Import audio or video and review the timestamped transcript before generating a separate knowledge note. Notes can include code, formulas, Mermaid diagrams, or function plots when the source material calls for them. The transcript remains available for correction and comparison.
 
 ```mermaid
 sequenceDiagram
@@ -118,7 +118,7 @@ sequenceDiagram
 
 ### Personal planning agents
 
-Create a goal-oriented Agent, let it produce a plan and actionable tasks, authorize only the tools it needs, and inspect the execution history. Task state is persisted so interrupted work can be diagnosed and resumed instead of silently disappearing.
+Give an Agent a goal, review the plan and tasks it creates, and authorize only the tools it needs. Runs are persisted, so an interruption can be inspected and resumed.
 
 ```mermaid
 stateDiagram-v2
@@ -149,7 +149,7 @@ Every transition is represented by a persisted run snapshot and ordered `agent_e
 
 ### Extensions and optional services
 
-- Install Skills and Plugins at demonstration time instead of bundling them into a user vault.
+- Install Skills and Plugins from reviewed local packages or the community catalog instead of bundling them into a user vault.
 - Connect MCP servers through supported transports and keep process lifecycle separate from the AI Core where appropriate.
 - Apply community themes and packages only after reviewing their origin and requested permissions.
 - Synchronize notes and attachments through the independently deployed Sync Server.
@@ -224,7 +224,7 @@ The WebView does not receive raw provider secrets or unrestricted filesystem acc
 
 ## Data and persistence model
 
-OpenNexus deliberately separates user-authored content from rebuildable indexes and host transaction state. The following stores are related but are not one shared database:
+OpenNexus stores user-authored content, rebuildable indexes, and host transaction state separately. The following stores are related, but they do not share one database:
 
 ```mermaid
 flowchart TB
@@ -428,7 +428,7 @@ Public components are maintained separately:
 | Sync Server | [KiriAky107/Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus) |
 | Community prototype | [KiriAky107/Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus) |
 
-This repository must not absorb Sync Server or community deployment code. Cross-repository changes should document compatible versions and be released independently.
+This repository contains only the desktop application and AI Core. Sync Server and community deployment code stay in their own repositories. Cross-repository changes must document compatible versions and use separate releases.
 
 ## Development
 
@@ -461,7 +461,7 @@ corepack prepare pnpm@10.28.0 --activate
 pnpm install --frozen-lockfile
 ```
 
-Dependency lock files are part of the build contract. Update them in the same pull request as the corresponding manifest change.
+Commit lock-file updates in the same pull request as the corresponding manifest change.
 
 ### Run the development stack
 
@@ -555,7 +555,7 @@ Do not publish exploitable security details or real secrets in a public issue. U
 
 ## Community standards
 
-OpenNexus uses repository-level community files so expectations are visible before a contribution is submitted:
+Repository-level community files describe the contribution and reporting rules:
 
 | Document | Purpose |
 | --- | --- |
@@ -601,7 +601,7 @@ Sync Server implementation reports belong in [Sync-for-OpenNexus](https://github
   ```
 
 - Update both `README.md` and `README.zh-CN.md` when shared documentation changes.
-- Do not commit user vaults, personal documents, credentials, model weights, build output, or identifying competition material.
+- Do not commit user vaults, personal documents, credentials, model weights, or build output.
 
 ## License
 
@@ -619,7 +619,7 @@ Before opening an issue:
 6. Include relevant model/provider, extension, MCP transport, and Sync Server versions without exposing credentials.
 7. Security vulnerabilities and leaked secrets must be reported privately, not through a public issue.
 
-Issues that only say “does not work,” omit reproducible information, duplicate an existing report, or expose private data may be closed until corrected.
+An Issue may be closed until corrected if it only says “does not work,” lacks reproduction details, duplicates an existing report, or exposes private data.
 
 ## Pull request requirements
 
@@ -633,7 +633,7 @@ A pull request must:
 6. Document frontend/backend/native contract changes, data migrations, rollback behavior, and cross-repository version requirements.
 7. Explain every new dependency, including its purpose, license, runtime size, and installer impact.
 8. Include before/after screenshots for UI changes and redact all personal or sensitive information.
-9. Exclude credentials, private vaults, personal documents, downloaded models, build artifacts, and competition-identifying material.
+9. Exclude credentials, private vaults, personal documents, downloaded models, and build artifacts.
 10. Pass formatting, type checking, tests, production builds, and applicable packaged-desktop acceptance checks before requesting review.
 
-Draft pull requests are welcome for early technical discussion. Mark the pull request ready only when the checklist is complete and the branch can be reviewed without access to private infrastructure or personal data.
+Use a Draft Pull Request for early technical discussion. Mark it ready after completing the checklist and removing any dependency on private infrastructure or personal data.
