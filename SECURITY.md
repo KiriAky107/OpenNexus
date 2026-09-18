@@ -36,6 +36,6 @@ Never send real provider keys, account passwords, private vault content, persona
 
 ## Response process / 处理流程
 
-Maintainers will attempt to acknowledge a complete report, reproduce it, assess severity and affected versions, prepare a fix and regression test, and coordinate disclosure. Timelines depend on impact and maintainer availability; no guaranteed response SLA is offered during alpha development.
+Maintainers will review complete reports, reproduce the issue where possible, assess affected versions, prepare a fix and regression test, and coordinate disclosure. Response time depends on severity and maintainer availability; the alpha project does not offer a fixed SLA.
 
-维护者会尽力确认完整报告、复现问题、评估严重程度和受影响版本、准备修复及回归测试，并协调披露时间。Alpha 开发阶段不承诺固定响应时限。
+维护者会审阅完整报告，在条件允许时复现问题，确认受影响版本，准备修复和回归测试，并协调披露时间。响应速度取决于问题严重程度和维护者时间；Alpha 阶段不提供固定 SLA。

@@ -32,6 +32,6 @@ Closes #
 - [ ] Frontend, backend, native contracts, and migrations are synchronized where applicable. / 相关前后端、原生接口和迁移已同步。
 - [ ] English and Simplified Chinese shared documentation are aligned. / 中英文公共文档已同步。
 - [ ] New dependencies include purpose, license, size, and packaging analysis. / 新依赖已说明用途、许可证、体积和打包影响。
-- [ ] No credentials, private vaults, personal information, identifying competition material, downloaded models, or build artifacts are included. / 不包含凭据、私人 Vault、个人信息、参赛身份材料、模型或构建产物。
+- [ ] No credentials, private vaults, personal information, downloaded models, or build artifacts are included. / 不包含凭据、私人 Vault、个人信息、模型或构建产物。
 - [ ] Packaged-desktop acceptance was performed when native dialogs, sidecars, export, installer, or sync behavior changed. / 涉及原生能力时已执行桌面安装版验收。
 - [ ] I have read [CONTRIBUTING.md](../CONTRIBUTING.md) and follow the [Code of Conduct](../CODE_OF_CONDUCT.md). / 已阅读贡献指南并遵守社区行为准则。

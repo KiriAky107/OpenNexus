@@ -9,7 +9,7 @@ Thank you for improving OpenNexus. This guide supplements the engineering, testi
 1. Search existing Issues and Pull Requests.
 2. Open or reference an Issue for behavior changes, architectural work, schema migrations, or cross-repository compatibility changes.
 3. Confirm that the change belongs in this repository rather than the separate Sync Server or Community repository.
-4. Never use a personal vault, production credential, private server, or identifying competition material as a committed fixture.
+4. Use synthetic fixtures. Do not commit a personal vault, production credential, private server address, or other identifying information.
 
 ## Development workflow
 
@@ -58,7 +58,7 @@ Documentation-only changes must at least pass Markdown link, code-fence, and Mer
 
 - Keep English and Simplified Chinese shared documentation aligned.
 - Use examples that contain fictitious users, domains, tokens, paths, and vault content.
-- Remove credentials, personal information, private hostnames, school or employer information, and identifying competition material.
+- Remove credentials, personal information, private hostnames, and other identifying details.
 - Do not commit generated bundles, model weights, user databases, media recordings, or personal documents.
 
 ## Review
