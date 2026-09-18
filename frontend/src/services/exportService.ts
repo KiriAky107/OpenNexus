@@ -1,4 +1,5 @@
 import { apiClient } from './apiClient'
+import { hostInvoke, isDesktop } from './platform/desktop'
 import { Marked } from 'marked'
 import { renderMermaid } from './mermaidService'
 
@@ -102,6 +103,10 @@ export const exportService = {
   async list() { const response = await apiClient.get<{ items: JobWire[] }>('/api/exports'); return response.items.map(mapJob) },
   cancel(id: string) { return apiClient.post(`/api/exports/${encodeURIComponent(id)}/cancel`) },
   async download(job: ExportJob) {
+    if (isDesktop()) {
+      await hostInvoke<string | null>('export_save', { jobId: job.id, fileName: job.fileName ?? 'export' })
+      return
+    }
     const response = await apiClient.get<Response>(`/api/exports/${encodeURIComponent(job.id)}/file`)
     const url = URL.createObjectURL(await response.blob())
     const link = document.createElement('a'); link.href = url; link.download = job.fileName ?? 'export'

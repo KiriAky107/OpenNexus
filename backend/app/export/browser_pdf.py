@@ -11,6 +11,10 @@ import sys
 import tempfile
 from app.export.document import ExportResult
 
+PDF_RENDER_WORKER = '--opennexus-pdf-render'
+PDF_RENDER_TIMEOUT_SECONDS = 120
+PAGE_RENDER_TIMEOUT_MS = 60_000
+
 
 def browser_executable():
     """优先使用显式配置，再查找系统已安装的 Chromium 系浏览器。"""
@@ -27,18 +31,39 @@ def browser_executable():
     return next((p for name in ('chromium','chromium-browser','google-chrome','microsoft-edge') if (p := shutil.which(name))), None)
 
 
+def renderer_command(source: Path, output: Path, page_size: str) -> list[str]:
+    """开发环境使用 Python 模块；PyInstaller 冻结版交回固定入口分派。"""
+    if getattr(sys, 'frozen', False):
+        return [sys.executable, PDF_RENDER_WORKER, str(source), str(output), page_size]
+    return [sys.executable, '-m', 'app.export.browser_pdf', str(source), str(output), page_size]
+
+
 def render_snapshot(snapshot: str, page_size: str) -> ExportResult:
     """在隔离子进程中打印快照，避免阻塞或污染服务进程的事件循环。"""
     with tempfile.TemporaryDirectory(prefix='notes-pdf-') as directory:
         source = Path(directory) / 'snapshot.html'
         output = Path(directory) / 'document.pdf'
         source.write_text(snapshot, encoding='utf-8')
-        process = subprocess.run([sys.executable, '-m', 'app.export.browser_pdf', str(source), str(output), page_size],
-            capture_output=True, text=True, encoding='utf-8', errors='replace',
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-            cwd=Path(__file__).resolve().parents[2])
+        try:
+            process = subprocess.run(renderer_command(source, output, page_size),
+                stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                encoding='utf-8', errors='replace', timeout=PDF_RENDER_TIMEOUT_SECONDS,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+                cwd=Path(__file__).resolve().parents[2])
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError('PDF browser rendering timed out.') from exc
         if process.returncode:
-            raise RuntimeError('PDF browser rendering failed: ' + process.stderr[-2000:])
+            # 某些 Windows 桌面会话会阻止冻结程序再次启动自身，但相同的
+            # Playwright 运行时仍可从当前导出工作线程正常启动浏览器。
+            # 独立 Worker 仍是首选；只有它明确失败时才回退一次。
+            try:
+                print_snapshot(source, output, page_size)
+            except Exception as fallback:
+                detail = process.stderr[-1200:].strip()
+                raise RuntimeError(
+                    'PDF browser rendering failed'
+                    + (f': {detail}' if detail else '.')
+                ) from fallback
         return ExportResult(content=output.read_bytes(), mime_type='application/pdf', warnings=[])
 
 
@@ -51,10 +76,10 @@ def print_snapshot(source: Path, output: Path, page_size: str):
             context = browser.new_context(java_script_enabled=False, offline=True)
             context.route('**/*', lambda route: route.abort())
             page = context.new_page()
-            page.set_default_timeout(0)
+            page.set_default_timeout(PAGE_RENDER_TIMEOUT_MS)
             page.emulate_media(media='screen')
             csp = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
-            page.set_content('<meta http-equiv="Content-Security-Policy" content="'+csp+'">'+source.read_text(encoding='utf-8'), wait_until='load', timeout=0)
+            page.set_content('<meta http-equiv="Content-Security-Policy" content="'+csp+'">'+source.read_text(encoding='utf-8'), wait_until='load', timeout=PAGE_RENDER_TIMEOUT_MS)
             page.evaluate('async () => { await document.fonts.ready; await Promise.all([...document.images].map(image => image.decode().catch(() => {}))); }')
             page.pdf(path=str(output), format='Letter' if page_size.lower()=='letter' else 'A4',
                 print_background=True, display_header_footer=False, prefer_css_page_size=False)

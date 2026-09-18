@@ -1,7 +1,5 @@
 # NotesAgent Frontend
 
-> 第二阶段收尾：标准 Agent/RAG Benchmark 与报告页、函数图预览、三格式快照导出及真实 Provider/MCP 结果见[实现与验收记录](../docs/development/第二阶段收尾实现与验收-2026-09-07.md)。当前分支尚未合并，不更改下文历史 main 基线。
-
 NotesAgent Frontend 是基于 Vue 3、TypeScript、Vite、Pinia、Vue Router、Milkdown 和 CodeMirror 6 的 Web 联调前端。当前页面调用 FastAPI 真实接口，不使用业务 Mock 作为运行时回退；测试文件中的 mock 只用于隔离单元和组件测试。
 
 ## 初始化与运行
@@ -44,9 +42,9 @@ pnpm dev
 
 编辑器使用 Milkdown/Crepe 与 CodeMirror 6；Markdown 展示使用 marked、DOMPurify 和 Shiki。Provider logo 位于 `src/assets/providers`，授权与来源说明随目录保存。
 
-写作模式支持按标题折叠章节及全部展开/折叠；“设置 → 编辑器 → 标题样式”可按 H1–H6 设置字号、粗细与标题字体。设置本地保存，不改写 Markdown；详见 [标题折叠与样式开发说明](../docs/development/标题折叠与样式开发说明.md)。
+写作模式支持按标题折叠章节及全部展开/折叠；“设置 → 编辑器 → 标题样式”可按 H1–H6 设置字号、粗细与标题字体。设置本地保存，不改写 Markdown。
 
-工作区和静态预览支持 GitHub alerts / Obsidian callout 的类型、别名、标题、嵌套与折叠。桌面快捷键使用预留的 v1 编辑命令边界，尚未接入 Tauri 原生快捷键与元数据转换处理器；见 [警告框与桌面编辑命令开发说明](../docs/development/警告框与桌面编辑命令开发说明.md)。
+工作区和静态预览支持 GitHub alerts / Obsidian callout 的类型、别名、标题、嵌套与折叠。桌面快捷键使用预留的 v1 编辑命令边界。
 
 语言设置会即时更新主导航、页面标题和各功能页面，并同步更新文档与编辑器的 `lang`。拼写检查使用浏览器或桌面 WebView 提供的本地词典，开关会即时作用于可视化 Markdown、源码编辑器以及普通文本输入；JSON、密码等结构化或敏感输入保持关闭。
 
@@ -66,7 +64,7 @@ pnpm dev
 
 设置页支持带 logo 的提供商预设、模型发现、聊天/Embedding/转写/声纹能力绑定，以及按 capability、model 和 stream 条件匹配的自定义请求 JSON。请求预览不联网；“发送测试推理请求”使用当前草稿和已保存凭据执行真实短请求。
 
-本地模型页显示固定 revision、许可、下载状态和实际磁盘占用。CPU 是默认运行方式；Windows 可从页面安装独立 CUDA 12.8 组件，安装过程不修改显卡驱动。当前模型选型详见[多模态管线与模型运行](../docs/development/多模态管线与模型运行开发说明.md)。
+本地模型页显示固定 revision、许可、下载状态和实际磁盘占用。CPU 是默认运行方式；Windows 可从页面安装独立 CUDA 12.8 组件，安装过程不修改显卡驱动。
 
 ## 测试与构建
 
@@ -84,7 +82,7 @@ pnpm build
 - 新接口先更新 `src/contracts` 与 `src/services`，页面和 Store 不直接散落 `fetch` 协议细节。
 - 异步页面需要处理加载、空数据、后端错误、重复提交和迟到响应。
 - 功能行为或契约变化时，同一提交同步更新测试和相关文档。
-- 页面需求见[前端页面需求说明](../docs/contracts/前端页面需求说明-开发版.md)，后端行为以运行时 `/openapi.json` 为准。
+- 后端行为以运行时 `/openapi.json` 为准。
 
 ## 保存状态与图表联调（2026-09-06）
 
@@ -92,10 +90,6 @@ pnpm build
 
 Mermaid 大图打开时适配窗口，支持平滑滚轮缩放和鼠标位置补偿；行内中键启用滚轮控制，移动鼠标退出。标签段落样式与正文隔离，避免 foreignObject 内文字裁切。
 
-开发和验证方法见 [后台索引与保存](../docs/development/工作区后台索引与保存开发说明.md)、[Mermaid 预览与缩放](../docs/development/Mermaid预览与缩放开发说明.md)。
-
 ## 构建体积检查
 
-执行 `pnpm build` 后运行 `pnpm build:report`，查看入口静态 JS 依赖与大块清单。分组策略、统计口径及保留的大资源见 [前端构建分块优化开发说明](../docs/development/前端构建分块优化开发说明.md)。
-
-Markdown 语法预设、主题适配和外部文件刷新规则见 [开发说明](../docs/development/Markdown语法预设与外部文件刷新.md)。
+执行 `pnpm build` 后运行 `pnpm build:report`，查看入口静态 JS 依赖与大块清单。

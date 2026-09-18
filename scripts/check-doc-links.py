@@ -13,7 +13,22 @@ LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 def main() -> int:
     failures: list[str] = []
     for document in ROOT.rglob("*.md"):
-        if any(part in {".build", ".venv", "node_modules", "target"} for part in document.parts):
+        if any(
+            part
+            in {
+                ".build",
+                ".local-plans",
+                ".pnpm-store",
+                ".qa-pytest-tmp",
+                ".qa-uv-cache",
+                ".venv",
+                ".venv-models",
+                ".venv-models-cuda",
+                "node_modules",
+                "target",
+            }
+            for part in document.parts
+        ):
             continue
         source = document.read_text(encoding="utf-8")
         for raw in LINK.findall(source):

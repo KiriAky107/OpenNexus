@@ -47,7 +47,7 @@ backend/.venv/Scripts/python.exe frontend/tests/performance/run-stress.py --url 
 
 `agent-task.html?kind=tasks&theme=light` 测试任务组件，`kind=trace` 测试 Trace；支持 light、dark、paper-moments。继续使用 `run-stress.py --scroll`，任务规模可设 `--sizes 100 1000`，Trace 可设 `--sizes 200 2000 10000`。每个规模在新页面中生成独立数据，所有 fetch 被拦截，未知请求直接失败，不落到真实后端。
 
-任务先记录实际分页加载数量，再注入全量夹具测渲染上限，结果包含 `fullListIsInjected`。Trace 测量时间线、树形搜索及切换；滚轮区间与过滤区间分别计时。`scrollContainers` 和 `maxScrollTop` 用来确认目标实际滚动。完整结果及限制见 [Agent 与任务压测报告](../../../docs/development/Agent与任务压测报告.md)。
+任务先记录实际分页加载数量，再注入全量夹具测渲染上限，结果包含 `fullListIsInjected`。Trace 测量时间线、树形搜索及切换；滚轮区间与过滤区间分别计时。`scrollContainers` 和 `maxScrollTop` 用来确认目标实际滚动。
 
 修复后任务会读取所有 API 页，渲染每页 100 条；Trace 每页 200 条，筛选仍覆盖完整数据。`renderedTasks`、`totalFilteredCount` 区分 DOM 数量与实际记录总数，不能把分页后的 DOM 数量误报为数据丢失。
 
