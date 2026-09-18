@@ -32,6 +32,8 @@ backend/data/vault/验收/
 backend/data/mcp/
 backend/data/extension-packages/
 backend/data/extension-installations.sqlite3*
+# 可由 backend/extensions/community/build_packages.py 重建的本地扩展包。
+backend/extensions/community/dist/
 server.json
 servers.json
 

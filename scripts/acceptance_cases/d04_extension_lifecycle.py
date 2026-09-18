@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -62,15 +63,25 @@ def main() -> int:
             ])
             if not passed:
                 break
-    archive = ROOT / "backend/extensions/community/dist/markdown-workbench-1.0.0.zip"
     native_package = False
-    if archive.is_file():
-        with zipfile.ZipFile(archive) as package:
-            names = set(package.namelist())
-            native_package = (
-                "markdown-workbench/markdown-workbench.exe" in names
-                and "markdown-workbench/server.py" not in names
-            )
+    if passed:
+        with tempfile.TemporaryDirectory(prefix="opennexus-d04-packages-") as directory:
+            builder_path = ROOT / "backend/extensions/community/build_packages.py"
+            spec = importlib.util.spec_from_file_location("opennexus_community_builder", builder_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError("无法载入社区扩展构建器")
+            builder = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(builder)
+            package_dir = Path(directory)
+            builder.build(package_dir)
+            archive = package_dir / "markdown-workbench-1.0.0.zip"
+            if archive.is_file():
+                with zipfile.ZipFile(archive) as package:
+                    names = set(package.namelist())
+                    native_package = (
+                        "markdown-workbench/markdown-workbench.exe" in names
+                        and "markdown-workbench/server.py" not in names
+                    )
     passed = passed and native_package
 
     with tempfile.TemporaryDirectory(prefix="opennexus-d04-external-") as directory:
@@ -93,7 +104,7 @@ def main() -> int:
         "backend/extensions/community/plugins/markdown-workbench/server.rs",
         "backend/extensions/community/plugins/markdown-workbench/plugin.yaml",
         "backend/extensions/community/skills/note-reviewer/skill.yaml",
-        "backend/extensions/community/dist/markdown-workbench-1.0.0.zip",
+        "backend/extensions/community/build_packages.py",
         "frontend/src-tauri/src/extension_commands.rs",
         "frontend/src-tauri/src/extension_instance.rs",
         "frontend/src-tauri/src/extension_store.rs",
