@@ -1,0 +1,52 @@
+name: Feature request / 功能建议
+description: Propose a scoped improvement / 提议范围清晰的改进
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / 问题
+      description: Describe the user problem rather than only a preferred implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome / 期望结果
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component / 组件
+      options:
+        - Desktop UI / 桌面界面
+        - Tauri host / Tauri 宿主
+        - AI Core
+        - Retrieval and indexing / 检索与索引
+        - Agents and tasks / Agent 与任务
+        - Media to notes / 音视频转笔记
+        - Skills, Plugins, themes, or MCP / 扩展系统
+        - Export / 导出
+        - Sync client / 同步客户端
+        - Documentation or tooling / 文档或工具
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and trade-offs / 替代方案与权衡
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Security, privacy, compatibility, or packaging impact / 安全、隐私、兼容性或打包影响
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks / 提交检查
+      options:
+        - label: I searched for an existing request. / 我已搜索现有建议。
+          required: true
+        - label: This request belongs in the OpenNexus repository rather than the Sync or Community repository. / 该建议属于主程序仓库，而不是 Sync 或 Community 仓库。
+          required: true

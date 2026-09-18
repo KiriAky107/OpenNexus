@@ -18,6 +18,7 @@ OpenNexus is a local-first AI notebook and knowledge workspace. It combines Mark
 - [Why OpenNexus](#why-opennexus)
 - [Core workflows](#core-workflows)
 - [Architecture](#architecture)
+- [Data and persistence model](#data-and-persistence-model)
 - [Repository boundaries](#repository-boundaries)
 - [Installation](#installation)
 - [Development](#development)
@@ -25,6 +26,7 @@ OpenNexus is a local-first AI notebook and knowledge workspace. It combines Mark
 - [Testing](#testing)
 - [Packaging and release](#packaging-and-release)
 - [Security and privacy](#security-and-privacy)
+- [Community standards](#community-standards)
 - [Contributing](#contributing)
 - [License](#license)
 - [Issue requirements](#issue-requirements)
@@ -47,9 +49,60 @@ The design focuses on four properties:
 
 Import real audio or video, produce timestamped transcript segments, correct the transcript, and generate a separate knowledge-point note. When the material requires it, generated notes may include code blocks, mathematical formulas, Mermaid diagrams, and function plots. Transcription and note generation are separate stages so that the source transcript remains reviewable.
 
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant UI as Media UI
+    participant Host as Tauri Host
+    participant Core as AI Core
+    participant ASR as Transcription Provider
+    participant Model as Note Model
+    participant Vault as Markdown Vault
+    participant DB as app.db
+
+    User->>UI: Select audio or video
+    UI->>Host: Open native file picker
+    Host->>Core: Register attachment and enqueue job
+    Core->>DB: Persist media_jobs and media_events
+    Core->>ASR: Transcribe with timestamps and speakers
+    ASR-->>Core: Segments and recognized text
+    Core->>DB: Save completed job and revision
+    Core-->>UI: Stream replayable progress events
+    User->>UI: Review and correct transcript
+    UI->>Core: Save optimistic revision
+    Core->>DB: Append media_revisions
+    User->>UI: Generate transcript and knowledge note
+    Core->>Model: Extract grounded course knowledge
+    Model-->>Core: Markdown with optional code or diagrams
+    Core->>Core: Validate Mermaid and function-plot blocks
+    Core->>Host: Create two idempotent note artifacts
+    Host->>Vault: Atomically write Markdown files
+    Core->>DB: Link media_notes to created note IDs
+    Core-->>UI: Return transcript note and knowledge note
+```
+
 ### Personal planning agents
 
 Create a goal-oriented Agent, let it produce a plan and actionable tasks, authorize only the tools it needs, and inspect the execution history. Task state is persisted so interrupted work can be diagnosed and resumed instead of silently disappearing.
+
+```mermaid
+stateDiagram-v2
+    [*] --> queued: create run
+    queued --> running: worker starts
+    running --> waiting_permission: privileged tool needs approval
+    waiting_permission --> running: permission granted
+    waiting_permission --> cancelled: user rejects or cancels
+    running --> completed: final result persisted
+    running --> failed: model, tool, or timeout error
+    running --> cancelled: cancellation requested
+    queued --> cancelled: cancelled before start
+    completed --> [*]
+    failed --> [*]
+    cancelled --> [*]
+```
+
+Every transition is represented by a persisted run snapshot and ordered `agent_events`, allowing the UI to reconnect without treating an interrupted SSE connection as lost work.
 
 ### Knowledge workspace
 
@@ -66,6 +119,22 @@ Create a goal-oriented Agent, let it produce a plan and actionable tasks, author
 - Connect MCP servers through supported transports and keep process lifecycle separate from the AI Core where appropriate.
 - Apply community themes and packages only after reviewing their origin and requested permissions.
 - Synchronize notes and attachments through the independently deployed Sync Server.
+
+```mermaid
+flowchart LR
+    A[Package file or community URL] --> B[Stage archive]
+    B --> C{Archive, manifest, hash and signer valid?}
+    C -- No --> X[Reject and record reason]
+    C -- Yes --> D[Prepare isolated package tree]
+    D --> E[Calculate requested changes and permissions]
+    E --> F{User confirms exact review fingerprint?}
+    F -- No --> Y[Cancel without activation]
+    F -- Yes --> G[Create extension transaction]
+    G --> H[Atomically switch active slot]
+    H --> I{Post-switch checks pass?}
+    I -- Yes --> J[Commit receipt and active revision]
+    I -- No --> K[Rollback previous state]
+```
 
 ## Architecture
 
@@ -92,6 +161,219 @@ flowchart LR
 | Optional services | Sync and community distribution | Separate repositories and deployment lifecycle |
 
 The AI Core is supervised by the desktop host but is not the owner of unrelated MCP processes. Production behavior must not depend on development-only `stdio` assumptions.
+
+### Desktop startup and authenticated local channel
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as Vue WebView
+    participant Host as Tauri Host
+    participant Core as AI Core Sidecar
+    participant Cred as Credential Vault
+    participant Vault as Selected Vault
+
+    Host->>Host: Acquire single-instance and state locks
+    Host->>Core: Start matching packaged sidecar
+    Core-->>Host: Bind loopback endpoint and health state
+    Host->>Core: Establish authenticated local session
+    Host->>Cred: Unlock provider credentials for this session
+    Host->>Vault: Validate selected root and host database
+    Host-->>UI: Expose narrow Tauri command surface
+    UI->>Host: Request workspace or AI operation
+    Host->>Core: Forward authorized request
+    Core-->>Host: Structured result or replayable event
+    Host-->>UI: Return sanitized response
+```
+
+The WebView does not receive raw provider secrets or unrestricted filesystem access. Native dialogs, selected-vault path checks, and sidecar version matching remain host responsibilities.
+
+## Data and persistence model
+
+OpenNexus deliberately separates user-authored content from rebuildable indexes and host transaction state. The following stores are related but are not one shared database:
+
+```mermaid
+flowchart TB
+    subgraph UserData[User-selected Vault]
+        MD[Markdown notes]
+        ATT[Content-addressed attachments]
+    end
+
+    subgraph HostState[Tauri-managed state]
+        HDB[(host.sqlite3)]
+        EDB[(extensions.sqlite3)]
+        HDB --> FILES[File identity, journal and outbox]
+        HDB --> SYNCSTATE[Bindings, heads, inbox and conflicts]
+        EDB --> EXTSTATE[Versions, trust and transactions]
+    end
+
+    subgraph CoreState[AI Core state]
+        ADB[(app.db)]
+        ADB --> SEARCH[Notes, blocks, FTS and vectors]
+        ADB --> ACTIVITY[Tasks, Agents, media and chat]
+    end
+
+    MD -->|indexed projection| SEARCH
+    ATT -->|metadata and links| ADB
+    HDB -->|authorized host bridge| ADB
+    EDB -->|active extension inventory| ADB
+```
+
+### AI Core database relationships
+
+The diagram shows the principal migrated tables in `app.db`. FTS and vector tables are projections of `blocks`; `media_notes.note_id` is a cross-boundary logical reference because the Rust host is the authoritative writer for desktop Markdown files.
+
+```mermaid
+erDiagram
+    NOTES ||--o{ BLOCKS : contains
+    BLOCKS ||--o| BLOCKS_FTS : projects_to
+    BLOCKS ||--o{ ROUTED_VECTORS : embeds_in
+    NOTES o|--o{ TASKS : optionally_links
+    AGENT_RUNS ||--o{ AGENT_EVENTS : emits
+    MEDIA_JOBS ||--o{ MEDIA_EVENTS : emits
+    MEDIA_JOBS ||--o{ MEDIA_REVISIONS : snapshots
+    MEDIA_JOBS ||--o{ MEDIA_NOTES : produces
+    CHAT_CONVERSATIONS ||--o{ CHAT_MESSAGES : contains
+    CHAT_MESSAGES o|--o{ CHAT_MESSAGES : branches_from
+    WORKSPACE_ASSETS ||--o{ WORKSPACE_ASSET_LINKS : referenced_by
+    NOTES o|--o{ WORKSPACE_ASSET_LINKS : uses
+
+    NOTES {
+        string note_id PK
+        string title
+        string file_path UK
+        string folder
+        json tags
+        datetime updated_at
+    }
+    BLOCKS {
+        string block_id PK
+        string note_id FK
+        json heading_path
+        int start_offset
+        int end_offset
+        string content_hash
+        int position
+        bool embedding_local_only
+    }
+    BLOCKS_FTS {
+        string block_id
+        string note_id
+        string heading_path
+        string content
+    }
+    ROUTED_VECTORS {
+        string space_id PK
+        string block_id PK, FK
+        int dimensions PK
+        json vector
+    }
+    TASKS {
+        string task_id PK
+        string note_id FK
+        string status
+        datetime due_at
+        datetime updated_at
+    }
+    AGENT_RUNS {
+        string run_id PK
+        string status
+        json run_json
+        json request_json
+        json config_snapshot_json
+        datetime updated_at
+    }
+    AGENT_EVENTS {
+        string run_id PK, FK
+        int sequence PK
+        string event
+        json data_json
+        datetime timestamp
+    }
+    MEDIA_JOBS {
+        string job_id PK
+        string status
+        json job_json
+        json request_json
+        string idempotency_key UK
+        string fingerprint
+    }
+    MEDIA_EVENTS {
+        string job_id PK, FK
+        int sequence PK
+        string event
+        json data_json
+    }
+    MEDIA_REVISIONS {
+        string job_id PK, FK
+        int revision PK
+        json job_json
+    }
+    MEDIA_NOTES {
+        string job_id PK, FK
+        int revision PK
+        string options_hash PK
+        string note_id
+    }
+    CHAT_CONVERSATIONS {
+        string conversation_id PK
+        string title
+        string active_leaf
+        string active_response_id
+        datetime updated_at
+    }
+    CHAT_MESSAGES {
+        string message_id PK
+        string conversation_id FK
+        string parent_message_id
+        int sequence
+        string role
+        string content
+        json citations_json
+        json tool_calls_json
+    }
+    WORKSPACE_ASSETS {
+        string asset_id PK
+        string path UK
+        string content_hash UK
+        string media_type
+        int size
+    }
+    WORKSPACE_ASSET_LINKS {
+        string asset_id PK, FK
+        string note_id PK
+        string note_path PK
+        string source
+    }
+```
+
+### Local sync state
+
+The host uses an outbox/inbox model rather than allowing a remote service to write directly into the Vault:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Watcher as Vault observer
+    participant HostDB as host.sqlite3
+    participant Sync as Sync Server
+    participant Resolver as Conflict resolver
+    participant Vault as Markdown Vault
+
+    Watcher->>HostDB: Record file identity and pending outbox operation
+    HostDB->>Sync: Upload operation with base revision
+    Sync-->>HostDB: Return remote revision or conflict
+    alt accepted
+        HostDB->>HostDB: Advance sync_heads and mark job complete
+    else conflict
+        HostDB->>Resolver: Persist local and remote variants
+        Resolver->>Vault: Apply explicit keep-local, keep-remote, or copy choice
+        Resolver->>HostDB: Record resolution and retry operation
+    end
+    Sync-->>HostDB: Download ordered remote inbox entries
+    HostDB->>Vault: Apply journaled, idempotent file operation
+    HostDB->>HostDB: Advance cursor only after durable completion
+```
 
 ## Repository boundaries
 
@@ -258,6 +540,39 @@ Version tags use the `v<version>` form. Alpha versions can be published as norma
 - Only install Skills, Plugins, themes, and MCP servers from sources you trust.
 
 Do not publish exploitable security details or real secrets in a public issue. Use a private maintainer contact or GitHub's private vulnerability reporting when it is enabled.
+
+## Community standards
+
+OpenNexus uses repository-level community files so expectations are visible before a contribution is submitted:
+
+| Document | Purpose |
+| --- | --- |
+| [Code of Conduct](CODE_OF_CONDUCT.md) | Participation and moderation expectations |
+| [Contributing Guide](CONTRIBUTING.md) | Branch, commit, engineering, testing, documentation, and review workflow |
+| [Security Policy](SECURITY.md) | Supported versions and private vulnerability reporting |
+| [Bug report form](.github/ISSUE_TEMPLATE/bug_report.yml) | Required reproducibility and redaction fields |
+| [Feature request form](.github/ISSUE_TEMPLATE/feature_request.yml) | Problem, outcome, component, and impact analysis |
+| [Pull Request template](.github/PULL_REQUEST_TEMPLATE.md) | Verification evidence and reviewer checklist |
+
+```mermaid
+flowchart TD
+    START[Question, defect, proposal, or vulnerability] --> KIND{What kind of report?}
+    KIND -- Usage question --> DISCUSS[Search README and existing Issues]
+    KIND -- Reproducible defect --> BUG[Complete Bug report form]
+    KIND -- Scoped enhancement --> FEATURE[Complete Feature request form]
+    KIND -- Unpatched vulnerability --> PRIVATE[Use private security reporting]
+    BUG --> TRIAGE[Maintainer triage and repository routing]
+    FEATURE --> TRIAGE
+    TRIAGE --> ISSUE[Accepted Issue with scope and acceptance criteria]
+    ISSUE --> BRANCH[Focused feature branch]
+    BRANCH --> CHECKS[Tests, docs, privacy and license checks]
+    CHECKS --> PR[Pull Request template and review]
+    PR --> MERGE{Requirements satisfied?}
+    MERGE -- No --> BRANCH
+    MERGE -- Yes --> MAIN[Merge to main and include in release process]
+```
+
+Sync Server implementation reports belong in [Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus/issues). Community catalog, package, and prototype reports belong in [Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus/issues).
 
 ## Contributing
 

@@ -18,6 +18,7 @@ OpenNexus 是一款本地优先的 AI 笔记与知识工作台，将 Markdown �
 - [项目定位](#项目定位)
 - [核心工作流](#核心工作流)
 - [系统架构](#系统架构)
+- [数据与持久化模型](#数据与持久化模型)
 - [仓库边界](#仓库边界)
 - [安装](#安装)
 - [开发环境](#开发环境)
@@ -25,6 +26,7 @@ OpenNexus 是一款本地优先的 AI 笔记与知识工作台，将 Markdown �
 - [测试](#测试)
 - [打包与发布](#打包与发布)
 - [安全与隐私](#安全与隐私)
+- [社区规范](#社区规范)
 - [参与开发](#参与开发)
 - [许可证](#许可证)
 - [Issue 要求](#issue-要求)
@@ -47,9 +49,60 @@ OpenNexus 将笔记视为用户拥有的可移植文件，而不是锁定在云�
 
 导入真实音频或视频，生成带时间戳的转录片段，完成校对后再生成独立的知识点笔记。内容需要时，笔记可包含代码块、数学公式、Mermaid 图和函数图像。转录与笔记生成分为两个阶段，确保原始转录稿始终可核对。
 
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as 用户
+    participant UI as 音视频界面
+    participant Host as Tauri 宿主
+    participant Core as AI Core
+    participant ASR as 转写服务
+    participant Model as 笔记模型
+    participant Vault as Markdown Vault
+    participant DB as app.db
+
+    User->>UI: 选择音频或视频
+    UI->>Host: 打开原生文件选择器
+    Host->>Core: 注册附件并创建任务
+    Core->>DB: 持久化 media_jobs 和 media_events
+    Core->>ASR: 请求带时间戳和说话人的转写
+    ASR-->>Core: 返回分段和识别文本
+    Core->>DB: 保存完成状态与修订版本
+    Core-->>UI: 推送可重放的进度事件
+    User->>UI: 校对并修正转录稿
+    UI->>Core: 以乐观锁保存修订
+    Core->>DB: 追加 media_revisions
+    User->>UI: 生成转录稿和知识点笔记
+    Core->>Model: 提取有转录依据的课程知识
+    Model-->>Core: 返回含可选代码或图表的 Markdown
+    Core->>Core: 校验 Mermaid 和 function-plot 块
+    Core->>Host: 创建两个幂等笔记产物
+    Host->>Vault: 原子写入 Markdown 文件
+    Core->>DB: 将 media_notes 关联到笔记 ID
+    Core-->>UI: 返回转录稿与知识点笔记
+```
+
 ### 个人规划智能体
 
 创建目标导向的 Agent，由其生成计划和可执行任务，仅授权必要工具，并检查完整执行历史。任务状态会持久化，异常中断后可以诊断和恢复，而不是静默丢失。
+
+```mermaid
+stateDiagram-v2
+    [*] --> queued: 创建运行
+    queued --> running: 工作进程启动
+    running --> waiting_permission: 高权限工具需要审批
+    waiting_permission --> running: 用户授权
+    waiting_permission --> cancelled: 用户拒绝或取消
+    running --> completed: 最终结果已持久化
+    running --> failed: 模型、工具或超时错误
+    running --> cancelled: 收到取消请求
+    queued --> cancelled: 启动前取消
+    completed --> [*]
+    failed --> [*]
+    cancelled --> [*]
+```
+
+每次状态变化均对应持久化的运行快照和有序 `agent_events`，因此界面重连时不会把 SSE 中断误判为任务丢失。
 
 ### 知识工作台
 
@@ -66,6 +119,22 @@ OpenNexus 将笔记视为用户拥有的可移植文件，而不是锁定在云�
 - 通过受支持的传输方式连接 MCP；适用时，MCP 进程生命周期与 AI Core 分离管理。
 - 安装社区主题和扩展前检查来源、清单与权限。
 - 通过独立部署的 Sync Server 同步笔记和附件。
+
+```mermaid
+flowchart LR
+    A[本地扩展包或社区 URL] --> B[暂存压缩包]
+    B --> C{压缩包、清单、哈希和签名者有效？}
+    C -- 否 --> X[拒绝并记录原因]
+    C -- 是 --> D[准备隔离的包目录]
+    D --> E[计算变更和所需权限]
+    E --> F{用户确认完全一致的审查指纹？}
+    F -- 否 --> Y[取消且不激活]
+    F -- 是 --> G[创建扩展事务]
+    G --> H[原子切换活动槽位]
+    H --> I{切换后检查通过？}
+    I -- 是 --> J[提交回执和活动版本]
+    I -- 否 --> K[回滚到先前状态]
+```
 
 ## 系统架构
 
@@ -92,6 +161,219 @@ flowchart LR
 | 可选服务 | 同步与社区分发 | 独立仓库和发布周期 |
 
 AI Core 由桌面宿主监督运行，但不负责拥有无关 MCP 进程。生产行为不得依赖仅开发环境可用的 `stdio` 假设。
+
+### 桌面启动与认证本机通道
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as Vue WebView
+    participant Host as Tauri 宿主
+    participant Core as AI Core Sidecar
+    participant Cred as 凭据保险库
+    participant Vault as 当前 Vault
+
+    Host->>Host: 获取单实例锁与状态锁
+    Host->>Core: 启动版本匹配的打包 Sidecar
+    Core-->>Host: 绑定回环地址并报告健康状态
+    Host->>Core: 建立经过认证的本机会话
+    Host->>Cred: 为当前会话自动解锁模型凭据
+    Host->>Vault: 校验所选根目录和宿主数据库
+    Host-->>UI: 暴露受限的 Tauri 命令集合
+    UI->>Host: 请求工作区或 AI 操作
+    Host->>Core: 转发已授权请求
+    Core-->>Host: 返回结构化结果或可重放事件
+    Host-->>UI: 返回清理后的响应
+```
+
+WebView 无法取得模型明文密钥或不受限文件访问能力。原生对话框、Vault 路径校验和 Sidecar 版本匹配均由宿主负责。
+
+## 数据与持久化模型
+
+OpenNexus 有意分离用户创作内容、可重建索引和宿主事务状态。以下存储互有关联，但不是同一个共享数据库：
+
+```mermaid
+flowchart TB
+    subgraph UserData[用户选择的 Vault]
+        MD[Markdown 笔记]
+        ATT[内容寻址附件]
+    end
+
+    subgraph HostState[Tauri 管理状态]
+        HDB[(host.sqlite3)]
+        EDB[(extensions.sqlite3)]
+        HDB --> FILES[文件身份、日志与 Outbox]
+        HDB --> SYNCSTATE[绑定、Head、Inbox 与冲突]
+        EDB --> EXTSTATE[版本、信任与安装事务]
+    end
+
+    subgraph CoreState[AI Core 状态]
+        ADB[(app.db)]
+        ADB --> SEARCH[笔记、Block、FTS 与向量]
+        ADB --> ACTIVITY[任务、Agent、媒体与对话]
+    end
+
+    MD -->|可重建索引投影| SEARCH
+    ATT -->|元数据与引用| ADB
+    HDB -->|经过授权的宿主桥接| ADB
+    EDB -->|活动扩展清单| ADB
+```
+
+### AI Core 数据库关系
+
+下图展示 `app.db` 中主要迁移表。FTS 与向量表是 `blocks` 的检索投影；由于桌面 Markdown 的权威写入方是 Rust 宿主，`media_notes.note_id` 是跨边界逻辑引用，而不是对 `notes` 的强外键。
+
+```mermaid
+erDiagram
+    NOTES ||--o{ BLOCKS : 包含
+    BLOCKS ||--o| BLOCKS_FTS : 投影
+    BLOCKS ||--o{ ROUTED_VECTORS : 嵌入
+    NOTES o|--o{ TASKS : 可选关联
+    AGENT_RUNS ||--o{ AGENT_EVENTS : 产生
+    MEDIA_JOBS ||--o{ MEDIA_EVENTS : 产生
+    MEDIA_JOBS ||--o{ MEDIA_REVISIONS : 保存修订
+    MEDIA_JOBS ||--o{ MEDIA_NOTES : 生成
+    CHAT_CONVERSATIONS ||--o{ CHAT_MESSAGES : 包含
+    CHAT_MESSAGES o|--o{ CHAT_MESSAGES : 消息分支
+    WORKSPACE_ASSETS ||--o{ WORKSPACE_ASSET_LINKS : 被引用
+    NOTES o|--o{ WORKSPACE_ASSET_LINKS : 使用
+
+    NOTES {
+        string note_id PK
+        string title
+        string file_path UK
+        string folder
+        json tags
+        datetime updated_at
+    }
+    BLOCKS {
+        string block_id PK
+        string note_id FK
+        json heading_path
+        int start_offset
+        int end_offset
+        string content_hash
+        int position
+        bool embedding_local_only
+    }
+    BLOCKS_FTS {
+        string block_id
+        string note_id
+        string heading_path
+        string content
+    }
+    ROUTED_VECTORS {
+        string space_id PK
+        string block_id PK, FK
+        int dimensions PK
+        json vector
+    }
+    TASKS {
+        string task_id PK
+        string note_id FK
+        string status
+        datetime due_at
+        datetime updated_at
+    }
+    AGENT_RUNS {
+        string run_id PK
+        string status
+        json run_json
+        json request_json
+        json config_snapshot_json
+        datetime updated_at
+    }
+    AGENT_EVENTS {
+        string run_id PK, FK
+        int sequence PK
+        string event
+        json data_json
+        datetime timestamp
+    }
+    MEDIA_JOBS {
+        string job_id PK
+        string status
+        json job_json
+        json request_json
+        string idempotency_key UK
+        string fingerprint
+    }
+    MEDIA_EVENTS {
+        string job_id PK, FK
+        int sequence PK
+        string event
+        json data_json
+    }
+    MEDIA_REVISIONS {
+        string job_id PK, FK
+        int revision PK
+        json job_json
+    }
+    MEDIA_NOTES {
+        string job_id PK, FK
+        int revision PK
+        string options_hash PK
+        string note_id
+    }
+    CHAT_CONVERSATIONS {
+        string conversation_id PK
+        string title
+        string active_leaf
+        string active_response_id
+        datetime updated_at
+    }
+    CHAT_MESSAGES {
+        string message_id PK
+        string conversation_id FK
+        string parent_message_id
+        int sequence
+        string role
+        string content
+        json citations_json
+        json tool_calls_json
+    }
+    WORKSPACE_ASSETS {
+        string asset_id PK
+        string path UK
+        string content_hash UK
+        string media_type
+        int size
+    }
+    WORKSPACE_ASSET_LINKS {
+        string asset_id PK, FK
+        string note_id PK
+        string note_path PK
+        string source
+    }
+```
+
+### 本地同步状态
+
+宿主使用 Outbox/Inbox 模型，不允许远程服务直接写入 Vault：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Watcher as Vault 观察器
+    participant HostDB as host.sqlite3
+    participant Sync as Sync Server
+    participant Resolver as 冲突处理器
+    participant Vault as Markdown Vault
+
+    Watcher->>HostDB: 记录文件身份和待发送操作
+    HostDB->>Sync: 携带基础修订上传操作
+    Sync-->>HostDB: 返回远程修订或冲突
+    alt 操作被接受
+        HostDB->>HostDB: 推进 sync_heads 并完成任务
+    else 发生冲突
+        HostDB->>Resolver: 持久化本地与远程版本
+        Resolver->>Vault: 执行保留本地、远程或副本选择
+        Resolver->>HostDB: 记录处理结果并重试
+    end
+    Sync-->>HostDB: 下载有序远程 Inbox 项目
+    HostDB->>Vault: 执行带日志且幂等的文件操作
+    HostDB->>HostDB: 仅在持久完成后推进游标
+```
 
 ## 仓库边界
 
@@ -258,6 +540,39 @@ pnpm desktop:build
 - 只安装来自可信来源的 Skill、Plugin、主题和 MCP 服务。
 
 不要在公开 Issue 中发布可利用的安全细节或真实密钥。请使用维护者私下联系方式，或在启用后使用 GitHub Private Vulnerability Reporting。
+
+## 社区规范
+
+OpenNexus 使用仓库级社区文件，让参与者在提交贡献前即可了解完整要求：
+
+| 文档 | 用途 |
+| --- | --- |
+| [社区行为准则](CODE_OF_CONDUCT.zh-CN.md) | 参与和社区管理要求 |
+| [贡献指南](CONTRIBUTING.zh-CN.md) | 分支、提交、工程、测试、文档和审查流程 |
+| [安全策略](SECURITY.md) | 支持版本和私下漏洞报告方式 |
+| [缺陷报告表单](.github/ISSUE_TEMPLATE/bug_report.yml) | 强制填写复现与脱敏信息 |
+| [功能建议表单](.github/ISSUE_TEMPLATE/feature_request.yml) | 问题、结果、组件和影响分析 |
+| [Pull Request 模板](.github/PULL_REQUEST_TEMPLATE.md) | 验证证据和审查检查清单 |
+
+```mermaid
+flowchart TD
+    START[问题、缺陷、建议或漏洞] --> KIND{属于哪类反馈？}
+    KIND -- 使用问题 --> DISCUSS[搜索 README 和已有 Issue]
+    KIND -- 可复现缺陷 --> BUG[填写缺陷报告表单]
+    KIND -- 范围明确的改进 --> FEATURE[填写功能建议表单]
+    KIND -- 未修复漏洞 --> PRIVATE[使用私下安全报告]
+    BUG --> TRIAGE[维护者分类并路由仓库]
+    FEATURE --> TRIAGE
+    TRIAGE --> ISSUE[形成包含范围和验收条件的 Issue]
+    ISSUE --> BRANCH[建立聚焦的功能分支]
+    BRANCH --> CHECKS[测试、文档、隐私和许可证检查]
+    CHECKS --> PR[填写 PR 模板并接受审查]
+    PR --> MERGE{是否满足要求？}
+    MERGE -- 否 --> BRANCH
+    MERGE -- 是 --> MAIN[合并到 main 并进入发布流程]
+```
+
+Sync Server 实现问题应提交到 [Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus/issues)；社区目录、扩展包和原型问题应提交到 [Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus/issues)。
 
 ## 参与开发
 

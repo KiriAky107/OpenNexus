@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability / 安全漏洞
+    url: https://github.com/KiriAky107/OpenNexus/security
+    about: Use private vulnerability reporting when available; do not disclose unpatched vulnerabilities publicly.
+  - name: Sync Server repository
+    url: https://github.com/KiriAky107/Sync-for-OpenNexus/issues
+    about: Report server-side synchronization issues in the Sync repository.
+  - name: Community repository
+    url: https://github.com/KiriAky107/Community-for-OpenNexus/issues
+    about: Report community catalog, package, or prototype issues in the Community repository.
