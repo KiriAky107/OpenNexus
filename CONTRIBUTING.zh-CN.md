@@ -1,68 +1,174 @@
-# 参与 OpenNexus 开发
 
-**简体中文** | [English](CONTRIBUTING.md)
+# OpenNexus 贡献指南
 
-感谢你改进 OpenNexus。本指南是 [README.zh-CN.md](README.zh-CN.md) 中工程、测试、Issue 和 Pull Request 要求的补充。
+**简体中文** | [English](https://www.google.com/search?q=CONTRIBUTING.md&utm_source=gemini)
 
-## 开始前
+---
 
-1. 搜索已有 Issue 和 Pull Request。
-2. 行为变化、架构工作、数据库迁移或跨仓库兼容性变更需要创建或关联 Issue。
-3. 确认改动属于本仓库，而不是独立的 Sync Server 或 Community 仓库。
-4. 测试夹具使用虚构数据，不得提交个人 Vault、生产凭据、私人服务器地址或其他身份信息。
+感谢你参与建设与改进 OpenNexus！我们非常欢迎社区提交代码、完善技术文档、优化系统架构以及提供高质量的可复现缺陷报告。
 
-## 开发流程
+OpenNexus 是一个注重隐私安全与本地优先（Local-First）的桌面端知识工作区，融合了基于 Tauri 的 Rust 原生宿主、基于 FastAPI 的 Python AI 伴生引擎，以及 Vue 3 响应式前端。为了保障系统的长期稳定性、用户数据主权与工程迭代效率，所有贡献均须遵守以下工程标准与规范。
 
-1. Fork 仓库，或从最新 `main` 创建功能分支。
-2. 使用仓库锁定文件安装依赖。
-3. 只完成一个聚焦的逻辑改动，并增加或更新测试。
-4. 运行所有受影响层级的检查。
-5. 公共行为变化时同步更新两种 README 和发行说明。
-6. 推送功能分支；需要早期方案反馈时可创建 Draft Pull Request。
+---
 
-建议的分支名称：
+## 1. 核心准则与代码仓库边界
 
-```text
-feat/agent-resume
-fix/pdf-export-dialog
-docs/community-standards
+在开始编写代码或提交提案前，请确认你的改动属于当前仓库的职责范畴：
+
+| 职责范畴 | 所属仓库 | 核心技术栈 |
+| --- | --- | --- |
+| **桌面客户端与 AI 引擎** | **[OpenNexus](https://github.com/KiriAky107/OpenNexus?utm_source=gemini)** *(当前仓库)* | Tauri 2 (Rust)、Vue 3、FastAPI |
+| **端到端加密同步服务** | [Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus?utm_source=gemini) | 独立服务端、PostgreSQL、S3 |
+| **扩展中心与技能注册表** | [Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus?utm_source=gemini) | Manifest 协议、包分发元数据 |
+
+* **提议先行 (Issue First)**：对于涉及底层架构变动、数据库结构迁移（Schema Migrations）、跨进程协议调整或重大破坏性变更，请先 [提交 Issue](https://www.google.com/search?q=https://github.com/KiriAky107/OpenNexus/issues/new/choose&utm_source=gemini) 探讨技术方案与折中取舍，避免无效编码。
+* **脱敏原则 (Synthetic Data Only)**：严禁在代码、测试夹具（Fixtures）或日志中包含真实用户笔记、生产 API 密钥、私有 IP 或个人敏感数据。所有测试数据必须使用人工生成的 Mock 数据。
+
+---
+
+## 2. 开发工作流
+
+### 第一步：分支管理
+
+基于最新的 `main` 主分支切出独立的特性分支：
+
+```bash
+git checkout main
+git pull origin main
+git checkout -b <type>/<short-description>
+
 ```
 
-## 提交信息
+* **新功能分支**：`feat/agent-checkpoint-resume`
+* **问题修复分支**：`fix/pdf-export-timeout`
+* **性能优化分支**：`perf/hybrid-retrieval-rerank`
+* **文档维护分支**：`docs/mcp-configuration-guide`
 
-使用 Conventional Commits：
+### 第二步：依赖安装
 
-```text
-<类型>(<可选范围>): <祈使句摘要>
+严格根据仓库锁定的依赖版本进行初始化：
+
+```powershell
+# 安装 Python AI 核心依赖
+cd backend
+uv sync --frozen
+
+# 安装前端与桌面框架依赖
+cd ..\frontend
+corepack enable
+corepack prepare pnpm@10.28.0 --activate
+pnpm install --frozen-lockfile
+
 ```
 
-常用类型包括 `feat`、`fix`、`docs`、`test`、`refactor`、`perf`、`build`、`ci` 和 `chore`。署名必须准确；未经明确请求不得改写其他贡献者的身份。
+### 第三步：原子化提交
 
-## 工程要求
+保持单个 Pull Request 职责单一。请勿在一个 PR 中混合格式化重构、业务逻辑修改与无关代码微调。
 
-- 保持本地优先模型，以及 WebView、Tauri 宿主、AI Core、Vault 和可选远程服务之间的信任边界。
-- 高权限桌面文件和凭据操作以 Rust 宿主为权威实现。
-- 持久化结构只能通过追加迁移更新，并记录恢复或回滚行为。
-- API 保持类型化，接口变化同步更新前端契约、后端 Schema、原生命令和测试。
-- 文件、媒体、同步和扩展事务必须保持幂等。
-- 校验不可信压缩包、Markdown、扩展清单、路径、URL、模型输出和远程响应。
-- 说明新增依赖，并检查其许可证和打包体积。
+---
 
-## 必须执行的检查
+## 3. 工程设计原则
 
-使用 [README.zh-CN.md](README.zh-CN.md#测试) 中的命令。Pull Request 只列出实际运行过的命令，并说明无法提供的环境或跳过的检查。
+任何代码贡献均须恪守 OpenNexus 的底层设计约束：
 
-纯文档改动至少应通过 Markdown 链接、代码围栏和 Mermaid 解析检查。涉及界面、原生对话框、Sidecar、导出、安装包或同步的改动，应执行适用的桌面安装版验收。
+### 本地优先与信任边界
 
-## 文档与隐私
+* **Rust 宿主拥有最高系统特权**：涉及越界文件读写、OS 原生凭证存储、系统级原生弹窗、子进程生命周期调度等敏感操作，必须且只能在 Tauri 宿主层（`frontend/src-tauri/`）中执行。
+* **AI Core 属于受限伴生服务**：FastAPI 进程仅通过带鉴权的本地回环接口提供计算、检索与转写能力，绝不可直接绕过宿主处理敏感凭据或执行任意磁盘写操作。
+* **前端为不可信环境**：Vue WebView 仅负责交互展示与发起结构化命令，内存或 `localStorage` 中严禁直接保存第三方 API 密钥明文。
 
-- 英文与简体中文公共文档保持一致。
-- 示例只能使用虚构的用户、域名、Token、路径和 Vault 内容。
-- 删除凭据、个人信息、私人主机名和其他可识别身份的细节。
-- 不得提交生成安装包、模型权重、用户数据库、媒体录音或个人文档。
+### 类型同步与契约一致性
 
-## 审查
+凡涉及 IPC 通讯命令、请求体或返回数据结构的调整，必须同步更新以下四个层次：
 
-审查内容包括正确性、安全边界、迁移安全、测试、可访问性、文档、许可证和发行影响。审查期间应使用新提交响应意见；维护者可以在合并时压缩提交。
+1. 后端模型契约（`backend/` 下的 Pydantic 模型）。
+2. Rust 原生命令签名与错误枚举（`src-tauri/src/`）。
+3. 前端 TypeScript 类型定义（`frontend/src/`）。
+4. 对应的单元测试与契约测试。
 
-参与社区须遵守[社区行为准则](CODE_OF_CONDUCT.zh-CN.md)，安全问题按照 [SECURITY.md](SECURITY.md) 报告。
+### 幂等性与持久化保障
+
+* **操作原子化**：文件写入、媒体解析转换任务、扩展包安装等关键操作必须具备幂等性与崩溃一致性。进程意外中断后再次启动，不可产生残留孤儿状态或脏数据。
+* **追加式迁移（Append-Only）**：针对 `app.db` 或宿主 SQLite 数据库的 Schema 变更，必须提供结构化迁移脚本，严禁对用户已有数据执行不可逆的破坏性变更。
+
+### 第三方依赖治理
+
+在 PR 中引入任何新依赖包时，需在描述中清晰说明：引入动机、运行时开销、对打包安装包体积的影响，以及开源协议合规性（首选 MIT、Apache-2.0 等宽松协议）。
+
+---
+
+## 4. Git 提交规范
+
+本项目遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/?utm_source=gemini) 规范：
+
+```text
+<type>(<scope>): <简要总结（祈使语气）>
+
+[可选正文：详细说明变更背景、技术动机与工程权衡]
+
+[可选页脚：关联 Issue，如 Closes #123, Breaking Changes]
+
+```
+
+### 常用类型标识
+
+* `feat`：新增功能（面向用户或开发者）。
+* `fix`：修复 Bug。
+* `perf`：提升检索、推理或界面渲染性能的代码改动。
+* `refactor`：既不修复 Bug 也不添加功能的代码重构。
+* `test`：新增测试用例或修正已有测试。
+* `docs`：仅包含文档类变动。
+* `build` / `ci`：影响构建系统、外置依赖或 CI 流程的变动。
+
+### 提交示例
+
+```text
+feat(agent): persist checkpoint states during long-running tasks
+fix(export): prevent crash when compiling math blocks to PDF
+docs(setup): clarify Rust MSVC baseline requirement on Windows
+
+```
+
+---
+
+## 5. 质量校验矩阵
+
+在提交代码或请求审查之前，请确保运行并通过对应层级的测试与静态检查：
+
+```powershell
+# 1. AI 核心与后端测试
+cd backend
+uv run pytest
+
+# 2. 前端类型检查、单元测试与打包分析
+cd ..\frontend
+pnpm type-check
+pnpm test
+pnpm build
+
+# 3. Tauri / Rust 宿主原生端代码规范与测试
+cd src-tauri
+cargo fmt --check
+cargo test --all-targets --features desktop
+cargo clippy --all-targets --features desktop -- -D warnings
+
+```
+
+* **桌面集成验收**：凡涉及原生弹窗交互、伴生进程生命周期管理、PDF/DOCX 导出或安装包配置的变动，需通过本地完整打包运行验证（`pnpm desktop:build`）。
+* **文档语法检查**：Markdown 内部相对链接必须保持有效，代码围栏格式正确，Mermaid 图表在 GitHub 上能够正常无错解析。
+
+---
+
+## 6. Pull Request 提交与评审
+
+1. **发起 PR**：在描述中通过关键词关联相关 Issue（如 `Closes #123`、`Fixes #456`）。
+2. **完善说明**：清晰阐明“问题背景”、“解决方案”以及“验证结果”（可附带终端测试日志或 UI 前后对比动图/截图）。
+3. **保持中英文档同步**：当公开交互、环境配置或命令发生变更时，请务必同步更新 `README.md` 与 `README.zh-CN.md`。
+4. **积极跟进评审**：维护者将围绕代码正确性、安全信任边界、运行性能和可维护性展开 Code Review。评审阶段可直接推送新 Commit，合并时将统一进行 Squash 合并。
+
+---
+
+## 7. 安全报告与社区准则
+
+* **漏洞提报**：切勿在公开 Issue 或 PR 中披露未修补的安全漏洞或真实系统密钥。请通过 [GitHub 私密漏洞提报通道](https://www.google.com/search?q=https://github.com/KiriAky107/OpenNexus/security/advisories/new&utm_source=gemini) 提交。
+* **行为准则**：所有参与 OpenNexus 社区的成员均受 [社区行为准则](https://www.google.com/search?q=CODE_OF_CONDUCT.zh-CN.md&utm_source=gemini) 约束。请保持理性、严谨、包容与尊重的沟通氛围。
