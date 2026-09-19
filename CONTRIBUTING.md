@@ -1,68 +1,175 @@
 # Contributing to OpenNexus
 
-[简体中文](CONTRIBUTING.zh-CN.md) | **English**
+[简体中文](https://www.google.com/search?q=CONTRIBUTING.zh-CN.md&utm_source=gemini) | **English**
 
-Thank you for improving OpenNexus. This guide supplements the engineering, testing, Issue, and Pull Request requirements in [README.md](README.md).
+---
 
-## Before starting
+Thank you for your interest in building and improving OpenNexus. We welcome code contributions, documentation enhancements, architectural refinements, and reproducible bug reports from the community.
 
-1. Search existing Issues and Pull Requests.
-2. Open or reference an Issue for behavior changes, architectural work, schema migrations, or cross-repository compatibility changes.
-3. Confirm that the change belongs in this repository rather than the separate Sync Server or Community repository.
-4. Use synthetic fixtures. Do not commit a personal vault, production credential, private server address, or other identifying information.
+OpenNexus is a local-first, security-sensitive desktop environment combining a native Tauri host, a Python AI engine, and a reactive Vue frontend. To maintain system reliability, data sovereignty, and engineering velocity, all contributions must adhere to the engineering standards outlined below.
 
-## Development workflow
+---
 
-1. Fork the repository or create a feature branch from the current `main` branch.
-2. Install dependencies from the committed lock files.
-3. Make one focused logical change and add or update tests.
-4. Run the checks for every affected layer.
-5. Update both README languages and release notes when public behavior changes.
-6. Push the feature branch and open a Draft Pull Request if early design feedback is needed.
+## 1. Ground Rules & Repository Boundaries
 
-Suggested branch names:
+Before writing code or filing proposals, ensure your contribution is directed to the appropriate layer:
 
-```text
-feat/agent-resume
-fix/pdf-export-dialog
-docs/community-standards
+| Focus Area | Responsible Repository | Stack |
+| --- | --- | --- |
+| **Desktop App & AI Engine** | **[OpenNexus](https://github.com/KiriAky107/OpenNexus?utm_source=gemini)** *(This Repo)* | Tauri 2 (Rust), Vue 3, FastAPI |
+| **Encrypted Sync Server** | [Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus?utm_source=gemini) | Independent service, PostgreSQL, S3 |
+| **Extension Registry & Skills** | [Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus?utm_source=gemini) | Manifests, catalog distribution |
+
+* **Issue First**: For significant architectural proposals, database schema migrations, contract modifications, or breaking changes, please [open an Issue](https://www.google.com/search?q=https://github.com/KiriAky107/OpenNexus/issues/new/choose&utm_source=gemini) to discuss design trade-offs before investing time in implementation.
+* **Synthetic Data Only**: Never commit real user vaults, production API tokens, private IPs, or personal documents. All tests and fixtures must use synthetic, generated mock data.
+
+---
+
+## 2. Development Lifecycle
+
+### Step 1: Branch Strategy
+
+Create a dedicated feature branch off the latest `main` branch:
+
+```bash
+git checkout main
+git pull origin main
+git checkout -b <type>/<short-description>
+
 ```
 
-## Commit messages
+* **Feature**: `feat/agent-checkpoint-resume`
+* **Bug Fix**: `fix/pdf-export-timeout`
+* **Performance**: `perf/hybrid-retrieval-rerank`
+* **Documentation**: `docs/mcp-configuration-guide`
 
-Use Conventional Commits:
+### Step 2: Toolchain Setup
 
-```text
-<type>(<optional-scope>): <imperative summary>
+Ensure you install dependencies strictly from the pinned lockfiles:
+
+```powershell
+# Setup backend dependencies
+cd backend
+uv sync --frozen
+
+# Setup frontend dependencies
+cd ..\frontend
+corepack enable
+corepack prepare pnpm@10.28.0 --activate
+pnpm install --frozen-lockfile
+
 ```
 
-Common types are `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`, and `chore`. Keep authorship accurate; do not rewrite another contributor's identity without their explicit request.
+### Step 3: Atomic Changes
 
-## Engineering expectations
+Keep each Pull Request focused on a single logical objective. Separate architectural refactorings, automated formatting sweeps, and functional logic into distinct commits or PRs.
 
-- Preserve the local-first model and the trust boundaries between WebView, Tauri host, AI Core, Vault, and optional remote services.
-- Treat the Rust host as the authority for privileged desktop filesystem and credential operations.
-- Keep persistent schema changes append-only through migrations and document recovery or rollback behavior.
-- Keep APIs typed and synchronize frontend contracts, backend schemas, native commands, and tests.
-- Preserve idempotency for file, media, sync, and extension transactions.
-- Validate untrusted archives, Markdown, extension manifests, paths, URLs, model output, and remote responses.
-- Explain new dependencies and verify their licenses and packaged size.
+---
 
-## Required checks
+## 3. Engineering Tenets
 
-Use the commands documented in [README.md](README.md#testing). In the Pull Request, list only commands that were actually run and state any unavailable environment or skipped check.
+Every contribution must align with our core design invariants:
 
-Documentation-only changes must at least pass Markdown link, code-fence, and Mermaid parsing checks. UI, native-dialog, sidecar, export, installer, or synchronization changes require packaged-desktop acceptance where applicable.
+### Local-First & Trust Boundaries
 
-## Documentation and privacy
+* **The Rust Host is Authoritative**: High-privilege actions (direct filesystem access outside sandbox scopes, OS credential storage, native dialogs, child process supervision) must reside in the Tauri host (`frontend/src-tauri/`).
+* **The AI Core is an Isolated Engine**: The FastAPI backend acts as a supervised compute engine over an authenticated loopback channel. It must never expose raw credentials or assume unrestricted filesystem authority.
+* **The Frontend is Untrusted**: The Vue WebView renders UI and issues structured commands. It must never hold raw provider API secrets in memory or `localStorage`.
 
-- Keep English and Simplified Chinese shared documentation aligned.
-- Use examples that contain fictitious users, domains, tokens, paths, and vault content.
-- Remove credentials, personal information, private hostnames, and other identifying details.
-- Do not commit generated bundles, model weights, user databases, media recordings, or personal documents.
+### Type Synchronization & Contract Rigor
 
-## Review
+Whenever an IPC command or API payload changes, you must synchronously update:
 
-Reviewers evaluate correctness, security boundaries, migration safety, tests, accessibility, documentation, licensing, and release impact. Address review comments with new commits while review is active; maintainers may squash when merging.
+1. Backend schemas (Pydantic models in `backend/`).
+2. Rust command arguments and error enums (`src-tauri/src/`).
+3. Frontend TypeScript interfaces (`frontend/src/`).
+4. Unit/Integration contract tests.
 
-Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md). Security reports follow [SECURITY.md](SECURITY.md).
+### Idempotency & Persistence
+
+* **Atomic Operations**: File edits, media processing jobs, and extension installations must be restart-safe and idempotent. Interrupted jobs must be cleanable or resumable without leaving orphaned state.
+* **Append-Only Migrations**: Database changes in `app.db` or host SQLite databases must use structured migrations. Never execute destructive, non-recoverable modifications on user data schemas.
+
+### Dependency Hygiene
+
+Explain any proposed dependency in the PR description, including runtime performance impact, bundle size increase, license compatibility (MIT/Apache-2.0 preferred), and security posture.
+
+---
+
+## 4. Commit Standards
+
+We enforce the [Conventional Commits](https://www.conventionalcommits.org/?utm_source=gemini) specification:
+
+```text
+<type>(<scope>): <short imperative summary>
+
+[optional body: explanation of context, trade-offs, and design rationale]
+
+[optional footer: Closes #123, Breaking Changes]
+
+```
+
+### Common Types
+
+* `feat`: A new user-visible capability or developer API.
+* `fix`: A bug fix or error mitigation.
+* `perf`: A code change that improves compute, retrieval, or UI performance.
+* `refactor`: Code restructurings that neither fix bugs nor add features.
+* `test`: Adding missing tests or correcting existing tests.
+* `docs`: Documentation updates or corrections.
+* `build` / `ci`: Changes to build tooling, dependencies, or CI workflows.
+
+### Examples
+
+```text
+feat(agent): persist checkpoint states during long-running tasks
+fix(export): prevent crash when compiling math blocks to PDF
+docs(setup): clarify Rust MSVC baseline requirement on Windows
+
+```
+
+---
+
+## 5. Verification Matrix
+
+Before requesting a review, run the quality gates corresponding to the layers you touched:
+
+```powershell
+# 1. AI Core & Backend Verification
+cd backend
+uv run pytest
+
+# 2. Frontend Type Checking, Unit Tests, and Build
+cd ..\frontend
+pnpm type-check
+pnpm test
+pnpm build
+
+# 3. Tauri / Rust Native Host Checks
+cd src-tauri
+cargo fmt --check
+cargo test --all-targets --features desktop
+cargo clippy --all-targets --features desktop -- -D warnings
+
+```
+
+* **Packaged Acceptance**: Changes affecting native file dialogs, sidecar lifecycle, PDF/DOCX exporters, or installer behavior must be verified via a local packaged build (`pnpm desktop:build`).
+* **Documentation Checks**: Markdown files must maintain valid internal links, correct code blocks, and compliant Mermaid syntax.
+
+---
+
+## 6. Pull Request Submission & Review
+
+When your changes are verified and ready:
+
+1. **Open a PR**: Reference relevant Issues using GitHub keywords (`Closes #123`, `Fixes #456`).
+2. **Fill the Template**: Clearly outline the *Problem*, *Solution*, and *Verification Evidence* (including terminal outputs or UI before/after recordings).
+3. **Keep Docs in Sync**: If public behavior, CLI commands, or configuration keys change, update both `README.md` and `README.zh-CN.md`.
+4. **Active Review**: Maintainers will review code for correctness, security boundaries, performance regressions, and architectural fit. Push new commits directly to your branch during the review cycle; commits will be squashed upon merge.
+
+---
+
+## 7. Security & Code of Conduct
+
+* **Security Disclosures**: Never report security vulnerabilities or credentials via public PRs or Issues. Use [GitHub Private Vulnerability Reporting](https://www.google.com/search?q=https://github.com/KiriAky107/OpenNexus/security/advisories/new&utm_source=gemini).
+* **Code of Conduct**: All participants are expected to adhere to our [Code of Conduct](https://www.google.com/search?q=CODE_OF_CONDUCT.md&utm_source=gemini). Please engage with respect, professional rigor, and constructive candor.
