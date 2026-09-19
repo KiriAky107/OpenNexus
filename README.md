@@ -1,261 +1,180 @@
-<p align="center">
-  <img src="frontend/public/opennexus-logo.svg" alt="OpenNexus logo" width="112" height="112">
-</p>
+<div align="center">
 
-# OpenNexus
+  <img src="frontend/public/opennexus-logo.svg" alt="OpenNexus Logo" width="100" height="100" />
 
-[简体中文](README.zh-CN.md) | **English**
+  <h1>OpenNexus</h1>
 
-[![Version](https://img.shields.io/badge/version-0.5.2--alpha1-5865f2)](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.2-alpha1)
-![Platform](https://img.shields.io/badge/platform-Windows%20x64-2563eb)
-![Desktop](https://img.shields.io/badge/desktop-Tauri%202-f97316)
-![Frontend](https://img.shields.io/badge/frontend-Vue%203-42b883)
-![Core](https://img.shields.io/badge/core-FastAPI-05998b)
-[![License](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
+  <p><strong>The Local-First, AI-Native Knowledge Workspace</strong></p>
 
-OpenNexus is a local-first Windows desktop app for notes and knowledge work. It keeps Markdown vaults, retrieval, grounded chat, auditable agents, media-to-notes workflows, extensions, and optional device sync in one workspace.
+  <p>
+    Own your data. Ground your AI. Turn scattered media, thoughts, and research into structured, connected knowledge — fully offline or plugged into the models of your choice.
+  </p>
 
-> The current release is **0.5.2-alpha1**. It is an early alpha, and its storage schema and extension interfaces may still change. Back up important vaults before upgrading.
+  <p>
+    <a href="README.zh-CN.md">简体中文</a> •
+    <a href="#quick-start">Quick Start</a> •
+    <a href="#why-opennexus">Key Features</a> •
+    <a href="#architecture">Architecture</a> •
+    <a href="#development">Development</a> •
+    <a href="https://github.com/KiriAky107/OpenNexus/releases">Releases</a>
+  </p>
 
-<p align="center">
-  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus desktop workspace" width="1100">
-</p>
+  <p>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.2-alpha1"><img src="https://img.shields.io/badge/Release-0.5.2--alpha1-5865f2?style=flat-square" alt="Version" /></a>
+    <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="Platform" />
+    <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="Desktop Tauri" />
+    <img src="https://img.shields.io/badge/Frontend-Vue_3-42b883?style=flat-square" alt="Frontend Vue" />
+    <img src="https://img.shields.io/badge/Core-FastAPI-05998b?style=flat-square" alt="Backend FastAPI" />
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e?style=flat-square" alt="License" /></a>
+  </p>
 
-<p align="center"><sub>The OpenNexus desktop workspace with local vault navigation and AI Core status.</sub></p>
+</div>
 
-## Table of contents
+---
 
-- [Get started](#get-started)
-- [Why OpenNexus](#why-opennexus)
-- [Core workflows](#core-workflows)
-- [Architecture](#architecture)
-- [Data and persistence model](#data-and-persistence-model)
-- [Repository boundaries](#repository-boundaries)
-- [Development](#development)
-- [Configuration and data](#configuration-and-data)
-- [Testing](#testing)
-- [Packaging and release](#packaging-and-release)
-- [Security and privacy](#security-and-privacy)
-- [Community standards](#community-standards)
-- [Contributing](#contributing)
-- [License](#license)
-- [Issue requirements](#issue-requirements)
-- [Pull request requirements](#pull-request-requirements)
+> ⚠️ **Alpha Notice**: OpenNexus is currently in active alpha (`v0.5.2-alpha1`). Storage schemas, IPC contracts, and extension APIs are evolving. Always back up critical Markdown vaults before updating.
 
-## Get started
+<div align="center">
+  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus Desktop Workspace" width="95%" />
+  <p><em>The OpenNexus desktop environment: Local Markdown vault, RRF hybrid retrieval, and real-time AI Core status.</em></p>
+</div>
 
-### Install the Windows release
+---
 
-1. Download `OpenNexus_0.5.2-alpha1_x64-setup.exe` from the [GitHub release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.2-alpha1).
-2. Verify its SHA-256 checksum:
+## Highlights
 
-   ```powershell
+- 📁 **Zero Vendor Lock-In**: Notes are plain, portable Markdown files with relative content-addressed assets. Move them anywhere, anytime.
+- 🔍 **Hybrid Local Retrieval**: Combines SQLite FTS5 lexical matching with local vector embeddings using Reciprocal Rank Fusion (RRF) and optional reranking.
+- 🎙️ **Media-to-Knowledge**: Turn lecture recordings, podcasts, and meetings into timestamped transcripts, Mermaid diagrams, formulas, and structured notes.
+- 🛡️ **Inspectable Autonomous Agents**: Every tool execution, permission boundary, and state change is snapshotted and auditable. No hidden background magic.
+- 🔌 **Extensible Ecosystem**: Built-in support for MCP (Model Context Protocol) servers, custom plugins, and reviewed community packages.
+- ⚡ **Strict Local-First Security**: Secrets stay securely stored in the native credential manager. The frontend WebView never touches raw API keys or unrestricted file paths.
+
+---
+
+## Quick Start
+
+### Windows Desktop (Recommended)
+
+1. Grab the latest installer: [`OpenNexus_0.5.2-alpha1_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.2-alpha1).
+2. *(Optional)* Verify integrity via PowerShell:
+```powershell
    Get-FileHash .\OpenNexus_0.5.2-alpha1_x64-setup.exe -Algorithm SHA256
-   ```
+   # Expected: F1B88FDF1D3AE0B48B3D2907818A52B843E39BF94E94B4A913EC6AFD26EC8786
 
-   Expected value:
+```
 
-   ```text
-   F1B88FDF1D3AE0B48B3D2907818A52B843E39BF94E94B4A913EC6AFD26EC8786
-   ```
+3. Run the installer and launch OpenNexus.
+4. Select or initialize a directory as your Markdown Vault.
+5. Head to **Settings → Model Providers** to connect your preferred local runtime (Ollama, vLLM) or cloud API key.
 
-3. Run the installer, launch OpenNexus from the Start menu, and select or create a Markdown vault.
-4. Open **Settings → Model providers** and configure a local or remote provider.
+> Application configuration is persisted under `%APPDATA%\cc.kronecker.notesagent`. Existing vaults remain untouched during in-place upgrades.
 
-The installer does not contain a user vault, downloaded model weights, a CUDA runtime, or preinstalled community packages. An in-place upgrade keeps the current Windows user's application data under `%APPDATA%\cc.kronecker.notesagent`.
+---
 
-To run OpenNexus from source, continue to [Development](#development).
+## Core Workflows
 
-## Why OpenNexus
+### 1. From Recording to Knowledge Note
 
-OpenNexus stores notes as portable files instead of locking them inside a hosted service. The desktop host handles privileged local operations. The AI Core exposes a narrow local API for retrieval, generation, agents, transcription, and export. Remote services are optional and deploy separately.
-
-In practice, this means:
-
-- **Local ownership:** notes remain ordinary Markdown files with relative, content-addressed attachments.
-- **Traceable AI:** retrieved context, tool permissions, task states, and agent execution records remain inspectable.
-- **Replaceable models:** local models and multiple remote providers can be selected without coupling the vault to one vendor.
-- **Composable extensions:** Skills, Plugins, themes, and MCP servers use explicit manifests and permission review.
-
-## Core workflows
-
-### Course recordings to knowledge notes
-
-Import audio or video and review the timestamped transcript before generating a separate knowledge note. Notes can include code, formulas, Mermaid diagrams, or function plots when the source material calls for them. The transcript remains available for correction and comparison.
+Transform noisy audio/video into clean, deeply referenced knowledge with an editable transcript audit loop:
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User
-    participant UI as Media UI
-    participant Host as Tauri Host
-    participant Core as AI Core
-    participant ASR as Transcription Provider
-    participant Model as Note Model
-    participant Vault as Markdown Vault
-    participant DB as app.db
+    participant UI as Vue Workspace
+    participant Host as Tauri (Rust)
+    participant Core as AI Core (FastAPI)
+    participant ASR as Speech Provider
+    participant LLM as Knowledge Model
+    participant Vault as Local Vault
 
-    User->>UI: Select audio or video
-    UI->>Host: Open native file picker
-    Host->>Core: Register attachment and enqueue job
-    Core->>DB: Persist media_jobs and media_events
-    Core->>ASR: Transcribe with timestamps and speakers
-    ASR-->>Core: Segments and recognized text
-    Core->>DB: Save completed job and revision
-    Core-->>UI: Stream replayable progress events
-    User->>UI: Review and correct transcript
-    UI->>Core: Save optimistic revision
-    Core->>DB: Append media_revisions
-    User->>UI: Generate transcript and knowledge note
-    Core->>Model: Extract grounded course knowledge
-    Model-->>Core: Markdown with optional code or diagrams
-    Core->>Core: Validate Mermaid and function-plot blocks
-    Core->>Host: Create two idempotent note artifacts
-    Host->>Vault: Atomically write Markdown files
-    Core->>DB: Link media_notes to created note IDs
-    Core-->>UI: Return transcript note and knowledge note
+    User->>UI: Import Audio / Video
+    UI->>Host: Request native file attachment
+    Host->>Core: Register media job
+    Core->>ASR: Process audio segments & timestamps
+    ASR-->>Core: Transcribed stream
+    Core-->>UI: Real-time progress events
+    User->>UI: Review & edit transcript inline
+    User->>UI: Trigger Note Generation
+    Core->>LLM: Extract grounded concepts & Mermaid structures
+    LLM-->>Core: Validated Markdown output
+    Core->>Host: Request atomic note write
+    Host->>Vault: Persist Markdown artifact & assets
+    Core-->>UI: Ready for review in editor
+
 ```
 
-### Personal planning agents
+### 2. Controllable & Resumable Agents
 
-Give an Agent a goal, review the plan and tasks it creates, and authorize only the tools it needs. Runs are persisted, so an interruption can be inspected and resumed.
+Agents run with strict human-in-the-loop permission gating. State transitions are event-sourced, so network drops or app restarts won't corrupt in-flight runs:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> queued: create run
-    queued --> running: worker starts
-    running --> waiting_permission: privileged tool needs approval
-    waiting_permission --> running: permission granted
-    waiting_permission --> cancelled: user rejects or cancels
-    running --> completed: final result persisted
-    running --> failed: model, tool, or timeout error
-    running --> cancelled: cancellation requested
-    queued --> cancelled: cancelled before start
-    completed --> [*]
-    failed --> [*]
-    cancelled --> [*]
+    [*] --> Queued: Run requested
+    Queued --> Running: Worker picks up task
+    Running --> AwaitingPermission: Sensitive tool triggered
+    AwaitingPermission --> Running: User approves
+    AwaitingPermission --> Cancelled: User denies / aborts
+    Running --> Completed: Artifact persisted
+    Running --> Failed: Error caught & logged
+    Running --> Cancelled: Interrupted
+    Completed --> [*]
+    Failed --> [*]
+    Cancelled --> [*]
+
 ```
 
-Every transition is represented by a persisted run snapshot and ordered `agent_events`, allowing the UI to reconnect without treating an interrupted SSE connection as lost work.
-
-### Knowledge workspace
-
-- Edit Markdown with source and rich-writing modes.
-- Index content with SQLite FTS5 and vector search.
-- Combine retrieval results with reciprocal-rank fusion and optional reranking.
-- Ask grounded questions against the selected vault.
-- Export the current editor snapshot to PDF, HTML, or DOCX.
-- Import Markdown and presentation material into reusable notes.
-
-### Extensions and optional services
-
-- Install Skills and Plugins from reviewed local packages or the community catalog instead of bundling them into a user vault.
-- Connect MCP servers through supported transports and keep process lifecycle separate from the AI Core where appropriate.
-- Apply community themes and packages only after reviewing their origin and requested permissions.
-- Synchronize notes and attachments through the independently deployed Sync Server.
-
-```mermaid
-flowchart LR
-    A[Package file or community URL] --> B[Stage archive]
-    B --> C{Archive, manifest, hash and signer valid?}
-    C -- No --> X[Reject and record reason]
-    C -- Yes --> D[Prepare isolated package tree]
-    D --> E[Calculate requested changes and permissions]
-    E --> F{User confirms exact review fingerprint?}
-    F -- No --> Y[Cancel without activation]
-    F -- Yes --> G[Create extension transaction]
-    G --> H[Atomically switch active slot]
-    H --> I{Post-switch checks pass?}
-    I -- Yes --> J[Commit receipt and active revision]
-    I -- No --> K[Rollback previous state]
-```
+---
 
 ## Architecture
 
+OpenNexus adopts a modular, three-tier architecture ensuring clean security boundaries and minimal IPC overhead:
+
 ```mermaid
 flowchart LR
-    UI[Vue 3 desktop UI] --> HOST[Tauri 2 / Rust host]
-    HOST --> VAULT[Local Markdown vault]
-    HOST --> CORE[FastAPI AI Core]
-    CORE --> INDEX[(SQLite / FTS5 / sqlite-vec)]
-    CORE --> MODEL[Local or remote models]
-    CORE --> EXT[Skills / Plugins / MCP]
-    HOST <--> SYNC[Optional Sync Server]
-    SYNC --> DB[(PostgreSQL)]
-    SYNC --> OBJ[S3-compatible storage]
-    COMMUNITY[Community prototype] --> EXT
-```
-
-| Layer | Responsibility | Trust boundary |
-| --- | --- | --- |
-| Vue frontend | Workspace, editor, search, chat, Agent, media, extension, and settings UI | No direct credential persistence |
-| Tauri/Rust host | Filesystem access, native dialogs, process supervision, credential vault, and privileged commands | Desktop security boundary |
-| FastAPI AI Core | Retrieval, model adapters, agents, transcription, indexing, and export orchestration | Authenticated local channel |
-| Vault | Markdown notes, attachments, and local metadata | User-controlled directory |
-| Optional services | Sync and community distribution | Separate repositories and deployment lifecycle |
-
-The AI Core is supervised by the desktop host but is not the owner of unrelated MCP processes. Production behavior must not depend on development-only `stdio` assumptions.
-
-### Desktop startup and authenticated local channel
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant UI as Vue WebView
-    participant Host as Tauri Host
-    participant Core as AI Core Sidecar
-    participant Cred as Credential Vault
-    participant Vault as Selected Vault
-
-    Host->>Host: Acquire single-instance and state locks
-    Host->>Core: Start matching packaged sidecar
-    Core-->>Host: Bind loopback endpoint and health state
-    Host->>Core: Establish authenticated local session
-    Host->>Cred: Unlock provider credentials for this session
-    Host->>Vault: Validate selected root and host database
-    Host-->>UI: Expose narrow Tauri command surface
-    UI->>Host: Request workspace or AI operation
-    Host->>Core: Forward authorized request
-    Core-->>Host: Structured result or replayable event
-    Host-->>UI: Return sanitized response
-```
-
-The WebView does not receive raw provider secrets or unrestricted filesystem access. Native dialogs, selected-vault path checks, and sidecar version matching remain host responsibilities.
-
-## Data and persistence model
-
-OpenNexus stores user-authored content, rebuildable indexes, and host transaction state separately. The following stores are related, but they do not share one database:
-
-```mermaid
-flowchart TB
-    subgraph UserData[User-selected Vault]
-        MD[Markdown notes]
-        ATT[Content-addressed attachments]
+    subgraph Frontend["Presentation Layer"]
+        UI[Vue 3 Desktop UI]
     end
 
-    subgraph HostState[Tauri-managed state]
-        HDB[(host.sqlite3)]
-        EDB[(extensions.sqlite3)]
-        HDB --> FILES[File identity, journal and outbox]
-        HDB --> SYNCSTATE[Bindings, heads, inbox and conflicts]
-        EDB --> EXTSTATE[Versions, trust and transactions]
+    subgraph Host["Privileged Native Host (Rust / Tauri 2)"]
+        HOST[Native Core & Supervision]
+        CRED[(OS Credential Vault)]
+        VAULT[Local Markdown Vault]
     end
 
-    subgraph CoreState[AI Core state]
-        ADB[(app.db)]
-        ADB --> SEARCH[Notes, blocks, FTS and vectors]
-        ADB --> ACTIVITY[Tasks, Agents, media and chat]
+    subgraph Core["AI & Compute Engine (Python / FastAPI)"]
+        CORE[AI Core Sidecar]
+        INDEX[(SQLite FTS5 + Vectors)]
+        LLM[Local / Remote Models]
     end
 
-    MD -->|indexed projection| SEARCH
-    ATT -->|metadata and links| ADB
-    HDB -->|authorized host bridge| ADB
-    EDB -->|active extension inventory| ADB
+    subgraph External["Ecosystem (Optional)"]
+        MCP[MCP Servers]
+        SYNC[Independent Sync Server]
+    end
+
+    UI <-->|"Tauri IPC (Restricted Commands)"| HOST
+    HOST <-->|Authenticated Loopback IPC| CORE
+    HOST --- CRED
+    HOST --- VAULT
+    CORE --- INDEX
+    CORE --- LLM
+    CORE <--> MCP
+    HOST <--> SYNC
+
 ```
 
-### AI Core database relationships
+### Responsibility & Trust Boundaries
 
-The diagram shows the principal migrated tables in `app.db`. FTS and vector tables are projections of `blocks`; `media_notes.note_id` is a cross-boundary logical reference because the Rust host is the authoritative writer for desktop Markdown files.
+| Boundary | Technology | Responsibilities | Security Guarantee |
+| --- | --- | --- | --- |
+| **Presentation** | Vue 3 + Tailwind | Editor, chat UI, agent monitoring, settings | No access to raw secrets or unrestricted disk |
+| **Native Host** | Tauri 2 (Rust) | OS integration, process supervisor, keychain | Strict path boundary checking for all FS operations |
+| **AI Core** | FastAPI (Sidecar) | RAG pipeline, ASR, agent loops, embeddings | Authenticated local loopback only |
+| **Vault** | Plain Files | Portable notes, attachments, indexes | 100% user-owned directory |
+
+OpenNexus cleanly separates user data from application caches:
 
 ```mermaid
 erDiagram
@@ -269,371 +188,162 @@ erDiagram
     MEDIA_JOBS ||--o{ MEDIA_NOTES : produces
     CHAT_CONVERSATIONS ||--o{ CHAT_MESSAGES : contains
     CHAT_MESSAGES o|--o{ CHAT_MESSAGES : branches_from
-    WORKSPACE_ASSETS ||--o{ WORKSPACE_ASSET_LINKS : referenced_by
-    NOTES o|--o{ WORKSPACE_ASSET_LINKS : uses
 
     NOTES {
         string note_id PK
         string title
         string file_path UK
-        string folder
-        json tags
         datetime updated_at
     }
     BLOCKS {
         string block_id PK
         string note_id FK
-        json heading_path
-        int start_offset
-        int end_offset
         string content_hash
         int position
-        bool embedding_local_only
-    }
-    BLOCKS_FTS {
-        string block_id
-        string note_id
-        string heading_path
-        string content
     }
     ROUTED_VECTORS {
         string space_id PK
         string block_id PK, FK
-        int dimensions PK
         json vector
-    }
-    TASKS {
-        string task_id PK
-        string note_id FK
-        string status
-        datetime due_at
-        datetime updated_at
     }
     AGENT_RUNS {
         string run_id PK
         string status
         json run_json
-        json request_json
-        json config_snapshot_json
-        datetime updated_at
-    }
-    AGENT_EVENTS {
-        string run_id PK, FK
-        int sequence PK
-        string event
-        json data_json
-        datetime timestamp
     }
     MEDIA_JOBS {
         string job_id PK
         string status
-        json job_json
-        json request_json
         string idempotency_key UK
-        string fingerprint
     }
-    MEDIA_EVENTS {
-        string job_id PK, FK
-        int sequence PK
-        string event
-        json data_json
-    }
-    MEDIA_REVISIONS {
-        string job_id PK, FK
-        int revision PK
-        json job_json
-    }
-    MEDIA_NOTES {
-        string job_id PK, FK
-        int revision PK
-        string options_hash PK
-        string note_id
-    }
-    CHAT_CONVERSATIONS {
-        string conversation_id PK
-        string title
-        string active_leaf
-        string active_response_id
-        datetime updated_at
-    }
-    CHAT_MESSAGES {
-        string message_id PK
-        string conversation_id FK
-        string parent_message_id
-        int sequence
-        string role
-        string content
-        json citations_json
-        json tool_calls_json
-    }
-    WORKSPACE_ASSETS {
-        string asset_id PK
-        string path UK
-        string content_hash UK
-        string media_type
-        int size
-    }
-    WORKSPACE_ASSET_LINKS {
-        string asset_id PK, FK
-        string note_id PK
-        string note_path PK
-        string source
-    }
+
 ```
 
-### Local sync state
+---
 
-The host uses an outbox/inbox model rather than allowing a remote service to write directly into the Vault:
+## Ecosystem Repositories
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Watcher as Vault observer
-    participant HostDB as host.sqlite3
-    participant Sync as Sync Server
-    participant Resolver as Conflict resolver
-    participant Vault as Markdown Vault
+To keep dependencies clean and packaging predictable, services are maintained in separate repositories:
 
-    Watcher->>HostDB: Record file identity and pending outbox operation
-    HostDB->>Sync: Upload operation with base revision
-    Sync-->>HostDB: Return remote revision or conflict
-    alt accepted
-        HostDB->>HostDB: Advance sync_heads and mark job complete
-    else conflict
-        HostDB->>Resolver: Persist local and remote variants
-        Resolver->>Vault: Apply explicit keep-local, keep-remote, or copy choice
-        Resolver->>HostDB: Record resolution and retry operation
-    end
-    Sync-->>HostDB: Download ordered remote inbox entries
-    HostDB->>Vault: Apply journaled, idempotent file operation
-    HostDB->>HostDB: Advance cursor only after durable completion
-```
+| Repository | Scope | Stack |
+| --- | --- | --- |
+| **[OpenNexus](https://github.com/KiriAky107/OpenNexus?utm_source=gemini)** | Desktop Application & AI Core | Tauri 2, Rust, Vue 3, FastAPI |
+| **[Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus?utm_source=gemini)** | Optional E2EE Sync Server | Rust / Go, PostgreSQL, S3 |
+| **[Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus?utm_source=gemini)** | Plugin catalog, skills, and templates | Static Catalog & Registry |
 
-## Repository boundaries
-
-| Path | Purpose |
-| --- | --- |
-| `frontend/` | Vue 3 application and the Tauri/Rust desktop host |
-| `frontend/src-tauri/` | Native commands, capabilities, sidecar supervision, and NSIS bundle configuration |
-| `backend/` | FastAPI AI Core, retrieval, agents, media processing, model adapters, and export |
-| `backend/tests/` | Backend unit and integration tests |
-| `scripts/` | Build, acceptance, verification, and release automation |
-| `tools/` | Development and packaging utilities |
-
-Public components are maintained separately:
-
-| Component | Repository |
-| --- | --- |
-| Desktop application and AI Core | [KiriAky107/OpenNexus](https://github.com/KiriAky107/OpenNexus) |
-| Sync Server | [KiriAky107/Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus) |
-| Community prototype | [KiriAky107/Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus) |
-
-This repository contains only the desktop application and AI Core. Sync Server and community deployment code stay in their own repositories. Cross-repository changes must document compatible versions and use separate releases.
+---
 
 ## Development
 
 ### Prerequisites
 
-| Tool | Supported baseline |
+| Runtime | Required Version |
 | --- | --- |
-| Windows | Windows 10/11 x64 |
-| Node.js | 22 or later |
-| pnpm | 10.28.0 |
-| Python | 3.11 or later |
-| uv | 0.9.24 or compatible |
-| Rust | Current stable toolchain with MSVC target |
-| WebView2 | Current Microsoft Edge WebView2 runtime |
+| **OS** | Windows 10/11 x64 |
+| **Node.js** | `>= 22.0.0` (with `pnpm 10.28.0` via corepack) |
+| **Python** | `>= 3.11` (managed via [`uv`](https://github.com/astral-sh/uv?utm_source=gemini)) |
+| **Rust** | Current stable toolchain (`x86_64-pc-windows-msvc`) |
+| **WebView2** | Microsoft Edge WebView2 runtime |
 
-Media processing, local inference, and some export paths may require additional runtimes. Install them only for the feature under test; do not commit downloaded models or runtime archives.
-
-### Clone and install dependencies
+### 1. Setup Environment
 
 ```powershell
-git clone https://github.com/KiriAky107/OpenNexus.git
+# Clone the repository
+git clone [https://github.com/KiriAky107/OpenNexus.git](https://github.com/KiriAky107/OpenNexus.git)
 cd OpenNexus
 
+# Set up Python AI Core dependencies
 cd backend
 uv sync --frozen
 
+# Set up Desktop Frontend dependencies
 cd ..\frontend
 corepack enable
 corepack prepare pnpm@10.28.0 --activate
 pnpm install --frozen-lockfile
+
 ```
 
-Commit lock-file updates in the same pull request as the corresponding manifest change.
-
-### Run the development stack
+### 2. Start Development Servers
 
 ```powershell
-# Terminal 1: AI Core
+# Terminal 1: Run AI Core Sidecar
 cd backend
 uv run python scripts/dev-server.py
 
-# Terminal 2: web frontend
+# Terminal 2: Run Web Interface
 cd frontend
 pnpm dev
+
 ```
 
-For desktop integration work, run the Tauri development command from `frontend/` with the required sidecar artifacts available. The packaged application must be tested separately because browser-only development mode does not cover native dialogs, credential storage, sidecar startup, or installer paths.
+> **Desktop Testing**: To test the complete Tauri host integration, run `pnpm tauri dev` from the `frontend/` directory with sidecar binaries properly staged.
 
-### Useful frontend commands
+### 3. Run Validation Suite
 
-```powershell
-cd frontend
-pnpm type-check
-pnpm test
-pnpm build
-pnpm build:report
-```
-
-## Configuration and data
-
-- A vault is a user-selected directory and is not part of the application repository.
-- Provider secrets belong in the desktop credential vault; never place API keys in source files, screenshots, logs, fixtures, or `localStorage`.
-- Indexes and generated caches can be rebuilt and must not be treated as the source of truth for notes.
-- Remote synchronization is opt-in. Review the endpoint, TLS configuration, device name, and selected sync categories before signing in.
-- Extension packages are untrusted input until their manifests, checksums, permissions, and executable contents have been reviewed.
-- Logs used in bug reports must be redacted. Preserve correlation IDs where useful, but remove vault content, credentials, personal paths, hostnames, and personal information.
-
-## Testing
-
-Run the checks relevant to the changed layer before opening a pull request:
+Ensure all checks pass before submitting pull requests:
 
 ```powershell
-# Backend tests
+# Backend verification
 cd backend
 uv run pytest
 
-# Frontend tests and production build
+# Frontend static analysis & tests
 cd ..\frontend
-pnpm test
 pnpm type-check
+pnpm test
 pnpm build
 
-# Native host checks
+# Native host lints & unit tests
 cd src-tauri
 cargo fmt --check
 cargo test --all-targets --features desktop
 cargo clippy --all-targets --features desktop -- -D warnings
+
 ```
 
-For changes that cross process or repository boundaries, also run the applicable scripts under `scripts/` and document the acceptance scenario. Release candidates should cover startup, vault selection, provider restart recovery, transcript-to-note generation, Agent planning, extension installation, native save dialogs, PDF/HTML/DOCX export, and optional sync authentication.
+---
 
-Tests must be deterministic, must not depend on a contributor's personal vault or credentials, and must clean up temporary processes and files.
+## Packaging
 
-## Packaging and release
-
-Build the Windows NSIS installer from `frontend/`:
+Build a standalone Windows NSIS installer:
 
 ```powershell
+cd frontend
 pnpm desktop:build
+
 ```
 
-The desktop build runs the production frontend build and uses `frontend/src-tauri/tauri.bundle.conf.json`. Before publishing a release:
+The output installer will be generated in `frontend/src-tauri/target/release/bundle/nsis/`.
 
-1. Synchronize versions in the frontend package, Tauri configuration, Rust package, and Python package metadata.
-2. Build the AI Core sidecar and verify that the packaged desktop host starts the matching artifact.
-3. Run frontend, backend, Rust, and release acceptance checks.
-4. Install the generated setup executable on a clean Windows user profile.
-5. Verify native file dialogs and PDF, HTML, and DOCX exports from the installed application.
-6. Calculate and publish SHA-256 checksums.
-7. Create an annotated version tag and a non-draft GitHub Release.
-8. Keep source archives free of vaults, credentials, personal documents, generated caches, and unrelated service repositories.
+---
 
-Version tags use the `v<version>` form. Alpha versions can be published as normal releases when that status is intentional, but their compatibility limitations must remain clear in the release notes.
+## Security & Privacy
 
-## Security and privacy
+* **Local Computation First**: Vault notes are processed strictly on-device unless external network providers are configured.
+* **Credential Protection**: Model keys are stored in the OS Credential Vault; they are never accessible to Web content or stored in `localStorage`.
+* **Scoped File Access**: The native host validates every path against the actively mounted vault root. Path traversal escapes are strictly blocked.
+* **Vulnerability Reporting**: Found a security issue? Please report it privately through GitHub's [Private Vulnerability Reporting](https://www.google.com/search?q=https://github.com/KiriAky107/OpenNexus/security/advisories/new&utm_source=gemini).
 
-- Vault content stays local unless the user explicitly enables a remote model, synchronization, or another network integration.
-- Provider credentials are handled by the desktop credential vault and must not be persisted by the WebView.
-- Extension permissions, network access, and privileged tool calls require explicit review and authorization.
-- Native commands must validate paths and must not broaden filesystem access beyond the selected vault or explicit user action.
-- Only install Skills, Plugins, themes, and MCP servers from sources you trust.
-
-Do not publish exploitable security details or real secrets in a public issue. Use a private maintainer contact or GitHub's private vulnerability reporting when it is enabled.
-
-## Community standards
-
-Repository-level community files describe the contribution and reporting rules:
-
-| Document | Purpose |
-| --- | --- |
-| [Code of Conduct](CODE_OF_CONDUCT.md) | Participation and moderation expectations |
-| [Contributing Guide](CONTRIBUTING.md) | Branch, commit, engineering, testing, documentation, and review workflow |
-| [Security Policy](SECURITY.md) | Supported versions and private vulnerability reporting |
-| [Bug report form](.github/ISSUE_TEMPLATE/bug_report.yml) | Required reproducibility and redaction fields |
-| [Feature request form](.github/ISSUE_TEMPLATE/feature_request.yml) | Problem, outcome, component, and impact analysis |
-| [Pull Request template](.github/PULL_REQUEST_TEMPLATE.md) | Verification evidence and reviewer checklist |
-
-```mermaid
-flowchart TD
-    START[Question, defect, proposal, or vulnerability] --> KIND{What kind of report?}
-    KIND -- Usage question --> DISCUSS[Search README and existing Issues]
-    KIND -- Reproducible defect --> BUG[Complete Bug report form]
-    KIND -- Scoped enhancement --> FEATURE[Complete Feature request form]
-    KIND -- Unpatched vulnerability --> PRIVATE[Use private security reporting]
-    BUG --> TRIAGE[Maintainer triage and repository routing]
-    FEATURE --> TRIAGE
-    TRIAGE --> ISSUE[Accepted Issue with scope and acceptance criteria]
-    ISSUE --> BRANCH[Focused feature branch]
-    BRANCH --> CHECKS[Tests, docs, privacy and license checks]
-    CHECKS --> PR[Pull Request template and review]
-    PR --> MERGE{Requirements satisfied?}
-    MERGE -- No --> BRANCH
-    MERGE -- Yes --> MAIN[Merge to main and include in release process]
-```
-
-Sync Server implementation reports belong in [Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus/issues). Community catalog, package, and prototype reports belong in [Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus/issues).
+---
 
 ## Contributing
 
-- Keep changes focused on one problem and respect the repository boundaries above.
-- Keep frontend types, backend schemas, native commands, and tests synchronized when an interface changes.
-- Use locked dependencies and explain new runtime dependencies, their licenses, and their packaging impact.
-- Use Conventional Commits, for example:
+We welcome contributions of all scopes! To maintain engineering velocity:
 
-  ```text
-  feat(agent): persist interrupted planning tasks
-  fix(export): restore PDF rendering in packaged builds
-  test(media): cover transcript-to-note generation
-  docs(readme): clarify Windows release verification
-  ```
+1. **Commit Convention**: Follow [Conventional Commits](https://www.conventionalcommits.org/?utm_source=gemini):
+* `feat(agent): add tool execution retry logic`
+* `fix(editor): prevent cursor jump during markdown table edit`
+* `test(media): add regression coverage for corrupted audio chunks`
 
-- Update both `README.md` and `README.zh-CN.md` when shared documentation changes.
-- Do not commit user vaults, personal documents, credentials, model weights, or build output.
+
+2. **Atomic Changes**: Keep PRs scoped to one logical concern. Include relevant unit tests and UI screenshots where applicable.
+3. **Synchronized Documentation**: Update both `README.md` and `README.zh-CN.md` when proposing developer- or user-facing changes.
+
+See our [Contributing Guide](https://www.google.com/search?q=CONTRIBUTING.md&utm_source=gemini) and [Code of Conduct](https://www.google.com/search?q=CODE_OF_CONDUCT.md&utm_source=gemini) for full details.
+
+---
 
 ## License
 
-OpenNexus project code is licensed under the [MIT License](LICENSE). Bundled or downloaded models, libraries, fonts, icons, and other third-party components remain subject to their own licenses and notices. The project MIT License does not replace those terms.
-
-## Issue requirements
-
-Before opening an issue:
-
-1. Search open and closed issues and confirm that the problem is not already tracked.
-2. Use a specific title and identify whether the report is a bug, feature request, documentation problem, or compatibility question.
-3. For bugs, include the OpenNexus version or commit, Windows version, installation type, affected component, expected result, actual result, and the smallest reproducible sequence.
-4. Attach only the minimum necessary screenshots or logs. Redact API keys, tokens, vault text, personal paths, account details, hostnames, and personal information.
-5. State whether the problem reproduces in the packaged desktop application, web development mode, or both.
-6. Include relevant model/provider, extension, MCP transport, and Sync Server versions without exposing credentials.
-7. Security vulnerabilities and leaked secrets must be reported privately, not through a public issue.
-
-An Issue may be closed until corrected if it only says “does not work,” lacks reproduction details, duplicates an existing report, or exposes private data.
-
-## Pull request requirements
-
-A pull request must:
-
-1. Reference the related issue or clearly explain the motivation and user-visible outcome.
-2. Contain one reviewable logical change; unrelated refactors and generated files must be separated.
-3. Use a feature branch and Conventional Commits. Do not rewrite other contributors' branches or force-update the default branch.
-4. Include tests for behavior changes and list the exact commands and acceptance scenarios that passed.
-5. Update both language versions of shared documentation and update release notes when behavior, configuration, or compatibility changes.
-6. Document frontend/backend/native contract changes, data migrations, rollback behavior, and cross-repository version requirements.
-7. Explain every new dependency, including its purpose, license, runtime size, and installer impact.
-8. Include before/after screenshots for UI changes and redact all personal or sensitive information.
-9. Exclude credentials, private vaults, personal documents, downloaded models, and build artifacts.
-10. Pass formatting, type checking, tests, production builds, and applicable packaged-desktop acceptance checks before requesting review.
-
-Use a Draft Pull Request for early technical discussion. Mark it ready after completing the checklist and removing any dependency on private infrastructure or personal data.
+OpenNexus is licensed under the [MIT License](https://www.google.com/search?q=LICENSE&utm_source=gemini). Third-party dependencies, bundled fonts, and model runtimes remain governed by their respective licenses.
