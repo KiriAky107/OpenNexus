@@ -333,6 +333,7 @@ onBeforeUnmount(() => {
         <button data-menu-item role="menuitem" @click="navigate('/benchmarks')"><span>{{ t('Benchmark 评测', 'Benchmarks') }}</span></button>
         <button data-menu-item role="menuitem" @click="navigate('/community')"><span>{{ t('社区目录', 'Community catalog') }}</span></button>
         <button data-help-function-plot data-menu-item role="menuitem" @click="navigate('/help/function-plot')"><span>{{ t('Function Plot 教程', 'Function Plot tutorial') }}</span></button>
+        <button data-help-about data-menu-item role="menuitem" @click="navigate('/help/about')"><span>{{ t('关于 OpenNexus', 'About OpenNexus') }}</span></button>
         <span class="menu-separator" role="separator" />
         <button data-menu-item role="menuitem" :disabled="!workspace.hasVault" @click="navigate('/settings')"><span>{{ t('设置与诊断…', 'Settings and diagnostics…') }}</span></button>
       </div>

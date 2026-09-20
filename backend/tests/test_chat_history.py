@@ -39,6 +39,37 @@ def test_chat_history_survives_new_connections_and_deletes_messages() -> None:
     assert chat_history.list_conversations(50, 0)[1] == 0
 
 
+def test_desktop_chat_history_is_isolated_by_vault(monkeypatch) -> None:
+    from app import host_bridge
+    from app.config import get_settings
+
+    monkeypatch.setenv("APP_ENVIRONMENT", "desktop")
+    get_settings.cache_clear()
+    first = host_bridge.vault_id.set("11111111-1111-4111-8111-111111111111")
+    try:
+        chat_history.create("First vault", "same-id")
+        chat_history.append_message("same-id", message_id="first-message", role="user", content="first")
+        assert chat_history.list_conversations(50, 0)[1] == 1
+
+        second = host_bridge.vault_id.set("22222222-2222-4222-8222-222222222222")
+        try:
+            assert chat_history.list_conversations(50, 0)[1] == 0
+            chat_history.create("Second vault", "same-id")
+            chat_history.append_message("same-id", message_id="second-message", role="user", content="second")
+            messages, total = chat_history.list_messages("same-id", 50, 0)
+            assert total == 1
+            assert messages[0].content == "second"
+        finally:
+            host_bridge.vault_id.reset(second)
+
+        messages, total = chat_history.list_messages("same-id", 50, 0)
+        assert total == 1
+        assert messages[0].content == "first"
+    finally:
+        host_bridge.vault_id.reset(first)
+        get_settings.cache_clear()
+
+
 def test_chat_stream_persists_user_and_assistant_messages(monkeypatch) -> None:
     from app import routes
 

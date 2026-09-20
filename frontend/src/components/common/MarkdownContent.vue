@@ -6,6 +6,7 @@ import { useThemeStore } from '@/stores/theme'
 import { useHeadingAppearanceStore } from '@/stores/headingAppearance'
 const headingAppearance = useHeadingAppearanceStore()
 import { useMarkdownPreferencesStore } from '@/stores/markdownPreferences'
+import { navigateMarkdownHref } from '@/services/markdownLinkService'
 const markdownPreferences = useMarkdownPreferencesStore()
 
 const props = defineProps<{ source: string; citationNumbers?: number[]; citationAliases?: Record<string, number> }>()
@@ -14,6 +15,12 @@ function citationClick(event: MouseEvent) {
   if (!(event.target instanceof Element)) return
   const number = Number(event.target.closest('[data-citation-number]')?.getAttribute('data-citation-number'))
   if (props.citationNumbers?.includes(number)) { event.preventDefault(); emit('citation', number) }
+  if (event.defaultPrevented || event.button !== 0) return
+  const link = event.target.closest<HTMLAnchorElement>('a[href]')
+  const href = link?.getAttribute('href')?.trim()
+  if (!href) return
+  event.preventDefault()
+  void navigateMarkdownHref(href)
 }
 const themeStore = useThemeStore()
 const html = ref('')

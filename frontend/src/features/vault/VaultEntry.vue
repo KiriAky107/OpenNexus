@@ -10,6 +10,8 @@ import appLogoUrl from '@/assets/opennexus-logo.svg'
 import { t } from '@/i18n'
 import { ApiErrorClass } from '@/services/apiClient'
 import { isDesktop } from '@/services/platform/desktop'
+import appPackage from '../../../package.json'
+import StorageLocationSettings from '@/features/settings/StorageLocationSettings.vue'
 
 const router = useRouter()
 const workspaceStore = useWorkspaceStore()
@@ -95,6 +97,8 @@ async function openFolderPicker() {
           </div>
         </div>
 
+        <StorageLocationSettings v-if="isDesktop()" class="entry-storage" />
+
         <div class="actions">
           <button class="btn btn-primary" @click="openFolderPicker" :disabled="isLoading || (!isDesktop() && !workspaceStore.recentVaults.length)">
             <AppIcon :icon="FolderOpened" /> {{ isDesktop() ? t('选择本地 Vault', 'Choose local Vault') : t('打开后端 Vault', 'Open backend Vault') }}
@@ -110,7 +114,7 @@ async function openFolderPicker() {
       </div>
 
       <div class="footer-info">
-        <span>v0.5.2-alpha1</span>
+        <span>v{{ appPackage.version }}</span>
         <button class="theme-toggle" @click="themeStore.toggleTheme()">
           <AppIcon :icon="themeStore.isDark ? Sunny : Moon" :size="15" />
           {{ themeStore.isDark ? t('浅色', 'Light') : t('深色', 'Dark') }}
@@ -131,7 +135,9 @@ async function openFolderPicker() {
   justify-content: center;
   background: var(--color-background-primary);
   position: relative;
-  overflow: hidden;
+  overflow: auto;
+  padding-block: 24px;
+  box-sizing: border-box;
 }
 
 .bg-decoration {
@@ -150,10 +156,12 @@ async function openFolderPicker() {
   flex-direction: column;
   align-items: center;
   gap: 32px;
-  max-width: 480px;
+  max-width: 620px;
   width: 90%;
   animation: entry-in var(--motion-slow) both;
 }
+
+.entry-storage { width: 100%; }
 
 .brand-section {
   text-align: center;

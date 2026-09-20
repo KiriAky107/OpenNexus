@@ -8,7 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.contracts import ChatMessage, Conversation
-from app.database.db import connect, transaction
+from app.database.db import connect_knowledge as connect, transaction
 from app.errors import ApiError
 
 

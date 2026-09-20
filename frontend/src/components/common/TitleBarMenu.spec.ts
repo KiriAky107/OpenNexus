@@ -55,9 +55,12 @@ describe('桌面顶部段落菜单', () => {
     expect(wrapper.text()).toContain('工作区搜索AI 对话智能体任务音视频')
     expect(wrapper.text()).toContain('Skill 管理Plugin 管理MCP 服务器')
     await wrapper.get('[data-menu="help"] .menu-trigger').trigger('click')
-    expect(wrapper.text()).toContain('运行日志Benchmark 评测社区目录Function Plot 教程设置与诊断…')
+    expect(wrapper.text()).toContain('运行日志Benchmark 评测社区目录Function Plot 教程关于 OpenNexus设置与诊断…')
     await wrapper.get('[data-help-function-plot]').trigger('click')
     expect(routerPush).toHaveBeenCalledWith('/help/function-plot')
+    await wrapper.get('[data-menu="help"] .menu-trigger').trigger('click')
+    await wrapper.get('[data-help-about]').trigger('click')
+    expect(routerPush).toHaveBeenCalledWith('/help/about')
     wrapper.unmount()
   })
 
