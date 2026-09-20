@@ -126,9 +126,29 @@ class AgentRuntime:
         )
         allowed_tools = list(request.allowed_tools)
         if skill_config is not None:
-            # 同时指定 Skill 与工具白名单时取交集，避免 Skill 扩大调用权限。
+            # 同时指定 Skill 与工具白名单时原则上取交集。MCP/Plugin 工具是在运行期
+            # 动态注册的，无法预先写进内置 Skill 清单；仅当调用方显式选择、且其权限
+            # 已被 Skill 声明时才保留，避免动态目录绕过 Skill 的权限边界。
+            declared_permissions = set(skill_config.permissions)
+            skill_tools = set(skill_config.allowed_tools)
+
+            def permitted(name: str) -> bool:
+                if name in skill_tools:
+                    return True
+                try:
+                    definition = self.tools.get(name).definition
+                except ToolNotFoundError:
+                    return False
+                return (
+                    definition.source in {"plugin", "mcp_server"}
+                    and (
+                        definition.permission is None
+                        or definition.permission in declared_permissions
+                    )
+                )
+
             allowed_tools = (
-                [name for name in skill_config.allowed_tools if name in allowed_tools]
+                [name for name in allowed_tools if permitted(name)]
                 if allowed_tools
                 else list(skill_config.allowed_tools)
             )

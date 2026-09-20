@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timezone
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 from app.agent.trace_repository import AgentTraceRepository
 from app.agent.permissions import PermissionMode
@@ -16,6 +17,7 @@ from app.contracts import (
     AgentRunCreateRequest,
     AgentRunStatus,
     ToolCall,
+    ToolDefinition,
 )
 
 
@@ -65,6 +67,47 @@ def test_agent_calls_registered_tool_and_records_result() -> None:
         assert completed.tool_results[0].output == {"text": "hello tool"}
         assert completed.output is not None
         assert "Tool result received" in completed.output
+
+    run(scenario())
+
+
+def test_skill_keeps_explicit_permission_compatible_mcp_tool() -> None:
+    class Arguments(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        text: str
+
+    async def scenario() -> None:
+        container = build_container()
+
+        async def echo(arguments, _):
+            return {"text": arguments.text}
+
+        name = "mcp.demo-server.echo"
+        container.tools.register(
+            ToolDefinition(
+                name=name,
+                description="Echo through MCP",
+                parameters=Arguments.model_json_schema(),
+                source="mcp_server",
+            ),
+            Arguments,
+            echo,
+        )
+        created = await container.agent.create_run(
+            AgentRunCreateRequest(
+                input=f'/tool {name} {{"text":"hello MCP"}}',
+                provider_id="mock",
+                model="mock-1",
+                skill_id="chat-operator",
+                allowed_tools=[name],
+            )
+        )
+        completed = await container.agent.wait(created.run_id)
+
+        assert completed.status == AgentRunStatus.completed
+        assert completed.tool_results[0].name == name
+        assert completed.tool_results[0].success is True
+        assert completed.tool_results[0].output == {"text": "hello MCP"}
 
     run(scenario())
 

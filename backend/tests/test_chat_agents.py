@@ -1,7 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 import pytest
-from app.contracts import ChatRequest, ToolCall, ModelCapability, Message, ModelEventType as E
+from pydantic import BaseModel, ConfigDict
+from app.contracts import ChatRequest, ToolCall, ToolDefinition, ModelCapability, Message, ModelEventType as E
 from app.services import chat_agents, chat_retrieval
 
 
@@ -22,6 +23,68 @@ def test_delegation_uses_existing_runtime_limits_and_no_network(monkeypatch):
     assert 'notes.patch_markdown' in requests[0].allowed_tools
     with pytest.raises(ValueError):
         asyncio.run(chat_agents.execute(call, request.model_copy(update={'allow_agent':False})))
+
+
+def test_chat_searches_live_mcp_catalog_and_delegates_selected_tool(monkeypatch):
+    from app.container import container
+
+    class Arguments(BaseModel):
+        model_config = ConfigDict(extra='forbid')
+        text: str
+
+    async def executor(arguments, _):
+        return {'text': arguments.text}
+
+    name = 'mcp.demo-server.echo'
+    container.tools.register(ToolDefinition(
+        name=name,
+        description='Echo text through the demo MCP server.',
+        parameters=Arguments.model_json_schema(),
+        source='mcp_server',
+    ), Arguments, executor)
+    requests = []
+
+    async def create(request):
+        requests.append(request)
+        return SimpleNamespace(
+            run_id='run_mcp', status=SimpleNamespace(value='queued'),
+            output=None, error_message=None,
+        )
+
+    monkeypatch.setattr(container.agent, 'create_run', create)
+    request = ChatRequest(
+        provider_id='mock', model='mock-1', allow_agent=True, messages=[]
+    )
+    try:
+        search = asyncio.run(chat_agents.execute(ToolCall(
+            tool_call_id='search', name='agent.search_tools',
+            arguments={'query': 'demo echo', 'source': 'mcp_server'},
+        ), request))
+        assert search['total'] == 1
+        assert search['items'][0]['name'] == name
+        assert search['items'][0]['source'] == 'mcp_server'
+
+        result = asyncio.run(chat_agents.execute(ToolCall(
+            tool_call_id='create', name='agent.create',
+            arguments={'input': 'echo the message', 'tools': [name]},
+        ), request))
+        assert result['run_id'] == 'run_mcp'
+        assert requests[0].skill_id == 'chat-operator'
+        assert name in requests[0].allowed_tools
+        assert requests[0].allow_network is False
+    finally:
+        container.tools.unregister(name)
+
+
+def test_chat_rejects_unlisted_agent_tool_selection():
+    request = ChatRequest(
+        provider_id='mock', model='mock-1', allow_agent=True, messages=[]
+    )
+    with pytest.raises(ValueError, match='unavailable'):
+        asyncio.run(chat_agents.execute(ToolCall(
+            tool_call_id='create', name='agent.create',
+            arguments={'input': 'work', 'tools': ['mcp.missing.tool']},
+        ), request))
 
 
 def test_chat_delegates_once_and_keeps_snapshot_in_model_context(monkeypatch):
