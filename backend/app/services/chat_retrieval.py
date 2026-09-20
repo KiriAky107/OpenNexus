@@ -52,7 +52,7 @@ async def stream(request, provider):
     from app.services import chat_agents
     tools = ([tool] if request.use_rag else []) + (chat_agents.TOOLS if request.allow_agent else [])
     if request.allow_agent:
-        grounded = grounded.model_copy(update={'system': (grounded.system or '') + '\n用户要求执行工作时可调用 agent.create 创建并启动智能体，每次回答最多创建一次；使用 agent.status 查询结果，不要伪造完成状态。创建后给出运行编号，提示用户在智能体页面查看进度和处理权限确认。'})
+        grounded = grounded.model_copy(update={'system': (grounded.system or '') + '\n用户要求执行工作时可调用 agent.create 创建并启动智能体，每次回答最多创建一次；任务可能需要 MCP 或 Plugin 时，先调用 agent.search_tools 检索实时工具目录，不要仅凭记忆判断工具不存在，并把选中的完整工具名传给 agent.create 的 tools。使用 agent.status 查询结果，不要伪造完成状态。创建后给出运行编号，提示用户在智能体页面查看进度和处理权限确认。'})
     from app.container import container
     from app.extensions.errors import ExtensionError
     try:
