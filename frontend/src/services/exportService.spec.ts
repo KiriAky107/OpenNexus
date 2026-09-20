@@ -5,8 +5,11 @@ const native=vi.hoisted(()=>({isDesktop:vi.fn(()=>false),hostInvoke:vi.fn()}))
 vi.mock('./apiClient',()=>({apiClient:{post:vi.fn(),get:vi.fn()}}))
 vi.mock('./platform/desktop',()=>native)
 vi.mock('./mermaidService',()=>({renderMermaid:vi.fn()}))
-vi.mock('./pdfSnapshotService',()=>({preparePdfSnapshot:vi.fn().mockResolvedValue('<html>theme snapshot</html>')}))
-import {preparePdfSnapshot} from './pdfSnapshotService'
+vi.mock('./pdfSnapshotService',()=>({
+  prepareExportSnapshot:vi.fn().mockResolvedValue('<html>theme snapshot</html>'),
+  preparePdfSnapshot:vi.fn().mockResolvedValue('<html>theme snapshot</html>'),
+}))
+import {prepareExportSnapshot} from './pdfSnapshotService'
 import {renderMermaid} from './mermaidService'
 import {apiClient} from './apiClient'
 import {exportService,captureExportPalette} from './exportService'
@@ -41,7 +44,7 @@ it('cancels a created server job after an in-flight submission is aborted',async
   vi.mocked(apiClient.post).mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve}) as never).mockResolvedValue({status:'completed'})
   vi.mocked(apiClient.get).mockResolvedValue({...queued,status:'cancelled'})
   const controller=new AbortController()
-  const pending=exportService.create('# snapshot','review','html',reviewOptions,controller.signal)
+  const pending=exportService.create('# snapshot','review','docx',reviewOptions,controller.signal)
   controller.abort();finish(queued)
   await expect(pending).rejects.toMatchObject({name:'AbortError'})
   expect(apiClient.post).toHaveBeenLastCalledWith('/api/exports/review-job/cancel')
@@ -51,7 +54,7 @@ it('does not report cancellation when the server job already completed',async()=
   vi.mocked(apiClient.post).mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve}) as never).mockResolvedValue({status:'completed'})
   vi.mocked(apiClient.get).mockResolvedValue({...queued,status:'completed'})
   const controller=new AbortController()
-  const pending=exportService.create('# snapshot','review','html',reviewOptions,controller.signal)
+  const pending=exportService.create('# snapshot','review','docx',reviewOptions,controller.signal)
   controller.abort();finish(queued)
   await expect(pending).rejects.toThrow('导出已完成，无法取消')
 })
@@ -59,7 +62,7 @@ it('surfaces a server cancellation failure instead of claiming it was cancelled'
   let finish!:(value:unknown)=>void
   vi.mocked(apiClient.post).mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve}) as never).mockRejectedValue(new Error('network failure'))
   const controller=new AbortController()
-  const pending=exportService.create('# snapshot','review','html',reviewOptions,controller.signal)
+  const pending=exportService.create('# snapshot','review','docx',reviewOptions,controller.signal)
   controller.abort();finish(queued)
   await expect(pending).rejects.toThrow('network failure')
 })
@@ -70,7 +73,7 @@ it.each(['mermaid','Mermaid','mermaid title="Flow"'])('prepares a static asset f
   vi.spyOn(HTMLCanvasElement.prototype,'toDataURL').mockReturnValue('data:image/png;base64,YWJj')
   vi.mocked(renderMermaid).mockResolvedValue({svg:'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"></svg>',warnings:[]} as never)
   vi.mocked(apiClient.post).mockResolvedValue(queued)
-  await exportService.create('```'+language+'\nflowchart LR\n A-->B\n```','review','html',reviewOptions)
+  await exportService.create('```'+language+'\nflowchart LR\n A-->B\n```','review','docx',reviewOptions)
   expect(renderMermaid).toHaveBeenCalledWith('flowchart LR\n A-->B',{mode:'raster',theme:'light'})
   expect(apiClient.post).toHaveBeenCalledWith('/api/exports',expect.objectContaining({assets:[expect.objectContaining({kind:'mermaid',png_base64:'YWJj',source_hash:expect.stringMatching(/^[a-f0-9]{64}$/)})]}))
 })
@@ -79,9 +82,16 @@ it('PDF submits the shared browser snapshot instead of raster assets',async()=>{
   vi.mocked(apiClient.post).mockResolvedValue(queued)
   const markdown=Array.from({length:17},(_,i)=>'```mermaid\nflowchart LR\n A'+i+'-->B\n```').join('\n\n')
   await exportService.create(markdown,'many','pdf',{...reviewOptions,theme_id:'dark'})
-  expect(preparePdfSnapshot).toHaveBeenCalledWith(markdown,'many',expect.objectContaining({theme_id:'dark'}),undefined,undefined)
+  expect(prepareExportSnapshot).toHaveBeenCalledWith(markdown,'many',expect.objectContaining({theme_id:'dark'}),'pdf',undefined,undefined)
   expect(renderMermaid).not.toHaveBeenCalled()
   expect(apiClient.post).toHaveBeenCalledWith('/api/exports',expect.objectContaining({assets:[],print_html:'<html>theme snapshot</html>'}))
+})
+it('HTML submits the complete browser theme snapshot instead of a reduced palette',async()=>{
+  vi.mocked(apiClient.post).mockResolvedValue(queued)
+  await exportService.create('# Theme','themed','html',{...reviewOptions,theme_id:'paper-moments'},undefined,'notes/theme.md')
+  expect(prepareExportSnapshot).toHaveBeenCalledWith('# Theme','themed',expect.objectContaining({theme_id:'paper-moments'}),'html',undefined,'notes/theme.md')
+  expect(renderMermaid).not.toHaveBeenCalled()
+  expect(apiClient.post).toHaveBeenCalledWith('/api/exports',expect.objectContaining({format:'html',assets:[],print_html:'<html>theme snapshot</html>'}))
 })
 it('captures custom theme CSS as a portable palette',()=>{
   const values={'background-primary':'#010409','surface-primary':'rgb(22, 27, 34)','text-primary':'#e6edf3','text-secondary':'#b1bac4','background-secondary':'#21262d','border-default':'#57606a','accent-primary':'#79c0ff'}

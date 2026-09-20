@@ -291,7 +291,7 @@ def register_service_tools(registry: ToolRegistry, plugins) -> None:
     _register(registry, "function_plot.compose", "Create and validate a safe function-plot Markdown block from mathematical expressions.", FunctionPlotComposeArguments, compose_function_plot)
     _register(registry, "notes.rename", "Rename a note file while preserving its note ID and indexed blocks.", NoteRenameArguments, rename_note, "notes.write")
     _register(registry, "notes.delete", "Delete a note from the current Vault.", NoteDeleteArguments, delete_note, "notes.delete")
-    _register(registry, "tasks.read", "Read a persistent task by task ID.", TaskReadArguments, read_task, "tasks.read")
+    _register(registry, "tasks.read", "Read a persistent task with Markdown content and one-time/Cron Agent schedule metadata by task ID.", TaskReadArguments, read_task, "tasks.read")
     _register(registry, "tasks.delete", "Delete a persistent task by task ID.", TaskDeleteArguments, delete_task, "tasks.write")
     _register(registry, "audio.transcription_status", "Read the current status and transcript of a transcription job.", TranscriptionStatusArguments, transcription_status, "attachments.read")
     _register(registry, "skills.list", "List Vault-owned custom Skills and their dependency state.", SkillListArguments, list_skills)

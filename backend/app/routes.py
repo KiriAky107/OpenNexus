@@ -1379,6 +1379,12 @@ async def delete_task(task_id: str) -> OperationResponse:
     return OperationResponse(status="completed", resource_id=task_id, message="deleted")
 
 
+@router.post("/tasks/{task_id}/agent-schedule/run", response_model=Task, tags=["Tasks"])
+async def run_task_agent_schedule(task_id: str) -> Task:
+    from app.services import task_agent_schedule
+    return await task_agent_schedule.run_due(task_id)
+
+
 # 媒体和索引
 @router.get("/model-routing", response_model=ModelRoutingResponse, tags=["Providers"])
 async def get_model_routing() -> ModelRoutingResponse:

@@ -209,6 +209,8 @@ MIGRATIONS: list[str] = [
     DROP TABLE media_notes;
     ALTER TABLE media_notes_v14 RENAME TO media_notes;
     """,
+    # v15：任务可保存一次性 Agent 调度配置与执行结果；JSON 便于后续扩展重试策略。
+    """ALTER TABLE tasks ADD COLUMN agent_schedule_json TEXT;""",
 ]
 
 

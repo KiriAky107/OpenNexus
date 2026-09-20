@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import logging
 import re
+from html.parser import HTMLParser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -79,6 +80,44 @@ class ExportCancelled(Exception):
 
 class ExportTooLarge(Exception):
     """导出产物超过大小上限时抛出，用于标记 failed 并携带专用错误码。"""
+
+
+_SNAPSHOT_CSP = (
+    "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; "
+    "img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; "
+    "object-src 'none'; base-uri 'none'; form-action 'none'"
+)
+
+
+class _SnapshotSafetyValidator(HTMLParser):
+    """拒绝主动内容；主题 CSS 与正文结构原样保留并由 CSP 禁止外部加载。"""
+
+    _blocked_tags = frozenset({"script", "iframe", "object", "embed", "base", "form"})
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() in self._blocked_tags:
+            raise ValueError(f"unsafe HTML snapshot tag: {tag}")
+        if any(name.lower().startswith("on") for name, _ in attrs):
+            raise ValueError("unsafe HTML snapshot event handler")
+
+    handle_startendtag = handle_starttag
+
+
+def _secure_html_snapshot(snapshot: str) -> ExportResult:
+    """校验前端主题快照并注入不可被调用方放宽的离线 CSP。"""
+    validator = _SnapshotSafetyValidator(convert_charrefs=False)
+    validator.feed(snapshot)
+    validator.close()
+    head = re.search(r"<head(?:\s[^>]*)?>", snapshot, flags=re.IGNORECASE)
+    if head is None:
+        raise ValueError("HTML snapshot is missing <head>")
+    csp = (
+        '<meta http-equiv="Content-Security-Policy" content="'
+        + _SNAPSHOT_CSP
+        + '">'
+    )
+    content = snapshot[: head.end()] + csp + snapshot[head.end() :]
+    return ExportResult(content=content.encode("utf-8"), mime_type="text/html", warnings=[])
 
 
 def _now() -> datetime:
@@ -279,6 +318,8 @@ async def _execute(
         if format == ExportFormat.pdf and print_html is not None:
             from app.export.browser_pdf import render_snapshot
             result = await asyncio.to_thread(render_snapshot, print_html, options.page_size)
+        elif format == ExportFormat.html and print_html is not None:
+            result = await asyncio.to_thread(_secure_html_snapshot, print_html)
         else:
             document = await asyncio.to_thread(parse_document, markdown)
             document.attributes["title"] = title

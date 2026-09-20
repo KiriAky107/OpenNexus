@@ -20,7 +20,7 @@
   </p>
 
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.3-alpha"><img src="https://img.shields.io/badge/Release-0.5.3--alpha-5865f2?style=flat-square" alt="Version" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.4-alpha"><img src="https://img.shields.io/badge/Release-0.5.4--alpha-5865f2?style=flat-square" alt="Version" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="Platform" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="Desktop Tauri" />
     <img src="https://img.shields.io/badge/Frontend-Vue_3-42b883?style=flat-square" alt="Frontend Vue" />
@@ -32,7 +32,7 @@
 
 ---
 
-> ⚠️ **Alpha Notice**: OpenNexus is currently in active alpha (`v0.5.3-alpha`). Storage schemas, IPC contracts, and extension APIs are evolving. Always back up critical Markdown vaults before updating.
+> ⚠️ **Alpha Notice**: OpenNexus is currently in active alpha (`v0.5.4-alpha`). Storage schemas, IPC contracts, and extension APIs are evolving. Always back up critical Markdown vaults before updating.
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus Desktop Workspace" width="95%" />
@@ -56,10 +56,10 @@
 
 ### Windows Desktop (Recommended)
 
-1. Grab the latest installer: [`OpenNexus_0.5.3-alpha_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.3-alpha).
+1. Grab the latest installer: [`OpenNexus_0.5.4-alpha_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.4-alpha).
 2. *(Optional)* Verify integrity via PowerShell:
 ```powershell
-   Get-FileHash .\OpenNexus_0.5.3-alpha_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.5.4-alpha_x64-setup.exe -Algorithm SHA256
    # Expected: F1B88FDF1D3AE0B48B3D2907818A52B843E39BF94E94B4A913EC6AFD26EC8786
 
 ```

@@ -1,5 +1,6 @@
 import asyncio
 import threading
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,7 @@ from app.contracts import (
     ProviderType,
     ProviderUpdateRequest,
     TaskCreateRequest,
+    TaskAgentScheduleInput,
     TaskStatus,
     TaskUpdateRequest,
 )
@@ -29,6 +31,7 @@ from app.routes import (
     list_providers,
     list_skills,
     list_tasks,
+    run_task_agent_schedule,
     update_provider,
     update_task,
 )
@@ -409,3 +412,62 @@ def test_task_lifecycle_is_persistent() -> None:
     assert updated.status == TaskStatus.done
     assert any(item.task_id == created.task_id for item in listed.items)
     assert deleted.resource_id == created.task_id
+
+
+def test_task_markdown_and_cron_schedule_are_returned_to_agent_tools() -> None:
+    from app.container import container
+    created = asyncio.run(create_task(TaskCreateRequest(
+        title="Daily review",
+        description="## Checklist\n\n- [ ] inspect logs\n- [ ] summarize",
+        agent_schedule=TaskAgentScheduleInput(
+            schedule_type="cron",
+            cron="0 9 * * 1-5",
+            timezone="Asia/Shanghai",
+            provider_id="local",
+            model="demo-model",
+            skill_id="chat-operator",
+        ),
+    )))
+    try:
+        assert created.description.startswith("## Checklist")
+        assert created.agent_schedule is not None
+        assert created.agent_schedule.cron == "0 9 * * 1-5"
+        assert created.agent_schedule.next_run_at is not None
+        create_schema = container.tools.get("tasks.create").definition.parameters
+        update_schema = container.tools.get("tasks.update").definition.parameters
+        assert "agent_schedule" in create_schema["properties"]
+        assert "agent_schedule" in update_schema["properties"]
+        assert "cron" in container.tools.get("tasks.read").definition.description.lower()
+    finally:
+        asyncio.run(delete_task(created.task_id))
+
+
+def test_due_one_time_task_starts_agent_and_completes_schedule(monkeypatch) -> None:
+    from app.services import task_agent_schedule
+    captured = []
+
+    async def create_run(request):
+        captured.append(request)
+        return SimpleNamespace(run_id="run_scheduled")
+
+    monkeypatch.setattr(task_agent_schedule.container.agent, "create_run", create_run)
+    created = asyncio.run(create_task(TaskCreateRequest(
+        title="Generate report",
+        description="Use **Markdown** task content.",
+        agent_schedule=TaskAgentScheduleInput(
+            schedule_type="once",
+            run_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            timezone="UTC",
+            provider_id="provider-test",
+            model="model-test",
+        ),
+    )))
+    try:
+        updated = asyncio.run(run_task_agent_schedule(created.task_id))
+        assert captured[0].input == "# Generate report\n\nUse **Markdown** task content."
+        assert captured[0].metadata["scheduled_task_id"] == created.task_id
+        assert updated.agent_schedule.status.value == "completed"
+        assert updated.agent_schedule.enabled is False
+        assert updated.agent_schedule.last_run_id == "run_scheduled"
+    finally:
+        asyncio.run(delete_task(created.task_id))

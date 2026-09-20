@@ -813,6 +813,36 @@ def test_unknown_theme_is_not_injected():
     assert '<script>' not in result.content.decode()
 
 
+def test_html_browser_snapshot_preserves_theme_css_and_adds_csp():
+    snapshot = '''<!doctype html><html data-theme="paper-moments"><head><style>
+    [data-theme="paper-moments"] article::before { content:"tape"; transform:rotate(-3deg) }
+    </style></head><body><article>正文</article></body></html>'''
+    finished = _create_and_wait(
+        ExportRequest(
+            source=ExportSource(type=ExportSourceType.markdown, markdown="正文"),
+            format=ExportFormat.html,
+            print_html=snapshot,
+        )
+    )
+    assert finished.status == ExportStatus.completed
+    content = (get_settings().exports_path / f"{finished.job_id}.html").read_text(encoding="utf-8")
+    assert 'data-theme="paper-moments"' in content
+    assert 'content:"tape"' in content
+    assert "default-src 'none'" in content
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    [
+        "<html><head></head><body><script>alert(1)</script></body></html>",
+        '<html><head></head><body><img src="data:image/png;base64,AA" onload="alert(1)"></body></html>',
+    ],
+)
+def test_html_browser_snapshot_rejects_active_content(unsafe):
+    with pytest.raises(ValueError):
+        export_service._secure_html_snapshot(unsafe)
+
+
 @pytest.mark.parametrize("name", list(CALLOUTS) + list(ALIASES))
 def test_callout_formats(name):
     from app.export.exporters.docx import DocxExporter

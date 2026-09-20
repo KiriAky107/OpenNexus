@@ -520,6 +520,28 @@ export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled'
 export type TaskPriority = 'low' | 'medium' | 'high'
 export type TaskSource = 'user' | 'note' | 'agent'
 
+export interface TaskAgentSchedule {
+  schedule_type: 'once' | 'cron'
+  run_at?: string | null
+  cron?: string | null
+  timezone: string
+  enabled: boolean
+  provider_id: string
+  model: string
+  skill_id?: string | null
+  max_steps: number
+  allow_network: boolean
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  next_run_at?: string | null
+  last_run_at?: string | null
+  last_run_id?: string | null
+  error?: string | null
+}
+
+export type TaskAgentScheduleInput = Pick<TaskAgentSchedule,
+  'schedule_type' | 'timezone' | 'enabled' | 'provider_id' | 'model' | 'max_steps' | 'allow_network'
+> & Pick<TaskAgentSchedule, 'run_at' | 'cron' | 'skill_id'>
+
 export interface TaskItem {
   task_id: string
   title: string
@@ -529,6 +551,7 @@ export interface TaskItem {
   due_date?: string
   note_id?: string
   note_title?: string
+  agent_schedule?: TaskAgentSchedule | null
   source?: TaskSource
   created_at: string
   updated_at: string
@@ -844,6 +867,7 @@ export interface ApiTask {
   status: TaskStatus
   note_id?: string | null
   due_at?: string | null
+  agent_schedule?: TaskAgentSchedule | null
   created_at: string
   updated_at: string
 }

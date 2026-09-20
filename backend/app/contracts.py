@@ -1144,6 +1144,42 @@ class TaskStatus(str, Enum):
     cancelled = "cancelled"
 
 
+class TaskAgentScheduleStatus(str, Enum):
+    pending = "pending"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+
+
+class TaskAgentScheduleInput(Contract):
+    schedule_type: Literal["once", "cron"] = "once"
+    run_at: datetime | None = None
+    cron: str | None = Field(default=None, max_length=128)
+    timezone: str = Field(default="UTC", min_length=1, max_length=64)
+    enabled: bool = True
+    provider_id: str = Field(min_length=1, max_length=128)
+    model: str = Field(min_length=1, max_length=256)
+    skill_id: str | None = Field(default=None, max_length=128)
+    max_steps: int = Field(default=10, ge=1, le=100)
+    allow_network: bool = False
+
+    @model_validator(mode="after")
+    def _validate_schedule(self) -> "TaskAgentScheduleInput":
+        if self.schedule_type == "once" and self.run_at is None:
+            raise ValueError("one-time schedule requires run_at")
+        if self.schedule_type == "cron" and not (self.cron or "").strip():
+            raise ValueError("cron schedule requires a cron expression")
+        return self
+
+
+class TaskAgentSchedule(TaskAgentScheduleInput):
+    status: TaskAgentScheduleStatus = TaskAgentScheduleStatus.pending
+    next_run_at: datetime | None = None
+    last_run_at: datetime | None = None
+    last_run_id: str | None = None
+    error: str | None = Field(default=None, max_length=2000)
+
+
 class Task(Contract):
     task_id: str
     title: str
@@ -1151,6 +1187,7 @@ class Task(Contract):
     status: TaskStatus = TaskStatus.todo
     note_id: str | None = None
     due_at: datetime | None = None
+    agent_schedule: TaskAgentSchedule | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -1160,6 +1197,7 @@ class TaskCreateRequest(Contract):
     description: str = ""
     note_id: str | None = None
     due_at: datetime | None = None
+    agent_schedule: TaskAgentScheduleInput | None = None
 
 
 class TaskUpdateRequest(Contract):
@@ -1168,6 +1206,7 @@ class TaskUpdateRequest(Contract):
     status: TaskStatus | None = None
     note_id: str | None = None
     due_at: datetime | None = None
+    agent_schedule: TaskAgentScheduleInput | None = None
 
 
 class TaskListResponse(Contract):
@@ -1543,7 +1582,9 @@ class ExportAsset(Contract):
 
 
 class ExportRequest(Contract):
-    print_html: str | None = None
+    # 浏览器生成的自包含主题快照。HTML 直接保存该快照，PDF 使用离线浏览器打印；
+    # DOCX 仍由结构化导出器生成，避免把不受支持的网页样式误传给文档格式。
+    print_html: str | None = Field(default=None, max_length=20 * 1024 * 1024)
     assets: list[ExportAsset] = Field(default_factory=list)
     title: str = Field(default="", max_length=200)
     source: ExportSource
@@ -1552,8 +1593,11 @@ class ExportRequest(Contract):
 
     @model_validator(mode="after")
     def _asset_limits(self) -> "ExportRequest":
-        if self.print_html is not None and self.format != ExportFormat.pdf:
-            raise ValueError("print_html is only supported for PDF")
+        if self.print_html is not None and self.format not in (
+            ExportFormat.html,
+            ExportFormat.pdf,
+        ):
+            raise ValueError("print_html is only supported for HTML and PDF")
         if self.format != ExportFormat.pdf:
             if len(self.assets) > 64 or any(len(asset.png_base64) > 2800000 for asset in self.assets):
                 raise ValueError("export asset count or size limit exceeded")

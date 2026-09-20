@@ -61,7 +61,7 @@ def main():
         "--name", "opennexus-core", "--distpath", str(output / "dist"),
         "--workpath", str(output / "work"), "--specpath", str(output),
         "--runtime-hook", str(ROOT / "scripts" / "pyinstaller-runtime-hook.py"),
-        "--collect-submodules", "app", "--collect-all", "sqlite_vec",
+        "--collect-submodules", "app", "--collect-all", "sqlite_vec", "--collect-all", "tzdata",
         # 本地模型使用独立 Python 进程执行；冻结后的 Core 必须保留可直接运行的 Worker 源文件。
         "--add-data", str(ROOT / "backend" / "app" / "local_models" / "worker.py") + ":app/local_models",
         "--add-data", str(ROOT / "backend" / "app" / "local_models" / "protocol.py") + ":app/local_models",

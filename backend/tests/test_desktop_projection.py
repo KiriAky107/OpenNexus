@@ -44,7 +44,7 @@ def test_projection_isolates_same_path_and_refreshes_changed_deleted_content(tmp
     try:
         conn = db.connect_knowledge()
         with db.transaction(conn):
-            conn.execute("INSERT INTO tasks VALUES ('legacy-task','Scoped task','','todo','file-b',NULL,'2026-09-08T00:00:00+00:00','2026-09-08T00:00:00+00:00')")
+            conn.execute("INSERT INTO tasks (task_id,title,description,status,note_id,due_at,created_at,updated_at) VALUES ('legacy-task','Scoped task','','todo','file-b',NULL,'2026-09-08T00:00:00+00:00','2026-09-08T00:00:00+00:00')")
         conn.close()
     finally: host_bridge.vault_id.reset(token)
     token = host_bridge.vault_id.set(first)
@@ -88,7 +88,7 @@ def test_host_identity_adoption_keeps_existing_task_links(tmp_path, monkeypatch)
         asyncio.run(desktop_projection.refresh())
         conn = db.connect_knowledge()
         with db.transaction(conn):
-            conn.execute("INSERT INTO tasks VALUES ('legacy-task','Preserve link','','todo','before-merge',NULL,'2026-09-08T00:00:00+00:00','2026-09-08T00:00:00+00:00')")
+            conn.execute("INSERT INTO tasks (task_id,title,description,status,note_id,due_at,created_at,updated_at) VALUES ('legacy-task','Preserve link','','todo','before-merge',NULL,'2026-09-08T00:00:00+00:00','2026-09-08T00:00:00+00:00')")
         conn.close()
         document['file_id'] = 'after-merge'
         document['aliases'] = ['before-merge']

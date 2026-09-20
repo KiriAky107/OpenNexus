@@ -15,7 +15,9 @@ import { getIndexStatus } from '@/services/indexService'
 import { isDesktop } from '@/services/platform/desktop'
 import { navigateToCitation } from '@/composables/useCitationNavigation'
 import { useWorkspaceRefresh } from '@/composables/useWorkspaceRefresh'
+import { useTaskScheduleRunner } from '@/composables/useTaskScheduleRunner'
 useWorkspaceRefresh()
+useTaskScheduleRunner()
 
 defineProps<{
   showSecondarySidebar?: boolean
