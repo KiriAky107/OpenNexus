@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-github-release-check"
+description = "Enables the github_release_check command without any pre-configured scope."
+commands.allow = ["github_release_check"]
+
+[[permission]]
+identifier = "deny-github-release-check"
+description = "Denies the github_release_check command without any pre-configured scope."
+commands.deny = ["github_release_check"]

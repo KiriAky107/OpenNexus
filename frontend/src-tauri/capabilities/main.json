@@ -8,6 +8,11 @@
   "permissions": [
     "core:default",
     "allow-host-capabilities",
+    "allow-storage-info",
+    "allow-storage-choose",
+    "allow-storage-use-default",
+    "allow-open-external-url",
+    "allow-github-release-check",
     "allow-credentials-status",
     "allow-credentials-unlock",
     "allow-credentials-lock",

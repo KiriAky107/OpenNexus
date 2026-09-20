@@ -17,6 +17,7 @@ import './language-icons.css'
 import { installLanguagePickerPopover } from './languagePickerPopover'
 import { installCodeBlockLabels } from './codeBlockLabels'
 import { installLinkNavigation } from './linkNavigation'
+import { navigateMarkdownHref } from '@/services/markdownLinkService'
 import { createMermaidPreview } from './mermaidPreview'
 import { splitNoteMetadata, updateMetadataTags } from './noteMetadata'
 import { getMarkdown, $remark, $prose } from '@milkdown/kit/utils'
@@ -509,7 +510,7 @@ onMounted(async () => {
   await crepe.create()
   if (editorRoot.value) disposeLanguagePicker = installLanguagePickerPopover(editorRoot.value)
   if (editorRoot.value) disposeCodeLabels = installCodeBlockLabels(editorRoot.value)
-  if (editorRoot.value) disposeLinkNavigation = installLinkNavigation(editorRoot.value)
+  if (editorRoot.value) disposeLinkNavigation = installLinkNavigation(editorRoot.value, navigateMarkdownHref)
   applyProofingPreferences()
   loading.value = false
   if (!disposed) installCommands()

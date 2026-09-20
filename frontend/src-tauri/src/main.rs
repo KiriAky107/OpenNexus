@@ -16,9 +16,9 @@ use notesagent_host::credentials::CredentialBroker;
 use notesagent_host::recent::{RecentVault, RecentVaultStore};
 use notesagent_host::request_lifecycle::Requests;
 use notesagent_host::workspace::{portable_path_string, Document, Entry, Workspace};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{Emitter, Manager, State};
@@ -44,6 +44,208 @@ struct Host {
     #[cfg(windows)]
     session_monitor: Mutex<Option<notesagent_host::session_lock::SessionMonitor>>,
     streams: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
+    storage: Mutex<StorageState>,
+}
+
+#[derive(Default)]
+struct StorageState {
+    active_root: PathBuf,
+    default_root: PathBuf,
+    configured_root: Option<PathBuf>,
+    config_path: PathBuf,
+}
+
+#[derive(Serialize)]
+struct StorageInfo {
+    active_path: String,
+    default_path: String,
+    configured_path: Option<String>,
+    custom: bool,
+    restart_required: bool,
+}
+
+fn storage_info_value(state: &StorageState) -> StorageInfo {
+    let configured = state.configured_root.as_ref();
+    StorageInfo {
+        active_path: state.active_root.to_string_lossy().into_owned(),
+        default_path: state.default_root.to_string_lossy().into_owned(),
+        configured_path: configured.map(|path| path.to_string_lossy().into_owned()),
+        custom: configured.is_some_and(|path| path != &state.default_root),
+        restart_required: configured.is_some_and(|path| path != &state.active_root),
+    }
+}
+
+fn write_storage_config(config_path: &Path, root: Option<&Path>) -> Result<(), String> {
+    let parent = config_path.parent().ok_or("STORAGE_CONFIG_INVALID")?;
+    std::fs::create_dir_all(parent).map_err(|_| "STORAGE_CONFIG_WRITE_FAILED")?;
+    let temporary = config_path.with_extension("json.tmp");
+    let body = serde_json::to_vec_pretty(&serde_json::json!({
+        "data_root": root.map(|path| path.to_string_lossy().into_owned())
+    }))
+    .map_err(|_| "STORAGE_CONFIG_WRITE_FAILED")?;
+    std::fs::write(&temporary, body).map_err(|_| "STORAGE_CONFIG_WRITE_FAILED")?;
+    if config_path.exists() {
+        std::fs::remove_file(config_path).map_err(|_| "STORAGE_CONFIG_WRITE_FAILED")?;
+    }
+    std::fs::rename(temporary, config_path).map_err(|_| "STORAGE_CONFIG_WRITE_FAILED".into())
+}
+
+fn validate_storage_root(path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err("STORAGE_PATH_NOT_ABSOLUTE".into());
+    }
+    std::fs::create_dir_all(path).map_err(|_| "STORAGE_PATH_UNWRITABLE")?;
+    let probe = path.join(format!(".opennexus-write-test-{}", uuid::Uuid::new_v4()));
+    std::fs::write(&probe, b"OpenNexus").map_err(|_| "STORAGE_PATH_UNWRITABLE")?;
+    std::fs::remove_file(&probe).map_err(|_| "STORAGE_PATH_UNWRITABLE")?;
+    path.canonicalize()
+        .map_err(|_| "STORAGE_PATH_INVALID".into())
+}
+
+#[tauri::command]
+fn storage_info(host: State<'_, Host>) -> Result<StorageInfo, String> {
+    let state = host.storage.lock().map_err(|_| "HOST_BUSY")?;
+    Ok(storage_info_value(&state))
+}
+
+#[tauri::command]
+fn storage_choose(host: State<'_, Host>) -> Result<StorageInfo, String> {
+    let Some(path) = rfd::FileDialog::new()
+        .set_title("选择 OpenNexus 数据存储目录")
+        .pick_folder()
+    else {
+        return Err("USER_CANCELLED".into());
+    };
+    let root = validate_storage_root(&path)?;
+    let mut state = host.storage.lock().map_err(|_| "HOST_BUSY")?;
+    write_storage_config(&state.config_path, Some(&root))?;
+    state.configured_root = Some(root);
+    Ok(storage_info_value(&state))
+}
+
+#[tauri::command]
+fn storage_use_default(host: State<'_, Host>) -> Result<StorageInfo, String> {
+    let mut state = host.storage.lock().map_err(|_| "HOST_BUSY")?;
+    write_storage_config(&state.config_path, None)?;
+    state.configured_root = None;
+    Ok(storage_info_value(&state))
+}
+
+fn allowed_external_url(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    !url.chars().any(char::is_control)
+        && ["https://", "http://", "mailto:", "tel:"]
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let url = url.trim();
+    if !allowed_external_url(url) {
+        return Err("EXTERNAL_URL_NOT_ALLOWED".into());
+    }
+    #[cfg(windows)]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        let operation: Vec<u16> = OsStr::new("open").encode_wide().chain(Some(0)).collect();
+        let target: Vec<u16> = OsStr::new(url).encode_wide().chain(Some(0)).collect();
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                operation.as_ptr(),
+                target.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+            )
+        } as isize;
+        if result <= 32 {
+            return Err("EXTERNAL_URL_OPEN_FAILED".into());
+        }
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("open").arg(url).status();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let status = std::process::Command::new("xdg-open").arg(url).status();
+    #[cfg(not(windows))]
+    return status
+        .map_err(|_| "EXTERNAL_URL_OPEN_FAILED")?
+        .success()
+        .then_some(())
+        .ok_or_else(|| "EXTERNAL_URL_OPEN_FAILED".into());
+}
+
+#[derive(Clone, Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    html_url: String,
+    name: Option<String>,
+    published_at: Option<String>,
+    draft: bool,
+    prerelease: bool,
+}
+
+#[derive(Serialize)]
+struct ReleaseCheck {
+    current_version: String,
+    latest_version: String,
+    name: Option<String>,
+    release_url: String,
+    published_at: Option<String>,
+    prerelease: bool,
+    update_available: bool,
+}
+
+fn release_version(tag: &str) -> Option<semver::Version> {
+    semver::Version::parse(tag.trim().trim_start_matches(['v', 'V'])).ok()
+}
+
+fn newest_release(releases: Vec<GithubRelease>) -> Option<(GithubRelease, semver::Version)> {
+    releases
+        .into_iter()
+        .filter(|release| !release.draft)
+        .filter_map(|release| release_version(&release.tag_name).map(|version| (release, version)))
+        .max_by(|left, right| left.1.cmp(&right.1))
+}
+
+#[tauri::command]
+async fn github_release_check() -> Result<ReleaseCheck, String> {
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .build()
+        .map_err(|_| "UPDATE_CLIENT_FAILED")?
+        .get("https://api.github.com/repos/KiriAky107/OpenNexus/releases?per_page=30")
+        .header(
+            reqwest::header::USER_AGENT,
+            format!("OpenNexus/{}", env!("CARGO_PKG_VERSION")),
+        )
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|_| "UPDATE_CHECK_FAILED")?;
+    if !response.status().is_success() {
+        return Err("UPDATE_CHECK_FAILED".into());
+    }
+    let releases = response
+        .json::<Vec<GithubRelease>>()
+        .await
+        .map_err(|_| "UPDATE_RESPONSE_INVALID")?;
+    let (release, latest) = newest_release(releases).ok_or("UPDATE_RELEASE_NOT_FOUND")?;
+    let current =
+        semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(|_| "APP_VERSION_INVALID")?;
+    Ok(ReleaseCheck {
+        current_version: current.to_string(),
+        latest_version: latest.to_string(),
+        name: release.name,
+        release_url: release.html_url,
+        published_at: release.published_at,
+        prerelease: release.prerelease,
+        update_available: latest > current,
+    })
 }
 
 impl Host {
@@ -468,7 +670,8 @@ fn valid_export_job_id(value: &str) -> bool {
 }
 
 fn export_file_name(value: &str) -> Result<(&str, &'static str), String> {
-    if value.len() > 120 || Path::new(value).file_name().and_then(|name| name.to_str()) != Some(value)
+    if value.len() > 120
+        || Path::new(value).file_name().and_then(|name| name.to_str()) != Some(value)
     {
         return Err("EXPORT_FILE_NAME_INVALID".into());
     }
@@ -529,7 +732,10 @@ async fn export_save(
         .build()
         .map_err(|_| "CORE_CLIENT_ERROR")?
         .get(&session.url)
-        .header(reqwest::header::AUTHORIZATION, session.authorization.as_str())
+        .header(
+            reqwest::header::AUTHORIZATION,
+            session.authorization.as_str(),
+        )
         .header("X-Core-Generation", &session.generation)
         .send()
         .await
@@ -1019,15 +1225,40 @@ fn main() {
             let paragraph = Submenu::with_items(app, "段落", true, &[&import])?;
             app.manage(import);
             app.set_menu(Menu::with_items(app, &[&paragraph])?)?;
-            let state_path = app.path().app_data_dir()?.join("host-state.sqlite3");
+            let default_data_root = app.path().app_data_dir()?;
+            let storage_config_path = app.path().app_config_dir()?.join("storage-location.json");
+            let configured_data_root = std::fs::read(&storage_config_path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .and_then(|value| {
+                    value
+                        .get("data_root")
+                        .and_then(|path| path.as_str())
+                        .map(PathBuf::from)
+                })
+                .filter(|path| path.is_absolute());
+            let data_root = configured_data_root
+                .as_deref()
+                .and_then(|path| validate_storage_root(path).ok())
+                .unwrap_or_else(|| default_data_root.clone());
+            *app.state::<Host>()
+                .storage
+                .lock()
+                .map_err(|_| std::io::Error::other("HOST_BUSY"))? = StorageState {
+                active_root: data_root.clone(),
+                default_root: default_data_root,
+                configured_root: configured_data_root,
+                config_path: storage_config_path,
+            };
+            let state_path = data_root.join("host-state.sqlite3");
             *app.state::<Host>()
                 .recent
                 .lock()
                 .map_err(|_| std::io::Error::other("HOST_BUSY"))? =
                 Some(RecentVaultStore::open(&state_path).map_err(std::io::Error::other)?);
-            let extension_root = app.path().app_data_dir()?.join("extensions-host");
+            let extension_root = data_root.join("extensions-host");
             std::fs::create_dir_all(&extension_root)?;
-            let app_data_dir = app.path().app_data_dir()?;
+            let app_data_dir = data_root.clone();
             let mut extension_store =
                 notesagent_host::extension_store::ExtensionStore::open(&extension_root)
                     .map_err(|error| std::io::Error::other(error.code))?;
@@ -1039,8 +1270,7 @@ fn main() {
                 .lock()
                 .map_err(|_| std::io::Error::other("HOST_BUSY"))? = Some(extension_store);
             let credential_state = app.state::<Host>().credentials.clone();
-            let mut broker =
-                CredentialBroker::new(app.path().app_data_dir()?.join("credentials/stronghold.v1"));
+            let mut broker = CredentialBroker::new(data_root.join("credentials/stronghold.v1"));
             #[cfg(windows)]
             broker
                 .ensure_system_unlock()
@@ -1084,7 +1314,7 @@ fn main() {
                     std::thread::sleep(Duration::from_millis(200));
                 }
             });
-            let data_dir = app.path().app_data_dir()?.join("core-data");
+            let data_dir = data_root.join("core-data");
             // 调试构建使用当前工作树的解释器；发布构建只使用随包提供的 Core。
             let core = if cfg!(debug_assertions) {
                 let backend = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1175,6 +1405,11 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             host_capabilities,
+            storage_info,
+            storage_choose,
+            storage_use_default,
+            open_external_url,
+            github_release_check,
             extension_trust_review,
             extension_trust_confirm,
             extension_trust_confirm_group,
@@ -1294,5 +1529,35 @@ mod lifecycle_tests {
             assert!(revoked > 0);
             assert!(start.elapsed() < Duration::from_secs(1));
         });
+    }
+
+    #[test]
+    fn external_urls_are_strictly_allowlisted() {
+        assert!(allowed_external_url(
+            "https://github.com/KiriAky107/OpenNexus"
+        ));
+        assert!(allowed_external_url("mailto:maintainer@example.com"));
+        assert!(!allowed_external_url("javascript:alert(1)"));
+        assert!(!allowed_external_url("https://example.com\nfile:///secret"));
+    }
+
+    #[test]
+    fn update_selection_includes_prereleases_and_ignores_drafts() {
+        let release = |tag: &str, draft: bool, prerelease: bool| GithubRelease {
+            tag_name: tag.into(),
+            html_url: format!("https://example.com/{tag}"),
+            name: None,
+            published_at: None,
+            draft,
+            prerelease,
+        };
+        let (selected, version) = newest_release(vec![
+            release("v0.5.2", false, false),
+            release("v0.5.3-alpha", false, true),
+            release("v9.0.0", true, false),
+        ])
+        .unwrap();
+        assert_eq!(selected.tag_name, "v0.5.3-alpha");
+        assert_eq!(version, semver::Version::parse("0.5.3-alpha").unwrap());
     }
 }

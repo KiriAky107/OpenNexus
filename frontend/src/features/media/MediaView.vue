@@ -55,6 +55,7 @@ const models = computed(() => providerStore.modelsByProvider[providerId.value] ?
 const player = ref<HTMLAudioElement | null>(null)
 const position = ref(0)
 const speed = ref(1)
+const pendingSeek = ref<number | null>(null)
 const history = ref<MediaJob[]>([])
 let timer: ReturnType<typeof setTimeout> | undefined
 let stopped = false
@@ -153,14 +154,32 @@ async function createArtifacts() {
     busy.value = false
   }
 }
-function loaded() { if (player.value) player.value.playbackRate = speed.value; const seconds = Number(route.query.time || 0); if (Number.isFinite(seconds) && seconds >= 0) seek(seconds) }
+function requestedTime() {
+  const seconds = Number(Array.isArray(route.query.time) ? route.query.time[0] : route.query.time ?? 0)
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : 0
+}
+function loaded() {
+  if (!player.value) return
+  player.value.playbackRate = speed.value
+  seek(pendingSeek.value ?? requestedTime())
+  pendingSeek.value = null
+}
 onMounted(async () => {
   await Promise.all([refresh(), providerStore.loadProviders()])
   providerId.value = providerStore.defaultProviderId
-  if (typeof route.query.job === 'string') {
-    try { selected.value = await mediaService.get(route.query.job) } catch (e) { error.value = (e as Error).message }
-  }
 })
+watch([() => route.query.job, () => route.query.time], async ([job]) => {
+  const seconds = requestedTime()
+  pendingSeek.value = seconds
+  if (typeof job === 'string' && selected.value?.job_id !== job) {
+    try { selected.value = await mediaService.get(job) }
+    catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); return }
+  }
+  if (player.value && player.value.readyState >= 1) {
+    seek(seconds)
+    pendingSeek.value = null
+  }
+}, { immediate: true })
 watch(providerId, async (value) => {
   model.value = providerStore.providers.find(item => item.provider_id === value)?.default_model ?? ''
   if (!value) return
