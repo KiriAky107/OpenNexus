@@ -115,6 +115,13 @@ def main() -> int:
         "APP_EXPORTS_PATH": str(root / "exports"),
         "APP_BENCHMARK_DATASETS_PATH": str(root / "benchmarks"),
     })
+    # Python 3.13 优先通过 WMI 读取 Windows 版本；损坏或停滞的 WMI Provider 会让
+    # Uvicorn 在 platform.system() 中无限等待，桌面端因而永远收不到 Core 握手。
+    # 禁用这个私有加速入口后 platform 会回退到注册表/API 路径，不影响系统版本结果。
+    if sys.platform == "win32":
+        import platform
+        if hasattr(platform, "_wmi"):
+            platform._wmi = None
     import uvicorn
     from app import host_bridge
     host_bridge.active = host_bridge.HostBridge(channel, handshake)
