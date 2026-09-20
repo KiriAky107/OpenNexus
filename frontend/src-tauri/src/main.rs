@@ -1553,11 +1553,11 @@ mod lifecycle_tests {
         };
         let (selected, version) = newest_release(vec![
             release("v0.5.2", false, false),
-            release("v0.5.3-alpha", false, true),
+            release("v0.5.4-alpha", false, true),
             release("v9.0.0", true, false),
         ])
         .unwrap();
-        assert_eq!(selected.tag_name, "v0.5.3-alpha");
-        assert_eq!(version, semver::Version::parse("0.5.3-alpha").unwrap());
+        assert_eq!(selected.tag_name, "v0.5.4-alpha");
+        assert_eq!(version, semver::Version::parse("0.5.4-alpha").unwrap());
     }
 }

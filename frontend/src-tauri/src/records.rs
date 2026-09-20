@@ -5,12 +5,33 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct TaskAgentScheduleData {
+    pub schedule_type: String,
+    pub run_at: Option<String>,
+    pub cron: Option<String>,
+    pub timezone: String,
+    pub enabled: bool,
+    pub provider_id: String,
+    pub model: String,
+    pub skill_id: Option<String>,
+    pub max_steps: u32,
+    pub allow_network: bool,
+    pub status: String,
+    pub next_run_at: Option<String>,
+    pub last_run_at: Option<String>,
+    pub last_run_id: Option<String>,
+    pub error: Option<String>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskData {
     pub title: String,
     pub description: String,
     pub status: String,
     pub note_id: Option<String>,
     pub due_at_ms: Option<i64>,
+    #[serde(default)]
+    pub agent_schedule: Option<TaskAgentScheduleData>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
 }
@@ -138,6 +159,23 @@ pub fn validate(path_value: &str, content: &[u8]) -> Result<Record> {
     }
     let data: TaskData = serde_json::from_value(record.data.clone())
         .map_err(|_| HostError::new("RECORD_SCHEMA_INVALID"))?;
+    let schedule_valid = data.agent_schedule.as_ref().is_none_or(|schedule| {
+        matches!(schedule.schedule_type.as_str(), "once" | "cron")
+            && matches!(schedule.status.as_str(), "pending" | "running" | "completed" | "failed")
+            && !schedule.provider_id.trim().is_empty()
+            && schedule.provider_id.len() <= 128
+            && !schedule.model.trim().is_empty()
+            && schedule.model.len() <= 256
+            && !schedule.timezone.trim().is_empty()
+            && schedule.timezone.len() <= 64
+            && (1..=100).contains(&schedule.max_steps)
+            && schedule.cron.as_ref().is_none_or(|value| value.len() <= 128)
+            && schedule.skill_id.as_ref().is_none_or(|value| value.len() <= 128)
+            && schedule.last_run_id.as_ref().is_none_or(|value| value.len() <= 128)
+            && schedule.error.as_ref().is_none_or(|value| value.len() <= 2000)
+            && (schedule.schedule_type != "once" || schedule.run_at.is_some())
+            && (schedule.schedule_type != "cron" || schedule.cron.as_ref().is_some_and(|value| !value.trim().is_empty()))
+    });
     if data.title.trim().is_empty()
         || data.title.len() > 4096
         || data.description.len() > 262144
@@ -148,6 +186,7 @@ pub fn validate(path_value: &str, content: &[u8]) -> Result<Record> {
         || !time(data.created_at_ms)
         || !time(data.updated_at_ms)
         || data.due_at_ms.is_some_and(|v| !time(v))
+        || !schedule_valid
         || data.note_id.as_ref().is_some_and(|v| {
             v.is_empty()
                 || v.len() > 128
@@ -297,6 +336,23 @@ mod tests {
     use super::*;
     fn fixture() -> Value {
         json!({"schema":1,"kind":"task","id":"task_00000000000000000000000000000001","data":{"title":"Task","description":"","status":"todo","note_id":null,"due_at_ms":null,"created_at_ms":0,"updated_at_ms":0}})
+    }
+    #[test]
+    fn task_agent_schedule_accepts_once_and_cron_but_rejects_unknown_nested_fields() {
+        let mut value = fixture();
+        value["data"]["agent_schedule"] = json!({
+            "schedule_type":"cron","run_at":null,"cron":"0 9 * * 1-5","timezone":"Asia/Shanghai",
+            "enabled":true,"provider_id":"provider-demo","model":"model-demo","skill_id":"chat-operator",
+            "max_steps":10,"allow_network":false,"status":"pending","next_run_at":"2026-09-22T01:00:00Z",
+            "last_run_at":null,"last_run_id":null,"error":null
+        });
+        let path = path(value["id"].as_str().unwrap()).unwrap();
+        validate(&path, &serde_json::to_vec(&value).unwrap()).unwrap();
+        value["data"]["agent_schedule"]["api_key"] = json!("secret");
+        assert_eq!(
+            validate(&path, &serde_json::to_vec(&value).unwrap()).err().unwrap().code,
+            "RECORD_SCHEMA_INVALID"
+        );
     }
     #[test]
     fn whitelist_rejects_secret_unknown_fields_and_future_schema_before_journal() {

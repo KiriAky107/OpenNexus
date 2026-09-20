@@ -71,13 +71,13 @@ export async function hashSource(source: string) {
 export const exportService = {
   async create(markdown: string, title: string, format: ExportFormat, options: { theme_id: string; include_title: boolean; page_size: string; palette?: ExportPalette }, signal?: AbortSignal, filePath?: string) {
     let printHtml: string | undefined
-    if (format === 'pdf') {
-      const { preparePdfSnapshot } = await import('./pdfSnapshotService')
-      printHtml = await preparePdfSnapshot(markdown,title,options,signal,filePath)
+    if (format === 'pdf' || format === 'html') {
+      const { prepareExportSnapshot } = await import('./pdfSnapshotService')
+      printHtml = await prepareExportSnapshot(markdown,title,options,format,signal,filePath)
     }
     const blocks: string[] = []
     const parser = new Marked()
-    if (format !== 'pdf') parser.walkTokens(parser.lexer(markdown), token => { if (token.type === 'code' && token.lang?.trim().split(/\s+/)[0]?.toLowerCase() === 'mermaid') blocks.push(token.text) })
+    if (format === 'docx') parser.walkTokens(parser.lexer(markdown), token => { if (token.type === 'code' && token.lang?.trim().split(/\s+/)[0]?.toLowerCase() === 'mermaid') blocks.push(token.text) })
     const assets = []
     for (const source of [...new Set(blocks)]) {
       signal?.throwIfAborted()

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import re
 from uuid import uuid4, uuid5, NAMESPACE_URL
 from app import host_bridge
-from app.contracts import Task, TaskStatus
+from app.contracts import Task, TaskAgentSchedule, TaskAgentScheduleInput, TaskStatus
 from app.database.db import connect_knowledge, transaction
 from app.errors import ApiError
 from app.services import desktop_notes
@@ -17,11 +17,14 @@ def _record(task):
     return {'schema': 1, 'kind': 'task', 'id': task.task_id, 'data': {
         'title': task.title, 'description': task.description, 'status': task.status.value,
         'note_id': task.note_id, 'due_at_ms': _ms(task.due_at),
+        'agent_schedule': task.agent_schedule.model_dump(mode='json') if task.agent_schedule else None,
         'created_at_ms': _ms(task.created_at), 'updated_at_ms': _ms(task.updated_at)}}
 def _task(record):
     data = record['data']
     return Task(task_id=record['id'], title=data['title'], description=data['description'], status=data['status'],
-                note_id=data['note_id'], due_at=_datetime(data['due_at_ms']), created_at=_datetime(data['created_at_ms']), updated_at=_datetime(data['updated_at_ms']))
+                note_id=data['note_id'], due_at=_datetime(data['due_at_ms']),
+                agent_schedule=TaskAgentSchedule.model_validate(data['agent_schedule']) if data.get('agent_schedule') else None,
+                created_at=_datetime(data['created_at_ms']), updated_at=_datetime(data['updated_at_ms']))
 def _operation(): return host_bridge.operation_id.get() or str(uuid4())
 def _replay(operation, task_id=None, values=None, deleted=False):
     previous = _call('operation', operation_id=operation)
@@ -60,14 +63,15 @@ def _link(note_id):
         if error.code == 'FILE_NOT_FOUND': raise ApiError(404, 'RESOURCE_NOT_FOUND', 'note not found', {'note_id': note_id}) from None
         raise
 
-def create(*, title, description='', note_id=None, due_at=None):
+def create(*, title, description='', note_id=None, due_at=None, agent_schedule=None):
     _migrate(); operation = _operation()
-    values = {'title': title, 'description': description, 'note_id': note_id, 'due_at': due_at}
+    schedule = TaskAgentSchedule(**agent_schedule.model_dump()) if isinstance(agent_schedule, TaskAgentScheduleInput) and not isinstance(agent_schedule, TaskAgentSchedule) else agent_schedule
+    values = {'title': title, 'description': description, 'note_id': note_id, 'due_at': due_at, 'agent_schedule': schedule}
     replay = _replay(operation, values=values)
     if replay is not None: return replay
     now = datetime.now(timezone.utc)
     task_id = 'task_' + uuid5(NAMESPACE_URL, 'opennexus-task:' + operation).hex
-    task = Task(task_id=task_id, title=title, description=description, note_id=_link(note_id), due_at=due_at, created_at=now, updated_at=now)
+    task = Task(task_id=task_id, title=title, description=description, note_id=_link(note_id), due_at=due_at, agent_schedule=schedule, created_at=now, updated_at=now)
     receipt = _call('write', record=_record(task), expected='', operation_id=operation)
     return _task(receipt['record'])
 def get(task_id):
@@ -86,12 +90,14 @@ def update(task_id, values):
     _migrate(); operation = _operation(); values = dict(values)
     for key in ['title', 'description', 'status']:
         if values.get(key) is None: values.pop(key, None)
-    if not set(values) <= {'title','description','status','note_id','due_at'}: raise ApiError(422, 'INVALID_ARGUMENT', '未知任务字段。')
+    if not set(values) <= {'title','description','status','note_id','due_at','agent_schedule'}: raise ApiError(422, 'INVALID_ARGUMENT', '未知任务字段。')
     replay = _replay(operation, task_id, values)
     if replay is not None: return replay
     current = _call('get', id=task_id)
     if current is None: raise ApiError(404, 'RESOURCE_NOT_FOUND', 'task not found', {'task_id': task_id})
     if 'note_id' in values: values['note_id'] = _link(values['note_id'])
+    if isinstance(values.get('agent_schedule'), TaskAgentScheduleInput) and not isinstance(values.get('agent_schedule'), TaskAgentSchedule):
+        values['agent_schedule'] = TaskAgentSchedule(**values['agent_schedule'].model_dump())
     task = _task(current['record']).model_copy(update={**values, 'updated_at': datetime.now(timezone.utc)})
     if isinstance(task.status, str): task.status = TaskStatus(task.status)
     receipt = _call('write', record=_record(task), expected=current['hash'], operation_id=operation)

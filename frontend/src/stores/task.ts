@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { TaskItem, TaskStatus, TaskPriority, TaskSource } from '@/contracts'
-import { createTask as createTaskRequest, deleteTask as deleteTaskRequest, listTasks, updateTask as updateTaskRequest } from '@/services/taskService'
+import type { TaskAgentScheduleInput, TaskItem, TaskStatus, TaskPriority, TaskSource } from '@/contracts'
+import { createTask as createTaskRequest, deleteTask as deleteTaskRequest, listTasks, runTaskAgentSchedule as runTaskAgentScheduleRequest, updateTask as updateTaskRequest } from '@/services/taskService'
 import { t } from '@/i18n'
 
 export const useTaskStore = defineStore('task', () => {
@@ -49,18 +49,25 @@ export const useTaskStore = defineStore('task', () => {
     }
   }
 
-  async function createTask(data: { title: string; description?: string; priority?: TaskPriority; due_date?: string; note_id?: string }) {
+  async function createTask(data: { title: string; description?: string; priority?: TaskPriority; due_date?: string; note_id?: string; agent_schedule?: TaskAgentScheduleInput }) {
     const newTask = await createTaskRequest(data)
     tasks.value.unshift(newTask)
     return newTask
   }
 
-  async function updateTask(taskId: string, data: Partial<Pick<TaskItem, 'title' | 'description' | 'status' | 'due_date'>> & { note_id?: string | null }) {
+  async function updateTask(taskId: string, data: Partial<Pick<TaskItem, 'title' | 'description' | 'status' | 'due_date'>> & { note_id?: string | null; agent_schedule?: TaskAgentScheduleInput | null }) {
     const task = tasks.value.find((t) => t.task_id === taskId)
     if (task) {
       const updated = await updateTaskRequest(taskId, data)
       Object.assign(task, updated)
     }
+  }
+
+  async function runTaskAgentSchedule(taskId: string) {
+    const updated = await runTaskAgentScheduleRequest(taskId)
+    const index = tasks.value.findIndex(task => task.task_id === taskId)
+    if (index >= 0) tasks.value[index] = updated
+    return updated
   }
 
   async function deleteTask(taskId: string) {
@@ -88,6 +95,7 @@ export const useTaskStore = defineStore('task', () => {
     createTask,
     updateTask,
     deleteTask,
+    runTaskAgentSchedule,
     setFilterStatus,
     setFilterPriority,
     setFilterSource,

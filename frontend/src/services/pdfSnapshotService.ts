@@ -13,6 +13,7 @@ void MarkdownContent; void VisualMarkdownEditor
 
 interface Resources { images: {source:string; data:string|null; warnings:string[]}[]; plots: {source:string; svg:string; warnings:string[]}[] }
 interface Options { theme_id:string; include_title:boolean; page_size:string }
+type SnapshotFormat = 'html' | 'pdf'
 
 const printRules = `
 @page { margin: 0; }
@@ -34,7 +35,7 @@ function attrs(element: Element): string {
 function escape(text: string) { return text.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
 function scopeAttributes(component: unknown) { const id=(component as {__scopeId?:string}).__scopeId; return id ? ` ${id}` : '' }
 async function dataUrl(url: string, signal?:AbortSignal):Promise<string> {
-  const response=await fetch(url,{signal}); if(!response.ok) throw Error(`PDF 资源读取失败：${url}`)
+  const response=await fetch(url,{signal}); if(!response.ok) throw Error(`导出资源读取失败：${url}`)
   const blob=await response.blob()
   return await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=reject;reader.readAsDataURL(blob)})
 }
@@ -60,7 +61,7 @@ export function preferWoff2FontSource(css:string):string {
   return woff2 ? `${css.slice(0,valueStart)} ${woff2[0]}${css.slice(valueEnd)}` : css
 }
 async function embedCss(css: string, base: string, signal?:AbortSignal) {
-  // 打印进程完全离线，主题资源必须来自应用同源地址并在此转换为 data URL。
+  // 导出快照完全离线，主题资源必须来自应用同源地址并在此转换为 data URL。
   // Chromium 支持 WOFF2；丢弃同一字体的 WOFF/TTF 回退，避免重复嵌入三份字体。
   css=preferWoff2FontSource(css)
   const matches=[...css.matchAll(/url\(\s*(['"]?)(.*?)\1\s*\)/g)]
@@ -68,7 +69,7 @@ async function embedCss(css: string, base: string, signal?:AbortSignal) {
     const url=match[2]!
     if(url.startsWith('data:')||url.startsWith('#'))continue
     const absolute=new URL(url,base)
-    if(absolute.origin!==location.origin)throw Error(`PDF 主题资源必须来自应用：${absolute.href}`)
+    if(absolute.origin!==location.origin)throw Error(`导出主题资源必须来自应用：${absolute.href}`)
     css=css.replace(match[0],`url("${await dataUrl(absolute.href,signal)}")`)
   }
   return css
@@ -85,7 +86,7 @@ function stylesheetSnapshot(): {css:string;base:string}[] {
   return sheets
 }
 
-export async function preparePdfSnapshot(markdown:string,title:string,options:Options,signal?:AbortSignal,filePath?:string):Promise<string> {
+export async function prepareExportSnapshot(markdown:string,title:string,options:Options,format:SnapshotFormat,signal?:AbortSignal,filePath?:string):Promise<string> {
   // 在任何异步资源请求前冻结主题、排版和编辑器内容，保证产物对应点击导出时的状态。
   signal?.throwIfAborted()
   const theme=useThemeStore(), preferences={...useMarkdownPreferencesStore().normalized}, heading=useHeadingAppearanceStore()
@@ -114,7 +115,7 @@ export async function preparePdfSnapshot(markdown:string,title:string,options:Op
     const source=image.getAttribute('src')||''
     if(source.startsWith('data:'))continue
     const resource=resources.images.find(item=>item.source===source)
-    if(!resource?.data)throw Error(resource?.warnings.join('; ')||`PDF 图片无法读取：${source}`)
+    if(!resource?.data)throw Error(resource?.warnings.join('; ')||`导出图片无法读取：${source}`)
     image.src=resource.data
   }
   // 打印全部警告框内容，只移除交互控件，保留主题装饰。
@@ -129,9 +130,16 @@ export async function preparePdfSnapshot(markdown:string,title:string,options:Op
     details.replaceWith(block)
   })
   const error=fragment.querySelector('.mermaid-error')
-  if(error)throw Error(error.textContent||'PDF 图表渲染失败')
+  if(error)throw Error(error.textContent||'导出图表渲染失败')
   fragment.querySelectorAll('.markdown-code-toolbar button,.diagram-controls').forEach(e=>e.remove())
   const css=(await Promise.all(styles.map(s=>embedCss(s.css,s.base,signal)))).join('\n')
   signal?.throwIfAborted()
-  return `<!doctype html><html${htmlAttrs}><head><meta charset="utf-8"><title>${escape(title)}</title><style>${css.replace(/<\/style/gi,'<\\/style')}\n:root{${rootVariables}}\n${printRules}</style></head><body${bodyAttrs}><div class="visual-editor pdf-document"${scope} ${customHeading?'data-heading-style="custom"':''} style="${escape(headingStyle)}"><div class="milkdown-host"${scope}>${metadataHtml}<div class="milkdown"><article class="ProseMirror markdown-content" data-code-wrap="${preferences.wrapCode}" data-line-numbers="${preferences.lineNumbers}" style="--markdown-code-indent:${preferences.indent}">${options.include_title?`<h1>${escape(title)}</h1>`:''}${fragment.body.innerHTML}</article></div></div></div></body></html>`
+  const csp="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+  const formatRules=format==='pdf'?printRules:''
+  const documentClass=format==='pdf'?'visual-editor export-document pdf-document':'visual-editor export-document'
+  return `<!doctype html><html${htmlAttrs}><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title><style>${css.replace(/<\/style/gi,'<\\/style')}\n:root{${rootVariables}}\n${formatRules}</style></head><body${bodyAttrs}><div class="${documentClass}"${scope} ${customHeading?'data-heading-style="custom"':''} style="${escape(headingStyle)}"><div class="milkdown-host"${scope}>${metadataHtml}<div class="milkdown"><article class="ProseMirror markdown-content" data-code-wrap="${preferences.wrapCode}" data-line-numbers="${preferences.lineNumbers}" style="--markdown-code-indent:${preferences.indent}">${options.include_title?`<h1>${escape(title)}</h1>`:''}${fragment.body.innerHTML}</article></div></div></div></body></html>`
+}
+
+export function preparePdfSnapshot(markdown:string,title:string,options:Options,signal?:AbortSignal,filePath?:string):Promise<string> {
+  return prepareExportSnapshot(markdown,title,options,'pdf',signal,filePath)
 }

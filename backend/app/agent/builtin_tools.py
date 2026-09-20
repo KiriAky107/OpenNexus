@@ -3,7 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.tools import ToolExecutionContext, ToolRegistry
-from app.contracts import SearchMode, SearchRequest, TaskStatus, ToolDefinition
+from app.contracts import SearchMode, SearchRequest, TaskAgentScheduleInput, TaskStatus, ToolDefinition
 from app.retrieval.engine import engine
 from app.services import note_service
 from app.services import attachment_service, task_service, transcription_service
@@ -67,6 +67,7 @@ class TaskCreateArguments(ToolArguments):
     description: str = ""
     note_id: str | None = None
     due_at: datetime | None = None
+    agent_schedule: TaskAgentScheduleInput | None = None
 
 
 class TaskUpdateArguments(ToolArguments):
@@ -76,6 +77,7 @@ class TaskUpdateArguments(ToolArguments):
     status: TaskStatus | None = None
     note_id: str | None = None
     due_at: datetime | None = None
+    agent_schedule: TaskAgentScheduleInput | None = None
 
 
 class TaskListArguments(ToolArguments):
@@ -265,7 +267,7 @@ def register_builtin_tools(registry: ToolRegistry) -> None:
     _register(
         registry,
         name="tasks.create",
-        description="Create a persistent task.",
+        description="Create a persistent task whose description is Markdown. Optionally schedule its content for a one-time or recurring Cron Agent run.",
         arguments_model=TaskCreateArguments,
         executor=create_task,
         permission="tasks.write",
@@ -273,7 +275,7 @@ def register_builtin_tools(registry: ToolRegistry) -> None:
     _register(
         registry,
         name="tasks.update",
-        description="Update a persistent task.",
+        description="Update task Markdown, state, deadline, or its one-time/Cron Agent schedule.",
         arguments_model=TaskUpdateArguments,
         executor=update_task,
         permission="tasks.write",
@@ -281,7 +283,7 @@ def register_builtin_tools(registry: ToolRegistry) -> None:
     _register(
         registry,
         name="tasks.list",
-        description="List persistent tasks.",
+        description="List persistent tasks, including Agent schedule status and next/last run metadata.",
         arguments_model=TaskListArguments,
         executor=list_tasks,
         permission="tasks.read",

@@ -8,7 +8,7 @@ vi.mock('@/stores/markdownPreferences',()=>({useMarkdownPreferencesStore:()=>({n
 vi.mock('@/stores/headingAppearance',()=>({useHeadingAppearanceStore:()=>({cssVariables:{'--heading-1-size':'37px'},preferences:{custom:true}})}))
 vi.mock('@/components/common/MarkdownContent.vue',()=>({default:{}}))
 vi.mock('@/features/editor/VisualMarkdownEditor.vue',()=>({default:{__scopeId:'data-v-editor'}}))
-import {preparePdfSnapshot,preferWoff2FontSource} from './pdfSnapshotService'
+import {prepareExportSnapshot,preparePdfSnapshot,preferWoff2FontSource} from './pdfSnapshotService'
 import {apiClient} from './apiClient'
 import {renderMarkdown} from '@/utils/markdown'
 afterEach(()=>vi.clearAllMocks())
@@ -36,9 +36,21 @@ it('preserves actual theme CSS, pseudo elements, root attributes and heading pre
   expect(renderMarkdown).toHaveBeenCalledWith('# Heading',expect.objectContaining({pdf:expect.anything()}))
  } finally {style.remove();delete document.documentElement.dataset.theme}
 })
+it('builds a complete themed HTML document without PDF-only layout overrides',async()=>{
+ const style=document.createElement('style');style.textContent='[data-theme="paper"] .ProseMirror::before { content:"tape"; transform:rotate(-3deg) }';document.head.append(style)
+ document.documentElement.dataset.theme='paper'
+ try {
+  const html=await prepareExportSnapshot('# Heading','Note',{theme_id:'paper',include_title:true,page_size:'A4'},'html')
+  expect(html).toContain('transform: rotate(-3deg)')
+  expect(html).toContain('class="visual-editor export-document"')
+  expect(html).not.toContain('class="visual-editor export-document pdf-document"')
+  expect(html).not.toContain('@page { margin: 0; }')
+  expect(html).toContain('Content-Security-Policy')
+ } finally {style.remove();delete document.documentElement.dataset.theme}
+})
 it('rejects a missing image instead of silently producing an incomplete PDF',async()=>{
  vi.mocked(renderMarkdown).mockResolvedValueOnce('<img src="missing.png">')
- await expect(preparePdfSnapshot('![image](missing.png)','note',{theme_id:'light',include_title:false,page_size:'A4'})).rejects.toThrow('PDF 图片无法读取')
+ await expect(preparePdfSnapshot('![image](missing.png)','note',{theme_id:'light',include_title:false,page_size:'A4'})).rejects.toThrow('导出图片无法读取')
 })
 it('an aborted snapshot never requests backend resources',async()=>{
  const controller=new AbortController();controller.abort()

@@ -20,7 +20,7 @@
   </p>
 
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.3-alpha"><img src="https://img.shields.io/badge/Release-0.5.3--alpha-5865f2?style=flat-square" alt="版本" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.4-alpha"><img src="https://img.shields.io/badge/Release-0.5.4--alpha-5865f2?style=flat-square" alt="版本" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="平台" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="桌面端 Tauri" />
     <img src="https://img.shields.io/badge/Frontend-Vue_3-42b883?style=flat-square" alt="前端 Vue" />
@@ -32,7 +32,7 @@
 
 ---
 
-> ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.3-alpha`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
+> ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.4-alpha`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 桌面工作区" width="95%" />
@@ -56,10 +56,10 @@
 
 ### Windows 桌面端安装（推荐）
 
-1. 前往 GitHub Releases 下载最新安装包：[`OpenNexus_0.5.3-alpha_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.3-alpha)。
+1. 前往 GitHub Releases 下载最新安装包：[`OpenNexus_0.5.4-alpha_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.4-alpha)。
 2. *(可选)* 通过 PowerShell 校验 SHA-256 完整性：
 ```powershell
-   Get-FileHash .\OpenNexus_0.5.3-alpha_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.5.4-alpha_x64-setup.exe -Algorithm SHA256
    # 预期哈希值: F1B88FDF1D3AE0B48B3D2907818A52B843E39BF94E94B4A913EC6AFD26EC8786
 
 ```
