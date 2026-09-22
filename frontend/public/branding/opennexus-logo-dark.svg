@@ -1,6 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
   <title id="title">OpenNexus</title><desc id="desc">OpenNexus logo for dark surfaces</desc>
-  <rect width="1024" height="1024" rx="184" fill="#111111"/>
-  <path fill="#C7CBD0" d="M192 348c0-54 30-104 78-129l276-143c51-27 112 10 112 67v264c0 39-23 74-59 90l-109 48c-21 9-34 30-34 53v109c0 25 15 48 39 57l88 34-132 57c-27 12-44 38-44 67v92L270 811c-48-25-78-75-78-129V348Z"/>
-  <path fill="#F5F6F7" d="M609 294l145 75c48 25 78 75 78 129v178c0 54-30 104-78 129L478 948c-51 27-112-10-112-67v-88c0-39 23-74 59-90l109-48c21-9 34-30 34-53v-99c0-28-18-52-44-61l-80-28 119-52c28-12 46-40 46-71v-9Z"/>
+  <defs>
+    <linearGradient id="light" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F4F5F6"/><stop offset="1" stop-color="#C7CBD0"/></linearGradient>
+    <linearGradient id="dark" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9298A1"/><stop offset="1" stop-color="#727983"/></linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="#111111"/>
+  <path fill="url(#light)" d="M546 155C570 143 589 162 589 190v153c0 23-12 39-33 48l-101 43c-16 7-24 19-24 35v82c0 18 10 29 27 33l90 20-109 46c-16 7-23 20-23 38v64l-145-80c-33-18-54-50-54-88V364c0-37 21-69 54-88l275-121Z"/>
+  <path fill="url(#dark)" d="M607 290l146 74c33 17 54 50 54 88v223c0 38-21 70-54 87L493 867c-28 12-59-9-59-40V686c0-18 9-31 25-38l116-49c15-7 22-20 22-37v-82c0-17-10-29-26-33l-88-16 91-37c22-9 33-26 33-49v-55Z"/>
 </svg>
