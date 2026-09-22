@@ -154,7 +154,7 @@ async fn real_core_notes_roundtrip_only_through_bound_host_and_confirm_commits()
             .join("core.sqlite3"),
     )
     .unwrap();
-    legacy_database.execute("INSERT INTO tasks VALUES ('task_00000000000000000000000000000002','Legacy task','','todo',?1,NULL,'2026-09-08T00:00:00+00:00','2026-09-08T00:00:00+00:00')",[file_id]).unwrap();
+    legacy_database.execute("INSERT INTO tasks (task_id,title,description,status,note_id,due_at,created_at,updated_at) VALUES ('task_00000000000000000000000000000002','Legacy task','','todo',?1,NULL,'2026-09-08T00:00:00+00:00','2026-09-08T00:00:00+00:00')",[file_id]).unwrap();
     let task_operation = uuid::Uuid::new_v4().to_string();
     let task_body = json!({"title":"Host task","note_id":file_id});
     let (status, task) = request(

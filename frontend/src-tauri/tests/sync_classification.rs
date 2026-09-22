@@ -6,13 +6,20 @@ use notesagent_host::{
 use serde_json::{json, Value};
 use std::{
     io::{BufRead, BufReader},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
 };
 use zeroize::Zeroizing;
 
 struct Server(Child);
+
+fn sync_service_root() -> Option<PathBuf> {
+    let configured = std::env::var_os("OPENNEXUS_SYNC_SERVER_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../server sync"));
+    configured.canonicalize().ok()
+}
 
 impl Drop for Server {
     fn drop(&mut self) {
@@ -206,10 +213,12 @@ async fn create_remote(client: &SyncClient, name: &str) -> String {
 async fn s08_actual_service_enforces_classification_and_roundtrips_selected_records() {
     let service_root = tempfile::tempdir().unwrap();
     std::fs::write(service_root.path().join(".opennexus-test"), b"fixture").unwrap();
-    let service = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../server sync")
-        .canonicalize()
-        .unwrap();
+    let Some(service) = sync_service_root() else {
+        eprintln!(
+            "skipped: set OPENNEXUS_SYNC_SERVER_DIR to run the split Sync Server integration test"
+        );
+        return;
+    };
     let python = service.join(if cfg!(windows) {
         ".venv/Scripts/python.exe"
     } else {
