@@ -20,7 +20,7 @@
   </p>
 
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.4-alpha"><img src="https://img.shields.io/badge/Release-0.5.4--alpha-5865f2?style=flat-square" alt="Version" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.5-alpha"><img src="https://img.shields.io/badge/Release-0.5.5--alpha-5865f2?style=flat-square" alt="Version" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="Platform" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="Desktop Tauri" />
     <img src="https://img.shields.io/badge/Frontend-Vue_3-42b883?style=flat-square" alt="Frontend Vue" />
@@ -32,12 +32,31 @@
 
 ---
 
-> ⚠️ **Alpha Notice**: OpenNexus is currently in active alpha (`v0.5.4-alpha`). Storage schemas, IPC contracts, and extension APIs are evolving. Always back up critical Markdown vaults before updating.
+> ⚠️ **Alpha Notice**: OpenNexus is currently in active alpha (`v0.5.5-alpha`). Storage schemas, IPC contracts, and extension APIs are evolving. Always back up critical Markdown vaults before updating.
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus Desktop Workspace" width="95%" />
   <p><em>The OpenNexus desktop environment: Local Markdown vault, RRF hybrid retrieval, and real-time AI Core status.</em></p>
 </div>
+
+<table align="center">
+  <tr>
+    <td width="50%"><img src=".github/assets/opennexus-transcription.png" alt="Lecture transcription and knowledge-note generation" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-agent-plan.png" alt="Agent-generated personal learning plan" /></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src=".github/assets/opennexus-tasks.png" alt="Markdown tasks and Cron-scheduled Agent execution" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-skill-plugin.png" alt="Skill tools, permissions, retrieval settings, and model capabilities" /></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src=".github/assets/opennexus-plugins.png" alt="Installed Plugin tools and MCP integrations" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-themes.png" alt="Themes and editor appearance" /></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src=".github/assets/opennexus-community.png" alt="Community extension catalog" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-settings.png" alt="OpenNexus 0.5.5 settings and task notifications" /></td>
+  </tr>
+</table>
 
 ---
 
@@ -56,10 +75,10 @@
 
 ### Windows Desktop (Recommended)
 
-1. Grab the latest installer: [`OpenNexus_0.5.4-alpha_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.4-alpha).
+1. Grab the latest installer: [`OpenNexus_0.5.5-alpha_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.5-alpha).
 2. *(Optional)* Verify integrity via PowerShell:
 ```powershell
-   Get-FileHash .\OpenNexus_0.5.4-alpha_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.5.5-alpha_x64-setup.exe -Algorithm SHA256
    # Expected: F1B88FDF1D3AE0B48B3D2907818A52B843E39BF94E94B4A913EC6AFD26EC8786
 
 ```

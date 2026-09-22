@@ -18,26 +18,45 @@
     <a href="#本地开发">本地开发</a> •
     <a href="https://github.com/KiriAky107/OpenNexus/releases">发布日志</a>
   </p>
-
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.4-alpha"><img src="https://img.shields.io/badge/Release-0.5.4--alpha-5865f2?style=flat-square" alt="版本" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.5-alpha"><img src="https://img.shields.io/badge/Release-0.5.5--alpha-5865f2?style=flat-square" alt="版本" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="平台" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="桌面端 Tauri" />
     <img src="https://img.shields.io/badge/Frontend-Vue_3-42b883?style=flat-square" alt="前端 Vue" />
     <img src="https://img.shields.io/badge/Core-FastAPI-05998b?style=flat-square" alt="后端 FastAPI" />
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e?style=flat-square" alt="开源协议" /></a>
+    <a href="visitors"><img src="https://visitor-badge.laobi.icu/badge?page_id=KiriAky107.OpenNexus" /></a>
   </p>
 
 </div>
 
 ---
 
-> ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.4-alpha`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
+> ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.5-alpha`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 桌面工作区" width="95%" />
   <p><em>OpenNexus 桌面端工作区：本地 Markdown 库导航、RRF 混合检索以及实时 AI 核心状态监控。</em></p>
 </div>
+<table align="center">
+  <tr>
+    <td width="50%"><img src=".github/assets/opennexus-transcription.png" alt="课程录音转写与知识点笔记生成" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-agent-plan.png" alt="Agent 生成个人学习规划" /></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src=".github/assets/opennexus-tasks.png" alt="Markdown 任务与 Cron 定时 Agent 调用" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-skill-plugin.png" alt="Skill 工具、权限、检索与模型能力配置" /></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src=".github/assets/opennexus-plugins.png" alt="已安装的 Plugin 工具与 MCP 集成" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-themes.png" alt="主题与编辑器外观配置" /></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src=".github/assets/opennexus-community.png" alt="社区扩展目录" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-settings.png" alt="OpenNexus 0.5.5 设置与任务通知" /></td>
+  </tr>
+</table>
+
 
 ---
 
@@ -56,10 +75,10 @@
 
 ### Windows 桌面端安装（推荐）
 
-1. 前往 GitHub Releases 下载最新安装包：[`OpenNexus_0.5.4-alpha_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.4-alpha)。
+1. 前往 GitHub Releases 下载最新安装包：[`OpenNexus_0.5.5-alpha_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.5-alpha)。
 2. *(可选)* 通过 PowerShell 校验 SHA-256 完整性：
 ```powershell
-   Get-FileHash .\OpenNexus_0.5.4-alpha_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.5.5-alpha_x64-setup.exe -Algorithm SHA256
    # 预期哈希值: F1B88FDF1D3AE0B48B3D2907818A52B843E39BF94E94B4A913EC6AFD26EC8786
 
 ```
