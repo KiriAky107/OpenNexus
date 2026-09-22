@@ -11,6 +11,7 @@ import StatusBar from './StatusBar.vue'
 import TitleBar from './TitleBar.vue'
 import TitleBarMenu from './TitleBarMenu.vue'
 import CommandPalette from './CommandPalette.vue'
+import NotificationCenter from './NotificationCenter.vue'
 import { getIndexStatus } from '@/services/indexService'
 import { isDesktop } from '@/services/platform/desktop'
 import { navigateToCitation } from '@/composables/useCitationNavigation'
@@ -90,6 +91,7 @@ defineExpose({ openCitation })
     </div>
     <StatusBar />
     <CommandPalette />
+    <NotificationCenter />
   </div>
 </template>
 

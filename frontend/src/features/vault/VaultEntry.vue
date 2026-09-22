@@ -11,12 +11,12 @@ import { t } from '@/i18n'
 import { ApiErrorClass } from '@/services/apiClient'
 import { isDesktop } from '@/services/platform/desktop'
 import appPackage from '../../../package.json'
-import StorageLocationSettings from '@/features/settings/StorageLocationSettings.vue'
 
 const router = useRouter()
 const workspaceStore = useWorkspaceStore()
 const themeStore = useThemeStore()
 const settingsStore = useSettingsStore()
+const darkAppLogoUrl = '/branding/opennexus-logo-dark.svg'
 
 const isLoading = ref(false)
 const aiCoreStatus = ref<'checking' | 'running' | 'stopped'>('checking')
@@ -65,7 +65,7 @@ async function openFolderPicker() {
     <div class="bg-decoration" />
     <div class="entry-container">
       <div class="brand-section">
-        <div class="logo"><img :src="appLogoUrl" alt="" /></div>
+        <div class="logo"><img :src="themeStore.isDark ? darkAppLogoUrl : appLogoUrl" alt="" /></div>
         <h1 class="app-title">OpenNexus</h1>
         <p class="app-subtitle">{{ t('本地优先的 AI 笔记软件', 'A local-first AI note-taking app') }}</p>
       </div>
@@ -89,15 +89,13 @@ async function openFolderPicker() {
             >
               <AppIcon class="vault-icon" :icon="Folder" :size="20" />
               <div class="vault-info">
-                <div class="vault-name">{{ vault.name }}</div>
-                <div class="vault-path">{{ vault.path }}</div>
+                <div class="vault-name" :title="vault.name">{{ vault.name }}</div>
+                <div class="vault-path" :title="vault.path">{{ vault.path }}</div>
               </div>
               <AppIcon class="vault-arrow" :icon="ArrowRight" :size="16" />
             </button>
           </div>
         </div>
-
-        <StorageLocationSettings v-if="isDesktop()" class="entry-storage" />
 
         <div class="actions">
           <button class="btn btn-primary" @click="openFolderPicker" :disabled="isLoading || (!isDesktop() && !workspaceStore.recentVaults.length)">
@@ -128,15 +126,16 @@ async function openFolderPicker() {
 <style scoped>
 .vault-entry {
   height: 100%;
+  max-height: 100%;
   min-height: 0;
-  width: 100vw;
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--color-background-primary);
   position: relative;
-  overflow: auto;
-  padding-block: 24px;
+  overflow: hidden;
+  padding: clamp(12px, 3dvh, 24px) clamp(12px, 3vw, 28px);
   box-sizing: border-box;
 }
 
@@ -155,16 +154,15 @@ async function openFolderPicker() {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 32px;
+  gap: clamp(12px, 2dvh, 24px);
   max-width: 620px;
-  width: 90%;
+  width: min(100%, 620px);
   animation: entry-in var(--motion-slow) both;
 }
 
-.entry-storage { width: 100%; }
-
 .brand-section {
   text-align: center;
+  flex: 0 0 auto;
 }
 
 .logo {
@@ -199,12 +197,16 @@ async function openFolderPicker() {
 }
 
 .vault-card {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
   width: 100%;
   background: var(--color-surface-primary);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-xl);
   padding: var(--space-2xl);
   box-shadow: var(--shadow-xl);
+  overflow: visible;
 }
 
 .card-title {
@@ -227,11 +229,18 @@ async function openFolderPicker() {
   font-weight: 500;
 }
 
+.recent-vaults { min-height: 0; }
+
 .vault-list {
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
   margin-bottom: var(--space-xl);
+  max-height: min(260px, 30dvh);
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: var(--space-xs);
 }
 
 .vault-item {
@@ -274,6 +283,9 @@ async function openFolderPicker() {
   font-weight: 500;
   color: var(--color-text-primary);
   font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .vault-path {
@@ -379,6 +391,7 @@ async function openFolderPicker() {
   gap: var(--space-lg);
   font-size: 12px;
   color: var(--color-text-tertiary);
+  flex: 0 0 auto;
 }
 
 .theme-toggle {
@@ -398,4 +411,12 @@ async function openFolderPicker() {
 }
 
 @keyframes entry-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+@media (max-height: 760px) {
+  .vault-entry { align-items: flex-start; overflow-y: auto; }
+  .logo, .logo img { width: 56px; height: 56px; }
+  .logo { margin-bottom: 8px; }
+  .app-title { font-size: 26px; margin-bottom: 4px; }
+  .vault-card { padding: var(--space-xl); }
+}
 </style>

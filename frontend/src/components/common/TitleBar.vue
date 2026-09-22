@@ -16,6 +16,7 @@ const workspaceStore = useWorkspaceStore()
 const editorStore = useEditorStore()
 const themeStore = useThemeStore()
 const desktop = isDesktop()
+const darkAppLogoUrl = '/branding/opennexus-logo-dark.svg'
 
 const pageTitle = computed(() => {
   const name = route.name as string
@@ -64,7 +65,7 @@ function toggleFromTitlebar(event: MouseEvent) {
       </span>
     </div>
     <div class="titlebar-center" data-tauri-drag-region>
-      <span class="app-name" data-tauri-drag-region><img :src="appLogoUrl" alt="" />OpenNexus</span>
+      <span class="app-name" data-tauri-drag-region><img :src="themeStore.isDark ? darkAppLogoUrl : appLogoUrl" alt="" />OpenNexus</span>
     </div>
     <div class="titlebar-right">
       <button class="icon-btn" @click="themeStore.toggleTheme()" :title="themeStore.isDark ? t('切换浅色主题', 'Switch to light theme') : t('切换深色主题', 'Switch to dark theme')">
