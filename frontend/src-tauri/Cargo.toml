@@ -1,6 +1,6 @@
 [package]
 name = "notesagent-desktop"
-version = "0.5.5-alpha"
+version = "0.5.5-alpha2"
 edition = "2021"
 rust-version = "1.89"
 
