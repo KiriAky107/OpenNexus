@@ -4,10 +4,13 @@ import appPackage from '../../../package.json'
 import { t } from '@/i18n'
 import { checkGithubRelease, openExternalUrl, type ReleaseCheck } from '@/services/releaseService'
 import appLogoUrl from '@/assets/opennexus-logo.svg'
+import { useThemeStore } from '@/stores/theme'
 
 const result = ref<ReleaseCheck>()
 const loading = ref(false)
 const error = ref('')
+const themeStore = useThemeStore()
+const darkAppLogoUrl = '/branding/opennexus-logo-dark.svg'
 
 async function check() {
   if (loading.value) return
@@ -23,7 +26,7 @@ onMounted(check)
 
 <template>
   <section class="feature-page about-page">
-    <header class="about-brand"><img :src="appLogoUrl" alt="OpenNexus" /><div><h1>OpenNexus</h1><p>{{ t('本地优先、以 Vault 为边界的 AI 笔记与知识工作台。', 'A local-first AI notes and knowledge workspace organized around Vault boundaries.') }}</p></div></header>
+    <header class="about-brand"><img :src="themeStore.isDark ? darkAppLogoUrl : appLogoUrl" alt="OpenNexus" /><div><h1>OpenNexus</h1><p>{{ t('本地优先、以 Vault 为边界的 AI 笔记与知识工作台。', 'A local-first AI notes and knowledge workspace organized around Vault boundaries.') }}</p></div></header>
     <article class="panel about-card">
       <h2>{{ t('关于', 'About') }}</h2>
       <dl><div><dt>{{ t('当前版本', 'Current version') }}</dt><dd>v{{ appPackage.version }}</dd></div><div><dt>{{ t('许可证', 'License') }}</dt><dd>MIT</dd></div><div><dt>{{ t('项目主页', 'Project') }}</dt><dd><button class="link-button" @click="openExternalUrl('https://github.com/KiriAky107/OpenNexus')">github.com/KiriAky107/OpenNexus</button></dd></div></dl>

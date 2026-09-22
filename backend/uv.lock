@@ -1120,7 +1120,7 @@ wheels = [
 
 [[package]]
 name = "notes-agent-backend"
-version = "0.5.4a0"
+version = "0.5.5a0"
 source = { virtual = "." }
 dependencies = [
     { name = "croniter" },

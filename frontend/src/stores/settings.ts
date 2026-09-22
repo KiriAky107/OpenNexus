@@ -18,6 +18,10 @@ export const useSettingsStore = defineStore('settings', () => {
   const language = appLocale
   const appVersion = ref(packageInfo.version)
   const aiCoreVersion = ref('—')
+  const taskNotificationsEnabled = ref(saved.taskNotificationsEnabled !== false)
+  const taskSuccessNotifications = ref(saved.taskSuccessNotifications !== false)
+  const taskFailureNotifications = ref(saved.taskFailureNotifications !== false)
+  const taskUpcomingNotifications = ref(saved.taskUpcomingNotifications !== false)
 
   // 编辑
   const defaultEditorMode = ref<'wysiwyg' | 'source'>(saved.defaultEditorMode === 'source' ? 'source' : 'wysiwyg')
@@ -49,6 +53,10 @@ export const useSettingsStore = defineStore('settings', () => {
     restoreLastVault: restoreLastVault.value, autoSaveInterval: autoSaveInterval.value,
     language: language.value, defaultEditorMode: defaultEditorMode.value,
     editorLineWidth: editorLineWidth.value, spellCheck: spellCheck.value,
+    taskNotificationsEnabled: taskNotificationsEnabled.value,
+    taskSuccessNotifications: taskSuccessNotifications.value,
+    taskFailureNotifications: taskFailureNotifications.value,
+    taskUpcomingNotifications: taskUpcomingNotifications.value,
   }), (value) => localStorage.setItem('app-settings', JSON.stringify(value)), { deep: true })
 
   async function loadDiagnostics() {
@@ -88,6 +96,10 @@ export const useSettingsStore = defineStore('settings', () => {
     language,
     appVersion,
     aiCoreVersion,
+    taskNotificationsEnabled,
+    taskSuccessNotifications,
+    taskFailureNotifications,
+    taskUpcomingNotifications,
     defaultEditorMode,
     editorLineWidth,
     spellCheck,

@@ -15,7 +15,9 @@ const desktop = isDesktop()
   <div v-if="isVaultEntry" class="entry-shell">
     <TitleBar v-if="desktop" />
     <TitleBarMenu v-if="desktop" />
-    <router-view />
+    <main class="entry-content">
+      <router-view />
+    </main>
   </div>
   <AppShell v-else>
     <router-view />
@@ -26,7 +28,16 @@ const desktop = isDesktop()
 .entry-shell {
   display: flex;
   flex-direction: column;
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.entry-content {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 </style>
