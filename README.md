@@ -26,6 +26,7 @@
     <img src="https://img.shields.io/badge/Frontend-Vue_3-42b883?style=flat-square" alt="Frontend Vue" />
     <img src="https://img.shields.io/badge/Core-FastAPI-05998b?style=flat-square" alt="Backend FastAPI" />
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e?style=flat-square" alt="License" /></a>
+    <a href="visitors"><img src="https://visitor-badge.laobi.icu/badge?page_id=KiriAky107.OpenNexus" /></a>
   </p>
 
 </div>
