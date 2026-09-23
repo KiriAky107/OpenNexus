@@ -24,6 +24,12 @@ MAX_UPLOAD_BYTES = MAX_LOCAL_MEDIA_BYTES
 MEDIA_SUFFIXES = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".mp4", ".webm", ".txt", ".md", ".docx", ".pptx", ".ppt", ".png", ".jpg", ".jpeg", ".webp"}
 
 
+@router.get("/transcriptions/{job_id}/artifacts")
+async def get_artifacts(job_id: str):
+    from app.services.media_notes import list_transcript_artifacts
+    return await list_transcript_artifacts(job_id)
+
+
 @router.post("/attachments", status_code=201)
 async def upload_attachment(request: Request, filename: str = Query(min_length=1, max_length=255),
                             idempotency_key: str | None = Header(None, min_length=16, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")):
