@@ -29,6 +29,7 @@ dev = [
 ]
 packaging = [
     "pyinstaller>=6.16,<7",
+    "uv==0.9.24",
 ]
 
 [tool.pytest.ini_options]

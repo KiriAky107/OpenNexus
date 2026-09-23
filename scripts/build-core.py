@@ -6,6 +6,7 @@
 from __future__ import annotations
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+import uv
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -56,6 +58,13 @@ def main():
     options = arguments()
     output = ROOT / ".build" / "sidecar"
     output.mkdir(parents=True, exist_ok=True)
+    installer_data = ['--add-binary', str(uv.find_uv_bin()) + ':tools']
+    distribution = importlib.metadata.distribution('uv')
+    licenses = [file for file in distribution.files or [] if '/licenses/LICENSE-' in str(file)]
+    if not licenses:
+        raise RuntimeError('Bundled uv license notices are missing')
+    for file in licenses:
+        installer_data.extend(['--add-data', str(distribution.locate_file(file)) + ':tools/licenses/uv'])
     subprocess.run([
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--onedir",
         "--name", "opennexus-core", "--distpath", str(output / "dist"),
@@ -74,6 +83,7 @@ def main():
         "--add-data", str(ROOT / "backend" / "extensions" / "skills" / "knowledge-assistant") + ":extensions/skills/knowledge-assistant",
         "--add-data", str(ROOT / "backend" / "extensions" / "skills" / "chat-operator") + ":extensions/skills/chat-operator",
         "--copy-metadata", "cryptography", "--copy-metadata", "uvicorn",
+        *installer_data,
         str(ROOT / "backend" / "sidecar_entry.py"),
     ], cwd=ROOT / "backend", check=True)
     bundle = output / "dist" / "opennexus-core"
