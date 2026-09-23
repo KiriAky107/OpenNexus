@@ -1,6 +1,6 @@
 # OpenNexus Code of Conduct
 
-[简体中文](https://www.google.com/search?q=CODE_OF_CONDUCT.zh-CN.md&utm_source=gemini) | **English**
+[简体中文](CODE_OF_CONDUCT.zh-CN.md) | **English**
 
 ---
 
