@@ -108,14 +108,15 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
       <p>{{ t('本机待提交设置已保留，请选择使用哪一份。', 'The local preference draft is retained. Choose which version to use.') }}</p>
       <div v-if="issue.hasDraft" class="inline-actions"><button :disabled="busy" @click="act(() => resolvePreferenceDraft(issue.kind, 'local'))">{{ t('保留本机设置', 'Keep local settings') }}</button><button :disabled="busy" @click="act(() => resolvePreferenceDraft(issue.kind, 'remote'))">{{ t('采用工作区设置', 'Use workspace settings') }}</button></div>
     </article>
-    <form class="sync-form" @submit.prevent="login">
+    <div class="sync-overview"><span class="badge" :class="{ success: connected, warning: status?.paused }">{{ connected ? t('已连接', 'Connected') : t('未连接', 'Not connected') }}</span><span>{{ status?.binding ? t('已绑定当前知识库', 'Current vault bound') : t('尚未绑定知识库', 'No vault bound') }}</span><span v-if="status">{{ t('待上传', 'Pending uploads') }} {{ status.pending }} · {{ t('冲突', 'Conflicts') }} {{ status.conflicts.length }}</span></div>
+    <details class="ui-disclosure connection-settings" :open="!connected"><summary>{{ t('服务器连接与登录', 'Server connection and sign-in') }}</summary><form class="sync-form" @submit.prevent="login">
       <label>{{ t('服务器地址', 'Server URL') }}<input v-model="endpoint" required :disabled="!!status?.binding || busy" type="url" autocomplete="url" /></label>
       <label>{{ t('账户', 'Account') }}<input v-model="account" required :disabled="!!status?.binding || busy" autocomplete="username" /></label>
       <label>{{ t('密码', 'Password') }}<input v-model="password" required type="password" autocomplete="current-password" :disabled="busy" /></label>
       <label>{{ t('设备名称', 'Device name') }}<input v-model="device" required maxlength="100" :disabled="busy" /></label>
       <label class="test-http"><input v-model="testHttp" type="checkbox" :disabled="busy" />{{ t('仅测试：允许 HTTP 明文连接', 'Testing only: allow unencrypted HTTP') }}</label>
       <button class="button-primary" :disabled="busy || !password">{{ t('登录', 'Sign in') }}</button>
-    </form>
+    </form></details>
     <div v-if="connected && !status?.binding" class="sync-connect">
       <button :disabled="busy" @click="act(listVaults)">{{ t('刷新远端库', 'Refresh vaults') }}</button>
       <label>{{ t('远端库', 'Remote vault') }}<select v-model="selected"><option value="">{{ t('请选择', 'Choose a vault') }}</option><option v-for="vault in remoteVaults" :key="vault.id" :value="vault.id">{{ vault.name }} · {{ vault.sequence }}</option></select></label>
@@ -128,7 +129,7 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
         <div class="inline-actions"><button :disabled="previewPage === 0" @click="previewPage--">{{ t('上一页', 'Previous') }}</button><button :disabled="(previewPage + 1) * 100 >= preview.items.length" @click="previewPage++">{{ t('下一页', 'Next') }}</button><button :disabled="busy" @click="merge">{{ t('确认合并并绑定', 'Confirm merge and bind') }}</button></div>
       </div>
     </div>
-    <fieldset v-if="status" :disabled="busy || !!status.binding" class="sync-scope">
+    <details v-if="status" class="ui-disclosure"><summary>{{ t('同步范围', 'Sync scope') }}</summary><fieldset :disabled="busy || !!status.binding" class="sync-scope">
       <legend>{{ t('可选同步内容', 'Optional sync content') }}</legend>
       <label><input type="checkbox" :checked="status.optional_scope?.persona ?? false" @change="setScope('persona', $event)" />{{ t('工作区人设', 'Workspace persona') }}</label>
       <label><input type="checkbox" :checked="status.optional_scope?.layout ?? false" @change="setScope('layout', $event)" />{{ t('侧栏布局', 'Sidebar layout') }}</label>
@@ -137,10 +138,10 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
       <label><input type="checkbox" :checked="status.optional_scope?.provider_settings ?? false" @change="setScope('provider_settings', $event)" />{{ t('Provider 通用参数（不含凭据）', 'Provider parameters (credentials excluded)') }}</label>
       <label><input type="checkbox" :checked="status.optional_scope?.extension_installations ?? false" @change="setScope('extension_installations', $event)" />{{ t('扩展安装清单（需重新下载和授权）', 'Extension list (download and authorize again)') }}</label>
       <p>{{ t('默认仅保存在本机。修改已绑定范围时，请先解除绑定，再重新预览合并；关闭选项不会删除远端内容。', 'Kept locally by default. Unbind before changing scope, then preview a new merge. Disabling an option does not delete remote content.') }}</p>
-    </fieldset>
+    </fieldset></details>
     <div v-if="status?.binding" class="sync-bound">
-      <p>{{ status.binding.endpoint }} · {{ status.binding.account }} · {{ status.binding.remote_vault }}</p>
-      <p aria-live="polite">{{ status.paused ? t('已暂停', 'Paused') : status.running ? t('同步中', 'Syncing') : status.halted ? t('自动同步已停止，请处理错误后重试', 'Automatic sync stopped; resolve the error and retry') : t('等待下一轮同步', 'Waiting for next sync') }} · {{ t('待上传', 'Pending') }} {{ status.pending }} · cursor {{ status.binding.cursor }}</p>
+      <p>{{ status.binding.endpoint }} · {{ status.binding.account }}</p>
+      <p aria-live="polite">{{ status.paused ? t('已暂停', 'Paused') : status.running ? t('同步中', 'Syncing') : status.halted ? t('自动同步已停止，请处理错误后重试', 'Automatic sync stopped; resolve the error and retry') : t('等待下一轮同步', 'Waiting for next sync') }} · {{ t('待上传', 'Pending') }} {{ status.pending }}</p>
       <p v-if="status.credential_state !== 'ready'" role="status">{{ status.credential_state }}</p>
       <p v-if="status.error" role="alert">{{ status.error }}<span v-if="status.retry_in && !status.halted"> · {{ status.retry_in }}s</span></p>
       <div class="inline-actions">
@@ -165,9 +166,20 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
 <style scoped>
 .sync-form,.sync-connect,.sync-bound { display:grid;gap:12px;margin-top:16px }
 .sync-form label,.sync-connect label,.sync-conflict label { display:grid;gap:5px }
-input,select { padding:8px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-primary);color:inherit;min-width:0 }
+input,select { padding:8px;border:1px solid var(--color-border-default);border-radius:6px;background:var(--color-surface-primary);color:inherit;min-width:0 }
 .test-http { display:flex!important;align-items:center }
 .inline-actions { display:flex;flex-wrap:wrap;gap:8px }
-.sync-conflict { border:1px solid var(--border-color);padding:14px;border-radius:8px;display:grid;gap:10px }
-button { padding:7px 12px;cursor:pointer } button:disabled { cursor:default;opacity:.5 }
+.sync-conflict { border:1px solid var(--color-border-default);padding:14px;border-radius:8px;display:grid;gap:10px }
+button { padding:9px 14px;cursor:pointer;border:1px solid var(--color-border-default);border-radius:var(--radius-md);background:var(--color-surface-primary);color:var(--color-text-primary) }
+button.button-primary { background: var(--color-accent-primary); color: var(--color-text-inverse); border-color: transparent; }
+.sync-overview { display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:14px;background:var(--color-background-secondary);border-radius:var(--radius-md) }
+.sync-form { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.sync-form .test-http { grid-column:1/-1; }
+.sync-scope { display:flex;flex-wrap:wrap;gap:14px;border:0;min-width:0; }
+.sync-scope label { display:flex;align-items:center;gap:8px; }
+.sync-scope p { width:100%;color:var(--color-text-secondary); }
+.sync-scope legend { display:none; }
+.sync-conflict { border-left:3px solid var(--color-warning);overflow-wrap:anywhere; }
+input:not([type='checkbox']) { min-height:38px; }
+@media(max-width:700px) { .sync-form { grid-template-columns:1fr; } } button:disabled { cursor:default;opacity:.5 }
 </style>

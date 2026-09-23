@@ -6,6 +6,7 @@ import { useAgentStore } from '@/stores/agent'
 import { useProviderStore } from '@/stores/provider'
 import { useSkillStore } from '@/stores/skill'
 import TraceTimeline from './TraceTimeline.vue'
+import MarkdownContent from '@/components/common/MarkdownContent.vue'
 import type { AgentEvent } from '@/contracts'
 import { localizeDetails, permissionLabel, runStatusLabel, toolLabel } from './labels'
 import ToolOption from './ToolOption.vue'
@@ -27,6 +28,17 @@ const form = reactive({
 
 const models = computed(() => providerStore.modelsByProvider[form.provider_id] ?? [])
 const isNewRun = computed(() => !route.params.runId)
+const toolQuery = ref('')
+const visibleTools = computed(() => agentStore.tools.filter(tool => `${tool.name} ${tool.description}`.toLowerCase().includes(toolQuery.value.trim().toLowerCase())))
+const output = computed(() => agentStore.activeRun?.output || [...agentStore.events].reverse().find(event => event.event === 'RunCompleted')?.data.output || '')
+const currentActivity = computed(() => {
+  const event = [...agentStore.events].reverse().find(event => ['ToolCall', 'ModelCallStarted', 'PermissionRequired', 'RunCompleted', 'RunFailed', 'RunCancelled'].includes(event.event))
+  if (!event) return t('等待开始', 'Waiting to start')
+  if (event.event === 'ToolCall') return `${t('正在调用', 'Using')} ${toolLabel(String(event.data.name || ''))}`
+  if (event.event === 'ModelCallStarted') return t('模型正在处理任务', 'The model is working on the task')
+  if (event.event === 'PermissionRequired') return t('等待您确认操作权限', 'Waiting for your permission')
+  return eventText(event) || t('运行已结束，请检查结果', 'Run ended; review the result')
+})
 
 onMounted(async () => {
   try {
@@ -89,7 +101,7 @@ async function handleOpenCitation(data: Record<string, unknown>) {
 
 <template>
   <section class="feature-page agent-page">
-    <header class="feature-header"><div><h1>{{ isNewRun ? t('创建智能体运行', 'Create Agent Run') : t('智能体执行轨迹', 'Agent Trace') }}</h1><p>{{ t('配置执行边界，并实时查看模型、工具和权限事件。', 'Configure execution limits and inspect model, tool, and permission events in real time.') }}</p></div>
+    <header class="feature-header"><div><h1>{{ isNewRun ? t('智能体', 'Agent') : t('任务进展', 'Task progress') }}</h1><p>{{ t('描述目标，选择模型与技能，检查执行结果。', 'Describe a goal, choose a model and skill, then review the result.') }}</p></div>
       <button v-if="!isNewRun" class="button-secondary" @click="router.push({ name: 'agent' })">{{ t('新建运行', 'New run') }}</button></header>
     <div v-if="pageError || agentStore.error || providerStore.error" class="error-banner">{{ pageError || agentStore.error || providerStore.error }}</div>
     <form v-if="isNewRun" class="panel run-form" @submit.prevent="createRun">
@@ -98,13 +110,15 @@ async function handleOpenCitation(data: Record<string, unknown>) {
         <div class="field"><label>{{ t('模型提供商', 'Model provider') }}</label><select v-model="form.provider_id" class="select"><option v-for="p in providerStore.enabledProviders" :key="p.provider_id" :value="p.provider_id">{{ p.name }}</option></select></div>
         <div class="field"><label>{{ t('模型', 'Model') }}</label><input v-model="form.model" class="input" list="agent-models" :placeholder="t('填写模型 ID', 'Enter model ID')" required /><datalist id="agent-models"><option v-for="m in models" :key="m.model_id" :value="m.model_id">{{ m.name }}</option></datalist></div>
         <div class="field"><label>{{ t('技能', 'Skill') }}</label><select v-model="form.skill_id" class="select"><option value="">{{ t('不使用技能', 'No skill') }}</option><optgroup :label="t('已安装 Skill', 'Installed Skills')"><option v-for="s in skillStore.readySkills" :key="s.skill_id" :value="s.skill_id">{{ s.name }}</option></optgroup><optgroup :label="t('当前库的用户 Skill', 'User Skills in this Vault')"><option v-for="s in skillStore.readyUserSkills" :key="s.skill_id" :value="s.skill_id">{{ s.data.name }}</option></optgroup></select></div>
+      </div>
+      <details class="ui-disclosure"><summary>{{ t('执行边界与高级设置', 'Execution limits and advanced settings') }}</summary><div class="form-grid">
         <div class="field"><label>{{ t('最大步骤', 'Maximum steps') }}</label><input v-model.number="form.max_steps" class="input" type="number" min="1" max="100" /></div>
         <div class="field"><label>{{ t('工具超时（秒）', 'Tool timeout (seconds)') }}</label><input v-model.number="form.tool_timeout_seconds" class="input" type="number" min="1" /></div>
         <div class="field"><label>{{ t('运行超时（秒）', 'Run timeout (seconds)') }}</label><input v-model.number="form.run_timeout_seconds" class="input" type="number" min="1" /></div>
         <div class="field budget-field"><label><input v-model="form.limit_token_budget" type="checkbox" />{{ t('限制令牌消耗', 'Limit token usage') }}</label><input v-if="form.limit_token_budget" v-model.number="form.token_budget" class="input" type="number" min="1" :aria-label="t('令牌上限', 'Token limit')" /><small v-else class="subtle">{{ t('默认不限制；仍可随时取消运行。', 'Unlimited by default; the run can still be cancelled at any time.') }}</small></div>
         <div class="field"><label>{{ t('最大并发工具', 'Maximum concurrent tools') }}</label><input v-model.number="form.max_concurrent_tools" class="input" type="number" min="1" /></div>
-      </div>
-      <div class="field"><label>{{ t('允许使用的工具', 'Allowed tools') }}</label><div class="tool-grid"><ToolOption v-for="tool in agentStore.tools" :key="tool.name" :name="tool.name" :description="tool.description" :selected="form.allowed_tools.includes(tool.name)" @toggle="toggleTool" /></div></div>
+      </div></details>
+      <details class="ui-disclosure"><summary>{{ t('工具与权限', 'Tools and permissions') }} · {{ t(`已选 ${form.allowed_tools.length} 项`, `${form.allowed_tools.length} selected`) }}</summary><p class="subtle">{{ t('留空时使用所选 Skill 的工具范围；未选 Skill 时需要手动选择工具。权限确认仍然生效。', 'Leave empty to use the selected Skill’s tools, or select tools manually without a Skill. Permission checks still apply.') }}</p><input v-model="toolQuery" class="input" :placeholder="t('搜索工具名称或用途', 'Search tools by name or purpose')" :aria-label="t('筛选工具', 'Filter tools')" /><div class="tool-grid"><ToolOption v-for="tool in visibleTools" :key="tool.name" :name="tool.name" :description="tool.description" :selected="form.allowed_tools.includes(tool.name)" @toggle="toggleTool" /></div></details>
       <label class="network"><input v-model="form.allow_network" type="checkbox" /> {{ t('允许本次运行调用网络工具', 'Allow network tools for this run') }}</label>
       <div class="inline-actions"><button class="button-primary" :disabled="agentStore.isCreating || !form.input.trim() || !form.provider_id || !form.model.trim()">{{ agentStore.isCreating ? t('创建中…', 'Creating…') : t('创建并运行', 'Create and run') }}</button></div>
     </form>
@@ -118,7 +132,8 @@ async function handleOpenCitation(data: Record<string, unknown>) {
             warning: agentStore.activeRun?.status === 'waiting_permission',
             info: agentStore.activeRun?.status === 'running' || agentStore.activeRun?.status === 'queued',
           }">{{ runStatusLabel(agentStore.activeRun?.status) }}</span>
-          <h2>{{ agentStore.activeRun?.run_id ?? agentStore.activeRunId }}</h2>
+          <h2>{{ agentStore.activeRun?.input || t('智能体任务', 'Agent task') }}</h2>
+          <p class="activity" role="status">{{ currentActivity }}</p>
           <p v-if="agentStore.activeRun" class="run-meta">
             <span>{{ t('步骤', 'Step') }} {{ agentStore.currentStep }} / {{ agentStore.activeRun.max_steps }}</span>
             <span>·</span>
@@ -131,14 +146,16 @@ async function handleOpenCitation(data: Record<string, unknown>) {
           <span v-if="agentStore.connectionState === 'reconnecting'">{{ t('正在恢复连接…', 'Reconnecting…') }}</span>
           <button v-if="agentStore.connectionState === 'disconnected'" class="button-secondary" @click="agentStore.reconnect()">{{ t('恢复连接', 'Reconnect') }}</button>
           <button v-if="agentStore.isRunning" class="button-danger" @click="agentStore.cancelRun(agentStore.activeRunId!)">{{ t('取消运行', 'Cancel run') }}</button>
-          <button class="button-secondary" @click="agentStore.loadRun(agentStore.activeRunId!)">重新加载</button>
+          <button class="button-secondary" @click="agentStore.loadRun(agentStore.activeRunId!)">{{ t('重新加载', 'Reload') }}</button>
         </div>
       </div>
-      <TraceTimeline
+      <section v-if="output" class="panel agent-result"><h2>{{ t('执行结果', 'Result') }}</h2><MarkdownContent :source="String(output)" /></section>
+      <p v-if="agentStore.activeRun?.error" class="error-banner" role="alert">{{ agentStore.activeRun.error }}</p>
+      <details class="ui-disclosure trace-disclosure"><summary>{{ t('执行详情与来源', 'Execution details and sources') }} · {{ agentStore.events.length }}</summary><TraceTimeline
         :events="agentStore.events"
         :run-status="agentStore.activeRun?.status"
         @open-citation="handleOpenCitation"
-      />
+      /></details>
     </div>
 
     <AppDialog v-if="agentStore.permissionRequest" :label="t('权限确认', 'Permission confirmation')" :dismissible="false">
@@ -171,9 +188,9 @@ async function handleOpenCitation(data: Record<string, unknown>) {
 }
 .run-summary h2 {
   margin-top: var(--space-sm);
-  font-family: var(--font-ui-mono);
   font-size: var(--font-size-lg);
-  word-break: break-all;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 .run-meta {
   display: flex;
@@ -183,4 +200,9 @@ async function handleOpenCitation(data: Record<string, unknown>) {
   color: var(--color-text-tertiary);
 }
 .permission-actions { margin-top: var(--space-lg); }
+.activity { color: var(--color-text-secondary); margin-top: 12px; }
+.tool-grid { max-height: 360px; overflow: auto; margin-top: 12px; }
+.agent-result h2 { margin-bottom: 16px; font-size: var(--font-size-lg); }
+.run-meta { flex-wrap: wrap; }
+@media(max-width:720px) { .run-summary { flex-direction: column; } }
 </style>

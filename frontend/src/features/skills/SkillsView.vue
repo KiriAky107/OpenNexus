@@ -6,14 +6,17 @@ const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 import { Lightning } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import ExtensionInstallDialog from '@/components/common/ExtensionInstallDialog.vue'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useSkillStore } from '@/stores/skill'
 import { t } from '@/i18n'
+import { statusLabel } from '@/utils/statusLabels'
 import UserSkillEditor from './UserSkillEditor.vue'
 
 const skillStore = useSkillStore()
 const actionError = ref('')
 const showInstall = ref(false)
+const query = ref('')
+const visibleSkills = computed(() => skillStore.skills.filter(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(query.value.trim().toLowerCase())))
 const restoreNoticeKey = ref(0)
 onMounted(() => { void skillStore.loadSkills() })
 
@@ -39,20 +42,26 @@ async function uninstall(skillId: string, name: string) {
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <ExtensionInstallDialog v-if="showInstall" kind="Skill" :install="skillStore.installSkill" @close="showInstall = false" @installed="installed" />
     <header class="feature-header"><div><h1>{{ t('Skill 管理', 'Skill Management') }}</h1><p>{{ t('查看工作流使用的 Tool、权限、检索配置和模型要求。', 'Review the tools, permissions, retrieval settings, and model requirements used by workflows.') }}</p></div><button class="button-primary" @click="showInstall = true">{{ t('安装 Skill', 'Install Skill') }}</button></header>
-    <UserSkillEditor />
+    <details class="ui-disclosure user-skills"><summary>{{ t('当前知识库的自定义 Skill', 'Custom Skills in this vault') }}</summary><UserSkillEditor /></details>
+    <div class="extension-filter"><input v-model="query" class="input" :placeholder="t('搜索已安装 Skill', 'Search installed Skills')" :aria-label="t('搜索 Skill', 'Search Skills')" /><button v-if="skillStore.selectedSkill" class="button-secondary" @click="skillStore.selectSkill('')">{{ t('返回全部', 'Back to all') }}</button></div>
     <div v-if="skillStore.error || actionError" class="error-banner">{{ skillStore.error || actionError }}</div>
     <div v-if="skillStore.selectedSkill" class="panel detail-panel">
-      <div class="detail-head"><div><span class="badge" :class="{ success: skillStore.selectedSkill.status === 'ready', error: skillStore.selectedSkill.status === 'error', warning: skillStore.selectedSkill.status.includes('missing') }">{{ skillStore.selectedSkill.status }}</span><h2>{{ skillStore.selectedSkill.icon }} {{ skillStore.selectedSkill.name }}</h2><p class="muted">v{{ skillStore.selectedSkill.version }} · {{ skillStore.selectedSkill.author || t('未知作者', 'Unknown author') }}</p></div><div class="inline-actions"><button class="button-secondary" @click="toggle(skillStore.selectedSkill.skill_id, skillStore.selectedSkill.enabled)">{{ skillStore.selectedSkill.enabled ? t('停用', 'Disable') : t('启用', 'Enable') }}</button><button class="button-danger" @click="uninstall(skillStore.selectedSkill.skill_id, skillStore.selectedSkill.name)">{{ t('卸载', 'Uninstall') }}</button></div></div>
+      <div class="detail-head"><div><span class="badge" :class="{ success: skillStore.selectedSkill.status === 'ready', error: skillStore.selectedSkill.status === 'error', warning: skillStore.selectedSkill.status.includes('missing') }">{{ statusLabel(skillStore.selectedSkill.status) }}</span><h2>{{ skillStore.selectedSkill.icon }} {{ skillStore.selectedSkill.name }}</h2><p class="muted">v{{ skillStore.selectedSkill.version }} · {{ skillStore.selectedSkill.author || t('未知作者', 'Unknown author') }}</p></div><div class="inline-actions"><button class="button-secondary" @click="toggle(skillStore.selectedSkill.skill_id, skillStore.selectedSkill.enabled)">{{ skillStore.selectedSkill.enabled ? t('停用', 'Disable') : t('启用', 'Enable') }}</button><button class="button-danger" @click="uninstall(skillStore.selectedSkill.skill_id, skillStore.selectedSkill.name)">{{ t('卸载', 'Uninstall') }}</button></div></div>
       <p class="description">{{ skillStore.selectedSkill.description }}</p>
       <div class="detail-grid"><div><h3>{{ t('工具', 'Tools') }}</h3><div class="tag-list"><span v-for="tool in skillStore.selectedSkill.tools" :key="tool" class="badge info">{{ tool }}</span></div></div><div><h3>{{ t('权限', 'Permissions') }}</h3><div class="tag-list"><span v-for="permission in skillStore.selectedSkill.permissions" :key="permission" class="badge warning">{{ permission }}</span></div></div><div><h3>{{ t('检索配置', 'Retrieval Settings') }}</h3><pre>{{ JSON.stringify(skillStore.selectedSkill.retrieval_config, null, 2) }}</pre></div><div><h3>{{ t('模型能力', 'Model Capabilities') }}</h3><div class="tag-list"><span v-for="cap in skillStore.selectedSkill.model_requirements?.capabilities" :key="cap" class="badge">{{ cap }}</span></div></div></div>
       <div v-if="skillStore.selectedSkill.missing_dependencies?.length" class="error-banner dependencies">{{ t('缺失依赖：', 'Missing dependencies: ') }}{{ skillStore.selectedSkill.missing_dependencies.join(', ') }}</div>
     </div>
     <div v-else-if="!skillStore.skills.length" class="empty-state"><div><strong>{{ skillStore.isLoading ? t('正在加载…', 'Loading…') : skillStore.error ? t('加载失败', 'Load failed') : t('尚未安装', 'Not installed') }}</strong><button class="button-secondary" @click="skillStore.loadSkills">{{ t('重新加载', 'Reload') }}</button></div></div>
-    <div v-else class="feature-grid"><article v-for="skill in skillStore.skills" :key="skill.skill_id" class="item-card extension-card" @click="skillStore.selectSkill(skill.skill_id)"><div class="extension-title"><AppIcon :icon="Lightning" :size="22" /><div><strong>{{ skill.name }}</strong><p>v{{ skill.version }}</p></div><span class="badge" :class="{ success: skill.status === 'ready', warning: skill.status === 'dependency_missing' }">{{ skill.status }}</span></div><p class="muted">{{ skill.description }}</p><div class="tag-list"><span v-for="permission in skill.permissions.slice(0, 3)" :key="permission" class="badge">{{ permission }}</span></div></article></div>
+    <div v-else class="feature-grid"><article v-for="skill in visibleSkills" :key="skill.skill_id" class="item-card extension-card" tabindex="0" role="button" @keydown.enter="skillStore.selectSkill(skill.skill_id)" @keydown.space.prevent="skillStore.selectSkill(skill.skill_id)" @click="skillStore.selectSkill(skill.skill_id)"><div class="extension-title"><AppIcon :icon="Lightning" :size="22" /><div><strong>{{ skill.name }}</strong><p>v{{ skill.version }}</p></div><span class="badge" :class="{ success: skill.status === 'ready', warning: skill.status === 'dependency_missing' }">{{ statusLabel(skill.status) }}</span></div><p class="muted">{{ skill.description }}</p><div class="tag-list"><span v-for="permission in skill.permissions.slice(0, 3)" :key="permission" class="badge">{{ permission }}</span></div></article></div>
   </section>
 </template>
 
 <style scoped>
+.user-skills { max-width: 1180px; margin: 0 auto 16px; }
+.extension-filter { display: flex; gap: 12px; max-width: 1180px; margin: 0 auto 16px; }
+.extension-filter .input { max-width: 400px; }
+.extension-card { min-width: 0; overflow-wrap: anywhere; }
+.detail-grid pre { overflow: auto; }
 .detail-head, .extension-title { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-md); }
 .detail-head h2 { margin-top: var(--space-sm); }
 .description { margin: var(--space-xl) 0; line-height: var(--line-height-relaxed); }

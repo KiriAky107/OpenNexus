@@ -2,9 +2,7 @@
   height: 100%;
   overflow: auto;
   padding: clamp(var(--space-lg), 3vw, var(--space-3xl));
-  background:
-    radial-gradient(circle at 92% -8%, var(--color-accent-soft) 0, transparent 28%),
-    var(--color-background-primary);
+  background: var(--color-background-primary);
   user-select: text;
   scrollbar-gutter: stable;
   animation: page-in var(--motion-normal) both;
@@ -43,7 +41,7 @@
   padding: var(--space-lg);
   transition: border-color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast), background-color var(--motion-fast);
 }
-.item-card:hover { border-color: var(--color-accent-secondary); box-shadow: var(--shadow-md); transform: translateY(-2px); }
+.item-card:hover { border-color: var(--color-accent-secondary); }
 .item-card.selected { border-color: var(--color-accent-primary); box-shadow: 0 0 0 3px var(--color-accent-soft), var(--shadow-md); }
 .panel-title { margin-bottom: var(--space-md); font-size: var(--font-size-xl); }
 .muted { color: var(--color-text-secondary); }
@@ -59,7 +57,7 @@
   transition: background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
 }
 
-.button-primary { background: var(--color-accent-primary); color: var(--color-text-inverse); box-shadow: 0 4px 12px color-mix(in srgb, var(--color-accent-primary) 24%, transparent); }
+.button-primary { background: var(--color-accent-primary); color: var(--color-text-inverse); }
 .button-primary:hover { background: var(--color-accent-primary-hover); transform: translateY(-1px); box-shadow: 0 7px 18px color-mix(in srgb, var(--color-accent-primary) 28%, transparent); }
 .button-secondary { border-color: var(--color-border-default); background: var(--color-surface-primary); }
 .button-secondary:hover, .icon-button:hover { border-color: var(--color-accent-secondary); background: var(--color-background-hover); color: var(--color-accent-primary); transform: translateY(-1px); }

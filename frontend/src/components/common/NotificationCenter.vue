@@ -138,11 +138,13 @@ onUnmounted(() => {
 .notification-center {
   position: fixed;
   right: var(--space-xl);
-  bottom: calc(var(--statusbar-height) + var(--space-xl));
+  bottom: calc(var(--statusbar-height) + 88px);
   z-index: var(--z-notification);
   display: grid;
   width: min(380px, calc(100vw - 32px));
   gap: var(--space-sm);
+  max-height: calc(100dvh - 200px);
+  overflow-y: auto;
   pointer-events: none;
 }
 .app-notification {
@@ -179,5 +181,5 @@ onUnmounted(() => {
   box-shadow: var(--shadow-sm);
 }
 @keyframes notification-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-@media (max-width: 560px) { .notification-center { right: var(--space-md); bottom: calc(var(--statusbar-height) + var(--space-md)); } }
+@media (max-width: 560px) { .notification-center { right: var(--space-md); } }
 </style>

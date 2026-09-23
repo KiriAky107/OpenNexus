@@ -6,6 +6,9 @@ function toAgentRun(run: ApiAgentRun): AgentRun {
   // API 的 token_usage 是累计值，UI 模型预留了输入/输出拆分字段。
   return {
     run_id: run.run_id,
+    input: run.input,
+    output: run.output,
+    model: run.model,
     status: run.status,
     current_step: run.current_step,
     max_steps: run.max_steps,

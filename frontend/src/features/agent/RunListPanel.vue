@@ -29,7 +29,7 @@ function selectRun(runId: string) { void router.push({ name: 'agent', params: { 
       <button v-for="run in visibleRuns" :key="run.run_id" class="sidebar-list-item run-item"
         :class="{ active: agentStore.activeRunId === run.run_id }" @click="selectRun(run.run_id)">
         <span class="badge" :class="{ success: run.status === 'completed', error: run.status === 'failed', warning: run.status === 'waiting_permission' }">{{ runStatusLabel(run.status) }}</span>
-        <strong>{{ run.run_id.slice(0, 12) }}</strong><small>{{ run.started_at ? new Date(run.started_at).toLocaleString(localeTag()) : t('等待开始', 'Waiting to start') }}</small>
+        <strong :title="run.input">{{ run.input || t('智能体任务', 'Agent task') }}</strong><small>{{ run.started_at ? new Date(run.started_at).toLocaleString(localeTag()) : t('等待开始', 'Waiting to start') }}</small>
       </button>
     </div>
   </div>
@@ -39,6 +39,7 @@ function selectRun(runId: string) { void router.push({ name: 'agent', params: { 
 .new-button { width: 100%; margin-bottom: var(--space-md); }
 .run-item { display: grid; gap: 3px; width: 100%; text-align: left; }
 .run-item .badge { justify-self: start; }
+.run-item strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-item small { color: var(--color-text-tertiary); }
 .error-text { margin-bottom: var(--space-sm); color: var(--color-error); }
 </style>
