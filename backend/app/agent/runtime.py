@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from app.agent.permissions import PermissionManager, PermissionMode
+from app.agent.note_references import NoteReferences, REFERENCE_INSTRUCTIONS
 from app.agent.tools import ToolExecutionContext, ToolNotFoundError, ToolRegistry
 from app.agent.trace_repository import AgentTraceRepository, sanitize_trace_value
 from app.contracts import (
@@ -323,8 +324,10 @@ class AgentRuntime:
         )
 
         messages = [Message(role=MessageRole.user, content=record.request.input)]
-        allowed_tools = self.tools.definitions(record.allowed_tools)
+        allowed_tools = [tool.model_copy(update={"parameters": NoteReferences.tool_parameters(tool.parameters)})
+                         for tool in self.tools.definitions(record.allowed_tools)]
         provider = self.providers.get(record.request.provider_id).adapter
+        references = NoteReferences()
 
         for step in range(1, record.request.max_steps + 1):
             record.run.current_step = step
@@ -346,7 +349,7 @@ class AgentRuntime:
                     ModelRequest(
                         provider_id=record.request.provider_id,
                         model=record.request.model,
-                        system=(record.skill_config.system_prompt if record.skill_config else None),
+                        system="\n".join(filter(None, [record.skill_config.system_prompt if record.skill_config else None, REFERENCE_INSTRUCTIONS])),
                         messages=messages,
                         tools=allowed_tools,
                         metadata=self._request_metadata(record),
@@ -412,7 +415,8 @@ class AgentRuntime:
 
                 async def execute(call: ToolCall) -> ToolResult:
                     async with semaphore:
-                        return await self._execute_tool(record, call, model_call_id)
+                        resolved = call.model_copy(update={"arguments": references.transform(call.arguments, restore=True)})
+                        return await self._execute_tool(record, resolved, model_call_id)
 
                 executions = [asyncio.create_task(execute(call)) for call in calls]
                 try:
@@ -430,7 +434,7 @@ class AgentRuntime:
                             role=MessageRole.tool,
                             name=call.name,
                             tool_call_id=call.tool_call_id,
-                            content=json.dumps(result.model_dump(mode="json"), ensure_ascii=False),
+                            content=json.dumps(references.transform(result.model_dump(mode="json")), ensure_ascii=False),
                         )
                     )
                 continue
