@@ -69,9 +69,13 @@ def render_snapshot(snapshot: str, page_size: str) -> ExportResult:
 
 def print_snapshot(source: Path, output: Path, page_size: str):
     """在离线、禁用 JavaScript 的上下文中将自包含 HTML 打印为 PDF。"""
+    executable = browser_executable()
+    if executable is None and getattr(sys, 'frozen', False):
+        # A developer's Playwright browser cache is not a release dependency.
+        raise RuntimeError('PDF export requires Microsoft Edge or Google Chrome. Please install either browser and retry.')
     from playwright.sync_api import sync_playwright
     with sync_playwright() as runtime:
-        browser = runtime.chromium.launch(executable_path=browser_executable(), headless=True)
+        browser = runtime.chromium.launch(executable_path=executable, headless=True)
         try:
             context = browser.new_context(java_script_enabled=False, offline=True)
             context.route('**/*', lambda route: route.abort())

@@ -10,6 +10,13 @@ from app.export import browser_pdf
 from app.export.browser_pdf import render_snapshot, browser_executable
 
 
+def test_frozen_pdf_never_depends_on_developer_browser_cache(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, 'frozen', True, raising=False)
+    monkeypatch.setattr(browser_pdf, 'browser_executable', lambda: None)
+    with pytest.raises(RuntimeError, match='Microsoft Edge or Google Chrome'):
+        browser_pdf.print_snapshot(tmp_path / 'in.html', tmp_path / 'out.pdf', 'A4')
+
+
 def test_renderer_command_dispatches_frozen_build_to_sidecar_entry(monkeypatch, tmp_path):
     source, output = tmp_path / 'snapshot.html', tmp_path / 'document.pdf'
     monkeypatch.setattr(sys, 'frozen', True, raising=False)
