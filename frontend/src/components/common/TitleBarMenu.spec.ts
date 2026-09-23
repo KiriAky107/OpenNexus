@@ -4,6 +4,7 @@ import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import TitleBarMenu from './TitleBarMenu.vue'
 
 const execute = vi.hoisted(() => vi.fn())
@@ -20,6 +21,7 @@ vi.mock('vue-router', () => ({
 }))
 
 beforeEach(() => {
+  localStorage.clear()
   setActivePinia(createPinia())
   execute.mockReset().mockResolvedValue({ ok: true })
   routerPush.mockReset()
@@ -32,6 +34,32 @@ beforeEach(() => {
 })
 
 describe('桌面顶部段落菜单', () => {
+  it('restores toolbar and file/outline panels from View with keyboard access', async () => {
+    useWorkspaceStore().hasVault = true
+    const layout = useLayoutPreferencesStore()
+    layout.editorToolbarVisible = false
+    layout.workspaceCollapsed = true
+    const wrapper = mount(TitleBarMenu, { attachTo: document.body })
+    try {
+      const trigger = wrapper.get('[data-menu="view"] .menu-trigger')
+      await trigger.trigger('keydown', { key: 'ArrowDown' })
+      expect(document.activeElement).toBe(wrapper.get('[data-view-toolbar]').element)
+      await wrapper.get('[data-view-toolbar]').trigger('click')
+      expect(layout.editorToolbarVisible).toBe(true)
+      await trigger.trigger('click')
+      await wrapper.get('[data-view-outline]').trigger('click')
+      expect(layout.workspaceTab).toBe('outline')
+      expect(layout.workspaceCollapsed).toBe(false)
+      await trigger.trigger('click')
+      expect(wrapper.get('[data-view-outline]').attributes('aria-checked')).toBe('true')
+      await wrapper.get('[data-view-outline]').trigger('click')
+      expect(layout.workspaceCollapsed).toBe(true)
+      await trigger.trigger('click')
+      await wrapper.get('[data-view-files]').trigger('click')
+      expect(layout.workspaceTab).toBe('files')
+      expect(layout.workspaceCollapsed).toBe(false)
+    } finally { wrapper.unmount() }
+  })
   it('文件菜单承载实际工作区命令和笔记导出', async () => {
     const editor = useEditorStore()
     editor.currentFilePath = '/示例.md'

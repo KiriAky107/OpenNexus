@@ -17,6 +17,7 @@ import { useEditorStore } from '@/stores/editor'
 import { executeEditorCommand } from '@/services/editorCommandService'
 import { headingFoldKey } from './headingFolding'
 import { useMarkdownPreferencesStore } from '@/stores/markdownPreferences'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import * as workspace from '@/services/workspaceService'
 
 type EditorComponent = { getEditor: () => Editor | undefined }
@@ -57,6 +58,43 @@ afterEach(() => {
 })
 
 describe('VisualMarkdownEditor formatting toolbars', () => {
+  it('hides the toolbar without recreating the editor or losing selection/history', async () => {
+    const store = useEditorStore(); store.currentFilePath = '/test.md'; store.mode = 'wysiwyg'
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: 'hello' }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    selectText(editor, 1, 6)
+    await wrapper.get('[aria-label="删除线"]').trigger('click', { detail: 0 })
+    expect(editor.action(getMarkdown())).toContain('~~hello~~')
+    await wrapper.get('[aria-label="撤销"]').trigger('click', { detail: 0 })
+    expect(editor.action(getMarkdown())).not.toContain('~~')
+    await wrapper.get('[aria-label="重做"]').trigger('click', { detail: 0 })
+    expect(editor.action(getMarkdown())).toContain('~~hello~~')
+    const selection = editor.action(ctx => ctx.get(editorViewCtx).state.selection.toJSON())
+    await wrapper.get('[aria-label="隐藏工具栏"]').trigger('click')
+    expect(wrapper.get('.markdown-toolbar').isVisible()).toBe(false)
+    expect((wrapper.vm as unknown as EditorComponent).getEditor()).toBe(editor)
+    useLayoutPreferencesStore().editorToolbarVisible = true
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('.markdown-toolbar').isVisible()).toBe(true)
+    expect(editor.action(ctx => ctx.get(editorViewCtx).state.selection.toJSON())).toEqual(selection)
+    expect(editor.action(getMarkdown())).toContain('~~hello~~')
+  })
+
+  it.each([
+    ['待办列表', 'list_item'], ['引用', 'blockquote'], ['插入表格', 'table'],
+    ['分隔线', 'hr'], ['插入 Mermaid 图表', 'code_block'],
+  ])('runs the %s toolbar command against the real document', async (label, type) => {
+    const store = useEditorStore(); store.currentFilePath = '/test.md'; store.mode = 'wysiwyg'
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: 'content' }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper)
+    await wrapper.get(`[aria-label="${label}"]`).trigger('click', { detail: 0 })
+    const types: string[] = []
+    editor.action(ctx => ctx.get(editorViewCtx).state.doc.descendants(node => { types.push(node.type.name) }))
+    expect(types).toContain(type)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  })
   it('uploads a selected image and keeps a portable Markdown reference', async () => {
     const store = useEditorStore(); store.currentFilePath = '/课程/笔记.md'; store.currentNoteId = 'note-image'
     vi.spyOn(workspace, 'storeWorkspaceImage').mockResolvedValue({

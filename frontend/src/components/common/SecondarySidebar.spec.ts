@@ -6,6 +6,33 @@ import { createPinia } from 'pinia'
 import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import SecondarySidebar from './SecondarySidebar.vue'
 
+it('collapses either tab into a rail, preserving panel instance and width', async () => {
+  localStorage.clear()
+  const pinia = createPinia()
+  const layout = useLayoutPreferencesStore(pinia)
+  layout.workspaceWidth = 336
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
+  await router.push('/')
+  const wrapper = mount(SecondarySidebar, { attachTo: document.body, props: { component: 'file-tree' }, global: { plugins: [router, pinia], stubs: { FileTreePanel: true } } })
+  const panel = wrapper.findComponent({ name: 'FileTreePanel' }).vm
+  try {
+    layout.workspaceCollapsed = true
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('aside').attributes('style')).toContain('40px')
+    expect(wrapper.find('[role="separator"]').exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'FileTreePanel' }).vm).toBe(panel)
+    expect(wrapper.get('.sidebar-content').isVisible()).toBe(false)
+    await wrapper.get('[data-panel="outline"]').trigger('click')
+    expect(layout.workspaceTab).toBe('outline')
+    expect(wrapper.get('aside').attributes('style')).toContain('336px')
+    layout.workspaceCollapsed = true
+    await wrapper.vm.$nextTick()
+    await wrapper.get('[data-panel="files"]').trigger('click')
+    expect(layout.workspaceTab).toBe('files')
+    expect(layout.workspaceWidth).toBe(336)
+  } finally { wrapper.unmount(); localStorage.clear() }
+})
+
 it('keeps conversation and file widths separate across route changes', async () => {
   localStorage.setItem('chat-sidebar-width', '320')
   localStorage.setItem('workspace-sidebar-width', '240')

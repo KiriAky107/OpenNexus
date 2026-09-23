@@ -4,7 +4,6 @@ import { useActionDialog } from '@/composables/useActionDialog'
 const { actionDialog, resolveAction, askPrompt } = useActionDialog()
 import DiagramInteractions from '@/components/common/DiagramInteractions.vue'
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Link, Fold, Expand } from '@element-plus/icons-vue'
 import { Crepe } from '@milkdown/crepe'
 import { codeBlockConfig } from '@milkdown/kit/component/code-block'
 import { basicSetup } from 'codemirror'
@@ -36,13 +35,15 @@ import {
 import { toggleStrikethroughCommand } from '@milkdown/kit/preset/gfm'
 import { commandsCtx, editorViewCtx, parserCtx, remarkStringifyOptionsCtx } from '@milkdown/kit/core'
 import { Slice } from '@milkdown/kit/prose/model'
-import { registerEditorCommands, type CommandHandler, type EditorCommandId } from '@/services/editorCommandService'
+import { executeEditorCommand, registerEditorCommands, type CommandHandler, type EditorCommandId } from '@/services/editorCommandService'
+import { undo, redo, undoDepth, redoDepth } from '@milkdown/kit/prose/history'
 import { TextSelection, Plugin } from '@milkdown/kit/prose/state'
 import { callCommand } from '@milkdown/kit/utils'
-import AppIcon from '@/components/common/AppIcon.vue'
+import ControlIcon from '@/components/common/ControlIcon.vue'
 import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore } from '@/stores/theme'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import { applyMarkdownFontSize, fontSizeMarkdownPlugin } from './fontSizeMarkdown'
 import { inlineCodeInputPlugin } from './inlineCodeInput'
 import { calloutPlugin, configureCalloutSerialization } from './calloutPlugin'
@@ -77,6 +78,19 @@ function addTags() {
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
 const themeStore = useThemeStore()
+const layout = useLayoutPreferencesStore()
+const canUndo = ref(false)
+const canRedo = ref(false)
+const commandError = ref('')
+async function toolbarCommand(id: EditorCommandId) {
+  const result = await executeEditorCommand(id)
+  commandError.value = result.ok ? '' : t('当前无法执行此操作。', 'This action is not available right now.')
+  if (result.ok) editorRoot.value?.querySelector<HTMLElement>('.ProseMirror')?.focus()
+}
+function hideToolbar() {
+  layout.editorToolbarVisible = false
+  void nextTick(() => editorRoot.value?.closest('.workspace-view')?.querySelector<HTMLButtonElement>('.toolbar-toggle')?.focus())
+}
 const editorRoot = ref<HTMLElement | null>(null)
 const loading = ref(true)
 const allHeadingsFolded = ref(false)
@@ -177,6 +191,16 @@ function insertCallout(event: Event) {
 function installCommands() {
   const targetPath = editorStore.currentFilePath
   const handlers: Partial<Record<EditorCommandId, CommandHandler>> = {}
+  for (const [id, action] of [['editor.undo', undo], ['editor.redo', redo]] as const) {
+    handlers[id] = () => crepe!.editor.action(ctx => {
+      const view = ctx.get(editorViewCtx)
+      return action(view.state, view.dispatch) ? { ok: true } : { ok: false, reason: 'unavailable' }
+    })
+  }
+  if (markdownPreferences.diagrams) handlers['editor.mermaid'] = () => {
+    insertMarkdown('```mermaid\nflowchart LR\n  A[Start] --> B[End]\n```')
+    return { ok: true }
+  }
   for (const [id, action] of [['editor.heading.toggle-fold', 'toggle'], ['editor.heading.fold-all', 'all'], ['editor.heading.unfold-all', 'none']] as const) {
     handlers[id] = () => { foldHeadings(action); return { ok: true } }
   }
@@ -481,6 +505,8 @@ onMounted(async () => {
   crepe.editor.use($prose(() => new Plugin({
     view(view) {
       const sync = (current: typeof view) => {
+        canUndo.value = undoDepth(current.state) > 0
+        canRedo.value = redoDepth(current.state) > 0
         const sections = headingSections(current.state.doc)
         const folded = headingFoldKey.getState(current.state)
         hasFoldableHeadings.value = sections.length > 0
@@ -540,57 +566,80 @@ defineExpose({ getEditor: () => crepe?.editor })
   <DiagramInteractions class="visual-editor" :class="{ 'hide-code-line-numbers': !markdownPreferences.lineNumbers }" :data-heading-style="headingAppearance.preferences.custom ? 'custom' : undefined" :style="headingAppearance.cssVariables">
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <p v-if="imageError" class="image-error" role="alert">{{ imageError }}</p>
-    <div class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
+    <p v-if="commandError" class="image-error" role="alert">{{ commandError }}</p>
+    <div v-show="layout.editorToolbarVisible" class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
+      <div class="toolbar-group" role="group" :aria-label="t('编辑历史', 'Edit history')">
+        <button type="button" :disabled="loading || !canUndo" :title="t('撤销 (Ctrl+Z)', 'Undo (Ctrl+Z)')" :aria-label="t('撤销', 'Undo')" @pointerdown.prevent="toolbarCommand('editor.undo')" @click="$event.detail === 0 && toolbarCommand('editor.undo')"><ControlIcon name="undo" /></button>
+        <button type="button" :disabled="loading || !canRedo" :title="t('重做 (Ctrl+Y)', 'Redo (Ctrl+Y)')" :aria-label="t('重做', 'Redo')" @pointerdown.prevent="toolbarCommand('editor.redo')" @click="$event.detail === 0 && toolbarCommand('editor.redo')"><ControlIcon name="redo" /></button>
+      </div>
       <div class="section-actions">
         <button type="button" :disabled="loading || !hasFoldableHeadings"
           :title="allHeadingsFolded ? t('展开所有章节正文', 'Expand all section content') : t('折叠所有章节，保留标题', 'Collapse all sections, keeping headings visible')"
           :aria-label="allHeadingsFolded ? t('展开所有章节', 'Unfold all sections') : t('折叠所有章节', 'Fold all sections')"
           @click="foldHeadings(allHeadingsFolded ? 'none' : 'all')">
-          <AppIcon :icon="allHeadingsFolded ? Expand : Fold" :size="16" />
+          <ControlIcon :name="allHeadingsFolded ? 'unfold' : 'fold'" />
           <span>{{ allHeadingsFolded ? t('全部展开', 'Expand all') : t('全部折叠', 'Collapse all') }}</span>
         </button>
       </div>
+      <div class="toolbar-group" role="group" :aria-label="t('标题与强调', 'Headings and emphasis')">
       <label class="toolbar-select heading-select" :title="t('设置标题级别', 'Set heading level')">
-        <span class="format-glyph heading-glyph">H</span>
+        <ControlIcon name="heading" />
         <select :aria-label="t('标题级别', 'Heading level')" @change="applyHeading">
           <option value="" selected>{{ t('标题', 'Heading') }}</option>
           <option value="paragraph">{{ t('正文', 'Paragraph') }}</option>
           <option v-for="level in 6" :key="level" :value="level">H{{ level }}</option>
         </select>
+        <ControlIcon class="select-chevron" name="chevron" :size="12" />
       </label>
-      <button type="button" :title="t('加粗 (Ctrl+B)', 'Bold (Ctrl+B)')" :aria-label="t('加粗', 'Bold')" @pointerdown.prevent="runCommand('bold')"><strong class="format-glyph">B</strong></button>
-      <button type="button" :title="t('斜体 (Ctrl+I)', 'Italic (Ctrl+I)')" :aria-label="t('斜体', 'Italic')" @pointerdown.prevent="runCommand('italic')"><em class="format-glyph">I</em></button>
-      <span class="toolbar-divider" />
-      <button type="button" class="list-glyph" :title="t('有序列表', 'Ordered list')" :aria-label="t('有序列表', 'Ordered list')" @pointerdown.prevent="runCommand('ordered-list')"><span class="list-marker">1</span><span class="list-lines">☰</span></button>
-      <button type="button" class="list-glyph" :title="t('无序列表', 'Bullet list')" :aria-label="t('无序列表', 'Bullet list')" @pointerdown.prevent="runCommand('bullet-list')"><span class="list-marker">•</span><span class="list-lines">☰</span></button>
-      <span class="toolbar-divider" />
+      <button type="button" :title="t('加粗 (Ctrl+B)', 'Bold (Ctrl+B)')" :aria-label="t('加粗', 'Bold')" @pointerdown.prevent="runCommand('bold')" @click="$event.detail === 0 && runCommand('bold')"><ControlIcon name="bold" /></button>
+      <button type="button" :title="t('斜体 (Ctrl+I)', 'Italic (Ctrl+I)')" :aria-label="t('斜体', 'Italic')" @pointerdown.prevent="runCommand('italic')" @click="$event.detail === 0 && runCommand('italic')"><ControlIcon name="italic" /></button>
+      <button type="button" :title="t('删除线', 'Strikethrough')" :aria-label="t('删除线', 'Strikethrough')" @pointerdown.prevent="toolbarCommand('editor.strikethrough')" @click="$event.detail === 0 && toolbarCommand('editor.strikethrough')"><ControlIcon name="strikethrough" /></button>
+      </div>
+      <div class="toolbar-group" role="group" :aria-label="t('列表', 'Lists')">
+      <button type="button" :title="t('有序列表', 'Ordered list')" :aria-label="t('有序列表', 'Ordered list')" @pointerdown.prevent="runCommand('ordered-list')" @click="$event.detail === 0 && runCommand('ordered-list')"><ControlIcon name="orderedList" /></button>
+      <button type="button" :title="t('无序列表', 'Bullet list')" :aria-label="t('无序列表', 'Bullet list')" @pointerdown.prevent="runCommand('bullet-list')" @click="$event.detail === 0 && runCommand('bullet-list')"><ControlIcon name="bulletList" /></button>
+      <button type="button" :title="t('待办列表', 'Task list')" :aria-label="t('待办列表', 'Task list')" @pointerdown.prevent="toolbarCommand('editor.task-list')" @click="$event.detail === 0 && toolbarCommand('editor.task-list')"><ControlIcon name="taskList" /></button>
+      <button type="button" :title="t('引用', 'Blockquote')" :aria-label="t('引用', 'Blockquote')" @pointerdown.prevent="toolbarCommand('editor.blockquote')" @click="$event.detail === 0 && toolbarCommand('editor.blockquote')"><ControlIcon name="quote" /></button>
+      </div>
+      <div class="toolbar-group" role="group" :aria-label="t('字号', 'Font size')">
       <label class="toolbar-select font-size-select" :title="t('选择预设字号', 'Choose a preset font size')">
-        <span class="format-glyph font-size-glyph">A</span>
+        <ControlIcon name="fontSize" />
         <select :aria-label="t('文字字号', 'Font size')" @change="applyFontSize">
           <option value="" selected>{{ t('字号', 'Size') }}</option>
           <option v-for="size in [12, 14, 16, 18, 20, 24, 28, 32]" :key="size" :value="size">{{ size }} px</option>
         </select>
+        <ControlIcon class="select-chevron" name="chevron" :size="12" />
       </label>
       <div class="font-size-input" :title="t('输入字号后按 Enter 或点击应用', 'Enter a font size, then press Enter or Apply')">
         <input v-model.number="fontSizeInput" type="number" min="8" max="96" step="1" :aria-label="t('自定义字号', 'Custom font size')"
           @keydown.enter.prevent="applyFontSizeValue" />
         <span>px</span>
-        <button type="button" :aria-label="t('应用自定义字号', 'Apply custom font size')" @pointerdown.prevent="applyFontSizeValue">{{ t('应用', 'Apply') }}</button>
+        <button type="button" :title="t('应用自定义字号', 'Apply custom font size')" :aria-label="t('应用自定义字号', 'Apply custom font size')" @pointerdown.prevent="applyFontSizeValue" @click="$event.detail === 0 && applyFontSizeValue()">{{ t('应用', 'Apply') }}</button>
       </div>
-      <span class="toolbar-divider" />
-      <button type="button" :title="t('行内代码', 'Inline code')" :aria-label="t('行内代码', 'Inline code')" @pointerdown.prevent="runCommand('inline-code')"><code class="code-glyph">&lt;/&gt;</code></button>
-      <button type="button" :title="t('代码块', 'Code block')" :aria-label="t('代码块', 'Code block')" @pointerdown.prevent="runCommand('code-block')"><span class="block-glyph">{ }</span></button>
-      <button v-if="markdownPreferences.math" type="button" :title="t('行内公式', 'Inline formula')" :aria-label="t('行内公式', 'Inline formula')" @pointerdown.prevent="runCommand('inline-math')"><span class="math-glyph">ƒx</span></button>
-      <button v-if="markdownPreferences.math" type="button" :title="t('公式块', 'Formula block')" :aria-label="t('公式块', 'Formula block')" @pointerdown.prevent="runCommand('math-block')"><span class="math-glyph">∑</span></button>
-      <button type="button" :title="t('插入链接', 'Insert link')" :aria-label="t('插入链接', 'Insert link')" @pointerdown.prevent="applyLink"><AppIcon :icon="Link" :size="17" /></button>
-      <button type="button" :title="t('插入工作区图片', 'Insert workspace image')" :aria-label="t('插入工作区图片', 'Insert workspace image')" @pointerdown.prevent="chooseImages"><span class="image-glyph">▧</span></button>
+      </div>
+      <div class="toolbar-group" role="group" :aria-label="t('代码与公式', 'Code and math')">
+      <button type="button" :title="t('行内代码', 'Inline code')" :aria-label="t('行内代码', 'Inline code')" @pointerdown.prevent="runCommand('inline-code')" @click="$event.detail === 0 && runCommand('inline-code')"><ControlIcon name="inlineCode" /></button>
+      <button type="button" :title="t('代码块', 'Code block')" :aria-label="t('代码块', 'Code block')" @pointerdown.prevent="runCommand('code-block')" @click="$event.detail === 0 && runCommand('code-block')"><ControlIcon name="codeBlock" /></button>
+      <button v-if="markdownPreferences.math" type="button" :title="t('行内公式', 'Inline formula')" :aria-label="t('行内公式', 'Inline formula')" @pointerdown.prevent="runCommand('inline-math')" @click="$event.detail === 0 && runCommand('inline-math')"><ControlIcon name="function" /></button>
+      <button v-if="markdownPreferences.math" type="button" :title="t('公式块', 'Formula block')" :aria-label="t('公式块', 'Formula block')" @pointerdown.prevent="runCommand('math-block')" @click="$event.detail === 0 && runCommand('math-block')"><ControlIcon name="formula" /></button>
+      </div>
+      <div class="toolbar-group" role="group" :aria-label="t('插入内容', 'Insert content')">
+      <button type="button" :title="t('插入表格', 'Insert table')" :aria-label="t('插入表格', 'Insert table')" @pointerdown.prevent="toolbarCommand('editor.table')" @click="$event.detail === 0 && toolbarCommand('editor.table')"><ControlIcon name="table" /></button>
+      <button v-if="markdownPreferences.diagrams" type="button" :title="t('插入 Mermaid 图表', 'Insert Mermaid diagram')" :aria-label="t('插入 Mermaid 图表', 'Insert Mermaid diagram')" @pointerdown.prevent="toolbarCommand('editor.mermaid')" @click="$event.detail === 0 && toolbarCommand('editor.mermaid')"><ControlIcon name="diagram" /></button>
+      <button type="button" :title="t('分隔线', 'Horizontal rule')" :aria-label="t('分隔线', 'Horizontal rule')" @pointerdown.prevent="toolbarCommand('editor.horizontal-rule')" @click="$event.detail === 0 && toolbarCommand('editor.horizontal-rule')"><ControlIcon name="rule" /></button>
+      <button type="button" :title="t('插入链接', 'Insert link')" :aria-label="t('插入链接', 'Insert link')" @pointerdown.prevent="applyLink" @click="$event.detail === 0 && applyLink()"><ControlIcon name="link" /></button>
+      <button type="button" :title="t('插入工作区图片', 'Insert workspace image')" :aria-label="t('插入工作区图片', 'Insert workspace image')" @pointerdown.prevent="chooseImages" @click="$event.detail === 0 && chooseImages()"><ControlIcon name="image" /></button>
       <input ref="imageInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple @change="selectedImages" />
-      <label class="toolbar-select">
-        <select v-if="markdownPreferences.callouts" :aria-label="t('插入警告框', 'Insert callout')" @change="insertCallout">
+      <label v-if="markdownPreferences.callouts" class="toolbar-select" :title="t('插入提示框', 'Insert callout')">
+        <ControlIcon name="callout" />
+        <select :aria-label="t('插入警告框', 'Insert callout')" @change="insertCallout">
           <option value="">{{ t('提示框', 'Callout') }}</option>
           <option v-for="(_, type) in calloutTypes" :key="type" :value="type">{{ type }}</option>
         </select>
+        <ControlIcon class="select-chevron" name="chevron" :size="12" />
       </label>
+      </div>
+      <button class="hide-toolbar" type="button" :title="t('隐藏工具栏，可从视图菜单恢复', 'Hide toolbar; restore from the View menu')" :aria-label="t('隐藏工具栏', 'Hide toolbar')" @click="hideToolbar"><ControlIcon name="hide" /></button>
     </div>
     <div v-if="loading" class="editor-loading">{{ t('正在加载编辑器…', 'Loading editor…') }}</div>
     <div class="milkdown-host" :class="{ loading }">
@@ -612,34 +661,29 @@ defineExpose({ getEditor: () => crepe?.editor })
 .visual-editor { display: flex; flex: 1; min-height: 0; flex-direction: column; background: var(--color-background-primary); }
 .image-error { margin: 0; padding: var(--space-sm) var(--space-lg); color: var(--color-error); background: var(--color-error-soft); }
 .hide-code-line-numbers :deep(.cm-lineNumbers) { display: none; }
-.markdown-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; min-height: 42px; padding: 5px var(--space-lg); border-bottom: 1px solid var(--color-border-subtle); background: var(--color-surface-primary); }
-.markdown-toolbar button { display: inline-grid; place-items: center; min-width: 32px; min-height: 30px; padding: 4px 8px; border-radius: var(--radius-sm); color: var(--color-text-primary); }
-.markdown-toolbar button:hover, .toolbar-select:hover { background: var(--color-background-hover); color: var(--color-text-primary); }
+.markdown-toolbar { display: flex; align-items: center; flex-wrap: wrap; flex-shrink: 0; gap: 6px; min-height: 44px; max-height: 35vh; overflow-y: auto; padding: 6px var(--space-md); border-bottom: 1px solid var(--color-border-subtle); background: var(--color-surface-primary); }
+.hide-toolbar { margin-inline-start: auto; }
+.markdown-toolbar button:disabled { opacity: .4; cursor: default; }
+.toolbar-group { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.toolbar-group + .toolbar-group { padding-inline-start: 6px; border-inline-start: 1px solid var(--color-border-subtle); }
+.markdown-toolbar button { display: inline-grid; place-items: center; min-width: 32px; min-height: 32px; padding: 4px 6px; border-radius: var(--radius-sm); color: var(--color-text-secondary); transition: background-color var(--motion-fast), color var(--motion-fast); }
+.markdown-toolbar button:hover:not(:disabled), .toolbar-select:hover { background: var(--color-accent-soft); color: var(--color-accent-primary); }
+.markdown-toolbar button:active:not(:disabled) { background: var(--color-background-active); }
 .markdown-toolbar button:focus-visible, .toolbar-select:focus-within { outline: 2px solid var(--color-border-focus); outline-offset: 1px; }
-.section-actions { display: inline-flex; align-items: center; flex-shrink: 0; margin-inline-end: 8px; padding: 2px; border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-background-secondary); }
+.section-actions { display: inline-flex; align-items: center; flex-shrink: 0; padding: 0; border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-background-secondary); }
 .markdown-toolbar .section-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 28px; padding: 4px 8px; font: inherit; font-size: var(--font-size-xs); line-height: 1.25; white-space: nowrap; color: var(--color-text-secondary); }
-.section-actions :deep(.app-icon) { transform: rotate(90deg); }
 .markdown-toolbar .section-actions button:hover:not(:disabled) { background: var(--color-background-hover); color: var(--color-accent-primary); }
 .markdown-toolbar .section-actions button:disabled { opacity: .45; cursor: default; }
-.format-glyph { font-family: Georgia, 'Times New Roman', serif; font-size: 17px; line-height: 1; }
-.heading-glyph { font-weight: 800; }
-.font-size-glyph { font-size: 18px; }
-.list-glyph { grid-template-columns: 8px 14px; column-gap: 2px; font-weight: 700; }
-.list-marker { font: 700 12px/1 var(--font-ui-sans); }
-.list-lines { overflow: hidden; width: 14px; font-size: 15px; line-height: 1; transform: scaleX(1.2); }
-.code-glyph, .block-glyph { padding: 0; background: transparent; color: inherit; font: 700 13px/1 var(--font-editor-mono); }
-.math-glyph { font: italic 700 16px/1 Georgia, 'Times New Roman', serif; }
-.image-glyph { font-size: 18px; line-height: 1; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-.toolbar-select { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 3px 5px 3px 8px; border-radius: var(--radius-sm); color: var(--color-text-primary); }
-.toolbar-select select { min-width: 58px; border: 0; outline: 0; background: transparent; color: inherit; cursor: pointer; font-size: var(--font-size-sm); }
-.font-size-select select { min-width: 62px; }
+.toolbar-select { position: relative; display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 3px 7px; border-radius: var(--radius-sm); color: var(--color-text-secondary); }
+.toolbar-select select { appearance: none; width: auto; min-width: 42px; padding-inline-end: 15px; border: 0; outline: 0; background: transparent; color: inherit; cursor: pointer; font-size: var(--font-size-sm); }
+.toolbar-select option { color: var(--color-text-primary); background: var(--color-surface-primary); }
+.select-chevron { position: absolute; right: 7px; pointer-events: none; }
 .font-size-input { display: inline-flex; align-items: center; height: 30px; margin-left: 2px; overflow: hidden; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); color: var(--color-text-secondary); background: var(--color-background-primary); }
 .font-size-input:focus-within { border-color: var(--color-border-focus); box-shadow: 0 0 0 1px var(--color-border-focus); }
 .font-size-input input { width: 42px; height: 100%; padding-left: 7px; border: 0; outline: 0; background: transparent; color: var(--color-text-primary); }
 .font-size-input span { font-size: var(--font-size-xs); }
 .font-size-input button { min-width: auto; min-height: 100%; margin-left: 4px; padding: 3px 7px; border-left: 1px solid var(--color-border-default); border-radius: 0; font-size: var(--font-size-xs); }
-.toolbar-divider { width: 1px; height: 20px; margin: 0 var(--space-xs); background: var(--color-border-default); }
 .milkdown-host { flex: 1; min-height: 0; overflow: auto; color: var(--color-text-primary); }
 .milkdown-host.loading { visibility: hidden; }
 .note-metadata { box-sizing: border-box; width: 90%; margin: 0 auto 20px; padding: 20px 24px; border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-surface-primary); }
