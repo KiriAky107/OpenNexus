@@ -11,8 +11,12 @@ import ChatPersonaDialog from './ChatPersonaDialog.vue'
 import { useChatPreferences } from '@/stores/chatPreferences'
 import { listTools } from '@/services/agentService'
 import type { ToolDefinition } from '@/contracts'
+import { useRouter } from 'vue-router'
+import { statusLabel } from '@/utils/statusLabels'
 import { usedCitations } from '@/utils/usedCitations'
 
+const router = useRouter()
+const suggestions = computed(() => [t('根据我的笔记整理本周复习重点', 'Summarize this week’s revision priorities from my notes'), t('解释笔记中的关键概念，并注明来源', 'Explain the key concepts in my notes and cite sources'), t('帮我规划一个循序渐进的学习任务', 'Help me plan a step-by-step study task')])
 const props = defineProps<{ workspaceContext?: WorkspaceContext; embedded?: boolean }>()
 const chatStore = useChatStore()
 const preferences = useChatPreferences()
@@ -131,7 +135,7 @@ async function openCitationCard(citation: Citation) {
     <div v-if="chatStore.contextNotice" class="notice-banner" role="status">{{ chatStore.contextNotice }}</div>
     <div v-if="loadError || providerStore.error || chatStore.historyError" class="error-banner chat-error">{{ loadError || providerStore.error || chatStore.historyError }}</div>
     <main class="message-timeline">
-      <div v-if="!chatStore.messages.length" class="empty-state"><div><strong>{{ t('开始一段知识对话', 'Start a knowledge conversation') }}</strong><p>{{ t('请先配置模型提供商。聊天记录保存在本地数据库中。', 'Configure a model provider first. Messages are saved in the local database.') }}</p></div></div>
+      <div v-if="!chatStore.messages.length" class="empty-state"><div><strong>{{ t('开始一段知识对话', 'Start a knowledge conversation') }}</strong><p>{{ t('围绕当前知识库提问，回答可以引用原文并定位到笔记。', 'Ask about this vault, with sources that open the original notes.') }}</p><div class="chat-suggestions"><button v-for="suggestion in suggestions" :key="suggestion" class="button-secondary" @click="chatStore.inputText = suggestion">{{ suggestion }}</button></div><button v-if="!providerStore.enabledProviders.length && !embedded" class="button-secondary" @click="router.push({ name: 'settings' })">{{ t('配置模型提供商', 'Configure a provider') }}</button></div></div>
       <article v-for="message in chatStore.messages" :key="message.message_id" class="message" :class="message.role">
         <div class="avatar"><img v-if="message.role === 'user' ? preferences.settings.userAvatar : preferences.settings.aiAvatar" :src="message.role === 'user' ? preferences.settings.userAvatar : preferences.settings.aiAvatar" :alt="message.role === 'user' ? t('我', 'Me') : 'AI'" /><span v-else>{{ message.role === 'user' ? t('你', 'You') : 'AI' }}</span></div>
         <div class="message-body"><small v-if="message.attachments?.length">附件：{{ message.attachments.map(id=>id.split('.').at(-1)).join('、') }}</small><details v-if="message.workspace_context" class="ui-disclosure"><summary>发送时的文件：{{ message.workspace_context.file_path }}</summary><pre class="context-snapshot">{{ message.workspace_context.content }}</pre></details>
@@ -144,7 +148,7 @@ async function openCitationCard(citation: Citation) {
             </summary>
             <template v-for="(entry, index) in activities[message.message_id]" :key="index">
               <p v-if="entry.text !== undefined">{{ entry.text }}</p>
-              <div v-else-if="entry.call" class="tool-calls"><div class="item-card"><span class="badge info">{{ entry.call.status }}</span><strong>{{ entry.call.name }}</strong><pre>{{ JSON.stringify(entry.call.parameters, null, 2) }}</pre><a v-if="agentRunId(entry.call.result)" :href="`#/agent/runs/${agentRunId(entry.call.result)}`">查看智能体运行 / 处理权限确认</a></div></div>
+              <div v-else-if="entry.call" class="tool-calls"><div class="item-card"><span class="badge info">{{ statusLabel(entry.call.status) }}</span><strong>{{ entry.call.name }}</strong><pre>{{ JSON.stringify(entry.call.parameters, null, 2) }}</pre><a v-if="agentRunId(entry.call.result)" :href="`#/agent/runs/${agentRunId(entry.call.result)}`">查看智能体运行 / 处理权限确认</a></div></div>
             </template>
           </details>
           <div v-if="editingMessage === message.message_id" class="message-edit">
@@ -186,6 +190,9 @@ async function openCitationCard(citation: Citation) {
 </template>
 
 <style scoped>
+.chat-suggestions { display: grid; gap: 10px; margin: 24px auto; max-width: 520px; }
+.chat-suggestions button { padding: 12px 16px; min-height: 42px; line-height: 1.6; text-align: left; }
+.message-body > small { display:inline-block; padding:4px 10px; margin-bottom:10px; border:1px solid var(--color-border-subtle); border-radius:var(--radius-md);color:var(--color-text-secondary); }
 .context-snapshot { max-height: 180px; overflow: auto; white-space: pre-wrap; }
 .chat-page { display: flex; flex-direction: column; height: 100%; min-height: 0; background: radial-gradient(circle at 85% -10%, var(--color-accent-soft), transparent 30%), var(--color-background-primary); }
 .chat-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: var(--space-md); padding: var(--space-md) var(--space-xl); border-bottom: 1px solid var(--color-border-default); background: var(--color-surface-secondary); box-shadow: var(--shadow-sm); z-index: 1; }

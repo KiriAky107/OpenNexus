@@ -98,12 +98,12 @@ function toggleSource() {
       <div><h1>社区目录</h1><p>连接您选择的来源。安装后仍需独立启用和授权；关闭社区不影响本地编辑。</p></div>
     </header>
     <section class="community-panel panel" aria-label="社区来源与搜索">
-    <div class="community-controls">
+    <details class="ui-disclosure" :open="!sources.length"><summary>管理社区来源</summary><p class="subtle">添加来源并核对公钥后，即可浏览扩展。安装与授权分别确认。</p><div class="community-controls">
       <label>来源地址 <input v-model="url" placeholder="https://community.example.org" :disabled="busy" /></label>
       <button class="btn" :disabled="busy || !url.trim()" @click="inspectSource">检查来源与公钥</button>
       <label>已添加来源 <select v-model="selectedSource" @change="search"><option value="">请选择</option><option v-for="item in sources" :key="item.id" :value="item.id">{{ item.url }}{{ item.enabled ? '' : '（已停用）' }}</option></select></label>
       <button class="btn" :disabled="!selectedSource || busy" @click="toggleSource">启用 / 停用来源</button>
-    </div>
+    </div></details>
     <div class="community-controls">
       <label>关键词 <input v-model="query" @keydown.enter="search" /></label>
       <label>类别 <select v-model="kind"><option v-for="item in kinds" :key="item.id" :value="item.id">{{ item.label }}</option></select></label>
@@ -111,10 +111,10 @@ function toggleSource() {
       <button v-if="busy" class="btn" @click="cancel">取消</button>
     </div>
     <p v-if="busy" role="status">正在处理…</p>
-    <p v-if="error" role="alert">{{ error }}</p>
-    <p v-if="notice" role="status">{{ notice }}</p>
+    <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
+    <p v-if="notice" class="notice-banner" role="status">{{ notice }}</p>
     <p v-if="offline">当前为离线缓存，仅供浏览；安装需要重新核对撤回和签名状态。</p>
-    <p v-if="!busy && !items.length">尚无发行记录。添加来源后搜索目录。</p>
+    <div v-if="!busy && !items.length" class="empty-state"><div><strong>浏览社区扩展</strong><p>连接来源后，可按类别寻找主题、Skill、Plugin 和笔记模板。</p><p class="subtle">尚无目录结果；请选择来源并搜索。</p></div></div>
     <div class="community-grid">
       <button v-for="item in items" :key="item.release_id" class="community-card" @click="detail = item">
         <strong>{{ item.name }}</strong><span>{{ item.type }} · {{ item.version }}</span>
@@ -163,6 +163,10 @@ label { display: grid; gap: var(--space-xs); }
 input, select { color: var(--color-text-primary); background: var(--color-background-secondary); border: 1px solid var(--color-border-subtle); padding: var(--space-sm); }
 .community-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: var(--space-md); }
 .community-card { display: grid; gap: var(--space-sm); text-align: left; padding: var(--space-lg); color: var(--color-text-primary); background: var(--color-background-secondary); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); overflow-wrap: anywhere; }
+.btn { min-height:36px;padding:8px 14px;border:1px solid var(--color-border-default);border-radius:var(--radius-md);background:var(--color-surface-primary);color:var(--color-text-primary); }
+.btn-primary { background:var(--color-accent-primary);color:var(--color-text-inverse);border-color:transparent; }
+input,select { border-radius:var(--radius-md);min-height:38px; }
+.community-controls label { flex:1;min-width:160px; }
 .saved-candidates { margin-top: var(--space-xl); }
 pre, dd { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
 </style>

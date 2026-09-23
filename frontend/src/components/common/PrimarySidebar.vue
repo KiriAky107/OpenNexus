@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import { ArrowLeftBold, ArrowRightBold, Brush, ChatDotRound, CircleCheck, Connection, Cpu, Document, FolderOpened, Lightning, Monitor, Search, Setting } from '@element-plus/icons-vue'
@@ -31,6 +31,13 @@ const navItems = computed(() => [
 const currentName = computed(() => {
   return route.name as string
 })
+const systemOpen = ref(false)
+const groups = computed(() => [
+  { key: 'knowledge', label: t('知识与学习', 'Knowledge'), items: navItems.value.slice(0, 6) },
+  { key: 'extensions', label: t('扩展', 'Extensions'), items: navItems.value.slice(6, 11) },
+  { key: 'system', label: t('系统', 'System'), items: navItems.value.slice(11, 13) },
+])
+watch(currentName, name => { if (['logs', 'benchmarks'].includes(name)) systemOpen.value = true }, { immediate: true })
 
 function navigate(name: string) {
   router.push({ name })
@@ -43,21 +50,29 @@ function toggleExpanded() {
 
 <template>
   <aside class="primary-sidebar" :class="{ expanded }">
-    <nav class="nav-list">
+    <nav class="nav-list" :aria-label="t('主导航', 'Main navigation')">
+      <section v-for="group in groups" :key="group.key" class="nav-group">
+        <button v-if="group.key === 'system'" type="button" class="group-heading system-toggle" :aria-expanded="systemOpen" :title="group.label" @click="systemOpen = !systemOpen"><span>{{ expanded ? group.label : '···' }}</span><span v-if="expanded" aria-hidden="true">{{ systemOpen ? '−' : '+' }}</span></button>
+        <h2 v-else class="group-heading"><span v-if="expanded">{{ group.label }}</span></h2>
+        <div v-show="group.key !== 'system' || systemOpen" class="group-items">
       <button
         type="button"
-        v-for="item in navItems"
+        v-for="item in group.items"
         :key="item.name"
         class="nav-item"
         :class="{ active: currentName === item.name }"
+        :aria-current="currentName === item.name ? 'page' : undefined"
         @click="navigate(item.name)"
         :title="item.label"
       >
         <AppIcon class="nav-icon" :icon="item.icon" :size="20" />
         <span class="nav-label">{{ item.label }}</span>
       </button>
+        </div>
+      </section>
     </nav>
     <div class="sidebar-footer">
+      <button type="button" class="nav-item footer-button" :class="{ active: currentName === 'settings' }" :title="t('设置', 'Settings')" @click="navigate('settings')"><AppIcon class="nav-icon" :icon="Setting" :size="20" /><span class="nav-label">{{ t('设置', 'Settings') }}</span></button>
       <button class="nav-item collapse-button" type="button" :title="expanded ? t('收起导航', 'Collapse navigation') : t('展开导航', 'Expand navigation')" @click="toggleExpanded">
         <AppIcon class="nav-icon" :icon="expanded ? ArrowLeftBold : ArrowRightBold" />
         <span class="nav-label">{{ expanded ? t('收起', 'Collapse') : t('展开', 'Expand') }}</span>
@@ -85,11 +100,20 @@ function toggleExpanded() {
 
 .nav-list {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: var(--space-md) 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
+.nav-group { flex-shrink: 0; }
+.group-items { display: grid; gap: 2px; }
+.group-heading { margin: 8px 16px 6px; font-size: 11px; font-weight: 600; color: var(--color-text-tertiary); min-height: 6px; }
+.system-toggle { width: calc(100% - 32px); display: flex; justify-content: space-between; align-items: center; min-height: 28px; }
+.footer-button { width: calc(100% - 12px); }
+.expanded .nav-item { height: 40px; }
 
 .nav-item {
   border: 0;
@@ -111,7 +135,6 @@ function toggleExpanded() {
   &:hover {
     background: var(--color-background-hover);
     color: var(--color-text-primary);
-    transform: translateX(2px);
   }
 
   &.active {

@@ -11,6 +11,14 @@ import { useTaskStore } from "@/stores/task";
 import { useProviderStore } from "@/stores/provider";
 import { useSkillStore } from "@/stores/skill";
 import { localeTag, t } from "@/i18n";
+import { statusLabel, cronSummary, localDateTime } from '@/utils/statusLabels';
+import { getNote } from '@/services/noteService';
+import { useCitationNavigation } from '@/composables/useCitationNavigation';
+const { openCitation } = useCitationNavigation();
+async function openLinkedNote(noteId: string) {
+  try { await openCitation(await getNote(noteId)); }
+  catch (error) { actionError.value = error instanceof Error ? error.message : String(error); }
+}
 
 const taskStore = useTaskStore();
 const providerStore = useProviderStore();
@@ -109,15 +117,13 @@ function editTask(task: TaskItem) {
   Object.assign(form, {
     title: task.title,
     description: task.description ?? "",
-    due_date: task.due_date?.slice(0, 16) ?? "",
+    due_date: localDateTime(task.due_date),
     note_id: task.note_id ?? "",
     schedule_enabled: Boolean(
       schedule?.enabled && schedule.status === "pending",
     ),
     schedule_type: schedule?.schedule_type ?? "once",
-    run_at: schedule?.run_at
-      ? new Date(schedule.run_at).toISOString().slice(0, 16)
-      : "",
+    run_at: localDateTime(schedule?.run_at),
     cron: schedule?.cron ?? "0 9 * * *",
     timezone:
       schedule?.timezone ??
@@ -271,25 +277,24 @@ async function remove(task: TaskItem) {
               task.title
             }}</strong>
           </div>
-          <MarkdownContent
-            v-if="task.description"
+          <details v-if="task.description" class="task-details"><summary>{{ t('查看任务内容', 'Task details') }}</summary><MarkdownContent
             class="task-markdown"
             :source="task.description"
-          />
+          /></details>
           <div class="subtle">
-            <span>{{ task.status }}</span
+            <span class="badge" :class="{ success: task.status === 'done' }">{{ statusLabel(task.status) }}</span
             ><span v-if="task.due_date"
               >{{ t("截止", "Due") }}
               {{ new Date(task.due_date).toLocaleString(localeTag()) }}</span
-            ><span v-if="task.note_id"
-              >{{ t("关联 Note", "Linked Note") }}: {{ task.note_id }}</span
+            ><button v-if="task.note_id" class="link-button" @click="openLinkedNote(task.note_id)"
+              >{{ task.note_title || t("打开关联笔记", "Open linked note") }}</button
             ><span v-if="task.agent_schedule"
               >{{
                 task.agent_schedule.schedule_type === "cron"
-                  ? `Cron ${task.agent_schedule.cron}`
+                  ? cronSummary(task.agent_schedule.cron || '')
                   : t("一次性 Agent", "One-time Agent")
               }}
-              · {{ task.agent_schedule.status }}</span
+              · {{ statusLabel(task.agent_schedule.status) }}</span
             ><span v-if="task.agent_schedule?.next_run_at"
               >{{ t("下次执行", "Next run") }}
               {{
@@ -310,6 +315,7 @@ async function remove(task: TaskItem) {
               {{ t("查看 Agent", "View Agent") }}
             </button>
           </div>
+          <details v-if="task.agent_schedule?.schedule_type === 'cron'" class="schedule-detail subtle"><summary>{{ t('循环规则', 'Schedule rule') }}</summary><code>{{ task.agent_schedule.cron }}</code> · {{ task.agent_schedule.timezone }}</details>
           <p v-if="task.agent_schedule?.error" class="error-text">
             {{ task.agent_schedule.error }}
           </p>
@@ -541,7 +547,7 @@ async function remove(task: TaskItem) {
 .task-card {
   display: grid;
   grid-template-columns: auto 1fr auto;
-  align-items: center;
+  align-items: start;
   gap: var(--space-md);
 }
 .status-check {
@@ -577,6 +583,9 @@ async function remove(task: TaskItem) {
 }
 .task-markdown {
   margin-block: var(--space-xs);
+  max-height: min(420px, 50vh);
+  overflow: auto;
+  scrollbar-gutter: stable;
 }
 .task-modal {
   width: min(820px, calc(100vw - 32px));
@@ -621,6 +630,10 @@ async function remove(task: TaskItem) {
   text-decoration: line-through;
   color: var(--color-text-tertiary);
 }
+.task-details { margin-block: 10px; }
+.task-details summary, .schedule-detail summary { cursor: pointer; color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+.task-details[open] summary { margin-bottom: 12px; }
+.schedule-detail { margin-top: 10px; }
 @media (max-width: 700px) {
   .task-card {
     grid-template-columns: auto 1fr;

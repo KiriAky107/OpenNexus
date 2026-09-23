@@ -21,10 +21,12 @@ import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore } from '@/stores/theme'
 import { t } from '@/i18n'
 
-type Section = 'general' | 'editor' | 'providers' | 'index' | 'permissions' | 'ai-core' | 'sync'
+type Section = 'general' | 'editor' | 'providers' | 'index' | 'permissions' | 'ai-core' | 'sync' | 'storage' | 'notifications'
 const sections = computed<Array<{ id: Section; label: string }>>(() => [
   { id: 'general', label: t('通用', 'General') }, { id: 'editor', label: t('编辑器', 'Editor') }, { id: 'providers', label: t('模型提供商', 'Model Providers') },
   ...(isDesktop() ? [{ id: 'sync' as const, label: 'Sync' }] : []),
+  { id: 'notifications', label: t('通知', 'Notifications') },
+  ...(isDesktop() ? [{ id: 'storage' as const, label: t('数据与凭据', 'Data and credentials') }] : []),
   { id: 'index', label: t('索引与模型', 'Index and Models') }, { id: 'permissions', label: t('权限', 'Permissions') }, { id: 'ai-core', label: t('AI Core 诊断', 'AI Core Diagnostics') },
 ])
 const activeSection = ref<Section>('general')
@@ -90,10 +92,9 @@ async function chooseDefaultModel(provider: ProviderConfig, event: Event) {
 
     <section v-if="activeSection === 'general'" class="panel settings-section"><div class="setting-row"><span><strong>{{ t('全局人设', 'Global persona') }}</strong><small>{{ t('统一设置所有 AI 对话和智能体的系统人设与对话示例', 'System persona and examples for all AI chats and agents') }}</small></span><button class="button-secondary" @click="showPersona = true">{{ t('编辑人设与头像', 'Edit persona and avatars') }}</button></div></section>
     <ChatPersonaDialog v-if="showPersona" @close="showPersona = false" />
-    <CredentialVaultSettings v-if="activeSection === 'general' && isDesktop()" />
-    <StorageLocationSettings v-if="activeSection === 'general' && isDesktop()" />
+    <div v-if="activeSection === 'storage' && isDesktop()" class="settings-section"><StorageLocationSettings /><details class="ui-disclosure"><summary>{{ t('设备凭据保险库', 'Device credential vault') }}</summary><CredentialVaultSettings /></details></div>
     <div v-if="activeSection === 'general'" class="panel settings-section"><h2>{{ t('通用', 'General') }}</h2><label class="setting-row"><span><strong>{{ t('恢复上次 Vault', 'Restore last Vault') }}</strong><small>{{ t('启动后自动打开最近使用的知识库', 'Open the most recently used knowledge base at startup') }}</small></span><input v-model="settingsStore.restoreLastVault" type="checkbox" /></label><div class="setting-row"><span><strong>{{ t('自动保存间隔', 'Autosave interval') }}</strong><small>{{ t('编辑停止后等待多久写入文件', 'How long to wait after editing before saving') }}</small></span><select v-model.number="settingsStore.autoSaveInterval" class="select short"><option :value="500">0.5 {{ t('秒', 'sec') }}</option><option :value="1500">1.5 {{ t('秒', 'sec') }}</option><option :value="3000">3 {{ t('秒', 'sec') }}</option></select></div><div class="setting-row"><span><strong>{{ t('界面语言', 'Interface language') }}</strong><small>{{ t('切换后立即应用到界面', 'Applied to the interface immediately') }}</small></span><select v-model="settingsStore.language" class="select short"><option value="zh-CN">简体中文</option><option value="en">English</option></select></div><div class="setting-row"><span><strong>{{ t('版本', 'Version') }}</strong><small>Desktop / AI Core</small></span><span>{{ settingsStore.appVersion }} / {{ settingsStore.aiCoreVersion }}</span></div></div>
-    <div v-if="activeSection === 'general'" class="panel settings-section">
+    <div v-if="activeSection === 'notifications'" class="panel settings-section">
       <h2>{{ t('任务通知', 'Task notifications') }}</h2>
       <label class="setting-row"><span><strong>{{ t('启用任务通知', 'Enable task notifications') }}</strong><small>{{ t('在当前 Vault 中显示定时任务和 Agent 状态', 'Show scheduled task and Agent status for the current Vault') }}</small></span><input v-model="settingsStore.taskNotificationsEnabled" type="checkbox" /></label>
       <label class="setting-row"><span><strong>{{ t('成功通知', 'Success notifications') }}</strong><small>{{ t('显示任务启动与完成状态', 'Show task start and completion status') }}</small></span><input v-model="settingsStore.taskSuccessNotifications" type="checkbox" :disabled="!settingsStore.taskNotificationsEnabled" /></label>
@@ -172,14 +173,17 @@ async function chooseDefaultModel(provider: ProviderConfig, event: Event) {
     <div v-else-if="activeSection === 'permissions'" class="panel settings-section"><h2>{{ t('权限策略', 'Permission Policy') }}</h2><p class="muted section-description">{{ t('以下为后端当前生效的权限策略；全局策略编辑尚未开放，运行时按实际权限请求确认。', 'These policies are active in the backend. Global policy editing is not yet available; runtime requests are confirmed as needed.') }}</p><p v-if="!Object.keys(settingsStore.permissionPolicy).length" class="subtle">{{ t('尚未获取权限策略，请检查后端连接并重新检测。', 'Permission policy is unavailable. Check the backend connection and try again.') }}</p><div class="permission-list"><div v-for="(policy, permission) in settingsStore.permissionPolicy" :key="permission" class="setting-row"><span><strong>{{ permission }}</strong></span><span>{{ policy === 'allow' ? t('允许', 'Allow') : policy === 'confirm' ? t('每次确认', 'Confirm each time') : t('拒绝', 'Deny') }}</span></div></div></div>
 
     <SyncSettings v-else-if="activeSection === 'sync'" />
-    <div v-else class="panel settings-section"><h2>{{ t('AI Core 诊断', 'AI Core Diagnostics') }}</h2><div v-if="settingsStore.diagnosticsError" class="error-banner">{{ settingsStore.diagnosticsError }}</div><div class="diagnostic-grid"><div class="item-card"><span class="badge" :class="{ success: settingsStore.aiCoreStatus === 'running', error: settingsStore.aiCoreStatus === 'error' }">{{ settingsStore.aiCoreStatus }}</span><h3>{{ t('AI Core 连接状态', 'AI Core connection') }}</h3><p class="subtle">{{ t('AI Core 不可用时，Markdown 编辑仍可继续使用。', 'Markdown editing remains available when AI Core is offline.') }}</p></div><div class="item-card"><strong>{{ settingsStore.aiCoreAddress }}</strong><h3>{{ t('开发 API 地址', 'Development API address') }}</h3><p class="subtle">{{ t('正式桌面环境由 Sidecar Manager 动态提供。', 'The desktop build will provide this through Sidecar Manager.') }}</p></div></div><div class="inline-actions diagnostic-actions"><button class="button-primary" @click="settingsStore.loadDiagnostics">{{ t('重新检测', 'Check again') }}</button><span class="subtle">{{ t('当前 Web 端不支持重启后端进程，请在运行后端的终端中操作。', 'The web build cannot restart the backend. Use the terminal running it.') }}</span></div></div>
+    <div v-else-if="activeSection === 'ai-core'" class="panel settings-section"><h2>{{ t('AI Core 诊断', 'AI Core Diagnostics') }}</h2><div v-if="settingsStore.diagnosticsError" class="error-banner">{{ settingsStore.diagnosticsError }}</div><div class="diagnostic-grid"><div class="item-card"><span class="badge" :class="{ success: settingsStore.aiCoreStatus === 'running', error: settingsStore.aiCoreStatus === 'error' }">{{ settingsStore.aiCoreStatus }}</span><h3>{{ t('AI Core 连接状态', 'AI Core connection') }}</h3><p class="subtle">{{ t('AI Core 不可用时，Markdown 编辑仍可继续使用。', 'Markdown editing remains available when AI Core is offline.') }}</p></div><div class="item-card"><strong>{{ settingsStore.aiCoreAddress }}</strong><h3>{{ t('开发 API 地址', 'Development API address') }}</h3><p class="subtle">{{ t('正式桌面环境由 Sidecar Manager 动态提供。', 'The desktop build will provide this through Sidecar Manager.') }}</p></div></div><div class="inline-actions diagnostic-actions"><button class="button-primary" @click="settingsStore.loadDiagnostics">{{ t('重新检测', 'Check again') }}</button><span class="subtle">{{ t('当前 Web 端不支持重启后端进程，请在运行后端的终端中操作。', 'The web build cannot restart the backend. Use the terminal running it.') }}</span></div></div>
 
     <ProviderForm v-if="showProviderForm" :provider="editingProvider" :models="editingProvider ? providerStore.modelsByProvider[editingProvider.provider_id] : []" @close="showProviderForm = false" @saved="providerSaved" />
   </section>
 </template>
 
 <style scoped>
-.settings-page { max-width: 1120px; margin: 0 auto; }
+.settings-page { width: 100%; max-width: 1180px; margin: 0 auto; }
+.settings-page > .settings-section + .settings-section { margin-top: var(--space-lg); }
+.settings-nav { position: sticky; top: calc(-1 * var(--space-lg)); z-index: 3; box-shadow: var(--shadow-sm); }
+.setting-row > span { min-width: 0; overflow-wrap: anywhere; }
 .settings-section { display: grid; gap: var(--space-md); }
 .provider-settings-card, .local-settings-card { padding: 20px; min-width: 0; }
 .provider-settings-card { display: grid; gap: var(--space-md); }

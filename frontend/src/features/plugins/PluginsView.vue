@@ -14,10 +14,13 @@ import { usePluginStore } from '@/stores/plugin'
 import * as pluginService from '@/services/pluginService'
 import type { PluginCommand } from '@/contracts'
 import { t } from '@/i18n'
+import { statusLabel } from '@/utils/statusLabels'
 
 const pluginStore = usePluginStore()
 const actionError = ref('')
 const showInstall = ref(false)
+const query = ref('')
+const visiblePlugins = computed(() => pluginStore.plugins.filter(plugin => `${plugin.name} ${plugin.description}`.toLowerCase().includes(query.value.trim().toLowerCase())))
 const activeTab = ref<'info' | 'settings' | 'commands'>('info')
 const pluginCommands = ref<PluginCommand[]>([])
 const restoreNoticeKey = ref(0)
@@ -84,6 +87,7 @@ const hasCommandContribution = computed(() =>
       {{ pluginStore.error || actionError }}
     </div>
 
+    <div class="extension-filter"><input v-model="query" class="input" :placeholder="t('搜索已安装 Plugin', 'Search installed Plugins')" :aria-label="t('搜索 Plugin', 'Search Plugins')" /><button v-if="pluginStore.selectedPlugin" class="button-secondary" @click="pluginStore.selectPlugin('')">{{ t('返回全部', 'Back to all') }}</button></div>
     <div v-if="pluginStore.selectedPlugin" class="plugin-detail">
       <div class="panel detail-panel">
         <div class="detail-head">
@@ -93,7 +97,7 @@ const hasCommandContribution = computed(() =>
               error: pluginStore.selectedPlugin.status === 'error',
               warning: pluginStore.selectedPlugin.status === 'permission_required',
               info: pluginStore.selectedPlugin.status === 'starting',
-            }">{{ pluginStore.selectedPlugin.status }}</span>
+            }">{{ statusLabel(pluginStore.selectedPlugin.status) }}</span>
             <h2>{{ pluginStore.selectedPlugin.icon }} {{ pluginStore.selectedPlugin.name }}</h2>
             <p class="muted">
               v{{ pluginStore.selectedPlugin.version }}
@@ -193,7 +197,7 @@ const hasCommandContribution = computed(() =>
 
     <div v-else class="feature-grid">
       <article
-        v-for="plugin in pluginStore.plugins"
+        v-for="plugin in visiblePlugins"
         :key="plugin.plugin_id"
         class="item-card extension-card"
         @click="pluginStore.selectPlugin(plugin.plugin_id)"
@@ -211,7 +215,7 @@ const hasCommandContribution = computed(() =>
               error: plugin.status === 'error',
               warning: plugin.status === 'permission_required',
             }"
-          >{{ plugin.status }}</span>
+          >{{ statusLabel(plugin.status) }}</span>
         </div>
         <p class="muted">{{ plugin.description }}</p>
         <p class="subtle">
@@ -223,6 +227,9 @@ const hasCommandContribution = computed(() =>
 </template>
 
 <style scoped>
+.extension-filter { display:flex;gap:12px;max-width:1180px;margin:0 auto 16px; }
+.extension-filter .input { max-width:400px; }
+.extension-card { min-width:0;overflow-wrap:anywhere; }
 .plugin-detail {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

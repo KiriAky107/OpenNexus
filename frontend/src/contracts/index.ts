@@ -134,6 +134,9 @@ export type AgentRunStatus =
 
 export interface AgentRun {
   run_id: string
+  input?: string
+  output?: string | null
+  model?: string
   status: AgentRunStatus
   current_step: number
   max_steps: number
