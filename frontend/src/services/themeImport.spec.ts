@@ -3,10 +3,11 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
 import { decodeThemePackage, fetchThemePackage, inspectThemePackage, installTheme, MAX_THEME_BYTES, THEME_APP_VERSION } from './themePackageService'
 import paper from '@/assets/themes/paper-moments.theme?raw'
+import { version } from '../../package.json'
 
 afterEach(() => vi.unstubAllGlobals())
 it('uses the desktop release version for compatibility checks', () => {
-  expect(THEME_APP_VERSION).toBe('0.5.6-alpha')
+  expect(THEME_APP_VERSION).toBe(version)
 })
 it.each(['999.0.0', 'bad', '0.2'])('rejects unsupported minimum app version %s at inspection and install', async version => {
   const source = paper.replace(/min_app_version:.*\r?\n/, `min_app_version: ${version}\n`)
