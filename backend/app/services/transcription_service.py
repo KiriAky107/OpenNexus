@@ -102,6 +102,10 @@ async def create_transcription(attachment_id, language=None, *, diarization=Fals
         created_at=now(), updated_at=now(), language=language, local_only=local_only, previous_job_id=previous_job_id, model_snapshot=snapshot)
     existing = None
     with closing(connect()) as conn, transaction(conn):
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name='media_upload_idempotency'").fetchone():
+            uploaded = conn.execute("SELECT filename FROM media_upload_idempotency WHERE attachment_id=? LIMIT 1", (attachment_id,)).fetchone()
+            if uploaded:
+                job.filename = uploaded[0]
         if idempotency_key:
             existing = conn.execute("SELECT job_json,fingerprint FROM media_jobs WHERE idempotency_key=?", (idempotency_key,)).fetchone()
         if existing:

@@ -4,12 +4,16 @@ import { isDesktop } from './platform/desktop'
 
 export interface Segment { segment_id: string; start_time: number; end_time: number; text: string; speaker: string | null; language?: string }
 export interface MediaJob {
+  filename?: string | null
   job_id: string; attachment_id: string; status: 'queued' | 'running' | 'processing' | 'completed' | 'failed' | 'cancelled'
   text: string | null; original_text: string | null; segments: Segment[]; speaker_names: Record<string, string>
   revision: number; created_at: string; progress: number | null; error_code: string | null; error_message: string | null
   warnings: string[]; source: string | null; fallback_reason: string | null; local_only: boolean
 }
+export interface MediaArtifact { note_id: string; title: string; file_path: string }
+export interface MediaArtifacts { transcript: MediaArtifact | null; knowledge_note: MediaArtifact | null }
 export const mediaService = {
+  getArtifacts: (id: string) => apiClient.get<MediaArtifacts>(`/api/media/transcriptions/${encodeURIComponent(id)}/artifacts`),
   list: () => apiClient.get<{ items: MediaJob[] }>('/api/media/transcriptions'),
   get: (id: string) => apiClient.get<MediaJob>(`/api/media/transcriptions/${encodeURIComponent(id)}`),
   create: (body: unknown) => apiClient.post<MediaJob>('/api/media/transcriptions', body),
@@ -22,7 +26,7 @@ export const mediaService = {
   revisions: (id: string) => apiClient.get<{items: MediaJob[]}>(`/api/media/transcriptions/${encodeURIComponent(id)}/revisions`),
   note: (id: string, title: string, update_existing = false) => apiClient.post<{note_id: string; title: string}>(`/api/media/transcriptions/${encodeURIComponent(id)}/notes`, { title, update_existing }),
   artifacts: (id: string, body: {title: string; knowledge_title?: string; provider_id: string; model: string; update_existing?: boolean}) =>
-    apiClient.post<{transcript: {note_id: string; title: string}; knowledge_note: {note_id: string; title: string}}>(
+    apiClient.post<{transcript: MediaArtifact; knowledge_note: MediaArtifact}>(
       `/api/media/transcriptions/${encodeURIComponent(id)}/artifacts`, body, { timeoutMs: 300_000 },
     ),
   audio: (id: string) => resolveApiUrl(`/api/media/attachments/${encodeURIComponent(id)}`),

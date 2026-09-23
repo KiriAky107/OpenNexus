@@ -273,6 +273,45 @@ def test_course_note_rejects_invalid_function_plot():
     assert invalid.value.code == "KNOWLEDGE_NOTE_VISUAL_INVALID"
 
 
+def test_readable_export_names_do_not_overwrite_user_notes():
+    from app.contracts import TranscriptNoteRequest
+    from app.services import note_service
+    from app.services.media_notes import create_transcript_note
+    text_attachment()
+
+    async def scenario():
+        user_note = await note_service.create_note(title="课程", markdown="Do not overwrite", folder=None, tags=[])
+        job = await jobs.create_transcription("lecture.txt")
+        options = TranscriptNoteRequest(title="课程")
+        created = await create_transcript_note(job.job_id, options)
+        repeated = await create_transcript_note(job.job_id, options)
+        assert created.title == "课程（2）"
+        assert repeated.note_id == created.note_id
+        assert (await note_service.get_note(user_note.note_id)).markdown == "Do not overwrite"
+        assert "transcription:" not in created.markdown
+        import re
+        assert not re.search(r"[a-f0-9]{64}", created.markdown)
+        assert created.file_path.endswith("课程（2）.md")
+    asyncio.run(scenario())
+
+
+def test_artifact_status_survives_reload_and_reports_partial_success():
+    from app.main import app
+    text_attachment()
+    with TestClient(app) as client:
+        job = client.post('/api/media/transcriptions', json={'attachment_id':'lecture.txt'}).json()
+        client.get(f'/api/media/transcriptions/{job["job_id"]}/events')
+        endpoint = f'/api/media/transcriptions/{job["job_id"]}'
+        assert client.get(endpoint + '/artifacts').json() == {"transcript": None, "knowledge_note": None}
+        note = client.post(endpoint + '/notes', json={"title": "课程转录稿"}).json()
+        artifacts = client.get(endpoint + '/artifacts').json()
+        assert artifacts['transcript']['note_id'] == note['note_id']
+        assert artifacts['knowledge_note'] is None
+        both = client.post(endpoint + '/artifacts', json={"title":"课程转录稿", "knowledge_title":"课程知识点", "provider_id":"mock", "model":"mock-1"})
+        assert both.status_code == 201
+        assert client.get(endpoint + '/artifacts').json()['knowledge_note']['title'] == "课程知识点"
+
+
 def test_local_only_export_and_rebuild_keep_local_embedding_policy(monkeypatch):
     from types import SimpleNamespace
     from app.contracts import TranscriptNoteRequest, IndexRebuildRequest

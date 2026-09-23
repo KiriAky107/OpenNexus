@@ -1250,6 +1250,7 @@ class TranscriptSegment(Contract):
 class TranscriptionJob(Contract):
     job_id: str
     attachment_id: str
+    filename: str | None = None
     status: Literal["queued", "processing", "running", "completed", "failed", "cancelled"]
     text: str | None = None
     error_code: str | None = None

@@ -19,6 +19,15 @@ from app.services.transcription_service import require_job
 _locks = {}
 
 
+def _export_marker(identity: str) -> str:
+    """Keep export fingerprints in the database, not in Markdown or filenames."""
+    with closing(connect()) as conn, transaction(conn):
+        conn.execute("CREATE TABLE IF NOT EXISTS media_export_markers (number INTEGER PRIMARY KEY AUTOINCREMENT, identity TEXT UNIQUE NOT NULL)")
+        conn.execute("INSERT OR IGNORE INTO media_export_markers(identity) VALUES (?)", (identity,))
+        number = conn.execute("SELECT number FROM media_export_markers WHERE identity=?", (identity,)).fetchone()[0]
+    return f"<!-- OpenNexus course material: {number} -->"
+
+
 @contextmanager
 def _artifact_operation(label: str):
     """Give each Host mutation in a multi-artifact request its own operation id."""
@@ -49,8 +58,8 @@ async def create_transcript_note(job_id, options):
             existing = await note_service.get_note(row[0])
             if existing is not None:
                 return existing
-        marker = f"<!-- transcription:{job_id}:{job.revision}:{options_hash} -->"
-        title = f"{options.title} · {job_id[-8:]}-r{job.revision}-{options_hash[:6]}"
+        marker = _export_marker(f"transcription:{job_id}:{job.revision}:{options_hash}")
+        title = options.title.strip()
         lines = [marker, f"# {options.title}", "", f"[源音频](/#/media?job={job_id})", ""]
         if job.segments:
             for segment in job.segments:
@@ -220,6 +229,7 @@ async def _knowledge_markdown(job, provider_id: str, model: str, title: str) -> 
         "流程、状态或关系适合可视化时可给出 mermaid 代码块；课程涉及函数曲线且画图有助理解时可给出 "
         "function-plot 代码块（第一行可写 domain: -10, 10，表达式逐行写成 y = ...）。"
         "不要为了展示而强行添加图表，也不要输出上述三类以外的特殊围栏或处理说明。"
+        "引用资料时使用可读的标题或时间戳，不输出文件哈希、笔记内部 ID 或自行编造的来源链接。"
     )
     parts = _chunks(transcript)
     summaries: list[str] = []
@@ -238,7 +248,6 @@ async def _knowledge_markdown(job, provider_id: str, model: str, title: str) -> 
         )
     body = await _compose_course_blocks(body, job.job_id)
     return "\n".join([
-        f"<!-- knowledge-note:{job.job_id}:{job.revision}:{provider_id}:{model} -->",
         f"# {title}", "", f"[查看完整转录稿](/#/media?job={job.job_id})", "", body,
     ])
 
@@ -276,8 +285,9 @@ async def create_transcript_artifacts(job_id, options):
             if knowledge_note is not None:
                 return {"transcript": transcript_note, "knowledge_note": knowledge_note}
         markdown = await _knowledge_markdown(job, options.provider_id, options.model, knowledge_title)
-        note_title = f"{knowledge_title} · {job_id[-8:]}-r{job.revision}-{signature[-6:]}"
-        marker = markdown.splitlines()[0]
+        note_title = knowledge_title.strip()
+        marker = _export_marker(f"knowledge:{job_id}:{job.revision}:{signature}")
+        markdown = f"{marker}\n{markdown}"
         with _artifact_operation("knowledge"):
             knowledge_note = await _create_note(
                 note_title, markdown, options, marker, tags=["课程笔记", "知识点"]
@@ -288,30 +298,49 @@ async def create_transcript_artifacts(job_id, options):
         return {"transcript": transcript_note, "knowledge_note": knowledge_note}
 
 
+async def list_transcript_artifacts(job_id):
+    require_job(job_id)
+    with closing(connect()) as conn:
+        rows = conn.execute("SELECT note_id,options_hash FROM media_notes WHERE job_id=? ORDER BY revision DESC, rowid DESC", (job_id,)).fetchall()
+    result = {"transcript": None, "knowledge_note": None}
+    for row in rows:
+        kind = "knowledge_note" if row[1].startswith("knowledge:") else "transcript"
+        if result[kind] is None:
+            result[kind] = await note_service.get_note(row[0])
+        if all(result.values()):
+            break
+    return result
+
+
 async def _create_note(title, markdown, options, marker, *, tags=None):
-    try:
-        note = await note_service.create_note(
-            title=title, markdown=markdown, folder=options.folder, tags=tags or ["转写"]
-        )
-    except ApiError as exc:
-        if exc.code == "RESOURCE_CONFLICT" and "note_id" in exc.details:
-            note = await note_service.get_note(exc.details["note_id"])
-        elif exc.code == "REVISION_CONFLICT":
-            # Rust Host 已完成写入、但 Core 尚未来得及保存关联时，重试会报告路径冲突。
-            # 只恢复标题和不可伪造的任务 marker 都匹配的文件，避免误认用户同名笔记。
-            summaries, _ = note_service.list_notes(
-                limit=1000, offset=0, folder=options.folder, tag=None
-            )
-            note = None
-            for summary in summaries:
-                if summary.title != title:
-                    continue
-                candidate = await note_service.get_note(summary.note_id)
-                if candidate is not None and marker in candidate.markdown:
-                    note = candidate
-                    break
-        else:
-            raise
-        if note is None or marker not in note.markdown:
-            raise
-    return note
+    lock = _locks.setdefault((str(get_settings().db_path), "export-names"), asyncio.Lock())
+    async with lock:
+        for number in range(1, 1001):
+            candidate_title = title if number == 1 else f"{title}（{number}）"
+            try:
+                # The Host caches each mutation, including conflicts. Each candidate
+                # needs its own child operation so a retry cannot replay a conflict.
+                with _artifact_operation(f"name:{number}"):
+                    return await note_service.create_note(
+                        title=candidate_title, markdown=markdown, folder=options.folder, tags=tags or ["转写"]
+                    )
+            except ApiError as exc:
+                if exc.code not in {"RESOURCE_CONFLICT", "REVISION_CONFLICT"}:
+                    raise
+                note = await note_service.get_note(exc.details["note_id"]) if exc.details.get("note_id") else None
+                if note is not None and marker in note.markdown:
+                    return note
+                # Recover a Host write whose database association was interrupted.
+                offset = 0
+                while True:
+                    summaries, total = note_service.list_notes(limit=1000, offset=offset, folder=options.folder, tag=None)
+                    for summary in summaries:
+                        if summary.title != candidate_title:
+                            continue
+                        note = await note_service.get_note(summary.note_id)
+                        if note is not None and marker in note.markdown:
+                            return note
+                    offset += len(summaries)
+                    if not summaries or offset >= total:
+                        break
+        raise ApiError(409, "EXPORT_NAME_CONFLICT", "同名课程笔记过多，请更换标题后重试。")
