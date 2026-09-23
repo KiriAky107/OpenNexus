@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useThemeStore } from '@/stores/theme'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import { executeEditorCommand, getEditorCommandCapabilities, subscribeEditorCommandCapabilities, type EditorCommandId } from '@/services/editorCommandService'
 import { calloutMenuCommands, formatMenuSections, paragraphMenuSections, type EditorMenuCommand } from '@/services/editorMenu'
 import * as workspaceService from '@/services/workspaceService'
@@ -16,6 +17,7 @@ type MenuName = 'file' | 'edit' | 'paragraph' | 'format' | 'view' | 'theme' | 'h
 const editor = useEditorStore()
 const workspace = useWorkspaceStore()
 const theme = useThemeStore()
+const layout = useLayoutPreferencesStore()
 const router = useRouter()
 const route = useRoute()
 const { actionDialog, resolveAction, askPrompt } = useActionDialog()
@@ -55,7 +57,7 @@ async function focusFirst(name: MenuName) {
   open.value = name
   nestedOpen.value = false
   await nextTick()
-  bar.value?.querySelector<HTMLElement>(`[data-menu="${name}"] [role="menuitem"]:not(:disabled)`)?.focus()
+  bar.value?.querySelector<HTMLElement>(`[data-menu="${name}"] [data-menu-item]:not(:disabled)`)?.focus()
 }
 function close() { open.value = null; nestedOpen.value = false }
 async function command(id: EditorCommandId, params?: unknown) {
@@ -83,6 +85,12 @@ async function save() {
   else error.value = t('当前笔记尚未安全保存。', 'The current note has not been saved safely.')
 }
 function setMode(mode: 'source' | 'wysiwyg') { editor.setMode(mode); close() }
+function togglePanel(tab: 'files' | 'outline') {
+  layout.toggleWorkspacePanel(tab)
+  if (route.name !== 'workspace') { layout.showWorkspacePanel(tab); void router.push({ name: 'workspace' }) }
+  close()
+}
+function toggleToolbar() { layout.editorToolbarVisible = !layout.editorToolbarVisible; close() }
 function toggleTheme() { theme.toggleTheme(); close() }
 function applyTheme(id: string) { theme.applyTheme(id); close() }
 function navigate(path: string) { void router.push(path); close() }
@@ -306,6 +314,10 @@ onBeforeUnmount(() => {
     <div class="menu-group" role="none" data-menu="view">
       <button class="menu-trigger" role="menuitem" :aria-expanded="open === 'view'" aria-haspopup="menu" @click="toggle('view')" @pointerenter="open && focusFirst('view')">{{ t('视图', 'View') }}</button>
       <div v-if="open === 'view'" class="menu-popover view-menu" role="menu" :aria-label="t('视图', 'View')">
+        <button data-menu-item data-view-toolbar role="menuitemcheckbox" :aria-checked="layout.editorToolbarVisible" @click="toggleToolbar"><span>{{ layout.editorToolbarVisible ? '✓ ' : '' }}{{ t('编辑器工具栏', 'Editor toolbar') }}</span></button>
+        <button data-menu-item data-view-files role="menuitemcheckbox" :aria-checked="route.name === 'workspace' && !layout.workspaceCollapsed && layout.workspaceTab === 'files'" :disabled="!workspace.hasVault" @click="togglePanel('files')"><span>{{ route.name === 'workspace' && !layout.workspaceCollapsed && layout.workspaceTab === 'files' ? '✓ ' : '' }}{{ t('文件树', 'File tree') }}</span></button>
+        <button data-menu-item data-view-outline role="menuitemcheckbox" :aria-checked="route.name === 'workspace' && !layout.workspaceCollapsed && layout.workspaceTab === 'outline'" :disabled="!workspace.hasVault" @click="togglePanel('outline')"><span>{{ route.name === 'workspace' && !layout.workspaceCollapsed && layout.workspaceTab === 'outline' ? '✓ ' : '' }}{{ t('大纲树', 'Outline tree') }}</span></button>
+        <span class="menu-separator" role="separator" />
         <button v-for="item in viewDestinations" :key="item.name" data-menu-item role="menuitemradio" :aria-checked="route.name === item.name" :disabled="!workspace.hasVault" @click="navigateNamed(item.name)"><span>{{ route.name === item.name ? '✓ ' : '' }}{{ item.label }}</span></button>
         <span class="menu-separator" role="separator" />
         <button v-for="item in extensionDestinations" :key="item.name" data-menu-item role="menuitemradio" :aria-checked="route.name === item.name" :disabled="!workspace.hasVault" @click="navigateNamed(item.name)"><span>{{ route.name === item.name ? '✓ ' : '' }}{{ item.label }}</span></button>

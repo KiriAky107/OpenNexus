@@ -7,8 +7,11 @@ import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
 import { isDesktop } from '@/services/platform/desktop'
 import { t } from '@/i18n'
+import ControlIcon from '@/components/common/ControlIcon.vue'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 
 const editorStore = useEditorStore()
+const layout = useLayoutPreferencesStore()
 const workspaceStore = useWorkspaceStore()
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 const reloadError = ref('')
@@ -51,6 +54,7 @@ const statusText = computed<Record<string, string>>(() => ({
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <div class="file-identity"><strong>{{ workspaceStore.activeFile?.name ?? t('未命名笔记', 'Untitled note') }}</strong><small>{{ workspaceStore.activeFilePath }}</small></div>
     <div class="editor-actions">
+      <button v-if="editorStore.mode === 'wysiwyg'" type="button" class="toolbar-toggle" :aria-pressed="layout.editorToolbarVisible" :title="layout.editorToolbarVisible ? t('隐藏编辑器工具栏', 'Hide editor toolbar') : t('显示编辑器工具栏', 'Show editor toolbar')" :aria-label="layout.editorToolbarVisible ? t('隐藏编辑器工具栏', 'Hide editor toolbar') : t('显示编辑器工具栏', 'Show editor toolbar')" @click="layout.editorToolbarVisible = !layout.editorToolbarVisible"><ControlIcon name="toolbar" /></button>
       <button v-if="!desktop" class="button-secondary" @click="exportOpen = true">{{ t('导出', 'Export') }}</button>
       <span class="save-status" :class="editorStore.saveStatus">{{ statusText[editorStore.saveStatus] }}</span>
       <button v-if="needsRecovery && !missingFile" class="button-secondary" @click="reload">{{ t('重新加载外部版本', 'Reload external version') }}</button>
@@ -81,6 +85,9 @@ const statusText = computed<Record<string, string>>(() => ({
 .file-identity strong, .file-identity small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-identity small { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 .editor-actions { flex-wrap: wrap; justify-content: flex-end; }
+.toolbar-toggle { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: var(--radius-sm); }
+.toolbar-toggle:hover, .toolbar-toggle[aria-pressed="true"] { color: var(--color-accent-primary); background: var(--color-accent-soft); }
+.toolbar-toggle:focus-visible { outline: 2px solid var(--color-border-focus); }
 .editor-actions, .mode-switch { display: flex; align-items: center; gap: var(--space-sm); }
 .save-status { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 .save-status.dirty, .save-status.external_changed { color: var(--color-warning); }

@@ -1,21 +1,30 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useEditorStore } from '@/stores/editor'
 import { useThemeStore } from '@/stores/theme'
-import { Moon, Sunny } from '@element-plus/icons-vue'
-import AppIcon from './AppIcon.vue'
+import ControlIcon from './ControlIcon.vue'
 import appLogoUrl from '@/assets/opennexus-logo.svg'
 import { t } from '@/i18n'
 import { isDesktop } from '@/services/platform/desktop'
-import { minimizeWindow, requestWindowClose, toggleMaximizeWindow } from '@/services/platform/windowControls'
+import { minimizeWindow, observeWindowMaximized, requestWindowClose, toggleMaximizeWindow } from '@/services/platform/windowControls'
 
 const route = useRoute()
 const workspaceStore = useWorkspaceStore()
 const editorStore = useEditorStore()
 const themeStore = useThemeStore()
 const desktop = isDesktop()
+const maximized = ref(false)
+let disposed = false
+let stopWindowObserver: (() => void) | undefined
+onMounted(async () => {
+  try {
+    const stop = await observeWindowMaximized(value => { maximized.value = value })
+    if (disposed) stop(); else stopWindowObserver = stop
+  } catch { /* Window controls remain usable if state observation is unavailable. */ }
+})
+onBeforeUnmount(() => { disposed = true; stopWindowObserver?.() })
 const darkAppLogoUrl = '/branding/opennexus-logo-dark.svg'
 
 const pageTitle = computed(() => {
@@ -68,13 +77,13 @@ function toggleFromTitlebar(event: MouseEvent) {
       <span class="app-name" data-tauri-drag-region><img :src="themeStore.isDark ? darkAppLogoUrl : appLogoUrl" alt="" />OpenNexus</span>
     </div>
     <div class="titlebar-right">
-      <button class="icon-btn" @click="themeStore.toggleTheme()" :title="themeStore.isDark ? t('切换浅色主题', 'Switch to light theme') : t('切换深色主题', 'Switch to dark theme')">
-        <AppIcon :icon="themeStore.isDark ? Sunny : Moon" :size="16" />
+      <button class="icon-btn" type="button" @click="themeStore.toggleTheme()" :aria-label="themeStore.isDark ? t('切换浅色主题', 'Switch to light theme') : t('切换深色主题', 'Switch to dark theme')" :title="themeStore.isDark ? t('切换浅色主题', 'Switch to light theme') : t('切换深色主题', 'Switch to dark theme')">
+        <ControlIcon :name="themeStore.isDark ? 'sun' : 'moon'" :size="18" />
       </button>
       <div v-if="desktop" class="window-controls">
-        <button class="win-btn minimize" type="button" :aria-label="t('最小化窗口', 'Minimize window')" @click="minimizeWindow">—</button>
-        <button class="win-btn maximize" type="button" :aria-label="t('最大化或还原窗口', 'Maximize or restore window')" @click="toggleMaximizeWindow">▢</button>
-        <button class="win-btn close" type="button" :aria-label="t('关闭窗口', 'Close window')" @click="requestWindowClose">✕</button>
+        <button class="win-btn minimize" type="button" :title="t('最小化窗口', 'Minimize window')" :aria-label="t('最小化窗口', 'Minimize window')" @click="minimizeWindow"><ControlIcon name="minimize" /></button>
+        <button class="win-btn maximize" type="button" :title="maximized ? t('还原窗口', 'Restore window') : t('最大化窗口', 'Maximize window')" :aria-label="maximized ? t('还原窗口', 'Restore window') : t('最大化窗口', 'Maximize window')" @click="toggleMaximizeWindow"><ControlIcon :name="maximized ? 'restore' : 'maximize'" /></button>
+        <button class="win-btn close" type="button" :title="t('关闭窗口', 'Close window')" :aria-label="t('关闭窗口', 'Close window')" @click="requestWindowClose"><ControlIcon name="close" /></button>
       </div>
     </div>
   </header>
@@ -179,12 +188,11 @@ function toggleFromTitlebar(event: MouseEvent) {
   color: var(--color-text-secondary);
   font-size: 14px;
   -webkit-app-region: no-drag;
-  transition: background-color var(--motion-fast), color var(--motion-fast), transform var(--motion-fast);
+  transition: background-color var(--motion-fast), color var(--motion-fast);
 
   &:hover {
     background: var(--color-background-hover);
     color: var(--color-text-primary);
-    transform: rotate(8deg);
   }
 }
 
@@ -195,17 +203,18 @@ function toggleFromTitlebar(event: MouseEvent) {
 .window-controls {
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 2px;
+  padding-left: 8px;
+  border-left: 1px solid var(--color-border-subtle);
   -webkit-app-region: no-drag;
 }
 
 .win-btn {
-  width: 34px;
-  height: 26px;
+  width: 38px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
   color: var(--color-text-secondary);
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -216,6 +225,7 @@ function toggleFromTitlebar(event: MouseEvent) {
 
   &:hover {
     background: var(--color-background-hover);
+    color: var(--color-text-primary);
   }
 
   &.close:hover {
@@ -223,10 +233,13 @@ function toggleFromTitlebar(event: MouseEvent) {
     color: var(--color-on-error);
   }
 }
+.win-btn:focus-visible, .icon-btn:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: -2px; }
+.win-btn:active, .icon-btn:active { background: var(--color-background-active); }
+.win-btn.close:active { background: var(--color-error); color: var(--color-on-error); }
 
 @media (max-width: 760px) {
   .titlebar-left, .titlebar-right { min-width: 0; }
-  .titlebar-center, .window-controls { display: none; }
+  .titlebar-center { display: none; }
   .file-name { max-width: 42vw; }
 }
 </style>

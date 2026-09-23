@@ -12,6 +12,8 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import FileTreeNode from './FileTreeNode.vue'
 import { Document, DocumentAdd, FolderAdd, ArrowRight } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
+import ControlIcon from '@/components/common/ControlIcon.vue'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import { t } from '@/i18n'
 
 const workspaceStore = useWorkspaceStore()
@@ -27,7 +29,8 @@ const selectedFolderPath = ref(
 const contextTarget = ref<FileNode | null>(null)
 const contextMenuPosition = ref({ x: 0, y: 0 })
 const searchVisible = ref(false)
-const activeTab = ref<'files' | 'outline'>('files')
+const layout = useLayoutPreferencesStore()
+const activeTab = computed({ get: () => layout.workspaceTab, set: value => { layout.workspaceTab = value } })
 function switchTab(tab: 'files' | 'outline') { activeTab.value = tab; closeContextMenu() }
 function navigateTabs(event: KeyboardEvent) {
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
@@ -218,9 +221,12 @@ function containingFolder(path: string): string {
   <section class="file-tree-panel" @click="closeContextMenu" @keydown.esc="closeContextMenu" @wheel.passive="revealSearch">
     <p v-if="workspaceStore.treeRefreshError" class="subtle" role="status">{{ t('文件树暂未同步，将自动重试。', 'File tree sync delayed; retrying automatically.') }}</p>
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
+    <div class="workspace-navigation">
     <div class="workspace-tabs" role="tablist" :aria-label="t('工作区导航', 'Workspace navigation')" @keydown="navigateTabs">
       <button id="workspace-files-tab" role="tab" aria-controls="workspace-files-panel" :aria-selected="activeTab === 'files'" :tabindex="activeTab === 'files' ? 0 : -1" @click="switchTab('files')">{{ t('文件', 'Files') }}</button>
       <button id="workspace-outline-tab" role="tab" aria-controls="workspace-outline-panel" :aria-selected="activeTab === 'outline'" :tabindex="activeTab === 'outline' ? 0 : -1" @click="switchTab('outline')">{{ t('大纲', 'Outline') }}</button>
+    </div>
+    <button class="collapse-panel" type="button" :title="t('折叠文件与大纲侧栏', 'Collapse files and outline sidebar')" :aria-label="t('折叠文件与大纲侧栏', 'Collapse files and outline sidebar')" @click="layout.workspaceCollapsed = true"><ControlIcon name="panelClose" /></button>
     </div>
     <div v-show="activeTab === 'files'" id="workspace-files-panel" class="files-panel" role="tabpanel" aria-labelledby="workspace-files-tab">
     <div class="toolbar">
@@ -279,7 +285,9 @@ function containingFolder(path: string): string {
 
 <style scoped>
 .file-tree-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--color-surface-secondary); color: var(--color-text-primary); }
-.workspace-tabs { display: flex; flex-shrink: 0; gap: 4px; padding: 8px; border-bottom: 1px solid var(--color-border-default); background: var(--color-background-secondary); }
+.workspace-navigation { display: flex; align-items: center; flex-shrink: 0; padding: 8px; gap: 4px; border-bottom: 1px solid var(--color-border-default); background: var(--color-background-secondary); }
+.workspace-tabs { display: flex; flex: 1; min-width: 0; gap: 4px; }
+.collapse-panel { display: grid; place-items: center; width: 30px; height: 32px; flex-shrink: 0; }
 .workspace-tabs button { flex: 1; min-height: 34px; font-weight: 600; color: var(--color-text-secondary); }
 .workspace-tabs button[aria-selected="true"] { background: var(--color-accent-soft); color: var(--color-accent-primary); box-shadow: inset 0 -2px var(--color-accent-primary); }
 .files-panel { display: flex; flex: 1; min-height: 0; flex-direction: column; }

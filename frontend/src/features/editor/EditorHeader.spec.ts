@@ -5,8 +5,21 @@ import { afterEach, expect, it, vi } from 'vitest'
 import EditorHeader from './EditorHeader.vue'
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import * as service from '@/services/workspaceService'
 afterEach(() => vi.restoreAllMocks())
+it('restores the hidden toolbar without switching mode or changing note content', async () => {
+ const pinia = createPinia(); setActivePinia(pinia)
+ const layout = useLayoutPreferencesStore(); layout.editorToolbarVisible = false
+ const editor = useEditorStore(); editor.mode = 'wysiwyg'; editor.content = '# Keep this'
+ const wrapper = mount(EditorHeader, { global: { plugins: [pinia] } })
+ try {
+  await wrapper.get('[aria-label="显示编辑器工具栏"]').trigger('click')
+  expect(layout.editorToolbarVisible).toBe(true)
+  expect(editor.content).toBe('# Keep this')
+  expect(editor.mode).toBe('wysiwyg')
+ } finally { wrapper.unmount(); localStorage.clear() }
+})
 it('offers recovery for a missing file, supports cancel, and releases navigation after confirmation', async () => {
  const pinia = createPinia(); setActivePinia(pinia)
  vi.spyOn(service, 'getNoteId').mockResolvedValue('id')
