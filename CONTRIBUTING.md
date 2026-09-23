@@ -1,6 +1,6 @@
 # Contributing to OpenNexus
 
-[简体中文](https://www.google.com/search?q=CONTRIBUTING.zh-CN.md&utm_source=gemini) | **English**
+[简体中文](CONTRIBUTING.zh-CN.md) | **English**
 
 ---
 
