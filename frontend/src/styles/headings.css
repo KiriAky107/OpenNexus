@@ -1,4 +1,64 @@
 .heading-fold-hidden { display: none !important; }
+/* Visual-only markers. They do not enter the editor document, copied text or Markdown. */
+:is(.milkdown .ProseMirror, .markdown-content) :is(h1,h2,h3,h4,h5,h6) { position: relative; overflow-wrap: anywhere; }
+:is(.milkdown .ProseMirror, .markdown-content) h1 { text-align: var(--heading-title-align, center) !important; }
+:is(.milkdown .ProseMirror, .markdown-content) :is(h1,h2,h3,h4,h5,h6)::before {
+  display: var(--heading-marker-display, inline-block) !important;
+  position: static !important;
+  margin-inline-end: .55em;
+  color: var(--color-text-secondary);
+  opacity: .65;
+  font-family: var(--font-ui-mono);
+  font-size: .65em;
+  font-weight: 500;
+  letter-spacing: -.08em;
+  vertical-align: .08em;
+  user-select: none;
+  pointer-events: none;
+  transform: none !important;
+}
+:is(.milkdown .ProseMirror, .markdown-content) h1::before {
+  content: '' !important;
+  box-sizing: border-box;
+  width: .7em;
+  height: .85em;
+  font-size: 1em;
+  border: .065em solid currentColor;
+  border-radius: .08em;
+  background: linear-gradient(currentColor,currentColor) center 32% / 58% .06em no-repeat,
+              linear-gradient(currentColor,currentColor) center 54% / 58% .06em no-repeat,
+              linear-gradient(currentColor,currentColor) 34% 76% / 35% .06em no-repeat;
+  vertical-align: -.04em;
+}
+:is(.milkdown .ProseMirror, .markdown-content) h2::before {
+  content: '#' !important;
+  color: var(--color-accent-primary);
+  opacity: .8;
+}
+/* Shape-based accents keep lower levels distinct without repeating Markdown syntax. */
+:is(.milkdown .ProseMirror, .markdown-content) h3::before {
+  content: '' !important;
+  width: .12em;
+  height: .9em;
+  border-radius: .06em;
+  background: var(--color-accent-primary);
+  font-size: 1em;
+  vertical-align: -.02em;
+  opacity: .8;
+}
+:is(.milkdown .ProseMirror, .markdown-content) h4::before {
+  content: '' !important;
+  box-sizing: border-box;
+  width: .34em;
+  height: .34em;
+  border: .065em solid var(--color-accent-primary);
+  border-radius: .035em;
+  font-size: 1em;
+  vertical-align: .15em;
+  transform: rotate(45deg) !important;
+  opacity: .8;
+}
+:is(.milkdown .ProseMirror, .markdown-content) :is(h5,h6)::before { content: none !important; }
 .milkdown .ProseMirror .heading-fold-toggle { opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
 .milkdown .ProseMirror :is(h1,h2,h3,h4,h5,h6):hover > .heading-fold-toggle,
 .milkdown .ProseMirror .heading-fold-toggle:focus-visible { opacity: 1; pointer-events: auto; }
@@ -17,3 +77,4 @@
 
 .milkdown .ProseMirror .heading-fold-toggle::before { content: ''; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); }
 .milkdown .ProseMirror .heading-fold-toggle[aria-expanded='false']::before { transform: rotate(-45deg); }
+.milkdown .ProseMirror .heading-fold-toggle { position: absolute; left: -27px; top: .1em; margin: 0; }
