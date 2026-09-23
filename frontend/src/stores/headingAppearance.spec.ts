@@ -26,3 +26,17 @@ it('rejects invalid storage and limits values before applying CSS', () => {
   expect(result.levels[0]).toEqual({ size: 72, weight: 700 })
   expect(result.levels[1]!.size).toBe(28)
 })
+
+it('defaults to centered H1 and markers without replacing theme typography', async () => {
+  const store = useHeadingAppearanceStore()
+  expect(store.preferences.centerTitle).toBe(true)
+  expect(store.preferences.markers).toBe(true)
+  store.preferences.centerTitle = false
+  store.preferences.markers = false
+  await nextTick()
+  expect(store.cssVariables).toEqual({ '--heading-title-align': 'left', '--heading-marker-display': 'none' })
+  setActivePinia(createPinia())
+  expect(useHeadingAppearanceStore().preferences.markers).toBe(false)
+  store.reset()
+  expect(store.cssVariables).toEqual({})
+})

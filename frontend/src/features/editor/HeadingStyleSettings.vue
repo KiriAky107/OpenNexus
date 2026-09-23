@@ -9,7 +9,10 @@ const appearance = useHeadingAppearanceStore()
     <summary>{{ t('标题样式', 'Heading styles') }}</summary>
     <div class="heading-settings-body">
       <label><input v-model="appearance.preferences.custom" type="checkbox" /> {{ t('自定义标题样式', 'Customize heading styles') }}</label>
-      <p class="subtle">{{ t('关闭时跟随主题。设置作用于正文 H1–H6，不改写 Markdown，也不改变笔记属性标题。', 'Disable to follow the theme. Applies to document H1–H6 without rewriting Markdown or the metadata title.') }}</p>
+      <p class="subtle">{{ t('字体和字号可跟随主题。设置只改变正文 H1–H6 的显示，不改写 Markdown，也不改变笔记属性标题。', 'Fonts and sizes can follow the theme. These settings only change document H1–H6 appearance, not Markdown or the metadata title.') }}</p>
+      <label><input v-model="appearance.preferences.centerTitle" type="checkbox" /> {{ t('一级标题居中', 'Center level-one headings') }}</label>
+      <label><input v-model="appearance.preferences.markers" type="checkbox" /> {{ t('显示标题装饰（图标、#、竖线、小菱形）', 'Show heading accents (icon, #, bar, diamond)') }}</label>
+      <p class="subtle">{{ t('一至四级使用不同装饰，五、六级只保留字体层级；颜色跟随当前主题。', 'Levels 1–4 use distinct accents; levels 5–6 rely on typography. Colors follow the current theme.') }}</p>
       <label>{{ t('标题字体', 'Heading font') }}
         <select v-model="appearance.preferences.family" class="select" :disabled="!appearance.preferences.custom">
           <option value="inherit">{{ t('跟随正文', 'Follow body') }}</option><option value="serif">{{ t('衬线字体', 'Serif') }}</option><option value="sans-serif">{{ t('无衬线字体', 'Sans serif') }}</option><option value="monospace">{{ t('等宽字体', 'Monospace') }}</option>

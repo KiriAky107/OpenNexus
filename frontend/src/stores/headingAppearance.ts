@@ -9,6 +9,8 @@ export function normalizeHeadingAppearance(value: unknown) {
   const levels = Array.isArray(raw.levels) ? raw.levels : []
   return {
     custom: raw.custom === true,
+    centerTitle: raw.centerTitle !== false,
+    markers: raw.markers !== false,
     family: ['inherit', 'serif', 'sans-serif', 'monospace'].includes(String(raw.family)) ? String(raw.family) : 'inherit',
     levels: defaultHeadingSizes.map((size, index) => {
       const item = levels[index] ?? {}
@@ -27,8 +29,11 @@ export const useHeadingAppearanceStore = defineStore('heading-appearance', () =>
   watch(preferences, value => localStorage.setItem(key, JSON.stringify(normalizeHeadingAppearance(value))), { deep: true })
   const cssVariables = computed(() => {
     const normalized = normalizeHeadingAppearance(preferences.value)
-    if (!normalized.custom) return {}
-    const result: Record<string, string> = { '--heading-family': normalized.family }
+    const result: Record<string, string> = {}
+    if (!normalized.centerTitle) result['--heading-title-align'] = 'left'
+    if (!normalized.markers) result['--heading-marker-display'] = 'none'
+    if (!normalized.custom) return result
+    result['--heading-family'] = normalized.family
     normalized.levels.forEach((item, index) => {
       result[`--heading-${index + 1}-size`] = `${item.size}px`
       result[`--heading-${index + 1}-weight`] = String(item.weight)
