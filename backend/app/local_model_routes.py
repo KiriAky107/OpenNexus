@@ -1,28 +1,29 @@
 import asyncio
+from typing import Literal
 from fastapi import APIRouter
 from app.services import model_diagnostics
 from app.local_models import manager
-from app.local_models.runtime import RuntimeConfig, configuration, configure, interpreter, runtime
+from app.local_models.runtime import RuntimeConfig, configuration, configure, runtime_installed, runtime
 
 router = APIRouter(prefix="/api/local-models", tags=["Local models"])
 
 
-@router.get("/runtime-components/cuda")
-async def cuda_status():
+@router.get("/runtime-components/{device}")
+async def component_status(device: Literal['cpu', 'cuda']):
     from app.local_models import components
-    return await components.status()
+    return await components.status(device)
 
 
-@router.post("/runtime-components/cuda", status_code=202)
-async def install_cuda():
+@router.post("/runtime-components/{device}", status_code=202)
+async def install_component(device: Literal['cpu', 'cuda']):
     from app.local_models import components
-    return await components.install()
+    return await components.install(device)
 
 
 @router.get("")
 async def list_models():
     items, diagnostics = await asyncio.gather(asyncio.to_thread(manager.describe), asyncio.to_thread(model_diagnostics.recent))
-    return {**items, "runtime_installed": interpreter().is_file(), "config": configuration(),
+    return {**items, "runtime_installed": runtime_installed(), "config": configuration(),
             "active_models": list(runtime.active.values()), "queued_requests": len(runtime.waiters),
             "last_inference": diagnostics[-1] if diagnostics else None}
 

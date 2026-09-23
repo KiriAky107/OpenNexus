@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import time
 import hashlib
 from collections import OrderedDict
@@ -74,9 +75,21 @@ def configure(request):
 def interpreter(config=None):
     from app.local_models import components
     requested_device = (config or configuration()).device
-    if not os.getenv("APP_MODEL_PYTHON") and requested_device == "cuda" and components.ready():
-        return components.ROOT / "Scripts/python.exe"
+    if not os.getenv("APP_MODEL_PYTHON"):
+        installed = components.installed_interpreter(requested_device)
+        if installed is not None:
+            return installed
+        if getattr(sys, 'frozen', False):
+            # Release builds never fall back to a development checkout.
+            return components.python_path(requested_device)
     return Path(os.getenv("APP_MODEL_PYTHON", str(BACKEND_DIR / ".venv-models" / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))))
+
+
+def runtime_installed(config=None):
+    from app.local_models import components
+    if getattr(sys, 'frozen', False) and not os.getenv('APP_MODEL_PYTHON'):
+        return components.installed_interpreter((config or configuration()).device) is not None
+    return interpreter(config).is_file()
 
 
 class Runtime:
@@ -164,7 +177,7 @@ class Runtime:
         if read_state(key)["status"] != "installed":
             raise ProviderError("LOCAL_MODEL_NOT_INSTALLED", "请先下载本地模型。")
         executable = interpreter(config)
-        if not executable.is_file():
+        if not runtime_installed(config):
             raise ProviderError("LOCAL_RUNTIME_NOT_INSTALLED", "请先安装本地模型运行环境。")
         from app.services.usage_service import UsageAttempt
         attempt = UsageAttempt("local-models", CATALOG[key].repository, "local", operation, source="local")
