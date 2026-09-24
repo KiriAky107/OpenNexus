@@ -37,7 +37,6 @@
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 0.5.6-alpha2 editor toolbar, outline, formulas, and Mermaid diagram" width="95%" />
-  <p><em>OpenNexus 0.5.6-alpha2: screenshots of the shared web frontend running with a copy of the demonstration vault. Native desktop window controls are not shown.</em></p>
 </div>
 
 <table align="center">
