@@ -102,7 +102,7 @@ async function handleOpenCitation(data: Record<string, unknown>) {
 <template>
   <section class="feature-page agent-page">
     <header class="feature-header"><div><h1>{{ isNewRun ? t('智能体', 'Agent') : t('任务进展', 'Task progress') }}</h1><p>{{ t('描述目标，选择模型与技能，检查执行结果。', 'Describe a goal, choose a model and skill, then review the result.') }}</p></div>
-      <button v-if="!isNewRun" class="button-secondary" @click="router.push({ name: 'agent' })">{{ t('新建运行', 'New run') }}</button></header>
+      <div class="inline-actions"><RouterLink class="button-secondary" to="/benchmarks?kind=agent">{{ t('当前知识库评测', 'Benchmark this vault') }}</RouterLink><button v-if="!isNewRun" class="button-secondary" @click="router.push({ name: 'agent' })">{{ t('新建运行', 'New run') }}</button></div></header>
     <div v-if="pageError || agentStore.error || providerStore.error" class="error-banner">{{ pageError || agentStore.error || providerStore.error }}</div>
     <form v-if="isNewRun" class="panel run-form" @submit.prevent="createRun">
       <div class="field"><label>{{ t('任务', 'Task') }}</label><textarea v-model="form.input" class="textarea" required :placeholder="t('描述希望智能体完成的任务', 'Describe the task for the agent')" /></div>

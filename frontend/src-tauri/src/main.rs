@@ -689,6 +689,29 @@ fn export_file_name(value: &str) -> Result<(&str, &'static str), String> {
     Ok((value, label))
 }
 
+/// Benchmark JSON 仅写入用户通过原生保存对话框明确选择的文件。
+#[tauri::command]
+async fn benchmark_save_json(file_name: String, content: String) -> Result<bool, String> {
+    if content.len() > 8 * 1024 * 1024
+        || file_name.len() > 100
+        || !file_name.ends_with(".json")
+        || !file_name.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+        || file_name.starts_with('.')
+        || serde_json::from_str::<serde_json::Value>(&content).is_err()
+    {
+        return Err("BENCHMARK_EXPORT_INVALID".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("保存 Benchmark JSON")
+            .set_file_name(&file_name)
+            .add_filter("JSON", &["json"])
+            .save_file() else { return Ok(false); };
+        std::fs::write(path, content).map_err(|_| "BENCHMARK_SAVE_FAILED".to_string())?;
+        Ok(true)
+    }).await.map_err(|_| "BENCHMARK_SAVE_FAILED".to_string())?
+}
+
 /// 由原生保存对话框选择目标，再从已认证的本机 Core 直接写入产物。
 /// 文件内容不绕回 WebView，避免大文件重复 Base64 编解码。
 #[tauri::command]
@@ -1453,6 +1476,7 @@ fn main() {
             core_request_prepare,
             core_request_cancel,
             export_save,
+            benchmark_save_json,
             core_stream,
             core_stream_cancel,
             editor_capabilities,
