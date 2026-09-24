@@ -166,7 +166,7 @@ async function chooseDefaultModel(provider: ProviderConfig, event: Event) {
         <p class="subtle">{{ t('统计本次 AI Core 启动以来的检索，包含搜索、对话和智能体调用；不计纯全文检索。', 'Counts searches, chat and agent retrievals since AI Core started; excludes full-text-only searches.') }}</p>
       </div>
       <div v-if="settingsStore.indexStatus.error" class="error-banner">{{ settingsStore.indexStatus.error }}</div>
-      <div class="inline-actions"><button class="button-primary" :disabled="settingsStore.indexStatus.status === 'indexing'" @click="settingsStore.rebuildIndex('full')">{{ t('重建全部', 'Rebuild all') }}</button><span class="subtle">{{ t('当前后端支持全量重建。', 'The current backend supports a full rebuild.') }}</span></div>
+      <div class="inline-actions"><button class="button-primary" :disabled="settingsStore.indexStatus.status === 'indexing'" @click="settingsStore.rebuildIndex('full')">{{ t('重建全部', 'Rebuild all') }}</button><RouterLink class="button-secondary" to="/benchmarks?kind=rag">{{ t('验证当前知识库检索', 'Benchmark this vault’s retrieval') }}</RouterLink><span class="subtle">{{ t('当前后端支持全量重建。', 'The current backend supports a full rebuild.') }}</span></div>
       <ModelRoutingSettings />
     </div>
 

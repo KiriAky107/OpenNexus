@@ -5,9 +5,11 @@ const map = (r: RunWire): BenchmarkRun => ({ id: r.run_id, kind: r.kind, dataset
 // 保留运行配置中的 Agent Run ID，使报告页可直接进入对应 Trace 和权限处理入口。
 export const benchmarkService = {
   async datasets(kind: 'rag' | 'agent') {
-    const r = await apiClient.get<{ items: { dataset_id: string; description: string; case_count: number }[] }>('/api/benchmarks/datasets', { params: { kind } })
-    return r.items.map(d => ({ id: d.dataset_id, description: d.description, cases: d.case_count }))
+    const r = await apiClient.get<{ items: { dataset_id: string; description: string; case_count: number; scope: 'vault' | 'shared'; version: string }[] }>('/api/benchmarks/datasets', { params: { kind } })
+    return r.items.map(d => ({ id: d.dataset_id, description: d.description, cases: d.case_count, scope: d.scope, version: d.version }))
   },
+  importDataset(content: string, expectedVaultId?: string) { return apiClient.post<{ dataset_id: string; kind: 'rag' | 'agent' }>('/api/benchmarks/datasets/import', { content, expected_vault_id: expectedVaultId }) },
+  exportDataset(id: string, kind: 'rag' | 'agent') { return apiClient.get<Record<string, unknown>>(`/api/benchmarks/datasets/${encodeURIComponent(id)}/export`, { params: { kind } }) },
   async list() { return (await apiClient.get<{ items: RunWire[] }>('/api/benchmarks/runs')).items.map(map) },
   async start(kind: 'rag' | 'agent', body: object) { return map(await apiClient.post<RunWire>(`/api/benchmarks/${kind}/runs`, body)) },
   cancel(id: string) { return apiClient.post(`/api/benchmarks/runs/${encodeURIComponent(id)}/cancel`) },

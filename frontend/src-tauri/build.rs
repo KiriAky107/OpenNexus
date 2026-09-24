@@ -56,6 +56,7 @@ fn main() {
             "core_request_prepare",
             "core_request_cancel",
             "export_save",
+            "benchmark_save_json",
             "core_stream",
             "core_stream_cancel",
             "editor_capabilities",

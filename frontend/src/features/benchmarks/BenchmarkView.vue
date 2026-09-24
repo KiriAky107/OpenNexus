@@ -1,8 +1,50 @@
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { benchmarkService as service, type BenchmarkRun } from '@/services/benchmarkService'
 import { listProviders } from '@/services/providerService'
-const kind = ref<'rag' | 'agent'>('rag'), dataset = ref(''), error = ref(''), busy = ref(false)
+import { useRoute } from 'vue-router'
+import { useWorkspaceStore } from '@/stores/workspace'
+import { hostInvoke, isDesktop } from '@/services/platform/desktop'
+const route = useRoute(), workspace = useWorkspaceStore()
+const kind = ref<'rag' | 'agent'>(route.query.kind === 'agent' ? 'agent' : 'rag'), dataset = ref(''), error = ref(''), busy = ref(false)
+const importing = ref(false), importText = ref(''), importNotice = ref('')
+const selectedDataset = computed(() => datasets.value.find(item => item.id === dataset.value))
+let datasetSequence = 0, scopeSequence = 0
+const selectionKey = () => `benchmark-dataset:${workspace.vaultId || workspace.vaultPath}:${kind.value}`
+async function saveJSON(value: unknown, filename: string) {
+  if (isDesktop()) { await hostInvoke('benchmark_save_json', { fileName: filename, content: JSON.stringify(value, null, 2) }); return }
+  const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' }))
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+function useTemplate() {
+  importText.value = JSON.stringify({ dataset_id: kind.value === 'rag' ? 'my-vault-rag-v1' : 'my-vault-agent-v1', kind: kind.value, version: '1.0', description: '请替换为当前知识库的验证目标', cases: kind.value === 'rag'
+    ? [{ case_id: 'case-1', query: '请替换为需要验证的检索问题', expected_note_paths: ['课程/双指针.md'] }]
+    : [{ case_id: 'case-1', prompt: '检索当前知识库中关于双指针的笔记，概括要点并引用来源。', allowed_tools: ['notes.search'], expected_tools: [{ name: 'notes.search', arguments: {} }], output_contains: ['双指针'], citation_required: true }] }, null, 2)
+}
+async function chooseFile(event: Event) {
+  const input = event.target as HTMLInputElement, file = input.files?.[0]
+  if (!file) return
+  if (file.size > 1048576) { error.value = '数据集不能超过 1 MiB。'; input.value = ''; return }
+  const epoch = scopeSequence
+  try { const content = await file.text(); if (epoch === scopeSequence) importText.value = content }
+  catch { error.value = '无法读取所选文件。' }
+  input.value = ''
+}
+async function importDataset() {
+  error.value = ''; importNotice.value = ''; importing.value = true
+  const epoch = scopeSequence
+  try {
+    const result = await service.importDataset(importText.value, isDesktop() ? workspace.vaultId : undefined)
+    if (epoch !== scopeSequence) return
+    kind.value = result.kind
+    await nextTick()
+    await loadDatasets(result.dataset_id)
+    if (epoch === scopeSequence) { importNotice.value = '已保存到当前知识库的专属评测列表。'; importText.value = '' }
+  } catch(e) { if (epoch === scopeSequence) error.value = String(e) }
+  finally { importing.value = false }
+}
+async function exportDataset() { const epoch = scopeSequence, filename = `${dataset.value}.json`; try { const value = await service.exportDataset(dataset.value, kind.value); if (epoch === scopeSequence) await saveJSON(value, filename) } catch(e) { if (epoch === scopeSequence) error.value = String(e) } }
 const datasets = ref<Awaited<ReturnType<typeof service.datasets>>>([]), runs = ref<BenchmarkRun[]>([])
 const providers = ref<Awaited<ReturnType<typeof listProviders>>>([]), provider = ref(''), model = ref('')
 const report = ref<Awaited<ReturnType<typeof service.report>> | null>(null)
@@ -31,32 +73,61 @@ const metricGroups = computed(() => {
   }))
 })
 let timer: ReturnType<typeof setTimeout> | undefined, disposed = false
-async function loadDatasets() { try { datasets.value = await service.datasets(kind.value); dataset.value = datasets.value[0]?.id ?? '' } catch(e) { error.value = String(e) } }
-async function refresh() { try { runs.value = await service.list() } catch(e) { error.value = String(e) } finally { loading.value = false } if (!disposed) timer = setTimeout(refresh, 1500) }
-watch(kind, loadDatasets)
+async function loadDatasets(preferred?: string) {
+  const sequence = ++datasetSequence, key = selectionKey(), selectedKind = kind.value
+  dataset.value = ''; datasets.value = []
+  try {
+    const items = await service.datasets(selectedKind)
+    if (sequence !== datasetSequence || disposed) return
+    datasets.value = items
+    let saved = preferred
+    try { saved ||= localStorage.getItem(key) || '' } catch { /* optional local preference */ }
+    dataset.value = items.find(item => item.id === saved)?.id ?? items[0]?.id ?? ''
+  } catch(e) { if (sequence === datasetSequence) error.value = String(e) }
+}
+async function refresh() { const epoch = scopeSequence; try { const items = await service.list(); if (epoch === scopeSequence) runs.value = items } catch(e) { if (epoch === scopeSequence) error.value = String(e) } finally { loading.value = false } if (!disposed) timer = setTimeout(refresh, 1500) }
+watch(kind, () => { void loadDatasets() })
+watch(() => route.query.kind, value => { if (value === 'rag' || value === 'agent') kind.value = value })
+watch(() => workspace.vaultId || workspace.vaultPath, () => {
+  scopeSequence++; report.value = null; runs.value = []; importText.value = ''; importNotice.value = ''; error.value = ''
+  void loadDatasets()
+})
+watch(dataset, value => { if (value) { try { localStorage.setItem(selectionKey(), value) } catch { /* optional local preference */ } } })
 watch(provider, id => { model.value = providers.value.find(p => p.provider_id === id)?.default_model ?? '' })
 async function start() {
   error.value = ''; busy.value = true
-  try { await service.start(kind.value, kind.value === 'agent' ? { dataset_id: dataset.value, provider_id: provider.value, model: model.value, max_steps: 6, timeout_seconds: 90, token_budget: 6000 } : { dataset_id: dataset.value, modes: ['fts','vector','hybrid'], retrieval: { top_k: topK.value, fusion: fusion.value, rrf_k: rrfK.value, rerank: rerank.value } }) }
+  const scope = isDesktop() ? { expected_vault_id: workspace.vaultId } : {}
+  try { await service.start(kind.value, kind.value === 'agent' ? { ...scope, dataset_id: dataset.value, provider_id: provider.value, model: model.value, max_steps: 6, timeout_seconds: 90, token_budget: 6000 } : { ...scope, dataset_id: dataset.value, modes: ['fts','vector','hybrid'], retrieval: { top_k: topK.value, fusion: fusion.value, rrf_k: rrfK.value, rerank: rerank.value } }) }
   catch(e) { error.value = String(e) } finally { busy.value = false }
 }
-async function action(run: BenchmarkRun, cancel = false) { try { if (cancel) await service.cancel(run.id); else { report.value = await service.report(run.id); reportName.value = run.datasetId } } catch(e) { error.value = String(e) } }
-function download() { const url = URL.createObjectURL(new Blob([JSON.stringify(report.value,null,2)], { type:'application/json' })); const a=document.createElement('a'); a.href=url; a.download='benchmark-report.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000) }
+async function action(run: BenchmarkRun, cancel = false) { const epoch = scopeSequence; try { if (cancel) await service.cancel(run.id); else { const result = await service.report(run.id); if (epoch === scopeSequence) { report.value = result; reportName.value = run.datasetId } } } catch(e) { if (epoch === scopeSequence) error.value = String(e) } }
+async function download() { try { await saveJSON(report.value, 'benchmark-report.json') } catch(e) { error.value = String(e) } }
 onMounted(async () => { void refresh(); void loadDatasets(); try { providers.value=(await listProviders()).filter(p=>p.enabled); provider.value=providers.value[0]?.provider_id ?? '' } catch(e) { error.value=String(e) } })
 onBeforeUnmount(() => { disposed=true; clearTimeout(timer) })
 </script>
 <template>
   <main class="feature-page benchmark-page">
     <header class="feature-header">
-      <div><h1>Benchmark 评测</h1><p>比较检索质量与智能体表现，查看每次评测的结果和执行轨迹。</p></div>
+      <div><h1>Benchmark 评测</h1><p>为不同知识库设置专属的检索问题和 Agent 验证任务。当前知识库：{{ workspace.vaultName || '未打开' }}。</p></div>
       <span class="badge" :class="{ info: activeCount > 0 }">{{ activeCount ? `${activeCount} 项正在运行` : 'RAG / Agent' }}</span>
     </header>
     <div class="benchmark-content">
+      <section class="panel" aria-label="知识库专属数据集">
+        <h2>知识库专属数据集</h2>
+        <p class="subtle">导入的数据集只属于当前知识库；切换知识库后会切换列表。已有共享数据集仍标注为“共享”。导入不会修改笔记，也不会自动执行 Agent。</p>
+        <details class="ui-disclosure"><summary>导入或编写 JSON 数据集</summary>
+          <p>RAG 使用 query 和 expected_note_paths 指定问题与预期笔记相对路径；Agent 使用 prompt、allowed_tools、expected_tools、output_contains 等定义验证目标。每份最多 100 个案例、1 MiB。同名但不同内容不会覆盖，请使用新的 dataset_id。</p>
+          <div class="inline-actions"><input type="file" accept=".json,application/json" aria-label="选择评测数据集 JSON" :disabled="importing || !workspace.hasVault" @change="chooseFile"><button class="button-secondary" type="button" @click="useTemplate">填写当前类型模板</button></div>
+          <textarea v-model="importText" class="textarea dataset-json" aria-label="数据集 JSON" rows="12" spellcheck="false" :disabled="importing" />
+          <button class="button-primary" type="button" :disabled="importing || !workspace.hasVault || !importText.trim()" @click="importDataset">{{ importing ? '导入中…' : '导入到当前知识库' }}</button>
+          <p v-if="importNotice" role="status">{{ importNotice }}</p>
+        </details>
+      </section>
       <form class="panel benchmark-config" @submit.prevent="start">
         <div class="section-heading"><div><h2>创建评测</h2><p class="subtle">选择数据集和运行配置，结果将保留在下方列表。</p></div></div>
         <div class="form-grid">
           <div class="field"><label for="benchmark-kind">类型</label><select id="benchmark-kind" v-model="kind" class="select"><option value="rag">RAG 检索</option><option value="agent">Agent 任务</option></select></div>
-          <div class="field dataset-field"><label for="benchmark-dataset">数据集</label><select id="benchmark-dataset" v-model="dataset" class="select"><option v-if="!datasets.length" value="">暂无可用数据集</option><option v-for="d in datasets" :key="d.id" :value="d.id">{{ d.id }} · {{ d.cases }} 案例</option></select></div>
+          <div class="field dataset-field"><label for="benchmark-dataset">数据集</label><select id="benchmark-dataset" v-model="dataset" class="select"><option v-if="!datasets.length" value="">暂无可用数据集，请为当前知识库导入</option><option v-for="d in datasets" :key="d.id" :value="d.id">{{ d.scope === 'vault' ? '当前知识库' : '共享' }} · {{ d.id }} · {{ d.cases }} 案例</option></select><small v-if="selectedDataset" class="subtle">{{ selectedDataset.description }} · {{ selectedDataset.version }}</small><button v-if="dataset" type="button" class="button-secondary" @click="exportDataset">导出所选数据集</button></div>
           <template v-if="kind === 'agent'">
             <div class="field"><label for="benchmark-provider">提供商</label><select id="benchmark-provider" v-model="provider" class="select"><option v-if="!providers.length" value="">暂无可用提供商</option><option v-for="p in providers" :key="p.provider_id" :value="p.provider_id">{{ p.name }}</option></select></div>
             <div class="field"><label for="benchmark-model">模型</label><input id="benchmark-model" v-model="model" class="input" placeholder="模型 ID"></div>
@@ -93,6 +164,7 @@ onBeforeUnmount(() => { disposed=true; clearTimeout(timer) })
 </template>
 <style scoped>
 .benchmark-page { width:100%; min-width:0; color:var(--color-text-primary); }
+.dataset-json { width:100%; margin-block:var(--space-md); font-family:var(--font-editor-mono); }
 .benchmark-content { max-width:1180px; margin:0 auto; display:grid; gap:var(--space-xl); }
 .benchmark-content > .panel { width:100%; min-width:0; margin:0; padding:var(--space-xl); }
 .section-heading { display:flex; align-items:center; justify-content:space-between; gap:var(--space-md); margin-bottom:var(--space-lg); }
