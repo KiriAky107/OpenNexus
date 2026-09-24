@@ -83,6 +83,9 @@ def _config_snapshot(request: RAGRunRequest, dataset: RAGDataset) -> dict:
         "dataset_id": dataset.dataset_id,
         "dataset_hash": dataset.content_hash,
         "dataset_version": dataset.version,
+        "dataset_scope": dataset.scope,
+        "vault_scope": datasets.current_scope(),
+        "dataset_cases": [case.model_dump(mode='json') for case in dataset.cases],
         "modes": [m.value for m in request.modes],
         "retrieval": request.retrieval.model_dump(),
         "repeat": request.repeat,
@@ -145,7 +148,9 @@ async def _validate_index_compatibility(request: RAGRunRequest) -> None:
 
 async def create_rag_run(request: RAGRunRequest) -> BenchmarkRun:
     """创建一次 RAG Benchmark，立即返回 queued 的 BenchmarkRun，由后台 Task 执行。"""
+    datasets.check_scope(request.expected_vault_id)
     dataset = datasets.load_dataset(request.dataset_id, BenchmarkKind.rag)
+    datasets.resolve_note_paths(dataset)
     await _validate_index_compatibility(request)
 
     # 容量检查：先淘汰终态 run 腾空间；满容量且全为活动 run 时拒绝创建
@@ -294,7 +299,8 @@ def list_runs(
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[BenchmarkRun], int]:
-    runs = list(_runs.values())
+    scope = datasets.current_scope()
+    runs = [run for run in _runs.values() if run.config_snapshot.get('vault_scope', scope) == scope]
     if kind is not None:
         runs = [r for r in runs if r.kind == kind]
     if status is not None:
@@ -305,20 +311,22 @@ def list_runs(
 
 
 def get_run(run_id: str) -> BenchmarkRun | None:
-    return _runs.get(run_id)
+    run = _runs.get(run_id)
+    scope = datasets.current_scope()
+    return run if run and run.config_snapshot.get('vault_scope', scope) == scope else None
 
 
 def get_report(run_id: str) -> BenchmarkReport | None:
-    return _reports.get(run_id)
+    return _reports.get(run_id) if get_run(run_id) else None
 
 
 def get_events(run_id: str) -> list[BenchmarkEvent]:
-    return _events.get(run_id, [])
+    return _events.get(run_id, []) if get_run(run_id) else []
 
 
 def cancel_run(run_id: str) -> BenchmarkRun | None:
     """取消运行：对 queued/running 设置取消标志，后台 Task 在 Case 边界检查后置为 cancelled。"""
-    run = _runs.get(run_id)
+    run = get_run(run_id)
     if run is None:
         return None
     if run.status in (BenchmarkStatus.queued, BenchmarkStatus.running):
@@ -328,7 +336,7 @@ def cancel_run(run_id: str) -> BenchmarkRun | None:
 
 def subscribe(run_id: str) -> asyncio.Queue[BenchmarkEvent] | None:
     """订阅运行事件流；运行已结束（completed/failed/cancelled）时返回 None。"""
-    run = _runs.get(run_id)
+    run = get_run(run_id)
     if run is None or run.status in (
         BenchmarkStatus.completed,
         BenchmarkStatus.failed,

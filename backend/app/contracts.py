@@ -1343,6 +1343,7 @@ class RAGDatasetCase(Contract):
     case_id: str
     query: str = Field(min_length=1)
     expected_note_ids: list[str] = Field(default_factory=list)
+    expected_note_paths: list[str] = Field(default_factory=list, max_length=100)
     expected_block_ids: list[str] = Field(default_factory=list)
     citation_required: bool = False
     tags: list[str] = Field(default_factory=list)
@@ -1361,6 +1362,7 @@ class RAGRetrievalConfig(Contract):
 
 
 class RAGRunRequest(Contract):
+    expected_vault_id: str | None = Field(default=None, max_length=100)
     dataset_id: str = Field(min_length=1)
     modes: list[SearchMode] = Field(
         default_factory=lambda: [SearchMode.fts, SearchMode.vector, SearchMode.hybrid],
@@ -1400,6 +1402,12 @@ class BenchmarkDatasetInfo(Contract):
     description: str = ""
     case_count: int
     content_hash: str
+    scope: Literal['vault', 'shared'] = 'shared'
+
+
+class BenchmarkDatasetImport(Contract):
+    content: str = Field(min_length=1, max_length=1048576)
+    expected_vault_id: str | None = Field(default=None, max_length=100)
 
 
 class BenchmarkDatasetListResponse(Contract):
@@ -1479,6 +1487,7 @@ class AgentDatasetCase(Contract):
 
 
 class AgentBenchmarkRequest(Contract):
+    expected_vault_id: str | None = Field(default=None, max_length=100)
     dataset_id: str = Field(min_length=1)
     provider_id: str
     model: str = Field(min_length=1)

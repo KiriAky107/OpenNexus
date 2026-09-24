@@ -66,6 +66,7 @@ def aggregate(cases, planned_total=None):
 
 async def create_run(request: AgentBenchmarkRequest):
     """冻结数据集与运行配置，并把评测交给后台真实 Agent Runtime。"""
+    datasets.check_scope(request.expected_vault_id)
     from app.container import container
     from app.providers.registry import ProviderNotFoundError
     try:
@@ -82,6 +83,8 @@ async def create_run(request: AgentBenchmarkRequest):
         raise ApiError(429, 'BENCHMARK_CAPACITY_EXCEEDED', 'Benchmark capacity exceeded.')
     run_id = 'benchmark_' + uuid4().hex[:12]
     snapshot = {**request.model_dump(), 'dataset_hash': dataset.content_hash,
+        'dataset_scope': dataset.scope, 'vault_scope': datasets.current_scope(),
+        'dataset_cases': [case.model_dump(mode='json') for case in dataset.cases],
         'dataset_version': dataset.version, 'execution': 'offline' if request.offline else 'real_agent_runtime',
         'provider_type': provider.config.provider_type, 'scoring_version': '1.0', 'permission_policy': 'runtime_user_decision'}
     run = BenchmarkRun(run_id=run_id, kind=BenchmarkKind.agent, dataset_id=dataset.dataset_id,

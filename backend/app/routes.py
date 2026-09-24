@@ -16,6 +16,8 @@ from app.operation_logs import log_event
 from app.extensions.archive import MAX_ZIP_BYTES, install_zip
 from app.services.persona_settings import PersonaSettings, load_persona, save_persona
 from app.contracts import (
+    BenchmarkDatasetImport,
+    BenchmarkDatasetInfo,
     AgentRun,
     AgentRunCreateRequest,
     AgentRunListResponse,
@@ -1470,6 +1472,17 @@ async def list_benchmark_datasets(
     kind: BenchmarkKind = Query(default=BenchmarkKind.rag),
 ) -> BenchmarkDatasetListResponse:
     return BenchmarkDatasetListResponse(items=benchmark_datasets.list_datasets(kind))
+
+
+@router.post('/benchmarks/datasets/import', response_model=BenchmarkDatasetInfo, tags=['Benchmark'])
+async def import_benchmark_dataset(request: BenchmarkDatasetImport):
+    benchmark_datasets.check_scope(request.expected_vault_id)
+    return benchmark_datasets.import_dataset(request.content)
+
+
+@router.get('/benchmarks/datasets/{dataset_id}/export', tags=['Benchmark'])
+async def export_benchmark_dataset(dataset_id: str, kind: BenchmarkKind = Query(default=BenchmarkKind.rag)):
+    return benchmark_datasets.export_dataset(dataset_id, kind)
 
 
 @router.post(
