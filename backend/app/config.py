@@ -33,7 +33,7 @@ def get_settings() -> Settings:
     data_dir = Path(os.getenv("APP_DATA_DIR", str(BACKEND_DIR / "data")))
     return Settings(
         name=os.getenv("APP_NAME", "OpenNexus AI Core"),
-        version=os.getenv("APP_VERSION", "0.5.6-alpha2"),
+        version=os.getenv("APP_VERSION", "0.5.7-alpha1"),
         environment=os.getenv("APP_ENVIRONMENT", "development"),
         host=os.getenv("APP_HOST", "127.0.0.1"),
         port=int(os.getenv("APP_PORT", "8000")),
