@@ -36,26 +36,26 @@
 > ⚠️ **Alpha Notice**: OpenNexus is currently in active alpha (`v0.5.6-alpha2`). Storage schemas, IPC contracts, and extension APIs are evolving. Always back up critical Markdown vaults before updating.
 
 <div align="center">
-  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus Desktop Workspace" width="95%" />
-  <p><em>The OpenNexus desktop environment: Local Markdown vault, RRF hybrid retrieval, and real-time AI Core status.</em></p>
+  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 0.5.6-alpha2 editor toolbar, outline, formulas, and Mermaid diagram" width="95%" />
+  <p><em>OpenNexus 0.5.6-alpha2: screenshots of the shared web frontend running with a copy of the demonstration vault. Native desktop window controls are not shown.</em></p>
 </div>
 
 <table align="center">
   <tr>
-    <td width="50%"><img src=".github/assets/opennexus-transcription.png" alt="Lecture transcription and knowledge-note generation" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-transcription.png" alt="Lecture recording playback and timestamped transcript review" /></td>
     <td width="50%"><img src=".github/assets/opennexus-agent-plan.png" alt="Agent-generated personal learning plan" /></td>
   </tr>
   <tr>
-    <td width="50%"><img src=".github/assets/opennexus-tasks.png" alt="Markdown tasks and Cron-scheduled Agent execution" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-tasks.png" alt="Task status management and rendered Markdown task details" /></td>
     <td width="50%"><img src=".github/assets/opennexus-skill-plugin.png" alt="Skill tools, permissions, retrieval settings, and model capabilities" /></td>
   </tr>
   <tr>
-    <td width="50%"><img src=".github/assets/opennexus-plugins.png" alt="Installed Plugin tools and MCP integrations" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-plugins.png" alt="Installed plugins and local Markdown validation tools" /></td>
     <td width="50%"><img src=".github/assets/opennexus-themes.png" alt="Themes and editor appearance" /></td>
   </tr>
   <tr>
-    <td width="50%"><img src=".github/assets/opennexus-community.png" alt="Community extension catalog" /></td>
-    <td width="50%"><img src=".github/assets/opennexus-settings.png" alt="OpenNexus 0.5.5 settings and task notifications" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-community.png" alt="Community source setup and extension category filters" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-settings.png" alt="OpenNexus 0.5.6-alpha2 general settings and frontend/Core versions" /></td>
   </tr>
 </table>
 

@@ -35,25 +35,25 @@
 > ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.6-alpha2`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
 
 <div align="center">
-  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 桌面工作区" width="95%" />
-  <p><em>OpenNexus 桌面端工作区：本地 Markdown 库导航、RRF 混合检索以及实时 AI 核心状态监控。</em></p>
+  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 0.5.6-alpha2 编辑器工具栏、大纲、公式与 Mermaid 图表" width="95%" />
+  <p><em>OpenNexus 0.5.6-alpha2：使用演示知识库副本运行共享 Web 前端的实际截图，不包含原生桌面窗口控制按钮。</em></p>
 </div>
 <table align="center">
   <tr>
-    <td width="50%"><img src=".github/assets/opennexus-transcription.png" alt="课程录音转写与知识点笔记生成" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-transcription.png" alt="课程录音回听与带时间戳的转写校对" /></td>
     <td width="50%"><img src=".github/assets/opennexus-agent-plan.png" alt="Agent 生成个人学习规划" /></td>
   </tr>
   <tr>
-    <td width="50%"><img src=".github/assets/opennexus-tasks.png" alt="Markdown 任务与 Cron 定时 Agent 调用" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-tasks.png" alt="任务状态管理与 Markdown 任务内容展示" /></td>
     <td width="50%"><img src=".github/assets/opennexus-skill-plugin.png" alt="Skill 工具、权限、检索与模型能力配置" /></td>
   </tr>
   <tr>
-    <td width="50%"><img src=".github/assets/opennexus-plugins.png" alt="已安装的 Plugin 工具与 MCP 集成" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-plugins.png" alt="已安装的 Plugin 与本地 Markdown 检查工具" /></td>
     <td width="50%"><img src=".github/assets/opennexus-themes.png" alt="主题与编辑器外观配置" /></td>
   </tr>
   <tr>
-    <td width="50%"><img src=".github/assets/opennexus-community.png" alt="社区扩展目录" /></td>
-    <td width="50%"><img src=".github/assets/opennexus-settings.png" alt="OpenNexus 0.5.5 设置与任务通知" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-community.png" alt="社区来源配置与扩展分类筛选" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-settings.png" alt="OpenNexus 0.5.6-alpha2 通用设置与前端、Core 版本" /></td>
   </tr>
 </table>
 
