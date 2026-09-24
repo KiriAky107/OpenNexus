@@ -19,7 +19,7 @@
     <a href="https://github.com/KiriAky107/OpenNexus/releases">发布日志</a>
   </p>
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.6-alpha2"><img src="https://img.shields.io/badge/Release-0.5.6--alpha2-5865f2?style=flat-square" alt="版本" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.7-alpha1"><img src="https://img.shields.io/badge/Release-0.5.7--alpha1-5865f2?style=flat-square" alt="版本" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="平台" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="桌面端 Tauri" />
     <img src="https://img.shields.io/badge/Frontend-Vue_3-42b883?style=flat-square" alt="前端 Vue" />
@@ -32,7 +32,7 @@
 
 ---
 
-> ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.6-alpha2`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
+> ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.7-alpha1`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 0.5.6-alpha2 编辑器工具栏、大纲、公式与 Mermaid 图表" width="95%" />
@@ -74,11 +74,11 @@
 
 ### Windows 桌面端安装（推荐）
 
-1. 前往 GitHub Releases 下载最新安装包：[`OpenNexus_0.5.6-alpha2_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.6-alpha2)。
+1. 前往 GitHub Releases 下载最新安装包：[`OpenNexus_0.5.7-alpha1_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.7-alpha1)。
 2. *(可选)* 通过 PowerShell 校验 SHA-256 完整性：
 ```powershell
-   Get-FileHash .\OpenNexus_0.5.6-alpha2_x64-setup.exe -Algorithm SHA256
-   # 预期哈希值: 80E7A1BC489E8CBE19A9B9B5F9189EA1519D78CD2D5756CDA7F9009D7F2F5ACF
+   Get-FileHash .\OpenNexus_0.5.7-alpha1_x64-setup.exe -Algorithm SHA256
+   # 预期哈希值: 4556B3DC86A3039A17ACC387BFDA4BE28997B203ABC6F7F7EA7897062C692424
 
 ```
 
