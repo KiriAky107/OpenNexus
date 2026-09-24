@@ -36,7 +36,6 @@
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 0.5.6-alpha2 编辑器工具栏、大纲、公式与 Mermaid 图表" width="95%" />
-  <p><em>OpenNexus 0.5.6-alpha2：使用演示知识库副本运行共享 Web 前端的实际截图，不包含原生桌面窗口控制按钮。</em></p>
 </div>
 <table align="center">
   <tr>
