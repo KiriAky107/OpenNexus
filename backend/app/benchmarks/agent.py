@@ -114,6 +114,16 @@ async def execute(run_id, request, dataset, runtime):
                 if flag.is_set():
                     status = BenchmarkStatus.cancelled; break
                 started = perf_counter()
+                if case.members:
+                    result = await execute_collaboration_case(run_id, request, case, runtime, flag, repeat)
+                    results.append(result)
+                    service._runs[run_id].progress = len(results)/(len(dataset.cases)*request.repeat)
+                    emit(BenchmarkEventType.case_completed, result.model_dump(mode='json'))
+                    if flag.is_set():
+                        status = BenchmarkStatus.cancelled
+                        break
+                    continue
+                service._runs[run_id].config_snapshot.pop('active_collaboration_id', None)
                 active = await runtime.create_run(AgentRunCreateRequest(input=case.prompt, provider_id=request.provider_id,
                     model=request.model, allowed_tools=case.allowed_tools, max_steps=request.max_steps,
                     token_budget=request.token_budget, run_timeout_seconds=request.timeout_seconds,
@@ -154,3 +164,60 @@ async def execute(run_id, request, dataset, runtime):
         emit({BenchmarkStatus.completed: BenchmarkEventType.run_completed, BenchmarkStatus.failed: BenchmarkEventType.run_failed,
             BenchmarkStatus.cancelled: BenchmarkEventType.run_cancelled}[status], {'metrics':metrics, 'error_code':error})
         service._cancel_flags.pop(run_id, None); service._subscribers.pop(run_id, None)
+
+
+async def execute_collaboration_case(benchmark_id, request, case, runtime, flag, repeat):
+    """Exercise actual persisted definitions, DAG scheduling and member traces.
+
+    Starting the benchmark is the user's execution request. Each write retains
+    its ordinary permission gate; import alone never starts a collaboration.
+    """
+    from app.agent.management import DefinitionConfig, CollaborationPlan, create_definition
+    from app.agent.collaboration import coordinator
+    from app.contracts import AgentDatasetCase
+    started = perf_counter()
+    members = []
+    for member in case.members:
+        definition = create_definition(DefinitionConfig(name=f'评测 · {case.case_id} · {member.member_id}'[:100],
+            role='Knowledge-base-specific benchmark member', provider_id=request.provider_id, model=request.model,
+            tools=member.allowed_tools, max_steps=request.max_steps, token_budget=request.token_budget), runtime,
+            operation_id=f'{benchmark_id}:{case.case_id}:{repeat}:{member.member_id}', origin='benchmark')
+        members.append({'member_id': member.member_id, 'agent_id': definition['id'], 'input': member.prompt, 'depends_on': member.depends_on})
+    manager = coordinator(runtime)
+    group = manager.plan(CollaborationPlan(title=f'评测 · {case.case_id}'[:200], members=members,
+        token_budget=request.token_budget, timeout_seconds=max(10, request.timeout_seconds)), operation_id=f'{benchmark_id}:{case.case_id}:{repeat}')
+    service._runs[benchmark_id].config_snapshot['active_collaboration_id'] = group['id']
+    service._runs[benchmark_id].config_snapshot.pop('active_agent_run_id', None)
+    await manager.approve(group['id'], group['revision'])
+    cancel = asyncio.create_task(flag.wait())
+    try:
+        done, _ = await asyncio.wait([manager.tasks[group['id']], cancel], return_when=asyncio.FIRST_COMPLETED)
+        if cancel in done:
+            await manager.cancel(group['id'])
+    finally:
+        cancel.cancel()
+        await asyncio.gather(cancel, return_exceptions=True)
+        if not manager.tasks[group['id']].done():
+            await manager.cancel(group['id'])
+    group = manager.get(group['id'])
+    checks = {'collaboration_completed': group['status'] == 'completed', 'member_count': len(group['members']) == len(case.members)}
+    children = []
+    run_ids = []
+    for expected, actual in zip(case.members, group['members']):
+        if not actual['run_id']:
+            checks[expected.member_id] = False
+            continue
+        run = runtime.get_run(actual['run_id'])
+        run_ids.append(run.run_id)
+        events = runtime.trace_repository.list_events(run.run_id)
+        child = score(AgentDatasetCase(case_id=expected.member_id, prompt=expected.prompt,
+            allowed_tools=expected.allowed_tools, expected_tools=expected.expected_tools, output_contains=expected.output_contains),
+            run, events, 0, repeat)
+        children.append(child)
+        checks[expected.member_id] = child.success and run.definition_snapshot is not None and run.collaboration_id == group['id']
+    return AgentCaseResult(case_id=case.case_id, repeat=repeat, collaboration_id=group['id'], member_run_ids=run_ids,
+        success=all(checks.values()), checks=checks, tool_calls=sum(c.tool_calls for c in children),
+        expected_calls=sum(len(m.expected_tools) for m in case.members), selected_calls=sum(c.selected_calls for c in children),
+        accurate_calls=sum(c.accurate_calls for c in children), invalid_calls=sum(c.invalid_calls for c in children),
+        steps=sum(c.steps for c in children), latency_ms=(perf_counter()-started)*1000, token_usage=group['token_usage'],
+        error_code=group.get('error'))

@@ -6,6 +6,7 @@ import {useWorkspaceStore} from '@/stores/workspace'
 import BenchmarkView from './BenchmarkView.vue'
 const service=vi.hoisted(()=>({datasets:vi.fn(),list:vi.fn(),start:vi.fn(),cancel:vi.fn(),report:vi.fn(),importDataset:vi.fn(),exportDataset:vi.fn()}))
 vi.mock('vue-router',()=>({useRoute:()=>({query:{}})}))
+vi.mock('@/features/agent/CollaborationCard.vue',()=>({default:{props:['id'],template:'<section data-collaboration>{{ id }}</section>'}}))
 vi.mock('@/services/benchmarkService',()=>({benchmarkService:service}))
 vi.mock('@/services/providerService',()=>({listProviders:vi.fn().mockResolvedValue([])}))
 beforeEach(()=>{setActivePinia(createPinia());localStorage.clear();const workspace=useWorkspaceStore();workspace.vaultId='vault-a';workspace.vaultName='课程库';workspace.hasVault=true;service.datasets.mockResolvedValue([{id:'rag-demo',cases:2,scope:'vault',version:'1'}]);service.list.mockResolvedValue([])})

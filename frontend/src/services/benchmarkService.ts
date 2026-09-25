@@ -1,7 +1,7 @@
 import { apiClient } from './apiClient'
 interface RunWire { run_id: string; kind: 'rag' | 'agent'; dataset_id: string; status: string; progress: number | null; config_snapshot: Record<string, unknown>; error_code: string | null }
-export interface BenchmarkRun { id: string; kind: 'rag' | 'agent'; datasetId: string; status: string; progress: number | null; agentId?: string; errorCode: string | null }
-const map = (r: RunWire): BenchmarkRun => ({ id: r.run_id, kind: r.kind, datasetId: r.dataset_id, status: r.status, progress: r.progress, agentId: r.config_snapshot.active_agent_run_id as string | undefined, errorCode: r.error_code })
+export interface BenchmarkRun { id: string; kind: 'rag' | 'agent'; datasetId: string; status: string; progress: number | null; agentId?: string; collaborationId?: string; errorCode: string | null }
+const map = (r: RunWire): BenchmarkRun => ({ id: r.run_id, kind: r.kind, datasetId: r.dataset_id, status: r.status, progress: r.progress, agentId: r.config_snapshot.active_agent_run_id as string | undefined, collaborationId: r.config_snapshot.active_collaboration_id as string | undefined, errorCode: r.error_code })
 // 保留运行配置中的 Agent Run ID，使报告页可直接进入对应 Trace 和权限处理入口。
 export const benchmarkService = {
   async datasets(kind: 'rag' | 'agent') {

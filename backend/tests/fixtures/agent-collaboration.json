@@ -1,0 +1,24 @@
+{
+  "dataset_id": "agent-collaboration-offline-v1",
+  "kind": "agent",
+  "version": "1.0",
+  "description": "Offline infrastructure regression, not a model capability score. Uses persisted definitions and real member runs.",
+  "cases": [
+    {
+      "case_id": "parallel-tools",
+      "prompt": "Run independent echo checks",
+      "members": [
+        {"member_id": "a", "prompt": "/tool system.echo {\"text\":\"alpha\"}", "allowed_tools": ["system.echo"], "expected_tools": [{"name": "system.echo", "arguments": {"text": "alpha"}}]},
+        {"member_id": "b", "prompt": "/tool system.echo {\"text\":\"beta\"}", "allowed_tools": ["system.echo"], "expected_tools": [{"name": "system.echo", "arguments": {"text": "beta"}}]}
+      ]
+    },
+    {
+      "case_id": "dependent-summary",
+      "prompt": "Read actual upstream evidence",
+      "members": [
+        {"member_id": "source", "prompt": "/tool system.echo {\"text\":\"evidence\"}", "allowed_tools": ["system.echo"], "expected_tools": [{"name": "system.echo", "arguments": {"text": "evidence"}}]},
+        {"member_id": "summary", "prompt": "Summarize evidence", "depends_on": ["source"], "allowed_tools": [], "output_contains": ["evidence"]}
+      ]
+    }
+  ]
+}
