@@ -158,6 +158,12 @@ export const useAgentStore = defineStore('agent', () => {
       }
       permissionRequest.value = null
       if (run?.status === 'waiting_permission') run.status = 'running'
+    } else if (event.event === 'Usage' && run) {
+      run.token_usage = { total_tokens: Number(data.token_usage) || 0 }
+    } else if (event.event === 'BudgetRequired' && run) {
+      run.status = 'waiting_budget'
+    } else if (event.event === 'BudgetResolved' && run) {
+      run.status = 'running'
     } else if (event.event === 'PermissionRequired') {
       const call = (data.tool_call ?? {}) as Record<string, unknown>
       permissionRequest.value = {

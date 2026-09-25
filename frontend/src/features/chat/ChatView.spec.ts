@@ -48,7 +48,7 @@ it('reveals only cited sources as the streamed answer reaches complete markers',
   wrapper.unmount()
 })
 
-it('animates only the active reply and keeps tools inside the reasoning disclosure', async () => {
+it('animates only the active reply and exposes tools outside the reasoning disclosure', async () => {
   const wrapper = mount(ChatView)
   await flushPromises()
   const chat = useChatStore()
@@ -58,18 +58,21 @@ it('animates only the active reply and keeps tools inside the reasoning disclosu
   await flushPromises()
   expect(wrapper.findAll('.thinking-typewriter')).toHaveLength(1)
   expect(wrapper.findAll('.message')[0]!.find('.thinking').exists()).toBe(false)
-  expect(wrapper.get('details.thinking .tool-calls').text()).toContain('rag.search')
+  expect(wrapper.find('details.thinking .tool-calls').exists()).toBe(false)
+  expect(wrapper.get('.tool-activity summary').text()).toContain('检索知识库')
   expect(wrapper.get('details.thinking summary').text()).toContain('正在思考')
   chat.messages[1]!.thinking = 'beforeafter'
   chat.messages[1]!.activity = [{ type: 'thinking', text: 'before' }, { type: 'tool', tool_call_id: 'search' }, { type: 'thinking', text: 'after' }]
   await flushPromises()
-  expect(wrapper.get('details.thinking').element.textContent).toMatch(/before[\s\S]*rag.search[\s\S]*after/)
+  expect(wrapper.get('details.thinking').element.textContent).toContain('beforeafter')
+  expect(wrapper.get('details.thinking').element.textContent).not.toContain('rag.search')
   chat.messages[1]!.content = 'Answer'
   chat.isStreaming = false
   await flushPromises()
   expect(wrapper.find('.thinking-typewriter').exists()).toBe(false)
   expect(wrapper.get('details.thinking summary').text()).toBe('思考过程')
-  expect(wrapper.find('details.thinking .tool-calls').exists()).toBe(true)
+  expect(wrapper.find('details.thinking .tool-calls').exists()).toBe(false)
+  expect(wrapper.find('.tool-activity').exists()).toBe(true)
   wrapper.unmount()
 })
 

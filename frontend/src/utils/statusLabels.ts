@@ -9,6 +9,9 @@ export function statusLabel(status?: string): string {
     ready: t('可用', 'Ready'), installed: t('已安装', 'Installed'), error: t('异常', 'Error'),
     dependency_missing: t('缺少依赖', 'Missing dependency'), permission_required: t('等待授权', 'Permission required'),
     waiting_permission: t('等待授权', 'Waiting for permission'), paused: t('已暂停', 'Paused'),
+    waiting_budget: t('等待追加预算', 'Waiting for more budget'),
+    awaiting_confirmation: t('等待确认分工', 'Awaiting plan approval'), partial_failure: t('部分失败', 'Partial failure'),
+    blocked: t('依赖未完成', 'Dependency not completed'), interrupted: t('执行已中断', 'Interrupted'),
     stopped: t('未运行', 'Stopped'), starting: t('启动中', 'Starting'), connected: t('已连接', 'Connected'),
   }
   return status ? labels[status] || status : t('未知状态', 'Unknown status')

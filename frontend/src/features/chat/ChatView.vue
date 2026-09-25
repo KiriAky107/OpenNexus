@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Citation, WorkspaceContext } from '@/contracts'
 import { useChatStore } from '@/stores/chat'
 import { useProviderStore } from '@/stores/provider'
 import { useSkillStore } from '@/stores/skill'
 import MarkdownContent from '@/components/common/MarkdownContent.vue'
+import MessageActivity from './MessageActivity.vue'
 import { useCitationNavigation } from '@/composables/useCitationNavigation'
 import { t } from '@/i18n'
 import ChatPersonaDialog from './ChatPersonaDialog.vue'
@@ -12,7 +13,6 @@ import { useChatPreferences } from '@/stores/chatPreferences'
 import { listTools } from '@/services/agentService'
 import type { ToolDefinition } from '@/contracts'
 import { useRouter } from 'vue-router'
-import { statusLabel } from '@/utils/statusLabels'
 import { usedCitations } from '@/utils/usedCitations'
 
 const router = useRouter()
@@ -36,17 +36,38 @@ const availableModels = computed(() => providerStore.modelsByProvider[chatStore.
 const streamingMessageId = computed(() => chatStore.isStreaming ? chatStore.messages.at(-1)?.message_id : undefined)
 const thinkingLabel = computed(() => t('正在思考…', 'Thinking…'))
 const editingMessage = ref<string | null>(null)
+const timeline = ref<HTMLElement>()
+const visibleCount = ref(30)
+const visibleMessages = computed(() => chatStore.messages.slice(-visibleCount.value))
+const nearBottom = ref(true)
+const hasNewActivity = ref(false)
+function trackScroll() {
+  const element = timeline.value
+  if (!element) return
+  nearBottom.value = element.scrollHeight - element.scrollTop - element.clientHeight < 80
+  if (nearBottom.value) hasNewActivity.value = false
+}
+async function latest() {
+  await nextTick()
+  if (timeline.value) timeline.value.scrollTop = timeline.value.scrollHeight
+  nearBottom.value = true; hasNewActivity.value = false
+}
+async function older() {
+  const element = timeline.value
+  const height = element?.scrollHeight || 0
+  const top = element?.scrollTop || 0
+  visibleCount.value += 30
+  await nextTick()
+  if (element) element.scrollTop = top + element.scrollHeight - height
+}
+watch(() => chatStore.activeConversationId, () => { visibleCount.value = 30; nearBottom.value = true; hasNewActivity.value = false })
+watch(() => [chatStore.messages.length, chatStore.messages.at(-1)?.content.length, chatStore.messages.at(-1)?.activity?.length,
+  chatStore.messages.at(-1)?.tool_calls?.map(call => call.status).join(',')], () => {
+  if (nearBottom.value) void latest()
+  else hasNewActivity.value = true
+})
 const editedText = ref('')
 watch(() => chatStore.activeConversationId, () => { editingMessage.value = null })
-const activities = computed(() => Object.fromEntries(chatStore.messages.map(message => {
-  const entries = message.activity?.length ? message.activity : [
-    ...(message.thinking ? [{ type: 'thinking' as const, text: message.thinking }] : []),
-    ...(message.tool_calls ?? []).map(call => ({ type: 'tool' as const, tool_call_id: call.tool_call_id })),
-  ]
-  return [message.message_id, entries.map(entry => entry.type === 'thinking'
-    ? { text: entry.text, call: undefined }
-    : { text: undefined, call: message.tool_calls?.find(call => call.tool_call_id === entry.tool_call_id) })]
-})))
 async function saveEdit() {
   const id = editingMessage.value
   if (!id || !editedText.value.trim()) return
@@ -93,9 +114,6 @@ function composerKeydown(event: KeyboardEvent) {
   if (!event.repeat) send()
 }
 
-function agentRunId(result?: string): string {
-  try { const id = JSON.parse(result ?? '{}').run_id; return typeof id === 'string' && /^run_[a-zA-Z0-9]+$/.test(id) ? id : '' } catch { return '' }
-}
 
 async function openCitationCard(citation: Citation) {
   loadError.value = ''
@@ -125,7 +143,7 @@ async function openCitationCard(citation: Citation) {
         <input v-else id="chat-model-select" v-model="chatStore.selectedModel" class="input" data-field="manual-model" :placeholder="t('填写模型 ID', 'Enter model ID')" />
       </div>
       <button type="button" class="button-secondary" @click="showPersona = true">{{ t('人设与头像', 'Persona and avatars') }}</button>
-      <label class="rag-toggle"><input v-model="chatStore.allowAgent" type="checkbox" :disabled="chatStore.isStreaming" />允许创建智能体</label>
+      <label class="rag-toggle"><input v-model="chatStore.allowAgent" type="checkbox" :disabled="chatStore.isStreaming" />{{ t('允许管理与委托智能体', 'Allow Agent management and delegation') }}</label>
       <label class="rag-toggle"><input v-model="chatStore.useRag" type="checkbox" :disabled="chatStore.isStreaming" />{{ t('检索知识库', 'Search knowledge base') }}</label>
       <span class="subtle">{{ t('模型先回复，按需调用知识库检索；需要提供商支持工具调用，仅显示正文引用的来源。开启智能体后可委托笔记和任务工作，写入操作仍需确认。', 'The model responds first and can search the knowledge base as needed. Requires tool calling; only cited sources are shown. Use Agent for note edits and skills.') }}</span>
       <details class="ui-disclosure image-routing"><summary>图片降级处理</summary><p class="subtle">优先当前模型视觉；选择下列处理器后，允许本次会话将图片交给对应服务。MCP 优先于插件。</p><select v-for="(source,index) in (['mcp_server','plugin'] as const)" :key="source" class="select" :aria-label="index === 0 ? 'MCP 图片处理器' : 'Plugin 图片处理器'" v-model="chatStore.imageFallbackTools[index]"><option value="">不启用此级降级</option><option v-for="tool in imageTools.filter(item => item.source === source)" :key="tool.name" :value="tool.name">{{ tool.name }}</option></select></details>
@@ -134,28 +152,27 @@ async function openCitationCard(citation: Citation) {
     <div v-if="workspaceContext" class="notice-banner">每次发送附带当前文件（含未保存编辑）：{{ workspaceContext.file_path }}</div>
     <div v-if="chatStore.contextNotice" class="notice-banner" role="status">{{ chatStore.contextNotice }}</div>
     <div v-if="loadError || providerStore.error || chatStore.historyError" class="error-banner chat-error">{{ loadError || providerStore.error || chatStore.historyError }}</div>
-    <main class="message-timeline">
+    <main ref="timeline" class="message-timeline" @scroll.passive="trackScroll">
+      <button v-if="chatStore.messages.length > visibleCount" class="button-secondary" @click="older">{{ t('加载更早的消息', 'Load earlier messages') }}</button>
       <div v-if="!chatStore.messages.length" class="empty-state"><div><strong>{{ t('开始一段知识对话', 'Start a knowledge conversation') }}</strong><p>{{ t('围绕当前知识库提问，回答可以引用原文并定位到笔记。', 'Ask about this vault, with sources that open the original notes.') }}</p><div class="chat-suggestions"><button v-for="suggestion in suggestions" :key="suggestion" class="button-secondary" @click="chatStore.inputText = suggestion">{{ suggestion }}</button></div><button v-if="!providerStore.enabledProviders.length && !embedded" class="button-secondary" @click="router.push({ name: 'settings' })">{{ t('配置模型提供商', 'Configure a provider') }}</button></div></div>
-      <article v-for="message in chatStore.messages" :key="message.message_id" class="message" :class="message.role">
+      <article v-for="message in visibleMessages" :key="message.message_id" class="message" :class="message.role">
         <div class="avatar"><img v-if="message.role === 'user' ? preferences.settings.userAvatar : preferences.settings.aiAvatar" :src="message.role === 'user' ? preferences.settings.userAvatar : preferences.settings.aiAvatar" :alt="message.role === 'user' ? t('我', 'Me') : 'AI'" /><span v-else>{{ message.role === 'user' ? t('你', 'You') : 'AI' }}</span></div>
         <div class="message-body"><small v-if="message.attachments?.length">附件：{{ message.attachments.map(id=>id.split('.').at(-1)).join('、') }}</small><details v-if="message.workspace_context" class="ui-disclosure"><summary>发送时的文件：{{ message.workspace_context.file_path }}</summary><pre class="context-snapshot">{{ message.workspace_context.content }}</pre></details>
-          <details v-if="message.thinking || message.tool_calls?.length || (message.role === 'assistant' && message.message_id === streamingMessageId)" class="thinking ui-disclosure">
+          <details v-if="message.thinking || (message.role === 'assistant' && message.message_id === streamingMessageId)" class="thinking ui-disclosure">
             <summary>
               <span v-if="message.message_id === streamingMessageId && !message.content" class="thinking-indicator" :aria-label="thinkingLabel">
                 <span class="thinking-typewriter" aria-hidden="true" :style="{ '--typing-steps': Array.from(thinkingLabel).length }">{{ thinkingLabel }}</span>
               </span>
               <span v-else>{{ t('思考过程', 'Reasoning') }}</span>
             </summary>
-            <template v-for="(entry, index) in activities[message.message_id]" :key="index">
-              <p v-if="entry.text !== undefined">{{ entry.text }}</p>
-              <div v-else-if="entry.call" class="tool-calls"><div class="item-card"><span class="badge info">{{ statusLabel(entry.call.status) }}</span><strong>{{ entry.call.name }}</strong><pre>{{ JSON.stringify(entry.call.parameters, null, 2) }}</pre><a v-if="agentRunId(entry.call.result)" :href="`#/agent/runs/${agentRunId(entry.call.result)}`">查看智能体运行 / 处理权限确认</a></div></div>
-            </template>
+            <p v-if="message.thinking">{{ message.thinking }}</p>
           </details>
           <div v-if="editingMessage === message.message_id" class="message-edit">
             <textarea v-model="editedText" class="textarea" :aria-label="t('编辑消息', 'Edit message')" :disabled="!chatStore.canSend" />
             <div class="inline-actions"><button class="button-primary" :disabled="!chatStore.canSend || !editedText.trim()" @click="saveEdit">{{ t('保存并重新生成', 'Save and regenerate') }}</button><button class="button-secondary" @click="editingMessage = null">{{ t('取消', 'Cancel') }}</button></div>
           </div>
-          <MarkdownContent v-else-if="message.content" class="message-content" :source="message.content" :citation-aliases="Object.fromEntries((message.citations ?? []).filter(c => c.citation_id).map(c => [c.citation_id!, (message.citations ?? []).indexOf(c) + 1]))" :citation-numbers="visibleCitations[message.message_id]?.map(item => item.number)" @citation="number => message.citations?.[number - 1] && openCitationCard(message.citations[number - 1]!)" />
+          <MessageActivity v-else-if="message.role === 'assistant'" :message="message" :citation-numbers="visibleCitations[message.message_id]?.map(item => item.number)" @citation="number => message.citations?.[number - 1] && openCitationCard(message.citations[number - 1]!)" />
+          <MarkdownContent v-else-if="message.content" class="message-content" :source="message.content" />
           <div v-if="visibleCitations[message.message_id]?.length" class="citations">
             <button v-for="{ citation, number } in visibleCitations[message.message_id]" :key="number" class="citation-card" @click="openCitationCard(citation)">
               <span class="badge info">{{ number }}</span><span><strong>{{ citation.heading_path || citation.file_path }}</strong><small>{{ citation.content }}</small></span>
@@ -175,6 +192,7 @@ async function openCitationCard(citation: Citation) {
         </div>
       </article>
     </main>
+    <button v-if="hasNewActivity" class="button-secondary new-activity" @click="latest">{{ t('有新内容，查看最新进展 ↓', 'New activity — show latest ↓') }}</button>
     <footer class="composer">
       <input ref="uploadInput" type="file" multiple hidden accept=".ppt,.pptx,.docx,.md,.txt,.wav,.mp3,.flac,.ogg,.m4a,.mp4,.webm,.png,.jpg,.jpeg,.webp" @change="selectFiles" />
       <div class="attachment-list"><button class="button-secondary" :disabled="chatStore.uploading || chatStore.isStreaming" @click="uploadInput?.click()">{{ chatStore.uploading ? '上传中…' : '上传文件' }}</button><span v-for="(file,index) in chatStore.pendingAttachments" :key="file.attachment_id" class="badge">{{ file.name }} <button aria-label="移除附件" @click="chatStore.pendingAttachments.splice(index,1)">×</button></span></div>
@@ -214,13 +232,15 @@ async function openCitationCard(citation: Citation) {
 .message-body { min-width: 0; padding: var(--space-md) var(--space-lg); border: 1px solid var(--color-border-subtle); border-radius: 4px var(--radius-lg) var(--radius-lg) var(--radius-lg); background: color-mix(in srgb, var(--color-surface-primary) 88%, transparent); box-shadow: var(--shadow-sm); }
 .user .message-body { background: var(--color-accent-soft); border-color: color-mix(in srgb, var(--color-accent-primary) 14%, transparent); }
 .message-content { white-space: pre-wrap; line-height: var(--line-height-relaxed); }
+.new-activity { align-self: center; margin: var(--space-xs); }
+@media (max-width: 640px) { .message-timeline { padding: var(--space-sm); } .message { grid-template-columns: 24px minmax(0, 1fr); gap: var(--space-xs); } .avatar { width: 24px; height: 24px; } .message-body { padding: var(--space-sm); } }
 .thinking { margin-bottom: var(--space-sm); color: var(--color-text-secondary); }.thinking p { margin-top: var(--space-sm); white-space: pre-wrap; }
 .thinking-indicator { display: inline-block; }
 .message-actions { margin-top: var(--space-sm); }
 .message-edit .textarea { width: 100%; min-height: 100px; }
 .thinking-typewriter { display: inline-block; white-space: nowrap; padding-inline-end: 3px; border-inline-end: 2px solid var(--color-accent-primary); animation: thinking-type 2s steps(var(--typing-steps), end) infinite; }
 @keyframes thinking-type { 0% { clip-path: inset(0 100% 0 0); } 65%, 100% { clip-path: inset(0 0 0 0); } }
-@media (prefers-reduced-motion: reduce) { .thinking-typewriter { animation: none; border-inline-end: 0; } }
+@media (prefers-reduced-motion: reduce) { .thinking-typewriter { animation: none; border-inline-end: 0; } .message { animation: none; } }
 .tool-calls { display: grid; gap: var(--space-sm); margin-top: var(--space-md); }.tool-calls .item-card { display: grid; gap: var(--space-xs); }.tool-calls pre { overflow: auto; font-size: var(--font-size-xs); }
 .usage { display: block; margin-top: var(--space-xs); color: var(--color-text-tertiary); }
 .message time { display: block; margin-top: var(--space-sm); color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
