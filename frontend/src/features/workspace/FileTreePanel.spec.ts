@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import FileTreePanel from './FileTreePanel.vue'
@@ -48,6 +48,26 @@ afterEach(() => {
 })
 
 describe('FileTreePanel file switching', () => {
+  it('previews images without opening a Markdown file and revokes the preview URL', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workspace', component: { template: '<div />' } }] })
+    await router.push('/workspace')
+    const store = useWorkspaceStore()
+    store.fileTree = [{ id: 'asset:附件/logo.png', name: 'logo.png', path: '/附件/logo.png', type: 'file' }]
+    vi.spyOn(workspaceService, 'loadWorkspaceImage').mockResolvedValue(new Blob(['image'], { type: 'image/png' }))
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview')
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    wrapper = mount(FileTreePanel, { attachTo: document.body, global: { plugins: [router] } })
+    await wrapper.get('.tree-node').trigger('click')
+    await flushPromises()
+    expect(workspaceService.loadWorkspaceImage).toHaveBeenCalledWith('附件/logo.png')
+    expect(document.querySelector('[role="dialog"] img')?.getAttribute('src')).toBe('blob:preview')
+    expect(workspaceService.readFileContent).not.toHaveBeenCalled()
+    expect(store.activeFilePath).toBeNull()
+    ;(document.querySelector('[role="dialog"] button') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(revoke).toHaveBeenCalledWith('blob:preview')
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
   it('expands every nested folder from the toolbar', async () => {
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workspace', component: { template: '<div />' } }] })
     await router.push('/workspace')

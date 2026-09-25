@@ -36,7 +36,7 @@ export function nativeTree(entries: HostEntry[]): FileNode[] {
       }
       children = node.children!
     }
-    if (!entry.is_folder) children.push({ id: entry.file_id, note_id: entry.file_id, path: `/${entry.path}`, name: parts.at(-1)!, type: 'file' })
+    if (!entry.is_folder) children.push({ id: entry.file_id, note_id: /\.md$/i.test(entry.path) ? entry.file_id : undefined, path: `/${entry.path}`, name: parts.at(-1)!, type: 'file' })
   }
   return roots
 }

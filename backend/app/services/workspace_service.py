@@ -86,7 +86,7 @@ def _tree(directory: Path, locations: dict[str, repository.NoteLocation]) -> lis
                     children=_tree(resolved, locations),
                 )
             )
-        elif resolved.is_file() and child.suffix.lower() == ".md":
+        elif resolved.is_file() and child.suffix.lower() in {".md", ".png", ".jpg", ".jpeg", ".gif", ".webp"}:
             location = locations.get(relative)
             entries.append(
                 WorkspaceEntry(

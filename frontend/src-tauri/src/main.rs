@@ -1178,7 +1178,7 @@ fn workspace_revoke(host: State<'_, Host>) -> Result<(), String> {
 
 #[tauri::command]
 fn workspace_tree(host: State<'_, Host>) -> Result<Vec<Entry>, String> {
-    with_workspace(&host, |ws| ws.scan())
+    with_workspace(&host, |ws| ws.tree())
 }
 #[tauri::command]
 fn workspace_read(host: State<'_, Host>, path: String) -> Result<Document, String> {

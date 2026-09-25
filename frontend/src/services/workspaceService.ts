@@ -139,7 +139,7 @@ export async function refreshTree(): Promise<FileNode[]> {
     const entries = await hostInvoke<HostEntry[]>('workspace_tree')
     if (version !== treeRequestVersion) return cachedTree ?? []
     noteIdByPath.clear(); typeByPath.clear()
-    for (const entry of entries) { if (!entry.is_folder) noteIdByPath.set(`/${entry.path}`, entry.file_id); typeByPath.set(`/${entry.path}`, entry.is_folder ? 'folder' : 'file') }
+    for (const entry of entries) { if (!entry.is_folder && /\.md$/i.test(entry.path)) noteIdByPath.set(`/${entry.path}`, entry.file_id); typeByPath.set(`/${entry.path}`, entry.is_folder ? 'folder' : 'file') }
     cachedTree = nativeTree(entries)
     return cachedTree
   }
@@ -168,15 +168,17 @@ export function workspaceAssetReference(notePath: string, assetPath: string): st
 /** 将笔记内的相对附件引用还原为 Vault 根路径。 */
 export function resolveWorkspaceAssetPath(notePath: string, reference: string): string | null {
   if (/^(?:[a-z]+:|\/\/|#)/i.test(reference)) return null
-  const parts = [...relativePath(notePath).split('/').slice(0, -1)]
+  const parts = reference.startsWith('/') ? [] : [...relativePath(notePath).split('/').slice(0, -1)]
   for (const part of reference.replace(/\\/g, '/').split('/')) {
     if (!part || part === '.') continue
     if (part === '..') { if (!parts.length) return null; parts.pop() }
     else parts.push(part)
   }
   const path = parts.join('/')
-  return path.startsWith('attachments/') ? path : null
+  return isWorkspaceImage(path) && !parts.some(part => part.startsWith('.') || part.includes(':') || part === 'opennexus-records') ? path : null
 }
+
+export function isWorkspaceImage(path: string): boolean { return /\.(png|jpe?g|gif|webp)$/i.test(path) }
 
 export async function storeWorkspaceImage(
   file: Blob & { name?: string }, source: WorkspaceAssetSource,

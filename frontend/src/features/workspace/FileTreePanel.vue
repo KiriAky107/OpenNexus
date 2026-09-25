@@ -2,7 +2,7 @@
 import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
 const { actionDialog, resolveAction, askConfirm, askPrompt } = useActionDialog()
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { noteOutline } from './outline'
 import { useRouter } from 'vue-router'
 import type { FileNode } from '@/contracts'
@@ -44,6 +44,15 @@ const searchFocused = ref(false)
 const createInput = ref<HTMLInputElement | null>(null)
 const createError = ref('')
 const creating = ref(false)
+const imagePreview = ref<{ name: string; url: string } | null>(null)
+let imageRequest = 0
+function closeImagePreview() {
+  imageRequest++
+  if (imagePreview.value) URL.revokeObjectURL(imagePreview.value.url)
+  imagePreview.value = null
+}
+onBeforeUnmount(closeImagePreview)
+watch(() => workspaceStore.vaultId, closeImagePreview)
 const outline = computed(() => noteOutline(editorStore.content))
 const collapsedHeadings = ref(new Set<number>())
 const visibleHeadings = computed(() => {
@@ -146,6 +155,17 @@ async function openNode(node: FileNode) {
     return workspaceStore.toggleFolder(node.path)
   }
   selectedFolderPath.value = containingFolder(node.path)
+  closeImagePreview()
+  if (workspaceService.isWorkspaceImage(node.path)) {
+    const request = imageRequest
+    try {
+      const blob = await workspaceService.loadWorkspaceImage(node.path.replace(/^\//, ''))
+      if (request === imageRequest) imagePreview.value = { name: node.name, url: URL.createObjectURL(blob) }
+    } catch (error) {
+      if (request === imageRequest) createError.value = error instanceof Error ? error.message : t('图片加载失败', 'Image loading failed')
+    }
+    return
+  }
   // 先同步活动文件，让真实点击立即生效；内容加载失败时再恢复原状态。
   const previousPath = workspaceStore.activeFilePath
   const wasOpen = workspaceStore.openFiles.includes(node.path)
@@ -272,18 +292,28 @@ function containingFolder(path: string): string {
       </nav>
     </div>
     <Teleport to="body">
+      <div v-if="imagePreview" class="image-preview-backdrop" @click.self="closeImagePreview" @keydown.esc="closeImagePreview">
+        <section class="image-preview" role="dialog" aria-modal="true" :aria-label="imagePreview.name">
+          <header><strong>{{ imagePreview.name }}</strong><button autofocus @click="closeImagePreview">{{ t('关闭', 'Close') }}</button></header>
+          <img :src="imagePreview.url" :alt="imagePreview.name" />
+        </section>
+      </div>
       <div v-if="contextTarget" class="context-menu"
         :style="{ left: `${contextMenuPosition.x}px`, top: `${contextMenuPosition.y}px` }" @click.stop>
         <button @click="beginCreate('file', selectedFolderPath)">{{ t('新建文件', 'New file') }}</button>
         <button @click="beginCreate('folder', selectedFolderPath)">{{ t('新建文件夹', 'New folder') }}</button>
-        <button v-if="contextTarget.path !== '/'" @click="renameTarget">{{ t('重命名', 'Rename') }}</button>
-        <button v-if="contextTarget.path !== '/'" class="danger" @click="deleteTarget">{{ t('删除', 'Delete') }}</button>
+        <button v-if="contextTarget.path !== '/' && !workspaceService.isWorkspaceImage(contextTarget.path)" @click="renameTarget">{{ t('重命名', 'Rename') }}</button>
+        <button v-if="contextTarget.path !== '/' && !workspaceService.isWorkspaceImage(contextTarget.path)" class="danger" @click="deleteTarget">{{ t('删除', 'Delete') }}</button>
       </div>
     </Teleport>
   </section>
 </template>
 
 <style scoped>
+.image-preview-backdrop { position: fixed; inset: 0; z-index: 2100; display: grid; place-items: center; padding: 24px; background: var(--color-background-overlay); }
+.image-preview { max-width: 90vw; max-height: 90vh; padding: 16px; border-radius: var(--radius-md); background: var(--color-background-primary); color: var(--color-text-primary); box-shadow: var(--shadow-md); }
+.image-preview header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 16px; }
+.image-preview img { display: block; max-width: 85vw; max-height: 75vh; object-fit: contain; }
 .file-tree-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--color-surface-secondary); color: var(--color-text-primary); }
 .workspace-navigation { display: flex; align-items: center; flex-shrink: 0; padding: 8px; gap: 4px; border-bottom: 1px solid var(--color-border-default); background: var(--color-background-secondary); }
 .workspace-tabs { display: flex; flex: 1; min-width: 0; gap: 4px; }

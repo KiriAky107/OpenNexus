@@ -308,7 +308,7 @@ impl Workspace {
             .optional()?)
     }
 
-    fn scan_dir(&self, dir: &Path, paths: &mut Vec<String>) -> Result<()> {
+    fn scan_dir(&self, dir: &Path, paths: &mut Vec<String>, images: bool) -> Result<()> {
         for item in fs::read_dir(dir)? {
             let path = item?.path();
             let relative = path
@@ -326,10 +326,10 @@ impl Workspace {
             }
             if path.is_dir() {
                 paths.push(relative);
-                self.scan_dir(&path, paths)?;
+                self.scan_dir(&path, paths, images)?;
             } else if path
                 .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+                .is_some_and(|e| e.eq_ignore_ascii_case("md") || (images && ["png", "jpg", "jpeg", "gif", "webp"].iter().any(|ext| e.eq_ignore_ascii_case(ext))))
             {
                 paths.push(relative);
             }
@@ -339,7 +339,7 @@ impl Workspace {
 
     pub fn scan(&mut self) -> Result<Vec<Entry>> {
         let mut paths = Vec::new();
-        self.scan_dir(&self.root, &mut paths)?;
+        self.scan_dir(&self.root, &mut paths, false)?;
         let mut entries = Vec::new();
         for path in paths {
             if self.resolve(&path)?.is_dir() {
@@ -368,6 +368,19 @@ impl Workspace {
                 self.entry(&path)?
                     .ok_or_else(|| HostError::new("FILE_NOT_FOUND"))?,
             );
+        }
+        Ok(entries)
+    }
+
+    /// UI-only image entries must not enter Markdown indexing or text reads.
+    pub fn tree(&mut self) -> Result<Vec<Entry>> {
+        let mut entries = self.scan()?;
+        let mut paths = Vec::new();
+        self.scan_dir(&self.root, &mut paths, true)?;
+        for path in paths {
+            if !path.to_ascii_lowercase().ends_with(".md") && self.resolve(&path)?.is_file() {
+                entries.push(Entry { file_id: format!("asset:{path}"), path, hash: String::new(), revision: 0, deleted: false, is_folder: false });
+            }
         }
         Ok(entries)
     }

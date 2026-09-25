@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
@@ -43,6 +44,16 @@ def _validate_asset_path(path: str) -> str:
     if normalized.is_absolute() or ".." in parts or len(parts) != 3 or parts[0] != "attachments":
         raise ApiError(400, "INVALID_PATH", "图片路径不属于工作区附件目录。")
     return normalized.as_posix()
+
+
+def _validate_image_read_path(path: str) -> str:
+    value = path.replace('\\', '/')
+    parts = value.split('/')
+    if (not value or value.startswith('/') or ':' in value or '\x00' in value
+            or any(not part or part.startswith('.') or part.lower() == 'opennexus-records' for part in parts)
+            or PurePosixPath(value).suffix.lower() not in {'.png', '.jpg', '.jpeg', '.gif', '.webp'}):
+        raise ApiError(400, 'INVALID_PATH', '图片必须是知识库内的 PNG、JPEG、GIF 或 WebP 文件。')
+    return value
 
 
 def _write_web(path: str, data: bytes) -> None:
@@ -114,7 +125,7 @@ def store(data: bytes, *, original_name: str, note_id: str, note_path: str, sour
 
 
 def read(path: str, *, note_id: str = "", note_path: str = "") -> tuple[bytes, str]:
-    path = _validate_asset_path(path)
+    path = _validate_image_read_path(path)
     if _desktop():
         if host_bridge.active is None:
             raise ApiError(503, "HOST_UNAVAILABLE", "桌面 Host 不可用。")
@@ -124,18 +135,30 @@ def read(path: str, *, note_id: str = "", note_path: str = "") -> tuple[bytes, s
         except (RuntimeError, KeyError, ValueError):
             raise ApiError(404, "RESOURCE_NOT_FOUND", "工作区图片不存在。") from None
     else:
+        original = get_settings().vault_path
+        for part in path.split('/'):
+            original = original / part
+            if original.is_symlink() or getattr(original, 'is_junction', lambda: False)():
+                raise ApiError(400, 'INVALID_PATH', '不读取链接图片。')
         target = resolve_in_vault(path)
         if not target.is_file() or target.is_symlink():
             raise ApiError(404, "RESOURCE_NOT_FOUND", "工作区图片不存在。")
-        data = target.read_bytes()
+        if target.stat().st_size > MAX_IMAGE_BYTES:
+            raise ApiError(413, 'WORKSPACE_IMAGE_TOO_LARGE', '工作区图片超过读取上限。')
+        with target.open('rb') as stream:
+            data = stream.read(MAX_IMAGE_BYTES + 1)
     if len(data) > MAX_IMAGE_BYTES:
         raise ApiError(413, "WORKSPACE_IMAGE_TOO_LARGE", "工作区图片超过读取上限。")
     _, media_type = _image_kind(data)
     digest = hashlib.sha256(data).hexdigest()
     expected = PurePosixPath(path).stem
-    if digest != expected:
+    managed = re.fullmatch(r'attachments/[0-9a-f]{2}/[0-9a-f]{64}\.(png|jpg|gif|webp)', path)
+    if managed and digest != expected:
         raise ApiError(409, "WORKSPACE_IMAGE_HASH_MISMATCH", "工作区图片内容与路径哈希不一致。")
-    _record(digest=digest, path=path, media_type=media_type, size=len(data),
-            original_name=PurePosixPath(path).name, note_id=note_id, note_path=note_path,
-            source="sync")
+    # Only immutable, content-addressed attachments belong in the managed asset
+    # registry. Ordinary files may be renamed or replaced outside the editor.
+    if managed:
+        _record(digest=digest, path=path, media_type=media_type, size=len(data),
+                original_name=PurePosixPath(path).name, note_id=note_id, note_path=note_path,
+                source="sync")
     return data, media_type
