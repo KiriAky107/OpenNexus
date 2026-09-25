@@ -8,6 +8,35 @@ from app.main import app
 PNG = b"\x89PNG\r\n\x1a\n" + b"fixture-image"
 
 
+def test_ordinary_vault_image_is_readable_and_listed() -> None:
+    with TestClient(app) as client:
+        target = get_settings().vault_path / '附件' / '课程图片.png'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(PNG)
+        response = client.get('/api/workspace/assets/content', params={'path': '附件/课程图片.png'})
+        assert response.status_code == 200
+        assert response.content == PNG
+        from app.services.workspace_service import _tree
+        entries = _tree(get_settings().vault_path, {})
+        assert '课程图片.png' in str(entries)
+        target.write_bytes(PNG + b'replaced')
+        replaced = client.get('/api/workspace/assets/content', params={'path': '附件/课程图片.png', 'note_path': '课程.md'})
+        assert replaced.status_code == 200 and replaced.content == PNG + b'replaced'
+        target.write_bytes(b'not a png')
+        assert client.get('/api/workspace/assets/content', params={'path': '附件/课程图片.png'}).status_code == 415
+        target.write_bytes(PNG + bytes(5 * 1024 * 1024))
+        assert client.get('/api/workspace/assets/content', params={'path': '附件/课程图片.png'}).status_code == 413
+        for path in ['../课程图片.png', '.ainote/secret.png', 'opennexus-records/secret.png', '/absolute.png', 'C:/secret.png']:
+            assert client.get('/api/workspace/assets/content', params={'path': path}).status_code == 400
+
+
+def test_managed_image_still_checks_content_hash() -> None:
+    with TestClient(app) as client:
+        asset = client.post('/api/workspace/assets', params={'filename': 'a.png', 'note_path': 'a.md', 'source': 'upload'}, content=PNG).json()
+        (get_settings().vault_path / asset['path']).write_bytes(PNG + b'tampered')
+        assert client.get('/api/workspace/assets/content', params={'path': asset['path']}).status_code == 409
+
+
 def test_workspace_image_is_content_addressed_and_linked() -> None:
     with TestClient(app) as client:
         response = client.post(

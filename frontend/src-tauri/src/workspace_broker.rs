@@ -58,10 +58,10 @@ fn valid_asset_path(path: &str) -> bool {
 }
 
 fn valid_image_bytes(path: &str, bytes: &[u8]) -> bool {
-    let extension = path.rsplit('.').next().unwrap_or("");
-    match extension {
+    let extension = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match extension.as_str() {
         "png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
-        "jpg" => bytes.starts_with(b"\xff\xd8\xff"),
+        "jpg" | "jpeg" => bytes.starts_with(b"\xff\xd8\xff"),
         "gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
         "webp" => bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
         _ => false,
@@ -336,14 +336,20 @@ pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
         "workspace.assets.read" => {
             let p: AssetRead = decode(params)?;
             bound(ws, &p.vault_id)?;
-            if !valid_asset_path(&p.path) {
+            let normalized = p.path.replace('\\', "/");
+            if normalized.split('/').any(|part| part.is_empty() || part.starts_with('.') || part.eq_ignore_ascii_case("opennexus-records"))
+                || !["png", "jpg", "jpeg", "gif", "webp"].iter().any(|ext| normalized.to_ascii_lowercase().ends_with(&format!(".{ext}"))) {
                 return Err("WORKSPACE_REQUEST_INVALID".into());
             }
-            let bytes = std::fs::read(ws.resolve(&p.path).map_err(|e| e.code)?)
-                .map_err(|_| "FILE_NOT_FOUND")?;
+            let file = std::fs::File::open(ws.resolve(&normalized).map_err(|e| e.code)?).map_err(|_| "FILE_NOT_FOUND")?;
+            if file.metadata().map_err(|_| "FILE_NOT_FOUND")?.len() > MAX_IMAGE_BYTES as u64 { return Err("CORE_NOTE_TOO_LARGE".into()); }
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            file.take(MAX_IMAGE_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|_| "FILE_NOT_FOUND")?;
             if bytes.len() > MAX_IMAGE_BYTES {
                 return Err("CORE_NOTE_TOO_LARGE".into());
             }
+            if !valid_image_bytes(&normalized, &bytes) { return Err("WORKSPACE_IMAGE_UNSUPPORTED".into()); }
             Ok(json!({"content_base64":STANDARD.encode(bytes)}))
         }
         "workspace.operation" => {
@@ -409,6 +415,24 @@ mod tests {
             dispatch(&mut ws, &denied).unwrap_err(),
             "VAULT_PERMISSION_CHANGED"
         );
+    }
+    #[test]
+    fn ordinary_images_are_readable_in_tree_but_not_indexed_as_notes() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        std::fs::create_dir(root.path().join("附件")).unwrap();
+        let bytes = b"\x89PNG\r\n\x1a\nfixture";
+        std::fs::write(root.path().join("附件/logo.png"), bytes).unwrap();
+        let read = json!({"rpc":"workspace.assets.read","params":{"vault_id":ws.vault_id,"path":"附件/logo.png"}});
+        assert_eq!(STANDARD.decode(dispatch(&mut ws, &read).unwrap()["content_base64"].as_str().unwrap()).unwrap(), bytes);
+        assert!(ws.tree().unwrap().iter().any(|e| e.path == "附件/logo.png" && !e.is_folder));
+        assert!(!ws.scan().unwrap().iter().any(|e| e.path.ends_with(".png")));
+        std::fs::write(root.path().join("附件/logo.png"), b"not an image").unwrap();
+        assert!(dispatch(&mut ws, &read).is_err());
+        for path in ["../logo.png", ".ainote/secret.png", "opennexus-records/secret.png", "C:/secret.png"] {
+            let denied = json!({"rpc":"workspace.assets.read","params":{"vault_id":ws.vault_id,"path":path}});
+            assert!(dispatch(&mut ws, &denied).is_err());
+        }
     }
     #[test]
     fn user_skills_are_vault_bound_listed_and_deleted_as_logical_records() {

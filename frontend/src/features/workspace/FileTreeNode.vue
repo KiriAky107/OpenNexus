@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { FileNode } from '@/contracts'
-import { Document, Folder, FolderOpened } from '@element-plus/icons-vue'
+import { Document, Folder, FolderOpened, Picture } from '@element-plus/icons-vue'
+import { isWorkspaceImage } from '@/services/workspaceService'
 import AppIcon from '@/components/common/AppIcon.vue'
 
 defineProps<{ node: FileNode; activePath: string | null }>()
@@ -14,7 +15,7 @@ const emit = defineEmits<{
   <div>
     <div class="tree-node" :class="{ active: node.path === activePath }"
       @click="emit('open', node)" @contextmenu="emit('contextMenu', $event, node)">
-      <AppIcon :icon="node.type === 'folder' ? (node.is_open ? FolderOpened : Folder) : Document" :size="16" />
+      <AppIcon :icon="node.type === 'folder' ? (node.is_open ? FolderOpened : Folder) : isWorkspaceImage(node.path) ? Picture : Document" :size="16" />
       <span class="name">{{ node.name }}</span>
       <span v-if="node.is_dirty">●</span>
     </div>
