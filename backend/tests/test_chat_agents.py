@@ -9,7 +9,7 @@ from app.services import chat_agents, chat_retrieval
 def test_delegation_uses_existing_runtime_limits_and_no_network(monkeypatch):
     from app.container import container
     requests = []
-    async def create(request):
+    async def create(request, **kwargs):
         requests.append(request)
         return SimpleNamespace(run_id='run_test', status=SimpleNamespace(value='queued'), output=None, error_message=None)
     monkeypatch.setattr(container.agent, 'create_run', create)
@@ -44,7 +44,7 @@ def test_chat_searches_live_mcp_catalog_and_delegates_selected_tool(monkeypatch)
     ), Arguments, executor)
     requests = []
 
-    async def create(request):
+    async def create(request, **kwargs):
         requests.append(request)
         return SimpleNamespace(
             run_id='run_mcp', status=SimpleNamespace(value='queued'),
