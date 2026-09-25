@@ -7,8 +7,9 @@ export function installLinkNavigation(root: HTMLElement, open: (href: string) =>
     if (!link || !root.contains(link)) return
     const href = link.getAttribute('href')?.trim()
     if (!href) return
-    // 在 Milkdown 的链接编辑器或 WebView 默认导航之前消费点击。
+    // Plain clicks edit source in place; Ctrl/Command-click follows the link.
     event.preventDefault()
+    if (!event.ctrlKey && !event.metaKey) return
     event.stopPropagation()
     void open(href)
   }

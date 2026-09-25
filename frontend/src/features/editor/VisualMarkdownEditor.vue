@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import ActionDialog from '@/components/common/ActionDialog.vue'
-import { useActionDialog } from '@/composables/useActionDialog'
-const { actionDialog, resolveAction, askPrompt } = useActionDialog()
+import { beginSourceInsertion, liveSourcePlugin, liveSourceSchema } from './liveSource'
+import { htmlPreviewPlugin } from './htmlPreviewPlugin'
+import { remarkPreserveEmptyLinePlugin } from '@milkdown/kit/preset/commonmark'
 import DiagramInteractions from '@/components/common/DiagramInteractions.vue'
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Crepe } from '@milkdown/crepe'
@@ -24,7 +24,6 @@ import {
   createCodeBlockCommand,
   toggleEmphasisCommand,
   toggleInlineCodeCommand,
-  toggleLinkCommand,
   toggleStrongCommand,
   turnIntoTextCommand,
   wrapInBulletListCommand,
@@ -33,7 +32,7 @@ import {
   wrapInOrderedListCommand,
 } from '@milkdown/kit/preset/commonmark'
 import { toggleStrikethroughCommand } from '@milkdown/kit/preset/gfm'
-import { commandsCtx, editorViewCtx, parserCtx, remarkStringifyOptionsCtx } from '@milkdown/kit/core'
+import { editorViewCtx, parserCtx, remarkStringifyOptionsCtx } from '@milkdown/kit/core'
 import { Slice } from '@milkdown/kit/prose/model'
 import { executeEditorCommand, registerEditorCommands, type CommandHandler, type EditorCommandId } from '@/services/editorCommandService'
 import { undo, redo, undoDepth, redoDepth } from '@milkdown/kit/prose/history'
@@ -138,6 +137,7 @@ async function insertImages(files: File[], source: WorkspaceAssetSource, positio
 }
 
 function chooseImages() { imageInput.value?.click() }
+function insertImageUrl() { if (crepe) beginSourceInsertion(crepe.editor, 'image') }
 function selectedImages(event: Event) {
   const input = event.target as HTMLInputElement
   void insertImages(imageFiles(input.files), 'upload')
@@ -147,6 +147,12 @@ function selectedImages(event: Event) {
 function workspaceImageNodeView(node: { type: unknown; attrs: Record<string, unknown> }) {
   const notePath = editorStore.currentFilePath
   const dom = document.createElement('img')
+  dom.referrerPolicy = 'no-referrer'
+  dom.onerror = () => {
+    dom.dataset.workspaceAssetError = 'true'
+    imageError.value = t('图片加载失败：请检查文件路径或图片直链，以及网络和来源网站的访问限制。', 'Image loading failed: check the file path or direct URL, network, and source access restrictions.')
+  }
+  dom.onload = () => { delete dom.dataset.workspaceAssetError }
   let source = '', objectUrl = '', generation = 0
   const apply = (next: typeof node) => {
     const nextSource = String(next.attrs.src ?? '')
@@ -165,7 +171,7 @@ function workspaceImageNodeView(node: { type: unknown; attrs: Record<string, unk
       if (disposed || current !== generation) { URL.revokeObjectURL(url); return }
       objectUrl = url; imageUrls.add(url); dom.src = url
     }).catch(() => {
-      if (current === generation) dom.dataset.workspaceAssetError = 'true'
+      if (current === generation && !disposed) dom.onerror?.(new Event('error'))
     })
   }
   apply(node)
@@ -329,34 +335,7 @@ function runCommand(command: ToolbarCommand) {
   editorRoot.value?.querySelector<HTMLElement>('.ProseMirror')?.focus()
 }
 
-async function applyLink() {
-  if (!crepe) return
-  const editor = crepe
-  const snapshot = editor.editor.action(ctx => {
-    const view = ctx.get(editorViewCtx)
-    return { doc: view.state.doc, selection: view.state.selection }
-  })
-  const href = (await askPrompt(t('请输入链接地址', 'Enter link address'), 'https://'))?.trim()
-  if (!href || crepe !== editor) return
-  const label = snapshot.selection.empty ? await askPrompt(t('请输入链接文字', 'Enter link text'), href) : ''
-  if (label === null || crepe !== editor) return
-
-  editor.editor.action((ctx) => {
-    const view = ctx.get(editorViewCtx)
-    if (!view.state.doc.eq(snapshot.doc)) return
-    view.dispatch(view.state.tr.setSelection(snapshot.selection))
-    const commands = ctx.get(commandsCtx)
-    if (view.state.selection.empty) {
-      const text = label.trim() || href
-      const from = view.state.selection.from
-      const transaction = view.state.tr.insertText(text, from)
-      transaction.setSelection(TextSelection.create(transaction.doc, from, from + text.length))
-      view.dispatch(transaction)
-    }
-    return commands.call(toggleLinkCommand.key, { href })
-  })
-  editorRoot.value?.querySelector<HTMLElement>('.ProseMirror')?.focus()
-}
+function applyLink() { if (crepe) beginSourceInsertion(crepe.editor, 'link') }
 
 function applyHeading(event: Event) {
   const value = (event.target as HTMLSelectElement).value
@@ -393,6 +372,7 @@ onMounted(async () => {
       [Crepe.Feature.TopBar]: false,
       [Crepe.Feature.Latex]: markdownPreferences.math,
       [Crepe.Feature.ImageBlock]: false,
+      [Crepe.Feature.LinkTooltip]: false,
     },
     featureConfigs: {
       [Crepe.Feature.Placeholder]: { text: t('开始记录你的想法…', 'Start writing your thoughts…') },
@@ -414,6 +394,12 @@ onMounted(async () => {
         inputPlaceholder: t('粘贴链接地址…', 'Paste link address…'),
       },
       [Crepe.Feature.Toolbar]: {
+        buildToolbar: builder => {
+          for (const group of builder.build()) {
+            const link = group.items.find(item => item.key === 'link')
+            if (link) link.onRun = () => applyLink()
+          }
+        },
         boldLabel: t('加粗', 'Bold'),
         italicLabel: t('斜体', 'Italic'),
         strikethroughLabel: t('删除线', 'Strikethrough'),
@@ -451,6 +437,8 @@ onMounted(async () => {
     },
   })
   // Crepe 的 defaultsDeep 会合并语言数组与主题扩展内部配置。
+  // The default empty-line transformer also drops inline <br>; keep HTML intact.
+  await crepe.editor.remove(remarkPreserveEmptyLinePlugin)
   // 必须在功能配置完成后同时替换两者，以免默认语法发生冲突。
   crepe.editor.config(ctx => ctx.update(codeBlockConfig.key, config => ({
     ...config,
@@ -482,6 +470,9 @@ onMounted(async () => {
     walk(tree as Ast)
   }))
   crepe.editor.use(fontSizeMarkdownPlugin)
+  crepe.editor.use(liveSourceSchema)
+  crepe.editor.use(liveSourcePlugin)
+  crepe.editor.use(htmlPreviewPlugin(() => ({ path: editorStore.currentFilePath, noteId: editorStore.currentNoteId })))
   crepe.editor.use(inlineCodeInputPlugin)
   if (markdownPreferences.callouts) crepe.editor.use(calloutPlugin)
   crepe.editor.use(headingFoldingPlugin)
@@ -564,7 +555,6 @@ defineExpose({ getEditor: () => crepe?.editor })
 
 <template>
   <DiagramInteractions class="visual-editor" :class="{ 'hide-code-line-numbers': !markdownPreferences.lineNumbers }" :data-heading-style="headingAppearance.preferences.custom ? 'custom' : undefined" :style="headingAppearance.cssVariables">
-    <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <p v-if="imageError" class="image-error" role="alert">{{ imageError }}</p>
     <p v-if="commandError" class="image-error" role="alert">{{ commandError }}</p>
     <div v-show="layout.editorToolbarVisible" class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
@@ -629,6 +619,7 @@ defineExpose({ getEditor: () => crepe?.editor })
       <button type="button" :title="t('分隔线', 'Horizontal rule')" :aria-label="t('分隔线', 'Horizontal rule')" @pointerdown.prevent="toolbarCommand('editor.horizontal-rule')" @click="$event.detail === 0 && toolbarCommand('editor.horizontal-rule')"><ControlIcon name="rule" /></button>
       <button type="button" :title="t('插入链接', 'Insert link')" :aria-label="t('插入链接', 'Insert link')" @pointerdown.prevent="applyLink" @click="$event.detail === 0 && applyLink()"><ControlIcon name="link" /></button>
       <button type="button" :title="t('插入工作区图片', 'Insert workspace image')" :aria-label="t('插入工作区图片', 'Insert workspace image')" @pointerdown.prevent="chooseImages" @click="$event.detail === 0 && chooseImages()"><ControlIcon name="image" /></button>
+      <button class="image-url-button" type="button" :title="t('通过 URL 插入图片', 'Insert image from URL')" :aria-label="t('通过 URL 插入图片', 'Insert image from URL')" @pointerdown.prevent="insertImageUrl" @click="$event.detail === 0 && insertImageUrl()"><ControlIcon name="image" /><span>URL</span></button>
       <input ref="imageInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple @change="selectedImages" />
       <label v-if="markdownPreferences.callouts" class="toolbar-select" :title="t('插入提示框', 'Insert callout')">
         <ControlIcon name="callout" />
@@ -669,6 +660,7 @@ defineExpose({ getEditor: () => crepe?.editor })
 .markdown-toolbar button { display: inline-grid; place-items: center; min-width: 32px; min-height: 32px; padding: 4px 6px; border-radius: var(--radius-sm); color: var(--color-text-secondary); transition: background-color var(--motion-fast), color var(--motion-fast); }
 .markdown-toolbar button:hover:not(:disabled), .toolbar-select:hover { background: var(--color-accent-soft); color: var(--color-accent-primary); }
 .markdown-toolbar button:active:not(:disabled) { background: var(--color-background-active); }
+.markdown-toolbar .image-url-button { display: inline-flex; align-items: center; gap: 4px; font-size: var(--font-size-xs); white-space: nowrap; }
 .markdown-toolbar button:focus-visible, .toolbar-select:focus-within { outline: 2px solid var(--color-border-focus); outline-offset: 1px; }
 .section-actions { display: inline-flex; align-items: center; flex-shrink: 0; padding: 0; border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-background-secondary); }
 .markdown-toolbar .section-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 28px; padding: 4px 8px; font: inherit; font-size: var(--font-size-xs); line-height: 1.25; white-space: nowrap; color: var(--color-text-secondary); }

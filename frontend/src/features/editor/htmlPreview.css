@@ -1,0 +1,8 @@
+.milkdown .html-source-marker { display: none; }
+.milkdown .html-preview-content { color: inherit; }
+.milkdown .html-preview-block { display: block; max-width: 100%; overflow-x: auto; }
+.milkdown .html-preview-content img { max-width: 100%; height: auto; }
+.milkdown .html-preview-content table { border-collapse: collapse; }
+.milkdown .html-preview-content th, .milkdown .html-preview-content td { padding: .5em .75em; border: 1px solid var(--color-border-default); }
+.milkdown .html-preview-content summary { cursor: pointer; }
+.milkdown .html-preview-content details { padding: .75em; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); }

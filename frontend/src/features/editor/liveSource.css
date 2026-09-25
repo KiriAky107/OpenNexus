@@ -1,0 +1,2 @@
+.milkdown .live-source-editor { display: inline; font: inherit; line-height: inherit; color: var(--color-text-primary); white-space: pre-wrap; overflow-wrap: anywhere; border: 0; background: none; padding: 0; margin: 0; }
+.milkdown .live-source-punctuation { color: var(--color-text-tertiary, #888); }
