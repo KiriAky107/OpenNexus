@@ -108,3 +108,7 @@ export async function respondToPermission(
     decision,
   })
 }
+
+export async function extendAgentBudget(runId: string, requestId: string, additionalTokens: number): Promise<OperationResponse> {
+  return apiClient.post(`/api/agent/runs/${runId}/budget/${requestId}`, { additional_tokens: additionalTokens })
+}

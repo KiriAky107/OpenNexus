@@ -74,7 +74,7 @@ export interface ChatMessage {
   context_captured?: boolean
   attachments?: string[]
   workspace_context?: WorkspaceContext
-  activity?: Array<{ type: 'thinking'; text: string } | { type: 'tool'; tool_call_id: string }>
+  activity?: Array<({ type: 'thinking' | 'text'; text: string } | { type: 'tool'; tool_call_id: string }) & { sequence?: number }>
   versions?: string[]
   message_id: string
   conversation_id: string
@@ -128,6 +128,7 @@ export type AgentRunStatus =
   | 'queued'
   | 'running'
   | 'waiting_permission'
+  | 'waiting_budget'
   | 'completed'
   | 'failed'
   | 'cancelled'
@@ -159,6 +160,8 @@ export type AgentEventType =
   | 'ModelCallCompleted'
   | 'ModelCallFailed'
   | 'PermissionResolved'
+  | 'BudgetRequired'
+  | 'BudgetResolved'
   | 'RunCompleted'
   | 'RunFailed'
   | 'RunCancelled'
@@ -202,6 +205,7 @@ export interface ToolCall {
 }
 
 export interface ToolDefinition {
+  permission?: string | null
   name: string
   description: string
   parameters: Record<string, unknown>

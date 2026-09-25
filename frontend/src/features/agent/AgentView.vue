@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import AppDialog from '@/components/common/AppDialog.vue'
+import BudgetConfirmation from './BudgetConfirmation.vue'
+import AgentManager from './AgentManager.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAgentStore } from '@/stores/agent'
@@ -32,6 +34,7 @@ const toolQuery = ref('')
 const visibleTools = computed(() => agentStore.tools.filter(tool => `${tool.name} ${tool.description}`.toLowerCase().includes(toolQuery.value.trim().toLowerCase())))
 const output = computed(() => agentStore.activeRun?.output || [...agentStore.events].reverse().find(event => event.event === 'RunCompleted')?.data.output || '')
 const currentActivity = computed(() => {
+  if (agentStore.activeRun?.status === 'waiting_budget') return t('等待您确认追加 Token 预算', 'Waiting for your token budget decision')
   const event = [...agentStore.events].reverse().find(event => ['ToolCall', 'ModelCallStarted', 'PermissionRequired', 'RunCompleted', 'RunFailed', 'RunCancelled'].includes(event.event))
   if (!event) return t('等待开始', 'Waiting to start')
   if (event.event === 'ToolCall') return `${t('正在调用', 'Using')} ${toolLabel(String(event.data.name || ''))}`
@@ -104,7 +107,9 @@ async function handleOpenCitation(data: Record<string, unknown>) {
     <header class="feature-header"><div><h1>{{ isNewRun ? t('智能体', 'Agent') : t('任务进展', 'Task progress') }}</h1><p>{{ t('描述目标，选择模型与技能，检查执行结果。', 'Describe a goal, choose a model and skill, then review the result.') }}</p></div>
       <div class="inline-actions"><RouterLink class="button-secondary" to="/benchmarks?kind=agent">{{ t('当前知识库评测', 'Benchmark this vault') }}</RouterLink><button v-if="!isNewRun" class="button-secondary" @click="router.push({ name: 'agent' })">{{ t('新建运行', 'New run') }}</button></div></header>
     <div v-if="pageError || agentStore.error || providerStore.error" class="error-banner">{{ pageError || agentStore.error || providerStore.error }}</div>
+    <AgentManager v-if="isNewRun" />
     <form v-if="isNewRun" class="panel run-form" @submit.prevent="createRun">
+      <h2>{{ t('临时运行（不保存配置）', 'Temporary run (without a saved definition)') }}</h2>
       <div class="field"><label>{{ t('任务', 'Task') }}</label><textarea v-model="form.input" class="textarea" required :placeholder="t('描述希望智能体完成的任务', 'Describe the task for the agent')" /></div>
       <div class="form-grid">
         <div class="field"><label>{{ t('模型提供商', 'Model provider') }}</label><select v-model="form.provider_id" class="select"><option v-for="p in providerStore.enabledProviders" :key="p.provider_id" :value="p.provider_id">{{ p.name }}</option></select></div>
@@ -124,12 +129,13 @@ async function handleOpenCitation(data: Record<string, unknown>) {
     </form>
 
     <div v-else class="trace-layout">
+      <BudgetConfirmation :run-id="agentStore.activeRunId || ''" :status="agentStore.activeRun?.status" :events="agentStore.events" @resolved="agentStore.loadRun(agentStore.activeRunId!)" />
       <div class="panel run-summary">
         <div>
           <span class="badge" :class="{
             success: agentStore.activeRun?.status === 'completed',
             error: agentStore.activeRun?.status === 'failed',
-            warning: agentStore.activeRun?.status === 'waiting_permission',
+            warning: ['waiting_permission', 'waiting_budget'].includes(agentStore.activeRun?.status || ''),
             info: agentStore.activeRun?.status === 'running' || agentStore.activeRun?.status === 'queued',
           }">{{ runStatusLabel(agentStore.activeRun?.status) }}</span>
           <h2>{{ agentStore.activeRun?.input || t('智能体任务', 'Agent task') }}</h2>

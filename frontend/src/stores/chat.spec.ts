@@ -52,7 +52,7 @@ it('keeps reasoning and tools ordered and retries only the selected branch prefi
   event('ToolCallStart', { tool_call_id: 'tool', name: 'rag.search' })
   event('ThinkingDelta', { text: 'after' })
   event('TextDelta', { text: 'answer' })
-  expect(store.messages[1]!.activity).toEqual([{ type: 'thinking', text: 'before' }, { type: 'tool', tool_call_id: 'tool' }, { type: 'thinking', text: 'after' }])
+  expect(store.messages[1]!.activity).toEqual([{ type: 'thinking', text: 'before' }, { type: 'tool', tool_call_id: 'tool', sequence: 0 }, { type: 'thinking', text: 'after' }, { type: 'text', text: 'answer', sequence: 0 }])
   first.onDone?.()
   const originalUser = store.messages[0]!.message_id
   const originalAnswer = store.messages[1]!.message_id

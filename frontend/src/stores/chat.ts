@@ -239,6 +239,7 @@ export const useChatStore = defineStore('chat', () => {
     conversation.message_count = messages.value.length
 
     const argumentBuffers = new Map<string, string>()
+    const seenEvents = new Set<string>()
     sseClient = streamChat({
       provider_id: selectedProviderId.value,
       ...(retryMessageId ? { retry_message_id: retryMessageId } : {}),
@@ -259,7 +260,16 @@ export const useChatStore = defineStore('chat', () => {
     }, {
       onEvent(event) {
         if (version !== streamVersion) return
-        if (event.event === 'TextDelta') aiMsg.content += String(event.data.text ?? '')
+        const identity = JSON.stringify([event.sequence, event.event, event.data])
+        if (seenEvents.has(identity)) return
+        seenEvents.add(identity)
+        if (event.event === 'TextDelta') {
+          const text = String(event.data.text ?? '')
+          aiMsg.content += text
+          const last = aiMsg.activity?.at(-1)
+          if (last?.type === 'text') last.text += text
+          else aiMsg.activity?.push({ type: 'text', text, sequence: event.sequence })
+        }
         if (event.event === 'ThinkingDelta') {
           const text = String(event.data.text ?? '')
           aiMsg.thinking = `${aiMsg.thinking ?? ''}${text}`
@@ -268,14 +278,16 @@ export const useChatStore = defineStore('chat', () => {
           else aiMsg.activity?.push({ type: 'thinking', text })
         }
         if (event.event === 'ToolCallStart') {
-          aiMsg.activity?.push({ type: 'tool', tool_call_id: String(event.data.tool_call_id ?? '') })
+          if (aiMsg.tool_calls?.some(call => call.tool_call_id === event.data.tool_call_id)) return
+          aiMsg.activity?.push({ type: 'tool', tool_call_id: String(event.data.tool_call_id ?? ''), sequence: event.sequence })
           aiMsg.tool_calls?.push({
             tool_call_id: String(event.data.tool_call_id ?? ''), name: String(event.data.name ?? 'unknown'),
             parameters: (event.data.arguments ?? {}) as Record<string, unknown>, status: 'running',
           })
         }
-        if (event.event === 'ToolCallDelta') {
-          const call = aiMsg.tool_calls?.find(item => item.tool_call_id === event.data.tool_call_id)
+          if (event.event === 'ToolCallDelta') {
+            const call = aiMsg.tool_calls?.find(item => item.tool_call_id === event.data.tool_call_id)
+            if (call && event.data.arguments && typeof event.data.arguments === 'object') call.parameters = event.data.arguments as Record<string, unknown>
           if (call && typeof event.data.arguments_delta === 'string') {
             const buffer = (argumentBuffers.get(call.tool_call_id) ?? '') + event.data.arguments_delta
             argumentBuffers.set(call.tool_call_id, buffer)
@@ -304,11 +316,19 @@ export const useChatStore = defineStore('chat', () => {
           })
         }
         if (event.event === 'ContextStatus') contextNotice.value = String(event.data.message ?? '')
-        if (event.event === 'Error') aiMsg.content += `\n\n${t('生成失败：', 'Generation failed: ')}${String(event.data.message ?? t('未知错误', 'Unknown error'))}`
+        if (event.event === 'Error') {
+          const text = `\n\n${t('生成失败：', 'Generation failed: ')}${String(event.data.message ?? t('未知错误', 'Unknown error'))}`
+          aiMsg.content += text
+          aiMsg.activity?.push({ type: 'text', text, sequence: event.sequence })
+          aiMsg.tool_calls?.filter(call => call.status === 'running').forEach(call => { call.status = 'error'; call.error_message = t('响应中断，请核对实际运行状态。', 'Response interrupted; check the actual run status.') })
+        }
       },
       onError(error) {
         if (version !== streamVersion) return
-        aiMsg.content += `\n\n${t('连接失败：', 'Connection failed: ')}${error.message}`
+        const text = `\n\n${t('连接失败：', 'Connection failed: ')}${error.message}`
+        aiMsg.content += text
+        aiMsg.activity?.push({ type: 'text', text })
+        aiMsg.tool_calls?.filter(call => call.status === 'running').forEach(call => { call.status = 'error'; call.error_message = t('连接中断，请核对实际运行状态。', 'Connection interrupted; check the actual run status.') })
         if (originalMessages) historyError.value = t('重试连接失败，可切换版本恢复原回复。', 'Retry connection failed. Switch versions to return to the original reply.')
         isStreaming.value = false
         sseClient = null
