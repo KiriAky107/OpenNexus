@@ -12,6 +12,12 @@ class NoteReferences:
     def __init__(self):
         self._values: dict[str, dict[str, str]] = {}
 
+    def snapshot(self):
+        return deepcopy(self._values)
+
+    def restore_snapshot(self, values):
+        self._values = deepcopy(values)
+
     def _translate(self, value, kind, *, restore):
         if isinstance(value, list):
             return [self._translate(item, kind, restore=restore) for item in value]

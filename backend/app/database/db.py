@@ -62,9 +62,9 @@ def _connect_path(path) -> sqlite3.Connection:
 
 
 @contextmanager
-def transaction(conn: sqlite3.Connection) -> Iterator[None]:
-    """显式事务：提交成功则 COMMIT，异常则 ROLLBACK。"""
-    conn.execute("BEGIN")
+def transaction(conn: sqlite3.Connection, *, immediate: bool = False) -> Iterator[None]:
+    """读改写事务可预取写锁；只读调用仍允许与其他连接并发。"""
+    conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
     try:
         yield
         conn.execute("COMMIT")

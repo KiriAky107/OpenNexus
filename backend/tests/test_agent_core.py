@@ -378,7 +378,7 @@ def test_step_limit_stops_repeated_agent_loop() -> None:
     run(scenario())
 
 
-def test_token_budget_stops_agent_run() -> None:
+def test_final_answer_is_kept_when_token_budget_is_reached() -> None:
     async def scenario() -> None:
         container = build_container()
         created = await container.agent.create_run(
@@ -391,8 +391,8 @@ def test_token_budget_stops_agent_run() -> None:
         )
 
         completed = await container.agent.wait(created.run_id)
-        assert completed.status == AgentRunStatus.failed
-        assert completed.error_code == "TOKEN_BUDGET_EXCEEDED"
+        assert completed.status == AgentRunStatus.completed
+        assert completed.output == "Mock response: hello budget"
 
     run(scenario())
 

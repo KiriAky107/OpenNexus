@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Header, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
+from app.agent.management_routes import router as agent_management_router
 
 from app.agent import AgentCapacityError, AgentRunNotFoundError
 from app.container import container
@@ -74,6 +75,7 @@ from app.contracts import (
     OperationResponse,
     PageMeta,
     PermissionDecisionRequest,
+    BudgetDecisionRequest,
     Plugin,
     PluginCommandExecuteRequest,
     PluginCommandListResponse,
@@ -143,6 +145,7 @@ from app.services import (
 from app.services.attachment_service import attachment_path
 
 router = APIRouter(prefix="/api")
+router.include_router(agent_management_router)
 
 
 @router.get("/permissions/policy", tags=["Permissions"])
@@ -435,6 +438,7 @@ async def chat(request: ChatRequest) -> StreamingResponse:
         if target['role'] == 'assistant':
             user_message_id = target['parent_message_id']
     assistant_message_id = request.assistant_message_id or f"message_{uuid4().hex}"
+    request = request.model_copy(update={'user_message_id': user_message_id, 'assistant_message_id': assistant_message_id})
     if conversation_id:
         user_message = next(
             (message for message in reversed(request.messages) if message.role.value == "user" and message.content.strip()),
@@ -470,14 +474,19 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                     if event.event == ModelEventType.citation:
                         citations.append(event.data)
                     elif event.event == ModelEventType.text_delta:
-                        assistant_content += str(event.data.get("text", ""))
+                        delta = str(event.data.get('text', ''))
+                        assistant_content += delta
+                        if activity and activity[-1]['type'] == 'text':
+                            activity[-1]['text'] += delta
+                        else:
+                            activity.append({'type': 'text', 'text': delta, 'sequence': event.sequence})
                     elif event.event == ModelEventType.thinking_delta:
                         delta = str(event.data.get("text", ""))
                         assistant_thinking += delta
                         if activity and activity[-1]['type'] == 'thinking': activity[-1]['text'] += delta
                         else: activity.append({'type': 'thinking', 'text': delta})
                     elif event.event == ModelEventType.tool_call_start:
-                        activity.append({'type': 'tool', 'tool_call_id': str(event.data.get('tool_call_id', ''))})
+                        activity.append({'type': 'tool', 'tool_call_id': str(event.data.get('tool_call_id', '')), 'sequence': event.sequence})
                         tool_calls.append({
                             "tool_call_id": str(event.data.get("tool_call_id", "")),
                             "name": str(event.data.get("name", "unknown")),
@@ -517,6 +526,10 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                         if assistant_content:
                             assistant_content += "\n\n"
                         assistant_content += str(event.data.get("message", "Model generation failed."))
+                        activity.append({'type': 'text', 'text': str(event.data.get('message', 'Model generation failed.')), 'sequence': event.sequence})
+                        for call in tool_calls:
+                            if call['status'] == 'running':
+                                call.update(status='error', error_message='Response interrupted; check the actual run status.')
                     yield as_sse(event.event.value, event.model_dump_json())
         except Exception as exc:
             log_event('chat', 'chat.failed', level='ERROR', error=exc,
@@ -525,6 +538,10 @@ async def chat(request: ChatRequest) -> StreamingResponse:
             if assistant_content:
                 assistant_content += "\n\n"
             assistant_content += failure_message
+            activity.append({'type': 'text', 'text': failure_message, 'sequence': sequence})
+            for call in tool_calls:
+                if call['status'] == 'running':
+                    call.update(status='error', error_message='Response interrupted; check the actual run status.')
             error = ModelEvent(
                 event=ModelEventType.error,
                 sequence=sequence,
@@ -707,6 +724,14 @@ async def decide_agent_permission(
     return OperationResponse(
         status="completed", resource_id=request_id, message=request.decision
     )
+
+
+@router.post("/agent/runs/{run_id}/budget/{request_id}", response_model=OperationResponse, tags=["Agent"])
+async def extend_agent_budget(run_id: str, request_id: str, request: BudgetDecisionRequest) -> OperationResponse:
+    await asyncio.to_thread(agent_run_or_404, run_id)
+    if not await container.agent.extend_budget(run_id, request_id, request.additional_tokens):
+        raise ApiError(409, "BUDGET_REQUEST_STALE", "Budget request is no longer pending or conflicts with an earlier decision.")
+    return OperationResponse(status="completed", resource_id=request_id, message="Budget extended.")
 
 
 @router.get("/tools", response_model=ToolListResponse, tags=["Agent"])

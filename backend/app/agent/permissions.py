@@ -75,10 +75,12 @@ class PermissionManager:
     def __init__(self, policy: PermissionPolicy) -> None:
         self.policy = policy
         self._pending: dict[tuple[str, str], PermissionTicket] = {}
-        self._session_grants: set[str] = set()
+        self._session_grants: set[tuple[str | None, str]] = set()
 
-    def mode_for(self, permission: str | None) -> PermissionMode:
-        if permission in self._session_grants:
+    def mode_for(self, permission: str | None, run_id: str | None = None) -> PermissionMode:
+        if self.policy.mode_for(permission) == PermissionMode.deny:
+            return PermissionMode.deny
+        if (run_id, permission) in self._session_grants:
             return PermissionMode.allow
         return self.policy.mode_for(permission)
 
@@ -104,7 +106,7 @@ class PermissionManager:
             return False
         if decision == "allow_session":
             # 会话授权只存在于进程内，应用重启后按默认策略重新确认。
-            self._session_grants.add(ticket.permission)
+            self._session_grants.add((run_id, ticket.permission))
         ticket.future.set_result(decision)
         return True
 
@@ -114,6 +116,7 @@ class PermissionManager:
         return self._pending.get((run_id, request_id))
 
     def cancel_run(self, run_id: str) -> None:
+        self._session_grants = {grant for grant in self._session_grants if grant[0] != run_id}
         for key, ticket in list(self._pending.items()):
             if ticket.run_id == run_id:
                 if not ticket.future.done():
