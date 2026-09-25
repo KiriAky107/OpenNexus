@@ -211,6 +211,19 @@ MIGRATIONS: list[str] = [
     """,
     # v15：任务可保存一次性 Agent 调度配置与执行结果；JSON 便于后续扩展重试策略。
     """ALTER TABLE tasks ADD COLUMN agent_schedule_json TEXT;""",
+    # v16: scoped reusable definitions, reviewed plans, operation receipts and checkpoints.
+    """
+    CREATE TABLE agent_objects (
+        scope TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL,
+        operation_id TEXT, data TEXT NOT NULL, updated_at TEXT NOT NULL,
+        PRIMARY KEY(scope,kind,id), UNIQUE(scope,kind,operation_id)
+    );
+    CREATE INDEX agent_objects_scope_kind ON agent_objects(scope,kind,updated_at);
+    """,
+    # v17: only a pre-tool budget checkpoint is resumable; never replay an in-flight write.
+    """CREATE TABLE agent_checkpoints (
+        run_id TEXT PRIMARY KEY REFERENCES agent_runs(run_id), data TEXT NOT NULL
+    );""",
 ]
 
 

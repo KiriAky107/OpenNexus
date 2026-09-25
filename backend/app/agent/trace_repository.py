@@ -154,13 +154,17 @@ class AgentTraceRepository:
             if _conn is None:
                 conn.close()
 
-    def append_event(self, run: AgentRun, event: AgentEvent, *, _conn=None) -> None:
+    def append_event(self, run: AgentRun, event: AgentEvent, checkpoint=None, *, _conn=None) -> None:
         """在同一事务中保存最新 Run 和事件；复写同一序号时保持幂等。"""
 
         conn = _conn or connect()
         try:
             with transaction(conn) if _conn is None else nullcontext():
                 self._update_run(conn, run)
+                conn.execute('DELETE FROM agent_checkpoints WHERE run_id=?', (run.run_id,))
+                if checkpoint is not None:
+                    conn.execute('INSERT INTO agent_checkpoints(run_id,data) VALUES(?,?)',
+                                 (run.run_id, json.dumps(checkpoint, ensure_ascii=False)))
                 conn.execute(
                     """
                     INSERT INTO agent_events(run_id, sequence, event, data_json, timestamp)
@@ -189,16 +193,34 @@ class AgentTraceRepository:
         finally:
             conn.close()
 
-    def list_runs(self, limit: int, offset: int) -> tuple[list[AgentRun], int]:
+    def get_checkpoint(self, run_id: str) -> dict | None:
         conn = connect()
         try:
-            total = int(conn.execute("SELECT COUNT(*) FROM agent_runs").fetchone()[0])
+            row = conn.execute('SELECT data FROM agent_checkpoints WHERE run_id=?', (run_id,)).fetchone()
+            return json.loads(row['data']) if row else None
+        finally:
+            conn.close()
+
+    def budget_decision(self, run_id: str, request_id: str, amount: int) -> bool:
+        conn = connect()
+        try:
+            return conn.execute("SELECT 1 FROM agent_events WHERE run_id=? AND event='BudgetResolved' "
+                "AND json_extract(data_json,'$.request_id')=? AND json_extract(data_json,'$.additional_tokens')=?",
+                (run_id, request_id, amount)).fetchone() is not None
+        finally:
+            conn.close()
+
+    def list_runs(self, limit: int, offset: int) -> tuple[list[AgentRun], int]:
+        from app.agent.management import scope
+        conn = connect()
+        try:
+            total = int(conn.execute("SELECT COUNT(*) FROM agent_runs WHERE COALESCE(json_extract(run_json,'$.scope_id'),'')=?", (scope(),)).fetchone()[0])
             rows = conn.execute(
                 """
-                SELECT run_json FROM agent_runs
+                SELECT run_json FROM agent_runs WHERE COALESCE(json_extract(run_json,'$.scope_id'),'')=?
                 ORDER BY created_at DESC LIMIT ? OFFSET ?
                 """,
-                (limit, offset),
+                (scope(), limit, offset),
             ).fetchall()
             return [AgentRun.model_validate_json(row["run_json"]) for row in rows], total
         finally:
@@ -310,6 +332,9 @@ class AgentTraceRepository:
                     return None
                 run = AgentRun.model_validate_json(row["run_json"])
                 if row["status"] in _TERMINAL_VALUES:
+                    return run
+                if (run.status == AgentRunStatus.waiting_budget and not run.collaboration_id
+                    and conn.execute('SELECT 1 FROM agent_checkpoints WHERE run_id=?', (run_id,)).fetchone()):
                     return run
                 run.status = AgentRunStatus.failed
                 run.error_code = "AGENT_PROCESS_RESTARTED"

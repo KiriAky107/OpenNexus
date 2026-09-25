@@ -375,6 +375,7 @@ class AgentRunStatus(str, Enum):
     queued = "queued"
     running = "running"
     waiting_permission = "waiting_permission"
+    waiting_budget = "waiting_budget"
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
@@ -396,6 +397,11 @@ class AgentRunCreateRequest(Contract):
 
 
 class AgentRun(Contract):
+    token_usage_estimated: bool = False
+    scope_id: str = ''
+    conversation_id: str | None = None
+    definition_snapshot: dict[str, Any] | None = None
+    collaboration_id: str | None = None
     run_id: str
     status: AgentRunStatus
     input: str
@@ -434,6 +440,8 @@ class AgentEventType(str, Enum):
     model_call_completed = "ModelCallCompleted"
     model_call_failed = "ModelCallFailed"
     permission_resolved = "PermissionResolved"
+    budget_required = "BudgetRequired"
+    budget_resolved = "BudgetResolved"
     run_completed = "RunCompleted"
     run_failed = "RunFailed"
     run_cancelled = "RunCancelled"
@@ -467,6 +475,10 @@ class AgentTraceResponse(Contract):
 
 class PermissionDecisionRequest(Contract):
     decision: Literal["allow_once", "allow_session", "deny"]
+
+
+class BudgetDecisionRequest(Contract):
+    additional_tokens: int = Field(ge=1, le=1_000_000, strict=True)
 
 
 # Skills 和插件
@@ -1475,6 +1487,15 @@ class ExpectedToolCall(Contract):
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
+class AgentBenchmarkMember(Contract):
+    member_id: str = Field(pattern=r'^[a-zA-Z0-9_-]{1,40}$')
+    prompt: str = Field(min_length=1, max_length=16000)
+    depends_on: list[str] = Field(default_factory=list, max_length=5)
+    allowed_tools: list[str] = Field(default_factory=list, max_length=20)
+    expected_tools: list[ExpectedToolCall] = Field(default_factory=list, max_length=30)
+    output_contains: list[str] = Field(default_factory=list)
+
+
 class AgentDatasetCase(Contract):
     case_id: str = Field(min_length=1)
     prompt: str = Field(min_length=1, max_length=20000)
@@ -1484,6 +1505,22 @@ class AgentDatasetCase(Contract):
     citation_required: bool = False
     tasks_created: int | None = Field(default=None, ge=0, le=20)
     tags: list[str] = Field(default_factory=list)
+    members: list[AgentBenchmarkMember] = Field(default_factory=list, max_length=6)
+
+    @model_validator(mode='after')
+    def validate_members(self):
+        if self.members:
+            from app.agent.management import CollaborationPlan
+            CollaborationPlan(title=self.case_id[:200], members=[{'member_id': member.member_id, 'agent_id': 'benchmark',
+                'input': member.prompt, 'depends_on': member.depends_on} for member in self.members])
+            for member in self.members:
+                if (any(name.startswith('agent.') for name in member.allowed_tools)
+                    or any(tool.name not in member.allowed_tools for tool in member.expected_tools)
+                    or not (member.expected_tools or member.output_contains)):
+                    raise ValueError('Each collaboration member requires non-recursive tools and objective expectations.')
+            if self.expected_tools or self.allowed_tools or self.tasks_created is not None or self.citation_required or self.output_contains:
+                raise ValueError('Collaboration cases define expectations per member, not on the outer case.')
+        return self
 
 
 class AgentBenchmarkRequest(Contract):
@@ -1503,6 +1540,8 @@ class AgentCaseResult(Contract):
     case_id: str
     repeat: int
     agent_run_id: str | None = None
+    collaboration_id: str | None = None
+    member_run_ids: list[str] = Field(default_factory=list)
     success: bool = False
     tool_calls: int = 0
     expected_calls: int = 0
