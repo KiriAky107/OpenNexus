@@ -15,6 +15,16 @@ from app.providers.http_base import (
 
 
 class OpenAICompatibleProvider(EventStreamingMixin, HTTPProviderMixin):
+    @staticmethod
+    def _check_finish_reason(reason):
+        if reason is None or reason in ('stop', 'tool_calls'):
+            return
+        if reason == 'length':
+            raise ProviderError('PROVIDER_OUTPUT_LIMIT', '模型输出达到长度上限，本次回答或工具参数未完成。')
+        if reason == 'content_filter':
+            raise ProviderError('PROVIDER_CONTENT_FILTERED', '提供商终止了本次输出，任务未完成。')
+        raise ProviderError('PROVIDER_UNEXPECTED_STOP', '提供商返回了不支持的结束原因，任务未完成。')
+
     def __init__(
         self,
         base_url: str,
@@ -35,6 +45,7 @@ class OpenAICompatibleProvider(EventStreamingMixin, HTTPProviderMixin):
         choices = list_value(data.get("choices"))
         if not choices:
             raise invalid_response()
+        self._check_finish_reason(object_value(choices[0]).get('finish_reason'))
         message = object_value(object_value(choices[0]).get("message"))
         calls = []
         for raw in list_value(message.get("tool_calls", [])):
@@ -76,6 +87,7 @@ class OpenAICompatibleProvider(EventStreamingMixin, HTTPProviderMixin):
         calls: dict[int, dict] = {}
         usage = UsageTracker("prompt_tokens", "completion_tokens")
         finished = False
+        finish_reason = None
         seen = False
         async with aclosing(self._stream_json(self._payload(request, stream=True))) as chunks:
             async for data in chunks:
@@ -108,9 +120,13 @@ class OpenAICompatibleProvider(EventStreamingMixin, HTTPProviderMixin):
                     fragment = string_value(function.get("arguments", ""))
                     call["arguments"] += fragment
                 if choice.get("finish_reason"):
+                    finish_reason = choice['finish_reason']
                     finished = True
         if not finished:
             raise truncated_stream()
+        self._check_finish_reason(finish_reason)
+        if finish_reason == 'tool_calls' and not calls:
+            raise invalid_response()
         for call in calls.values():
             if not call["name"]:
                 raise invalid_response()
