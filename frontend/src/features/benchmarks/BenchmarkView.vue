@@ -7,6 +7,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { hostInvoke, isDesktop } from '@/services/platform/desktop'
 import { Upload, Document, Download, DataAnalysis } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
+import CollaborationCard from '@/features/agent/CollaborationCard.vue'
 const route = useRoute(), workspace = useWorkspaceStore()
 const kind = ref<'rag' | 'agent'>(route.query.kind === 'agent' ? 'agent' : 'rag'), dataset = ref(''), error = ref(''), busy = ref(false)
 const importing = ref(false), importText = ref(''), importNotice = ref('')
@@ -25,6 +26,15 @@ function useTemplate() {
   importText.value = JSON.stringify({ dataset_id: kind.value === 'rag' ? 'my-vault-rag-v1' : 'my-vault-agent-v1', kind: kind.value, version: '1.0', description: '请替换为当前知识库的验证目标', cases: kind.value === 'rag'
     ? [{ case_id: 'case-1', query: '请替换为需要验证的检索问题', expected_note_paths: ['课程/双指针.md'] }]
     : [{ case_id: 'case-1', prompt: '检索当前知识库中关于双指针的笔记，概括要点并引用来源。', allowed_tools: ['notes.search'], expected_tools: [{ name: 'notes.search', arguments: {} }], output_contains: ['双指针'], citation_required: true }] }, null, 2)
+}
+function useCollaborationTemplate() {
+  importFileName.value = ''
+  importText.value = JSON.stringify({ dataset_id: 'my-vault-collaboration-v1', kind: 'agent', version: '1.0',
+    description: '请按当前知识库修改检索主题、预期工具与结果关键词。运行评测会创建独立智能体配置和协作记录。',
+    cases: [{ case_id: 'review-and-summarize', prompt: '检查当前知识库的课程资料并汇总', members: [
+      { member_id: 'review', prompt: '检索当前知识库关于双指针的笔记，列出指针移动规则。', allowed_tools: ['notes.search'], expected_tools: [{ name: 'notes.search', arguments: {} }], output_contains: ['双指针'] },
+      { member_id: 'summary', prompt: '根据上游检索结果概括指针移动规则；资料不足时明确说明。', depends_on: ['review'], allowed_tools: [], expected_tools: [], output_contains: ['指针'] },
+    ] }] }, null, 2)
 }
 async function chooseFile(event: Event) {
   const input = event.target as HTMLInputElement, file = input.files?.[0]
@@ -124,6 +134,7 @@ onBeforeUnmount(() => { disposed=true; clearTimeout(timer) })
               <button class="button-secondary icon-action" type="button" :disabled="importing || !workspace.hasVault" @click="fileInput?.click()"><AppIcon :icon="Upload" :size="16" />选择 JSON 文件</button>
               <span class="file-name subtle" :title="importFileName">{{ importFileName || '也可以在下方粘贴 JSON' }}</span>
               <button class="button-secondary icon-action template-button" type="button" :disabled="importing" @click="useTemplate"><AppIcon :icon="Document" :size="16" />填写当前类型模板</button>
+              <button v-if="kind === 'agent'" class="button-secondary" type="button" :disabled="importing" @click="useCollaborationTemplate">填写多智能体协作模板</button>
             </div>
             <label class="editor-label" for="benchmark-json">数据集内容 · JSON</label>
             <textarea id="benchmark-json" v-model="importText" class="textarea dataset-json" aria-label="数据集 JSON" rows="8" placeholder="选择文件、填写模板，或粘贴数据集内容…" spellcheck="false" :disabled="importing" aria-describedby="benchmark-import-help" />
@@ -172,6 +183,7 @@ onBeforeUnmount(() => { disposed=true; clearTimeout(timer) })
         <div v-for="group in metricGroups" :key="group.name" class="metric-group"><h3>{{ group.name }}</h3><dl class="metric-grid"><div v-for="row in group.rows" :key="row.label" class="metric-card"><dt>{{ row.label }}</dt><dd>{{ row.value }}</dd></div></dl></div>
         <details class="ui-disclosure"><summary>冻结配置与逐例证据</summary><pre>{{ JSON.stringify(report,null,2) }}</pre></details>
       </section>
+      <CollaborationCard v-for="run in runs.filter(item => item.collaborationId)" :key="run.id" :id="run.collaborationId!" />
     </div>
   </main>
 </template>

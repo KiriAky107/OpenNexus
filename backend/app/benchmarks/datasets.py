@@ -153,7 +153,7 @@ def _dataset_from_raw(raw: dict, raw_bytes: bytes, kind: BenchmarkKind) -> RAGDa
                 {"dataset_id": dataset_id, "case_index": index, "errors": exc.errors()},
             ) from exc
         if kind == BenchmarkKind.agent:
-            if not (parsed.expected_tools or parsed.output_contains or parsed.citation_required or parsed.tasks_created is not None):
+            if not (parsed.members or parsed.expected_tools or parsed.output_contains or parsed.citation_required or parsed.tasks_created is not None):
                 raise ApiError(422, 'BENCHMARK_DATASET_INVALID', 'Agent case requires objective expectations.')
             if any(tool.name not in parsed.allowed_tools for tool in parsed.expected_tools):
                 raise ApiError(422, 'BENCHMARK_DATASET_INVALID', 'Expected tools must be allowed.')
