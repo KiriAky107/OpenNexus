@@ -5,9 +5,12 @@ import { listProviders } from '@/services/providerService'
 import { useRoute } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { hostInvoke, isDesktop } from '@/services/platform/desktop'
+import { Upload, Document, Download, DataAnalysis } from '@element-plus/icons-vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 const route = useRoute(), workspace = useWorkspaceStore()
 const kind = ref<'rag' | 'agent'>(route.query.kind === 'agent' ? 'agent' : 'rag'), dataset = ref(''), error = ref(''), busy = ref(false)
 const importing = ref(false), importText = ref(''), importNotice = ref('')
+const fileInput = ref<HTMLInputElement | null>(null), importFileName = ref('')
 const selectedDataset = computed(() => datasets.value.find(item => item.id === dataset.value))
 let datasetSequence = 0, scopeSequence = 0
 const selectionKey = () => `benchmark-dataset:${workspace.vaultId || workspace.vaultPath}:${kind.value}`
@@ -18,6 +21,7 @@ async function saveJSON(value: unknown, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 function useTemplate() {
+  importFileName.value = ''
   importText.value = JSON.stringify({ dataset_id: kind.value === 'rag' ? 'my-vault-rag-v1' : 'my-vault-agent-v1', kind: kind.value, version: '1.0', description: '请替换为当前知识库的验证目标', cases: kind.value === 'rag'
     ? [{ case_id: 'case-1', query: '请替换为需要验证的检索问题', expected_note_paths: ['课程/双指针.md'] }]
     : [{ case_id: 'case-1', prompt: '检索当前知识库中关于双指针的笔记，概括要点并引用来源。', allowed_tools: ['notes.search'], expected_tools: [{ name: 'notes.search', arguments: {} }], output_contains: ['双指针'], citation_required: true }] }, null, 2)
@@ -27,7 +31,7 @@ async function chooseFile(event: Event) {
   if (!file) return
   if (file.size > 1048576) { error.value = '数据集不能超过 1 MiB。'; input.value = ''; return }
   const epoch = scopeSequence
-  try { const content = await file.text(); if (epoch === scopeSequence) importText.value = content }
+  try { const content = await file.text(); if (epoch === scopeSequence) { importText.value = content; importFileName.value = file.name } }
   catch { error.value = '无法读取所选文件。' }
   input.value = ''
 }
@@ -40,7 +44,7 @@ async function importDataset() {
     kind.value = result.kind
     await nextTick()
     await loadDatasets(result.dataset_id)
-    if (epoch === scopeSequence) { importNotice.value = '已保存到当前知识库的专属评测列表。'; importText.value = '' }
+    if (epoch === scopeSequence) { importNotice.value = '已保存到当前知识库的专属评测列表。'; importText.value = ''; importFileName.value = '' }
   } catch(e) { if (epoch === scopeSequence) error.value = String(e) }
   finally { importing.value = false }
 }
@@ -89,7 +93,7 @@ async function refresh() { const epoch = scopeSequence; try { const items = awai
 watch(kind, () => { void loadDatasets() })
 watch(() => route.query.kind, value => { if (value === 'rag' || value === 'agent') kind.value = value })
 watch(() => workspace.vaultId || workspace.vaultPath, () => {
-  scopeSequence++; report.value = null; runs.value = []; importText.value = ''; importNotice.value = ''; error.value = ''
+  scopeSequence++; report.value = null; runs.value = []; importText.value = ''; importFileName.value = ''; importNotice.value = ''; error.value = ''
   void loadDatasets()
 })
 watch(dataset, value => { if (value) { try { localStorage.setItem(selectionKey(), value) } catch { /* optional local preference */ } } })
@@ -108,26 +112,35 @@ onBeforeUnmount(() => { disposed=true; clearTimeout(timer) })
 <template>
   <main class="feature-page benchmark-page">
     <header class="feature-header">
-      <div><h1>Benchmark 评测</h1><p>为不同知识库设置专属的检索问题和 Agent 验证任务。当前知识库：{{ workspace.vaultName || '未打开' }}。</p></div>
+      <div><h1>Benchmark 评测</h1><p>检验当前知识库的检索效果与 Agent 任务表现。</p><span class="vault-context"><AppIcon :icon="Document" :size="15" />{{ workspace.vaultName || '未打开知识库' }}</span></div>
       <span class="badge" :class="{ info: activeCount > 0 }">{{ activeCount ? `${activeCount} 项正在运行` : 'RAG / Agent' }}</span>
     </header>
     <div class="benchmark-content">
-      <section class="panel" aria-label="知识库专属数据集">
-        <h2>知识库专属数据集</h2>
-        <p class="subtle">导入的数据集只属于当前知识库；切换知识库后会切换列表。已有共享数据集仍标注为“共享”。导入不会修改笔记，也不会自动执行 Agent。</p>
-        <details class="ui-disclosure"><summary>导入或编写 JSON 数据集</summary>
-          <p>RAG 使用 query 和 expected_note_paths 指定问题与预期笔记相对路径；Agent 使用 prompt、allowed_tools、expected_tools、output_contains 等定义验证目标。每份最多 100 个案例、1 MiB。同名但不同内容不会覆盖，请使用新的 dataset_id。</p>
-          <div class="inline-actions"><input type="file" accept=".json,application/json" aria-label="选择评测数据集 JSON" :disabled="importing || !workspace.hasVault" @change="chooseFile"><button class="button-secondary" type="button" @click="useTemplate">填写当前类型模板</button></div>
-          <textarea v-model="importText" class="textarea dataset-json" aria-label="数据集 JSON" rows="12" spellcheck="false" :disabled="importing" />
-          <button class="button-primary" type="button" :disabled="importing || !workspace.hasVault || !importText.trim()" @click="importDataset">{{ importing ? '导入中…' : '导入到当前知识库' }}</button>
-          <p v-if="importNotice" role="status">{{ importNotice }}</p>
+      <section class="panel dataset-panel" aria-label="知识库专属数据集">
+        <details class="dataset-import ui-disclosure"><summary><span class="import-heading"><AppIcon :icon="Upload" :size="20" /><span><span class="import-title">知识库专属数据集</span><span class="import-subtitle">导入 JSON，或从模板创建验证问题</span></span></span><span class="import-limit">JSON · 最多 100 例</span></summary>
+          <div class="import-body">
+            <div class="import-toolbar">
+              <input ref="fileInput" class="dataset-file-input" type="file" accept=".json,application/json" aria-label="选择评测数据集 JSON" tabindex="-1" :disabled="importing || !workspace.hasVault" @change="chooseFile">
+              <button class="button-secondary icon-action" type="button" :disabled="importing || !workspace.hasVault" @click="fileInput?.click()"><AppIcon :icon="Upload" :size="16" />选择 JSON 文件</button>
+              <span class="file-name subtle" :title="importFileName">{{ importFileName || '也可以在下方粘贴 JSON' }}</span>
+              <button class="button-secondary icon-action template-button" type="button" :disabled="importing" @click="useTemplate"><AppIcon :icon="Document" :size="16" />填写当前类型模板</button>
+            </div>
+            <label class="editor-label" for="benchmark-json">数据集内容 · JSON</label>
+            <textarea id="benchmark-json" v-model="importText" class="textarea dataset-json" aria-label="数据集 JSON" rows="8" placeholder="选择文件、填写模板，或粘贴数据集内容…" spellcheck="false" :disabled="importing" aria-describedby="benchmark-import-help" />
+            <div class="import-footer"><p id="benchmark-import-help" class="subtle">仅保存到当前知识库，不修改笔记、不执行 Agent。上限 1 MiB；同名不同内容请使用新的 dataset_id。</p><button class="button-primary" type="button" :disabled="importing || !workspace.hasVault || !importText.trim()" @click="importDataset">{{ importing ? '导入中…' : '导入到当前知识库' }}</button></div>
+            <details class="format-help"><summary>数据格式说明</summary><p>RAG 使用 query 和 expected_note_paths 指定问题与预期笔记相对路径；Agent 使用 prompt、allowed_tools、expected_tools、output_contains 等定义验证目标。模板跟随下方选择的评测类型。</p></details>
+          </div>
         </details>
+        <p v-if="importNotice" class="import-notice" role="status">{{ importNotice }}</p>
       </section>
       <form class="panel benchmark-config" @submit.prevent="start">
         <div class="section-heading"><div><h2>创建评测</h2><p class="subtle">选择数据集和运行配置，结果将保留在下方列表。</p></div></div>
-        <div class="form-grid">
+        <div class="form-grid dataset-selection">
           <div class="field"><label for="benchmark-kind">类型</label><select id="benchmark-kind" v-model="kind" class="select"><option value="rag">RAG 检索</option><option value="agent">Agent 任务</option></select></div>
-          <div class="field dataset-field"><label for="benchmark-dataset">数据集</label><select id="benchmark-dataset" v-model="dataset" class="select"><option v-if="!datasets.length" value="">暂无可用数据集，请为当前知识库导入</option><option v-for="d in datasets" :key="d.id" :value="d.id">{{ d.scope === 'vault' ? '当前知识库' : '共享' }} · {{ d.id }} · {{ d.cases }} 案例</option></select><small v-if="selectedDataset" class="subtle">{{ selectedDataset.description }} · {{ selectedDataset.version }}</small><button v-if="dataset" type="button" class="button-secondary" @click="exportDataset">导出所选数据集</button></div>
+          <div class="field dataset-field"><label for="benchmark-dataset">数据集</label><select id="benchmark-dataset" v-model="dataset" class="select"><option v-if="!datasets.length" value="">暂无可用数据集，请先导入</option><option v-for="d in datasets" :key="d.id" :value="d.id">{{ d.scope === 'vault' ? '当前知识库' : '共享' }} · {{ d.id }} · {{ d.cases }} 案例</option></select></div>
+        </div>
+        <div v-if="selectedDataset" class="dataset-description"><div><span class="badge">{{ selectedDataset.scope === 'vault' ? '当前知识库专属' : '共享数据集' }}</span><span class="subtle">{{ selectedDataset.cases }} 个案例 · v{{ selectedDataset.version }}</span><p v-if="selectedDataset.description" class="subtle">{{ selectedDataset.description }}</p></div><button type="button" class="button-secondary icon-action" @click="exportDataset"><AppIcon :icon="Download" :size="16" />导出所选数据集</button></div>
+        <div class="form-grid runtime-options" :class="{ 'agent-options': kind === 'agent' }">
           <template v-if="kind === 'agent'">
             <div class="field"><label for="benchmark-provider">提供商</label><select id="benchmark-provider" v-model="provider" class="select"><option v-if="!providers.length" value="">暂无可用提供商</option><option v-for="p in providers" :key="p.provider_id" :value="p.provider_id">{{ p.name }}</option></select></div>
             <div class="field"><label for="benchmark-model">模型</label><input id="benchmark-model" v-model="model" class="input" placeholder="模型 ID"></div>
@@ -147,7 +160,7 @@ onBeforeUnmount(() => { disposed=true; clearTimeout(timer) })
       <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
       <section class="panel benchmark-history" aria-labelledby="benchmark-history-title" :aria-busy="loading">
         <div class="section-heading"><h2 id="benchmark-history-title">运行记录</h2><span class="badge">{{ runs.length }} 项</span></div>
-        <div v-if="!runs.length" class="empty-state"><div><strong>{{ loading ? '正在加载记录…' : '还没有评测记录' }}</strong><p>选择上方的数据集并运行评测，完成后可查看指标、下载报告。</p></div></div>
+        <div v-if="!runs.length" class="empty-state"><AppIcon class="empty-icon" :icon="DataAnalysis" :size="28" /><div><strong>{{ loading ? '正在加载记录…' : '还没有评测记录' }}</strong><p>运行评测后，在这里查看指标与报告。</p></div></div>
         <div v-else class="table-scroll"><table><thead><tr><th>数据集</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="run in runs" :key="run.id">
           <td><strong>{{ run.datasetId }}</strong><small class="subtle run-id">{{ run.id }}</small></td>
           <td><span class="badge" :class="{ success:run.status === 'completed', error:run.status === 'failed', info:['queued','running'].includes(run.status), warning:run.status === 'cancelled' }">{{ statusLabels[run.status] ?? run.status }}</span><span v-if="run.progress !== null" class="progress-label subtle">{{ Math.round(run.progress*100) }}%</span><small v-if="run.errorCode" class="run-error">{{ run.errorCode }}</small></td>
@@ -164,17 +177,52 @@ onBeforeUnmount(() => { disposed=true; clearTimeout(timer) })
 </template>
 <style scoped>
 .benchmark-page { width:100%; min-width:0; color:var(--color-text-primary); }
-.dataset-json { width:100%; margin-block:var(--space-md); font-family:var(--font-editor-mono); }
-.benchmark-content { max-width:1180px; margin:0 auto; display:grid; gap:var(--space-xl); }
+.vault-context { display:inline-flex; align-items:center; gap:var(--space-xs); margin-top:var(--space-sm); color:var(--color-text-secondary); font-size:var(--font-size-sm); }
+.benchmark-content { max-width:1180px; margin:0 auto; display:grid; gap:var(--space-lg); }
 .benchmark-content > .panel { width:100%; min-width:0; margin:0; padding:var(--space-xl); }
+.benchmark-content > .dataset-panel { padding:0; }
+.dataset-import.ui-disclosure { padding:0; border:0; background:transparent; border-radius:inherit; }
+.dataset-import.ui-disclosure > summary { padding:var(--space-lg) var(--space-xl); margin:0; min-height:76px; border-radius:inherit; }
+.dataset-import.ui-disclosure[open] > summary { border-radius:var(--radius-lg) var(--radius-lg) 0 0; }
+.import-heading { display:flex; align-items:center; gap:var(--space-md); min-width:0; }
+.import-heading > .app-icon { color:var(--color-accent-primary); flex-shrink:0; }
+.import-title { display:block; color:var(--color-text-primary); font-size:var(--font-size-md); }
+.import-subtitle { display:block; margin-top:var(--space-xs); font-size:var(--font-size-sm); color:var(--color-text-secondary); font-weight:400; }
+.import-limit { margin-left:auto; white-space:nowrap; font-size:var(--font-size-xs); font-weight:400; color:var(--color-text-secondary); }
+.import-body { padding:var(--space-lg) var(--space-xl); }
+.import-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-sm); margin-bottom:var(--space-md); }
+.dataset-file-input { display:none; }
+.icon-action { display:inline-flex; align-items:center; justify-content:center; gap:var(--space-sm); white-space:nowrap; }
+.file-name { min-width:0; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.template-button { margin-left:auto; }
+.editor-label { display:block; margin-bottom:var(--space-sm); color:var(--color-text-secondary); font-size:var(--font-size-sm); font-weight:600; }
+.dataset-json { display:block; width:100%; height:200px; min-height:140px; max-height:420px; margin:0; font-family:var(--font-editor-mono); font-size:var(--font-size-sm); line-height:1.65; background:var(--color-background-secondary); tab-size:2; }
+.dataset-json::placeholder { color:var(--color-text-tertiary); }
+.dataset-json:disabled { opacity:.65; }
+.import-footer { display:flex; align-items:center; gap:var(--space-lg); margin-top:var(--space-md); }
+.import-footer p { flex:1; margin:0; line-height:1.6; }
+.import-footer button { flex-shrink:0; }
+.format-help { margin-top:var(--space-md); color:var(--color-text-secondary); font-size:var(--font-size-sm); }
+.format-help summary { cursor:pointer; }
+.format-help p { line-height:1.7; margin:var(--space-sm) 0 0; }
+.import-notice { margin:0; padding:var(--space-md) var(--space-xl); color:var(--color-success); font-size:var(--font-size-sm); }
 .section-heading { display:flex; align-items:center; justify-content:space-between; gap:var(--space-md); margin-bottom:var(--space-lg); }
 h2 { margin:0; font-size:var(--font-size-lg); font-weight:650; } h3 { margin:0 0 var(--space-md); font-size:var(--font-size-md); }
-.section-heading p { margin:var(--space-xs) 0 0; } .form-grid { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
-.dataset-field { grid-column:span 2; } .field { min-width:0; }
+.section-heading p { margin:var(--space-xs) 0 0; }
+.dataset-selection { grid-template-columns:minmax(150px, .7fr) minmax(0, 2fr); align-items:start; }
+.field { min-width:0; align-content:start; }
+.dataset-description { display:flex; justify-content:space-between; align-items:center; gap:var(--space-md); margin-block:var(--space-md) var(--space-lg); padding:var(--space-md); background:var(--color-background-secondary); border-radius:var(--radius-md); border:1px solid var(--color-border-subtle); }
+.dataset-description > div { min-width:0; overflow-wrap:anywhere; }
+.dataset-description .badge { margin-right:var(--space-sm); }
+.dataset-description p { margin:var(--space-xs) 0 0; line-height:1.6; }
+.dataset-description button { flex-shrink:0; }
+.runtime-options { grid-template-columns:repeat(3,minmax(0,1fr)); margin-top:var(--space-lg); }
+.agent-options { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .config-footer { display:flex; align-items:center; justify-content:space-between; gap:var(--space-lg); margin-top:var(--space-xl); padding-top:var(--space-lg); border-top:1px solid var(--color-border-default); }
 .config-footer p { margin:0; } .config-footer .button-primary { margin-left:auto; flex-shrink:0; }
 .checkbox-label { display:flex; align-items:center; gap:var(--space-sm); color:var(--color-text-secondary); font-size:var(--font-size-sm); }
-.empty-state { min-height:170px; } .empty-state p { margin:0; line-height:1.7; }
+.empty-state { min-height:110px; padding:var(--space-lg); gap:var(--space-sm); } .empty-state p { margin:var(--space-xs) 0 0; line-height:1.7; }
+.empty-icon { color:var(--color-text-tertiary); flex-shrink:0; }
 .table-scroll { overflow-x:auto; } table { width:100%; min-width:580px; border-collapse:collapse; font-size:var(--font-size-sm); }
 th { text-align:left; color:var(--color-text-secondary); background:var(--color-background-secondary); font-weight:600; }
 td,th { padding:var(--space-md); border-bottom:1px solid var(--color-border-default); } tbody tr:last-child td { border-bottom:0; }
@@ -189,6 +237,11 @@ pre { padding:var(--space-md); border-radius:var(--radius-md); background:var(--
 @media(max-width:640px) {
   .benchmark-content > .panel { padding:var(--space-lg); }
   .form-grid { grid-template-columns:minmax(0,1fr); } .dataset-field { grid-column:auto; }
+  .import-limit { display:none; }
+  .dataset-import.ui-disclosure > summary,.import-body { padding:var(--space-lg); }
+  .template-button { margin-left:0; }
+  .import-footer,.dataset-description { flex-direction:column; align-items:stretch; }
+  .import-footer button { width:100%; }
   .section-heading,.config-footer { align-items:flex-start; flex-wrap:wrap; } .config-footer .button-primary { width:100%; }
   .metric-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } dd { font-size:var(--font-size-xl); }
 }
