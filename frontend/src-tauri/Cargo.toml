@@ -14,7 +14,7 @@ required-features = ["desktop"]
 
 [features]
 default = []
-desktop = ["dep:tauri", "dep:tauri-build", "dep:rfd", "dep:reqwest", "dep:tokio"]
+desktop = ["dep:tauri", "tauri/custom-protocol", "dep:tauri-build", "dep:rfd", "dep:reqwest", "dep:tokio"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
