@@ -153,7 +153,8 @@ async function applyPluginEffect(effect: PluginCommandEffect) {
 }
 
 function handleKeydown(event: KeyboardEvent) {
-  if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'p') {
+  if (event.defaultPrevented || event.isComposing || event.repeat) return
+  if ((event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey && event.key.toLocaleLowerCase() === 'p') {
     if (!open.value && document.querySelector('dialog[open]')) return
     event.preventDefault()
     open.value ? hide() : show()

@@ -58,7 +58,17 @@ describe('CommandPalette Plugin Command', () => {
     await router.push('/')
     const wrapper = mount(CommandPalette, { attachTo: document.body, global: { plugins: [router] } })
 
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', ctrlKey: true }))
+    for (const modifiers of [{ ctrlKey: true }, { ctrlKey: true, altKey: true }, { ctrlKey: true, shiftKey: true, repeat: true }, { ctrlKey: true, shiftKey: true, isComposing: true }]) {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', ...modifiers }))
+      await flushPromises()
+      expect(document.querySelector('dialog[open]')).toBeNull()
+    }
+    const handled = new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, shiftKey: true, cancelable: true })
+    handled.preventDefault()
+    window.dispatchEvent(handled)
+    await flushPromises()
+    expect(document.querySelector('dialog[open]')).toBeNull()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'P', ctrlKey: true, shiftKey: true }))
     await flushPromises()
     const command = Array.from(document.querySelectorAll('button')).find((button) => button.textContent?.includes('处理选区'))
     expect(command).toBeTruthy()
