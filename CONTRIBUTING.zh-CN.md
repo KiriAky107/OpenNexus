@@ -1,7 +1,7 @@
 
 # OpenNexus 贡献指南
 
-**简体中文** | [English](https://www.google.com/search?q=CONTRIBUTING.md&utm_source=gemini)
+**简体中文** | [English](CONTRIBUTING.md)
 
 ---
 
@@ -17,11 +17,11 @@ OpenNexus 是一个注重隐私安全与本地优先（Local-First）的桌面�
 
 | 职责范畴 | 所属仓库 | 核心技术栈 |
 | --- | --- | --- |
-| **桌面客户端与 AI 引擎** | **[OpenNexus](https://github.com/KiriAky107/OpenNexus?utm_source=gemini)** *(当前仓库)* | Tauri 2 (Rust)、Vue 3、FastAPI |
-| **端到端加密同步服务** | [Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus?utm_source=gemini) | 独立服务端、PostgreSQL、S3 |
-| **扩展中心与技能注册表** | [Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus?utm_source=gemini) | Manifest 协议、包分发元数据 |
+| **桌面客户端与 AI 引擎** | **[OpenNexus](https://github.com/KiriAky107/OpenNexus)** *(当前仓库)* | Tauri 2 (Rust)、Vue 3、FastAPI |
+| **端到端加密同步服务** | [Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus) | 独立服务端、PostgreSQL、S3 |
+| **扩展中心与技能注册表** | [Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus) | Manifest 协议、包分发元数据 |
 
-* **提议先行 (Issue First)**：对于涉及底层架构变动、数据库结构迁移（Schema Migrations）、跨进程协议调整或重大破坏性变更，请先 [提交 Issue](https://www.google.com/search?q=https://github.com/KiriAky107/OpenNexus/issues/new/choose&utm_source=gemini) 探讨技术方案与折中取舍，避免无效编码。
+* **提议先行 (Issue First)**：对于涉及底层架构变动、数据库结构迁移（Schema Migrations）、跨进程协议调整或重大破坏性变更，请先 [提交 Issue](https://github.com/KiriAky107/OpenNexus/issues/new/choose) 探讨技术方案与折中取舍，避免无效编码。
 * **脱敏原则 (Synthetic Data Only)**：严禁在代码、测试夹具（Fixtures）或日志中包含真实用户笔记、生产 API 密钥、私有 IP 或个人敏感数据。所有测试数据必须使用人工生成的 Mock 数据。
 
 ---
@@ -99,7 +99,7 @@ pnpm install --frozen-lockfile
 
 ## 4. Git 提交规范
 
-本项目遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/?utm_source=gemini) 规范：
+本项目遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans) 规范：
 
 ```text
 <type>(<scope>): <简要总结（祈使语气）>
@@ -170,5 +170,5 @@ cargo clippy --all-targets --features desktop -- -D warnings
 
 ## 7. 安全报告与社区准则
 
-* **漏洞提报**：切勿在公开 Issue 或 PR 中披露未修补的安全漏洞或真实系统密钥。请通过 [GitHub 私密漏洞提报通道](https://www.google.com/search?q=https://github.com/KiriAky107/OpenNexus/security/advisories/new&utm_source=gemini) 提交。
-* **行为准则**：所有参与 OpenNexus 社区的成员均受 [社区行为准则](https://www.google.com/search?q=CODE_OF_CONDUCT.zh-CN.md&utm_source=gemini) 约束。请保持理性、严谨、包容与尊重的沟通氛围。
+* **漏洞提报**：切勿在公开 Issue 或 PR 中披露未修补的安全漏洞或真实系统密钥。请通过 [GitHub 私密漏洞提报通道](https://github.com/KiriAky107/OpenNexus/security/advisories/new) 提交。
+* **行为准则**：所有参与 OpenNexus 社区的成员均受 [社区行为准则](CODE_OF_CONDUCT.zh-CN.md) 约束。请保持理性、严谨、包容与尊重的沟通氛围。
