@@ -39,7 +39,7 @@ def run_exact(cargo: str, target: str, test: str) -> bool:
         "--features",
         "desktop",
     ]
-    command.extend(("--lib",) if target == "lib" else ("--bin", "notesagent-desktop"))
+    command.extend(("--lib",) if target == "lib" else ("--bin", "OpenNexus"))
     command.extend((test, "--", "--exact", "--nocapture", "--test-threads=1"))
     completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
     print(completed.stdout, end="")

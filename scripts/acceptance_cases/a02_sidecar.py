@@ -27,7 +27,7 @@ RUST_TESTS = (
     ),
     (
         "--bin",
-        "notesagent-desktop",
+        "OpenNexus",
         "core_proxy_tests::request_dto_accepts_camel_case_and_rejects_unowned_headers",
     ),
 )

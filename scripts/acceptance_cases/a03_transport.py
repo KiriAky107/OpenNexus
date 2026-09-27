@@ -15,7 +15,7 @@ MANIFEST = ROOT / "frontend" / "src-tauri" / "Cargo.toml"
 FRONTEND = ROOT / "frontend"
 RUST_TESTS = (
     (("--lib",), "core::tests::protocol_incompatibility_rejects_pre_ready_broker_requests"),
-    (("--bin", "notesagent-desktop"), "core_proxy_tests::a03_frozen_transfer_limits_and_failure_semantics"),
+    (("--bin", "OpenNexus"), "core_proxy_tests::a03_frozen_transfer_limits_and_failure_semantics"),
     (("--lib",), "request_lifecycle::tests::cancellation_before_dispatch_and_replay_never_run_work"),
     (("--lib",), "request_lifecycle::tests::cancelling_a_real_response_closes_its_socket"),
     (("--lib",), "workspace::tests::operation_receipt_survives_reopen_and_replay_after_later_edit"),

@@ -8,7 +8,7 @@ rust-version = "1.89"
 name = "notesagent_host"
 
 [[bin]]
-name = "notesagent-desktop"
+name = "OpenNexus"
 path = "src/main.rs"
 required-features = ["desktop"]
 

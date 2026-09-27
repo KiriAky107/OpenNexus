@@ -6,7 +6,7 @@ if ($installers.Count -ne 1) { throw "应恰好生成一个 NSIS 安装包，实
 $installer = $installers[0]
 if ($installer.Length -gt 300MB) { throw "基础安装包超过 300 MiB：$($installer.Length)" }
 
-$hostExecutable = Join-Path $root 'frontend\src-tauri\target\x86_64-pc-windows-msvc\release\notesagent-desktop.exe'
+$hostExecutable = Join-Path $root 'frontend\src-tauri\target\x86_64-pc-windows-msvc\release\OpenNexus.exe'
 if (-not (Test-Path -LiteralPath $hostExecutable -PathType Leaf)) { throw '缺少 MSVC Host 可执行文件' }
 foreach ($path in @($hostExecutable, $installer.FullName)) {
   $signature = Get-AuthenticodeSignature -LiteralPath $path
