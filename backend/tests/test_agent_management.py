@@ -1,4 +1,5 @@
 import asyncio
+import json
 import pytest
 from pydantic import ValidationError
 from app import host_bridge
@@ -264,10 +265,39 @@ def test_temporary_launch_is_idempotent():
             request = AgentRunCreateRequest(input='hello', provider_id='mock', model='mock-1')
             a, b = await asyncio.gather(manager.start_temporary(request, 'once'), manager.start_temporary(request, 'once'))
             assert a.run_id == b.run_id
+            assert store.find_operation('temporary_launch', 'once')['run_id'] == a.run_id
             await runtime.wait(a.run_id)
             assert runtime.list_runs(20, 0)[1] == 1
         finally:
             await runtime.shutdown()
+    asyncio.run(scenario())
+
+
+def test_run_history_shows_current_vault_but_hides_unassigned_legacy_runs():
+    from app.database.db import connect
+
+    async def scenario():
+        runtime = build_container().agent
+        vault = '9ce6a972-7249-45b1-8357-3f46d759bcea'
+        token = host_bridge.vault_id.set(vault)
+        try:
+            run = await runtime.create_run(AgentRunCreateRequest(input='scoped', provider_id='mock', model='mock-1'))
+            await runtime.wait(run.run_id)
+            assert [item.run_id for item in runtime.list_runs(20, 0)[0]] == [run.run_id]
+            conn = connect()
+            try:
+                row = conn.execute('SELECT run_json FROM agent_runs WHERE run_id=?', (run.run_id,)).fetchone()
+                legacy = json.loads(row['run_json'])
+                legacy.pop('scope_id', None)
+                conn.execute('UPDATE agent_runs SET run_json=? WHERE run_id=?', (json.dumps(legacy), run.run_id))
+                conn.commit()
+            finally:
+                conn.close()
+            assert runtime.list_runs(20, 0) == ([], 0)
+        finally:
+            host_bridge.vault_id.reset(token)
+            await runtime.shutdown()
+
     asyncio.run(scenario())
 
 

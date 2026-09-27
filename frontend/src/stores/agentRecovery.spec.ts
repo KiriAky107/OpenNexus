@@ -2,8 +2,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia, disposePinia } from 'pinia'
 import { useAgentStore } from './agent'
-const mock = vi.hoisted(() => ({ stream: vi.fn(), get: vi.fn(), trace: vi.fn(), cancel: vi.fn() }))
-vi.mock('@/services/agentService', () => ({ streamAgentEvents: mock.stream, getAgentRun: mock.get, getAgentTrace: mock.trace, cancelAgentRun: mock.cancel }))
+const mock = vi.hoisted(() => ({ stream: vi.fn(), get: vi.fn(), trace: vi.fn(), cancel: vi.fn(), list: vi.fn() }))
+vi.mock('@/services/agentService', () => ({ streamAgentEvents: mock.stream, getAgentRun: mock.get, getAgentTrace: mock.trace, cancelAgentRun: mock.cancel, listAgentRuns: mock.list }))
 let pinia: ReturnType<typeof createPinia>
 beforeEach(() => {
   vi.useFakeTimers()
@@ -13,6 +13,7 @@ beforeEach(() => {
   mock.stream.mockReturnValue({ cancel: vi.fn() })
   mock.get.mockImplementation(async id => ({ run_id: id, status: 'running', current_step: 0, max_steps: 6 }))
   mock.trace.mockImplementation(async id => ({ run_id: id, status: 'running', items: [], next_sequence: -1, has_more: false }))
+  mock.list.mockResolvedValue({ items: [], total: 0 })
 })
 afterEach(() => { disposePinia(pinia); vi.useRealTimers() })
 const handler = () => mock.stream.mock.calls.at(-1)![1]
@@ -86,4 +87,13 @@ it('fills missing events through REST before reconnecting a live run', async () 
 
   expect(store.events.map(item => item.sequence)).toEqual([0, 1, 2])
   expect(mock.stream.mock.calls.at(-1)![2]).toBe(2)
+})
+
+it('drops a previously selected run when the current vault list does not contain it', async () => {
+  const store = useAgentStore()
+  await store.loadRun('legacy-run')
+  expect(store.sortedRuns.map(run => run.run_id)).toEqual(['legacy-run'])
+  await store.loadRuns()
+  expect(store.sortedRuns).toEqual([])
+  expect(store.activeRunId).toBeNull()
 })

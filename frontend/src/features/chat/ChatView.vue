@@ -9,6 +9,7 @@ import MessageActivity from './MessageActivity.vue'
 import { useCitationNavigation } from '@/composables/useCitationNavigation'
 import { t } from '@/i18n'
 import ChatPersonaDialog from './ChatPersonaDialog.vue'
+import AppDialog from '@/components/common/AppDialog.vue'
 import { useChatPreferences } from '@/stores/chatPreferences'
 import { listTools } from '@/services/agentService'
 import type { ToolDefinition } from '@/contracts'
@@ -22,6 +23,8 @@ const chatStore = useChatStore()
 const preferences = useChatPreferences()
 const showPersona = ref(false)
 const settingsExpanded = ref(false)
+const budgetDialogOpen = ref(false)
+const additionalBudget = ref(8000)
 const imageTools = ref<ToolDefinition[]>([])
 const uploadInput = ref<HTMLInputElement | null>(null)
 async function selectFiles(e: Event) { const input=e.target as HTMLInputElement; await chatStore.uploadFiles(Array.from(input.files ?? [])); input.value='' }
@@ -34,7 +37,6 @@ onBeforeUnmount(() => { disposed = true })
 
 const availableModels = computed(() => providerStore.modelsByProvider[chatStore.selectedProviderId] ?? [])
 const streamingMessageId = computed(() => chatStore.isStreaming ? chatStore.messages.at(-1)?.message_id : undefined)
-const thinkingLabel = computed(() => t('正在思考…', 'Thinking…'))
 const editingMessage = ref<string | null>(null)
 const timeline = ref<HTMLElement>()
 const visibleCount = ref(30)
@@ -61,7 +63,15 @@ async function older() {
   if (element) element.scrollTop = top + element.scrollHeight - height
 }
 watch(() => chatStore.activeConversationId, () => { visibleCount.value = 30; nearBottom.value = true; hasNewActivity.value = false })
+watch(() => chatStore.pendingBudget?.requestId, requestId => {
+  budgetDialogOpen.value = Boolean(requestId)
+  additionalBudget.value = Math.max(8000, chatStore.pendingBudget?.minimumAdditional ?? 1)
+})
+const validAdditionalBudget = computed(() => Number.isInteger(additionalBudget.value)
+  && additionalBudget.value >= (chatStore.pendingBudget?.minimumAdditional ?? 1)
+  && additionalBudget.value <= 1000000)
 watch(() => [chatStore.messages.length, chatStore.messages.at(-1)?.content.length, chatStore.messages.at(-1)?.activity?.length,
+  JSON.stringify(chatStore.messages.at(-1)?.activity?.at(-1))?.length,
   chatStore.messages.at(-1)?.tool_calls?.map(call => call.status).join(',')], () => {
   if (nearBottom.value) void latest()
   else hasNewActivity.value = true
@@ -151,6 +161,7 @@ async function openCitationCard(citation: Citation) {
     </header>
     <div v-if="workspaceContext" class="notice-banner">每次发送附带当前文件（含未保存编辑）：{{ workspaceContext.file_path }}</div>
     <div v-if="chatStore.contextNotice" class="notice-banner" role="status">{{ chatStore.contextNotice }}</div>
+    <div v-if="chatStore.pendingBudget" class="notice-banner" role="status">{{ t('聊天协作用量已到上限，当前生成已暂停。', 'Chat coordination has reached its budget and is paused.') }} <button class="button-secondary" @click="budgetDialogOpen = true">{{ t('决定是否继续', 'Decide whether to continue') }}</button></div>
     <div v-if="loadError || providerStore.error || chatStore.historyError" class="error-banner chat-error">{{ loadError || providerStore.error || chatStore.historyError }}</div>
     <main ref="timeline" class="message-timeline" @scroll.passive="trackScroll">
       <button v-if="chatStore.messages.length > visibleCount" class="button-secondary" @click="older">{{ t('加载更早的消息', 'Load earlier messages') }}</button>
@@ -158,20 +169,11 @@ async function openCitationCard(citation: Citation) {
       <article v-for="message in visibleMessages" :key="message.message_id" class="message" :class="message.role">
         <div class="avatar"><img v-if="message.role === 'user' ? preferences.settings.userAvatar : preferences.settings.aiAvatar" :src="message.role === 'user' ? preferences.settings.userAvatar : preferences.settings.aiAvatar" :alt="message.role === 'user' ? t('我', 'Me') : 'AI'" /><span v-else>{{ message.role === 'user' ? t('你', 'You') : 'AI' }}</span></div>
         <div class="message-body"><small v-if="message.attachments?.length">附件：{{ message.attachments.map(id=>id.split('.').at(-1)).join('、') }}</small><details v-if="message.workspace_context" class="ui-disclosure"><summary>发送时的文件：{{ message.workspace_context.file_path }}</summary><pre class="context-snapshot">{{ message.workspace_context.content }}</pre></details>
-          <details v-if="message.thinking || (message.role === 'assistant' && message.message_id === streamingMessageId)" class="thinking ui-disclosure">
-            <summary>
-              <span v-if="message.message_id === streamingMessageId && !message.content" class="thinking-indicator" :aria-label="thinkingLabel">
-                <span class="thinking-typewriter" aria-hidden="true" :style="{ '--typing-steps': Array.from(thinkingLabel).length }">{{ thinkingLabel }}</span>
-              </span>
-              <span v-else>{{ t('思考过程', 'Reasoning') }}</span>
-            </summary>
-            <p v-if="message.thinking">{{ message.thinking }}</p>
-          </details>
           <div v-if="editingMessage === message.message_id" class="message-edit">
             <textarea v-model="editedText" class="textarea" :aria-label="t('编辑消息', 'Edit message')" :disabled="!chatStore.canSend" />
             <div class="inline-actions"><button class="button-primary" :disabled="!chatStore.canSend || !editedText.trim()" @click="saveEdit">{{ t('保存并重新生成', 'Save and regenerate') }}</button><button class="button-secondary" @click="editingMessage = null">{{ t('取消', 'Cancel') }}</button></div>
           </div>
-          <MessageActivity v-else-if="message.role === 'assistant'" :message="message" :citation-numbers="visibleCitations[message.message_id]?.map(item => item.number)" @citation="number => message.citations?.[number - 1] && openCitationCard(message.citations[number - 1]!)" />
+          <MessageActivity v-else-if="message.role === 'assistant'" :message="message" :streaming="message.message_id === streamingMessageId" :citation-numbers="visibleCitations[message.message_id]?.map(item => item.number)" @citation="number => message.citations?.[number - 1] && openCitationCard(message.citations[number - 1]!)" />
           <MarkdownContent v-else-if="message.content" class="message-content" :source="message.content" />
           <div v-if="visibleCitations[message.message_id]?.length" class="citations">
             <button v-for="{ citation, number } in visibleCitations[message.message_id]" :key="number" class="citation-card" @click="openCitationCard(citation)">
@@ -204,11 +206,31 @@ async function openCitationCard(citation: Citation) {
       </div>
     </footer>
     <ChatPersonaDialog v-if="showPersona" @close="showPersona = false" />
+    <AppDialog v-if="chatStore.pendingBudget && budgetDialogOpen" :label="t('继续本次对话？', 'Continue this chat?')" :dismissible="!chatStore.budgetDecisionBusy" @close="budgetDialogOpen = false">
+      <div class="modal chat-budget-modal">
+        <h2>{{ t('协作用量已达到上限', 'Coordination budget reached') }}</h2>
+        <p>{{ t('当前对话已暂停。追加预算会从暂停点继续，不会重新执行已完成的工具调用；已启动的智能体仍可单独管理。', 'This chat is paused. Adding budget continues from this point without replaying completed tool calls. Started agents remain independently manageable.') }}</p>
+        <p>{{ t('已使用 / 当前预算：', 'Used / current budget: ') }}{{ chatStore.pendingBudget.usage }} / {{ chatStore.pendingBudget.budget }}</p>
+        <p v-if="chatStore.pendingBudget.reason === 'agent_reservation'" class="subtle">{{ t('下一项智能体调用尚未执行，需要先确认预算。', 'The next Agent call has not executed and requires budget approval.') }}</p>
+        <p v-if="chatStore.pendingBudget.estimated" class="subtle">{{ t('部分用量为估算值，不代表实际账单。', 'Some usage is estimated and does not represent the actual bill.') }}</p>
+        <label for="chat-additional-budget">{{ t('追加 Token 预算', 'Additional token budget') }}</label>
+        <input id="chat-additional-budget" v-model.number="additionalBudget" class="input" type="number" :min="chatStore.pendingBudget.minimumAdditional" max="1000000" step="1" :disabled="chatStore.budgetDecisionBusy" />
+        <p>{{ t('追加后预算：', 'Budget after addition: ') }}{{ validAdditionalBudget ? chatStore.pendingBudget.budget + additionalBudget : '—' }}</p>
+        <p class="subtle">{{ t('继续可能产生额外模型费用，且不会提高模型提供商的上下文窗口或账户配额。', 'Continuing may incur additional model charges and does not raise the provider context window or account quota.') }}</p>
+        <p v-if="chatStore.budgetError" class="error-banner" role="alert">{{ chatStore.budgetError }}</p>
+        <div class="inline-actions">
+          <button class="button-primary" :disabled="chatStore.budgetDecisionBusy || !validAdditionalBudget" @click="chatStore.resolveBudget(additionalBudget)">{{ t('追加预算并继续', 'Add budget and continue') }}</button>
+          <button class="button-danger" :disabled="chatStore.budgetDecisionBusy" @click="chatStore.resolveBudget(0)">{{ t('停止并保留已有结果', 'Stop and keep existing results') }}</button>
+          <button class="button-secondary" :disabled="chatStore.budgetDecisionBusy" @click="budgetDialogOpen = false">{{ t('稍后决定', 'Decide later') }}</button>
+        </div>
+      </div>
+    </AppDialog>
   </section>
 </template>
 
 <style scoped>
 .chat-suggestions { display: grid; gap: 10px; margin: 24px auto; max-width: 520px; }
+.chat-budget-modal { display: grid; gap: var(--space-md); width: min(560px, 100%); }
 .chat-suggestions button { padding: 12px 16px; min-height: 42px; line-height: 1.6; text-align: left; }
 .message-body > small { display:inline-block; padding:4px 10px; margin-bottom:10px; border:1px solid var(--color-border-subtle); border-radius:var(--radius-md);color:var(--color-text-secondary); }
 .context-snapshot { max-height: 180px; overflow: auto; white-space: pre-wrap; }
@@ -234,13 +256,9 @@ async function openCitationCard(citation: Citation) {
 .message-content { white-space: pre-wrap; line-height: var(--line-height-relaxed); }
 .new-activity { align-self: center; margin: var(--space-xs); }
 @media (max-width: 640px) { .message-timeline { padding: var(--space-sm); } .message { grid-template-columns: 24px minmax(0, 1fr); gap: var(--space-xs); } .avatar { width: 24px; height: 24px; } .message-body { padding: var(--space-sm); } }
-.thinking { margin-bottom: var(--space-sm); color: var(--color-text-secondary); }.thinking p { margin-top: var(--space-sm); white-space: pre-wrap; }
-.thinking-indicator { display: inline-block; }
 .message-actions { margin-top: var(--space-sm); }
 .message-edit .textarea { width: 100%; min-height: 100px; }
-.thinking-typewriter { display: inline-block; white-space: nowrap; padding-inline-end: 3px; border-inline-end: 2px solid var(--color-accent-primary); animation: thinking-type 2s steps(var(--typing-steps), end) infinite; }
-@keyframes thinking-type { 0% { clip-path: inset(0 100% 0 0); } 65%, 100% { clip-path: inset(0 0 0 0); } }
-@media (prefers-reduced-motion: reduce) { .thinking-typewriter { animation: none; border-inline-end: 0; } .message { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .message { animation: none; } }
 .tool-calls { display: grid; gap: var(--space-sm); margin-top: var(--space-md); }.tool-calls .item-card { display: grid; gap: var(--space-xs); }.tool-calls pre { overflow: auto; font-size: var(--font-size-xs); }
 .usage { display: block; margin-top: var(--space-xs); color: var(--color-text-tertiary); }
 .message time { display: block; margin-top: var(--space-sm); color: var(--color-text-tertiary); font-size: var(--font-size-xs); }

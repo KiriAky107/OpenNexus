@@ -40,6 +40,123 @@ def test_late_response_does_not_replace_new_generation():
     assert history.list_messages('late', 500, 0)[0][-1].message_id == 'new'
 
 
+def test_regeneration_reuses_agent_launch_but_blocks_other_prior_writes():
+    history.create('Retry permissions', 'retry-permissions')
+    history.append_message('retry-permissions', message_id='u', role='user', content='create a note')
+    history.append_message('retry-permissions', message_id='a1', role='assistant', content='draft',
+                           parent_message_id='u', tool_calls=[{'name': 'agent.search_tools', 'status': 'completed'}])
+    assert history.retry_write_policy('retry-permissions', 'a1') == 'full'
+    history.append_message('retry-permissions', message_id='a2', role='assistant', content='failed',
+                           parent_message_id='u', tool_calls=[{'name': 'agent.create', 'status': 'error'}])
+    assert history.retry_write_policy('retry-permissions', 'a1') == 'create_only'
+    assert history.retry_write_policy('retry-permissions', 'a2') == 'create_only'
+    assert history.retry_write_policy('retry-permissions', 'u') == 'read_only'
+    history.append_message('retry-permissions', message_id='a3', role='assistant', content='changed',
+                           parent_message_id='u', tool_calls=[{'name': 'agent.define', 'status': 'error'}])
+    assert history.retry_write_policy('retry-permissions', 'a1') == 'read_only'
+
+
+def test_chat_route_sets_retry_permission_from_server_history_not_client_metadata(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from app.contracts import ChatRequest, Message
+    from app.routes import chat
+
+    seen = []
+
+    async def events(request, _provider):
+        seen.append(request.metadata['retry_write_policy'])
+        if False:
+            yield
+
+    monkeypatch.setattr('app.routes.provider_or_404', lambda _: SimpleNamespace())
+    monkeypatch.setattr('app.services.chat_retrieval.stream', events)
+
+    async def scenario():
+        history.create('Retry route', 'retry-route')
+        history.append_message('retry-route', message_id='u', role='user', content='write')
+        history.append_message('retry-route', message_id='a1', role='assistant', content='draft', parent_message_id='u')
+        for index, claimed in enumerate(('read_only', 'full')):
+            request = ChatRequest(provider_id='mock', model='mock-1', conversation_id='retry-route',
+                                  retry_message_id='a1', user_message_id='u',
+                                  assistant_message_id=f'new{index}', messages=[Message(role='user', content='write')],
+                                  metadata={'retry_write_policy': claimed})
+            response = await chat(request)
+            _ = [chunk async for chunk in response.body_iterator]
+            if index == 0:
+                history.append_message('retry-route', message_id='a2', role='assistant', content='attempted',
+                                       parent_message_id='u', tool_calls=[{'name': 'agent.create', 'status': 'error'}])
+        assert seen == ['full', 'create_only']
+
+    asyncio.run(scenario())
+
+
+def test_stream_persists_interleaved_reasoning_tools_and_text(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from app.contracts import ChatRequest, Message, ModelEvent, ModelEventType
+    from app.routes import chat, utc_now
+
+    async def events(request, provider):
+        for event, data in [
+            (ModelEventType.thinking_delta, {'text': 'before'}),
+            (ModelEventType.text_delta, {'text': 'intro'}),
+            (ModelEventType.tool_call_start, {'tool_call_id': 'tool', 'name': 'rag.search', 'arguments': {}}),
+            (ModelEventType.tool_call_delta, {'tool_call_id': 'tool', 'result': {'run_id': 'run_live', 'status': 'queued'}}),
+            (ModelEventType.tool_call_end, {'tool_call_id': 'tool', 'result': {'hits': 0}}),
+            (ModelEventType.thinking_delta, {'text': 'after'}),
+            (ModelEventType.text_delta, {'text': 'answer'}),
+        ]:
+            yield ModelEvent(event=event, sequence=0, data=data, timestamp=utc_now())
+
+    monkeypatch.setattr('app.routes.provider_or_404', lambda _: SimpleNamespace())
+    monkeypatch.setattr('app.services.chat_retrieval.stream', events)
+
+    async def scenario():
+        history.create('Timeline', 'timeline')
+        request = ChatRequest(provider_id='test', model='test', use_rag=False,
+            conversation_id='timeline', messages=[Message(role='user', content='question')])
+        response = await chat(request)
+        _ = [chunk async for chunk in response.body_iterator]
+        answer = history.list_messages('timeline', 100, 0)[0][-1]
+        assert [(entry['type'], entry['sequence']) for entry in answer.activity] == [
+            ('thinking', 0), ('text', 1), ('tool', 2), ('thinking', 5), ('text', 6),
+        ]
+        assert answer.thinking == 'beforeafter'
+
+    asyncio.run(scenario())
+
+
+def test_stream_persists_run_link_before_agent_finishes(monkeypatch):
+    import asyncio
+    import json
+    from types import SimpleNamespace
+    from app.contracts import ChatRequest, Message, ModelEvent, ModelEventType
+    from app.routes import chat, utc_now
+
+    async def events(request, provider):
+        yield ModelEvent(event=ModelEventType.tool_call_start, sequence=0,
+            data={'tool_call_id': 'create', 'name': 'agent.create'}, timestamp=utc_now())
+        yield ModelEvent(event=ModelEventType.tool_call_delta, sequence=1,
+            data={'tool_call_id': 'create', 'result': {'run_id': 'run_live', 'status': 'queued'}}, timestamp=utc_now())
+        yield ModelEvent(event=ModelEventType.done, sequence=2,
+            data={'status': 'failed'}, timestamp=utc_now())
+
+    monkeypatch.setattr('app.routes.provider_or_404', lambda _: SimpleNamespace())
+    monkeypatch.setattr('app.services.chat_retrieval.stream', events)
+
+    async def scenario():
+        history.create('Running Agent', 'running-agent')
+        request = ChatRequest(provider_id='test', model='test', use_rag=False,
+            conversation_id='running-agent', messages=[Message(role='user', content='write note')])
+        response = await chat(request)
+        _ = [chunk async for chunk in response.body_iterator]
+        answer = history.list_messages('running-agent', 100, 0)[0][-1]
+        assert json.loads(answer.tool_calls[0]['result']) == {'run_id': 'run_live', 'status': 'queued'}
+
+    asyncio.run(scenario())
+
+
 def test_workspace_snapshots_and_agent_links_survive_history_reload():
     history.create('Workspace', 'workspace')
     snapshot = {'file_path': 'demo.md', 'content': '# unsaved draft'}

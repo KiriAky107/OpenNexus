@@ -833,8 +833,10 @@ fn core_stream(
             let session = tauri::async_runtime::spawn_blocking(move || {
                 core.lock().map_err(|_| "HOST_BUSY")?.as_mut().ok_or("CORE_UNAVAILABLE")?.request_session(&path)
             }).await.map_err(|_| "CORE_UNAVAILABLE")??;
+            // SSE may pause while the user decides whether to extend a chat
+            // budget. A total request timeout would discard that live state.
             let client = reqwest::Client::builder().no_proxy()
-                .redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(600))
+                .redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(30))
                 .build().map_err(|_| "CORE_CLIENT_ERROR")?;
             let mut request = client.request(reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| "CORE_METHOD_DENIED")?, session.url)
                 .header("Authorization", session.authorization.as_str())

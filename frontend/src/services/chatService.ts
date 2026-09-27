@@ -49,6 +49,14 @@ export function selectMessageVersion(conversationId: string, messageId: string) 
   return apiClient.post(`/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/select`, {})
 }
 
+export function decideChatBudget(requestId: string, conversationId: string, assistantMessageId: string, additionalTokens: number) {
+  return apiClient.post<{ status: string }>(`/api/chat/budget/${encodeURIComponent(requestId)}`, {
+    conversation_id: conversationId,
+    assistant_message_id: assistantMessageId,
+    additional_tokens: additionalTokens,
+  })
+}
+
 export function streamChat(
   request: ChatRequest,
   handlers: {

@@ -14,7 +14,7 @@ vi.mock('@/stores/workspace', () => ({ useWorkspaceStore: () => ({}) }))
 vi.mock('@/components/common/MarkdownContent.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('@/services/chatService', () => ({
   listConversations: vi.fn().mockResolvedValue({ items: [], page: { total: 0, limit: 100, offset: 0 } }),
-  listConversationMessages: vi.fn(), createConversation: vi.fn(), removeConversation: vi.fn(), streamChat: vi.fn(),
+  listConversationMessages: vi.fn(), createConversation: vi.fn(), removeConversation: vi.fn(), streamChat: vi.fn(), decideChatBudget: vi.fn(),
 }))
 
 beforeEach(() => {
@@ -28,6 +28,19 @@ beforeEach(() => {
   vi.spyOn(providers, 'loadProviders').mockResolvedValue(undefined)
   vi.spyOn(providers, 'loadModels').mockResolvedValue([])
   vi.spyOn(useSkillStore(), 'loadSkills').mockResolvedValue(undefined)
+})
+
+it('opens a continuation dialog for the chat coordination budget', async () => {
+  const wrapper = mount(ChatView, { global: { stubs: { AppDialog: { template: '<div data-dialog><slot /></div>' } } } })
+  await flushPromises()
+  const chat = useChatStore()
+  chat.pendingBudget = { requestId: 'chat_budget_1', conversationId: 'chat', assistantMessageId: 'answer',
+    usage: 51000, budget: 48000, minimumAdditional: 3001, estimated: true, reason: 'agent_reservation' }
+  await flushPromises()
+  expect(wrapper.get('[data-dialog]').text()).toContain('协作用量已达到上限')
+  expect((wrapper.get('#chat-additional-budget').element as HTMLInputElement).value).toBe('8000')
+  expect(wrapper.get('[data-dialog]').text()).toContain('停止并保留已有结果')
+  wrapper.unmount()
 })
 
 it('reveals only cited sources as the streamed answer reaches complete markers', async () => {
@@ -48,7 +61,7 @@ it('reveals only cited sources as the streamed answer reaches complete markers',
   wrapper.unmount()
 })
 
-it('animates only the active reply and exposes tools outside the reasoning disclosure', async () => {
+it('animates only the empty active reply and interleaves reasoning with tools', async () => {
   const wrapper = mount(ChatView)
   await flushPromises()
   const chat = useChatStore()
@@ -64,8 +77,9 @@ it('animates only the active reply and exposes tools outside the reasoning discl
   chat.messages[1]!.thinking = 'beforeafter'
   chat.messages[1]!.activity = [{ type: 'thinking', text: 'before' }, { type: 'tool', tool_call_id: 'search' }, { type: 'thinking', text: 'after' }]
   await flushPromises()
-  expect(wrapper.get('details.thinking').element.textContent).toContain('beforeafter')
-  expect(wrapper.get('details.thinking').element.textContent).not.toContain('rag.search')
+  expect(wrapper.findAll('details.thinking')).toHaveLength(2)
+  expect(wrapper.findAll('details.thinking').map(item => item.element.textContent)).toEqual(['思考过程before', '思考过程after'])
+  expect([...wrapper.element.querySelectorAll('.message:last-child .thinking, .message:last-child .tool-activity')].map(item => item.classList.contains('thinking') ? 'thinking' : 'tool')).toEqual(['thinking', 'tool', 'thinking'])
   chat.messages[1]!.content = 'Answer'
   chat.isStreaming = false
   await flushPromises()

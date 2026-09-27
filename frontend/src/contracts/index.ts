@@ -107,6 +107,8 @@ export type ModelEventType =
   | 'ContextStatus'
   | 'TextDelta'
   | 'ThinkingDelta'
+  | 'BudgetRequired'
+  | 'BudgetResolved'
   | 'ToolCallStart'
   | 'ToolCallDelta'
   | 'ToolCallEnd'

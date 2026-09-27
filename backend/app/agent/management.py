@@ -134,6 +134,14 @@ class ManagementStore:
             raise ApiError(404, 'AGENT_OBJECT_NOT_FOUND', 'Agent object does not exist in this knowledge base.')
         return json.loads(row['data'])
 
+    def find_operation(self, kind: str, operation_id: str) -> dict | None:
+        with closing(connect()) as conn:
+            row = conn.execute(
+                'SELECT data FROM agent_objects WHERE scope=? AND kind=? AND operation_id=?',
+                (scope(), kind, operation_id),
+            ).fetchone()
+        return json.loads(row['data']) if row else None
+
     def list(self, kind: str, conversation_id: str | None = None) -> list[dict]:
         with closing(connect()) as conn:
             rows = conn.execute('SELECT data FROM agent_objects WHERE scope=? AND kind=? ORDER BY updated_at DESC LIMIT 200', (scope(), kind)).fetchall()

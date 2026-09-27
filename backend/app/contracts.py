@@ -302,6 +302,12 @@ class ChatRequest(ModelRequest):
     retrieval: SearchRequest | None = None
 
 
+class ChatBudgetDecisionRequest(Contract):
+    conversation_id: str = Field(min_length=1, max_length=128)
+    assistant_message_id: str = Field(min_length=1, max_length=128)
+    additional_tokens: int = Field(ge=0, le=1000000)
+
+
 class ConversationCreateRequest(Contract):
     conversation_id: str | None = Field(default=None, min_length=1, max_length=128)
     title: str = Field(min_length=1, max_length=120)
@@ -355,6 +361,8 @@ class ModelEventType(str, Enum):
     text_delta = "TextDelta"
     context_status = "ContextStatus"
     thinking_delta = "ThinkingDelta"
+    budget_required = "BudgetRequired"
+    budget_resolved = "BudgetResolved"
     tool_call_start = "ToolCallStart"
     tool_call_delta = "ToolCallDelta"
     tool_call_end = "ToolCallEnd"

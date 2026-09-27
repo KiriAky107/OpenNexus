@@ -7,6 +7,7 @@ import {
   listConversations,
   removeConversation,
   streamChat,
+  decideChatBudget,
 } from '@/services/chatService'
 import type { ChatMessage, Conversation } from '@/contracts'
 import type { SseClient } from '@/services/sseClient'
@@ -18,6 +19,7 @@ vi.mock('@/services/chatService', () => ({
   listConversations: vi.fn(),
   removeConversation: vi.fn(),
   streamChat: vi.fn(),
+  decideChatBudget: vi.fn().mockResolvedValue({ status: 'accepted' }),
   selectMessageVersion: vi.fn().mockResolvedValue({ status: 'completed' }),
 }))
 
@@ -39,6 +41,48 @@ beforeEach(() => {
     ...value, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), message_count: 0,
   }))
   vi.mocked(removeConversation).mockReset().mockResolvedValue(undefined)
+  vi.mocked(decideChatBudget).mockReset().mockResolvedValue({ status: 'accepted' })
+})
+
+it('pauses for chat budget approval and continues the same response stream', async () => {
+  const store = useChatStore()
+  store.selectedProviderId = 'real'
+  store.selectedModel = 'model'
+  await store.sendMessage('create a study plan')
+  const handlers = vi.mocked(streamChat).mock.calls[0]![1]
+  handlers.onEvent?.({ event: 'BudgetRequired', sequence: 4, timestamp: '', data: {
+    request_id: 'chat_budget_1', token_usage: 51000, token_budget: 48000,
+    minimum_additional_tokens: 3001, estimated: true, reason: 'agent_reservation',
+  } })
+  expect(store.pendingBudget?.minimumAdditional).toBe(3001)
+  expect(store.isStreaming).toBe(true)
+  await store.resolveBudget(8000)
+  expect(decideChatBudget).toHaveBeenCalledWith('chat_budget_1', store.activeConversationId, store.messages[1]!.message_id, 8000)
+  expect(streamChat).toHaveBeenCalledTimes(1)
+  expect(store.isStreaming).toBe(true)
+  handlers.onEvent?.({ event: 'BudgetResolved', sequence: 5, timestamp: '', data: { request_id: 'chat_budget_1' } })
+  handlers.onDone?.()
+  expect(store.isStreaming).toBe(false)
+  expect(store.pendingBudget).toBeNull()
+})
+
+it('shows the delegated run while the chat turn is still open', async () => {
+  const store = useChatStore()
+  store.selectedProviderId = 'real'
+  store.selectedModel = 'model'
+  await store.sendMessage('write the note')
+  const handlers = vi.mocked(streamChat).mock.calls[0]![1]
+  const emit = (event: string, sequence: number, data: Record<string, unknown>) =>
+    handlers.onEvent?.({ event: event as 'ToolCallStart', sequence, timestamp: '', data })
+  emit('ToolCallStart', 0, { tool_call_id: 'create', name: 'agent.create' })
+  emit('ToolCallDelta', 1, { tool_call_id: 'create', result: { run_id: 'run_live', status: 'queued' } })
+  expect(JSON.parse(store.messages[1]!.tool_calls![0]!.result!)).toEqual({ run_id: 'run_live', status: 'queued' })
+  expect(store.messages[1]!.tool_calls![0]!.status).toBe('running')
+  expect(store.isStreaming).toBe(true)
+  emit('ToolCallEnd', 2, { tool_call_id: 'create', status: 'completed', result: { run_id: 'run_live', status: 'completed', output: 'saved' } })
+  expect(JSON.parse(store.messages[1]!.tool_calls![0]!.result!).output).toBe('saved')
+  handlers.onDone?.()
+  expect(store.isStreaming).toBe(false)
 })
 
 it('keeps reasoning and tools ordered and retries only the selected branch prefix', async () => {
@@ -52,7 +96,7 @@ it('keeps reasoning and tools ordered and retries only the selected branch prefi
   event('ToolCallStart', { tool_call_id: 'tool', name: 'rag.search' })
   event('ThinkingDelta', { text: 'after' })
   event('TextDelta', { text: 'answer' })
-  expect(store.messages[1]!.activity).toEqual([{ type: 'thinking', text: 'before' }, { type: 'tool', tool_call_id: 'tool', sequence: 0 }, { type: 'thinking', text: 'after' }, { type: 'text', text: 'answer', sequence: 0 }])
+  expect(store.messages[1]!.activity).toEqual([{ type: 'thinking', text: 'before', sequence: 0 }, { type: 'tool', tool_call_id: 'tool', sequence: 0 }, { type: 'thinking', text: 'after', sequence: 0 }, { type: 'text', text: 'answer', sequence: 0 }])
   first.onDone?.()
   const originalUser = store.messages[0]!.message_id
   const originalAnswer = store.messages[1]!.message_id

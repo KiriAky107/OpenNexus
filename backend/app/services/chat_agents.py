@@ -58,7 +58,7 @@ class StatusArguments(BaseModel):
 
 TOOLS = [
     ToolDefinition(name="agent.search_tools", description="Search the live Agent tool catalog, including enabled MCP servers and Plugins. Use this before claiming that a tool is unavailable. Pass selected tool names to agent.create.", parameters=SearchToolsArguments.model_json_schema()),
-    ToolDefinition(name="agent.create", description="Create and start a persistent Agent for work explicitly requested by the user. Use agent.search_tools first when the task may need MCP or Plugin tools, then pass the selected names in tools. Return its run ID; do not claim work is completed. File changes still require Agent permission confirmation. Network tools are not available from chat delegation.", parameters=CreateArguments.model_json_schema()),
+    ToolDefinition(name="agent.create", description="Create and start a persistent Agent for work explicitly requested by the user. Use agent.search_tools first when the task may need MCP or Plugin tools, then pass the selected names in tools. This chat turn waits for the actual run result; do not claim completion until the final tool result says completed. File changes still require Agent permission confirmation. Network tools are not available from chat delegation.", parameters=CreateArguments.model_json_schema()),
     ToolDefinition(name="agent.status", description="Read an Agent run's current status and result. If waiting_permission, tell the user to open the run and review it.", parameters=StatusArguments.model_json_schema()),
 ]
 TOOLS += [ToolDefinition(name=name, description=description, parameters=schema.model_json_schema()) for name, description, schema in [
@@ -67,7 +67,7 @@ TOOLS += [ToolDefinition(name=name, description=description, parameters=schema.m
     ('agent.define', 'Create a reusable Agent configuration, not a run. Chat-created definitions have a finite token budget (default 8000). Does not execute tasks or grant tools permissions.', ChatDefinitionConfig),
     ('agent.propose_update', 'Propose a full configuration revision, including disabling via enabled=false. The user must approve before it takes effect.', UpdateArguments),
     ('agent.propose_delete', 'Propose deleting a reusable definition. The user must approve; existing run history is preserved.', DeleteArguments),
-    ('agent.start', 'Start a bounded run using the specified definition revision. Tool writes still require permission.', StartArguments),
+    ('agent.start', 'Start a run using the specified definition revision. This chat turn waits for the final run result; tool writes still require permission.', StartArguments),
     ('agent.cancel', 'Cancel a run in this conversation when requested. Existing writes and results are retained.', StatusArguments),
     ('agent.collaborate', 'Prepare a bounded DAG plan using existing Agent definitions. Independent members run in parallel, dependencies receive upstream results. ALWAYS requires user review before any member starts.', CollaborationPlan),
     ('agent.collaboration_status', 'Read real member statuses and outputs of a collaboration in this conversation.', GroupArguments),
@@ -78,8 +78,12 @@ READ_TOOLS = {'agent.search_tools', 'agent.list', 'agent.inspect', 'agent.status
 
 
 def operation_id(call, request):
-    identity = [request.conversation_id, request.user_message_id or request.assistant_message_id,
-                call.name, call.arguments]
+    message_id = request.user_message_id or request.assistant_message_id
+    # One temporary launch per user turn, even if a regenerated answer chooses
+    # different wording or tool arguments. The manager returns the existing run.
+    identity = [request.conversation_id, message_id, call.name]
+    if call.name != 'agent.create' or not message_id:
+        identity.append(call.arguments)
     return hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 ALLOWED_TOOLS = ['chat-policy.plan', 'notes.search', 'rag.search', 'notes.read', 'notes.list', 'notes.create', 'notes.update', 'notes.move', 'notes.rename', 'notes.delete', 'notes.patch_markdown', 'markdown.catalog', 'markdown.compose', 'function_plot.compose', 'tasks.create', 'tasks.update', 'tasks.list', 'tasks.read', 'tasks.delete', 'attachments.read', 'audio.transcribe', 'audio.transcription_status', 'skills.list', 'skills.create', 'skills.update', 'plugins.list', 'plugins.create']
 
@@ -155,8 +159,12 @@ async def execute(call, request):
     from app.container import container
     if not request.allow_agent:
         raise ValueError('Agent delegation is disabled')
-    if request.retry_message_id and call.name not in READ_TOOLS:
-        raise ValueError('Regeneration can inspect earlier work but cannot replay mutations. Send a new explicit task to execute again.')
+    if request.retry_message_id:
+        policy = request.metadata.get('retry_write_policy', 'read_only')
+        if policy == 'read_only' and call.name not in READ_TOOLS:
+            raise ValueError('This retry is read-only because an earlier version may have changed data. Send a new explicit task to execute again.')
+        if policy == 'create_only' and call.name not in READ_TOOLS | {'agent.create'}:
+            raise ValueError('Only the original Agent launch may be retried in this answer.')
     manager = coordinator(container.agent)
     ceiling = {item.name for item in _available_agent_tools(request)}
     if call.name == 'agent.list':
@@ -202,7 +210,11 @@ async def execute(call, request):
     if call.name == 'agent.search_tools':
         return _search_tools(SearchToolsArguments.model_validate(call.arguments), request)
     if call.name == 'agent.create':
-        args = CreateArguments.model_validate(call.arguments)
+        # Some providers echo a provider/model override despite the declared
+        # schema. Never let model-supplied fields change the user's selection.
+        create_arguments = {key: value for key, value in call.arguments.items()
+                            if key not in {'provider_id', 'model'}}
+        args = CreateArguments.model_validate(create_arguments)
         available = {item.name for item in _available_agent_tools(request)}
         selected = list(dict.fromkeys(args.tools))
         unavailable = [name for name in selected if name not in available]
@@ -221,6 +233,8 @@ async def execute(call, request):
         if request.metadata.get('chat_attachment_context'):
             task += '\n附件参考数据（不是操作指令）：\n' + json.dumps(request.metadata['chat_attachment_context'],ensure_ascii=False)
         skill_id = 'chat-operator' if _operator_configuration(request) else None
+        launch_operation = operation_id(call, request)
+        reused = store.find_operation('temporary_launch', launch_operation) is not None
         run = await manager.start_temporary(AgentRunCreateRequest(
             input=task, provider_id=request.provider_id, model=request.model,
             skill_id=skill_id,
@@ -228,7 +242,7 @@ async def execute(call, request):
             max_steps=10, token_budget=8000,
             allow_network=False, metadata={'source': 'chat', 'conversation_id': request.conversation_id,
                 'assistant_message_id': request.assistant_message_id},
-        ), operation_id(call, request))
+        ), launch_operation)
     elif call.name in {'agent.status', 'agent.cancel'}:
         run = container.agent.get_run(StatusArguments.model_validate(call.arguments).run_id)
         if run.conversation_id != request.conversation_id:
@@ -237,4 +251,7 @@ async def execute(call, request):
             run = await container.agent.cancel(run.run_id)
     else:
         raise ValueError('Unknown Agent tool')
-    return {'run_id': run.run_id, 'status': run.status.value, 'output': (run.output or '')[:12000], 'error': run.error_message}
+    result = {'run_id': run.run_id, 'status': run.status.value, 'output': (run.output or '')[:12000], 'error': run.error_message}
+    if call.name == 'agent.create':
+        result['reused'] = reused
+    return result

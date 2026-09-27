@@ -21,11 +21,15 @@ def collect(adapter, **kwargs):
 
 
 def test_discovery_does_not_exhaust_creation_or_status_budget(monkeypatch):
+    from app.container import container
     executed, requests = [], []
     async def execute(call, _):
         executed.append(call.name)
         return {'items': []} if call.name.endswith('search_tools') else {'run_id': 'run_one', 'status': 'queued'}
     monkeypatch.setattr(chat_agents, 'execute', execute)
+    monkeypatch.setattr(container.agent, 'get_run', lambda _: SimpleNamespace(
+        conversation_id=None, status=SimpleNamespace(value='completed'),
+        output='finished work', error_message=None))
     class Adapter:
         async def stream(self, request):
             requests.append(request)

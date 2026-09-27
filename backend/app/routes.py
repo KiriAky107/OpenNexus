@@ -24,6 +24,7 @@ from app.contracts import (
     AgentRunListResponse,
     AgentTraceResponse,
     ChatRequest,
+    ChatBudgetDecisionRequest,
     ChatMessageListResponse,
     Conversation,
     ConversationCreateRequest,
@@ -389,6 +390,13 @@ async def list_chat_conversations(
     return ConversationListResponse(items=items, page=PageMeta(total=total, limit=limit, offset=offset))
 
 
+@router.post('/chat/budget/{request_id}', tags=['Chat'])
+async def decide_chat_budget(request_id: str, request: ChatBudgetDecisionRequest):
+    from app.services import chat_budget
+    chat_budget.resolve(request_id, request.conversation_id, request.assistant_message_id, request.additional_tokens)
+    return {'status': 'accepted'}
+
+
 @router.post("/chat/conversations", response_model=Conversation, status_code=201, tags=["Chat"])
 async def create_chat_conversation(request: ConversationCreateRequest) -> Conversation:
     from app.services import chat_history
@@ -431,14 +439,19 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     conversation_id = request.conversation_id
     provider = provider_or_404(request.provider_id)
     user_message_id = request.user_message_id or f"message_{uuid4().hex}"
+    retry_write_policy = 'full'
     if request.retry_message_id:
         if not conversation_id:
             raise ApiError(400, 'CHAT_CONVERSATION_REQUIRED', 'Retry requires a saved conversation')
+        retry_write_policy = chat_history.retry_write_policy(conversation_id, request.retry_message_id)
         target = chat_history.prepare_retry(conversation_id, request.retry_message_id)
         if target['role'] == 'assistant':
             user_message_id = target['parent_message_id']
     assistant_message_id = request.assistant_message_id or f"message_{uuid4().hex}"
-    request = request.model_copy(update={'user_message_id': user_message_id, 'assistant_message_id': assistant_message_id})
+    request = request.model_copy(update={
+        'user_message_id': user_message_id, 'assistant_message_id': assistant_message_id,
+        'metadata': {**request.metadata, 'retry_write_policy': retry_write_policy},
+    })
     if conversation_id:
         user_message = next(
             (message for message in reversed(request.messages) if message.role.value == "user" and message.content.strip()),
@@ -484,7 +497,7 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                         delta = str(event.data.get("text", ""))
                         assistant_thinking += delta
                         if activity and activity[-1]['type'] == 'thinking': activity[-1]['text'] += delta
-                        else: activity.append({'type': 'thinking', 'text': delta})
+                        else: activity.append({'type': 'thinking', 'text': delta, 'sequence': event.sequence})
                     elif event.event == ModelEventType.tool_call_start:
                         activity.append({'type': 'tool', 'tool_call_id': str(event.data.get('tool_call_id', '')), 'sequence': event.sequence})
                         tool_calls.append({
@@ -497,6 +510,8 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                         call_id = str(event.data.get("tool_call_id", ""))
                         call = next((item for item in tool_calls if item["tool_call_id"] == call_id), None)
                         if call is not None:
+                            if isinstance(event.data.get('result'), dict):
+                                call['result'] = json.dumps(event.data['result'], ensure_ascii=False)
                             delta = event.data.get("arguments_delta")
                             if isinstance(delta, str):
                                 argument_buffers[call_id] = argument_buffers.get(call_id, "") + delta
@@ -556,6 +571,8 @@ async def chat(request: ChatRequest) -> StreamingResponse:
             yield as_sse(error.event.value, error.model_dump_json())
             yield as_sse(done.event.value, done.model_dump_json())
         finally:
+            from app.services import chat_budget
+            chat_budget.close_response(conversation_id, assistant_message_id)
             if conversation_id and (assistant_content or assistant_thinking or citations or tool_calls):
                 chat_history.append_message(
                     conversation_id,

@@ -7,6 +7,7 @@ import {
   listConversations as listConversationsApi,
   removeConversation,
   streamChat,
+  decideChatBudget,
   selectMessageVersion,
 } from '@/services/chatService'
 import type { SseClient } from '@/services/sseClient'
@@ -14,10 +15,15 @@ import { t } from '@/i18n'
 import { mediaService } from '@/services/mediaService'
 
 export const useChatStore = defineStore('chat', () => {
+  type PendingBudget = { requestId: string; conversationId: string; assistantMessageId: string;
+    usage: number; budget: number; minimumAdditional: number; estimated: boolean; reason: string }
   const conversations = ref<Conversation[]>([])
   const activeConversationId = ref<string | null>(null)
   const messages = ref<ChatMessage[]>([])
   const isStreaming = ref(false)
+  const pendingBudget = ref<PendingBudget | null>(null)
+  const budgetDecisionBusy = ref(false)
+  const budgetError = ref('')
   const isPreparing = ref(false)
   const messagesReady = ref(true)
   const deletingConversations = reactive(new Set<string>())
@@ -235,6 +241,8 @@ export const useChatStore = defineStore('chat', () => {
     inputText.value = ''
     if (!retryMessageId) pendingAttachments.value = []
     isStreaming.value = true
+    pendingBudget.value = null
+    budgetError.value = ''
     conversation.updated_at = new Date().toISOString()
     conversation.message_count = messages.value.length
 
@@ -275,7 +283,7 @@ export const useChatStore = defineStore('chat', () => {
           aiMsg.thinking = `${aiMsg.thinking ?? ''}${text}`
           const last = aiMsg.activity?.at(-1)
           if (last?.type === 'thinking') last.text += text
-          else aiMsg.activity?.push({ type: 'thinking', text })
+          else aiMsg.activity?.push({ type: 'thinking', text, sequence: event.sequence })
         }
         if (event.event === 'ToolCallStart') {
           if (aiMsg.tool_calls?.some(call => call.tool_call_id === event.data.tool_call_id)) return
@@ -285,9 +293,10 @@ export const useChatStore = defineStore('chat', () => {
             parameters: (event.data.arguments ?? {}) as Record<string, unknown>, status: 'running',
           })
         }
-          if (event.event === 'ToolCallDelta') {
-            const call = aiMsg.tool_calls?.find(item => item.tool_call_id === event.data.tool_call_id)
-            if (call && event.data.arguments && typeof event.data.arguments === 'object') call.parameters = event.data.arguments as Record<string, unknown>
+        if (event.event === 'ToolCallDelta') {
+          const call = aiMsg.tool_calls?.find(item => item.tool_call_id === event.data.tool_call_id)
+          if (call && event.data.arguments && typeof event.data.arguments === 'object') call.parameters = event.data.arguments as Record<string, unknown>
+          if (call && event.data.result && typeof event.data.result === 'object') call.result = JSON.stringify(event.data.result)
           if (call && typeof event.data.arguments_delta === 'string') {
             const buffer = (argumentBuffers.get(call.tool_call_id) ?? '') + event.data.arguments_delta
             argumentBuffers.set(call.tool_call_id, buffer)
@@ -316,6 +325,17 @@ export const useChatStore = defineStore('chat', () => {
           })
         }
         if (event.event === 'ContextStatus') contextNotice.value = String(event.data.message ?? '')
+        if (event.event === 'BudgetRequired') {
+          pendingBudget.value = {
+            requestId: String(event.data.request_id ?? ''), conversationId,
+            assistantMessageId: aiMsg.message_id,
+            usage: Number(event.data.token_usage ?? 0), budget: Number(event.data.token_budget ?? 0),
+            minimumAdditional: Number(event.data.minimum_additional_tokens ?? 1),
+            estimated: Boolean(event.data.estimated), reason: String(event.data.reason ?? 'coordination'),
+          }
+          budgetError.value = ''
+        }
+        if (event.event === 'BudgetResolved') pendingBudget.value = null
         if (event.event === 'Error') {
           const text = `\n\n${t('生成失败：', 'Generation failed: ')}${String(event.data.message ?? t('未知错误', 'Unknown error'))}`
           aiMsg.content += text
@@ -331,6 +351,7 @@ export const useChatStore = defineStore('chat', () => {
         aiMsg.tool_calls?.filter(call => call.status === 'running').forEach(call => { call.status = 'error'; call.error_message = t('连接中断，请核对实际运行状态。', 'Connection interrupted; check the actual run status.') })
         if (originalMessages) historyError.value = t('重试连接失败，可切换版本恢复原回复。', 'Retry connection failed. Switch versions to return to the original reply.')
         isStreaming.value = false
+        pendingBudget.value = null
         sseClient = null
       },
       onDone() {
@@ -338,6 +359,7 @@ export const useChatStore = defineStore('chat', () => {
         conversation!.message_count = messages.value.length
         conversation!.updated_at = new Date().toISOString()
         isStreaming.value = false
+        pendingBudget.value = null
         sseClient = null
       },
     })
@@ -369,6 +391,21 @@ export const useChatStore = defineStore('chat', () => {
     isPreparing.value = false
     if (sseClient) { sseClient.cancel(); sseClient = null }
     isStreaming.value = false
+    pendingBudget.value = null
+  }
+
+  async function resolveBudget(additionalTokens: number) {
+    const pending = pendingBudget.value
+    if (!pending || budgetDecisionBusy.value || !Number.isInteger(additionalTokens) || additionalTokens < 0 || additionalTokens > 1000000) return
+    if (additionalTokens > 0 && additionalTokens < pending.minimumAdditional) return
+    budgetDecisionBusy.value = true
+    budgetError.value = ''
+    try {
+      await decideChatBudget(pending.requestId, pending.conversationId, pending.assistantMessageId, additionalTokens)
+      if (pendingBudget.value?.requestId === pending.requestId) pendingBudget.value = null
+    } catch (cause) {
+      budgetError.value = cause instanceof Error ? cause.message : String(cause)
+    } finally { budgetDecisionBusy.value = false }
   }
 
   async function deleteConversation(id: string) {
@@ -397,6 +434,7 @@ export const useChatStore = defineStore('chat', () => {
     uploading, pendingAttachments, imageFallbackTools, uploadFiles,
     conversations, activeConversationId, activeConversation, sortedConversations, messages,
     isStreaming, isPreparing, canSend, inputText, useRag, allowAgent, selectedSkillId, selectedProviderId, selectedModel, historyError, contextNotice,
+    pendingBudget, budgetDecisionBusy, budgetError, resolveBudget,
     loadConversations, setActiveConversation, sendMessage, stopGeneration, createNewConversation, deleteConversation, retryMessage, switchVersion,
   }
 })

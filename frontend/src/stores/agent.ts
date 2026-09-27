@@ -69,10 +69,15 @@ export const useAgentStore = defineStore('agent', () => {
       offset += resp.items.length
       if (!resp.items.length || offset >= resp.total) break
     } while (true)
-    const active = runs.value.find(run => run.run_id === activeRunId.value)
-    const merged = new Map(items.map(item => [item.run_id, item]))
-    if (active && !merged.has(active.run_id)) merged.set(active.run_id, active)
-    runs.value = [...merged.values()]
+    // The server list is scoped to the current vault. Keeping an active run
+    // from the previous list could leak a legacy or another vault's run here.
+    runs.value = items
+    if (activeRunId.value && !items.some(run => run.run_id === activeRunId.value)) {
+      stopStream()
+      resetEvents()
+      activeRunId.value = null
+      isRunning.value = false
+    }
   }
 
   async function loadRun(runId: string) {

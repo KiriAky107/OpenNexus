@@ -233,6 +233,49 @@ def prepare_retry(conversation_id: str, message_id: str):
         return dict(row)
 
 
+_READ_ONLY_CHAT_TOOLS = {
+    'rag.search', 'agent.search_tools', 'agent.list', 'agent.inspect',
+    'agent.status', 'agent.collaboration_status',
+}
+
+
+def retry_write_policy(conversation_id: str, message_id: str) -> str:
+    """Classify safe regeneration across all answers to the same user turn.
+
+    A repeated agent.create uses a stable idempotency key for that user turn;
+    all other attempted writes (including errors) require a new explicit turn.
+    Edited user messages keep the stricter read-only rule.
+    """
+    with closing(connect()) as conn:
+        target = conn.execute(
+            'SELECT role, parent_message_id FROM chat_messages WHERE conversation_id=? AND message_id=?',
+            (conversation_id, message_id),
+        ).fetchone()
+        if target is None or target['role'] != 'assistant':
+            return 'read_only'
+        siblings = conn.execute(
+            'SELECT tool_calls_json FROM chat_messages WHERE conversation_id=? AND parent_message_id=? AND role=?',
+            (conversation_id, target['parent_message_id'], 'assistant'),
+        ).fetchall()
+        create_attempted = False
+        for sibling in siblings:
+            try:
+                calls = json.loads(sibling['tool_calls_json'])
+            except (TypeError, ValueError):
+                return 'read_only'
+            if not isinstance(calls, list):
+                return 'read_only'
+            for call in calls:
+                if not isinstance(call, dict):
+                    return 'read_only'
+                name = call.get('name')
+                if name == 'agent.create':
+                    create_attempted = True
+                elif name not in _READ_ONLY_CHAT_TOOLS:
+                    return 'read_only'
+        return 'create_only' if create_attempted else 'full'
+
+
 def select_version(conversation_id: str, message_id: str):
     with closing(connect()) as conn, transaction(conn):
         row = conn.execute('SELECT message_id FROM chat_messages WHERE conversation_id=? AND message_id=?', (conversation_id, message_id)).fetchone()

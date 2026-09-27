@@ -5,6 +5,177 @@ from app.contracts import ChatRequest, Message, ModelCapability, ModelEventType 
 from app.services import chat_retrieval as service
 
 
+def test_chat_coordination_budget_pauses_and_resumes_without_replaying_tools(monkeypatch):
+    from app.services import chat_budget
+    model_calls = []
+    async def prepare(request):
+        return request, []
+    monkeypatch.setattr(service, 'prepare', prepare)
+    class Adapter:
+        async def stream(self, request):
+            model_calls.append(request)
+            if len(model_calls) == 1:
+                yield service.event(E.tool_call_start, {'tool_call_id': 'search', 'name': 'rag.search', 'arguments': {'query': 'test'}})
+                yield service.event(E.usage, {'input_tokens': 48000, 'output_tokens': 10})
+            else:
+                yield service.event(E.text_delta, {'text': 'finished'})
+            yield service.event(E.done, {})
+    provider = SimpleNamespace(adapter=Adapter(), config=SimpleNamespace(capabilities=[ModelCapability.tool_calling]))
+    request = ChatRequest(provider_id='x', model='x', conversation_id='chat', assistant_message_id='answer',
+        messages=[Message(role='user', content='question')])
+    async def run():
+        stream = service.stream(request, provider)
+        before = []
+        while True:
+            item = await anext(stream)
+            before.append(item)
+            if item.event == E.budget_required:
+                break
+        assert len(model_calls) == 1
+        assert sum(item.event == E.tool_call_end for item in before) == 1
+        pending = before[-1].data
+        assert pending['minimum_additional_tokens'] == 11
+        chat_budget.resolve(pending['request_id'], 'chat', 'answer', 8000)
+        after = [item async for item in stream]
+        assert len(model_calls) == 2
+        assert [item.event for item in after].count(E.budget_resolved) == 1
+        assert [item.event for item in after].count(E.tool_call_start) == 0
+        assert any(item.event == E.text_delta and item.data['text'] == 'finished' for item in after)
+        assert after[-1].data['status'] == 'completed'
+    asyncio.run(run())
+
+
+def test_chat_budget_stop_prevents_unexecuted_agent_call(monkeypatch):
+    from app.services import chat_agents, chat_budget
+    executed = []
+    async def execute(call, request):
+        executed.append(call)
+        return {'run_id': 'run_new', 'status': 'queued'}
+    monkeypatch.setattr(chat_agents, 'execute', execute)
+    class Adapter:
+        async def stream(self, request):
+            yield service.event(E.tool_call_start, {'tool_call_id': 'start', 'name': 'agent.create', 'arguments': {'input': 'work'}})
+            yield service.event(E.usage, {'input_tokens': 45000, 'output_tokens': 1})
+            yield service.event(E.done, {})
+    provider = SimpleNamespace(adapter=Adapter(), config=SimpleNamespace(capabilities=[ModelCapability.chat, ModelCapability.tool_calling]))
+    request = ChatRequest(provider_id='x', model='x', conversation_id='chat-stop', assistant_message_id='answer-stop',
+        allow_agent=True, use_rag=False, messages=[Message(role='user', content='work')])
+    async def run():
+        stream = service.stream(request, provider)
+        before = []
+        while True:
+            item = await anext(stream)
+            before.append(item)
+            if item.event == E.budget_required:
+                break
+        assert executed == []
+        assert before[-1].data['reason'] == 'agent_reservation'
+        chat_budget.resolve(before[-1].data['request_id'], 'chat-stop', 'answer-stop', 0)
+        after = [item async for item in stream]
+        assert executed == []
+        assert any(item.event == E.tool_call_end and item.data['result']['code'] == 'CHAT_BUDGET_STOPPED' for item in after)
+        assert after[-1].data['status'] == 'cancelled'
+    asyncio.run(run())
+
+
+def test_chat_budget_approval_executes_pending_agent_call_once(monkeypatch):
+    from app.services import chat_agents, chat_budget
+    from app.container import container
+    executed = []
+    async def execute(call, request):
+        executed.append(call.tool_call_id)
+        return {'run_id': 'run_new', 'status': 'queued'}
+    monkeypatch.setattr(chat_agents, 'execute', execute)
+    monkeypatch.setattr(container.agent, 'get_run', lambda _: SimpleNamespace(
+        conversation_id='chat-continue', status=SimpleNamespace(value='completed'),
+        output='finished work', error_message=None))
+    class Adapter:
+        def __init__(self): self.rounds = 0
+        async def stream(self, request):
+            self.rounds += 1
+            if self.rounds == 1:
+                yield service.event(E.tool_call_start, {'tool_call_id': 'start', 'name': 'agent.create', 'arguments': {'input': 'work'}})
+                yield service.event(E.usage, {'input_tokens': 45000, 'output_tokens': 1})
+            else:
+                assert request.messages[-1].role.value == 'tool'
+                yield service.event(E.text_delta, {'text': 'Task started'})
+            yield service.event(E.done, {})
+    adapter = Adapter()
+    provider = SimpleNamespace(adapter=adapter, config=SimpleNamespace(capabilities=[ModelCapability.chat, ModelCapability.tool_calling]))
+    request = ChatRequest(provider_id='x', model='x', conversation_id='chat-continue', assistant_message_id='answer-continue',
+        allow_agent=True, use_rag=False, messages=[Message(role='user', content='work')])
+    async def run():
+        stream = service.stream(request, provider)
+        while (item := await anext(stream)).event != E.budget_required:
+            pass
+        assert executed == []
+        chat_budget.resolve(item.data['request_id'], 'chat-continue', 'answer-continue', 8000)
+        after = [event async for event in stream]
+        assert executed == ['retrieval_0_start']
+        assert adapter.rounds == 2
+        assert any(event.event == E.tool_call_end and event.data.get('result', {}).get('run_id') == 'run_new' for event in after)
+        assert after[-1].data['status'] == 'completed'
+    asyncio.run(run())
+
+
+def test_chat_waits_for_agent_budget_decision_and_real_result(monkeypatch):
+    from app.container import container
+    from app.services import chat_agents
+
+    state = {'status': 'queued'}
+    async def execute(call, request):
+        return {'run_id': 'run_wait', 'status': 'queued'}
+    def get_run(run_id):
+        assert run_id == 'run_wait'
+        return SimpleNamespace(conversation_id='chat-wait',
+            status=SimpleNamespace(value=state['status']),
+            output='笔记已实际写入' if state['status'] == 'completed' else None,
+            error_message=None)
+    monkeypatch.setattr(chat_agents, 'execute', execute)
+    monkeypatch.setattr(container.agent, 'get_run', get_run)
+    monkeypatch.setattr(service, 'AGENT_POLL_SECONDS', .001)
+
+    class Adapter:
+        def __init__(self): self.rounds = 0
+        async def stream(self, request):
+            self.rounds += 1
+            if self.rounds == 1:
+                yield service.event(E.tool_call_start, {'tool_call_id': 'create', 'name': 'agent.create', 'arguments': {'input': '写入笔记'}})
+            else:
+                assert request.messages[-1].role.value == 'tool'
+                assert '笔记已实际写入' in request.messages[-1].content
+                yield service.event(E.text_delta, {'text': '笔记已写入。'})
+            yield service.event(E.done, {})
+
+    async def run():
+        request = ChatRequest(provider_id='x', model='x', conversation_id='chat-wait',
+            assistant_message_id='answer-wait', allow_agent=True, use_rag=False,
+            messages=[Message(role='user', content='写入笔记')])
+        provider = SimpleNamespace(adapter=Adapter(), config=SimpleNamespace(
+            capabilities=[ModelCapability.chat, ModelCapability.tool_calling]))
+        stream = service.stream(request, provider)
+        before = []
+        while True:
+            item = await anext(stream)
+            before.append(item)
+            if item.event == E.tool_call_delta and item.data.get('result', {}).get('run_id') == 'run_wait':
+                break
+        assert not any(item.event == E.done for item in before)
+        state['status'] = 'waiting_budget'
+        paused = []
+        while not any(item.event == E.context_status and '预算确认' in item.data['message'] for item in paused):
+            paused.append(await asyncio.wait_for(anext(stream), timeout=1))
+        assert not any(item.event in {E.tool_call_end, E.done} for item in paused)
+        state['status'] = 'completed'
+        after = [item async for item in stream]
+        result = next(item.data['result'] for item in after if item.event == E.tool_call_end)
+        assert result['status'] == 'completed'
+        assert result['output'] == '笔记已实际写入'
+        assert any(item.event == E.text_delta and item.data['text'] == '笔记已写入。' for item in after)
+        assert after[-1].data['status'] == 'completed'
+    asyncio.run(run())
+
+
 def test_stream_searches_again_and_preserves_numbers(monkeypatch):
     seen = []
     async def prepare(request):
