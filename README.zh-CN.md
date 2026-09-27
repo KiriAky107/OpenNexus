@@ -266,9 +266,9 @@ erDiagram
 
 | 项目仓库 | 职责定位 | 技术实现 |
 | --- | --- | --- |
-| **[OpenNexus](https://github.com/KiriAky107/OpenNexus?utm_source=gemini)** | 桌面主程序与内置 AI 核心引擎 | Tauri 2, Rust, Vue 3, FastAPI |
-| **[Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus?utm_source=gemini)** | 可选的自建端到端加密同步后端 | Rust / Go, PostgreSQL, S3 |
-| **[Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus?utm_source=gemini)** | 官方与社区插件、技能、预设模板中心 | 静态托管服务 / 包注册表原型 |
+| **[OpenNexus](https://github.com/KiriAky107/OpenNexus)** | 桌面主程序与内置 AI 核心引擎 | Tauri 2, Rust, Vue 3, FastAPI |
+| **[Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus)** | 可选的自建端到端加密同步后端 | Rust / Go, PostgreSQL, S3 |
+| **[Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus)** | 官方与社区插件、技能、预设模板中心 | 静态托管服务 / 包注册表原型 |
 
 ---
 
