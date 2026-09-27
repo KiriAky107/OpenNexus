@@ -268,9 +268,9 @@ To keep dependencies clean and packaging predictable, services are maintained in
 
 | Repository | Scope | Stack |
 | --- | --- | --- |
-| **[OpenNexus](https://github.com/KiriAky107/OpenNexus?utm_source=gemini)** | Desktop Application & AI Core | Tauri 2, Rust, Vue 3, FastAPI |
-| **[Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus?utm_source=gemini)** | Optional E2EE Sync Server | Rust / Go, PostgreSQL, S3 |
-| **[Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus?utm_source=gemini)** | Plugin catalog, skills, and templates | Static Catalog & Registry |
+| **[OpenNexus](https://github.com/KiriAky107/OpenNexus)** | Desktop Application & AI Core | Tauri 2, Rust, Vue 3, FastAPI |
+| **[Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus)** | Optional E2EE Sync Server | Rust / Go, PostgreSQL, S3 |
+| **[Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus)** | Plugin catalog, skills, and templates | Static Catalog & Registry |
 
 ---
 
@@ -282,7 +282,7 @@ To keep dependencies clean and packaging predictable, services are maintained in
 | --- | --- |
 | **OS** | Windows 10/11 x64 |
 | **Node.js** | `>= 22.0.0` (with `pnpm 10.28.0` via corepack) |
-| **Python** | `>= 3.11` (managed via [`uv`](https://github.com/astral-sh/uv?utm_source=gemini)) |
+| **Python** | `>= 3.11` (managed via [`uv`](https://github.com/astral-sh/uv)) |
 | **Rust** | Current stable toolchain (`x86_64-pc-windows-msvc`) |
 | **WebView2** | Microsoft Edge WebView2 runtime |
 
@@ -364,7 +364,7 @@ The output installer will be generated in `frontend/src-tauri/target/release/bun
 * **Local Computation First**: Vault notes are processed strictly on-device unless external network providers are configured.
 * **Credential Protection**: Model keys are stored in the OS Credential Vault; they are never accessible to Web content or stored in `localStorage`.
 * **Scoped File Access**: The native host validates every path against the actively mounted vault root. Path traversal escapes are strictly blocked.
-* **Vulnerability Reporting**: Found a security issue? Please report it privately through GitHub's [Private Vulnerability Reporting](https://www.google.com/search?q=https://github.com/KiriAky107/OpenNexus/security/advisories/new&utm_source=gemini).
+* **Vulnerability Reporting**: Found a security issue? Please report it privately through GitHub's [Private Vulnerability Reporting](https://github.com/KiriAky107/OpenNexus/security/advisories/new).
 
 ---
 
@@ -372,7 +372,7 @@ The output installer will be generated in `frontend/src-tauri/target/release/bun
 
 We welcome contributions of all scopes! To maintain engineering velocity:
 
-1. **Commit Convention**: Follow [Conventional Commits](https://www.conventionalcommits.org/?utm_source=gemini):
+1. **Commit Convention**: Follow [Conventional Commits](https://www.conventionalcommits.org):
 * `feat(agent): add tool execution retry logic`
 * `fix(editor): prevent cursor jump during markdown table edit`
 * `test(media): add regression coverage for corrupted audio chunks`
@@ -381,10 +381,10 @@ We welcome contributions of all scopes! To maintain engineering velocity:
 2. **Atomic Changes**: Keep PRs scoped to one logical concern. Include relevant unit tests and UI screenshots where applicable.
 3. **Synchronized Documentation**: Update both `README.md` and `README.zh-CN.md` when proposing developer- or user-facing changes.
 
-See our [Contributing Guide](https://www.google.com/search?q=CONTRIBUTING.md&utm_source=gemini) and [Code of Conduct](https://www.google.com/search?q=CODE_OF_CONDUCT.md&utm_source=gemini) for full details.
+See our [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) for full details.
 
 ---
 
 ## License
 
-OpenNexus is licensed under the [MIT License](https://www.google.com/search?q=LICENSE&utm_source=gemini). Third-party dependencies, bundled fonts, and model runtimes remain governed by their respective licenses.
+OpenNexus is licensed under the [MIT License](LICENSE). Third-party dependencies, bundled fonts, and model runtimes remain governed by their respective licenses.
