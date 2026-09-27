@@ -280,7 +280,7 @@ erDiagram
 | --- | --- |
 | **操作系统** | Windows 10/11 x64 |
 | **Node.js** | `>= 22.0.0`（通过 corepack 启用 `pnpm 10.28.0`） |
-| **Python** | `>= 3.11`（推荐通过 [`uv`](https://github.com/astral-sh/uv?utm_source=gemini) 管理） |
+| **Python** | `>= 3.11`（推荐通过 [`uv`](https://github.com/astral-sh/uv) 管理） |
 | **Rust** | 最新稳定版 Toolchain（带 `x86_64-pc-windows-msvc` target） |
 | **WebView2** | 系统预装 Microsoft Edge WebView2 Runtime |
 
@@ -362,7 +362,7 @@ pnpm desktop:build
 * **本地优先计算**：笔记内容全程保存在本地。除非显式配置并启用了第三方云端模型或同步扩展，否则绝无后台上传行为。
 * **敏感凭证防泄漏**：模型提供商 API 密钥交由操作系统凭据安全区保管，杜绝存放在前端 `localStorage` 或代码仓库中。
 * **受限沙箱路径**：原生宿主对所有传入的文件操作进行越界校验（Directory Traversal 防御），拒绝访问指定 Vault 以外的任何磁盘路径。
-* **安全漏洞汇报**：如发现可利用的安全缺陷，请勿直接公开提 Issue，请通过 [GitHub 私密漏洞上报渠道](https://www.google.com/search?q=https://github.com/KiriAky107/OpenNexus/security/advisories/new&utm_source=gemini) 提交。
+* **安全漏洞汇报**：如发现可利用的安全缺陷，请勿直接公开提 Issue，请通过 [GitHub 私密漏洞上报渠道](https://github.com/KiriAky107/OpenNexus/security/advisories/new) 提交。
 
 ---
 
@@ -370,7 +370,7 @@ pnpm desktop:build
 
 我们欢迎社区各种形式的代码贡献与反馈！为了保证项目的工程演进速度，请遵循以下规范：
 
-1. **Commit 规范**：使用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/?utm_source=gemini) 提交信息格式：
+1. **Commit 规范**：使用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans) 提交信息格式：
 * `feat(agent): 新增工具调用的自动重试机制`
 * `fix(editor): 修复表格编辑模式下的光标跳跃异常`
 * `test(media): 补充音视频损坏数据块的容错回归测试`
@@ -379,10 +379,10 @@ pnpm desktop:build
 2. **变更原则**：保持单个 PR 职责单一（Atomic Change）。包含破坏性改动或界面变动时，请附带测试用例或前后效果对比图。
 3. **文档同步**：修改涉密协议、配置项或通用交互时，请同步更新 `README.md` 与 `README.zh-CN.md`。
 
-详见 [贡献指南](https://www.google.com/search?q=CONTRIBUTING.md&utm_source=gemini) 与 [行为准则](https://www.google.com/search?q=CODE_OF_CONDUCT.md&utm_source=gemini)。
+详见 [贡献指南](CONTRIBUTING.md) 与 [行为准则](CODE_OF_CONDUCT.md)。
 
 ---
 
 ## 开源协议
 
-OpenNexus 核心代码基于 [MIT License](https://www.google.com/search?q=LICENSE&utm_source=gemini) 授权开源。所引用的第三方库、字体、分发运行时以及大语言模型权重遵循其各自独立的开源协议与版权声明。
+OpenNexus 核心代码基于 [MIT License](LICENSE) 授权开源。所引用的第三方库、字体、分发运行时以及大语言模型权重遵循其各自独立的开源协议与版权声明。
