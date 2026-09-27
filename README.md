@@ -145,6 +145,27 @@ stateDiagram-v2
 
 ```
 
+### 3. Multi-Agent Collaboration
+
+From AI Chat or the Agents page, users can combine existing agents and assign tasks and dependencies. Once the collaboration plan is confirmed, ready members run in parallel, completed outputs feed dependent members, and the results and artifacts are collected in one place:
+
+```mermaid
+flowchart TD
+    A["Start a collaboration"] --> B["Select agents, tasks, and dependencies"]
+    B --> C{"Confirm the plan"}
+    C -- Confirm --> D["Schedule ready members"]
+    C -- Cancel --> X["End"]
+    D --> E["Run independent members in parallel"]
+    E --> F{"More tokens needed?"}
+    F -- Yes --> G["Pause for user confirmation"]
+    G -- Continue --> E
+    F -- No --> H["Record outputs for dependent members"]
+    H --> I{"Pending members?"}
+    I -- Yes --> D
+    I -- No --> J["Collect member status, artifacts, and run history"]
+
+```
+
 ---
 
 ## Architecture
