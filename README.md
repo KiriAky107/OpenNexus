@@ -20,7 +20,7 @@
   </p>
 
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.7-alpha2"><img src="https://img.shields.io/badge/Release-0.5.7--alpha2-5865f2?style=flat-square" alt="Version" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha1"><img src="https://img.shields.io/badge/Release-0.5.8--alpha1-5865f2?style=flat-square" alt="Version" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="Platform" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="Desktop Tauri" />
     <img src="https://img.shields.io/badge/Frontend-Vue_3-42b883?style=flat-square" alt="Frontend Vue" />
@@ -33,7 +33,7 @@
 
 ---
 
-> ⚠️ **Alpha Notice**: OpenNexus is currently in active alpha (`v0.5.7-alpha2`). Storage schemas, IPC contracts, and extension APIs are evolving. Always back up critical Markdown vaults before updating.
+> ⚠️ **Alpha Notice**: OpenNexus is currently in active alpha (`v0.5.8-alpha1`). Storage schemas, IPC contracts, and extension APIs are evolving. Always back up critical Markdown vaults before updating.
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 0.5.6-alpha2 editor toolbar, outline, formulas, and Mermaid diagram" width="95%" />
@@ -66,6 +66,7 @@
 - 🔍 **Hybrid Local Retrieval**: Combines SQLite FTS5 lexical matching with local vector embeddings using Reciprocal Rank Fusion (RRF) and optional reranking.
 - 🎙️ **Media-to-Knowledge**: Turn lecture recordings, podcasts, and meetings into timestamped transcripts, Mermaid diagrams, formulas, and structured notes.
 - 🛡️ **Inspectable Autonomous Agents**: Every tool execution, permission boundary, and state change is snapshotted and auditable. No hidden background magic.
+- 🤝 **Chat-directed Agent Workflows**: Create reusable or one-off Agents from chat, review multi-Agent plans, and follow reasoning, tool calls, and replies in execution order. Token limits pause for a user decision instead of silently ending the turn.
 - 🔌 **Extensible Ecosystem**: Built-in support for MCP (Model Context Protocol) servers, custom plugins, and reviewed community packages.
 - ⚡ **Strict Local-First Security**: Secrets stay securely stored in the native credential manager. The frontend WebView never touches raw API keys or unrestricted file paths.
 
@@ -75,10 +76,10 @@
 
 ### Windows Desktop (Recommended)
 
-1. Grab the latest installer: [`OpenNexus_0.5.7-alpha2_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.7-alpha2).
+1. Grab the latest installer: [`OpenNexus_0.5.8-alpha1_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha1).
 2. *(Optional)* Verify integrity via PowerShell:
 ```powershell
-   Get-FileHash .\OpenNexus_0.5.7-alpha2_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.5.8-alpha1_x64-setup.exe -Algorithm SHA256
    # Compare with SHA256SUMS.txt from the same release.
 
 ```

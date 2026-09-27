@@ -19,7 +19,7 @@
     <a href="https://github.com/KiriAky107/OpenNexus/releases">发布日志</a>
   </p>
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.7-alpha2"><img src="https://img.shields.io/badge/Release-0.5.7--alpha2-5865f2?style=flat-square" alt="版本" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha1"><img src="https://img.shields.io/badge/Release-0.5.8--alpha1-5865f2?style=flat-square" alt="版本" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="平台" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="桌面端 Tauri" />
     <img src="https://img.shields.io/badge/Frontend-Vue_3-42b883?style=flat-square" alt="前端 Vue" />
@@ -32,7 +32,7 @@
 
 ---
 
-> ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.7-alpha2`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
+> ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.8-alpha1`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 0.5.6-alpha2 编辑器工具栏、大纲、公式与 Mermaid 图表" width="95%" />
@@ -65,6 +65,7 @@
 - 🔍 **本地混合检索 (Hybrid Local Retrieval)**：整合 SQLite FTS5 全文搜索与本地向量嵌入（sqlite-vec），引入倒数排名融合（RRF）与可选重排机制（Rerank）。
 - 🎙️ **媒体直转知识 (Media-to-Knowledge)**：一键导入课程、会议或播客音视频，生成时间戳对齐的逐字稿，并智能提炼包含 Mermaid 流程图、数学公式的结构化笔记。
 - 🛡️ **可审计的自主智能体 (Inspectable Autonomous Agents)**：严格执行人机协同权限授权（Human-in-the-Loop）。所有工具调用、状态流转与执行记录均可回溯与断点恢复。
+- 🤝 **对话驱动的智能体协作**：可在对话中创建可复用或临时智能体，审核多智能体分工，并按发生顺序查看思考、工具调用与回复；达到 Token 上限时由用户决定是否继续。
 - 🔌 **标准扩展生态 (Extensible Ecosystem)**：原生接入 MCP (Model Context Protocol) 协议生态，支持经过安全指纹审计的第三方插件与扩展包。
 - ⚡ **原生安全边界 (Strict Local-First Security)**：API 密钥统一托管于操作系统凭据管理器（Credential Vault）。前端 WebView 永远无法接触明文凭证或越权访问文件系统。
 
@@ -74,10 +75,10 @@
 
 ### Windows 桌面端安装（推荐）
 
-1. 前往 GitHub Releases 下载最新安装包：[`OpenNexus_0.5.7-alpha2_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.7-alpha2)。
+1. 前往 GitHub Releases 下载最新安装包：[`OpenNexus_0.5.8-alpha1_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha1)。
 2. *(可选)* 通过 PowerShell 校验 SHA-256 完整性：
 ```powershell
-   Get-FileHash .\OpenNexus_0.5.7-alpha2_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.5.8-alpha1_x64-setup.exe -Algorithm SHA256
    # 与同一 Release 中的 SHA256SUMS.txt 比对。
 
 ```
