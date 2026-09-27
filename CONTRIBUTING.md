@@ -16,11 +16,11 @@ Before writing code or filing proposals, ensure your contribution is directed to
 
 | Focus Area | Responsible Repository | Stack |
 | --- | --- | --- |
-| **Desktop App & AI Engine** | **[OpenNexus](https://github.com/KiriAky107/OpenNexus?utm_source=gemini)** *(This Repo)* | Tauri 2 (Rust), Vue 3, FastAPI |
-| **Encrypted Sync Server** | [Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus?utm_source=gemini) | Independent service, PostgreSQL, S3 |
-| **Extension Registry & Skills** | [Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus?utm_source=gemini) | Manifests, catalog distribution |
+| **Desktop App & AI Engine** | **[OpenNexus](https://github.com/KiriAky107/OpenNexus)** *(This Repo)* | Tauri 2 (Rust), Vue 3, FastAPI |
+| **Encrypted Sync Server** | [Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus) | Independent service, PostgreSQL, S3 |
+| **Extension Registry & Skills** | [Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus) | Manifests, catalog distribution |
 
-* **Issue First**: For significant architectural proposals, database schema migrations, contract modifications, or breaking changes, please [open an Issue](https://www.google.com/search?q=https://github.com/KiriAky107/OpenNexus/issues/new/choose&utm_source=gemini) to discuss design trade-offs before investing time in implementation.
+* **Issue First**: For significant architectural proposals, database schema migrations, contract modifications, or breaking changes, please [open an Issue](https://github.com/KiriAky107/OpenNexus/issues/new/choose) to discuss design trade-offs before investing time in implementation.
 * **Synthetic Data Only**: Never commit real user vaults, production API tokens, private IPs, or personal documents. All tests and fixtures must use synthetic, generated mock data.
 
 ---
@@ -98,7 +98,7 @@ Explain any proposed dependency in the PR description, including runtime perform
 
 ## 4. Commit Standards
 
-We enforce the [Conventional Commits](https://www.conventionalcommits.org/?utm_source=gemini) specification:
+We enforce the [Conventional Commits](https://www.conventionalcommits.org) specification:
 
 ```text
 <type>(<scope>): <short imperative summary>
@@ -171,5 +171,5 @@ When your changes are verified and ready:
 
 ## 7. Security & Code of Conduct
 
-* **Security Disclosures**: Never report security vulnerabilities or credentials via public PRs or Issues. Use [GitHub Private Vulnerability Reporting](https://www.google.com/search?q=https://github.com/KiriAky107/OpenNexus/security/advisories/new&utm_source=gemini).
-* **Code of Conduct**: All participants are expected to adhere to our [Code of Conduct](https://www.google.com/search?q=CODE_OF_CONDUCT.md&utm_source=gemini). Please engage with respect, professional rigor, and constructive candor.
+* **Security Disclosures**: Never report security vulnerabilities or credentials via public PRs or Issues. Use [GitHub Private Vulnerability Reporting](https://github.com/KiriAky107/OpenNexus/security/advisories/new).
+* **Code of Conduct**: All participants are expected to adhere to our [Code of Conduct](CODE_OF_CONDUCT.md). Please engage with respect, professional rigor, and constructive candor.
