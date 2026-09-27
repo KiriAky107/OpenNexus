@@ -65,7 +65,7 @@ Community maintainers follow a proportional enforcement ladder to resolve violat
 If you experience or witness behavior that violates this Code of Conduct, report it promptly:
 
 * **General Conduct Violations**: Contact the maintainers via the repository moderation tools or reach out directly to the maintainers listed on GitHub.
-* **Security & Vulnerability Reports**: Do **not** post security bugs, exploit chains, or leaked tokens in public issues. Submit them privately via [GitHub Private Vulnerability Reporting](https://www.google.com/search?q=https://github.com/KiriAky107/OpenNexus/security/advisories/new&utm_source=gemini).
+* **Security & Vulnerability Reports**: Do **not** post security bugs, exploit chains, or leaked tokens in public issues. Submit them privately via [GitHub Private Vulnerability Reporting](https://github.com/KiriAky107/OpenNexus/security/advisories/new).
 
 All reports will be handled with discretion and confidentiality. Retaliation against anyone reporting a violation in good faith will be treated as an immediate Tier 4 violation.
 
