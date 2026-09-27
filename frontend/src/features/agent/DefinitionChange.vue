@@ -29,10 +29,15 @@ async function decide(decision: 'approve' | 'reject') {
   <section class="panel change-card">
     <strong>{{ change?.action === 'delete' ? t('删除智能体配置', 'Delete Agent definition') : t('修改智能体配置', 'Update Agent definition') }} · {{ change?.before.name }}</strong>
     <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
-    <dl v-if="change?.config"><template v-for="field in fields" :key="field"><dt>{{ field }}</dt><dd>{{ change.before[field as keyof AgentChange['before']] }} → {{ change.config[field as keyof AgentChange['before']] }}</dd></template></dl>
+    <dl v-if="change?.config" class="change-list"><template v-for="field in fields" :key="field"><dt>{{ field }}</dt><dd>{{ change.before[field as keyof AgentChange['before']] }} → {{ change.config[field as keyof AgentChange['before']] }}</dd></template></dl>
     <p v-else>{{ t('删除后保留既有运行记录。', 'Existing run history will be retained.') }}</p>
     <div v-if="change?.status === 'pending'" class="inline-actions"><button class="button-primary" :disabled="busy" @click="decide('approve')">{{ t('确认变更', 'Approve change') }}</button><button class="button-secondary" :disabled="busy" @click="decide('reject')">{{ t('拒绝', 'Reject') }}</button></div>
     <p v-else-if="change">{{ change.status === 'approved' ? t('变更已确认', 'Change approved') : t('变更已拒绝', 'Change rejected') }}</p>
   </section>
 </template>
-<style scoped>.change-card { display: grid; gap: var(--space-sm); overflow-wrap: anywhere; } dd { white-space: pre-wrap; margin-bottom: var(--space-sm); }</style>
+<style scoped>
+.change-card { display: grid; gap: var(--space-sm); overflow-wrap: anywhere; color: var(--color-text-primary); }
+.change-list { display: grid; gap: var(--space-xs); }
+.change-list dt { color: var(--color-text-secondary); font-size: var(--font-size-xs); font-weight: 600; }
+.change-list dd { margin-bottom: var(--space-sm); padding: var(--space-sm); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-surface-secondary); white-space: pre-wrap; }
+</style>

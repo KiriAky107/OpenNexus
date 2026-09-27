@@ -74,6 +74,10 @@ async function decide(continueRun: boolean) {
 </template>
 
 <style scoped>
-.budget-notice { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-md); }
-.budget-modal { display: grid; gap: var(--space-md); width: min(560px, 100%); }
+.budget-notice { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-md); border-color: color-mix(in srgb, var(--color-callout-warning) 35%, var(--color-border-default)); background: color-mix(in srgb, var(--color-callout-warning) 8%, var(--color-surface-primary)); color: var(--color-text-primary); }
+.budget-notice > p { flex: 1 1 250px; }
+.budget-modal { display: grid; gap: var(--space-md); width: min(560px, 100%); color: var(--color-text-primary); }
+.budget-modal h2 { margin-bottom: 0; color: var(--color-callout-warning); }
+.budget-modal > label { color: var(--color-text-secondary); font-weight: 600; }
+.budget-modal > .inline-actions { gap: var(--space-sm); }
 </style>

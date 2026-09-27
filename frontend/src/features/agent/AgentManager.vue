@@ -109,12 +109,12 @@ async function plan() {
       <label>{{ t('指令', 'Instructions') }}<textarea v-model="form.instructions" maxlength="12000" class="textarea" /></label>
       <div class="form-grid"><label>{{ t('提供商', 'Provider') }}<select v-model="form.provider_id" class="select" required><option v-for="provider in providers.enabledProviders" :key="provider.provider_id" :value="provider.provider_id">{{ provider.name }}</option></select></label>
       <label>{{ t('模型', 'Model') }}<input v-model="form.model" class="input" required /></label>
-      <label><span>{{ t('设置 Token 预算上限', 'Set a token budget limit') }}</span><input type="checkbox" :checked="form.token_budget !== null" @change="form.token_budget = ($event.target as HTMLInputElement).checked ? 8000 : null" /></label>
+      <label class="checkbox-row"><span>{{ t('设置 Token 预算上限', 'Set a token budget limit') }}</span><input type="checkbox" :checked="form.token_budget !== null" @change="form.token_budget = ($event.target as HTMLInputElement).checked ? 8000 : null" /></label>
       <label v-if="form.token_budget !== null">{{ t('Token 预算', 'Token budget') }}<input v-model.number="form.token_budget" class="input" type="number" min="1" max="1000000" required /></label>
       <label>{{ t('步骤上限', 'Step limit') }}<input v-model.number="form.max_steps" class="input" type="number" min="1" max="30" required /></label></div>
-      <label><input v-model="form.enabled" type="checkbox" />{{ t('启用此配置', 'Enable this definition') }}</label>
+      <label class="checkbox-row"><input v-model="form.enabled" type="checkbox" />{{ t('启用此配置', 'Enable this definition') }}</label>
       <p class="subtle">{{ t('手动创建默认不设 Token 上限；步骤、执行时限和提供商限制仍然有效。由聊天委托或加入协作时，仍受该次委托或协作整体预算约束。', 'Manual definitions default to no token limit. Step, timeout and provider limits still apply. Chat delegation and collaboration retain their own overall budgets.') }}</p>
-      <details class="ui-disclosure"><summary>{{ t('可用工具', 'Available tools') }} · {{ form.tools.length }}/20</summary><div class="tool-options"><label v-for="tool in agentStore.tools.filter(item => item.permission !== 'network.request' && !item.name.startsWith('agent.'))" :key="tool.name"><input v-model="form.tools" type="checkbox" :value="tool.name" :disabled="form.tools.length >= 20 && !form.tools.includes(tool.name)" />{{ tool.name }} · {{ tool.description }}</label></div></details>
+      <details class="ui-disclosure"><summary>{{ t('可用工具', 'Available tools') }} · {{ form.tools.length }}/20</summary><div class="tool-options"><label v-for="tool in agentStore.tools.filter(item => item.permission !== 'network.request' && !item.name.startsWith('agent.'))" :key="tool.name" class="checkbox-row"><input v-model="form.tools" type="checkbox" :value="tool.name" :disabled="form.tools.length >= 20 && !form.tools.includes(tool.name)" />{{ tool.name }} · {{ tool.description }}</label></div></details>
       <div class="inline-actions"><button class="button-primary" :disabled="busy">{{ t('审阅并保存', 'Review and save') }}</button><button type="button" class="button-secondary" @click="showForm = false">{{ t('关闭', 'Close') }}</button><button v-if="editing" type="button" class="button-danger" @click="confirm = 'delete'">{{ t('删除配置', 'Delete definition') }}</button></div>
     </form>
     <details class="ui-disclosure"><summary>{{ t('使用已有配置运行任务', 'Run a saved Agent') }}</summary><form class="config-form" @submit.prevent="start">
@@ -125,7 +125,7 @@ async function plan() {
     <RunActivity v-if="launched" :run-id="launched" />
     <details class="ui-disclosure"><summary>{{ t('安排多智能体协作', 'Plan multi-Agent work') }}</summary><form class="config-form" @submit.prevent="plan">
       <label>{{ t('协作名称', 'Collaboration title') }}<input v-model="title" class="input" required maxlength="200" /></label>
-      <div v-for="member in members" :key="member.member_id" class="panel config-form"><strong>{{ member.member_id }}</strong>
+      <div v-for="member in members" :key="member.member_id" class="panel config-form member-config"><strong>{{ member.member_id }}</strong>
         <select v-model="member.agent_id" class="select" required :aria-label="`${member.member_id} Agent`"><option value="">{{ t('选择智能体', 'Choose Agent') }}</option><option v-for="definition in definitions.filter(item => item.config.enabled)" :key="definition.id" :value="definition.id">{{ definition.config.name }}</option></select>
         <textarea v-model="member.input" class="textarea" required :aria-label="`${member.member_id} ${t('任务', 'task')}`" :placeholder="t('此成员负责的任务', 'Task for this member')" />
         <label>{{ t('依赖成员编号（逗号分隔，留空表示并行）', 'Dependency IDs (comma-separated; empty for parallel)') }}<input v-model="member.dependencies" class="input" placeholder="member1" /></label>
@@ -139,18 +139,25 @@ async function plan() {
     <AppDialog v-if="confirm" :label="t('确认配置变更', 'Confirm configuration change')" @close="confirm = null"><div class="modal config-form"><h2>{{ confirm === 'delete' ? t('删除配置？', 'Delete definition?') : t('保存配置？', 'Save definition?') }}</h2>
       <p>{{ form.name }} · {{ form.model }} · {{ form.enabled ? t('启用', 'Enabled') : t('停用', 'Disabled') }}</p>
       <p>{{ t('工具范围', 'Tools') }}: {{ form.tools.join(', ') || t('无', 'None') }}</p><p>Token: {{ form.token_budget ?? t('不设上限', 'No limit') }} · {{ t('最大步骤', 'Maximum steps') }}: {{ form.max_steps }}</p>
-      <details v-if="editing"><summary>{{ t('查看修改前配置', 'Review previous configuration') }}</summary><pre>{{ JSON.stringify(editing.config, null, 2) }}</pre></details>
+      <details v-if="editing" class="ui-disclosure"><summary>{{ t('查看修改前配置', 'Review previous configuration') }}</summary><pre>{{ JSON.stringify(editing.config, null, 2) }}</pre></details>
       <p>{{ t('已启动的任务保留启动时的配置。工具执行仍按权限规则确认。', 'Existing runs retain their snapshots. Tool execution still follows permission checks.') }}</p>
       <div class="inline-actions"><button class="button-primary" :disabled="busy" @click="confirm === 'delete' ? remove() : save()">{{ t('确认', 'Confirm') }}</button><button class="button-secondary" @click="confirm = null">{{ t('取消', 'Cancel') }}</button></div>
     </div></AppDialog>
   </section>
 </template>
 <style scoped>
-.manager, .config-form { display: grid; gap: var(--space-md); }
+.manager, .config-form { display: grid; gap: var(--space-md); min-width: 0; }
 .definition-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: var(--space-md); }
-.definition { display: grid; gap: var(--space-sm); overflow-wrap: anywhere; }
+.definition { display: grid; align-content: start; gap: var(--space-sm); overflow-wrap: anywhere; background: var(--color-surface-secondary); }
+.definition > .badge { justify-self: start; }
+.definition > small { color: var(--color-text-secondary); }
+.definition > .button-secondary { justify-self: start; }
 .config-form label { display: grid; gap: var(--space-xs); }
-.tool-options { max-height: 280px; overflow: auto; display: grid; gap: var(--space-sm); }
-.tool-options label { display: block; }
-pre { white-space: pre-wrap; max-height: 240px; overflow: auto; }
+.config-form .checkbox-row, .tool-options .checkbox-row { display: flex; align-items: center; gap: var(--space-sm); color: var(--color-text-primary); }
+.config-form .checkbox-row:has(input:last-child) { justify-content: space-between; }
+.tool-options { max-height: 280px; overflow: auto; display: grid; gap: var(--space-xs); }
+.tool-options .checkbox-row { padding: var(--space-sm); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-surface-secondary); }
+.tool-options .checkbox-row:hover { background: var(--color-background-hover); }
+.member-config { border-color: var(--color-border-default); background: var(--color-surface-secondary); }
+pre { max-height: 240px; overflow: auto; padding: var(--space-sm); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-background-secondary); color: var(--color-text-primary); white-space: pre-wrap; font: var(--font-size-xs)/1.6 var(--font-ui-mono); user-select: text; }
 </style>

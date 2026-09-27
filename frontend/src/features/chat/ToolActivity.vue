@@ -19,14 +19,21 @@ const title = computed(() => ({ 'agent.define': t('创建智能体配置', 'Crea
 </script>
 <template>
   <div class="tool-activity">
-    <details class="ui-disclosure tool-calls"><summary>{{ title }} <span class="badge">{{ statusLabel(call.status) }}</span> {{ objectName }}</summary>
+    <details class="ui-disclosure tool-calls"><summary>{{ title }} <span class="badge" :class="{ success: call.status === 'completed', error: ['failed', 'error'].includes(call.status), info: call.status === 'running' }">{{ statusLabel(call.status) }}</span> {{ objectName }}</summary>
       <p v-if="result.status">{{ t('返回状态', 'Returned status') }}: {{ statusLabel(String(result.status)) }}</p>
-      <p v-if="call.error_message" role="alert">{{ call.error_message }}</p>
-      <details><summary>{{ t('参数与返回详情', 'Parameters and result') }}</summary><pre>{{ JSON.stringify({ parameters: call.parameters, result }, null, 2) }}</pre></details>
+      <p v-if="call.error_message" class="tool-error" role="alert">{{ call.error_message }}</p>
+      <details class="ui-disclosure tool-result"><summary>{{ t('参数与返回详情', 'Parameters and result') }}</summary><pre>{{ JSON.stringify({ parameters: call.parameters, result }, null, 2) }}</pre></details>
     </details>
     <RunActivity v-if="identifier('run_id', 'run')" :run-id="identifier('run_id', 'run')" />
     <CollaborationCard v-if="identifier('collaboration_id', 'collaboration')" :id="identifier('collaboration_id', 'collaboration')" />
     <DefinitionChange v-if="identifier('change_id', 'change')" :id="identifier('change_id', 'change')" />
   </div>
 </template>
-<style scoped>.tool-activity { margin-block: var(--space-sm); min-width: 0; } pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--font-size-xs); } summary { cursor: pointer; }</style>
+<style scoped>
+.tool-activity { margin-block: var(--space-sm); min-width: 0; }
+.tool-calls { background: var(--color-surface-secondary); }
+.tool-calls > summary { flex-wrap: wrap; }
+.tool-result { margin-top: var(--space-sm); background: var(--color-surface-primary); }
+.tool-result pre { max-height: 240px; overflow: auto; padding: var(--space-sm); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-background-secondary); color: var(--color-text-primary); white-space: pre-wrap; overflow-wrap: anywhere; font: var(--font-size-xs)/1.6 var(--font-ui-mono); user-select: text; }
+.tool-error { padding: var(--space-sm); border-radius: var(--radius-sm); background: var(--color-error-soft); color: var(--color-error); overflow-wrap: anywhere; }
+</style>

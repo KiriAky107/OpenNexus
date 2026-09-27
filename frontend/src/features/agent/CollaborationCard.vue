@@ -40,7 +40,7 @@ async function act(operation: () => Promise<unknown>) {
 
 <template>
   <section class="panel collaboration-card">
-    <header class="inline-actions"><strong>{{ group?.title || t('协作任务', 'Collaboration') }}</strong><span class="badge">{{ statusLabel(group?.status) }}</span>
+    <header class="inline-actions"><strong>{{ group?.title || t('协作任务', 'Collaboration') }}</strong><span class="badge" :class="{ success: group?.status === 'completed', error: group?.status === 'failed', warning: ['awaiting_confirmation', 'waiting_budget'].includes(group?.status || ''), info: group?.status === 'running' }">{{ statusLabel(group?.status) }}</span>
       <button class="button-secondary" @click="refresh()">{{ t('刷新', 'Refresh') }}</button></header>
     <p v-if="error || group?.error" class="error-banner" role="alert">{{ error || group?.error }}</p>
     <template v-if="group">
@@ -53,7 +53,7 @@ async function act(operation: () => Promise<unknown>) {
       <button v-if="['running', 'waiting_budget'].includes(group.status)" class="button-danger" :disabled="busy" @click="act(() => cancelCollaboration(id))">{{ t('停止整个协作', 'Stop collaboration') }}</button>
       <BudgetConfirmation :run-id="id" :collaboration-id="id" :status="group.status === 'waiting_budget' ? 'waiting_budget' : undefined" :events="budgetEvents" @resolved="refresh()" />
       <details v-for="member in group.members" :key="member.member_id" class="member ui-disclosure" :open="group.status === 'awaiting_confirmation'">
-        <summary>{{ member.definition.config.name }} · {{ statusLabel(member.status) }}</summary>
+        <summary><span>{{ member.definition.config.name }}</span><span class="badge" :class="{ success: member.status === 'completed', error: member.status === 'failed', warning: member.status === 'waiting_permission', info: member.status === 'running' }">{{ statusLabel(member.status) }}</span></summary>
         <p>{{ member.input }}</p>
         <p v-if="member.depends_on.length">{{ t('依赖', 'Depends on') }}: {{ member.depends_on.map(id => group!.members.find(item => item.member_id === id)?.definition.config.name || id).join('、') }}</p>
         <p class="subtle">{{ member.definition.config.model }} · {{ member.definition.config.tools.join(', ') || t('无工具', 'No tools') }}</p>
@@ -65,6 +65,10 @@ async function act(operation: () => Promise<unknown>) {
 </template>
 
 <style scoped>
-.collaboration-card { display: grid; gap: var(--space-sm); margin-block: var(--space-sm); min-width: 0; overflow-wrap: anywhere; }
-.member p { white-space: pre-wrap; }
+.collaboration-card { display: grid; gap: var(--space-sm); margin-block: var(--space-sm); min-width: 0; overflow-wrap: anywhere; color: var(--color-text-primary); }
+.collaboration-card > header strong { min-width: 0; overflow-wrap: anywhere; }
+.member { min-width: 0; background: var(--color-surface-secondary); }
+.member > summary { justify-content: flex-start; flex-wrap: wrap; }
+.member > summary::after { margin-left: auto; }
+.member p { margin-block: var(--space-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>
