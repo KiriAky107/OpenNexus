@@ -46,6 +46,51 @@ def test_status_checks_without_installing(monkeypatch, device):
     asyncio.run(scenario())
 
 
+def test_recheck_detects_environment_added_after_failed_check(monkeypatch):
+    components.states['cuda'].update(status='failed', stage='安装失败')
+    python = make_runtime('cuda')
+    calls = []
+
+    async def execute(args, timeout, device):
+        calls.append(args)
+        return [json.dumps({'torch': '2.9.1+cu128', 'cuda_available': True})]
+
+    monkeypatch.setattr(components, 'execute', execute)
+
+    async def scenario():
+        assert (await components.status('cuda'))['status'] == 'failed'
+        assert (await components.recheck('cuda'))['status'] == 'checking'
+        await components.tasks['cuda']
+        assert (await components.status('cuda'))['status'] == 'installed'
+        assert calls[0][0] == str(python)
+
+    asyncio.run(scenario())
+
+
+def test_status_detects_complete_manual_environment_after_failure(monkeypatch):
+    components.states['cuda'].update(status='failed', stage='先前安装失败')
+    python = make_runtime('cuda')
+    for package in ('torch', 'torchaudio', 'sentence_transformers', 'qwen_asr'):
+        module_file = components.ROOT / 'Lib/site-packages' / package / '__init__.py'
+        module_file.parent.mkdir(parents=True)
+        module_file.touch()
+    calls = []
+
+    async def execute(args, timeout, device):
+        calls.append(args)
+        return [json.dumps({'torch': '2.9.1+cu128', 'cuda_available': True})]
+
+    monkeypatch.setattr(components, 'execute', execute)
+
+    async def scenario():
+        assert (await components.status('cuda'))['status'] == 'checking'
+        await components.tasks['cuda']
+        assert (await components.status('cuda'))['status'] == 'installed'
+        assert len(calls) == 1 and calls[0][0] == str(python)
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.skipif(os.name != 'nt', reason='Windows installer')
 def test_install_deduplicates_and_failure_can_retry_without_breaking_cpu(monkeypatch):
     make_runtime('cpu')
@@ -133,6 +178,9 @@ def test_windows_installer_is_ascii_and_uses_fixed_native_extensions():
     assert "$env:PATHEXT = '.COM;.EXE;.BAT;.CMD'" in script
     assert '[string[]]$uvOptions' in script
     assert "$env:UV_LINK_MODE = 'copy'" in script
+    assert 'UV_PYTHON_INSTALL_MIRROR' in script
+    assert 'mirrors.nju.edu.cn/pytorch/whl/cu128' in script
+    assert 'mirrors.aliyun.com/pypi/simple' in script
 
 
 def test_bundled_uv_is_found_without_path(monkeypatch, tmp_path):

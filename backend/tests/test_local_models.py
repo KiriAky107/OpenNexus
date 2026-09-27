@@ -65,13 +65,105 @@ def test_download_resumes_partial_and_checks_digest(monkeypatch):
         return httpx.Response(206, headers={'content-range':f'bytes 5-{len(payload)-1}/{len(payload)}'},content=payload[5:])
     original = httpx.AsyncClient
     monkeypatch.setattr(manager.httpx,'AsyncClient',lambda **kwargs:original(**kwargs,transport=httpx.MockTransport(respond)))
-    asyncio.run(manager._download('bekko'))
+    asyncio.run(manager._download('bekko', 'official'))
     assert manager.read_state('bekko')['status'] == 'installed'
     assert (path/'model.safetensors').read_bytes() == payload
     assert manager.valid_file(path/'model.safetensors',entry)
     (path/'model.safetensors').write_bytes(b'x'*len(payload))
     assert not manager.valid_file(path/'model.safetensors',entry)
     assert len(requests) == 1
+
+
+def test_manual_model_files_verify_offline(monkeypatch):
+    payload = b'copied-model-weights'
+    entry = {'path': 'model.safetensors', 'size': len(payload),
+             'hash': hashlib.sha256(payload).hexdigest(), 'algorithm': 'sha256'}
+    monkeypatch.setitem(manager.PINNED_MANIFESTS, 'qwen3-asr', [entry])
+    path = manager.model_path('qwen3-asr')
+    path.mkdir(parents=True)
+    (path / entry['path']).write_bytes(payload)
+
+    async def scenario():
+        assert (await manager.verify('qwen3-asr'))['status'] == 'verifying'
+        await manager._downloads[manager.task_key('qwen3-asr')]
+        assert manager.read_state('qwen3-asr')['status'] == 'installed'
+        assert (path / 'verified-manifest.json').is_file()
+
+    asyncio.run(scenario())
+
+
+def test_complete_manual_import_is_detected_automatically(monkeypatch):
+    payload = b'copied-model-weights'
+    entry = {'path': 'model.safetensors', 'size': len(payload),
+             'hash': hashlib.sha256(payload).hexdigest(), 'algorithm': 'sha256'}
+    monkeypatch.setitem(manager.PINNED_MANIFESTS, 'qwen3-asr', [entry])
+    path = manager.model_path('qwen3-asr')
+    path.mkdir(parents=True)
+    (path / entry['path']).write_bytes(payload)
+
+    async def scenario():
+        await manager.detect_manual_models()
+        await manager._downloads[manager.task_key('qwen3-asr')]
+        assert manager.read_state('qwen3-asr')['status'] == 'installed'
+
+    asyncio.run(scenario())
+
+
+def test_manual_model_files_reject_wrong_hash(monkeypatch):
+    payload = b'correct'
+    entry = {'path': 'model.safetensors', 'size': len(payload),
+             'hash': hashlib.sha256(payload).hexdigest(), 'algorithm': 'sha256'}
+    monkeypatch.setitem(manager.PINNED_MANIFESTS, 'qwen3-asr', [entry])
+    path = manager.model_path('qwen3-asr')
+    path.mkdir(parents=True)
+    (path / entry['path']).write_bytes(b'wrong!!')
+
+    async def scenario():
+        await manager.verify('qwen3-asr')
+        await manager._downloads[manager.task_key('qwen3-asr')]
+        assert manager.read_state('qwen3-asr')['error_code'] == 'MODEL_FILES_INCOMPLETE'
+        assert not (path / 'verified-manifest.json').exists()
+
+    asyncio.run(scenario())
+
+
+def test_domestic_model_download_uses_pinned_hash_without_huggingface(monkeypatch):
+    payload = b'domestic-mirror-model'
+    entry = {'path': 'model.safetensors', 'size': len(payload),
+             'hash': hashlib.sha256(payload).hexdigest(), 'algorithm': 'sha256'}
+    monkeypatch.setitem(manager.PINNED_MANIFESTS, 'qwen3-asr', [entry])
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, content=payload)
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(manager.httpx, 'AsyncClient',
+                        lambda **kwargs: original(**kwargs, transport=httpx.MockTransport(respond)))
+    asyncio.run(manager._download('qwen3-asr'))
+    assert manager.read_state('qwen3-asr')['status'] == 'installed'
+    assert requests and requests[0].url.host == 'modelscope.cn'
+    assert b'huggingface.co' not in str(requests).encode()
+
+
+def test_download_source_availability_is_explicit():
+    assert manager.chosen_source(manager.CATALOG['qwen3-asr'], 'auto') == 'domestic'
+    assert manager.chosen_source(manager.CATALOG['bekko'], 'auto') == 'domestic'
+    assert manager.file_url(manager.CATALOG['bekko'], {'path': 'model.safetensors'}, 'domestic').startswith(
+        'https://hf-mirror.net/hotchpotch/bekko-embedding-v1-a8m/resolve/c721113d59a1d91b447450324f51c4b3332c924a/')
+
+
+def test_every_catalog_model_has_a_safe_pinned_manifest():
+    assert set(manager.PINNED_MANIFESTS) == set(manager.CATALOG)
+    for entries in manager.PINNED_MANIFESTS.values():
+        assert any(entry['path'].endswith(('.safetensors', '.ckpt')) for entry in entries)
+        for entry in entries:
+            path = Path(entry['path'])
+            assert not path.is_absolute() and '..' not in path.parts
+            assert entry['size'] > 0
+            assert entry['algorithm'] in {'sha256', 'git-blob'}
+            assert len(entry['hash']) == (64 if entry['algorithm'] == 'sha256' else 40)
 
 
 def test_local_model_missing_is_explicit():

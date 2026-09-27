@@ -44,20 +44,22 @@ Embedding、音频转写和声纹匹配遵循同一规则：
 
 ## 本地模型运行环境
 
-API 的 `backend/.venv` 与模型环境分离。默认安装 CPU 运行组件：
+API 的 `backend/.venv` 与模型环境分离。桌面设置页默认使用国内镜像安装 CPU/CUDA 环境：独立 Python 来自阿里云镜像，PyTorch 来自南大镜像，其余依赖来自阿里云 PyPI 镜像。也可在页面切换官方源。源码环境下同样可以运行：
 
 ```powershell
-./scripts/install-model-runtime.ps1
+./scripts/install-model-runtime.ps1 -Source domestic
 ```
 
 可选 CUDA 环境：
 
 ```powershell
-./scripts/install-model-runtime.ps1 -Device cuda -RuntimeDirectory ./.venv-models-cuda
+./scripts/install-model-runtime.ps1 -Device cuda -Source domestic -RuntimeDirectory ./.venv-models-cuda
 $env:APP_MODEL_PYTHON = (Resolve-Path ./.venv-models-cuda/Scripts/python.exe).Path
 ```
 
 脚本固定 `torch`/`torchaudio` 2.9.1，CUDA 使用 cu128 wheel，不安装驱动。其余模型依赖由 `scripts/model-requirements.lock` 锁定，包含 `qwen-asr`、`sentence-transformers`、ModelScope 和 PyAV。
+
+模型权重的固定版本文件大小与哈希已内置，因此手动复制到设置页显示的目录后，可点击“校验本地文件”，无需访问下载站。默认国内来源中，Qwen3-ASR、Granite 和声纹模型使用 ModelScope，Bekko 使用 Hugging Face 镜像；镜像文件仍须通过固定哈希校验。可切换官方源。手动安装 CPU/CUDA Python 环境后点击“重新检测本地环境”，不必重启 AI Core。校验失败不会把任意文件标记为已安装。
 
 | 能力 | 模型 | 固定 revision | 许可 |
 | --- | --- | --- | --- |

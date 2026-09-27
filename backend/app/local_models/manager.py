@@ -7,14 +7,18 @@ import json
 import shutil
 from pathlib import Path
 from urllib.parse import quote
+from typing import Literal
 
 import httpx
 
 from app.config import get_settings
 from app.errors import ApiError
 from app.local_models.catalog import CATALOG
+from app.local_models.pinned_manifests import PINNED_MANIFESTS
 
 _downloads: dict[tuple[str, str], asyncio.Task] = {}
+_observed_import_signatures: dict[tuple[str, str], tuple] = {}
+DownloadSource = Literal['auto', 'domestic', 'official']
 
 
 def model_path(key: str) -> Path:
@@ -32,7 +36,7 @@ def read_state(key):
         state = json.loads(state_path(key).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         state = {"status": "not_installed", "downloaded_bytes": 0, "total_bytes": None}
-    if state["status"] == "downloading" and task_key(key) not in _downloads:
+    if state["status"] in {"downloading", "verifying"} and task_key(key) not in _downloads:
         state.update(status="interrupted", error_code="DOWNLOAD_INTERRUPTED")
     return state
 
@@ -62,17 +66,76 @@ def disk_bytes(key):
 
 
 def describe():
-    return {"items": [{**spec.public(), **read_state(key), "disk_bytes": disk_bytes(key)} for key, spec in CATALOG.items()]}
+    return {"items": [{**spec.public(), **read_state(key), "disk_bytes": disk_bytes(key),
+                       "install_path": str(model_path(key)),
+                       "download_sources": available_sources(spec)} for key, spec in CATALOG.items()]}
 
 
-async def download(key):
+def available_sources(spec):
+    return ['domestic', 'official'] if spec.mirror_repository else (
+        ['domestic'] if spec.source == 'modelscope' else ['official'])
+
+
+def chosen_source(spec, requested: DownloadSource):
+    source = available_sources(spec)[0] if requested == 'auto' else requested
+    if source not in available_sources(spec):
+        raise ApiError(422, 'MODEL_SOURCE_UNAVAILABLE',
+                       '该模型没有经过校验的对应下载源；可选择其他来源或复制文件后使用本地校验。')
+    return source
+
+
+async def download(key, source: DownloadSource = 'auto'):
     model_path(key)
+    chosen_source(CATALOG[key], source)
     if task_key(key) not in _downloads and read_state(key)["status"] != "installed":
         write_state(key, {"status": "downloading", "downloaded_bytes": 0, "total_bytes": None})
-        task = asyncio.create_task(_download(key))
+        task = asyncio.create_task(_download(key, source))
         _downloads[task_key(key)] = task
         task.add_done_callback(lambda done: _downloads.pop(task_key(key), None))
     return read_state(key)
+
+
+async def verify(key):
+    from app.local_models.runtime import runtime
+    model_path(key)
+    if runtime.in_use(key):
+        raise ApiError(409, 'MODEL_IN_USE', '模型正在使用中，请等待任务结束后校验。')
+    if task_key(key) not in _downloads:
+        write_state(key, {"status": "verifying", "downloaded_bytes": 0, "total_bytes": None})
+        task = asyncio.create_task(_verify(key))
+        _downloads[task_key(key)] = task
+        task.add_done_callback(lambda done: _downloads.pop(task_key(key), None))
+    return read_state(key)
+
+
+def local_import_signature(key):
+    root = model_path(key).resolve()
+    signature = []
+    try:
+        for entry in PINNED_MANIFESTS[key]:
+            path = safe_model_file(root, entry['path'])
+            stat = path.stat()
+            if not path.is_file() or stat.st_size != entry['size']:
+                return None
+            signature.append((entry['path'], stat.st_size, stat.st_mtime_ns))
+    except (OSError, ApiError):
+        return None
+    return tuple(signature)
+
+
+async def detect_manual_models():
+    """Auto-verify complete-looking local imports once per file signature."""
+    from app.local_models.runtime import runtime
+    for key in CATALOG:
+        if task_key(key) in _downloads or runtime.in_use(key):
+            continue
+        if read_state(key)['status'] == 'installed':
+            continue
+        signature = local_import_signature(key)
+        if signature is None or _observed_import_signatures.get(task_key(key)) == signature:
+            continue
+        _observed_import_signatures[task_key(key)] = signature
+        await verify(key)
 
 
 async def cancel_download(key):
@@ -81,7 +144,7 @@ async def cancel_download(key):
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
     state = read_state(key)
-    if state["status"] == "downloading":
+    if state["status"] in {"downloading", "verifying"}:
         state["status"] = "interrupted"
         write_state(key, state)
     return state
@@ -102,26 +165,23 @@ async def delete(key):
 
 
 async def _manifest(client, spec):
-    if spec.source == "huggingface":
-        response = await client.get(f"https://huggingface.co/api/models/{spec.repository}/revision/{spec.revision}?blobs=true")
-        response.raise_for_status()
-        files = []
-        for item in response.json()["siblings"]:
-            name = item["rfilename"]
-            if name.startswith(("onnx/", "openvino/", ".")) or not name.endswith((".json", ".txt", ".safetensors", ".md")):
-                continue
-            lfs = item.get("lfs") or {}
-            files.append({"path": name, "size": item["size"], "hash": lfs.get("sha256") or item["blobId"],
-                          "algorithm": "sha256" if lfs else "git-blob",
-                          "url": f"https://huggingface.co/{spec.repository}/resolve/{spec.revision}/{quote(name)}"})
-        return files
-    response = await client.get(f"https://modelscope.cn/api/v1/models/{spec.repository}/repo/files",
-                                params={"Revision": spec.revision, "Recursive": "true"})
-    response.raise_for_status()
-    return [{"path": f["Path"], "size": f["Size"], "hash": f["Sha256"], "algorithm": "sha256",
-             "url": f"https://modelscope.cn/api/v1/models/{spec.repository}/repo?Revision={spec.revision}&FilePath={quote(f['Path'])}"}
-            for f in response.json()["Data"]["Files"]
-            if f["Path"] in {"configuration.json", "pretrained_eres2netv2.ckpt", "README.md"}]
+    # The reviewed revision's hashes ship with the app. Fetching a manifest
+    # must not require access to Hugging Face, including during local import.
+    return [dict(entry) for entry in PINNED_MANIFESTS[spec.key]]
+
+
+def file_url(spec, entry, source):
+    if 'url' in entry:  # Test fixtures and reviewed legacy manifests.
+        return entry['url']
+    name = quote(entry['path'])
+    if source == 'domestic':
+        repository = spec.mirror_repository or spec.repository
+        if spec.mirror_source == 'hf-mirror':
+            return f'https://hf-mirror.net/{repository}/resolve/{spec.revision}/{name}'
+        revision = spec.revision if spec.source == 'modelscope' else 'master'
+        return (f'https://modelscope.cn/api/v1/models/{repository}/repo?'
+                f'Revision={revision}&FilePath={name}')
+    return f'https://huggingface.co/{spec.repository}/resolve/{spec.revision}/{name}'
 
 
 def valid_file(path, entry):
@@ -136,55 +196,119 @@ def valid_file(path, entry):
     return digest.hexdigest() == entry["hash"]
 
 
-async def _download(key):
+def safe_model_file(root, name):
+    path = (root / name).resolve()
+    if not path.is_relative_to(root):
+        raise ApiError(422, 'INVALID_MODEL_PATH', 'Model manifest path escapes storage.')
+    return path
+
+
+async def _verify(key):
+    root = model_path(key).resolve()
+    manifest = PINNED_MANIFESTS[key]
+    state = {'status': 'verifying', 'downloaded_bytes': 0,
+             'total_bytes': sum(entry['size'] for entry in manifest)}
+    try:
+        complete = 0
+        missing = 0
+        for entry in manifest:
+            if await asyncio.to_thread(valid_file, safe_model_file(root, entry['path']), entry):
+                complete += entry['size']
+            else:
+                missing += 1
+            state['downloaded_bytes'] = complete
+            write_state(key, state)
+        if missing:
+            state.update(status='failed', error_code='MODEL_FILES_INCOMPLETE',
+                         error_detail=f'{missing} 个文件缺失或校验不通过；请放入固定版本文件后重新检测。')
+        else:
+            (root / 'verified-manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+            state.update(status='installed', downloaded_bytes=complete)
+    except asyncio.CancelledError:
+        state.update(status='interrupted', error_code='VERIFY_CANCELLED')
+    except Exception:
+        state.update(status='failed', error_code='MODEL_VERIFY_FAILED')
+    write_state(key, state)
+
+
+def failure_details(exc):
+    if isinstance(exc, ApiError):
+        return exc.code, exc.message
+    if isinstance(exc, httpx.HTTPStatusError):
+        return 'MODEL_SOURCE_HTTP_ERROR', f'下载源返回 HTTP {exc.response.status_code}。'
+    if isinstance(exc, httpx.TimeoutException):
+        return 'MODEL_SOURCE_TIMEOUT', '下载源连接或传输超时。'
+    if isinstance(exc, httpx.TransportError):
+        return 'MODEL_SOURCE_NETWORK_ERROR', '无法连接下载源或传输中断。'
+    return 'MODEL_DOWNLOAD_FAILED', '下载未完成，请查看失败阶段或尝试另一来源。'
+
+
+async def _download(key, requested_source: DownloadSource = 'auto'):
     spec, root = CATALOG[key], model_path(key).resolve()
-    state = {"status": "downloading", "downloaded_bytes": 0, "total_bytes": None}
+    source = chosen_source(spec, requested_source)
+    state = {"status": "downloading", "downloaded_bytes": 0, "total_bytes": None,
+             "source": source, "stage": "校验已有文件"}
     try:
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
             manifest = await _manifest(client, spec)
             if not manifest or not any(f["path"].endswith((".safetensors", ".ckpt")) for f in manifest):
-                raise ValueError("Missing weights in model manifest")
+                raise ValueError("Missing weights in pinned model manifest")
             state["total_bytes"] = sum(f["size"] for f in manifest)
             root.mkdir(parents=True, exist_ok=True)
-            if shutil.disk_usage(root).free < state["total_bytes"] + 100 * 1024 * 1024:
-                raise ApiError(507, "MODEL_DISK_FULL", "Insufficient free disk space.")
             complete = 0
+            missing = []
             for entry in manifest:
-                path = (root / entry["path"]).resolve()
-                if not path.is_relative_to(root):
-                    raise ValueError("Invalid model manifest path")
-                path.parent.mkdir(parents=True, exist_ok=True)
+                path = safe_model_file(root, entry['path'])
                 if await asyncio.to_thread(valid_file, path, entry):
-                    complete += entry["size"]
-                    continue
-                partial = path.with_suffix(path.suffix + ".partial")
+                    complete += entry['size']
+                else:
+                    missing.append((entry, path))
+            state['downloaded_bytes'] = complete
+            write_state(key, state)
+            remaining = 0
+            for entry, path in missing:
+                partial = path.with_suffix(path.suffix + '.partial')
                 offset = partial.stat().st_size if partial.exists() else 0
-                if offset >= entry["size"]:
-                    partial.unlink()
+                reusable = 0 < offset < entry['size'] and not (
+                    source == 'domestic' and entry['size'] < 32 * 1024 * 1024)
+                remaining += entry['size'] - offset if reusable else entry['size']
+            if remaining and shutil.disk_usage(root).free < remaining + 100 * 1024 * 1024:
+                raise ApiError(507, 'MODEL_DISK_FULL', '模型目录磁盘空间不足。')
+            for entry, path in missing:
+                state['stage'] = f'下载 {entry["path"]}'
+                path.parent.mkdir(parents=True, exist_ok=True)
+                partial = path.with_suffix(path.suffix + '.partial')
+                offset = partial.stat().st_size if partial.exists() else 0
+                if offset >= entry['size'] or (source == 'domestic' and entry['size'] < 32 * 1024 * 1024):
+                    partial.unlink(missing_ok=True)
                     offset = 0
-                async with client.stream("GET", entry["url"], headers={"Range": f"bytes={offset}-"} if offset else {}) as response:
+                url = file_url(spec, entry, source)
+                async with client.stream('GET', url, headers={'Range': f'bytes={offset}-'} if offset else {}) as response:
                     response.raise_for_status()
                     if offset and response.status_code != 206:
+                        # Some mirrors ignore Range. A full response can still be used.
                         offset = 0
-                    if response.status_code == 206 and not response.headers.get("content-range", "").startswith(f"bytes {offset}-"):
-                        raise ValueError("Invalid download range")
-                    with partial.open("ab" if offset else "wb") as stream:
+                    if response.status_code == 206 and not response.headers.get('content-range', '').startswith(f'bytes {offset}-'):
+                        raise ApiError(502, 'MODEL_RANGE_INVALID', '下载源返回了错误的续传范围。')
+                    with partial.open('ab' if offset else 'wb') as stream:
                         async for chunk in response.aiter_bytes(1024 * 1024):
                             offset += len(chunk)
-                            if offset > entry["size"]:
-                                raise ValueError("Download exceeds manifest size")
+                            if offset > entry['size']:
+                                raise ApiError(502, 'MODEL_SIZE_INVALID', '下载源返回的文件超过固定版本大小。')
                             stream.write(chunk)
-                            state["downloaded_bytes"] = complete + offset
+                            state['downloaded_bytes'] = complete + offset
                             write_state(key, state)
+                state['stage'] = f'校验 {entry["path"]}'
                 if not await asyncio.to_thread(valid_file, partial, entry):
                     partial.unlink(missing_ok=True)
-                    raise ApiError(422, "MODEL_CHECKSUM_FAILED", "Model file checksum did not match.")
+                    raise ApiError(422, 'MODEL_CHECKSUM_FAILED', '文件校验未通过，已丢弃不匹配内容。')
                 partial.replace(path)
-                complete += entry["size"]
-            (root / "verified-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-            state.update(status="installed", downloaded_bytes=complete)
+                complete += entry['size']
+            (root / 'verified-manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+            state.update(status='installed', downloaded_bytes=complete, stage='全部文件已校验')
     except asyncio.CancelledError:
-        state.update(status="interrupted", error_code="DOWNLOAD_CANCELLED")
+        state.update(status='interrupted', error_code='DOWNLOAD_CANCELLED')
     except Exception as exc:
-        state.update(status="failed", error_code=exc.code if isinstance(exc, ApiError) else "MODEL_DOWNLOAD_FAILED")
+        code, detail = failure_details(exc)
+        state.update(status='failed', error_code=code, error_detail=detail)
     write_state(key, state)

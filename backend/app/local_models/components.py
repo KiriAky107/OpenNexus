@@ -19,6 +19,7 @@ CPU_ROOT = get_settings().data_dir / 'model-runtime-cpu'
 states = {device: {'status': 'unchecked', 'stage': '', 'cuda_available': None}
           for device in ('cpu', 'cuda')}
 tasks = {}
+observed_signatures = {}
 
 
 def root(device: Device):
@@ -31,6 +32,16 @@ def python_path(device: Device):
 
 def ready(device: Device = 'cuda'):
     return (root(device) / 'ready.json').is_file() and python_path(device).is_file()
+
+
+def runtime_signature(device: Device):
+    base = root(device)
+    paths = [python_path(device)] + [base / 'Lib/site-packages' / package / '__init__.py'
+        for package in ('torch', 'torchaudio', 'sentence_transformers', 'qwen_asr')]
+    try:
+        return tuple((str(path), path.stat().st_size, path.stat().st_mtime_ns) for path in paths)
+    except OSError:
+        return None
 
 
 def installed_interpreter(device: Device):
@@ -67,12 +78,32 @@ async def status(device: Device = 'cuda'):
     if state['status'] == 'unchecked':
         state.update(status='checking', stage=f'检查已有 {device.upper()} 组件')
         tasks[device] = asyncio.create_task(run(False, device))
-    return {**state, 'device': device, 'supported': os.name == 'nt',
+    elif state['status'] in {'failed', 'not_installed'} and not any(
+            item['status'] == 'installing' for item in states.values()):
+        signature = runtime_signature(device)
+        if signature is not None and signature != observed_signatures.get(device):
+            observed_signatures[device] = signature
+            state.update(status='checking', stage=f'检测新放入的 {device.upper()} 环境', error=None)
+            tasks[device] = asyncio.create_task(run(False, device))
+    return {**state, 'device': device, 'install_path': str(root(device)), 'supported': os.name == 'nt',
             'ready': ready(device),
             'custom_interpreter': bool(os.getenv('APP_MODEL_PYTHON'))}
 
 
-async def install(device: Device = 'cuda'):
+async def recheck(device: Device = 'cuda'):
+    from app.local_models.runtime import runtime
+    if device in tasks and not tasks[device].done():
+        return await status(device)
+    if any(item['status'] == 'installing' for item in states.values()):
+        raise ApiError(409, 'RUNTIME_INSTALL_BUSY', '另一运行组件正在安装，请等待完成。')
+    if runtime.active or runtime.waiters:
+        raise ApiError(409, 'MODEL_IN_USE', '模型正在运行，请等待任务完成后重新检测。')
+    states[device].update(status='checking', stage=f'重新检测 {device.upper()} 组件', error=None)
+    tasks[device] = asyncio.create_task(run(False, device))
+    return await status(device)
+
+
+async def install(device: Device = 'cuda', source: Literal['domestic', 'official'] = 'domestic'):
     from app.local_models.runtime import runtime
     if os.name != 'nt':
         raise ApiError(422, 'PLATFORM_UNSUPPORTED', '当前平台暂不支持页面安装运行组件。')
@@ -86,8 +117,8 @@ async def install(device: Device = 'cuda'):
         return await status(device)
     uv_path()
     windows_tool('WindowsPowerShell/v1.0/powershell.exe')
-    states[device].update(status='installing', stage='准备独立模型环境', error=None)
-    tasks[device] = asyncio.create_task(run(True, device))
+    states[device].update(status='installing', stage='准备独立模型环境', error=None, source=source)
+    tasks[device] = asyncio.create_task(run(True, device, source))
     return await status(device)
 
 
@@ -124,7 +155,7 @@ async def execute(args, timeout, device: Device = 'cuda'):
         await process.close()
 
 
-async def run(download, device: Device = 'cuda'):
+async def run(download, device: Device = 'cuda', source: Literal['domestic', 'official'] = 'domestic'):
     marker = root(device) / 'ready.json'
     state = states[device]
     try:
@@ -133,7 +164,7 @@ async def run(download, device: Device = 'cuda'):
             await execute([windows_tool('WindowsPowerShell/v1.0/powershell.exe'),
                 '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
                 str(BACKEND_DIR / 'scripts/install-model-runtime.ps1'),
-                '-Device', device, '-RuntimeDirectory', str(root(device)),
+                '-Device', device, '-Source', source, '-RuntimeDirectory', str(root(device)),
                 '-UvPath', uv_path(), '-PythonDirectory',
                 str(root(device).parent / 'model-python'), '-QuietProgress'], 7200, device)
         python = python_path(device)
@@ -141,8 +172,11 @@ async def run(download, device: Device = 'cuda'):
             marker.unlink(missing_ok=True)
             state.update(status='not_installed', stage='尚未安装', error=None)
             return
+        expected_variant = 'cu128' if device == 'cuda' else 'cpu'
         result = await execute([str(python), '-c',
             'import json, torch, torchaudio, sentence_transformers, qwen_asr; '
+            + f'assert torch.__version__ == "2.9.1+{expected_variant}"; '
+            + f'assert torchaudio.__version__ == "2.9.1+{expected_variant}"; '
             + ('assert torch.version.cuda; ' if device == 'cuda' else '')
             + 'print(json.dumps({"torch":torch.__version__,"cuda_available":torch.cuda.is_available()}))'], 180, device)
         info = json.loads(result[-1])
@@ -155,8 +189,12 @@ async def run(download, device: Device = 'cuda'):
     except Exception:
         marker.unlink(missing_ok=True)
         failed_stage = state['stage']
+        hint = ('可切换下载源重试，或手动放入完整环境后点击“重新检测”'
+                if download else '请确认该环境包含 torch/torchaudio 2.9.1 对应设备版本、sentence-transformers 和 qwen-asr')
         state.update(status='failed', stage='组件安装或验证失败',
-            error=f'{failed_stage}失败。请检查网络和磁盘空间后重试；另一设备的独立环境不会被修改。')
+            error=f'{failed_stage}失败。{hint}；另一设备的环境不会被修改。')
+    finally:
+        observed_signatures[device] = runtime_signature(device)
 
 
 async def shutdown():

@@ -1,5 +1,6 @@
 param(
     [ValidateSet('cpu', 'cuda')][string]$Device = 'cpu',
+    [ValidateSet('domestic', 'official')][string]$Source = 'domestic',
     [string]$RuntimeDirectory = '',
     [string]$UvPath = 'uv',
     [string]$PythonDirectory = '',
@@ -17,6 +18,13 @@ if ($PythonDirectory) {
 # Python and environment files must survive cache cleanup and app upgrades.
 $env:UV_LINK_MODE = 'copy'
 $env:UV_PYTHON_PREFERENCE = 'only-managed'
+if ($Source -eq 'domestic') {
+    # Mirrors preserve the upstream release path. uv verifies package hashes
+    # supplied by the package indexes; model weights have separate pinned hashes.
+    $env:UV_PYTHON_INSTALL_MIRROR = 'https://mirrors.aliyun.com/github/releases/astral-sh/python-build-standalone'
+} else {
+    Remove-Item Env:UV_PYTHON_INSTALL_MIRROR -ErrorAction SilentlyContinue
+}
 $backendRoot = Split-Path $PSScriptRoot -Parent
 $runtimeRoot = if ($RuntimeDirectory) { [IO.Path]::GetFullPath($RuntimeDirectory) } else { Join-Path $backendRoot '.venv-models' }
 $runtimePython = Join-Path $runtimeRoot 'Scripts/python.exe'
@@ -34,14 +42,17 @@ if (!$runtimeHealthy) {
     if ($LASTEXITCODE -ne 0) { throw 'Could not create the model runtime' }
 }
 # CPU is the default. CUDA wheels include runtime libraries, not NVIDIA drivers.
-$torchIndex = if ($Device -eq 'cuda') { 'https://download.pytorch.org/whl/cu128' } else { 'https://download.pytorch.org/whl/cpu' }
+$torchIndex = if ($Source -eq 'domestic') {
+    if ($Device -eq 'cuda') { 'https://mirrors.nju.edu.cn/pytorch/whl/cu128' } else { 'https://mirrors.nju.edu.cn/pytorch/whl/cpu' }
+} elseif ($Device -eq 'cuda') { 'https://download.pytorch.org/whl/cu128' } else { 'https://download.pytorch.org/whl/cpu' }
+$packageIndex = if ($Source -eq 'domestic') { 'https://mirrors.aliyun.com/pypi/simple' } else { 'https://pypi.org/simple' }
 $wheelVariant = if ($Device -eq 'cuda') { 'cu128' } else { 'cpu' }
 # Pin the local version as well: ==2.9.1 alone also accepts CPU wheels.
 Write-Output 'COMPONENT:torch'
 & $UvPath @uvOptions pip install --python $runtimePython --index-url $torchIndex "torch==2.9.1+$wheelVariant" "torchaudio==2.9.1+$wheelVariant"
 if ($LASTEXITCODE -ne 0) { throw 'PyTorch installation failed' }
 Write-Output 'COMPONENT:dependencies'
-& $UvPath @uvOptions pip install --python $runtimePython --index-url https://pypi.org/simple -r (Join-Path $PSScriptRoot 'model-requirements.lock') -c (Join-Path $PSScriptRoot 'model-requirements.txt')
+& $UvPath @uvOptions pip install --python $runtimePython --index-url $packageIndex -r (Join-Path $PSScriptRoot 'model-requirements.lock') -c (Join-Path $PSScriptRoot 'model-requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw 'Model dependency installation failed' }
 Write-Output 'COMPONENT:verify'
 & $runtimePython -c 'import torch; print(dict(torch=torch.__version__,cuda_available=torch.cuda.is_available()))'
