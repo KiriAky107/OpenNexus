@@ -20,7 +20,8 @@ const routeName = computed(() => route.name as string)
 const sidebar = ref<HTMLElement | null>(null)
 const resizable = computed(() => ['file-tree', 'conversation-list'].includes(props.component ?? ''))
 const layout = useLayoutPreferencesStore()
-const collapsed = computed(() => props.component === 'file-tree' && layout.workspaceCollapsed)
+const collapsed = computed(() => props.component === 'file-tree' ? layout.workspaceCollapsed
+  : props.component === 'conversation-list' && layout.chatSidebarCollapsed)
 const preferredWidth = computed(() => props.component === 'conversation-list' ? layout.chatWidth : layout.workspaceWidth)
 const width = ref(272)
 const maxWidth = ref(520)
@@ -61,7 +62,7 @@ watch(collapsed, async value => {
   // Only move focus when the control being hidden belonged to this sidebar.
   const ownedFocus = sidebar.value?.contains(document.activeElement)
   await nextTick()
-  if (ownedFocus) sidebar.value?.querySelector<HTMLButtonElement>(value ? '.collapsed-rail button' : '[role="tab"][aria-selected="true"]')?.focus()
+  if (ownedFocus) sidebar.value?.querySelector<HTMLButtonElement>(value ? '.collapsed-rail button' : '[role="tab"][aria-selected="true"], .collapse-chat-sidebar')?.focus()
 })
 onMounted(() => {
   restoreWidth()
@@ -87,10 +88,12 @@ const showSkillToggle = computed(() => routeName.value === 'skills' || routeName
 <template>
   <aside ref="sidebar" class="secondary-sidebar" :class="{ collapsed }" :style="resizable ? { width: collapsed ? '40px' : `${width}px` } : undefined">
     <nav v-if="collapsed" class="collapsed-rail" :aria-label="t('工作区侧栏', 'Workspace sidebar')">
-      <button v-for="tab in (['files', 'outline'] as const)" :key="tab" type="button" :title="tab === 'files' ? t('展开文件树', 'Show files') : t('展开大纲树', 'Show outline')" :aria-label="tab === 'files' ? t('展开文件树', 'Show files') : t('展开大纲树', 'Show outline')" :data-panel="tab" @click="layout.showWorkspacePanel(tab)"><ControlIcon :name="tab" /></button>
+      <template v-if="component === 'file-tree'"><button v-for="tab in (['files', 'outline'] as const)" :key="tab" type="button" :title="tab === 'files' ? t('展开文件树', 'Show files') : t('展开大纲树', 'Show outline')" :aria-label="tab === 'files' ? t('展开文件树', 'Show files') : t('展开大纲树', 'Show outline')" :data-panel="tab" @click="layout.showWorkspacePanel(tab)"><ControlIcon :name="tab" /></button></template>
+      <button v-else-if="component === 'conversation-list'" type="button" :title="t('展开对话列表', 'Show conversations')" :aria-label="t('展开对话列表', 'Show conversations')" @click="layout.toggleChatSidebar()"><ControlIcon name="chat" /></button>
     </nav>
-    <div v-if="component !== 'file-tree'" class="sidebar-header">
+    <div v-if="component !== 'file-tree' && !collapsed" class="sidebar-header" :class="{ 'chat-sidebar-header': component === 'conversation-list' }">
       <h3 class="sidebar-title">{{ sidebarTitle }}</h3>
+      <button v-if="component === 'conversation-list'" type="button" class="collapse-chat-sidebar" :title="t('折叠对话列表', 'Collapse conversations')" :aria-label="t('折叠对话列表', 'Collapse conversations')" @click="layout.toggleChatSidebar()"><ControlIcon name="panelClose" /></button>
       <div v-if="showSkillToggle" class="sidebar-tabs">
         <router-link to="/extensions/skills" class="tab" :class="{ active: routeName === 'skills' }">Skill</router-link>
         <router-link to="/extensions/plugins" class="tab" :class="{ active: routeName === 'plugins' }">Plugin</router-link>
@@ -125,6 +128,11 @@ const showSkillToggle = computed(() => routeName.value === 'skills' || routeName
   border-bottom: 1px solid var(--color-border-subtle);
   flex-shrink: 0;
 }
+.chat-sidebar-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); }
+.chat-sidebar-header .sidebar-title { margin: 0; }
+.collapse-chat-sidebar { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-sm); color: var(--color-text-secondary); }
+.collapse-chat-sidebar:hover { background: var(--color-accent-soft); color: var(--color-accent-primary); }
+.collapse-chat-sidebar:focus-visible { outline: 2px solid var(--color-border-focus); }
 .collapsed-rail { display: grid; justify-items: center; gap: 6px; padding: 9px 3px; }
 .collapsed-rail button { display: grid; place-items: center; width: 32px; height: 34px; border-radius: var(--radius-sm); color: var(--color-text-secondary); }
 .collapsed-rail button:hover { background: var(--color-accent-soft); color: var(--color-accent-primary); }

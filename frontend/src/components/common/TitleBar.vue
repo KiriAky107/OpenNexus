@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useEditorStore } from '@/stores/editor'
 import { useThemeStore } from '@/stores/theme'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import ControlIcon from './ControlIcon.vue'
 import appLogoUrl from '@/assets/opennexus-logo.svg'
 import { t } from '@/i18n'
@@ -14,6 +15,7 @@ const route = useRoute()
 const workspaceStore = useWorkspaceStore()
 const editorStore = useEditorStore()
 const themeStore = useThemeStore()
+const layout = useLayoutPreferencesStore()
 const desktop = isDesktop()
 const maximized = ref(false)
 let disposed = false
@@ -77,6 +79,9 @@ function toggleFromTitlebar(event: MouseEvent) {
       <span class="app-name" data-tauri-drag-region><img :src="themeStore.isDark ? darkAppLogoUrl : appLogoUrl" alt="" />OpenNexus</span>
     </div>
     <div class="titlebar-right">
+      <button v-if="route.name !== 'vault-entry'" class="icon-btn" :class="{ active: layout.focusMode }" type="button" :aria-pressed="layout.focusMode" :aria-label="layout.focusMode ? t('退出专注模式', 'Exit focus mode') : t('进入专注模式', 'Enter focus mode')" :title="layout.focusMode ? t('退出专注模式', 'Exit focus mode') : t('进入专注模式', 'Enter focus mode')" @click="layout.toggleFocusMode()">
+        <ControlIcon :name="layout.focusMode ? 'focusExit' : 'focus'" :size="18" />
+      </button>
       <button class="icon-btn" type="button" @click="themeStore.toggleTheme()" :aria-label="themeStore.isDark ? t('切换浅色主题', 'Switch to light theme') : t('切换深色主题', 'Switch to dark theme')" :title="themeStore.isDark ? t('切换浅色主题', 'Switch to light theme') : t('切换深色主题', 'Switch to dark theme')">
         <ControlIcon :name="themeStore.isDark ? 'sun' : 'moon'" :size="18" />
       </button>
@@ -233,6 +238,7 @@ function toggleFromTitlebar(event: MouseEvent) {
     color: var(--color-on-error);
   }
 }
+.icon-btn.active { color: var(--color-accent-primary); background: var(--color-accent-soft); }
 .win-btn:focus-visible, .icon-btn:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: -2px; }
 .win-btn:active, .icon-btn:active { background: var(--color-background-active); }
 .win-btn.close:active { background: var(--color-error); color: var(--color-on-error); }

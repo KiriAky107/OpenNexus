@@ -91,6 +91,7 @@ function togglePanel(tab: 'files' | 'outline') {
   close()
 }
 function toggleToolbar() { layout.editorToolbarVisible = !layout.editorToolbarVisible; close() }
+function toggleFocus() { layout.toggleFocusMode(); close() }
 function toggleTheme() { theme.toggleTheme(); close() }
 function applyTheme(id: string) { theme.applyTheme(id); close() }
 function navigate(path: string) { void router.push(path); close() }
@@ -314,9 +315,11 @@ onBeforeUnmount(() => {
     <div class="menu-group" role="none" data-menu="view">
       <button class="menu-trigger" role="menuitem" :aria-expanded="open === 'view'" aria-haspopup="menu" @click="toggle('view')" @pointerenter="open && focusFirst('view')">{{ t('视图', 'View') }}</button>
       <div v-if="open === 'view'" class="menu-popover view-menu" role="menu" :aria-label="t('视图', 'View')">
-        <button data-menu-item data-view-toolbar role="menuitemcheckbox" :aria-checked="layout.editorToolbarVisible" @click="toggleToolbar"><span>{{ layout.editorToolbarVisible ? '✓ ' : '' }}{{ t('编辑器工具栏', 'Editor toolbar') }}</span></button>
-        <button data-menu-item data-view-files role="menuitemcheckbox" :aria-checked="route.name === 'workspace' && !layout.workspaceCollapsed && layout.workspaceTab === 'files'" :disabled="!workspace.hasVault" @click="togglePanel('files')"><span>{{ route.name === 'workspace' && !layout.workspaceCollapsed && layout.workspaceTab === 'files' ? '✓ ' : '' }}{{ t('文件树', 'File tree') }}</span></button>
-        <button data-menu-item data-view-outline role="menuitemcheckbox" :aria-checked="route.name === 'workspace' && !layout.workspaceCollapsed && layout.workspaceTab === 'outline'" :disabled="!workspace.hasVault" @click="togglePanel('outline')"><span>{{ route.name === 'workspace' && !layout.workspaceCollapsed && layout.workspaceTab === 'outline' ? '✓ ' : '' }}{{ t('大纲树', 'Outline tree') }}</span></button>
+          <button data-menu-item data-view-toolbar role="menuitemcheckbox" :aria-checked="layout.editorToolbarVisible" @click="toggleToolbar"><span>{{ layout.editorToolbarVisible ? '✓ ' : '' }}{{ t('编辑器工具栏', 'Editor toolbar') }}</span></button>
+          <button data-menu-item data-view-files role="menuitemcheckbox" :aria-checked="route.name === 'workspace' && !layout.workspaceCollapsed && layout.workspaceTab === 'files'" :disabled="!workspace.hasVault" @click="togglePanel('files')"><span>{{ route.name === 'workspace' && !layout.workspaceCollapsed && layout.workspaceTab === 'files' ? '✓ ' : '' }}{{ t('文件树', 'File tree') }}</span></button>
+          <button data-menu-item data-view-outline role="menuitemcheckbox" :aria-checked="route.name === 'workspace' && !layout.workspaceCollapsed && layout.workspaceTab === 'outline'" :disabled="!workspace.hasVault" @click="togglePanel('outline')"><span>{{ route.name === 'workspace' && !layout.workspaceCollapsed && layout.workspaceTab === 'outline' ? '✓ ' : '' }}{{ t('大纲树', 'Outline tree') }}</span></button>
+          <span class="menu-separator" role="separator" />
+          <button data-menu-item data-view-focus role="menuitemcheckbox" :aria-checked="layout.focusMode" @click="toggleFocus"><span>{{ layout.focusMode ? '✓ ' : '' }}{{ t('专注模式', 'Focus mode') }}</span></button>
         <span class="menu-separator" role="separator" />
         <button v-for="item in viewDestinations" :key="item.name" data-menu-item role="menuitemradio" :aria-checked="route.name === item.name" :disabled="!workspace.hasVault" @click="navigateNamed(item.name)"><span>{{ route.name === item.name ? '✓ ' : '' }}{{ item.label }}</span></button>
         <span class="menu-separator" role="separator" />

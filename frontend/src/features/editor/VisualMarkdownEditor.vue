@@ -557,7 +557,7 @@ defineExpose({ getEditor: () => crepe?.editor })
   <DiagramInteractions class="visual-editor" :class="{ 'hide-code-line-numbers': !markdownPreferences.lineNumbers }" :data-heading-style="headingAppearance.preferences.custom ? 'custom' : undefined" :style="headingAppearance.cssVariables">
     <p v-if="imageError" class="image-error" role="alert">{{ imageError }}</p>
     <p v-if="commandError" class="image-error" role="alert">{{ commandError }}</p>
-    <div v-show="layout.editorToolbarVisible" class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
+    <div v-show="layout.editorToolbarVisible && !layout.focusMode" class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
       <div class="toolbar-group" role="group" :aria-label="t('编辑历史', 'Edit history')">
         <button type="button" :disabled="loading || !canUndo" :title="t('撤销 (Ctrl+Z)', 'Undo (Ctrl+Z)')" :aria-label="t('撤销', 'Undo')" @pointerdown.prevent="toolbarCommand('editor.undo')" @click="$event.detail === 0 && toolbarCommand('editor.undo')"><ControlIcon name="undo" /></button>
         <button type="button" :disabled="loading || !canRedo" :title="t('重做 (Ctrl+Y)', 'Redo (Ctrl+Y)')" :aria-label="t('重做', 'Redo')" @pointerdown.prevent="toolbarCommand('editor.redo')" @click="$event.detail === 0 && toolbarCommand('editor.redo')"><ControlIcon name="redo" /></button>

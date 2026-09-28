@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useChatStore } from '@/stores/chat'
 import { useProviderStore } from '@/stores/provider'
 import { useSkillStore } from '@/stores/skill'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import ChatView from './ChatView.vue'
 
 vi.mock('@/services/agentService', () => ({ listTools: vi.fn().mockResolvedValue([]) }))
@@ -18,6 +19,8 @@ vi.mock('@/services/chatService', () => ({
 }))
 
 beforeEach(() => {
+  localStorage.removeItem('chat-sidebar-collapsed')
+  localStorage.removeItem('chat-settings-collapsed')
   setActivePinia(createPinia())
   const providers = useProviderStore()
   providers.providers = ['a', 'b'].map(id => ({
@@ -28,6 +31,24 @@ beforeEach(() => {
   vi.spyOn(providers, 'loadProviders').mockResolvedValue(undefined)
   vi.spyOn(providers, 'loadModels').mockResolvedValue([])
   vi.spyOn(useSkillStore(), 'loadSkills').mockResolvedValue(undefined)
+})
+
+it('collapses chat settings independently and hides them during global focus', async () => {
+  const wrapper = mount(ChatView, { attachTo: document.body })
+  await flushPromises()
+  expect(wrapper.get('#chat-settings').isVisible()).toBe(true)
+  await wrapper.get('[aria-controls="chat-settings"]').trigger('click')
+  expect(wrapper.get('#chat-settings').isVisible()).toBe(false)
+  const layout = useLayoutPreferencesStore()
+  layout.toggleFocusMode()
+  await flushPromises()
+  expect(wrapper.get('#chat-settings').isVisible()).toBe(false)
+  expect(wrapper.text()).toContain('退出专注模式')
+  layout.toggleFocusMode()
+  await flushPromises()
+  await wrapper.get('[aria-controls="chat-settings"]').trigger('click')
+  expect(wrapper.get('#chat-settings').isVisible()).toBe(true)
+  wrapper.unmount()
 })
 
 it('opens a continuation dialog for the chat coordination budget', async () => {

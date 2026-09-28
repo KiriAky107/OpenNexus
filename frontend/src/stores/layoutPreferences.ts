@@ -14,6 +14,17 @@ export const useLayoutPreferencesStore = defineStore('layoutPreferences', () => 
   const editorToolbarVisible = ref(stored('editor-toolbar-visible') !== 'false')
   const workspaceCollapsed = ref(stored('workspace-sidebar-collapsed') === 'true')
   const workspaceTab = ref<'files' | 'outline'>(stored('workspace-sidebar-tab') === 'outline' ? 'outline' : 'files')
+  const chatSidebarCollapsed = ref(stored('chat-sidebar-collapsed') === 'true')
+  const chatSettingsCollapsed = ref(stored('chat-settings-collapsed') === 'true')
+  // Focus is temporary; saved panel choices are restored simply by leaving it.
+  const focusMode = ref(false)
+  function toggleFocusMode() { focusMode.value = !focusMode.value }
+  function toggleChatSidebar() {
+    chatSidebarCollapsed.value = !chatSidebarCollapsed.value
+  }
+  function toggleChatSettings() {
+    chatSettingsCollapsed.value = !chatSettingsCollapsed.value
+  }
   function showWorkspacePanel(tab: 'files' | 'outline') {
     workspaceTab.value = tab
     workspaceCollapsed.value = false
@@ -36,5 +47,13 @@ export const useLayoutPreferencesStore = defineStore('layoutPreferences', () => 
       localStorage.setItem('chat-sidebar-width', String(chatWidth.value))
     } catch { /* 当本地存储不可用时，保持当前布局可用。 */ }
   }, { flush: 'sync' })
-  return { primaryExpanded, workspaceWidth, chatWidth, editorToolbarVisible, workspaceCollapsed, workspaceTab, showWorkspacePanel, toggleWorkspacePanel }
+  watch(() => [chatSidebarCollapsed.value, chatSettingsCollapsed.value], () => {
+    try {
+      localStorage.setItem('chat-sidebar-collapsed', String(chatSidebarCollapsed.value))
+      localStorage.setItem('chat-settings-collapsed', String(chatSettingsCollapsed.value))
+    } catch { /* Keep the current session usable without local storage. */ }
+  }, { flush: 'sync' })
+  return { primaryExpanded, workspaceWidth, chatWidth, editorToolbarVisible, workspaceCollapsed, workspaceTab,
+    chatSidebarCollapsed, chatSettingsCollapsed, focusMode, toggleFocusMode,
+    toggleChatSidebar, toggleChatSettings, showWorkspacePanel, toggleWorkspacePanel }
 })

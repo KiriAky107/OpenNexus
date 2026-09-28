@@ -17,6 +17,7 @@ import { isDesktop } from '@/services/platform/desktop'
 import { navigateToCitation } from '@/composables/useCitationNavigation'
 import { useWorkspaceRefresh } from '@/composables/useWorkspaceRefresh'
 import { useTaskScheduleRunner } from '@/composables/useTaskScheduleRunner'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 useWorkspaceRefresh()
 useTaskScheduleRunner()
 
@@ -28,6 +29,7 @@ const workspaceStore = useWorkspaceStore()
 const themeStore = useThemeStore()
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
+const layout = useLayoutPreferencesStore()
 const route = useRoute()
 const router = useRouter()
 const desktop = isDesktop()
@@ -83,8 +85,8 @@ defineExpose({ openCitation })
     <TitleBar />
     <TitleBarMenu v-if="desktop" />
     <div class="app-body">
-      <PrimarySidebar />
-      <SecondarySidebar v-if="secondaryComponent" :component="secondaryComponent" />
+      <PrimarySidebar v-show="!layout.focusMode" />
+      <SecondarySidebar v-if="secondaryComponent" v-show="!layout.focusMode" :component="secondaryComponent" />
       <main class="main-content">
         <slot />
       </main>

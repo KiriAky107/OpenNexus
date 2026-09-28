@@ -11,6 +11,7 @@ import { t } from '@/i18n'
 import ChatPersonaDialog from './ChatPersonaDialog.vue'
 import AppDialog from '@/components/common/AppDialog.vue'
 import { useChatPreferences } from '@/stores/chatPreferences'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import { listTools } from '@/services/agentService'
 import type { ToolDefinition } from '@/contracts'
 import { useRouter } from 'vue-router'
@@ -21,8 +22,10 @@ const suggestions = computed(() => [t('根据我的笔记整理本周复习重�
 const props = defineProps<{ workspaceContext?: WorkspaceContext; embedded?: boolean }>()
 const chatStore = useChatStore()
 const preferences = useChatPreferences()
+const layout = useLayoutPreferencesStore()
 const showPersona = ref(false)
 const settingsExpanded = ref(false)
+const showSettings = computed(() => props.embedded ? settingsExpanded.value : !layout.focusMode && !layout.chatSettingsCollapsed)
 const budgetDialogOpen = ref(false)
 const additionalBudget = ref(8000)
 const imageTools = ref<ToolDefinition[]>([])
@@ -138,9 +141,14 @@ async function openCitationCard(citation: Citation) {
 <template>
   <section class="chat-page">
     <header class="chat-toolbar" :class="{ embedded }">
+      <div v-if="!embedded" class="chat-toolbar-head">
+        <strong>{{ t('AI 对话', 'AI Chat') }}</strong>
+        <button v-if="layout.focusMode" type="button" class="button-secondary" @click="layout.toggleFocusMode()">{{ t('退出专注模式', 'Exit focus mode') }}</button>
+        <button v-else type="button" class="button-secondary" :aria-expanded="showSettings" aria-controls="chat-settings" @click="layout.toggleChatSettings()">{{ showSettings ? t('收起聊天设置', 'Hide chat settings') : t('展开聊天设置', 'Show chat settings') }}</button>
+      </div>
       <template v-if="embedded"><select class="select" aria-label="恢复聊天记录" :value="chatStore.activeConversationId" :disabled="chatStore.isPreparing" @change="chatStore.setActiveConversation(($event.target as HTMLSelectElement).value)"><option v-for="conversation in chatStore.sortedConversations" :key="conversation.conversation_id" :value="conversation.conversation_id">{{ conversation.title }}</option></select></template>
       <button v-if="embedded" class="button-secondary config-toggle" :aria-expanded="settingsExpanded" @click="settingsExpanded = !settingsExpanded">{{ settingsExpanded ? '收起聊天设置 ▴' : '聊天设置 ▾' }}</button>
-      <div v-show="!embedded || settingsExpanded" class="chat-settings">
+      <div id="chat-settings" v-show="showSettings" class="chat-settings">
       <button v-if="embedded" class="button-secondary" @click="chatStore.createNewConversation()">新对话</button>
       <div class="field compact"><label>Provider</label><select v-model="chatStore.selectedProviderId" class="select">
         <option v-for="provider in providerStore.enabledProviders" :key="provider.provider_id" :value="provider.provider_id">{{ provider.name }}</option>
@@ -236,6 +244,8 @@ async function openCitationCard(citation: Citation) {
 .context-snapshot { max-height: 180px; overflow: auto; white-space: pre-wrap; }
 .chat-page { display: flex; flex-direction: column; height: 100%; min-height: 0; background: radial-gradient(circle at 85% -10%, var(--color-accent-soft), transparent 30%), var(--color-background-primary); }
 .chat-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: var(--space-md); padding: var(--space-md) var(--space-xl); border-bottom: 1px solid var(--color-border-default); background: var(--color-surface-secondary); box-shadow: var(--shadow-sm); z-index: 1; }
+.chat-toolbar-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); width: 100%; min-height: 32px; }
+.chat-toolbar-head strong { color: var(--color-text-primary); }
 .attachment-list { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .image-routing { flex-basis: 100%; }
 .chat-settings { display: flex; align-items: end; flex-wrap: wrap; gap: var(--space-md); width: min(100%, 820px); min-width: 0; margin: 0 auto; }
@@ -248,6 +258,11 @@ async function openCitationCard(citation: Citation) {
 .chat-error { margin: var(--space-md) var(--space-xl) 0; }
 .message-timeline { flex: 1; min-height: 0; overflow: auto; padding: var(--space-xl) max(var(--space-xl), calc((100% - 820px) / 2)); user-select: text; }
 .message { display: grid; grid-template-columns: 36px 1fr; gap: var(--space-md); margin-bottom: var(--space-xl); animation: message-in var(--motion-normal) both; }
+.message.user { grid-template-columns: minmax(0, 1fr) 36px; }
+.message.user .avatar { grid-column: 2; grid-row: 1; }
+.message.user .message-body { grid-column: 1; grid-row: 1; justify-self: end; max-width: min(100%, 720px); border-radius: var(--radius-lg) 4px var(--radius-lg) var(--radius-lg); }
+.message.user time { text-align: right; }
+.message.user .message-actions { justify-content: flex-end; }
 .avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .avatar { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--color-border-default); border-radius: var(--radius-full); background: var(--color-background-tertiary); box-shadow: var(--shadow-sm); font-weight: 700; }
 .assistant .avatar { background: var(--color-accent-soft); color: var(--color-accent-primary); }
@@ -255,7 +270,7 @@ async function openCitationCard(citation: Citation) {
 .user .message-body { background: var(--color-accent-soft); border-color: color-mix(in srgb, var(--color-accent-primary) 14%, transparent); }
 .message-content { white-space: pre-wrap; line-height: var(--line-height-relaxed); }
 .new-activity { align-self: center; margin: var(--space-xs); }
-@media (max-width: 640px) { .message-timeline { padding: var(--space-sm); } .message { grid-template-columns: 24px minmax(0, 1fr); gap: var(--space-xs); } .avatar { width: 24px; height: 24px; } .message-body { padding: var(--space-sm); } }
+@media (max-width: 640px) { .message-timeline { padding: var(--space-sm); } .message { grid-template-columns: 24px minmax(0, 1fr); gap: var(--space-xs); } .message.user { grid-template-columns: minmax(0, 1fr) 24px; } .avatar { width: 24px; height: 24px; } .message-body { padding: var(--space-sm); } }
 .message-actions { margin-top: var(--space-sm); }
 .message-edit .textarea { width: 100%; min-height: 100px; }
 @media (prefers-reduced-motion: reduce) { .message { animation: none; } }

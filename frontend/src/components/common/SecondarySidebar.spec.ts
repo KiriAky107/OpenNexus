@@ -52,6 +52,26 @@ it('keeps conversation and file widths separate across route changes', async () 
   localStorage.removeItem('workspace-sidebar-width')
 })
 
+it('collapses the conversation list into a restore rail without losing its width', async () => {
+  localStorage.clear()
+  const pinia = createPinia()
+  const layout = useLayoutPreferencesStore(pinia)
+  layout.chatWidth = 320
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
+  await router.push('/')
+  const wrapper = mount(SecondarySidebar, { attachTo: document.body, props: { component: 'conversation-list' },
+    global: { plugins: [router, pinia], stubs: { ConversationListPanel: true } } })
+  try {
+    await wrapper.get('.collapse-chat-sidebar').trigger('click')
+    expect(wrapper.get('aside').attributes('style')).toContain('40px')
+    expect(wrapper.find('[role="separator"]').exists()).toBe(false)
+    expect(wrapper.get('.sidebar-content').isVisible()).toBe(false)
+    await wrapper.get('.collapsed-rail button').trigger('click')
+    expect(wrapper.get('aside').attributes('style')).toContain('320px')
+    expect(layout.chatWidth).toBe(320)
+  } finally { wrapper.unmount(); localStorage.clear() }
+})
+
 it('resizes by keyboard, clamps bounds and restores the saved width', async () => {
   localStorage.removeItem('workspace-sidebar-width')
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })

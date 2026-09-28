@@ -28,3 +28,22 @@ it('uses valid defaults for malformed stored choices', () => {
   expect(layout.workspaceTab).toBe('files')
   expect(layout.workspaceWidth).toBe(272)
 })
+it('keeps chat panel choices while global focus is temporary', () => {
+  const layout = useLayoutPreferencesStore(createPinia())
+  layout.chatSidebarCollapsed = true
+  layout.chatSettingsCollapsed = false
+  layout.toggleFocusMode()
+  expect(layout.focusMode).toBe(true)
+  expect(layout.chatSidebarCollapsed).toBe(true)
+  expect(layout.chatSettingsCollapsed).toBe(false)
+  layout.toggleFocusMode()
+  expect(layout.focusMode).toBe(false)
+  const restored = useLayoutPreferencesStore(createPinia())
+  expect(restored.focusMode).toBe(false)
+  expect(restored.chatSidebarCollapsed).toBe(true)
+  expect(restored.chatSettingsCollapsed).toBe(false)
+  restored.toggleChatSidebar()
+  restored.toggleChatSettings()
+  expect(restored.chatSidebarCollapsed).toBe(false)
+  expect(restored.chatSettingsCollapsed).toBe(true)
+})
