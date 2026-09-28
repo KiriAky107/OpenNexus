@@ -52,8 +52,8 @@ async function act(operation: () => Promise<unknown>) {
       </div>
       <button v-if="['running', 'waiting_budget'].includes(group.status)" class="button-danger" :disabled="busy" @click="act(() => cancelCollaboration(id))">{{ t('停止整个协作', 'Stop collaboration') }}</button>
       <BudgetConfirmation :run-id="id" :collaboration-id="id" :status="group.status === 'waiting_budget' ? 'waiting_budget' : undefined" :events="budgetEvents" @resolved="refresh()" />
-      <details v-for="member in group.members" :key="member.member_id" class="member ui-disclosure" :open="group.status === 'awaiting_confirmation'">
-        <summary><span>{{ member.definition.config.name }}</span><span class="badge" :class="{ success: member.status === 'completed', error: member.status === 'failed', warning: member.status === 'waiting_permission', info: member.status === 'running' }">{{ statusLabel(member.status) }}</span></summary>
+      <details v-for="member in group.members" :key="member.member_id" class="member ui-disclosure" :open="group.status === 'awaiting_confirmation' || ['waiting_permission', 'waiting_budget'].includes(member.status)">
+        <summary><span>{{ member.definition.config.name }}</span><span class="badge" :class="{ success: member.status === 'completed', error: member.status === 'failed', warning: ['waiting_permission', 'waiting_budget'].includes(member.status), info: member.status === 'running' }">{{ member.status === 'waiting_budget' ? t('等待继续确认', 'Waiting for continuation') : statusLabel(member.status) }}</span></summary>
         <p>{{ member.input }}</p>
         <p v-if="member.depends_on.length">{{ t('依赖', 'Depends on') }}: {{ member.depends_on.map(id => group!.members.find(item => item.member_id === id)?.definition.config.name || id).join('、') }}</p>
         <p class="subtle">{{ member.definition.config.model }} · {{ member.definition.config.tools.join(', ') || t('无工具', 'No tools') }}</p>

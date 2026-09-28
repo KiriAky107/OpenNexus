@@ -77,6 +77,7 @@ from app.contracts import (
     PageMeta,
     PermissionDecisionRequest,
     BudgetDecisionRequest,
+    StepsDecisionRequest,
     Plugin,
     PluginCommandExecuteRequest,
     PluginCommandListResponse,
@@ -749,6 +750,14 @@ async def extend_agent_budget(run_id: str, request_id: str, request: BudgetDecis
     if not await container.agent.extend_budget(run_id, request_id, request.additional_tokens):
         raise ApiError(409, "BUDGET_REQUEST_STALE", "Budget request is no longer pending or conflicts with an earlier decision.")
     return OperationResponse(status="completed", resource_id=request_id, message="Budget extended.")
+
+
+@router.post("/agent/runs/{run_id}/steps/{request_id}", response_model=OperationResponse, tags=["Agent"])
+async def extend_agent_steps(run_id: str, request_id: str, request: StepsDecisionRequest) -> OperationResponse:
+    await asyncio.to_thread(agent_run_or_404, run_id)
+    if not await container.agent.extend_steps(run_id, request_id, request.additional_steps):
+        raise ApiError(409, "STEPS_REQUEST_STALE", "Step request is no longer pending or conflicts with an earlier decision.")
+    return OperationResponse(status="completed", resource_id=request_id, message="Step limit extended.")
 
 
 @router.get("/tools", response_model=ToolListResponse, tags=["Agent"])

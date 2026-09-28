@@ -24,7 +24,7 @@ const title = computed(() => ({ 'agent.define': t('创建智能体配置', 'Crea
       <p v-if="call.error_message" class="tool-error" role="alert">{{ call.error_message }}</p>
       <details class="ui-disclosure tool-result"><summary>{{ t('参数与返回详情', 'Parameters and result') }}</summary><pre>{{ JSON.stringify({ parameters: call.parameters, result }, null, 2) }}</pre></details>
     </details>
-    <RunActivity v-if="identifier('run_id', 'run')" :run-id="identifier('run_id', 'run')" />
+    <RunActivity v-if="identifier('run_id', 'run')" :run-id="identifier('run_id', 'run')" permission-dialog />
     <CollaborationCard v-if="identifier('collaboration_id', 'collaboration')" :id="identifier('collaboration_id', 'collaboration')" />
     <DefinitionChange v-if="identifier('change_id', 'change')" :id="identifier('change_id', 'change')" />
   </div>

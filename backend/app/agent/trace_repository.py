@@ -210,6 +210,15 @@ class AgentTraceRepository:
         finally:
             conn.close()
 
+    def steps_decision(self, run_id: str, request_id: str, amount: int) -> bool:
+        conn = connect()
+        try:
+            return conn.execute("SELECT 1 FROM agent_events WHERE run_id=? AND event='StepsResolved' "
+                "AND json_extract(data_json,'$.request_id')=? AND json_extract(data_json,'$.additional_steps')=?",
+                (run_id, request_id, amount)).fetchone() is not None
+        finally:
+            conn.close()
+
     def list_runs(self, limit: int, offset: int) -> tuple[list[AgentRun], int]:
         from app.agent.management import scope
         conn = connect()

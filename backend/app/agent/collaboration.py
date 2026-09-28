@@ -199,6 +199,9 @@ class Coordinator:
                             member['status'] = 'blocked'
                     if json.dumps(group['members'], sort_keys=True) != before:
                         group = store.save('collaboration', group, group['revision'])
+                    controller.note_manual_wait(group['status'] == 'running' and any(
+                        member['status'] in {'waiting_permission', 'waiting_budget'}
+                        for member in group['members']))
                     if monotonic() - started - controller.paused_seconds() > group['plan']['timeout_seconds']:
                         raise TimeoutError('Collaboration execution time exceeded')
                     for member in group['members']:
@@ -253,9 +256,19 @@ class GroupBudget:
         self.cancelled_members = set()
         self.wait_started = None
         self.waited = 0.0
+        self.manual_wait_started = None
+        self.manual_waited = 0.0
 
     def paused_seconds(self):
-        return self.waited + (monotonic() - self.wait_started if self.wait_started is not None else 0)
+        return (self.waited + (monotonic() - self.wait_started if self.wait_started is not None else 0)
+                + self.manual_waited + (monotonic() - self.manual_wait_started if self.manual_wait_started is not None else 0))
+
+    def note_manual_wait(self, waiting: bool):
+        if waiting and self.manual_wait_started is None:
+            self.manual_wait_started = monotonic()
+        elif not waiting and self.manual_wait_started is not None:
+            self.manual_waited += monotonic() - self.manual_wait_started
+            self.manual_wait_started = None
 
     async def checkpoint(self, usage=0, tool=False, needs_more=True, estimated=False, wait=True, run_id=None, member_usage=0):
         async with self.lock:

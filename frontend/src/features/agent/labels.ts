@@ -5,7 +5,7 @@ const runStatusLabels: Record<AgentRunStatus, string> = {
   queued: '排队中',
   running: '运行中',
   waiting_permission: '等待授权',
-  waiting_budget: '等待追加预算',
+  waiting_budget: '等待继续确认',
   completed: '已完成',
   failed: '失败',
   cancelled: '已取消',
@@ -26,19 +26,22 @@ const eventLabels: Record<AgentEventType, string> = {
   PermissionResolved: '权限已处理',
   BudgetRequired: '等待追加预算',
   BudgetResolved: '预算已追加',
+  StepsRequired: '等待追加执行步数',
+  StepsResolved: '执行步数已追加',
   RunCompleted: '运行完成',
   RunFailed: '运行失败',
   RunCancelled: '运行取消',
 }
 
 const runStatusLabelsEn: Record<AgentRunStatus, string> = {
-  waiting_budget: 'Waiting for more budget',
+  waiting_budget: 'Waiting for continuation',
   queued: 'Queued', running: 'Running', waiting_permission: 'Waiting for permission',
   completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled',
 }
 
 const eventLabelsEn: Record<AgentEventType, string> = {
   BudgetRequired: 'Budget approval required', BudgetResolved: 'Budget extended',
+  StepsRequired: 'More steps required', StepsResolved: 'Step limit extended',
   RunStarted: 'Run started', TextDelta: 'Response', ThinkingDelta: 'Reasoning',
   ToolCall: 'Tool call', ToolResult: 'Tool result', PermissionRequired: 'Permission required',
   Usage: 'Usage', Citation: 'Citation', ModelCallStarted: 'Model call started',

@@ -15,6 +15,10 @@ class FindArguments(BaseModel):
 
 
 class ChatDefinitionConfig(DefinitionConfig):
+    # Chat-created definitions inherit the model explicitly selected in this
+    # conversation unless the caller supplies a different configured model.
+    provider_id: str | None = Field(default=None, min_length=1, max_length=128)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
     token_budget: int = Field(default=8000, ge=1, le=1000000)
 
 
@@ -64,7 +68,7 @@ TOOLS = [
 TOOLS += [ToolDefinition(name=name, description=description, parameters=schema.model_json_schema()) for name, description, schema in [
     ('agent.list', 'Find reusable Agents in the current knowledge base. Empty query lists available definitions.', FindArguments),
     ('agent.inspect', 'Read an Agent configuration and revision before starting or proposing changes.', IdArguments),
-    ('agent.define', 'Create a reusable Agent configuration, not a run. Chat-created definitions have a finite token budget (default 8000). Does not execute tasks or grant tools permissions.', ChatDefinitionConfig),
+    ('agent.define', 'Create a reusable Agent configuration, not a run. Omit provider_id and model to inherit the current chat model. Chat-created definitions have a finite token budget (default 8000). Does not execute tasks or grant tools permissions.', ChatDefinitionConfig),
     ('agent.propose_update', 'Propose a full configuration revision, including disabling via enabled=false. The user must approve before it takes effect.', UpdateArguments),
     ('agent.propose_delete', 'Propose deleting a reusable definition. The user must approve; existing run history is preserved.', DeleteArguments),
     ('agent.start', 'Start a run using the specified definition revision. This chat turn waits for the final run result; tool writes still require permission.', StartArguments),
@@ -173,10 +177,15 @@ async def execute(call, request):
     if call.name == 'agent.inspect':
         return store.get('definition', IdArguments.model_validate(call.arguments).agent_id)
     if call.name == 'agent.define':
-        config = ChatDefinitionConfig.model_validate(call.arguments)
+        config = ChatDefinitionConfig.model_validate({
+            **call.arguments,
+            'provider_id': call.arguments.get('provider_id') or request.provider_id,
+            'model': call.arguments.get('model') or request.model,
+        })
         if not set(config.tools) <= ceiling:
             raise ValueError('Definition tools exceed the current chat catalog')
-        return create_definition(config, container.agent, operation_id(call, request), origin='chat')
+        return create_definition(DefinitionConfig.model_validate(config.model_dump()), container.agent,
+            operation_id(call, request), origin='chat')
     if call.name in {'agent.propose_update', 'agent.propose_delete'}:
         args = (UpdateArguments if call.name == 'agent.propose_update' else DeleteArguments).model_validate(call.arguments)
         previous = store.get('definition', args.agent_id)

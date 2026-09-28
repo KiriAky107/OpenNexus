@@ -167,6 +167,30 @@ def test_permission_confirmation_resumes_agent() -> None:
     run(scenario())
 
 
+def test_permission_review_does_not_consume_tool_or_run_timeout() -> None:
+    async def scenario() -> None:
+        container = build_container()
+        container.tools.get('system.echo').definition.permission = 'notes.write'
+        created = await container.agent.create_run(AgentRunCreateRequest(
+            input='/tool system.echo {"text":"approved later"}',
+            provider_id='mock', model='mock-1', allowed_tools=['system.echo'],
+            tool_timeout_seconds=1, run_timeout_seconds=1,
+        ))
+        async with asyncio.timeout(2):
+            async for event in container.agent.events(created.run_id):
+                if event.event == AgentEventType.permission_required:
+                    request_id = str(event.data['request_id'])
+                    break
+        await asyncio.sleep(1.2)
+        assert container.agent.get_run(created.run_id).status == AgentRunStatus.waiting_permission
+        assert await container.agent.resolve_permission(created.run_id, request_id, 'allow_once')
+        completed = await container.agent.wait(created.run_id)
+        assert completed.status == AgentRunStatus.completed
+        assert completed.tool_results[0].success is True
+
+    run(scenario())
+
+
 def test_agent_trace_persists_and_replays_from_sequence() -> None:
     async def scenario() -> None:
         first = build_container()
@@ -357,7 +381,7 @@ def test_agent_sse_uses_last_event_id_and_emits_event_ids(monkeypatch) -> None:
     run(scenario())
 
 
-def test_step_limit_stops_repeated_agent_loop() -> None:
+def test_step_limit_pauses_and_continues_without_replaying_tools() -> None:
     async def scenario() -> None:
         container = build_container()
         created = await container.agent.create_run(
@@ -370,9 +394,22 @@ def test_step_limit_stops_repeated_agent_loop() -> None:
             )
         )
 
+        for _ in range(100):
+            paused = container.agent.get_run(created.run_id)
+            if paused.status == AgentRunStatus.waiting_budget:
+                break
+            await asyncio.sleep(0.01)
+        assert paused.status == AgentRunStatus.waiting_budget
+        assert len(paused.tool_results) == 1
+        trace = container.agent.get_trace(created.run_id, after_sequence=-1, limit=100)
+        required = next(event for event in trace.items if event.event == AgentEventType.steps_required)
+        request_id = required.data['request_id']
+        assert not await container.agent.extend_budget(created.run_id, request_id, 100)
+        assert await container.agent.extend_steps(created.run_id, request_id, 2)
+        assert await container.agent.extend_steps(created.run_id, request_id, 2)
         completed = await container.agent.wait(created.run_id)
-        assert completed.status == AgentRunStatus.failed
-        assert completed.error_code == "MAX_STEPS_EXCEEDED"
+        assert completed.status == AgentRunStatus.completed
+        assert completed.max_steps == 3
         assert len(completed.tool_results) == 1
 
     run(scenario())

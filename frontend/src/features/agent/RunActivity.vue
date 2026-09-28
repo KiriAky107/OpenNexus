@@ -13,11 +13,13 @@ import { getNote } from '@/services/noteService'
 import { getTask } from '@/services/taskService'
 import AppDialog from '@/components/common/AppDialog.vue'
 import type { TaskItem } from '@/contracts'
-const props = defineProps<{ runId: string }>()
+const props = withDefaults(defineProps<{ runId: string; permissionDialog?: boolean }>(), { permissionDialog: false })
 const workspace = useWorkspaceStore()
 const run = ref<ApiAgentRun>()
 const events = ref<AgentEvent[]>([])
 const permissions = ref<AgentEvent[]>([])
+const dismissedPermission = ref('')
+const activePermission = computed(() => permissions.value.find(item => String(item.data.request_id) !== dismissedPermission.value))
 const error = ref('')
 const unavailable = ref(false)
 const busy = ref(false)
@@ -80,7 +82,7 @@ async function refresh(version = generation) {
 watch(() => [props.runId, workspace.vaultId], () => {
   generation++
   clearTimeout(timer)
-  cursor = -1; run.value = undefined; events.value = []; permissions.value = []; selectedTask.value = undefined; error.value = ''; unavailable.value = false; busy.value = false
+  cursor = -1; run.value = undefined; events.value = []; permissions.value = []; dismissedPermission.value = ''; selectedTask.value = undefined; error.value = ''; unavailable.value = false; busy.value = false
   void refresh()
 }, { immediate: true })
 onBeforeUnmount(() => { generation++; clearTimeout(timer) })
@@ -113,6 +115,20 @@ async function act(operation: () => Promise<unknown>) {
         <button class="button-danger" :disabled="busy" @click="act(() => respondToPermission(runId, String(permission.data.request_id), 'deny'))">{{ t('拒绝', 'Deny') }}</button>
       </div>
     </section>
+    <AppDialog v-if="permissionDialog && activePermission" :label="t('确认智能体操作', 'Confirm Agent action')" @close="dismissedPermission = String(activePermission.data.request_id)">
+      <div class="modal permission-modal">
+        <h2>{{ t('确认智能体操作', 'Confirm Agent action') }}</h2>
+        <p>{{ t('智能体请求执行以下操作。请先核对内容，再决定是否允许；关闭弹窗后仍可在运行卡片中处理。', 'The Agent requests the following action. Review it before allowing; you can also decide later from the run card.') }}</p>
+        <strong>{{ toolLabel(String((activePermission.data.tool_call as Record<string, unknown>)?.name)) }}</strong>
+        <details class="ui-disclosure permission-review"><summary>{{ t('查看操作内容', 'Review operation') }}</summary><pre>{{ JSON.stringify(activePermission.data.tool_call, null, 2) }}</pre></details>
+        <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
+        <div class="inline-actions">
+          <button class="button-primary" :disabled="busy" @click="act(() => respondToPermission(runId, String(activePermission!.data.request_id), 'allow_once'))">{{ t('允许本次', 'Allow once') }}</button>
+          <button class="button-danger" :disabled="busy" @click="act(() => respondToPermission(runId, String(activePermission!.data.request_id), 'deny'))">{{ t('拒绝', 'Deny') }}</button>
+          <button class="button-secondary" :disabled="busy" @click="dismissedPermission = String(activePermission.data.request_id)">{{ t('稍后处理', 'Decide later') }}</button>
+        </div>
+      </div>
+    </AppDialog>
     <details class="ui-disclosure run-details" :open="expanded" @toggle="expanded = ($event.target as HTMLDetailsElement).open"><summary>{{ t('执行详情与结果', 'Execution details and result') }} · {{ run?.current_step || 0 }} {{ t('步', 'steps') }}</summary>
       <template v-if="expanded">
         <MarkdownContent v-if="run?.output" :source="run.output" />
@@ -134,6 +150,8 @@ async function act(operation: () => Promise<unknown>) {
 .permission-card { display: grid; gap: var(--space-sm); padding: var(--space-md); border: 1px solid color-mix(in srgb, var(--color-callout-warning) 30%, var(--color-border-default)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-callout-warning) 7%, var(--color-surface-primary)); }
 .permission-card > strong { color: var(--color-callout-warning); }
 .permission-review, .operation-result { background: var(--color-surface-primary); }
+.permission-modal { display: grid; gap: var(--space-md); width: min(560px, 100%); }
+.permission-modal > strong { color: var(--color-callout-warning); }
 .run-details { min-width: 0; background: var(--color-surface-secondary); }
 .operation-line { display: grid; gap: var(--space-xs); margin-block: var(--space-sm); padding: var(--space-sm); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-surface-primary); overflow-wrap: anywhere; }
 </style>

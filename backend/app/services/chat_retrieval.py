@@ -68,7 +68,7 @@ async def stream(request, provider):
     except ExtensionError:
         pass  # 可选的内置包可能已被禁用或卸载。
     if request.allow_agent:
-        grounded = grounded.model_copy(update={'system': (grounded.system or '') + '\n可用 agent.list/inspect/define 管理可复用配置；propose_update/propose_delete 只提出变更，需用户确认。多任务使用 agent.collaborate 创建待确认的分工计划，不声称已启动成员。执行者不能再委派其他智能体；状态与结果只以工具返回为准。'})
+        grounded = grounded.model_copy(update={'system': (grounded.system or '') + '\n可用 agent.list/inspect/define 管理可复用配置；agent.define 省略 provider_id 和 model 时自动沿用本轮已选择的模型，无需另找模型配置接口。propose_update/propose_delete 只提出变更，需用户确认。多任务使用 agent.collaborate 创建待确认的分工计划，不声称已启动成员。执行者不能再委派其他智能体；状态与结果只以工具返回为准。'})
     retry_policy = request.metadata.get('retry_write_policy', 'read_only') if request.retry_message_id else 'full'
     if retry_policy not in {'full', 'create_only', 'read_only'}:
         retry_policy = 'read_only'
@@ -277,7 +277,7 @@ async def stream(request, provider):
                                 'queued': '智能体已排队，正在等待执行。',
                                 'running': '智能体正在执行；本轮对话会等待实际结果。',
                                 'waiting_permission': '智能体等待操作授权，请在运行卡片中确认。',
-                                'waiting_budget': '智能体已暂停等待 Token 预算确认，请在运行卡片中处理。',
+                                'waiting_budget': '智能体已暂停，等待 Token 预算确认或执行步数确认，请在运行卡片中处理。',
                             }.get(status, '智能体仍在执行。')
                             if status != last_status:
                                 yield event(E.context_status, {'message': message})

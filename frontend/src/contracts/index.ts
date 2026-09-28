@@ -164,6 +164,8 @@ export type AgentEventType =
   | 'PermissionResolved'
   | 'BudgetRequired'
   | 'BudgetResolved'
+  | 'StepsRequired'
+  | 'StepsResolved'
   | 'RunCompleted'
   | 'RunFailed'
   | 'RunCancelled'

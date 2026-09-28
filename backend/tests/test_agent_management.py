@@ -42,6 +42,56 @@ def test_manual_defaults_unlimited_but_chat_definitions_are_bounded():
     assert changed['config']['token_budget'] == 12000
 
 
+def test_chat_definition_schema_inherits_current_model_when_unspecified():
+    from app.services.chat_agents import ChatDefinitionConfig
+    schema = ChatDefinitionConfig.model_json_schema()
+    assert 'provider_id' not in schema.get('required', [])
+    assert 'model' not in schema.get('required', [])
+    parsed = ChatDefinitionConfig.model_validate({'name': 'Planner', 'provider_id': 'mock', 'model': 'mock-1'})
+    assert parsed.provider_id == 'mock' and parsed.model == 'mock-1'
+
+
+def test_chat_can_define_collaboration_member_without_model_ids():
+    from app.services import chat_agents
+    from app.contracts import ChatRequest, ToolCall
+
+    async def scenario():
+        request = ChatRequest(provider_id='mock', model='mock-1', messages=[],
+            allow_agent=True, conversation_id='chat-define-model-default')
+        call = ToolCall(tool_call_id='define', name='agent.define', arguments={
+            'name': 'Researcher', 'role': 'Read notes', 'tools': ['notes.read']})
+        result = await chat_agents.execute(call, request)
+        assert result['config']['provider_id'] == 'mock'
+        assert result['config']['model'] == 'mock-1'
+        assert result['origin'] == 'chat'
+        writer = await chat_agents.execute(ToolCall(tool_call_id='define-writer', name='agent.define', arguments={
+            'name': 'Writer', 'role': 'Write notes', 'tools': ['notes.create']}), request)
+        planned = await chat_agents.execute(ToolCall(tool_call_id='plan', name='agent.collaborate', arguments={
+            'title': 'Research and write',
+            'members': [
+                {'member_id': 'reader', 'agent_id': result['id'], 'input': 'Read source notes'},
+                {'member_id': 'writer', 'agent_id': writer['id'], 'input': 'Write a summary', 'depends_on': ['reader']},
+            ],
+        }), request)
+        assert planned['status'] == 'awaiting_confirmation'
+        assert planned['members'] == 2
+
+    asyncio.run(scenario())
+
+
+def test_collaboration_timeout_excludes_human_confirmation(monkeypatch):
+    from app.agent import collaboration
+    clock = [100.0]
+    monkeypatch.setattr(collaboration, 'monotonic', lambda: clock[0])
+    controller = collaboration.GroupBudget(None, {'id': 'group-test'})
+    controller.note_manual_wait(True)
+    clock[0] += 75
+    assert controller.paused_seconds() == 75
+    controller.note_manual_wait(False)
+    clock[0] += 10
+    assert controller.paused_seconds() == 75
+
+
 def test_unlimited_manual_agent_is_still_bounded_by_chat_and_group():
     async def scenario():
         runtime = build_container().agent

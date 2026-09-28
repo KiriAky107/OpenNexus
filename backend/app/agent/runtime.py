@@ -74,10 +74,13 @@ class RunRecord:
     budget_request_id: str | None = None
     budget_future: asyncio.Future[None] | None = None
     budget_decisions: dict[str, int] = field(default_factory=dict)
+    limit_kind: str = 'tokens'
     timeout: asyncio.Timeout | None = None
     checkpoint: dict | None = None
     resume: dict | None = None
     preserve_pause: bool = False
+    permission_waits: int = 0
+    permission_timeout_remaining: float | None = None
 
 
 class AgentRuntime:
@@ -261,6 +264,7 @@ class AgentRuntime:
             return False
         if self.trace_repository.budget_decision(run_id, request_id, additional_tokens):
             return True
+
         record = self._records.get(run_id) or self._restore_paused(run_id)
         if record is None:
             return False
@@ -271,6 +275,7 @@ class AgentRuntime:
                 return record.budget_decisions[request_id] == additional_tokens
             if (record.run.status != AgentRunStatus.waiting_budget
                 or record.budget_request_id != request_id
+                or record.limit_kind != 'tokens'
                 or record.budget_future is None or record.budget_future.done()):
                 return False
             previous_budget = record.run.token_budget
@@ -314,6 +319,58 @@ class AgentRuntime:
                 record.task = asyncio.create_task(self._execute(record), name=run_id)
             return True
 
+    async def extend_steps(self, run_id: str, request_id: str, additional_steps: int) -> bool:
+        if type(additional_steps) is not int or not 1 <= additional_steps <= 100:
+            raise ValueError("Additional steps must be an integer between 1 and 100.")
+        try:
+            self.get_run(run_id)
+        except AgentRunNotFoundError:
+            return False
+        if self.trace_repository.steps_decision(run_id, request_id, additional_steps):
+            return True
+        record = self._records.get(run_id) or self._restore_paused(run_id)
+        if record is None:
+            return False
+        async with record.cancel_lock:
+            if request_id in record.budget_decisions:
+                return record.budget_decisions[request_id] == additional_steps
+            if (record.run.status != AgentRunStatus.waiting_budget
+                or record.budget_request_id != request_id or record.limit_kind != 'steps'
+                or record.budget_future is None or record.budget_future.done()
+                or record.request.max_steps + additional_steps > 1000):
+                return False
+            previous_checkpoint = record.checkpoint
+            previous_steps = record.request.max_steps
+            record.checkpoint = None
+            record.request.max_steps += additional_steps
+            record.run.max_steps = record.request.max_steps
+            record.run.status = AgentRunStatus.running
+            record.run.updated_at = datetime.now(timezone.utc)
+            try:
+                await self._publish(record, AgentEventType.steps_resolved, {
+                    'request_id': request_id, 'additional_steps': additional_steps,
+                    'max_steps': record.run.max_steps,
+                })
+            except BaseException:
+                if (record.persisted_run is not None
+                    and record.persisted_run.status == AgentRunStatus.running
+                    and record.persisted_run.max_steps == record.run.max_steps):
+                    record.budget_decisions[request_id] = additional_steps
+                    record.budget_future.set_result(None)
+                    if record.resume is not None and record.task is None:
+                        record.task = asyncio.create_task(self._execute(record), name=run_id)
+                else:
+                    record.checkpoint = previous_checkpoint
+                    record.request.max_steps = previous_steps
+                    record.run.max_steps = previous_steps
+                    record.run.status = AgentRunStatus.waiting_budget
+                raise
+            record.budget_decisions[request_id] = additional_steps
+            record.budget_future.set_result(None)
+            if record.resume is not None and record.task is None:
+                record.task = asyncio.create_task(self._execute(record), name=run_id)
+            return True
+
     def _restore_paused(self, run_id: str) -> RunRecord | None:
         run = self.get_run(run_id)  # scope check precedes loading private execution context
         checkpoint = self.trace_repository.get_checkpoint(run_id)
@@ -333,11 +390,13 @@ class AgentRuntime:
             skill_config=skill_config, persisted_run=run.model_copy(deep=True),
             checkpoint=checkpoint, resume=checkpoint,
             next_sequence=max((event.sequence for event in trace), default=-1) + 1,
+            limit_kind=checkpoint.get('limit_kind', 'tokens'),
             budget_request_id=checkpoint['request_id'], budget_future=asyncio.get_running_loop().create_future())
         self._records[run_id] = record
         return record
 
     async def _wait_for_budget(self, record: RunRecord, context: dict) -> None:
+        record.limit_kind = 'tokens'
         loop = asyncio.get_running_loop()
         remaining = None
         if record.timeout is not None and record.timeout.when() is not None:
@@ -361,6 +420,38 @@ class AgentRuntime:
                 "token_usage": record.run.token_usage,
                 "token_budget": record.run.token_budget,
                 "estimated": record.run.token_usage_estimated,
+            })
+            await record.budget_future
+        finally:
+            record.budget_request_id = None
+            record.budget_future = None
+            if remaining is not None and record.timeout is not None:
+                record.timeout.reschedule(loop.time() + remaining)
+
+    async def _wait_for_steps(self, record: RunRecord, context: dict) -> None:
+        record.limit_kind = 'steps'
+        loop = asyncio.get_running_loop()
+        remaining = None
+        if record.timeout is not None and record.timeout.when() is not None:
+            remaining = max(0, record.timeout.when() - loop.time())
+            record.timeout.reschedule(None)
+        record.budget_request_id = f"steps_{uuid4().hex}"
+        record.budget_future = loop.create_future()
+        context.update(request_id=record.budget_request_id, remaining=remaining,
+            limit_kind='steps', request=record.request.model_dump(mode='json'),
+            allowed_tools=record.allowed_tools,
+            skill=({**asdict(record.skill_config), 'retrieval': record.skill_config.retrieval.model_dump(mode='json')}
+                   if record.skill_config else None))
+        safe = sanitize_trace_value(context, apply_limits=False)
+        record.checkpoint = safe if safe == context and len(json.dumps(safe)) <= 4_000_000 else None
+        record.run.status = AgentRunStatus.waiting_budget
+        record.run.updated_at = datetime.now(timezone.utc)
+        try:
+            await self._publish(record, AgentEventType.steps_required, {
+                'request_id': record.budget_request_id,
+                'current_step': record.run.current_step,
+                'max_steps': record.run.max_steps,
+                'token_usage': record.run.token_usage,
             })
             await record.budget_future
         finally:
@@ -498,16 +589,21 @@ class AgentRuntime:
             messages = [Message.model_validate(item) for item in resume['messages']]
             references.restore_snapshot(resume['references'])
 
-        for step in range(resume['step'] if resume else 1, record.request.max_steps + 1):
+        step = resume['step'] if resume else 1
+        while True:
+            if step > record.request.max_steps:
+                await self._wait_for_steps(record, {'step': step,
+                    'messages': [item.model_dump(mode='json') for item in messages],
+                    'references': references.snapshot()})
             await self._group_checkpoint(record)
             record.run.current_step = step
             record.run.updated_at = datetime.now(timezone.utc)
-            if resume:
+            if resume and 'turn' in resume:
                 model_call_id = resume['model_call_id']
                 turn = ProviderTurn(**{**resume['turn'], 'tool_calls': [ProviderToolCall(**item) for item in resume['turn']['tool_calls']]})
-                resume = None
             else:
                 turn, model_call_id = await self._model_turn(record, provider, messages, allowed_tools, step)
+            resume = None
             if (turn.tool_calls and record.request.token_budget is not None
                 and record.run.token_usage >= record.request.token_budget):
                 await self._wait_for_budget(record, {'step': step, 'model_call_id': model_call_id,
@@ -540,6 +636,7 @@ class AgentRuntime:
                     await self._collect_citations(record, result)
                     messages.append(Message(role=MessageRole.tool, name=call.name, tool_call_id=call.tool_call_id,
                         content=json.dumps(references.transform(result.model_dump(mode='json')), ensure_ascii=False)))
+                step += 1
                 continue
             if turn.text is not None:
                 record.run.output = turn.text
@@ -550,7 +647,6 @@ class AgentRuntime:
                 return
             await self._fail(record, 'EMPTY_MODEL_RESPONSE', 'Provider returned no text or tool call.')
             return
-        await self._fail(record, 'MAX_STEPS_EXCEEDED', 'Agent reached its maximum step count.')
 
     async def _model_turn(self, record, provider, messages, allowed_tools, step):
             model_call_id = f'model_call_{uuid4().hex}'
@@ -663,33 +759,34 @@ class AgentRuntime:
             # 运行状态必须在等待期间可见，前端才能展示并处理权限确认卡片。
             ticket = self.permissions.create_ticket(record.run.run_id, permission)
             record.run.status = AgentRunStatus.waiting_permission
-            await self._publish(
-                record,
-                AgentEventType.permission_required,
-                {
-                    "request_id": ticket.request_id,
-                    "permission": permission,
-                    "tool_call": call.model_dump(mode="json"),
-                },
-            )
+            record.run.updated_at = datetime.now(timezone.utc)
+            loop = asyncio.get_running_loop()
+            if record.permission_waits == 0 and record.timeout is not None and record.timeout.when() is not None:
+                record.permission_timeout_remaining = max(0, record.timeout.when() - loop.time())
+                record.timeout.reschedule(None)
+            record.permission_waits += 1
             try:
-                decision = await self.permissions.wait(
-                    ticket, timeout=record.request.tool_timeout_seconds
+                await self._publish(
+                    record,
+                    AgentEventType.permission_required,
+                    {
+                        "request_id": ticket.request_id,
+                        "permission": permission,
+                        "tool_call": call.model_dump(mode="json"),
+                    },
                 )
-            except TimeoutError:
-                record.run.status = AgentRunStatus.running
-                result = ToolResult(
-                    tool_call_id=call.tool_call_id,
-                    name=call.name,
-                    success=False,
-                    error_code="PERMISSION_TIMEOUT",
-                    error_message="Tool permission confirmation timed out.",
-                )
-                await self._publish_tool_result(
-                    record, result, parent_model_call_id, started_at
-                )
-                return result
-            record.run.status = AgentRunStatus.running
+                # A person's review is not tool execution. Only an explicit
+                # decision or cancellation ends this wait; tool timeout still
+                # applies after the user approves the call.
+                decision = await self.permissions.wait(ticket)
+            finally:
+                record.permission_waits -= 1
+                if record.permission_waits == 0 and record.permission_timeout_remaining is not None:
+                    if record.timeout is not None:
+                        record.timeout.reschedule(loop.time() + record.permission_timeout_remaining)
+                    record.permission_timeout_remaining = None
+            record.run.status = (AgentRunStatus.waiting_permission if record.permission_waits
+                                 else AgentRunStatus.running)
             record.run.updated_at = datetime.now(timezone.utc)
             async with record.publish_lock:
                 snapshot = record.run.model_copy(deep=True)

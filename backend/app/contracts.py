@@ -395,7 +395,7 @@ class AgentRunCreateRequest(Contract):
     model: str
     skill_id: str | None = None
     allowed_tools: list[str] = Field(default_factory=list)
-    max_steps: int = Field(default=10, ge=1, le=100)
+    max_steps: int = Field(default=10, ge=1, le=1000)
     tool_timeout_seconds: int = Field(default=30, ge=1)
     run_timeout_seconds: int = Field(default=300, ge=1)
     token_budget: int | None = Field(default=None, ge=1)
@@ -450,6 +450,8 @@ class AgentEventType(str, Enum):
     permission_resolved = "PermissionResolved"
     budget_required = "BudgetRequired"
     budget_resolved = "BudgetResolved"
+    steps_required = "StepsRequired"
+    steps_resolved = "StepsResolved"
     run_completed = "RunCompleted"
     run_failed = "RunFailed"
     run_cancelled = "RunCancelled"
@@ -487,6 +489,10 @@ class PermissionDecisionRequest(Contract):
 
 class BudgetDecisionRequest(Contract):
     additional_tokens: int = Field(ge=1, le=1_000_000, strict=True)
+
+
+class StepsDecisionRequest(Contract):
+    additional_steps: int = Field(ge=1, le=100, strict=True)
 
 
 # Skills 和插件

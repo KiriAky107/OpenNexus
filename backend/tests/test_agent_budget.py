@@ -20,6 +20,18 @@ async def paused_run(container, **kwargs):
     raise AssertionError('No budget request')
 
 
+async def paused_steps_run(container):
+    run = await container.agent.create_run(AgentRunCreateRequest(
+        input='/tool system.echo {"text":"once"}', provider_id='mock', model='mock-1',
+        allowed_tools=['system.echo'], max_steps=1,
+    ))
+    async with asyncio.timeout(3):
+        async for event in container.agent.events(run.run_id):
+            if event.event.value == 'StepsRequired':
+                return run.run_id, str(event.data['request_id'])
+    raise AssertionError('No step request')
+
+
 def test_budget_pause_resume_is_bounded_and_idempotent():
     async def scenario():
         container = build_container()
@@ -136,6 +148,26 @@ def test_restart_restores_pending_turn_without_repeating_model_or_tools(monkeypa
             assert third.agent.get_run(run_id).status.value == 'completed'
         finally:
             await third.agent.shutdown()
+    asyncio.run(scenario())
+
+
+def test_restart_restores_step_limit_pause_without_repeating_tools():
+    async def scenario():
+        first = build_container()
+        run_id, request_id = await paused_steps_run(first)
+        await first.agent.shutdown()
+        second = build_container()
+        try:
+            assert second.agent.get_run(run_id).status.value == 'waiting_budget'
+            assert await second.agent.extend_steps(run_id, request_id, 2)
+            completed = await asyncio.wait_for(second.agent.wait(run_id), 3)
+            assert completed.status.value == 'completed'
+            assert completed.max_steps == 3
+            assert len(completed.tool_results) == 1
+            events = [event async for event in second.agent.events(run_id)]
+            assert sum(event.event.value == 'StepsResolved' for event in events) == 1
+        finally:
+            await second.agent.shutdown()
     asyncio.run(scenario())
 
 

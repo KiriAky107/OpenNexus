@@ -31,6 +31,17 @@ it('shows permission actions independently of collapsed execution detail', async
   expect(respondToPermission).toHaveBeenCalledWith('run_a', 'p', 'allow_once')
   wrapper.unmount()
 })
+it('opens a permission dialog in chat and keeps the inline action when postponed', async () => {
+  const wrapper = mount(RunActivity, { props: { runId: 'run_a', permissionDialog: true },
+    global: { stubs: { AppDialog: { template: '<div data-dialog><slot /></div>' } } } })
+  await flushPromises()
+  expect(wrapper.get('[data-dialog]').text()).toContain('确认智能体操作')
+  expect(wrapper.get('[data-dialog]').text()).toContain('允许本次')
+  await wrapper.findAll('[data-dialog] button').find(button => button.text() === '稍后处理')!.trigger('click')
+  expect(wrapper.find('[data-dialog]').exists()).toBe(false)
+  expect(wrapper.get('.permission-card').text()).toContain('允许本次')
+  wrapper.unmount()
+})
 it('ignores a late response after switching vaults', async () => {
   let resolve!: (value: unknown) => void
   vi.mocked(api.get).mockImplementationOnce(() => new Promise(done => { resolve = done }) as never)

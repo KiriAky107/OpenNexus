@@ -94,7 +94,7 @@ class PermissionManager:
         self._pending[(run_id, ticket.request_id)] = ticket
         return ticket
 
-    async def wait(self, ticket: PermissionTicket, timeout: float) -> str:
+    async def wait(self, ticket: PermissionTicket, timeout: float | None = None) -> str:
         try:
             return await asyncio.wait_for(ticket.future, timeout=timeout)
         finally:

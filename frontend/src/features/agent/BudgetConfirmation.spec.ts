@@ -3,9 +3,9 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import BudgetConfirmation from './BudgetConfirmation.vue'
 import type { AgentEvent } from '@/contracts'
-import { cancelAgentRun, extendAgentBudget } from '@/services/agentService'
+import { cancelAgentRun, extendAgentBudget, extendAgentSteps } from '@/services/agentService'
 
-vi.mock('@/services/agentService', () => ({ cancelAgentRun: vi.fn(), extendAgentBudget: vi.fn() }))
+vi.mock('@/services/agentService', () => ({ cancelAgentRun: vi.fn(), extendAgentBudget: vi.fn(), extendAgentSteps: vi.fn() }))
 const event: AgentEvent = { event: 'BudgetRequired', sequence: 4, run_id: 'run_demo', timestamp: '', data: { request_id: 'budget_demo', token_usage: 8200, token_budget: 8000 } }
 function setup() {
   return mount(BudgetConfirmation, { props: { runId: 'run_demo', status: 'waiting_budget', events: [event] }, global: { stubs: { AppDialog: { template: '<div data-dialog><slot /></div>' } } } })
@@ -41,5 +41,15 @@ describe('BudgetConfirmation', () => {
     await flushPromises()
     expect(wrapper.find('[role="alert"]').text()).toContain('Disconnected')
     expect(wrapper.find('[data-dialog]').exists()).toBe(true)
+  })
+  it('offers step continuation separately from token budget', async () => {
+    const steps: AgentEvent = { event: 'StepsRequired', sequence: 5, run_id: 'run_demo', timestamp: '', data: { request_id: 'steps_demo', current_step: 10, max_steps: 10 } }
+    const wrapper = mount(BudgetConfirmation, { props: { runId: 'run_demo', status: 'waiting_budget', events: [steps] }, global: { stubs: { AppDialog: { template: '<div data-dialog><slot /></div>' } } } })
+    expect(wrapper.text()).toContain('执行步数已达到上限')
+    await wrapper.find('input').setValue('3')
+    await wrapper.findAll('button').find(button => button.text().includes('追加步数并继续'))!.trigger('click')
+    await flushPromises()
+    expect(extendAgentSteps).toHaveBeenCalledExactlyOnceWith('run_demo', 'steps_demo', 3)
+    expect(extendAgentBudget).not.toHaveBeenCalled()
   })
 })
