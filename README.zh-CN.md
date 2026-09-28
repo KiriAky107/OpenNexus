@@ -19,23 +19,23 @@
     <a href="https://github.com/KiriAky107/OpenNexus/releases">发布日志</a>
   </p>
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha1"><img src="https://img.shields.io/badge/Release-0.5.8--alpha1-5865f2?style=flat-square" alt="版本" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha2"><img src="https://img.shields.io/badge/Release-0.5.8--alpha2-5865f2?style=flat-square" alt="版本" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="平台" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="桌面端 Tauri" />
     <img src="https://img.shields.io/badge/Frontend-Vue_3-42b883?style=flat-square" alt="前端 Vue" />
     <img src="https://img.shields.io/badge/Core-FastAPI-05998b?style=flat-square" alt="后端 FastAPI" />
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e?style=flat-square" alt="开源协议" /></a>
-    <a href="visitors"><img src="https://visitor-badge.laobi.icu/badge?page_id=KiriAky107.OpenNexus" /></a>
+    <img src="https://visitor-badge.laobi.icu/badge?page_id=KiriAky107.OpenNexus" alt="访问量" />
   </p>
 
 </div>
 
 ---
 
-> ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.8-alpha1`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
+> ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.8-alpha2`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
 
 <div align="center">
-  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 0.5.6-alpha2 编辑器工具栏、大纲、公式与 Mermaid 图表" width="95%" />
+  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 编辑器工具栏、大纲、公式与 Mermaid 图表" width="95%" />
 </div>
 <table align="center">
   <tr>
@@ -50,10 +50,6 @@
     <td width="50%"><img src=".github/assets/opennexus-plugins.png" alt="已安装的 Plugin 与本地 Markdown 检查工具" /></td>
     <td width="50%"><img src=".github/assets/opennexus-themes.png" alt="主题与编辑器外观配置" /></td>
   </tr>
-  <tr>
-    <td width="50%"><img src=".github/assets/opennexus-community.png" alt="社区来源配置与扩展分类筛选" /></td>
-    <td width="50%"><img src=".github/assets/opennexus-settings.png" alt="OpenNexus 0.5.6-alpha2 通用设置与前端、Core 版本" /></td>
-  </tr>
 </table>
 
 
@@ -63,9 +59,10 @@
 
 - 📁 **零数据绑定 (Zero Vendor Lock-In)**：笔记采用开放的 Markdown 原生文件存储，辅以相对路径与内容寻址附件。数据随时自由迁移，无私有格式壁垒。
 - 🔍 **本地混合检索 (Hybrid Local Retrieval)**：整合 SQLite FTS5 全文搜索与本地向量嵌入（sqlite-vec），引入倒数排名融合（RRF）与可选重排机制（Rerank）。
-- 🎙️ **媒体直转知识 (Media-to-Knowledge)**：一键导入课程、会议或播客音视频，生成时间戳对齐的逐字稿，并智能提炼包含 Mermaid 流程图、数学公式的结构化笔记。
-- 🛡️ **可审计的自主智能体 (Inspectable Autonomous Agents)**：严格执行人机协同权限授权（Human-in-the-Loop）。所有工具调用、状态流转与执行记录均可回溯与断点恢复。
-- 🤝 **对话驱动的智能体协作**：可在对话中创建可复用或临时智能体，审核多智能体分工，并按发生顺序查看思考、工具调用与回复；达到 Token 上限时由用户决定是否继续。
+- 🎙️ **媒体直转知识 (Media-to-Knowledge)**：一键导入课程、会议或播客音视频，生成时间戳对齐的逐字稿，并智能提炼包含 Mermaid 流程图、数学公式的结构化笔记。本地处理支持最大 200 MiB 的文件与最长两小时的音轨。
+- 🛡️ **可审计的自主智能体 (Inspectable Autonomous Agents)**：可在弹窗中确认工具操作，查看持久化的执行轨迹；达到 Token 或步数上限时可追加额度继续运行。
+- 🤝 **对话驱动的智能体协作**：可在对话中创建可复用或临时智能体，审核多智能体分工，并按发生顺序查看思考、工具调用与回复；未指定模型时，对话创建的智能体沿用当前模型。
+- 🧭 **全局专注模式**：一键收起主侧栏和编辑工具栏；对话列表与顶部设置可分别折叠，用户和 AI 消息分列显示，让内容成为界面焦点。
 - 🔌 **标准扩展生态 (Extensible Ecosystem)**：原生接入 MCP (Model Context Protocol) 协议生态，支持经过安全指纹审计的第三方插件与扩展包。
 - ⚡ **原生安全边界 (Strict Local-First Security)**：API 密钥统一托管于操作系统凭据管理器（Credential Vault）。前端 WebView 永远无法接触明文凭证或越权访问文件系统。
 
@@ -75,10 +72,10 @@
 
 ### Windows 桌面端安装（推荐）
 
-1. 前往 GitHub Releases 下载最新安装包：[`OpenNexus_0.5.8-alpha1_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha1)。
+1. 前往 GitHub Releases 下载最新安装包：[`OpenNexus_0.5.8-alpha2_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha2)。
 2. *(可选)* 通过 PowerShell 校验 SHA-256 完整性：
 ```powershell
-   Get-FileHash .\OpenNexus_0.5.8-alpha1_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.5.8-alpha2_x64-setup.exe -Algorithm SHA256
    # 与同一 Release 中的 SHA256SUMS.txt 比对。
 
 ```
@@ -86,7 +83,7 @@
 3. 运行安装程序，在启动界面中选择或新建一个本地文件夹作为 Markdown 知识库（Vault）。
 4. 进入 **设置 (Settings) → 模型供应商 (Model Providers)**，配置本地推理后端（如 Ollama、vLLM）或输入云端 API 密钥。
 
-> 安装包采用绿色更新机制，用户应用配置及会话缓存持久化保存在 `%APPDATA%\cc.kronecker.notesagent`，覆盖升级不会影响已存在的本地笔记。
+> 安装包自带 AI Core，本地模型权重与 CUDA 组件可按需在设置中安装。用户应用配置及会话缓存保存在 `%APPDATA%\cc.kronecker.notesagent`，覆盖升级不会影响已存在的本地笔记。
 
 ---
 
@@ -94,7 +91,7 @@
 
 ### 1. 音视频录音转知识笔记
 
-通过可校对的转写中间层，将高噪多媒体平滑提炼为高内聚的知识笔记：
+通过可校对的转写中间层，将音视频素材整理成结构化知识笔记。本地处理支持最大 200 MiB 的文件与最长两小时的音轨：
 
 ```mermaid
 sequenceDiagram
@@ -125,15 +122,18 @@ sequenceDiagram
 
 ### 2. 受控且可续跑的规划智能体
 
-Agent 的执行具备权限沙箱保障。每次状态转移均通过持久化事件流驱动，网络断开或程序重启不会导致任务状态丢失：
+智能体执行轨迹会持续保存。工具权限可通过弹窗或运行卡片确认；达到 Token 或步数上限时，任务暂停并等待用户决定是否继续。保存的暂停点可在追加额度后续跑，不会重复已完成的工具操作：
 
 ```mermaid
 stateDiagram-v2
     [*] --> 队列中: 创建 Agent 任务
     队列中 --> 运行中: Worker 调度就绪
-    运行中 --> 等待权限确认: 触发敏感系统工具
-    等待权限确认 --> 运行中: 用户批准调用
-    等待权限确认 --> 已取消: 用户拒绝或中止
+    运行中 --> 等待权限确认: 工具操作需要授权
+    等待权限确认 --> 运行中: 用户批准或拒绝本次调用
+    等待权限确认 --> 已取消: 用户停止任务
+    运行中 --> 等待继续确认: 达到 Token 或执行步数上限
+    等待继续确认 --> 运行中: 用户追加预算或步数
+    等待继续确认 --> 已取消: 用户停止任务
     运行中 --> 执行完成: 交付最终产物并持久化
     运行中 --> 异常失败: 模型或工具超时抛错
     运行中 --> 已取消: 接收到外部中断信号
@@ -145,7 +145,7 @@ stateDiagram-v2
 
 ### 3. 多智能体协作
 
-在 AI 对话或智能体页面中，可以组合已有智能体并指定各自的任务与依赖。用户确认协作计划后，系统并行调度就绪成员，将已完成的上游结果交给后续成员，最后汇总执行结果与产物：
+在 AI 对话或智能体页面中，可以组合已有智能体并指定各自的任务与依赖。手动创建的智能体默认不设 Token 上限，也可自行设置；对话创建的智能体沿用当前所选模型并设置 Token 预算。用户确认协作计划后，系统并行调度就绪成员，将已完成的上游结果交给后续成员，最后汇总执行结果与产物：
 
 ```mermaid
 flowchart TD
@@ -154,13 +154,17 @@ flowchart TD
     C -- 确认 --> D["调度就绪成员"]
     C -- 取消 --> X["结束"]
     D --> E["独立成员并行执行"]
-    E --> F{"需要追加 Token？"}
-    F -- 是 --> G["暂停并等待用户确认"]
-    G -- 继续 --> E
-    F -- 否 --> H["记录结果并传递给依赖成员"]
-    H --> I{"还有待执行成员？"}
-    I -- 是 --> D
-    I -- 否 --> J["汇总成员状态、产物与运行记录"]
+    E --> F{"需要人工处理？"}
+    F -- 成员工具权限 --> G["相关成员等待权限决定"]
+    F -- 成员执行步数 --> H["相关成员等待追加步数"]
+    F -- 协作或成员 Token 预算 --> I["暂停调度并等待追加预算"]
+    G -- 作出决定 --> E
+    H -- 追加并继续 --> E
+    I -- 追加并继续 --> E
+    F -- 无 --> J["记录结果并传递给依赖成员"]
+    J --> K{"还有待执行成员？"}
+    K -- 是 --> D
+    K -- 否 --> L["汇总成员状态、产物与运行记录"]
 
 ```
 
@@ -211,9 +215,9 @@ flowchart LR
 | **视图层 (Frontend)** | Vue 3 + Tailwind | 工作区交互、双模式编辑器、Agent 状态看板、设置中心 | 无明文凭据存储权，无随意读写磁盘权 |
 | **宿主层 (Host)** | Tauri 2 (Rust) | 系统级 API 调用、进程生命周期监控、密钥管理、原子文件写入 | 桌面安全中枢，路径严格限制在选定 Vault 内 |
 | **计算层 (Core)** | FastAPI (Sidecar) | 混合检索调度、转写封装、Agent 循环、文档导出转换 | 仅监听本地回环地址，依赖宿主鉴权认证 |
-| **数据层 (Vault)** | 纯文本生态 | Markdown 笔记文件、内容寻址静态资源、配置元数据 | 100% 用户所属的普通本地文件夹 |
+| **数据层 (Vault)** | 本地文件 | Markdown 笔记与附件 | 用户自主选择的本地文件夹 |
 
-OpenNexus 严格解耦了“用户可读数据”与“索引计算缓存”：
+OpenNexus 严格解耦了“用户可读数据”与“索引计算缓存”。可复用智能体配置、协作计划及审核记录保存在知识库作用域的 `agent_objects` 中；运行记录保存配置快照，暂停续跑点保存在 `agent_checkpoints` 中：
 
 ```mermaid
 erDiagram
@@ -222,6 +226,7 @@ erDiagram
     BLOCKS ||--o{ ROUTED_VECTORS : "向量嵌入映射"
     NOTES o|--o{ TASKS : "关联任务"
     AGENT_RUNS ||--o{ AGENT_EVENTS : "派发事件"
+    AGENT_RUNS ||--o| AGENT_CHECKPOINTS : "保存暂停续跑点"
     MEDIA_JOBS ||--o{ MEDIA_EVENTS : "派发事件"
     MEDIA_JOBS ||--o{ MEDIA_REVISIONS : "历史快照"
     MEDIA_JOBS ||--o{ MEDIA_NOTES : "产出笔记"
@@ -249,6 +254,17 @@ erDiagram
         string run_id PK "主键"
         string status "运行状态"
         json run_json "任务详情"
+    }
+    AGENT_OBJECTS {
+        string scope PK "知识库"
+        string kind PK "配置、协作或审核类型"
+        string id PK "对象 ID"
+        string operation_id "幂等操作 ID"
+        json data "对象详情"
+    }
+    AGENT_CHECKPOINTS {
+        string run_id PK,FK "运行 ID"
+        json data "续跑上下文"
     }
     MEDIA_JOBS {
         string job_id PK "主键"
@@ -288,7 +304,7 @@ erDiagram
 
 ```powershell
 # 克隆代码仓库
-git clone [https://github.com/KiriAky107/OpenNexus.git](https://github.com/KiriAky107/OpenNexus.git)
+git clone https://github.com/KiriAky107/OpenNexus.git
 cd OpenNexus
 
 # 安装 Python AI 核心依赖
@@ -306,11 +322,11 @@ pnpm install --frozen-lockfile
 ### 2. 启动开发服务器
 
 ```powershell
-# 终端 1：启动 AI Core 伴生服务
+# 终端 1：从仓库根目录启动 AI Core 伴生服务
 cd backend
 uv run python scripts/dev-server.py
 
-# 终端 2：启动前端 Web 实时预览
+# 终端 2：从仓库根目录启动前端 Web 实时预览
 cd frontend
 pnpm dev
 
@@ -345,15 +361,16 @@ cargo clippy --all-targets --features desktop -- -D warnings
 
 ## 打包发布
 
-在 `frontend/` 目录下执行如下命令构建原生 Windows NSIS 安装程序：
+从仓库根目录依次构建 AI Core 与 Windows NSIS 安装程序：
 
 ```powershell
+uv run --directory backend --group packaging python ../scripts/build-core.py
 cd frontend
 pnpm desktop:build
 
 ```
 
-构建完成的安装包将输出至 `frontend/src-tauri/target/release/bundle/nsis/`。
+构建完成的安装包将输出至 `frontend/src-tauri/target/release/bundle/nsis/`。[0.5.8-alpha2 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha2) 另提供包含桌面主程序以及 Sync、Community 原型的源码压缩包。
 
 ---
 

@@ -20,23 +20,23 @@
   </p>
 
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha1"><img src="https://img.shields.io/badge/Release-0.5.8--alpha1-5865f2?style=flat-square" alt="Version" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha2"><img src="https://img.shields.io/badge/Release-0.5.8--alpha2-5865f2?style=flat-square" alt="Version" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="Platform" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="Desktop Tauri" />
     <img src="https://img.shields.io/badge/Frontend-Vue_3-42b883?style=flat-square" alt="Frontend Vue" />
     <img src="https://img.shields.io/badge/Core-FastAPI-05998b?style=flat-square" alt="Backend FastAPI" />
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e?style=flat-square" alt="License" /></a>
-    <a href="visitors"><img src="https://visitor-badge.laobi.icu/badge?page_id=KiriAky107.OpenNexus" /></a>
+    <img src="https://visitor-badge.laobi.icu/badge?page_id=KiriAky107.OpenNexus" alt="Visitor count" />
   </p>
 
 </div>
 
 ---
 
-> ⚠️ **Alpha Notice**: OpenNexus is currently in active alpha (`v0.5.8-alpha1`). Storage schemas, IPC contracts, and extension APIs are evolving. Always back up critical Markdown vaults before updating.
+> ⚠️ **Alpha Notice**: OpenNexus is currently in active alpha (`v0.5.8-alpha2`). Storage schemas, IPC contracts, and extension APIs are evolving. Always back up critical Markdown vaults before updating.
 
 <div align="center">
-  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 0.5.6-alpha2 editor toolbar, outline, formulas, and Mermaid diagram" width="95%" />
+  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus editor toolbar, outline, formulas, and Mermaid diagram" width="95%" />
 </div>
 
 <table align="center">
@@ -52,10 +52,6 @@
     <td width="50%"><img src=".github/assets/opennexus-plugins.png" alt="Installed plugins and local Markdown validation tools" /></td>
     <td width="50%"><img src=".github/assets/opennexus-themes.png" alt="Themes and editor appearance" /></td>
   </tr>
-  <tr>
-    <td width="50%"><img src=".github/assets/opennexus-community.png" alt="Community source setup and extension category filters" /></td>
-    <td width="50%"><img src=".github/assets/opennexus-settings.png" alt="OpenNexus 0.5.6-alpha2 general settings and frontend/Core versions" /></td>
-  </tr>
 </table>
 
 ---
@@ -64,9 +60,10 @@
 
 - 📁 **Zero Vendor Lock-In**: Notes are plain, portable Markdown files with relative content-addressed assets. Move them anywhere, anytime.
 - 🔍 **Hybrid Local Retrieval**: Combines SQLite FTS5 lexical matching with local vector embeddings using Reciprocal Rank Fusion (RRF) and optional reranking.
-- 🎙️ **Media-to-Knowledge**: Turn lecture recordings, podcasts, and meetings into timestamped transcripts, Mermaid diagrams, formulas, and structured notes.
-- 🛡️ **Inspectable Autonomous Agents**: Every tool execution, permission boundary, and state change is snapshotted and auditable. No hidden background magic.
-- 🤝 **Chat-directed Agent Workflows**: Create reusable or one-off Agents from chat, review multi-Agent plans, and follow reasoning, tool calls, and replies in execution order. Token limits pause for a user decision instead of silently ending the turn.
+- 🎙️ **Media-to-Knowledge**: Turn lecture recordings, podcasts, and meetings into timestamped transcripts, Mermaid diagrams, formulas, and structured notes. Local processing accepts files up to 200 MiB and audio tracks up to two hours.
+- 🛡️ **Inspectable Autonomous Agents**: Review tool operations in a permission dialog, follow the persisted execution trace, and continue a paused run by adding tokens or steps.
+- 🤝 **Chat-directed Agent Workflows**: Create reusable or one-off Agents from chat, review multi-Agent plans, and follow reasoning, tool calls, and replies in execution order. Chat-created Agents inherit the selected model when none is specified.
+- 🧭 **Focus on the Work**: Hide the main sidebars and editor toolbar with global focus mode; collapse the conversation list and chat settings independently, while user and AI messages remain on opposite sides.
 - 🔌 **Extensible Ecosystem**: Built-in support for MCP (Model Context Protocol) servers, custom plugins, and reviewed community packages.
 - ⚡ **Strict Local-First Security**: Secrets stay securely stored in the native credential manager. The frontend WebView never touches raw API keys or unrestricted file paths.
 
@@ -76,10 +73,10 @@
 
 ### Windows Desktop (Recommended)
 
-1. Grab the latest installer: [`OpenNexus_0.5.8-alpha1_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha1).
+1. Grab the latest installer: [`OpenNexus_0.5.8-alpha2_x64-setup.exe`](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha2).
 2. *(Optional)* Verify integrity via PowerShell:
 ```powershell
-   Get-FileHash .\OpenNexus_0.5.8-alpha1_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.5.8-alpha2_x64-setup.exe -Algorithm SHA256
    # Compare with SHA256SUMS.txt from the same release.
 
 ```
@@ -88,7 +85,7 @@
 4. Select or initialize a directory as your Markdown Vault.
 5. Head to **Settings → Model Providers** to connect your preferred local runtime (Ollama, vLLM) or cloud API key.
 
-> Application configuration is persisted under `%APPDATA%\cc.kronecker.notesagent`. Existing vaults remain untouched during in-place upgrades.
+> The installer includes AI Core. Local model weights and CUDA components can be installed from Settings when needed. Application configuration is persisted under `%APPDATA%\cc.kronecker.notesagent`; existing vaults remain untouched during in-place upgrades.
 
 ---
 
@@ -96,7 +93,7 @@
 
 ### 1. From Recording to Knowledge Note
 
-Transform noisy audio/video into clean, deeply referenced knowledge with an editable transcript audit loop:
+Transform audio/video into structured notes through a reviewable transcript. Local processing supports files up to 200 MiB and audio tracks up to two hours:
 
 ```mermaid
 sequenceDiagram
@@ -127,15 +124,18 @@ sequenceDiagram
 
 ### 2. Controllable & Resumable Agents
 
-Agents run with strict human-in-the-loop permission gating. State transitions are event-sourced, so network drops or app restarts won't corrupt in-flight runs:
+Agent runs keep a persistent execution trace. Tool permissions can be reviewed in a dialog or the run card; token and step limits pause execution until the user chooses whether to continue. Saved pause points resume without repeating completed tool operations:
 
 ```mermaid
 stateDiagram-v2
     [*] --> Queued: Run requested
     Queued --> Running: Worker picks up task
-    Running --> AwaitingPermission: Sensitive tool triggered
-    AwaitingPermission --> Running: User approves
-    AwaitingPermission --> Cancelled: User denies / aborts
+    Running --> AwaitingPermission: Tool operation needs approval
+    AwaitingPermission --> Running: User approves or denies this call
+    AwaitingPermission --> Cancelled: User stops the run
+    Running --> AwaitingContinuation: Token or step limit reached
+    AwaitingContinuation --> Running: User adds tokens or steps
+    AwaitingContinuation --> Cancelled: User stops the run
     Running --> Completed: Artifact persisted
     Running --> Failed: Error caught & logged
     Running --> Cancelled: Interrupted
@@ -147,7 +147,7 @@ stateDiagram-v2
 
 ### 3. Multi-Agent Collaboration
 
-From AI Chat or the Agents page, users can combine existing agents and assign tasks and dependencies. Once the collaboration plan is confirmed, ready members run in parallel, completed outputs feed dependent members, and the results and artifacts are collected in one place:
+From AI Chat or the Agents page, users can combine existing agents and assign tasks and dependencies. Manually created Agents have no token limit by default, with an optional configurable limit; chat-created Agents use the selected conversation model and a token budget. Once the collaboration plan is confirmed, ready members run in parallel, completed outputs feed dependent members, and the results and artifacts are collected in one place:
 
 ```mermaid
 flowchart TD
@@ -156,13 +156,17 @@ flowchart TD
     C -- Confirm --> D["Schedule ready members"]
     C -- Cancel --> X["End"]
     D --> E["Run independent members in parallel"]
-    E --> F{"More tokens needed?"}
-    F -- Yes --> G["Pause for user confirmation"]
-    G -- Continue --> E
-    F -- No --> H["Record outputs for dependent members"]
-    H --> I{"Pending members?"}
-    I -- Yes --> D
-    I -- No --> J["Collect member status, artifacts, and run history"]
+    E --> F{"Needs human review?"}
+    F -- Member tool permission --> G["Affected member awaits a decision"]
+    F -- Member step limit --> H["Affected member awaits more steps"]
+    F -- Group or member token budget --> I["Pause scheduling and request more tokens"]
+    G -- Decision made --> E
+    H -- Add steps --> E
+    I -- Add tokens --> E
+    F -- No --> J["Record outputs for dependent members"]
+    J --> K{"Pending members?"}
+    K -- Yes --> D
+    K -- No --> L["Collect member status, artifacts, and run history"]
 
 ```
 
@@ -213,9 +217,9 @@ flowchart LR
 | **Presentation** | Vue 3 + Tailwind | Editor, chat UI, agent monitoring, settings | No access to raw secrets or unrestricted disk |
 | **Native Host** | Tauri 2 (Rust) | OS integration, process supervisor, keychain | Strict path boundary checking for all FS operations |
 | **AI Core** | FastAPI (Sidecar) | RAG pipeline, ASR, agent loops, embeddings | Authenticated local loopback only |
-| **Vault** | Plain Files | Portable notes, attachments, indexes | 100% user-owned directory |
+| **Vault** | Local Files | Portable Markdown notes and attachments | User-owned local directory |
 
-OpenNexus cleanly separates user data from application caches:
+OpenNexus cleanly separates user data from application caches. Reusable Agent definitions, collaboration plans, and review records live in vault-scoped `agent_objects`; runs retain configuration snapshots, while `agent_checkpoints` hold paused continuation points:
 
 ```mermaid
 erDiagram
@@ -224,6 +228,7 @@ erDiagram
     BLOCKS ||--o{ ROUTED_VECTORS : embeds_in
     NOTES o|--o{ TASKS : optionally_links
     AGENT_RUNS ||--o{ AGENT_EVENTS : emits
+    AGENT_RUNS ||--o| AGENT_CHECKPOINTS : stores_resume_point
     MEDIA_JOBS ||--o{ MEDIA_EVENTS : emits
     MEDIA_JOBS ||--o{ MEDIA_REVISIONS : snapshots
     MEDIA_JOBS ||--o{ MEDIA_NOTES : produces
@@ -251,6 +256,17 @@ erDiagram
         string run_id PK
         string status
         json run_json
+    }
+    AGENT_OBJECTS {
+        string scope PK
+        string kind PK
+        string id PK
+        string operation_id
+        json data
+    }
+    AGENT_CHECKPOINTS {
+        string run_id PK, FK
+        json data
     }
     MEDIA_JOBS {
         string job_id PK
@@ -290,7 +306,7 @@ To keep dependencies clean and packaging predictable, services are maintained in
 
 ```powershell
 # Clone the repository
-git clone [https://github.com/KiriAky107/OpenNexus.git](https://github.com/KiriAky107/OpenNexus.git)
+git clone https://github.com/KiriAky107/OpenNexus.git
 cd OpenNexus
 
 # Set up Python AI Core dependencies
@@ -308,11 +324,11 @@ pnpm install --frozen-lockfile
 ### 2. Start Development Servers
 
 ```powershell
-# Terminal 1: Run AI Core Sidecar
+# Terminal 1, from the repository root: Run AI Core Sidecar
 cd backend
 uv run python scripts/dev-server.py
 
-# Terminal 2: Run Web Interface
+# Terminal 2, from the repository root: Run Web Interface
 cd frontend
 pnpm dev
 
@@ -347,15 +363,16 @@ cargo clippy --all-targets --features desktop -- -D warnings
 
 ## Packaging
 
-Build a standalone Windows NSIS installer:
+Build AI Core, then package it in a Windows NSIS installer from the repository root:
 
 ```powershell
+uv run --directory backend --group packaging python ../scripts/build-core.py
 cd frontend
 pnpm desktop:build
 
 ```
 
-The output installer will be generated in `frontend/src-tauri/target/release/bundle/nsis/`.
+The output installer will be generated in `frontend/src-tauri/target/release/bundle/nsis/`. The [0.5.8-alpha2 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha2) also provides a source archive containing the desktop application and the Sync and Community prototypes.
 
 ---
 
