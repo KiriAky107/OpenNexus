@@ -32,7 +32,7 @@ def test_decode_recovers_one_corrupt_packet_without_shifting_following_audio(mon
     from app.local_models.worker import decode
     class Samples(list):
         def reshape(self, *_): return self
-        def astype(self, *_): return self
+        def astype(self, *_, **__): return self
         def to_ndarray(self): return self
     class InvalidDataError(Exception): pass
     def broken(): raise InvalidDataError()
@@ -52,8 +52,44 @@ def test_decode_recovers_one_corrupt_packet_without_shifting_following_audio(mon
     output = decode('test.mp3', warnings=warnings)
     assert output == [1] * 3200 + [0] * 1600 + [2] * 3200
     assert warnings == ['MEDIA_CORRUPT_PACKETS_SKIPPED:1']
-    with pytest.raises(ValueError, match='one hour'):
+    with pytest.raises(ValueError, match='two hours'):
         decode('test.mp3', limit_seconds=.25)
+
+
+def test_decode_default_duration_limit_is_two_hours(monkeypatch):
+    from app.local_models.worker import AudioDurationExceeded, MAX_AUDIO_SECONDS, decode
+    class LongFrame:
+        length = (60 * 60 + 1) * 16000
+        def to_ndarray(self): return self
+        def reshape(self, *_): return self
+        def astype(self, *_, **__): return self
+        def __len__(self): return self.length
+    class InvalidDataError(Exception): pass
+    frame = LongFrame()
+    packets = [SimpleNamespace(decode=lambda: [frame])]
+    container = SimpleNamespace(streams=SimpleNamespace(audio=[1]), demux=lambda **_: iter(packets))
+    monkeypatch.setitem(sys.modules, 'av', SimpleNamespace(
+        open=lambda *_a, **_kw: nullcontext(container),
+        error=SimpleNamespace(InvalidDataError=InvalidDataError),
+        AudioResampler=lambda **_: SimpleNamespace(resample=lambda value: [] if value is None else [value]),
+    ))
+    monkeypatch.setitem(sys.modules, 'numpy', SimpleNamespace(
+        float32=float,
+        concatenate=lambda frames: frames[0],
+        isfinite=lambda _: SimpleNamespace(all=lambda: True),
+    ))
+    assert len(decode('long.mp3')) == (60 * 60 + 1) * 16000
+    frame.length = (MAX_AUDIO_SECONDS + 1) * 16000
+    with pytest.raises(AudioDurationExceeded, match='two hours'):
+        decode('long.mp3')
+
+
+def test_long_audio_inference_gets_a_longer_timeout():
+    from app.local_models.runtime import RuntimeConfig, inference_timeout_seconds
+    config = RuntimeConfig()
+    assert inference_timeout_seconds(config, 'transcription') == 4 * 60 * 60
+    assert inference_timeout_seconds(config, 'diarization') == 4 * 60 * 60
+    assert inference_timeout_seconds(config, 'embedding') == config.timeout_seconds
 
 
 def test_decode_warning_reaches_persisted_job(monkeypatch):

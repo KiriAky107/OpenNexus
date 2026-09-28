@@ -85,6 +85,38 @@ def test_controlled_upload_and_async_http_flow():
         assert client.get(f"/api/media/transcriptions/{job_id}/events", headers={"Last-Event-ID": "bad"}).status_code == 422
 
 
+def test_chunked_media_upload_resumes_and_rejects_conflicting_bytes():
+    from app.main import app
+    base = '/api/media/attachments/chunks?filename=lecture.wav&upload_id=large-upload-identity&total=6'
+    with TestClient(app) as client:
+        first = client.post(base + '&offset=0', content=b'abc')
+        assert first.status_code == 201
+        assert first.json()['next_offset'] == 3
+        assert first.json()['complete'] is False
+        repeated = client.post(base + '&offset=0', content=b'abc')
+        assert repeated.json()['next_offset'] == 3
+        assert client.post(base + '&offset=0', content=b'bad').status_code == 409
+        finished = client.post(base + '&offset=3', content=b'def')
+        assert finished.status_code == 201
+        assert finished.json()['complete'] is True
+        attachment_id = finished.json()['attachment_id']
+        assert client.get(f'/api/media/attachments/{attachment_id}').content == b'abcdef'
+        assert client.get(f'/api/media/attachments/{attachment_id}/info').json()['size'] == 6
+        assert client.get(f'/api/media/attachments/{attachment_id}/chunks?offset=2&length=3').content == b'cde'
+        assert client.get(f'/api/media/attachments/{attachment_id}/chunks?offset=6&length=1').status_code == 416
+        assert client.post(base + '&offset=3', content=b'def').json()['complete'] is True
+        assert client.post(base + '&offset=3', content=b'xyz').status_code == 409
+
+
+def test_chunked_media_upload_has_a_200_mib_total_limit():
+    from app.main import app
+    from app.providers.routing import MAX_LOCAL_MEDIA_BYTES
+    assert MAX_LOCAL_MEDIA_BYTES == 200 * 1024 * 1024
+    with TestClient(app) as client:
+        response = client.post(f'/api/media/attachments/chunks?filename=lecture.wav&upload_id=large-upload-identity&offset=0&total={MAX_LOCAL_MEDIA_BYTES + 1}', content=b'a')
+        assert response.status_code == 422
+
+
 def test_terminology_export_and_privacy_cleanup():
     from app.main import app
     text_attachment()

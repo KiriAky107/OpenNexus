@@ -26,7 +26,14 @@ os.environ.setdefault(
 )
 
 
-def decode(path, *, limit_seconds=3600, warnings=None):
+MAX_AUDIO_SECONDS = 2 * 60 * 60
+
+
+class AudioDurationExceeded(ValueError):
+    pass
+
+
+def decode(path, *, limit_seconds=MAX_AUDIO_SECONDS, warnings=None):
     import av
     import numpy as np
     frames = []
@@ -47,7 +54,7 @@ def decode(path, *, limit_seconds=3600, warnings=None):
                 missing = max(0, round(float((packet.duration or 0) * (packet.time_base or 0)) * 16000))
                 samples += missing
                 if samples > limit_seconds * 16000:
-                    raise ValueError("Audio exceeds one hour")
+                    raise AudioDurationExceeded("Audio exceeds two hours")
                 if missing:
                     frames.append(np.zeros(missing, dtype=np.float32))
                 continue
@@ -56,17 +63,17 @@ def decode(path, *, limit_seconds=3600, warnings=None):
                     audio = output.to_ndarray().reshape(-1)
                     samples += len(audio)
                     if samples > limit_seconds * 16000:
-                        raise ValueError("Audio exceeds one hour")
+                        raise AudioDurationExceeded("Audio exceeds two hours")
                     frames.append(audio)
         for output in resampler.resample(None):
             audio = output.to_ndarray().reshape(-1)
             samples += len(audio)
             if samples > limit_seconds * 16000:
-                raise ValueError("Audio exceeds one hour")
+                raise AudioDurationExceeded("Audio exceeds two hours")
             frames.append(audio)
     if not frames:
         raise ValueError("Audio is empty")
-    audio = np.concatenate(frames).astype(np.float32)
+    audio = np.concatenate(frames).astype(np.float32, copy=False)
     if corrupt and warnings is not None:
         warnings.append(f"MEDIA_CORRUPT_PACKETS_SKIPPED:{corrupt}")
     if not np.isfinite(audio).all() or len(audio) < 1600:
@@ -301,6 +308,8 @@ if __name__ == "__main__":
             response = run(request)
         except (ImportError, ModuleNotFoundError):
             response = {"error_code": "LOCAL_RUNTIME_DEPENDENCY_MISSING", "message": "本地模型运行依赖不完整，请重新运行安装脚本。"}
+        except AudioDurationExceeded:
+            response = {"error_code": "MEDIA_DURATION_EXCEEDED", "message": "音轨最长支持 2 小时。"}
         except Exception as exc:
             # 只有设备故障才允许主机在新的 CPU 进程中重试一次。
             import torch

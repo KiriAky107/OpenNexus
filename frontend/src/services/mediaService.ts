@@ -30,13 +30,51 @@ export const mediaService = {
       `/api/media/transcriptions/${encodeURIComponent(id)}/artifacts`, body, { timeoutMs: 300_000 },
     ),
   audio: (id: string) => resolveApiUrl(`/api/media/attachments/${encodeURIComponent(id)}`),
+  async downloadAudio(id: string, signal?: AbortSignal): Promise<Blob> {
+    const path = `/api/media/attachments/${encodeURIComponent(id)}`
+    const info = await apiClient.get<{ size: number; content_type: string }>(`${path}/info`, { signal })
+    if (!Number.isSafeInteger(info.size) || info.size < 1 || info.size > 200 * 1024 * 1024) {
+      throw new Error(t('音频大小无效。', 'Invalid audio size.'))
+    }
+    if (info.size <= 64 * 1024 * 1024) return (await apiClient.get<Response>(path, { signal })).blob()
+    const chunks: Blob[] = []
+    const chunkSize = 4 * 1024 * 1024
+    for (let offset = 0; offset < info.size; offset += chunkSize) {
+      const length = Math.min(chunkSize, info.size - offset)
+      const response = await apiClient.get<Response>(`${path}/chunks?offset=${offset}&length=${length}`, { signal })
+      const chunk = await response.blob()
+      if (chunk.size !== length) throw new Error(t('音频分块读取不完整，请重试。', 'Incomplete audio chunk; retry playback.'))
+      chunks.push(chunk)
+    }
+    return new Blob(chunks, { type: info.content_type })
+  },
   impact: (id: string) => apiClient.get<{message:string;retained_note_ids:string[]}>(`/api/media/attachments/${encodeURIComponent(id)}/cleanup-impact`),
   purge: (id: string) => apiClient.delete(`/api/media/attachments/${encodeURIComponent(id)}`),
   async upload(file: File, idempotencyKey?: string) {
-    if (isDesktop()) return apiClient.postBinary<{ attachment_id: string }>(
-      `/api/media/attachments?filename=${encodeURIComponent(file.name)}`, file,
-      {'Content-Type': 'application/octet-stream', ...(idempotencyKey ? {'Idempotency-Key': idempotencyKey} : {})},
-    )
+    if (isDesktop()) {
+      if (file.size > 64 * 1024 * 1024) {
+        const uploadId = idempotencyKey ?? crypto.randomUUID()
+        const chunkSize = 4 * 1024 * 1024
+        let offset = 0
+        while (offset < file.size) {
+          const chunk = file.slice(offset, Math.min(offset + chunkSize, file.size))
+          const result = await apiClient.postBinary<{ attachment_id: string; next_offset: number; complete: boolean }>(
+            `/api/media/attachments/chunks?filename=${encodeURIComponent(file.name)}&upload_id=${encodeURIComponent(uploadId)}&offset=${offset}&total=${file.size}`,
+            chunk, { 'Content-Type': 'application/octet-stream' },
+          )
+          if (result.complete) return { attachment_id: result.attachment_id }
+          if (!Number.isSafeInteger(result.next_offset) || result.next_offset <= offset || result.next_offset > file.size) {
+            throw new Error(t('分块上传进度无效，请重试。', 'Invalid chunk upload progress; retry the upload.'))
+          }
+          offset = result.next_offset
+        }
+        throw new Error(t('上传未完成，请重试。', 'Upload did not finish; retry.'))
+      }
+      return apiClient.postBinary<{ attachment_id: string }>(
+        `/api/media/attachments?filename=${encodeURIComponent(file.name)}`, file,
+        {'Content-Type': 'application/octet-stream', ...(idempotencyKey ? {'Idempotency-Key': idempotencyKey} : {})},
+      )
+    }
     const response = await fetch(resolveApiUrl(`/api/media/attachments?filename=${encodeURIComponent(file.name)}`), {
       method: 'POST', headers: {'Content-Type': 'application/octet-stream', ...(idempotencyKey ? {'Idempotency-Key': idempotencyKey} : {})}, body: file,
     })

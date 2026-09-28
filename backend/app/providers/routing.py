@@ -30,7 +30,7 @@ from app.retrieval.provenance import record_embedding
 CAPABILITIES = ("embedding", "transcription", "speaker_matching")
 HTTP_TYPES = {ProviderType.openai_chat, ProviderType.openai_compatible}
 MAX_MEDIA_BYTES = 25 * 1024 * 1024
-MAX_LOCAL_MEDIA_BYTES = 128 * 1024 * 1024
+MAX_LOCAL_MEDIA_BYTES = 200 * 1024 * 1024
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 

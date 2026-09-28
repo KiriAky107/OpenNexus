@@ -9,7 +9,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Header, Query, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
+import mimetypes
 
 from app.contracts import TranscriptArtifactsRequest, TranscriptEditRequest, TranscriptNoteRequest, TranscriptionJob
 from app.database.db import connect, transaction
@@ -21,6 +22,8 @@ router = APIRouter(prefix="/api/media", tags=["Media"])
 from app.providers.routing import MAX_LOCAL_MEDIA_BYTES
 
 MAX_UPLOAD_BYTES = MAX_LOCAL_MEDIA_BYTES
+MAX_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024
+_upload_chunk_lock = asyncio.Lock()
 MEDIA_SUFFIXES = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".mp4", ".webm", ".txt", ".md", ".docx", ".pptx", ".ppt", ".png", ".jpg", ".jpeg", ".webp"}
 
 
@@ -48,7 +51,7 @@ async def upload_attachment(request: Request, filename: str = Query(min_length=1
             async for chunk in request.stream():
                 size += len(chunk)
                 if size > MAX_UPLOAD_BYTES:
-                    raise ApiError(413, "ATTACHMENT_TOO_LARGE", "Attachment exceeds 128 MiB.")
+                    raise ApiError(413, "ATTACHMENT_TOO_LARGE", "Attachment exceeds 200 MiB.")
                 digest.update(chunk)
                 stream.write(chunk)
         if not size:
@@ -88,12 +91,125 @@ async def upload_attachment(request: Request, filename: str = Query(min_length=1
     return {"attachment_id": attachment_id, "filename": Path(filename).name, "size": size}
 
 
+@router.post("/attachments/chunks", status_code=201)
+async def upload_attachment_chunk(
+    request: Request,
+    filename: str = Query(min_length=1, max_length=255),
+    upload_id: str = Query(min_length=16, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$"),
+    offset: int = Query(ge=0),
+    total: int = Query(ge=1, le=MAX_UPLOAD_BYTES),
+):
+    """Transfer large desktop media without a single oversized IPC message."""
+    name = Path(filename).name
+    suffix = Path(name).suffix.lower()
+    if suffix not in MEDIA_SUFFIXES:
+        raise ApiError(422, "UNSUPPORTED_MEDIA", "Unsupported attachment extension.")
+    data = bytearray()
+    async for chunk in request.stream():
+        data.extend(chunk)
+        if len(data) > MAX_UPLOAD_CHUNK_BYTES:
+            raise ApiError(413, "ATTACHMENT_CHUNK_TOO_LARGE", "Upload chunk exceeds 4 MiB.")
+    if not data or offset + len(data) > total:
+        raise ApiError(422, "INVALID_UPLOAD_CHUNK", "Upload chunk is empty or exceeds declared size.")
+
+    identity = hashlib.sha256(upload_id.encode()).hexdigest()
+    attachment_id = f"media_{identity}{suffix}"
+    destination = attachment_path(attachment_id)
+    partial = attachment_path(f"media_upload_{identity}.part")
+    metadata = attachment_path(f"media_upload_{identity}.json")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    async with _upload_chunk_lock:
+        if destination.is_file():
+            with destination.open('rb') as existing:
+                existing.seek(offset)
+                same_chunk = existing.read(len(data)) == data
+            if destination.stat().st_size != total or not same_chunk:
+                raise ApiError(409, "IDEMPOTENCY_CONFLICT", "The upload identity belongs to different content.")
+            return {"attachment_id": attachment_id, "filename": name, "size": total,
+                    "next_offset": total, "complete": True}
+
+        if metadata.is_file():
+            try:
+                recorded = json.loads(metadata.read_text(encoding='utf-8'))
+            except (OSError, ValueError) as exc:
+                raise ApiError(409, "UPLOAD_STATE_INVALID", "Upload state is unreadable; start a new upload.") from exc
+            if recorded != {"filename": name, "total": total}:
+                raise ApiError(409, "IDEMPOTENCY_CONFLICT", "The upload identity belongs to another file.")
+        elif offset == 0 and not partial.exists():
+            metadata.write_text(json.dumps({"filename": name, "total": total}), encoding='utf-8')
+        else:
+            raise ApiError(409, "UPLOAD_OFFSET_CONFLICT", "Upload state is missing; start a new upload.")
+
+        current = partial.stat().st_size if partial.exists() else 0
+        if offset > current or (offset < current and offset + len(data) > current):
+            raise ApiError(409, "UPLOAD_OFFSET_CONFLICT", "Upload offset does not match stored data.")
+        if offset < current:
+            with partial.open('rb') as existing:
+                existing.seek(offset)
+                if existing.read(len(data)) != data:
+                    raise ApiError(409, "IDEMPOTENCY_CONFLICT", "The upload identity belongs to different content.")
+        else:
+            with partial.open('ab') as stream:
+                stream.write(data)
+        next_offset = partial.stat().st_size
+        if next_offset < total:
+            return {"attachment_id": attachment_id, "filename": name, "size": next_offset,
+                    "next_offset": next_offset, "complete": False}
+
+        def digest_file() -> str:
+            with partial.open('rb') as stream:
+                return hashlib.file_digest(stream, 'sha256').hexdigest()
+        content_hash = await asyncio.to_thread(digest_file)
+        with closing(connect()) as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS media_upload_idempotency (idempotency_key TEXT PRIMARY KEY, attachment_id TEXT NOT NULL, filename TEXT NOT NULL, content_hash TEXT NOT NULL)")
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute("SELECT attachment_id,filename,content_hash FROM media_upload_idempotency WHERE idempotency_key=?", (upload_id,)).fetchone()
+                if row and (row['attachment_id'] != attachment_id or row['filename'] != name or row['content_hash'] != content_hash):
+                    raise ApiError(409, "IDEMPOTENCY_CONFLICT", "The upload identity belongs to different content.")
+                if row:
+                    raise ApiError(409, "IDEMPOTENCY_EXPIRED", "The previous upload is no longer available; start a new upload.")
+                partial.replace(destination)
+                conn.execute("INSERT INTO media_upload_idempotency VALUES (?,?,?,?)",
+                             (upload_id, attachment_id, name, content_hash))
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+        partial.unlink(missing_ok=True)
+        metadata.unlink(missing_ok=True)
+        return {"attachment_id": attachment_id, "filename": name, "size": total,
+                "next_offset": total, "complete": True}
+
+
 @router.get("/attachments/{attachment_id}")
 async def download_attachment(attachment_id: str):
     path = attachment_path(attachment_id)
     if not path.is_file():
         raise ApiError(404, "ATTACHMENT_NOT_FOUND", "Attachment was not found.")
     return FileResponse(path, headers={"X-Content-Type-Options": "nosniff"})
+
+
+@router.get("/attachments/{attachment_id}/info")
+async def attachment_info(attachment_id: str):
+    path = attachment_path(attachment_id)
+    if not path.is_file():
+        raise ApiError(404, "ATTACHMENT_NOT_FOUND", "Attachment was not found.")
+    return {"size": path.stat().st_size, "content_type": mimetypes.guess_type(path.name)[0] or "application/octet-stream"}
+
+
+@router.get("/attachments/{attachment_id}/chunks")
+async def download_attachment_chunk(attachment_id: str, offset: int = Query(ge=0),
+                                    length: int = Query(ge=1, le=MAX_UPLOAD_CHUNK_BYTES)):
+    path = attachment_path(attachment_id)
+    if not path.is_file():
+        raise ApiError(404, "ATTACHMENT_NOT_FOUND", "Attachment was not found.")
+    if offset >= path.stat().st_size:
+        raise ApiError(416, "ATTACHMENT_RANGE_INVALID", "Requested offset is outside the attachment.")
+    with path.open('rb') as stream:
+        stream.seek(offset)
+        data = stream.read(length)
+    return Response(data, media_type="application/octet-stream", headers={"X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/transcriptions")

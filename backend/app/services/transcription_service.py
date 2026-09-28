@@ -84,8 +84,11 @@ async def create_transcription(attachment_id, language=None, *, diarization=Fals
         raise ApiError(404, "ATTACHMENT_NOT_FOUND", "Attachment was not found.")
     from app.providers.routing import MAX_LOCAL_MEDIA_BYTES, MAX_MEDIA_BYTES
     if not 0 < actual.stat().st_size <= (MAX_LOCAL_MEDIA_BYTES if local_only else MAX_MEDIA_BYTES):
-        raise ApiError(413, "ATTACHMENT_TOO_LARGE", "仅本地处理最大支持 128 MiB；超过 25 MiB 的录音请启用仅本地处理。")
-    digest = await asyncio.to_thread(lambda: hashlib.sha256(actual.read_bytes()).hexdigest())
+        raise ApiError(413, "ATTACHMENT_TOO_LARGE", "仅本地处理最大支持 200 MiB；超过 25 MiB 的录音请启用仅本地处理。")
+    def digest_file() -> str:
+        with actual.open('rb') as stream:
+            return hashlib.file_digest(stream, 'sha256').hexdigest()
+    digest = await asyncio.to_thread(digest_file)
     from app.container import container
     from app.local_models.runtime import configuration
     from app.local_models.catalog import CATALOG

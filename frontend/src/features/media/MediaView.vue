@@ -14,7 +14,7 @@ import { useProviderStore } from '@/stores/provider'
 
 const route = useRoute()
 const providerStore = useProviderStore()
-const maxUploadMiB = isDesktop() ? 64 : 128
+const maxUploadMiB = 200
 const submission = createMediaSubmission()
 const updateExisting = ref(false)
 const jobs = ref<MediaJob[]>([])
@@ -58,13 +58,13 @@ const audioSource = ref('')
 watch(() => selected.value?.attachment_id, async (id, _old, onCleanup) => {
   let stale = false
   let objectUrl: string | undefined
-  onCleanup(() => { stale = true; if (objectUrl) URL.revokeObjectURL(objectUrl) })
+  const controller = new AbortController()
+  onCleanup(() => { stale = true; controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl) })
   audioSource.value = ''
   if (!id) return
   if (!isDesktop()) { audioSource.value = mediaService.audio(id); return }
   try {
-    const response = await apiClient.get<Response>(`/api/media/attachments/${encodeURIComponent(id)}`)
-    const blob = await response.blob()
+    const blob = await mediaService.downloadAudio(id, controller.signal)
     if (stale) return
     objectUrl = URL.createObjectURL(blob)
     audioSource.value = objectUrl
@@ -235,7 +235,7 @@ onUnmounted(() => { stopped = true; clearTimeout(timer) })
 <template>
   <section class="feature-page media-page">
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
-    <header class="feature-header"><div><h1>{{ t('音视频转写', 'Media Transcription') }}</h1><p class="subtle">{{ t(`上传音频或视频音轨，转写、校对后保存到知识库。最多 ${maxUploadMiB} MiB；超过 25 MiB 请启用仅本地处理。音轨最长 1 小时。`, `Upload audio or a video soundtrack, transcribe and correct it, then save it to the knowledge base. Up to ${maxUploadMiB} MiB; enable local-only processing above 25 MiB. Audio duration is limited to one hour.`) }}</p></div></header>
+    <header class="feature-header"><div><h1>{{ t('音视频转写', 'Media Transcription') }}</h1><p class="subtle">{{ t(`上传音频或视频音轨，转写、校对后保存到知识库。最多 ${maxUploadMiB} MiB；超过 25 MiB 请启用仅本地处理。音轨最长 2 小时。`, `Upload audio or a video soundtrack, transcribe and correct it, then save it to the knowledge base. Up to ${maxUploadMiB} MiB; enable local-only processing above 25 MiB. Audio duration is limited to two hours.`) }}</p></div></header>
     <div v-if="error" class="error-banner" role="alert">{{ error }}</div><p v-if="notice" role="status">{{ notice }}</p>
     <ol class="workflow-steps" :aria-label="t('课程材料流程', 'Course material workflow')"><li :class="{ active: !selected }">1 · {{ t('导入录音', 'Import') }}</li><li :class="{ active: selected && active(selected) }">2 · {{ t('识别转写', 'Transcribe') }}</li><li :class="{ active: selected?.status === 'completed' && resultTab === 'review' }">3 · {{ t('回听校对', 'Review') }}</li><li :class="{ active: resultTab === 'materials' }">4 · {{ t('生成笔记', 'Create notes') }}</li></ol>
     <details class="panel import-panel" :open="uploadOpen" @toggle="uploadOpen = ($event.target as HTMLDetailsElement).open">

@@ -34,6 +34,17 @@ class RuntimeConfig(BaseModel):
     version: int = Field(default=1, ge=1)
 
 
+LONG_AUDIO_TIMEOUT_SECONDS = 4 * 60 * 60
+
+
+def inference_timeout_seconds(config: RuntimeConfig, operation: str) -> int:
+    # Two-hour recordings can take longer than real time on CPU. Keep shorter
+    # limits for embeddings and speaker comparison, which are separate jobs.
+    if operation in {"transcription", "diarization"}:
+        return max(config.timeout_seconds, LONG_AUDIO_TIMEOUT_SECONDS)
+    return config.timeout_seconds
+
+
 runtime_context = ContextVar("runtime_config", default=None)
 runtime_progress = ContextVar("runtime_progress", default=None)
 embedding_priority = ContextVar("embedding_priority", default=0)
@@ -230,7 +241,7 @@ class Runtime:
                     raise ProviderError('LOCAL_MODEL_INVALID_RESPONSE', '本地向量传输缺少结束标记。')
                 return final
             try:
-                result = await asyncio.wait_for(receive(), config.timeout_seconds)
+                result = await asyncio.wait_for(receive(), inference_timeout_seconds(config, operation))
             except TimeoutError as exc:
                 raise ProviderError("LOCAL_MODEL_TIMEOUT", "本地模型处理超时。") from exc
             if process.returncode != 0:
