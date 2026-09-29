@@ -1,0 +1,51 @@
+export type WorkspaceDocumentType = 'markdown' | 'canvas' | 'image' | 'unsupported'
+
+export function workspaceDocumentType(path: string): WorkspaceDocumentType {
+  if (/\.md$/i.test(path)) return 'markdown'
+  if (/\.canvas$/i.test(path)) return 'canvas'
+  if (/\.(png|jpe?g|gif|webp)$/i.test(path)) return 'image'
+  return 'unsupported'
+}
+
+export const MAX_CANVAS_BYTES = 4 * 1024 * 1024
+export const EMPTY_CANVAS = '{\n  "nodes": [],\n  "edges": []\n}\n'
+
+export function validateCanvasContent(content: string): void {
+  if (new TextEncoder().encode(content).length > MAX_CANVAS_BYTES) throw new Error('CANVAS_TOO_LARGE')
+  let value: unknown
+  try { value = JSON.parse(content) } catch { throw new Error('CANVAS_INVALID') }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('CANVAS_INVALID')
+  const root = value as Record<string, unknown>
+  const nodes = root.nodes === undefined ? [] : root.nodes
+  const edges = root.edges === undefined ? [] : root.edges
+  if (!Array.isArray(nodes) || !Array.isArray(edges)) throw new Error('CANVAS_INVALID')
+  if (nodes.length > 2000 || edges.length > 4000) throw new Error('CANVAS_TOO_COMPLEX')
+  const ids = new Set<string>()
+  const bounded = (value: unknown, min: number, max: number) => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max
+  const vaultPath = (value: unknown) => typeof value === 'string' && value.length > 0 && !value.startsWith('/') && !/[\\:%?#*"<>|\x00-\x1f]/.test(value)
+    && value.split('/').every(part => part.length > 0 && part !== '.' && part !== '..' && !part.startsWith('.') && part.toLowerCase() !== 'opennexus-records')
+  for (const item of nodes) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('CANVAS_INVALID')
+    const node = item as Record<string, unknown>
+    if (typeof node.id !== 'string' || !node.id || node.id.length > 128 || ids.has(node.id)
+      || !bounded(node.x, -1_000_000, 1_000_000) || !bounded(node.y, -1_000_000, 1_000_000)
+      || !bounded(node.width, 1, 100_000) || !bounded(node.height, 1, 100_000)) throw new Error('CANVAS_INVALID')
+    ids.add(node.id)
+    if (node.type === 'text' && typeof node.text === 'string') continue
+    if (node.type === 'file' && vaultPath(node.file)) continue
+    if (node.type === 'link' && typeof node.url === 'string' && /^https?:\/\//i.test(node.url) && !/\s/.test(node.url)) {
+      try { const url = new URL(node.url); if (url.hostname && !url.username && !url.password && url.port !== '0') continue } catch { /* invalid URL */ }
+    }
+    if (node.type === 'group') continue
+    throw new Error('CANVAS_INVALID')
+  }
+  const edgeIds = new Set<string>()
+  for (const item of edges) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('CANVAS_INVALID')
+    const edge = item as Record<string, unknown>
+    if (typeof edge.id !== 'string' || !edge.id || edge.id.length > 128 || edgeIds.has(edge.id)
+      || typeof edge.fromNode !== 'string' || !ids.has(edge.fromNode)
+      || typeof edge.toNode !== 'string' || !ids.has(edge.toNode)) throw new Error('CANVAS_INVALID')
+    edgeIds.add(edge.id)
+  }
+}

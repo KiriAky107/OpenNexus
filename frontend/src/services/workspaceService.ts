@@ -11,6 +11,11 @@ import { t } from '@/i18n'
 import * as noteService from './noteService'
 import { splitNoteMetadata } from '@/utils/noteMetadata'
 import { contentHash, hostInvoke, isDesktop, nativePath, nativeTree, type HostDocument, type HostEntry, type HostVault } from './platform/desktop'
+import { EMPTY_CANVAS, validateCanvasContent, workspaceDocumentType } from './workspaceDocuments'
+import { resolveVaultReference } from './vaultReferences'
+import { inspectWorkspaceReferenceImpact, type ReferenceImpact } from './referenceImpact'
+
+interface CanvasDocument { path: string; content: string; content_hash: string }
 
 export interface WorkspaceAsset {
   asset_id: string
@@ -96,7 +101,7 @@ export async function getWorkspaceInfo(): Promise<ApiWorkspaceInfo> {
     const vault = (await getRecentVaults())[0]
     if (!vault) throw new Error('VAULT_NOT_OPEN')
     const entries = await hostInvoke<HostEntry[]>('workspace_tree')
-    return { ...vault, file_count: entries.length, indexed_note_count: 0, requires_refresh: false }
+    return { ...vault, file_count: entries.filter(entry => !entry.is_folder && !entry.deleted).length, indexed_note_count: 0, requires_refresh: false }
   }
   return apiClient.get('/api/workspace', { timeoutMs: 15000 })
 }
@@ -152,8 +157,15 @@ export async function getFileTree(): Promise<FileNode[]> {
   return cachedTree ?? refreshTree()
 }
 
+export async function previewPathChange(path: string): Promise<ReferenceImpact> {
+  return inspectWorkspaceReferenceImpact(await refreshTree(), path, readFileContent)
+}
+
 export async function readFileContent(filePath: string): Promise<string> {
+  if (workspaceDocumentType(filePath) === 'image') throw new Error('IMAGE_USE_BINARY_ASSET_API')
+  if (workspaceDocumentType(filePath) === 'unsupported') throw new Error('UNSUPPORTED_DOCUMENT_TYPE')
   if (isDesktop()) return (await hostInvoke<HostDocument>('workspace_read', { path: nativePath(filePath) })).content
+  if (workspaceDocumentType(filePath) === 'canvas') return (await apiClient.get<CanvasDocument>('/api/workspace/canvas', { params: { path: filePath } })).content
   const note = await noteService.getNote(await requireNoteId(filePath))
   return note.markdown
 }
@@ -167,18 +179,27 @@ export function workspaceAssetReference(notePath: string, assetPath: string): st
 
 /** 将笔记内的相对附件引用还原为 Vault 根路径。 */
 export function resolveWorkspaceAssetPath(notePath: string, reference: string): string | null {
-  if (/^(?:[a-z]+:|\/\/|#)/i.test(reference)) return null
-  const parts = reference.startsWith('/') ? [] : [...relativePath(notePath).split('/').slice(0, -1)]
-  for (const part of reference.replace(/\\/g, '/').split('/')) {
-    if (!part || part === '.') continue
-    if (part === '..') { if (!parts.length) return null; parts.pop() }
-    else parts.push(part)
-  }
-  const path = parts.join('/')
-  return isWorkspaceImage(path) && !parts.some(part => part.startsWith('.') || part.includes(':') || part === 'opennexus-records') ? path : null
+  const target = resolveVaultReference(notePath, reference)
+  return target && isWorkspaceImage(target) && !target.toLowerCase().split('/').includes('opennexus-records') ? target.replace(/^\//, '') : null
 }
 
 export function isWorkspaceImage(path: string): boolean { return /\.(png|jpe?g|gif|webp)$/i.test(path) }
+
+export function isMutableWorkspaceImage(path: string): boolean {
+  return isWorkspaceImage(path) && !/^\/?attachments\/[0-9a-f]{2}\/[0-9a-f]{64}\.(png|jpg|gif|webp)$/i.test(path)
+}
+
+async function imageRevision(path: string): Promise<string> {
+  if (isDesktop()) {
+    const entries = await hostInvoke<HostEntry[]>('workspace_tree')
+    const entry = entries.find(item => !item.deleted && item.path === nativePath(path))
+    if (!entry?.hash) throw new Error('IMAGE_REVISION_UNAVAILABLE')
+    return entry.hash
+  }
+  const bytes = await (await loadWorkspaceImage(relativePath(path))).arrayBuffer()
+  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)))
+    .map(byte => byte.toString(16).padStart(2, '0')).join('')
+}
 
 export async function storeWorkspaceImage(
   file: Blob & { name?: string }, source: WorkspaceAssetSource,
@@ -201,9 +222,16 @@ export async function getNoteId(filePath: string): Promise<string> {
 }
 
 export async function saveFileContent(filePath: string, content: string, expectedContent?: string): Promise<void> {
+  if (workspaceDocumentType(filePath) !== 'markdown' && workspaceDocumentType(filePath) !== 'canvas') throw new Error('UNSUPPORTED_DOCUMENT_TYPE')
+  if (workspaceDocumentType(filePath) === 'canvas') validateCanvasContent(content)
   if (isDesktop()) {
     if (expectedContent === undefined) throw new Error('EXPECTED_REVISION_REQUIRED')
     await hostInvoke('workspace_write', { path: nativePath(filePath), expected: await contentHash(expectedContent), content })
+    return
+  }
+  if (workspaceDocumentType(filePath) === 'canvas') {
+    if (expectedContent === undefined) throw new Error('EXPECTED_REVISION_REQUIRED')
+    await apiClient.put('/api/workspace/canvas', { path: filePath, expected_content_hash: await contentHash(expectedContent), content })
     return
   }
   const metadata = splitNoteMetadata(content)
@@ -221,13 +249,23 @@ export async function createFile(
   name: string,
   content = '',
 ): Promise<FileNode> {
+  const fileName = /\.(md|canvas)$/i.test(name) ? name : `${name}.md`
+  const kind = workspaceDocumentType(fileName)
+  if (kind !== 'markdown' && kind !== 'canvas') throw new Error('UNSUPPORTED_DOCUMENT_TYPE')
+  const initialContent = kind === 'canvas' ? (content || EMPTY_CANVAS) : content
+  if (kind === 'canvas') validateCanvasContent(initialContent)
   if (isDesktop()) {
-    const path = [nativePath(folderPath), name.endsWith('.md') ? name : `${name}.md`].filter(Boolean).join('/')
-    const entry = await hostInvoke<HostEntry>('workspace_write', { path, expected: '', content })
-    noteIdByPath.set(`/${path}`, entry.file_id)
-    return { id: entry.file_id, note_id: entry.file_id, path: `/${path}`, name: path.split('/').at(-1)!, type: 'file' }
+    const path = [nativePath(folderPath), fileName].filter(Boolean).join('/')
+    const entry = await hostInvoke<HostEntry>('workspace_write', { path, expected: '', content: initialContent })
+    if (kind === 'markdown') noteIdByPath.set(`/${path}`, entry.file_id)
+    return { id: entry.file_id, note_id: kind === 'markdown' ? entry.file_id : undefined, path: `/${path}`, name: path.split('/').at(-1)!, type: 'file' }
   }
-  const title = name.replace(/\.md$/i, '')
+  if (kind === 'canvas') {
+    const path = [relativePath(folderPath), fileName].filter(Boolean).join('/')
+    await apiClient.put<CanvasDocument>('/api/workspace/canvas', { path, expected_content_hash: '', content: initialContent })
+    return { id: `canvas:${path}`, path: `/${path}`, name: fileName, type: 'file' }
+  }
+  const title = fileName.replace(/\.md$/i, '')
   const note = await noteService.createNote({
     title,
     folder: relativePath(folderPath),
@@ -250,6 +288,16 @@ export async function createFolder(parentPath: string, name: string): Promise<Fi
 }
 
 export async function renameFile(oldPath: string, newName: string): Promise<void> {
+  if (workspaceDocumentType(oldPath) === 'image') {
+    if (!isMutableWorkspaceImage(oldPath)) throw new Error('IMAGE_ASSET_IMMUTABLE')
+    const path = normalizePublicPath(oldPath)
+    const destination = `${path.slice(0, path.lastIndexOf('/') + 1)}${newName}`
+    if (workspaceDocumentType(destination) !== 'image' || path.slice(path.lastIndexOf('.')).toLowerCase() !== destination.slice(destination.lastIndexOf('.')).toLowerCase()) throw new Error('IMAGE_EXTENSION_MISMATCH')
+    const expected = await imageRevision(path)
+    if (isDesktop()) await hostInvoke('workspace_rename', { path: nativePath(path), destination: nativePath(destination), expected })
+    else await apiClient.post('/api/workspace/assets/move', { path, destination, expected_content_hash: expected })
+    await refreshTree(); return
+  }
   if (isDesktop()) {
     const path = nativePath(oldPath)
     const document = await hostInvoke<HostDocument>('workspace_read', { path })
@@ -257,6 +305,12 @@ export async function renameFile(oldPath: string, newName: string): Promise<void
     await refreshTree(); return
   }
   const path = normalizePublicPath(oldPath)
+  if (workspaceDocumentType(path) === 'canvas') {
+    const document = await apiClient.get<CanvasDocument>('/api/workspace/canvas', { params: { path } })
+    const destination = `${path.slice(0, path.lastIndexOf('/') + 1)}${newName}`
+    await apiClient.post('/api/workspace/canvas/move', { path, destination, expected_content_hash: document.content_hash })
+    await refreshTree(); return
+  }
   if (typeByPath.get(path) === 'folder') {
     await apiClient.post('/api/workspace/folders/rename', {
       path: relativePath(path),
@@ -269,6 +323,13 @@ export async function renameFile(oldPath: string, newName: string): Promise<void
 }
 
 export async function deleteFile(pathValue: string): Promise<void> {
+  if (workspaceDocumentType(pathValue) === 'image') {
+    if (!isMutableWorkspaceImage(pathValue)) throw new Error('IMAGE_ASSET_IMMUTABLE')
+    const expected = await imageRevision(pathValue)
+    if (isDesktop()) await hostInvoke('workspace_delete', { path: nativePath(pathValue), expected })
+    else await apiClient.post('/api/workspace/assets/delete', { path: pathValue, expected_content_hash: expected })
+    await refreshTree(); return
+  }
   if (isDesktop()) {
     const path = nativePath(pathValue)
     const document = await hostInvoke<HostDocument>('workspace_read', { path })
@@ -276,6 +337,11 @@ export async function deleteFile(pathValue: string): Promise<void> {
     await refreshTree(); return
   }
   const path = normalizePublicPath(pathValue)
+  if (workspaceDocumentType(path) === 'canvas') {
+    const document = await apiClient.get<CanvasDocument>('/api/workspace/canvas', { params: { path } })
+    await apiClient.post('/api/workspace/canvas/delete', { path, expected_content_hash: document.content_hash })
+    await refreshTree(); return
+  }
   if (typeByPath.get(path) === 'folder') {
     await apiClient.post<OperationResponse>('/api/workspace/folders/delete', {
       path: relativePath(path),
@@ -287,6 +353,17 @@ export async function deleteFile(pathValue: string): Promise<void> {
 }
 
 export async function moveFile(sourcePath: string, targetPath: string): Promise<void> {
+  const impact = await previewPathChange(sourcePath)
+  const sources = [...new Set([...impact.incoming, ...impact.ambiguous, ...impact.outgoing].map(ref => ref.source))]
+  if (sources.length) throw new Error(`REFERENCE_IMPACT_REVIEW_REQUIRED: ${sources.join(', ')}`)
+  if (workspaceDocumentType(sourcePath) === 'image') {
+    if (!isMutableWorkspaceImage(sourcePath)) throw new Error('IMAGE_ASSET_IMMUTABLE')
+    const destination = `${normalizePublicPath(targetPath).replace(/\/$/, '')}/${sourcePath.split('/').at(-1)}`
+    const expected = await imageRevision(sourcePath)
+    if (isDesktop()) await hostInvoke('workspace_rename', { path: nativePath(sourcePath), destination: nativePath(destination), expected })
+    else await apiClient.post('/api/workspace/assets/move', { path: sourcePath, destination, expected_content_hash: expected })
+    await refreshTree(); return
+  }
   if (isDesktop()) {
     const path = nativePath(sourcePath)
     const document = await hostInvoke<HostDocument>('workspace_read', { path })
@@ -294,6 +371,12 @@ export async function moveFile(sourcePath: string, targetPath: string): Promise<
     await refreshTree(); return
   }
   const source = normalizePublicPath(sourcePath)
+  if (workspaceDocumentType(source) === 'canvas') {
+    const document = await apiClient.get<CanvasDocument>('/api/workspace/canvas', { params: { path: source } })
+    const destination = `${normalizePublicPath(targetPath).replace(/\/$/, '')}/${source.split('/').at(-1)}`
+    await apiClient.post('/api/workspace/canvas/move', { path: source, destination, expected_content_hash: document.content_hash })
+    await refreshTree(); return
+  }
   if (typeByPath.get(source) !== 'file') {
     throw new Error(t('当前阶段只支持移动笔记文件。', 'Only note files can be moved at this stage.'))
   }

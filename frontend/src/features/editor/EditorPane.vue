@@ -4,8 +4,10 @@ import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore } from '@/stores/theme'
 import EditorScrollButtons from './EditorScrollButtons.vue'
+import { workspaceDocumentType } from '@/services/workspaceDocuments'
 const SourceMarkdownEditor = defineAsyncComponent(() => import('./SourceMarkdownEditor.vue'))
 const VisualMarkdownEditor = defineAsyncComponent(() => import('./VisualMarkdownEditor.vue'))
+const CanvasSourceEditor = defineAsyncComponent(() => import('./CanvasSourceEditor.vue'))
 
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
@@ -15,10 +17,11 @@ const container = ref<HTMLElement | null>(null)
 
 <template>
   <div ref="container" class="editor-scroll-pane">
-  <VisualMarkdownEditor v-if="editorStore.mode === 'wysiwyg'" :key="`${editorStore.currentFilePath ?? 'empty'}:${editorStore.contentRevision}:${themeStore.resolvedCodeBlockTheme}:${settingsStore.language}`"
+  <CanvasSourceEditor v-if="workspaceDocumentType(editorStore.currentFilePath ?? '') === 'canvas'" :key="`${editorStore.currentFilePath}:${editorStore.contentRevision}`" />
+  <VisualMarkdownEditor v-else-if="editorStore.mode === 'wysiwyg'" :key="`${editorStore.currentFilePath ?? 'empty'}:${editorStore.contentRevision}:${themeStore.resolvedCodeBlockTheme}:${settingsStore.language}`"
     :initial-content="editorStore.content" />
   <SourceMarkdownEditor v-else :key="`${editorStore.currentFilePath ?? 'empty'}:${editorStore.contentRevision}`" :initial-content="editorStore.content" />
-  <EditorScrollButtons :container="container" :content="editorStore.content" />
+  <EditorScrollButtons v-if="workspaceDocumentType(editorStore.currentFilePath ?? '') === 'markdown'" :container="container" :content="editorStore.content" />
   </div>
 </template>
 

@@ -9,6 +9,7 @@ import { isDesktop } from '@/services/platform/desktop'
 import { t } from '@/i18n'
 import ControlIcon from '@/components/common/ControlIcon.vue'
 import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
+import { workspaceDocumentType } from '@/services/workspaceDocuments'
 
 const editorStore = useEditorStore()
 const layout = useLayoutPreferencesStore()
@@ -17,19 +18,21 @@ const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 const reloadError = ref('')
 const exportOpen = ref(false)
 const desktop = isDesktop()
+const isMarkdown = computed(() => workspaceDocumentType(editorStore.currentFilePath ?? 'untitled.md') !== 'canvas')
 const needsRecovery = computed(() => ['conflict', 'external_changed'].includes(editorStore.saveStatus))
 const missingFile = computed(() => needsRecovery.value && editorStore.currentFilePath === workspaceStore.activeFilePath && !workspaceStore.activeFile && !workspaceStore.treeRefreshError)
 function downloadCopy() {
-  const url = URL.createObjectURL(new Blob([editorStore.content], { type: 'text/markdown;charset=utf-8' }))
+  const extension = isMarkdown.value ? 'md' : 'canvas'
+  const url = URL.createObjectURL(new Blob([editorStore.content], { type: 'text/plain;charset=utf-8' }))
   const link = document.createElement('a')
   link.href = url
-  link.download = `${(editorStore.currentFilePath?.split('/').pop() ?? 'note.md').replace(/\.md$/i, '')}-recovered.md`
+  link.download = `${(editorStore.currentFilePath?.split('/').pop() ?? `document.${extension}`).replace(/\.(md|canvas)$/i, '')}-recovered.${extension}`
   document.body.append(link); link.click(); link.remove()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 async function discard() {
   const path = editorStore.currentFilePath, snapshot = editorStore.content
-  if (!path || !(await askConfirm(t('关闭将丢弃当前编辑内容。需要保留时，请先下载 Markdown 副本。确认关闭？', 'Closing discards the current editor content. Download a Markdown copy first if needed. Close?')))) return
+  if (!path || !(await askConfirm(t('关闭将丢弃当前编辑内容。需要保留时，请先下载副本。确认关闭？', 'Closing discards the current editor content. Download a copy first if needed. Close?')))) return
   if (!(await editorStore.discardExternalChanges(path, snapshot))) return
   workspaceStore.closeFile(path)
   workspaceStore.setActiveFile(null)
@@ -50,19 +53,19 @@ const statusText = computed<Record<string, string>>(() => ({
 
 <template>
   <header class="editor-header">
-    <ExportDialog v-if="exportOpen" @close="exportOpen = false" />
+    <ExportDialog v-if="exportOpen && isMarkdown" @close="exportOpen = false" />
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <div class="file-identity"><strong>{{ workspaceStore.activeFile?.name ?? t('未命名笔记', 'Untitled note') }}</strong><small>{{ workspaceStore.activeFilePath }}</small></div>
     <div class="editor-actions">
-      <button v-if="editorStore.mode === 'wysiwyg'" type="button" class="toolbar-toggle" :aria-pressed="layout.editorToolbarVisible" :title="layout.editorToolbarVisible ? t('隐藏编辑器工具栏', 'Hide editor toolbar') : t('显示编辑器工具栏', 'Show editor toolbar')" :aria-label="layout.editorToolbarVisible ? t('隐藏编辑器工具栏', 'Hide editor toolbar') : t('显示编辑器工具栏', 'Show editor toolbar')" @click="layout.editorToolbarVisible = !layout.editorToolbarVisible"><ControlIcon name="toolbar" /></button>
-      <button v-if="!desktop" class="button-secondary" @click="exportOpen = true">{{ t('导出', 'Export') }}</button>
+      <button v-if="isMarkdown && editorStore.mode === 'wysiwyg'" type="button" class="toolbar-toggle" :aria-pressed="layout.editorToolbarVisible" :title="layout.editorToolbarVisible ? t('隐藏编辑器工具栏', 'Hide editor toolbar') : t('显示编辑器工具栏', 'Show editor toolbar')" :aria-label="layout.editorToolbarVisible ? t('隐藏编辑器工具栏', 'Hide editor toolbar') : t('显示编辑器工具栏', 'Show editor toolbar')" @click="layout.editorToolbarVisible = !layout.editorToolbarVisible"><ControlIcon name="toolbar" /></button>
+      <button v-if="!desktop && isMarkdown" class="button-secondary" @click="exportOpen = true">{{ t('导出', 'Export') }}</button>
       <span class="save-status" :class="editorStore.saveStatus">{{ statusText[editorStore.saveStatus] }}</span>
       <button v-if="needsRecovery && !missingFile" class="button-secondary" @click="reload">{{ t('重新加载外部版本', 'Reload external version') }}</button>
       <span v-if="missingFile" class="save-status conflict">{{ t('原文件已删除或移动', 'Original file deleted or moved') }}</span>
-      <button v-if="needsRecovery" class="button-secondary" @click="downloadCopy">{{ t('下载 Markdown 副本', 'Download Markdown copy') }}</button>
+      <button v-if="needsRecovery" class="button-secondary" @click="downloadCopy">{{ isMarkdown ? t('下载 Markdown 副本', 'Download Markdown copy') : t('下载 Canvas 副本', 'Download Canvas copy') }}</button>
       <button v-if="needsRecovery" class="button-secondary" @click="discard">{{ t('关闭当前笔记', 'Close current note') }}</button>
       <span v-if="reloadError" class="save-status conflict" role="alert">{{ reloadError }}</span>
-      <div class="mode-switch" :aria-label="t('编辑模式', 'Editor mode')">
+      <div v-if="isMarkdown" class="mode-switch" :aria-label="t('编辑模式', 'Editor mode')">
         <button type="button" :class="{ active: editorStore.mode === 'wysiwyg' }" @click="editorStore.setMode('wysiwyg')">{{ t('写作', 'Writing') }}</button>
         <button type="button" :class="{ active: editorStore.mode === 'source' }" @click="editorStore.setMode('source')">{{ t('源码', 'Source') }}</button>
       </div>

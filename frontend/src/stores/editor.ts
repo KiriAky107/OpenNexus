@@ -5,6 +5,7 @@ import * as workspaceService from '@/services/workspaceService'
 import { t } from '@/i18n'
 import { ApiErrorClass } from '@/services/apiClient'
 import { DesktopError } from '@/services/platform/desktop'
+import { workspaceDocumentType } from '@/services/workspaceDocuments'
 
 export const useEditorStore = defineStore('editor', () => {
   const mode = ref<'wysiwyg' | 'source'>('wysiwyg')
@@ -45,6 +46,11 @@ export const useEditorStore = defineStore('editor', () => {
   let saveTimer: ReturnType<typeof setTimeout> | null = null
   let pendingSave: Promise<void> | null = null
 
+  function cancelPendingAutoSave() {
+    if (saveTimer) clearTimeout(saveTimer)
+    saveTimer = null
+  }
+
   function scheduleAutoSave(delay = 1500) {
     if (saveStatus.value === 'conflict' || saveStatus.value === 'external_changed') return
     if (saveTimer) clearTimeout(saveTimer)
@@ -72,7 +78,7 @@ export const useEditorStore = defineStore('editor', () => {
           lastSavedAt.value = new Date().toISOString()
         }
       } catch (error) {
-        if (currentFilePath.value === targetPath) saveStatus.value = (error instanceof ApiErrorClass && error.code === 'NOTE_CONTENT_CONFLICT') || (error instanceof DesktopError && error.code === 'REVISION_CONFLICT') ? 'conflict' : 'save_failed'
+        if (currentFilePath.value === targetPath) saveStatus.value = (error instanceof ApiErrorClass && ['NOTE_CONTENT_CONFLICT', 'CANVAS_CONTENT_CONFLICT'].includes(error.code)) || (error instanceof DesktopError && error.code === 'REVISION_CONFLICT') ? 'conflict' : 'save_failed'
       } finally {
         pendingSave = null
         if (currentFilePath.value === targetPath && saveStatus.value === 'dirty') scheduleAutoSave()
@@ -104,7 +110,7 @@ export const useEditorStore = defineStore('editor', () => {
     try {
       const [loadedContent, loadedNoteId] = await Promise.all([
         workspaceService.readFileContent(filePath),
-        workspaceService.getNoteId(filePath),
+        workspaceDocumentType(filePath) === 'markdown' ? workspaceService.getNoteId(filePath) : Promise.resolve(null),
       ])
       if (version !== loadVersion) return
       currentFilePath.value = filePath
@@ -209,6 +215,7 @@ export const useEditorStore = defineStore('editor', () => {
     toggleMode,
     updateContent,
     scheduleAutoSave,
+    cancelPendingAutoSave,
     save,
     loadFile,
     highlightBlock,

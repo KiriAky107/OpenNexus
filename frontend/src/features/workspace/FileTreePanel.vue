@@ -6,6 +6,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { noteOutline } from './outline'
 import { useRouter } from 'vue-router'
 import type { FileNode } from '@/contracts'
+import { EMPTY_CANVAS, workspaceDocumentType } from '@/services/workspaceDocuments'
 import * as workspaceService from '@/services/workspaceService'
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -19,7 +20,7 @@ import { t } from '@/i18n'
 const workspaceStore = useWorkspaceStore()
 const editorStore = useEditorStore()
 const router = useRouter()
-const newItemType = ref<'file' | 'folder' | null>(null)
+const newItemType = ref<'file' | 'canvas' | 'folder' | null>(null)
 const newItemName = ref('')
 const parentPath = ref('/')
 const selectedTreePath = ref(workspaceStore.activeFilePath ?? '/')
@@ -109,7 +110,7 @@ watch(() => workspaceStore.activeFilePath, (path) => {
   selectedFolderPath.value = containingFolder(path)
 })
 
-function beginCreate(type: 'file' | 'folder', parent = '/') {
+function beginCreate(type: 'file' | 'canvas' | 'folder', parent = '/') {
   if (creating.value) return
   closeContextMenu()
   createError.value = ''
@@ -127,9 +128,11 @@ async function createItem() {
   creating.value = true
   createError.value = ''
   try {
-  if (newItemType.value === 'file') {
-    const name = rawName.endsWith('.md') ? rawName : `${rawName}.md`
-    const file = await workspaceService.createFile(parentPath.value, name, `# ${rawName}\n\n`)
+  if (newItemType.value === 'file' || newItemType.value === 'canvas') {
+    const canvas = newItemType.value === 'canvas'
+    const extension = canvas ? '.canvas' : '.md'
+    const name = rawName.toLowerCase().endsWith(extension) ? rawName : `${rawName}${extension}`
+    const file = await workspaceService.createFile(parentPath.value, name, canvas ? EMPTY_CANVAS : `# ${rawName}\n\n`)
     workspaceStore.addFileToTree(parentPath.value, file)
     selectedTreePath.value = file.path
     selectedFolderPath.value = parentPath.value
@@ -160,7 +163,10 @@ async function openNode(node: FileNode) {
     const request = imageRequest
     try {
       const blob = await workspaceService.loadWorkspaceImage(node.path.replace(/^\//, ''))
-      if (request === imageRequest) imagePreview.value = { name: node.name, url: URL.createObjectURL(blob) }
+      if (request === imageRequest) {
+        imagePreview.value = { name: node.name, url: URL.createObjectURL(blob) }
+        workspaceStore.rememberRecentFile(node.path)
+      }
     } catch (error) {
       if (request === imageRequest) createError.value = error instanceof Error ? error.message : t('图片加载失败', 'Image loading failed')
     }
@@ -176,6 +182,7 @@ async function openNode(node: FileNode) {
   } catch (error) {
     if (!wasOpen) workspaceStore.closeFile(node.path)
     workspaceStore.setActiveFile(previousPath)
+    createError.value = `${t('无法打开文件：', 'Could not open file: ')}${error instanceof Error ? error.message : String(error)}`
     console.error(`打开文件失败：${node.path}`, error)
   }
 }
@@ -196,11 +203,33 @@ async function renameTarget() {
   if (!node) return
   const newName = (await askPrompt(t('新名称', 'New name'), node.name))?.trim()
   if (newName && newName !== node.name) {
-    const normalizedName = node.type === 'file' && !newName.toLowerCase().endsWith('.md') ? `${newName}.md` : newName
+    const kind = workspaceDocumentType(node.path)
+    const extension = kind === 'canvas' ? '.canvas' : kind === 'image' ? node.path.slice(node.path.lastIndexOf('.')) : '.md'
+    const normalizedName = node.type === 'file' && !newName.toLowerCase().endsWith(extension.toLowerCase()) ? `${newName}${extension}` : newName
     const oldPath = node.path
     const separator = oldPath.lastIndexOf('/')
     const newPath = `${oldPath.slice(0, separator + 1)}${normalizedName}`
-    await workspaceService.renameFile(oldPath, normalizedName)
+    if (editorStore.currentFilePath === oldPath && ['dirty', 'saving', 'save_failed', 'conflict', 'external_changed'].includes(editorStore.saveStatus)) {
+      createError.value = t('请先保存或处理当前文件的冲突，再重命名。', 'Save or resolve the current document before renaming.')
+      closeContextMenu(); return
+    }
+    try {
+      const impact = await workspaceService.previewPathChange(oldPath)
+      const total = impact.incoming.length + impact.ambiguous.length + impact.outgoing.length
+      if (total) {
+        const sources = [...new Set([...impact.incoming, ...impact.ambiguous, ...impact.outgoing].map(item => item.source))]
+        const message = `${t('重命名会影响引用；本次只移动文件，不会静默改写其他文件。请确认后逐一处理：', 'Renaming affects references. This move will not silently rewrite other files. Review these sources:')}\n${sources.slice(0, 12).join('\n')}${sources.length > 12 ? `\n… ${sources.length - 12}` : ''}\n${t('确定继续？', 'Continue?')}`
+        if (!(await askConfirm(message))) { closeContextMenu(); return }
+      }
+    } catch (error) {
+      createError.value = `${t('无法完成引用检查，已取消重命名：', 'Reference check failed; rename cancelled: ')}${error instanceof Error ? error.message : String(error)}`
+      closeContextMenu(); return
+    }
+    try { await workspaceService.renameFile(oldPath, normalizedName) }
+    catch (error) {
+      createError.value = `${t('重命名失败：', 'Rename failed: ')}${error instanceof Error ? error.message : String(error)}`
+      closeContextMenu(); return
+    }
     workspaceStore.renamePath(oldPath, newPath, normalizedName)
     editorStore.renameFilePath(oldPath, newPath)
     if (selectedTreePath.value === oldPath || selectedTreePath.value.startsWith(`${oldPath}/`)) {
@@ -217,7 +246,12 @@ async function deleteTarget() {
   const node = contextTarget.value
   if (!node) return
   if (!(await askConfirm(`${t('确定要删除', 'Delete')} “${node.name}”?`))) return closeContextMenu()
-  await workspaceService.deleteFile(node.path)
+  try { await workspaceService.deleteFile(node.path) }
+  catch (error) {
+    createError.value = `${t('删除失败：', 'Delete failed: ')}${error instanceof Error ? error.message : String(error)}`
+    closeContextMenu(); return
+  }
+  closeImagePreview()
   const activeWasRemoved = workspaceStore.closePath(node.path)
   workspaceStore.removeFromTree(node.path)
   if (selectedTreePath.value === node.path || selectedTreePath.value.startsWith(`${node.path}/`)) {
@@ -251,6 +285,7 @@ function containingFolder(path: string): string {
     <div v-show="activeTab === 'files'" id="workspace-files-panel" class="files-panel" role="tabpanel" aria-labelledby="workspace-files-tab">
     <div class="toolbar">
       <button type="button" :title="t('新建笔记', 'New note')" :aria-label="t('新建笔记', 'New note')" @click.stop="beginCreate('file', selectedFolderPath)"><AppIcon :icon="DocumentAdd" /></button>
+      <button type="button" :title="t('新建画布', 'New canvas')" :aria-label="t('新建画布', 'New canvas')" @click.stop="beginCreate('canvas', selectedFolderPath)">◇</button>
       <button type="button" :title="t('新建文件夹', 'New folder')" :aria-label="t('新建文件夹', 'New folder')" @click.stop="beginCreate('folder', selectedFolderPath)"><AppIcon :icon="FolderAdd" /></button>
       <button type="button" :aria-label="t('搜索文件', 'Search files')" :aria-expanded="searchVisible" @click="searchVisible = !searchVisible">{{ t('搜索', 'Search') }}</button>
       <button type="button" :aria-label="t('全部展开文件夹', 'Expand all folders')" @click="expandAllFiles">{{ t('全部展开', 'Expand all') }}</button>
@@ -259,7 +294,7 @@ function containingFolder(path: string): string {
       <input v-model="searchQuery" type="search" :placeholder="t('搜索文件或文件夹…', 'Search files or folders…')" :aria-label="t('搜索文件或文件夹', 'Search files or folders')" @focus="searchFocused = true" @blur="searchFocused = false" />
     </div>
     <form v-if="newItemType" class="new-item" @submit.prevent="createItem">
-      <input ref="createInput" v-model="newItemName" :disabled="creating" :placeholder="newItemType === 'file' ? t('笔记名称', 'Note name') : t('文件夹名称', 'Folder name')" />
+      <input ref="createInput" v-model="newItemName" :disabled="creating" :placeholder="newItemType === 'folder' ? t('文件夹名称', 'Folder name') : newItemType === 'canvas' ? t('画布名称', 'Canvas name') : t('笔记名称', 'Note name')" />
       <button type="submit" :disabled="creating">{{ t('创建', 'Create') }}</button>
       <button type="button" :disabled="creating" @click="newItemType = null">{{ t('取消', 'Cancel') }}</button>
     </form>
@@ -301,9 +336,10 @@ function containingFolder(path: string): string {
       <div v-if="contextTarget" class="context-menu"
         :style="{ left: `${contextMenuPosition.x}px`, top: `${contextMenuPosition.y}px` }" @click.stop>
         <button @click="beginCreate('file', selectedFolderPath)">{{ t('新建文件', 'New file') }}</button>
+        <button @click="beginCreate('canvas', selectedFolderPath)">{{ t('新建画布', 'New canvas') }}</button>
         <button @click="beginCreate('folder', selectedFolderPath)">{{ t('新建文件夹', 'New folder') }}</button>
-        <button v-if="contextTarget.path !== '/' && !workspaceService.isWorkspaceImage(contextTarget.path)" @click="renameTarget">{{ t('重命名', 'Rename') }}</button>
-        <button v-if="contextTarget.path !== '/' && !workspaceService.isWorkspaceImage(contextTarget.path)" class="danger" @click="deleteTarget">{{ t('删除', 'Delete') }}</button>
+        <button v-if="contextTarget.path !== '/' && (!workspaceService.isWorkspaceImage(contextTarget.path) || workspaceService.isMutableWorkspaceImage(contextTarget.path))" @click="renameTarget">{{ t('重命名', 'Rename') }}</button>
+        <button v-if="contextTarget.path !== '/' && (!workspaceService.isWorkspaceImage(contextTarget.path) || workspaceService.isMutableWorkspaceImage(contextTarget.path))" class="danger" @click="deleteTarget">{{ t('删除', 'Delete') }}</button>
       </div>
     </Teleport>
   </section>

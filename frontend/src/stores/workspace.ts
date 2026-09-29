@@ -9,6 +9,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const vaultName = ref('')
   const fileTree = ref<FileNode[]>([])
   const openFiles = ref<string[]>([])
+  const recentFiles = ref<string[]>([])
   const activeFilePath = ref<string | null>(null)
   const isLoading = ref(false)
   const hasVault = ref(false)
@@ -44,6 +45,21 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       openFiles.value.push(path)
     }
     activeFilePath.value = path
+    rememberRecentFile(path)
+  }
+
+  function rememberRecentFile(path: string) {
+    const node = findNodeByPath(fileTree.value, path)
+    if (!node || node.type !== 'file') return
+    recentFiles.value = [path, ...recentFiles.value.filter(previous => previous !== path)].slice(0, 20)
+    try { localStorage.setItem(`workspace-recent-files:${vaultId.value}`, JSON.stringify(recentFiles.value)) } catch { /* session-only storage */ }
+  }
+
+  function restoreRecentFiles() {
+    let saved: unknown = []
+    try { saved = JSON.parse(localStorage.getItem(`workspace-recent-files:${vaultId.value}`) ?? '[]') } catch { /* invalid prior state */ }
+    recentFiles.value = Array.isArray(saved) ? saved.filter((path): path is string =>
+      typeof path === 'string' && findNodeByPath(fileTree.value, path)?.type === 'file').slice(0, 20) : []
   }
 
   function closeFile(path: string) {
@@ -79,6 +95,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       restore(fresh)
       // 避免在每次背景检查时重绘未更改的树。
       if (JSON.stringify(fresh) !== JSON.stringify(fileTree.value)) fileTree.value = fresh
+      const existingRecent = recentFiles.value.filter(recent => findNodeByPath(fileTree.value, recent)?.type === 'file')
+      if (existingRecent.length !== recentFiles.value.length) {
+        recentFiles.value = existingRecent
+        try { localStorage.setItem(`workspace-recent-files:${vaultId.value}`, JSON.stringify(existingRecent)) } catch { /* session-only storage */ }
+      }
       treeRefreshError.value = null
     } catch (error) {
       if (sequence === refreshSequence) treeRefreshError.value = error instanceof Error ? error.message : '文件树刷新失败'
@@ -96,6 +117,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       vaultId.value = info.vault_id
       vaultName.value = info.name
       fileTree.value = tree
+      restoreRecentFiles()
       openFiles.value = []
       activeFilePath.value = null
       hasVault.value = true
@@ -115,6 +137,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       vaultId.value = info.vault_id
       vaultName.value = info.name
       fileTree.value = tree
+      restoreRecentFiles()
       openFiles.value = []
       activeFilePath.value = null
       hasVault.value = true
@@ -168,12 +191,16 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (activeFilePath.value && (activeFilePath.value === oldPath || activeFilePath.value.startsWith(`${oldPath}/`))) {
       activeFilePath.value = `${newPath}${activeFilePath.value.slice(oldPath.length)}`
     }
+    recentFiles.value = recentFiles.value.map(path => path === oldPath || path.startsWith(`${oldPath}/`) ? `${newPath}${path.slice(oldPath.length)}` : path)
+    try { localStorage.setItem(`workspace-recent-files:${vaultId.value}`, JSON.stringify(recentFiles.value)) } catch { /* session-only storage */ }
   }
 
   function closePath(path: string) {
     const activeWasRemoved = Boolean(activeFilePath.value && (activeFilePath.value === path || activeFilePath.value.startsWith(`${path}/`)))
     openFiles.value = openFiles.value.filter((openPath) => openPath !== path && !openPath.startsWith(`${path}/`))
     if (activeWasRemoved) activeFilePath.value = openFiles.value.at(-1) ?? null
+    recentFiles.value = recentFiles.value.filter(recent => recent !== path && !recent.startsWith(`${path}/`))
+    try { localStorage.setItem(`workspace-recent-files:${vaultId.value}`, JSON.stringify(recentFiles.value)) } catch { /* session-only storage */ }
     return activeWasRemoved
   }
 
@@ -183,6 +210,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     vaultName,
     fileTree,
     openFiles,
+    recentFiles,
     activeFilePath,
     activeFile,
     isLoading,
@@ -191,6 +219,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     treeRefreshError,
     toggleFolder,
     openFile,
+    rememberRecentFile,
     closeFile,
     setActiveFile,
     loadRecentVaults,
