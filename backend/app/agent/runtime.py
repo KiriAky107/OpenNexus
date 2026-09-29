@@ -236,12 +236,35 @@ class AgentRuntime:
                 await self._finish_cancelled(record)
             return (record.persisted_run or record.run).model_copy(deep=True)
 
-    async def resolve_permission(self, run_id: str, request_id: str, decision: str) -> bool:
+    async def permission_preview(self, run_id: str, request_id: str) -> dict:
+        self.get_run(run_id)
+        from app.errors import ApiError
+        from app.services.note_preview import WRITE_TOOLS, preview_write
+        ticket = self.permissions.get_ticket(run_id, request_id)
+        if not ticket or ticket.future.done() or not ticket.tool_call or ticket.tool_call.name not in WRITE_TOOLS:
+            raise ApiError(404, 'PERMISSION_REQUEST_NOT_FOUND', '待预览的笔记操作不存在。')
+        ticket.preview = None
+        preview = await preview_write(ticket.tool_call)
+        if ticket.future.done():
+            raise ApiError(409, 'PERMISSION_REQUEST_RESOLVED', '操作已处理。')
+        ticket.preview = preview
+        return {key: value for key, value in preview.items() if key != 'binding'}
+
+    async def resolve_permission(self, run_id: str, request_id: str, decision: str, preview_token: str | None = None) -> bool:
         self.get_run(run_id)
         record = self._records.get(run_id)
         if record is None:
             return False
         ticket = self.permissions.get_ticket(run_id, request_id)
+        from app.errors import ApiError
+        from app.services.note_preview import WRITE_TOOLS, validate_preview
+        if ticket and not ticket.future.done() and decision != 'deny' and ticket.tool_call and ticket.tool_call.name in WRITE_TOOLS:
+            if decision != 'allow_once' or not ticket.preview or preview_token != ticket.preview['token']:
+                raise ApiError(409, 'NOTE_PREVIEW_REQUIRED', '请预览当前修改并仅允许本次写入。')
+            approved_preview = ticket.preview
+            await validate_preview(ticket.tool_call, approved_preview)
+            if ticket.preview is not approved_preview:
+                raise ApiError(409, 'NOTE_PREVIEW_STALE', '预览已刷新，请重新确认。')
         resolved = self.permissions.resolve(run_id, request_id, decision)
         if resolved:
             await self._publish(
@@ -758,6 +781,7 @@ class AgentRuntime:
         elif mode == PermissionMode.confirm and permission:
             # 运行状态必须在等待期间可见，前端才能展示并处理权限确认卡片。
             ticket = self.permissions.create_ticket(record.run.run_id, permission)
+            ticket.tool_call = call.model_copy(deep=True)
             record.run.status = AgentRunStatus.waiting_permission
             record.run.updated_at = datetime.now(timezone.utc)
             loop = asyncio.get_running_loop()
@@ -795,7 +819,7 @@ class AgentRuntime:
                 if cancelled:
                     raise asyncio.CancelledError
             result = (
-                await self._invoke_tool(record, call, permission)
+                await self._invoke_tool(record, call, permission, ticket.preview)
                 if decision in {"allow_once", "allow_session"}
                 else self._permission_denied(call)
             )
@@ -817,14 +841,14 @@ class AgentRuntime:
         data["duration_ms"] = int((perf_counter() - started_at) * 1000)
         await self._publish(record, AgentEventType.tool_result, data)
 
-    async def _invoke_tool(self, record: RunRecord, call: ToolCall, permission=None) -> ToolResult:
+    async def _invoke_tool(self, record: RunRecord, call: ToolCall, permission=None, reviewed_write=None) -> ToolResult:
         # Serialize potential writes across members. Permission decisions remain
         # outside the lock, and optimistic revision checks still run in each tool.
         read_only = call.name in {'notes.read', 'notes.list', 'notes.search', 'rag.search', 'tasks.read', 'tasks.list', 'markdown.catalog', 'skills.list', 'plugins.list', 'attachments.read', 'system.echo', 'math.add'}
         if not read_only:
             async with self._write_lock:
-                return await self._invoke_tool_unlocked(record, call, permission)
-        return await self._invoke_tool_unlocked(record, call, permission)
+                return await self._invoke_tool_unlocked(record, call, permission, reviewed_write)
+        return await self._invoke_tool_unlocked(record, call, permission, reviewed_write)
 
     async def _group_checkpoint(self, record: RunRecord, **kwargs):
         if not record.run.collaboration_id:
@@ -844,19 +868,28 @@ class AgentRuntime:
             if remaining is not None and record.timeout:
                 record.timeout.reschedule(loop.time() + remaining)
 
-    async def _invoke_tool_unlocked(self, record: RunRecord, call: ToolCall, permission=None) -> ToolResult:
+    async def _invoke_tool_unlocked(self, record: RunRecord, call: ToolCall, permission=None, reviewed_write=None) -> ToolResult:
         if self.permissions.mode_for(permission, record.run.run_id) == PermissionMode.deny:
             return self._permission_denied(call)
         if self.tools.contains(call.name) and self.tools.get(call.name).definition.permission != permission:
             return ToolResult(tool_call_id=call.tool_call_id, name=call.name, success=False,
                 error_code='TOOL_PERMISSION_CHANGED', error_message='Tool permissions changed; review a new execution request.')
         try:
+            if reviewed_write:
+                from app.services.note_preview import validate_preview
+                from app.errors import ApiError
+                try:
+                    await validate_preview(call, reviewed_write)
+                except ApiError as exc:
+                    return ToolResult(tool_call_id=call.tool_call_id, name=call.name, success=False,
+                                      error_code=exc.code, error_message=exc.message)
             return await asyncio.wait_for(
                 self.tools.execute(
                     call,
                     ToolExecutionContext(
                         run_id=record.run.run_id,
                         tool_call_id=call.tool_call_id,
+                        reviewed_write=reviewed_write,
                     ),
                 ),
                 timeout=record.request.tool_timeout_seconds,

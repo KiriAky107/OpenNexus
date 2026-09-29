@@ -485,6 +485,12 @@ class AgentTraceResponse(Contract):
 
 class PermissionDecisionRequest(Contract):
     decision: Literal["allow_once", "allow_session", "deny"]
+    preview_token: str | None = Field(default=None, max_length=64)
+
+
+class NoteRestoreRequest(Contract):
+    expected_content_hash: str = Field(pattern=r'^[0-9a-f]{64}$')
+    confirm: Literal[True]
 
 
 class BudgetDecisionRequest(Contract):

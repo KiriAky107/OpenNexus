@@ -7,5 +7,6 @@
 - `/tests/visual/index.html?case=editor`：逐字输入行内代码；先输入两个反引号、向左移再填字；连续普通/软换行；输入法提交；选区替换；撤销/重做。编辑器单元测试另覆盖 Markdown 序列化往返。
 - `/tests/visual/mermaid-matrix.html`：真实 Mermaid（无渲染 mock）的 6 图型 × 6 主题矩阵。顶部报告检查结果；加 `?theme=paper-moments` 可查看单主题外观。
 - `/tests/visual/callouts.html?theme=paper-moments`：工作区与静态预览的警告框类型、嵌套和折叠对照；可切换上述六个主题，不读写用户笔记。
+- `/tests/visual/note-changes.html?theme=dark`：AI 笔记授权差异、折叠原始参数、历史差异与恢复确认；内存请求夹具，不访问真实笔记。检查六主题、窄窗口、键盘焦点与关闭弹窗后的焦点恢复。
 
 运行自动回归：`pnpm test`。AppDialog 测试覆盖滚动锁引用计数、恢复焦点、禁止隐式关闭；主题预览矩阵覆盖六主题的实际共享 CSS、控件状态和 CSP/无脚本隔离。自动结构检查不代替浏览器截图、布局和对比度检查。

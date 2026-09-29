@@ -13,6 +13,8 @@ export const useAgentStore = defineStore('agent', () => {
   const isCreating = ref(false)
   const isRunning = ref(false)
   const permissionRequest = ref<PermissionRequest | null>(null)
+  const pendingPermissions = ref<(PermissionRequest & { tool_call_id: string })[]>([])
+  function syncPermissions() { permissionRequest.value = pendingPermissions.value[0] ?? null }
   const toolCalls = ref<ToolCall[]>([])
   const error = ref<string | null>(null)
   let eventStream: SseClient | null = null
@@ -33,6 +35,7 @@ export const useAgentStore = defineStore('agent', () => {
     eventStream = null
   }
   function resetEvents() {
+    pendingPermissions.value = []; syncPermissions()
     events.value = []
     toolCalls.value = []
     seenSequences.clear()
@@ -161,8 +164,9 @@ export const useAgentStore = defineStore('agent', () => {
         toolCall.error_message = data.error_message == null ? undefined : String(data.error_message)
         toolCall.completed_at = event.timestamp
       }
-      permissionRequest.value = null
-      if (run?.status === 'waiting_permission') run.status = 'running'
+      pendingPermissions.value = pendingPermissions.value.filter(item => item.tool_call_id !== data.tool_call_id)
+      syncPermissions()
+      if (run?.status === 'waiting_permission' && !permissionRequest.value) run.status = 'running'
     } else if (event.event === 'Usage' && run) {
       run.token_usage = { total_tokens: Number(data.token_usage) || 0 }
     } else if (event.event === 'BudgetRequired' && run) {
@@ -171,18 +175,23 @@ export const useAgentStore = defineStore('agent', () => {
       run.status = 'running'
     } else if (event.event === 'PermissionRequired') {
       const call = (data.tool_call ?? {}) as Record<string, unknown>
-      permissionRequest.value = {
+      pendingPermissions.value.push({
         request_id: String(data.request_id ?? ''),
         run_id: event.run_id,
         tool_name: String(call.name ?? 'unknown'),
         permission: String(data.permission ?? ''),
         parameters: (call.arguments ?? {}) as Record<string, unknown>,
         impact: t('该工具需要获得权限后才能继续执行。', 'This tool requires permission before it can continue.'),
-      }
+        tool_call_id: String(call.tool_call_id ?? ''),
+      })
+      syncPermissions()
       if (run) run.status = 'waiting_permission'
+    } else if (event.event === 'PermissionResolved') {
+      pendingPermissions.value = pendingPermissions.value.filter(item => item.request_id !== data.request_id)
+      syncPermissions()
     } else if (['RunCompleted', 'RunFailed', 'RunCancelled'].includes(event.event)) {
       isRunning.value = false
-      permissionRequest.value = null
+      pendingPermissions.value = []; syncPermissions()
       if (run) {
         run.status = event.event === 'RunCompleted' ? 'completed' : event.event === 'RunFailed' ? 'failed' : 'cancelled'
         run.completed_at = event.timestamp
@@ -263,7 +272,7 @@ export const useAgentStore = defineStore('agent', () => {
     if (run) run.status = 'cancelled'
     if (activeRunId.value === runId) {
       isRunning.value = false
-      permissionRequest.value = null
+      pendingPermissions.value = []; syncPermissions()
       stopStream()
       connectionState.value = 'idle'
     }
@@ -272,8 +281,10 @@ export const useAgentStore = defineStore('agent', () => {
   async function respondPermission(decision: 'allow' | 'deny', scope: 'once' | 'session' = 'once') {
     if (!activeRunId.value || !permissionRequest.value) return
     const apiDecision = decision === 'deny' ? 'deny' : scope === 'session' ? 'allow_session' : 'allow_once'
-    await agentService.respondToPermission(activeRunId.value, permissionRequest.value.request_id, apiDecision)
-    permissionRequest.value = null
+    const requestId = permissionRequest.value.request_id
+    await agentService.respondToPermission(activeRunId.value, requestId, apiDecision)
+    pendingPermissions.value = pendingPermissions.value.filter(item => item.request_id !== requestId)
+    syncPermissions()
   }
 
   return {

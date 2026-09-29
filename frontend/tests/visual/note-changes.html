@@ -1,0 +1,47 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>笔记预览与恢复验收</title></head>
+<body><div id="app"></div><script type="module">
+import { createApp, h, ref } from 'vue';
+import { createPinia } from 'pinia';
+import PermissionReview from '/src/features/agent/PermissionReview.vue';
+import NoteHistory from '/src/features/editor/NoteHistory.vue';
+import { useEditorStore } from '/src/stores/editor.ts';
+import { getCommunityThemePreviewCss } from '/src/services/themePackageService.ts';
+import '/src/styles/tokens.css';
+import '/src/styles/features.css';
+const theme = new URLSearchParams(location.search).get('theme') || 'light';
+document.documentElement.dataset.theme = theme;
+const style = document.createElement('style');
+style.textContent = getCommunityThemePreviewCss(theme) || '';
+document.head.append(style);
+const diff = { lines: [
+  {kind:'-',line:3,text:'复习目标：了解知识点。\n'},
+  {kind:'+',line:3,text:'复习目标：解释检索流程，并用两份材料验证结论。\n'},
+  {kind:'+',line:4,text:'- [ ] 完成示例并记录仍需核对的引用。\n'},
+], added_chars:44,removed_chars:12,before_chars:82,after_chars:114,truncated:false };
+const preview = { token:'test-only',file_path:'课程/第一讲.md',note_id:'fixture',operation:'replace',metadata:{title:null,tags:['课程']},diff };
+const change = {change_id:'fixture-change',note_id:'fixture',file_path:preview.file_path,origin:'agent:fixture:notes.patch_markdown',before_hash:'0'.repeat(64),after_hash:'1'.repeat(64),created_at:'2026-09-30T01:00:00Z',applied_at:'2026-09-30T01:00:01Z'};
+let restored = false;
+// Isolated fixture: every request stays in memory; never touches a real vault.
+window.fetch = async (input, init) => {
+  const path = String(input);
+  let data;
+  if (path.endsWith('/preview')) data = preview;
+  else if (path.includes('/changes?')) data = {items:[change]};
+  else if (path.endsWith('/fixture-change')) data = {...change,diff,can_restore:!restored,restore_reason:restored?'changed':'',before_metadata:null,after_metadata:null};
+  else if (path.endsWith('/restore')) { restored = true; data = {}; }
+  else if (path.includes('/permissions/')) data = {status:'completed'};
+  else throw new Error('Unexpected fixture request: ' + path);
+  return new Response(JSON.stringify(data), {headers:{'content-type':'application/json'}});
+};
+createApp({setup(){
+  const editor = useEditorStore(); editor.currentNoteId='fixture'; editor.saveStatus='saved';
+  const history = ref(false), done = ref(false);
+  return () => h('main',{class:'feature-page',style:'max-width:760px;margin:auto;padding:16px;box-sizing:border-box;color:var(--color-text-primary);background:var(--color-background-primary)'},[
+    h('h1','笔记修改预览'),
+    h(PermissionReview,{runId:'fixture',requestId:'fixture',call:{name:'notes.patch_markdown',arguments:{note_id:'fixture',old_text:'了解知识点',new_text:'解释检索流程，并用两份材料验证结论'}},onResolved:()=>done.value=true}),
+    done.value && h('p',{role:'status'},'已处理授权'),
+    h('button',{class:'button-secondary',onClick:()=>history.value=true},'查看修改历史'),
+    history.value && h(NoteHistory,{noteId:'fixture',onClose:()=>history.value=false}),
+  ]);
+}}).use(createPinia()).mount('#app');
+</script></body></html>

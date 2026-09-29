@@ -76,6 +76,7 @@ from app.contracts import (
     OperationResponse,
     PageMeta,
     PermissionDecisionRequest,
+    NoteRestoreRequest,
     BudgetDecisionRequest,
     StepsDecisionRequest,
     Plugin,
@@ -393,6 +394,30 @@ async def move_note(note_id: str, request: NoteMoveRequest) -> Note:
 @router.post("/notes/{note_id}/rename", response_model=Note, tags=["Notes"])
 async def rename_note(note_id: str, request: NoteRenameRequest) -> Note:
     return await note_service.rename_note(note_id, file_name=request.file_name)
+
+
+@router.get('/notes/{note_id}/changes', tags=['Notes'])
+async def list_note_changes(note_id: str, limit: int = Query(30, ge=1, le=100), offset: int = Query(0, ge=0)):
+    from app.services import note_changes
+    await get_note(note_id)
+    return {'items': note_changes.list_changes(note_id, limit=limit, offset=offset)}
+
+
+@router.get('/notes/{note_id}/changes/{change_id}', tags=['Notes'])
+async def get_note_change(note_id: str, change_id: str):
+    from app.services import note_changes
+    return await note_changes.change_detail(note_id, change_id)
+
+
+@router.post('/notes/{note_id}/changes/{change_id}/restore', response_model=Note, tags=['Notes'])
+async def restore_note_change(note_id: str, change_id: str, request: NoteRestoreRequest):
+    from app.agent.permissions import PermissionMode
+    from app.services import note_changes
+    # This trusted UI endpoint requires an explicit confirmation; it is not a model tool.
+    async with container.agent._write_lock:
+        if container.agent.permissions.mode_for('notes.write') == PermissionMode.deny:
+            raise ApiError(403, 'PERMISSION_DENIED', '当前策略禁止修改笔记。')
+        return await note_changes.restore_change(change_id, note_id=note_id, expected_hash=request.expected_content_hash)
 
 
 # 检索和聊天
@@ -766,7 +791,7 @@ async def decide_agent_permission(
     run_id: str, request_id: str, request: PermissionDecisionRequest
 ) -> OperationResponse:
     await asyncio.to_thread(agent_run_or_404, run_id)
-    if not await container.agent.resolve_permission(run_id, request_id, request.decision):
+    if not await container.agent.resolve_permission(run_id, request_id, request.decision, request.preview_token):
         raise ApiError(
             404,
             "PERMISSION_REQUEST_NOT_FOUND",
@@ -776,6 +801,12 @@ async def decide_agent_permission(
     return OperationResponse(
         status="completed", resource_id=request_id, message=request.decision
     )
+
+
+@router.get('/agent/runs/{run_id}/permissions/{request_id}/preview', tags=['Agent'])
+async def preview_agent_permission(run_id: str, request_id: str):
+    await asyncio.to_thread(agent_run_or_404, run_id)
+    return await container.agent.permission_preview(run_id, request_id)
 
 
 @router.post("/agent/runs/{run_id}/budget/{request_id}", response_model=OperationResponse, tags=["Agent"])

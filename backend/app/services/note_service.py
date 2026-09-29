@@ -178,6 +178,8 @@ async def get_note(note_id: str) -> Note | None:
     record = repository.get_note_record(note_id)
     if record is None:
         return None
+    if not resolve_in_vault(record.file_path).is_file():
+        return None
     markdown = _read_markdown(record.file_path)
     return _build_note(record.note_id, record.title, record.file_path, record.tags,
                        record.created_at, record.updated_at, record.blocks, markdown)
@@ -191,7 +193,13 @@ async def update_note(
     if record is None:
         raise ApiError(404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id})
 
+    if not resolve_in_vault(record.file_path).is_file():
+        raise ApiError(409, 'NOTE_FILE_MISSING', '笔记文件已删除或移动。')
     old_md = _read_markdown(record.file_path)
+    from app.services.note_preview import check_write_state
+    from types import SimpleNamespace
+    check_write_state(SimpleNamespace(note_id=record.note_id, file_path=record.file_path,
+                                     markdown=old_md, title=record.title, tags=record.tags))
     if expected_content_hash is not None:
         import hashlib
         if hashlib.sha256(old_md.encode()).hexdigest() != expected_content_hash:
@@ -206,7 +214,7 @@ async def update_note(
     try:
         parsed = parse_note(
             markdown=new_md, file_path=record.file_path, folder=record.folder, tags=effective_tags,
-            created_at=record.created_at, updated_at=now,
+            created_at=record.created_at, updated_at=now, note_id=record.note_id,
         )
         if title is not None:
             parsed.title = title  # 显式传入的 title 覆盖正文推导结果

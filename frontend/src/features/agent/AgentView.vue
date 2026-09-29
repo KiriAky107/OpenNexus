@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import AppDialog from '@/components/common/AppDialog.vue'
 import BudgetConfirmation from './BudgetConfirmation.vue'
+import PermissionReview from './PermissionReview.vue'
 import AgentManager from './AgentManager.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -10,7 +11,7 @@ import { useSkillStore } from '@/stores/skill'
 import TraceTimeline from './TraceTimeline.vue'
 import MarkdownContent from '@/components/common/MarkdownContent.vue'
 import type { AgentEvent } from '@/contracts'
-import { localizeDetails, permissionLabel, runStatusLabel, toolLabel } from './labels'
+import { permissionLabel, runStatusLabel, toolLabel } from './labels'
 import ToolOption from './ToolOption.vue'
 import { useCitationNavigation } from '@/composables/useCitationNavigation'
 import { localeTag, t } from '@/i18n'
@@ -165,7 +166,9 @@ async function handleOpenCitation(data: Record<string, unknown>) {
     </div>
 
     <AppDialog v-if="agentStore.permissionRequest" :label="t('权限确认', 'Permission confirmation')" :dismissible="false">
-      <div class="modal"><span class="badge warning">{{ t('权限确认', 'Permission Confirmation') }}</span><h2>{{ toolLabel(agentStore.permissionRequest.tool_name) }}</h2><p>{{ agentStore.permissionRequest.impact }}</p><p class="subtle">{{ t('所需权限：', 'Required permission: ') }}{{ permissionLabel(agentStore.permissionRequest.permission) }} ({{ agentStore.permissionRequest.permission }})</p><pre>{{ JSON.stringify(localizeDetails(agentStore.permissionRequest.parameters), null, 2) }}</pre><div class="inline-actions permission-actions"><button class="button-primary" @click="agentStore.respondPermission('allow', 'once')">{{ t('仅本次允许', 'Allow once') }}</button><button class="button-secondary" @click="agentStore.respondPermission('allow', 'session')">{{ t('本次会话允许', 'Allow for session') }}</button><button class="button-danger" @click="agentStore.respondPermission('deny')">{{ t('拒绝', 'Deny') }}</button></div></div>
+      <div class="modal"><span class="badge warning">{{ t('权限确认', 'Permission Confirmation') }}</span><h2>{{ toolLabel(agentStore.permissionRequest.tool_name) }}</h2><p>{{ agentStore.permissionRequest.impact }}</p><p class="subtle">{{ t('所需权限：', 'Required permission: ') }}{{ permissionLabel(agentStore.permissionRequest.permission) }}</p>
+        <PermissionReview allow-session :run-id="agentStore.permissionRequest.run_id" :request-id="agentStore.permissionRequest.request_id" :call="{ name: agentStore.permissionRequest.tool_name, arguments: agentStore.permissionRequest.parameters }" @resolved="agentStore.loadRun(agentStore.activeRunId!)" />
+      </div>
     </AppDialog>
   </section>
 </template>

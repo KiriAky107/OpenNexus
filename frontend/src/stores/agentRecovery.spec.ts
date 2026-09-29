@@ -97,3 +97,30 @@ it('drops a previously selected run when the current vault list does not contain
   expect(store.sortedRuns).toEqual([])
   expect(store.activeRunId).toBeNull()
 })
+
+it('retains every pending permission when another parallel tool completes or is resolved', async () => {
+  const store = useAgentStore(); await store.loadRun('r')
+  const permission = (sequence: number, requestId: string, toolId: string) => ({ ...event(sequence, 'PermissionRequired'), data: { request_id: requestId, permission: 'notes.write', tool_call: { name: 'notes.update', tool_call_id: toolId, arguments: { note_id: 'note' } } } })
+  handler().onEvent(permission(1, 'p1', 't1'))
+  handler().onEvent(permission(2, 'p2', 't2'))
+  expect(store.permissionRequest?.request_id).toBe('p1')
+  handler().onEvent({ ...event(3, 'ToolResult'), data: { tool_call_id: 'unrelated', success: true } })
+  expect(store.permissionRequest?.request_id).toBe('p1')
+  handler().onEvent({ ...event(4, 'PermissionResolved'), data: { request_id: 'p1' } })
+  expect(store.permissionRequest?.request_id).toBe('p2')
+  handler().onEvent({ ...event(5, 'ToolResult'), data: { tool_call_id: 't1', success: true } })
+  expect(store.permissionRequest?.request_id).toBe('p2')
+  handler().onEvent({ ...event(6, 'PermissionResolved'), data: { request_id: 'p2' } })
+  expect(store.permissionRequest).toBeNull()
+})
+
+it('rebuilds unresolved permission queue from a persisted trace', async () => {
+  mock.trace.mockResolvedValue({ run_id: 'r', status: 'waiting_permission', has_more: false, next_sequence: 4, items: [
+    { ...event(1, 'PermissionRequired'), data: { request_id: 'remaining', tool_call: { name: 'notes.create', tool_call_id: 't1' } } },
+    { ...event(2, 'PermissionRequired'), data: { request_id: 'resolved', tool_call: { name: 'notes.create', tool_call_id: 't2' } } },
+    { ...event(3, 'PermissionResolved'), data: { request_id: 'resolved' } },
+    { ...event(4, 'ToolResult'), data: { tool_call_id: 't2', success: true } },
+  ] })
+  const store = useAgentStore(); await store.loadRun('r')
+  expect(store.permissionRequest?.request_id).toBe('remaining')
+})

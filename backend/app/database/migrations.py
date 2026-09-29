@@ -242,6 +242,9 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX note_changes_note_time ON note_changes(note_id, created_at);
     CREATE UNIQUE INDEX note_changes_operation ON note_changes(operation_id);""",
+    # v19: include web-only metadata in revision checks and restores.
+    """ALTER TABLE note_changes ADD COLUMN before_metadata TEXT;
+    ALTER TABLE note_changes ADD COLUMN after_metadata TEXT;""",
 ]
 
 

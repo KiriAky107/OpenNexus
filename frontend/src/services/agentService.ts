@@ -102,12 +102,16 @@ export function streamAgentEvents(
 export async function respondToPermission(
   runId: string,
   requestId: string,
-  decision: 'allow_once' | 'allow_session' | 'deny'
+  decision: 'allow_once' | 'allow_session' | 'deny',
+  previewToken?: string,
 ): Promise<OperationResponse> {
   return apiClient.post(`/api/agent/runs/${runId}/permissions/${requestId}`, {
     decision,
+    ...(previewToken ? { preview_token: previewToken } : {}),
   })
 }
+
+export const getPermissionPreview = (runId: string, requestId: string) => apiClient.get<import('./noteService').NoteWritePreview>(`/api/agent/runs/${runId}/permissions/${requestId}/preview`)
 
 export async function extendAgentBudget(runId: string, requestId: string, additionalTokens: number): Promise<OperationResponse> {
   return apiClient.post(`/api/agent/runs/${runId}/budget/${requestId}`, { additional_tokens: additionalTokens })

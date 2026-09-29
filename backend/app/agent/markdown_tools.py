@@ -94,9 +94,7 @@ def catalog(_, __):
             'rendering': 'Function plots, Math, Mermaid, callouts and auto-links depend on editor preferences. HTML is sanitized; scripts are not supported. Heading folding, font size, undo and redo are UI state, not Markdown document syntax. Callout collapsed=null is static, true is folded, false is expanded.'}
 
 
-async def patch(arguments: PatchArguments, context):
-    note = await note_service.get_note(arguments.note_id)
-    if note is None: raise LookupError('Note not found')
+def prepare_patch(arguments: PatchArguments, note):
     if hashlib.sha256(note.markdown.encode()).hexdigest() != arguments.expected_content_hash:
         raise ValueError('Note changed; read it again before editing')
     if note.markdown.count(arguments.old_text) != 1:
@@ -105,6 +103,13 @@ async def patch(arguments: PatchArguments, context):
     from app.knowledge.parser import _extract_frontmatter, _parse_tags
     old_meta, new_meta = _extract_frontmatter(note.markdown), _extract_frontmatter(markdown)
     tags = _parse_tags(new_meta.get('tags')) if old_meta.get('tags') != new_meta.get('tags') else None
+    return markdown, tags
+
+
+async def patch(arguments: PatchArguments, context):
+    note = await note_service.get_note(arguments.note_id)
+    if note is None: raise LookupError('Note not found')
+    markdown, tags = prepare_patch(arguments, note)
     async def write(expected_hash):
         if expected_hash != arguments.expected_content_hash:
             raise ValueError('Note changed; read it again before editing')
@@ -113,7 +118,8 @@ async def patch(arguments: PatchArguments, context):
             expected_content_hash=expected_hash, defer_vectors=True)
     updated = await note_changes.record_ai_write(
         origin=f'agent:{context.run_id if context else "direct"}:notes.patch_markdown',
-        requested_target=note.file_path, note_id=arguments.note_id, write=write)
+        requested_target=note.file_path, note_id=arguments.note_id, write=write,
+        reviewed=getattr(context, 'reviewed_write', None))
     return {'note_id': updated.note_id, 'content_hash': hashlib.sha256(updated.markdown.encode()).hexdigest()}
 
 

@@ -4,11 +4,11 @@ import { beforeEach, expect, it, vi } from 'vitest'
 import { reactive } from 'vue'
 import RunActivity from './RunActivity.vue'
 import api from '@/services/apiClient'
-import { getAgentTrace, respondToPermission } from '@/services/agentService'
+import { getAgentTrace, getPermissionPreview, respondToPermission } from '@/services/agentService'
 const state = vi.hoisted(() => ({ workspace: null as unknown as { vaultId: string } }))
 vi.mock('@/stores/workspace', () => ({ useWorkspaceStore: () => state.workspace }))
 vi.mock('@/services/apiClient', () => ({ default: { get: vi.fn() } }))
-vi.mock('@/services/agentService', () => ({ getAgentTrace: vi.fn(), respondToPermission: vi.fn(), cancelAgentRun: vi.fn() }))
+vi.mock('@/services/agentService', () => ({ getAgentTrace: vi.fn(), getPermissionPreview: vi.fn(), respondToPermission: vi.fn(), cancelAgentRun: vi.fn() }))
 vi.mock('@/composables/useCitationNavigation', () => ({ useCitationNavigation: () => ({ openCitation: vi.fn() }) }))
 vi.mock('@/components/common/MarkdownContent.vue', () => ({ default: { props: ['source'], template: '<p>{{ source }}</p>' } }))
 vi.mock('./BudgetConfirmation.vue', () => ({ default: { template: '<div data-budget />' } }))
@@ -17,6 +17,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   state.workspace = reactive({ vaultId: 'vault-a' })
   vi.mocked(api.get).mockResolvedValue(current)
+  vi.mocked(getPermissionPreview).mockResolvedValue({ token: 'reviewed', file_path: 'note.md', operation: 'create', note_id: null, metadata: { title: 'note', tags: [] }, diff: { lines: [{ kind: '+', line: 1, text: 'new content' }], added_chars: 11, removed_chars: 0, before_chars: 0, after_chars: 11, truncated: false } })
   vi.mocked(getAgentTrace).mockResolvedValue({ items: [{ event: 'PermissionRequired', run_id: 'run_a', sequence: 1, timestamp: '', data: { request_id: 'p', tool_call: { name: 'notes.create', tool_call_id: 't' } } }], has_more: false } as never)
 })
 it('shows permission actions independently of collapsed execution detail', async () => {
@@ -28,7 +29,8 @@ it('shows permission actions independently of collapsed execution detail', async
   expect(wrapper.get('.badge.warning').text()).toContain('等待')
   const allow = wrapper.findAll('button').find(button => button.text() === '允许本次')!
   await allow.trigger('click'); await flushPromises()
-  expect(respondToPermission).toHaveBeenCalledWith('run_a', 'p', 'allow_once')
+  expect(wrapper.text()).toContain('new content')
+  expect(respondToPermission).toHaveBeenCalledWith('run_a', 'p', 'allow_once', 'reviewed')
   wrapper.unmount()
 })
 it('opens a permission dialog in chat and keeps the inline action when postponed', async () => {

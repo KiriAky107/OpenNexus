@@ -67,6 +67,8 @@ class PermissionTicket:
     run_id: str
     permission: str
     future: asyncio.Future[str]
+    tool_call: object | None = None
+    preview: dict | None = None
 
 
 class PermissionManager:

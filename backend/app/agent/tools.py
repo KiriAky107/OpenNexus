@@ -11,6 +11,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 
 from app.contracts import ToolCall, ToolDefinition, ToolResult
+from app.errors import ApiError
 from app.schema_security import reject_external_schema_references
 
 ToolExecutor = Callable[[BaseModel, "ToolExecutionContext"], Any | Awaitable[Any]]
@@ -20,6 +21,7 @@ ToolExecutor = Callable[[BaseModel, "ToolExecutionContext"], Any | Awaitable[Any
 class ToolExecutionContext:
     run_id: str
     tool_call_id: str | None = None
+    reviewed_write: dict | None = None
 
 
 @dataclass(slots=True)
@@ -134,7 +136,7 @@ class ToolRegistry:
                 output=output,
                 duration_ms=round((perf_counter() - started) * 1000),
             )
-        except ToolExecutionError as exc:
+        except (ToolExecutionError, ApiError) as exc:
             return ToolResult(
                 tool_call_id=call.tool_call_id,
                 name=call.name,

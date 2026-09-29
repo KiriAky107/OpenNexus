@@ -24,7 +24,8 @@ def test_update_preserves_tags_and_carries_explicit_cas_and_operation(monkeypatc
     calls = []
     def call(method, **params):
         calls.append((method, params))
-        return document if method == 'read' else {'state': 'committed'}
+        import hashlib
+        return document if method == 'read' else {'state': 'committed', 'result': {'file_id': document['file_id'], 'path': params['path'], 'hash': hashlib.sha256(params['content'].encode()).hexdigest()}}
     monkeypatch.setattr(desktop_notes, 'call', call)
     token = host_bridge.operation_id.set('b9e1da18-c442-4c1c-a7d7-4ac83b58c849')
     try:

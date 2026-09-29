@@ -62,26 +62,43 @@ async def get_note(note_id: str) -> Note | None:
         raise
 
 
+async def write_content(*, path: str, expected: str, content: str, operation_id: str, previous: dict | None = None) -> Note:
+    """Return the committed content, never a later read that may contain human edits."""
+    import hashlib
+    now = datetime.now(timezone.utc).timestamp()
+    document = {'path': path, 'content': content, 'file_id': previous['file_id'] if previous else 'pending',
+                'created_at': previous['created_at'] if previous else now, 'updated_at': now}
+    note_from_document(document)  # Validate parsable metadata before the Host write.
+    receipt = await asyncio.to_thread(call, 'write', path=path, expected=expected, content=content, operation_id=operation_id)
+    result = receipt.get('result', {})
+    if (result.get('hash') != hashlib.sha256(content.encode()).hexdigest()
+            or result.get('path') != path or not result.get('file_id')
+            or (previous and result['file_id'] != previous['file_id'])):
+        raise ApiError(409, 'CHANGE_RECONCILIATION_REQUIRED', '写入回执与内容不匹配，请核对实际笔记。')
+    document['file_id'] = result['file_id']
+    return note_from_document(document)
+
+
 async def mutate(name: str, *args, **kwargs):
     operation_id = host_bridge.operation_id.get() or str(uuid4())
     if name == 'create_note':
         folder = normalize_folder(kwargs.get('folder'))
         path = '/'.join(filter(None, [folder, safe_note_filename(kwargs['title'])]))
         content = metadata(kwargs['markdown'], kwargs['title'], kwargs.get('tags') or None)
-        receipt = await asyncio.to_thread(call, 'write', path=path, expected='', content=content, operation_id=operation_id)
-        return await get_note(receipt['result']['file_id'])
+        return await write_content(path=path, expected='', content=content, operation_id=operation_id)
     note_id = args[0] if args else kwargs.pop('note_id')
     document = await asyncio.to_thread(call, 'read', file_id=note_id)
     path = document['path']
     if name == 'update_note':
+        from app.services.note_preview import check_write_state
+        check_write_state(note_from_document(document))
         expected = kwargs.get('expected_content_hash') or document['hash']
         content = document['content'] if kwargs.get('markdown') is None else kwargs['markdown']
         tags = kwargs.get('tags')
         if tags is None and kwargs.get('markdown') is not None:
             tags = note_from_document(document).tags
         content = metadata(content, kwargs.get('title'), tags)
-        await asyncio.to_thread(call, 'write', path=path, expected=expected, content=content, operation_id=operation_id)
-        return await get_note(note_id)
+        return await write_content(path=path, expected=expected, content=content, operation_id=operation_id, previous=document)
     if name in {'move_note', 'rename_note', 'delete_note'}:
         destination = ''
         if name == 'move_note':

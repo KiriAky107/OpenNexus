@@ -2,7 +2,8 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { ApiAgentRun, AgentEvent } from '@/contracts'
 import api from '@/services/apiClient'
-import { getAgentTrace, cancelAgentRun, respondToPermission } from '@/services/agentService'
+import { getAgentTrace, cancelAgentRun } from '@/services/agentService'
+import PermissionReview from './PermissionReview.vue'
 import { useWorkspaceStore } from '@/stores/workspace'
 import BudgetConfirmation from './BudgetConfirmation.vue'
 import MarkdownContent from '@/components/common/MarkdownContent.vue'
@@ -109,22 +110,16 @@ async function act(operation: () => Promise<unknown>) {
     <BudgetConfirmation :run-id="runId" :status="run?.status" :events="events" @resolved="refresh()" />
     <section v-for="permission in permissions" :key="String(permission.data.request_id)" class="permission-card">
       <strong>{{ t('等待操作授权', 'Permission required') }} · {{ toolLabel(String((permission.data.tool_call as Record<string, unknown>)?.name)) }}</strong>
-      <details class="ui-disclosure permission-review"><summary>{{ t('查看操作内容', 'Review operation') }}</summary><pre>{{ JSON.stringify(permission.data.tool_call, null, 2) }}</pre></details>
-      <div class="inline-actions">
-        <button class="button-primary" :disabled="busy" @click="act(() => respondToPermission(runId, String(permission.data.request_id), 'allow_once'))">{{ t('允许本次', 'Allow once') }}</button>
-        <button class="button-danger" :disabled="busy" @click="act(() => respondToPermission(runId, String(permission.data.request_id), 'deny'))">{{ t('拒绝', 'Deny') }}</button>
-      </div>
+      <PermissionReview :run-id="runId" :request-id="String(permission.data.request_id)" :call="permission.data.tool_call as Record<string, unknown>" @resolved="refresh()" />
     </section>
     <AppDialog v-if="permissionDialog && activePermission" :label="t('确认智能体操作', 'Confirm Agent action')" @close="dismissedPermission = String(activePermission.data.request_id)">
       <div class="modal permission-modal">
         <h2>{{ t('确认智能体操作', 'Confirm Agent action') }}</h2>
         <p>{{ t('智能体请求执行以下操作。请先核对内容，再决定是否允许；关闭弹窗后仍可在运行卡片中处理。', 'The Agent requests the following action. Review it before allowing; you can also decide later from the run card.') }}</p>
         <strong>{{ toolLabel(String((activePermission.data.tool_call as Record<string, unknown>)?.name)) }}</strong>
-        <details class="ui-disclosure permission-review"><summary>{{ t('查看操作内容', 'Review operation') }}</summary><pre>{{ JSON.stringify(activePermission.data.tool_call, null, 2) }}</pre></details>
+        <PermissionReview :run-id="runId" :request-id="String(activePermission.data.request_id)" :call="activePermission.data.tool_call as Record<string, unknown>" @resolved="refresh()" />
         <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
         <div class="inline-actions">
-          <button class="button-primary" :disabled="busy" @click="act(() => respondToPermission(runId, String(activePermission!.data.request_id), 'allow_once'))">{{ t('允许本次', 'Allow once') }}</button>
-          <button class="button-danger" :disabled="busy" @click="act(() => respondToPermission(runId, String(activePermission!.data.request_id), 'deny'))">{{ t('拒绝', 'Deny') }}</button>
           <button class="button-secondary" :disabled="busy" @click="dismissedPermission = String(activePermission.data.request_id)">{{ t('稍后处理', 'Decide later') }}</button>
         </div>
       </div>

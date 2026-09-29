@@ -123,7 +123,7 @@ async def create_note(arguments: NoteCreateArguments, context: ToolExecutionCont
     note = await note_changes.record_ai_write(
         origin=f'agent:{context.run_id}:notes.create',
         requested_target=f"{arguments.folder or ''}/{arguments.title}",
-        note_id=None, write=write,
+        note_id=None, write=write, reviewed=context.reviewed_write,
     )
     return note.model_dump(mode="json")
 
@@ -139,7 +139,7 @@ async def update_note(arguments: NoteUpdateArguments, context: ToolExecutionCont
         return await note_service.update_note(note_id, expected_content_hash=observed_hash, **values)
     note = await note_changes.record_ai_write(
         origin=f'agent:{context.run_id}:notes.update',
-        requested_target=note_id, note_id=note_id, write=write,
+        requested_target=note_id, note_id=note_id, write=write, reviewed=context.reviewed_write,
     )
     return note.model_dump(mode="json")
 
