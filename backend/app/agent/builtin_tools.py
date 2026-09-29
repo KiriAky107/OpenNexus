@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.agent.tools import ToolExecutionContext, ToolRegistry
 from app.contracts import SearchMode, SearchRequest, TaskAgentScheduleInput, TaskStatus, ToolDefinition
 from app.retrieval.engine import engine
-from app.services import note_service
+from app.services import note_service, note_changes
 from app.services import attachment_service, task_service, transcription_service
 
 
@@ -48,6 +48,7 @@ class NoteUpdateArguments(ToolArguments):
     title: str | None = None
     markdown: str | None = None
     tags: list[str] | None = None
+    expected_content_hash: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
 
 
 class NoteListArguments(ToolArguments):
@@ -116,15 +117,30 @@ async def read_note(arguments: NoteReadArguments, _: ToolExecutionContext) -> di
     return {**note.model_dump(mode="json"), "content_hash": hashlib.sha256(note.markdown.encode()).hexdigest()}
 
 
-async def create_note(arguments: NoteCreateArguments, _: ToolExecutionContext) -> dict:
-    note = await note_service.create_note(**arguments.model_dump())
+async def create_note(arguments: NoteCreateArguments, context: ToolExecutionContext) -> dict:
+    async def write(_: str | None):
+        return await note_service.create_note(**arguments.model_dump())
+    note = await note_changes.record_ai_write(
+        origin=f'agent:{context.run_id}:notes.create',
+        requested_target=f"{arguments.folder or ''}/{arguments.title}",
+        note_id=None, write=write,
+    )
     return note.model_dump(mode="json")
 
 
-async def update_note(arguments: NoteUpdateArguments, _: ToolExecutionContext) -> dict:
+async def update_note(arguments: NoteUpdateArguments, context: ToolExecutionContext) -> dict:
     values = arguments.model_dump()
     note_id = values.pop("note_id")
-    note = await note_service.update_note(note_id, **values)
+    supplied_hash = values.pop('expected_content_hash')
+    async def write(observed_hash: str | None):
+        if supplied_hash is not None and supplied_hash != observed_hash:
+            from app.errors import ApiError
+            raise ApiError(409, 'NOTE_CONTENT_CONFLICT', '笔记已被编辑，请重新读取。')
+        return await note_service.update_note(note_id, expected_content_hash=observed_hash, **values)
+    note = await note_changes.record_ai_write(
+        origin=f'agent:{context.run_id}:notes.update',
+        requested_target=note_id, note_id=note_id, write=write,
+    )
     return note.model_dump(mode="json")
 
 

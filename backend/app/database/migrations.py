@@ -224,6 +224,24 @@ MIGRATIONS: list[str] = [
     """CREATE TABLE agent_checkpoints (
         run_id TEXT PRIMARY KEY REFERENCES agent_runs(run_id), data TEXT NOT NULL
     );""",
+    # v18: vault-scoped note change intents and completed content revisions.
+    """CREATE TABLE note_changes (
+        change_id TEXT PRIMARY KEY,
+        note_id TEXT,
+        requested_target TEXT NOT NULL,
+        file_path TEXT,
+        origin TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        before_content TEXT,
+        before_hash TEXT,
+        after_content TEXT,
+        after_hash TEXT,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'applied', 'failed')),
+        created_at TEXT NOT NULL,
+        applied_at TEXT
+    );
+    CREATE INDEX note_changes_note_time ON note_changes(note_id, created_at);
+    CREATE UNIQUE INDEX note_changes_operation ON note_changes(operation_id);""",
 ]
 
 
