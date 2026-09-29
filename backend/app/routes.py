@@ -137,6 +137,7 @@ from app.providers.factory import UnsupportedProviderError
 from app.providers.registry import ProviderNotFoundError
 from app.retrieval.engine import engine
 from app.services import (
+    canvas_service,
     index_service,
     note_service,
     task_service,
@@ -249,6 +250,27 @@ async def get_workspace_tree() -> list[WorkspaceEntry]:
     return await workspace_service.refresh_workspace_tree()
 
 
+@router.get("/workspace/canvas", response_model=canvas_service.CanvasDocument, tags=["Workspace"])
+async def read_workspace_canvas(path: str = Query(min_length=1, max_length=1024)) -> canvas_service.CanvasDocument:
+    return canvas_service.read(path)
+
+
+@router.put("/workspace/canvas", response_model=canvas_service.CanvasDocument, tags=["Workspace"])
+async def write_workspace_canvas(request: canvas_service.CanvasWriteRequest) -> canvas_service.CanvasDocument:
+    return await canvas_service.write(request)
+
+
+@router.post("/workspace/canvas/move", response_model=canvas_service.CanvasDocument, tags=["Workspace"])
+async def move_workspace_canvas(request: canvas_service.CanvasMoveRequest) -> canvas_service.CanvasDocument:
+    return await canvas_service.move(request)
+
+
+@router.post("/workspace/canvas/delete", tags=["Workspace"])
+async def delete_workspace_canvas(request: canvas_service.CanvasDeleteRequest) -> dict[str, str]:
+    await canvas_service.delete(request)
+    return {"status": "completed"}
+
+
 @router.post("/workspace/folders", response_model=WorkspaceEntry, tags=["Workspace"])
 async def create_workspace_folder(request: FolderCreateRequest) -> WorkspaceEntry:
     return await workspace_service.create_folder(request.parent, request.name)
@@ -296,6 +318,18 @@ async def get_workspace_asset_content(
 ) -> Response:
     data, media_type = workspace_asset_service.read(path, note_id=note_id, note_path=note_path)
     return Response(data, media_type=media_type, headers={"Cache-Control": "private, max-age=31536000, immutable"})
+
+
+@router.post("/workspace/assets/move", tags=["Workspace"])
+async def move_workspace_image(request: workspace_asset_service.ImageMoveRequest) -> dict[str, str]:
+    await workspace_asset_service.move_image(request)
+    return {"status": "completed"}
+
+
+@router.post("/workspace/assets/delete", tags=["Workspace"])
+async def delete_workspace_image(request: workspace_asset_service.ImageDeleteRequest) -> dict[str, str]:
+    await workspace_asset_service.delete_image(request)
+    return {"status": "completed"}
 
 
 # 笔记

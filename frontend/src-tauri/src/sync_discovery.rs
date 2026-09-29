@@ -23,7 +23,7 @@ pub fn allowed(path: &str) -> bool {
         .and_then(|v| v.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    extension == "md"
+    matches!(extension.as_str(), "md" | "canvas" | "png" | "jpg" | "jpeg" | "gif" | "webp")
         || (parts
             .first()
             .is_some_and(|v| v.eq_ignore_ascii_case("attachments"))
@@ -164,6 +164,17 @@ impl Workspace {
 mod tests {
     use super::*;
     #[test]
+    fn canvas_and_image_external_edits_enter_sync_discovery() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let binding = ws.sync_bind_empty("https://sync.example", "remote", "account").unwrap();
+        fs::write(root.path().join("map.canvas"), br#"{"nodes":[],"edges":[]}"#).unwrap();
+        fs::write(root.path().join("diagram.png"), b"image-bytes").unwrap();
+        assert_eq!(ws.sync_discover(&binding.id).unwrap(), 2);
+        assert_eq!(ws.sync_discover(&binding.id).unwrap(), 0);
+        assert_eq!(ws.pending_count().unwrap(), 2);
+    }
+    #[test]
     fn external_edits_after_ui_reads_are_queued_once_and_deletions_survive_restart() {
         let root = tempfile::tempdir().unwrap();
         let mut ws = Workspace::open(root.path()).unwrap();
@@ -216,6 +227,8 @@ mod tests {
         }
         for path in [
             "notes/a.md",
+            "maps/course.canvas",
+            "diagrams/chart.png",
             "attachments/movie.mp4",
             "attachments/image.png",
             "attachments/fixture.bin",

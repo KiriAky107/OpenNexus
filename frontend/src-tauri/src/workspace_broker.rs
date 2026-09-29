@@ -426,7 +426,7 @@ mod tests {
         let read = json!({"rpc":"workspace.assets.read","params":{"vault_id":ws.vault_id,"path":"附件/logo.png"}});
         assert_eq!(STANDARD.decode(dispatch(&mut ws, &read).unwrap()["content_base64"].as_str().unwrap()).unwrap(), bytes);
         assert!(ws.tree().unwrap().iter().any(|e| e.path == "附件/logo.png" && !e.is_folder));
-        assert!(!ws.scan().unwrap().iter().any(|e| e.path.ends_with(".png")));
+        assert!(ws.scan().unwrap().iter().any(|e| e.path == "附件/logo.png" && !e.hash.is_empty()));
         std::fs::write(root.path().join("附件/logo.png"), b"not an image").unwrap();
         assert!(dispatch(&mut ws, &read).is_err());
         for path in ["../logo.png", ".ainote/secret.png", "opennexus-records/secret.png", "C:/secret.png"] {

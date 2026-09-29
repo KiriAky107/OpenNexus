@@ -329,7 +329,7 @@ impl Workspace {
                 self.scan_dir(&path, paths, images)?;
             } else if path
                 .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("md") || (images && ["png", "jpg", "jpeg", "gif", "webp"].iter().any(|ext| e.eq_ignore_ascii_case(ext))))
+                .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("canvas") || (images && ["png", "jpg", "jpeg", "gif", "webp"].iter().any(|ext| e.eq_ignore_ascii_case(ext))))
             {
                 paths.push(relative);
             }
@@ -339,7 +339,7 @@ impl Workspace {
 
     pub fn scan(&mut self) -> Result<Vec<Entry>> {
         let mut paths = Vec::new();
-        self.scan_dir(&self.root, &mut paths, false)?;
+        self.scan_dir(&self.root, &mut paths, true)?;
         let mut entries = Vec::new();
         for path in paths {
             if self.resolve(&path)?.is_dir() {
@@ -372,21 +372,16 @@ impl Workspace {
         Ok(entries)
     }
 
-    /// UI-only image entries must not enter Markdown indexing or text reads.
+    /// Markdown, Canvas and image entries share stable Host identities and sync revisions.
     pub fn tree(&mut self) -> Result<Vec<Entry>> {
-        let mut entries = self.scan()?;
-        let mut paths = Vec::new();
-        self.scan_dir(&self.root, &mut paths, true)?;
-        for path in paths {
-            if !path.to_ascii_lowercase().ends_with(".md") && self.resolve(&path)?.is_file() {
-                entries.push(Entry { file_id: format!("asset:{path}"), path, hash: String::new(), revision: 0, deleted: false, is_folder: false });
-            }
-        }
-        Ok(entries)
+        self.scan()
     }
 
     pub fn read(&mut self, path: &str) -> Result<Document> {
         let content = fs::read_to_string(self.resolve(path)?)?;
+        if crate::canvas_contract::is_canvas(path) {
+            crate::canvas_contract::validate(content.as_bytes())?;
+        }
         let digest = hash(content.as_bytes());
         let previous = self.entry(path)?;
         if previous
@@ -1092,6 +1087,36 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canvas_is_tracked_and_invalid_updates_preserve_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        let content = br#"{"nodes":[],"edges":[],"custom":true}"#;
+        let first = ws.write("course.canvas", "", content, "local").unwrap();
+        assert_eq!(ws.read("course.canvas").unwrap().content, std::str::from_utf8(content).unwrap());
+        assert_eq!(ws.scan().unwrap().iter().filter(|entry| entry.path == "course.canvas").count(), 1);
+        assert_eq!(ws.tree().unwrap().iter().filter(|entry| entry.path == "course.canvas").count(), 1);
+        assert!(ws.write("course.canvas", &first.hash, b"{broken", "local").is_err());
+        assert_eq!(ws.entry("course.canvas").unwrap().unwrap().hash, first.hash);
+        assert_eq!(fs::read(dir.path().join("course.canvas")).unwrap(), content);
+    }
+
+    #[test]
+    fn image_files_have_stable_revisions_in_sync_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        fs::write(dir.path().join("diagram.png"), b"image-bytes").unwrap();
+        let first = ws.scan().unwrap().into_iter().find(|entry| entry.path == "diagram.png").unwrap();
+        assert_eq!(ws.tree().unwrap().iter().filter(|entry| entry.path == "diagram.png").count(), 1);
+        let second = ws.scan().unwrap().into_iter().find(|entry| entry.path == "diagram.png").unwrap();
+        assert_eq!(first.file_id, second.file_id);
+        assert_eq!(first.hash, second.hash);
+        fs::write(dir.path().join("diagram.png"), b"different-image").unwrap();
+        let third = ws.scan().unwrap().into_iter().find(|entry| entry.path == "diagram.png").unwrap();
+        assert_eq!(third.file_id, first.file_id);
+        assert_ne!(third.hash, first.hash);
+    }
 
     #[cfg(windows)]
     #[test]

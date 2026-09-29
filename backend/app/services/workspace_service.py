@@ -51,10 +51,12 @@ def get_workspace_info() -> WorkspaceInfo:
     root = get_settings().vault_path.resolve()
     disk_paths = _disk_markdown_paths()
     indexed_paths = {item.file_path for item in repository.list_note_locations()}
+    def count_files(entries: list[WorkspaceEntry]) -> int:
+        return sum(count_files(entry.children) if entry.type == 'folder' else 1 for entry in entries)
     return WorkspaceInfo(
         name=root.name or "Vault",
         path=str(root),
-        file_count=len(disk_paths),
+        file_count=count_files(get_workspace_tree()),
         indexed_note_count=len(indexed_paths),
         requires_refresh=disk_paths != indexed_paths,
     )
@@ -86,7 +88,7 @@ def _tree(directory: Path, locations: dict[str, repository.NoteLocation]) -> lis
                     children=_tree(resolved, locations),
                 )
             )
-        elif resolved.is_file() and child.suffix.lower() in {".md", ".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+        elif resolved.is_file() and child.suffix.lower() in {".md", ".canvas", ".png", ".jpg", ".jpeg", ".gif", ".webp"}:
             location = locations.get(relative)
             entries.append(
                 WorkspaceEntry(

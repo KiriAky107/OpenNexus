@@ -5,6 +5,7 @@ pub mod core_update;
 #[cfg(windows)]
 mod credential_autounlock;
 pub mod credentials;
+mod canvas_contract;
 mod payloads;
 mod preference_records;
 pub mod recent;

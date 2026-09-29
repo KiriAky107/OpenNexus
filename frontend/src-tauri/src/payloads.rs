@@ -123,6 +123,9 @@ impl WritePayload<'_> {
         }
     }
     pub(crate) fn validate(&self, ws: &Workspace, path: &str) -> Result<()> {
+        if crate::canvas_contract::is_canvas(path) && self.size() > crate::canvas_contract::MAX_CANVAS_BYTES as u64 {
+            return Err(HostError::new("CANVAS_TOO_LARGE"));
+        }
         if crate::records::is_record(path) && self.size() > 1024 * 1024 {
             return Err(HostError::new("RECORD_TOO_LARGE"));
         }
@@ -131,6 +134,9 @@ impl WritePayload<'_> {
         }
         match self {
             Self::Inline(bytes) => {
+                if crate::canvas_contract::is_canvas(path) {
+                    crate::canvas_contract::validate(bytes)?;
+                }
                 if crate::records::is_record(path) {
                     crate::records::validate(path, bytes)?;
                 }
@@ -153,6 +159,15 @@ impl WritePayload<'_> {
     }
 }
 pub(crate) fn validate_record(file: &mut fs::File, path: &str, size: u64) -> Result<()> {
+    if crate::canvas_contract::is_canvas(path) {
+        if size > crate::canvas_contract::MAX_CANVAS_BYTES as u64 {
+            return Err(HostError::new("CANVAS_TOO_LARGE"));
+        }
+        let mut bytes = Vec::new();
+        file.take(crate::canvas_contract::MAX_CANVAS_BYTES as u64 + 1).read_to_end(&mut bytes)?;
+        crate::canvas_contract::validate(&bytes)?;
+        file.seek(SeekFrom::Start(0))?;
+    }
     if crate::records::is_record(path) {
         if size > 1024 * 1024 {
             return Err(HostError::new("RECORD_TOO_LARGE"));
@@ -168,12 +183,14 @@ pub(crate) fn hash_file(path: &Path) -> Result<String> {
     hash_file_info(path).map(|(digest, _)| digest)
 }
 pub(crate) fn sync_file_info(source: &Path, path: &str) -> Result<(String, u64)> {
-    if crate::records::is_record(path) {
+    if crate::records::is_record(path) || crate::canvas_contract::is_canvas(path) {
         let mut bytes = Vec::new();
+        let limit = if crate::canvas_contract::is_canvas(path) { crate::canvas_contract::MAX_CANVAS_BYTES } else { 1024 * 1024 };
         fs::File::open(source)?
-            .take(1024 * 1024 + 1)
+            .take(limit as u64 + 1)
             .read_to_end(&mut bytes)?;
-        crate::records::validate(path, &bytes)?;
+        if crate::canvas_contract::is_canvas(path) { crate::canvas_contract::validate(&bytes)?; }
+        else { crate::records::validate(path, &bytes)?; }
         Ok((hash(&bytes), bytes.len() as u64))
     } else {
         hash_file_info(source)

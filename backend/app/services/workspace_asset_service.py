@@ -8,14 +8,27 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
+from pydantic import BaseModel, Field
 
 from app import host_bridge
 from app.config import get_settings
 from app.database.db import connect_knowledge, transaction
 from app.errors import ApiError
 from app.services.vault_paths import resolve_in_vault
+from app.services.coordination import serialized_vault_mutation
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+
+class ImageMoveRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
+    destination: str = Field(min_length=1, max_length=1024)
+    expected_content_hash: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
+class ImageDeleteRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
+    expected_content_hash: str = Field(pattern=r'^[0-9a-f]{64}$')
 
 
 def _image_kind(data: bytes) -> tuple[str, str]:
@@ -162,3 +175,53 @@ def read(path: str, *, note_id: str = "", note_path: str = "") -> tuple[bytes, s
                 original_name=PurePosixPath(path).name, note_id=note_id, note_path=note_path,
                 source="sync")
     return data, media_type
+
+
+def _mutable_image_path(value: str) -> Path:
+    relative = _validate_image_read_path(value.removeprefix('/'))
+    if re.fullmatch(r'attachments/[0-9a-f]{2}/[0-9a-f]{64}\.(png|jpg|gif|webp)', relative):
+        raise ApiError(409, 'WORKSPACE_IMAGE_IMMUTABLE', '内容寻址的附件不能直接重命名或删除。')
+    root = get_settings().vault_path.resolve()
+    lexical = root.joinpath(*relative.split('/'))
+    target = lexical.resolve()
+    if target != lexical or not target.is_relative_to(root):
+        raise ApiError(400, 'INVALID_PATH', '图片路径不能通过链接跳转。')
+    return target
+
+
+def _current_image_hash(source: Path) -> str:
+    if source.stat().st_size > MAX_IMAGE_BYTES:
+        raise ApiError(413, 'WORKSPACE_IMAGE_TOO_LARGE', '工作区图片超过读取上限。')
+    with source.open('rb') as stream:
+        content = stream.read(MAX_IMAGE_BYTES + 1)
+    if len(content) > MAX_IMAGE_BYTES:
+        raise ApiError(413, 'WORKSPACE_IMAGE_TOO_LARGE', '工作区图片超过读取上限。')
+    return hashlib.sha256(content).hexdigest()
+
+
+@serialized_vault_mutation
+async def move_image(request: ImageMoveRequest) -> None:
+    source, target = _mutable_image_path(request.path), _mutable_image_path(request.destination)
+    if source.suffix.lower() != target.suffix.lower():
+        raise ApiError(400, 'INVALID_PATH', '重命名图片时必须保留原扩展名。')
+    if not source.is_file():
+        raise ApiError(404, 'RESOURCE_NOT_FOUND', '图片不存在。')
+    if _current_image_hash(source) != request.expected_content_hash:
+        raise ApiError(409, 'WORKSPACE_IMAGE_CONFLICT', '图片已被修改。')
+    if source == target:
+        return
+    if target.exists() or not target.parent.is_dir():
+        raise ApiError(409, 'RESOURCE_CONFLICT', '目标文件夹不存在或已有同名文件。')
+    source.rename(target)
+
+
+@serialized_vault_mutation
+async def delete_image(request: ImageDeleteRequest) -> None:
+    source = _mutable_image_path(request.path)
+    if not source.is_file():
+        raise ApiError(404, 'RESOURCE_NOT_FOUND', '图片不存在。')
+    if _current_image_hash(source) != request.expected_content_hash:
+        raise ApiError(409, 'WORKSPACE_IMAGE_CONFLICT', '图片已被修改。')
+    tombstone = source.with_name(f'.{source.name}.{uuid4().hex}.deleting')
+    source.rename(tombstone)
+    tombstone.unlink()
