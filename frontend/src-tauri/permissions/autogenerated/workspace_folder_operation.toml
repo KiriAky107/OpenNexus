@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-workspace-folder-operation"
+description = "Enables the workspace_folder_operation command without any pre-configured scope."
+commands.allow = ["workspace_folder_operation"]
+
+[[permission]]
+identifier = "deny-workspace-folder-operation"
+description = "Denies the workspace_folder_operation command without any pre-configured scope."
+commands.deny = ["workspace_folder_operation"]

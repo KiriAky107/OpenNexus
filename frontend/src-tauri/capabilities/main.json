@@ -33,6 +33,7 @@
     "allow-workspace-read",
     "allow-workspace-write",
     "allow-workspace-operation",
+    "allow-workspace-folder-operation",
     "allow-workspace-rename",
     "allow-workspace-delete",
     "allow-workspace-mkdir",

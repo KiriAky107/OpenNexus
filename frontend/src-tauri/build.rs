@@ -66,6 +66,7 @@ fn main() {
             "workspace_read",
             "workspace_write",
             "workspace_operation",
+            "workspace_folder_operation",
             "workspace_rename",
             "workspace_delete",
             "workspace_mkdir",
