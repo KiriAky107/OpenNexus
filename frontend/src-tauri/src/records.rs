@@ -161,7 +161,10 @@ pub fn validate(path_value: &str, content: &[u8]) -> Result<Record> {
         .map_err(|_| HostError::new("RECORD_SCHEMA_INVALID"))?;
     let schedule_valid = data.agent_schedule.as_ref().is_none_or(|schedule| {
         matches!(schedule.schedule_type.as_str(), "once" | "cron")
-            && matches!(schedule.status.as_str(), "pending" | "running" | "completed" | "failed")
+            && matches!(
+                schedule.status.as_str(),
+                "pending" | "running" | "completed" | "failed"
+            )
             && !schedule.provider_id.trim().is_empty()
             && schedule.provider_id.len() <= 128
             && !schedule.model.trim().is_empty()
@@ -169,12 +172,28 @@ pub fn validate(path_value: &str, content: &[u8]) -> Result<Record> {
             && !schedule.timezone.trim().is_empty()
             && schedule.timezone.len() <= 64
             && (1..=100).contains(&schedule.max_steps)
-            && schedule.cron.as_ref().is_none_or(|value| value.len() <= 128)
-            && schedule.skill_id.as_ref().is_none_or(|value| value.len() <= 128)
-            && schedule.last_run_id.as_ref().is_none_or(|value| value.len() <= 128)
-            && schedule.error.as_ref().is_none_or(|value| value.len() <= 2000)
+            && schedule
+                .cron
+                .as_ref()
+                .is_none_or(|value| value.len() <= 128)
+            && schedule
+                .skill_id
+                .as_ref()
+                .is_none_or(|value| value.len() <= 128)
+            && schedule
+                .last_run_id
+                .as_ref()
+                .is_none_or(|value| value.len() <= 128)
+            && schedule
+                .error
+                .as_ref()
+                .is_none_or(|value| value.len() <= 2000)
             && (schedule.schedule_type != "once" || schedule.run_at.is_some())
-            && (schedule.schedule_type != "cron" || schedule.cron.as_ref().is_some_and(|value| !value.trim().is_empty()))
+            && (schedule.schedule_type != "cron"
+                || schedule
+                    .cron
+                    .as_ref()
+                    .is_some_and(|value| !value.trim().is_empty()))
     });
     if data.title.trim().is_empty()
         || data.title.len() > 4096
@@ -350,7 +369,10 @@ mod tests {
         validate(&path, &serde_json::to_vec(&value).unwrap()).unwrap();
         value["data"]["agent_schedule"]["api_key"] = json!("secret");
         assert_eq!(
-            validate(&path, &serde_json::to_vec(&value).unwrap()).err().unwrap().code,
+            validate(&path, &serde_json::to_vec(&value).unwrap())
+                .err()
+                .unwrap()
+                .code,
             "RECORD_SCHEMA_INVALID"
         );
     }

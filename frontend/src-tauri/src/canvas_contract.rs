@@ -58,13 +58,20 @@ fn web_url(value: &str) -> bool {
         })
 }
 
-fn optional(item: &serde_json::Map<String, Value>, key: &str, valid: impl Fn(&str) -> bool) -> bool {
-    item.get(key).is_none_or(|value| value.as_str().is_some_and(valid))
+fn optional(
+    item: &serde_json::Map<String, Value>,
+    key: &str,
+    valid: impl Fn(&str) -> bool,
+) -> bool {
+    item.get(key)
+        .is_none_or(|value| value.as_str().is_some_and(valid))
 }
 
 fn color(value: &str) -> bool {
     matches!(value, "1" | "2" | "3" | "4" | "5" | "6")
-        || (value.len() == 7 && value.starts_with('#') && value[1..].bytes().all(|byte| byte.is_ascii_hexdigit()))
+        || (value.len() == 7
+            && value.starts_with('#')
+            && value[1..].bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
 
 pub fn validate(bytes: &[u8]) -> Result<()> {
@@ -96,7 +103,9 @@ pub fn validate(bytes: &[u8]) -> Result<()> {
             || !optional(node, "subpath", |value| value.starts_with('#'))
             || !optional(node, "label", |_| true)
             || !optional(node, "background", vault_file)
-            || !optional(node, "backgroundStyle", |value| matches!(value, "cover" | "ratio" | "repeat"))
+            || !optional(node, "backgroundStyle", |value| {
+                matches!(value, "cover" | "ratio" | "repeat")
+            })
         {
             return Err(invalid());
         }
@@ -134,8 +143,14 @@ pub fn validate(bytes: &[u8]) -> Result<()> {
         }
         if !optional(edge, "color", color)
             || !optional(edge, "label", |_| true)
-            || !["fromSide", "toSide"].iter().all(|key| optional(edge, key, |value| matches!(value, "left" | "right" | "top" | "bottom")))
-            || !["fromEnd", "toEnd"].iter().all(|key| optional(edge, key, |value| matches!(value, "none" | "arrow")))
+            || !["fromSide", "toSide"].iter().all(|key| {
+                optional(edge, key, |value| {
+                    matches!(value, "left" | "right" | "top" | "bottom")
+                })
+            })
+            || !["fromEnd", "toEnd"]
+                .iter()
+                .all(|key| optional(edge, key, |value| matches!(value, "none" | "arrow")))
         {
             return Err(invalid());
         }

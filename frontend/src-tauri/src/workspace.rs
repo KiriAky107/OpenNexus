@@ -331,10 +331,14 @@ impl Workspace {
             if path.is_dir() {
                 paths.push(relative);
                 self.scan_dir(&path, paths, images)?;
-            } else if path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("canvas") || (images && ["png", "jpg", "jpeg", "gif", "webp"].iter().any(|ext| e.eq_ignore_ascii_case(ext))))
-            {
+            } else if path.extension().is_some_and(|e| {
+                e.eq_ignore_ascii_case("md")
+                    || e.eq_ignore_ascii_case("canvas")
+                    || (images
+                        && ["png", "jpg", "jpeg", "gif", "webp"]
+                            .iter()
+                            .any(|ext| e.eq_ignore_ascii_case(ext)))
+            }) {
                 paths.push(relative);
             }
         }
@@ -382,8 +386,10 @@ impl Workspace {
         let mut entries = self.scan()?;
         for entry in &mut entries {
             let modified = fs::metadata(self.resolve(&entry.path)?)?.modified()?;
-            let millis = modified.duration_since(std::time::UNIX_EPOCH)
-                .map_err(|_| HostError::new("FILESYSTEM_ERROR"))?.as_millis();
+            let millis = modified
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|_| HostError::new("FILESYSTEM_ERROR"))?
+                .as_millis();
             entry.updated_at = Some(millis.to_string());
         }
         Ok(entries)
@@ -839,18 +845,43 @@ impl Workspace {
         Ok(())
     }
 
-    fn directory_manifest(&self, root: &Path) -> Result<std::collections::BTreeMap<String, String>> {
-        fn walk(root: &Path, directory: &Path, values: &mut std::collections::BTreeMap<String,String>) -> Result<()> {
+    fn directory_manifest(
+        &self,
+        root: &Path,
+    ) -> Result<std::collections::BTreeMap<String, String>> {
+        fn walk(
+            root: &Path,
+            directory: &Path,
+            values: &mut std::collections::BTreeMap<String, String>,
+        ) -> Result<()> {
             for item in fs::read_dir(directory)? {
                 let path = item?.path();
-                if linked(&path)? || path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('.')) {
+                if linked(&path)?
+                    || path
+                        .file_name()
+                        .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+                {
                     return Err(HostError::new("UNSAFE_FOLDER_CONTENT"));
                 }
-                let relative = path.strip_prefix(root).map_err(|_| HostError::new("UNSAFE_PATH"))?.to_string_lossy().replace('\\', "/");
-                if path.is_dir() { values.insert(relative, String::new()); walk(root, &path, values)?; }
-                else if path.is_file() && path.extension().is_some_and(|ext| ["md","canvas","png","jpg","jpeg","gif","webp"].iter().any(|allowed| ext.eq_ignore_ascii_case(allowed))) {
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|_| HostError::new("UNSAFE_PATH"))?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if path.is_dir() {
+                    values.insert(relative, String::new());
+                    walk(root, &path, values)?;
+                } else if path.is_file()
+                    && path.extension().is_some_and(|ext| {
+                        ["md", "canvas", "png", "jpg", "jpeg", "gif", "webp"]
+                            .iter()
+                            .any(|allowed| ext.eq_ignore_ascii_case(allowed))
+                    })
+                {
                     values.insert(relative, crate::payloads::hash_file(&path)?);
-                } else { return Err(HostError::new("UNSUPPORTED_FOLDER_CONTENT")); }
+                } else {
+                    return Err(HostError::new("UNSUPPORTED_FOLDER_CONTENT"));
+                }
             }
             Ok(())
         }
@@ -865,70 +896,182 @@ impl Workspace {
     }
 
     /// Move a reviewed subtree atomically on disk, then finish each journaled file receipt.
-    pub fn mutate_directory(&mut self, path: &str, destination: &str, kind: &str, expected: &std::collections::BTreeMap<String,String>) -> Result<()> {
-        if path.is_empty() || !matches!(kind,"rename"|"delete") || (kind == "rename" && (destination == path || destination.starts_with(&format!("{path}/")))) { return Err(HostError::new("INVALID_PATH")); }
+    pub fn mutate_directory(
+        &mut self,
+        path: &str,
+        destination: &str,
+        kind: &str,
+        expected: &std::collections::BTreeMap<String, String>,
+    ) -> Result<()> {
+        if path.is_empty()
+            || !matches!(kind, "rename" | "delete")
+            || (kind == "rename"
+                && (destination == path || destination.starts_with(&format!("{path}/"))))
+        {
+            return Err(HostError::new("INVALID_PATH"));
+        }
         let source = self.resolve(path)?;
-        if !source.is_dir() { return Err(HostError::new("FOLDER_NOT_FOUND")); }
-        if &self.directory_manifest(&source)? != expected { return Err(HostError::new("REVISION_CONFLICT")); }
-        if kind == "rename" && self.resolve(destination)?.exists() { return Err(HostError::new("PATH_CONFLICT")); }
+        if !source.is_dir() {
+            return Err(HostError::new("FOLDER_NOT_FOUND"));
+        }
+        if &self.directory_manifest(&source)? != expected {
+            return Err(HostError::new("REVISION_CONFLICT"));
+        }
+        if kind == "rename" && self.resolve(destination)?.exists() {
+            return Err(HostError::new("PATH_CONFLICT"));
+        }
         self.scan()?;
         self.directory_ops_schema()?;
         let id = Uuid::new_v4().to_string();
-        let operations: Vec<(String,String,String)> = expected.iter().filter(|(_,digest)| !digest.is_empty()).map(|(relative,digest)| (Uuid::new_v4().to_string(),relative.clone(),digest.clone())).collect();
-        self.db.execute("INSERT INTO directory_ops VALUES (?1,?2,?3,?4,?5,?6,'preparing')", params![id,path,destination,kind,serde_json::to_string(expected).map_err(|_|HostError::new("INVALID_OPERATION"))?,serde_json::to_string(&operations).map_err(|_|HostError::new("INVALID_OPERATION"))?])?;
-        for (operation,relative,digest) in &operations {
-            self.prepare_file_op_with_id(kind,&format!("{path}/{relative}"),&format!("{destination}/{relative}"),digest,operation,"local")?;
+        let operations: Vec<(String, String, String)> = expected
+            .iter()
+            .filter(|(_, digest)| !digest.is_empty())
+            .map(|(relative, digest)| {
+                (Uuid::new_v4().to_string(), relative.clone(), digest.clone())
+            })
+            .collect();
+        self.db.execute(
+            "INSERT INTO directory_ops VALUES (?1,?2,?3,?4,?5,?6,'preparing')",
+            params![
+                id,
+                path,
+                destination,
+                kind,
+                serde_json::to_string(expected).map_err(|_| HostError::new("INVALID_OPERATION"))?,
+                serde_json::to_string(&operations)
+                    .map_err(|_| HostError::new("INVALID_OPERATION"))?
+            ],
+        )?;
+        for (operation, relative, digest) in &operations {
+            self.prepare_file_op_with_id(
+                kind,
+                &format!("{path}/{relative}"),
+                &format!("{destination}/{relative}"),
+                digest,
+                operation,
+                "local",
+            )?;
         }
-        if &self.directory_manifest(&source)? != expected { return Err(HostError::new("REVISION_CONFLICT")); }
-        self.db.execute("UPDATE directory_ops SET state='ready' WHERE id=?1",[&id])?;
+        if &self.directory_manifest(&source)? != expected {
+            return Err(HostError::new("REVISION_CONFLICT"));
+        }
+        self.db
+            .execute("UPDATE directory_ops SET state='ready' WHERE id=?1", [&id])?;
         self.apply_directory_op(&id)
     }
 
     fn apply_directory_op(&mut self, id: &str) -> Result<()> {
-        let (path,destination,kind,manifest,operations,state): (String,String,String,String,String,String) = self.db.query_row("SELECT path,destination,kind,manifest,operations,state FROM directory_ops WHERE id=?1",[id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)))?;
-        let expected: std::collections::BTreeMap<String,String> = serde_json::from_str(&manifest).map_err(|_|HostError::new("DATABASE_ERROR"))?;
-        let operations: Vec<(String,String,String)> = serde_json::from_str(&operations).map_err(|_|HostError::new("DATABASE_ERROR"))?;
+        let (path, destination, kind, manifest, operations, state): (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+        ) = self.db.query_row(
+            "SELECT path,destination,kind,manifest,operations,state FROM directory_ops WHERE id=?1",
+            [id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )?;
+        let expected: std::collections::BTreeMap<String, String> =
+            serde_json::from_str(&manifest).map_err(|_| HostError::new("DATABASE_ERROR"))?;
+        let operations: Vec<(String, String, String)> =
+            serde_json::from_str(&operations).map_err(|_| HostError::new("DATABASE_ERROR"))?;
         let abort = |workspace: &mut Self| -> Result<()> {
             let tx = workspace.db.transaction()?;
-            for (operation,_,_) in &operations {
-                tx.execute("UPDATE file_ops SET state='conflict' WHERE id=?1",[operation])?;
+            for (operation, _, _) in &operations {
+                tx.execute(
+                    "UPDATE file_ops SET state='conflict' WHERE id=?1",
+                    [operation],
+                )?;
                 tx.execute("UPDATE operations SET state='conflict' WHERE operation_id=?1 AND state!='committed'",[operation])?;
             }
-            tx.execute("UPDATE directory_ops SET state='conflict' WHERE id=?1",[id])?;
+            tx.execute(
+                "UPDATE directory_ops SET state='conflict' WHERE id=?1",
+                [id],
+            )?;
             tx.commit()?;
             Err(HostError::new("RECOVERY_CONFLICT"))
         };
-        if state == "preparing" { return abort(self); }
+        if state == "preparing" {
+            return abort(self);
+        }
         let source = self.resolve(&path)?;
-        let target = if kind == "rename" { self.resolve(&destination)? } else {
+        let target = if kind == "rename" {
+            self.resolve(&destination)?
+        } else {
             let trash = self.root.join(".ainote").join("trash");
-            if trash.exists() && linked(&trash)? { return Err(HostError::new("UNSAFE_PATH")); }
-            fs::create_dir_all(&trash)?; trash.join(format!("folder-{id}"))
+            if trash.exists() && linked(&trash)? {
+                return Err(HostError::new("UNSAFE_PATH"));
+            }
+            fs::create_dir_all(&trash)?;
+            trash.join(format!("folder-{id}"))
         };
         if source.exists() {
-            if target.exists() || !source.is_dir() || self.directory_manifest(&source)? != expected { return abort(self); }
-            fs::create_dir_all(target.parent().ok_or_else(||HostError::new("UNSAFE_PATH"))?)?;
-            fs::rename(&source,&target)?;
+            if target.exists() || !source.is_dir() || self.directory_manifest(&source)? != expected
+            {
+                return abort(self);
+            }
+            fs::create_dir_all(
+                target
+                    .parent()
+                    .ok_or_else(|| HostError::new("UNSAFE_PATH"))?,
+            )?;
+            fs::rename(&source, &target)?;
         }
-        if !target.is_dir() || linked(&target)? || self.directory_manifest(&target)? != expected { return abort(self); }
-        for (operation,_,_) in &operations {
-            let state: String = self.db.query_row("SELECT state FROM operations WHERE operation_id=?1",[operation],|row|row.get(0))?;
-            if state == "committed" { continue; }
-            if state == "conflict" { return abort(self); }
-            if let Err(error) = self.apply_file_op(operation) { if error.code == "RECOVERY_CONFLICT" { return abort(self); } return Err(error); }
+        if !target.is_dir() || linked(&target)? || self.directory_manifest(&target)? != expected {
+            return abort(self);
         }
-        self.db.execute("DELETE FROM directory_ops WHERE id=?1",[id])?;
+        for (operation, _, _) in &operations {
+            let state: String = self.db.query_row(
+                "SELECT state FROM operations WHERE operation_id=?1",
+                [operation],
+                |row| row.get(0),
+            )?;
+            if state == "committed" {
+                continue;
+            }
+            if state == "conflict" {
+                return abort(self);
+            }
+            if let Err(error) = self.apply_file_op(operation) {
+                if error.code == "RECOVERY_CONFLICT" {
+                    return abort(self);
+                }
+                return Err(error);
+            }
+        }
+        self.db
+            .execute("DELETE FROM directory_ops WHERE id=?1", [id])?;
         Ok(())
     }
 
     fn recover_directory_ops(&mut self) -> Result<()> {
         self.directory_ops_schema()?;
         let ids = {
-            let mut statement = self.db.prepare("SELECT id FROM directory_ops WHERE state!='conflict'")?;
-            let values = statement.query_map([],|row|row.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;
+            let mut statement = self
+                .db
+                .prepare("SELECT id FROM directory_ops WHERE state!='conflict'")?;
+            let values = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
             values
         };
-        for id in ids { match self.apply_directory_op(&id) { Err(error) if error.code == "RECOVERY_CONFLICT" => {}, result => result? } }
+        for id in ids {
+            match self.apply_directory_op(&id) {
+                Err(error) if error.code == "RECOVERY_CONFLICT" => {}
+                result => result?,
+            }
+        }
         Ok(())
     }
 
@@ -1200,32 +1343,67 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ws = Workspace::open(dir.path()).unwrap();
         ws.mkdir("course/empty").unwrap();
-        let note = ws.write("course/note.md","",b"original","local").unwrap();
-        ws.write("course/map.canvas","",br#"{"nodes":[],"edges":[],"extra":true}"#,"local").unwrap();
+        let note = ws
+            .write("course/note.md", "", b"original", "local")
+            .unwrap();
+        ws.write(
+            "course/map.canvas",
+            "",
+            br#"{"nodes":[],"edges":[],"extra":true}"#,
+            "local",
+        )
+        .unwrap();
         let expected = ws.directory_manifest(&dir.path().join("course")).unwrap();
-        ws.mutate_directory("course","renamed","rename",&expected).unwrap();
+        ws.mutate_directory("course", "renamed", "rename", &expected)
+            .unwrap();
         assert!(!dir.path().join("course").exists());
         assert!(dir.path().join("renamed/empty").is_dir());
-        assert_eq!(ws.read("renamed/note.md").unwrap().entry.file_id,note.file_id);
-        assert_eq!(ws.path_for_id(&note.file_id).unwrap(),"renamed/note.md");
+        assert_eq!(
+            ws.read("renamed/note.md").unwrap().entry.file_id,
+            note.file_id
+        );
+        assert_eq!(ws.path_for_id(&note.file_id).unwrap(), "renamed/note.md");
         let expected = ws.directory_manifest(&dir.path().join("renamed")).unwrap();
-        ws.mutate_directory("renamed","","delete",&expected).unwrap();
+        ws.mutate_directory("renamed", "", "delete", &expected)
+            .unwrap();
         assert!(!dir.path().join("renamed").exists());
         assert!(ws.entry("renamed/note.md").unwrap().unwrap().deleted);
-        assert!(ws.db.query_row("SELECT COUNT(*) FROM outbox WHERE file_id=?1 AND operation='delete'",[&note.file_id],|r|r.get::<_,i64>(0)).unwrap() > 0);
+        assert!(
+            ws.db
+                .query_row(
+                    "SELECT COUNT(*) FROM outbox WHERE file_id=?1 AND operation='delete'",
+                    [&note.file_id],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap()
+                > 0
+        );
     }
 
     #[test]
     fn folder_revision_conflict_preserves_external_edits_and_new_files() {
         let dir = tempfile::tempdir().unwrap();
         let mut ws = Workspace::open(dir.path()).unwrap();
-        ws.write("course/note.md","",b"before","local").unwrap();
+        ws.write("course/note.md", "", b"before", "local").unwrap();
         let expected = ws.directory_manifest(&dir.path().join("course")).unwrap();
-        fs::write(dir.path().join("course/note.md"),b"human").unwrap();
-        assert_eq!(ws.mutate_directory("course","renamed","rename",&expected).unwrap_err().code,"REVISION_CONFLICT");
-        assert_eq!(fs::read(dir.path().join("course/note.md")).unwrap(),b"human");
-        fs::write(dir.path().join("course/new.md"),b"new").unwrap();
-        assert_eq!(ws.mutate_directory("course","","delete",&expected).unwrap_err().code,"REVISION_CONFLICT");
+        fs::write(dir.path().join("course/note.md"), b"human").unwrap();
+        assert_eq!(
+            ws.mutate_directory("course", "renamed", "rename", &expected)
+                .unwrap_err()
+                .code,
+            "REVISION_CONFLICT"
+        );
+        assert_eq!(
+            fs::read(dir.path().join("course/note.md")).unwrap(),
+            b"human"
+        );
+        fs::write(dir.path().join("course/new.md"), b"new").unwrap();
+        assert_eq!(
+            ws.mutate_directory("course", "", "delete", &expected)
+                .unwrap_err()
+                .code,
+            "REVISION_CONFLICT"
+        );
         assert!(dir.path().join("course/new.md").exists());
     }
 
@@ -1233,19 +1411,48 @@ mod tests {
     fn folder_recovery_finishes_a_disk_move_and_never_runs_half_prepared_operations() {
         let dir = tempfile::tempdir().unwrap();
         let mut ws = Workspace::open(dir.path()).unwrap();
-        ws.write("course/note.md","",b"content","local").unwrap();
+        ws.write("course/note.md", "", b"content", "local").unwrap();
         let expected = ws.directory_manifest(&dir.path().join("course")).unwrap();
         let id = Uuid::new_v4().to_string();
         let op = Uuid::new_v4().to_string();
-        ws.prepare_file_op_with_id("rename","course/note.md","renamed/note.md",&expected["note.md"],&op,"local").unwrap();
-        let operations = vec![(op.clone(),"note.md".to_string(),expected["note.md"].clone())];
-        ws.db.execute("INSERT INTO directory_ops VALUES (?1,'course','renamed','rename',?2,?3,'ready')",params![id,serde_json::to_string(&expected).unwrap(),serde_json::to_string(&operations).unwrap()]).unwrap();
-        fs::rename(dir.path().join("course"),dir.path().join("renamed")).unwrap();
+        ws.prepare_file_op_with_id(
+            "rename",
+            "course/note.md",
+            "renamed/note.md",
+            &expected["note.md"],
+            &op,
+            "local",
+        )
+        .unwrap();
+        let operations = vec![(
+            op.clone(),
+            "note.md".to_string(),
+            expected["note.md"].clone(),
+        )];
+        ws.db
+            .execute(
+                "INSERT INTO directory_ops VALUES (?1,'course','renamed','rename',?2,?3,'ready')",
+                params![
+                    id,
+                    serde_json::to_string(&expected).unwrap(),
+                    serde_json::to_string(&operations).unwrap()
+                ],
+            )
+            .unwrap();
+        fs::rename(dir.path().join("course"), dir.path().join("renamed")).unwrap();
         ws.recover().unwrap();
-        assert_eq!(ws.read("renamed/note.md").unwrap().content,"content");
+        assert_eq!(ws.read("renamed/note.md").unwrap().content, "content");
         let op2 = Uuid::new_v4().to_string();
-        ws.prepare_file_op_with_id("rename","renamed/note.md","unexpected/note.md",&expected["note.md"],&op2,"local").unwrap();
-        let operations = vec![(op2,"note.md".to_string(),expected["note.md"].clone())];
+        ws.prepare_file_op_with_id(
+            "rename",
+            "renamed/note.md",
+            "unexpected/note.md",
+            &expected["note.md"],
+            &op2,
+            "local",
+        )
+        .unwrap();
+        let operations = vec![(op2, "note.md".to_string(), expected["note.md"].clone())];
         ws.db.execute("INSERT INTO directory_ops VALUES (?1,'renamed','unexpected','rename',?2,?3,'preparing')",params![Uuid::new_v4().to_string(),serde_json::to_string(&expected).unwrap(),serde_json::to_string(&operations).unwrap()]).unwrap();
         ws.recover().unwrap();
         assert!(dir.path().join("renamed/note.md").exists());
@@ -1258,10 +1465,29 @@ mod tests {
         let mut ws = Workspace::open(dir.path()).unwrap();
         let content = br#"{"nodes":[],"edges":[],"custom":true}"#;
         let first = ws.write("course.canvas", "", content, "local").unwrap();
-        assert_eq!(ws.read("course.canvas").unwrap().content, std::str::from_utf8(content).unwrap());
-        assert_eq!(ws.scan().unwrap().iter().filter(|entry| entry.path == "course.canvas").count(), 1);
-        assert_eq!(ws.tree().unwrap().iter().filter(|entry| entry.path == "course.canvas").count(), 1);
-        assert!(ws.write("course.canvas", &first.hash, b"{broken", "local").is_err());
+        assert_eq!(
+            ws.read("course.canvas").unwrap().content,
+            std::str::from_utf8(content).unwrap()
+        );
+        assert_eq!(
+            ws.scan()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry.path == "course.canvas")
+                .count(),
+            1
+        );
+        assert_eq!(
+            ws.tree()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry.path == "course.canvas")
+                .count(),
+            1
+        );
+        assert!(ws
+            .write("course.canvas", &first.hash, b"{broken", "local")
+            .is_err());
         assert_eq!(ws.entry("course.canvas").unwrap().unwrap().hash, first.hash);
         assert_eq!(fs::read(dir.path().join("course.canvas")).unwrap(), content);
     }
@@ -1271,13 +1497,35 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ws = Workspace::open(dir.path()).unwrap();
         fs::write(dir.path().join("diagram.png"), b"image-bytes").unwrap();
-        let first = ws.scan().unwrap().into_iter().find(|entry| entry.path == "diagram.png").unwrap();
-        assert_eq!(ws.tree().unwrap().iter().filter(|entry| entry.path == "diagram.png").count(), 1);
-        let second = ws.scan().unwrap().into_iter().find(|entry| entry.path == "diagram.png").unwrap();
+        let first = ws
+            .scan()
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.path == "diagram.png")
+            .unwrap();
+        assert_eq!(
+            ws.tree()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry.path == "diagram.png")
+                .count(),
+            1
+        );
+        let second = ws
+            .scan()
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.path == "diagram.png")
+            .unwrap();
         assert_eq!(first.file_id, second.file_id);
         assert_eq!(first.hash, second.hash);
         fs::write(dir.path().join("diagram.png"), b"different-image").unwrap();
-        let third = ws.scan().unwrap().into_iter().find(|entry| entry.path == "diagram.png").unwrap();
+        let third = ws
+            .scan()
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.path == "diagram.png")
+            .unwrap();
         assert_eq!(third.file_id, first.file_id);
         assert_ne!(third.hash, first.hash);
     }

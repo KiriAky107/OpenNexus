@@ -337,19 +337,33 @@ pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
             let p: AssetRead = decode(params)?;
             bound(ws, &p.vault_id)?;
             let normalized = p.path.replace('\\', "/");
-            if normalized.split('/').any(|part| part.is_empty() || part.starts_with('.') || part.eq_ignore_ascii_case("opennexus-records"))
-                || !["png", "jpg", "jpeg", "gif", "webp"].iter().any(|ext| normalized.to_ascii_lowercase().ends_with(&format!(".{ext}"))) {
+            if normalized.split('/').any(|part| {
+                part.is_empty()
+                    || part.starts_with('.')
+                    || part.eq_ignore_ascii_case("opennexus-records")
+            }) || !["png", "jpg", "jpeg", "gif", "webp"].iter().any(|ext| {
+                normalized
+                    .to_ascii_lowercase()
+                    .ends_with(&format!(".{ext}"))
+            }) {
                 return Err("WORKSPACE_REQUEST_INVALID".into());
             }
-            let file = std::fs::File::open(ws.resolve(&normalized).map_err(|e| e.code)?).map_err(|_| "FILE_NOT_FOUND")?;
-            if file.metadata().map_err(|_| "FILE_NOT_FOUND")?.len() > MAX_IMAGE_BYTES as u64 { return Err("CORE_NOTE_TOO_LARGE".into()); }
+            let file = std::fs::File::open(ws.resolve(&normalized).map_err(|e| e.code)?)
+                .map_err(|_| "FILE_NOT_FOUND")?;
+            if file.metadata().map_err(|_| "FILE_NOT_FOUND")?.len() > MAX_IMAGE_BYTES as u64 {
+                return Err("CORE_NOTE_TOO_LARGE".into());
+            }
             use std::io::Read;
             let mut bytes = Vec::new();
-            file.take(MAX_IMAGE_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|_| "FILE_NOT_FOUND")?;
+            file.take(MAX_IMAGE_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| "FILE_NOT_FOUND")?;
             if bytes.len() > MAX_IMAGE_BYTES {
                 return Err("CORE_NOTE_TOO_LARGE".into());
             }
-            if !valid_image_bytes(&normalized, &bytes) { return Err("WORKSPACE_IMAGE_UNSUPPORTED".into()); }
+            if !valid_image_bytes(&normalized, &bytes) {
+                return Err("WORKSPACE_IMAGE_UNSUPPORTED".into());
+            }
             Ok(json!({"content_base64":STANDARD.encode(bytes)}))
         }
         "workspace.operation" => {
@@ -424,12 +438,34 @@ mod tests {
         let bytes = b"\x89PNG\r\n\x1a\nfixture";
         std::fs::write(root.path().join("附件/logo.png"), bytes).unwrap();
         let read = json!({"rpc":"workspace.assets.read","params":{"vault_id":ws.vault_id,"path":"附件/logo.png"}});
-        assert_eq!(STANDARD.decode(dispatch(&mut ws, &read).unwrap()["content_base64"].as_str().unwrap()).unwrap(), bytes);
-        assert!(ws.tree().unwrap().iter().any(|e| e.path == "附件/logo.png" && !e.is_folder));
-        assert!(ws.scan().unwrap().iter().any(|e| e.path == "附件/logo.png" && !e.hash.is_empty()));
+        assert_eq!(
+            STANDARD
+                .decode(
+                    dispatch(&mut ws, &read).unwrap()["content_base64"]
+                        .as_str()
+                        .unwrap()
+                )
+                .unwrap(),
+            bytes
+        );
+        assert!(ws
+            .tree()
+            .unwrap()
+            .iter()
+            .any(|e| e.path == "附件/logo.png" && !e.is_folder));
+        assert!(ws
+            .scan()
+            .unwrap()
+            .iter()
+            .any(|e| e.path == "附件/logo.png" && !e.hash.is_empty()));
         std::fs::write(root.path().join("附件/logo.png"), b"not an image").unwrap();
         assert!(dispatch(&mut ws, &read).is_err());
-        for path in ["../logo.png", ".ainote/secret.png", "opennexus-records/secret.png", "C:/secret.png"] {
+        for path in [
+            "../logo.png",
+            ".ainote/secret.png",
+            "opennexus-records/secret.png",
+            "C:/secret.png",
+        ] {
             let denied = json!({"rpc":"workspace.assets.read","params":{"vault_id":ws.vault_id,"path":path}});
             assert!(dispatch(&mut ws, &denied).is_err());
         }

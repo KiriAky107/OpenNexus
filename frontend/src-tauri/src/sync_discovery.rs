@@ -23,34 +23,36 @@ pub fn allowed(path: &str) -> bool {
         .and_then(|v| v.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    matches!(extension.as_str(), "md" | "canvas" | "png" | "jpg" | "jpeg" | "gif" | "webp")
-        || (parts
-            .first()
-            .is_some_and(|v| v.eq_ignore_ascii_case("attachments"))
-            && matches!(
-                extension.as_str(),
-                "png"
-                    | "jpg"
-                    | "jpeg"
-                    | "gif"
-                    | "webp"
-                    | "svg"
-                    | "pdf"
-                    | "mp3"
-                    | "wav"
-                    | "m4a"
-                    | "ogg"
-                    | "flac"
-                    | "mp4"
-                    | "webm"
-                    | "mov"
-                    | "txt"
-                    | "csv"
-                    | "docx"
-                    | "xlsx"
-                    | "pptx"
-                    | "bin"
-            ))
+    matches!(
+        extension.as_str(),
+        "md" | "canvas" | "png" | "jpg" | "jpeg" | "gif" | "webp"
+    ) || (parts
+        .first()
+        .is_some_and(|v| v.eq_ignore_ascii_case("attachments"))
+        && matches!(
+            extension.as_str(),
+            "png"
+                | "jpg"
+                | "jpeg"
+                | "gif"
+                | "webp"
+                | "svg"
+                | "pdf"
+                | "mp3"
+                | "wav"
+                | "m4a"
+                | "ogg"
+                | "flac"
+                | "mp4"
+                | "webm"
+                | "mov"
+                | "txt"
+                | "csv"
+                | "docx"
+                | "xlsx"
+                | "pptx"
+                | "bin"
+        ))
 }
 impl Workspace {
     pub(crate) fn sync_paths(&self) -> Result<Vec<String>> {
@@ -167,8 +169,14 @@ mod tests {
     fn canvas_and_image_external_edits_enter_sync_discovery() {
         let root = tempfile::tempdir().unwrap();
         let mut ws = Workspace::open(root.path()).unwrap();
-        let binding = ws.sync_bind_empty("https://sync.example", "remote", "account").unwrap();
-        fs::write(root.path().join("map.canvas"), br#"{"nodes":[],"edges":[]}"#).unwrap();
+        let binding = ws
+            .sync_bind_empty("https://sync.example", "remote", "account")
+            .unwrap();
+        fs::write(
+            root.path().join("map.canvas"),
+            br#"{"nodes":[],"edges":[]}"#,
+        )
+        .unwrap();
         fs::write(root.path().join("diagram.png"), b"image-bytes").unwrap();
         assert_eq!(ws.sync_discover(&binding.id).unwrap(), 2);
         assert_eq!(ws.sync_discover(&binding.id).unwrap(), 0);

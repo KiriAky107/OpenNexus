@@ -1435,22 +1435,24 @@ mod tests {
                 b04_write_source(&legacy, &source, &legacy_key);
                 let marker = temp.path().join(format!("{boundary}-{round}.ready"));
                 let diagnostics = temp.path().join("worker.log");
-                let mut child = Worker(std::process::Command::new(std::env::current_exe().unwrap())
-                    .args([
-                        "--ignored",
-                        "--exact",
-                        "credentials::tests::b04_migration_boundary_worker",
-                        "--nocapture",
-                    ])
-                    .env("OPENNEXUS_B04_SOURCE", &legacy)
-                    .env("OPENNEXUS_B04_TARGET", &target)
-                    .env("OPENNEXUS_B04_BOUNDARY", boundary)
-                    .env("OPENNEXUS_B04_MARKER", &marker)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(fs::File::create(&diagnostics).unwrap())
-                    .spawn()
-                    .unwrap());
+                let mut child = Worker(
+                    std::process::Command::new(std::env::current_exe().unwrap())
+                        .args([
+                            "--ignored",
+                            "--exact",
+                            "credentials::tests::b04_migration_boundary_worker",
+                            "--nocapture",
+                        ])
+                        .env("OPENNEXUS_B04_SOURCE", &legacy)
+                        .env("OPENNEXUS_B04_TARGET", &target)
+                        .env("OPENNEXUS_B04_BOUNDARY", boundary)
+                        .env("OPENNEXUS_B04_MARKER", &marker)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(fs::File::create(&diagnostics).unwrap())
+                        .spawn()
+                        .unwrap(),
+                );
                 let started = std::time::Instant::now();
                 while !marker.is_file() {
                     assert!(

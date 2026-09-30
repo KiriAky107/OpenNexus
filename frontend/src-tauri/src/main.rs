@@ -695,7 +695,9 @@ async fn benchmark_save_json(file_name: String, content: String) -> Result<bool,
     if content.len() > 8 * 1024 * 1024
         || file_name.len() > 100
         || !file_name.ends_with(".json")
-        || !file_name.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+        || !file_name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
         || file_name.starts_with('.')
         || serde_json::from_str::<serde_json::Value>(&content).is_err()
     {
@@ -706,10 +708,15 @@ async fn benchmark_save_json(file_name: String, content: String) -> Result<bool,
             .set_title("保存 Benchmark JSON")
             .set_file_name(&file_name)
             .add_filter("JSON", &["json"])
-            .save_file() else { return Ok(false); };
+            .save_file()
+        else {
+            return Ok(false);
+        };
         std::fs::write(path, content).map_err(|_| "BENCHMARK_SAVE_FAILED".to_string())?;
         Ok(true)
-    }).await.map_err(|_| "BENCHMARK_SAVE_FAILED".to_string())?
+    })
+    .await
+    .map_err(|_| "BENCHMARK_SAVE_FAILED".to_string())?
 }
 
 /// 由原生保存对话框选择目标，再从已认证的本机 Core 直接写入产物。
@@ -1231,8 +1238,16 @@ fn workspace_delete(host: State<'_, Host>, path: String, expected: String) -> Re
     with_workspace(&host, |ws| ws.delete(&path, &expected))
 }
 #[tauri::command]
-fn workspace_folder_operation(host: State<'_, Host>, path: String, destination: String, kind: String, expected: std::collections::BTreeMap<String,String>) -> Result<(),String> {
-    with_workspace(&host, |ws| ws.mutate_directory(&path,&destination,&kind,&expected))
+fn workspace_folder_operation(
+    host: State<'_, Host>,
+    path: String,
+    destination: String,
+    kind: String,
+    expected: std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
+    with_workspace(&host, |ws| {
+        ws.mutate_directory(&path, &destination, &kind, &expected)
+    })
 }
 #[tauri::command]
 fn workspace_mkdir(host: State<'_, Host>, path: String) -> Result<(), String> {

@@ -1,11 +1,11 @@
 //! 原生文件所有权与持久化 outbox；本库不依赖 WebView，可独立执行破坏性故障测试。
 
+mod canvas_contract;
 pub mod core;
 pub mod core_update;
 #[cfg(windows)]
 mod credential_autounlock;
 pub mod credentials;
-mod canvas_contract;
 mod payloads;
 mod preference_records;
 pub mod recent;
