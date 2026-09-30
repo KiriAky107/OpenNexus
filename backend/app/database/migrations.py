@@ -245,6 +245,21 @@ MIGRATIONS: list[str] = [
     # v19: include web-only metadata in revision checks and restores.
     """ALTER TABLE note_changes ADD COLUMN before_metadata TEXT;
     ALTER TABLE note_changes ADD COLUMN after_metadata TEXT;""",
+    # v20: searchable visible chat segments; reasoning and raw tool arguments are excluded.
+    """CREATE TABLE chat_search_entries (
+        id INTEGER PRIMARY KEY, message_id TEXT NOT NULL REFERENCES chat_messages(message_id) ON DELETE CASCADE,
+        conversation_id TEXT NOT NULL, entry_index INTEGER NOT NULL, kind TEXT NOT NULL,
+        tool_call_id TEXT, text TEXT NOT NULL, UNIQUE(message_id,entry_index)
+    );
+    CREATE INDEX chat_search_conversation ON chat_search_entries(conversation_id,message_id);
+    CREATE TABLE chat_search_state (conversation_id TEXT PRIMARY KEY REFERENCES chat_conversations(conversation_id) ON DELETE CASCADE, last_sequence INTEGER NOT NULL);
+    CREATE VIRTUAL TABLE chat_search_fts USING fts5(text, content='chat_search_entries', content_rowid='id', tokenize='trigram');
+    CREATE TRIGGER chat_search_insert AFTER INSERT ON chat_search_entries BEGIN
+      INSERT INTO chat_search_fts(rowid,text) VALUES(new.id,new.text);
+    END;
+    CREATE TRIGGER chat_search_delete AFTER DELETE ON chat_search_entries BEGIN
+      INSERT INTO chat_search_fts(chat_search_fts,rowid,text) VALUES('delete',old.id,old.text);
+    END;""",
 ]
 
 

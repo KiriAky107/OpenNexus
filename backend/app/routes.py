@@ -482,6 +482,13 @@ async def delete_chat_conversation(conversation_id: str) -> OperationResponse:
     return OperationResponse(status="completed", resource_id=conversation_id, message="deleted")
 
 
+@router.get('/chat/conversations/{conversation_id}/search', tags=['Chat'])
+async def search_chat(conversation_id: str, q: str = Query(min_length=1, max_length=200),
+                      limit: int = Query(40, ge=1, le=100), offset: int = Query(0, ge=0)):
+    from app.services.chat_search import search
+    return await asyncio.to_thread(search, conversation_id, q, limit=limit, offset=offset)
+
+
 @router.post(
     "/chat",
     response_class=StreamingResponse,

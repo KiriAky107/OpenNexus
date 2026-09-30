@@ -6,19 +6,15 @@ import RunActivity from '@/features/agent/RunActivity.vue'
 import CollaborationCard from '@/features/agent/CollaborationCard.vue'
 import DefinitionChange from '@/features/agent/DefinitionChange.vue'
 import { t } from '@/i18n'
+import { toolTitle } from './toolSummary'
 const props = defineProps<{ call: ToolCall }>()
 const result = computed<Record<string, unknown>>(() => { try { const value = JSON.parse(props.call.result || '{}'); return value && typeof value === 'object' && !Array.isArray(value) ? value : {} } catch { return {} } })
 const objectName = computed(() => { const name = result.value.name || result.value.title || (result.value.config as Record<string, unknown> | undefined)?.name; return typeof name === 'string' ? name : '' })
 function identifier(key: string, prefix: string) { const id = result.value[key]; return typeof id === 'string' && new RegExp(`^${prefix}_[a-zA-Z0-9]+$`).test(id) ? id : '' }
-const title = computed(() => ({ 'agent.define': t('创建智能体配置', 'Create Agent definition'), 'agent.start': t('启动智能体任务', 'Start Agent task'),
-  'agent.create': t('创建并启动临时任务', 'Create and start task'), 'agent.collaborate': t('规划协作分工', 'Plan collaboration'),
-  'agent.search_tools': t('查找可用工具', 'Discover available tools'), 'agent.list': t('查找智能体', 'Find Agents'),
-  'agent.inspect': t('读取智能体配置', 'Read Agent definition'), 'agent.status': t('查询任务状态', 'Read task status'),
-  'agent.propose_update': t('提出配置变更', 'Propose configuration change'), 'agent.propose_delete': t('提出删除请求', 'Propose deletion'),
-  'rag.search': t('检索知识库', 'Search knowledge base') } as Record<string, string>)[props.call.name] || props.call.name)
+const title = computed(() => toolTitle(props.call.name))
 </script>
 <template>
-  <div class="tool-activity">
+  <div class="tool-activity" :data-tool-call-id="call.tool_call_id">
     <details class="ui-disclosure tool-calls"><summary>{{ title }} <span class="badge" :class="{ success: call.status === 'completed', error: ['failed', 'error'].includes(call.status), info: call.status === 'running' }">{{ statusLabel(call.status) }}</span> {{ objectName }}</summary>
       <p v-if="result.status">{{ t('返回状态', 'Returned status') }}: {{ statusLabel(String(result.status)) }}</p>
       <p v-if="call.error_message" class="tool-error" role="alert">{{ call.error_message }}</p>

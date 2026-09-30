@@ -49,6 +49,14 @@ export function selectMessageVersion(conversationId: string, messageId: string) 
   return apiClient.post(`/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/select`, {})
 }
 
+export interface ChatSearchHit {
+  message_id: string; position: number; entry_index: number; kind: 'text' | 'tool'; role: string
+  tool_call_id?: string | null; snippet: string; created_at: string
+}
+export function searchConversation(conversationId: string, q: string, offset = 0) {
+  return apiClient.get<{ items: ChatSearchHit[]; has_more: boolean }>(`/api/chat/conversations/${encodeURIComponent(conversationId)}/search`, { params: { q, offset, limit: 40 } })
+}
+
 export function decideChatBudget(requestId: string, conversationId: string, assistantMessageId: string, additionalTokens: number) {
   return apiClient.post<{ status: string }>(`/api/chat/budget/${encodeURIComponent(requestId)}`, {
     conversation_id: conversationId,

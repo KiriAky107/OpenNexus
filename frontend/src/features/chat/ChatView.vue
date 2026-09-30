@@ -16,11 +16,16 @@ import { listTools } from '@/services/agentService'
 import type { ToolDefinition } from '@/contracts'
 import { useRouter } from 'vue-router'
 import { usedCitations } from '@/utils/usedCitations'
+import ConversationSearch from './ConversationSearch.vue'
+import type { ChatSearchHit } from '@/services/chatService'
+import { paintSearchRanges, visibleMatchRanges } from './searchHighlight'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 const router = useRouter()
 const suggestions = computed(() => [t('根据我的笔记整理本周复习重点', 'Summarize this week’s revision priorities from my notes'), t('解释笔记中的关键概念，并注明来源', 'Explain the key concepts in my notes and cite sources'), t('帮我规划一个循序渐进的学习任务', 'Help me plan a step-by-step study task')])
 const props = defineProps<{ workspaceContext?: WorkspaceContext; embedded?: boolean }>()
 const chatStore = useChatStore()
+const workspace = useWorkspaceStore()
 const preferences = useChatPreferences()
 const layout = useLayoutPreferencesStore()
 const showPersona = ref(false)
@@ -43,21 +48,77 @@ const streamingMessageId = computed(() => chatStore.isStreaming ? chatStore.mess
 const editingMessage = ref<string | null>(null)
 const timeline = ref<HTMLElement>()
 const visibleCount = ref(30)
-const visibleMessages = computed(() => chatStore.messages.slice(-visibleCount.value))
+const searchWindow = ref<number | null>(null)
+const visibleMessages = computed(() => searchWindow.value === null ? chatStore.messages.slice(-visibleCount.value) : chatStore.messages.slice(searchWindow.value, searchWindow.value + 30))
+const searchLocation = ref<{ hit: ChatSearchHit; query: string }>()
+const matchIndex = ref(0), matchCount = ref(0)
+let ranges: Range[] = [], locateVersion = 0
+let versionSwitch: Promise<void> | undefined
+let readingPosition: { top: number; count: number; window: number | null; conversation: string | null; leaf?: string; vault: string | null } | undefined
+async function clearSearch() {
+  const version = ++locateVersion; searchLocation.value = undefined; ranges = []; paintSearchRanges([])
+  const position = readingPosition; readingPosition = undefined
+  if (!position || position.conversation !== chatStore.activeConversationId || position.vault !== workspace.vaultId) return
+  await versionSwitch
+  if (disposed || version !== locateVersion || position.conversation !== chatStore.activeConversationId || position.vault !== workspace.vaultId) return
+  if (position.leaf && !chatStore.messages.some(message => message.message_id === position.leaf) && chatStore.canSend) await chatStore.switchVersion(position.leaf)
+  if (disposed || version !== locateVersion || position.conversation !== chatStore.activeConversationId || position.vault !== workspace.vaultId) return
+  visibleCount.value = position.count; searchWindow.value = position.window
+  await nextTick()
+  if (timeline.value) timeline.value.scrollTop = position.top
+}
+async function locateHit(hit: ChatSearchHit, query: string) {
+  const version = ++locateVersion, conversation = chatStore.activeConversationId, vault = workspace.vaultId
+  if (!readingPosition) readingPosition = { top: timeline.value?.scrollTop || 0, count: visibleCount.value, window: searchWindow.value, conversation, leaf: chatStore.messages.at(-1)?.message_id, vault: workspace.vaultId }
+  let index = chatStore.messages.findIndex(message => message.message_id === hit.message_id)
+  if (index < 0) {
+    if (!chatStore.canSend) { loadError.value = t('当前正在生成内容；结束后可定位其他回答版本。', 'Finish the current response before navigating to another answer version.'); return }
+    versionSwitch = chatStore.switchVersion(hit.message_id)
+    await versionSwitch
+    versionSwitch = undefined
+    if (disposed || version !== locateVersion || conversation !== chatStore.activeConversationId || vault !== workspace.vaultId) return
+    index = chatStore.messages.findIndex(message => message.message_id === hit.message_id)
+  }
+  if (index < 0) return
+  searchWindow.value = Math.max(0, index - 12); nearBottom.value = false
+  searchLocation.value = { hit, query }; matchIndex.value = 0
+  matchCount.value = 0; loadError.value = ''
+  await nextTick()
+  if (version !== locateVersion) return
+  const article = Array.from(timeline.value?.querySelectorAll<HTMLElement>('[data-message-id]') || []).find(e => e.dataset.messageId === hit.message_id)
+  let target = article
+  if (hit.tool_call_id && article) {
+    target = Array.from(article.querySelectorAll<HTMLElement>('[data-tool-call-id]')).find(e => e.dataset.toolCallId === hit.tool_call_id) || article
+    const details = target.querySelector<HTMLDetailsElement>('.tool-calls'); if (details) details.open = true
+  }
+  if (target) {
+    ranges = visibleMatchRanges(target, query); matchCount.value = ranges.length; paintSearchRanges(ranges)
+    target.scrollIntoView?.({ block: 'center' }); target.focus({ preventScroll: true })
+  }
+}
+function nextMatch(direction: number) {
+  if (!ranges.length) return
+  matchIndex.value = (matchIndex.value + direction + ranges.length) % ranges.length
+  paintSearchRanges(ranges, matchIndex.value)
+  ranges[matchIndex.value]?.startContainer.parentElement?.scrollIntoView?.({ block: 'center' })
+}
+onBeforeUnmount(() => { locateVersion++; paintSearchRanges([]) })
 const nearBottom = ref(true)
 const hasNewActivity = ref(false)
 function trackScroll() {
   const element = timeline.value
   if (!element) return
-  nearBottom.value = element.scrollHeight - element.scrollTop - element.clientHeight < 80
+  nearBottom.value = searchWindow.value === null && element.scrollHeight - element.scrollTop - element.clientHeight < 80
   if (nearBottom.value) hasNewActivity.value = false
 }
 async function latest() {
+  searchWindow.value = null
   await nextTick()
   if (timeline.value) timeline.value.scrollTop = timeline.value.scrollHeight
   nearBottom.value = true; hasNewActivity.value = false
 }
 async function older() {
+  if (searchWindow.value !== null) { searchWindow.value = Math.max(0, searchWindow.value - 30); return }
   const element = timeline.value
   const height = element?.scrollHeight || 0
   const top = element?.scrollTop || 0
@@ -65,7 +126,7 @@ async function older() {
   await nextTick()
   if (element) element.scrollTop = top + element.scrollHeight - height
 }
-watch(() => chatStore.activeConversationId, () => { visibleCount.value = 30; nearBottom.value = true; hasNewActivity.value = false })
+watch(() => [chatStore.activeConversationId, workspace.vaultId], () => { readingPosition = undefined; searchWindow.value = null; void clearSearch(); visibleCount.value = 30; nearBottom.value = true; hasNewActivity.value = false })
 watch(() => chatStore.pendingBudget?.requestId, requestId => {
   budgetDialogOpen.value = Boolean(requestId)
   additionalBudget.value = Math.max(8000, chatStore.pendingBudget?.minimumAdditional ?? 1)
@@ -171,10 +232,11 @@ async function openCitationCard(citation: Citation) {
     <div v-if="chatStore.contextNotice" class="notice-banner" role="status">{{ chatStore.contextNotice }}</div>
     <div v-if="chatStore.pendingBudget" class="notice-banner" role="status">{{ t('聊天协作用量已到上限，当前生成已暂停。', 'Chat coordination has reached its budget and is paused.') }} <button class="button-secondary" @click="budgetDialogOpen = true">{{ t('决定是否继续', 'Decide whether to continue') }}</button></div>
     <div v-if="loadError || providerStore.error || chatStore.historyError" class="error-banner chat-error">{{ loadError || providerStore.error || chatStore.historyError }}</div>
+    <ConversationSearch :conversation-id="chatStore.activeConversationId" :live-message="chatStore.isStreaming ? chatStore.messages.at(-1) : undefined" @locate="locateHit" @clear="clearSearch" />
     <main ref="timeline" class="message-timeline" @scroll.passive="trackScroll">
       <button v-if="chatStore.messages.length > visibleCount" class="button-secondary" @click="older">{{ t('加载更早的消息', 'Load earlier messages') }}</button>
       <div v-if="!chatStore.messages.length" class="empty-state"><div><strong>{{ t('开始一段知识对话', 'Start a knowledge conversation') }}</strong><p>{{ t('围绕当前知识库提问，回答可以引用原文并定位到笔记。', 'Ask about this vault, with sources that open the original notes.') }}</p><div class="chat-suggestions"><button v-for="suggestion in suggestions" :key="suggestion" class="button-secondary" @click="chatStore.inputText = suggestion">{{ suggestion }}</button></div><button v-if="!providerStore.enabledProviders.length && !embedded" class="button-secondary" @click="router.push({ name: 'settings' })">{{ t('配置模型提供商', 'Configure a provider') }}</button></div></div>
-      <article v-for="message in visibleMessages" :key="message.message_id" class="message" :class="message.role">
+      <article v-for="message in visibleMessages" :key="message.message_id" class="message" :class="[message.role, { 'search-selected': searchLocation?.hit.message_id === message.message_id }]" :data-message-id="message.message_id" tabindex="-1">
         <div class="avatar"><img v-if="message.role === 'user' ? preferences.settings.userAvatar : preferences.settings.aiAvatar" :src="message.role === 'user' ? preferences.settings.userAvatar : preferences.settings.aiAvatar" :alt="message.role === 'user' ? t('我', 'Me') : 'AI'" /><span v-else>{{ message.role === 'user' ? t('你', 'You') : 'AI' }}</span></div>
         <div class="message-body"><small v-if="message.attachments?.length">附件：{{ message.attachments.map(id=>id.split('.').at(-1)).join('、') }}</small><details v-if="message.workspace_context" class="ui-disclosure"><summary>发送时的文件：{{ message.workspace_context.file_path }}</summary><pre class="context-snapshot">{{ message.workspace_context.content }}</pre></details>
           <div v-if="editingMessage === message.message_id" class="message-edit">
@@ -187,6 +249,10 @@ async function openCitationCard(citation: Citation) {
             <button v-for="{ citation, number } in visibleCitations[message.message_id]" :key="number" class="citation-card" @click="openCitationCard(citation)">
               <span class="badge info">{{ number }}</span><span><strong>{{ citation.heading_path || citation.file_path }}</strong><small>{{ citation.content }}</small></span>
             </button>
+          </div>
+          <div v-if="searchLocation?.hit.message_id === message.message_id" class="search-navigation">
+            <p>{{ t('定位片段', 'Located passage') }}: <mark>{{ searchLocation.hit.snippet }}</mark></p>
+            <div v-if="matchCount" class="inline-actions"><button class="button-secondary" @click="nextMatch(-1)">{{ t('上一处', 'Previous match') }}</button><span>{{ matchIndex + 1 }} / {{ matchCount }}</span><button class="button-secondary" @click="nextMatch(1)">{{ t('下一处', 'Next match') }}</button></div>
           </div>
           <time>{{ new Date(message.created_at).toLocaleTimeString() }}</time>
           <div class="message-actions inline-actions">
@@ -237,6 +303,11 @@ async function openCitationCard(citation: Citation) {
 </template>
 
 <style scoped>
+.search-selected { outline: 2px solid var(--color-border-focus); outline-offset: -2px; }
+.search-navigation { margin-block: var(--space-sm); overflow-wrap: anywhere; }
+.search-navigation mark { background: var(--color-accent-soft); color: var(--color-text-primary); }
+:global(::highlight(opennexus-chat-match)) { background: var(--color-accent-soft); color: var(--color-text-primary); }
+:global(::highlight(opennexus-chat-current)) { background: var(--color-accent-primary); color: var(--color-text-inverse); }
 .chat-suggestions { display: grid; gap: 10px; margin: 24px auto; max-width: 520px; }
 .chat-budget-modal { display: grid; gap: var(--space-md); width: min(560px, 100%); }
 .chat-suggestions button { padding: 12px 16px; min-height: 42px; line-height: 1.6; text-align: left; }

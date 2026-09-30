@@ -7,6 +7,7 @@ import { useProviderStore } from '@/stores/provider'
 import { useSkillStore } from '@/stores/skill'
 import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import ChatView from './ChatView.vue'
+import ConversationSearch from './ConversationSearch.vue'
 
 vi.mock('@/services/agentService', () => ({ listTools: vi.fn().mockResolvedValue([]) }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
@@ -200,5 +201,47 @@ it('sends on Enter but preserves Shift+Enter and IME confirmation', async () => 
   expect(send).toHaveBeenCalledWith('问题', undefined, undefined)
   await input.trigger('keydown', { key: 'Enter', repeat: true })
   expect(send).toHaveBeenCalledTimes(1)
+  wrapper.unmount()
+})
+
+it('locates an old message in a bounded window and restores the original reading position', async () => {
+  const wrapper = mount(ChatView)
+  await flushPromises()
+  const chat = useChatStore()
+  chat.activeConversationId = 'search'
+  chat.messages = Array.from({ length: 110 }, (_, i) => ({ message_id: `m${i}`, conversation_id: 'search', role: 'user' as const, content: `needle ${i}`, created_at: '2026-09-30T00:00:00Z' }))
+  await flushPromises()
+  const timeline = wrapper.get('.message-timeline').element as HTMLElement
+  timeline.scrollTop = 123
+  expect(wrapper.findAll('.message')).toHaveLength(30)
+  wrapper.getComponent(ConversationSearch).vm.$emit('locate', { message_id: 'm10', position: 11, entry_index: 0, kind: 'text', role: 'user', snippet: 'needle 10', created_at: '' }, 'needle')
+  await flushPromises()
+  expect(wrapper.get('.search-selected').attributes('data-message-id')).toBe('m10')
+  expect(wrapper.findAll('.message')).toHaveLength(30)
+  wrapper.getComponent(ConversationSearch).vm.$emit('clear')
+  await flushPromises()
+  expect(wrapper.find('.search-selected').exists()).toBe(false)
+  expect(wrapper.findAll('.message')[0]!.attributes('data-message-id')).toBe('m80')
+  expect(timeline.scrollTop).toBe(123)
+  wrapper.unmount()
+})
+
+it('restores the selected answer branch after locating an earlier attempt', async () => {
+  const wrapper = mount(ChatView)
+  await flushPromises()
+  const chat = useChatStore()
+  chat.activeConversationId = 'search'
+  const message = (id: string) => ({ message_id: id, conversation_id: 'search', role: 'assistant' as const, content: id, created_at: '' })
+  chat.messages = [message('current')]
+  const switchVersion = vi.spyOn(chat, 'switchVersion').mockImplementation(async id => { chat.messages = [message(id)] })
+  await flushPromises()
+  wrapper.getComponent(ConversationSearch).vm.$emit('locate', { message_id: 'previous', position: 2, entry_index: 0, kind: 'text', role: 'assistant', snippet: 'previous', created_at: '' }, 'previous')
+  await flushPromises()
+  expect(switchVersion).toHaveBeenCalledWith('previous')
+  expect(wrapper.get('.search-selected').attributes('data-message-id')).toBe('previous')
+  wrapper.getComponent(ConversationSearch).vm.$emit('clear')
+  await flushPromises()
+  expect(switchVersion).toHaveBeenLastCalledWith('current')
+  expect(chat.messages[0]!.message_id).toBe('current')
   wrapper.unmount()
 })
