@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -68,3 +69,20 @@ def test_canvas_path_is_vault_scoped() -> None:
     for path in ("../outside.canvas", "/../../outside.canvas", "C:/outside.canvas", ".ainote/hidden.canvas"):
         with pytest.raises(ApiError):
             asyncio.run(canvas_service.write(canvas_service.CanvasWriteRequest(path=path, content=_content())))
+
+
+def test_imported_canvas_standard_fields_round_trip_and_invalid_optionals():
+    imported = (Path(__file__).parents[2] / "frontend/tests/fixtures/imported.canvas").read_text(encoding="utf-8")
+    get_settings().vault_path.mkdir(parents=True)
+    created = asyncio.run(canvas_service.write(canvas_service.CanvasWriteRequest(path="imported.canvas", content=imported)))
+    assert canvas_service.read("imported.canvas").content == imported
+    original = json.loads(imported)
+    for target, changes in [("nodes", {"color": "url(evil)"}), ("nodes", {"background": "../outside.png"}),
+                            ("nodes", {"backgroundStyle": 42}), ("nodes", {"label": []}),
+                            ("edges", {"fromSide": "diagonal"}), ("edges", {"toEnd": "triangle"}), ("edges", {"label": {}})]:
+        bad = json.loads(imported)
+        bad[target][0].update(changes)
+        with pytest.raises(ApiError) as error:
+            asyncio.run(canvas_service.write(canvas_service.CanvasWriteRequest(path="imported.canvas", expected_content_hash=created.content_hash, content=json.dumps(bad))))
+        assert error.value.code == "CANVAS_INVALID"
+    assert json.loads(canvas_service.read("imported.canvas").content) == original

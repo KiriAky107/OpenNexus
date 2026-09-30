@@ -1,0 +1,14 @@
+{
+  "nodes": [
+    {"id":"group","type":"group","x":-40,"y":-70,"width":1160,"height":500,"label":"Imported lesson","background":"course/image.png","backgroundStyle":"repeat","color":"#5968AB","exporter":{"collapsed":false}},
+    {"id":"root","type":"text","x":0,"y":0,"width":280,"height":180,"text":"# Research map\n\nPreserve original Markdown.","color":"4","custom":{"preserve":[1,2,3]}},
+    {"id":"note","type":"file","x":400,"y":0,"width":280,"height":180,"file":"course/note.md","subpath":"#Evidence"},
+    {"id":"image","type":"file","x":400,"y":230,"width":280,"height":180,"file":"course/image.png"},
+    {"id":"url","type":"link","x":800,"y":0,"width":280,"height":180,"url":"https://jsoncanvas.org/spec/1.0/"}
+  ],
+  "edges": [
+    {"id":"reference","fromNode":"root","fromSide":"right","fromEnd":"none","toNode":"note","toSide":"left","toEnd":"arrow","label":"Evidence","color":"5","custom":true},
+    {"id":"standard","fromNode":"note","toNode":"url","label":"Format"}
+  ],
+  "exporter":{"version":1,"unknownOptionalField":"retained"}
+}

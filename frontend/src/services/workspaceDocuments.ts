@@ -22,6 +22,8 @@ export function validateCanvasContent(content: string): void {
   if (nodes.length > 2000 || edges.length > 4000) throw new Error('CANVAS_TOO_COMPLEX')
   const ids = new Set<string>()
   const bounded = (value: unknown, min: number, max: number) => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max
+  const optional = (item: Record<string, unknown>, key: string, valid: (value: unknown) => boolean) => item[key] === undefined || valid(item[key])
+  const color = (value: unknown) => typeof value === 'string' && /^(?:[1-6]|#[\da-f]{6})$/i.test(value)
   const vaultPath = (value: unknown) => typeof value === 'string' && value.length > 0 && !value.startsWith('/') && !/[\\:%?#*"<>|\x00-\x1f]/.test(value)
     && value.split('/').every(part => part.length > 0 && part !== '.' && part !== '..' && !part.startsWith('.') && part.toLowerCase() !== 'opennexus-records')
   for (const item of nodes) {
@@ -31,6 +33,11 @@ export function validateCanvasContent(content: string): void {
       || !bounded(node.x, -1_000_000, 1_000_000) || !bounded(node.y, -1_000_000, 1_000_000)
       || !bounded(node.width, 1, 100_000) || !bounded(node.height, 1, 100_000)) throw new Error('CANVAS_INVALID')
     ids.add(node.id)
+    if (!optional(node, 'color', color)
+      || !optional(node, 'subpath', value => typeof value === 'string' && value.startsWith('#'))
+      || !optional(node, 'label', value => typeof value === 'string')
+      || !optional(node, 'background', vaultPath)
+      || !optional(node, 'backgroundStyle', value => typeof value === 'string' && ['cover', 'ratio', 'repeat'].includes(value))) throw new Error('CANVAS_INVALID')
     if (node.type === 'text' && typeof node.text === 'string') continue
     if (node.type === 'file' && vaultPath(node.file)) continue
     if (node.type === 'link' && typeof node.url === 'string' && /^https?:\/\//i.test(node.url) && !/\s/.test(node.url)) {
@@ -47,5 +54,8 @@ export function validateCanvasContent(content: string): void {
       || typeof edge.fromNode !== 'string' || !ids.has(edge.fromNode)
       || typeof edge.toNode !== 'string' || !ids.has(edge.toNode)) throw new Error('CANVAS_INVALID')
     edgeIds.add(edge.id)
+    if (!optional(edge, 'color', color) || !optional(edge, 'label', value => typeof value === 'string')
+      || !['fromSide', 'toSide'].every(key => optional(edge, key, value => typeof value === 'string' && ['left', 'right', 'top', 'bottom'].includes(value)))
+      || !['fromEnd', 'toEnd'].every(key => optional(edge, key, value => typeof value === 'string' && ['none', 'arrow'].includes(value)))) throw new Error('CANVAS_INVALID')
   }
 }

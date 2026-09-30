@@ -18,4 +18,11 @@ describe('workspace document contracts', () => {
     expect(() => validateCanvasContent(JSON.stringify({ nodes: [{ id: 'a', type: 'link', x: 0, y: 0, width: 100, height: 50, url: 'https://example.com:0' }] }))).toThrow('CANVAS_INVALID')
     expect(() => validateCanvasContent(JSON.stringify({ nodes: [{ id: 'a', type: 'link', x: 0, y: 0, width: 100, height: 50, url: 'https://user:pass@example.com' }] }))).toThrow('CANVAS_INVALID')
   })
+  it('rejects malformed optional standard fields before rendering',()=>{
+    const node={id:'a',type:'text',x:0,y:0,width:100,height:50,text:'safe'}
+    for(const fields of[{color:'url(evil)'},{subpath:'heading'},{background:'../outside.png'},{label:42},{backgroundStyle:'invalid'}])
+      expect(()=>validateCanvasContent(JSON.stringify({nodes:[{...node,...fields}]}))).toThrow('CANVAS_INVALID')
+    for(const fields of[{label:42},{fromSide:'diagonal'},{toEnd:'triangle'},{color:'#fff'}])
+      expect(()=>validateCanvasContent(JSON.stringify({nodes:[node],edges:[{id:'e',fromNode:'a',toNode:'a',...fields}]}))).toThrow('CANVAS_INVALID')
+  })
 })

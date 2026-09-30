@@ -1,0 +1,47 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>工作区增量验收</title></head>
+<body style="margin:0;background:var(--color-background-primary)"><div id="app"></div><script type="module">
+import {createApp,h,ref} from 'vue';
+import {createPinia} from 'pinia';
+import FolderContents from '/src/features/workspace/FolderContents.vue';
+import VaultReferencesPanel from '/src/features/workspace/VaultReferencesPanel.vue';
+import BenchmarkComparison from '/src/features/benchmarks/BenchmarkComparison.vue';
+import ConversationSearch from '/src/features/chat/ConversationSearch.vue';
+import CanvasEditor from '/src/features/editor/CanvasEditor.vue';
+import imported from '/tests/fixtures/imported.canvas?raw';
+import {useWorkspaceStore} from '/src/stores/workspace.ts';
+import {useEditorStore} from '/src/stores/editor.ts';
+import {getCommunityThemePreviewCss} from '/src/services/themePackageService.ts';
+import '/src/styles/tokens.css';import '/src/styles/features.css';
+const params=new URLSearchParams(location.search),theme=params.get('theme')||'light';
+document.documentElement.dataset.theme=theme;const style=document.createElement('style');style.textContent=getCommunityThemePreviewCss(theme)||'';document.head.append(style);
+const content={intro:'# 课程导言\n\n这是实际笔记内容产生的目录摘要。阅读 [课程笔记](note.md)。',note:'---\ntitle: 检索与证据\n---\n# Evidence\n\n检索应保留证据和出处。用于复习与核对的真实摘要。',source:'# 复习清单\n\n[证据](note.md#Evidence)\n\n[待补材料](missing.md)\n\n[格式说明](https://jsoncanvas.org/spec/1.0/)'};
+const entry=(name,id)=>({entry_id:id,note_id:name.endsWith('.md')?id:null,name,path:'/course/'+name,type:'file',content_hash:'h-'+id,updated_at:'2026-09-30T00:00:00Z',children:[]});
+const tree=[{entry_id:'course',note_id:null,name:'course',path:'/course',type:'folder',children:[entry('index.md','intro'),entry('note.md','note'),entry('review.md','source'),entry('image.png','image')]},entry('map.canvas','map')];tree[1].path='/map.canvas';
+const run=id=>({id,kind:'rag',datasetId:'课程专属数据集',datasetHash:'12'.repeat(32),createdAt:'2026-09-30T00:00:00Z',status:'completed',progress:1,errorCode:null,configSnapshot:{vault_scope:'fixture',top_k:id==='baseline'?5:10}});
+const report=id=>({run_id:id,kind:'rag',dataset_id:run(id).datasetId,dataset_hash:run(id).datasetHash,status:'completed',metrics:{fts:{recall_at_k:id==='baseline'?1:.5,citation_hit_rate:null,latency_ms:id==='baseline'?12:9}},config_snapshot:run(id).configSnapshot,cases:[{case_id:'课程证据',mode:'fts',repeat:0,recall:id==='baseline'?1:.5,source:'实际用例'}]});
+const nativeFetch=window.fetch;
+// Every API request stays in memory. This page never reads or writes a real vault.
+window.fetch=async(input,init)=>{
+ const url=new URL(String(input),location.href),path=url.pathname;if(!path.startsWith('/api/'))return nativeFetch(input,init);let data;
+ if(path==='/api/workspace/tree')data=tree;
+ else if(path==='/api/workspace/canvas')data={path:'/map.canvas',content:imported,content_hash:'canvas'};
+ else if(path.includes('/assets/'))return new Response(Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='),c=>c.charCodeAt(0)),{headers:{'Content-Type':'image/png'}});
+ else if(path.startsWith('/api/notes/')){const id=path.split('/').at(-1);data={note_id:id,markdown:content[id],title:id,file_path:'course/'+(id==='intro'?'index':id)+'.md'};}
+ else if(path.includes('/benchmarks/runs/'))data=report(path.split('/').at(-2));
+ else if(path.includes('/conversations/'))data={items:[{message_id:'message',position:24,role:'assistant',kind:'text',entry_index:0,snippet:'通过检索证据核对课程内容。',created_at:'2026-09-30T00:00:00Z'},{message_id:'activity',position:25,role:'assistant',kind:'tool',entry_index:0,tool_call_id:'tool',snippet:'读取笔记：课程证据',created_at:'2026-09-30T00:01:00Z'}],has_more:false};
+ else throw new Error('Unexpected fixture request: '+path);
+ return new Response(JSON.stringify(data),{headers:{'Content-Type':'application/json'}});
+};
+createApp({setup(){
+ const workspace=useWorkspaceStore(),editor=useEditorStore(),mode=ref(params.get('case')||'canvas'),status=ref('');
+ workspace.hasVault=true;workspace.vaultId='fixture';workspace.vaultName='示例课程库';workspace.vaultPath='fixture';workspace.selectFolder('/course');workspace.activeFilePath='/course/note.md';void workspace.refreshFileTree();
+ editor.currentFilePath='/map.canvas';editor.content=imported;editor.saveStatus='saved';editor.scheduleAutoSave=()=>{};
+ window.qa={editor,workspace};
+ const modes={canvas:'画布',folder:'子笔记',links:'引用',benchmark:'评测对比',search:'对话搜索'};
+ return()=>h('main',{style:'display:flex;flex-direction:column;height:100vh;min-width:0;color:var(--color-text-primary)'},[
+ h('nav',{class:'inline-actions',style:'padding:8px;flex-wrap:wrap;flex-shrink:0'},Object.entries(modes).map(([id,label])=>h('button',{class:'button-secondary','aria-pressed':mode.value===id,onClick:()=>mode.value=id},label))),
+ mode.value==='canvas'?h(CanvasEditor):mode.value==='folder'?h(FolderContents,{path:'/course'}):mode.value==='links'?h(VaultReferencesPanel):mode.value==='benchmark'?h('div',{style:'overflow:auto;padding:16px'},h(BenchmarkComparison,{runs:[run('baseline'),run('candidate')],onReport:r=>status.value='报告 '+r.id})):h(ConversationSearch,{conversationId:'fixture',onLocate:hit=>status.value='已定位 '+hit.message_id}),
+ status.value&&h('p',{role:'status'},status.value),
+ ]);
+}}).use(createPinia()).mount('#app');
+</script></body></html>

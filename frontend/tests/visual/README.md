@@ -8,5 +8,6 @@
 - `/tests/visual/mermaid-matrix.html`：真实 Mermaid（无渲染 mock）的 6 图型 × 6 主题矩阵。顶部报告检查结果；加 `?theme=paper-moments` 可查看单主题外观。
 - `/tests/visual/callouts.html?theme=paper-moments`：工作区与静态预览的警告框类型、嵌套和折叠对照；可切换上述六个主题，不读写用户笔记。
 - `/tests/visual/note-changes.html?theme=dark`：AI 笔记授权差异、折叠原始参数、历史差异与恢复确认；内存请求夹具，不访问真实笔记。检查六主题、窄窗口、键盘焦点与关闭弹窗后的焦点恢复。
+- `/tests/visual/workspace-p1.html?theme=dark&case=canvas`：画布真实文件夹具、子笔记目录、反链与失效链接、Benchmark 对比和会话搜索；API 全部为内存夹具。检查六主题、390px 窄窗口、拖动／键盘／撤销、节点目标、列表切换、退步用例与搜索定位。
 
 运行自动回归：`pnpm test`。AppDialog 测试覆盖滚动锁引用计数、恢复焦点、禁止隐式关闭；主题预览矩阵覆盖六主题的实际共享 CSS、控件状态和 CSP/无脚本隔离。自动结构检查不代替浏览器截图、布局和对比度检查。

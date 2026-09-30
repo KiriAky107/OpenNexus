@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 from pathlib import Path
 from uuid import uuid4
@@ -91,6 +92,12 @@ def validate(content: bytes) -> None:
                                                  ("width", 1, 100_000), ("height", 1, 100_000)))):
             raise ApiError(422, "CANVAS_INVALID", "画布节点标识或尺寸无效。")
         ids.add(node_id)
+        if (not _optional(node, "color", _color)
+                or not _optional(node, "subpath", lambda value: isinstance(value, str) and value.startswith("#"))
+                or not _optional(node, "label", lambda value: isinstance(value, str))
+                or not _optional(node, "background", _safe_file)
+                or not _optional(node, "backgroundStyle", lambda value: value in ("cover", "ratio", "repeat"))):
+            raise ApiError(422, "CANVAS_INVALID", "画布节点的可选字段无效。")
         kind = node.get("type")
         if kind == "text" and isinstance(node.get("text"), str):
             continue
@@ -112,6 +119,19 @@ def validate(content: bytes) -> None:
                 or from_node not in ids or to_node not in ids):
             raise ApiError(422, "CANVAS_INVALID", "画布连线指向不存在的节点。")
         edge_ids.add(edge_id)
+        if (not _optional(edge, "color", _color)
+                or not _optional(edge, "label", lambda value: isinstance(value, str))
+                or any(not _optional(edge, key, lambda value: value in ("left", "right", "top", "bottom")) for key in ("fromSide", "toSide"))
+                or any(not _optional(edge, key, lambda value: value in ("none", "arrow")) for key in ("fromEnd", "toEnd"))):
+            raise ApiError(422, "CANVAS_INVALID", "画布连线的可选字段无效。")
+
+
+def _optional(item: dict, key: str, valid) -> bool:
+    return key not in item or valid(item[key])
+
+
+def _color(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"(?:[1-6]|#[\da-fA-F]{6})", value) is not None
 
 
 def _safe_file(value: object) -> bool:
