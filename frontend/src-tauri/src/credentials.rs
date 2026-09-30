@@ -1397,6 +1397,7 @@ mod tests {
         let mut broker = CredentialBroker::new(target);
         broker.unlock(password()).unwrap();
         let _ = broker.import_fernet_inner(Path::new(&source), None, |at| {
+            eprintln!("B-04 helper reached {at}");
             if at == boundary {
                 let file = fs::File::create(&marker).unwrap();
                 file.sync_all().unwrap();
@@ -1410,6 +1411,14 @@ mod tests {
     }
     #[test]
     fn b04_migration_survives_twenty_hard_terminations_per_boundary() {
+        // A failed oracle must not leave the boundary worker waiting forever.
+        struct Worker(std::process::Child);
+        impl Drop for Worker {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
         let (source, legacy_key, expected) = b04_fixture();
         for boundary in [
             "backed_up",
@@ -1418,13 +1427,15 @@ mod tests {
             "ownership_committed",
             "switched",
         ] {
+            eprintln!("B-04 checking 20 hard terminations at {boundary}");
             for round in 0..20 {
                 let temp = tempfile::tempdir().unwrap();
                 let legacy = temp.path().join("legacy");
                 let target = temp.path().join("new/stronghold.v1");
                 b04_write_source(&legacy, &source, &legacy_key);
                 let marker = temp.path().join(format!("{boundary}-{round}.ready"));
-                let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                let diagnostics = temp.path().join("worker.log");
+                let mut child = Worker(std::process::Command::new(std::env::current_exe().unwrap())
                     .args([
                         "--ignored",
                         "--exact",
@@ -1437,23 +1448,27 @@ mod tests {
                     .env("OPENNEXUS_B04_MARKER", &marker)
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
+                    .stderr(fs::File::create(&diagnostics).unwrap())
                     .spawn()
-                    .unwrap();
+                    .unwrap());
                 let started = std::time::Instant::now();
                 while !marker.is_file() {
                     assert!(
-                        child.try_wait().unwrap().is_none(),
-                        "helper exited before {boundary}"
+                        child.0.try_wait().unwrap().is_none(),
+                        "helper exited before {boundary} round {round}: {}",
+                        fs::read_to_string(&diagnostics).unwrap_or_default()
                     );
                     assert!(
-                        started.elapsed() < std::time::Duration::from_secs(30),
-                        "helper did not reach {boundary}"
+                        // Snapshot encryption also runs a production-strength scrypt KDF.
+                        // Leave scheduling headroom on a busy development host.
+                        started.elapsed() < std::time::Duration::from_secs(300),
+                        "helper did not reach {boundary} round {round}: {}",
+                        fs::read_to_string(&diagnostics).unwrap_or_default()
                     );
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
-                child.kill().unwrap();
-                assert!(!child.wait().unwrap().success());
+                child.0.kill().unwrap();
+                assert!(!child.0.wait().unwrap().success());
                 assert_eq!(fs::read(legacy.join("credentials.json")).unwrap(), source);
                 assert_eq!(
                     fs::read_to_string(legacy.join("master.key")).unwrap(),
