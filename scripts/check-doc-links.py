@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -12,23 +13,14 @@ LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 
 def main() -> int:
     failures: list[str] = []
-    for document in ROOT.rglob("*.md"):
-        if any(
-            part
-            in {
-                ".build",
-                ".local-plans",
-                ".pnpm-store",
-                ".qa-pytest-tmp",
-                ".qa-uv-cache",
-                ".venv",
-                ".venv-models",
-                ".venv-models-cuda",
-                "node_modules",
-                "target",
-            }
-            for part in document.parts
-        ):
+    # Check repository documentation without traversing ignored vaults or runtimes.
+    paths = subprocess.check_output(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.md"],
+        cwd=ROOT,
+    ).decode("utf-8").split("\0")
+    for relative in sorted(set(filter(None, paths))):
+        document = ROOT / relative
+        if not document.is_file():
             continue
         source = document.read_text(encoding="utf-8")
         for raw in LINK.findall(source):
