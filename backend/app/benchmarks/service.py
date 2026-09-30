@@ -3,7 +3,7 @@
 RAG Benchmark 采用「创建即返回 queued、后台 Task 异步执行」的模式（与 index_service
 的 rebuild 一致）：POST 创建后立即返回 202 queued 的 BenchmarkRun，由受管 asyncio.Task
 在后台逐 Case 求值，进度与事件实时写入内存注册表，供 SSE 订阅。运行记录、事件与报告
-暂存内存（_runs/_events/_reports），不持久化到 SQLite；后续接入异步任务队列时再落库。
+活动任务暂存内存；运行快照、逐例事件与报告持久化到当前知识库的 SQLite。
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from app import repository
 from app.benchmarks import datasets
+from app.benchmarks import storage
 from app.benchmarks.datasets import RAGDataset
 from app.benchmarks.rag import BenchmarkCancelled, run_rag
 from app.config import get_settings
@@ -43,6 +44,23 @@ _tasks: dict[str, asyncio.Task] = {}
 _subscribers: dict[str, list[asyncio.Queue[BenchmarkEvent]]] = {}
 _cancel_flags: dict[str, asyncio.Event] = {}
 MAX_RUNS = 100
+
+
+def _persist(run_id, event=None):
+    storage.save(_runs[run_id], _reports.get(run_id), event)
+
+
+def _saved(run_id):
+    run, report = storage.get(run_id)
+    if run and run.status in (BenchmarkStatus.queued, BenchmarkStatus.running) and run_id not in _tasks:
+        evidence = storage.events(run_id)
+        run = run.model_copy(update={'status': BenchmarkStatus.failed, 'completed_at': _now(),
+                                    'error_code': 'BENCHMARK_INTERRUPTED', 'error': '应用重启中断了该次评测。'})
+        report = BenchmarkReport(run_id=run_id,kind=run.kind,dataset_id=run.dataset_id,dataset_hash=run.dataset_hash,
+                                 status=run.status,config_snapshot=run.config_snapshot,error_code=run.error_code,error=run.error,
+                                 cases=[event.data for event in evidence if event.event == BenchmarkEventType.case_completed])
+        storage.save(run,report,BenchmarkEvent(event=BenchmarkEventType.run_failed,run_id=run_id,sequence=len(evidence),data={'error_code':run.error_code},timestamp=_now()))
+    return run, report
 
 
 def _now() -> datetime:
@@ -178,6 +196,7 @@ async def create_rag_run(request: RAGRunRequest) -> BenchmarkRun:
     _events[run_id] = []
     _subscribers[run_id] = []
     _cancel_flags[run_id] = asyncio.Event()
+    _persist(run_id)
     _tasks[run_id] = asyncio.create_task(_execute_rag(run_id, request, dataset, snapshot))
     return run
 
@@ -194,10 +213,12 @@ async def _execute_rag(
             event=event_type, run_id=run_id, sequence=sequence, data=data, timestamp=_now()
         )
         _events[run_id].append(event)
+        _persist(run_id, event)
         for queue in _subscribers.get(run_id, []):
             queue.put_nowait(event)
 
     def finish() -> None:
+        _persist(run_id)
         _subscribers.pop(run_id, None)
         _cancel_flags.pop(run_id, None)
 
@@ -230,7 +251,6 @@ async def _execute_rag(
                 "completed_at": _now(),
             }
         )
-        emit(BenchmarkEventType.run_cancelled, {"status": BenchmarkStatus.cancelled.value})
         _reports[run_id] = BenchmarkReport(
             run_id=run_id,
             kind=BenchmarkKind.rag,
@@ -238,7 +258,9 @@ async def _execute_rag(
             dataset_hash=dataset.content_hash,
             status=BenchmarkStatus.cancelled,
             config_snapshot=snapshot,
+            cases=[event.data for event in _events[run_id] if event.event == BenchmarkEventType.case_completed],
         )
+        emit(BenchmarkEventType.run_cancelled, {"status": BenchmarkStatus.cancelled.value})
         finish()
         return
     except Exception as exc:  # 单次运行失败不拖垮服务，记录错误后结束
@@ -253,10 +275,6 @@ async def _execute_rag(
                 "completed_at": _now(),
             }
         )
-        emit(
-            BenchmarkEventType.run_failed,
-            {"error": "Benchmark run failed.", "error_code": "BENCHMARK_RUN_FAILED"},
-        )
         _reports[run_id] = BenchmarkReport(
             run_id=run_id,
             kind=BenchmarkKind.rag,
@@ -266,6 +284,11 @@ async def _execute_rag(
             config_snapshot=snapshot,
             error="Benchmark run failed.",
             error_code="BENCHMARK_RUN_FAILED",
+            cases=[event.data for event in _events[run_id] if event.event == BenchmarkEventType.case_completed],
+        )
+        emit(
+            BenchmarkEventType.run_failed,
+            {"error": "Benchmark run failed.", "error_code": "BENCHMARK_RUN_FAILED"},
         )
         finish()
         return
@@ -279,7 +302,6 @@ async def _execute_rag(
             "completed_at": _now(),
         }
     )
-    emit(BenchmarkEventType.run_completed, {"metrics": metrics})
     _reports[run_id] = BenchmarkReport(
         run_id=run_id,
         kind=BenchmarkKind.rag,
@@ -290,6 +312,7 @@ async def _execute_rag(
         metrics=metrics,
         cases=results,
     )
+    emit(BenchmarkEventType.run_completed, {"metrics": metrics})
     finish()
 
 
@@ -300,28 +323,36 @@ def list_runs(
     offset: int = 0,
 ) -> tuple[list[BenchmarkRun], int]:
     scope = datasets.current_scope()
-    runs = [run for run in _runs.values() if run.config_snapshot.get('vault_scope', scope) == scope]
+    for run_id in storage.unfinished_ids():
+        if run_id not in _tasks and run_id not in _runs: _saved(run_id)
+    # Recover interrupted records before filtering by state; terminal historical
+    # rows stay on disk instead of growing the live task cache.
+    persisted, total = storage.list_runs(kind, status, limit, offset)
+    runs = [_runs.get(run.run_id) or _saved(run.run_id)[0] for run in persisted]
+    extra = [run for run in _runs.values() if run.config_snapshot.get('vault_scope', scope) == scope and run.run_id not in {item.run_id for item in persisted}]
+    # Unpersisted entries are only legacy process-local runs.
+    extra = [run for run in extra if storage.get(run.run_id)[0] is None]
+    runs += extra
     if kind is not None:
         runs = [r for r in runs if r.kind == kind]
     if status is not None:
         runs = [r for r in runs if r.status == status]
     runs.sort(key=lambda r: r.created_at, reverse=True)
-    total = len(runs)
-    return runs[offset : offset + limit], total
+    return runs[:limit], total + len(extra)
 
 
 def get_run(run_id: str) -> BenchmarkRun | None:
-    run = _runs.get(run_id)
+    run = _runs.get(run_id) or _saved(run_id)[0]
     scope = datasets.current_scope()
     return run if run and run.config_snapshot.get('vault_scope', scope) == scope else None
 
 
 def get_report(run_id: str) -> BenchmarkReport | None:
-    return _reports.get(run_id) if get_run(run_id) else None
+    return (_reports.get(run_id) or _saved(run_id)[1]) if get_run(run_id) else None
 
 
 def get_events(run_id: str) -> list[BenchmarkEvent]:
-    return _events.get(run_id, []) if get_run(run_id) else []
+    return (_events.get(run_id) or storage.events(run_id)) if get_run(run_id) else []
 
 
 def cancel_run(run_id: str) -> BenchmarkRun | None:

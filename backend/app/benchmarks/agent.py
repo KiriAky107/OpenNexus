@@ -93,6 +93,7 @@ async def create_run(request: AgentBenchmarkRequest):
     service._events[run_id] = []
     service._subscribers[run_id] = []
     service._cancel_flags[run_id] = asyncio.Event()
+    service._persist(run_id)
     service._tasks[run_id] = asyncio.create_task(execute(run_id, request, dataset, container.agent))
     return run
 
@@ -103,6 +104,7 @@ async def execute(run_id, request, dataset, runtime):
     def emit(kind, data):
         event = BenchmarkEvent(event=kind, run_id=run_id, sequence=len(service._events[run_id]), data=data, timestamp=service._now())
         service._events[run_id].append(event)
+        service._persist(run_id,event)
         for queue in service._subscribers.get(run_id, []): queue.put_nowait(event)
     status = BenchmarkStatus.completed
     error = None

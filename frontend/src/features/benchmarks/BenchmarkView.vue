@@ -8,6 +8,7 @@ import { hostInvoke, isDesktop } from '@/services/platform/desktop'
 import { Upload, Document, Download, DataAnalysis } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import CollaborationCard from '@/features/agent/CollaborationCard.vue'
+import BenchmarkComparison from './BenchmarkComparison.vue'
 const route = useRoute(), workspace = useWorkspaceStore()
 const kind = ref<'rag' | 'agent'>(route.query.kind === 'agent' ? 'agent' : 'rag'), dataset = ref(''), error = ref(''), busy = ref(false)
 const importing = ref(false), importText = ref(''), importNotice = ref('')
@@ -63,6 +64,12 @@ const datasets = ref<Awaited<ReturnType<typeof service.datasets>>>([]), runs = r
 const providers = ref<Awaited<ReturnType<typeof listProviders>>>([]), provider = ref(''), model = ref('')
 const report = ref<Awaited<ReturnType<typeof service.report>> | null>(null)
 const reportName = ref(''), loading = ref(true)
+const moreRuns = ref(true), historyBusy = ref(false)
+async function olderRuns() {
+  if(historyBusy.value)return
+  const epoch=scopeSequence;historyBusy.value=true
+  try{const items=await service.list(runs.value.length);if(epoch===scopeSequence){runs.value=[...runs.value,...items.filter(run=>!runs.value.some(previous=>previous.id===run.id))];moreRuns.value=items.length===50}}catch(cause){if(epoch===scopeSequence)error.value=String(cause)}finally{historyBusy.value=false}
+}
 const statusLabels: Record<string,string> = { queued:'排队中', running:'运行中', completed:'已完成', failed:'失败', cancelled:'已取消' }
 const activeCount = computed(() => runs.value.filter(run => ['queued','running'].includes(run.status)).length)
 const ratioKeys = new Set(['task_success_rate','tool_selection_accuracy','tool_argument_accuracy','invalid_tool_call_rate','hit_at_1','hit_at_5','recall_at_k','citation_hit_rate','failure_rate'])
@@ -99,11 +106,12 @@ async function loadDatasets(preferred?: string) {
     dataset.value = items.find(item => item.id === saved)?.id ?? items[0]?.id ?? ''
   } catch(e) { if (sequence === datasetSequence) error.value = String(e) }
 }
-async function refresh() { const epoch = scopeSequence; try { const items = await service.list(); if (epoch === scopeSequence) runs.value = items } catch(e) { if (epoch === scopeSequence) error.value = String(e) } finally { loading.value = false } if (!disposed) timer = setTimeout(refresh, 1500) }
+async function refresh() { const epoch = scopeSequence; try { const items = await service.list(); if (epoch === scopeSequence) { const older=runs.value.filter(run=>!items.some(fresh=>fresh.id===run.id));runs.value=[...items,...older];if(!older.length)moreRuns.value=items.length===50 } } catch(e) { if (epoch === scopeSequence) error.value = String(e) } finally { loading.value = false } if (!disposed) timer = setTimeout(refresh, 1500) }
 watch(kind, () => { void loadDatasets() })
 watch(() => route.query.kind, value => { if (value === 'rag' || value === 'agent') kind.value = value })
 watch(() => workspace.vaultId || workspace.vaultPath, () => {
   scopeSequence++; report.value = null; runs.value = []; importText.value = ''; importFileName.value = ''; importNotice.value = ''; error.value = ''
+  moreRuns.value=true
   void loadDatasets()
 })
 watch(dataset, value => { if (value) { try { localStorage.setItem(selectionKey(), value) } catch { /* optional local preference */ } } })
@@ -177,7 +185,9 @@ onBeforeUnmount(() => { disposed=true; clearTimeout(timer) })
           <td><span class="badge" :class="{ success:run.status === 'completed', error:run.status === 'failed', info:['queued','running'].includes(run.status), warning:run.status === 'cancelled' }">{{ statusLabels[run.status] ?? run.status }}</span><span v-if="run.progress !== null" class="progress-label subtle">{{ Math.round(run.progress*100) }}%</span><small v-if="run.errorCode" class="run-error">{{ run.errorCode }}</small></td>
           <td><div class="inline-actions"><button v-if="['queued','running'].includes(run.status)" class="button-secondary" @click="action(run,true)">取消</button><button v-else class="button-secondary" @click="action(run)">查看报告</button><RouterLink v-if="run.agentId" class="trace-link" :to="`/agent/runs/${run.agentId}`">执行轨迹</RouterLink></div></td>
         </tr></tbody></table></div>
+        <button v-if="moreRuns && runs.length >= 50" class="button-secondary" :disabled="historyBusy" @click="olderRuns">更早的运行</button>
       </section>
+      <BenchmarkComparison :runs="runs" @report="action" />
       <section v-if="report" class="panel benchmark-report" aria-labelledby="benchmark-report-title">
         <div class="section-heading"><div><h2 id="benchmark-report-title">评测报告</h2><p class="subtle">{{ reportName }}</p></div><button class="button-secondary" @click="download">下载完整 JSON</button></div>
         <div v-for="group in metricGroups" :key="group.name" class="metric-group"><h3>{{ group.name }}</h3><dl class="metric-grid"><div v-for="row in group.rows" :key="row.label" class="metric-card"><dt>{{ row.label }}</dt><dd>{{ row.value }}</dd></div></dl></div>

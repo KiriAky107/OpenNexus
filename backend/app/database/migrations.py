@@ -260,6 +260,16 @@ MIGRATIONS: list[str] = [
     CREATE TRIGGER chat_search_delete AFTER DELETE ON chat_search_entries BEGIN
       INSERT INTO chat_search_fts(chat_search_fts,rowid,text) VALUES('delete',old.id,old.text);
     END;""",
+    # v21: durable vault-scoped benchmark runs, reports and event evidence.
+    """CREATE TABLE benchmark_runs (
+        run_id TEXT PRIMARY KEY, scope TEXT NOT NULL, kind TEXT NOT NULL,
+        status TEXT NOT NULL, created_at TEXT NOT NULL, run_json TEXT NOT NULL, report_json TEXT
+    );
+    CREATE INDEX benchmark_runs_scope_time ON benchmark_runs(scope,created_at);
+    CREATE TABLE benchmark_events (
+        run_id TEXT NOT NULL REFERENCES benchmark_runs(run_id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL, event_json TEXT NOT NULL, PRIMARY KEY(run_id,sequence)
+    );""",
 ]
 
 
