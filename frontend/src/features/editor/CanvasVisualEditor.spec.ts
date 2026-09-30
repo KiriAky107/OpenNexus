@@ -47,7 +47,7 @@ it('never displays a previous vault preview after a delayed read and leaves inva
 
 it('renders imported group backgrounds with their repeat, ratio and cover styles',async()=>{
  const editor=useEditorStore();editor.content=JSON.stringify({nodes:['repeat','ratio','cover'].map((backgroundStyle,index)=>({id:backgroundStyle,type:'group',x:index*200,y:0,width:180,height:160,label:backgroundStyle,background:'course/image.png',backgroundStyle})),edges:[]})
- useWorkspaceStore().fileTree=[{id:'image',name:'image.png',path:'/course/image.png',type:'image',content_hash:'image-hash'}]
+ useWorkspaceStore().fileTree=[{id:'image',name:'image.png',path:'/course/image.png',type:'file',content_hash:'image-hash'}]
  vi.spyOn(service,'loadWorkspaceImage').mockResolvedValue(new Blob(['image'],{type:'image/png'}))
  const wrapper=mount(CanvasVisualEditor);await flushPromises()
  expect(wrapper.get('[data-node-id="repeat"] .canvas-group-background').attributes('style')).toContain('background-repeat: repeat')

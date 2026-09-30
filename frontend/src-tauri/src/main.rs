@@ -165,7 +165,7 @@ fn open_external_url(url: String) -> Result<(), String> {
         if result <= 32 {
             return Err("EXTERNAL_URL_OPEN_FAILED".into());
         }
-        return Ok(());
+        Ok(())
     }
     #[cfg(target_os = "macos")]
     let status = std::process::Command::new("open").arg(url).status();

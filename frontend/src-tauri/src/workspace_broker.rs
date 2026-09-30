@@ -310,7 +310,7 @@ pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
                 || crate::workspace::hash(&bytes)
                     != p.path
                         .split('/')
-                        .last()
+                        .next_back()
                         .unwrap_or("")
                         .split('.')
                         .next()
