@@ -10,6 +10,7 @@ export interface VaultReference {
   end?: number
   suffix?: string
   nodeId?: string
+  field?: 'file' | 'background'
 }
 
 function safeParts(parts: string[]): boolean {
@@ -49,8 +50,10 @@ function reference(source: string, raw: string, kind: VaultReference['kind'], pa
 export function scanVaultReferences(source: string, content: string, paths: Set<string>): VaultReference[] {
   if (workspaceDocumentType(source) === 'canvas') {
     const document = JSON.parse(content) as { nodes?: Array<Record<string, unknown>> }
-    return (document.nodes ?? []).filter(node => node.type === 'file' && typeof node.file === 'string')
-      .map(node => ({ ...reference(source, String(node.file), 'canvas-file', paths), nodeId: String(node.id) }))
+    return (document.nodes ?? []).flatMap(node => {
+      const field = node.type === 'file' ? 'file' : node.type === 'group' ? 'background' : null
+      return field && typeof node[field] === 'string' ? [{ ...reference(source, String(node[field]), 'canvas-file', paths), nodeId: String(node.id), field }] : []
+    })
   }
   if (workspaceDocumentType(source) !== 'markdown') return []
   const results: VaultReference[] = []
@@ -111,7 +114,7 @@ export function rewritePathReferences(source: string, content: string, oldPath: 
     const document = JSON.parse(content) as { nodes: Array<Record<string, unknown>> }
     for (const ref of changed) {
       const node = document.nodes.find(node => node.id === ref.nodeId)
-      if (node) node.file = replacement(ref)
+      if (node) node[ref.field ?? 'file'] = replacement(ref)
     }
     return { content: JSON.stringify(document, null, 2) + '\n', changed, pending }
   }
@@ -135,8 +138,10 @@ export function rewriteReferences(source: string, content: string, oldPath: stri
   if (workspaceDocumentType(source) === 'canvas') {
     if (!changed.length) return { content, changed, pending }
     const document = JSON.parse(content) as { nodes: Array<Record<string, unknown>> }
-    const ids = new Set(changed.map(item => item.nodeId))
-    for (const node of document.nodes) if (ids.has(String(node.id))) node.file = newPath.replace(/^\//, '')
+    for (const item of changed) {
+      const node = document.nodes.find(node => String(node.id) === item.nodeId)
+      if (node) node[item.field ?? 'file'] = newPath.replace(/^\//, '')
+    }
     return { content: JSON.stringify(document, null, 2) + '\n', changed, pending }
   }
   let updated = content
