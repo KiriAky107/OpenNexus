@@ -35,7 +35,7 @@
 > ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.9-alpha`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
 
 <div align="center">
-  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 编辑器工具栏、大纲、公式与 Mermaid 图表" width="95%" />
+  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 桌面编辑器：精简文件操作、大纲、公式与函数图" width="95%" />
 </div>
 <table align="center">
   <tr>
@@ -51,12 +51,15 @@
     <td width="50%"><img src=".github/assets/opennexus-themes.png" alt="主题与编辑器外观配置" /></td>
   </tr>
   <tr>
-    <td width="50%"><img src=".github/assets/opennexus-canvas.png" alt="示例数据：JSON Canvas 编辑、文件节点、分组与连线" /></td>
-    <td width="50%"><img src=".github/assets/opennexus-folder.png" alt="示例数据：文件夹导言与子笔记列表" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-canvas.png" alt="新版 Demo：精简画布工具栏、文件节点、分组、连线与可收起的节点栏" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-folder.png" alt="新版 Demo：文件夹卡片、Markdown 笔记标题与摘要" /></td>
   </tr>
   <tr>
     <td width="50%"><img src=".github/assets/opennexus-note-review.png" alt="示例数据：授权前核对 AI 笔记修改差异" /></td>
     <td width="50%"><img src=".github/assets/opennexus-benchmark-comparison.png" alt="示例数据：评测指标与逐用例结果对比" /></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src=".github/assets/opennexus-backlinks.png" alt="新版 Demo：从底部状态栏打开反向链接弹窗" width="80%" /></td>
   </tr>
 </table>
 
@@ -199,7 +202,11 @@ flowchart LR
 
 ### 5. 浏览知识库与比较评测结果
 
-选择文件夹可查看导言和直接子笔记。反向链接能定位引用来源的笔记或画布节点；移动文件前，可审核失效链接与建议的引用改写。`.canvas` 文件会打开可视化编辑器，也可切换到可编辑的 JSON 源码；思维导图整理只改变布局，并可撤销。
+选择文件夹可查看导言和直接子笔记。点击底部状态栏中 AI Core 状态旁的“反向链接”，会弹窗显示当前文件的反向链接和知识库失效链接。点击引用可定位来源笔记或画布节点；移动文件前，可审核建议的引用改写。
+
+`.canvas` 文件会打开可视化编辑器。点击“节点与属性”可显示或隐藏右侧节点栏，应用会记住选择。“更多画布操作（···）”提供复制、粘贴、删除、思维导图整理和“查看 JSON 源码”。思维导图整理只改变布局，并可撤销。
+
+桌面版由顶部标题栏显示当前文件，保存按钮和 Markdown 编辑模式位于应用菜单右侧。扩展命令从“编辑 → 扩展命令”进入。
 
 在已保存的会话中搜索，可以定位消息正文或可见操作。在 **Benchmark** 导入当前知识库的专属数据集，完成多次运行，再从“运行对比”选择基线与候选。直接比较要求两次运行均已完成且数据集内容哈希相同；无法计算的指标按缺失显示。应用重启后，运行记录与完整报告仍可读取。
 

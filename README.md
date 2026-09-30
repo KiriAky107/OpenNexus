@@ -36,7 +36,7 @@
 > ⚠️ **Alpha Notice**: OpenNexus is currently in active alpha (`v0.5.9-alpha`). Storage schemas, IPC contracts, and extension APIs are evolving. Always back up critical Markdown vaults before updating.
 
 <div align="center">
-  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus editor toolbar, outline, formulas, and Mermaid diagram" width="95%" />
+  <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus desktop editor with compact file controls, outline, formulas, and a function plot" width="95%" />
 </div>
 
 <table align="center">
@@ -53,12 +53,15 @@
     <td width="50%"><img src=".github/assets/opennexus-themes.png" alt="Themes and editor appearance" /></td>
   </tr>
   <tr>
-    <td width="50%"><img src=".github/assets/opennexus-canvas.png" alt="JSON Canvas editing, file nodes, groups, and connections using example data" /></td>
-    <td width="50%"><img src=".github/assets/opennexus-folder.png" alt="Folder introduction and child-note list using example data" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-canvas.png" alt="Current Demo: JSON Canvas with a compact toolbar, file nodes, groups, connections, and a collapsible inspector" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-folder.png" alt="Current Demo: folder cards with Markdown note titles and summaries" /></td>
   </tr>
   <tr>
     <td width="50%"><img src=".github/assets/opennexus-note-review.png" alt="Reviewing an AI note change before approval using example data" /></td>
     <td width="50%"><img src=".github/assets/opennexus-benchmark-comparison.png" alt="Comparing benchmark metrics and individual cases using example data" /></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src=".github/assets/opennexus-backlinks.png" alt="Current Demo: backlinks opened from the bottom status bar in a dialog" width="80%" /></td>
   </tr>
 </table>
 
@@ -201,7 +204,11 @@ flowchart LR
 
 ### 5. Explore a Vault and Compare Results
 
-Select a folder for its introduction and direct child notes. Use backlinks to find referring notes and Canvas nodes; review unresolved links and proposed reference edits before moving files. A `.canvas` file opens in the visual editor, with an editable JSON view for inspecting its source. The mind-map command changes the layout and can be undone.
+Select a folder for its introduction and direct child notes. Click **Backlinks** beside the AI Core status in the bottom bar to open a dialog with incoming references and broken vault links. Reference entries locate their source note or Canvas node; review proposed reference edits before moving files.
+
+A `.canvas` file opens in the visual editor. Toggle **Nodes and properties** to show or hide the right inspector; this choice is remembered. **More canvas actions (···)** contains copy, paste, deletion, mind-map layout, and **View JSON source**. The mind-map command changes the layout and can be undone.
+
+On desktop, the title bar identifies the current file, while Save and Markdown editing modes sit beside the application menus. Extension commands are available under **Edit → Extension commands**.
 
 Search a saved conversation to locate a message or visible operation. In **Benchmark**, import a dataset for the current vault, run it more than once, and select a baseline and candidate under **Run comparison**. Comparable runs must be completed and share their dataset content hash; unavailable metrics stay missing. Run records and reports survive app restarts.
 
