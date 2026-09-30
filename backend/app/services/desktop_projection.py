@@ -12,7 +12,7 @@ def entries():
     result, offset = [], 0
     while True:
         page = desktop_notes.call('list', offset=offset, limit=1000)
-        result.extend(page['items'])
+        result.extend(entry for entry in page['items'] if desktop_notes.is_note_entry(entry))
         offset += len(page['items'])
         if offset >= page['total'] or not page['items']: return result
 

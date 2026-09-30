@@ -168,6 +168,9 @@ async def create_rag_run(request: RAGRunRequest) -> BenchmarkRun:
     """创建一次 RAG Benchmark，立即返回 queued 的 BenchmarkRun，由后台 Task 执行。"""
     datasets.check_scope(request.expected_vault_id)
     dataset = datasets.load_dataset(request.dataset_id, BenchmarkKind.rag)
+    if get_settings().environment == 'desktop':
+        from app.services import desktop_projection
+        await desktop_projection.refresh()
     datasets.resolve_note_paths(dataset)
     await _validate_index_compatibility(request)
 

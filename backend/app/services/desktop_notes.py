@@ -122,9 +122,15 @@ def list_notes(*, limit: int, offset: int, folder: str | None, tag: str | None):
         if position >= page['total'] or not page['items']: break
     notes = []
     for entry in entries:
+        if not is_note_entry(entry): continue
         parent = str(PurePosixPath(entry['path']).parent)
         if folder is not None and ('' if parent == '.' else parent) != normalize_folder(folder): continue
         note = note_from_document(call('read', file_id=entry['file_id']))
         if tag is not None and tag not in note.tags: continue
         notes.append(NoteSummary(**note.model_dump(exclude={'markdown', 'blocks'})))
     return notes[offset:offset + limit], len(notes)
+
+
+def is_note_entry(entry: dict) -> bool:
+    """The Host inventory also contains Canvas and binary assets."""
+    return not entry.get('is_folder') and not entry.get('deleted') and PurePosixPath(entry['path']).suffix.lower() == '.md'

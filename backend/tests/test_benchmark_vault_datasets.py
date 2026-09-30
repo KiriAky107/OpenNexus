@@ -126,3 +126,32 @@ def test_run_records_do_not_cross_vaults(monkeypatch, tmp_path):
     assert service.get_run(created.run_id) is None
     assert service.get_report(created.run_id) is None
     assert service.cancel_run(created.run_id) is None
+
+
+def test_desktop_first_run_projects_host_notes_before_resolving_dataset_paths(monkeypatch):
+    from hashlib import sha256
+    from app import host_bridge
+    from app.services import desktop_notes
+    monkeypatch.setenv('APP_ENVIRONMENT', 'desktop'); get_settings.cache_clear()
+    token = host_bridge.vault_id.set(str(uuid4()))
+    document = {'file_id': 'stable-host-id', 'path': '课程/双指针.md',
+                'content': '# 双指针\n排序后移动左右指针。', 'created_at': 0, 'updated_at': 1}
+    document['hash'] = sha256(document['content'].encode()).hexdigest()
+    def call(method, **params):
+        if method == 'list': return {'items': [document, {'file_id': 'image', 'path': '课程/image.png'}], 'total': 2}
+        assert method == 'read' and params['file_id'] == document['file_id']
+        return document
+    monkeypatch.setattr(desktop_notes, 'call', call)
+    try:
+        datasets.import_dataset(payload())
+        async def run():
+            created = await service.create_rag_run(RAGRunRequest(dataset_id='course', modes=[SearchMode.fts]))
+            await service.wait_for_run(created.run_id)
+            return service.get_report(created.run_id)
+        report = asyncio.run(run())
+        assert report.status.value == 'completed'
+        assert report.cases[0].error is None
+        assert set(report.cases[0].retrieved_note_ids) == {'stable-host-id'}
+        assert report.cases[0].hit_at_1
+    finally:
+        host_bridge.vault_id.reset(token)

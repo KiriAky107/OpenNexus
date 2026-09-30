@@ -43,3 +43,23 @@ def test_metadata_keeps_unrelated_frontmatter_and_rejects_non_mapping():
     assert 'custom: keep' in result and 'tags: []' in result and result.endswith('body')
     with pytest.raises(ApiError):
         desktop_notes.metadata('---\ntitle: [broken\n---\nbody', 'new', None)
+
+
+def test_note_listing_skips_canvas_images_and_folders_across_host_pages(monkeypatch):
+    document = dict(file_id='note', path='lesson/evidence.MD', hash='hash',
+                    content='# Evidence\nActual note', created_at=0, updated_at=1)
+    pages = [dict(path='map.canvas', file_id='canvas'), dict(path='image.png', file_id='image'),
+             dict(path='lesson', file_id='folder', is_folder=True), document]
+    reads = []
+    def call(method, **params):
+        if method == 'list':
+            return {'items': pages[params['offset']:params['offset'] + 2], 'total': len(pages)}
+        reads.append(params['file_id'])
+        assert params['file_id'] == 'note'
+        return document
+    monkeypatch.setattr(desktop_notes, 'call', call)
+    notes, total = desktop_notes.list_notes(limit=100, offset=0, folder=None, tag=None)
+    assert total == 1 and notes[0].note_id == 'note'
+    assert reads == ['note']
+    from app.services import desktop_projection
+    assert desktop_projection.entries() == [document]
