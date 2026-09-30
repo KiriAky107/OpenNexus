@@ -30,16 +30,16 @@ export async function updateNote(
   return apiClient.patch(`/api/notes/${noteId}`, data)
 }
 
-export async function deleteNote(noteId: string): Promise<OperationResponse> {
-  return apiClient.delete(`/api/notes/${noteId}`)
+export async function deleteNote(noteId: string, expectedContentHash?: string): Promise<OperationResponse> {
+  return apiClient.delete(`/api/notes/${noteId}`, { params: { expected_content_hash: expectedContentHash } })
 }
 
-export async function moveNote(noteId: string, folder: string): Promise<ApiNote> {
-  return apiClient.post(`/api/notes/${noteId}/move`, { folder })
+export async function moveNote(noteId: string, folder: string, expectedContentHash?: string): Promise<ApiNote> {
+  return apiClient.post(`/api/notes/${noteId}/move`, { folder, ...(expectedContentHash ? { expected_content_hash: expectedContentHash } : {}) })
 }
 
-export async function renameNote(noteId: string, fileName: string): Promise<ApiNote> {
-  return apiClient.post(`/api/notes/${noteId}/rename`, { file_name: fileName })
+export async function renameNote(noteId: string, fileName: string, expectedContentHash?: string): Promise<ApiNote> {
+  return apiClient.post(`/api/notes/${noteId}/rename`, { file_name: fileName, ...(expectedContentHash ? { expected_content_hash: expectedContentHash } : {}) })
 }
 
 export interface NoteDiff {

@@ -3,7 +3,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core'
 import type { FileNode } from '@/contracts'
 
 export const isDesktop = () => isTauri()
-export interface HostEntry { file_id: string; path: string; hash: string; revision: number; deleted: boolean; is_folder?: boolean }
+export interface HostEntry { file_id: string; path: string; hash: string; revision: number; deleted: boolean; is_folder?: boolean; updated_at?: string }
 export interface HostDocument extends HostEntry { content: string }
 export interface HostVault { vault_id: string; path: string; name: string }
 export interface HostCapabilities { protocol: number; workspace: boolean; core: boolean; sync: boolean; credentials: boolean; extensions: boolean; release: string }
@@ -36,7 +36,7 @@ export function nativeTree(entries: HostEntry[]): FileNode[] {
       }
       children = node.children!
     }
-    if (!entry.is_folder) children.push({ id: entry.file_id, note_id: /\.md$/i.test(entry.path) ? entry.file_id : undefined, path: `/${entry.path}`, name: parts.at(-1)!, type: 'file' })
+    if (!entry.is_folder) children.push({ id: entry.file_id, content_hash: entry.hash, updated_at: entry.updated_at ? new Date(Number(entry.updated_at)).toISOString() : undefined, note_id: /\.md$/i.test(entry.path) ? entry.file_id : undefined, path: `/${entry.path}`, name: parts.at(-1)!, type: 'file' })
   }
   return roots
 }

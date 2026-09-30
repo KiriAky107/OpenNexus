@@ -59,6 +59,8 @@ pub struct Entry {
     pub deleted: bool,
     #[serde(default)]
     pub is_folder: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -148,10 +150,10 @@ impl Workspace {
         let db = Connection::open(db_path)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 13 {
+        if version > 14 {
             return Err(HostError::new("SCHEMA_INCOMPATIBLE"));
         }
-        if (1..13).contains(&version) {
+        if (1..14).contains(&version) {
             // 模式所有权更改之前独立、完整的 SQLite 备份。
             let backup = managed.join(format!("host-schema{version}-{}.sqlite3", Uuid::new_v4()));
             db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
@@ -161,6 +163,7 @@ impl Workspace {
             CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY,path TEXT UNIQUE NOT NULL,hash TEXT NOT NULL,revision INTEGER NOT NULL,deleted INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS journal (operation_id TEXT PRIMARY KEY,file_id TEXT NOT NULL,path TEXT NOT NULL,expected TEXT NOT NULL,content BLOB NOT NULL,origin TEXT NOT NULL,state TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS file_ops (id TEXT PRIMARY KEY,kind TEXT NOT NULL,path TEXT NOT NULL,destination TEXT NOT NULL,hash TEXT NOT NULL,content BLOB NOT NULL,state TEXT NOT NULL DEFAULT 'pending');
+            CREATE TABLE IF NOT EXISTS directory_ops(id TEXT PRIMARY KEY,path TEXT NOT NULL,destination TEXT NOT NULL,kind TEXT NOT NULL,manifest TEXT NOT NULL,operations TEXT NOT NULL,state TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS outbox (operation_id TEXT PRIMARY KEY,file_id TEXT NOT NULL,revision INTEGER NOT NULL,path TEXT NOT NULL,hash TEXT NOT NULL,operation TEXT NOT NULL,content BLOB NOT NULL,state TEXT NOT NULL DEFAULT 'pending');
             CREATE TABLE IF NOT EXISTS operations (operation_id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,state TEXT NOT NULL,result TEXT);
             CREATE TABLE IF NOT EXISTS sync_bindings (id TEXT PRIMARY KEY,endpoint TEXT NOT NULL,remote_vault TEXT NOT NULL,account TEXT NOT NULL,state TEXT NOT NULL,cursor INTEGER NOT NULL DEFAULT 0);
@@ -236,7 +239,7 @@ impl Workspace {
         if version < 7 {
             db.execute_batch("INSERT OR IGNORE INTO sync_observed SELECT f.id,COALESCE((SELECT o.path FROM outbox o WHERE o.file_id=f.id AND o.state IN ('pending','queued') ORDER BY rowid DESC LIMIT 1),(SELECT h.path FROM sync_heads h JOIN sync_bindings b ON h.binding=b.id WHERE h.file_id=f.id AND b.state='active'),f.path),COALESCE((SELECT o.hash FROM outbox o WHERE o.file_id=f.id AND o.state IN ('pending','queued') ORDER BY rowid DESC LIMIT 1),(SELECT h.hash FROM sync_heads h JOIN sync_bindings b ON h.binding=b.id WHERE h.file_id=f.id AND b.state='active'),f.hash),f.deleted FROM files f;")?;
         }
-        db.execute_batch("UPDATE sync_attempts SET outcome=CASE WHEN EXISTS(SELECT 1 FROM sync_jobs j WHERE j.binding=sync_attempts.binding AND j.operation_id=sync_attempts.operation_id AND j.state='acked') THEN 'succeeded' ELSE 'interrupted' END WHERE outcome='running'; PRAGMA user_version=13; COMMIT;")?;
+        db.execute_batch("UPDATE sync_attempts SET outcome=CASE WHEN EXISTS(SELECT 1 FROM sync_jobs j WHERE j.binding=sync_attempts.binding AND j.operation_id=sync_attempts.operation_id AND j.state='acked') THEN 'succeeded' ELSE 'interrupted' END WHERE outcome='running'; PRAGMA user_version=14; COMMIT;")?;
         let vault_id: String = db
             .query_row("SELECT id FROM identity", [], |r| r.get(0))
             .optional()?
@@ -302,6 +305,7 @@ impl Workspace {
                         revision: r.get(3)?,
                         deleted: r.get(4)?,
                         is_folder: false,
+                        updated_at: None,
                     })
                 },
             )
@@ -350,6 +354,7 @@ impl Workspace {
                     revision: 0,
                     deleted: false,
                     is_folder: true,
+                    updated_at: None,
                 });
                 continue;
             }
@@ -374,7 +379,14 @@ impl Workspace {
 
     /// Markdown, Canvas and image entries share stable Host identities and sync revisions.
     pub fn tree(&mut self) -> Result<Vec<Entry>> {
-        self.scan()
+        let mut entries = self.scan()?;
+        for entry in &mut entries {
+            let modified = fs::metadata(self.resolve(&entry.path)?)?.modified()?;
+            let millis = modified.duration_since(std::time::UNIX_EPOCH)
+                .map_err(|_| HostError::new("FILESYSTEM_ERROR"))?.as_millis();
+            entry.updated_at = Some(millis.to_string());
+        }
+        Ok(entries)
     }
 
     pub fn read(&mut self, path: &str) -> Result<Document> {
@@ -749,6 +761,7 @@ impl Workspace {
                     revision: row.get(3)?,
                     deleted: row.get(4)?,
                     is_folder: false,
+                    updated_at: None,
                 })
             },
         )?;
@@ -767,6 +780,7 @@ impl Workspace {
     }
 
     pub fn recover(&mut self) -> Result<()> {
+        self.recover_directory_ops()?;
         let operations = {
             let mut statement = self
                 .db
@@ -822,6 +836,99 @@ impl Workspace {
 
     pub fn mkdir(&self, path: &str) -> Result<()> {
         fs::create_dir_all(self.resolve(path)?)?;
+        Ok(())
+    }
+
+    fn directory_manifest(&self, root: &Path) -> Result<std::collections::BTreeMap<String, String>> {
+        fn walk(root: &Path, directory: &Path, values: &mut std::collections::BTreeMap<String,String>) -> Result<()> {
+            for item in fs::read_dir(directory)? {
+                let path = item?.path();
+                if linked(&path)? || path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('.')) {
+                    return Err(HostError::new("UNSAFE_FOLDER_CONTENT"));
+                }
+                let relative = path.strip_prefix(root).map_err(|_| HostError::new("UNSAFE_PATH"))?.to_string_lossy().replace('\\', "/");
+                if path.is_dir() { values.insert(relative, String::new()); walk(root, &path, values)?; }
+                else if path.is_file() && path.extension().is_some_and(|ext| ["md","canvas","png","jpg","jpeg","gif","webp"].iter().any(|allowed| ext.eq_ignore_ascii_case(allowed))) {
+                    values.insert(relative, crate::payloads::hash_file(&path)?);
+                } else { return Err(HostError::new("UNSUPPORTED_FOLDER_CONTENT")); }
+            }
+            Ok(())
+        }
+        let mut manifest = std::collections::BTreeMap::new();
+        walk(root, root, &mut manifest)?;
+        Ok(manifest)
+    }
+
+    fn directory_ops_schema(&self) -> Result<()> {
+        self.db.execute_batch("CREATE TABLE IF NOT EXISTS directory_ops(id TEXT PRIMARY KEY,path TEXT NOT NULL,destination TEXT NOT NULL,kind TEXT NOT NULL,manifest TEXT NOT NULL,operations TEXT NOT NULL,state TEXT NOT NULL)")?;
+        Ok(())
+    }
+
+    /// Move a reviewed subtree atomically on disk, then finish each journaled file receipt.
+    pub fn mutate_directory(&mut self, path: &str, destination: &str, kind: &str, expected: &std::collections::BTreeMap<String,String>) -> Result<()> {
+        if path.is_empty() || !matches!(kind,"rename"|"delete") || (kind == "rename" && (destination == path || destination.starts_with(&format!("{path}/")))) { return Err(HostError::new("INVALID_PATH")); }
+        let source = self.resolve(path)?;
+        if !source.is_dir() { return Err(HostError::new("FOLDER_NOT_FOUND")); }
+        if &self.directory_manifest(&source)? != expected { return Err(HostError::new("REVISION_CONFLICT")); }
+        if kind == "rename" && self.resolve(destination)?.exists() { return Err(HostError::new("PATH_CONFLICT")); }
+        self.scan()?;
+        self.directory_ops_schema()?;
+        let id = Uuid::new_v4().to_string();
+        let operations: Vec<(String,String,String)> = expected.iter().filter(|(_,digest)| !digest.is_empty()).map(|(relative,digest)| (Uuid::new_v4().to_string(),relative.clone(),digest.clone())).collect();
+        self.db.execute("INSERT INTO directory_ops VALUES (?1,?2,?3,?4,?5,?6,'preparing')", params![id,path,destination,kind,serde_json::to_string(expected).map_err(|_|HostError::new("INVALID_OPERATION"))?,serde_json::to_string(&operations).map_err(|_|HostError::new("INVALID_OPERATION"))?])?;
+        for (operation,relative,digest) in &operations {
+            self.prepare_file_op_with_id(kind,&format!("{path}/{relative}"),&format!("{destination}/{relative}"),digest,operation,"local")?;
+        }
+        if &self.directory_manifest(&source)? != expected { return Err(HostError::new("REVISION_CONFLICT")); }
+        self.db.execute("UPDATE directory_ops SET state='ready' WHERE id=?1",[&id])?;
+        self.apply_directory_op(&id)
+    }
+
+    fn apply_directory_op(&mut self, id: &str) -> Result<()> {
+        let (path,destination,kind,manifest,operations,state): (String,String,String,String,String,String) = self.db.query_row("SELECT path,destination,kind,manifest,operations,state FROM directory_ops WHERE id=?1",[id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)))?;
+        let expected: std::collections::BTreeMap<String,String> = serde_json::from_str(&manifest).map_err(|_|HostError::new("DATABASE_ERROR"))?;
+        let operations: Vec<(String,String,String)> = serde_json::from_str(&operations).map_err(|_|HostError::new("DATABASE_ERROR"))?;
+        let abort = |workspace: &mut Self| -> Result<()> {
+            let tx = workspace.db.transaction()?;
+            for (operation,_,_) in &operations {
+                tx.execute("UPDATE file_ops SET state='conflict' WHERE id=?1",[operation])?;
+                tx.execute("UPDATE operations SET state='conflict' WHERE operation_id=?1 AND state!='committed'",[operation])?;
+            }
+            tx.execute("UPDATE directory_ops SET state='conflict' WHERE id=?1",[id])?;
+            tx.commit()?;
+            Err(HostError::new("RECOVERY_CONFLICT"))
+        };
+        if state == "preparing" { return abort(self); }
+        let source = self.resolve(&path)?;
+        let target = if kind == "rename" { self.resolve(&destination)? } else {
+            let trash = self.root.join(".ainote").join("trash");
+            if trash.exists() && linked(&trash)? { return Err(HostError::new("UNSAFE_PATH")); }
+            fs::create_dir_all(&trash)?; trash.join(format!("folder-{id}"))
+        };
+        if source.exists() {
+            if target.exists() || !source.is_dir() || self.directory_manifest(&source)? != expected { return abort(self); }
+            fs::create_dir_all(target.parent().ok_or_else(||HostError::new("UNSAFE_PATH"))?)?;
+            fs::rename(&source,&target)?;
+        }
+        if !target.is_dir() || linked(&target)? || self.directory_manifest(&target)? != expected { return abort(self); }
+        for (operation,_,_) in &operations {
+            let state: String = self.db.query_row("SELECT state FROM operations WHERE operation_id=?1",[operation],|row|row.get(0))?;
+            if state == "committed" { continue; }
+            if state == "conflict" { return abort(self); }
+            if let Err(error) = self.apply_file_op(operation) { if error.code == "RECOVERY_CONFLICT" { return abort(self); } return Err(error); }
+        }
+        self.db.execute("DELETE FROM directory_ops WHERE id=?1",[id])?;
+        Ok(())
+    }
+
+    fn recover_directory_ops(&mut self) -> Result<()> {
+        self.directory_ops_schema()?;
+        let ids = {
+            let mut statement = self.db.prepare("SELECT id FROM directory_ops WHERE state!='conflict'")?;
+            let values = statement.query_map([],|row|row.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;
+            values
+        };
+        for id in ids { match self.apply_directory_op(&id) { Err(error) if error.code == "RECOVERY_CONFLICT" => {}, result => result? } }
         Ok(())
     }
 
@@ -1087,6 +1194,63 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reviewed_folder_move_and_delete_keep_identities_and_sync_receipts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        ws.mkdir("course/empty").unwrap();
+        let note = ws.write("course/note.md","",b"original","local").unwrap();
+        ws.write("course/map.canvas","",br#"{"nodes":[],"edges":[],"extra":true}"#,"local").unwrap();
+        let expected = ws.directory_manifest(&dir.path().join("course")).unwrap();
+        ws.mutate_directory("course","renamed","rename",&expected).unwrap();
+        assert!(!dir.path().join("course").exists());
+        assert!(dir.path().join("renamed/empty").is_dir());
+        assert_eq!(ws.read("renamed/note.md").unwrap().entry.file_id,note.file_id);
+        assert_eq!(ws.path_for_id(&note.file_id).unwrap(),"renamed/note.md");
+        let expected = ws.directory_manifest(&dir.path().join("renamed")).unwrap();
+        ws.mutate_directory("renamed","","delete",&expected).unwrap();
+        assert!(!dir.path().join("renamed").exists());
+        assert!(ws.entry("renamed/note.md").unwrap().unwrap().deleted);
+        assert!(ws.db.query_row("SELECT COUNT(*) FROM outbox WHERE file_id=?1 AND operation='delete'",[&note.file_id],|r|r.get::<_,i64>(0)).unwrap() > 0);
+    }
+
+    #[test]
+    fn folder_revision_conflict_preserves_external_edits_and_new_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        ws.write("course/note.md","",b"before","local").unwrap();
+        let expected = ws.directory_manifest(&dir.path().join("course")).unwrap();
+        fs::write(dir.path().join("course/note.md"),b"human").unwrap();
+        assert_eq!(ws.mutate_directory("course","renamed","rename",&expected).unwrap_err().code,"REVISION_CONFLICT");
+        assert_eq!(fs::read(dir.path().join("course/note.md")).unwrap(),b"human");
+        fs::write(dir.path().join("course/new.md"),b"new").unwrap();
+        assert_eq!(ws.mutate_directory("course","","delete",&expected).unwrap_err().code,"REVISION_CONFLICT");
+        assert!(dir.path().join("course/new.md").exists());
+    }
+
+    #[test]
+    fn folder_recovery_finishes_a_disk_move_and_never_runs_half_prepared_operations() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        ws.write("course/note.md","",b"content","local").unwrap();
+        let expected = ws.directory_manifest(&dir.path().join("course")).unwrap();
+        let id = Uuid::new_v4().to_string();
+        let op = Uuid::new_v4().to_string();
+        ws.prepare_file_op_with_id("rename","course/note.md","renamed/note.md",&expected["note.md"],&op,"local").unwrap();
+        let operations = vec![(op.clone(),"note.md".to_string(),expected["note.md"].clone())];
+        ws.db.execute("INSERT INTO directory_ops VALUES (?1,'course','renamed','rename',?2,?3,'ready')",params![id,serde_json::to_string(&expected).unwrap(),serde_json::to_string(&operations).unwrap()]).unwrap();
+        fs::rename(dir.path().join("course"),dir.path().join("renamed")).unwrap();
+        ws.recover().unwrap();
+        assert_eq!(ws.read("renamed/note.md").unwrap().content,"content");
+        let op2 = Uuid::new_v4().to_string();
+        ws.prepare_file_op_with_id("rename","renamed/note.md","unexpected/note.md",&expected["note.md"],&op2,"local").unwrap();
+        let operations = vec![(op2,"note.md".to_string(),expected["note.md"].clone())];
+        ws.db.execute("INSERT INTO directory_ops VALUES (?1,'renamed','unexpected','rename',?2,?3,'preparing')",params![Uuid::new_v4().to_string(),serde_json::to_string(&expected).unwrap(),serde_json::to_string(&operations).unwrap()]).unwrap();
+        ws.recover().unwrap();
+        assert!(dir.path().join("renamed/note.md").exists());
+        assert!(!dir.path().join("unexpected").exists());
+    }
 
     #[test]
     fn canvas_is_tracked_and_invalid_updates_preserve_revision() {
@@ -1481,7 +1645,7 @@ mod tests {
             ws.db
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            13
+            14
         );
         for column in ["retire_id", "restore_id"] {
             assert!(ws
@@ -1539,7 +1703,7 @@ mod tests {
             ws.db
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            13
+            14
         );
         let backup = fs::read_dir(dir.path().join(".ainote"))
             .unwrap()

@@ -281,14 +281,14 @@ async def create_workspace_folder(request: FolderCreateRequest) -> WorkspaceEntr
     "/workspace/folders/rename", response_model=WorkspaceEntry, tags=["Workspace"]
 )
 async def rename_workspace_folder(request: FolderRenameRequest) -> WorkspaceEntry:
-    return await workspace_service.rename_folder(request.path, request.new_name)
+    return await workspace_service.rename_folder(request.path, request.new_name, **({'expected_entries': request.expected_entries} if request.expected_entries is not None else {}))
 
 
 @router.post(
     "/workspace/folders/delete", response_model=OperationResponse, tags=["Workspace"]
 )
 async def delete_workspace_folder(request: FolderDeleteRequest) -> OperationResponse:
-    return await workspace_service.delete_folder(request.path)
+    return await workspace_service.delete_folder(request.path, **({'expected_entries': request.expected_entries} if request.expected_entries is not None else {}))
 
 
 @router.post("/workspace/assets", response_model=WorkspaceAsset, tags=["Workspace"])
@@ -378,8 +378,8 @@ async def update_note(note_id: str, request: NoteUpdateRequest) -> Note:
 
 
 @router.delete("/notes/{note_id}", response_model=OperationResponse, tags=["Notes"])
-async def delete_note(note_id: str) -> OperationResponse:
-    if not await note_service.delete_note(note_id):
+async def delete_note(note_id: str, expected_content_hash: str | None = Query(default=None, pattern=r'^[0-9a-f]{64}$')) -> OperationResponse:
+    if not await note_service.delete_note(note_id, **({'expected_content_hash': expected_content_hash} if isinstance(expected_content_hash, str) else {})):
         raise ApiError(
             404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id}
         )
@@ -388,12 +388,12 @@ async def delete_note(note_id: str) -> OperationResponse:
 
 @router.post("/notes/{note_id}/move", response_model=Note, tags=["Notes"])
 async def move_note(note_id: str, request: NoteMoveRequest) -> Note:
-    return await note_service.move_note(note_id, folder=request.folder)
+    return await note_service.move_note(note_id, folder=request.folder, **({'expected_content_hash': request.expected_content_hash} if request.expected_content_hash else {}))
 
 
 @router.post("/notes/{note_id}/rename", response_model=Note, tags=["Notes"])
 async def rename_note(note_id: str, request: NoteRenameRequest) -> Note:
-    return await note_service.rename_note(note_id, file_name=request.file_name)
+    return await note_service.rename_note(note_id, file_name=request.file_name, **({'expected_content_hash': request.expected_content_hash} if request.expected_content_hash else {}))
 
 
 @router.get('/notes/{note_id}/changes', tags=['Notes'])

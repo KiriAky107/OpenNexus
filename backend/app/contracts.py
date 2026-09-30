@@ -51,6 +51,8 @@ class WorkspaceInfo(Contract):
 
 class WorkspaceEntry(Contract):
     entry_id: str
+    content_hash: str | None = None
+    updated_at: str | None = None
     name: str
     path: str
     type: Literal["file", "folder"]
@@ -75,10 +77,12 @@ class FolderCreateRequest(Contract):
 class FolderRenameRequest(Contract):
     path: str
     new_name: str = Field(min_length=1)
+    expected_entries: dict[str, str] | None = None
 
 
 class FolderDeleteRequest(Contract):
     path: str
+    expected_entries: dict[str, str] | None = None
 
 
 class WorkspaceAsset(Contract):
@@ -137,10 +141,12 @@ class NoteUpdateRequest(Contract):
 
 class NoteMoveRequest(Contract):
     folder: str
+    expected_content_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class NoteRenameRequest(Contract):
     file_name: str = Field(min_length=1)
+    expected_content_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class SearchMode(str, Enum):

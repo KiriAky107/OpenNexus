@@ -19,6 +19,10 @@ export const useEditorStore = defineStore('editor', () => {
   const highlightBlockId = ref<string | null>(null)
   const cursorPosition = ref({ line: 0, column: 0 })
   const headingRequest = ref<{ index: number; offset: number; path: string | null } | null>(null)
+  const canvasNodeRequest = ref<{ path: string | null; nodeId: string } | null>(null)
+  const referenceRequest = ref<{ path: string | null; offset: number; length: number; raw: string; occurrence: number } | null>(null)
+  function locateReference(offset: number, length: number, raw: string, occurrence = 0) { referenceRequest.value = { path: currentFilePath.value, offset, length, raw, occurrence } }
+  function selectCanvasNode(nodeId: string) { canvasNodeRequest.value = { path: currentFilePath.value, nodeId } }
   function jumpToHeading(index: number, offset: number) {
     headingRequest.value = { index, offset, path: currentFilePath.value }
   }
@@ -114,6 +118,7 @@ export const useEditorStore = defineStore('editor', () => {
       ])
       if (version !== loadVersion) return
       currentFilePath.value = filePath
+      referenceRequest.value = null; canvasNodeRequest.value = null
       currentNoteId.value = loadedNoteId
       content.value = loadedContent
       diskContent = loadedContent
@@ -180,6 +185,7 @@ export const useEditorStore = defineStore('editor', () => {
     loadVersion++
     if (saveTimer) clearTimeout(saveTimer)
     currentFilePath.value = null
+    referenceRequest.value = null; canvasNodeRequest.value = null
     currentNoteId.value = null
     content.value = ''
     diskContent = undefined
@@ -195,6 +201,10 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   return {
+    referenceRequest,
+    locateReference,
+    canvasNodeRequest,
+    selectCanvasNode,
     headingRequest,
     jumpToHeading,
     mode,

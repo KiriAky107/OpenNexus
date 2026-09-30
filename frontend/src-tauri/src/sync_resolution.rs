@@ -378,6 +378,7 @@ impl Workspace {
                     revision: r.get(3)?,
                     deleted: true,
                     is_folder: false,
+                    updated_at: None,
                 })
             },
         )?;

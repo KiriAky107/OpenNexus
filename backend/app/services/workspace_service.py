@@ -97,6 +97,8 @@ def _tree(directory: Path, locations: dict[str, repository.NoteLocation]) -> lis
                     name=child.name,
                     path=public_path,
                     type="file",
+                    content_hash=hashlib.sha256(resolved.read_bytes()).hexdigest(),
+                    updated_at=datetime.fromtimestamp(resolved.stat().st_mtime, timezone.utc).isoformat(),
                 )
             )
     return entries
@@ -197,7 +199,7 @@ async def create_folder(parent: str, name: str) -> WorkspaceEntry:
 
 
 @serialized_vault_mutation
-async def rename_folder(path: str, new_name: str) -> WorkspaceEntry:
+async def rename_folder(path: str, new_name: str, expected_entries: dict[str,str] | None = None) -> WorkspaceEntry:
     old_folder = normalize_folder(path)
     if not old_folder:
         raise ApiError(400, "INVALID_PATH", "the Vault root cannot be renamed")
@@ -219,6 +221,7 @@ async def rename_folder(path: str, new_name: str) -> WorkspaceEntry:
         for item in repository.list_note_locations()
         if item.folder == old_folder or item.folder.startswith(f"{old_folder}/")
     ]
+    _check_folder_revision(source, expected_entries)
     source.replace(target)
     conn = connect()
     now = datetime.now(timezone.utc)
@@ -253,7 +256,7 @@ async def rename_folder(path: str, new_name: str) -> WorkspaceEntry:
 
 
 @serialized_vault_mutation
-async def delete_folder(path: str) -> OperationResponse:
+async def delete_folder(path: str, expected_entries: dict[str,str] | None = None) -> OperationResponse:
     folder = normalize_folder(path)
     if not folder:
         raise ApiError(400, "INVALID_PATH", "the Vault root cannot be deleted")
@@ -267,6 +270,7 @@ async def delete_folder(path: str) -> OperationResponse:
         if item.folder == folder or item.folder.startswith(f"{folder}/")
     ]
     tombstone = source.with_name(f".{source.name}.{uuid4().hex}.deleting")
+    _check_folder_revision(source, expected_entries)
     source.replace(tombstone)
     conn = connect()
     try:
@@ -291,3 +295,16 @@ async def delete_folder(path: str) -> OperationResponse:
         resource_id=_entry_id("folder", folder),
         message=f"deleted folder and {len(affected)} indexed notes",
     )
+
+
+def _check_folder_revision(source: Path, expected: dict[str,str] | None) -> None:
+    if expected is None:
+        return
+    actual = {}
+    for path in source.rglob('*'):
+        if path.is_symlink() or not path.resolve().is_relative_to(source.resolve()):
+            raise ApiError(409, 'FOLDER_CONTENT_CONFLICT', '目录包含不可安全处理的路径。')
+        relative = path.relative_to(source).as_posix()
+        actual[relative] = '' if path.is_dir() else hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual != expected:
+        raise ApiError(409, 'FOLDER_CONTENT_CONFLICT', '目录内容已改变，请重新预览。')

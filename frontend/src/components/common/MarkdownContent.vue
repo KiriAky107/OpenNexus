@@ -9,7 +9,7 @@ import { useMarkdownPreferencesStore } from '@/stores/markdownPreferences'
 import { navigateMarkdownHref } from '@/services/markdownLinkService'
 const markdownPreferences = useMarkdownPreferencesStore()
 
-const props = defineProps<{ source: string; citationNumbers?: number[]; citationAliases?: Record<string, number> }>()
+const props = defineProps<{ source: string; sourcePath?: string; citationNumbers?: number[]; citationAliases?: Record<string, number> }>()
 const emit = defineEmits<{ citation: [number: number] }>()
 function citationClick(event: MouseEvent) {
   if (!(event.target instanceof Element)) return
@@ -20,7 +20,7 @@ function citationClick(event: MouseEvent) {
   const href = link?.getAttribute('href')?.trim()
   if (!href) return
   event.preventDefault()
-  void navigateMarkdownHref(href)
+  void navigateMarkdownHref(href, props.sourcePath)
 }
 const themeStore = useThemeStore()
 const html = ref('')

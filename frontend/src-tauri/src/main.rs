@@ -1231,6 +1231,10 @@ fn workspace_delete(host: State<'_, Host>, path: String, expected: String) -> Re
     with_workspace(&host, |ws| ws.delete(&path, &expected))
 }
 #[tauri::command]
+fn workspace_folder_operation(host: State<'_, Host>, path: String, destination: String, kind: String, expected: std::collections::BTreeMap<String,String>) -> Result<(),String> {
+    with_workspace(&host, |ws| ws.mutate_directory(&path,&destination,&kind,&expected))
+}
+#[tauri::command]
 fn workspace_mkdir(host: State<'_, Host>, path: String) -> Result<(), String> {
     with_workspace(&host, |ws| ws.mkdir(&path))
 }
@@ -1487,6 +1491,7 @@ fn main() {
             workspace_recent,
             workspace_revoke,
             workspace_tree,
+            workspace_folder_operation,
             workspace_read,
             workspace_write,
             workspace_operation,

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
-const { actionDialog, resolveAction, askConfirm, askPrompt } = useActionDialog()
+const { actionDialog, resolveAction, askPrompt } = useActionDialog()
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { noteOutline } from './outline'
 import { useRouter } from 'vue-router'
@@ -16,6 +16,8 @@ import AppIcon from '@/components/common/AppIcon.vue'
 import ControlIcon from '@/components/common/ControlIcon.vue'
 import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import { t } from '@/i18n'
+import ReferenceChangeDialog from './ReferenceChangeDialog.vue'
+import { prepareReferenceChange, executeReferenceChange, type ReferenceChangePlan, type ReferenceChangeResult } from '@/services/referenceChangeService'
 
 const workspaceStore = useWorkspaceStore()
 const editorStore = useEditorStore()
@@ -44,6 +46,28 @@ const searchQuery = ref('')
 const searchFocused = ref(false)
 const createInput = ref<HTMLInputElement | null>(null)
 const createError = ref('')
+const operationResult = ref('')
+const referencePlan = ref<ReferenceChangePlan>()
+let resolveReference: ((update: boolean | null) => void) | undefined
+function decideReference(update: boolean | null) { referencePlan.value = undefined; resolveReference?.(update); resolveReference = undefined }
+onBeforeUnmount(() => decideReference(null))
+watch(() => workspaceStore.vaultId, () => decideReference(null))
+function describeResult(result: ReferenceChangeResult) {
+  operationResult.value = `${t('文件操作已完成；更新引用来源', 'File operation completed; updated sources')}: ${result.changed.length}${result.changed.length ? `\n${result.changed.join('\n')}` : ''}${result.pending.length ? `\n${t('保留待处理', 'Kept for review')}: ${result.pending.join('、')}` : ''}${result.failures.length ? `\n${t('以下文件未更新', 'These files were not updated')}: ${result.failures.map(item => `${item.path}: ${item.error}`).join('\n')}` : ''}`
+}
+async function reviewChange(oldPath: string, newPath: string | null) {
+  const vault = workspaceStore.vaultId
+  const plan = await prepareReferenceChange(oldPath, newPath)
+  if (vault !== workspaceStore.vaultId) throw new Error('VAULT_PERMISSION_CHANGED')
+  const current = editorStore.currentFilePath
+  if (current && ['dirty','saving','save_failed','conflict','external_changed'].includes(editorStore.saveStatus) && (current === oldPath || current.startsWith(`${oldPath}/`) || plan.updates.some(item => item.path === current))) throw new Error(t('请先保存或处理受影响文件的冲突。', 'Save or resolve the affected document first.'))
+  referencePlan.value = plan
+  const update = await new Promise<boolean | null>(resolve => { resolveReference = resolve })
+  if (update === null) return null
+  const assertScope = () => { if (vault !== workspaceStore.vaultId) throw new Error('VAULT_PERMISSION_CHANGED'); if (editorStore.currentFilePath && plan.updates.some(item => item.path === editorStore.currentFilePath) && ['dirty','saving','save_failed','conflict','external_changed'].includes(editorStore.saveStatus)) throw new Error('UNSAVED_REFERENCE_SOURCE') }
+  assertScope()
+  return { plan, update, assertScope }
+}
 const creating = ref(false)
 const imagePreview = ref<{ name: string; url: string } | null>(null)
 let imageRequest = 0
@@ -155,7 +179,10 @@ async function openNode(node: FileNode) {
   selectedTreePath.value = node.path
   if (node.type === 'folder') {
     selectedFolderPath.value = node.path
-    return workspaceStore.toggleFolder(node.path)
+    workspaceStore.toggleFolder(node.path)
+    workspaceStore.selectFolder(node.path)
+    await router.push('/workspace')
+    return
   }
   selectedFolderPath.value = containingFolder(node.path)
   closeImagePreview()
@@ -203,6 +230,7 @@ async function renameTarget() {
   if (!node) return
   const newName = (await askPrompt(t('新名称', 'New name'), node.name))?.trim()
   if (newName && newName !== node.name) {
+    if (/[\\/]/.test(newName) || ['.', '..'].includes(newName)) { createError.value = t('名称不能包含路径分隔符', 'Names cannot contain path separators'); closeContextMenu(); return }
     const kind = workspaceDocumentType(node.path)
     const extension = kind === 'canvas' ? '.canvas' : kind === 'image' ? node.path.slice(node.path.lastIndexOf('.')) : '.md'
     const normalizedName = node.type === 'file' && !newName.toLowerCase().endsWith(extension.toLowerCase()) ? `${newName}${extension}` : newName
@@ -214,24 +242,17 @@ async function renameTarget() {
       closeContextMenu(); return
     }
     try {
-      const impact = await workspaceService.previewPathChange(oldPath)
-      const total = impact.incoming.length + impact.ambiguous.length + impact.outgoing.length
-      if (total) {
-        const sources = [...new Set([...impact.incoming, ...impact.ambiguous, ...impact.outgoing].map(item => item.source))]
-        const message = `${t('重命名会影响引用；本次只移动文件，不会静默改写其他文件。请确认后逐一处理：', 'Renaming affects references. This move will not silently rewrite other files. Review these sources:')}\n${sources.slice(0, 12).join('\n')}${sources.length > 12 ? `\n… ${sources.length - 12}` : ''}\n${t('确定继续？', 'Continue?')}`
-        if (!(await askConfirm(message))) { closeContextMenu(); return }
-      }
-    } catch (error) {
-      createError.value = `${t('无法完成引用检查，已取消重命名：', 'Reference check failed; rename cancelled: ')}${error instanceof Error ? error.message : String(error)}`
-      closeContextMenu(); return
+      const review = await reviewChange(oldPath, newPath)
+      if (!review) { closeContextMenu(); return }
+      describeResult(await executeReferenceChange(review.plan, review.update, expected => workspaceService.renameFile(oldPath, normalizedName, expected, review.plan.expectedEntries), review.assertScope))
     }
-    try { await workspaceService.renameFile(oldPath, normalizedName) }
     catch (error) {
       createError.value = `${t('重命名失败：', 'Rename failed: ')}${error instanceof Error ? error.message : String(error)}`
       closeContextMenu(); return
     }
     workspaceStore.renamePath(oldPath, newPath, normalizedName)
     editorStore.renameFilePath(oldPath, newPath)
+    await editorStore.checkExternalFile()
     if (selectedTreePath.value === oldPath || selectedTreePath.value.startsWith(`${oldPath}/`)) {
       selectedTreePath.value = `${newPath}${selectedTreePath.value.slice(oldPath.length)}`
     }
@@ -245,8 +266,11 @@ async function renameTarget() {
 async function deleteTarget() {
   const node = contextTarget.value
   if (!node) return
-  if (!(await askConfirm(`${t('确定要删除', 'Delete')} “${node.name}”?`))) return closeContextMenu()
-  try { await workspaceService.deleteFile(node.path) }
+  try {
+    const review = await reviewChange(node.path, null)
+    if (!review) return closeContextMenu()
+    describeResult(await executeReferenceChange(review.plan, false, expected => workspaceService.deleteFile(node.path, expected, review.plan.expectedEntries), review.assertScope))
+  }
   catch (error) {
     createError.value = `${t('删除失败：', 'Delete failed: ')}${error instanceof Error ? error.message : String(error)}`
     closeContextMenu(); return
@@ -265,6 +289,24 @@ async function deleteTarget() {
   closeContextMenu()
 }
 
+async function moveTarget() {
+  const node = contextTarget.value
+  if (!node || node.type !== 'file') return
+  const folder = (await askPrompt(t('目标文件夹（知识库内路径）', 'Destination folder in this vault'), '/'))?.trim()
+  if (!folder) return closeContextMenu()
+  const targetFolder = `/${folder.replace(/^\/+|\/+$/g, '')}`
+  const newPath = `${targetFolder.replace(/\/$/, '')}/${node.name}`
+  try {
+    const review = await reviewChange(node.path, newPath)
+    if (!review) return closeContextMenu()
+    describeResult(await executeReferenceChange(review.plan, review.update, expected => workspaceService.moveFile(node.path, targetFolder, { expectedHash: expected!, reviewed: true }), review.assertScope))
+    workspaceStore.renamePath(node.path, newPath, node.name)
+    editorStore.renameFilePath(node.path, newPath)
+    await workspaceStore.refreshFileTree(); await editorStore.checkExternalFile()
+  } catch (error) { createError.value = String(error) }
+  closeContextMenu()
+}
+
 function containingFolder(path: string): string {
   const separator = path.lastIndexOf('/')
   return separator > 0 ? path.slice(0, separator) : '/'
@@ -275,6 +317,7 @@ function containingFolder(path: string): string {
   <section class="file-tree-panel" @click="closeContextMenu" @keydown.esc="closeContextMenu" @wheel.passive="revealSearch">
     <p v-if="workspaceStore.treeRefreshError" class="subtle" role="status">{{ t('文件树暂未同步，将自动重试。', 'File tree sync delayed; retrying automatically.') }}</p>
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
+    <ReferenceChangeDialog v-if="referencePlan" :plan="referencePlan" @resolve="decideReference" />
     <div class="workspace-navigation">
     <div class="workspace-tabs" role="tablist" :aria-label="t('工作区导航', 'Workspace navigation')" @keydown="navigateTabs">
       <button id="workspace-files-tab" role="tab" aria-controls="workspace-files-panel" :aria-selected="activeTab === 'files'" :tabindex="activeTab === 'files' ? 0 : -1" @click="switchTab('files')">{{ t('文件', 'Files') }}</button>
@@ -299,6 +342,7 @@ function containingFolder(path: string): string {
       <button type="button" :disabled="creating" @click="newItemType = null">{{ t('取消', 'Cancel') }}</button>
     </form>
     <p v-if="createError" class="create-error" role="alert">{{ createError }}</p>
+    <p v-if="operationResult" class="operation-result" role="status">{{ operationResult }}</p>
     <div class="tree" @scroll.passive="onTreeScroll" @contextmenu.self="openContextMenu($event, { id: 'root', name: '/', path: '/', type: 'folder' })">
       <FileTreeNode v-for="node in filteredTree" :key="node.id" :node="node"
         :active-path="selectedTreePath" @open="openNode" @context-menu="openContextMenu" />
@@ -339,6 +383,7 @@ function containingFolder(path: string): string {
         <button @click="beginCreate('canvas', selectedFolderPath)">{{ t('新建画布', 'New canvas') }}</button>
         <button @click="beginCreate('folder', selectedFolderPath)">{{ t('新建文件夹', 'New folder') }}</button>
         <button v-if="contextTarget.path !== '/' && (!workspaceService.isWorkspaceImage(contextTarget.path) || workspaceService.isMutableWorkspaceImage(contextTarget.path))" @click="renameTarget">{{ t('重命名', 'Rename') }}</button>
+        <button v-if="contextTarget.type === 'file' && (!workspaceService.isWorkspaceImage(contextTarget.path) || workspaceService.isMutableWorkspaceImage(contextTarget.path))" @click="moveTarget">{{ t('移动到文件夹', 'Move to folder') }}</button>
         <button v-if="contextTarget.path !== '/' && (!workspaceService.isWorkspaceImage(contextTarget.path) || workspaceService.isMutableWorkspaceImage(contextTarget.path))" class="danger" @click="deleteTarget">{{ t('删除', 'Delete') }}</button>
       </div>
     </Teleport>
@@ -346,6 +391,7 @@ function containingFolder(path: string): string {
 </template>
 
 <style scoped>
+.operation-result { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; padding: var(--space-sm); }
 .image-preview-backdrop { position: fixed; inset: 0; z-index: 2100; display: grid; place-items: center; padding: 24px; background: var(--color-background-overlay); }
 .image-preview { max-width: 90vw; max-height: 90vh; padding: 16px; border-radius: var(--radius-md); background: var(--color-background-primary); color: var(--color-text-primary); box-shadow: var(--shadow-md); }
 .image-preview header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 16px; }

@@ -11,6 +11,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const openFiles = ref<string[]>([])
   const recentFiles = ref<string[]>([])
   const activeFilePath = ref<string | null>(null)
+  const activeFolderPath = ref<string | null>(null)
   const isLoading = ref(false)
   const hasVault = ref(false)
   const recentVaults = ref<workspaceService.VaultInfo[]>([])
@@ -41,6 +42,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function openFile(path: string) {
+    activeFolderPath.value = null
     if (!openFiles.value.includes(path)) {
       openFiles.value.push(path)
     }
@@ -73,7 +75,17 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function setActiveFile(path: string | null) {
+    activeFolderPath.value = null
     activeFilePath.value = path
+  }
+  function selectFolder(path: string) {
+    activeFolderPath.value = path
+    activeFilePath.value = null
+    try { localStorage.setItem(`workspace-folder:${vaultId.value}`, path) } catch { /* session state */ }
+  }
+  function restoreFolder() {
+    activeFolderPath.value = null
+    try { const path = localStorage.getItem(`workspace-folder:${vaultId.value}`); if (path === '/' || (path && findNodeByPath(fileTree.value,path)?.type === 'folder')) activeFolderPath.value = path } catch { /* session state */ }
   }
 
   async function loadRecentVaults() {
@@ -121,6 +133,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       openFiles.value = []
       activeFilePath.value = null
       hasVault.value = true
+      restoreFolder()
       localStorage.setItem('last-vault-path', info.path)
     } finally {
       isLoading.value = false
@@ -141,6 +154,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       openFiles.value = []
       activeFilePath.value = null
       hasVault.value = true
+      restoreFolder()
       localStorage.setItem('last-vault-path', info.path)
     } finally {
       isLoading.value = false
@@ -192,10 +206,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       activeFilePath.value = `${newPath}${activeFilePath.value.slice(oldPath.length)}`
     }
     recentFiles.value = recentFiles.value.map(path => path === oldPath || path.startsWith(`${oldPath}/`) ? `${newPath}${path.slice(oldPath.length)}` : path)
+    if (activeFolderPath.value && (activeFolderPath.value === oldPath || activeFolderPath.value.startsWith(`${oldPath}/`))) selectFolder(`${newPath}${activeFolderPath.value.slice(oldPath.length)}`)
     try { localStorage.setItem(`workspace-recent-files:${vaultId.value}`, JSON.stringify(recentFiles.value)) } catch { /* session-only storage */ }
   }
 
   function closePath(path: string) {
+    if (activeFolderPath.value === path || activeFolderPath.value?.startsWith(`${path}/`)) selectFolder('/')
     const activeWasRemoved = Boolean(activeFilePath.value && (activeFilePath.value === path || activeFilePath.value.startsWith(`${path}/`)))
     openFiles.value = openFiles.value.filter((openPath) => openPath !== path && !openPath.startsWith(`${path}/`))
     if (activeWasRemoved) activeFilePath.value = openFiles.value.at(-1) ?? null
@@ -212,6 +228,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     openFiles,
     recentFiles,
     activeFilePath,
+    activeFolderPath,
+    selectFolder,
     activeFile,
     isLoading,
     hasVault,

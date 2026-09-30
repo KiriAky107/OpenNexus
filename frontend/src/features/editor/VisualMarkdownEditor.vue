@@ -531,10 +531,12 @@ onMounted(async () => {
   applyProofingPreferences()
   loading.value = false
   if (!disposed) installCommands()
+  if (!disposed) navigateHeading(editorStore.headingRequest)
+  if (!disposed) navigateReference(editorStore.referenceRequest)
 })
 
 watch([() => settingsStore.spellCheck, () => settingsStore.language], applyProofingPreferences)
-watch(() => editorStore.headingRequest, request => {
+function navigateHeading(request: typeof editorStore.headingRequest) {
   if (!request || request.path !== editorStore.currentFilePath || !crepe) return
   crepe.editor.action(ctx => {
     const view = ctx.get(editorViewCtx)
@@ -546,7 +548,22 @@ watch(() => editorStore.headingRequest, request => {
       view.focus()
     })
   })
-})
+}
+watch(() => editorStore.headingRequest, navigateHeading)
+function navigateReference(request: typeof editorStore.referenceRequest) {
+  if (!request || request.path !== editorStore.currentFilePath || !crepe) return
+  crepe.editor.action(ctx => {
+    const view=ctx.get(editorViewCtx), matches:Array<{from:number;to:number}>=[]
+    view.state.doc.descendants((node,position)=>{
+      if(!node.isText)return
+      if(node.marks.some(mark=>mark.type.name==='link'&&mark.attrs.href===request.raw))matches.push({from:position,to:position+node.nodeSize})
+      else if(node.text?.includes(request.raw)){const start=node.text.indexOf(request.raw);matches.push({from:position+start,to:position+start+request.raw.length})}
+    })
+    const target=matches[request.occurrence]??matches[0]
+    if(target){view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc,target.from,target.to)).scrollIntoView());view.focus()}
+  })
+}
+watch(()=>editorStore.referenceRequest,navigateReference)
 
 onBeforeUnmount(() => { disposed = true; disposeCommands?.(); diagramPreviews.clear(); imageUrls.forEach(URL.revokeObjectURL); imageUrls.clear(); disposeLinkNavigation?.(); disposeCodeLabels?.(); disposeLanguagePicker?.(); void crepe?.destroy() })
 

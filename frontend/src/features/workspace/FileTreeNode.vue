@@ -13,7 +13,7 @@ const emit = defineEmits<{
 
 <template>
   <div>
-    <div class="tree-node" :class="{ active: node.path === activePath }"
+    <div class="tree-node" :class="{ active: node.path === activePath }" role="button" tabindex="0" :aria-label="node.name" :aria-expanded="node.type === 'folder' ? !!node.is_open : undefined" @keydown.enter.prevent="emit('open', node)" @keydown.space.prevent="emit('open', node)"
       @click="emit('open', node)" @contextmenu="emit('contextMenu', $event, node)">
       <AppIcon :icon="node.type === 'folder' ? (node.is_open ? FolderOpened : Folder) : isWorkspaceImage(node.path) ? Picture : Document" :size="16" />
       <span class="name">{{ node.name }}</span>

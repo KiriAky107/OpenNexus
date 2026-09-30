@@ -3,6 +3,7 @@ import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { noteOutline } from '@/features/workspace/outline'
 import { hostInvoke, isDesktop } from '@/services/platform/desktop'
+import { resolveVaultReference } from './vaultReferences'
 
 const externalSchemes = /^(https?:|mailto:|tel:)/i
 const unsafeSchemes = /^(javascript:|data:|file:|vbscript:)/i
@@ -15,17 +16,9 @@ export function resolveNoteLink(href: string, currentPath: string | null): { pat
   if (externalSchemes.test(href) || unsafeSchemes.test(href)) return null
   const [rawPath, rawFragment = ''] = href.split('#', 2)
   if (!rawPath && currentPath) return { path: currentPath, fragment: decode(rawFragment) }
-  const pathPart = decode(rawPath.split('?')[0] ?? '').replace(/\\/g, '/')
-  if (!pathPart || !/\.md$/i.test(pathPart)) return null
-  const base = pathPart.startsWith('/') ? [] : (currentPath ?? '/').split('/').slice(0, -1)
-  const parts = [...base, ...pathPart.split('/')]
-  const normalized: string[] = []
-  for (const part of parts) {
-    if (!part || part === '.') continue
-    if (part === '..') { if (!normalized.length) return null; normalized.pop() }
-    else normalized.push(part)
-  }
-  return { path: `/${normalized.join('/')}`, fragment: decode(rawFragment) }
+  const path = resolveVaultReference(currentPath ?? '/current.md', rawPath ?? '')
+  if (!path || !/\.(md|canvas)$/i.test(path)) return null
+  return { path, fragment: decode(rawFragment) }
 }
 
 function slug(value: string) {
@@ -37,7 +30,7 @@ async function openExternal(href: string) {
   else window.open(href, '_blank', 'noopener,noreferrer')
 }
 
-export async function navigateMarkdownHref(href: string): Promise<boolean> {
+export async function navigateMarkdownHref(href: string, sourcePath?: string): Promise<boolean> {
   const value = href.trim()
   if (!value || unsafeSchemes.test(value)) return false
   if (externalSchemes.test(value)) { await openExternal(value); return true }
@@ -49,7 +42,7 @@ export async function navigateMarkdownHref(href: string): Promise<boolean> {
   }
 
   const editor = useEditorStore()
-  const target = resolveNoteLink(value, editor.currentFilePath)
+  const target = resolveNoteLink(value, sourcePath ?? editor.currentFilePath)
   if (!target) return false
   if (target.path !== editor.currentFilePath) await editor.loadFile(target.path)
   const workspace = useWorkspaceStore()

@@ -106,6 +106,8 @@ onMounted(() => {
       '.cm-gutters': { backgroundColor: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)', border: 'none' },
       '.cm-content': { padding: '24px 8px', minHeight: '100%' } }),
   ] }) })
+  navigateHeading(editor.headingRequest)
+  navigateReference(editor.referenceRequest)
   dispose = registerEditorCommands({ available, handlers: {
     'editor.import-note-properties': importProperties,
     'editor.undo': () => undo(view!) ? { ok: true } : { ok: false, reason: 'unavailable' },
@@ -113,11 +115,18 @@ onMounted(() => {
   } })
 })
 watch(() => [settings.spellCheck, settings.language], () => view?.dispatch({ effects: proofing.reconfigure(attributes()) }))
-watch(() => editor.headingRequest, request => {
+function navigateHeading(request: typeof editor.headingRequest) {
   if (!view || !request || request.path !== editor.currentFilePath) return
   const offset = Math.min(view.state.doc.length, request.offset)
   view.dispatch({ selection: { anchor: offset }, effects: EditorView.scrollIntoView(offset, { y: 'start' }) }); view.focus()
-})
+}
+watch(() => editor.headingRequest, navigateHeading)
+function navigateReference(request: typeof editor.referenceRequest) {
+  if (!view || !request || request.path !== editor.currentFilePath) return
+  const from = Math.min(request.offset,view.state.doc.length), to = Math.min(from+request.length,view.state.doc.length)
+  view.dispatch({selection:{anchor:from,head:to},effects:EditorView.scrollIntoView(from,{y:'center'})}); view.focus()
+}
+watch(() => editor.referenceRequest,navigateReference)
 onBeforeUnmount(() => { dispose?.(); view?.destroy(); pending = undefined })
 </script>
 

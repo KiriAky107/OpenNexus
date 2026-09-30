@@ -24,6 +24,8 @@ export interface NoteBlock {
 
 export interface FileNode {
   id: string
+  content_hash?: string
+  updated_at?: string
   note_id?: string
   name: string
   path: string
@@ -653,6 +655,8 @@ export interface ApiWorkspaceInfo {
 
 export interface ApiWorkspaceEntry {
   entry_id: string
+  content_hash?: string | null
+  updated_at?: string | null
   name: string
   path: string
   type: 'file' | 'folder'

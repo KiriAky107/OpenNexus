@@ -13,6 +13,8 @@ import WorkspacePluginCommands from './WorkspacePluginCommands.vue'
 import { EditPen } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { t } from '@/i18n'
+import VaultReferencesPanel from './VaultReferencesPanel.vue'
+import FolderContents from './FolderContents.vue'
 
 const WorkspaceChat = defineAsyncComponent(() => import('../chat/WorkspaceChat.vue'))
 const chatOpened = ref(false), chatVisible = ref(false)
@@ -50,9 +52,11 @@ async function newNote() {
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <button class="workspace-chat-launcher button-secondary" aria-label="唤起 AI 聊天" title="AI 聊天" @click="openChat">AI</button>
     <WorkspaceChat v-if="chatOpened" :open="chatVisible" @close="chatVisible = false" />
-    <template v-if="workspaceStore.activeFilePath">
+    <FolderContents v-if="workspaceStore.activeFolderPath" :path="workspaceStore.activeFolderPath" />
+    <template v-else-if="workspaceStore.activeFilePath">
       <EditorHeader />
       <WorkspacePluginCommands><EditorPane /></WorkspacePluginCommands>
+      <VaultReferencesPanel />
     </template>
     <div v-else class="empty-workspace">
       <div class="empty-content">

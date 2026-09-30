@@ -53,6 +53,8 @@ function toFileNode(entry: ApiWorkspaceEntry): FileNode {
   const path = normalizePublicPath(entry.path)
   const node: FileNode = {
     id: entry.entry_id,
+    content_hash: entry.content_hash ?? undefined,
+    updated_at: entry.updated_at ?? undefined,
     note_id: entry.note_id ?? undefined,
     name: entry.name,
     path,
@@ -287,13 +289,19 @@ export async function createFolder(parentPath: string, name: string): Promise<Fi
   return toFileNode(entry)
 }
 
-export async function renameFile(oldPath: string, newName: string): Promise<void> {
+export async function renameFile(oldPath: string, newName: string, expectedHash?: string, expectedEntries?: Record<string,string>): Promise<void> {
+  if (expectedEntries) {
+    const destination = `${oldPath.slice(0, oldPath.lastIndexOf('/') + 1)}${newName}`
+    if (isDesktop()) await hostInvoke('workspace_folder_operation', { path: nativePath(oldPath), destination: nativePath(destination), kind: 'rename', expected: expectedEntries })
+    else await apiClient.post('/api/workspace/folders/rename', { path: relativePath(oldPath), new_name: newName, expected_entries: expectedEntries })
+    await refreshTree(); return
+  }
   if (workspaceDocumentType(oldPath) === 'image') {
     if (!isMutableWorkspaceImage(oldPath)) throw new Error('IMAGE_ASSET_IMMUTABLE')
     const path = normalizePublicPath(oldPath)
     const destination = `${path.slice(0, path.lastIndexOf('/') + 1)}${newName}`
     if (workspaceDocumentType(destination) !== 'image' || path.slice(path.lastIndexOf('.')).toLowerCase() !== destination.slice(destination.lastIndexOf('.')).toLowerCase()) throw new Error('IMAGE_EXTENSION_MISMATCH')
-    const expected = await imageRevision(path)
+    const expected = expectedHash ?? await imageRevision(path)
     if (isDesktop()) await hostInvoke('workspace_rename', { path: nativePath(path), destination: nativePath(destination), expected })
     else await apiClient.post('/api/workspace/assets/move', { path, destination, expected_content_hash: expected })
     await refreshTree(); return
@@ -301,14 +309,14 @@ export async function renameFile(oldPath: string, newName: string): Promise<void
   if (isDesktop()) {
     const path = nativePath(oldPath)
     const document = await hostInvoke<HostDocument>('workspace_read', { path })
-    await hostInvoke('workspace_rename', { path, destination: [...path.split('/').slice(0, -1), newName].join('/'), expected: document.hash })
+    await hostInvoke('workspace_rename', { path, destination: [...path.split('/').slice(0, -1), newName].join('/'), expected: expectedHash ?? document.hash })
     await refreshTree(); return
   }
   const path = normalizePublicPath(oldPath)
   if (workspaceDocumentType(path) === 'canvas') {
     const document = await apiClient.get<CanvasDocument>('/api/workspace/canvas', { params: { path } })
     const destination = `${path.slice(0, path.lastIndexOf('/') + 1)}${newName}`
-    await apiClient.post('/api/workspace/canvas/move', { path, destination, expected_content_hash: document.content_hash })
+    await apiClient.post('/api/workspace/canvas/move', { path, destination, expected_content_hash: expectedHash ?? document.content_hash })
     await refreshTree(); return
   }
   if (typeByPath.get(path) === 'folder') {
@@ -317,15 +325,20 @@ export async function renameFile(oldPath: string, newName: string): Promise<void
       new_name: newName,
     })
   } else {
-    await noteService.renameNote(await requireNoteId(path), newName)
+    await noteService.renameNote(await requireNoteId(path), newName, expectedHash)
   }
   await refreshTree()
 }
 
-export async function deleteFile(pathValue: string): Promise<void> {
+export async function deleteFile(pathValue: string, expectedHash?: string, expectedEntries?: Record<string,string>): Promise<void> {
+  if (expectedEntries) {
+    if (isDesktop()) await hostInvoke('workspace_folder_operation', { path: nativePath(pathValue), destination: '', kind: 'delete', expected: expectedEntries })
+    else await apiClient.post('/api/workspace/folders/delete', { path: relativePath(pathValue), expected_entries: expectedEntries })
+    await refreshTree(); return
+  }
   if (workspaceDocumentType(pathValue) === 'image') {
     if (!isMutableWorkspaceImage(pathValue)) throw new Error('IMAGE_ASSET_IMMUTABLE')
-    const expected = await imageRevision(pathValue)
+    const expected = expectedHash ?? await imageRevision(pathValue)
     if (isDesktop()) await hostInvoke('workspace_delete', { path: nativePath(pathValue), expected })
     else await apiClient.post('/api/workspace/assets/delete', { path: pathValue, expected_content_hash: expected })
     await refreshTree(); return
@@ -333,13 +346,13 @@ export async function deleteFile(pathValue: string): Promise<void> {
   if (isDesktop()) {
     const path = nativePath(pathValue)
     const document = await hostInvoke<HostDocument>('workspace_read', { path })
-    await hostInvoke('workspace_delete', { path, expected: document.hash })
+    await hostInvoke('workspace_delete', { path, expected: expectedHash ?? document.hash })
     await refreshTree(); return
   }
   const path = normalizePublicPath(pathValue)
   if (workspaceDocumentType(path) === 'canvas') {
     const document = await apiClient.get<CanvasDocument>('/api/workspace/canvas', { params: { path } })
-    await apiClient.post('/api/workspace/canvas/delete', { path, expected_content_hash: document.content_hash })
+    await apiClient.post('/api/workspace/canvas/delete', { path, expected_content_hash: expectedHash ?? document.content_hash })
     await refreshTree(); return
   }
   if (typeByPath.get(path) === 'folder') {
@@ -347,19 +360,19 @@ export async function deleteFile(pathValue: string): Promise<void> {
       path: relativePath(path),
     })
   } else {
-    await noteService.deleteNote(await requireNoteId(path))
+    await noteService.deleteNote(await requireNoteId(path), expectedHash)
   }
   await refreshTree()
 }
 
-export async function moveFile(sourcePath: string, targetPath: string): Promise<void> {
-  const impact = await previewPathChange(sourcePath)
+export async function moveFile(sourcePath: string, targetPath: string, review?: { expectedHash: string; reviewed: true }): Promise<void> {
+  const impact = review ? {incoming: [], ambiguous: [], outgoing: []} : await previewPathChange(sourcePath)
   const sources = [...new Set([...impact.incoming, ...impact.ambiguous, ...impact.outgoing].map(ref => ref.source))]
   if (sources.length) throw new Error(`REFERENCE_IMPACT_REVIEW_REQUIRED: ${sources.join(', ')}`)
   if (workspaceDocumentType(sourcePath) === 'image') {
     if (!isMutableWorkspaceImage(sourcePath)) throw new Error('IMAGE_ASSET_IMMUTABLE')
     const destination = `${normalizePublicPath(targetPath).replace(/\/$/, '')}/${sourcePath.split('/').at(-1)}`
-    const expected = await imageRevision(sourcePath)
+    const expected = review?.expectedHash ?? await imageRevision(sourcePath)
     if (isDesktop()) await hostInvoke('workspace_rename', { path: nativePath(sourcePath), destination: nativePath(destination), expected })
     else await apiClient.post('/api/workspace/assets/move', { path: sourcePath, destination, expected_content_hash: expected })
     await refreshTree(); return
@@ -367,19 +380,19 @@ export async function moveFile(sourcePath: string, targetPath: string): Promise<
   if (isDesktop()) {
     const path = nativePath(sourcePath)
     const document = await hostInvoke<HostDocument>('workspace_read', { path })
-    await hostInvoke('workspace_rename', { path, destination: [nativePath(targetPath), path.split('/').at(-1)].filter(Boolean).join('/'), expected: document.hash })
+    await hostInvoke('workspace_rename', { path, destination: [nativePath(targetPath), path.split('/').at(-1)].filter(Boolean).join('/'), expected: review?.expectedHash ?? document.hash })
     await refreshTree(); return
   }
   const source = normalizePublicPath(sourcePath)
   if (workspaceDocumentType(source) === 'canvas') {
     const document = await apiClient.get<CanvasDocument>('/api/workspace/canvas', { params: { path: source } })
     const destination = `${normalizePublicPath(targetPath).replace(/\/$/, '')}/${source.split('/').at(-1)}`
-    await apiClient.post('/api/workspace/canvas/move', { path: source, destination, expected_content_hash: document.content_hash })
+    await apiClient.post('/api/workspace/canvas/move', { path: source, destination, expected_content_hash: review?.expectedHash ?? document.content_hash })
     await refreshTree(); return
   }
   if (typeByPath.get(source) !== 'file') {
     throw new Error(t('当前阶段只支持移动笔记文件。', 'Only note files can be moved at this stage.'))
   }
-  await noteService.moveNote(await requireNoteId(source), relativePath(targetPath))
+  await noteService.moveNote(await requireNoteId(source), relativePath(targetPath), review?.expectedHash)
   await refreshTree()
 }

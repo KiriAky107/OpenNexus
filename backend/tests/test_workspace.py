@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 
 import pytest
 
@@ -66,6 +67,38 @@ def test_note_rename_preserves_identity_and_content() -> None:
     assert renamed.title == "新名称"
     assert renamed.markdown == "# 标题不变\n\n真实正文。\n"
     assert not (get_settings().vault_path / "课程" / "旧名称.md").exists()
+
+
+@pytest.mark.parametrize('operation', ['rename','move','delete'])
+def test_reviewed_note_operations_reject_external_edits(operation):
+    from app.services import note_service
+    note = asyncio.run(note_service.create_note(title='Before', markdown='original', folder='course', tags=[]))
+    expected = hashlib.sha256(note.markdown.encode()).hexdigest()
+    path = get_settings().vault_path / note.file_path
+    path.write_text('human edit',encoding='utf-8')
+    async def run():
+        if operation == 'rename': return await note_service.rename_note(note.note_id,file_name='After.md',expected_content_hash=expected)
+        if operation == 'move': return await note_service.move_note(note.note_id,folder='elsewhere',expected_content_hash=expected)
+        return await note_service.delete_note(note.note_id,expected_content_hash=expected)
+    with pytest.raises(ApiError) as error: asyncio.run(run())
+    assert error.value.code == 'NOTE_CONTENT_CONFLICT'
+    assert path.read_text(encoding='utf-8') == 'human edit'
+
+
+def test_folder_review_checks_all_entries_and_tree_exposes_real_revisions():
+    from app.services import workspace_service
+    note = asyncio.run(create_note(NoteCreateRequest(title='Before',markdown='original',folder='course')))
+    tree = workspace_service.get_workspace_tree()
+    child = tree[0].children[0]
+    assert child.content_hash == hashlib.sha256(b'original').hexdigest()
+    assert child.updated_at is not None
+    expected = {'Before.md':child.content_hash}
+    source = get_settings().vault_path / 'course'
+    (source/'unexpected.txt').write_text('new',encoding='utf-8')
+    with pytest.raises(ApiError) as error: asyncio.run(workspace_service.rename_folder('/course','renamed',expected))
+    assert error.value.code == 'FOLDER_CONTENT_CONFLICT'
+    with pytest.raises(ApiError): asyncio.run(workspace_service.delete_folder('/course',expected))
+    assert (source/'unexpected.txt').exists()
 
 
 def test_folder_lifecycle_updates_database_and_vectors() -> None:

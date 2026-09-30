@@ -5,6 +5,7 @@ Markdown 文件是笔记正文的持久化载体（Vault），SQLite/FTS5/向量
 """
 
 from __future__ import annotations
+import hashlib
 
 import sqlite3
 from contextlib import nullcontext
@@ -248,7 +249,7 @@ async def update_note(
 
 
 @serialized_vault_mutation
-async def move_note(note_id: str, *, folder: str) -> Note:
+async def move_note(note_id: str, *, folder: str, expected_content_hash: str | None = None) -> Note:
     record = repository.get_note_record(note_id)
     if record is None:
         raise ApiError(404, "RESOURCE_NOT_FOUND", "note not found", {"note_id": note_id})
@@ -275,6 +276,8 @@ async def move_note(note_id: str, *, folder: str) -> Note:
         )
 
     markdown = source.read_text(encoding="utf-8")
+    if expected_content_hash is not None and hashlib.sha256(markdown.encode()).hexdigest() != expected_content_hash:
+        raise ApiError(409, 'NOTE_CONTENT_CONFLICT', '笔记已改变，请重新检查引用。')
     target.parent.mkdir(parents=True, exist_ok=True)
     source.replace(target)
     try:
@@ -299,7 +302,7 @@ async def move_note(note_id: str, *, folder: str) -> Note:
 
 
 @serialized_vault_mutation
-async def rename_note(note_id: str, *, file_name: str) -> Note:
+async def rename_note(note_id: str, *, file_name: str, expected_content_hash: str | None = None) -> Note:
     """重命名 Markdown 文件并保留 note_id、Block 与向量身份。"""
 
     record = repository.get_note_record(note_id)
@@ -330,6 +333,8 @@ async def rename_note(note_id: str, *, file_name: str) -> Note:
             {"note_id": note_id, "file_path": new_file_path},
         )
 
+    if expected_content_hash is not None and hashlib.sha256(source.read_text(encoding='utf-8').encode()).hexdigest() != expected_content_hash:
+        raise ApiError(409, 'NOTE_CONTENT_CONFLICT', '笔记已改变，请重新检查引用。')
     source.replace(target)
     now = datetime.now(timezone.utc)
     conn = connect()
@@ -355,12 +360,14 @@ async def rename_note(note_id: str, *, file_name: str) -> Note:
 
 
 @serialized_vault_mutation
-async def delete_note(note_id: str) -> bool:
+async def delete_note(note_id: str, *, expected_content_hash: str | None = None) -> bool:
     record = repository.get_note_record(note_id)
     if record is None:
         return False
 
     path = resolve_in_vault(record.file_path)
+    if expected_content_hash is not None and (not path.is_file() or hashlib.sha256(path.read_text(encoding='utf-8').encode()).hexdigest() != expected_content_hash):
+        raise ApiError(409, 'NOTE_CONTENT_CONFLICT', '笔记已改变，请重新检查引用。')
     tombstone = path.with_name(f".{path.name}.{uuid4().hex}.deleting") if path.exists() else None
     if tombstone is not None:
         path.replace(tombstone)
