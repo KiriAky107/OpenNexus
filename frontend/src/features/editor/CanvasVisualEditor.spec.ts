@@ -53,5 +53,6 @@ it('renders imported group backgrounds with their repeat, ratio and cover styles
  expect(wrapper.get('[data-node-id="repeat"] .canvas-group-background').attributes('style')).toContain('background-repeat: repeat')
  expect(wrapper.get('[data-node-id="ratio"] .canvas-group-background').attributes('style')).toContain('background-size: contain')
  expect(wrapper.get('[data-node-id="cover"] .canvas-group-background').attributes('style')).toContain('background-size: cover')
+ expect(Number((wrapper.get('.canvas-edges').element as SVGElement).style.zIndex)).toBeGreaterThan(Number((wrapper.get('[data-node-id="cover"]').element as HTMLElement).style.zIndex))
  wrapper.unmount()
 })
