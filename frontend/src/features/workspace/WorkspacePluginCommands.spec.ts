@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import Commands from './WorkspacePluginCommands.vue'
 import { useEditorStore } from '@/stores/editor'
 import { listPluginCommands, executePluginCommand } from '@/services/pluginService'
+import { captureWorkspaceSelection, openWorkspaceExtensions } from '@/services/workspaceCommandService'
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('@/services/pluginService', () => ({ listPluginCommands: vi.fn(), executePluginCommand: vi.fn() }))
 const command = { command_id:'inspect',plugin_id:'p', title:'Inspect', enabled:true, when:['editor.has_selection'], parameters:{type:'object',properties:{}}, locations:['context_menu','toolbar'] }
@@ -27,10 +28,11 @@ it('filters disabled commands and invalidates an open form when changing file', 
   vi.mocked(listPluginCommands).mockResolvedValue([{...command,when:[],enabled:false} as any])
   const pinia=createPinia(); const editor=useEditorStore(pinia); editor.currentFilePath='/one.md'
   const wrapper=mount(Commands,{global:{plugins:[pinia],stubs:{AppDialog:{template:'<div><slot/></div>'}}}})
-  await wrapper.get('button').trigger('click'); await flushPromises()
+  captureWorkspaceSelection();openWorkspaceExtensions(); await flushPromises()
   expect(listPluginCommands).toHaveBeenCalledWith('toolbar')
   expect(wrapper.text()).not.toContain('Inspect')
   editor.currentFilePath='/two.md'; await flushPromises()
   expect(wrapper.find('section.modal').exists()).toBe(false)
   wrapper.unmount()
+  openWorkspaceExtensions();await flushPromises();expect(wrapper.find('section.modal').exists()).toBe(false)
 })

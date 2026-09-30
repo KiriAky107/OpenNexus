@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, defineAsyncComponent, ref, watch } from 'vue'
+import { useWorkspaceStore } from '@/stores/workspace'
+import AppDialog from './AppDialog.vue'
+import ControlIcon from './ControlIcon.vue'
 import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
 import { useProviderStore } from '@/stores/provider'
@@ -12,6 +15,10 @@ const settingsStore = useSettingsStore()
 const providerStore = useProviderStore()
 const agentStore = useAgentStore()
 const route = useRoute()
+const workspace = useWorkspaceStore()
+const referencesOpen = ref(false)
+const VaultReferencesPanel = defineAsyncComponent(() => import('@/features/workspace/VaultReferencesPanel.vue'))
+watch(() => [route.name, workspace.vaultId, workspace.activeFilePath], () => { referencesOpen.value = false })
 
 const saveStatusText = computed(() => {
   const map: Record<string, string> = {
@@ -81,6 +88,9 @@ const showEditorInfo = computed(() => route.name === 'workspace')
         <span class="status-dot" :style="{ background: aiCoreColor }" />
         {{ aiCoreStatusText }}
       </span>
+      <button v-if="showEditorInfo && workspace.hasVault && workspace.activeFilePath" class="status-item references-trigger" aria-haspopup="dialog" :aria-expanded="referencesOpen" :title="t('反向链接与失效链接', 'Backlinks and broken links')" @click="referencesOpen = true">
+        <ControlIcon name="link" :size="13" />{{ t('反向链接', 'Backlinks') }}
+      </button>
       <span v-if="agentStore.isRunning" class="status-item agent-status">
         <span class="spinner" />
         {{ t('智能体运行中', 'Agent running') }}
@@ -98,6 +108,12 @@ const showEditorInfo = computed(() => route.name === 'workspace')
       </span>
     </div>
   </footer>
+  <AppDialog v-if="referencesOpen" :label="t('反向链接与失效链接', 'Backlinks and broken links')" @close="referencesOpen = false">
+    <section class="modal references-dialog">
+      <div class="references-heading"><h2>{{ t('反向链接与失效链接', 'Backlinks and broken links') }}</h2><button class="button-secondary" :aria-label="t('关闭链接弹窗', 'Close references dialog')" @click="referencesOpen = false"><ControlIcon name="close" /></button></div>
+      <VaultReferencesPanel @navigate="referencesOpen = false" />
+    </section>
+  </AppDialog>
 </template>
 
 <style scoped>
@@ -142,6 +158,12 @@ const showEditorInfo = computed(() => route.name === 'workspace')
   flex-shrink: 0;
   box-shadow: 0 0 0 2px var(--color-surface-secondary);
 }
+.references-trigger { cursor: pointer; padding: 3px 6px; margin-left: 2px; border-radius: var(--radius-sm); color: var(--color-text-secondary); font: inherit; }
+.references-trigger:hover, .references-trigger[aria-expanded="true"] { background: var(--color-accent-soft); color: var(--color-accent-primary); }
+.references-trigger:focus-visible { outline: 2px solid var(--color-border-focus); }
+.references-dialog { width: min(780px, 100%); text-align: left; }
+.references-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); margin-bottom: var(--space-md); }
+.references-heading h2 { font-size: var(--font-size-lg); }
 
 .agent-status {
   color: var(--color-accent-primary);

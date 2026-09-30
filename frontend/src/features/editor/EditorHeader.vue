@@ -3,7 +3,7 @@ import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
 import ExportDialog from './ExportDialog.vue'
 import NoteHistory from './NoteHistory.vue'
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
 import { isDesktop } from '@/services/platform/desktop'
@@ -11,6 +11,7 @@ import { t } from '@/i18n'
 import ControlIcon from '@/components/common/ControlIcon.vue'
 import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import { workspaceDocumentType } from '@/services/workspaceDocuments'
+import { captureWorkspaceSelection, openWorkspaceExtensions } from '@/services/workspaceCommandService'
 
 const editorStore = useEditorStore()
 const layout = useLayoutPreferencesStore()
@@ -20,6 +21,8 @@ const reloadError = ref('')
 const exportOpen = ref(false)
 const historyOpen = ref(false)
 const desktop = isDesktop()
+const actionsHost = ref<HTMLElement | null>(null)
+onMounted(() => { actionsHost.value = document.getElementById('editor-actions-host') })
 const isMarkdown = computed(() => workspaceDocumentType(editorStore.currentFilePath ?? 'untitled.md') !== 'canvas')
 const needsRecovery = computed(() => ['conflict', 'external_changed'].includes(editorStore.saveStatus))
 const missingFile = computed(() => needsRecovery.value && editorStore.currentFilePath === workspaceStore.activeFilePath && !workspaceStore.activeFile && !workspaceStore.treeRefreshError)
@@ -54,12 +57,13 @@ const statusText = computed<Record<string, string>>(() => ({
 </script>
 
 <template>
-  <header class="editor-header">
+  <Teleport :to="actionsHost ?? 'body'" :disabled="!actionsHost || needsRecovery">
+  <header class="editor-header" :class="{ docked: actionsHost && !needsRecovery }">
     <ExportDialog v-if="exportOpen && isMarkdown" @close="exportOpen = false" />
     <NoteHistory v-if="historyOpen && isMarkdown && editorStore.currentNoteId" :note-id="editorStore.currentNoteId" @close="historyOpen = false" />
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
-    <div class="file-identity"><strong>{{ workspaceStore.activeFile?.name ?? t('未命名笔记', 'Untitled note') }}</strong><small>{{ workspaceStore.activeFilePath }}</small></div>
     <div class="editor-actions">
+      <button v-if="!actionsHost" class="button-secondary" @pointerdown="captureWorkspaceSelection" @click="openWorkspaceExtensions">{{ t('扩展命令', 'Extension commands') }}</button>
       <button v-if="isMarkdown && editorStore.currentNoteId" class="button-secondary" @click="historyOpen = true">{{ t('修改历史', 'Change history') }}</button>
       <button v-if="isMarkdown && editorStore.mode === 'wysiwyg'" type="button" class="toolbar-toggle" :aria-pressed="layout.editorToolbarVisible" :title="layout.editorToolbarVisible ? t('隐藏编辑器工具栏', 'Hide editor toolbar') : t('显示编辑器工具栏', 'Show editor toolbar')" :aria-label="layout.editorToolbarVisible ? t('隐藏编辑器工具栏', 'Hide editor toolbar') : t('显示编辑器工具栏', 'Show editor toolbar')" @click="layout.editorToolbarVisible = !layout.editorToolbarVisible"><ControlIcon name="toolbar" /></button>
       <button v-if="!desktop && isMarkdown" class="button-secondary" @click="exportOpen = true">{{ t('导出', 'Export') }}</button>
@@ -76,21 +80,23 @@ const statusText = computed<Record<string, string>>(() => ({
       <button type="button" class="save-button" :disabled="['saving','conflict','external_changed'].includes(editorStore.saveStatus)" @click="editorStore.save">{{ t('保存', 'Save') }}</button>
     </div>
   </header>
+  </Teleport>
 </template>
 
 <style scoped>
 .editor-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  min-height: 40px;
-  padding: 0 var(--space-lg);
+  justify-content: flex-end;
+  padding: var(--space-xs) var(--space-md);
   border-bottom: 1px solid var(--color-border-subtle);
   color: var(--color-text-secondary);
 }
-.file-identity { display: grid; min-width: 0; }
-.file-identity strong, .file-identity small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-identity small { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
+.editor-header.docked { padding: 0; border: 0; }
+.docked .editor-actions { flex-wrap: nowrap; }
+.docked .save-status.saved, .docked .save-status.idle { display: none; }
+.docked .editor-actions > .button-secondary { padding: 3px 8px; font-size: var(--font-size-xs); }
+.docked .mode-switch button, .docked .save-button { padding: 3px 8px; font-size: var(--font-size-xs); }
 .editor-actions { flex-wrap: wrap; justify-content: flex-end; }
 .toolbar-toggle { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: var(--radius-sm); }
 .toolbar-toggle:hover, .toolbar-toggle[aria-pressed="true"] { color: var(--color-accent-primary); background: var(--color-accent-soft); }

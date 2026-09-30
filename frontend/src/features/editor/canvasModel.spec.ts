@@ -1,5 +1,5 @@
 import{expect,it}from'vitest'
-import{CanvasModel,edgeGeometry}from'./canvasModel'
+import{CanvasModel,edgeGeometry,nodeLabel}from'./canvasModel'
 import imported from '../../../tests/fixtures/imported.canvas?raw'
 const fixture=JSON.stringify({nodes:[{id:'a',type:'text',x:0,y:0,width:300,height:180,text:'Root',custom:{a:1}},{id:'b',type:'file',x:400,y:0,width:300,height:180,file:'course/note.md',subpath:'#heading'}],edges:[{id:'e',fromNode:'a',toNode:'b',label:'evidence',custom:true}],custom:{future:'preserved'}})
 it('edits, copies, removes and undo/redoes while preserving unknown fields and reference contents',()=>{
@@ -9,6 +9,19 @@ it('edits, copies, removes and undo/redoes while preserving unknown fields and r
   expect(model.document.nodes.find(node=>node.id===selected[1])).toMatchObject({file:'course/note.md',subpath:'#heading'})
   model.remove(selected);expect(model.document.nodes).toHaveLength(2);expect(model.document.edges).toHaveLength(1)
   expect(model.document.custom).toEqual({future:'preserved'})
+})
+
+it('centres levels with unequal node heights and uses vertical anchors without changing explicit sides',()=>{
+ const nodes=[{id:'root',type:'text',x:0,y:0,width:300,height:100,text:'# Root\n\nBody'},{id:'a',type:'text',x:0,y:300,width:300,height:200,text:'A'},{id:'b',type:'text',x:0,y:600,width:300,height:300,text:'B'}]
+ const edges=[{id:'a',fromNode:'root',toNode:'a'},{id:'b',fromNode:'root',toNode:'b'}]
+ const model=new CanvasModel(JSON.stringify({nodes,edges}));const before=model.source;model.mindMap('root')
+ const [root,a,b]=model.document.nodes
+ expect(root!.y+root!.height/2).toBe((a!.y+b!.y+b!.height)/2)
+ expect(a!.y+a!.height).toBeLessThan(b!.y)
+ expect(nodeLabel(root!)).toBe('Root')
+ expect(edgeGeometry(edges[0]!,nodes as any)?.path).toMatch(/^M 150 100 C/)
+ expect(edgeGeometry({...edges[0]!,fromSide:'right'},nodes as any)?.path).toMatch(/^M 300 50 C/)
+ model.undo();expect(model.source).toBe(before)
 })
 it('rejects invalid mutations and pasted unsafe paths without changing the original document',()=>{
   const model=new CanvasModel(fixture)

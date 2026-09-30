@@ -10,10 +10,10 @@ const diagnostic=computed(()=>{try{validateCanvasContent(editor.content);return'
 </script>
 <template>
   <section class="canvas-editor">
-    <div class="canvas-mode"><strong>JSON Canvas</strong><button class="button-secondary" :aria-pressed="source" @click="source=!source">{{ source?t('显示可视化画布','Show visual canvas'):t('查看 JSON 源码','View JSON source') }}</button></div>
+    <div v-if="source||diagnostic" class="canvas-mode"><strong>JSON Canvas</strong><button class="button-secondary" :aria-pressed="source" :disabled="!!diagnostic" @click="source=false">{{ t('显示可视化画布','Show visual canvas') }}</button></div>
     <p v-if="diagnostic" class="error-banner" role="alert">{{ t('无法显示画布，请在源码中修复；原文件会保留。','Cannot display this canvas. Repair its source; the original file is preserved.') }} {{ diagnostic }}</p>
     <CanvasSourceEditor v-if="source||diagnostic" />
-    <CanvasVisualEditor v-else />
+    <CanvasVisualEditor v-else><template #tools><button role="menuitem" @click="source=true">{{ t('查看 JSON 源码','View JSON source') }}</button></template></CanvasVisualEditor>
   </section>
 </template>
 <style scoped>

@@ -11,6 +11,7 @@ import ExportDialog from '@/features/editor/ExportDialog.vue'
 import ActionDialog from './ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
 import { t } from '@/i18n'
+import { captureWorkspaceSelection, openWorkspaceExtensions } from '@/services/workspaceCommandService'
 import { useRoute, useRouter } from 'vue-router'
 
 type MenuName = 'file' | 'edit' | 'paragraph' | 'format' | 'view' | 'theme' | 'help'
@@ -185,6 +186,7 @@ function menuItems(menu: Element) {
 }
 function handleKeys(event: KeyboardEvent) {
   const target = event.target as HTMLElement
+  if (target.closest('.editor-actions-host')) return
   const menu = target.closest('[role="menu"]')
   if (event.key === 'Escape') {
     event.preventDefault()
@@ -266,12 +268,13 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <div class="menu-group" role="none" data-menu="edit">
-      <button class="menu-trigger" role="menuitem" :aria-expanded="open === 'edit'" aria-haspopup="menu" @click="toggle('edit')" @pointerenter="open && focusFirst('edit')">{{ t('编辑', 'Edit') }}</button>
+      <button class="menu-trigger" role="menuitem" :aria-expanded="open === 'edit'" aria-haspopup="menu" @pointerdown="captureWorkspaceSelection" @click="toggle('edit')" @pointerenter="open && focusFirst('edit')">{{ t('编辑', 'Edit') }}</button>
       <div v-if="open === 'edit'" class="menu-popover" role="menu" :aria-label="t('编辑', 'Edit')">
         <button data-menu-item role="menuitem" :disabled="!enabled('editor.undo')" @click="command('editor.undo')"><span>{{ t('撤销', 'Undo') }}</span><kbd>Ctrl+Z</kbd></button>
         <button data-menu-item role="menuitem" :disabled="!enabled('editor.redo')" @click="command('editor.redo')"><span>{{ t('重做', 'Redo') }}</span><kbd>Ctrl+Shift+Z</kbd></button>
         <span class="menu-separator" role="separator" />
         <button data-menu-item role="menuitem" :disabled="!workspace.hasVault" @click="navigate('/search')"><span>{{ t('在知识库中搜索…', 'Search knowledge base…') }}</span></button>
+        <button data-menu-item data-extension-commands role="menuitem" :disabled="route.name !== 'workspace' || !workspace.activeFilePath" @click="close(); openWorkspaceExtensions()"><span>{{ t('扩展命令…', 'Extension commands…') }}</span></button>
       </div>
     </div>
     <div class="menu-group" role="none" data-menu="paragraph">
@@ -354,6 +357,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <span v-if="error" class="menu-error" role="alert">{{ error }}</span>
+    <div id="editor-actions-host" class="editor-actions-host" role="toolbar" :aria-label="t('当前文件操作', 'Current file actions')" />
   </nav>
 </template>
 
@@ -383,4 +387,5 @@ onBeforeUnmount(() => {
 .menu-popover small { padding: var(--space-xs) var(--space-md); color: var(--color-text-tertiary); white-space: normal; }
 .menu-context { display: block; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap !important; }
 .menu-error { margin-left: var(--space-md); color: var(--color-error); font-size: var(--font-size-xs); }
+.editor-actions-host { margin-left: auto; min-width: 0; }
 </style>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { registerWorkspaceCommands } from '@/services/workspaceCommandService'
 import { useRouter } from 'vue-router'
 import AppDialog from '@/components/common/AppDialog.vue'
 import { useEditorStore } from '@/stores/editor'
@@ -16,8 +17,10 @@ const commands = ref<PluginCommand[]>([]), selected = ref<PluginCommand | null>(
 const args = ref<Record<string, unknown>>({})
 const snapshot = ref<PluginCommandContext>({ vault_id: null, note_id: null, file_path: null, selection: null })
 let revision = 0
-function capture() {
-  const input = document.activeElement
+let disposeCommands: (() => void) | undefined
+onMounted(() => { disposeCommands = registerWorkspaceCommands({ captureSelection: () => capture(), openExtensions: () => { void show('toolbar') } }) })
+onBeforeUnmount(() => { revision++; disposeCommands?.() })
+function capture(input: EventTarget | null = document.activeElement) {
   const selection = input instanceof HTMLTextAreaElement
     ? input.value.slice(input.selectionStart, input.selectionEnd)
     : window.getSelection()?.toString() || ''
@@ -40,6 +43,9 @@ async function show(location: PluginCommandLocation) {
 function contextMenu(event: MouseEvent) {
   if (!(event.target instanceof Element) || !event.target.closest('.ProseMirror, .source')) return
   event.preventDefault(); capture(); void show('context_menu')
+}
+function captureEditorSelection(event: FocusEvent) {
+  if (!open.value && event.target instanceof Element && event.target.closest('.ProseMirror, .source')) capture(event.target)
 }
 function choose(command: PluginCommand) { selected.value = command; args.value = initialArguments(command) }
 function close() { if (!busy.value) { open.value = false; revision++ } }
@@ -72,11 +78,8 @@ async function run() {
 </script>
 
 <template>
-  <div class="workspace-plugin-host" @contextmenu="contextMenu">
-    <div class="workspace-plugin-toolbar" role="toolbar" :aria-label="t('扩展工具栏', 'Extension toolbar')">
-      <button class="button-secondary" @pointerdown.prevent="capture" @click="event => { if (!event.detail) capture(); show('toolbar') }">{{ t('扩展命令', 'Extension commands') }}</button>
-      <span v-if="notice" role="status">{{ notice }}</span>
-    </div>
+  <div class="workspace-plugin-host" @contextmenu="contextMenu" @focusout="captureEditorSelection">
+    <span v-if="notice" class="workspace-command-notice" role="status">{{ notice }}</span>
     <slot />
     <AppDialog v-if="open" :label="t('扩展命令', 'Extension commands')" :dismissible="!busy" @close="close">
       <section class="modal">
@@ -105,8 +108,7 @@ async function run() {
 
 <style scoped>
 .workspace-plugin-host { display: contents; }
-.workspace-plugin-toolbar { display: flex; gap: var(--space-sm); align-items: center; padding: var(--space-xs) var(--space-md); background: var(--color-background-secondary); border-bottom: 1px solid var(--color-border-default); }
-.workspace-plugin-toolbar span { overflow-wrap: anywhere; font-size: var(--font-size-sm); }
+.workspace-command-notice { padding: var(--space-xs) var(--space-md); overflow-wrap: anywhere; font-size: var(--font-size-sm); }
 .workspace-command-list, form { display: grid; gap: var(--space-sm); margin-block: var(--space-md); }
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); }
 </style>

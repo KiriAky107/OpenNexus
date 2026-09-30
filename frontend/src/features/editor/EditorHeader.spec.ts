@@ -52,3 +52,17 @@ it('does not discard text changed after confirmation was opened', async () => {
  expect(await editor.discardExternalChanges('/removed.md', 'before')).toBe(false)
  expect(editor.content).toBe('after')
 })
+
+it('removes duplicate file identity and docks actions in the menu while leaving conflict recovery in the workspace', async () => {
+ setActivePinia(createPinia())
+ const host=document.createElement('div');host.id='editor-actions-host';document.body.append(host)
+ const editor=useEditorStore();editor.currentFilePath='/map.canvas';editor.content='{"nodes":[],"edges":[]}';editor.saveStatus='saved'
+ const wrapper=mount(EditorHeader,{attachTo:document.body});await flushPromises()
+ try {
+  expect(host.querySelector('.editor-header.docked')).not.toBeNull()
+  expect(document.querySelector('.file-identity')).toBeNull()
+  editor.saveStatus='conflict';await flushPromises()
+  expect(host.querySelector('.editor-header')).toBeNull()
+  expect(wrapper.text()).toContain('下载 Canvas 副本')
+ } finally { wrapper.unmount();host.remove() }
+})

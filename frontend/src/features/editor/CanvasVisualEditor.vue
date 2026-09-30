@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed,ref,shallowRef,watch,onMounted,onBeforeUnmount } from 'vue'
+import { computed,ref,shallowRef,watch,onMounted,onBeforeUnmount,nextTick } from 'vue'
+import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
+import ControlIcon from '@/components/common/ControlIcon.vue'
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useSettingsStore } from '@/stores/settings'
@@ -15,16 +17,22 @@ import AppDialog from '@/components/common/AppDialog.vue'
 import { t } from '@/i18n'
 
 const editor=useEditorStore(),workspace=useWorkspaceStore(),settings=useSettingsStore()
+const layout=useLayoutPreferencesStore()
+const sidebar=computed({get:()=>layout.canvasInspectorVisible,set:value=>{layout.canvasInspectorVisible=value}})
+const toolsOpen=ref(false),toolsMenu=ref<HTMLElement>(),toolsTrigger=ref<HTMLButtonElement>()
+let fittedAll=false,viewReady=false
 const model=new CanvasModel(editor.content),document=shallowRef(model.document),historyRevision=ref(0)
 const viewport=ref<HTMLElement>(),viewportSize=ref({width:800,height:600}),pan=ref({x:60,y:60}),zoom=ref(1)
-const selected=ref<string[]>([]),selectedEdge=ref(''),error=ref(''),sidebar=ref(true),nodeFilter=ref(''),nodeCount=ref(100)
+const selected=ref<string[]>([]),selectedEdge=ref(''),error=ref(''),nodeFilter=ref(''),nodeCount=ref(100)
 const readOnly=computed(()=>['conflict','external_changed'].includes(editor.saveStatus))
 const canUndo=computed(()=>{void historyRevision.value;return model.canUndo}),canRedo=computed(()=>{void historyRevision.value;return model.canRedo})
 const picked=computed(()=>document.value.nodes.find(node=>node.id===selected.value[0])),edge=computed(()=>document.value.edges.find(edge=>edge.id===selectedEdge.value))
 const draft=ref({value:'',x:0,y:0,width:300,height:180,color:'',subpath:''}),edgeDraft=ref({label:'',fromSide:'right' as CanvasSide,toSide:'left' as CanvasSide,fromEnd:'none' as 'none'|'arrow',toEnd:'arrow' as 'none'|'arrow'})
 const creating=ref<'file'|'link'|null>(null),newValue=ref('')
 const paths=computed(()=>documentPaths(workspace.fileTree)),fileOptions=computed(()=>paths.value.filter(path=>['markdown','canvas','image'].includes(workspaceDocumentType(path))))
-const listed=computed(()=>document.value.nodes.filter(node=>nodeLabel(node).toLowerCase().includes(nodeFilter.value.toLowerCase())).slice(0,nodeCount.value))
+const filteredNodes=computed(()=>document.value.nodes.filter(node=>`${node.text??''} ${node.file??''} ${node.url??''} ${node.label??''}`.toLowerCase().includes(nodeFilter.value.trim().toLowerCase())))
+const listed=computed(()=>filteredNodes.value.slice(0,nodeCount.value))
+watch(nodeFilter,()=>{nodeCount.value=100})
 let disposed=false,space=false,clipboard='',resizeObserver:ResizeObserver|undefined,disposeCommands:(()=>void)|undefined,previewGeneration=0
 const previews=ref<Record<string,{text?:string;url?:string}>>({})
 const gesture=ref<{kind:'move'|'resize'|'pan'|'box';startX:number;startY:number;x:number;y:number;ids:string[];width?:number;height?:number;add?:boolean}>()
@@ -61,8 +69,8 @@ function copy(){clipboard=model.copy(selected.value);return clipboard}
 function paste(value=clipboard){if(!value)return;let ids:string[]=[];if(change(()=>{ids=model.paste(value)})){selected.value=ids;selectedEdge.value=''}}
 function onCopy(event:ClipboardEvent){if((event.target as HTMLElement).closest('input,textarea,select')||!selected.value.length)return;event.preventDefault();event.clipboardData?.setData('text/plain',copy())}
 function onPaste(event:ClipboardEvent){if((event.target as HTMLElement).closest('input,textarea,select'))return;const content=event.clipboardData?.getData('text/plain')??'';if(!content.includes('opennexus_canvas'))return;event.preventDefault();paste(content)}
-function fit(ids?:string[]){const nodes=ids?document.value.nodes.filter(node=>ids.includes(node.id)):document.value.nodes;const bounds=nodeBounds(nodes);zoom.value=Math.max(.1,Math.min(1.5,(viewportSize.value.width-100)/Math.max(100,bounds.width),(viewportSize.value.height-100)/Math.max(100,bounds.height)));pan.value={x:(viewportSize.value.width-bounds.width*zoom.value)/2-bounds.x*zoom.value,y:(viewportSize.value.height-bounds.height*zoom.value)/2-bounds.y*zoom.value};rememberView()}
-function magnify(factor:number,x=viewportSize.value.width/2,y=viewportSize.value.height/2){const next=Math.max(.1,Math.min(3,zoom.value*factor));pan.value={x:x-(x-pan.value.x)*next/zoom.value,y:y-(y-pan.value.y)*next/zoom.value};zoom.value=next;rememberView()}
+function fit(ids?:string[]){fittedAll=!ids;const nodes=ids?document.value.nodes.filter(node=>ids.includes(node.id)):document.value.nodes;const bounds=nodeBounds(nodes);zoom.value=Math.max(.1,Math.min(1.5,(viewportSize.value.width-64)/Math.max(100,bounds.width),(viewportSize.value.height-64)/Math.max(100,bounds.height)));pan.value={x:(viewportSize.value.width-bounds.width*zoom.value)/2-bounds.x*zoom.value,y:(viewportSize.value.height-bounds.height*zoom.value)/2-bounds.y*zoom.value};rememberView()}
+function magnify(factor:number,x=viewportSize.value.width/2,y=viewportSize.value.height/2){fittedAll=false;const next=Math.max(.1,Math.min(3,zoom.value*factor));pan.value={x:x-(x-pan.value.x)*next/zoom.value,y:y-(y-pan.value.y)*next/zoom.value};zoom.value=next;rememberView()}
 function wheel(event:WheelEvent){event.preventDefault();const rect=viewport.value!.getBoundingClientRect();magnify(Math.exp(-event.deltaY*.002),event.clientX-rect.left,event.clientY-rect.top)}
 function local(event:PointerEvent){const rect=viewport.value!.getBoundingClientRect();return{x:event.clientX-rect.left,y:event.clientY-rect.top}}
 function begin(event:PointerEvent,node?:CanvasNode,resize=false){
@@ -82,7 +90,7 @@ function begin(event:PointerEvent,node?:CanvasNode,resize=false){
   gesture.value={kind,startX:point.x,startY:point.y,x:point.x,y:point.y,ids,add:event.shiftKey}
   viewport.value?.setPointerCapture?.(event.pointerId)
 }
-function move(event:PointerEvent){const active=gesture.value;if(!active)return;const point=local(event);if(active.kind==='pan'){pan.value={x:pan.value.x+point.x-active.x,y:pan.value.y+point.y-active.y}}active.x=point.x;active.y=point.y}
+function move(event:PointerEvent){const active=gesture.value;if(!active)return;const point=local(event);if(active.kind==='pan'){fittedAll=false;pan.value={x:pan.value.x+point.x-active.x,y:pan.value.y+point.y-active.y}}active.x=point.x;active.y=point.y}
 function end(event:PointerEvent){const active=gesture.value;if(!active)return;const offset={...delta.value},rectangle=box.value
   gesture.value=undefined;viewport.value?.releasePointerCapture?.(event.pointerId)
   if(active.kind==='move'&&(Math.abs(offset.x)>1||Math.abs(offset.y)>1))change(()=>model.move(active.ids,offset.x,offset.y))
@@ -104,7 +112,16 @@ function keydown(event:KeyboardEvent){
   const movement:Record<string,[number,number]>={arrowleft:[-1,0],arrowright:[1,0],arrowup:[0,-1],arrowdown:[0,1]}
   if(movement[key]&&selected.value.length){event.preventDefault();const[dx,dy]=movement[key];change(()=>model.move(selected.value,dx*(event.shiftKey?1:10),dy*(event.shiftKey?1:10)))}
 }
-function locate(id:string){select(id);fit([id]);sidebar.value=true;viewport.value?.focus()}
+function locate(id:string){select(id);sidebar.value=true;void nextTick(()=>{fit([id]);viewport.value?.focus()})}
+function closeTools(event:PointerEvent){if(!toolsMenu.value?.contains(event.target as Node))toolsOpen.value=false}
+async function toggleTools(){toolsOpen.value=!toolsOpen.value;if(toolsOpen.value){await nextTick();toolsMenu.value?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus()}}
+function toolsKeys(event:KeyboardEvent){
+  if(event.key==='Escape'){event.preventDefault();event.stopPropagation();toolsOpen.value=false;toolsTrigger.value?.focus();return}
+  if(!['ArrowDown','ArrowUp','Home','End','Tab'].includes(event.key))return
+  if(event.key==='Tab'){toolsOpen.value=false;return}
+  event.preventDefault();event.stopPropagation();const items=[...toolsMenu.value!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')],index=items.indexOf(event.target as HTMLButtonElement)
+  items[event.key==='Home'?0:event.key==='End'?items.length-1:(index+(event.key==='ArrowDown'?1:-1)+items.length)%items.length]?.focus()
+}
 watch(()=>editor.canvasNodeRequest,request=>{if(request?.path===editor.currentFilePath)locate(request.nodeId)},{immediate:true})
 async function open(node:CanvasNode){
   try{
@@ -143,22 +160,39 @@ watch([()=>workspace.vaultId,()=>JSON.stringify(visibleNodes.value.map(node=>ima
   Object.values(previews.value).forEach(value=>{if(value.url)URL.revokeObjectURL(value.url)});previews.value=next
 },{immediate:true})
 onMounted(()=>{
-  const measure=()=>{if(viewport.value)viewportSize.value={width:viewport.value.clientWidth||800,height:viewport.value.clientHeight||600}}
+  window.addEventListener('pointerdown',closeTools)
+  const measure=()=>{if(!viewport.value)return;const size={width:viewport.value.clientWidth||800,height:viewport.value.clientHeight||600},previous=viewportSize.value;viewportSize.value=size;if(!viewReady)return;if(fittedAll)fit();else{pan.value={x:pan.value.x+(size.width-previous.width)/2,y:pan.value.y+(size.height-previous.height)/2};rememberView()}}
   measure();if(typeof ResizeObserver!=='undefined'){resizeObserver=new ResizeObserver(measure);resizeObserver.observe(viewport.value!)}
   let restored=false;try{const saved=JSON.parse(localStorage.getItem(viewKey())??'null');if(saved&&Number.isFinite(saved.zoom)&&saved.zoom>=.1&&saved.zoom<=3&&Number.isFinite(saved.pan?.x)&&Number.isFinite(saved.pan?.y)){pan.value=saved.pan;zoom.value=saved.zoom;restored=true}}catch{/* no view state */}if(!restored)fit()
+  viewReady=true
   const request=editor.canvasNodeRequest;if(request?.path===editor.currentFilePath)locate(request.nodeId)
   disposeCommands=registerEditorCommands({available:()=>!disposed&&!readOnly.value,handlers:{'editor.undo':()=>change(()=>model.undo())?{ok:true}:{ok:false,reason:'unavailable'},'editor.redo':()=>change(()=>model.redo())?{ok:true}:{ok:false,reason:'unavailable'}}})
 })
-onBeforeUnmount(()=>{disposed=true;previewGeneration++;resizeObserver?.disconnect();disposeCommands?.();Object.values(previews.value).forEach(value=>{if(value.url)URL.revokeObjectURL(value.url)})})
+onBeforeUnmount(()=>{disposed=true;previewGeneration++;window.removeEventListener('pointerdown',closeTools);resizeObserver?.disconnect();disposeCommands?.();Object.values(previews.value).forEach(value=>{if(value.url)URL.revokeObjectURL(value.url)})})
 </script>
 
 <template>
   <div class="canvas-visual" @keydown="keydown" @keyup.space="space=false" @copy="onCopy" @paste="onPaste">
     <div class="canvas-toolbar" role="toolbar" :aria-label="t('画布操作','Canvas operations')">
-      <button class="button-secondary" :disabled="readOnly" @click="add('text',t('新文字','New text'))">{{ t('文字','Text') }}</button><button class="button-secondary" :disabled="readOnly" @click="beginAdd('file')">{{ t('笔记／图片','Note / image') }}</button><button class="button-secondary" :disabled="readOnly" @click="beginAdd('link')">{{ t('网址','URL') }}</button><button class="button-secondary" :disabled="readOnly" @click="selected.length?group():add('group',t('分组','Group'))">{{ t('分组','Group') }}</button>
-      <button class="button-secondary" :disabled="readOnly||selected.length!==2" @click="connect">{{ t('连接所选节点','Connect selected nodes') }}</button><button class="button-secondary" :disabled="!selected.length" @click="copy">{{ t('复制','Copy') }}</button><button class="button-secondary" :disabled="readOnly" @click="paste()">{{ t('粘贴','Paste') }}</button><button class="button-secondary" :disabled="readOnly||(!selected.length&&!selectedEdge)" @click="remove">{{ t('删除所选','Delete selected') }}</button>
-      <button class="button-secondary" :disabled="readOnly||!canUndo" @click="change(()=>model.undo())">{{ t('撤销','Undo') }}</button><button class="button-secondary" :disabled="readOnly||!canRedo" @click="change(()=>model.redo())">{{ t('重做','Redo') }}</button><button class="button-secondary" :disabled="readOnly||!document.nodes.length" @click="change(()=>model.mindMap(selected[0]))&&fit()">{{ t('整理为思维导图','Arrange as mind map') }}</button>
-      <button class="button-secondary" :aria-pressed="sidebar" @click="sidebar=!sidebar">{{ t('节点与属性','Nodes and properties') }}</button>
+      <div class="canvas-tool-group">
+        <button class="button-secondary" :disabled="readOnly" @click="add('text',t('新文字','New text'))">{{ t('文字','Text') }}</button><button class="button-secondary" :disabled="readOnly" @click="beginAdd('file')">{{ t('笔记／图片','Note / image') }}</button><button class="button-secondary" :disabled="readOnly" @click="beginAdd('link')">{{ t('网址','URL') }}</button><button class="button-secondary" :disabled="readOnly" @click="selected.length?group():add('group',t('分组','Group'))">{{ t('分组','Group') }}</button>
+      </div>
+      <div class="canvas-tool-group canvas-history-tools">
+        <button class="button-secondary canvas-icon-button" :title="t('连接所选节点','Connect selected nodes')" :aria-label="t('连接所选节点','Connect selected nodes')" :disabled="readOnly||selected.length!==2" @click="connect"><ControlIcon name="link" /></button>
+        <button class="button-secondary canvas-icon-button" :title="t('撤销','Undo')+' · Ctrl+Z'" :disabled="readOnly||!canUndo" @click="change(()=>model.undo())"><ControlIcon name="undo" /><span class="canvas-sr-only">{{ t('撤销','Undo') }}</span></button><button class="button-secondary canvas-icon-button" :title="t('重做','Redo')+' · Ctrl+Shift+Z'" :disabled="readOnly||!canRedo" @click="change(()=>model.redo())"><ControlIcon name="redo" /><span class="canvas-sr-only">{{ t('重做','Redo') }}</span></button>
+      </div>
+      <div class="canvas-view-tools">
+        <div ref="toolsMenu" class="canvas-tools-menu">
+          <button ref="toolsTrigger" class="button-secondary canvas-icon-button" :title="t('更多画布操作','More canvas actions')" :aria-label="t('更多画布操作','More canvas actions')" aria-haspopup="menu" :aria-expanded="toolsOpen" @click="toggleTools" @keydown.down.prevent="!toolsOpen&&toggleTools()">···</button>
+          <div v-if="toolsOpen" class="canvas-tools-popover" role="menu" :aria-label="t('更多画布操作','More canvas actions')" @keydown="toolsKeys" @click="toolsOpen=false">
+            <button role="menuitem" :disabled="!selected.length" @click="copy">{{ t('复制','Copy') }}</button><button role="menuitem" :disabled="readOnly" @click="paste()">{{ t('粘贴','Paste') }}</button><button role="menuitem" :disabled="readOnly||(!selected.length&&!selectedEdge)" @click="remove">{{ t('删除所选','Delete selected') }}</button>
+            <span class="canvas-menu-divider" role="separator" />
+            <button role="menuitem" :disabled="readOnly||!document.nodes.length" @click="change(()=>model.mindMap(selected[0]))&&fit()">{{ t('整理为思维导图','Arrange as mind map') }}</button>
+            <slot name="tools" />
+          </div>
+        </div>
+        <button class="button-secondary inspector-toggle" :aria-expanded="sidebar" :aria-label="sidebar?t('隐藏右侧栏','Hide right sidebar'):t('显示右侧栏','Show right sidebar')" :title="sidebar?t('隐藏右侧栏','Hide right sidebar'):t('显示右侧栏','Show right sidebar')" @click="sidebar=!sidebar"><ControlIcon name="panelClose" :class="{ mirrored: sidebar }" /><span>{{ t('节点与属性','Nodes and properties') }}</span></button>
+      </div>
     </div>
     <p v-if="error" class="error-banner canvas-error" role="alert">{{ error }}</p>
     <div class="canvas-body">
@@ -166,13 +200,13 @@ onBeforeUnmount(()=>{disposed=true;previewGeneration++;resizeObserver?.disconnec
         <div class="canvas-world" :style="{transform:`translate(${pan.x}px,${pan.y}px) scale(${zoom})`}">
           <svg class="canvas-edges" width="1" height="1" :style="{zIndex:document.nodes.length+1}" aria-label="节点连接"><defs><marker id="canvas-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse" markerUnits="strokeWidth"><path d="M 0 0 L 8 4 L 0 8 z" fill="context-stroke" /></marker></defs>
             <g v-for="{edge:line,geometry} in edges" :key="line.id" class="canvas-edge" :class="{'edge-selected':selectedEdge===line.id}" role="button" tabindex="0" :aria-label="`${t('连接','Connection')}: ${line.label??line.fromNode+' → '+line.toNode}`" @pointerdown.stop @click="selectedEdge=line.id;selected=[]" @keydown.enter.stop="selectedEdge=line.id;selected=[]">
-              <path :d="geometry!.path" fill="none" :stroke="color(line.color)" :stroke-width="selectedEdge===line.id?4:2" :marker-start="line.fromEnd==='arrow'?'url(#canvas-arrow)':undefined" :marker-end="line.toEnd==='none'?undefined:'url(#canvas-arrow)'"/><path :d="geometry!.path" fill="none" stroke="transparent" stroke-width="16" />
+              <path :d="geometry!.path" fill="none" :stroke="line.color?color(line.color):'var(--color-text-tertiary)'" :stroke-width="selectedEdge===line.id?4:2" :marker-start="line.fromEnd==='arrow'?'url(#canvas-arrow)':undefined" :marker-end="line.toEnd==='none'?undefined:'url(#canvas-arrow)'"/><path :d="geometry!.path" fill="none" stroke="transparent" stroke-width="16" />
               <text v-if="line.label" :x="geometry!.x" :y="geometry!.y-8" text-anchor="middle">{{ line.label.slice(0,120) }}</text>
             </g>
           </svg>
           <div v-for="node in visibleNodes" :key="node.id" class="canvas-node" :class="[node.type,{selected:selected.includes(node.id)}]" :data-node-id="node.id" tabindex="0" role="group" :aria-label="`${node.type}: ${nodeLabel(node)}`" :style="{left:`${node.x}px`,top:`${node.y}px`,width:`${node.width}px`,height:`${node.height}px`,borderColor:color(node.color),zIndex:document.nodes.findIndex(value=>value.id===node.id)+1}" @pointerdown.stop="begin($event,node)" @keydown.enter.prevent.stop="locate(node.id)">
             <header><span>{{ node.type==='text'?t('文字','Text'):node.type==='file'?t('文件','File'):node.type==='link'?t('网址','URL'):node.label??t('分组','Group') }}</span><button v-if="node.type==='file'&&['markdown','canvas'].includes(workspaceDocumentType(node.file??''))||node.type==='link'" class="node-open" :aria-label="t('打开节点目标','Open node target')" @pointerdown.stop @click.stop="open(node)">↗</button></header>
-            <div class="canvas-node-content"><template v-if="node.type==='text'">{{ node.text }}</template><template v-else-if="node.type==='link'"><strong>{{ node.url }}</strong><p>{{ t('选择打开时会使用浏览器。','Opens in your browser when selected.') }}</p></template><template v-else-if="node.type==='file'"><strong>{{ node.file }}</strong><img v-if="previews[node.file??'']?.url" :src="previews[node.file??'']!.url" :alt="node.file??''" draggable="false"/><p v-else>{{ previews[node.file??'']?.text??t('读取引用内容…','Loading referenced content…') }}</p></template><div v-else-if="node.background&&previews[node.background]?.url" class="canvas-group-background" role="img" :aria-label="node.label??node.background" :style="groupBackground(node)"/></div>
+            <div class="canvas-node-content"><template v-if="node.type==='text'">{{ node.text }}</template><template v-else-if="node.type==='link'"><strong>{{ node.url }}</strong><p>{{ t('选择打开时会使用浏览器。','Opens in your browser when selected.') }}</p></template><template v-else-if="node.type==='file'"><strong :title="node.file">{{ nodeLabel(node) }}</strong><img v-if="previews[node.file??'']?.url" :src="previews[node.file??'']!.url" :alt="node.file??''" draggable="false"/><p v-else>{{ previews[node.file??'']?.text??t('读取引用内容…','Loading referenced content…') }}</p></template><div v-else-if="node.background&&previews[node.background]?.url" class="canvas-group-background" role="img" :aria-label="node.label??node.background" :style="groupBackground(node)"/></div>
             <button v-if="selected.includes(node.id)&&!readOnly" class="node-resize" :aria-label="t('调整节点尺寸','Resize node')" @pointerdown.stop="begin($event,node,true)">↘</button>
           </div>
         </div>
@@ -180,10 +214,11 @@ onBeforeUnmount(()=>{disposed=true;previewGeneration++;resizeObserver?.disconnec
         <p v-if="!document.nodes.length" class="canvas-empty">{{ t('添加文字、笔记、图片或网址开始构建画布。','Add text, notes, images or URLs to start your canvas.') }}</p>
       </div>
       <aside v-if="sidebar" class="canvas-inspector" :aria-label="t('画布节点与连接','Canvas nodes and connections')">
+        <div class="canvas-inspector-heading"><strong>{{ t('节点与属性','Nodes and properties') }}</strong><button class="button-secondary canvas-icon-button" :aria-label="t('收起右侧栏','Collapse right sidebar')" :title="t('收起右侧栏','Collapse right sidebar')" @click="sidebar=false"><ControlIcon name="close" :size="16" /></button></div>
         <p class="subtle">{{ t('Shift 选择两个节点后连接；拖动空白区域框选，空格拖动平移。','Shift-select two nodes to connect. Drag empty space to select; Space-drag to pan.') }}</p>
         <form v-if="picked" class="node-properties" @submit.prevent="applyNode"><strong>{{ t('节点属性','Node properties') }} · {{ selected.length }}</strong><label>{{ picked.type==='file'?t('知识库相对路径','Vault-relative path'):picked.type==='link'?'URL':t('内容','Content') }}<textarea v-model="draft.value" class="textarea" :aria-label="t('节点内容','Node content')" :disabled="readOnly" rows="4" /></label><div class="node-dimensions"><label v-for="field in (['x','y','width','height'] as const)" :key="field">{{ field }}<input v-model.number="draft[field]" class="input" type="number" :aria-label="field" :disabled="readOnly" /></label></div><label>{{ t('颜色','Color') }}<select v-model="draft.color" class="select" :disabled="readOnly"><option value="">{{ t('默认','Default') }}</option><option v-for="value in ['1','2','3','4','5','6']" :key="value" :value="value">{{ value }}</option><option v-if="draft.color.startsWith('#')" :value="draft.color">{{ draft.color }}</option></select></label><label v-if="picked.type==='file'">{{ t('标题或块子路径','Heading or block subpath') }}<input v-model="draft.subpath" class="input" placeholder="#heading" :disabled="readOnly" /></label><button class="button-primary" :disabled="readOnly">{{ t('应用属性修改','Apply property changes') }}</button></form>
         <form v-if="edge" class="node-properties" @submit.prevent="applyEdge"><strong>{{ t('连接属性','Connection properties') }}</strong><label>{{ t('连线标签','Connection label') }}<input v-model="edgeDraft.label" class="input" :aria-label="t('连线标签','Connection label')" :disabled="readOnly" /></label><label v-for="field in (['fromSide','toSide'] as const)" :key="field">{{ field }}<select v-model="edgeDraft[field]" class="select" :disabled="readOnly"><option v-for="side in ['left','right','top','bottom']" :key="side" :value="side">{{ side }}</option></select></label><label v-for="field in (['fromEnd','toEnd'] as const)" :key="field">{{ field }}<select v-model="edgeDraft[field]" class="select" :disabled="readOnly"><option value="none">{{ t('无箭头','No arrow') }}</option><option value="arrow">{{ t('箭头','Arrow') }}</option></select></label><button class="button-primary" :disabled="readOnly">{{ t('应用连接修改','Apply connection changes') }}</button></form>
-        <h3>{{ t('节点列表','Node list') }} · {{ document.nodes.length }}</h3><input v-model="nodeFilter" class="input" :aria-label="t('筛选画布节点','Filter canvas nodes')"/><div class="canvas-node-list"><button v-for="node in listed" :key="node.id" class="button-secondary" :aria-pressed="selected.includes(node.id)" @click="locate(node.id)">{{ node.type }} · {{ nodeLabel(node) }}</button><button v-if="nodeCount<document.nodes.length" class="button-secondary" @click="nodeCount+=100">{{ t('更多节点','More nodes') }}</button></div>
+        <h3>{{ t('节点列表','Node list') }} · {{ document.nodes.length }}</h3><input v-model="nodeFilter" class="input" :aria-label="t('筛选画布节点','Filter canvas nodes')"/><div class="canvas-node-list"><button v-for="node in listed" :key="node.id" class="button-secondary" :aria-pressed="selected.includes(node.id)" :data-list-node-id="node.id" :title="String(node.text??node.file??node.url??node.label??'')" @click="locate(node.id)"><span class="node-kind">{{ node.type }} · </span><span class="node-label">{{ nodeLabel(node) }}</span></button><button v-if="nodeCount<filteredNodes.length" class="button-secondary" @click="nodeCount+=100">{{ t('更多节点','More nodes') }}</button></div>
         <h3>{{ t('连接列表','Connection list') }} · {{ document.edges.length }}</h3><div class="canvas-node-list"><button v-for="line in document.edges.filter(value=>!selected.length||selected.includes(value.fromNode)||selected.includes(value.toNode)).slice(0,100)" :key="line.id" class="button-secondary" @click="selectedEdge=line.id;selected=[]">{{ line.label??`${nodeLabel(document.nodes.find(node=>node.id===line.fromNode)!)} → ${nodeLabel(document.nodes.find(node=>node.id===line.toNode)!)}` }}</button></div>
       </aside>
     </div>
@@ -195,4 +230,33 @@ onBeforeUnmount(()=>{disposed=true;previewGeneration++;resizeObserver?.disconnec
 <style scoped>
 .canvas-group-background{position:absolute;inset:0;z-index:-1;pointer-events:none}
 .canvas-visual{display:flex;flex:1;min-height:0;min-width:0;flex-direction:column;color:var(--color-text-primary)}.canvas-toolbar{display:flex;gap:var(--space-xs);padding:var(--space-sm);flex-wrap:wrap;border-bottom:1px solid var(--color-border-default)}.canvas-toolbar button{font-size:var(--font-size-xs)}.canvas-body{display:flex;flex:1;min-height:0;min-width:0}.canvas-viewport{position:relative;flex:1;overflow:hidden;min-height:200px;min-width:0;touch-action:none;background-color:var(--color-background-secondary);background-image:radial-gradient(var(--color-border-default) 1px,transparent 1px);background-size:20px 20px;user-select:none}.canvas-world{position:absolute;left:0;top:0;transform-origin:0 0;pointer-events:none}.canvas-edges{position:absolute;overflow:visible;pointer-events:none}.canvas-edge{pointer-events:stroke;cursor:pointer}.canvas-edge text{fill:var(--color-text-primary);font-size:14px;paint-order:stroke;stroke:var(--color-background-secondary);stroke-width:5px;pointer-events:auto}.canvas-node{position:absolute;box-sizing:border-box;border:2px solid var(--color-border-default);border-radius:var(--radius-md);background:var(--color-surface-primary);box-shadow:var(--shadow-sm);display:flex;flex-direction:column;overflow:hidden;pointer-events:auto;cursor:grab}.canvas-node.selected{outline:3px solid var(--color-border-focus);outline-offset:2px}.canvas-node.group{background:color-mix(in srgb,var(--color-accent-soft) 25%,transparent);box-shadow:none}.canvas-node header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--color-border-subtle);font-size:12px;color:var(--color-text-secondary);min-height:20px}.canvas-node-content{flex:1;min-height:0;padding:12px;white-space:pre-wrap;overflow:hidden;overflow-wrap:anywhere;font-size:14px;line-height:1.5}.canvas-node-content p{font-size:12px;color:var(--color-text-secondary);margin-block:8px}.canvas-node-content img{width:100%;height:calc(100% - 24px);object-fit:contain}.node-open{cursor:pointer;border:1px solid var(--color-border-default);border-radius:var(--radius-sm);width:24px;height:24px;background:var(--color-background-primary);color:var(--color-text-primary)}.node-resize{position:absolute;bottom:0;right:0;width:24px;height:24px;cursor:nwse-resize;background:var(--color-accent-soft);color:var(--color-text-primary)}.canvas-selection-box{position:absolute;border:1px solid var(--color-border-focus);background:var(--color-accent-soft);opacity:.65;pointer-events:none}.canvas-inspector{width:270px;flex-shrink:0;overflow:auto;padding:var(--space-md);border-left:1px solid var(--color-border-default);background:var(--color-surface-primary)}.canvas-inspector h3{font-size:var(--font-size-sm);margin-block:var(--space-lg) var(--space-sm)}.canvas-inspector .subtle{font-size:var(--font-size-xs)}.node-properties{display:grid;gap:var(--space-sm);margin-bottom:var(--space-lg)}label{display:grid;gap:var(--space-xs);font-size:var(--font-size-xs)}.node-dimensions{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-sm)}.canvas-inspector input,.canvas-inspector textarea,.canvas-inspector select{width:100%;min-width:0;box-sizing:border-box}.canvas-node-list{display:grid;gap:var(--space-xs);margin-top:var(--space-sm)}.canvas-node-list button{text-align:left;overflow-wrap:anywhere;white-space:normal;font-size:var(--font-size-xs)}.canvas-status{display:flex;justify-content:space-between;align-items:center;gap:var(--space-sm);padding:var(--space-sm);border-top:1px solid var(--color-border-default);font-size:var(--font-size-xs);flex-wrap:wrap}.canvas-empty{position:absolute;top:40%;left:15%;right:15%;text-align:center;color:var(--color-text-secondary);pointer-events:none}.canvas-create{display:grid;gap:var(--space-lg);width:min(520px,100%)}.canvas-error{margin:0;padding:var(--space-sm)}@media(max-width:640px){.canvas-inspector{width:180px;padding:var(--space-sm)}.canvas-body{flex-direction:column}.canvas-inspector{width:auto;max-height:35%;border-left:0;border-top:1px solid var(--color-border-default)}.canvas-viewport{min-height:180px}.canvas-toolbar{max-height:100px;overflow:auto}.canvas-node-list{grid-template-columns:repeat(2,minmax(0,1fr))}} 
+
+.canvas-toolbar { position: relative; z-index: 12; align-items: center; gap: 10px; padding: 7px 12px; background: var(--color-surface-primary); }
+.canvas-toolbar .button-secondary { height: 30px; padding: 4px 10px; }
+.canvas-tool-group, .canvas-view-tools { display: flex; align-items: center; gap: 4px; }
+.canvas-history-tools { border-left: 1px solid var(--color-border-default); padding-left: 10px; }
+.canvas-view-tools { margin-left: auto; gap: 8px; }
+.canvas-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0 !important; }
+.canvas-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.inspector-toggle { display: inline-flex; align-items: center; gap: 7px; }
+.inspector-toggle[aria-expanded="true"] { color: var(--color-accent-primary); background: var(--color-accent-soft); }
+.mirrored { transform: scaleX(-1); }
+.canvas-tools-menu { position: relative; }
+.canvas-tools-popover { position: absolute; right: 0; top: calc(100% + 8px); width: max-content; min-width: 190px; padding: 6px; display: grid; border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-surface-elevated); box-shadow: var(--shadow-lg); }
+.canvas-tools-popover :deep(button) { width: 100%; text-align: left; padding: 8px 12px; font-size: var(--font-size-sm); border-radius: var(--radius-sm); white-space: nowrap; }
+.canvas-tools-popover :deep(button:hover:not(:disabled)), .canvas-tools-popover :deep(button:focus-visible) { background: var(--color-accent-soft); color: var(--color-accent-primary); }
+.canvas-menu-divider { height: 1px; background: var(--color-border-subtle); margin: 5px; }
+.canvas-inspector { box-sizing: border-box; width: 244px; padding: 0 12px 12px; }
+.canvas-inspector-heading { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 0; background: var(--color-surface-primary); font-size: var(--font-size-sm); }
+.canvas-inspector .subtle { line-height: 1.6; margin: 0 0 14px; }
+.canvas-inspector h3 { margin-block: 18px 8px; }
+.canvas-node-list button { display: flex; align-items: flex-start; gap: 4px; height: auto; min-height: 36px; padding: 8px 10px; line-height: 1.4; }
+.canvas-node-list button[aria-pressed="true"] { border-color: var(--color-border-focus); color: var(--color-accent-primary); background: var(--color-accent-soft); }
+.node-kind { flex-shrink: 0; color: var(--color-text-tertiary); font-size: 10px; line-height: 1.7; }
+.node-label { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.canvas-node header > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.canvas-node-content > strong { display: block; font-size: 14px; }
+.canvas-status { min-height: 40px; padding: 4px 12px; background: var(--color-surface-primary); }
+.canvas-status button { min-width: 28px; height: 28px; padding: 3px 8px; }
+@media (max-width: 640px) { .canvas-toolbar { max-height: none; overflow: visible; gap: 6px; } .canvas-inspector { width: auto; max-height: 40%; } .canvas-node-list { grid-template-columns: 1fr; } .inspector-toggle > span { display: none; } .canvas-view-tools { gap: 4px; } }
 </style>

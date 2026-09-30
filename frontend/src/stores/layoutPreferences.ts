@@ -12,6 +12,10 @@ export const useLayoutPreferencesStore = defineStore('layoutPreferences', () => 
   const chatWidth = ref(width('chat-sidebar-width'))
   // Local presentation choices; do not add them to the portable sync schema.
   const editorToolbarVisible = ref(stored('editor-toolbar-visible') !== 'false')
+  const canvasInspectorVisible = ref(stored('canvas-inspector-visible') === 'true')
+  watch(canvasInspectorVisible, value => {
+    try { localStorage.setItem('canvas-inspector-visible', String(value)) } catch { /* Session-only preference. */ }
+  }, { flush: 'sync' })
   const workspaceCollapsed = ref(stored('workspace-sidebar-collapsed') === 'true')
   const workspaceTab = ref<'files' | 'outline'>(stored('workspace-sidebar-tab') === 'outline' ? 'outline' : 'files')
   const chatSidebarCollapsed = ref(stored('chat-sidebar-collapsed') === 'true')
@@ -53,7 +57,7 @@ export const useLayoutPreferencesStore = defineStore('layoutPreferences', () => 
       localStorage.setItem('chat-settings-collapsed', String(chatSettingsCollapsed.value))
     } catch { /* Keep the current session usable without local storage. */ }
   }, { flush: 'sync' })
-  return { primaryExpanded, workspaceWidth, chatWidth, editorToolbarVisible, workspaceCollapsed, workspaceTab,
+  return { primaryExpanded, workspaceWidth, chatWidth, editorToolbarVisible, canvasInspectorVisible, workspaceCollapsed, workspaceTab,
     chatSidebarCollapsed, chatSettingsCollapsed, focusMode, toggleFocusMode,
     toggleChatSidebar, toggleChatSettings, showWorkspacePanel, toggleWorkspacePanel }
 })

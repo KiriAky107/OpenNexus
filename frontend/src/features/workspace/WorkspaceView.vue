@@ -13,7 +13,6 @@ import WorkspacePluginCommands from './WorkspacePluginCommands.vue'
 import { EditPen } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { t } from '@/i18n'
-import VaultReferencesPanel from './VaultReferencesPanel.vue'
 import FolderContents from './FolderContents.vue'
 
 const WorkspaceChat = defineAsyncComponent(() => import('../chat/WorkspaceChat.vue'))
@@ -56,7 +55,6 @@ async function newNote() {
     <template v-else-if="workspaceStore.activeFilePath">
       <EditorHeader />
       <WorkspacePluginCommands><EditorPane /></WorkspacePluginCommands>
-      <VaultReferencesPanel />
     </template>
     <div v-else class="empty-workspace">
       <div class="empty-content">
@@ -73,6 +71,7 @@ async function newNote() {
 
 <style scoped>
 .workspace-chat-launcher { position: absolute; right: 72px; bottom: 24px; z-index: 11; width: 42px; height: 42px; border-radius: var(--radius-full); background: var(--color-editor-scroll-background); color: var(--color-editor-scroll-text); box-shadow: var(--shadow-sm); }
+.workspace-view:has(.canvas-editor) .workspace-chat-launcher { right: 16px; bottom: 64px; }
 
 .workspace-view {
   position: relative;

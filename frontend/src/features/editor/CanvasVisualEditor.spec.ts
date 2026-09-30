@@ -4,6 +4,7 @@ import {beforeEach,afterEach,expect,it,vi} from 'vitest'
 import {createPinia,setActivePinia} from 'pinia'
 import {useEditorStore} from '@/stores/editor'
 import {useWorkspaceStore} from '@/stores/workspace'
+import {useLayoutPreferencesStore} from '@/stores/layoutPreferences'
 import * as service from '@/services/workspaceService'
 import {executeEditorCommand} from '@/services/editorCommandService'
 import CanvasVisualEditor from './CanvasVisualEditor.vue'
@@ -11,6 +12,7 @@ import CanvasEditor from './CanvasEditor.vue'
 const fixture=JSON.stringify({nodes:[{id:'a',type:'text',x:0,y:0,width:300,height:180,text:'Root',custom:'keep'},{id:'b',type:'file',x:400,y:0,width:300,height:180,file:'course/note.md',subpath:'#heading'}],edges:[{id:'e',fromNode:'a',toNode:'b',label:'Evidence'}],extension:{keep:true}})
 beforeEach(()=>{
  localStorage.clear();setActivePinia(createPinia());const editor=useEditorStore();editor.currentFilePath='/map.canvas';editor.content=fixture;editor.saveStatus='saved';vi.spyOn(editor,'scheduleAutoSave').mockImplementation(()=>{})
+ useLayoutPreferencesStore().canvasInspectorVisible=true
  const workspace=useWorkspaceStore();workspace.vaultId='one';workspace.fileTree=[{id:'course',name:'course',path:'/course',type:'folder',children:[{id:'note',name:'note.md',path:'/course/note.md',type:'file',content_hash:'h'}]}]
  vi.spyOn(service,'readFileContent').mockResolvedValue('# Actual note\n\nReal preview.')
 })
@@ -23,11 +25,26 @@ it('edits using the keyboard and property inspector, preserves extensions, copie
  const editor=useEditorStore();expect(JSON.parse(editor.content).nodes[0]).toMatchObject({x:10,custom:'keep'})
  await wrapper.get('[aria-label="节点内容"]').setValue('Edited');await wrapper.get('.node-properties').trigger('submit')
  expect(JSON.parse(editor.content).nodes[0].text).toBe('Edited');expect(JSON.parse(editor.content).extension).toEqual({keep:true})
- await button(wrapper,'复制').trigger('click');await button(wrapper,'粘贴').trigger('click');expect(JSON.parse(editor.content).nodes).toHaveLength(3)
+ await wrapper.get('[aria-label="更多画布操作"]').trigger('click');await button(wrapper,'复制').trigger('click');await wrapper.get('[aria-label="更多画布操作"]').trigger('click');await button(wrapper,'粘贴').trigger('click');expect(JSON.parse(editor.content).nodes).toHaveLength(3)
  await executeEditorCommand('editor.undo');expect(JSON.parse(editor.content).nodes).toHaveLength(2)
- await button(wrapper,'整理为思维导图').trigger('click');await button(wrapper,'撤销').trigger('click')
+ await wrapper.get('[aria-label="更多画布操作"]').trigger('click');await button(wrapper,'整理为思维导图').trigger('click');await button(wrapper,'撤销').trigger('click')
  expect(JSON.parse(editor.content).nodes[0].text).toBe('Edited');wrapper.unmount()
  expect(await executeEditorCommand('editor.undo')).toEqual({ok:false,reason:'unavailable'})
+})
+
+it('remembers a collapsed inspector, searches full paths and keeps long node bodies out of the list',async()=>{
+ const editor=useEditorStore();editor.content=JSON.stringify({nodes:[{id:'a',type:'text',x:0,y:0,width:300,height:180,text:'# Short title\n\nLong body with a search term'},{id:'b',type:'file',x:400,y:0,width:300,height:180,file:'course/note.md'}],edges:[]})
+ const wrapper=mount(CanvasVisualEditor);await flushPromises()
+ expect(wrapper.get('[data-list-node-id="a"]').text()).toBe('text · Short title')
+ await wrapper.get('[aria-label="筛选画布节点"]').setValue('course/')
+ expect(wrapper.findAll('[data-list-node-id]')).toHaveLength(1)
+ await wrapper.get('[aria-label="收起右侧栏"]').trigger('click')
+ expect(wrapper.find('.canvas-inspector').exists()).toBe(false)
+ expect(localStorage.getItem('canvas-inspector-visible')).toBe('false')
+ expect(editor.content).toContain('Long body with a search term')
+ wrapper.unmount()
+ const reopened=mount(CanvasVisualEditor);expect(reopened.find('.canvas-inspector').exists()).toBe(false)
+ await reopened.get('[aria-label="显示右侧栏"]').trigger('click');expect(reopened.find('.canvas-inspector').exists()).toBe(true);reopened.unmount()
 })
 it('commits a drag once and blocks edits during revision conflict',async()=>{
  const wrapper=mount(CanvasVisualEditor);await flushPromises();const node=wrapper.get('[data-node-id="a"]'),viewport=wrapper.get('.canvas-viewport')

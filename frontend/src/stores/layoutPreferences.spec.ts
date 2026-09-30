@@ -28,6 +28,11 @@ it('uses valid defaults for malformed stored choices', () => {
   expect(layout.workspaceTab).toBe('files')
   expect(layout.workspaceWidth).toBe(272)
 })
+it('starts with room for the canvas and remembers an explicitly opened inspector',()=>{
+ const layout=useLayoutPreferencesStore(createPinia());expect(layout.canvasInspectorVisible).toBe(false)
+ layout.canvasInspectorVisible=true
+ expect(useLayoutPreferencesStore(createPinia()).canvasInspectorVisible).toBe(true)
+})
 it('keeps chat panel choices while global focus is temporary', () => {
   const layout = useLayoutPreferencesStore(createPinia())
   layout.chatSidebarCollapsed = true
