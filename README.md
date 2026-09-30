@@ -52,16 +52,29 @@
     <td width="50%"><img src=".github/assets/opennexus-plugins.png" alt="Installed plugins and local Markdown validation tools" /></td>
     <td width="50%"><img src=".github/assets/opennexus-themes.png" alt="Themes and editor appearance" /></td>
   </tr>
+  <tr>
+    <td width="50%"><img src=".github/assets/opennexus-canvas.png" alt="JSON Canvas editing, file nodes, groups, and connections using example data" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-folder.png" alt="Folder introduction and child-note list using example data" /></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src=".github/assets/opennexus-note-review.png" alt="Reviewing an AI note change before approval using example data" /></td>
+    <td width="50%"><img src=".github/assets/opennexus-benchmark-comparison.png" alt="Comparing benchmark metrics and individual cases using example data" /></td>
+  </tr>
 </table>
 
 ---
 
 ## Highlights
 
-- 📁 **Zero Vendor Lock-In**: Notes are plain, portable Markdown files with relative content-addressed assets. Move them anywhere, anytime.
+- 📁 **Portable Vault Files**: Notes use Markdown, structured maps use JSON Canvas, and referenced images remain ordinary vault files. File moves preserve stable identities and the original extensions.
 - 🔍 **Hybrid Local Retrieval**: Combines SQLite FTS5 lexical matching with local vector embeddings using Reciprocal Rank Fusion (RRF) and optional reranking.
 - 🎙️ **Media-to-Knowledge**: Turn lecture recordings, podcasts, and meetings into timestamped transcripts, Mermaid diagrams, formulas, and structured notes. Local processing accepts files up to 200 MiB and audio tracks up to two hours.
-- 🛡️ **Inspectable Autonomous Agents**: Review tool operations in a permission dialog, follow the persisted execution trace, and continue a paused run by adding tokens or steps.
+- 🛡️ **Reviewable AI Writes**: Inspect the actual note diff before approving a write, then browse successful changes and restore a previous revision. Preview approval and restoration both check the current file version.
+- 🔎 **Conversation Search**: Find user messages, AI replies, and visible operation summaries in the current conversation; jump to matching text, including earlier answer versions.
+- 🔗 **Vault References**: Browse backlinks and unresolved local references. Review the impact of a rename or move, then choose whether to update references whose targets are clear.
+- 🗂️ **Folder Views**: Open a folder as child-note cards or a list, with real titles, summaries, sorting, filtering, and an optional `index.md` introduction.
+- 🧩 **Editable Canvas**: Arrange text, notes, images, URLs, groups, and labeled connections. Pan, zoom, select, copy, undo, and arrange a mind map while preserving imported optional fields.
+- 📊 **Persistent Benchmark Comparisons**: Compare completed RAG or Agent runs from the same vault, type, dataset ID, and content hash. Inspect metric deltas, configuration differences, and individual cases after restarting the app.
 - 🤝 **Chat-directed Agent Workflows**: Create reusable or one-off Agents from chat, review multi-Agent plans, and follow reasoning, tool calls, and replies in execution order. Chat-created Agents inherit the selected model when none is specified.
 - 🧭 **Focus on the Work**: Hide the main sidebars and editor toolbar with global focus mode; collapse the conversation list and chat settings independently, while user and AI messages remain on opposite sides.
 - 🔌 **Extensible Ecosystem**: Built-in support for MCP (Model Context Protocol) servers, custom plugins, and reviewed community packages.
@@ -172,6 +185,28 @@ flowchart TD
 
 ---
 
+### 4. Review and Restore Note Changes
+
+AI note creation, replacement, and Markdown patches show the target and the actual content changes before approval. If the file changes after the preview, review it again before writing. Open **Change history** from the note editor to inspect successful writes or restore the content before a selected change. Restoration creates another history entry and checks that subsequent edits will be preserved.
+
+```mermaid
+flowchart LR
+    A[Actual tool arguments and current note] --> B[Review content diff]
+    B --> C[Approve this write]
+    C --> D{File version still matches?}
+    D -- Yes --> E[Save note and history]
+    D -- No --> B
+    E --> F[Inspect or restore from change history]
+```
+
+### 5. Explore a Vault and Compare Results
+
+Select a folder for its introduction and direct child notes. Use backlinks to find referring notes and Canvas nodes; review unresolved links and proposed reference edits before moving files. A `.canvas` file opens in the visual editor, with an editable JSON view for inspecting its source. The mind-map command changes the layout and can be undone.
+
+Search a saved conversation to locate a message or visible operation. In **Benchmark**, import a dataset for the current vault, run it more than once, and select a baseline and candidate under **Run comparison**. Comparable runs must be completed and share their dataset content hash; unavailable metrics stay missing. Run records and reports survive app restarts.
+
+---
+
 ## Architecture
 
 OpenNexus adopts a modular, three-tier architecture ensuring clean security boundaries and minimal IPC overhead:
@@ -185,7 +220,7 @@ flowchart LR
     subgraph Host["Privileged Native Host (Rust / Tauri 2)"]
         HOST[Native Core & Supervision]
         CRED[(OS Credential Vault)]
-        VAULT[Local Markdown Vault]
+        VAULT[Local Markdown and JSON Canvas Vault]
     end
 
     subgraph Core["AI & Compute Engine (Python / FastAPI)"]
