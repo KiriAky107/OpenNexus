@@ -437,6 +437,9 @@ mod tests {
         std::fs::create_dir(root.path().join("附件")).unwrap();
         let bytes = b"\x89PNG\r\n\x1a\nfixture";
         std::fs::write(root.path().join("附件/logo.png"), bytes).unwrap();
+        // External writes reach the cached tree asynchronously. Explicit scans
+        // provide immediate verification; watcher delivery has separate tests.
+        ws.scan().unwrap();
         let read = json!({"rpc":"workspace.assets.read","params":{"vault_id":ws.vault_id,"path":"附件/logo.png"}});
         assert_eq!(
             STANDARD
