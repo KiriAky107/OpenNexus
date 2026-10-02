@@ -3,11 +3,11 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { reactive } from 'vue'
 import { beforeEach, expect, it, vi } from 'vitest'
 import NoteHistory from './NoteHistory.vue'
-import { listNoteChanges, getNoteChange, restoreNoteChange } from '@/services/noteService'
+import { listNoteChanges, getNoteChange, restoreNoteChange, listPendingNoteChanges, inspectPendingNoteChange, reconcileNoteChange } from '@/services/noteService'
 const state = vi.hoisted(() => ({ editor: null as unknown as { currentNoteId: string; saveStatus: string; checkExternalFile: ReturnType<typeof vi.fn> }, workspace: null as unknown as { vaultId: string } }))
 vi.mock('@/stores/editor', () => ({ useEditorStore: () => state.editor }))
 vi.mock('@/stores/workspace', () => ({ useWorkspaceStore: () => state.workspace }))
-vi.mock('@/services/noteService', () => ({ listNoteChanges: vi.fn(), getNoteChange: vi.fn(), restoreNoteChange: vi.fn() }))
+vi.mock('@/services/noteService', () => ({ listNoteChanges: vi.fn(), getNoteChange: vi.fn(), restoreNoteChange: vi.fn(), listPendingNoteChanges: vi.fn(), inspectPendingNoteChange: vi.fn(), reconcileNoteChange: vi.fn() }))
 const change = { change_id: 'change', note_id: 'note', file_path: 'A.md', origin: 'agent:run:notes.update', before_hash: 'before', after_hash: 'after', created_at: '2026-09-30T01:00:00Z', applied_at: '2026-09-30T01:00:00Z' }
 const detail = { ...change, can_restore: true, restore_reason: '' as const, before_metadata: null, after_metadata: null, diff: { lines: [{ kind: '-' as const, line: 1, text: 'before' }, { kind: '+' as const, line: 1, text: 'after' }], added_chars: 5, removed_chars: 6, before_chars: 6, after_chars: 5, truncated: false } }
 beforeEach(() => {
@@ -53,5 +53,55 @@ it('shows a conflict and never reloads the editor after a rejected restore', asy
   await button(wrapper, '确认恢复').trigger('click'); await flushPromises()
   expect(wrapper.text()).toContain('后续内容已变化')
   expect(state.editor.checkExternalFile).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
+it('shows uncertain planned changes, reconciles without a restore, and keeps manual edits protected', async () => {
+  const pending = { ...detail, status: 'pending' as const, can_restore: false, restore_reason: 'unconfirmed' as const }
+  vi.mocked(listNoteChanges).mockResolvedValue({ items: [pending] })
+  vi.mocked(getNoteChange).mockResolvedValue(pending)
+  const wrapper = setup(); await flushPromises()
+  await wrapper.get('.history-entry').trigger('click'); await flushPromises()
+  expect(wrapper.text()).toContain('结果待核对')
+  expect(wrapper.text()).toContain('差异是计划内容')
+  expect(button(wrapper, '恢复到此次写入前')).toBeUndefined()
+  vi.mocked(reconcileNoteChange).mockResolvedValue({ ...detail, status: 'applied', can_restore: false, restore_reason: 'changed' })
+  await button(wrapper, '核对持久回执').trigger('click'); await flushPromises()
+  expect(reconcileNoteChange).toHaveBeenCalledWith('change')
+  expect(restoreNoteChange).not.toHaveBeenCalled()
+  expect(state.editor.checkExternalFile).not.toHaveBeenCalled()
+  expect(wrapper.text()).toContain('历史已补齐')
+  expect(wrapper.text()).toContain('不能覆盖后续内容')
+  wrapper.unmount()
+})
+it('exposes pending creations from the vault-wide view and leaves legacy evidence uncertain', async () => {
+  const pending = { ...detail, note_id: null, status: 'pending' as const, can_restore: false, restore_reason: 'unconfirmed' as const, diff: null }
+  vi.mocked(listPendingNoteChanges).mockResolvedValue({ items: [pending] })
+  vi.mocked(inspectPendingNoteChange).mockResolvedValue(pending)
+  vi.mocked(reconcileNoteChange).mockResolvedValue({ ...pending, reconciliation_reason: 'legacy_evidence_missing' })
+  const wrapper = mount(NoteHistory, { global: { stubs: { AppDialog: { template: '<div><slot /></div>' } } } })
+  await flushPromises()
+  expect(listPendingNoteChanges).toHaveBeenCalledWith(0)
+  await wrapper.get('.history-entry').trigger('click'); await flushPromises()
+  await button(wrapper, '核对持久回执').trigger('click'); await flushPromises()
+  expect(wrapper.text()).toContain('旧记录缺少计划内容')
+  expect(wrapper.text()).toContain('仍无法确定结果')
+  expect(restoreNoteChange).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
+it('ignores a late reconciliation response after switching vaults', async () => {
+  const pending = { ...detail, status: 'pending' as const, can_restore: false, restore_reason: 'unconfirmed' as const }
+  vi.mocked(listNoteChanges).mockResolvedValue({ items: [pending] })
+  vi.mocked(getNoteChange).mockResolvedValue(pending)
+  let finish!: (value: typeof detail) => void
+  vi.mocked(reconcileNoteChange).mockReturnValue(new Promise(resolve => { finish = resolve }))
+  const wrapper = setup(); await flushPromises()
+  await wrapper.get('.history-entry').trigger('click'); await flushPromises()
+  await button(wrapper, '核对持久回执').trigger('click')
+  vi.mocked(listNoteChanges).mockResolvedValue({ items: [] })
+  state.workspace.vaultId = 'two'; await flushPromises()
+  finish(detail); await flushPromises()
+  expect(wrapper.find('.history-detail').exists()).toBe(false)
+  expect(wrapper.text()).not.toContain('历史已补齐')
+  expect(restoreNoteChange).not.toHaveBeenCalled()
   wrapper.unmount()
 })

@@ -399,14 +399,35 @@ async def rename_note(note_id: str, request: NoteRenameRequest) -> Note:
 @router.get('/notes/{note_id}/changes', tags=['Notes'])
 async def list_note_changes(note_id: str, limit: int = Query(30, ge=1, le=100), offset: int = Query(0, ge=0)):
     from app.services import note_changes
-    await get_note(note_id)
-    return {'items': note_changes.list_changes(note_id, limit=limit, offset=offset)}
+    return {'items': note_changes.list_changes(note_id, limit=limit, offset=offset, include_pending=True)}
 
 
 @router.get('/notes/{note_id}/changes/{change_id}', tags=['Notes'])
 async def get_note_change(note_id: str, change_id: str):
     from app.services import note_changes
     return await note_changes.change_detail(note_id, change_id)
+
+
+@router.get('/note-changes', tags=['Notes'])
+async def list_pending_note_changes(limit: int = Query(30, ge=1, le=100), offset: int = Query(0, ge=0)):
+    from app.services import note_changes
+    return {'items': note_changes.list_changes(None, limit=limit, offset=offset, include_pending=True)}
+
+
+@router.get('/note-changes/{change_id}', tags=['Notes'])
+async def inspect_note_change(change_id: str):
+    from app.services import note_changes
+    change = note_changes._get_change(change_id, applied_only=False)
+    return await note_changes.change_detail(change['note_id'], change_id)
+
+
+@router.post('/note-changes/{change_id}/reconcile', tags=['Notes'])
+async def reconcile_note_change(change_id: str):
+    from app.services import note_changes
+    # No write permission is needed: this only confirms an existing operation,
+    # never calls workspace.write/recover or a model tool.
+    async with container.agent._write_lock:
+        return await note_changes.reconcile_change(change_id)
 
 
 @router.post('/notes/{note_id}/changes/{change_id}/restore', response_model=Note, tags=['Notes'])

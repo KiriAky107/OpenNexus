@@ -69,6 +69,8 @@ async def write_content(*, path: str, expected: str, content: str, operation_id:
     document = {'path': path, 'content': content, 'file_id': previous['file_id'] if previous else 'pending',
                 'created_at': previous['created_at'] if previous else now, 'updated_at': now}
     note_from_document(document)  # Validate parsable metadata before the Host write.
+    from app.services.note_changes import prepare_write_intent
+    prepare_write_intent(document, expected=expected, operation_id=operation_id)
     receipt = await asyncio.to_thread(call, 'write', path=path, expected=expected, content=content, operation_id=operation_id)
     result = receipt.get('result', {})
     if (result.get('hash') != hashlib.sha256(content.encode()).hexdigest()

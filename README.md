@@ -193,6 +193,8 @@ flowchart TD
 
 AI note creation, replacement, and Markdown patches show the target and the actual content changes before approval. If the file changes after the preview, review it again before writing. Open **Change history** from the note editor to inspect successful writes or restore the content before a selected change. Restoration creates another history entry and checks that subsequent edits will be preserved.
 
+If a write times out or its history cannot be saved, open **Reconcile writes** in the status bar to inspect pending operations in the current vault. Reconciliation matches the original planned content against durable Host receipts and completes history without writing the note again. Missing or mismatched receipts and legacy records lacking evidence remain uncertain. Later manual edits, moves, and deletions are preserved and are never attributed to the AI output.
+
 ```mermaid
 flowchart LR
     A[Actual tool arguments and current note] --> B[Review content diff]

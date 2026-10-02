@@ -161,6 +161,8 @@ async def create_note(*, title: str, markdown: str, folder: str | None, tags: li
             "a note already exists at this path",
             {"note_id": parsed.note_id, "file_path": rel_path},
         )
+    from app.services.note_changes import prepare_web_write_intent
+    prepare_web_write_intent(parsed, markdown, '')
     _create_markdown(rel_path, markdown)
     try:
         await index_note(parsed)
@@ -202,24 +204,24 @@ async def update_note(
     check_write_state(SimpleNamespace(note_id=record.note_id, file_path=record.file_path,
                                      markdown=old_md, title=record.title, tags=record.tags))
     if expected_content_hash is not None:
-        import hashlib
         if hashlib.sha256(old_md.encode()).hexdigest() != expected_content_hash:
             raise ApiError(409, "NOTE_CONTENT_CONFLICT", "笔记已被编辑，请保留现有内容或导出为新笔记。")
 
     new_md = old_md if markdown is None else markdown
     # PATCH 语义：tags=None 保持原标签；[] 清空；非空列表替换（区别于 create 的 frontmatter 推导）
     effective_tags = record.tags if tags is None else tags
+    now = datetime.now(timezone.utc)
+    parsed = parse_note(
+        markdown=new_md, file_path=record.file_path, folder=record.folder, tags=effective_tags,
+        created_at=record.created_at, updated_at=now, note_id=record.note_id,
+    )
+    if title is not None:
+        parsed.title = title
+    from app.services.note_changes import prepare_web_write_intent
+    prepare_web_write_intent(parsed, new_md, hashlib.sha256(old_md.encode()).hexdigest())
     _write_markdown(record.file_path, new_md)
 
-    now = datetime.now(timezone.utc)
     try:
-        parsed = parse_note(
-            markdown=new_md, file_path=record.file_path, folder=record.folder, tags=effective_tags,
-            created_at=record.created_at, updated_at=now, note_id=record.note_id,
-        )
-        if title is not None:
-            parsed.title = title  # 显式传入的 title 覆盖正文推导结果
-
         if defer_vectors:
             conn = connect()
             try:

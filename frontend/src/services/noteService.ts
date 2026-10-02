@@ -60,21 +60,28 @@ export interface NoteWritePreview {
 }
 export interface NoteChange {
   change_id: string
-  note_id: string
-  file_path: string
+  note_id: string | null
+  file_path: string | null
+  requested_target?: string
   origin: string
   before_hash: string | null
-  after_hash: string
+  after_hash: string | null
   created_at: string
-  applied_at: string
+  applied_at: string | null
+  status?: 'pending' | 'applied' | 'failed'
+  failure_code?: string | null
 }
 export interface NoteChangeDetail extends NoteChange {
-  diff: NoteDiff
+  diff: NoteDiff | null
   can_restore: boolean
-  restore_reason: '' | 'created' | 'changed'
+  restore_reason: '' | 'created' | 'changed' | 'unconfirmed'
+  reconciliation_reason?: string
   before_metadata: string | null
   after_metadata: string | null
 }
 export const listNoteChanges = (noteId: string, offset = 0) => apiClient.get<{ items: NoteChange[] }>(`/api/notes/${noteId}/changes`, { params: { limit: 30, offset } })
 export const getNoteChange = (noteId: string, changeId: string) => apiClient.get<NoteChangeDetail>(`/api/notes/${noteId}/changes/${changeId}`)
+export const listPendingNoteChanges = (offset = 0) => apiClient.get<{ items: NoteChange[] }>('/api/note-changes', { params: { limit: 30, offset } })
+export const inspectPendingNoteChange = (changeId: string) => apiClient.get<NoteChangeDetail>(`/api/note-changes/${changeId}`)
+export const reconcileNoteChange = (changeId: string) => apiClient.post<NoteChangeDetail>(`/api/note-changes/${changeId}/reconcile`, {})
 export const restoreNoteChange = (change: NoteChange) => apiClient.post<ApiNote>(`/api/notes/${change.note_id}/changes/${change.change_id}/restore`, { expected_content_hash: change.after_hash, confirm: true })

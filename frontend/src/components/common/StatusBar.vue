@@ -17,8 +17,11 @@ const agentStore = useAgentStore()
 const route = useRoute()
 const workspace = useWorkspaceStore()
 const referencesOpen = ref(false)
+const writesOpen = ref(false)
+const NoteHistory = defineAsyncComponent(() => import('@/features/editor/NoteHistory.vue'))
 const VaultReferencesPanel = defineAsyncComponent(() => import('@/features/workspace/VaultReferencesPanel.vue'))
 watch(() => [route.name, workspace.vaultId, workspace.activeFilePath], () => { referencesOpen.value = false })
+watch(() => workspace.vaultId, () => { writesOpen.value = false })
 
 const saveStatusText = computed(() => {
   const map: Record<string, string> = {
@@ -91,6 +94,7 @@ const showEditorInfo = computed(() => route.name === 'workspace')
       <button v-if="showEditorInfo && workspace.hasVault && workspace.activeFilePath" class="status-item references-trigger" aria-haspopup="dialog" :aria-expanded="referencesOpen" :title="t('反向链接与失效链接', 'Backlinks and broken links')" @click="referencesOpen = true">
         <ControlIcon name="link" :size="13" />{{ t('反向链接', 'Backlinks') }}
       </button>
+      <button v-if="workspace.hasVault" class="status-item references-trigger" aria-haspopup="dialog" :aria-expanded="writesOpen" :title="t('核对当前知识库未确定结果的 AI 写入', 'Check uncertain AI writes in this vault')" @click="writesOpen = true">{{ t('写入核对', 'Reconcile writes') }}</button>
       <span v-if="agentStore.isRunning" class="status-item agent-status">
         <span class="spinner" />
         {{ t('智能体运行中', 'Agent running') }}
@@ -114,6 +118,7 @@ const showEditorInfo = computed(() => route.name === 'workspace')
       <VaultReferencesPanel @navigate="referencesOpen = false" />
     </section>
   </AppDialog>
+  <NoteHistory v-if="writesOpen" @close="writesOpen = false" />
 </template>
 
 <style scoped>

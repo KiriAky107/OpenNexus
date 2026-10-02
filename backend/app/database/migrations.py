@@ -270,6 +270,14 @@ MIGRATIONS: list[str] = [
         run_id TEXT NOT NULL REFERENCES benchmark_runs(run_id) ON DELETE CASCADE,
         sequence INTEGER NOT NULL, event_json TEXT NOT NULL, PRIMARY KEY(run_id,sequence)
     );""",
+    # v22: exact planned write evidence survives a lost Host response. Old pending
+    # intents remain version 0 and cannot be inferred from later disk content.
+    # Legacy failures also lack proof that an atomic file replace did not happen.
+    """ALTER TABLE note_changes ADD COLUMN intent_version INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE note_changes ADD COLUMN intent_json TEXT;
+    ALTER TABLE note_changes ADD COLUMN failure_code TEXT;
+    UPDATE note_changes SET status='pending' WHERE status='failed';
+    CREATE INDEX note_changes_status_time ON note_changes(status,created_at);""",
 ]
 
 
