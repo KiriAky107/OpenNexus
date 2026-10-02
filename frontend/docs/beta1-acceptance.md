@@ -1,11 +1,11 @@
 # 0.5.9-beta1 acceptance record
 
 This record distinguishes feature verification from installation acceptance.
-Checks below were run on the beta1 implementation before the version bump;
-the final versioned installer must pass package and native startup verification
-again. Windows 10/11 installation scenarios remain pending until explicitly
-completed. The screenshots use demonstration vault copies with their file tree
-collapsed for Canvas and folder views.
+Native feature checks below were run before the version bump. The versioned
+beta1 installer subsequently passed package identity and native startup checks
+as recorded below. Windows 10/11 installation scenarios remain pending until
+explicitly completed. The screenshots use demonstration vault copies with their
+file tree collapsed for Canvas and folder views.
 
 ## Automated and native coverage
 
@@ -13,6 +13,13 @@ collapsed for Canvas and folder views.
 passed documentation links, backend (1,144 passed, 3 skipped), frontend
 (720 tests across 140 files), type checking, production UI build, Rust tests,
 formatting and Clippy. The skips are reported as skips, not passes.
+
+The [versioned candidate CI on 0bad406](https://github.com/KiriAky107/OpenNexus/actions/runs/37062688231)
+also passed: backend 1,144 passed / 3 skipped, frontend 720 passed, and Rust
+83 passed / 4 ignored / 1 filtered. B04 is the filtered production-KDF test;
+its separate native acceptance and the ignored S02 repeated-kill check passed
+as described below. The frontend type check and production build, formatting,
+Clippy and documentation checks passed on the candidate versions and locks.
 
 Native feature acceptance used isolated storage and copies of demonstration
 vaults on Windows 11 x64 build 26100, WebView2 154.0.4258.48. It covered:
@@ -65,6 +72,27 @@ including the missing-DLL negative control. Both verified 2,166 Core files,
 the embedded manifest, dependency lock, SDK DLL and Runtime bootstrapper.
 Host started with only System32 on PATH, without developer Python variables.
 These pre-version checks do not establish the final beta1 package identity.
+
+The versioned GNU candidate was built from code/version commit
+`0bad406e6cf3590d3480bf905b521c6b409ca015` and then verified independently:
+
+- Installer: `OpenNexus_0.5.9-beta1_x64-setup.exe`, 102,217,540 bytes,
+  SHA-256 `c5769d82f1b13141a3864b5fd14250be7cc88737eb7f5d63d3ef698e1b5cb106`.
+- All 2,166 Core filenames and hashes, embedded Host manifest and locked
+  dependencies matched. Extracted Host matched the compiled Host exactly
+  except for Tauri's documented three-byte NSIS bundle marker.
+- Host, Core, frontend and Cargo lock identify `0.5.9-beta1`; the backend lock
+  uses its normalized Python version `0.5.9b1`. Frozen Core budget continuation
+  and duplicate approval with one tool execution also passed.
+- Actual extracted-payload native startup passed on Windows 11 build 26100 /
+  WebView2 154.0.4258.48 with only System32 on PATH. Core version, private
+  storage, Canvas, inspector, backlinks, exit and the dynamic missing-Loader
+  negative control passed; test vault files and the storage pointer were
+  restored. Loader and Runtime bootstrapper Microsoft signatures were valid.
+
+Source archives and SHA-256 lists are regenerated from the eventual fixed
+release commit, including documentation updates. That does not turn this
+startup check into installation, upgrade or missing-Runtime acceptance.
 
 | Installation scenario | Independent Windows 10 x64 | Independent Windows 11 x64 |
 | --- | --- | --- |
