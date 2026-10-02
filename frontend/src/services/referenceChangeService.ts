@@ -2,12 +2,12 @@ import * as workspace from './workspaceService'
 import { contentHash } from './platform/desktop'
 import { VaultLinkIndex } from './vaultLinkIndex'
 import { documentPaths } from './referenceImpact'
-import { resolveVaultReference, rewritePathReferences, type VaultReference } from './vaultReferences'
+import { resolveVaultReference, rewritePathReferences, type VaultReference, type ReferenceEdit } from './vaultReferences'
 import type { FileNode } from '@/contracts'
 
 export interface ReferenceChangePlan {
   oldPath: string; newPath: string | null; expectedHash?: string; expectedEntries?: Record<string,string>
-  updates: Array<{ path: string; destination: string; before: string; after: string; count: number }>
+  updates: Array<{ path: string; destination: string; before: string; after: string; count: number; edits?: ReferenceEdit[] }>
   pending: VaultReference[]
   affected: VaultReference[]
   tree: FileNode[]
@@ -23,8 +23,8 @@ export async function prepareReferenceChange(oldPath: string, newPath: string | 
   for (const document of index.documents.values()) {
     if (!newPath) continue
     const result = rewritePathReferences(document.path, document.content, oldPath, newPath, paths)
-    if (result.content !== document.content) updates.push({ path: document.path, destination: moved(document.path) ? `${newPath}${document.path.slice(oldPath.length)}` : document.path, before: document.content, after: result.content, count: result.changed.length })
-    pending.push(...result.pending.filter(ref => moved(document.path) || (ref.kind === 'wiki' && (ref.raw.split('#')[0] === oldPath.split('/').at(-1)?.replace(/\.md$/i, '') || oldPath.endsWith(`/${ref.raw}`)))))
+    if (result.content !== document.content) updates.push({ path: document.path, destination: moved(document.path) ? `${newPath}${document.path.slice(oldPath.length)}` : document.path, before: document.content, after: result.content, count: result.changed.length, edits: result.edits })
+    pending.push(...result.pending.filter(ref => moved(document.path) || (ref.target && moved(ref.target)) || (ref.kind === 'wiki' && (ref.raw.split('#')[0] === oldPath.split('/').at(-1)?.replace(/\.md$/i, '') || oldPath.endsWith(`/${ref.raw}`)))))
   }
   const content = index.documents.get(oldPath)?.content
   const find = (nodes: FileNode[]): FileNode | undefined => nodes.find(node => node.path === oldPath) ?? nodes.flatMap(node => node.children ?? []).map(node => find([node])).find(Boolean)

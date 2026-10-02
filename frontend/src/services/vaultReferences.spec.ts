@@ -40,4 +40,61 @@ describe('vault references', () => {
       expect(result.nodes[1].file).toBe('assets/renamed.png')
     }
   })
+
+  it.each([
+    '``[b](b.md) [[b]] <img src="b.md">``',
+    '`one `` [b](b.md) [[b]]`',
+    '    [b](b.md) [[b]] <img src="b.md">\n',
+    '````md\n```md\n[b](b.md) [[b]] <img src="b.md">\n```\n````',
+    '\\[b](b.md) \\[[b]]',
+    '<!-- [b](b.md) [[b]] <img src="b.md"> -->',
+    '<script>"<img src=\"b.md\">"; [b](b.md) [[b]]</script>',
+    '---\ntitle: "[b](b.md) [[b]]"\ntags: []\n---\n',
+  ])('preserves non-link source bytes: %s', example => {
+    const content = `${example}\n\n[real](b.md)`
+    const references = scanVaultReferences('/notes/a.md', content, paths)
+    expect(references).toHaveLength(1)
+    expect(references[0]?.raw).toBe('b.md')
+    expect(rewritePathReferences('/notes/a.md', content, '/notes/b.md', '/notes/new.md', paths).content)
+      .toBe(`${example}\n\n[real](new.md)`)
+  })
+
+  it('resolves balanced parentheses, escaped destinations, entities and multiline angle destinations', () => {
+    const files = new Set(['/notes/a.md', '/notes/note(1).md', '/notes/中文 空格(1).md'])
+    const content = '[paren](note(1).md#段落 "标题") [escape](note\\(1\\).md) [entity](note&#40;1&#41;.md)\r\n[space](\r\n<中文 空格(1).md#中文>\r\n"多行标题"\r\n)'
+    const references = scanVaultReferences('/notes/a.md', content, files)
+    expect(references.map(ref => ref.target)).toEqual(['/notes/note(1).md', '/notes/note(1).md', '/notes/note(1).md', '/notes/中文 空格(1).md'])
+    for (const ref of references) expect(content.slice(ref.start, ref.end)).toBe(ref.raw)
+    const result = rewritePathReferences('/notes/a.md', content, '/notes/note(1).md', '/notes/新(2).md', files)
+    expect(result.content).toBe(content.replace('note(1).md', '%E6%96%B0%282%29.md').replace('note\\(1\\).md', '%E6%96%B0%282%29.md').replace('note&#40;1&#41;.md', '%E6%96%B0%282%29.md'))
+  })
+
+  it('captures exact CRLF/Unicode offsets and replaces each repeated destination without changing titles or labels', () => {
+    const content = '中文🙂\r\n[标签 b.md](b.md "b.md [fake](b.md)") ![b.md](b.md)\r\n[引用][ref]\r\n\r\n[ref]:\r\n  <b.md#部分>\r\n  "标题 b.md"\r\n'
+    const result = rewritePathReferences('/notes/a.md', content, '/notes/b.md', '/notes/new.md', paths)
+    expect(result.changed).toHaveLength(3)
+    expect(result.content).toBe(content.replace('](b.md "', '](new.md "').replace('![b.md](b.md)', '![b.md](new.md)').replace('<b.md#部分>', '<new.md#部分>'))
+    expect(result.edits).toHaveLength(3)
+    for (const edit of result.edits!) expect(content.slice(edit.start, edit.end)).toBe(edit.before)
+  })
+
+  it('parses actual HTML href/src attributes with quotes, repeated text and entities while ignoring data attributes', () => {
+    const files = new Set([...paths, '/notes/p&b.md'])
+    const content = '<a data-href="b.md" title="b.md > fake" HREF = "b.md#段落">link</a> <img data-src="b.md" src=b.md>\r\n<a href=\'p&amp;b.md?a=1&amp;b=2\'>中文</a>'
+    const refs = scanVaultReferences('/notes/a.md', content, files)
+    expect(refs.map(ref => ref.target)).toEqual(['/notes/b.md', '/notes/b.md', '/notes/p&b.md'])
+    for (const ref of refs) expect(content.slice(ref.start, ref.end)).toBe(ref.raw)
+    const first = rewritePathReferences('/notes/a.md', content, '/notes/b.md', '/notes/new.md', files)
+    expect(first.content).toBe(content.replace('HREF = "b.md#', 'HREF = "new.md#').replace('src=b.md>', 'src=new.md>'))
+    expect(rewritePathReferences('/notes/a.md', content, '/notes/p&b.md', '/notes/new.md', files).content)
+      .toBe(content.replace('p&amp;b.md?a=1&amp;b=2', 'new.md?a=1&amp;b=2'))
+  })
+
+  it('handles linked images and skips inline or unclosed raw-text HTML contexts', () => {
+    const content = '[![logo](../assets/logo.png)](b.md) before <script>[b](b.md) <img src="b.md"></script> [real](b.md)'
+    const refs = scanVaultReferences('/notes/a.md', content, paths)
+    expect(refs.map(ref => ref.kind)).toEqual(['image', 'markdown', 'markdown'])
+    expect(scanVaultReferences('/notes/a.md', '<script>\n<img src="b.md">\n[b](b.md)', paths)).toEqual([])
+    expect(scanVaultReferences('/notes/a.md', 'before <textarea>[b](b.md)</textarea> [real](b.md)', paths)).toHaveLength(1)
+  })
 })
