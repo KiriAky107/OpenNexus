@@ -20,7 +20,7 @@
   </p>
 
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.5.9--alpha1-5865f2?style=flat-square" alt="Version" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.5.9--alpha2-5865f2?style=flat-square" alt="Version" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="Platform" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="Desktop Tauri" />
     <img src="https://img.shields.io/badge/Frontend-Vue_3-42b883?style=flat-square" alt="Frontend Vue" />
@@ -33,7 +33,7 @@
 
 ---
 
-> ⚠️ **Alpha Notice**: OpenNexus is currently in active alpha (`v0.5.9-alpha1`). Storage schemas, IPC contracts, and extension APIs are evolving. Always back up critical Markdown vaults before updating.
+> ⚠️ **Alpha Notice**: OpenNexus is currently in active alpha (`v0.5.9-alpha2`). Storage schemas, IPC contracts, and extension APIs are evolving. Always back up critical Markdown vaults before updating.
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus desktop editor with compact file controls, outline, formulas, and a function plot" width="95%" />
@@ -89,10 +89,10 @@
 
 ### Windows Desktop (Recommended)
 
-1. Download the Windows x64 installer from the [0.5.9-alpha1 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-alpha1). For a local build, follow [Packaging](#packaging).
+1. Download the Windows x64 installer from the [0.5.9-alpha2 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-alpha2). For a local build, follow [Packaging](#packaging).
 2. *(Optional)* Verify integrity via PowerShell:
 ```powershell
-   Get-FileHash .\OpenNexus_0.5.9-alpha1_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.5.9-alpha2_x64-setup.exe -Algorithm SHA256
    # Compare with SHA256SUMS.txt from the same release.
 
 ```
@@ -342,7 +342,7 @@ To keep dependencies clean and packaging predictable, services are maintained in
 | **Node.js** | `>= 22.0.0` (with `pnpm 10.28.0` via corepack) |
 | **Python** | `>= 3.11` (managed via [`uv`](https://github.com/astral-sh/uv)) |
 | **Rust** | Current stable toolchain (`x86_64-pc-windows-msvc`) |
-| **WebView2** | Microsoft Edge WebView2 runtime |
+| **WebView2** | The installer detects and installs the Microsoft Edge WebView2 Runtime as needed (internet required); the SDK Loader DLL is included with the app |
 
 ### 1. Setup Environment
 
@@ -415,6 +415,8 @@ pnpm desktop:build
 ```
 
 The output installer will be generated in `frontend/src-tauri/target/release/bundle/nsis/`. The [0.5.8-alpha2 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha2) also provides a source archive containing the desktop application and the Sync and Community prototypes.
+
+Windows installers include the architecture-matched, Microsoft-signed `WebView2Loader.dll` beside `OpenNexus.exe`, resolved from the locked WebView2 SDK before bundling. The WebView2 Runtime installer does not supply this app-side DLL. The embedded bootstrapper installs the Runtime if needed and still requires internet access. To check an extracted installer, run `python scripts/verify-windows-loader.py <extracted-installer-directory>`; this checks the Host/Loader architecture and SDK hash, so an SDK installed on the build machine cannot hide a missing DLL.
 
 ---
 

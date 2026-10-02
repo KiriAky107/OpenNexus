@@ -19,7 +19,7 @@
     <a href="https://github.com/KiriAky107/OpenNexus/releases">发布日志</a>
   </p>
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.5.9--alpha1-5865f2?style=flat-square" alt="版本" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.5.9--alpha2-5865f2?style=flat-square" alt="版本" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="平台" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="桌面端 Tauri" />
     <img src="https://img.shields.io/badge/Frontend-Vue_3-42b883?style=flat-square" alt="前端 Vue" />
@@ -32,7 +32,7 @@
 
 ---
 
-> ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.9-alpha1`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
+> ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.9-alpha2`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 桌面编辑器：精简文件操作、大纲、公式与函数图" width="95%" />
@@ -88,10 +88,10 @@
 
 ### Windows 桌面端安装（推荐）
 
-1. 前往 [0.5.9-alpha1 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-alpha1) 下载 Windows x64 安装包。本地构建可按[打包发布](#打包发布)步骤进行。
+1. 前往 [0.5.9-alpha2 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-alpha2) 下载 Windows x64 安装包。本地构建可按[打包发布](#打包发布)步骤进行。
 2. *(可选)* 通过 PowerShell 校验 SHA-256 完整性：
 ```powershell
-   Get-FileHash .\OpenNexus_0.5.9-alpha1_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.5.9-alpha2_x64-setup.exe -Algorithm SHA256
    # 与同一 Release 中的 SHA256SUMS.txt 比对。
 
 ```
@@ -340,7 +340,7 @@ erDiagram
 | **Node.js** | `>= 22.0.0`（通过 corepack 启用 `pnpm 10.28.0`） |
 | **Python** | `>= 3.11`（推荐通过 [`uv`](https://github.com/astral-sh/uv) 管理） |
 | **Rust** | 最新稳定版 Toolchain（带 `x86_64-pc-windows-msvc` target） |
-| **WebView2** | 系统预装 Microsoft Edge WebView2 Runtime |
+| **WebView2** | 安装程序检测并按需安装 Microsoft Edge WebView2 Runtime（需联网）；应用自带 SDK Loader DLL |
 
 ### 1. 环境初始化
 
@@ -413,6 +413,8 @@ pnpm desktop:build
 ```
 
 构建完成的安装包将输出至 `frontend/src-tauri/target/release/bundle/nsis/`。[0.5.8-alpha2 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha2) 另提供包含桌面主程序以及 Sync、Community 原型的源码压缩包。
+
+Windows 安装包会在 `OpenNexus.exe` 同目录包含匹配架构、带微软签名的 `WebView2Loader.dll`，打包前从依赖锁定的 WebView2 SDK 准备。WebView2 Runtime 安装程序不会替应用提供这个 DLL。内嵌引导程序会在需要时安装 Runtime，仍需联网。解压安装包后可运行 `python scripts/verify-windows-loader.py <安装包解压目录>`，检查主程序与 Loader 架构及 SDK 哈希，避免构建机上已有的 SDK 掩盖漏打包问题。
 
 ---
 

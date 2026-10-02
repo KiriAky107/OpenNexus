@@ -1,5 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBundleCommand": "node scripts/prepare-windows-loader.mjs"
+  },
   "bundle": {
     "active": true,
     "targets": [
@@ -12,14 +15,15 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../../.build/sidecar/dist/opennexus-core/": "core/"
+      "../../.build/sidecar/dist/opennexus-core/": "core/",
+      "../../.build/windows/WebView2Loader.dll": "WebView2Loader.dll"
     },
     "category": "Productivity",
     "shortDescription": "本地优先的 AI 笔记与知识中枢",
     "windows": {
       "allowDowngrades": false,
       "webviewInstallMode": {
-        "type": "downloadBootstrapper",
+        "type": "embedBootstrapper",
         "silent": true
       },
       "nsis": {
