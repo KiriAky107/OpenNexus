@@ -35,6 +35,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--target', default='')
     parser.add_argument('--installer', type=Path)
+    parser.add_argument('--native-smoke', action='store_true', help='Start extracted payload in a Windows WebView2 session')
     args = parser.parse_args()
     release = ROOT / 'frontend/src-tauri/target' / args.target / 'release'
     candidates = [args.installer] if args.installer else list((release / 'bundle/nsis').glob('*.exe'))
@@ -82,6 +83,12 @@ def main() -> None:
             'host_version': manifest['host_version'], 'core_version': manifest['core_version'],
             'dynamic_loader_dependency': dynamic, 'loader': loader,
             'microsoft_signatures_verified': os.name == 'nt', 'runtime_bootstrapper_embedded': True}
+        if args.native_smoke:
+            from windows_native_smoke import verify
+            config = json.loads((ROOT/'frontend/src-tauri/tauri.conf.json').read_text(encoding='utf-8'))
+            evidence = Path(tempfile.mkdtemp(prefix='native-', dir=staging))
+            report['native_smoke'] = verify(payload, manifest['core_version'], config['identifier'], evidence, dynamic)
+            report['native_smoke']['evidence_directory'] = evidence.relative_to(ROOT).as_posix()
     (staging / 'package-verification.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(report, indent=2))
 
