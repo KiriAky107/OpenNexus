@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // 应用程序有一个文档类型； happy-dom 否则会向 KaTeX 报告怪癖模式。
 vi.hoisted(() => { Object.defineProperty(document, 'compatMode', {value:'CSS1Compat',configurable:true}) })
 import { mount, type VueWrapper } from '@vue/test-utils'
@@ -55,6 +55,13 @@ afterEach(() => {
   mounted.splice(0).forEach((wrapper) => wrapper.unmount())
   document.body.innerHTML = ''
   vi.restoreAllMocks()
+})
+
+afterAll(async () => {
+  // Milkdown 7.22.1 keeps a 3000ms Timer callback even after its promise resolves.
+  // Let it remove its DOM event listener before Vitest removes browser globals;
+  // unresolved timers still fail inside the live test environment.
+  await new Promise(resolve => setTimeout(resolve, 3100))
 })
 
 describe('VisualMarkdownEditor formatting toolbars', () => {
