@@ -24,7 +24,9 @@ const host = execFileSync('rustc', ['-vV'], { encoding: 'utf8' }).match(/^host: 
 const targetEnvironment = host?.includes('-pc-windows-gnu') ? 'gnu' : 'msvc'
 const metadataTarget = process.env.CARGO_BUILD_TARGET ?? `${rustArch}-pc-windows-${targetEnvironment}`
 const metadata = JSON.parse(execFileSync('cargo', [
-  'metadata', '--locked', '--offline', '--format-version', '1', '--features', 'desktop',
+  // A fresh builder has no SDK crate yet. Locked metadata fetches only the
+  // resolved dependencies before Tauri's build script validates resources.
+  'metadata', '--locked', '--format-version', '1', '--features', 'desktop',
   '--manifest-path', resolve(frontend, 'src-tauri/Cargo.toml'),
   '--filter-platform', metadataTarget,
 ], { cwd: frontend, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }))
