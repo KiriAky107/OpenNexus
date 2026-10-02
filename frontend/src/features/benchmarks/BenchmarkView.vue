@@ -43,7 +43,7 @@ async function chooseFile(event: Event) {
   if (file.size > 1048576) { error.value = '数据集不能超过 1 MiB。'; input.value = ''; return }
   const epoch = scopeSequence
   try { const content = await file.text(); if (epoch === scopeSequence) { importText.value = content; importFileName.value = file.name } }
-  catch { error.value = '无法读取所选文件。' }
+  catch { if (epoch === scopeSequence) error.value = '无法读取所选文件。' }
   input.value = ''
 }
 async function importDataset() {
@@ -57,7 +57,7 @@ async function importDataset() {
     await loadDatasets(result.dataset_id)
     if (epoch === scopeSequence) { importNotice.value = '已保存到当前知识库的专属评测列表。'; importText.value = ''; importFileName.value = '' }
   } catch(e) { if (epoch === scopeSequence) error.value = String(e) }
-  finally { importing.value = false }
+  finally { if (epoch === scopeSequence) importing.value = false }
 }
 async function exportDataset() { const epoch = scopeSequence, filename = `${dataset.value}.json`; try { const value = await service.exportDataset(dataset.value, kind.value); if (epoch === scopeSequence) await saveJSON(value, filename) } catch(e) { if (epoch === scopeSequence) error.value = String(e) } }
 const datasets = ref<Awaited<ReturnType<typeof service.datasets>>>([]), runs = ref<BenchmarkRun[]>([])
@@ -68,7 +68,7 @@ const moreRuns = ref(true), historyBusy = ref(false)
 async function olderRuns() {
   if(historyBusy.value)return
   const epoch=scopeSequence;historyBusy.value=true
-  try{const items=await service.list(runs.value.length);if(epoch===scopeSequence){runs.value=[...runs.value,...items.filter(run=>!runs.value.some(previous=>previous.id===run.id))];moreRuns.value=items.length===50}}catch(cause){if(epoch===scopeSequence)error.value=String(cause)}finally{historyBusy.value=false}
+  try{const items=await service.list(runs.value.length);if(epoch===scopeSequence&&!disposed){runs.value=[...runs.value,...items.filter(run=>!runs.value.some(previous=>previous.id===run.id))];moreRuns.value=items.length===50;schedulePoll()}}catch(cause){if(epoch===scopeSequence)error.value=String(cause)}finally{if(epoch===scopeSequence)historyBusy.value=false}
 }
 const statusLabels: Record<string,string> = { queued:'排队中', running:'运行中', completed:'已完成', failed:'失败', cancelled:'已取消' }
 const activeCount = computed(() => runs.value.filter(run => ['queued','running'].includes(run.status)).length)
@@ -94,6 +94,12 @@ const metricGroups = computed(() => {
   }))
 })
 let timer: ReturnType<typeof setTimeout> | undefined, disposed = false
+let refreshingEpoch: number | undefined, queuedFullRefresh = false
+const visible = () => document.visibilityState !== 'hidden'
+function schedulePoll() {
+  clearTimeout(timer)
+  if (!disposed && visible() && activeCount.value) timer = setTimeout(() => void refresh(false), 1500)
+}
 async function loadDatasets(preferred?: string) {
   const sequence = ++datasetSequence, key = selectionKey(), selectedKind = kind.value
   dataset.value = ''; datasets.value = []
@@ -106,26 +112,57 @@ async function loadDatasets(preferred?: string) {
     dataset.value = items.find(item => item.id === saved)?.id ?? items[0]?.id ?? ''
   } catch(e) { if (sequence === datasetSequence) error.value = String(e) }
 }
-async function refresh() { const epoch = scopeSequence; try { const items = await service.list(); if (epoch === scopeSequence) { const older=runs.value.filter(run=>!items.some(fresh=>fresh.id===run.id));runs.value=[...items,...older];if(!older.length)moreRuns.value=items.length===50 } } catch(e) { if (epoch === scopeSequence) error.value = String(e) } finally { loading.value = false } if (!disposed) timer = setTimeout(refresh, 1500) }
+async function refresh(full = true) {
+  if (disposed || !visible()) return
+  const epoch = scopeSequence
+  if (refreshingEpoch === epoch) { queuedFullRefresh ||= full; return }
+  refreshingEpoch = epoch; clearTimeout(timer)
+  try {
+    // Only active summaries are polled, including older runs already loaded.
+    const items = full ? await service.list() : await Promise.all(runs.value.filter(run => ['queued','running'].includes(run.status)).map(run => service.state(run.id)))
+    if (epoch !== scopeSequence || disposed) return
+    const fresh = new Map(items.map(run => [run.id, run]))
+    if (full) {
+      const older = runs.value.filter(run => !fresh.has(run.id))
+      runs.value = [...items, ...older]
+      if (!older.length) moreRuns.value = items.length === 50
+    } else runs.value = runs.value.map(run => fresh.get(run.id) ?? run)
+  } catch(e) { if (epoch === scopeSequence && !disposed) error.value = String(e) }
+  finally {
+    if (epoch === scopeSequence && !disposed) {
+      refreshingEpoch = undefined; loading.value = false
+      if (queuedFullRefresh) { queuedFullRefresh = false; void refresh() } else schedulePoll()
+    }
+  }
+}
+function visibilityChanged() { clearTimeout(timer); if (visible()) void refresh() }
 watch(kind, () => { void loadDatasets() })
 watch(() => route.query.kind, value => { if (value === 'rag' || value === 'agent') kind.value = value })
 watch(() => workspace.vaultId || workspace.vaultPath, () => {
   scopeSequence++; report.value = null; runs.value = []; importText.value = ''; importFileName.value = ''; importNotice.value = ''; error.value = ''
   moreRuns.value=true
+  importing.value=false;busy.value=false;historyBusy.value=false;loading.value=true;queuedFullRefresh=false;clearTimeout(timer)
   void loadDatasets()
-})
+  void refresh()
+}, { flush: 'sync' })
 watch(dataset, value => { if (value) { try { localStorage.setItem(selectionKey(), value) } catch { /* optional local preference */ } } })
 watch(provider, id => { model.value = providers.value.find(p => p.provider_id === id)?.default_model ?? '' })
 async function start() {
   error.value = ''; busy.value = true
-  const scope = isDesktop() ? { expected_vault_id: workspace.vaultId } : {}
-  try { await service.start(kind.value, kind.value === 'agent' ? { ...scope, dataset_id: dataset.value, provider_id: provider.value, model: model.value, max_steps: 6, timeout_seconds: 90, token_budget: 6000 } : { ...scope, dataset_id: dataset.value, modes: ['fts','vector','hybrid'], retrieval: { top_k: topK.value, fusion: fusion.value, rrf_k: rrfK.value, rerank: rerank.value } }) }
-  catch(e) { error.value = String(e) } finally { busy.value = false }
+  const epoch = scopeSequence, scope = isDesktop() ? { expected_vault_id: workspace.vaultId } : {}
+  try {
+    const created = await service.start(kind.value, kind.value === 'agent' ? { ...scope, dataset_id: dataset.value, provider_id: provider.value, model: model.value, max_steps: 6, timeout_seconds: 90, token_budget: 6000 } : { ...scope, dataset_id: dataset.value, modes: ['fts','vector','hybrid'], retrieval: { top_k: topK.value, fusion: fusion.value, rrf_k: rrfK.value, rerank: rerank.value } })
+    if (epoch !== scopeSequence || disposed) return
+    if (created) runs.value = [created, ...runs.value.filter(run => run.id !== created.id)]
+    schedulePoll(); void refresh()
+  }
+  catch(e) { if (epoch === scopeSequence && !disposed) error.value = String(e) } finally { if (epoch === scopeSequence) busy.value = false }
 }
-async function action(run: BenchmarkRun, cancel = false) { const epoch = scopeSequence; try { if (cancel) await service.cancel(run.id); else { const result = await service.report(run.id); if (epoch === scopeSequence) { report.value = result; reportName.value = run.datasetId } } } catch(e) { if (epoch === scopeSequence) error.value = String(e) } }
+let reportSequence = 0
+async function action(run: BenchmarkRun, cancel = false) { const epoch = scopeSequence, request = ++reportSequence; try { if (cancel) { await service.cancel(run.id); if (epoch === scopeSequence) void refresh(false) } else { const result = await service.report(run.id); if (epoch === scopeSequence && request === reportSequence && !disposed) { report.value = result; reportName.value = run.datasetId } } } catch(e) { if (epoch === scopeSequence && !disposed) error.value = String(e) } }
 async function download() { try { await saveJSON(report.value, 'benchmark-report.json') } catch(e) { error.value = String(e) } }
-onMounted(async () => { void refresh(); void loadDatasets(); try { providers.value=(await listProviders()).filter(p=>p.enabled); provider.value=providers.value[0]?.provider_id ?? '' } catch(e) { error.value=String(e) } })
-onBeforeUnmount(() => { disposed=true; clearTimeout(timer) })
+onMounted(async () => { document.addEventListener('visibilitychange', visibilityChanged); void refresh(); void loadDatasets(); try { const items=(await listProviders()).filter(p=>p.enabled); if (!disposed) { providers.value=items; provider.value=items[0]?.provider_id ?? '' } } catch(e) { if (!disposed) error.value=String(e) } })
+onBeforeUnmount(() => { disposed=true; clearTimeout(timer); document.removeEventListener('visibilitychange', visibilityChanged) })
 </script>
 <template>
   <main class="feature-page benchmark-page">
@@ -178,7 +215,7 @@ onBeforeUnmount(() => { disposed=true; clearTimeout(timer) })
       </form>
       <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
       <section class="panel benchmark-history" aria-labelledby="benchmark-history-title" :aria-busy="loading">
-        <div class="section-heading"><h2 id="benchmark-history-title">运行记录</h2><span class="badge">{{ runs.length }} 项</span></div>
+        <div class="section-heading"><h2 id="benchmark-history-title">运行记录</h2><div class="inline-actions"><span class="badge">{{ runs.length }} 项</span><button class="button-secondary" :disabled="loading" @click="refresh()">刷新记录</button></div></div>
         <div v-if="!runs.length" class="empty-state"><AppIcon class="empty-icon" :icon="DataAnalysis" :size="28" /><div><strong>{{ loading ? '正在加载记录…' : '还没有评测记录' }}</strong><p>运行评测后，在这里查看指标与报告。</p></div></div>
         <div v-else class="table-scroll"><table><thead><tr><th>数据集</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="run in runs" :key="run.id">
           <td><strong>{{ run.datasetId }}</strong><small class="subtle run-id">{{ run.id }}</small></td>

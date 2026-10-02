@@ -281,6 +281,10 @@ MIGRATIONS: list[str] = [
     # v23: cover sibling/version metadata without reading message bodies.
     """CREATE INDEX chat_versions_metadata ON chat_messages(conversation_id,parent_message_id,role,sequence,message_id);
     CREATE INDEX chat_parent_metadata ON chat_messages(conversation_id,message_id,parent_message_id,sequence,role);""",
+    # v24: bounded run summaries are separate from frozen dataset/report evidence.
+    """ALTER TABLE benchmark_runs ADD COLUMN summary_json TEXT;
+    UPDATE benchmark_runs SET summary_json=json_remove(run_json,'$.config_snapshot.dataset_cases');
+    CREATE INDEX benchmark_runs_scope_status ON benchmark_runs(scope,status,created_at,run_id);""",
 ]
 
 

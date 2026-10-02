@@ -4,13 +4,13 @@ import {afterEach,beforeEach,expect,it,vi} from 'vitest'
 import {createPinia,setActivePinia} from 'pinia'
 import {useWorkspaceStore} from '@/stores/workspace'
 import BenchmarkView from './BenchmarkView.vue'
-const service=vi.hoisted(()=>({datasets:vi.fn(),list:vi.fn(),start:vi.fn(),cancel:vi.fn(),report:vi.fn(),importDataset:vi.fn(),exportDataset:vi.fn()}))
+const service=vi.hoisted(()=>({datasets:vi.fn(),list:vi.fn(),state:vi.fn(),start:vi.fn(),cancel:vi.fn(),report:vi.fn(),importDataset:vi.fn(),exportDataset:vi.fn()}))
 vi.mock('vue-router',()=>({useRoute:()=>({query:{}})}))
 vi.mock('@/features/agent/CollaborationCard.vue',()=>({default:{props:['id'],template:'<section data-collaboration>{{ id }}</section>'}}))
 vi.mock('@/services/benchmarkService',()=>({benchmarkService:service}))
 vi.mock('@/services/providerService',()=>({listProviders:vi.fn().mockResolvedValue([])}))
 beforeEach(()=>{setActivePinia(createPinia());localStorage.clear();const workspace=useWorkspaceStore();workspace.vaultId='vault-a';workspace.vaultName='课程库';workspace.hasVault=true;service.datasets.mockResolvedValue([{id:'rag-demo',cases:2,scope:'vault',version:'1'}]);service.list.mockResolvedValue([])})
-afterEach(()=>vi.clearAllMocks())
+afterEach(()=>{vi.clearAllMocks();vi.useRealTimers();vi.restoreAllMocks()})
 it('keeps the import editor collapsed and uses the themed file picker button',async()=>{
  const wrapper=mount(BenchmarkView,{global:{stubs:{RouterLink:true}}});await flushPromises()
  expect(wrapper.get('.dataset-import').attributes('open')).toBeUndefined()
@@ -78,4 +78,43 @@ it('renders report percentages, unavailable metrics and localized terminal state
  expect(wrapper.get('.benchmark-report').text()).toContain('不适用')
  expect(wrapper.get('.benchmark-report').text()).toContain('agent-demo')
  wrapper.unmount()
+})
+const active={id:'live',kind:'rag',datasetId:'d',status:'running',progress:.1,errorCode:null}
+it('stops idle/hidden polling and polls only active summaries until terminal',async()=>{
+ vi.useFakeTimers();vi.spyOn(document,'visibilityState','get').mockReturnValue('visible')
+ service.list.mockResolvedValue([active]);service.state.mockResolvedValue({...active,progress:.5})
+ const wrapper=mount(BenchmarkView,{global:{stubs:{RouterLink:true}}});await flushPromises()
+ await vi.advanceTimersByTimeAsync(1500);await flushPromises()
+ expect(service.list).toHaveBeenCalledOnce();expect(service.state).toHaveBeenCalledWith('live')
+ vi.spyOn(document,'visibilityState','get').mockReturnValue('hidden');document.dispatchEvent(new Event('visibilitychange'))
+ await vi.advanceTimersByTimeAsync(4500);expect(service.state).toHaveBeenCalledOnce()
+ service.list.mockResolvedValue([active]);service.state.mockResolvedValue({...active,status:'completed'})
+ vi.spyOn(document,'visibilityState','get').mockReturnValue('visible');document.dispatchEvent(new Event('visibilitychange'));await flushPromises()
+ await vi.advanceTimersByTimeAsync(1500);await flushPromises();await vi.advanceTimersByTimeAsync(4500)
+ expect(service.state).toHaveBeenCalledTimes(2);expect(service.list).toHaveBeenCalledTimes(2)
+ wrapper.unmount()
+})
+it('starts no idle timer and ignores old scope responses without blocking the new list',async()=>{
+ vi.useFakeTimers();vi.spyOn(document,'visibilityState','get').mockReturnValue('visible')
+ let finish!:(value:unknown)=>void
+ service.list.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve})).mockResolvedValue([])
+ const wrapper=mount(BenchmarkView,{global:{stubs:{RouterLink:true}}});await flushPromises()
+ useWorkspaceStore().vaultId='vault-b';await flushPromises()
+ expect(service.list).toHaveBeenCalledTimes(2)
+ finish([active]);await flushPromises();await vi.advanceTimersByTimeAsync(9000)
+ expect(wrapper.text()).not.toContain('live');expect(service.state).not.toHaveBeenCalled();expect(service.list).toHaveBeenCalledTimes(2)
+ wrapper.unmount()
+})
+it('updates an older active run without repeating history or overlapping state requests',async()=>{
+ vi.useFakeTimers();vi.spyOn(document,'visibilityState','get').mockReturnValue('visible')
+ const first=Array.from({length:50},(_,i)=>({...active,id:`done-${i}`,status:'completed'}))
+ service.list.mockResolvedValueOnce(first).mockResolvedValueOnce([active])
+ let finish!:(value:unknown)=>void
+ service.state.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve}))
+ const wrapper=mount(BenchmarkView,{global:{stubs:{RouterLink:true}}});await flushPromises()
+ await wrapper.findAll('button').find(button=>button.text()==='更早的运行')!.trigger('click');await flushPromises()
+ await vi.advanceTimersByTimeAsync(1500);await vi.advanceTimersByTimeAsync(4500)
+ expect(service.state).toHaveBeenCalledOnce();expect(service.list).toHaveBeenCalledTimes(2)
+ finish({...active,status:'completed'});await flushPromises();await vi.advanceTimersByTimeAsync(4500)
+ expect(service.state).toHaveBeenCalledOnce();wrapper.unmount()
 })

@@ -51,16 +51,17 @@ def _persist(run_id, event=None):
 
 
 def _saved(run_id):
-    run, report = storage.get(run_id)
-    if run and run.status in (BenchmarkStatus.queued, BenchmarkStatus.running) and run_id not in _tasks:
-        evidence = storage.events(run_id)
-        run = run.model_copy(update={'status': BenchmarkStatus.failed, 'completed_at': _now(),
-                                    'error_code': 'BENCHMARK_INTERRUPTED', 'error': '应用重启中断了该次评测。'})
-        report = BenchmarkReport(run_id=run_id,kind=run.kind,dataset_id=run.dataset_id,dataset_hash=run.dataset_hash,
-                                 status=run.status,config_snapshot=run.config_snapshot,error_code=run.error_code,error=run.error,
-                                 cases=[event.data for event in evidence if event.event == BenchmarkEventType.case_completed])
-        storage.save(run,report,BenchmarkEvent(event=BenchmarkEventType.run_failed,run_id=run_id,sequence=len(evidence),data={'error_code':run.error_code},timestamp=_now()))
-    return run, report
+    _recover(run_id)
+    return storage.get(run_id)
+
+
+def _recover(run_id):
+    # Live asyncio tasks/queues stay on their owning loop. Database recovery only
+    # touches orphaned records and serializes its status transition in SQLite.
+    if run_id not in _tasks and run_id not in _runs:
+        run = storage.get_summary(run_id)
+        if run and run.status in (BenchmarkStatus.queued, BenchmarkStatus.running):
+            storage.recover_interrupted(run_id, _now())
 
 
 def _now() -> datetime:
@@ -327,27 +328,30 @@ def list_runs(
 ) -> tuple[list[BenchmarkRun], int]:
     scope = datasets.current_scope()
     for run_id in storage.unfinished_ids():
-        if run_id not in _tasks and run_id not in _runs: _saved(run_id)
+        _recover(run_id)
     # Recover interrupted records before filtering by state; terminal historical
     # rows stay on disk instead of growing the live task cache.
-    persisted, total = storage.list_runs(kind, status, limit, offset)
-    runs = [_runs.get(run.run_id) or _saved(run.run_id)[0] for run in persisted]
-    extra = [run for run in _runs.values() if run.config_snapshot.get('vault_scope', scope) == scope and run.run_id not in {item.run_id for item in persisted}]
-    # Unpersisted entries are only legacy process-local runs.
-    extra = [run for run in extra if storage.get(run.run_id)[0] is None]
+    live = [run for run in list(_runs.values()) if run.config_snapshot.get('vault_scope', scope) == scope]
+    existing = storage.existing_ids([run.run_id for run in live])
+    extra = [storage.summary(run) for run in live if run.run_id not in existing
+             and (kind is None or run.kind == kind) and (status is None or run.status == status)]
+    if not extra:
+        return storage.list_runs(kind, status, limit, offset)
+    # Compatibility for legacy process-local fixtures: paginate the merged order,
+    # rather than appending the same entries to every persisted page.
+    runs, total = storage.list_runs(kind, status, limit + offset, 0)
     runs += extra
-    if kind is not None:
-        runs = [r for r in runs if r.kind == kind]
-    if status is not None:
-        runs = [r for r in runs if r.status == status]
-    runs.sort(key=lambda r: r.created_at, reverse=True)
-    return runs[:limit], total + len(extra)
+    runs.sort(key=lambda run: (run.created_at, run.run_id), reverse=True)
+    return runs[offset:offset+limit], total + len(extra)
 
 
 def get_run(run_id: str) -> BenchmarkRun | None:
-    run = _runs.get(run_id) or _saved(run_id)[0]
+    run = _runs.get(run_id)
+    if run is None:
+        _recover(run_id)
+        run = storage.get_summary(run_id)
     scope = datasets.current_scope()
-    return run if run and run.config_snapshot.get('vault_scope', scope) == scope else None
+    return storage.summary(run) if run and run.config_snapshot.get('vault_scope', scope) == scope else None
 
 
 def get_report(run_id: str) -> BenchmarkReport | None:

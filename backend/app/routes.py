@@ -1635,7 +1635,7 @@ async def list_benchmark_runs(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> BenchmarkRunListResponse:
-    items, total = benchmark_service.list_runs(
+    items, total = await asyncio.to_thread(benchmark_service.list_runs,
         kind=kind, status=status, limit=limit, offset=offset
     )
     return BenchmarkRunListResponse(
@@ -1649,7 +1649,7 @@ async def list_benchmark_runs(
     tags=["Benchmark"],
 )
 async def get_benchmark_run(run_id: str) -> BenchmarkRun:
-    run = benchmark_service.get_run(run_id)
+    run = await asyncio.to_thread(benchmark_service.get_run, run_id)
     if run is None:
         raise ApiError(
             404, "BENCHMARK_RUN_NOT_FOUND", "benchmark run not found", {"run_id": run_id}
@@ -1663,6 +1663,8 @@ async def get_benchmark_run(run_id: str) -> BenchmarkRun:
     tags=["Benchmark"],
 )
 async def cancel_benchmark_run(run_id: str) -> OperationResponse:
+    # Recover orphaned state off-loop; setting live asyncio.Event stays on-loop.
+    await asyncio.to_thread(benchmark_service.get_run, run_id)
     run = benchmark_service.cancel_run(run_id)
     if run is None:
         raise ApiError(
@@ -1691,7 +1693,7 @@ async def benchmark_events(
     after_sequence: int = Query(default=-1, ge=-1),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
 ) -> StreamingResponse:
-    if benchmark_service.get_run(run_id) is None:
+    if await asyncio.to_thread(benchmark_service.get_run, run_id) is None:
         raise ApiError(
             404, "BENCHMARK_RUN_NOT_FOUND", "benchmark run not found", {"run_id": run_id}
         )
@@ -1727,7 +1729,7 @@ async def benchmark_events(
             last_sequence = cursor
             # 回放按订阅时刻的快照长度遍历，避免列表在回放期间被追加；终止事件同样要结束流，
             # 防止回放完成后进入实时队列却因序号去重跳过同一终止事件而永久等待。
-            history = benchmark_service.get_events(run_id)
+            history = await asyncio.to_thread(benchmark_service.get_events, run_id)
             for index in range(len(history)):
                 event = history[index]
                 if event.sequence <= cursor:
@@ -1759,7 +1761,7 @@ async def benchmark_events(
     tags=["Benchmark"],
 )
 async def get_benchmark_report(run_id: str) -> BenchmarkReport:
-    report = benchmark_service.get_report(run_id)
+    report = await asyncio.to_thread(benchmark_service.get_report, run_id)
     if report is None:
         raise ApiError(
             404, "BENCHMARK_RUN_NOT_FOUND", "benchmark report not found", {"run_id": run_id}

@@ -12,6 +12,7 @@ export const benchmarkService = {
   importDataset(content: string, expectedVaultId?: string) { return apiClient.post<{ dataset_id: string; kind: 'rag' | 'agent' }>('/api/benchmarks/datasets/import', { content, expected_vault_id: expectedVaultId }) },
   exportDataset(id: string, kind: 'rag' | 'agent') { return apiClient.get<Record<string, unknown>>(`/api/benchmarks/datasets/${encodeURIComponent(id)}/export`, { params: { kind } }) },
   async list(offset=0) { return (await apiClient.get<{ items: RunWire[] }>('/api/benchmarks/runs', {params:{limit:50,offset}})).items.map(map) },
+  async state(id: string) { return map(await apiClient.get<RunWire>(`/api/benchmarks/runs/${encodeURIComponent(id)}`)) },
   async start(kind: 'rag' | 'agent', body: object) { return map(await apiClient.post<RunWire>(`/api/benchmarks/${kind}/runs`, body)) },
   cancel(id: string) { return apiClient.post(`/api/benchmarks/runs/${encodeURIComponent(id)}/cancel`) },
   report(id: string) { return apiClient.get<BenchmarkReport>(`/api/benchmarks/runs/${encodeURIComponent(id)}/report`) },
