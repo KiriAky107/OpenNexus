@@ -21,6 +21,7 @@
 
   <p>
     <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.5.9--alpha2-5865f2?style=flat-square" alt="Version" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml"><img src="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="Platform" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="Desktop Tauri" />
     <img src="https://img.shields.io/badge/Frontend-Vue_3-42b883?style=flat-square" alt="Frontend Vue" />
@@ -417,6 +418,8 @@ pnpm desktop:build
 The output installer will be generated in `frontend/src-tauri/target/release/bundle/nsis/`. The [0.5.8-alpha2 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha2) also provides a source archive containing the desktop application and the Sync and Community prototypes.
 
 Windows installers include the architecture-matched, Microsoft-signed `WebView2Loader.dll` beside `OpenNexus.exe`, resolved from the locked WebView2 SDK before bundling. The WebView2 Runtime installer does not supply this app-side DLL. The embedded bootstrapper installs the Runtime if needed and still requires internet access. To check an extracted installer, run `python scripts/verify-windows-loader.py <extracted-installer-directory>`; this checks the Host/Loader architecture and SDK hash, so an SDK installed on the build machine cannot hide a missing DLL.
+
+[GitHub Actions CI](https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml) checks documentation, backend, frontend and Rust on pushes to `main` and pull requests. The manually triggered [Windows package workflow](https://github.com/KiriAky107/OpenNexus/actions/workflows/windows-rc.yml) builds an MSVC installer with the same bundle configuration and verifies its extracted payload. Unsigned builds need no signing secrets; selecting a signed build requires the configured Windows certificate and Core signing key. Artifacts and verification reports are available on each workflow run.
 
 ---
 

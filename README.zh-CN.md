@@ -20,6 +20,7 @@
   </p>
   <p>
     <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.5.9--alpha2-5865f2?style=flat-square" alt="版本" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml"><img src="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="平台" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="桌面端 Tauri" />
     <img src="https://img.shields.io/badge/Frontend-Vue_3-42b883?style=flat-square" alt="前端 Vue" />
@@ -415,6 +416,8 @@ pnpm desktop:build
 构建完成的安装包将输出至 `frontend/src-tauri/target/release/bundle/nsis/`。[0.5.8-alpha2 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha2) 另提供包含桌面主程序以及 Sync、Community 原型的源码压缩包。
 
 Windows 安装包会在 `OpenNexus.exe` 同目录包含匹配架构、带微软签名的 `WebView2Loader.dll`，打包前从依赖锁定的 WebView2 SDK 准备。WebView2 Runtime 安装程序不会替应用提供这个 DLL。内嵌引导程序会在需要时安装 Runtime，仍需联网。解压安装包后可运行 `python scripts/verify-windows-loader.py <安装包解压目录>`，检查主程序与 Loader 架构及 SDK 哈希，避免构建机上已有的 SDK 掩盖漏打包问题。
+
+[GitHub Actions CI](https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml) 在 `main` 推送和 Pull Request 时执行文档、后端、前端和 Rust 检查。手动触发的 [Windows 打包工作流](https://github.com/KiriAky107/OpenNexus/actions/workflows/windows-rc.yml) 使用同一基础打包配置构建 MSVC 安装包并校验解包后的实际内容。普通未签名构建无需签名秘密；选择签名构建时需配置 Windows 证书和 Core 签名密钥。产物和验证报告可从各次运行页面下载。
 
 ---
 

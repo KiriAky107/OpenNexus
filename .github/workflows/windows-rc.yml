@@ -1,0 +1,140 @@
+name: Windows package
+
+on:
+  workflow_dispatch:
+    inputs:
+      signed:
+        description: Sign Host, installer and Core with configured release secrets
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: windows-2022
+    timeout-minutes: 50
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pnpm before enabling its cache
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.28.0 --activate
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.9.24'
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Install locked dependencies
+        shell: pwsh
+        run: |
+          uv sync --frozen --group packaging --directory backend
+          pnpm --dir frontend install --frozen-lockfile
+
+      - name: Prepare optional release signatures
+        if: inputs.signed
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          CORE_SIGNING_KEY_PEM_BASE64: ${{ secrets.CORE_SIGNING_KEY_PEM_BASE64 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:WINDOWS_CERTIFICATE_BASE64 -or -not $env:WINDOWS_CERTIFICATE_PASSWORD -or -not $env:CORE_SIGNING_KEY_PEM_BASE64) {
+            throw 'Signed builds require Windows certificate and Core signing secrets'
+          }
+          $signingDirectory = Join-Path $env:RUNNER_TEMP 'opennexus-signing'
+          New-Item -ItemType Directory -Force -Path $signingDirectory | Out-Null
+          $pfxPath = Join-Path $signingDirectory 'codesign.pfx'
+          $coreKeyPath = Join-Path $signingDirectory 'core-ed25519.pem'
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          [IO.File]::WriteAllBytes($coreKeyPath, [Convert]::FromBase64String($env:CORE_SIGNING_KEY_PEM_BASE64))
+          $certificatePassword = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $certificatePassword
+          if (-not $certificate.HasPrivateKey) { throw 'Signing certificate has no private key' }
+          "OPENNEXUS_CORE_SIGNING_KEY_FILE=$coreKeyPath" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "OPENNEXUS_WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          $signingConfig = @{ bundle = @{ windows = @{
+            certificateThumbprint = $certificate.Thumbprint
+            digestAlgorithm = 'sha256'
+            timestampUrl = 'http://timestamp.digicert.com'
+          } } } | ConvertTo-Json -Depth 4
+          [IO.File]::WriteAllText((Join-Path $env:GITHUB_WORKSPACE 'frontend/src-tauri/tauri.rc.conf.json'), $signingConfig, [Text.UTF8Encoding]::new($false))
+          Remove-Item -LiteralPath $pfxPath -Force
+
+      - name: Build Core
+        shell: pwsh
+        env:
+          SIGNED_BUILD: ${{ inputs.signed }}
+        run: |
+          $coreArguments = @('run', '--frozen', '--directory', 'backend', '--group', 'packaging', 'python', '../scripts/build-core.py')
+          if ($env:SIGNED_BUILD -eq 'true') { $coreArguments += '--release' }
+          uv @coreArguments
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build installer using the shared bundle configuration
+        shell: pwsh
+        env:
+          SIGNED_BUILD: ${{ inputs.signed }}
+        run: |
+          $buildArguments = @('--dir', 'frontend', 'exec', 'tauri', 'build', '--target', $env:CARGO_BUILD_TARGET, '--features', 'desktop', '--bundles', 'nsis', '--config', 'src-tauri/tauri.bundle.conf.json')
+          if ($env:SIGNED_BUILD -eq 'true') { $buildArguments += @('--config', 'src-tauri/tauri.rc.conf.json') }
+          pnpm @buildArguments
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify actual installer payload and dependencies
+        shell: pwsh
+        run: python scripts/verify-windows-package.py --target x86_64-pc-windows-msvc
+      - name: Verify release signatures
+        if: inputs.signed
+        shell: pwsh
+        run: ./scripts/verify-windows-rc.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenNexus-windows-x64-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            frontend/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            .build/sidecar/manifest.json
+            .build/sidecar/manifest.sig
+            .build/sidecar/public-key.hex
+            .build/windows/package-verification.json
+            .build/windows-rc-sha256.json
+
+      - name: Clean signing material
+        if: always() && inputs.signed
+        shell: pwsh
+        run: |
+          if ($env:OPENNEXUS_WINDOWS_CERTIFICATE_THUMBPRINT) {
+            Remove-Item -LiteralPath "Cert:\CurrentUser\My\$env:OPENNEXUS_WINDOWS_CERTIFICATE_THUMBPRINT" -Force -ErrorAction SilentlyContinue
+          }
+          $signingDirectory = Join-Path $env:RUNNER_TEMP 'opennexus-signing'
+          foreach ($signingFile in @('codesign.pfx', 'core-ed25519.pem')) {
+            Remove-Item -LiteralPath (Join-Path $signingDirectory $signingFile) -Force -ErrorAction SilentlyContinue
+          }
+          Remove-Item -LiteralPath $signingDirectory -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'frontend/src-tauri/tauri.rc.conf.json') -Force -ErrorAction SilentlyContinue

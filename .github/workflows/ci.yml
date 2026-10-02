@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: git diff --check
+      - run: python3 scripts/check-doc-links.py
+
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      APP_EXPORT_FONT: /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.9.24'
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: dtolnay/rust-toolchain@stable
+      - run: uv sync --frozen
+      - run: uv run --frozen python -m compileall -q app
+      - run: uv run --frozen pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: corepack enable
+      - run: corepack prepare pnpm@10.28.0 --activate
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test --maxWorkers=2
+      - run: pnpm type-check
+      - run: pnpm build
+
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: frontend/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.9.24'
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: uv sync --frozen --directory ../../backend
+      - run: cargo fmt --check
+      # The production-strength repeated-crash migration test runs in release acceptance.
+      - run: cargo test --lib --locked -- --skip credentials::tests::b04_migration_survives_twenty_hard_terminations_per_boundary
+      - run: cargo clippy --lib --locked -- -D warnings
