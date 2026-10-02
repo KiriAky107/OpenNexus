@@ -5,7 +5,7 @@ import ControlIcon from '@/components/common/ControlIcon.vue'
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useSettingsStore } from '@/stores/settings'
-import { CanvasModel,edgeGeometry,nodeBounds,nodeLabel,nodesInsideGroup,type CanvasNode,type CanvasSide } from './canvasModel'
+import { CanvasModel,edgeGeometry,nodeBounds,nodeLabel,movementIds,type CanvasNode,type CanvasSide } from './canvasModel'
 import { documentPaths } from '@/services/referenceImpact'
 import { loadWorkspaceImage,readFileContent } from '@/services/workspaceService'
 import { workspaceDocumentType } from '@/services/workspaceDocuments'
@@ -81,9 +81,7 @@ function begin(event:PointerEvent,node?:CanvasNode,resize=false){
   if(node&&kind!=='pan'){
     if(!selected.value.includes(node.id))select(node.id,event.shiftKey)
     else if(event.shiftKey&&!resize){select(node.id,true);return}
-    ids=[...selected.value]
-    for(const id of [...ids]){const group=document.value.nodes.find(node=>node.id===id);if(group?.type==='group')ids.push(...nodesInsideGroup(group,document.value.nodes))}
-    ids=[...new Set(ids)]
+    ids=movementIds(document.value.nodes,selected.value)
     if(resize)ids=[node.id]
   }
   if(kind==='box'&&!event.shiftKey){selected.value=[];selectedEdge.value=''}
@@ -204,7 +202,7 @@ onBeforeUnmount(()=>{disposed=true;previewGeneration++;window.removeEventListene
               <text v-if="line.label" :x="geometry!.x" :y="geometry!.y-8" text-anchor="middle">{{ line.label.slice(0,120) }}</text>
             </g>
           </svg>
-          <div v-for="node in visibleNodes" :key="node.id" class="canvas-node" :class="[node.type,{selected:selected.includes(node.id)}]" :data-node-id="node.id" tabindex="0" role="group" :aria-label="`${node.type}: ${nodeLabel(node)}`" :style="{left:`${node.x}px`,top:`${node.y}px`,width:`${node.width}px`,height:`${node.height}px`,borderColor:color(node.color),zIndex:document.nodes.findIndex(value=>value.id===node.id)+1}" @pointerdown.stop="begin($event,node)" @keydown.enter.prevent.stop="locate(node.id)">
+          <div v-for="node in visibleNodes" :key="node.id" class="canvas-node" :class="[node.type,{selected:selected.includes(node.id)}]" :data-node-id="node.id" tabindex="0" role="group" :aria-label="`${node.type}: ${nodeLabel(node)}`" :style="{left:`${node.x}px`,top:`${node.y}px`,width:`${node.width}px`,height:`${node.height}px`,borderColor:color(node.color),zIndex:document.nodes.findIndex(value=>value.id===node.id)+1}" @pointerdown.stop="begin($event,node)" @keydown.enter.self.prevent.stop="locate(node.id)">
             <header><span>{{ node.type==='text'?t('文字','Text'):node.type==='file'?t('文件','File'):node.type==='link'?t('网址','URL'):node.label??t('分组','Group') }}</span><button v-if="node.type==='file'&&['markdown','canvas'].includes(workspaceDocumentType(node.file??''))||node.type==='link'" class="node-open" :aria-label="t('打开节点目标','Open node target')" @pointerdown.stop @click.stop="open(node)">↗</button></header>
             <div class="canvas-node-content"><template v-if="node.type==='text'">{{ node.text }}</template><template v-else-if="node.type==='link'"><strong>{{ node.url }}</strong><p>{{ t('选择打开时会使用浏览器。','Opens in your browser when selected.') }}</p></template><template v-else-if="node.type==='file'"><strong :title="node.file">{{ nodeLabel(node) }}</strong><img v-if="previews[node.file??'']?.url" :src="previews[node.file??'']!.url" :alt="node.file??''" draggable="false"/><p v-else>{{ previews[node.file??'']?.text??t('读取引用内容…','Loading referenced content…') }}</p></template><div v-else-if="node.background&&previews[node.background]?.url" class="canvas-group-background" role="img" :aria-label="node.label??node.background" :style="groupBackground(node)"/></div>
             <button v-if="selected.includes(node.id)&&!readOnly" class="node-resize" :aria-label="t('调整节点尺寸','Resize node')" @pointerdown.stop="begin($event,node,true)">↘</button>

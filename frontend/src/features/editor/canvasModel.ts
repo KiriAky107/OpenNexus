@@ -16,6 +16,15 @@ export function nodeBounds(nodes:CanvasNode[]){
   return{x,y,width:Math.max(...nodes.map(node=>node.x+node.width))-x,height:Math.max(...nodes.map(node=>node.y+node.height))-y}
 }
 export function nodesInsideGroup(group:CanvasNode,nodes:CanvasNode[]){return nodes.filter(node=>node.id!==group.id&&node.x>=group.x&&node.y>=group.y&&node.x+node.width<=group.x+group.width&&node.y+node.height<=group.y+group.height).map(node=>node.id)}
+export function movementIds(nodes:CanvasNode[],selected:readonly string[]){
+  const indexed=new Map(nodes.map(node=>[node.id,node])),ids=new Set(selected),queue=[...ids]
+  for(let index=0;index<queue.length;index++){
+    const group=indexed.get(queue[index]!)
+    if(group?.type!=='group')continue
+    for(const id of nodesInsideGroup(group,nodes))if(!ids.has(id)){ids.add(id);queue.push(id)}
+  }
+  return[...ids]
+}
 export class CanvasModel {
   document:CanvasDocument
   source:string
@@ -39,7 +48,7 @@ export class CanvasModel {
     this.change(document=>{if(type==='group')document.nodes.unshift(node);else document.nodes.push(node)});return id
   }
   updateNode(id:string,fields:Partial<CanvasNode>){return this.change(document=>{const node=document.nodes.find(node=>node.id===id);if(node)Object.assign(node,fields,{id:node.id,type:node.type})})}
-  move(ids:string[],dx:number,dy:number){const set=new Set(ids);return this.change(document=>document.nodes.forEach(node=>{if(set.has(node.id)){node.x+=Math.round(dx);node.y+=Math.round(dy)}}))}
+  move(ids:string[],dx:number,dy:number){const set=new Set(movementIds(this.document.nodes,ids));return this.change(document=>document.nodes.forEach(node=>{if(set.has(node.id)){node.x+=Math.round(dx);node.y+=Math.round(dy)}}))}
   remove(ids:string[],edgeId?:string){const set=new Set(ids);return this.change(document=>{document.nodes=document.nodes.filter(node=>!set.has(node.id));document.edges=document.edges.filter(edge=>edge.id!==edgeId&&!set.has(edge.fromNode)&&!set.has(edge.toNode))})}
   connect(from:string,to:string,label=''){const id=crypto.randomUUID();this.change(document=>document.edges.push({id,fromNode:from,toNode:to,label}));return id}
   updateEdge(id:string,fields:Partial<CanvasEdge>){return this.change(document=>{const edge=document.edges.find(edge=>edge.id===id);if(edge)Object.assign(edge,fields,{id:edge.id})})}

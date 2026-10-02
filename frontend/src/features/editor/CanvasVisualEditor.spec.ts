@@ -9,6 +9,8 @@ import * as service from '@/services/workspaceService'
 import {executeEditorCommand} from '@/services/editorCommandService'
 import CanvasVisualEditor from './CanvasVisualEditor.vue'
 import CanvasEditor from './CanvasEditor.vue'
+import {navigateMarkdownHref} from '@/services/markdownLinkService'
+vi.mock('@/services/markdownLinkService',()=>({navigateMarkdownHref:vi.fn().mockResolvedValue(undefined)}))
 const fixture=JSON.stringify({nodes:[{id:'a',type:'text',x:0,y:0,width:300,height:180,text:'Root',custom:'keep'},{id:'b',type:'file',x:400,y:0,width:300,height:180,file:'course/note.md',subpath:'#heading'}],edges:[{id:'e',fromNode:'a',toNode:'b',label:'Evidence'}],extension:{keep:true}})
 beforeEach(()=>{
  localStorage.clear();setActivePinia(createPinia());const editor=useEditorStore();editor.currentFilePath='/map.canvas';editor.content=fixture;editor.saveStatus='saved';vi.spyOn(editor,'scheduleAutoSave').mockImplementation(()=>{})
@@ -17,6 +19,40 @@ beforeEach(()=>{
  vi.spyOn(service,'readFileContent').mockResolvedValue('# Actual note\n\nReal preview.')
 })
 afterEach(()=>vi.restoreAllMocks())
+it('keeps native Enter and Space on the target button and focuses only a node-level Enter',async()=>{
+ const wrapper=mount(CanvasVisualEditor);await flushPromises()
+ const target=wrapper.get('[data-node-id="b"] .node-open').element
+ for(const key of ['Enter',' ']){
+  const event=new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true})
+  expect(target.dispatchEvent(event)).toBe(true);expect(event.defaultPrevented).toBe(false)
+ }
+ await wrapper.get('[data-node-id="b"] .node-open').trigger('click')
+ expect(navigateMarkdownHref).toHaveBeenCalledWith('/course/note.md#heading')
+ await wrapper.get('[data-node-id="a"]').trigger('keydown',{key:'Enter'})
+ expect(wrapper.get('[aria-label="节点内容"]').element).toHaveProperty('value','Root')
+ wrapper.unmount()
+})
+it('uses the same group expansion for pointer and keyboard movement with one undo',async()=>{
+ const editor=useEditorStore(),source=JSON.stringify({nodes:[
+  {id:'group',type:'group',x:0,y:0,width:600,height:400,label:'Group'},
+  {id:'member',type:'text',x:100,y:100,width:100,height:100,text:'Member'},
+ ],edges:[]});editor.content=source
+ const wrapper=mount(CanvasVisualEditor);await flushPromises()
+ await wrapper.get('[data-list-node-id="group"]').trigger('click')
+ const viewport=wrapper.get('.canvas-viewport')
+ await viewport.trigger('keydown',{key:'ArrowRight'})
+ expect(JSON.parse(editor.content).nodes.map((n:any)=>n.x)).toEqual([10,110])
+ expect(editor.scheduleAutoSave).toHaveBeenCalledTimes(1)
+ await executeEditorCommand('editor.undo');expect(editor.content).toBe(source)
+ await wrapper.get('[data-node-id="group"]').trigger('pointerdown',{button:0,clientX:10,clientY:10,pointerId:1})
+ await viewport.trigger('pointermove',{clientX:40,clientY:30,pointerId:1})
+ await viewport.trigger('pointerup',{clientX:40,clientY:30,pointerId:1})
+ const [group,member]=JSON.parse(editor.content).nodes
+ expect(member.x-100).toBe(group.x);expect(member.y-100).toBe(group.y)
+ await executeEditorCommand('editor.undo');expect(editor.content).toBe(source)
+ expect(await executeEditorCommand('editor.undo')).toEqual({ok:false,reason:'unavailable'})
+ wrapper.unmount()
+})
 const button=(wrapper:ReturnType<typeof mount>,text:string)=>wrapper.findAll('button').find(button=>button.text()===text)!
 it('edits using the keyboard and property inspector, preserves extensions, copies and restores through shared undo',async()=>{
  const wrapper=mount(CanvasVisualEditor);await flushPromises();expect(wrapper.text()).toContain('Real preview.')

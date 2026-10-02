@@ -1,7 +1,23 @@
 import{expect,it}from'vitest'
-import{CanvasModel,edgeGeometry,nodeLabel}from'./canvasModel'
+import{CanvasModel,edgeGeometry,nodeLabel,movementIds}from'./canvasModel'
 import imported from '../../../tests/fixtures/imported.canvas?raw'
 const fixture=JSON.stringify({nodes:[{id:'a',type:'text',x:0,y:0,width:300,height:180,text:'Root',custom:{a:1}},{id:'b',type:'file',x:400,y:0,width:300,height:180,file:'course/note.md',subpath:'#heading'}],edges:[{id:'e',fromNode:'a',toNode:'b',label:'evidence',custom:true}],custom:{future:'preserved'}})
+it('moves nested and overlapping group members once and records one undo',()=>{
+ const source=JSON.stringify({nodes:[
+  {id:'outer',type:'group',x:0,y:0,width:600,height:600,label:'Outer',extra:true},
+  {id:'inner',type:'group',x:100,y:100,width:300,height:300,label:'Inner'},
+  {id:'overlap',type:'group',x:50,y:50,width:400,height:400,label:'Overlap'},
+  {id:'child',type:'text',x:150,y:150,width:100,height:100,text:'Child'},
+  {id:'outside',type:'text',x:800,y:0,width:100,height:100,text:'Outside'},
+ ],edges:[]})
+ const model=new CanvasModel(source),before=model.document.nodes.map(n=>({...n}))
+ expect(new Set(movementIds(model.document.nodes,['outer','overlap','child']))).toEqual(new Set(['outer','inner','overlap','child']))
+ model.move(['outer','overlap','child'],10,-10)
+ model.document.nodes.forEach((node,index)=>expect(node).toMatchObject({x:before[index]!.x+(node.id==='outside'?0:10),y:before[index]!.y+(node.id==='outside'?0:-10)}))
+ expect(model.document.nodes[0]!.extra).toBe(true)
+ expect(model.undo()).toBe(true);expect(model.source).toBe(source);expect(model.canUndo).toBe(false)
+ model.redo();expect(model.document.nodes[3]!.x).toBe(160)
+})
 it('edits, copies, removes and undo/redoes while preserving unknown fields and reference contents',()=>{
   const model=new CanvasModel(fixture);model.move(['a'],20,30);expect(model.document.nodes[0]).toMatchObject({x:20,y:30,custom:{a:1}})
   model.undo();expect(model.source).toBe(fixture);model.redo();expect(model.document.nodes[0]?.x).toBe(20)
