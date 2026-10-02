@@ -90,12 +90,13 @@ impl Workspace {
     }
     pub fn sync_discover(&mut self, binding: &str) -> Result<usize> {
         self.check_binding(binding)?;
+        self.refresh_snapshot(false)?;
         let paths = self.sync_paths()?;
         let mut seen = HashSet::new();
         let mut changes = 0;
         for path in paths {
             let target = self.resolve(&path)?;
-            let (digest, _) = crate::payloads::sync_file_info(&target, &path)?;
+            let (digest, _) = self.cached_sync_file_info(&target, &path)?;
             let previous = self.entry(&path)?;
             let observed: Option<(String, String, bool)> = if let Some(entry) = &previous {
                 self.db
@@ -126,6 +127,7 @@ impl Workspace {
             tx.execute("INSERT INTO outbox SELECT ?1,id,revision,path,hash,'put',X'','pending' FROM files WHERE id=?2",params![operation,file_id])?;
             tx.execute("INSERT INTO sync_observed VALUES (?1,?2,?3,0) ON CONFLICT(file_id) DO UPDATE SET path=excluded.path,hash=excluded.hash,deleted=0",params![file_id,path,digest])?;
             tx.commit()?;
+            self.changed_path(&path);
             seen.insert(file_id);
             changes += 1;
         }
@@ -157,6 +159,7 @@ impl Workspace {
                 [&file_id],
             )?;
             tx.commit()?;
+            self.changed_path(&path);
             changes += 1;
         }
         Ok(changes)

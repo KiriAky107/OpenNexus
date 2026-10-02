@@ -9,6 +9,9 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
+#[path = "workspace_watch.rs"]
+mod watch;
+pub use watch::{ScanStats, WatchStatus, WorkspaceChange};
 
 #[derive(Debug, Serialize)]
 pub struct HostError {
@@ -50,7 +53,7 @@ impl From<rusqlite::Error> for HostError {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
     pub file_id: String,
     pub path: String,
@@ -117,6 +120,7 @@ pub struct Workspace {
     pub vault_id: String,
     pub(crate) db: Connection,
     _lock: File,
+    cache: watch::Cache,
 }
 
 impl Workspace {
@@ -248,11 +252,13 @@ impl Workspace {
             "INSERT INTO identity SELECT ?1 WHERE NOT EXISTS (SELECT 1 FROM identity)",
             [&vault_id],
         )?;
+        let cache = watch::Cache::new(&root);
         let mut workspace = Self {
             root,
             vault_id,
             db,
             _lock: lock,
+            cache,
         };
         workspace.recover()?;
         workspace.scan()?;
@@ -346,53 +352,14 @@ impl Workspace {
     }
 
     pub fn scan(&mut self) -> Result<Vec<Entry>> {
-        let mut paths = Vec::new();
-        self.scan_dir(&self.root, &mut paths, true)?;
-        let mut entries = Vec::new();
-        for path in paths {
-            if self.resolve(&path)?.is_dir() {
-                entries.push(Entry {
-                    file_id: format!("folder:{path}"),
-                    path,
-                    hash: String::new(),
-                    revision: 0,
-                    deleted: false,
-                    is_folder: true,
-                    updated_at: None,
-                });
-                continue;
-            }
-            let digest = crate::payloads::hash_file(&self.resolve(&path)?)?;
-            let previous = self.entry(&path)?;
-            if previous
-                .as_ref()
-                .is_none_or(|e| e.hash != digest || e.deleted)
-            {
-                let id = previous
-                    .as_ref()
-                    .map_or_else(|| Uuid::new_v4().to_string(), |e| e.file_id.clone());
-                self.db.execute("INSERT INTO files VALUES (?1,?2,?3,1,0) ON CONFLICT(path) DO UPDATE SET hash=excluded.hash,revision=files.revision+1,deleted=0", params![id,path,digest])?;
-            }
-            entries.push(
-                self.entry(&path)?
-                    .ok_or_else(|| HostError::new("FILE_NOT_FOUND"))?,
-            );
-        }
-        Ok(entries)
+        self.refresh_snapshot(true)?;
+        Ok(self.cached_entries())
     }
 
     /// Markdown, Canvas and image entries share stable Host identities and sync revisions.
     pub fn tree(&mut self) -> Result<Vec<Entry>> {
-        let mut entries = self.scan()?;
-        for entry in &mut entries {
-            let modified = fs::metadata(self.resolve(&entry.path)?)?.modified()?;
-            let millis = modified
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|_| HostError::new("FILESYSTEM_ERROR"))?
-                .as_millis();
-            entry.updated_at = Some(millis.to_string());
-        }
-        Ok(entries)
+        self.refresh_snapshot(false)?;
+        Ok(self.cached_entries())
     }
 
     pub fn read(&mut self, path: &str) -> Result<Document> {
@@ -782,6 +749,7 @@ impl Workspace {
         )?;
         tx.execute("DELETE FROM journal WHERE operation_id=?1", [operation_id])?;
         tx.commit()?;
+        self.changed_path(path);
         Ok(())
     }
 
@@ -842,6 +810,7 @@ impl Workspace {
 
     pub fn mkdir(&self, path: &str) -> Result<()> {
         fs::create_dir_all(self.resolve(path)?)?;
+        self.changed_path(path);
         Ok(())
     }
 
@@ -1052,6 +1021,10 @@ impl Workspace {
         }
         self.db
             .execute("DELETE FROM directory_ops WHERE id=?1", [id])?;
+        self.changed_path(&path);
+        if kind == "rename" {
+            self.changed_path(&destination);
+        }
         Ok(())
     }
 
@@ -1330,6 +1303,10 @@ impl Workspace {
             ],
         )?;
         tx.commit()?;
+        self.changed_path(&path);
+        if kind == "rename" {
+            self.changed_path(&result.path);
+        }
         Ok(())
     }
 }

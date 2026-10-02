@@ -1186,8 +1186,26 @@ fn workspace_revoke(host: State<'_, Host>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn workspace_tree(host: State<'_, Host>) -> Result<Vec<Entry>, String> {
-    with_workspace(&host, |ws| ws.tree())
+async fn workspace_tree(host: State<'_, Host>, force: Option<bool>) -> Result<Vec<Entry>, String> {
+    let workspace = host.workspace.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut guard = workspace.lock().map_err(|_| "HOST_BUSY")?;
+        let ws = guard.as_mut().ok_or("VAULT_NOT_OPEN")?;
+        if force.unwrap_or(false) {
+            ws.scan()
+        } else {
+            ws.tree()
+        }
+        .map_err(|error| error.code)
+    })
+    .await
+    .map_err(|_| "HOST_BUSY".to_owned())?
+}
+#[tauri::command]
+fn workspace_watch_status(
+    host: State<'_, Host>,
+) -> Result<notesagent_host::workspace::WatchStatus, String> {
+    with_workspace(&host, |ws| Ok(ws.watch_status()))
 }
 #[tauri::command]
 fn workspace_read(host: State<'_, Host>, path: String) -> Result<Document, String> {
@@ -1433,6 +1451,24 @@ fn main() {
                     let _ = sync_commands::run(&sync_handle.state::<Host>(), false).await;
                 }
             });
+            // One background scan at a time. Never wait for a busy write/commit lock.
+            let workspace_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_millis(250));
+                loop {
+                    interval.tick().await;
+                    let handle = workspace_handle.clone();
+                    let change = tauri::async_runtime::spawn_blocking(move || {
+                        let host = handle.state::<Host>();
+                        let mut active = host.workspace.try_lock().ok()?;
+                        active.as_mut()?.poll_change().ok().flatten()
+                    })
+                    .await;
+                    if let Ok(Some(change)) = change {
+                        let _ = workspace_handle.emit("workspace-changed", change);
+                    }
+                }
+            });
             Ok(())
         })
         .on_menu_event(|app, event| {
@@ -1506,6 +1542,7 @@ fn main() {
             workspace_recent,
             workspace_revoke,
             workspace_tree,
+            workspace_watch_status,
             workspace_folder_operation,
             workspace_read,
             workspace_write,

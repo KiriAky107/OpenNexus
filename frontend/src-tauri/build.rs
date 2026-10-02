@@ -63,6 +63,7 @@ fn main() {
             "workspace_choose",
             "workspace_open",
             "workspace_tree",
+            "workspace_watch_status",
             "workspace_read",
             "workspace_write",
             "workspace_operation",

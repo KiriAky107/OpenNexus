@@ -238,7 +238,7 @@ pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
             if !(1..=1000).contains(&p.limit) {
                 return Err("WORKSPACE_REQUEST_INVALID".into());
             }
-            let mut entries = ws.scan().map_err(|e| e.code)?;
+            let mut entries = ws.tree().map_err(|e| e.code)?;
             entries.retain(|e| !e.deleted && !e.is_folder);
             entries.sort_by(|a, b| a.path.cmp(&b.path));
             let total = entries.len();

@@ -140,10 +140,10 @@ export async function createVault(path: string, name: string): Promise<VaultInfo
   return openVault(path)
 }
 
-export async function refreshTree(): Promise<FileNode[]> {
+export async function refreshTree(force = false): Promise<FileNode[]> {
   const version = ++treeRequestVersion
   if (isDesktop()) {
-    const entries = await hostInvoke<HostEntry[]>('workspace_tree')
+    const entries = await hostInvoke<HostEntry[]>('workspace_tree', { force })
     if (version !== treeRequestVersion) return cachedTree ?? []
     noteIdByPath.clear(); typeByPath.clear()
     for (const entry of entries) { if (!entry.is_folder && /\.md$/i.test(entry.path)) noteIdByPath.set(`/${entry.path}`, entry.file_id); typeByPath.set(`/${entry.path}`, entry.is_folder ? 'folder' : 'file') }

@@ -93,12 +93,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   /** 重新拉取文件树。插件命令返回 refresh:workspace 时需要。 */
-  async function refreshFileTree() {
+  async function refreshFileTree(force = true) {
     if (!hasVault.value) return
     const sequence = ++refreshSequence
     const path = vaultPath.value
     try {
-      const fresh = await workspaceService.refreshTree()
+      const fresh = await workspaceService.refreshTree(force)
       if (sequence !== refreshSequence || path !== vaultPath.value || !hasVault.value) return
       const open = new Map<string, boolean>()
       const collect = (nodes: FileNode[]) => nodes.forEach(node => { if (node.type === 'folder') open.set(node.path, !!node.is_open); if (node.children) collect(node.children) })
@@ -235,6 +235,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     hasVault,
     recentVaults,
     treeRefreshError,
+    findNodeByPath,
     toggleFolder,
     openFile,
     rememberRecentFile,

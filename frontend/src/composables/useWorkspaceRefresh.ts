@@ -1,40 +1,63 @@
 import { onMounted, onUnmounted } from 'vue'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { isDesktop } from '@/services/platform/desktop'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useEditorStore } from '@/stores/editor'
 
-/** Web 回退，直到桌面主机提供文件系统事件。没有重叠的民意调查。 */
+interface WorkspaceChange { vault_id: string; revision: number; paths: string[] }
+
+/** Desktop events with a cheap snapshot fallback; Web polls only while visible. */
 export function useWorkspaceRefresh() {
-  const workspace = useWorkspaceStore()
-  const editor = useEditorStore()
-  let stopped = false
-  let running = false
+  const workspace = useWorkspaceStore(), editor = useEditorStore()
+  const desktop = isDesktop()
+  let stopped = false, running = false, queued = false, forceNext = false
   let timer: ReturnType<typeof setTimeout> | undefined
-  async function refresh() {
-    if (running || stopped) return
+  let unlisten: UnlistenFn | undefined
+  async function refresh(force = false) {
+    forceNext ||= force
+    if (stopped) return
+    if (running) { queued = true; return }
     clearTimeout(timer)
     running = true
+    const explicit = forceNext; forceNext = false
     try {
       if (document.visibilityState !== 'hidden' && workspace.hasVault) {
-        await workspace.refreshFileTree()
-        if (!stopped) {
-          if (editor.currentFilePath && editor.currentFilePath === workspace.activeFilePath && !workspace.activeFile) editor.setExternalChanged()
-          else await editor.checkExternalFile()
+        const vault = workspace.vaultId, path = editor.currentFilePath
+        const previous = path ? workspace.findNodeByPath(workspace.fileTree, path) : null
+        const hash = previous?.content_hash
+        await workspace.refreshFileTree(explicit)
+        if (!stopped && vault === workspace.vaultId && path && path === editor.currentFilePath) {
+          const current = workspace.findNodeByPath(workspace.fileTree, path)
+          if (!current) editor.setExternalChanged()
+          else if (hash !== current.content_hash || (!hash && !desktop)) await editor.checkExternalFile()
         }
       }
-    } catch { /* 保留现有树；商店暴露错误并重试。 */ }
+    } catch { /* Store retains the snapshot and exposes a retryable refresh error. */ }
     finally {
       running = false
-      if (!stopped) timer = setTimeout(refresh, 2000)
+      if (!stopped) {
+        if (queued) { queued = false; void refresh() }
+        else timer = setTimeout(() => { void refresh() }, desktop ? 30000 : 5000)
+      }
     }
   }
-  onMounted(() => {
-    window.addEventListener('focus', refresh)
-    document.addEventListener('visibilitychange', refresh)
-    void refresh()
+  const resume = () => { if (document.visibilityState !== 'hidden') void refresh(true) }
+  onMounted(async () => {
+    window.addEventListener('focus', resume)
+    document.addEventListener('visibilitychange', resume)
+    if (desktop) {
+      try {
+        const stop = await listen<WorkspaceChange>('workspace-changed', event => {
+          if (event.payload.vault_id === workspace.vaultId) void refresh()
+        })
+        if (stopped) stop(); else unlisten = stop
+      } catch { /* 30s snapshot fallback still works if event subscription fails. */ }
+    }
+    if (!stopped) void refresh()
   })
   onUnmounted(() => {
-    stopped = true; clearTimeout(timer)
-    window.removeEventListener('focus', refresh)
-    document.removeEventListener('visibilitychange', refresh)
+    stopped = true; clearTimeout(timer); unlisten?.()
+    window.removeEventListener('focus', resume)
+    document.removeEventListener('visibilitychange', resume)
   })
 }

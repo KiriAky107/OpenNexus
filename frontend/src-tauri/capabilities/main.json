@@ -30,6 +30,7 @@
     "allow-workspace-choose",
     "allow-workspace-open",
     "allow-workspace-tree",
+    "allow-workspace-watch-status",
     "allow-workspace-read",
     "allow-workspace-write",
     "allow-workspace-operation",
