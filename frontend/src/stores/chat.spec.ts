@@ -3,11 +3,12 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useChatStore } from './chat'
 import {
   createConversation,
-  listConversationMessages,
+  loadConversationWindow,
   listConversations,
   removeConversation,
   streamChat,
   decideChatBudget,
+  selectMessageVersion,
 } from '@/services/chatService'
 import type { ChatMessage, Conversation } from '@/contracts'
 import type { SseClient } from '@/services/sseClient'
@@ -15,7 +16,7 @@ import { useChatPreferences } from './chatPreferences'
 
 vi.mock('@/services/chatService', () => ({
   createConversation: vi.fn(),
-  listConversationMessages: vi.fn(),
+  loadConversationWindow: vi.fn(),
   listConversations: vi.fn(),
   removeConversation: vi.fn(),
   streamChat: vi.fn(),
@@ -24,6 +25,10 @@ vi.mock('@/services/chatService', () => ({
 }))
 
 const page = { total: 0, limit: 100, offset: 0 }
+function windowOf(items: ChatMessage[] = [], total = items.length) {
+  return { items, total, start: Math.max(0,total-items.length), branch_leaf: items.at(-1)?.message_id || null,
+    active_leaf: items.at(-1)?.message_id || null, before: total > items.length ? 'before' : null, after: null }
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -36,12 +41,13 @@ beforeEach(() => {
   setActivePinia(createPinia())
   vi.mocked(streamChat).mockReset().mockReturnValue({ cancel: vi.fn() } as unknown as SseClient)
   vi.mocked(listConversations).mockReset().mockResolvedValue({ items: [], page })
-  vi.mocked(listConversationMessages).mockReset().mockResolvedValue({ items: [], page: { ...page, limit: 1000 } })
+  vi.mocked(loadConversationWindow).mockReset().mockImplementation(async () => windowOf(JSON.parse(JSON.stringify(useChatStore().messages))))
   vi.mocked(createConversation).mockReset().mockImplementation(async value => ({
     ...value, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), message_count: 0,
   }))
   vi.mocked(removeConversation).mockReset().mockResolvedValue(undefined)
   vi.mocked(decideChatBudget).mockReset().mockResolvedValue({ status: 'accepted' })
+  vi.mocked(selectMessageVersion).mockReset().mockResolvedValue({ status: 'completed' })
 })
 
 it('pauses for chat budget approval and continues the same response stream', async () => {
@@ -128,7 +134,7 @@ it('sends persistent message ids and restores messages from the backend', async 
   handlers.onDone?.()
 
   const persisted = store.messages.map(message => ({ ...message })) as ChatMessage[]
-  vi.mocked(listConversationMessages).mockResolvedValueOnce({ items: persisted, page: { total: 2, limit: 1000, offset: 0 } })
+  vi.mocked(loadConversationWindow).mockResolvedValueOnce(windowOf(persisted))
   const id = store.activeConversationId!
   await store.createNewConversation()
   expect(store.messages).toEqual([])
@@ -154,10 +160,7 @@ it('loads the newest persisted conversation on initialization', async () => {
     updated_at: '2026-01-02T00:00:00Z', message_count: 1,
   }
   vi.mocked(listConversations).mockResolvedValue({ items: [conversation], page: { ...page, total: 1 } })
-  vi.mocked(listConversationMessages).mockResolvedValue({
-    items: [{ message_id: 'm1', conversation_id: 'persisted', role: 'user', content: 'saved text', created_at: '2026-01-01T00:00:00Z' }],
-    page: { total: 1, limit: 1000, offset: 0 },
-  })
+  vi.mocked(loadConversationWindow).mockResolvedValue(windowOf([{ message_id: 'm1', conversation_id: 'persisted', role: 'user', content: 'saved text', created_at: '2026-01-01T00:00:00Z' }]))
   const store = useChatStore()
   await store.loadConversations()
   expect(store.activeConversationId).toBe('persisted')
@@ -189,26 +192,26 @@ it('keeps a conversation visible when backend deletion fails', async () => {
   expect(store.historyError).toBe('offline')
 })
 
-it('blocks sends until history is loaded, then includes that history', async () => {
+it('blocks sends until history is loaded, then requests saved branch context', async () => {
   const store = useChatStore()
   store.selectedProviderId = 'real'
   store.selectedModel = 'model'
   await store.createNewConversation()
   const id = store.activeConversationId!
-  const history = deferred<Awaited<ReturnType<typeof listConversationMessages>>>()
-  vi.mocked(listConversationMessages).mockReturnValueOnce(history.promise)
+  const history = deferred<Awaited<ReturnType<typeof loadConversationWindow>>>()
+  vi.mocked(loadConversationWindow).mockReturnValueOnce(history.promise)
   const loading = store.setActiveConversation(id)
   store.inputText = 'followup'
   expect(store.canSend).toBe(false)
   await store.sendMessage(store.inputText)
   expect(streamChat).not.toHaveBeenCalled()
   expect(store.inputText).toBe('followup')
-  history.resolve({ items: [{ message_id: 'old', conversation_id: id, role: 'user', content: 'previous context', created_at: '' }], page: { ...page, total: 1 } })
+  history.resolve(windowOf([{ message_id: 'old', conversation_id: id, role: 'user', content: 'previous context', created_at: '' }]))
   await loading
   expect(store.canSend).toBe(true)
   await store.sendMessage(store.inputText)
   expect(vi.mocked(streamChat).mock.calls[0]![0].messages).toEqual([
-    { role: 'user', content: 'previous context' }, { role: 'user', content: 'followup' },
+    { role: 'user', content: 'followup' },
   ])
   expect(store.messages.map(m => m.content)).toEqual(['previous context', 'followup', ''])
 })
@@ -219,7 +222,7 @@ it('keeps sending blocked after history failure until a successful retry', async
   store.selectedModel = 'model'
   await store.createNewConversation()
   const id = store.activeConversationId!
-  vi.mocked(listConversationMessages).mockRejectedValueOnce(new Error('offline'))
+  vi.mocked(loadConversationWindow).mockRejectedValueOnce(new Error('offline'))
   await store.setActiveConversation(id)
   await store.sendMessage('followup')
   expect(streamChat).not.toHaveBeenCalled()
@@ -300,12 +303,12 @@ it('ignores old history after switching to a new conversation and sending', asyn
   store.selectedModel = 'model'
   await store.createNewConversation()
   const id = store.activeConversationId!
-  const history = deferred<Awaited<ReturnType<typeof listConversationMessages>>>()
-  vi.mocked(listConversationMessages).mockReturnValueOnce(history.promise)
+  const history = deferred<Awaited<ReturnType<typeof loadConversationWindow>>>()
+  vi.mocked(loadConversationWindow).mockReturnValueOnce(history.promise)
   const loading = store.setActiveConversation(id)
   await store.createNewConversation()
   await store.sendMessage('new question')
-  history.resolve({ items: [], page })
+  history.resolve(windowOf())
   await loading
   expect(store.messages.map(m => m.content)).toEqual(['new question', ''])
   expect(store.isStreaming).toBe(true)
@@ -422,7 +425,7 @@ it('restores each answer context after history reload, including explicitly abse
   await s.retryMessage(original,undefined,second); vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
   expect(s.messages[0]!.workspace_context).toEqual(first)
   expect(s.messages[1]!.workspace_context).toEqual(second)
-  vi.mocked(listConversationMessages).mockResolvedValue({items:JSON.parse(JSON.stringify(s.messages)),page:{total:2,limit:500,offset:0}})
+  vi.mocked(loadConversationWindow).mockResolvedValue(windowOf(JSON.parse(JSON.stringify(s.messages))))
   await s.setActiveConversation(s.activeConversationId!)
   await s.retryMessage(s.messages[1]!.message_id)
   expect(vi.mocked(streamChat).mock.calls.at(-1)![0].workspace_context).toEqual(second)
@@ -430,8 +433,106 @@ it('restores each answer context after history reload, including explicitly abse
   await s.retryMessage(s.messages[1]!.message_id,undefined,null)
   vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
   // API 将缺失的捕获上下文序列化为 null；不要回退到原始用户快照。
-  vi.mocked(listConversationMessages).mockResolvedValue({items:JSON.parse(JSON.stringify(s.messages)),page:{total:2,limit:500,offset:0}})
+  vi.mocked(loadConversationWindow).mockResolvedValue(windowOf(JSON.parse(JSON.stringify(s.messages))))
   await s.setActiveConversation(s.activeConversationId!)
   await s.sendMessage('continue')
   expect(vi.mocked(streamChat).mock.calls.at(-1)![0].workspace_context).toBeUndefined()
+})
+
+
+function largeWindow(start: number, total = 10000) {
+  const items: ChatMessage[] = Array.from({length: Math.min(60,total-start)}, (_, offset) => ({
+    message_id: `m${start+offset}`, conversation_id: 'large', role: (start+offset)%2 ? 'assistant' : 'user',
+    content: `body ${start+offset}`, created_at: '', parent_message_id: start+offset ? `m${start+offset-1}` : null,
+  }))
+  return {...windowOf(items,total), start, branch_leaf: `m${total-1}`, active_leaf: `m${total-1}`,
+    before: start ? `before-${start}` : null, after: start+items.length < total ? `after-${start+items.length-1}` : null}
+}
+
+it('opens a 10000-message conversation with one bounded request and pages with overlap', async () => {
+  const s = useChatStore()
+  vi.mocked(loadConversationWindow).mockResolvedValueOnce(largeWindow(9940))
+  await s.setActiveConversation('large')
+  expect(loadConversationWindow).toHaveBeenCalledTimes(1)
+  expect(s.messages).toHaveLength(60)
+  expect(s.messageWindow.total).toBe(10000)
+  const original = s.captureReading()
+  vi.mocked(loadConversationWindow).mockResolvedValueOnce(largeWindow(9910))
+  await s.loadEarlier()
+  expect(loadConversationWindow).toHaveBeenLastCalledWith('large',{cursor:'before-9940'})
+  expect(s.messages).toHaveLength(60)
+  expect(s.atLatest).toBe(false)
+  expect(s.messages[30]!.message_id).toBe(original.window.items[0]!.message_id)
+  vi.mocked(loadConversationWindow).mockResolvedValueOnce(largeWindow(9940))
+  await s.loadLater()
+  expect(loadConversationWindow).toHaveBeenLastCalledWith('large',{cursor:'after-9969'})
+  expect(s.atLatest).toBe(true)
+  expect(await s.restoreReading(original)).toBe(true)
+  expect(loadConversationWindow).toHaveBeenCalledTimes(3)
+})
+
+it('locates a message by ID, selects an alternate branch only when needed, and restores the bounded snapshot', async () => {
+  const s=useChatStore()
+  vi.mocked(loadConversationWindow).mockResolvedValueOnce(largeWindow(9940))
+  await s.setActiveConversation('large')
+  const original=s.captureReading()
+  const outside=Object.assign(new Error('other answer'),{code:'CHAT_MESSAGE_OUTSIDE_BRANCH'})
+  vi.mocked(loadConversationWindow).mockRejectedValueOnce(outside).mockResolvedValueOnce({
+    ...largeWindow(4970), branch_leaf:'old-leaf', active_leaf:'old-leaf', items:[{
+      message_id:'old-answer',conversation_id:'large',role:'assistant',content:'older answer',created_at:'',
+    }],
+  })
+  expect(await s.locateMessage('old-answer')).toBe(true)
+  expect(selectMessageVersion).toHaveBeenCalledWith('large','old-answer')
+  expect(loadConversationWindow).toHaveBeenLastCalledWith('large',{around:'old-answer'})
+  expect(await s.restoreReading(original)).toBe(true)
+  expect(selectMessageVersion).toHaveBeenLastCalledWith('large','m9999')
+  expect(s.messages.map(m=>m.message_id)).toEqual(original.window.items.map(m=>m.message_id))
+  expect(loadConversationWindow).toHaveBeenCalledTimes(3)
+})
+
+it('keeps live deltas while paging older messages and sends only the new turn with a saved-context guard', async () => {
+  const s=useChatStore(); s.selectedProviderId='real'; s.selectedModel='model'
+  await s.createNewConversation()
+  s.activeConversationId='large'
+  s.conversations=[{conversation_id:'large',title:'Large',message_count:10000,created_at:'',updated_at:''}]
+  vi.mocked(loadConversationWindow).mockResolvedValueOnce(largeWindow(9940))
+  await s.setActiveConversation('large')
+  await s.sendMessage('continue')
+  const [request,handlers]=vi.mocked(streamChat).mock.calls.at(-1)!
+  expect(request.messages).toEqual([{role:'user',content:'continue'}])
+  expect(request.use_saved_history).toBe(true)
+  expect(request.expected_branch_leaf).toBe('m9999')
+  expect(s.activeConversation!.message_count).toBe(10002)
+  const live=s.liveMessage!
+  vi.mocked(loadConversationWindow).mockResolvedValueOnce(largeWindow(9910))
+  await s.loadEarlier()
+  expect(s.messages.some(m=>m.message_id===live.message_id)).toBe(false)
+  handlers.onEvent?.({event:'TextDelta',sequence:0,timestamp:'',data:{text:'still streaming'}})
+  expect(s.liveMessage!.content).toBe('still streaming')
+  const tail=largeWindow(9941,10001)
+  tail.items[59]={...s.captureReading().window.items[0]!,message_id:request.user_message_id!,role:'user',content:'continue'}
+  vi.mocked(loadConversationWindow).mockResolvedValueOnce(tail)
+  await s.showLatest()
+  expect(s.messages).toHaveLength(60)
+  expect(s.messages.at(-1)!.message_id).toBe(live.message_id)
+  expect(s.messages.at(-1)!.content).toBe('still streaming')
+  handlers.onEvent?.({event:'TextDelta',sequence:1,timestamp:'',data:{text:' done'}})
+  expect(s.messages.at(-1)!.content).toBe('still streaming done')
+  handlers.onDone?.()
+  expect(s.activeConversation!.message_count).toBe(10002)
+})
+
+it('rejects a late window after changing vaults even when the conversation ID is reused', async () => {
+  const {useWorkspaceStore}=await import('./workspace')
+  const w=useWorkspaceStore(); w.vaultId='first'
+  const s=useChatStore(), old=deferred<Awaited<ReturnType<typeof loadConversationWindow>>>()
+  vi.mocked(loadConversationWindow).mockReturnValueOnce(old.promise)
+  const pending=s.setActiveConversation('large')
+  w.vaultId='second'
+  vi.mocked(loadConversationWindow).mockResolvedValueOnce({...largeWindow(9940),items:[{message_id:'second-vault',conversation_id:'large',role:'user',content:'second',created_at:''}]})
+  await s.setActiveConversation('large')
+  old.resolve(largeWindow(9940)); await pending
+  expect(s.messages.map(m=>m.message_id)).toEqual(['second-vault'])
+  expect(s.windowBusy).toBe(false)
 })

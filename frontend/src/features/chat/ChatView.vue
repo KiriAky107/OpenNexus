@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Citation, WorkspaceContext } from '@/contracts'
 import { useChatStore } from '@/stores/chat'
+import type { ChatReadingSnapshot } from '@/stores/chat'
 import { useProviderStore } from '@/stores/provider'
 import { useSkillStore } from '@/stores/skill'
 import MarkdownContent from '@/components/common/MarkdownContent.vue'
@@ -44,7 +45,7 @@ let disposed = false
 onBeforeUnmount(() => { disposed = true })
 
 const availableModels = computed(() => providerStore.modelsByProvider[chatStore.selectedProviderId] ?? [])
-const streamingMessageId = computed(() => chatStore.isStreaming ? chatStore.messages.at(-1)?.message_id : undefined)
+const streamingMessageId = computed(() => chatStore.isStreaming ? chatStore.liveMessage?.message_id : undefined)
 const editingMessage = ref<string | null>(null)
 const timeline = ref<HTMLElement>()
 const visibleCount = ref(30)
@@ -52,28 +53,55 @@ const searchWindow = ref<number | null>(null)
 const visibleMessages = computed(() => searchWindow.value === null ? chatStore.messages.slice(-visibleCount.value) : chatStore.messages.slice(searchWindow.value, searchWindow.value + 30))
 const searchLocation = ref<{ hit: ChatSearchHit; query: string }>()
 const matchIndex = ref(0), matchCount = ref(0)
+let disclosures = new Map<string, Record<string, boolean>>()
+function detailKey(detail: HTMLDetailsElement, index: number) { return detail.dataset.disclosureKey || `${detail.className}:${index}` }
+function rememberDetails() {
+  for (const article of timeline.value?.querySelectorAll<HTMLElement>('[data-message-id]') || []) {
+    const id = article.dataset.messageId!
+    const states: Record<string, boolean> = {}
+    Array.from(article.querySelectorAll<HTMLDetailsElement>('details')).slice(0, 64).forEach((detail, index) => { states[detailKey(detail, index)] = detail.open })
+    disclosures.delete(id); disclosures.set(id, states)
+  }
+  while (disclosures.size > 120) disclosures.delete(disclosures.keys().next().value!)
+}
+function restoreDetails() {
+  for (const article of timeline.value?.querySelectorAll<HTMLElement>('[data-message-id]') || []) {
+    const states = disclosures.get(article.dataset.messageId!)
+    if (!states) continue
+    Array.from(article.querySelectorAll<HTMLDetailsElement>('details')).slice(0, 64).forEach((detail, index) => {
+      const open = states[detailKey(detail, index)]
+      if (open !== undefined && detail.open !== open) detail.open = open
+    })
+  }
+}
+watch(() => visibleMessages.value.map(m => m.message_id).join('\n'), async () => { await nextTick(); restoreDetails() }, { flush: 'post' })
 let ranges: Range[] = [], locateVersion = 0
-let versionSwitch: Promise<void> | undefined
-let readingPosition: { top: number; count: number; window: number | null; conversation: string | null; leaf?: string; vault: string | null } | undefined
+let versionSwitch: Promise<unknown> | undefined
+let readingPosition: { top: number; count: number; window: number | null; conversation: string | null; vault: string | null; snapshot: ChatReadingSnapshot; disclosures: Map<string, Record<string, boolean>> } | undefined
 async function clearSearch() {
   const version = ++locateVersion; searchLocation.value = undefined; ranges = []; paintSearchRanges([])
   const position = readingPosition; readingPosition = undefined
   if (!position || position.conversation !== chatStore.activeConversationId || position.vault !== workspace.vaultId) return
   await versionSwitch
   if (disposed || version !== locateVersion || position.conversation !== chatStore.activeConversationId || position.vault !== workspace.vaultId) return
-  if (position.leaf && !chatStore.messages.some(message => message.message_id === position.leaf) && chatStore.canSend) await chatStore.switchVersion(position.leaf)
+  if (!await chatStore.restoreReading(position.snapshot)) return
   if (disposed || version !== locateVersion || position.conversation !== chatStore.activeConversationId || position.vault !== workspace.vaultId) return
+  disclosures = position.disclosures
   visibleCount.value = position.count; searchWindow.value = position.window
   await nextTick()
+  restoreDetails()
   if (timeline.value) timeline.value.scrollTop = position.top
 }
 async function locateHit(hit: ChatSearchHit, query: string) {
   const version = ++locateVersion, conversation = chatStore.activeConversationId, vault = workspace.vaultId
-  if (!readingPosition) readingPosition = { top: timeline.value?.scrollTop || 0, count: visibleCount.value, window: searchWindow.value, conversation, leaf: chatStore.messages.at(-1)?.message_id, vault: workspace.vaultId }
+  if (!readingPosition) {
+    rememberDetails()
+    readingPosition = { top: timeline.value?.scrollTop || 0, count: visibleCount.value, window: searchWindow.value, conversation, vault, snapshot: chatStore.captureReading(), disclosures: new Map(disclosures) }
+  }
   let index = chatStore.messages.findIndex(message => message.message_id === hit.message_id)
   if (index < 0) {
-    if (!chatStore.canSend) { loadError.value = t('当前正在生成内容；结束后可定位其他回答版本。', 'Finish the current response before navigating to another answer version.'); return }
-    versionSwitch = chatStore.switchVersion(hit.message_id)
+    nearBottom.value = false
+    versionSwitch = chatStore.locateMessage(hit.message_id)
     await versionSwitch
     versionSwitch = undefined
     if (disposed || version !== locateVersion || conversation !== chatStore.activeConversationId || vault !== workspace.vaultId) return
@@ -108,25 +136,44 @@ const hasNewActivity = ref(false)
 function trackScroll() {
   const element = timeline.value
   if (!element) return
-  nearBottom.value = searchWindow.value === null && element.scrollHeight - element.scrollTop - element.clientHeight < 80
+  nearBottom.value = chatStore.atLatest && searchWindow.value === null && element.scrollHeight - element.scrollTop - element.clientHeight < 80
   if (nearBottom.value) hasNewActivity.value = false
 }
 async function latest() {
+  if (!chatStore.atLatest || searchWindow.value !== null) rememberDetails()
+  if (!await chatStore.showLatest()) return
   searchWindow.value = null
   await nextTick()
   if (timeline.value) timeline.value.scrollTop = timeline.value.scrollHeight
   nearBottom.value = true; hasNewActivity.value = false
 }
 async function older() {
-  if (searchWindow.value !== null) { searchWindow.value = Math.max(0, searchWindow.value - 30); return }
+  rememberDetails()
+  nearBottom.value = false
+  if (searchWindow.value !== null && searchWindow.value > 0) { searchWindow.value = Math.max(0, searchWindow.value - 30); return }
   const element = timeline.value
   const height = element?.scrollHeight || 0
   const top = element?.scrollTop || 0
-  visibleCount.value += 30
+  const first = element?.querySelector<HTMLElement>('[data-message-id]')
+  const anchor = first?.dataset.messageId, offset = first?.offsetTop || 0
+  if (visibleCount.value < chatStore.messages.length && searchWindow.value === null) visibleCount.value = Math.min(60, visibleCount.value + 30)
+  else {
+    if (!await chatStore.loadEarlier()) return
+    searchWindow.value = null; visibleCount.value = 60
+  }
   await nextTick()
-  if (element) element.scrollTop = top + element.scrollHeight - height
+  const kept = Array.from(element?.querySelectorAll<HTMLElement>('[data-message-id]') || []).find(e => e.dataset.messageId === anchor)
+  if (element) element.scrollTop = top + (kept ? kept.offsetTop - offset : element.scrollHeight - height)
 }
-watch(() => [chatStore.activeConversationId, workspace.vaultId], () => { readingPosition = undefined; searchWindow.value = null; void clearSearch(); visibleCount.value = 30; nearBottom.value = true; hasNewActivity.value = false })
+async function later() {
+  rememberDetails()
+  nearBottom.value = false
+  if (!await chatStore.loadLater()) return
+  searchWindow.value = null; visibleCount.value = 60
+  await nextTick()
+  if (timeline.value) timeline.value.scrollTop = 0
+}
+watch(() => [chatStore.activeConversationId, workspace.vaultId], () => { disclosures.clear(); readingPosition = undefined; searchWindow.value = null; void clearSearch(); visibleCount.value = 30; nearBottom.value = true; hasNewActivity.value = false })
 watch(() => chatStore.pendingBudget?.requestId, requestId => {
   budgetDialogOpen.value = Boolean(requestId)
   additionalBudget.value = Math.max(8000, chatStore.pendingBudget?.minimumAdditional ?? 1)
@@ -134,9 +181,9 @@ watch(() => chatStore.pendingBudget?.requestId, requestId => {
 const validAdditionalBudget = computed(() => Number.isInteger(additionalBudget.value)
   && additionalBudget.value >= (chatStore.pendingBudget?.minimumAdditional ?? 1)
   && additionalBudget.value <= 1000000)
-watch(() => [chatStore.messages.length, chatStore.messages.at(-1)?.content.length, chatStore.messages.at(-1)?.activity?.length,
-  JSON.stringify(chatStore.messages.at(-1)?.activity?.at(-1))?.length,
-  chatStore.messages.at(-1)?.tool_calls?.map(call => call.status).join(',')], () => {
+watch(() => [chatStore.messages.length, chatStore.liveMessage?.content.length, chatStore.liveMessage?.activity?.length,
+  JSON.stringify(chatStore.liveMessage?.activity?.at(-1))?.length,
+  chatStore.liveMessage?.tool_calls?.map(call => call.status).join(',')], () => {
   if (nearBottom.value) void latest()
   else hasNewActivity.value = true
 })
@@ -232,9 +279,9 @@ async function openCitationCard(citation: Citation) {
     <div v-if="chatStore.contextNotice" class="notice-banner" role="status">{{ chatStore.contextNotice }}</div>
     <div v-if="chatStore.pendingBudget" class="notice-banner" role="status">{{ t('聊天协作用量已到上限，当前生成已暂停。', 'Chat coordination has reached its budget and is paused.') }} <button class="button-secondary" @click="budgetDialogOpen = true">{{ t('决定是否继续', 'Decide whether to continue') }}</button></div>
     <div v-if="loadError || providerStore.error || chatStore.historyError" class="error-banner chat-error">{{ loadError || providerStore.error || chatStore.historyError }}</div>
-    <ConversationSearch :conversation-id="chatStore.activeConversationId" :live-message="chatStore.isStreaming ? chatStore.messages.at(-1) : undefined" @locate="locateHit" @clear="clearSearch" />
-    <main ref="timeline" class="message-timeline" @scroll.passive="trackScroll">
-      <button v-if="chatStore.messages.length > visibleCount" class="button-secondary" @click="older">{{ t('加载更早的消息', 'Load earlier messages') }}</button>
+    <ConversationSearch :conversation-id="chatStore.activeConversationId" :live-message="chatStore.isStreaming ? chatStore.liveMessage : undefined" @locate="locateHit" @clear="clearSearch" />
+    <main ref="timeline" class="message-timeline" @scroll.passive="trackScroll" @toggle.capture="rememberDetails">
+      <button v-if="chatStore.messageWindow.before || chatStore.messages.length > visibleCount || (searchWindow !== null && searchWindow > 0)" class="button-secondary" :disabled="chatStore.windowBusy" @click="older">{{ t('加载更早的消息', 'Load earlier messages') }}</button>
       <div v-if="!chatStore.messages.length" class="empty-state"><div><strong>{{ t('开始一段知识对话', 'Start a knowledge conversation') }}</strong><p>{{ t('围绕当前知识库提问，回答可以引用原文并定位到笔记。', 'Ask about this vault, with sources that open the original notes.') }}</p><div class="chat-suggestions"><button v-for="suggestion in suggestions" :key="suggestion" class="button-secondary" @click="chatStore.inputText = suggestion">{{ suggestion }}</button></div><button v-if="!providerStore.enabledProviders.length && !embedded" class="button-secondary" @click="router.push({ name: 'settings' })">{{ t('配置模型提供商', 'Configure a provider') }}</button></div></div>
       <article v-for="message in visibleMessages" :key="message.message_id" class="message" :class="[message.role, { 'search-selected': searchLocation?.hit.message_id === message.message_id }]" :data-message-id="message.message_id" tabindex="-1">
         <div class="avatar"><img v-if="message.role === 'user' ? preferences.settings.userAvatar : preferences.settings.aiAvatar" :src="message.role === 'user' ? preferences.settings.userAvatar : preferences.settings.aiAvatar" :alt="message.role === 'user' ? t('我', 'Me') : 'AI'" /><span v-else>{{ message.role === 'user' ? t('你', 'You') : 'AI' }}</span></div>
@@ -267,8 +314,9 @@ async function openCitationCard(citation: Citation) {
           <small v-if="message.usage" class="usage">Token {{ message.usage.total_tokens }}<span v-if="message.usage.input_tokens !== undefined && message.usage.output_tokens !== undefined"> ({{ t('输入', 'input') }} {{ message.usage.input_tokens }} / {{ t('输出', 'output') }} {{ message.usage.output_tokens }})</span></small>
         </div>
       </article>
+      <button v-if="chatStore.messageWindow.after" class="button-secondary" :disabled="chatStore.windowBusy" @click="later">{{ t('加载后续消息', 'Load later messages') }}</button>
     </main>
-    <button v-if="hasNewActivity" class="button-secondary new-activity" @click="latest">{{ t('有新内容，查看最新进展 ↓', 'New activity — show latest ↓') }}</button>
+    <button v-if="hasNewActivity || !chatStore.atLatest" class="button-secondary new-activity" :disabled="chatStore.windowBusy" @click="latest">{{ t('查看最新进展 ↓', 'Show latest ↓') }}</button>
     <footer class="composer">
       <input ref="uploadInput" type="file" multiple hidden accept=".ppt,.pptx,.docx,.md,.txt,.wav,.mp3,.flac,.ogg,.m4a,.mp4,.webm,.png,.jpg,.jpeg,.webp" @change="selectFiles" />
       <div class="attachment-list"><button class="button-secondary" :disabled="chatStore.uploading || chatStore.isStreaming" @click="uploadInput?.click()">{{ chatStore.uploading ? '上传中…' : '上传文件' }}</button><span v-for="(file,index) in chatStore.pendingAttachments" :key="file.attachment_id" class="badge">{{ file.name }} <button aria-label="移除附件" @click="chatStore.pendingAttachments.splice(index,1)">×</button></span></div>

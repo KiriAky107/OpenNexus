@@ -491,8 +491,18 @@ async def list_chat_messages(
     offset: int = Query(default=0, ge=0),
 ) -> ChatMessageListResponse:
     from app.services import chat_history
-    items, total = chat_history.list_messages(conversation_id, limit, offset)
+    items, total = await asyncio.to_thread(chat_history.list_messages, conversation_id, limit, offset)
     return ChatMessageListResponse(items=items, page=PageMeta(total=total, limit=limit, offset=offset))
+
+
+@router.get('/chat/conversations/{conversation_id}/window', tags=['Chat'])
+async def chat_message_window(conversation_id: str, limit: int = Query(60, ge=2, le=120),
+                              cursor: str | None = Query(None, max_length=2048),
+                              around: str | None = Query(None, max_length=128),
+                              branch_leaf: str | None = Query(None, max_length=128)):
+    from app.services.chat_windows import window
+    return await asyncio.to_thread(window, conversation_id, limit=limit, cursor=cursor,
+                                   around=around, branch_leaf=branch_leaf)
 
 
 @router.delete("/chat/conversations/{conversation_id}", response_model=OperationResponse, tags=["Chat"])
@@ -527,35 +537,10 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     conversation_id = request.conversation_id
     provider = provider_or_404(request.provider_id)
     user_message_id = request.user_message_id or f"message_{uuid4().hex}"
-    retry_write_policy = 'full'
-    if request.retry_message_id:
-        if not conversation_id:
-            raise ApiError(400, 'CHAT_CONVERSATION_REQUIRED', 'Retry requires a saved conversation')
-        retry_write_policy = chat_history.retry_write_policy(conversation_id, request.retry_message_id)
-        target = chat_history.prepare_retry(conversation_id, request.retry_message_id)
-        if target['role'] == 'assistant':
-            user_message_id = target['parent_message_id']
     assistant_message_id = request.assistant_message_id or f"message_{uuid4().hex}"
-    request = request.model_copy(update={
-        'user_message_id': user_message_id, 'assistant_message_id': assistant_message_id,
-        'metadata': {**request.metadata, 'retry_write_policy': retry_write_policy},
-    })
-    if conversation_id:
-        user_message = next(
-            (message for message in reversed(request.messages) if message.role.value == "user" and message.content.strip()),
-            None,
-        )
-        if user_message is not None:
-            chat_history.append_message(
-                conversation_id,
-                message_id=user_message_id,
-                role="user",
-                content=user_message.content,
-                title=request.conversation_title or user_message.content[:30],
-                workspace_context=request.workspace_context.model_dump() if request.workspace_context else None,
-                attachments=request.attachments,
-            )
-        chat_history.reserve_response(conversation_id, assistant_message_id)
+    from app.services.chat_windows import prepare_request
+    request = await asyncio.to_thread(prepare_request, request, user_message_id, assistant_message_id)
+    user_message_id = request.user_message_id
 
     async def stream() -> AsyncIterator[str]:
         sequence = 0

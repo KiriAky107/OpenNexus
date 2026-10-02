@@ -15,10 +15,10 @@ const title = computed(() => toolTitle(props.call.name))
 </script>
 <template>
   <div class="tool-activity" :data-tool-call-id="call.tool_call_id">
-    <details class="ui-disclosure tool-calls"><summary>{{ title }} <span class="badge" :class="{ success: call.status === 'completed', error: ['failed', 'error'].includes(call.status), info: call.status === 'running' }">{{ statusLabel(call.status) }}</span> {{ objectName }}</summary>
+    <details class="ui-disclosure tool-calls" :data-disclosure-key="`tool:${call.tool_call_id}`"><summary>{{ title }} <span class="badge" :class="{ success: call.status === 'completed', error: ['failed', 'error'].includes(call.status), info: call.status === 'running' }">{{ statusLabel(call.status) }}</span> {{ objectName }}</summary>
       <p v-if="result.status">{{ t('返回状态', 'Returned status') }}: {{ statusLabel(String(result.status)) }}</p>
       <p v-if="call.error_message" class="tool-error" role="alert">{{ call.error_message }}</p>
-      <details class="ui-disclosure tool-result"><summary>{{ t('参数与返回详情', 'Parameters and result') }}</summary><pre>{{ JSON.stringify({ parameters: call.parameters, result }, null, 2) }}</pre></details>
+      <details class="ui-disclosure tool-result" :data-disclosure-key="`result:${call.tool_call_id}`"><summary>{{ t('参数与返回详情', 'Parameters and result') }}</summary><pre>{{ JSON.stringify({ parameters: call.parameters, result }, null, 2) }}</pre></details>
     </details>
     <RunActivity v-if="identifier('run_id', 'run')" :run-id="identifier('run_id', 'run')" permission-dialog />
     <CollaborationCard v-if="identifier('collaboration_id', 'collaboration')" :id="identifier('collaboration_id', 'collaboration')" />

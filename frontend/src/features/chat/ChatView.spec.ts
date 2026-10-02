@@ -16,7 +16,7 @@ vi.mock('@/stores/workspace', () => ({ useWorkspaceStore: () => ({}) }))
 vi.mock('@/components/common/MarkdownContent.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('@/services/chatService', () => ({
   listConversations: vi.fn().mockResolvedValue({ items: [], page: { total: 0, limit: 100, offset: 0 } }),
-  listConversationMessages: vi.fn(), createConversation: vi.fn(), removeConversation: vi.fn(), streamChat: vi.fn(), decideChatBudget: vi.fn(),
+  loadConversationWindow: vi.fn(), createConversation: vi.fn(), removeConversation: vi.fn(), streamChat: vi.fn(), decideChatBudget: vi.fn(),
 }))
 
 beforeEach(() => {
@@ -90,6 +90,7 @@ it('animates only the empty active reply and interleaves reasoning with tools', 
   const base = { conversation_id: 'test', role: 'assistant' as const, content: '', created_at: new Date().toISOString() }
   chat.messages = [{ ...base, message_id: 'old' }, { ...base, message_id: 'active', tool_calls: [{ tool_call_id: 'search', name: 'rag.search', parameters: { query: 'Python' }, status: 'running' }] }]
   chat.isStreaming = true
+  chat.liveMessage = chat.messages.at(-1)
   await flushPromises()
   expect(wrapper.findAll('.thinking-typewriter')).toHaveLength(1)
   expect(wrapper.findAll('.message')[0]!.find('.thinking').exists()).toBe(false)
@@ -210,10 +211,14 @@ it('locates an old message in a bounded window and restores the original reading
   const chat = useChatStore()
   chat.activeConversationId = 'search'
   chat.messages = Array.from({ length: 110 }, (_, i) => ({ message_id: `m${i}`, conversation_id: 'search', role: 'user' as const, content: `needle ${i}`, created_at: '2026-09-30T00:00:00Z' }))
+  chat.messages[80]!.role = 'assistant'; chat.messages[80]!.thinking = 'Preserved reasoning disclosure'
   await flushPromises()
   const timeline = wrapper.get('.message-timeline').element as HTMLElement
   timeline.scrollTop = 123
   expect(wrapper.findAll('.message')).toHaveLength(30)
+  const disclosure = wrapper.get('details.thinking')
+  ;(disclosure.element as HTMLDetailsElement).open = true
+  await disclosure.trigger('toggle')
   wrapper.getComponent(ConversationSearch).vm.$emit('locate', { message_id: 'm10', position: 11, entry_index: 0, kind: 'text', role: 'user', snippet: 'needle 10', created_at: '' }, 'needle')
   await flushPromises()
   expect(wrapper.get('.search-selected').attributes('data-message-id')).toBe('m10')
@@ -223,6 +228,7 @@ it('locates an old message in a bounded window and restores the original reading
   expect(wrapper.find('.search-selected').exists()).toBe(false)
   expect(wrapper.findAll('.message')[0]!.attributes('data-message-id')).toBe('m80')
   expect(timeline.scrollTop).toBe(123)
+  expect((wrapper.get('details.thinking').element as HTMLDetailsElement).open).toBe(true)
   wrapper.unmount()
 })
 
@@ -233,15 +239,17 @@ it('restores the selected answer branch after locating an earlier attempt', asyn
   chat.activeConversationId = 'search'
   const message = (id: string) => ({ message_id: id, conversation_id: 'search', role: 'assistant' as const, content: id, created_at: '' })
   chat.messages = [message('current')]
-  const switchVersion = vi.spyOn(chat, 'switchVersion').mockImplementation(async id => { chat.messages = [message(id)] })
+  chat.messageWindow.branch_leaf = 'current'; chat.messageWindow.active_leaf = 'current'
+  const locate = vi.spyOn(chat, 'locateMessage').mockImplementation(async id => { chat.messages = [message(id)]; return true })
+  const restore = vi.spyOn(chat, 'restoreReading').mockImplementation(async snapshot => { chat.messages = snapshot.window.items; return true })
   await flushPromises()
   wrapper.getComponent(ConversationSearch).vm.$emit('locate', { message_id: 'previous', position: 2, entry_index: 0, kind: 'text', role: 'assistant', snippet: 'previous', created_at: '' }, 'previous')
   await flushPromises()
-  expect(switchVersion).toHaveBeenCalledWith('previous')
+  expect(locate).toHaveBeenCalledWith('previous')
   expect(wrapper.get('.search-selected').attributes('data-message-id')).toBe('previous')
   wrapper.getComponent(ConversationSearch).vm.$emit('clear')
   await flushPromises()
-  expect(switchVersion).toHaveBeenLastCalledWith('current')
+  expect(restore).toHaveBeenCalledWith(expect.objectContaining({window: expect.objectContaining({branch_leaf: 'current'})}))
   expect(chat.messages[0]!.message_id).toBe('current')
   wrapper.unmount()
 })

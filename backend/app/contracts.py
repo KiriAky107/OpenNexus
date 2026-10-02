@@ -295,6 +295,8 @@ class WorkspaceContext(Contract):
 
 
 class ChatRequest(ModelRequest):
+    use_saved_history: bool = False
+    expected_branch_leaf: str | None = Field(default=None, max_length=128)
     attachments: list[str] = Field(default_factory=list, max_length=8)
     image_fallback_tools: list[str] = Field(default_factory=list, max_length=2)
     workspace_context: WorkspaceContext | None = None
@@ -341,6 +343,7 @@ class ConversationListResponse(Contract):
 
 
 class ChatMessage(Contract):
+    parent_message_id: str | None = None
     context_captured: bool = False
     attachments: list[str] = Field(default_factory=list)
     workspace_context: WorkspaceContext | None = None

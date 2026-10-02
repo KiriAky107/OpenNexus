@@ -73,6 +73,7 @@ export interface Conversation {
 export interface WorkspaceContext { file_path: string; content: string }
 
 export interface ChatMessage {
+  parent_message_id?: string | null
   context_captured?: boolean
   attachments?: string[]
   workspace_context?: WorkspaceContext

@@ -11,6 +11,8 @@ from app.contracts import ChatMessage, Conversation
 from app.database.db import connect_knowledge as connect, transaction
 from app.errors import ApiError
 
+_ANY_LEAF = object()
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -33,6 +35,7 @@ def _message(row) -> ChatMessage:
             citation["heading_path"] = " / ".join(str(part) for part in citation["heading_path"])
     return ChatMessage(
         message_id=row["message_id"],
+        parent_message_id=row['parent_message_id'],
         conversation_id=row["conversation_id"],
         role=row["role"],
         content=row["content"],
@@ -88,27 +91,8 @@ def list_conversations(limit: int, offset: int) -> tuple[list[Conversation], int
 
 
 def list_messages(conversation_id: str, limit: int, offset: int) -> tuple[list[ChatMessage], int]:
-    if get(conversation_id) is None:
-        raise ApiError(404, "CONVERSATION_NOT_FOUND", "conversation not found", {"conversation_id": conversation_id})
-    with closing(connect()) as conn:
-        all_rows = conn.execute('SELECT * FROM chat_messages WHERE conversation_id=? ORDER BY sequence', (conversation_id,)).fetchall()
-        by_id = {row['message_id']: row for row in all_rows}
-        siblings = {}
-        for row in all_rows:
-            siblings.setdefault((row['parent_message_id'], row['role']), []).append(row['message_id'])
-        leaf = conn.execute('SELECT active_leaf FROM chat_conversations WHERE conversation_id=?', (conversation_id,)).fetchone()[0]
-        path = []
-        while leaf in by_id:
-            row = by_id[leaf]
-            path.append(row)
-            leaf = row['parent_message_id']
-        path.reverse()
-        items = []
-        for row in path[offset:offset + limit]:
-            message = _message(row)
-            message.versions = siblings[(row['parent_message_id'], row['role'])]
-            items.append(message)
-        return items, len(path)
+    from app.services.chat_windows import offset_messages
+    return offset_messages(conversation_id, limit, offset)
 
 
 def delete(conversation_id: str) -> bool:
@@ -132,12 +116,19 @@ def append_message(
     workspace_context: dict | None = None,
     attachments: list[str] | None = None,
     context_captured: bool = False,
+    expected_leaf: str | None | object = _ANY_LEAF,
 ) -> None:
     now = _now().isoformat()
     clean_title = (title or "").strip() or content[:30].strip() or "New conversation"
     with closing(connect()) as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            if expected_leaf is not _ANY_LEAF:
+                row = conn.execute('SELECT active_leaf FROM chat_conversations WHERE conversation_id=?', (conversation_id,)).fetchone()
+                if row is None:
+                    raise ApiError(404, 'CONVERSATION_NOT_FOUND', '当前知识库中找不到该会话。')
+                if row['active_leaf'] != expected_leaf:
+                    raise ApiError(409, 'CHAT_BRANCH_CHANGED', '会话分支已变化，请重新加载后发送。')
             _append_message_in_transaction(
                 conn, conversation_id, message_id=message_id, role=role, content=content,
                 title=clean_title, thinking=thinking, citations=citations, tool_calls=tool_calls,
@@ -289,6 +280,10 @@ def select_version(conversation_id: str, message_id: str):
         conn.execute("UPDATE chat_conversations SET active_leaf=?,active_response_id='' WHERE conversation_id=?", (leaf, conversation_id))
 
 
-def reserve_response(conversation_id: str, message_id: str):
-    with closing(connect()) as conn:
+def reserve_response(conversation_id: str, message_id: str, expected_leaf=_ANY_LEAF):
+    with closing(connect()) as conn, transaction(conn, immediate=True):
+        if expected_leaf is not _ANY_LEAF:
+            row = conn.execute('SELECT active_leaf FROM chat_conversations WHERE conversation_id=?', (conversation_id,)).fetchone()
+            if row is None or row['active_leaf'] != expected_leaf:
+                raise ApiError(409, 'CHAT_BRANCH_CHANGED', '会话分支已变化，请重新加载后发送。')
         conn.execute('UPDATE chat_conversations SET active_response_id=? WHERE conversation_id=?', (message_id, conversation_id))

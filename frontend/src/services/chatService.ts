@@ -3,6 +3,8 @@ import { apiClient } from './apiClient'
 import type { ChatMessage, Conversation, ModelEvent, PageMeta } from '@/contracts'
 
 export interface ChatRequest {
+  use_saved_history?: boolean
+  expected_branch_leaf?: string | null
   workspace_context?: import('@/contracts').WorkspaceContext
   allow_agent?: boolean
   image_fallback_tools?: string[]
@@ -39,6 +41,19 @@ export function createConversation(conversation: Pick<Conversation, 'conversatio
 
 export function listConversationMessages(conversationId: string, offset = 0, limit = 500) {
   return apiClient.get<{ items: ChatMessage[]; page: PageMeta }>(`/api/chat/conversations/${encodeURIComponent(conversationId)}/messages`, { params: { limit, offset } })
+}
+
+export interface ChatWindow {
+  items: ChatMessage[]
+  total: number
+  start: number
+  branch_leaf: string | null
+  active_leaf: string | null
+  before: string | null
+  after: string | null
+}
+export function loadConversationWindow(conversationId: string, params: { cursor?: string; around?: string; branch_leaf?: string; limit?: number } = {}) {
+  return apiClient.get<ChatWindow>(`/api/chat/conversations/${encodeURIComponent(conversationId)}/window`, { params: { limit: 60, ...params } })
 }
 
 export function removeConversation(conversationId: string) {

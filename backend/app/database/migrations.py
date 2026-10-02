@@ -278,6 +278,9 @@ MIGRATIONS: list[str] = [
     ALTER TABLE note_changes ADD COLUMN failure_code TEXT;
     UPDATE note_changes SET status='pending' WHERE status='failed';
     CREATE INDEX note_changes_status_time ON note_changes(status,created_at);""",
+    # v23: cover sibling/version metadata without reading message bodies.
+    """CREATE INDEX chat_versions_metadata ON chat_messages(conversation_id,parent_message_id,role,sequence,message_id);
+    CREATE INDEX chat_parent_metadata ON chat_messages(conversation_id,message_id,parent_message_id,sequence,role);""",
 ]
 
 
