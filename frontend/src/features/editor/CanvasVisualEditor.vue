@@ -5,7 +5,10 @@ import ControlIcon from '@/components/common/ControlIcon.vue'
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useSettingsStore } from '@/stores/settings'
-import { CanvasModel,edgeGeometry,nodeBounds,nodeLabel,movementIds,type CanvasNode,type CanvasSide } from './canvasModel'
+import { CanvasModel,nodeBounds,nodeLabel,movementIds,type CanvasNode,type CanvasSide } from './canvasModel'
+import { CanvasGeometry,intersects } from './canvasGeometry'
+import { CanvasPreviewCache } from './canvasPreviewCache'
+import { contentHash,isDesktop } from '@/services/platform/desktop'
 import { documentPaths } from '@/services/referenceImpact'
 import { loadWorkspaceImage,readFileContent } from '@/services/workspaceService'
 import { workspaceDocumentType } from '@/services/workspaceDocuments'
@@ -26,7 +29,8 @@ const viewport=ref<HTMLElement>(),viewportSize=ref({width:800,height:600}),pan=r
 const selected=ref<string[]>([]),selectedEdge=ref(''),error=ref(''),nodeFilter=ref(''),nodeCount=ref(100)
 const readOnly=computed(()=>['conflict','external_changed'].includes(editor.saveStatus))
 const canUndo=computed(()=>{void historyRevision.value;return model.canUndo}),canRedo=computed(()=>{void historyRevision.value;return model.canRedo})
-const picked=computed(()=>document.value.nodes.find(node=>node.id===selected.value[0])),edge=computed(()=>document.value.edges.find(edge=>edge.id===selectedEdge.value))
+const graph=computed(()=>new CanvasGeometry(document.value)),selectedSet=computed(()=>new Set(selected.value))
+const picked=computed(()=>graph.value.nodes.get(selected.value[0]??'')),edge=computed(()=>graph.value.edges.get(selectedEdge.value))
 const draft=ref({value:'',x:0,y:0,width:300,height:180,color:'',subpath:''}),edgeDraft=ref({label:'',fromSide:'right' as CanvasSide,toSide:'left' as CanvasSide,fromEnd:'none' as 'none'|'arrow',toEnd:'arrow' as 'none'|'arrow'})
 const creating=ref<'file'|'link'|null>(null),newValue=ref('')
 const paths=computed(()=>documentPaths(workspace.fileTree)),fileOptions=computed(()=>paths.value.filter(path=>['markdown','canvas','image'].includes(workspaceDocumentType(path))))
@@ -34,17 +38,25 @@ const filteredNodes=computed(()=>document.value.nodes.filter(node=>`${node.text?
 const listed=computed(()=>filteredNodes.value.slice(0,nodeCount.value))
 watch(nodeFilter,()=>{nodeCount.value=100})
 let disposed=false,space=false,clipboard='',resizeObserver:ResizeObserver|undefined,disposeCommands:(()=>void)|undefined,previewGeneration=0
-const previews=ref<Record<string,{text?:string;url?:string}>>({})
+const previews=ref<Record<string,{text?:string;url?:string}>>({}),previewCache=new CanvasPreviewCache()
+let previousPreviewKeys=new Map<string,string>()
+const unknownRevisions=new WeakMap<object,number>();let unknownRevision=0
 const gesture=ref<{kind:'move'|'resize'|'pan'|'box';startX:number;startY:number;x:number;y:number;ids:string[];width?:number;height?:number;add?:boolean}>()
 const delta=computed(()=>gesture.value?{x:(gesture.value.x-gesture.value.startX)/zoom.value,y:(gesture.value.y-gesture.value.startY)/zoom.value}:{x:0,y:0})
-const displayedNodes=computed(()=>document.value.nodes.map(node=>{
-  if(!gesture.value?.ids.includes(node.id))return node
-  if(gesture.value.kind==='move')return{...node,x:node.x+delta.value.x,y:node.y+delta.value.y}
-  if(gesture.value.kind==='resize')return{...node,width:Math.max(80,node.width+delta.value.x),height:Math.max(60,node.height+delta.value.y)}
-  return node
-}))
-const visibleNodes=computed(()=>displayedNodes.value.filter(node=>selected.value.includes(node.id)||(node.x+node.width)*zoom.value+pan.value.x>=-100&&node.x*zoom.value+pan.value.x<=viewportSize.value.width+100&&(node.y+node.height)*zoom.value+pan.value.y>=-100&&node.y*zoom.value+pan.value.y<=viewportSize.value.height+100))
-const edges=computed(()=>document.value.edges.map(edge=>({edge,geometry:edgeGeometry(edge,displayedNodes.value)})).filter(item=>item.geometry))
+const moved=computed(()=>{
+  const active=gesture.value,overrides=new Map<string,CanvasNode>()
+  if(active?.kind!=='move'&&active?.kind!=='resize')return overrides
+  for(const id of active.ids){const node=graph.value.nodes.get(id);if(!node)continue
+    overrides.set(id,active.kind==='move'?{...node,x:node.x+delta.value.x,y:node.y+delta.value.y}:{...node,width:Math.max(80,node.width+delta.value.x),height:Math.max(60,node.height+delta.value.y)})
+  }
+  return overrides
+})
+const displayedNodes=computed(()=>moved.value.size?document.value.nodes.map(node=>moved.value.get(node.id)??node):document.value.nodes)
+const visibleNodes=computed(()=>displayedNodes.value.filter(node=>selectedSet.value.has(node.id)||(node.x+node.width)*zoom.value+pan.value.x>=-100&&node.x*zoom.value+pan.value.x<=viewportSize.value.width+100&&(node.y+node.height)*zoom.value+pan.value.y>=-100&&node.y*zoom.value+pan.value.y<=viewportSize.value.height+100))
+const edges=computed(()=>{
+  const view={left:(-pan.value.x-100)/zoom.value,right:(viewportSize.value.width-pan.value.x+100)/zoom.value,top:(-pan.value.y-100)/zoom.value,bottom:(viewportSize.value.height-pan.value.y+100)/zoom.value}
+  return graph.value.project(moved.value).filter(({edge,geometry})=>geometry&&(edge.id===selectedEdge.value||selectedSet.value.has(edge.fromNode)||selectedSet.value.has(edge.toNode)||intersects(geometry.bounds,view)))
+})
 const box=computed(()=>{
   const active=gesture.value;if(active?.kind!=='box')return null
   return{x:Math.min(active.startX,active.x),y:Math.min(active.startY,active.y),width:Math.abs(active.x-active.startX),height:Math.abs(active.y-active.startY)}
@@ -88,8 +100,11 @@ function begin(event:PointerEvent,node?:CanvasNode,resize=false){
   gesture.value={kind,startX:point.x,startY:point.y,x:point.x,y:point.y,ids,add:event.shiftKey}
   viewport.value?.setPointerCapture?.(event.pointerId)
 }
-function move(event:PointerEvent){const active=gesture.value;if(!active)return;const point=local(event);if(active.kind==='pan'){fittedAll=false;pan.value={x:pan.value.x+point.x-active.x,y:pan.value.y+point.y-active.y}}active.x=point.x;active.y=point.y}
-function end(event:PointerEvent){const active=gesture.value;if(!active)return;const offset={...delta.value},rectangle=box.value
+let pendingPoint:{x:number;y:number}|undefined,moveFrame:number|undefined
+function flushMove(){if(moveFrame!==undefined)cancelAnimationFrame(moveFrame);moveFrame=undefined;const active=gesture.value,point=pendingPoint;pendingPoint=undefined;if(!active||!point)return;if(active.kind==='pan'){fittedAll=false;pan.value={x:pan.value.x+point.x-active.x,y:pan.value.y+point.y-active.y}}active.x=point.x;active.y=point.y}
+function cancelGesture(){if(moveFrame!==undefined)cancelAnimationFrame(moveFrame);moveFrame=undefined;pendingPoint=undefined;gesture.value=undefined}
+function move(event:PointerEvent){if(!gesture.value)return;pendingPoint=local(event);if(moveFrame===undefined)moveFrame=requestAnimationFrame(flushMove)}
+function end(event:PointerEvent){flushMove();const active=gesture.value;if(!active)return;const offset={...delta.value},rectangle=box.value
   gesture.value=undefined;viewport.value?.releasePointerCapture?.(event.pointerId)
   if(active.kind==='move'&&(Math.abs(offset.x)>1||Math.abs(offset.y)>1))change(()=>model.move(active.ids,offset.x,offset.y))
   if(active.kind==='resize'){const node=document.value.nodes.find(node=>node.id===active.ids[0]);if(node)change(()=>model.updateNode(node.id,{width:Math.round(Math.max(80,node.width+offset.x)),height:Math.round(Math.max(60,node.height+offset.y))}))}
@@ -100,7 +115,7 @@ function keydown(event:KeyboardEvent){
   if((event.target as HTMLElement).closest('input,textarea,select')||event.isComposing)return
   const key=event.key.toLowerCase(),modifier=event.ctrlKey||event.metaKey
   if(key===' '){if((event.target as HTMLElement).closest('button'))return;space=true;event.preventDefault();return}
-  if(key==='escape'){gesture.value=undefined;selected.value=[];selectedEdge.value='';return}
+  if(key==='escape'){cancelGesture();selected.value=[];selectedEdge.value='';return}
   if(modifier&&key==='a'){selected.value=document.value.nodes.map(node=>node.id);selectedEdge.value='';event.preventDefault();return}
   if(modifier&&key==='z'){event.preventDefault();change(()=>event.shiftKey?model.redo():model.undo());return}
   if(modifier&&key==='y'){event.preventDefault();change(()=>model.redo());return}
@@ -137,25 +152,54 @@ function groupBackground(node:CanvasNode){
   const url=previews.value[node.background??'']?.url
   return{backgroundImage:url?`url("${url}")`:undefined,backgroundSize:node.backgroundStyle==='repeat'?'auto':node.backgroundStyle==='ratio'?'contain':'cover',backgroundRepeat:node.backgroundStyle==='repeat'?'repeat':'no-repeat',backgroundPosition:'center',width:'100%',height:'100%'}
 }
-const treeRevision=(nodes:typeof workspace.fileTree):unknown=>nodes.map(node=>[node.path,node.content_hash,treeRevision(node.children??[])])
-watch([()=>workspace.vaultId,()=>JSON.stringify(visibleNodes.value.map(node=>imagePath(node)).filter(Boolean)),()=>JSON.stringify(treeRevision(workspace.fileTree))],async()=>{
-  const version=++previewGeneration,vault=workspace.vaultId
-  const wanted=[...new Set(visibleNodes.value.map(node=>imagePath(node)).filter((path):path is string=>typeof path==='string'))]
-  const next:typeof previews.value={}
-  for(let offset=0;offset<wanted.length;offset+=6){
-    await Promise.all(wanted.slice(offset,offset+6).map(async raw=>{
-      const target=resolveVaultReference(editor.currentFilePath??'/map.canvas',raw,true)
-      if(!target||!paths.value.includes(target)){next[raw]={text:t('引用目标缺失','Missing target')};return}
-      try{
-        const type=workspaceDocumentType(target)
-        if(type==='image'){const blob=await loadWorkspaceImage(target.slice(1));if(disposed||version!==previewGeneration||vault!==workspace.vaultId)return;next[raw]={url:URL.createObjectURL(blob)}}
-        else if(type==='markdown'){const content=await readFileContent(target);if(disposed||version!==previewGeneration)return;next[raw]={text:folderNoteSummary(target,content).summary}}
-        else next[raw]={text:type==='canvas'?t('结构化画布','Structured canvas'):t('暂不支持预览此格式','Preview unavailable for this format')}
-      }catch(cause){next[raw]={text:t('无法读取引用目标','Unable to read target')};if(!disposed&&version===previewGeneration)error.value=String(cause)}
-    }))
-    if(disposed||version!==previewGeneration){Object.values(next).forEach(value=>{if(value.url)URL.revokeObjectURL(value.url)});return}
+const treeFiles=computed(()=>{
+  const indexed=new Map<string,typeof workspace.fileTree[number]>(),queue=[...workspace.fileTree]
+  for(let index=0;index<queue.length;index++){const node=queue[index]!;indexed.set(node.path,node);queue.push(...(node.children??[]))}
+  return indexed
+})
+const previewSources=computed(()=>[...new Set(visibleNodes.value.map(node=>imagePath(node)).filter((path):path is string=>typeof path==='string'))].map(raw=>{
+  const target=resolveVaultReference(editor.currentFilePath??'/map.canvas',raw,true),entry=target?treeFiles.value.get(target):undefined
+  let revision=entry?.content_hash
+  if(entry&&!revision){if(!unknownRevisions.has(entry))unknownRevisions.set(entry,++unknownRevision);revision=`unverified:${unknownRevisions.get(entry)}`}
+  return {raw,path:target??raw,valid:Boolean(target&&entry?.type==='file'),revision,vault:workspace.vaultId,
+    key:JSON.stringify([workspace.vaultId,target,revision??'missing']),type:target?workspaceDocumentType(target):'unsupported'}
+}))
+watch(()=>JSON.stringify(previewSources.value),async()=>{
+  const version=++previewGeneration,vault=workspace.vaultId,sources=previewSources.value,next:typeof previews.value={}
+  const allowed=sources.slice(0,previewCache.maxEntries),keys=new Map(allowed.map(source=>[source.raw,source.key]))
+  for(const source of sources){
+    if(!source.valid)next[source.raw]={text:t('引用目标缺失','Missing target')}
+    else if(!keys.has(source.raw))next[source.raw]={text:t('预览数量较多，请放大画布后查看。','Zoom in to view more previews.')}
+    else if(previousPreviewKeys.get(source.raw)===source.key&&previews.value[source.raw])next[source.raw]=previews.value[source.raw]!
   }
-  Object.values(previews.value).forEach(value=>{if(value.url)URL.revokeObjectURL(value.url)});previews.value=next
+  previews.value=next;previousPreviewKeys=keys
+  previewCache.configure(vault,allowed)
+  for(let offset=0;offset<allowed.length;offset+=6){
+    await Promise.all(allowed.slice(offset,offset+6).map(async source=>{
+      if(!source.valid)return
+      try{
+        const value=await previewCache.read(source,async()=>{
+          if(source.type==='image'){
+            const blob=await loadWorkspaceImage(source.path.slice(1))
+            if(isDesktop()&&/^[0-9a-f]{64}$/i.test(source.revision??'')){
+              const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await blob.arrayBuffer()))).map(b=>b.toString(16).padStart(2,'0')).join('')
+              if(hash!==source.revision)throw new Error(t('引用目标已变化，请刷新后重试。','The target changed. Refresh and try again.'))
+            }
+            return{blob}
+          }
+          if(source.type==='markdown'){
+            const content=await readFileContent(source.path)
+            if(isDesktop()&&/^[0-9a-f]{64}$/i.test(source.revision??'')&&await contentHash(content)!==source.revision)throw new Error(t('引用目标已变化，请刷新后重试。','The target changed. Refresh and try again.'))
+            return{text:folderNoteSummary(source.path,content).summary}
+          }
+          return{text:source.type==='canvas'?t('结构化画布','Structured canvas'):t('暂不支持预览此格式','Preview unavailable for this format')}
+        })
+        if(value&&!disposed&&version===previewGeneration&&vault===workspace.vaultId)next[source.raw]=value.limited?{text:t('预览超过当前容量，请放大画布后查看。','Zoom in to view previews within the available capacity.')}:value
+      }catch(cause){if(!disposed&&version===previewGeneration&&vault===workspace.vaultId){next[source.raw]={text:t('无法读取引用目标','Unable to read target')};error.value=String(cause)}}
+    }))
+    if(disposed||version!==previewGeneration||vault!==workspace.vaultId)return
+    previews.value={...next}
+  }
 },{immediate:true})
 onMounted(()=>{
   window.addEventListener('pointerdown',closeTools)
@@ -166,7 +210,7 @@ onMounted(()=>{
   const request=editor.canvasNodeRequest;if(request?.path===editor.currentFilePath)locate(request.nodeId)
   disposeCommands=registerEditorCommands({available:()=>!disposed&&!readOnly.value,handlers:{'editor.undo':()=>change(()=>model.undo())?{ok:true}:{ok:false,reason:'unavailable'},'editor.redo':()=>change(()=>model.redo())?{ok:true}:{ok:false,reason:'unavailable'}}})
 })
-onBeforeUnmount(()=>{disposed=true;previewGeneration++;window.removeEventListener('pointerdown',closeTools);resizeObserver?.disconnect();disposeCommands?.();Object.values(previews.value).forEach(value=>{if(value.url)URL.revokeObjectURL(value.url)})})
+onBeforeUnmount(()=>{disposed=true;previewGeneration++;cancelGesture();window.removeEventListener('pointerdown',closeTools);resizeObserver?.disconnect();disposeCommands?.();previewCache.dispose()})
 </script>
 
 <template>
@@ -194,18 +238,18 @@ onBeforeUnmount(()=>{disposed=true;previewGeneration++;window.removeEventListene
     </div>
     <p v-if="error" class="error-banner canvas-error" role="alert">{{ error }}</p>
     <div class="canvas-body">
-      <div ref="viewport" class="canvas-viewport" tabindex="0" role="region" :aria-label="t('可编辑画布：Shift 多选，空格拖动平移，方向键移动节点，Home 显示全部','Editable canvas: Shift selects multiple nodes, Space-drag pans, arrow keys move nodes, Home fits all')" @pointerdown.self="begin($event)" @pointermove="move" @pointerup="end" @pointercancel="gesture=undefined" @wheel="wheel" @contextmenu.prevent @blur="space=false">
+      <div ref="viewport" class="canvas-viewport" tabindex="0" role="region" :aria-label="t('可编辑画布：Shift 多选，空格拖动平移，方向键移动节点，Home 显示全部','Editable canvas: Shift selects multiple nodes, Space-drag pans, arrow keys move nodes, Home fits all')" @pointerdown.self="begin($event)" @pointermove="move" @pointerup="end" @pointercancel="cancelGesture" @wheel="wheel" @contextmenu.prevent @blur="space=false">
         <div class="canvas-world" :style="{transform:`translate(${pan.x}px,${pan.y}px) scale(${zoom})`}">
           <svg class="canvas-edges" width="1" height="1" :style="{zIndex:document.nodes.length+1}" aria-label="节点连接"><defs><marker id="canvas-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse" markerUnits="strokeWidth"><path d="M 0 0 L 8 4 L 0 8 z" fill="context-stroke" /></marker></defs>
-            <g v-for="{edge:line,geometry} in edges" :key="line.id" class="canvas-edge" :class="{'edge-selected':selectedEdge===line.id}" role="button" tabindex="0" :aria-label="`${t('连接','Connection')}: ${line.label??line.fromNode+' → '+line.toNode}`" @pointerdown.stop @click="selectedEdge=line.id;selected=[]" @keydown.enter.stop="selectedEdge=line.id;selected=[]">
+            <g v-for="{edge:line,geometry} in edges" :key="line.id" v-memo="[line,geometry,selectedEdge===line.id,t('连接','Connection')]" class="canvas-edge" :class="{'edge-selected':selectedEdge===line.id}" role="button" tabindex="0" :aria-label="`${t('连接','Connection')}: ${line.label??line.fromNode+' → '+line.toNode}`" @pointerdown.stop @click="selectedEdge=line.id;selected=[]" @keydown.enter.stop="selectedEdge=line.id;selected=[]">
               <path :d="geometry!.path" fill="none" :stroke="line.color?color(line.color):'var(--color-text-tertiary)'" :stroke-width="selectedEdge===line.id?4:2" :marker-start="line.fromEnd==='arrow'?'url(#canvas-arrow)':undefined" :marker-end="line.toEnd==='none'?undefined:'url(#canvas-arrow)'"/><path :d="geometry!.path" fill="none" stroke="transparent" stroke-width="16" />
               <text v-if="line.label" :x="geometry!.x" :y="geometry!.y-8" text-anchor="middle">{{ line.label.slice(0,120) }}</text>
             </g>
           </svg>
-          <div v-for="node in visibleNodes" :key="node.id" class="canvas-node" :class="[node.type,{selected:selected.includes(node.id)}]" :data-node-id="node.id" tabindex="0" role="group" :aria-label="`${node.type}: ${nodeLabel(node)}`" :style="{left:`${node.x}px`,top:`${node.y}px`,width:`${node.width}px`,height:`${node.height}px`,borderColor:color(node.color),zIndex:document.nodes.findIndex(value=>value.id===node.id)+1}" @pointerdown.stop="begin($event,node)" @keydown.enter.self.prevent.stop="locate(node.id)">
+          <div v-for="node in visibleNodes" :key="node.id" v-memo="[node,selectedSet.has(node.id),previews[imagePath(node)??''],readOnly,t('文字','Text')]" class="canvas-node" :class="[node.type,{selected:selectedSet.has(node.id)}]" :data-node-id="node.id" tabindex="0" role="group" :aria-label="`${node.type}: ${nodeLabel(node)}`" :style="{left:`${node.x}px`,top:`${node.y}px`,width:`${node.width}px`,height:`${node.height}px`,borderColor:color(node.color),zIndex:(graph.order.get(node.id)??0)+1}" @pointerdown.stop="begin($event,node)" @keydown.enter.self.prevent.stop="locate(node.id)">
             <header><span>{{ node.type==='text'?t('文字','Text'):node.type==='file'?t('文件','File'):node.type==='link'?t('网址','URL'):node.label??t('分组','Group') }}</span><button v-if="node.type==='file'&&['markdown','canvas'].includes(workspaceDocumentType(node.file??''))||node.type==='link'" class="node-open" :aria-label="t('打开节点目标','Open node target')" @pointerdown.stop @click.stop="open(node)">↗</button></header>
             <div class="canvas-node-content"><template v-if="node.type==='text'">{{ node.text }}</template><template v-else-if="node.type==='link'"><strong>{{ node.url }}</strong><p>{{ t('选择打开时会使用浏览器。','Opens in your browser when selected.') }}</p></template><template v-else-if="node.type==='file'"><strong :title="node.file">{{ nodeLabel(node) }}</strong><img v-if="previews[node.file??'']?.url" :src="previews[node.file??'']!.url" :alt="node.file??''" draggable="false"/><p v-else>{{ previews[node.file??'']?.text??t('读取引用内容…','Loading referenced content…') }}</p></template><div v-else-if="node.background&&previews[node.background]?.url" class="canvas-group-background" role="img" :aria-label="node.label??node.background" :style="groupBackground(node)"/></div>
-            <button v-if="selected.includes(node.id)&&!readOnly" class="node-resize" :aria-label="t('调整节点尺寸','Resize node')" @pointerdown.stop="begin($event,node,true)">↘</button>
+            <button v-if="selectedSet.has(node.id)&&!readOnly" class="node-resize" :aria-label="t('调整节点尺寸','Resize node')" @pointerdown.stop="begin($event,node,true)">↘</button>
           </div>
         </div>
         <div v-if="box" class="canvas-selection-box" :style="{left:`${box.x}px`,top:`${box.y}px`,width:`${box.width}px`,height:`${box.height}px`}" />
@@ -216,8 +260,8 @@ onBeforeUnmount(()=>{disposed=true;previewGeneration++;window.removeEventListene
         <p class="subtle">{{ t('Shift 选择两个节点后连接；拖动空白区域框选，空格拖动平移。','Shift-select two nodes to connect. Drag empty space to select; Space-drag to pan.') }}</p>
         <form v-if="picked" class="node-properties" @submit.prevent="applyNode"><strong>{{ t('节点属性','Node properties') }} · {{ selected.length }}</strong><label>{{ picked.type==='file'?t('知识库相对路径','Vault-relative path'):picked.type==='link'?'URL':t('内容','Content') }}<textarea v-model="draft.value" class="textarea" :aria-label="t('节点内容','Node content')" :disabled="readOnly" rows="4" /></label><div class="node-dimensions"><label v-for="field in (['x','y','width','height'] as const)" :key="field">{{ field }}<input v-model.number="draft[field]" class="input" type="number" :aria-label="field" :disabled="readOnly" /></label></div><label>{{ t('颜色','Color') }}<select v-model="draft.color" class="select" :disabled="readOnly"><option value="">{{ t('默认','Default') }}</option><option v-for="value in ['1','2','3','4','5','6']" :key="value" :value="value">{{ value }}</option><option v-if="draft.color.startsWith('#')" :value="draft.color">{{ draft.color }}</option></select></label><label v-if="picked.type==='file'">{{ t('标题或块子路径','Heading or block subpath') }}<input v-model="draft.subpath" class="input" placeholder="#heading" :disabled="readOnly" /></label><button class="button-primary" :disabled="readOnly">{{ t('应用属性修改','Apply property changes') }}</button></form>
         <form v-if="edge" class="node-properties" @submit.prevent="applyEdge"><strong>{{ t('连接属性','Connection properties') }}</strong><label>{{ t('连线标签','Connection label') }}<input v-model="edgeDraft.label" class="input" :aria-label="t('连线标签','Connection label')" :disabled="readOnly" /></label><label v-for="field in (['fromSide','toSide'] as const)" :key="field">{{ field }}<select v-model="edgeDraft[field]" class="select" :disabled="readOnly"><option v-for="side in ['left','right','top','bottom']" :key="side" :value="side">{{ side }}</option></select></label><label v-for="field in (['fromEnd','toEnd'] as const)" :key="field">{{ field }}<select v-model="edgeDraft[field]" class="select" :disabled="readOnly"><option value="none">{{ t('无箭头','No arrow') }}</option><option value="arrow">{{ t('箭头','Arrow') }}</option></select></label><button class="button-primary" :disabled="readOnly">{{ t('应用连接修改','Apply connection changes') }}</button></form>
-        <h3>{{ t('节点列表','Node list') }} · {{ document.nodes.length }}</h3><input v-model="nodeFilter" class="input" :aria-label="t('筛选画布节点','Filter canvas nodes')"/><div class="canvas-node-list"><button v-for="node in listed" :key="node.id" class="button-secondary" :aria-pressed="selected.includes(node.id)" :data-list-node-id="node.id" :title="String(node.text??node.file??node.url??node.label??'')" @click="locate(node.id)"><span class="node-kind">{{ node.type }} · </span><span class="node-label">{{ nodeLabel(node) }}</span></button><button v-if="nodeCount<filteredNodes.length" class="button-secondary" @click="nodeCount+=100">{{ t('更多节点','More nodes') }}</button></div>
-        <h3>{{ t('连接列表','Connection list') }} · {{ document.edges.length }}</h3><div class="canvas-node-list"><button v-for="line in document.edges.filter(value=>!selected.length||selected.includes(value.fromNode)||selected.includes(value.toNode)).slice(0,100)" :key="line.id" class="button-secondary" @click="selectedEdge=line.id;selected=[]">{{ line.label??`${nodeLabel(document.nodes.find(node=>node.id===line.fromNode)!)} → ${nodeLabel(document.nodes.find(node=>node.id===line.toNode)!)}` }}</button></div>
+        <h3>{{ t('节点列表','Node list') }} · {{ document.nodes.length }}</h3><input v-model="nodeFilter" class="input" :aria-label="t('筛选画布节点','Filter canvas nodes')"/><div class="canvas-node-list"><button v-for="node in listed" :key="node.id" class="button-secondary" :aria-pressed="selectedSet.has(node.id)" :data-list-node-id="node.id" :title="String(node.text??node.file??node.url??node.label??'')" @click="locate(node.id)"><span class="node-kind">{{ node.type }} · </span><span class="node-label">{{ nodeLabel(node) }}</span></button><button v-if="nodeCount<filteredNodes.length" class="button-secondary" @click="nodeCount+=100">{{ t('更多节点','More nodes') }}</button></div>
+        <h3>{{ t('连接列表','Connection list') }} · {{ document.edges.length }}</h3><div class="canvas-node-list"><button v-for="line in document.edges.filter(value=>!selected.length||selected.includes(value.fromNode)||selected.includes(value.toNode)).slice(0,100)" :key="line.id" class="button-secondary" @click="selectedEdge=line.id;selected=[]">{{ line.label??`${nodeLabel(graph.nodes.get(line.fromNode)!)} → ${nodeLabel(graph.nodes.get(line.toNode)!)}` }}</button></div>
       </aside>
     </div>
     <footer class="canvas-status"><span>{{ document.nodes.length }} {{ t('个节点','nodes') }} · {{ document.edges.length }} {{ t('条连接','connections') }} · {{ selected.length }} {{ t('已选择','selected') }}</span><div class="inline-actions"><button class="button-secondary" :aria-label="t('缩小画布','Zoom out canvas')" @click="magnify(1/1.2)">−</button><span>{{ Math.round(zoom*100) }}%</span><button class="button-secondary" :aria-label="t('放大画布','Zoom in canvas')" @click="magnify(1.2)">＋</button><button class="button-secondary" @click="fit()">{{ t('显示全部','Fit all') }}</button></div></footer>

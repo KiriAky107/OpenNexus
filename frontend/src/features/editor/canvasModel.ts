@@ -88,8 +88,8 @@ export class CanvasModel {
     })
   }
 }
-export function edgeGeometry(edge:CanvasEdge,nodes:CanvasNode[]){
-  const from=nodes.find(node=>node.id===edge.fromNode),to=nodes.find(node=>node.id===edge.toNode);if(!from||!to)return null
+export function edgeGeometry(edge:CanvasEdge,nodes:CanvasNode[]|ReadonlyMap<string,CanvasNode>){
+  const from=Array.isArray(nodes)?nodes.find(node=>node.id===edge.fromNode):nodes.get(edge.fromNode),to=Array.isArray(nodes)?nodes.find(node=>node.id===edge.toNode):nodes.get(edge.toNode);if(!from||!to)return null
   const anchors=(node:CanvasNode,side:CanvasSide)=>({left:[node.x,node.y+node.height/2],right:[node.x+node.width,node.y+node.height/2],top:[node.x+node.width/2,node.y],bottom:[node.x+node.width/2,node.y+node.height]}[side]!)
   const dx=to.x+to.width/2-from.x-from.width/2,dy=to.y+to.height/2-from.y-from.height/2
   const vertical=Math.abs(dy)/((from.height+to.height)/2)>Math.abs(dx)/((from.width+to.width)/2)
@@ -97,5 +97,7 @@ export function edgeGeometry(edge:CanvasEdge,nodes:CanvasNode[]){
   const[a,b]=anchors(from,fromSide),[c,d]=anchors(to,toSide),distance=Math.max(48,(vertical?Math.abs(d!-b!):Math.abs(c!-a!))/2)
   const control=(x:number,y:number,side:CanvasSide)=>side==='left'?[x-distance,y]:side==='right'?[x+distance,y]:side==='top'?[x,y-distance]:[x,y+distance]
   const[p,q]=control(a!,b!,fromSide),[r,s]=control(c!,d!,toSide)
-  return{path:`M ${a} ${b} C ${p} ${q}, ${r} ${s}, ${c} ${d}`,x:(a!+c!)/2,y:(b!+d!)/2}
+  const x=(a!+c!)/2,y=(b!+d!)/2,bounds={left:Math.min(a!,p!,r!,c!)-24,right:Math.max(a!,p!,r!,c!)+24,top:Math.min(b!,q!,s!,d!)-24,bottom:Math.max(b!,q!,s!,d!)+24}
+  if(edge.label){const half=edge.label.slice(0,120).length*9;bounds.left=Math.min(bounds.left,x-half);bounds.right=Math.max(bounds.right,x+half);bounds.top=Math.min(bounds.top,y-26)}
+  return{path:`M ${a} ${b} C ${p} ${q}, ${r} ${s}, ${c} ${d}`,x,y,bounds}
 }

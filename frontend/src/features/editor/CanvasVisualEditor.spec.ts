@@ -10,6 +10,7 @@ import {executeEditorCommand} from '@/services/editorCommandService'
 import CanvasVisualEditor from './CanvasVisualEditor.vue'
 import CanvasEditor from './CanvasEditor.vue'
 import {navigateMarkdownHref} from '@/services/markdownLinkService'
+import * as desktop from '@/services/platform/desktop'
 vi.mock('@/services/markdownLinkService',()=>({navigateMarkdownHref:vi.fn().mockResolvedValue(undefined)}))
 const fixture=JSON.stringify({nodes:[{id:'a',type:'text',x:0,y:0,width:300,height:180,text:'Root',custom:'keep'},{id:'b',type:'file',x:400,y:0,width:300,height:180,file:'course/note.md',subpath:'#heading'}],edges:[{id:'e',fromNode:'a',toNode:'b',label:'Evidence'}],extension:{keep:true}})
 beforeEach(()=>{
@@ -108,4 +109,66 @@ it('renders imported group backgrounds with their repeat, ratio and cover styles
  expect(wrapper.get('[data-node-id="cover"] .canvas-group-background').attributes('style')).toContain('background-size: cover')
  expect(Number((wrapper.get('.canvas-edges').element as SVGElement).style.zIndex)).toBeGreaterThan(Number((wrapper.get('[data-node-id="cover"]').element as HTMLElement).style.zIndex))
  wrapper.unmount()
+})
+
+
+it('reads previews only for changed targets, shares aliases, and clears moved or deleted targets',async()=>{
+ const editor=useEditorStore();editor.content=JSON.stringify({nodes:[
+  {id:'one',type:'file',file:'course/note.md',x:0,y:0,width:300,height:180},
+  {id:'alias',type:'file',file:'course/note.md',x:400,y:0,width:300,height:180},
+ ],edges:[]})
+ const wrapper=mount(CanvasVisualEditor);await flushPromises()
+ expect(service.readFileContent).toHaveBeenCalledTimes(1)
+ const w=useWorkspaceStore();w.fileTree=[...w.fileTree,{id:'unrelated',type:'file',path:'/elsewhere.md',name:'elsewhere.md',content_hash:'new'}]
+ await flushPromises();expect(service.readFileContent).toHaveBeenCalledTimes(1)
+ vi.mocked(service.readFileContent).mockResolvedValue('# Changed\n\nFresh preview.')
+ w.fileTree=[{id:'note',type:'file',path:'/course/note.md',name:'note.md',content_hash:'changed'}]
+ await flushPromises();expect(service.readFileContent).toHaveBeenCalledTimes(2);expect(wrapper.text()).toContain('Fresh preview.')
+ w.fileTree=[{id:'note',type:'file',path:'/course/moved.md',name:'moved.md',content_hash:'changed'}]
+ await flushPromises();expect(wrapper.text()).not.toContain('Fresh preview.');expect(wrapper.text()).toContain('引用目标缺失')
+ expect(service.readFileContent).toHaveBeenCalledTimes(2);wrapper.unmount()
+})
+
+it('revokes one shared image URL on hash replacement, deletion and unmount',async()=>{
+ let count=0
+ const create=vi.spyOn(URL,'createObjectURL').mockImplementation(()=>`blob:preview-${++count}`),revoke=vi.spyOn(URL,'revokeObjectURL').mockImplementation(()=>{})
+ const editor=useEditorStore();editor.content=JSON.stringify({nodes:[
+  {id:'one',type:'file',file:'image.png',x:0,y:0,width:200,height:180},
+  {id:'alias',type:'file',file:'image.png',x:300,y:0,width:200,height:180},
+ ],edges:[]})
+ const w=useWorkspaceStore();w.fileTree=[{id:'image',type:'file',path:'/image.png',name:'image.png',content_hash:'first'}]
+ const read=vi.spyOn(service,'loadWorkspaceImage').mockResolvedValue(new Blob(['image'],{type:'image/png'}))
+ const wrapper=mount(CanvasVisualEditor);await flushPromises()
+ expect(read).toHaveBeenCalledTimes(1);expect(create).toHaveBeenCalledTimes(1)
+ w.fileTree=[{id:'image',type:'file',path:'/image.png',name:'image.png',content_hash:'second'}]
+ await flushPromises();expect(read).toHaveBeenCalledTimes(2);expect(revoke).toHaveBeenCalledWith('blob:preview-1')
+ w.fileTree=[];await flushPromises();expect(revoke).toHaveBeenCalledWith('blob:preview-2');expect(wrapper.find('img').exists()).toBe(false)
+ wrapper.unmount();expect(revoke).toHaveBeenCalledTimes(2)
+})
+
+it('flushes the final coalesced pointer position once and cancels queued moves on escape',async()=>{
+ const wrapper=mount(CanvasVisualEditor);await flushPromises();const viewport=wrapper.get('.canvas-viewport')
+ await wrapper.get('[data-node-id="a"]').trigger('pointerdown',{button:0,clientX:10,clientY:10,pointerId:1})
+ for(let i=1;i<=20;i++)await viewport.trigger('pointermove',{clientX:10+i,clientY:10+i,pointerId:1})
+ await viewport.trigger('pointerup',{pointerId:1})
+ const editor=useEditorStore();expect(editor.scheduleAutoSave).toHaveBeenCalledTimes(1)
+ expect(JSON.parse(editor.content).nodes[0].x).toBeGreaterThan(0)
+ const saved=editor.content
+ await wrapper.get('[data-node-id="a"]').trigger('pointerdown',{button:0,clientX:10,clientY:10,pointerId:1})
+ await viewport.trigger('pointermove',{clientX:100,clientY:100,pointerId:1})
+ await viewport.trigger('keydown',{key:'Escape'});await viewport.trigger('pointerup',{pointerId:1})
+ expect(editor.content).toBe(saved);expect(editor.scheduleAutoSave).toHaveBeenCalledTimes(1);wrapper.unmount()
+})
+
+it('does not cache a desktop body under an obsolete content hash',async()=>{
+ const content='# Verified\n\nCorrect preview.',hash=await desktop.contentHash(content)
+ vi.spyOn(desktop,'isDesktop').mockReturnValue(true)
+ vi.mocked(service.readFileContent).mockResolvedValue(content)
+ const w=useWorkspaceStore();w.fileTree=[{id:'note',name:'note.md',path:'/course/note.md',type:'file',content_hash:'a'.repeat(64)}]
+ const wrapper=mount(CanvasVisualEditor)
+ await vi.waitFor(()=>expect(wrapper.text()).toContain('无法读取引用目标'))
+ expect(wrapper.text()).not.toContain('Correct preview.')
+ w.fileTree=[{id:'note',name:'note.md',path:'/course/note.md',type:'file',content_hash:hash}]
+ await vi.waitFor(()=>expect(wrapper.text()).toContain('Correct preview.'))
+ expect(service.readFileContent).toHaveBeenCalledTimes(2);wrapper.unmount()
 })
