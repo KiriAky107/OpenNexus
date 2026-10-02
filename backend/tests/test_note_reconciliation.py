@@ -190,12 +190,13 @@ def test_explicit_pre_commit_rejection_is_visible_as_not_committed(host):
     assert host.writes == 0 and not detail['can_restore']
 
 
-def test_old_pending_and_failed_records_migrate_without_inventing_evidence():
-    conn = sqlite3.connect(':memory:')
-    conn.row_factory = sqlite3.Row
-    conn.executescript(MIGRATIONS[17] + MIGRATIONS[18])
-    conn.execute('CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY,applied_at TEXT NOT NULL)')
-    conn.executemany('INSERT INTO schema_migrations VALUES (?,?)', [(version, 'old') for version in range(1, 22)])
+def test_old_pending_and_failed_records_migrate_without_inventing_evidence(monkeypatch):
+    # A real v21 database also has the conversation schema. Applying only the
+    # note tables while claiming every migration ran breaks later upgrades.
+    with monkeypatch.context() as patch:
+        patch.setattr('app.database.migrations.MIGRATIONS', MIGRATIONS[:21])
+        conn = connect_knowledge()
+    assert conn.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0] == 21
     for status in ['pending', 'failed']:
         conn.execute('''INSERT INTO note_changes(change_id,requested_target,origin,operation_id,status,created_at)
                         VALUES (?,?,?,?,?,?)''', (status, 'A.md', 'old', status, status, 'old'))
