@@ -35,6 +35,9 @@
 
 > ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.9-alpha2`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
 
+当前源码正在准备 `0.5.9-beta1`；最终安装验收完成前，下方下载仍指向已发布的 alpha2。
+已验证范围见 [beta1 验收记录](frontend/docs/beta1-acceptance.md)。
+
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 桌面编辑器：精简文件操作、大纲、公式与函数图" width="95%" />
 </div>

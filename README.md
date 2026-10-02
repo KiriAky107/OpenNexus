@@ -36,6 +36,10 @@
 
 > ⚠️ **Alpha Notice**: OpenNexus is currently in active alpha (`v0.5.9-alpha2`). Storage schemas, IPC contracts, and extension APIs are evolving. Always back up critical Markdown vaults before updating.
 
+The current source prepares `0.5.9-beta1`; the download below remains the
+published alpha2 release while final installer acceptance is pending. See the
+[beta1 acceptance record](frontend/docs/beta1-acceptance.md) for verified scope.
+
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus desktop editor with compact file controls, outline, formulas, and a function plot" width="95%" />
 </div>

@@ -3292,7 +3292,7 @@ dependencies = [
 
 [[package]]
 name = "notesagent-desktop"
-version = "0.5.9-alpha2"
+version = "0.5.9-beta1"
 dependencies = [
  "argon2",
  "base64 0.22.1",
