@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { FileNode } from '@/contracts'
 import * as workspaceService from '@/services/workspaceService'
+import { normalizeWorkspacePath } from '@/services/workspacePaths'
 
 export const useWorkspaceStore = defineStore('workspace', () => {
   const vaultPath = ref('')
@@ -42,6 +43,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function openFile(path: string) {
+    path = normalizeWorkspacePath(path)
     activeFolderPath.value = null
     if (!openFiles.value.includes(path)) {
       openFiles.value.push(path)
@@ -51,6 +53,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function rememberRecentFile(path: string) {
+    path = normalizeWorkspacePath(path)
     const node = findNodeByPath(fileTree.value, path)
     if (!node || node.type !== 'file') return
     recentFiles.value = [path, ...recentFiles.value.filter(previous => previous !== path)].slice(0, 20)
@@ -65,6 +68,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function closeFile(path: string) {
+    path = normalizeWorkspacePath(path)
     const idx = openFiles.value.indexOf(path)
     if (idx > -1) {
       openFiles.value.splice(idx, 1)
@@ -76,7 +80,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   function setActiveFile(path: string | null) {
     activeFolderPath.value = null
-    activeFilePath.value = path
+    activeFilePath.value = path === null ? null : normalizeWorkspacePath(path)
   }
   function selectFolder(path: string) {
     activeFolderPath.value = path

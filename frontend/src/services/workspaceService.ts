@@ -14,6 +14,7 @@ import { contentHash, hostInvoke, isDesktop, nativePath, nativeTree, type HostDo
 import { EMPTY_CANVAS, validateCanvasContent, workspaceDocumentType } from './workspaceDocuments'
 import { resolveVaultReference } from './vaultReferences'
 import { inspectWorkspaceReferenceImpact, type ReferenceImpact } from './referenceImpact'
+import { normalizeWorkspacePath } from './workspacePaths'
 
 interface CanvasDocument { path: string; content: string; content_hash: string }
 
@@ -40,17 +41,12 @@ let treeRequestVersion = 0
 const noteIdByPath = new Map<string, string>()
 const typeByPath = new Map<string, FileNode['type']>()
 
-function normalizePublicPath(path: string): string {
-  const normalized = path.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
-  return normalized ? `/${normalized}` : '/'
-}
-
 function relativePath(path: string): string {
-  return normalizePublicPath(path).replace(/^\//, '')
+  return normalizeWorkspacePath(path).replace(/^\//, '')
 }
 
 function toFileNode(entry: ApiWorkspaceEntry): FileNode {
-  const path = normalizePublicPath(entry.path)
+  const path = normalizeWorkspacePath(entry.path)
   const node: FileNode = {
     id: entry.entry_id,
     content_hash: entry.content_hash ?? undefined,
@@ -75,7 +71,7 @@ function cacheEntries(entries: ApiWorkspaceEntry[]): FileNode[] {
 }
 
 function nodeFromNote(note: ApiNote): FileNode {
-  const path = normalizePublicPath(note.file_path)
+  const path = normalizeWorkspacePath(note.file_path)
   noteIdByPath.set(path, note.note_id)
   typeByPath.set(path, 'file')
   return {
@@ -88,7 +84,7 @@ function nodeFromNote(note: ApiNote): FileNode {
 }
 
 async function requireNoteId(filePath: string): Promise<string> {
-  const path = normalizePublicPath(filePath)
+  const path = normalizeWorkspacePath(filePath)
   let noteId = noteIdByPath.get(path)
   if (!noteId) {
     await refreshTree()
@@ -298,7 +294,7 @@ export async function renameFile(oldPath: string, newName: string, expectedHash?
   }
   if (workspaceDocumentType(oldPath) === 'image') {
     if (!isMutableWorkspaceImage(oldPath)) throw new Error('IMAGE_ASSET_IMMUTABLE')
-    const path = normalizePublicPath(oldPath)
+    const path = normalizeWorkspacePath(oldPath)
     const destination = `${path.slice(0, path.lastIndexOf('/') + 1)}${newName}`
     if (workspaceDocumentType(destination) !== 'image' || path.slice(path.lastIndexOf('.')).toLowerCase() !== destination.slice(destination.lastIndexOf('.')).toLowerCase()) throw new Error('IMAGE_EXTENSION_MISMATCH')
     const expected = expectedHash ?? await imageRevision(path)
@@ -312,7 +308,7 @@ export async function renameFile(oldPath: string, newName: string, expectedHash?
     await hostInvoke('workspace_rename', { path, destination: [...path.split('/').slice(0, -1), newName].join('/'), expected: expectedHash ?? document.hash })
     await refreshTree(); return
   }
-  const path = normalizePublicPath(oldPath)
+  const path = normalizeWorkspacePath(oldPath)
   if (workspaceDocumentType(path) === 'canvas') {
     const document = await apiClient.get<CanvasDocument>('/api/workspace/canvas', { params: { path } })
     const destination = `${path.slice(0, path.lastIndexOf('/') + 1)}${newName}`
@@ -349,7 +345,7 @@ export async function deleteFile(pathValue: string, expectedHash?: string, expec
     await hostInvoke('workspace_delete', { path, expected: expectedHash ?? document.hash })
     await refreshTree(); return
   }
-  const path = normalizePublicPath(pathValue)
+  const path = normalizeWorkspacePath(pathValue)
   if (workspaceDocumentType(path) === 'canvas') {
     const document = await apiClient.get<CanvasDocument>('/api/workspace/canvas', { params: { path } })
     await apiClient.post('/api/workspace/canvas/delete', { path, expected_content_hash: expectedHash ?? document.content_hash })
@@ -371,7 +367,7 @@ export async function moveFile(sourcePath: string, targetPath: string, review?: 
   if (sources.length) throw new Error(`REFERENCE_IMPACT_REVIEW_REQUIRED: ${sources.join(', ')}`)
   if (workspaceDocumentType(sourcePath) === 'image') {
     if (!isMutableWorkspaceImage(sourcePath)) throw new Error('IMAGE_ASSET_IMMUTABLE')
-    const destination = `${normalizePublicPath(targetPath).replace(/\/$/, '')}/${sourcePath.split('/').at(-1)}`
+    const destination = `${normalizeWorkspacePath(targetPath).replace(/\/$/, '')}/${sourcePath.split('/').at(-1)}`
     const expected = review?.expectedHash ?? await imageRevision(sourcePath)
     if (isDesktop()) await hostInvoke('workspace_rename', { path: nativePath(sourcePath), destination: nativePath(destination), expected })
     else await apiClient.post('/api/workspace/assets/move', { path: sourcePath, destination, expected_content_hash: expected })
@@ -383,10 +379,10 @@ export async function moveFile(sourcePath: string, targetPath: string, review?: 
     await hostInvoke('workspace_rename', { path, destination: [nativePath(targetPath), path.split('/').at(-1)].filter(Boolean).join('/'), expected: review?.expectedHash ?? document.hash })
     await refreshTree(); return
   }
-  const source = normalizePublicPath(sourcePath)
+  const source = normalizeWorkspacePath(sourcePath)
   if (workspaceDocumentType(source) === 'canvas') {
     const document = await apiClient.get<CanvasDocument>('/api/workspace/canvas', { params: { path: source } })
-    const destination = `${normalizePublicPath(targetPath).replace(/\/$/, '')}/${source.split('/').at(-1)}`
+    const destination = `${normalizeWorkspacePath(targetPath).replace(/\/$/, '')}/${source.split('/').at(-1)}`
     await apiClient.post('/api/workspace/canvas/move', { path: source, destination, expected_content_hash: review?.expectedHash ?? document.content_hash })
     await refreshTree(); return
   }

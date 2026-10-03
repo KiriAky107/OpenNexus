@@ -6,6 +6,7 @@ import { t } from '@/i18n'
 import { ApiErrorClass } from '@/services/apiClient'
 import { DesktopError } from '@/services/platform/desktop'
 import { workspaceDocumentType } from '@/services/workspaceDocuments'
+import { normalizeWorkspacePath } from '@/services/workspacePaths'
 
 export const useEditorStore = defineStore('editor', () => {
   const mode = ref<'wysiwyg' | 'source'>('wysiwyg')
@@ -94,6 +95,7 @@ export const useEditorStore = defineStore('editor', () => {
   let loadVersion = 0
 
   async function loadFile(filePath: string) {
+    filePath = normalizeWorkspacePath(filePath)
     if (currentFilePath.value === filePath) return
     if (saveTimer) {
       clearTimeout(saveTimer)
