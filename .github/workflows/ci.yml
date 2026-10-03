@@ -93,3 +93,34 @@ jobs:
       # The production-strength repeated-crash migration test runs in release acceptance.
       - run: cargo test --lib --locked -- --skip credentials::tests::b04_migration_survives_twenty_hard_terminations_per_boundary
       - run: cargo clippy --lib --locked -- -D warnings
+
+  windows-host:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: frontend/src-tauri
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        id: rust
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            frontend/src-tauri/target
+          key: windows-host-msvc-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('frontend/src-tauri/Cargo.lock', 'frontend/src-tauri/Cargo.toml') }}-${{ github.sha }}
+          restore-keys: |
+            windows-host-msvc-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('frontend/src-tauri/Cargo.lock', 'frontend/src-tauri/Cargo.toml') }}-
+      - name: Test native watcher, stable identities and workspace recovery
+        run: cargo test --lib --locked workspace:: -- --nocapture
+      - name: Test sync discovery, ordering and peer application
+        run: cargo test --lib --locked sync_ -- --nocapture
