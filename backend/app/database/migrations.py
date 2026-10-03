@@ -285,6 +285,15 @@ MIGRATIONS: list[str] = [
     """ALTER TABLE benchmark_runs ADD COLUMN summary_json TEXT;
     UPDATE benchmark_runs SET summary_json=json_remove(run_json,'$.config_snapshot.dataset_cases');
     CREATE INDEX benchmark_runs_scope_status ON benchmark_runs(scope,status,created_at,run_id);""",
+    # v25: keep frozen input payloads outside rows updated after every case.
+    """CREATE TABLE benchmark_inputs (
+        run_id TEXT PRIMARY KEY REFERENCES benchmark_runs(run_id) ON DELETE CASCADE,
+        config_json TEXT NOT NULL
+    );
+    INSERT INTO benchmark_inputs(run_id,config_json)
+        SELECT run_id,COALESCE(json_extract(run_json,'$.config_snapshot'),'{}') FROM benchmark_runs;
+    UPDATE benchmark_runs SET run_json=json_remove(run_json,'$.config_snapshot.dataset_cases'),
+        report_json=CASE WHEN report_json IS NULL THEN NULL ELSE json_remove(report_json,'$.config_snapshot.dataset_cases') END;""",
 ]
 
 

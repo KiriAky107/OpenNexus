@@ -3,7 +3,7 @@ import asyncio
 from time import perf_counter
 from uuid import uuid4
 from app.contracts import (AgentBenchmarkRequest, AgentCaseResult, AgentRunCreateRequest,
-    BenchmarkRun, BenchmarkReport, BenchmarkKind, BenchmarkStatus, BenchmarkEvent, BenchmarkEventType)
+    BenchmarkRun, BenchmarkKind, BenchmarkStatus, BenchmarkEventType)
 from app.benchmarks import datasets, service
 from app.errors import ApiError
 
@@ -93,7 +93,11 @@ async def create_run(request: AgentBenchmarkRequest):
     service._events[run_id] = []
     service._subscribers[run_id] = []
     service._cancel_flags[run_id] = asyncio.Event()
-    service._persist(run_id)
+    try:
+        await service._persist(run_id)
+    except BaseException:
+        service._forget(run_id)
+        raise
     service._tasks[run_id] = asyncio.create_task(execute(run_id, request, dataset, container.agent))
     return run
 
@@ -101,16 +105,15 @@ async def execute(run_id, request, dataset, runtime):
     """顺序执行样本，传播取消信号，并持续发布可订阅的运行事件。"""
     flag = service._cancel_flags[run_id]
     results = []; active = None
-    def emit(kind, data):
-        event = BenchmarkEvent(event=kind, run_id=run_id, sequence=len(service._events[run_id]), data=data, timestamp=service._now())
-        service._events[run_id].append(event)
-        service._persist(run_id,event)
-        for queue in service._subscribers.get(run_id, []): queue.put_nowait(event)
+    async def complete_case(result):
+        await service._emit(run_id, BenchmarkEventType.case_completed, result.model_dump(mode='json'),
+            run=service._runs[run_id].model_copy(update={'progress': (len(results)+1)/(len(dataset.cases)*request.repeat)}))
+        results.append(result)
     status = BenchmarkStatus.completed
     error = None
     try:
-        service._runs[run_id] = service._runs[run_id].model_copy(update={'status': BenchmarkStatus.running, 'started_at': service._now()})
-        emit(BenchmarkEventType.run_started, {'dataset_id': dataset.dataset_id})
+        await service._emit(run_id, BenchmarkEventType.run_started, {'dataset_id': dataset.dataset_id},
+            run=service._runs[run_id].model_copy(update={'status': BenchmarkStatus.running, 'started_at': service._now()}))
         for case in dataset.cases:
             for repeat in range(request.repeat):
                 if flag.is_set():
@@ -118,9 +121,7 @@ async def execute(run_id, request, dataset, runtime):
                 started = perf_counter()
                 if case.members:
                     result = await execute_collaboration_case(run_id, request, case, runtime, flag, repeat)
-                    results.append(result)
-                    service._runs[run_id].progress = len(results)/(len(dataset.cases)*request.repeat)
-                    emit(BenchmarkEventType.case_completed, result.model_dump(mode='json'))
+                    await complete_case(result)
                     if flag.is_set():
                         status = BenchmarkStatus.cancelled
                         break
@@ -145,9 +146,8 @@ async def execute(run_id, request, dataset, runtime):
                     cancel.cancel(); await asyncio.gather(cancel, return_exceptions=True)
                 events = [event async for event in runtime.events(active.run_id)]
                 result = score(case, finished, events, (perf_counter()-started)*1000, repeat)
-                results.append(result); active = None
-                service._runs[run_id].progress = len(results)/(len(dataset.cases)*request.repeat)
-                emit(BenchmarkEventType.case_completed, result.model_dump(mode='json'))
+                active = None
+                await complete_case(result)
             if status == BenchmarkStatus.cancelled: break
     except asyncio.CancelledError:
         status = BenchmarkStatus.cancelled
@@ -157,15 +157,12 @@ async def execute(run_id, request, dataset, runtime):
         if active:
             await runtime.cancel(active.run_id)
             await runtime.wait(active.run_id)
+        # A cancellation may arrive during a worker write. Count only committed
+        # events, including the write drained by _persist before cancellation.
+        results = [AgentCaseResult.model_validate(event.data) for event in service._events[run_id]
+            if event.event == BenchmarkEventType.case_completed]
         metrics = aggregate(results, len(dataset.cases)*request.repeat)
-        run = service._runs[run_id]
-        service._runs[run_id] = run.model_copy(update={'status':status, 'metrics':metrics, 'completed_at':service._now(), 'error_code':error})
-        service._reports[run_id] = BenchmarkReport(run_id=run_id, kind=BenchmarkKind.agent,
-            dataset_id=dataset.dataset_id, dataset_hash=dataset.content_hash, status=status,
-            config_snapshot=run.config_snapshot, cases=results, metrics=metrics, error_code=error)
-        emit({BenchmarkStatus.completed: BenchmarkEventType.run_completed, BenchmarkStatus.failed: BenchmarkEventType.run_failed,
-            BenchmarkStatus.cancelled: BenchmarkEventType.run_cancelled}[status], {'metrics':metrics, 'error_code':error})
-        service._cancel_flags.pop(run_id, None); service._subscribers.pop(run_id, None)
+        await service._finish(run_id, status, metrics, results, error)
 
 
 async def execute_collaboration_case(benchmark_id, request, case, runtime, flag, repeat):

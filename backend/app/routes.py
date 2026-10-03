@@ -1742,6 +1742,8 @@ async def benchmark_events(
                 return
             while True:
                 event = await queue.get()
+                if event is None:
+                    return
                 if event.sequence <= last_sequence:
                     continue
                 yield as_sse(event.event.value, event.model_dump_json(), event_id=event.sequence)

@@ -44,3 +44,52 @@ These are single-pass timings on identical fixture data, not a performance
 guarantee. Structural assertions enforce zero full-report reads independently
 of timing. Additional tests cover v23 migration, restart recovery, concurrency,
 filters/pagination, identity-only changes, partial checks and unavailable values.
+
+## Incremental execution persistence (0.5.9-beta2)
+
+Migration v25 moves frozen configuration, including the input dataset, into
+`benchmark_inputs`. Large inputs therefore do not share the row updated after
+each evaluated case. `run_json` retains a small initial snapshot; `summary_json`
+contains current progress and state. Reports omit the duplicate input dataset
+on disk and restore it on reads and exports. Existing beta1 runs, complete
+reports and interrupted evidence migrate in the same transaction without
+changing their public representation.
+
+RAG, single-agent and collaboration runs await one worker-thread write at each
+case boundary. There is at most one pending persistence operation per run
+(the existing active-run limit is 100); evaluation cannot outrun the writer.
+Worker calls preserve the originating Vault context. Each case event and its
+progress update commit together; the terminal report, status and terminal event
+also share a transaction. Polling and SSE expose updates only after commit.
+Identical event retries are harmless, while conflicting or out-of-order
+sequences are rejected before progress changes. Cancellation drains the pending
+write before recording the terminal event. A failed writer closes subscribers
+without inventing an uncommitted event; remaining durable evidence can be
+recovered by the interrupted-run path.
+
+`backend/tests/test_benchmark_incremental.py` covers these transitions, actual
+AgentRuntime and collaboration execution, Vault isolation, beta1 migration,
+rollback, failed writes, cancellation during writes and linear SQL payload size.
+The scale fixture uses 1,024-character queries and an empty retrieval response,
+with the real service, RAG runner and SQLite. Its 200/500-case typed datasets
+deliberately bypass the existing 100-case import limit for scale testing.
+
+On 2026-10-04, an isolated same-machine comparison loaded the published
+`v0.5.9-beta1` service/storage source and executed the same fixture against both
+versions. These numbers count cumulative UTF-8 **SQL string parameters**, not
+physical disk writes:
+
+| Cases | beta1 parameter bytes | beta2 parameter bytes | beta1 serialized input cases | beta2 serialized input cases |
+| --- | ---: | ---: | ---: | ---: |
+| 100 | 12,946,805 | 315,388 | 10,400 | 100 |
+| 200 | 49,655,763 | 620,997 | 40,800 | 200 |
+| 500 | 302,471,323 | 1,542,466 | 252,000 | 500 |
+
+The paired runs issued 206/406/1,006 write statements respectively: the change
+reduces payload size and moves writes off the loop rather than batching away
+case durability. The new per-run pending-write peak was one, with zero writes
+executed on the event-loop thread. A 1ms asyncio heartbeat measured p95 excess
+delay of 23.377/21.360/30.172ms for beta1 versus 4.507/6.283/4.396ms for beta2.
+These are single instrumented passes affected by scheduling, not a UI latency
+guarantee. Deterministic assertions check the queue bound, commit ordering and
+linear payload growth separately from timing.

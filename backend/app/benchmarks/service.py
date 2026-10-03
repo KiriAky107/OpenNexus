@@ -28,7 +28,6 @@ from app.contracts import (
     BenchmarkRun,
     BenchmarkStatus,
     RAGCaseResult,
-    RAGMetrics,
     RAGRunRequest,
     SearchMode,
 )
@@ -41,13 +40,72 @@ _runs: dict[str, BenchmarkRun] = {}
 _events: dict[str, list[BenchmarkEvent]] = {}
 _reports: dict[str, BenchmarkReport] = {}
 _tasks: dict[str, asyncio.Task] = {}
-_subscribers: dict[str, list[asyncio.Queue[BenchmarkEvent]]] = {}
+_subscribers: dict[str, list[asyncio.Queue[BenchmarkEvent | None]]] = {}
 _cancel_flags: dict[str, asyncio.Event] = {}
 MAX_RUNS = 100
 
 
-def _persist(run_id, event=None):
-    storage.save(_runs[run_id], _reports.get(run_id), event)
+async def _persist(run_id, event=None, *, run=None, report=None):
+    """One awaited worker write per run: ordered, capacity-one backpressure.
+
+    to_thread carries the creating task's Vault ContextVars. Shield the write so
+    cancellation cannot race an unfinished transaction with the terminal event.
+    Only committed state is visible to polling and SSE subscribers.
+    """
+    run = run if run is not None else _runs[run_id]
+    write = asyncio.create_task(asyncio.to_thread(storage.save, run, report, event))
+    cancelled = False
+    while not write.done():
+        try:
+            await asyncio.shield(write)
+        except asyncio.CancelledError:
+            cancelled = True
+    write.result()
+    _runs[run_id] = run
+    if report is not None:
+        _reports[run_id] = report
+    if event is not None:
+        _events[run_id].append(event)
+        for queue in _subscribers.get(run_id, []):
+            queue.put_nowait(event)
+    if cancelled:
+        raise asyncio.CancelledError
+
+
+async def _emit(run_id, kind, data, *, run=None, report=None):
+    event = BenchmarkEvent(event=kind, run_id=run_id, sequence=len(_events[run_id]), data=data, timestamp=_now())
+    await _persist(run_id, event, run=run, report=report)
+
+
+async def _finish(run_id, status, metrics=None, cases=None, error_code=None):
+    """Commit the report and its terminal event together, then close live state."""
+    if _runs[run_id].status in (BenchmarkStatus.completed, BenchmarkStatus.cancelled, BenchmarkStatus.failed):
+        return  # Cancellation arrived after a terminal transaction committed.
+    run = _runs[run_id].model_copy(update={
+        'status': status, 'progress': 1.0, 'metrics': metrics or {}, 'completed_at': _now(),
+        'error_code': error_code, 'error': 'Benchmark run failed.' if error_code else None,
+    })
+    report = BenchmarkReport(run_id=run_id, kind=run.kind, dataset_id=run.dataset_id,
+        dataset_hash=run.dataset_hash, status=status, config_snapshot=run.config_snapshot,
+        metrics=run.metrics, error_code=run.error_code, error=run.error,
+        cases=cases if cases is not None else [event.data for event in _events[run_id]
+            if event.event == BenchmarkEventType.case_completed])
+    kind = {BenchmarkStatus.completed: BenchmarkEventType.run_completed,
+        BenchmarkStatus.cancelled: BenchmarkEventType.run_cancelled,
+        BenchmarkStatus.failed: BenchmarkEventType.run_failed}[status]
+    try:
+        await _emit(run_id, kind, {'metrics': run.metrics, 'error_code': run.error_code, 'error': run.error},
+            run=run, report=report)
+    except asyncio.CancelledError:
+        pass  # _persist already waited for and published this terminal commit.
+    except Exception:
+        logger.exception('Benchmark terminal persistence failed: run_id=%s', run_id)
+        # Do not advertise a result that never reached disk. The last committed
+        # evidence remains recoverable through the existing interrupted-run path.
+        _forget(run_id)
+    finally:
+        _close_subscribers(run_id)
+        _cancel_flags.pop(run_id, None)
 
 
 def _saved(run_id):
@@ -74,8 +132,15 @@ def _forget(run_id: str) -> None:
     _events.pop(run_id, None)
     _reports.pop(run_id, None)
     _tasks.pop(run_id, None)
-    _subscribers.pop(run_id, None)
+    _close_subscribers(run_id)
     _cancel_flags.pop(run_id, None)
+
+
+def _close_subscribers(run_id):
+    # Closing a failed writer must not manufacture an uncommitted SSE event, or
+    # leave the stream waiting indefinitely for an event that can never arrive.
+    for queue in _subscribers.pop(run_id, []):
+        queue.put_nowait(None)
 
 
 def _evict_terminal() -> bool:
@@ -200,124 +265,49 @@ async def create_rag_run(request: RAGRunRequest) -> BenchmarkRun:
     _events[run_id] = []
     _subscribers[run_id] = []
     _cancel_flags[run_id] = asyncio.Event()
-    _persist(run_id)
-    _tasks[run_id] = asyncio.create_task(_execute_rag(run_id, request, dataset, snapshot))
+    try:
+        await _persist(run_id)
+    except BaseException:
+        _forget(run_id)
+        raise
+    _tasks[run_id] = asyncio.create_task(_execute_rag(run_id, request, dataset))
     return run
 
 
 async def _execute_rag(
-    run_id: str, request: RAGRunRequest, dataset: RAGDataset, snapshot: dict
+    run_id: str, request: RAGRunRequest, dataset: RAGDataset
 ) -> None:
     """后台执行 RAG Benchmark，实时更新进度/事件，结束后写入报告并关闭订阅。"""
     cancel_event = _cancel_flags[run_id]
 
-    def emit(event_type: BenchmarkEventType, data: dict) -> None:
-        sequence = len(_events[run_id])
-        event = BenchmarkEvent(
-            event=event_type, run_id=run_id, sequence=sequence, data=data, timestamp=_now()
-        )
-        _events[run_id].append(event)
-        _persist(run_id, event)
-        for queue in _subscribers.get(run_id, []):
-            queue.put_nowait(event)
-
-    def finish() -> None:
-        _persist(run_id)
-        _subscribers.pop(run_id, None)
-        _cancel_flags.pop(run_id, None)
-
-    _runs[run_id] = _runs[run_id].model_copy(
-        update={"status": BenchmarkStatus.running, "started_at": _now()}
-    )
-    emit(
-        BenchmarkEventType.run_started,
-        {"dataset_id": dataset.dataset_id, "modes": [m.value for m in request.modes]},
-    )
     total = len(request.modes) * len(dataset.cases) * request.repeat
 
-    def on_case(result: RAGCaseResult, done: int, _total: int) -> None:
+    async def on_case(result: RAGCaseResult, done: int, _total: int) -> None:
         progress = done / total if total else 1.0
-        _runs[run_id] = _runs[run_id].model_copy(update={"progress": progress})
-        emit(BenchmarkEventType.case_completed, result.model_dump(mode="json"))
+        run = _runs[run_id].model_copy(update={"progress": progress})
+        await _emit(run_id, BenchmarkEventType.case_completed, result.model_dump(mode="json"), run=run)
 
     try:
+        await _emit(run_id, BenchmarkEventType.run_started,
+            {"dataset_id": dataset.dataset_id, "modes": [m.value for m in request.modes]},
+            run=_runs[run_id].model_copy(update={"status": BenchmarkStatus.running, "started_at": _now()}))
         metrics_by_mode, results = await run_rag(
             dataset,
             request,
             on_case=on_case,
             should_cancel=cancel_event.is_set,
         )
-    except BenchmarkCancelled:
-        _runs[run_id] = _runs[run_id].model_copy(
-            update={
-                "status": BenchmarkStatus.cancelled,
-                "progress": 1.0,
-                "completed_at": _now(),
-            }
-        )
-        _reports[run_id] = BenchmarkReport(
-            run_id=run_id,
-            kind=BenchmarkKind.rag,
-            dataset_id=dataset.dataset_id,
-            dataset_hash=dataset.content_hash,
-            status=BenchmarkStatus.cancelled,
-            config_snapshot=snapshot,
-            cases=[event.data for event in _events[run_id] if event.event == BenchmarkEventType.case_completed],
-        )
-        emit(BenchmarkEventType.run_cancelled, {"status": BenchmarkStatus.cancelled.value})
-        finish()
+    except (BenchmarkCancelled, asyncio.CancelledError):
+        await _finish(run_id, BenchmarkStatus.cancelled)
         return
-    except Exception as exc:  # 单次运行失败不拖垮服务，记录错误后结束
+    except Exception:  # 单次运行失败不拖垮服务，记录错误后结束
         # 详细异常只进日志，公开响应仅带项目错误码与安全消息，避免泄露路径/SQL 等敏感信息
         logger.exception("Benchmark run failed: run_id=%s", run_id)
-        _runs[run_id] = _runs[run_id].model_copy(
-            update={
-                "status": BenchmarkStatus.failed,
-                "progress": 1.0,
-                "error": "Benchmark run failed.",
-                "error_code": "BENCHMARK_RUN_FAILED",
-                "completed_at": _now(),
-            }
-        )
-        _reports[run_id] = BenchmarkReport(
-            run_id=run_id,
-            kind=BenchmarkKind.rag,
-            dataset_id=dataset.dataset_id,
-            dataset_hash=dataset.content_hash,
-            status=BenchmarkStatus.failed,
-            config_snapshot=snapshot,
-            error="Benchmark run failed.",
-            error_code="BENCHMARK_RUN_FAILED",
-            cases=[event.data for event in _events[run_id] if event.event == BenchmarkEventType.case_completed],
-        )
-        emit(
-            BenchmarkEventType.run_failed,
-            {"error": "Benchmark run failed.", "error_code": "BENCHMARK_RUN_FAILED"},
-        )
-        finish()
+        await _finish(run_id, BenchmarkStatus.failed, error_code='BENCHMARK_RUN_FAILED')
         return
 
     metrics = {mode: m.model_dump() for mode, m in metrics_by_mode.items()}
-    _runs[run_id] = _runs[run_id].model_copy(
-        update={
-            "status": BenchmarkStatus.completed,
-            "progress": 1.0,
-            "metrics": metrics,
-            "completed_at": _now(),
-        }
-    )
-    _reports[run_id] = BenchmarkReport(
-        run_id=run_id,
-        kind=BenchmarkKind.rag,
-        dataset_id=dataset.dataset_id,
-        dataset_hash=dataset.content_hash,
-        status=BenchmarkStatus.completed,
-        config_snapshot=snapshot,
-        metrics=metrics,
-        cases=results,
-    )
-    emit(BenchmarkEventType.run_completed, {"metrics": metrics})
-    finish()
+    await _finish(run_id, BenchmarkStatus.completed, metrics, results)
 
 
 def list_runs(
@@ -372,7 +362,7 @@ def cancel_run(run_id: str) -> BenchmarkRun | None:
     return run
 
 
-def subscribe(run_id: str) -> asyncio.Queue[BenchmarkEvent] | None:
+def subscribe(run_id: str) -> asyncio.Queue[BenchmarkEvent | None] | None:
     """订阅运行事件流；运行已结束（completed/failed/cancelled）时返回 None。"""
     run = get_run(run_id)
     if run is None or run.status in (
@@ -381,12 +371,12 @@ def subscribe(run_id: str) -> asyncio.Queue[BenchmarkEvent] | None:
         BenchmarkStatus.cancelled,
     ):
         return None
-    queue: asyncio.Queue[BenchmarkEvent] = asyncio.Queue()
+    queue: asyncio.Queue[BenchmarkEvent | None] = asyncio.Queue()
     _subscribers.setdefault(run_id, []).append(queue)
     return queue
 
 
-def unsubscribe(run_id: str, queue: asyncio.Queue[BenchmarkEvent]) -> None:
+def unsubscribe(run_id: str, queue: asyncio.Queue[BenchmarkEvent | None]) -> None:
     subscribers = _subscribers.get(run_id)
     if subscribers and queue in subscribers:
         subscribers.remove(queue)

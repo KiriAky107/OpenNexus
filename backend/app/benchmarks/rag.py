@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import inspect
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from app import repository
 from app.benchmarks import metrics as m
@@ -36,7 +37,7 @@ class BenchmarkCancelled(Exception):
 async def run_rag(
     dataset: RAGDataset,
     request: RAGRunRequest,
-    on_case: Callable[[RAGCaseResult, int, int], None] | None = None,
+    on_case: Callable[[RAGCaseResult, int, int], None | Awaitable[None]] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[dict[str, RAGMetrics], list[RAGCaseResult]]:
     """执行 RAG Benchmark，返回 (按 mode 聚合的指标, 全部逐样本结果)。
@@ -60,7 +61,9 @@ async def run_rag(
                 results.append(result)
                 done += 1
                 if on_case is not None:
-                    on_case(result, done, total)
+                    pending = on_case(result, done, total)
+                    if inspect.isawaitable(pending):
+                        await pending
 
     metrics_by_mode = {mode.value: _aggregate(results, mode) for mode in request.modes}
     return metrics_by_mode, results

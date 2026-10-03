@@ -1,11 +1,21 @@
-"""Persist run snapshots and evidence in the active vault database."""
+"""Persist frozen inputs once, and atomically append evidence and small progress rows.
+
+``benchmark_inputs`` keeps frozen configuration outside the mutable run row.
+``summary_json`` is the current state; reports rehydrate their dataset on reads.
+Migration v25 extracts beta1 inputs without losing report or event evidence.
+"""
+import json
 from contextlib import closing
+from typing import Any
+from pydantic import TypeAdapter
 from app.database.db import connect_knowledge, transaction
 from app.contracts import BenchmarkRun, BenchmarkReport, BenchmarkEvent, BenchmarkEventType, BenchmarkStatus
 from app.benchmarks.datasets import current_scope
 
+_CONFIG_JSON = TypeAdapter(dict[str, Any])
+
 def summary(run: BenchmarkRun) -> BenchmarkRun:
-    # Full frozen inputs remain in run_json/report_json for audit and export.
+    # Full frozen inputs remain in benchmark_inputs for audit and export.
     return run.model_copy(update={'config_snapshot': {
         key: value for key, value in run.config_snapshot.items() if key != 'dataset_cases'
     }})
@@ -13,18 +23,61 @@ def summary(run: BenchmarkRun) -> BenchmarkRun:
 
 def save(run: BenchmarkRun, report: BenchmarkReport | None = None, event: BenchmarkEvent | None = None):
     with closing(connect_knowledge()) as conn, transaction(conn, immediate=True):
-        conn.execute('''INSERT INTO benchmark_runs(run_id,scope,kind,status,created_at,run_json,report_json,summary_json) VALUES(?,?,?,?,?,?,?,?)
-            ON CONFLICT(run_id) DO UPDATE SET status=excluded.status,run_json=excluded.run_json,
-            summary_json=excluded.summary_json,report_json=COALESCE(excluded.report_json,benchmark_runs.report_json)''',
-            (run.run_id, current_scope(), run.kind.value, run.status.value, run.created_at.isoformat(),
-             run.model_dump_json(), report.model_dump_json() if report else None, summary(run).model_dump_json()))
+        scope = current_scope()
+        existing = conn.execute('SELECT scope,status FROM benchmark_runs WHERE run_id=?', (run.run_id,)).fetchone()
+        if existing and existing['scope'] != scope:
+            raise ValueError('Benchmark scope mismatch')
+        if event and event.run_id != run.run_id:
+            raise ValueError('Benchmark event belongs to another run')
+        event_json = event.model_dump_json() if event else None
+        if existing and event:
+            previous = conn.execute('SELECT event_json FROM benchmark_events WHERE run_id=? AND sequence=?',
+                (run.run_id, event.sequence)).fetchone()
+            if previous:
+                if previous[0] != event_json:
+                    raise ValueError('Conflicting benchmark event sequence')
+                return  # An acknowledged retry must not roll progress backwards.
+            last = conn.execute('SELECT MAX(sequence) FROM benchmark_events WHERE run_id=?', (run.run_id,)).fetchone()[0]
+            if event.sequence != (last + 1 if last is not None else 0):
+                raise ValueError('Out-of-order benchmark event sequence')
+        if existing and existing['status'] not in ('queued', 'running'):
+            raise ValueError('Benchmark is already terminal')
+        report_json = report.model_dump_json(exclude={'config_snapshot': {'dataset_cases'}}) if report else None
+        summary_json = summary(run).model_dump_json()
+        if existing:
+            conn.execute('''UPDATE benchmark_runs SET status=?,summary_json=?,
+                report_json=COALESCE(?,report_json) WHERE run_id=?''',
+                (run.status.value, summary_json, report_json, run.run_id))
+        else:
+            conn.execute('''INSERT INTO benchmark_runs(run_id,scope,kind,status,created_at,run_json,report_json,summary_json)
+                VALUES(?,?,?,?,?,?,?,?)''',
+                (run.run_id, scope, run.kind.value, run.status.value, run.created_at.isoformat(),
+                 summary_json, report_json, summary_json))
+            conn.execute('INSERT INTO benchmark_inputs(run_id,config_json) VALUES(?,?)',
+                (run.run_id, _CONFIG_JSON.dump_json(run.config_snapshot).decode('utf-8')))
         if event:
-            conn.execute('INSERT OR IGNORE INTO benchmark_events VALUES(?,?,?)', (run.run_id,event.sequence,event.model_dump_json()))
+            conn.execute('INSERT INTO benchmark_events VALUES(?,?,?)', (run.run_id,event.sequence,event_json))
+
+
+def _hydrate_run(snapshot_json, summary_json, config_json):
+    frozen = BenchmarkRun.model_validate_json(snapshot_json)
+    latest = BenchmarkRun.model_validate_json(summary_json) if summary_json else frozen
+    inputs = json.loads(config_json) if config_json else frozen.config_snapshot
+    if 'dataset_cases' in inputs:
+        latest.config_snapshot['dataset_cases'] = inputs['dataset_cases']
+    return latest
 
 def get(run_id):
     with closing(connect_knowledge()) as conn:
-        row = conn.execute('SELECT run_json,report_json FROM benchmark_runs WHERE run_id=? AND scope=?',(run_id,current_scope())).fetchone()
-        return (BenchmarkRun.model_validate_json(row[0]), BenchmarkReport.model_validate_json(row[1]) if row[1] else None) if row else (None,None)
+        row = conn.execute('''SELECT r.run_json,r.report_json,r.summary_json,i.config_json FROM benchmark_runs r
+            LEFT JOIN benchmark_inputs i ON i.run_id=r.run_id WHERE r.run_id=? AND r.scope=?''',(run_id,current_scope())).fetchone()
+        if not row:
+            return None, None
+        run = _hydrate_run(row[0], row[2], row[3])
+        report = BenchmarkReport.model_validate_json(row[1]) if row[1] else None
+        if report and 'dataset_cases' in run.config_snapshot:
+            report.config_snapshot['dataset_cases'] = run.config_snapshot['dataset_cases']
+        return run, report
 
 
 def get_summary(run_id):
@@ -64,10 +117,12 @@ def unfinished_ids():
 def recover_interrupted(run_id, now):
     """Recover only nonterminal evidence, once even with concurrent readers."""
     with closing(connect_knowledge()) as conn, transaction(conn, immediate=True):
-        row = conn.execute("SELECT run_json FROM benchmark_runs WHERE run_id=? AND scope=? AND status IN ('queued','running')", (run_id, current_scope())).fetchone()
+        row = conn.execute('''SELECT r.run_json,r.summary_json,i.config_json FROM benchmark_runs r
+            LEFT JOIN benchmark_inputs i ON i.run_id=r.run_id
+            WHERE r.run_id=? AND r.scope=? AND r.status IN ('queued','running')''', (run_id, current_scope())).fetchone()
         if not row:
             return
-        run = BenchmarkRun.model_validate_json(row[0]).model_copy(update={
+        run = _hydrate_run(row[0], row[1], row[2]).model_copy(update={
             'status': BenchmarkStatus.failed, 'completed_at': now,
             'error_code': 'BENCHMARK_INTERRUPTED', 'error': '应用重启中断了该次评测。',
         })
@@ -76,8 +131,8 @@ def recover_interrupted(run_id, now):
             dataset_hash=run.dataset_hash, status=run.status, config_snapshot=run.config_snapshot,
             error_code=run.error_code, error=run.error,
             cases=[event.data for event in evidence if event.event == BenchmarkEventType.case_completed])
-        conn.execute('UPDATE benchmark_runs SET status=?,run_json=?,report_json=?,summary_json=? WHERE run_id=?',
-            (run.status.value, run.model_dump_json(), report.model_dump_json(), summary(run).model_dump_json(), run_id))
+        conn.execute('UPDATE benchmark_runs SET status=?,report_json=?,summary_json=? WHERE run_id=?',
+            (run.status.value, report.model_dump_json(exclude={'config_snapshot': {'dataset_cases'}}), summary(run).model_dump_json(), run_id))
         event = BenchmarkEvent(event=BenchmarkEventType.run_failed, run_id=run_id,
             sequence=max((event.sequence for event in evidence), default=-1)+1,
             data={'error_code':run.error_code}, timestamp=now)
