@@ -93,7 +93,50 @@ impl Workspace {
         self.refresh_snapshot(false)?;
         let paths = self.sync_paths()?;
         let mut seen = HashSet::new();
+        for path in &paths {
+            if let Some(entry) = self.entry(path)?.filter(|entry| !entry.deleted) {
+                seen.insert(entry.file_id);
+            }
+        }
         let mut changes = 0;
+        // Queue the retired occupant's deletion before the replacement's put.
+        // The observed path is the last public path, even when identity
+        // reconciliation moved a tombstone into internal metadata storage.
+        let previous = {
+            let mut statement = self
+                .db
+                .prepare("SELECT file_id,path FROM sync_observed WHERE deleted=0")?;
+            let rows = statement
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
+        for (file_id, path) in previous {
+            if seen.contains(&file_id) || !self.sync_path_enabled(&path)? {
+                continue;
+            }
+            if self.resolve(&path)?.exists()
+                && self
+                    .entry(&path)?
+                    .is_none_or(|entry| entry.file_id == file_id && !entry.deleted)
+            {
+                continue;
+            }
+            let operation = Uuid::new_v4().to_string();
+            let tx = self.db.transaction()?;
+            tx.execute(
+                "UPDATE files SET deleted=1,revision=revision+1 WHERE id=?1 AND deleted=0",
+                [&file_id],
+            )?;
+            tx.execute("INSERT INTO outbox SELECT ?1,id,revision,?3,'','delete',X'','pending' FROM files WHERE id=?2",params![operation,file_id,path])?;
+            tx.execute(
+                "UPDATE sync_observed SET deleted=1 WHERE file_id=?1",
+                [&file_id],
+            )?;
+            tx.commit()?;
+            self.changed_path(&path);
+            changes += 1;
+        }
         for path in paths {
             let target = self.resolve(&path)?;
             let (digest, _) = self.cached_sync_file_info(&target, &path)?;
@@ -129,37 +172,6 @@ impl Workspace {
             tx.commit()?;
             self.changed_path(&path);
             seen.insert(file_id);
-            changes += 1;
-        }
-        let previous = {
-            let mut statement = self
-                .db
-                .prepare("SELECT file_id,path FROM sync_observed WHERE deleted=0")?;
-            let rows = statement
-                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            rows
-        };
-        for (file_id, path) in previous {
-            if seen.contains(&file_id)
-                || !self.sync_path_enabled(&path)?
-                || self.resolve(&path)?.exists()
-            {
-                continue;
-            }
-            let operation = Uuid::new_v4().to_string();
-            let tx = self.db.transaction()?;
-            tx.execute(
-                "UPDATE files SET deleted=1,revision=revision+1 WHERE id=?1",
-                [&file_id],
-            )?;
-            tx.execute("INSERT INTO outbox SELECT ?1,id,revision,path,'','delete',X'','pending' FROM files WHERE id=?2",params![operation,file_id])?;
-            tx.execute(
-                "UPDATE sync_observed SET deleted=1 WHERE file_id=?1",
-                [&file_id],
-            )?;
-            tx.commit()?;
-            self.changed_path(&path);
             changes += 1;
         }
         Ok(changes)

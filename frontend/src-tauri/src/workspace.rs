@@ -73,6 +73,13 @@ pub struct Document {
     pub content: String,
 }
 
+struct AliasDescendant {
+    file_id: String,
+    old_path: String,
+    new_path: String,
+    disk_identity: Option<String>,
+}
+
 pub fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -154,10 +161,10 @@ impl Workspace {
         let db = Connection::open(db_path)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 14 {
+        if version > 15 {
             return Err(HostError::new("SCHEMA_INCOMPATIBLE"));
         }
-        if (1..14).contains(&version) {
+        if (1..15).contains(&version) {
             // 模式所有权更改之前独立、完整的 SQLite 备份。
             let backup = managed.join(format!("host-schema{version}-{}.sqlite3", Uuid::new_v4()));
             db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
@@ -165,6 +172,7 @@ impl Workspace {
         db.execute_batch("BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS identity (id TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY,path TEXT UNIQUE NOT NULL,hash TEXT NOT NULL,revision INTEGER NOT NULL,deleted INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS file_disk_identity (file_id TEXT PRIMARY KEY,identity TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS journal (operation_id TEXT PRIMARY KEY,file_id TEXT NOT NULL,path TEXT NOT NULL,expected TEXT NOT NULL,content BLOB NOT NULL,origin TEXT NOT NULL,state TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS file_ops (id TEXT PRIMARY KEY,kind TEXT NOT NULL,path TEXT NOT NULL,destination TEXT NOT NULL,hash TEXT NOT NULL,content BLOB NOT NULL,state TEXT NOT NULL DEFAULT 'pending');
             CREATE TABLE IF NOT EXISTS directory_ops(id TEXT PRIMARY KEY,path TEXT NOT NULL,destination TEXT NOT NULL,kind TEXT NOT NULL,manifest TEXT NOT NULL,operations TEXT NOT NULL,state TEXT NOT NULL);
@@ -243,7 +251,7 @@ impl Workspace {
         if version < 7 {
             db.execute_batch("INSERT OR IGNORE INTO sync_observed SELECT f.id,COALESCE((SELECT o.path FROM outbox o WHERE o.file_id=f.id AND o.state IN ('pending','queued') ORDER BY rowid DESC LIMIT 1),(SELECT h.path FROM sync_heads h JOIN sync_bindings b ON h.binding=b.id WHERE h.file_id=f.id AND b.state='active'),f.path),COALESCE((SELECT o.hash FROM outbox o WHERE o.file_id=f.id AND o.state IN ('pending','queued') ORDER BY rowid DESC LIMIT 1),(SELECT h.hash FROM sync_heads h JOIN sync_bindings b ON h.binding=b.id WHERE h.file_id=f.id AND b.state='active'),f.hash),f.deleted FROM files f;")?;
         }
-        db.execute_batch("UPDATE sync_attempts SET outcome=CASE WHEN EXISTS(SELECT 1 FROM sync_jobs j WHERE j.binding=sync_attempts.binding AND j.operation_id=sync_attempts.operation_id AND j.state='acked') THEN 'succeeded' ELSE 'interrupted' END WHERE outcome='running'; PRAGMA user_version=14; COMMIT;")?;
+        db.execute_batch("UPDATE sync_attempts SET outcome=CASE WHEN EXISTS(SELECT 1 FROM sync_jobs j WHERE j.binding=sync_attempts.binding AND j.operation_id=sync_attempts.operation_id AND j.state='acked') THEN 'succeeded' ELSE 'interrupted' END WHERE outcome='running'; PRAGMA user_version=15; COMMIT;")?;
         let vault_id: String = db
             .query_row("SELECT id FROM identity", [], |r| r.get(0))
             .optional()?
@@ -295,6 +303,88 @@ impl Workspace {
             }
         }
         Ok(path)
+    }
+
+    pub(crate) fn paths_alias(&self, first: &str, second: &str) -> Result<bool> {
+        let first = self.resolve(first)?;
+        let second = self.resolve(second)?;
+        Ok(first.exists() && second.exists() && first.canonicalize()? == second.canonicalize()?)
+    }
+
+    fn rename_alias_path(&self, destination: &str) -> Result<()> {
+        // Each prefix can have obsolete casing; renaming only the leaf would
+        // leave a remote directory rename invisible in the actual file tree.
+        let mut requested = self.root.clone();
+        for component in Path::new(destination).components() {
+            requested.push(component);
+            let actual = requested.canonicalize()?;
+            if actual != requested {
+                fs::rename(actual, &requested)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn alias_descendant_paths(
+        &self,
+        source: &str,
+        destination: &str,
+        file_id: &str,
+    ) -> Result<Vec<AliasDescendant>> {
+        let mut aliases = Vec::new();
+        let mut old_prefix = String::new();
+        let mut new_prefix = String::new();
+        let old_parts: Vec<_> = source.split('/').collect();
+        let new_parts: Vec<_> = destination.split('/').collect();
+        for (old, new) in old_parts.iter().zip(&new_parts).take(old_parts.len() - 1) {
+            if !old_prefix.is_empty() {
+                old_prefix.push('/');
+                new_prefix.push('/');
+            }
+            old_prefix.push_str(old);
+            new_prefix.push_str(new);
+            if old_prefix != new_prefix && self.paths_alias(&old_prefix, &new_prefix)? {
+                aliases.push(format!("{old_prefix}/"));
+            }
+        }
+        if aliases.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut statement = self
+            .db
+            .prepare("SELECT id,path FROM files WHERE deleted=0 AND id<>?1")?;
+        let rows = statement.query_map([file_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut changes = Vec::new();
+        for row in rows {
+            let (id, old) = row?;
+            if !aliases.iter().any(|prefix| old.starts_with(prefix)) {
+                continue;
+            }
+            let target = self.resolve(&old)?;
+            if !target.is_file() {
+                continue;
+            }
+            let actual = target.canonicalize()?;
+            let actual = actual
+                .strip_prefix(&self.root)
+                .map_err(|_| HostError::new("UNSAFE_PATH"))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            if actual != old {
+                // The durable directory-alias operation establishes the same
+                // logical path, including an editor's atomic replacement.
+                // Leave the hash check to normal discovery of local edits.
+                changes.push(AliasDescendant {
+                    file_id: id,
+                    old_path: old,
+                    new_path: actual,
+                    disk_identity: watch::disk_identity(&target, &fs::metadata(&target)?)?,
+                });
+            }
+        }
+        Ok(changes)
     }
 
     pub(crate) fn entry(&self, path: &str) -> Result<Option<Entry>> {
@@ -363,6 +453,16 @@ impl Workspace {
     }
 
     pub fn read(&mut self, path: &str) -> Result<Document> {
+        // Resolve an obsolete Windows spelling to the actual directory entry,
+        // then reconcile a structural change before read can create an identity.
+        let actual = self.resolve(path)?.canonicalize()?;
+        let actual = actual
+            .strip_prefix(&self.root)
+            .map_err(|_| HostError::new("UNSAFE_PATH"))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let path = actual.as_str();
+        self.refresh_read_identity(path)?;
         let content = fs::read_to_string(self.resolve(path)?)?;
         if crate::canvas_contract::is_canvas(path) {
             crate::canvas_contract::validate(content.as_bytes())?;
@@ -716,9 +816,15 @@ impl Workspace {
             #[cfg(unix)]
             File::open(parent)?.sync_all()?;
         }
+        let disk_identity = watch::disk_identity(&target, &fs::metadata(&target)?)?;
         // 文件成功但 DB 未提交时，重启凭 journal 补齐同一 operation_id，避免丢 outbox。
         let tx = self.db.transaction()?;
         tx.execute("INSERT INTO files VALUES (?1,?2,?3,1,0) ON CONFLICT(path) DO UPDATE SET hash=excluded.hash,revision=files.revision+1,deleted=0", params![file_id,path,digest])?;
+        if let Some(identity) = disk_identity {
+            tx.execute("INSERT INTO file_disk_identity VALUES (?1,?2) ON CONFLICT(file_id) DO UPDATE SET identity=excluded.identity", params![file_id,identity])?;
+        } else {
+            tx.execute("DELETE FROM file_disk_identity WHERE file_id=?1", [file_id])?;
+        }
         tx.execute("INSERT INTO sync_observed VALUES (?1,?2,?3,0) ON CONFLICT(file_id) DO UPDATE SET path=excluded.path,hash=excluded.hash,deleted=0",params![file_id,path,digest])?;
         if origin == "local" {
             tx.execute("INSERT OR IGNORE INTO outbox SELECT ?1,id,revision,path,hash,'put',?2,'pending' FROM files WHERE path=?3", params![operation_id,b"".as_slice(),path])?;
@@ -1155,7 +1261,10 @@ impl Workspace {
             }
             return Ok(id.to_owned());
         }
-        if kind == "rename" && self.resolve(destination)?.exists() {
+        if kind == "rename"
+            && self.resolve(destination)?.exists()
+            && (path == destination || !self.paths_alias(path, destination)?)
+        {
             return Err(HostError::new("PATH_CONFLICT"));
         }
         let source = self.resolve(path)?;
@@ -1249,8 +1358,12 @@ impl Workspace {
             tx.commit()?;
             return Err(HostError::new("RECOVERY_CONFLICT"));
         }
-        // 删除来源后，持久载荷仍保持可用。
-        if !target.exists() {
+        let case_rename = kind == "rename" && self.paths_alias(&path, &destination)?;
+        // Removing the old spelling after a Windows case-only rename would
+        // remove the destination itself. Rename the same object directly.
+        if case_rename {
+            self.rename_alias_path(&destination)?;
+        } else if !target.exists() {
             let parent = target
                 .parent()
                 .ok_or_else(|| HostError::new("UNSAFE_PATH"))?;
@@ -1261,11 +1374,25 @@ impl Workspace {
             temp.persist_noclobber(&target)
                 .map_err(|_| HostError::new("PATH_CONFLICT"))?;
         }
-        if source.exists() {
+        if !case_rename && source.exists() {
             fs::remove_file(source)?;
         }
+        let disk_identity = if kind == "rename" {
+            watch::disk_identity(&target, &fs::metadata(&target)?)?
+        } else {
+            None
+        };
+        let alias_descendants = if case_rename {
+            self.alias_descendant_paths(&path, &destination, &previous.file_id)?
+        } else {
+            Vec::new()
+        };
         let tx = self.db.transaction()?;
         if kind == "rename" {
+            tx.execute(
+                "UPDATE files SET path='.ainote/retired/' || id WHERE path=?1 AND id<>?2 AND deleted=1",
+                params![destination, previous.file_id],
+            )?;
             tx.execute(
                 "UPDATE files SET path=?1,revision=revision+1 WHERE id=?2",
                 params![destination, previous.file_id],
@@ -1280,6 +1407,44 @@ impl Workspace {
             )?;
             if origin == "local" {
                 tx.execute("INSERT INTO outbox SELECT ?1,id,revision,path,'','delete',X'','pending' FROM files WHERE id=?2", params![id,previous.file_id])?;
+            }
+        }
+        if let Some(identity) = disk_identity {
+            tx.execute("INSERT INTO file_disk_identity VALUES (?1,?2) ON CONFLICT(file_id) DO UPDATE SET identity=excluded.identity", params![previous.file_id,identity])?;
+        } else if kind == "rename" {
+            tx.execute(
+                "DELETE FROM file_disk_identity WHERE file_id=?1",
+                [&previous.file_id],
+            )?;
+        }
+        for AliasDescendant {
+            file_id,
+            old_path,
+            new_path,
+            disk_identity,
+        } in alias_descendants
+        {
+            tx.execute("UPDATE files SET path='.ainote/retired/' || id WHERE path=?1 AND id<>?2 AND deleted=1", params![new_path,file_id])?;
+            tx.execute(
+                "UPDATE files SET path=?2,revision=revision+1 WHERE id=?1 AND path=?3",
+                params![file_id, new_path, old_path],
+            )?;
+            if let Some(identity) = disk_identity {
+                tx.execute("INSERT INTO file_disk_identity VALUES (?1,?2) ON CONFLICT(file_id) DO UPDATE SET identity=excluded.identity", params![file_id,identity])?;
+            } else {
+                tx.execute(
+                    "DELETE FROM file_disk_identity WHERE file_id=?1",
+                    [&file_id],
+                )?;
+            }
+            if origin == "remote" {
+                // The same remote directory rename changed these spellings too.
+                // Preserve observed hashes and pending local writes, but do not
+                // echo unchanged siblings as local renames after a disconnect.
+                tx.execute(
+                    "UPDATE sync_observed SET path=?2 WHERE file_id=?1 AND path=?3 AND deleted=0",
+                    params![file_id, new_path, old_path],
+                )?;
             }
         }
         tx.execute("INSERT INTO sync_observed SELECT id,path,hash,deleted FROM files WHERE id=?1 ON CONFLICT(file_id) DO UPDATE SET path=excluded.path,hash=excluded.hash,deleted=excluded.deleted",[&previous.file_id])?;
@@ -1870,7 +2035,7 @@ mod tests {
             ws.db
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            14
+            15
         );
         for column in ["retire_id", "restore_id"] {
             assert!(ws
@@ -1928,7 +2093,7 @@ mod tests {
             ws.db
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            14
+            15
         );
         let backup = fs::read_dir(dir.path().join(".ainote"))
             .unwrap()

@@ -8,16 +8,19 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 mod windows;
 #[cfg(windows)]
 use windows::NativeWatcher;
+#[path = "workspace_identity.rs"]
+mod identity;
+#[cfg(test)]
+#[path = "workspace_identity_tests.rs"]
+mod identity_tests;
 #[cfg(not(windows))]
 type NativeWatcher = RecommendedWatcher;
-use rusqlite::params;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use uuid::Uuid;
 
 const MAX_HINTS: usize = 4096;
 const VERIFY_INTERVAL: Duration = Duration::from_secs(300);
@@ -133,7 +136,7 @@ impl Stamp {
 }
 
 #[cfg(windows)]
-fn disk_identity(path: &Path, _: &fs::Metadata) -> Result<Option<String>> {
+pub(super) fn disk_identity(path: &Path, _: &fs::Metadata) -> Result<Option<String>> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
@@ -144,17 +147,26 @@ fn disk_identity(path: &Path, _: &fs::Metadata) -> Result<Option<String>> {
         return Ok(None);
     }
     Ok(Some(format!(
-        "{}:{}:{}",
-        info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow
+        "{}:{}:{}:{}:{}",
+        info.dwVolumeSerialNumber,
+        info.nFileIndexHigh,
+        info.nFileIndexLow,
+        info.ftCreationTime.dwHighDateTime,
+        info.ftCreationTime.dwLowDateTime
     )))
 }
 #[cfg(unix)]
-fn disk_identity(_: &Path, metadata: &fs::Metadata) -> Result<Option<String>> {
+pub(super) fn disk_identity(_: &Path, metadata: &fs::Metadata) -> Result<Option<String>> {
     use std::os::unix::fs::MetadataExt;
-    Ok(Some(format!("{}:{}", metadata.dev(), metadata.ino())))
+    // An inode may be reused after deletion. Without a birth time there is not
+    // enough evidence to persist an identity across process lifetimes.
+    Ok(metadata
+        .created()
+        .ok()
+        .map(|created| format!("{}:{}:{created:?}", metadata.dev(), metadata.ino())))
 }
 #[cfg(not(any(windows, unix)))]
-fn disk_identity(_: &Path, _: &fs::Metadata) -> Result<Option<String>> {
+pub(super) fn disk_identity(_: &Path, _: &fs::Metadata) -> Result<Option<String>> {
     Ok(None)
 }
 
@@ -317,6 +329,10 @@ impl Workspace {
         full: bool,
         enumerate: bool,
     ) -> Result<()> {
+        // Structural hints need a metadata enumeration: the old-name event can
+        // arrive alone, and Windows still resolves an obsolete case spelling.
+        // Content edits keep the incremental path and idle polls remain free.
+        let enumerate = enumerate || self.identity_rescan_needed(dirty)?;
         if full {
             self.cache.sync_digests.clear();
             self.cache.stats.full_scans += 1;
@@ -422,52 +438,18 @@ impl Workspace {
                 next.insert(path, cached.unwrap().clone());
                 continue;
             }
-            let digest = if rehash {
-                let value = crate::payloads::hash_file(&target)?;
-                self.cache.stats.hashed_files += 1;
-                self.cache.stats.hashed_bytes += stamp.size;
-                value
-            } else {
-                cached.unwrap().entry.hash.clone()
+            let digest = crate::payloads::hash_file(&target)?;
+            self.cache.stats.hashed_files += 1;
+            self.cache.stats.hashed_bytes += stamp.size;
+            let entry = Entry {
+                file_id: String::new(),
+                path: path.clone(),
+                hash: digest,
+                revision: 0,
+                deleted: false,
+                is_folder: false,
+                updated_at: Some(modified),
             };
-            let mut previous = self.entry(&path)?;
-            // Preserve identities for unambiguous external OS renames, never by hash alone.
-            if previous.is_none() && stamp.identity.is_some() {
-                let candidates: Vec<_> = self
-                    .cache
-                    .entries
-                    .iter()
-                    .filter(|(old, item)| {
-                        *old != &path
-                            && !self.root.join(old).exists()
-                            && item
-                                .stamp
-                                .as_ref()
-                                .is_some_and(|old_stamp| old_stamp.identity == stamp.identity)
-                    })
-                    .collect();
-                if candidates.len() == 1 {
-                    let (old, item) = candidates[0];
-                    self.db.execute(
-                        "UPDATE files SET path=?1 WHERE id=?2 AND path=?3",
-                        params![path, item.entry.file_id, old],
-                    )?;
-                    previous = self.entry(&path)?;
-                }
-            }
-            if previous
-                .as_ref()
-                .is_none_or(|entry| entry.hash != digest || entry.deleted)
-            {
-                let id = previous
-                    .as_ref()
-                    .map_or_else(|| Uuid::new_v4().to_string(), |entry| entry.file_id.clone());
-                self.db.execute("INSERT INTO files VALUES (?1,?2,?3,1,0) ON CONFLICT(path) DO UPDATE SET hash=excluded.hash,revision=files.revision+1,deleted=0", params![id,path,digest])?;
-            }
-            let mut entry = self
-                .entry(&path)?
-                .ok_or_else(|| HostError::new("FILE_NOT_FOUND"))?;
-            entry.updated_at = Some(modified);
             next.insert(
                 path,
                 CachedEntry {
@@ -476,19 +458,7 @@ impl Workspace {
                 },
             );
         }
-        for old in self
-            .cache
-            .entries
-            .keys()
-            .filter(|path| !next.contains_key(*path))
-        {
-            if !self.cache.entries[old].entry.is_folder {
-                self.db.execute(
-                    "UPDATE files SET deleted=1,revision=revision+1 WHERE path=?1 AND deleted=0",
-                    [old],
-                )?;
-            }
-        }
+        self.reconcile_file_identities(&mut next, enumerate)?;
         let all: BTreeSet<_> = self
             .cache
             .entries

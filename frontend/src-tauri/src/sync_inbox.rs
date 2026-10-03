@@ -313,7 +313,8 @@ impl Workspace {
         let target_collision = local_path
             .as_deref()
             .is_some_and(|previous| previous != revision.path)
-            && self.resolve(&revision.path)?.exists();
+            && self.resolve(&revision.path)?.exists()
+            && !self.paths_alias(local_path.as_deref().unwrap(), &revision.path)?;
         let conflict = queued
             || (local_path.is_none() && local.exists())
             || (local_path.is_some() && head.as_deref() != Some(current.as_str()))
