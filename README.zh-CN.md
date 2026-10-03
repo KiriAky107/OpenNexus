@@ -19,7 +19,7 @@
     <a href="https://github.com/KiriAky107/OpenNexus/releases">发布日志</a>
   </p>
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.5.9--beta1-5865f2?style=flat-square" alt="版本" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.5.9--beta2-5865f2?style=flat-square" alt="版本" /></a>
     <a href="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml"><img src="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="平台" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="桌面端 Tauri" />
@@ -33,7 +33,7 @@
 
 ---
 
-当前版本：[v0.5.9-beta1](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta1)。
+当前版本：[v0.5.9-beta2](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta2)。
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 桌面编辑器：精简文件操作、大纲、公式与函数图" width="95%" />
@@ -67,6 +67,17 @@
 
 ---
 
+## 0.5.9-beta2 更新
+
+- **正文链接与 AI 引用**：通过不同路径格式打开同一笔记时，不再误报文件已移动。
+- **编辑与文件切换**：保留文件读取或保存期间继续输入的内容；只有最后一次有效打开操作能更新标签、正文与定位。
+- **外部重命名**：仅修改文件名大小写、重新使用已删除文件名时，保留原文件身份并同步更新关联状态。
+- **聊天并发重试**：一次性准备选中的分支、模型上下文与响应，避免并发编辑把消息接到其他请求的父链。
+- **Benchmark 写入**：数据集只保存一次，逐条追加样本结果与进度，减少重复写入，同时保留报告与重启恢复。
+- **长代码块**：语法高亮转入后台 Worker，减少整块分词对输入的阻塞，保留选择、复制与撤销操作。
+
+性能测量与原生验证见 [beta2 验证记录](frontend/docs/beta2-acceptance.md)。
+
 ## 核心亮点
 
 - 📁 **开放的知识库文件**：笔记使用 Markdown，结构化画布使用 JSON Canvas，引用的图片仍是普通知识库文件。移动文件保留稳定身份与真实扩展名。
@@ -89,10 +100,10 @@
 
 ### Windows 桌面端安装（推荐）
 
-1. 前往 [0.5.9-beta1 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta1) 下载 Windows x64 安装包。本地构建可按[打包发布](#打包发布)步骤进行。
+1. 前往 [0.5.9-beta2 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta2) 下载 Windows x64 安装包。本地构建可按[打包发布](#打包发布)步骤进行。
 2. *(可选)* 通过 PowerShell 校验 SHA-256 完整性：
 ```powershell
-   Get-FileHash .\OpenNexus_0.5.9-beta1_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.5.9-beta2_x64-setup.exe -Algorithm SHA256
    # 与同一 Release 中的 SHA256SUMS.txt 比对。
 
 ```
@@ -215,7 +226,7 @@ flowchart LR
 
 对比将质量与耗时成本分别展示。“只看退步”包括 Agent 单项检查退步，即使两次运行总体都失败也能发现。展开用例可查看原始证据与配置差异；页面没有活动运行时，可点击“刷新”发现其他窗口完成的运行。
 
-性能测量与原生验证见 [beta1 验证记录](frontend/docs/beta1-acceptance.md)。
+性能测量与原生验证见 [beta2 验证记录](frontend/docs/beta2-acceptance.md)。
 
 ---
 
@@ -419,11 +430,11 @@ pnpm desktop:build
 
 ```
 
-构建完成的安装包将输出至 `frontend/src-tauri/target/release/bundle/nsis/`。[0.5.9-beta1 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta1) 同时提供固定发布提交的源码压缩包与 SHA-256 清单。
+构建完成的安装包将输出至 `frontend/src-tauri/target/release/bundle/nsis/`。[0.5.9-beta2 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta2) 同时提供固定发布提交的源码压缩包与 SHA-256 清单。
 
 Windows 安装包会在 `OpenNexus.exe` 同目录包含匹配架构、带微软签名的 `WebView2Loader.dll`，打包前从依赖锁定的 WebView2 SDK 准备。WebView2 Runtime 安装程序不会替应用提供这个 DLL。内嵌引导程序会在需要时安装 Runtime，仍需联网。解压安装包后可运行 `python scripts/verify-windows-loader.py <安装包解压目录>`，检查主程序与 Loader 架构及 SDK 哈希，避免构建机上已有的 SDK 掩盖漏打包问题。
 
-[GitHub Actions CI](https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml) 在 `main` 推送和 Pull Request 时执行文档、后端、前端和 Rust 检查。手动触发的 [Windows 打包工作流](https://github.com/KiriAky107/OpenNexus/actions/workflows/windows-rc.yml) 使用同一基础打包配置构建 MSVC 安装包并校验解包后的实际内容。普通未签名构建无需签名秘密；选择签名构建时需配置 Windows 证书和 Core 签名密钥。产物和验证报告可从各次运行页面下载。
+[GitHub Actions CI](https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml) 在 `main` 推送和 Pull Request 时执行文档、后端、前端和 Rust 检查，包括 Windows 文件监听、重命名身份与同步回归。手动触发的 [Windows 打包工作流](https://github.com/KiriAky107/OpenNexus/actions/workflows/windows-rc.yml) 使用同一基础打包配置构建 MSVC 安装包并校验解包后的实际内容。普通未签名构建无需签名秘密；选择签名构建时需配置 Windows 证书和 Core 签名密钥。产物和验证报告可从各次运行页面下载。
 
 ---
 

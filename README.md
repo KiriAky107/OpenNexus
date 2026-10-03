@@ -20,7 +20,7 @@
   </p>
 
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.5.9--beta1-5865f2?style=flat-square" alt="Version" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.5.9--beta2-5865f2?style=flat-square" alt="Version" /></a>
     <a href="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml"><img src="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="Platform" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="Desktop Tauri" />
@@ -34,7 +34,7 @@
 
 ---
 
-Current release: [v0.5.9-beta1](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta1).
+Current release: [v0.5.9-beta2](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta2).
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus desktop editor with compact file controls, outline, formulas, and a function plot" width="95%" />
@@ -68,6 +68,17 @@ Current release: [v0.5.9-beta1](https://github.com/KiriAky107/OpenNexus/releases
 
 ---
 
+## What's New in 0.5.9-beta2
+
+- **Note links and AI citations**: Opening the same note through different path formats no longer reports that the file has moved.
+- **Editing during navigation**: Preserve text entered while another file is loading or a save is pending. Only the latest valid navigation updates the tab, document and location.
+- **External renames**: Preserve file identity when changing filename case or reusing a deleted filename, with matching sync updates.
+- **Concurrent chat retries**: Prepare the chosen branch, model context and response together, preventing concurrent edits from mixing parent chains.
+- **Benchmark writes**: Save the dataset once and append case results with progress updates, reducing repeated writes while retaining reports and restart recovery.
+- **Long code blocks**: Highlight syntax in a background Worker so typing does not wait for full-document tokenization; selection, copy and undo remain available.
+
+Measurements and native checks are in the [beta2 validation record](frontend/docs/beta2-acceptance.md).
+
 ## Highlights
 
 - 📁 **Portable Vault Files**: Notes use Markdown, structured maps use JSON Canvas, and referenced images remain ordinary vault files. File moves preserve stable identities and the original extensions.
@@ -90,10 +101,10 @@ Current release: [v0.5.9-beta1](https://github.com/KiriAky107/OpenNexus/releases
 
 ### Windows Desktop (Recommended)
 
-1. Download the Windows x64 installer from the [0.5.9-beta1 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta1). For a local build, follow [Packaging](#packaging).
+1. Download the Windows x64 installer from the [0.5.9-beta2 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta2). For a local build, follow [Packaging](#packaging).
 2. *(Optional)* Verify integrity via PowerShell:
 ```powershell
-   Get-FileHash .\OpenNexus_0.5.9-beta1_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.5.9-beta2_x64-setup.exe -Algorithm SHA256
    # Compare with SHA256SUMS.txt from the same release.
 
 ```
@@ -217,7 +228,7 @@ Search a saved conversation to locate a message or visible operation. In **Bench
 
 The comparison separates quality from time and cost. **Regressions only** includes individual failed Agent checks even when both runs failed overall. Expand a case to inspect its original evidence and configuration differences. Use **Refresh** to discover runs completed elsewhere when this page has no active run.
 
-For performance measurements and native checks, see the [beta1 validation record](frontend/docs/beta1-acceptance.md).
+For performance measurements and native checks, see the [beta2 validation record](frontend/docs/beta2-acceptance.md).
 
 ---
 
@@ -421,11 +432,11 @@ pnpm desktop:build
 
 ```
 
-The output installer will be generated in `frontend/src-tauri/target/release/bundle/nsis/`. The [0.5.9-beta1 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta1) also provides a source archive of its fixed release commit and a SHA-256 list.
+The output installer will be generated in `frontend/src-tauri/target/release/bundle/nsis/`. The [0.5.9-beta2 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta2) also provides a source archive of its fixed release commit and a SHA-256 list.
 
 Windows installers include the architecture-matched, Microsoft-signed `WebView2Loader.dll` beside `OpenNexus.exe`, resolved from the locked WebView2 SDK before bundling. The WebView2 Runtime installer does not supply this app-side DLL. The embedded bootstrapper installs the Runtime if needed and still requires internet access. To check an extracted installer, run `python scripts/verify-windows-loader.py <extracted-installer-directory>`; this checks the Host/Loader architecture and SDK hash, so an SDK installed on the build machine cannot hide a missing DLL.
 
-[GitHub Actions CI](https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml) checks documentation, backend, frontend and Rust on pushes to `main` and pull requests. The manually triggered [Windows package workflow](https://github.com/KiriAky107/OpenNexus/actions/workflows/windows-rc.yml) builds an MSVC installer with the same bundle configuration and verifies its extracted payload. Unsigned builds need no signing secrets; selecting a signed build requires the configured Windows certificate and Core signing key. Artifacts and verification reports are available on each workflow run.
+[GitHub Actions CI](https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml) checks documentation, backend, frontend and Rust on pushes to `main` and pull requests, including Windows file-watcher, rename-identity and sync regressions. The manually triggered [Windows package workflow](https://github.com/KiriAky107/OpenNexus/actions/workflows/windows-rc.yml) builds an MSVC installer with the same bundle configuration and verifies its extracted payload. Unsigned builds need no signing secrets; selecting a signed build requires the configured Windows certificate and Core signing key. Artifacts and verification reports are available on each workflow run.
 
 ---
 
