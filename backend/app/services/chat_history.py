@@ -12,6 +12,7 @@ from app.database.db import connect_knowledge as connect, transaction
 from app.errors import ApiError
 
 _ANY_LEAF = object()
+_ACTIVE_LEAF = object()
 
 
 def _now() -> datetime:
@@ -123,22 +124,30 @@ def append_message(
     with closing(connect()) as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            if expected_leaf is not _ANY_LEAF:
-                row = conn.execute('SELECT active_leaf FROM chat_conversations WHERE conversation_id=?', (conversation_id,)).fetchone()
-                if row is None:
-                    raise ApiError(404, 'CONVERSATION_NOT_FOUND', '当前知识库中找不到该会话。')
-                if row['active_leaf'] != expected_leaf:
-                    raise ApiError(409, 'CHAT_BRANCH_CHANGED', '会话分支已变化，请重新加载后发送。')
+            _check_expected_leaf(conn, conversation_id, expected_leaf)
             _append_message_in_transaction(
                 conn, conversation_id, message_id=message_id, role=role, content=content,
                 title=clean_title, thinking=thinking, citations=citations, tool_calls=tool_calls,
-                usage=usage, now=now, activity=activity, parent_message_id=parent_message_id, workspace_context=workspace_context, attachments=attachments, context_captured=context_captured,
+                usage=usage, now=now, activity=activity,
+                # Preserve the legacy append API's None-as-current-parent behavior.
+                parent_message_id=parent_message_id if parent_message_id is not None else _ACTIVE_LEAF,
+                workspace_context=workspace_context, attachments=attachments, context_captured=context_captured,
             )
             conn.execute("COMMIT")
         except BaseException:
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
             raise
+
+
+def _check_expected_leaf(conn, conversation_id, expected_leaf):
+    if expected_leaf is _ANY_LEAF:
+        return
+    row = conn.execute('SELECT active_leaf FROM chat_conversations WHERE conversation_id=?', (conversation_id,)).fetchone()
+    if row is None:
+        raise ApiError(404, 'CONVERSATION_NOT_FOUND', '当前知识库中找不到该会话。')
+    if row['active_leaf'] != expected_leaf:
+        raise ApiError(409, 'CHAT_BRANCH_CHANGED', '会话分支已变化，请重新加载后发送。')
 
 
 def _append_message_in_transaction(
@@ -155,7 +164,7 @@ def _append_message_in_transaction(
     usage: dict[str, Any] | None,
     now: str,
     activity: list[dict[str, Any]] | None = None,
-    parent_message_id: str | None = None,
+    parent_message_id: str | None | object = _ACTIVE_LEAF,
     workspace_context: dict | None = None,
     attachments: list[str] | None = None,
     context_captured: bool = False,
@@ -191,7 +200,8 @@ def _append_message_in_transaction(
         (conversation_id,),
     ).fetchone()[0]
     active_leaf = conn.execute('SELECT active_leaf FROM chat_conversations WHERE conversation_id=?', (conversation_id,)).fetchone()[0]
-    parent = parent_message_id if parent_message_id is not None else active_leaf
+    # An explicit None is a root, including while editing the first user turn.
+    parent = active_leaf if parent_message_id is _ACTIVE_LEAF else parent_message_id
     if parent is not None and not conn.execute('SELECT 1 FROM chat_messages WHERE message_id=? AND conversation_id=?', (parent, conversation_id)).fetchone():
         raise ApiError(409, 'CHAT_PARENT_MISSING', 'Parent message no longer exists')
     conn.execute(
@@ -216,12 +226,16 @@ def _append_message_in_transaction(
 
 
 def prepare_retry(conversation_id: str, message_id: str):
-    with closing(connect()) as conn, transaction(conn):
-        row = conn.execute('SELECT * FROM chat_messages WHERE conversation_id=? AND message_id=?', (conversation_id, message_id)).fetchone()
-        if row is None or row['role'] not in ('user', 'assistant'):
-            raise ApiError(404, 'MESSAGE_NOT_FOUND', 'Message not found')
-        conn.execute("UPDATE chat_conversations SET active_leaf=?,active_response_id='' WHERE conversation_id=?", (row['parent_message_id'], conversation_id))
-        return dict(row)
+    with closing(connect()) as conn, transaction(conn, immediate=True):
+        return _prepare_retry_in_transaction(conn, conversation_id, message_id)
+
+
+def _prepare_retry_in_transaction(conn, conversation_id, message_id):
+    row = conn.execute('SELECT * FROM chat_messages WHERE conversation_id=? AND message_id=?', (conversation_id, message_id)).fetchone()
+    if row is None or row['role'] not in ('user', 'assistant'):
+        raise ApiError(404, 'MESSAGE_NOT_FOUND', 'Message not found')
+    conn.execute("UPDATE chat_conversations SET active_leaf=?,active_response_id='' WHERE conversation_id=?", (row['parent_message_id'], conversation_id))
+    return dict(row)
 
 
 _READ_ONLY_CHAT_TOOLS = {
@@ -238,37 +252,41 @@ def retry_write_policy(conversation_id: str, message_id: str) -> str:
     Edited user messages keep the stricter read-only rule.
     """
     with closing(connect()) as conn:
-        target = conn.execute(
-            'SELECT role, parent_message_id FROM chat_messages WHERE conversation_id=? AND message_id=?',
-            (conversation_id, message_id),
-        ).fetchone()
-        if target is None or target['role'] != 'assistant':
+        return _retry_write_policy_in_transaction(conn, conversation_id, message_id)
+
+
+def _retry_write_policy_in_transaction(conn, conversation_id, message_id):
+    target = conn.execute(
+        'SELECT role, parent_message_id FROM chat_messages WHERE conversation_id=? AND message_id=?',
+        (conversation_id, message_id),
+    ).fetchone()
+    if target is None or target['role'] != 'assistant':
+        return 'read_only'
+    siblings = conn.execute(
+        'SELECT tool_calls_json FROM chat_messages WHERE conversation_id=? AND parent_message_id=? AND role=?',
+        (conversation_id, target['parent_message_id'], 'assistant'),
+    ).fetchall()
+    create_attempted = False
+    for sibling in siblings:
+        try:
+            calls = json.loads(sibling['tool_calls_json'])
+        except (TypeError, ValueError):
             return 'read_only'
-        siblings = conn.execute(
-            'SELECT tool_calls_json FROM chat_messages WHERE conversation_id=? AND parent_message_id=? AND role=?',
-            (conversation_id, target['parent_message_id'], 'assistant'),
-        ).fetchall()
-        create_attempted = False
-        for sibling in siblings:
-            try:
-                calls = json.loads(sibling['tool_calls_json'])
-            except (TypeError, ValueError):
+        if not isinstance(calls, list):
+            return 'read_only'
+        for call in calls:
+            if not isinstance(call, dict):
                 return 'read_only'
-            if not isinstance(calls, list):
+            name = call.get('name')
+            if name == 'agent.create':
+                create_attempted = True
+            elif name not in _READ_ONLY_CHAT_TOOLS:
                 return 'read_only'
-            for call in calls:
-                if not isinstance(call, dict):
-                    return 'read_only'
-                name = call.get('name')
-                if name == 'agent.create':
-                    create_attempted = True
-                elif name not in _READ_ONLY_CHAT_TOOLS:
-                    return 'read_only'
-        return 'create_only' if create_attempted else 'full'
+    return 'create_only' if create_attempted else 'full'
 
 
 def select_version(conversation_id: str, message_id: str):
-    with closing(connect()) as conn, transaction(conn):
+    with closing(connect()) as conn, transaction(conn, immediate=True):
         row = conn.execute('SELECT message_id FROM chat_messages WHERE conversation_id=? AND message_id=?', (conversation_id, message_id)).fetchone()
         if row is None:
             raise ApiError(404, 'MESSAGE_NOT_FOUND', 'Message not found')
@@ -282,8 +300,9 @@ def select_version(conversation_id: str, message_id: str):
 
 def reserve_response(conversation_id: str, message_id: str, expected_leaf=_ANY_LEAF):
     with closing(connect()) as conn, transaction(conn, immediate=True):
-        if expected_leaf is not _ANY_LEAF:
-            row = conn.execute('SELECT active_leaf FROM chat_conversations WHERE conversation_id=?', (conversation_id,)).fetchone()
-            if row is None or row['active_leaf'] != expected_leaf:
-                raise ApiError(409, 'CHAT_BRANCH_CHANGED', '会话分支已变化，请重新加载后发送。')
-        conn.execute('UPDATE chat_conversations SET active_response_id=? WHERE conversation_id=?', (message_id, conversation_id))
+        _reserve_response_in_transaction(conn, conversation_id, message_id, expected_leaf)
+
+
+def _reserve_response_in_transaction(conn, conversation_id, message_id, expected_leaf=_ANY_LEAF):
+    _check_expected_leaf(conn, conversation_id, expected_leaf)
+    conn.execute('UPDATE chat_conversations SET active_response_id=? WHERE conversation_id=?', (message_id, conversation_id))

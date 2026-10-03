@@ -124,14 +124,18 @@ def offset_messages(conversation_id, limit, offset):
 def generation_messages(conversation_id, expected_leaf):
     """Called on send only. A reading window never trims the model's saved context."""
     with closing(connect_knowledge()) as conn, transaction(conn):
-        leaf = _conversation(conn, conversation_id)
-        if leaf != expected_leaf:
-            raise ApiError(409, 'CHAT_BRANCH_CHANGED', '会话分支已变化，请重新加载后发送。')
-        _path(conn, conversation_id, leaf)
-        rows = conn.execute('''SELECT m.role,m.content,m.thinking FROM chat_window_path p
-                              JOIN chat_messages m USING(message_id) ORDER BY p.position''').fetchall()
-        return [Message(role=row['role'], content=row['content'],
-                        reasoning_content=row['thinking'] if row['role'] == 'assistant' else None) for row in rows]
+        return _generation_messages_in_transaction(conn, conversation_id, expected_leaf)
+
+
+def _generation_messages_in_transaction(conn, conversation_id, expected_leaf):
+    leaf = _conversation(conn, conversation_id)
+    if leaf != expected_leaf:
+        raise ApiError(409, 'CHAT_BRANCH_CHANGED', '会话分支已变化，请重新加载后发送。')
+    _path(conn, conversation_id, leaf)
+    rows = conn.execute('''SELECT m.role,m.content,m.thinking FROM chat_window_path p
+                          JOIN chat_messages m USING(message_id) ORDER BY p.position''').fetchall()
+    return [Message(role=row['role'], content=row['content'],
+                    reasoning_content=row['thinking'] if row['role'] == 'assistant' else None) for row in rows]
 
 
 def prepare_request(request, user_message_id, assistant_message_id):
@@ -139,34 +143,47 @@ def prepare_request(request, user_message_id, assistant_message_id):
     conversation = request.conversation_id
     if request.use_saved_history and not conversation:
         raise ApiError(400, 'CHAT_CONVERSATION_REQUIRED', '请先创建会话。')
+    if request.retry_message_id and not conversation:
+        raise ApiError(400, 'CHAT_CONVERSATION_REQUIRED', 'Retry requires a saved conversation')
     policy = 'full'
-    regenerate = False
-    if request.retry_message_id:
-        if not conversation:
-            raise ApiError(400, 'CHAT_CONVERSATION_REQUIRED', 'Retry requires a saved conversation')
-        policy = history.retry_write_policy(conversation, request.retry_message_id)
-        target = history.prepare_retry(conversation, request.retry_message_id)
-        regenerate = target['role'] == 'assistant'
-        if regenerate:
-            user_message_id = target['parent_message_id']
     if conversation:
         user = next((message for message in reversed(request.messages)
                      if message.role.value == 'user' and message.content.strip()), None)
-        if request.use_saved_history and not regenerate and user is None:
-            raise ApiError(400, 'CHAT_USER_REQUIRED', '请提供用户消息。')
-        if user is not None and not (request.use_saved_history and regenerate):
-            guard = {'expected_leaf': request.expected_branch_leaf} if request.use_saved_history and not request.retry_message_id else {}
-            history.append_message(conversation, message_id=user_message_id, role='user', content=user.content,
-                                   title=request.conversation_title or user.content[:30],
-                                   workspace_context=request.workspace_context.model_dump() if request.workspace_context else None,
-                                   attachments=request.attachments, **guard)
-        if request.use_saved_history:
-            messages = generation_messages(conversation, user_message_id)
-            if not messages or messages[-1].role.value != 'user':
+        # Hold one write lock from branch validation through response reservation.
+        # Another tab cannot change the selected parent while we build context;
+        # any error also rolls back the retry switch and newly appended user.
+        with closing(connect_knowledge()) as conn, transaction(conn, immediate=True):
+            if request.use_saved_history:
+                history._check_expected_leaf(conn, conversation, request.expected_branch_leaf)
+            parent = history._ACTIVE_LEAF
+            regenerate = False
+            if request.retry_message_id:
+                policy = history._retry_write_policy_in_transaction(conn, conversation, request.retry_message_id)
+                target = history._prepare_retry_in_transaction(conn, conversation, request.retry_message_id)
+                parent = target['parent_message_id']
+                regenerate = target['role'] == 'assistant'
+                if regenerate:
+                    user_message_id = parent
+            if request.use_saved_history and not regenerate and user is None:
                 raise ApiError(400, 'CHAT_USER_REQUIRED', '请提供用户消息。')
-            request = request.model_copy(update={'messages': messages})
-        history.reserve_response(conversation, assistant_message_id,
-                                 **({'expected_leaf': user_message_id} if request.use_saved_history else {}))
+            if user is not None and not regenerate:
+                title = (request.conversation_title or user.content[:30]).strip() or 'New conversation'
+                history._append_message_in_transaction(
+                    conn, conversation, message_id=user_message_id, role='user', content=user.content,
+                    title=title, thinking=None, citations=None, tool_calls=None, usage=None,
+                    now=history._now().isoformat(), parent_message_id=parent,
+                    workspace_context=request.workspace_context.model_dump() if request.workspace_context else None,
+                    attachments=request.attachments,
+                )
+            if request.use_saved_history:
+                messages = _generation_messages_in_transaction(conn, conversation, user_message_id)
+                if not messages or messages[-1].role.value != 'user':
+                    raise ApiError(400, 'CHAT_USER_REQUIRED', '请提供用户消息。')
+                request = request.model_copy(update={'messages': messages})
+            history._reserve_response_in_transaction(
+                conn, conversation, assistant_message_id,
+                user_message_id if request.use_saved_history else history._ANY_LEAF,
+            )
     return request.model_copy(update={
         'user_message_id': user_message_id, 'assistant_message_id': assistant_message_id,
         'metadata': {**request.metadata, 'retry_write_policy': policy},

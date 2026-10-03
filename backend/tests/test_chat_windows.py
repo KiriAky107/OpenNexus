@@ -154,35 +154,25 @@ def test_saved_generation_uses_complete_branch_content_and_thinking_not_reading_
 
 def test_saved_regeneration_uses_stored_user_and_edit_uses_exact_branch_prefix():
     seed(80, 'context')
-    regenerated = windows.prepare_request(saved_request(retry_message_id='context-79'), 'ignored-client-user', 'retry')
+    regenerated = windows.prepare_request(saved_request(retry_message_id='context-79', expected_branch_leaf='context-79'), 'ignored-client-user', 'retry')
     assert regenerated.user_message_id == 'context-78'
     assert len(regenerated.messages) == 79
     assert regenerated.messages[-1].content.startswith('needle 78 ')
     assert regenerated.metadata['retry_write_policy'] == 'full'
-    edited = windows.prepare_request(saved_request(retry_message_id='context-60'), 'edited-user', 'edited-answer')
+    edited = windows.prepare_request(saved_request(retry_message_id='context-60', expected_branch_leaf='context-78'), 'edited-user', 'edited-answer')
     assert len(edited.messages) == 61 and edited.messages[-1].content == 'followup'
     assert edited.messages[-2].content.startswith('needle 59 ')
     assert edited.metadata['retry_write_policy'] == 'read_only'
     assert ids(windows.window('context', branch_leaf='context-79'))[-1] == 'context-79'
 
 
-def test_saved_send_rejects_stale_branch_atomically_and_reservation_checks_concurrent_append(monkeypatch):
+def test_saved_send_rejects_stale_branch_without_appending():
     seed(4, 'context')
     with pytest.raises(ApiError) as error:
         windows.prepare_request(saved_request(expected_branch_leaf='context-1'), 'stale-user', 'stale-answer')
     assert error.value.code == 'CHAT_BRANCH_CHANGED'
     with closing(connect_knowledge()) as conn:
         assert conn.execute("SELECT 1 FROM chat_messages WHERE message_id='stale-user'").fetchone() is None
-    generation = windows.generation_messages
-    def competing_append(conversation, leaf):
-        result = generation(conversation, leaf)
-        history.append_message(conversation, message_id='other-window', role='user', content='other window')
-        return result
-    monkeypatch.setattr(windows, 'generation_messages', competing_append)
-    with pytest.raises(ApiError) as error:
-        windows.prepare_request(saved_request(expected_branch_leaf='context-3'), 'new-user', 'new-answer')
-    assert error.value.code == 'CHAT_BRANCH_CHANGED'
-    with closing(connect_knowledge()) as conn:
         assert conn.execute("SELECT active_response_id FROM chat_conversations WHERE conversation_id='context'").fetchone()[0] is None
 
 
@@ -190,12 +180,12 @@ def test_saved_request_route_preserves_full_context_and_persists_reply_under_new
     import asyncio
     from types import SimpleNamespace
     from app.contracts import ModelEvent, ModelEventType
-    from app.routes import chat
+    from app.routes import chat, utc_now
     seed(80, 'context')
     seen = []
     async def events(request, provider):
         seen.append(request)
-        yield ModelEvent(event=ModelEventType.text_delta, sequence=0, data={'text': 'reply'})
+        yield ModelEvent(event=ModelEventType.text_delta, sequence=0, data={'text': 'reply'}, timestamp=utc_now())
     monkeypatch.setattr('app.routes.provider_or_404', lambda _: SimpleNamespace())
     monkeypatch.setattr('app.services.chat_retrieval.stream', events)
     async def scenario():
@@ -205,3 +195,4 @@ def test_saved_request_route_preserves_full_context_and_persists_reply_under_new
     assert len(seen[0].messages) == 81 and seen[0].messages[0].content.startswith('needle 0 ')
     with closing(connect_knowledge()) as conn:
         assert conn.execute("SELECT parent_message_id FROM chat_messages WHERE message_id='route-answer'").fetchone()[0] == 'route-user'
+        assert conn.execute("SELECT content FROM chat_messages WHERE message_id='route-answer'").fetchone()[0] == 'reply'

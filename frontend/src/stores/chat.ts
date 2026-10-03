@@ -281,8 +281,17 @@ export const useChatStore = defineStore('chat', () => {
     const content = text.trim() || (pendingAttachments.value.length ? '请分析附件内容' : '')
     if (!content || !canSend.value || !selectedProviderId.value || !selectedModel.value) return
     const readingConversation = activeConversationId.value, readingVault = workspace.vaultId
+    const preparingVersion = streamVersion
     if (readingConversation && !retryMessageId && (!atLatest.value || tailNeedsRefresh) && !await showLatest()) return
-    if (readingConversation !== activeConversationId.value || readingVault !== workspace.vaultId || !canSend.value) return
+    if (readingConversation && retryMessageId && tailNeedsRefresh) {
+      // The last stream may have stopped before its response was saved. Refresh
+      // the real active leaf while retaining the exact turn chosen for retry.
+      if (!await readWindow({ around: retryMessageId, branch_leaf: retryMessageId })) return
+      if (preparingVersion !== streamVersion) return
+      selectedLeaf.value = messageWindow.value.active_leaf
+      tailNeedsRefresh = false
+    }
+    if (preparingVersion !== streamVersion || readingConversation !== activeConversationId.value || readingVault !== workspace.vaultId || !canSend.value) return
     const targetIndex = retryMessageId ? messages.value.findIndex(m => m.message_id === retryMessageId) : messages.value.length - 1
     if (retryMessageId && targetIndex < 0) return
     const target = messages.value[targetIndex]

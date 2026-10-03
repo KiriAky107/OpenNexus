@@ -425,7 +425,7 @@ it('restores each answer context after history reload, including explicitly abse
   await s.retryMessage(original,undefined,second); vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
   expect(s.messages[0]!.workspace_context).toEqual(first)
   expect(s.messages[1]!.workspace_context).toEqual(second)
-  vi.mocked(loadConversationWindow).mockResolvedValue(windowOf(JSON.parse(JSON.stringify(s.messages))))
+  vi.mocked(loadConversationWindow).mockResolvedValueOnce(windowOf(JSON.parse(JSON.stringify(s.messages))))
   await s.setActiveConversation(s.activeConversationId!)
   await s.retryMessage(s.messages[1]!.message_id)
   expect(vi.mocked(streamChat).mock.calls.at(-1)![0].workspace_context).toEqual(second)
@@ -433,7 +433,7 @@ it('restores each answer context after history reload, including explicitly abse
   await s.retryMessage(s.messages[1]!.message_id,undefined,null)
   vi.mocked(streamChat).mock.calls.at(-1)![1].onDone?.()
   // API 将缺失的捕获上下文序列化为 null；不要回退到原始用户快照。
-  vi.mocked(loadConversationWindow).mockResolvedValue(windowOf(JSON.parse(JSON.stringify(s.messages))))
+  vi.mocked(loadConversationWindow).mockResolvedValueOnce(windowOf(JSON.parse(JSON.stringify(s.messages))))
   await s.setActiveConversation(s.activeConversationId!)
   await s.sendMessage('continue')
   expect(vi.mocked(streamChat).mock.calls.at(-1)![0].workspace_context).toBeUndefined()
@@ -535,4 +535,73 @@ it('rejects a late window after changing vaults even when the conversation ID is
   old.resolve(largeWindow(9940)); await pending
   expect(s.messages.map(m=>m.message_id)).toEqual(['second-vault'])
   expect(s.windowBusy).toBe(false)
+})
+
+it.each(['stop', 'error', 'done'] as const)('refreshes the retry target and branch guard after stream %s', async outcome => {
+  const s = useChatStore(); s.selectedProviderId = 'real'; s.selectedModel = 'model'
+  await s.sendMessage('original')
+  const user = { ...s.messages[0]! }
+  const handlers = vi.mocked(streamChat).mock.calls[0]![1]
+  if (outcome === 'stop') s.stopGeneration()
+  else if (outcome === 'error') handlers.onError?.(new Error('SSE connection failed: 409'))
+  else handlers.onDone?.()
+  vi.mocked(loadConversationWindow).mockResolvedValueOnce({
+    ...windowOf([user]), branch_leaf: user.message_id, active_leaf: 'server-current-leaf',
+  })
+  await s.retryMessage(user.message_id, 'edited')
+  expect(loadConversationWindow).toHaveBeenLastCalledWith(s.activeConversationId, {
+    around: user.message_id, branch_leaf: user.message_id,
+  })
+  const retry = vi.mocked(streamChat).mock.calls[1]![0]
+  expect(retry.expected_branch_leaf).toBe('server-current-leaf')
+  expect(retry.retry_message_id).toBe(user.message_id)
+  expect(retry.messages).toEqual([{ role: 'user', content: 'edited' }])
+})
+
+it('regenerates an older answer after refresh without switching to the latest reading window', async () => {
+  const s = useChatStore(); s.selectedProviderId = 'real'; s.selectedModel = 'model'
+  await s.sendMessage('old question')
+  const [user, answer] = s.messages.map(message => ({ ...message }))
+  vi.mocked(streamChat).mock.calls[0]![1].onDone?.()
+  vi.mocked(loadConversationWindow).mockResolvedValueOnce({
+    ...windowOf([user!, answer!]), branch_leaf: answer!.message_id, active_leaf: 'much-later-leaf',
+  })
+  await s.retryMessage(answer!.message_id)
+  const retry = vi.mocked(streamChat).mock.calls[1]![0]
+  expect(retry.expected_branch_leaf).toBe('much-later-leaf')
+  expect(retry.user_message_id).toBe(user!.message_id)
+  expect(retry.retry_message_id).toBe(answer!.message_id)
+  expect(retry.messages).toEqual([{ role: 'user', content: 'old question' }])
+  expect(selectMessageVersion).not.toHaveBeenCalled()
+})
+
+it.each(['stop', 'switch', 'vault'] as const)('cancels retry while refreshing its guard on %s', async action => {
+  const { useWorkspaceStore } = await import('./workspace')
+  const s = useChatStore(); s.selectedProviderId = 'real'; s.selectedModel = 'model'
+  await s.sendMessage('original')
+  const user = { ...s.messages[0]! }
+  vi.mocked(streamChat).mock.calls[0]![1].onDone?.()
+  const pending = deferred<Awaited<ReturnType<typeof loadConversationWindow>>>()
+  vi.mocked(loadConversationWindow).mockReturnValueOnce(pending.promise)
+  const retrying = s.retryMessage(user.message_id, 'edited')
+  expect(s.windowBusy).toBe(true)
+  if (action === 'stop') s.stopGeneration()
+  else if (action === 'switch') await s.createNewConversation()
+  else useWorkspaceStore().vaultId = 'another-vault'
+  pending.resolve(windowOf([user]))
+  await retrying
+  expect(streamChat).toHaveBeenCalledTimes(1)
+  expect(s.isStreaming).toBe(false)
+})
+
+it('does not retry with the stale guard when its refresh fails', async () => {
+  const s = useChatStore(); s.selectedProviderId = 'real'; s.selectedModel = 'model'
+  await s.sendMessage('original')
+  const userId = s.messages[0]!.message_id
+  vi.mocked(streamChat).mock.calls[0]![1].onDone?.()
+  vi.mocked(loadConversationWindow).mockRejectedValueOnce(new Error('history unavailable'))
+  await s.retryMessage(userId, 'edited')
+  expect(streamChat).toHaveBeenCalledTimes(1)
+  expect(s.historyError).toBe('history unavailable')
+  expect(s.canSend).toBe(true)
 })
