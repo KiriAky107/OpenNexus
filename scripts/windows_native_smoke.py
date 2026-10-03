@@ -6,7 +6,6 @@ session. This is payload startup validation, not an installation/upgrade matrix.
 """
 from __future__ import annotations
 
-import base64
 import ctypes
 import hashlib
 import json
@@ -64,7 +63,8 @@ def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:
     (vault/'课程').mkdir()
     (vault/'课程/证据.md').write_text('# 启动证据\n\n合成测试笔记。\n',encoding='utf-8')
     (vault/'课程/引用.md').write_text('# 引用\n\n[证据](证据.md)\n\n[缺失](missing.md)\n',encoding='utf-8')
-    (vault/'标志.png').write_bytes(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='))
+    logo = Path(__file__).resolve().parents[1] / 'frontend/public/branding/png/opennexus-512.png'
+    (vault/'标志.png').write_bytes(logo.read_bytes())
     (vault/'研究.canvas').write_text(json.dumps({'nodes':[
         {'id':'text','type':'text','text':'# 启动验证','x':0,'y':0,'width':240,'height':180},
         {'id':'note','type':'file','file':'课程/证据.md','x':320,'y':0,'width':240,'height':180},
