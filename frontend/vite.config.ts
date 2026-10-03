@@ -16,6 +16,7 @@ function mathChunk(module: string) {
 
 export default defineConfig({
   plugins: [vue()],
+  worker: { format: 'es' },
   resolve: {
     dedupe: ['katex'],
     alias: {

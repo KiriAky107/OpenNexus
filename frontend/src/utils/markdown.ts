@@ -2,11 +2,8 @@ import { renderFunctionPlot } from '@/services/functionPlotService'
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
 import { defaultMarkdownPreferences, type MarkdownPreferences } from '@/stores/markdownPreferences'
-import { createHighlighterCore } from 'shiki/core'
-import { createOnigurumaEngine } from 'shiki/engine/oniguruma'
-import { bundledLanguagesInfo } from 'shiki/langs'
-import githubDark from '@shikijs/themes/github-dark'
-import githubLight from '@shikijs/themes/github-light'
+import { loadCodeLanguage } from '@/services/codeHighlighter'
+export { getCodeTokenizer } from '@/services/codeHighlighter'
 import { renderMermaid, type mermaidThemeVariables } from '@/services/mermaidService'
 import { appendDiagramControls } from './diagramControls'
 import katex from 'katex'
@@ -52,36 +49,6 @@ if (!preferences.autoLinks) marked.use({ tokenizer: { url() { return undefined }
 return marked
 }
 
-// Highlighter 是昂贵的单例；复用初始化 Promise，避免每个代码块重复加载语法与主题。
-let highlighter: ReturnType<typeof createHighlighterCore> | undefined
-function getHighlighter() { return highlighter ??= createHighlighterCore({
-  themes: [githubLight, githubDark],
-  langs: [],
-  engine: createOnigurumaEngine(import('shiki/wasm')),
-}).catch(error => { highlighter = undefined; throw error }) }
-
-const languageAliases = new Map(bundledLanguagesInfo.flatMap(info =>
-  [info.id, info.name, ...(info.aliases ?? [])].map(alias => [alias.toLowerCase(), info.id] as const),
-))
-const languageLoads = new Map<string, Promise<void>>()
-const languageLoaders = new Map(bundledLanguagesInfo.map(info => [info.id, info.import]))
-
-async function loadCodeLanguage(requestedLanguage: string) {
-  const shiki = await getHighlighter()
-  const language = languageAliases.get(requestedLanguage.toLowerCase())
-  if (!language) return { shiki, language: 'text' as const }
-  let loading = languageLoads.get(language)
-  if (!loading) {
-    loading = shiki.loadLanguage(languageLoaders.get(language)!).catch(error => {
-      languageLoads.delete(language)
-      throw error
-    })
-    languageLoads.set(language, loading)
-  }
-  await loading
-  return { shiki, language }
-}
-
 // 双主题 HTML 使用有界 LRU；大型一次性代码块不会留在缓存中。
 const highlightedBlocks = new Map<string, string>()
 let highlightedCharacters = 0
@@ -112,18 +79,6 @@ export async function highlightCode(source: string, requestedLanguage = 'text'):
     highlightedBlocks.set(key, html); highlightedCharacters += cost
   }
   return html
-}
-
-/** 与可编辑代码块共享已初始化的语法和主题注册表。 */
-export async function getCodeTokenizer(theme: 'github-light' | 'github-dark', requestedLanguage = 'text') {
-  const { shiki } = await loadCodeLanguage(requestedLanguage)
-  return (source: string, requestedLanguage: string) => {
-    const language = languageAliases.get(requestedLanguage.toLowerCase()) ?? 'text'
-    return shiki.codeToTokens(source, {
-      lang: shiki.getLoadedLanguages().includes(language as never) ? language : 'text',
-      theme,
-    }).tokens
-  }
 }
 
 export async function renderMarkdown(source: string, options?: { themeId?: string; theme?: 'light' | 'dark'; preferences?: MarkdownPreferences; pdf?: { plot: (source: string) => Promise<{svg: string; warnings: string[]}>; mermaidVariables: ReturnType<typeof mermaidThemeVariables> }; citationNumbers?: number[]; citationAliases?: Record<string, number> }): Promise<string> {
@@ -228,4 +183,4 @@ function appendCodeToolbar(container: HTMLElement, language: string, source: str
   container.append(raw)
 }
 
-// 高亮器首次需要代码高亮时才创建；语法保持按语言加载。Worker 可在性能测量后进一步引入。
+// Preview grammars load on demand; editable code blocks tokenize in a Worker.

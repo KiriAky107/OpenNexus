@@ -1,54 +1,78 @@
 import { LanguageDescription, LanguageSupport, StreamLanguage } from '@codemirror/language'
+import { StateEffect, Transaction, type Text } from '@codemirror/state'
 import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import { bundledLanguagesInfo } from 'shiki/langs'
-import { getCodeTokenizer } from '@/utils/markdown'
+import type { CodeTheme } from '@/services/codeHighlighter'
+import { codeHighlights } from './codeHighlightClient'
+import { MAX_HIGHLIGHT_CHARACTERS, type HighlightResult } from './codeHighlightProtocol'
 
-type CodeTheme = 'github-light' | 'github-dark'
+const highlighted = StateEffect.define<{ owner: object; document: Text; result?: HighlightResult }>()
+
+function visibleDecorations(view: EditorView, result: HighlightResult): DecorationSet {
+  const { spans, styles } = result
+  const marks = styles.map(style => Decoration.mark({ class: 'shiki-token', attributes: { style } }))
+  const ranges = []
+  for (const visible of view.visibleRanges) {
+    // Binary search avoids scanning off-screen tokens on scroll or result arrival.
+    let lo = 0, hi = spans.length / 3
+    while (lo < hi) { const mid = (lo + hi) >>> 1; if (spans[mid * 3 + 1]! <= visible.from) lo = mid + 1; else hi = mid }
+    for (let index = lo * 3; index < spans.length && spans[index]! < visible.to; index += 3) {
+      const from = Math.max(visible.from, spans[index]!), to = Math.min(visible.to, spans[index + 1]!)
+      if (from < to) ranges.push(marks[spans[index + 2]!]!.range(from, to))
+    }
+  }
+  return Decoration.set(ranges, true)
+}
 
 export async function shikiLanguage(language: string, theme: CodeTheme): Promise<LanguageSupport> {
-  const tokenize = await getCodeTokenizer(theme, language)
-  // Milkdown 重新创建屏幕外 CodeMirror 视图。在该语言/主题内重复使用相同代码的不可变范围，并保留有限的预算。
-  const cache = new Map<string, DecorationSet>()
-  let cachedCharacters = 0
   const highlights = ViewPlugin.fromClass(class {
-    decorations: DecorationSet
+    decorations: DecorationSet = Decoration.none
+    private revision = 0
+    private disposed = false
+    private timer?: ReturnType<typeof setTimeout>
+    private result?: { document: Text; value: HighlightResult }
 
-    constructor(view: EditorView) { this.decorations = this.highlight(view) }
+    constructor(private view: EditorView) { this.schedule(0) }
 
     update(update: ViewUpdate) {
-      if (update.docChanged) this.decorations = this.highlight(update.view)
-    }
-
-    highlight(view: EditorView): DecorationSet {
-      const source = view.state.doc.toString()
-      const cached = cache.get(source)
-      if (cached) {
-        cache.delete(source); cache.set(source, cached)
-        return cached
+      if (update.docChanged) {
+        this.revision++
+        this.result = undefined
+        this.decorations = this.decorations.map(update.changes)
+        this.schedule(30)
       }
-      const tokens = tokenize(source, language)
-      const ranges = tokens.flatMap((line, index) => {
-        let offset = view.state.doc.line(index + 1).from
-        return line.flatMap(token => {
-          const from = offset
-          offset += token.content.length
-          if (from === offset) return []
-          const fontStyle = token.fontStyle ?? 0
-          return [Decoration.mark({
-            class: 'shiki-token',
-            attributes: { style: `color:${token.color};font-style:${fontStyle & 1 ? 'italic' : 'normal'};font-weight:${fontStyle & 2 ? 'bold' : 'normal'};text-decoration:${fontStyle & 4 ? 'underline' : 'none'}` },
-          }).range(from, offset)]
-        })
-      })
-      const decorations = Decoration.set(ranges)
-      if (source.length <= 16000) {
-        cache.set(source, decorations); cachedCharacters += source.length
-        while (cache.size > 32 || cachedCharacters > 64000) {
-          const oldest = cache.keys().next().value!
-          cachedCharacters -= oldest.length; cache.delete(oldest)
+      for (const transaction of update.transactions) for (const effect of transaction.effects) {
+        if (effect.is(highlighted) && effect.value.owner === this && effect.value.document === update.state.doc) {
+          this.result = effect.value.result ? { document: effect.value.document, value: effect.value.result } : undefined
+          this.decorations = this.result ? visibleDecorations(update.view, this.result.value) : Decoration.none
         }
       }
-      return decorations
+      if (update.viewportChanged && this.result?.document === update.state.doc) {
+        this.decorations = visibleDecorations(update.view, this.result.value)
+      }
+    }
+
+    private schedule(delay: number) {
+      clearTimeout(this.timer)
+      codeHighlights.cancel(this)
+      // Do not flatten the document or clone/tokenize it in an input transaction.
+      this.timer = setTimeout(() => {
+        if (this.disposed) return
+        const document = this.view.state.doc, revision = this.revision
+        const receive = (result?: HighlightResult) => {
+          if (this.disposed || this.revision !== revision || this.view.state.doc !== document) return
+          this.view.dispatch({ effects: highlighted.of({ owner: this, document, result }), annotations: Transaction.addToHistory.of(false) })
+        }
+        if (document.length > MAX_HIGHLIGHT_CHARACTERS) { receive(); return }
+        codeHighlights.request(this, { source: document.toString(), language, theme }, receive)
+      }, delay)
+    }
+
+    destroy() {
+      this.disposed = true
+      clearTimeout(this.timer)
+      codeHighlights.cancel(this)
+      this.result = undefined
     }
   }, { decorations: value => value.decorations })
 

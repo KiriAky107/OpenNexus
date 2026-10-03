@@ -20,6 +20,16 @@ import { useMarkdownPreferencesStore } from '@/stores/markdownPreferences'
 import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import * as workspace from '@/services/workspaceService'
 
+// happy-dom has no module Worker runtime. Keep the real Shiki computation and
+// asynchronous reply boundary; the broker and production Worker are tested apart.
+vi.mock('./codeHighlightClient', async () => {
+  const { computeHighlight } = await import('./codeHighlightProcessor')
+  return { codeHighlights: {
+    request: (_owner: object, input: Parameters<typeof computeHighlight>[0], done: (result: Awaited<ReturnType<typeof computeHighlight>>) => void) => { void computeHighlight(input).then(done) },
+    cancel: () => {},
+  } }
+})
+
 type EditorComponent = { getEditor: () => Editor | undefined }
 
 const mounted: VueWrapper[] = []
@@ -418,11 +428,12 @@ describe('VisualMarkdownEditor formatting toolbars', () => {
       const language = config.languages.find(item => item.name === name.toLowerCase())
       expect(language, `${name} remains available`).toBeDefined()
       const view = new CodeMirror({ doc: 'class Example {}', extensions: [...config.extensions, await language!.load()] })
-      try { expect(view.dom.querySelector('.shiki-token')).not.toBeNull() }
+      try { await vi.waitFor(() => expect(view.dom.querySelector('.shiki-token')).not.toBeNull()) }
       finally { view.destroy() }
     }
     const cm = new CodeMirror({ doc: 'print("Hello")', extensions: [...config.extensions, await matching[0]!.load()] })
     try {
+      await vi.waitFor(() => expect(cm.dom.querySelector('.shiki-token')).not.toBeNull())
       const string = [...cm.dom.querySelectorAll<HTMLElement>('.shiki-token')].find(el => el.textContent?.includes('Hello'))
       expect(string?.style.color.toUpperCase()).toBe(theme === 'github-dark' ? '#9ECBFF' : '#032F62')
     } finally { cm.destroy() }
