@@ -121,6 +121,6 @@ jobs:
           restore-keys: |
             windows-host-msvc-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('frontend/src-tauri/Cargo.lock', 'frontend/src-tauri/Cargo.toml') }}-
       - name: Test native watcher, stable identities and workspace recovery
-        run: cargo test --lib --locked workspace:: -- --nocapture
+        run: cargo test --lib --locked 'workspace::' -- --nocapture
       - name: Test sync discovery, ordering and peer application
         run: cargo test --lib --locked sync_ -- --nocapture
