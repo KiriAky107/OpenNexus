@@ -19,7 +19,7 @@
     <a href="https://github.com/KiriAky107/OpenNexus/releases">发布日志</a>
   </p>
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.5.9--alpha2-5865f2?style=flat-square" alt="版本" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.5.9--beta1-5865f2?style=flat-square" alt="版本" /></a>
     <a href="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml"><img src="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="平台" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="桌面端 Tauri" />
@@ -33,10 +33,7 @@
 
 ---
 
-> ⚠️ **Alpha 阶段提示**：OpenNexus 目前处于早期测试阶段（`v0.5.9-alpha2`）。数据存储 Schema、IPC 契约及扩展接口仍可能调整。在升级新版本前，请务必备份关键的 Markdown 知识库（Vault）。
-
-当前源码正在准备 `0.5.9-beta1`；最终安装验收完成前，下方下载仍指向已发布的 alpha2。
-已验证范围见 [beta1 验收记录](frontend/docs/beta1-acceptance.md)。
+当前版本：[v0.5.9-beta1](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta1)。
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 桌面编辑器：精简文件操作、大纲、公式与函数图" width="95%" />
@@ -92,10 +89,10 @@
 
 ### Windows 桌面端安装（推荐）
 
-1. 前往 [0.5.9-alpha2 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-alpha2) 下载 Windows x64 安装包。本地构建可按[打包发布](#打包发布)步骤进行。
+1. 前往 [0.5.9-beta1 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta1) 下载 Windows x64 安装包。本地构建可按[打包发布](#打包发布)步骤进行。
 2. *(可选)* 通过 PowerShell 校验 SHA-256 完整性：
 ```powershell
-   Get-FileHash .\OpenNexus_0.5.9-alpha2_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.5.9-beta1_x64-setup.exe -Algorithm SHA256
    # 与同一 Release 中的 SHA256SUMS.txt 比对。
 
 ```
@@ -218,7 +215,7 @@ flowchart LR
 
 对比将质量与耗时成本分别展示。“只看退步”包括 Agent 单项检查退步，即使两次运行总体都失败也能发现。展开用例可查看原始证据与配置差异；页面没有活动运行时，可点击“刷新”发现其他窗口完成的运行。
 
-性能测量、原生验证与待完成的 Windows 安装覆盖见 [beta1 验收记录](frontend/docs/beta1-acceptance.md)。
+性能测量与原生验证见 [beta1 验证记录](frontend/docs/beta1-acceptance.md)。
 
 ---
 
@@ -422,7 +419,7 @@ pnpm desktop:build
 
 ```
 
-构建完成的安装包将输出至 `frontend/src-tauri/target/release/bundle/nsis/`。[0.5.8-alpha2 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.8-alpha2) 另提供包含桌面主程序以及 Sync、Community 原型的源码压缩包。
+构建完成的安装包将输出至 `frontend/src-tauri/target/release/bundle/nsis/`。[0.5.9-beta1 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta1) 同时提供固定发布提交的源码压缩包与 SHA-256 清单。
 
 Windows 安装包会在 `OpenNexus.exe` 同目录包含匹配架构、带微软签名的 `WebView2Loader.dll`，打包前从依赖锁定的 WebView2 SDK 准备。WebView2 Runtime 安装程序不会替应用提供这个 DLL。内嵌引导程序会在需要时安装 Runtime，仍需联网。解压安装包后可运行 `python scripts/verify-windows-loader.py <安装包解压目录>`，检查主程序与 Loader 架构及 SDK 哈希，避免构建机上已有的 SDK 掩盖漏打包问题。
 
