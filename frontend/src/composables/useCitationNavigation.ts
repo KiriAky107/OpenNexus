@@ -1,6 +1,5 @@
 import { useRouter } from 'vue-router'
-import { useEditorStore } from '@/stores/editor'
-import { useWorkspaceStore } from '@/stores/workspace'
+import { useEditorStore, type FileNavigation } from '@/stores/editor'
 
 /**
  * 引用目标。字段用 unknown 是因为 Agent 事件流里拿到的是
@@ -12,8 +11,7 @@ export interface CitationTarget {
 }
 
 export interface CitationNavigationDeps {
-  loadFile: (filePath: string) => Promise<void>
-  openFile: (filePath: string) => void
+  loadFile: (filePath: string) => Promise<FileNavigation | null>
   highlightBlock: (blockId: string) => void
   navigate: (path: string) => Promise<unknown> | unknown
 }
@@ -37,8 +35,8 @@ export async function navigateToCitation(
   const filePath = asPath(target.file_path)
   if (!filePath) throw new Error('该引用缺少文件路径，无法定位到笔记。')
 
-  await deps.loadFile(filePath)
-  deps.openFile(filePath)
+  const navigation = await deps.loadFile(filePath)
+  if (!navigation?.isCurrent()) return
 
   const blockId = asPath(target.block_id)
   if (blockId) deps.highlightBlock(blockId)
@@ -50,13 +48,11 @@ export async function navigateToCitation(
 export function useCitationNavigation() {
   const router = useRouter()
   const editorStore = useEditorStore()
-  const workspaceStore = useWorkspaceStore()
 
   return {
     openCitation: (target: CitationTarget) =>
       navigateToCitation(target, {
         loadFile: (filePath) => editorStore.loadFile(filePath),
-        openFile: (filePath) => workspaceStore.openFile(filePath),
         highlightBlock: (blockId) => editorStore.highlightBlock(blockId),
         navigate: (path) => router.push(path),
       }),

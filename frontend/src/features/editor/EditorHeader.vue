@@ -68,6 +68,7 @@ const statusText = computed<Record<string, string>>(() => ({
       <button v-if="isMarkdown && editorStore.mode === 'wysiwyg'" type="button" class="toolbar-toggle" :aria-pressed="layout.editorToolbarVisible" :title="layout.editorToolbarVisible ? t('隐藏编辑器工具栏', 'Hide editor toolbar') : t('显示编辑器工具栏', 'Show editor toolbar')" :aria-label="layout.editorToolbarVisible ? t('隐藏编辑器工具栏', 'Hide editor toolbar') : t('显示编辑器工具栏', 'Show editor toolbar')" @click="layout.editorToolbarVisible = !layout.editorToolbarVisible"><ControlIcon name="toolbar" /></button>
       <button v-if="!desktop && isMarkdown" class="button-secondary" @click="exportOpen = true">{{ t('导出', 'Export') }}</button>
       <span class="save-status" :class="editorStore.saveStatus">{{ statusText[editorStore.saveStatus] }}</span>
+      <span v-if="editorStore.loadingFilePath" class="save-status" role="status">{{ t('正在打开文件…', 'Opening file…') }}</span>
       <button v-if="needsRecovery && !missingFile" class="button-secondary" @click="reload">{{ t('重新加载外部版本', 'Reload external version') }}</button>
       <span v-if="missingFile" class="save-status conflict">{{ t('原文件已删除或移动', 'Original file deleted or moved') }}</span>
       <button v-if="needsRecovery" class="button-secondary" @click="downloadCopy">{{ isMarkdown ? t('下载 Markdown 副本', 'Download Markdown copy') : t('下载 Canvas 副本', 'Download Canvas copy') }}</button>

@@ -5,8 +5,7 @@ import type { CitationNavigationDeps } from './useCitationNavigation'
 function deps(overrides: Partial<CitationNavigationDeps> = {}) {
   const calls: string[] = []
   const base: CitationNavigationDeps = {
-    loadFile: vi.fn(async () => { calls.push('loadFile') }),
-    openFile: vi.fn(() => { calls.push('openFile') }),
+    loadFile: vi.fn(async path => { calls.push('loadFile'); return { path, isCurrent: () => true } }),
     highlightBlock: vi.fn(() => { calls.push('highlightBlock') }),
     navigate: vi.fn(async () => { calls.push('navigate') }),
   }
@@ -21,7 +20,7 @@ describe('navigateToCitation', () => {
 
     await navigateToCitation({ file_path: 'notes/a.md', block_id: 'blk-1' }, d)
 
-    expect(calls).toEqual(['loadFile', 'openFile', 'highlightBlock', 'navigate'])
+    expect(calls).toEqual(['loadFile', 'highlightBlock', 'navigate'])
     expect(d.loadFile).toHaveBeenCalledWith('notes/a.md')
     expect(d.highlightBlock).toHaveBeenCalledWith('blk-1')
     expect(d.navigate).toHaveBeenCalledWith('/workspace')
@@ -37,6 +36,7 @@ describe('navigateToCitation', () => {
       loadFile: vi.fn(async () => {
         await Promise.resolve()
         loaded = true
+        return { path: '/notes/a.md', isCurrent: () => true }
       }),
       highlightBlock,
     })
@@ -51,7 +51,7 @@ describe('navigateToCitation', () => {
 
     await navigateToCitation({ file_path: 'notes/a.md' }, d)
 
-    expect(calls).toEqual(['loadFile', 'openFile', 'navigate'])
+    expect(calls).toEqual(['loadFile', 'navigate'])
     expect(d.highlightBlock).not.toHaveBeenCalled()
   })
 
@@ -77,7 +77,13 @@ describe('navigateToCitation', () => {
     })
 
     await expect(navigateToCitation({ file_path: 'notes/a.md', block_id: 'b' }, d)).rejects.toThrow(/SAVE_CONFLICT/)
-    expect(d.openFile).not.toHaveBeenCalled()
+    expect(d.highlightBlock).not.toHaveBeenCalled()
+    expect(d.navigate).not.toHaveBeenCalled()
+  })
+
+  it.each([null, { path: '/notes/a.md', isCurrent: () => false }])('does not navigate or highlight a cancelled load', async result => {
+    const { deps: d } = deps({ loadFile: vi.fn(async () => result) })
+    await navigateToCitation({ file_path: 'notes/a.md', block_id: 'b' }, d)
     expect(d.highlightBlock).not.toHaveBeenCalled()
     expect(d.navigate).not.toHaveBeenCalled()
   })

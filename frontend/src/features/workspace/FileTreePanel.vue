@@ -160,8 +160,8 @@ async function createItem() {
     workspaceStore.addFileToTree(parentPath.value, file)
     selectedTreePath.value = file.path
     selectedFolderPath.value = parentPath.value
-    await editorStore.loadFile(file.path)
-    workspaceStore.openFile(file.path)
+    const navigation = await editorStore.loadFile(file.path)
+    if (!navigation?.isCurrent()) return
     await router.push('/workspace')
   } else {
     const folder = await workspaceService.createFolder(parentPath.value, rawName)
@@ -199,16 +199,11 @@ async function openNode(node: FileNode) {
     }
     return
   }
-  // 先同步活动文件，让真实点击立即生效；内容加载失败时再恢复原状态。
-  const previousPath = workspaceStore.activeFilePath
-  const wasOpen = workspaceStore.openFiles.includes(node.path)
-  workspaceStore.openFile(node.path)
   try {
-    await editorStore.loadFile(node.path)
+    const navigation = await editorStore.loadFile(node.path)
+    if (!navigation?.isCurrent()) return
     await router.push('/workspace')
   } catch (error) {
-    if (!wasOpen) workspaceStore.closeFile(node.path)
-    workspaceStore.setActiveFile(previousPath)
     createError.value = `${t('无法打开文件：', 'Could not open file: ')}${error instanceof Error ? error.message : String(error)}`
     console.error(`打开文件失败：${node.path}`, error)
   }

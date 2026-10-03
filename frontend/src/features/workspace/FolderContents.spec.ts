@@ -16,12 +16,13 @@ function setup(count=2){
   return{workspace,read}
 }
 it('shows actual titles, summaries, introduction and opens the correct note or subfolder',async()=>{
-  const {workspace}=setup();const editor=useEditorStore();const load=vi.spyOn(editor,'loadFile').mockResolvedValue(undefined)
+  const {workspace}=setup();const editor=useEditorStore();const load=vi.spyOn(editor,'loadFile')
+  vi.spyOn(service,'getNoteId').mockResolvedValue('n1')
   const wrapper=mount(FolderContents,{props:{path:'/course'}});await flushPromises()
   expect(wrapper.get('.intro-body').text()).toContain('实际介绍')
   expect(wrapper.findAll('.folder-item').map(item=>item.text()).join()).toContain('实际标题')
   const target=wrapper.findAll('.folder-item').find(item=>item.text().includes('实际标题'))!
-  await target.trigger('click');expect(load).toHaveBeenCalledWith('/course/n1.md');expect(workspace.activeFilePath).toBe('/course/n1.md')
+  await target.trigger('click');await flushPromises();expect(load).toHaveBeenCalledWith('/course/n1.md');expect(workspace.activeFilePath).toBe('/course/n1.md')
   await wrapper.findAll('.folder-item')[0]!.trigger('click');expect(workspace.activeFolderPath).toBe('/course/sub')
   wrapper.unmount()
 })

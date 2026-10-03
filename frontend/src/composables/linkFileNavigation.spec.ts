@@ -38,7 +38,7 @@ afterEach(() => {
 it.each(['课程/笔记.md', '课程\\笔记.md', '/课程/笔记.md'])('keeps citation %s and in-note links attached to the tree through refresh', async filePath => {
   const editor = useEditorStore(), workspace = useWorkspaceStore()
   await navigateToCitation({ file_path: filePath, block_id: 'block-1' }, {
-    loadFile: editor.loadFile, openFile: workspace.openFile,
+    loadFile: editor.loadFile,
     highlightBlock: editor.highlightBlock, navigate: vi.fn(),
   })
   await navigateMarkdownHref('#结论')

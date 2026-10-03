@@ -1,6 +1,5 @@
 import router from '@/router'
 import { useEditorStore } from '@/stores/editor'
-import { useWorkspaceStore } from '@/stores/workspace'
 import { noteOutline } from '@/features/workspace/outline'
 import { hostInvoke, isDesktop } from '@/services/platform/desktop'
 import { resolveVaultReference } from './vaultReferences'
@@ -44,10 +43,10 @@ export async function navigateMarkdownHref(href: string, sourcePath?: string): P
   const editor = useEditorStore()
   const target = resolveNoteLink(value, sourcePath ?? editor.currentFilePath)
   if (!target) return false
-  if (target.path !== editor.currentFilePath) await editor.loadFile(target.path)
-  const workspace = useWorkspaceStore()
-  workspace.openFile(target.path)
+  const navigation = await editor.loadFile(target.path)
+  if (!navigation?.isCurrent()) return false
   await router.push('/workspace')
+  if (!navigation.isCurrent()) return false
   if (target.fragment) {
     const wanted = slug(target.fragment)
     const heading = noteOutline(editor.content).find(item => item.title === target.fragment || slug(item.title) === wanted)

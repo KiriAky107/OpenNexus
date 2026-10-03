@@ -17,6 +17,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const hasVault = ref(false)
   const recentVaults = ref<workspaceService.VaultInfo[]>([])
   const treeRefreshError = ref<string | null>(null)
+  // Navigation intent invalidates document reads even before a new tab is committed.
+  const navigationRevision = ref(0)
   let refreshSequence = 0
 
   const activeFile = computed(() => {
@@ -43,6 +45,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function openFile(path: string) {
+    navigationRevision.value++
     path = normalizeWorkspacePath(path)
     activeFolderPath.value = null
     if (!openFiles.value.includes(path)) {
@@ -68,6 +71,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function closeFile(path: string) {
+    navigationRevision.value++
     path = normalizeWorkspacePath(path)
     const idx = openFiles.value.indexOf(path)
     if (idx > -1) {
@@ -79,10 +83,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function setActiveFile(path: string | null) {
+    navigationRevision.value++
     activeFolderPath.value = null
     activeFilePath.value = path === null ? null : normalizeWorkspacePath(path)
   }
   function selectFolder(path: string) {
+    navigationRevision.value++
     activeFolderPath.value = path
     activeFilePath.value = null
     try { localStorage.setItem(`workspace-folder:${vaultId.value}`, path) } catch { /* session state */ }
@@ -124,6 +130,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   async function openVault(path: string) {
+    navigationRevision.value++
     refreshSequence++
     isLoading.value = true
     try {
@@ -145,6 +152,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   async function createVault(path: string, name: string) {
+    navigationRevision.value++
     refreshSequence++
     isLoading.value = true
     try {
@@ -192,6 +200,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function renamePath(oldPath: string, newPath: string, newName: string) {
+    navigationRevision.value++
     const node = findNodeByPath(fileTree.value, oldPath)
     if (!node) return
     // 文件夹重命名必须同步改写所有后代、标签页和当前文件路径。
@@ -215,6 +224,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function closePath(path: string) {
+    navigationRevision.value++
     if (activeFolderPath.value === path || activeFolderPath.value?.startsWith(`${path}/`)) selectFolder('/')
     const activeWasRemoved = Boolean(activeFilePath.value && (activeFilePath.value === path || activeFilePath.value.startsWith(`${path}/`)))
     openFiles.value = openFiles.value.filter((openPath) => openPath !== path && !openPath.startsWith(`${path}/`))
@@ -239,6 +249,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     hasVault,
     recentVaults,
     treeRefreshError,
+    navigationRevision,
     findNodeByPath,
     toggleFolder,
     openFile,

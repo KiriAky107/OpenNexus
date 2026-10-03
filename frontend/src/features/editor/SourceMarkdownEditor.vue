@@ -13,6 +13,7 @@ import { storeWorkspaceImage, type WorkspaceAssetSource } from '@/services/works
 
 const props = defineProps<{ initialContent: string }>()
 const editor = useEditorStore(), settings = useSettingsStore()
+const isCurrentDocument = editor.captureDocument()
 const root = ref<HTMLElement | null>(null), error = ref('')
 const imageInput = ref<HTMLInputElement | null>(null)
 const conflicts = ref<PropertyConflict[]>([]), choices = ref<PropertyChoices>({})
@@ -23,7 +24,7 @@ function attributes() {
   return EditorView.contentAttributes.of({ spellcheck: String(settings.spellCheck), lang: settings.language,
     'aria-label': settings.language === 'en' ? 'Markdown source editor' : 'Markdown 源码编辑器' })
 }
-function available() { return !!view && !!editor.currentFilePath && !['conflict', 'external_changed'].includes(editor.saveStatus) }
+function available() { return isCurrentDocument() && !!view && !!editor.currentFilePath && !['conflict', 'external_changed'].includes(editor.saveStatus) }
 function imageFiles(list: FileList | null): File[] {
   return [...(list ?? [])].filter(file => file.type.startsWith('image/'))
 }
@@ -99,7 +100,7 @@ onMounted(() => {
       },
     }),
     EditorView.updateListener.of(update => {
-      if (update.docChanged) { editor.updateContent(update.state.doc.toString()); editor.scheduleAutoSave(settings.autoSaveInterval) }
+      if (update.docChanged && isCurrentDocument()) { editor.updateContent(update.state.doc.toString()); editor.scheduleAutoSave(settings.autoSaveInterval) }
     }),
     EditorView.theme({ '&': { height: '100%', color: 'var(--color-text-primary)', backgroundColor: 'var(--color-background-primary)' },
       '.cm-scroller': { fontFamily: 'var(--font-editor-mono)', fontSize: 'var(--font-editor-size)', overflow: 'auto' },

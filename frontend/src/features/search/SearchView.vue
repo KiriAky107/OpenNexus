@@ -4,12 +4,10 @@ import { useRouter } from 'vue-router'
 import type { SearchResult } from '@/contracts'
 import { useEditorStore } from '@/stores/editor'
 import { useSearchStore } from '@/stores/search'
-import { useWorkspaceStore } from '@/stores/workspace'
 import { t } from '@/i18n'
 
 const searchStore = useSearchStore()
 onMounted(() => { void searchStore.loadHistory() })
-const workspaceStore = useWorkspaceStore()
 const editorStore = useEditorStore()
 const router = useRouter()
 const folder = ref('')
@@ -25,8 +23,8 @@ function submitSearch() {
 }
 
 async function openResult(result: SearchResult) {
-  await editorStore.loadFile(result.file_path)
-  workspaceStore.openFile(result.file_path)
+  const navigation = await editorStore.loadFile(result.file_path)
+  if (!navigation?.isCurrent()) return
   editorStore.highlightBlock(result.block_id)
   await router.push('/workspace')
 }

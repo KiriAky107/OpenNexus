@@ -7,6 +7,9 @@ import { ApiErrorClass } from '@/services/apiClient'
 import { DesktopError } from '@/services/platform/desktop'
 import { workspaceDocumentType } from '@/services/workspaceDocuments'
 import { normalizeWorkspacePath } from '@/services/workspacePaths'
+import { useWorkspaceStore } from './workspace'
+
+export interface FileNavigation { path: string; isCurrent: () => boolean }
 
 export const useEditorStore = defineStore('editor', () => {
   const mode = ref<'wysiwyg' | 'source'>('wysiwyg')
@@ -17,6 +20,8 @@ export const useEditorStore = defineStore('editor', () => {
   const lastSavedAt = ref<string | null>(null)
   const currentNoteId = ref<string | null>(null)
   const currentFilePath = ref<string | null>(null)
+  const loadingFilePath = ref<string | null>(null)
+  let documentVersion = 0
   const highlightBlockId = ref<string | null>(null)
   const cursorPosition = ref({ line: 0, column: 0 })
   const headingRequest = ref<{ index: number; offset: number; path: string | null } | null>(null)
@@ -48,6 +53,12 @@ export const useEditorStore = defineStore('editor', () => {
     if (saveStatus.value !== 'conflict' && saveStatus.value !== 'external_changed') saveStatus.value = 'dirty'
   }
 
+  /** A view may finish an input/render callback after navigation has replaced it. */
+  function captureDocument() {
+    const document = documentVersion, path = currentFilePath.value
+    return () => document === documentVersion && path === currentFilePath.value
+  }
+
   let saveTimer: ReturnType<typeof setTimeout> | null = null
   let pendingSave: Promise<void> | null = null
 
@@ -71,22 +82,23 @@ export const useEditorStore = defineStore('editor', () => {
     if (pendingSave) return pendingSave
     // 保存路径与正文都取快照；请求完成时用户可能已继续输入或切换文件。
     const targetPath = currentFilePath.value
+    const document = documentVersion
     const snapshot = content.value
     const baseline = diskContent
     saveStatus.value = 'saving'
     pendingSave = (async () => {
       try {
         await workspaceService.saveFileContent(targetPath, snapshot, baseline)
-        if (currentFilePath.value === targetPath) {
+        if (document === documentVersion && currentFilePath.value === targetPath) {
           diskContent = snapshot
           saveStatus.value = content.value === snapshot ? 'saved' : 'dirty'
           lastSavedAt.value = new Date().toISOString()
         }
       } catch (error) {
-        if (currentFilePath.value === targetPath) saveStatus.value = (error instanceof ApiErrorClass && ['NOTE_CONTENT_CONFLICT', 'CANVAS_CONTENT_CONFLICT'].includes(error.code)) || (error instanceof DesktopError && error.code === 'REVISION_CONFLICT') ? 'conflict' : 'save_failed'
+        if (document === documentVersion && currentFilePath.value === targetPath) saveStatus.value = (error instanceof ApiErrorClass && ['NOTE_CONTENT_CONFLICT', 'CANVAS_CONTENT_CONFLICT'].includes(error.code)) || (error instanceof DesktopError && error.code === 'REVISION_CONFLICT') ? 'conflict' : 'save_failed'
       } finally {
         pendingSave = null
-        if (currentFilePath.value === targetPath && saveStatus.value === 'dirty') scheduleAutoSave()
+        if (document === documentVersion && currentFilePath.value === targetPath && saveStatus.value === 'dirty') scheduleAutoSave()
       }
     })()
     return pendingSave
@@ -94,44 +106,71 @@ export const useEditorStore = defineStore('editor', () => {
 
   let loadVersion = 0
 
-  async function loadFile(filePath: string) {
+  async function loadFile(filePath: string): Promise<FileNavigation | null> {
     filePath = normalizeWorkspacePath(filePath)
-    if (currentFilePath.value === filePath) return
-    if (saveTimer) {
-      clearTimeout(saveTimer)
-      saveTimer = null
-    }
-    if (saveStatus.value === 'conflict') {
-      throw new Error(t('当前文件存在编辑冲突，请处理后再切换文件。', 'The current file has an editing conflict. Resolve it before switching files.'))
-    }
-    if (pendingSave) await pendingSave
-    if (saveStatus.value === 'dirty' || saveStatus.value === 'save_failed') await save()
-    if (['dirty', 'save_failed', 'conflict', 'external_changed'].includes(saveStatus.value)) {
-      throw new Error(t('当前文件保存失败，已阻止切换以避免内容丢失。', 'The current file could not be saved. Switching was blocked to prevent data loss.'))
-    }
-    // 版本号使较慢的旧读取不能覆盖用户后选择的新文件。
+    // Allocate before any await, including saves and same-file navigation.
     const version = ++loadVersion
-    const previousStatus = saveStatus.value
-    saveStatus.value = 'saving'
+    const workspace = useWorkspaceStore(), vault = workspace.vaultId
+    let workspaceRevision = workspace.navigationRevision
+    const isCurrent = () => version === loadVersion && vault === workspace.vaultId
+      && workspaceRevision === workspace.navigationRevision && !workspace.isLoading
+    const commitTab = () => {
+      workspace.openFile(filePath)
+      workspaceRevision = workspace.navigationRevision
+      return { path: filePath, isCurrent }
+    }
+    loadingFilePath.value = filePath
+    async function saveBeforeLeaving() {
+      while (isCurrent()) {
+        if (saveStatus.value === 'saving' && !pendingSave) {
+          saveStatus.value = 'conflict'
+          break
+        }
+        if (!currentFilePath.value) break
+        if (pendingSave) await pendingSave
+        else if (saveStatus.value === 'dirty' || saveStatus.value === 'save_failed') await save()
+        else break
+        if (!isCurrent()) return false
+        if (saveStatus.value === 'save_failed' || saveStatus.value === 'conflict' || saveStatus.value === 'external_changed') break
+      }
+      if (!isCurrent()) return false
+      if (['dirty', 'save_failed', 'conflict', 'external_changed'].includes(saveStatus.value)) {
+        throw new Error(t('当前文件保存失败，已阻止切换以避免内容丢失。', 'The current file could not be saved. Switching was blocked to prevent data loss.'))
+      }
+      return true
+    }
     try {
+      if (!isCurrent()) return null
+      if (currentFilePath.value === filePath) return commitTab()
+      cancelPendingAutoSave()
+      if (!(await saveBeforeLeaving())) return null
       const [loadedContent, loadedNoteId] = await Promise.all([
         workspaceService.readFileContent(filePath),
         workspaceDocumentType(filePath) === 'markdown' ? workspaceService.getNoteId(filePath) : Promise.resolve(null),
       ])
-      if (version !== loadVersion) return
+      while (true) {
+        if (!isCurrent() || !(await saveBeforeLeaving())) return null
+        if (!isCurrent()) return null
+        if (!pendingSave && !['dirty', 'saving', 'save_failed', 'conflict', 'external_changed'].includes(saveStatus.value)) break
+      }
+      // No await between the final edit check, document replacement and tab commit.
+      cancelPendingAutoSave()
+      documentVersion++
       currentFilePath.value = filePath
-      referenceRequest.value = null; canvasNodeRequest.value = null
+      referenceRequest.value = null; canvasNodeRequest.value = null; headingRequest.value = null
       currentNoteId.value = loadedNoteId
       content.value = loadedContent
       diskContent = loadedContent
       saveStatus.value = 'saved'
       lastSavedAt.value = new Date().toISOString()
+      highlightBlockId.value = null
+      return commitTab()
     } catch (error) {
-      if (version !== loadVersion) return
-      saveStatus.value = previousStatus
+      if (!isCurrent()) return null
       throw error
+    } finally {
+      if (version === loadVersion) loadingFilePath.value = null
     }
-    highlightBlockId.value = null
   }
 
   function highlightBlock(blockId: string) {
@@ -154,11 +193,12 @@ export const useEditorStore = defineStore('editor', () => {
 
   async function checkExternalFile() {
     if (!currentFilePath.value || pendingSave || diskContent === undefined || saveStatus.value === 'conflict') return
-    const path = currentFilePath.value, baseline = diskContent
+    const path = currentFilePath.value, baseline = diskContent, document = documentVersion
     try {
       const latest = await workspaceService.readFileContent(path)
-      if (path !== currentFilePath.value || pendingSave || diskContent !== baseline || latest === baseline) return
+      if (document !== documentVersion || path !== currentFilePath.value || pendingSave || diskContent !== baseline || latest === baseline) return
       if (content.value === baseline && saveStatus.value === 'saved') {
+        documentVersion++
         content.value = latest; diskContent = latest; contentRevision.value++
       } else {
         setExternalChanged(); saveStatus.value = 'conflict'
@@ -167,11 +207,13 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   async function reloadExternalFile() {
-    const path = currentFilePath.value, snapshot = content.value
+    loadVersion++; loadingFilePath.value = null
+    const path = currentFilePath.value, snapshot = content.value, document = documentVersion
     if (!path || pendingSave) return
     const latest = await workspaceService.readFileContent(path)
-    if (path !== currentFilePath.value || content.value !== snapshot || pendingSave) return
+    if (document !== documentVersion || path !== currentFilePath.value || content.value !== snapshot || pendingSave) return
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+    documentVersion++
     content.value = latest; diskContent = latest; saveStatus.value = 'saved'; contentRevision.value++
   }
 
@@ -185,9 +227,10 @@ export const useEditorStore = defineStore('editor', () => {
 
   function closeFile() {
     loadVersion++
-    if (saveTimer) clearTimeout(saveTimer)
+    documentVersion++; loadingFilePath.value = null
+    cancelPendingAutoSave()
     currentFilePath.value = null
-    referenceRequest.value = null; canvasNodeRequest.value = null
+    referenceRequest.value = null; canvasNodeRequest.value = null; headingRequest.value = null
     currentNoteId.value = null
     content.value = ''
     diskContent = undefined
@@ -197,7 +240,15 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function renameFilePath(oldPath: string, newPath: string) {
+    loadVersion++; loadingFilePath.value = null
     if (currentFilePath.value === oldPath || currentFilePath.value?.startsWith(`${oldPath}/`)) {
+      // A rename racing a write needs an explicit reload/review at the new path.
+      // The old write must not mark this document saved or leave it saving forever.
+      if (pendingSave || ['dirty', 'saving', 'save_failed'].includes(saveStatus.value)) {
+        cancelPendingAutoSave()
+        saveStatus.value = 'conflict'
+      }
+      documentVersion++
       currentFilePath.value = `${newPath}${currentFilePath.value.slice(oldPath.length)}`
     }
   }
@@ -219,6 +270,7 @@ export const useEditorStore = defineStore('editor', () => {
     lastSavedAt,
     currentNoteId,
     currentFilePath,
+    loadingFilePath,
     highlightBlockId,
     cursorPosition,
     wordCount,
@@ -226,6 +278,7 @@ export const useEditorStore = defineStore('editor', () => {
     setMode,
     toggleMode,
     updateContent,
+    captureDocument,
     scheduleAutoSave,
     cancelPendingAutoSave,
     save,

@@ -14,8 +14,9 @@ watch(() => [workspace.vaultId, JSON.stringify(workspace.fileTree)], () => { voi
 watch(() => [tab.value, query.value, workspace.activeFilePath], () => { page.value = 40 })
 async function locate(ref: IndexedReference) {
   try {
-    await editor.loadFile(ref.source); workspace.openFile(ref.source)
+    const navigation = await editor.loadFile(ref.source)
     await nextTick()
+    if (!navigation?.isCurrent()) return
     if (ref.nodeId) editor.selectCanvasNode(ref.nodeId)
     else { const occurrence = links.references.filter(item => item.source === ref.source && item.raw === ref.raw && (item.start ?? 0) < (ref.start ?? 0)).length; editor.locateReference(ref.start ?? 0, ref.raw.length, ref.raw, occurrence) }
     emit('navigate')

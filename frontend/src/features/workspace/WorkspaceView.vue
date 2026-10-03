@@ -29,7 +29,7 @@ const notes = computed(() => {
   return collect(workspaceStore.fileTree).slice(0, 5)
 })
 async function openNote(path: string) {
-  try { await editorStore.loadFile(path); workspaceStore.openFile(path) }
+  try { await editorStore.loadFile(path) }
   catch (error) { pageError.value = error instanceof Error ? error.message : String(error) }
 }
 async function newNote() {

@@ -44,7 +44,7 @@ watch(()=>[props.path,workspace.vaultId,JSON.stringify(shown.value.map(node=>[no
 onBeforeUnmount(()=>generation++)
 async function open(node:FileNode){
   if(node.type==='folder'){workspace.selectFolder(node.path);return}
-  try{await editor.loadFile(node.path);workspace.openFile(node.path)}catch(cause){error.value=String(cause)}
+  try{await editor.loadFile(node.path)}catch(cause){error.value=String(cause)}
 }
 const introductionSource = computed(()=>splitNoteMetadata(intro.value)?.body??intro.value)
 </script>

@@ -6,6 +6,7 @@ import SourceMarkdownEditor from './SourceMarkdownEditor.vue'
 import { executeEditorCommand } from '@/services/editorCommandService'
 import { useEditorStore } from '@/stores/editor'
 import * as workspace from '@/services/workspaceService'
+import { EditorView } from '@codemirror/view'
 
 let wrapper: VueWrapper | undefined
 const original = '***\ntitle: 中文\ntags: [一, 二, 一]\ncustom: [1, false]\n---\n# 正文\n'
@@ -18,6 +19,15 @@ beforeEach(async () => {
   wrapper = mount(SourceMarkdownEditor, { props: { initialContent: store.content }, attachTo: document.body })
 })
 afterEach(() => { wrapper?.unmount(); useEditorStore().closeFile(); vi.restoreAllMocks() })
+
+it('ignores a late input callback from the old view after another file opens', async () => {
+  const store = useEditorStore()
+  const view = EditorView.findFromDOM(wrapper!.get('.cm-editor').element as HTMLElement)!
+  vi.mocked(workspace.readFileContent).mockResolvedValue('new file')
+  await store.loadFile('/another.md')
+  view.dispatch({ changes: { from: 0, insert: 'late old input' } })
+  expect(store.content).toBe('new file'); expect(store.saveStatus).toBe('saved')
+})
 
 it('完整属性转换是一笔可撤销重做的源码事务', async () => {
   const store = useEditorStore()

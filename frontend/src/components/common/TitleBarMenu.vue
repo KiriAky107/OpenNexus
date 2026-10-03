@@ -135,8 +135,8 @@ async function createWorkspaceItem(type: 'file' | 'folder') {
     const title = rawName.replace(/\.md$/i, '')
     const file = await workspaceService.createFile('/', rawName, `# ${title}\n\n`)
     workspace.addFileToTree('/', file)
-    await editor.loadFile(file.path)
-    workspace.openFile(file.path)
+    const navigation = await editor.loadFile(file.path)
+    if (!navigation?.isCurrent()) return
     await router.push('/workspace')
   })
 }

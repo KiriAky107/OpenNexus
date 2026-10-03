@@ -61,7 +61,7 @@ const markdownPreferences = { ...useMarkdownPreferencesStore().normalized }
 const metadata = ref(splitNoteMetadata(props.initialContent))
 const tagDraft = ref('')
 function setTags(tags: string[]) {
-  if (!metadata.value || !crepe) return
+  if (!metadata.value || !crepe || !isCurrentDocument()) return
   const prefix = updateMetadataTags(metadata.value, tags)
   const body = crepe.editor.action(getMarkdown())
   metadata.value = splitNoteMetadata(prefix + body)
@@ -75,6 +75,7 @@ function addTags() {
   tagDraft.value = ''
 }
 const editorStore = useEditorStore()
+const isCurrentDocument = editorStore.captureDocument()
 const settingsStore = useSettingsStore()
 const themeStore = useThemeStore()
 const layout = useLayoutPreferencesStore()
@@ -128,7 +129,7 @@ async function insertImages(files: File[], source: WorkspaceAssetSource, positio
   try {
     const assets = []
     for (const file of files) assets.push(await storeWorkspaceImage(file, source, targetPath, editorStore.currentNoteId))
-    if (crepe !== target || editorStore.currentFilePath !== targetPath) return
+    if (disposed || !isCurrentDocument() || crepe !== target || editorStore.currentFilePath !== targetPath) return
     const current = target.editor.action(ctx => ctx.get(editorViewCtx).state.doc)
     insertMarkdown(assets.map(asset => `![${asset.original_name.replace(/[\]\\]/g, '\\$&')}](${asset.reference})`).join('\n\n'), current.eq(document) ? position : undefined)
   } catch (reason) {
@@ -263,7 +264,7 @@ function installCommands() {
     return { ok: true }
   }
   disposeCommands = registerEditorCommands({
-    available: () => !loading.value && !!crepe && editorStore.mode === 'wysiwyg' && editorStore.saveStatus !== 'conflict'
+    available: () => !disposed && isCurrentDocument() && !loading.value && !!crepe && editorStore.mode === 'wysiwyg' && editorStore.saveStatus !== 'conflict'
       && !!targetPath && targetPath === editorStore.currentFilePath && crepe.editor.action(ctx => ctx.get(editorViewCtx).editable),
     handlers,
   })
@@ -517,6 +518,7 @@ onMounted(async () => {
   if (markdownPreferences.callouts) crepe.editor.config(configureCalloutSerialization)
   crepe.on((listener) => {
     listener.markdownUpdated((_ctx, markdown, previousMarkdown) => {
+      if (disposed || !isCurrentDocument()) return
       // 忽略编辑器初始化/回显事件，防止无内容变化时触发自动保存循环。
       const fullMarkdown = (metadata.value?.prefix ?? '') + markdown
       if (markdown === previousMarkdown || fullMarkdown === editorStore.content) return

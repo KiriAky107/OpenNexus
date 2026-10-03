@@ -5,11 +5,13 @@ import { t } from '@/i18n'
 import { validateCanvasContent } from '@/services/workspaceDocuments'
 
 const editor = useEditorStore()
+const isCurrentDocument = editor.captureDocument()
 const validationError = computed(() => {
   try { validateCanvasContent(editor.content); return '' }
   catch { return t('JSON Canvas 无效；修改完成前不会自动保存。', 'Invalid JSON Canvas; automatic save is paused.') }
 })
 function changed(event: Event) {
+  if (!isCurrentDocument()) return
   editor.updateContent((event.target as HTMLTextAreaElement).value)
   if (validationError.value) editor.cancelPendingAutoSave()
   else editor.scheduleAutoSave()

@@ -27,7 +27,8 @@ let fittedAll=false,viewReady=false
 const model=new CanvasModel(editor.content),document=shallowRef(model.document),historyRevision=ref(0)
 const viewport=ref<HTMLElement>(),viewportSize=ref({width:800,height:600}),pan=ref({x:60,y:60}),zoom=ref(1)
 const selected=ref<string[]>([]),selectedEdge=ref(''),error=ref(''),nodeFilter=ref(''),nodeCount=ref(100)
-const readOnly=computed(()=>['conflict','external_changed'].includes(editor.saveStatus))
+const isCurrentDocument=editor.captureDocument()
+const readOnly=computed(()=>!isCurrentDocument()||['conflict','external_changed'].includes(editor.saveStatus))
 const canUndo=computed(()=>{void historyRevision.value;return model.canUndo}),canRedo=computed(()=>{void historyRevision.value;return model.canRedo})
 const graph=computed(()=>new CanvasGeometry(document.value)),selectedSet=computed(()=>new Set(selected.value))
 const picked=computed(()=>graph.value.nodes.get(selected.value[0]??'')),edge=computed(()=>graph.value.edges.get(selectedEdge.value))
@@ -63,7 +64,7 @@ const box=computed(()=>{
 })
 const viewKey=()=>`canvas-view:${workspace.vaultId}:${editor.currentFilePath}`
 function rememberView(){try{localStorage.setItem(viewKey(),JSON.stringify({pan:pan.value,zoom:zoom.value}))}catch{/* session state */}}
-function sync(){document.value=model.document;historyRevision.value++;editor.updateContent(model.source);editor.scheduleAutoSave(settings.autoSaveInterval);selected.value=selected.value.filter(id=>model.document.nodes.some(node=>node.id===id));if(!model.document.edges.some(edge=>edge.id===selectedEdge.value))selectedEdge.value=''}
+function sync(){if(!isCurrentDocument())return;document.value=model.document;historyRevision.value++;editor.updateContent(model.source);editor.scheduleAutoSave(settings.autoSaveInterval);selected.value=selected.value.filter(id=>model.document.nodes.some(node=>node.id===id));if(!model.document.edges.some(edge=>edge.id===selectedEdge.value))selectedEdge.value=''}
 function change(action:()=>unknown){if(readOnly.value){error.value=t('请先处理文件冲突。','Resolve the file conflict first.');return false}try{const before=model.source;action();const changed=model.source!==before;if(changed)sync();error.value='';return changed}catch(cause){error.value=String(cause);return false}}
 function select(id:string,extend=false){selectedEdge.value='';selected.value=extend?(selected.value.includes(id)?selected.value.filter(value=>value!==id):[...selected.value,id]):[id]}
 watch(picked,node=>{if(node)draft.value={value:String(node.text??node.file??node.url??node.label??''),x:node.x,y:node.y,width:node.width,height:node.height,color:typeof node.color==='string'?node.color:'',subpath:typeof node.subpath==='string'?node.subpath:''}},{immediate:true})

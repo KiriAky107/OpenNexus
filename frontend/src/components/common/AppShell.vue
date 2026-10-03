@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useWorkspaceStore } from '@/stores/workspace'
 import { useThemeStore } from '@/stores/theme'
 import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
@@ -25,7 +24,6 @@ defineProps<{
   showSecondarySidebar?: boolean
 }>()
 
-const workspaceStore = useWorkspaceStore()
 const themeStore = useThemeStore()
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
@@ -70,7 +68,6 @@ function openCitation(_noteId: string, blockId: string, filePath: string) {
     { file_path: filePath, block_id: blockId },
     {
       loadFile: (path) => editorStore.loadFile(path),
-      openFile: (path) => workspaceStore.openFile(path),
       highlightBlock: (id) => editorStore.highlightBlock(id),
       navigate: (path) => router.push(path),
     },
