@@ -138,6 +138,9 @@ def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:
                     if time.monotonic()>=until: raise TimeoutError('Packaged Core did not start')
                     time.sleep(.2)
                 storage = page.evaluate("()=>smokeInvoke('storage_info')")
+                experiments = page.evaluate("()=>smokeInvoke('host_capabilities')").get('experiments', {})
+                if not experiments.get('runtime_available') or experiments.get('enabled') is not False:
+                    raise RuntimeError('Host did not discover the verified packaged experiment runtime')
                 if str(data).casefold().replace('/','\\') not in json.dumps(storage).casefold().replace('\\\\','\\'):
                     raise RuntimeError('Host did not use private test storage')
                 restore()
@@ -162,6 +165,7 @@ def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:
             'os':platform.win32_ver(),'os_build':sys.getwindowsversion().build,'architecture':platform.machine(),
             'webview':debug.get('Browser'),'sdk_paths_removed':True,'private_storage_verified':True,
             'storage_pointer_restored':True,'vault_documents_unchanged':True,
+            'packaged_experiment_runtime':experiments,
             'missing_loader_negative_control':missing_loader_control if dynamic_loader else 'not applicable: static Loader',
             'scope':'Extracted payload startup and exit; no installer/upgrade/uninstall or missing-Runtime validation'}
     finally:

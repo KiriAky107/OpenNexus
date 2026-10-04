@@ -36,6 +36,7 @@ def main() -> None:
     parser.add_argument('--target', default='')
     parser.add_argument('--installer', type=Path)
     parser.add_argument('--native-smoke', action='store_true', help='Start extracted payload in a Windows WebView2 session')
+    parser.add_argument('--experiment-probe', action='store_true', help='Probe the extracted interpreter in an owned AppContainer')
     args = parser.parse_args()
     release = ROOT / 'frontend/src-tauri/target' / args.target / 'release'
     candidates = [args.installer] if args.installer else list((release / 'bundle/nsis').glob('*.exe'))
@@ -78,11 +79,22 @@ def main() -> None:
         if os.name == 'nt':
             microsoft_signature(payload / 'WebView2Loader.dll')
             microsoft_signature(bootstrapper)
+        experiment_spec = importlib.util.spec_from_file_location('experiment_package', ROOT / 'scripts/verify-experiment-package.py')
+        experiment = importlib.util.module_from_spec(experiment_spec)
+        experiment_spec.loader.exec_module(experiment)
+        runtime_lock = json.loads((ROOT / 'scripts/experiment-runtime-lock.json').read_text(encoding='utf-8'))
+        runtime_inventory = (ROOT / '.build/experiment-runtime' / runtime_lock['runtime_id'] / 'runtime.json').read_bytes()
+        runtime_report = experiment.verify_payload(payload, runtime_inventory)
         report = {'installer': installer.name, 'installer_sha256': digest(installer),
             'target': args.target or 'host-default', 'core_files_verified': len(actual),
             'host_version': manifest['host_version'], 'core_version': manifest['core_version'],
             'dynamic_loader_dependency': dynamic, 'loader': loader,
-            'microsoft_signatures_verified': os.name == 'nt', 'runtime_bootstrapper_embedded': True}
+            'microsoft_signatures_verified': os.name == 'nt', 'runtime_bootstrapper_embedded': True,
+            'experiment_runtime': runtime_report}
+        if args.experiment_probe:
+            evidence = Path(tempfile.mkdtemp(prefix='experiment-', dir=staging))
+            report['experiment_runtime']['native_probe'] = experiment.native_probe(payload, args.target, evidence)
+            report['experiment_runtime']['evidence_directory'] = evidence.relative_to(ROOT).as_posix()
         if args.native_smoke:
             from windows_native_smoke import verify
             config = json.loads((ROOT/'frontend/src-tauri/tauri.conf.json').read_text(encoding='utf-8'))

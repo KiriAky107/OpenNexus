@@ -98,9 +98,15 @@ fn native_probe(experimental: bool) {
         "../../../scripts/experiment-runtime-lock.json"
     ))
     .unwrap();
-    let runtime = root
-        .join(".build/experiment-runtime")
-        .join(lock["runtime_id"].as_str().unwrap());
+    // Test-only override for the installer's extracted payload. Production never
+    // accepts an environment-provided runtime directory.
+    let runtime = std::env::var_os("OPENNEXUS_PROBE_RUNTIME_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            root.join(".build/experiment-runtime")
+                .join(lock["runtime_id"].as_str().unwrap())
+        });
+    assert!(runtime.is_absolute());
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(runtime.join("runtime.json")).unwrap()).unwrap();
     assert_eq!(manifest["lock"], lock);
@@ -203,6 +209,10 @@ fn native_probe(experimental: bool) {
     assert_eq!(report["total"], 18);
     assert_eq!(report["names"][0], "中文");
     assert_eq!(report["runtime"], lock["version"]);
+    assert_eq!(
+        fs::canonicalize(report["executable"].as_str().unwrap()).unwrap(),
+        fs::canonicalize(&executable).unwrap()
+    );
     assert_eq!(report["isolated"], 1);
     assert_eq!(report["site_loaded"], false);
     assert_eq!(report["input_write"]["denied"], true);
@@ -370,7 +380,11 @@ fn native_probe(experimental: bool) {
     } else {
         "probe-result.json"
     };
-    fs::write(root.join(".build/experiment-runtime").join(receipt), serde_json::to_vec_pretty(&serde_json::json!({
+    let evidence = std::env::var_os("OPENNEXUS_PROBE_RECEIPT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join(".build/experiment-runtime"));
+    assert!(evidence.is_absolute() && evidence.is_dir());
+    fs::write(evidence.join(receipt), serde_json::to_vec_pretty(&serde_json::json!({
         "schema_version": 1, "runtime_id": lock["runtime_id"], "basic": report, "cancelled_tree_processes": cancelled_processes,
         "remaining_processes": 0, "resources": resources, "deadline_ms": 750,
         "experiment_limits": if experimental { Some(&limits) } else { None },

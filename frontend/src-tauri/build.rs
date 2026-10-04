@@ -1,4 +1,6 @@
 fn main() {
+    let release_desktop =
+        cfg!(feature = "desktop") && std::env::var("PROFILE").as_deref() == Ok("release");
     let manifest = std::path::Path::new("../../.build/sidecar/manifest.json");
     println!("cargo:rerun-if-changed={}", manifest.display());
     let content =
@@ -11,6 +13,25 @@ fn main() {
     std::fs::write(
         std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("core-manifest.json"),
         content,
+    )
+    .unwrap();
+    let runtime = "../../.build/experiment-runtime/python-3.13.16-windows-x64/runtime.json";
+    println!("cargo:rerun-if-changed={runtime}");
+    let runtime_content = if release_desktop
+        && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+    {
+        assert_eq!(
+            std::env::var("CARGO_CFG_TARGET_ARCH").as_deref(),
+            Ok("x86_64"),
+            "The packaged experiment runtime currently requires Windows x64"
+        );
+        std::fs::read(runtime).expect("Prepare the locked experiment runtime before a release Host")
+    } else {
+        b"{}".to_vec()
+    };
+    std::fs::write(
+        std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("experiment-runtime.json"),
+        runtime_content,
     )
     .unwrap();
     #[cfg(feature = "desktop")]

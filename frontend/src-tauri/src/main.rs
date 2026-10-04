@@ -26,6 +26,8 @@ use zeroize::Zeroizing;
 
 #[derive(Default)]
 struct Host {
+    experiment_runtime:
+        std::sync::OnceLock<Result<notesagent_host::experiment_runtime::RuntimeInfo, String>>,
     requests: Requests,
     extensions: Arc<Mutex<Option<notesagent_host::extension_store::ExtensionStore>>>,
     extension_reviews: extension_commands::Reviews,
@@ -316,7 +318,12 @@ fn host_capabilities(host: State<'_, Host>) -> serde_json::Value {
         .ok()
         .and_then(|mut core| core.as_mut().map(|c| c.available()))
         .unwrap_or(false);
-    serde_json::json!({"protocol":1,"workspace":true,"core":ready,"sync":true,"credentials":true,"extensions":cfg!(windows),"release":"preview","product":"OpenNexus"})
+    let experiment = host
+        .experiment_runtime
+        .get()
+        .and_then(|value| value.as_ref().ok());
+    serde_json::json!({"protocol":1,"workspace":true,"core":ready,"sync":true,"credentials":true,"extensions":cfg!(windows),"release":"preview","product":"OpenNexus",
+        "experiments": {"enabled": false, "runtime_available": experiment.is_some(), "runtime": experiment}})
 }
 
 #[derive(serde::Serialize)]
@@ -1276,6 +1283,20 @@ fn main() {
     tauri::Builder::default()
         .manage(Host::default())
         .setup(|app| {
+            let runtime = app
+                .path()
+                .resource_dir()
+                .map_err(|_| "EXPERIMENT_RUNTIME_UNAVAILABLE".to_owned())
+                .and_then(|root| {
+                    notesagent_host::experiment_runtime::verify_distribution(
+                        &root
+                            .join("runtimes")
+                            .join(notesagent_host::experiment_runtime::RUNTIME_ID),
+                        include_str!(concat!(env!("OUT_DIR"), "/experiment-runtime.json")),
+                    )
+                    .map_err(|error| error.code)
+                });
+            let _ = app.state::<Host>().experiment_runtime.set(runtime);
             use tauri::menu::{Menu, MenuItem, Submenu};
             let import = MenuItem::with_id(
                 app,

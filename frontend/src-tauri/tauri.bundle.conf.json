@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "build": {
-    "beforeBuildCommand": "pnpm build && node scripts/prepare-windows-loader.mjs",
-    "beforeBundleCommand": "node scripts/prepare-windows-loader.mjs"
+    "beforeBuildCommand": "pnpm build && node scripts/prepare-windows-loader.mjs && python ../scripts/prepare-experiment-runtime.py",
+    "beforeBundleCommand": "node scripts/prepare-windows-loader.mjs && python ../scripts/prepare-experiment-runtime.py"
   },
   "bundle": {
     "active": true,
@@ -17,6 +17,7 @@
     ],
     "resources": {
       "../../.build/sidecar/dist/opennexus-core/": "core/",
+      "../../.build/experiment-runtime/python-3.13.16-windows-x64/": "runtimes/python-3.13.16-windows-x64/",
       "../../.build/windows/WebView2Loader.dll": "WebView2Loader.dll"
     },
     "category": "Productivity",

@@ -72,6 +72,7 @@ def main():
         "total": sum(int(row["value"]) for row in rows),
         "names": [row["name"] for row in rows],
         "runtime": sys.version.split()[0],
+        "executable": sys.executable,
         "isolated": sys.flags.isolated,
         "site_loaded": "site" in sys.modules,
         "input_write": denied(lambda: (inputs / "input.csv").write_text("changed", encoding="utf-8")),

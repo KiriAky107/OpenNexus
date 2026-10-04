@@ -21,6 +21,20 @@
 
 GitHub CI 的 `windows-host` 使用同一入口并保存证据；普通 Linux Host 测试不下载或执行 Windows 运行时。默认测试不会误触发实验脚本执行。
 
+## 安装包资源与发现
+
+[Windows bundle 配置](../src-tauri/tauri.bundle.conf.json)在编译前和最终打包前复核锁定运行时，并将完整资源及许可证保存到 `runtimes/python-3.13.16-windows-x64/`。[Host build](../src-tauri/build.rs)将该构建清单内嵌到 release Host；Windows x64 以外的目标不会混用此解释器。
+
+[只读发现模块](../src-tauri/src/experiment_runtime.rs)从应用资源目录检查源码锁、文件清单、大小、SHA-256 和清单自身字节，拒绝额外文件、链接及被替换的 receipt。预期清单来自 Host 二进制；同时修改磁盘文件和旁边的 receipt 不能改变该预期。`host_capabilities` 记录实际发现结果，执行能力保持禁用，发现过程不运行脚本。此检查只证明发现时的完整性；正式运行仍须重新校验并在整个运行期间持有源码、解释器及祖先句柄。
+
+[安装包验证](../../scripts/verify-windows-package.py)从真实 NSIS 产物解包，核对包内解释器与 Host 内嵌清单及所有文件。加 `--experiment-probe` 会编译独占测试驱动，以仅含 System32 的 `PATH`、无 Python 环境配置的父环境运行两个隔离探测；驱动明确记录 `sys.executable`，验证确实启动了解包后的解释器。30 个原生运行时文件另做 Authenticode 校验，证据保存到 `.build/windows/experiment-*/`。该探测不启动生产应用、不修改应用存储指针；`Windows package` CI 同时运行既有解包 Host 启动检查，并核对 Host 能发现包内运行时。
+
+```powershell
+python scripts/verify-windows-package.py --installer <本次构建的安装包> --experiment-probe
+```
+
+源码 `.py`、UTF-8 JSON／CSV 和标准库文本计算已通过原生夹具。实验文件编辑、执行确认、日志及成果导入尚未接入，此处的安装包为实施中的技术产物，正式版本材料在整体验收后统一生成。
+
 ## 隔离模型与原型验收
 
 [原生测试](../src-tauri/src/experiment_runtime_probe.rs)为每次探测建立独占 AppContainer，无网络 capabilities。先创建暂停进程、绑定 Job、核对容器身份，再恢复执行。运行时与选定输入的读取句柄在整个运行期间保持打开，禁止共享写入或删除；单独授予该实例 SID 读取权限，退出后撤销授权。所选源码和 CSV 是测试副本，其他文件未授权。
