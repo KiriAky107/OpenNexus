@@ -435,3 +435,168 @@ fn queued_local_edit_and_successive_cycles_keep_their_original_operation_order()
     pair.assert_file("b.md", "beta", &b);
     assert_eq!(pair.peer.sync_paths().unwrap().len(), 2);
 }
+
+#[test]
+#[ignore = "helper killed at a durable rename-cycle receive boundary"]
+fn s02_rename_boundary_worker() {
+    let root = std::path::PathBuf::from(std::env::var("OPENNEXUS_S02_RENAME_ROOT").unwrap());
+    let boundary = std::env::var("OPENNEXUS_S02_RENAME_BOUNDARY").unwrap();
+    let revision: RemoteRevision =
+        serde_json::from_slice(&fs::read(root.join(".s02-rename-revision.json")).unwrap()).unwrap();
+    let mut peer = Workspace::open(&root).unwrap();
+    let binding = peer.sync_binding().unwrap().unwrap();
+    peer.sync_set_boundary(&binding.id, revision.sequence)
+        .unwrap();
+    peer.sync_stage(&binding.id, &revision).unwrap();
+    if boundary == "cursor" {
+        assert!(peer.sync_apply_pending(&binding.id).unwrap());
+    } else if boundary != "stage" {
+        let (operation, rename): (String, String) = peer
+            .db
+            .query_row(
+                "SELECT operation_id,rename_id FROM sync_inbox WHERE binding=?1 AND sequence=?2",
+                rusqlite::params![binding.id, revision.sequence],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let source = peer.path_for_id(&revision.file_id).unwrap();
+        let digest = peer.read(&source).unwrap().entry.hash;
+        peer.mutate_with_origin(
+            "rename",
+            &source,
+            &revision.path,
+            &digest,
+            &rename,
+            "remote",
+        )
+        .unwrap();
+        if boundary == "file" {
+            peer.write_spooled_with_identity(
+                &revision.path,
+                &digest,
+                (revision.hash.as_deref().unwrap(), revision.size as u64),
+                "remote",
+                &operation,
+                Some(&revision.file_id),
+            )
+            .unwrap();
+        }
+    }
+    fs::write(root.join(".s02-rename-ready"), boundary).unwrap();
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+}
+
+#[test]
+#[ignore = "80 real process kills across rename-cycle receive boundaries"]
+fn s02_rename_cycle_survives_twenty_process_kills_per_boundary() {
+    use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
+    struct Worker(Child);
+    impl Drop for Worker {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    for boundary in ["stage", "rename", "file", "cursor"] {
+        for round in 0..20 {
+            let mut pair = Pair::new(&[("a.md", "alpha"), ("b.md", "beta")]);
+            pair.rename("a.md", "temporary.md");
+            pair.rename("b.md", "a.md");
+            pair.rename("temporary.md", "b.md");
+            fs::write(pair.source_root.path().join("a.md"), b"edited beta").unwrap();
+            assert_eq!(pair.discover(), 2);
+            let a_id = pair.source.read("a.md").unwrap().entry.file_id;
+            let b_id = pair.source.read("b.md").unwrap().entry.file_id;
+            let revision = pair.next().unwrap();
+            let job = pair
+                .source
+                .sync_next(&pair.source_binding.id)
+                .unwrap()
+                .unwrap();
+            let frozen = pair.source.sync_commit_payload(&job).unwrap();
+            fs::write(
+                pair.peer_root.path().join(".s02-rename-revision.json"),
+                serde_json::to_vec(&revision).unwrap(),
+            )
+            .unwrap();
+            let Pair {
+                source_root,
+                peer_root,
+                source,
+                peer,
+                source_binding,
+                peer_binding,
+                sequence,
+            } = pair;
+            drop(source);
+            drop(peer);
+            let mut worker = Worker(
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--ignored",
+                        "--exact",
+                        "sync_discovery::rename_tests::s02_rename_boundary_worker",
+                    ])
+                    .env("OPENNEXUS_S02_RENAME_ROOT", peer_root.path())
+                    .env("OPENNEXUS_S02_RENAME_BOUNDARY", boundary)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap(),
+            );
+            let marker = peer_root.path().join(".s02-rename-ready");
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !marker.exists() {
+                assert!(
+                    worker.0.try_wait().unwrap().is_none(),
+                    "{boundary} worker exited in round {round}"
+                );
+                assert!(
+                    Instant::now() < deadline,
+                    "{boundary} marker timed out in round {round}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            worker.0.kill().unwrap();
+            worker.0.wait().unwrap();
+            let source = Workspace::open(source_root.path()).unwrap();
+            let peer = Workspace::open(peer_root.path()).unwrap();
+            let mut pair = Pair {
+                source_root,
+                peer_root,
+                source,
+                peer,
+                source_binding,
+                peer_binding,
+                sequence,
+            };
+            assert_eq!(pair.source.sync_commit_payload(&job).unwrap(), frozen);
+            assert_eq!(
+                pair.peer.sync_binding().unwrap().unwrap().cursor,
+                revision.sequence - i64::from(boundary != "cursor")
+            );
+            assert_eq!(
+                pair.peer.sync_apply_pending(&pair.peer_binding.id).unwrap(),
+                boundary != "cursor"
+            );
+            assert_eq!(
+                pair.peer.sync_binding().unwrap().unwrap().cursor,
+                revision.sequence
+            );
+            assert!(pair
+                .peer
+                .sync_conflicts(&pair.peer_binding.id)
+                .unwrap()
+                .is_empty());
+            pair.ack(&revision);
+            assert_eq!(pair.drain(false).len(), 2);
+            pair.assert_file("a.md", "edited beta", &a_id);
+            pair.assert_file("b.md", "alpha", &b_id);
+            assert!(!pair.peer_root.path().join(&revision.path).exists());
+        }
+    }
+}

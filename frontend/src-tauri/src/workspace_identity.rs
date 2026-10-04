@@ -78,7 +78,11 @@ impl<'a> WindowsIdentityIndex<'a> {
         // Windows directories remain distinct; no Unicode folding is involved.
         if self.destinations.is_none() {
             let mut destinations: BTreeMap<_, Vec<_>> = BTreeMap::new();
-            for old in self.previous.values().filter(|old| old.identity.is_some()) {
+            for old in self
+                .previous
+                .values()
+                .filter(|old| old.identity.is_some() && !old.entry.path.starts_with(".ainote/"))
+            {
                 if let Some(path) = canonical(&old.entry.path)? {
                     destinations.entry(path).or_default().push(old);
                 }
@@ -446,5 +450,28 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(identities.destinations.is_none());
+    }
+
+    #[test]
+    fn canonical_destination_index_skips_internal_retired_identity_metadata() {
+        let mut retired = previous(".ainote/retired/old-id", 3, 3);
+        retired.entry.deleted = true;
+        let previous = BTreeMap::from([
+            ("a.md".into(), previous("a.md", 1, 1)),
+            ("B.md".into(), previous("B.md", 2, 2)),
+            (retired.entry.path.clone(), retired),
+        ]);
+        let mut identities = WindowsIdentityIndex::new(&previous);
+        let found = identities
+            .tunneled_identity("1:0:1:0:2", "b.md", |path| {
+                // Workspace::resolve rejects internal metadata paths. They are
+                // tombstone bookkeeping, never candidate public destinations.
+                if path.starts_with(".ainote/") {
+                    return Err(HostError::new("UNSAFE_PATH"));
+                }
+                Ok(Some(PathBuf::from(path.to_ascii_lowercase())))
+            })
+            .unwrap();
+        assert_eq!(found, Some("1:0:1:0:1"));
     }
 }
