@@ -7,6 +7,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceRefresh } from './useWorkspaceRefresh'
 import type { FileNode } from '@/contracts'
+import * as service from '@/services/workspaceService'
 
 const native = vi.hoisted(() => ({ desktop: true, listen: vi.fn(), stop: vi.fn() }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: native.listen }))
@@ -25,7 +26,7 @@ async function start() {
   workspace.hasVault = true; workspace.vaultId = 'vault'; workspace.fileTree = [node('old')]
   workspace.activeFilePath = '/a.md'; editor.currentFilePath = '/a.md'
   const refresh = vi.spyOn(workspace, 'refreshFileTree').mockResolvedValue()
-  const check = vi.spyOn(editor, 'checkExternalFile').mockResolvedValue()
+  const check = vi.spyOn(editor, 'checkExternalFile').mockResolvedValue(true)
   const missing = vi.spyOn(editor, 'setExternalChanged').mockImplementation(() => undefined)
   wrapper = mount(defineComponent({ setup() { useWorkspaceRefresh(); return () => null } }))
   await flushPromises()
@@ -91,4 +92,47 @@ it('keeps a visible-only five-second Web fallback without a native subscription'
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
   await vi.advanceTimersByTimeAsync(10000)
   expect(refresh).toHaveBeenCalledTimes(2)
+})
+
+it('retries a failed body read even after the tree has accepted the new hash', async () => {
+  const { workspace, editor, refresh, check } = await start()
+  check.mockRestore()
+  editor.closeFile()
+  vi.spyOn(service, 'getNoteId').mockResolvedValue('a')
+  const read = vi.spyOn(service, 'readFileContent').mockResolvedValue('original')
+  await editor.loadFile('/a.md')
+  refresh.mockImplementationOnce(async () => { workspace.fileTree = [node('new')] })
+  read.mockRejectedValueOnce(new Error('temporary file lock'))
+  window.dispatchEvent(new Event('focus')); await flushPromises()
+  expect(editor.content).toBe('original')
+  expect(editor.externalReadError).toBe(true)
+  read.mockResolvedValue('external update')
+  window.dispatchEvent(new Event('focus')); await flushPromises()
+  expect(editor.content).toBe('external update')
+  expect(editor.externalReadError).toBe(false)
+  expect(read).toHaveBeenCalledTimes(3)
+  window.dispatchEvent(new Event('focus')); await flushPromises()
+  expect(read).toHaveBeenCalledTimes(3)
+})
+
+it('retries a body check skipped while saving without replacing newer unsaved input', async () => {
+  const { workspace, editor, refresh, check } = await start()
+  check.mockRestore(); editor.closeFile()
+  vi.spyOn(service, 'getNoteId').mockResolvedValue('a')
+  const read = vi.spyOn(service, 'readFileContent').mockResolvedValue('original')
+  await editor.loadFile('/a.md')
+  let release!: () => void
+  vi.spyOn(service, 'saveFileContent').mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve }))
+  editor.updateContent('saved input')
+  const saving = editor.save()
+  refresh.mockImplementationOnce(async () => { workspace.fileTree = [node('new')] })
+  window.dispatchEvent(new Event('focus')); await flushPromises()
+  expect(read).toHaveBeenCalledTimes(1)
+  release(); await saving
+  editor.updateContent('new unsaved input'); editor.cancelPendingAutoSave()
+  read.mockResolvedValue('external update')
+  window.dispatchEvent(new Event('focus')); await flushPromises()
+  expect(read).toHaveBeenCalledTimes(2)
+  expect(editor.content).toBe('new unsaved input')
+  expect(editor.saveStatus).toBe('conflict')
 })

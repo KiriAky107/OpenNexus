@@ -13,6 +13,8 @@ export function useWorkspaceRefresh() {
   let stopped = false, running = false, queued = false, forceNext = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let unlisten: UnlistenFn | undefined
+  // Tree revisions are observations, not proof that the editor read that body.
+  let pendingBody: { vault: string | null; path: string } | undefined
   async function refresh(force = false) {
     forceNext ||= force
     if (stopped) return
@@ -23,13 +25,17 @@ export function useWorkspaceRefresh() {
     try {
       if (document.visibilityState !== 'hidden' && workspace.hasVault) {
         const vault = workspace.vaultId, path = editor.currentFilePath
+        if (pendingBody && (pendingBody.vault !== vault || pendingBody.path !== path)) pendingBody = undefined
         const previous = path ? workspace.findNodeByPath(workspace.fileTree, path) : null
         const hash = previous?.content_hash
         await workspace.refreshFileTree(explicit)
         if (!stopped && vault === workspace.vaultId && path && path === editor.currentFilePath) {
           const current = workspace.findNodeByPath(workspace.fileTree, path)
-          if (!current) editor.setExternalChanged()
-          else if (hash !== current.content_hash || (!hash && !desktop)) await editor.checkExternalFile()
+          if (!current) { pendingBody = undefined; editor.setExternalChanged() }
+          else {
+            if (hash !== current.content_hash || (!hash && !desktop)) pendingBody = { vault, path }
+            if (pendingBody && await editor.checkExternalFile()) pendingBody = undefined
+          }
         }
       }
     } catch { /* Store retains the snapshot and exposes a retryable refresh error. */ }

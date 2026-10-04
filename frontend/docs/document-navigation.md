@@ -29,6 +29,12 @@ write into a newly loaded document, including reopening the same path. Backgroun
 external-content reads and save completions check that identity as well. Actual
 external deletion still exposes recovery and preserves unsaved text.
 
+Workspace refresh retains a pending body check independently of the file tree
+hash. A temporary read failure, or a check skipped while saving, is retried on
+the next workspace refresh even if the hash is unchanged. Only a successful
+read or an explicit conflict acknowledges the body change. Failed reads show
+an automatic-retry notice and retain the current editor text.
+
 Regression coverage uses controlled reads and saves to verify out-of-order
 completion, typing during loads and saves, returning to the current file,
 closing or changing scope, failed saves, stale editor callbacks, citations and

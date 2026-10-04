@@ -21,6 +21,7 @@ export const useEditorStore = defineStore('editor', () => {
   const currentNoteId = ref<string | null>(null)
   const currentFilePath = ref<string | null>(null)
   const loadingFilePath = ref<string | null>(null)
+  const externalReadError = ref(false)
   let documentVersion = 0
   const highlightBlockId = ref<string | null>(null)
   const cursorPosition = ref({ line: 0, column: 0 })
@@ -161,6 +162,7 @@ export const useEditorStore = defineStore('editor', () => {
       currentNoteId.value = loadedNoteId
       content.value = loadedContent
       diskContent = loadedContent
+      externalReadError.value = false
       saveStatus.value = 'saved'
       lastSavedAt.value = new Date().toISOString()
       highlightBlockId.value = null
@@ -191,19 +193,27 @@ export const useEditorStore = defineStore('editor', () => {
     }
   }
 
-  async function checkExternalFile() {
-    if (!currentFilePath.value || pendingSave || diskContent === undefined || saveStatus.value === 'conflict') return
+  async function checkExternalFile(): Promise<boolean> {
+    if (!currentFilePath.value || pendingSave || diskContent === undefined) return false
+    // Conflicts already require explicit recovery; never replace unsaved text.
+    if (saveStatus.value === 'conflict') return true
     const path = currentFilePath.value, baseline = diskContent, document = documentVersion
     try {
       const latest = await workspaceService.readFileContent(path)
-      if (document !== documentVersion || path !== currentFilePath.value || pendingSave || diskContent !== baseline || latest === baseline) return
+      if (document !== documentVersion || path !== currentFilePath.value || pendingSave || diskContent !== baseline) return false
+      externalReadError.value = false
+      if (latest === baseline) return true
       if (content.value === baseline && saveStatus.value === 'saved') {
         documentVersion++
         content.value = latest; diskContent = latest; contentRevision.value++
       } else {
         setExternalChanged(); saveStatus.value = 'conflict'
       }
-    } catch { /* Tree polling reports missing files; transient network errors retain edits. */ }
+      return true
+    } catch {
+      if (document === documentVersion && path === currentFilePath.value) externalReadError.value = true
+      return false
+    }
   }
 
   async function reloadExternalFile() {
@@ -215,6 +225,7 @@ export const useEditorStore = defineStore('editor', () => {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
     documentVersion++
     content.value = latest; diskContent = latest; saveStatus.value = 'saved'; contentRevision.value++
+    externalReadError.value = false
   }
 
   async function discardExternalChanges(path: string, snapshot: string): Promise<boolean> {
@@ -234,6 +245,7 @@ export const useEditorStore = defineStore('editor', () => {
     currentNoteId.value = null
     content.value = ''
     diskContent = undefined
+    externalReadError.value = false
     saveStatus.value = 'idle'
     lastSavedAt.value = null
     highlightBlockId.value = null
@@ -271,6 +283,7 @@ export const useEditorStore = defineStore('editor', () => {
     currentNoteId,
     currentFilePath,
     loadingFilePath,
+    externalReadError,
     highlightBlockId,
     cursorPosition,
     wordCount,
