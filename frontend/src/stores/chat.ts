@@ -469,6 +469,7 @@ export const useChatStore = defineStore('chat', () => {
       },
       onDone() {
         if (version !== streamVersion) return
+        finishPendingTools(aiMsg)
         conversation!.updated_at = new Date().toISOString()
         selectedLeaf.value = aiMsg.message_id
         completedLive = true
@@ -510,8 +511,15 @@ export const useChatStore = defineStore('chat', () => {
     return false
   }
 
+  function finishPendingTools(message?: ChatMessage) {
+    message?.tool_calls?.filter(call => call.status === 'running').forEach(call => {
+      call.status = 'error'
+      call.error_message = t('响应已结束，工具结果尚未确认；请核对实际运行状态。', 'Response ended before the tool result was confirmed; check the actual run status.')
+    })
+  }
+
   function stopGeneration() {
-    if (isStreaming.value) tailNeedsRefresh = true
+    if (isStreaming.value) { tailNeedsRefresh = true; finishPendingTools(liveMessage.value) }
     streamVersion++
     isPreparing.value = false
     if (sseClient) { sseClient.cancel(); sseClient = null }

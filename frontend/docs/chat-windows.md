@@ -10,4 +10,6 @@ Reading windows do not define model context. New frontend requests use `use_save
 
 After a stream completes, fails or is stopped, retry first reloads a window ending at the chosen message. This updates the active-leaf guard without losing an older retry target outside the latest page. Stopping or changing conversations during that read cancels the send. Regeneration reuses the saved user turn; retries still derive tool-write permissions from all saved sibling answers. A cancelled or delayed stream can persist its partial answer on its original parent without replacing a newer generation or selected branch. Concurrent desktop requests keep preparation and persistence in their own vault databases.
 
+When a response ends, is cancelled or disconnects, unfinished chat tools are marked interrupted in the live view and saved history. Existing tool results and delegated Agent links are preserved; the Agent's own lifecycle is queried separately.
+
 Synthetic 10,000-message tests record body rows, payload and timings without user data. The window service decodes 60 bodies for both initial loading and ID lookup. Full parent metadata traversal is still proportional to branch length; this change bounds body/JSON/network work rather than caching entire conversations.

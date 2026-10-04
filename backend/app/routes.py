@@ -646,6 +646,12 @@ async def chat(request: ChatRequest) -> StreamingResponse:
         finally:
             from app.services import chat_budget
             chat_budget.close_response(conversation_id, assistant_message_id)
+            # Cancellation/GeneratorExit bypass Exception. A closed response
+            # cannot leave a chat tool running; delegated Agents have their own
+            # lifecycle and the existing result/run link must remain available.
+            for call in tool_calls:
+                if call['status'] == 'running':
+                    call.update(status='error', error_message='Response ended before the tool result was confirmed; check the actual run status.')
             if conversation_id and (assistant_content or assistant_thinking or citations or tool_calls):
                 chat_history.append_message(
                     conversation_id,

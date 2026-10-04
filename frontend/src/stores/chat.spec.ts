@@ -91,6 +91,26 @@ it('shows the delegated run while the chat turn is still open', async () => {
   expect(store.isStreaming).toBe(false)
 })
 
+it.each(['stop', 'done'] as const)('ends pending chat tools on %s while retaining delegated run links', async ending => {
+  const store = useChatStore()
+  store.selectedProviderId = 'real'; store.selectedModel = 'model'
+  await store.sendMessage('write the note')
+  const handlers = vi.mocked(streamChat).mock.calls[0]![1]
+  const emit = (event: string, data: Record<string, unknown>) => handlers.onEvent?.({ event: event as 'ToolCallStart', sequence: 0, timestamp: '', data })
+  emit('ToolCallStart', { tool_call_id: 'create', name: 'agent.create' })
+  emit('ToolCallDelta', { tool_call_id: 'create', result: { run_id: 'still-running' } })
+  emit('ToolCallStart', { tool_call_id: 'search', name: 'rag.search' })
+  emit('ToolCallEnd', { tool_call_id: 'search', status: 'completed', result: { count: 1 } })
+  if (ending === 'stop') store.stopGeneration()
+  else handlers.onDone?.()
+  const calls = store.messages[1]!.tool_calls!
+  expect(calls[0]!.status).toBe('error')
+  expect(calls[0]!.error_message).toBeTruthy()
+  expect(JSON.parse(calls[0]!.result!).run_id).toBe('still-running')
+  expect(calls[1]!.status).toBe('completed')
+  expect(store.isStreaming).toBe(false)
+})
+
 it('keeps reasoning and tools ordered and retries only the selected branch prefix', async () => {
   const store = useChatStore()
   store.selectedProviderId = 'real'
