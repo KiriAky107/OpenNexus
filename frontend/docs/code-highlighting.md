@@ -27,4 +27,11 @@ remain on the main thread; Worker time is not input latency.
 
 After `pnpm build`, run `node scripts/highlight-benchmark.mjs 1000 5000`. The fixture repeats the same TypeScript export line used for native WebView measurements. The script compares the beta1 full-document tokenization/decoration computation against the built production Worker's message transport and computation for initial loading, one-character edits, 200-line paste, undo/redo, theme and language changes. It uses three samples per case and reports medians, span counts and transferred range bytes. Worker round-trip time includes background computation; it is not input latency.
 
+For preview HTML, run `node scripts/preview-highlight-benchmark.mjs 1000 5000`.
+It loads the built preview Worker, verifies byte-for-byte equality with synchronous
+dual-theme Shiki output, and separately reports synchronous CPU time, main-thread
+message-post time and Worker round-trip time. The default fixture uses three
+samples per size. Run large measurements without competing builds; the harness
+reports a failure when its 30-second reply deadline is exceeded.
+
 Native WebView validation records real CodeMirror transaction time, time to the next frame and main-thread tasks over 50 ms with the same input before and after this change. Browser measurements belong in the beta2 acceptance record alongside the actual Host build and WebView version.
