@@ -71,6 +71,25 @@ impl Drop for Scratch {
 #[test]
 #[ignore = "requires prepared official embedded runtime; run scripts/verify-experiment-runtime.ps1"]
 fn packaged_python_isolation_and_owned_process_tree() {
+    native_probe(false);
+}
+
+#[test]
+#[ignore = "requires prepared official embedded runtime; run scripts/verify-experiment-runtime.ps1"]
+fn experiment_policy_bounds_the_complete_container() {
+    native_probe(true);
+}
+
+fn native_probe(experimental: bool) {
+    let limits = crate::experiment_policy::ExecutionLimits {
+        wall_seconds: 8,
+        cpu_seconds: 2,
+        processes: 8,
+        disk_mib: 8,
+        output_mib: 1,
+        ..Default::default()
+    };
+    let validated = limits.validate().unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -153,7 +172,11 @@ fn packaged_python_isolation_and_owned_process_tree() {
             &BTreeMap::new(),
         )
         .unwrap();
-        let suspended = Suspended::create(&profile, &executable, data).unwrap();
+        let suspended = if experimental {
+            Suspended::create_experiment(&profile, &executable, data, &validated).unwrap()
+        } else {
+            Suspended::create(&profile, &executable, data).unwrap()
+        };
         // Safety: the test owns synthetic inputs, pins the verified runtime and
         // entry for the entire process lifetime, and uses no network capabilities
         // or brokers. Production execution still needs independent authorization.
@@ -213,11 +236,21 @@ fn packaged_python_isolation_and_owned_process_tree() {
     assert_eq!(running.active_test_processes().unwrap(), 0);
     drop(running);
     let mut resources = serde_json::Map::new();
-    for (mode, expected) in [
+    let mut resource_probes = vec![
         ("memory", "EXTENSION_RESOURCE_MEMORY_EXCEEDED"),
         ("processes", "EXTENSION_RESOURCE_PROCESSES_EXCEEDED"),
         ("scratch", "EXTENSION_RESOURCE_SCRATCH_EXCEEDED"),
-    ] {
+    ];
+    if experimental {
+        resource_probes.extend([
+            ("cpu", "EXTENSION_RESOURCE_CPU_EXCEEDED"),
+            ("outside", "EXTENSION_RESOURCE_SCRATCH_EXCEEDED"),
+            ("file-stream", "EXTENSION_RESOURCE_SCRATCH_EXCEEDED"),
+            ("directory-stream", "EXTENSION_RESOURCE_SCRATCH_EXCEEDED"),
+        ]);
+    }
+    for (mode, expected) in resource_probes {
+        let _ = fs::remove_file(scratch.0.join("error.txt"));
         let running = launch(mode);
         let deadline = running
             .start_test_tool_call(Duration::from_secs(15))
@@ -254,6 +287,12 @@ fn packaged_python_isolation_and_owned_process_tree() {
         if mode == "scratch" {
             fs::remove_file(scratch.0.join("large.bin")).unwrap();
         }
+        if mode == "outside" || mode == "file-stream" {
+            fs::remove_file(folder.join("outside-large.bin")).unwrap();
+        }
+        if mode == "directory-stream" {
+            fs::remove_dir(folder.join("stream-directory")).unwrap();
+        }
     }
     let running = launch("child");
     let deadline = running
@@ -267,9 +306,49 @@ fn packaged_python_isolation_and_owned_process_tree() {
     assert_eq!(running.active_test_processes().unwrap(), 0);
     drop(deadline);
     drop(running);
-    fs::write(root.join(".build/experiment-runtime/probe-result.json"), serde_json::to_vec_pretty(&serde_json::json!({
+    let independent_deadline = if experimental {
+        fs::remove_file(scratch.0.join("child-ready")).unwrap();
+        let running = launch("cancel");
+        let start = Instant::now();
+        while !scratch.0.join("child-ready").exists() && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(scratch.0.join("child-ready").exists());
+        let processes = running.active_test_processes().unwrap();
+        assert!(
+            processes >= 2,
+            "independent deadline needs a real descendant"
+        );
+        // Do not start a test tool timer or poll authorization while waiting:
+        // the run's own watchdog must kill the complete tree independently.
+        assert!(running.wait(Duration::from_secs(12)).unwrap().is_some());
+        assert_eq!(
+            running.check_authorization().unwrap_err().code,
+            "EXTENSION_TOOL_DEADLINE_EXCEEDED"
+        );
+        let start = Instant::now();
+        while running.active_test_processes().unwrap() != 0
+            && start.elapsed() < Duration::from_secs(5)
+        {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(running.active_test_processes().unwrap(), 0);
+        drop(running);
+        Some(serde_json::json!({"seconds": limits.wall_seconds,
+            "initial_processes": processes, "remaining_processes": 0}))
+    } else {
+        None
+    };
+    let receipt = if experimental {
+        "policy-probe-result.json"
+    } else {
+        "probe-result.json"
+    };
+    fs::write(root.join(".build/experiment-runtime").join(receipt), serde_json::to_vec_pretty(&serde_json::json!({
         "schema_version": 1, "runtime_id": lock["runtime_id"], "basic": report, "cancelled_tree_processes": cancelled_processes,
         "remaining_processes": 0, "resources": resources, "deadline_ms": 750,
+        "experiment_limits": if experimental { Some(&limits) } else { None },
+        "independent_run_deadline_seconds": independent_deadline,
         "host_network_positive_control": true, "container_outside_scratch_writable": true,
         "production_executor_enabled": false
     })).unwrap()).unwrap();

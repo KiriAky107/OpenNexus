@@ -78,6 +78,7 @@ impl Drop for Handles {
 struct Process<'a> {
     handles: Handles,
     job: Job,
+    experiment_deadline: Option<crate::extension_deadline::ToolDeadline>,
     _profile: &'a Profile,
     #[cfg(feature = "desktop")]
     _bound_entry: Option<&'a crate::extension_pinned::BoundEntry<'a>>,
@@ -99,13 +100,22 @@ impl<'a> Suspended<'a> {
     /// 使用显式环境和工作目录创建隐藏进程，不继承任意句柄。Profile 借用会在
     /// 所有者存活期间阻止清理；此 API 永远不会恢复扩展指令。
     pub fn create(profile: &'a Profile, executable: &Path, data: LaunchData) -> Result<Self> {
-        Self::create_inner(profile, executable, data, None)
+        Self::create_inner(profile, executable, data, None, None)
+    }
+    pub(crate) fn create_experiment(
+        profile: &'a Profile,
+        executable: &Path,
+        data: LaunchData,
+        limits: &crate::experiment_policy::ValidatedLimits,
+    ) -> Result<Self> {
+        Self::create_inner(profile, executable, data, None, Some(limits))
     }
     fn create_inner(
         profile: &'a Profile,
         executable: &Path,
         mut data: LaunchData,
         io: Option<crate::extension_stdio::ChildIo>,
+        experiment: Option<&crate::experiment_policy::ValidatedLimits>,
     ) -> Result<Self> {
         let bad = || HostError::new("EXTENSION_PROCESS_CREATE_FAILED");
         if !executable.is_absolute() || data.command_mut().last() != Some(&0) {
@@ -161,7 +171,15 @@ impl<'a> Suspended<'a> {
         {
             return Err(HostError::new("EXTENSION_PROCESS_ATTRIBUTES_FAILED"));
         }
-        let job = Job::with_scratch(data.scratch())?;
+        let job = match experiment {
+            Some(limits) => Job::for_experiment(profile, limits)?,
+            None => Job::with_scratch(data.scratch())?,
+        };
+        // This independent watchdog owns a Job handle and kills the whole tree
+        // even if disk inspection, UI or the caller stops making progress.
+        let experiment_deadline = experiment
+            .map(|limits| crate::extension_deadline::ToolDeadline::arm_experiment(&job, limits))
+            .transpose()?;
         let mut startup = STARTUPINFOEXW::default();
         startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
         startup.lpAttributeList = attributes.buffer.as_mut_ptr().cast();
@@ -223,6 +241,7 @@ impl<'a> Suspended<'a> {
         let process = Process {
             handles,
             job,
+            experiment_deadline,
             _profile: profile,
             #[cfg(feature = "desktop")]
             _bound_entry: None,
@@ -249,7 +268,7 @@ impl<'a> Suspended<'a> {
         data: LaunchData,
     ) -> Result<(Self, crate::extension_stdio::HostIo)> {
         let (child, host) = crate::extension_stdio::ChildIo::create()?;
-        let mut value = Self::create_inner(profile, entry.path(), data, Some(child))?;
+        let mut value = Self::create_inner(profile, entry.path(), data, Some(child), None)?;
         value.0._bound_entry = Some(entry);
         Ok((value, host))
     }
@@ -259,6 +278,9 @@ impl<'a> Suspended<'a> {
     /// 此底层模块不会代为执行上述授权检查。
     pub unsafe fn resume(self) -> Result<Running<'a>> {
         self.0.job.check_resources()?;
+        if let Some(deadline) = &self.0.experiment_deadline {
+            deadline.check()?;
+        }
         if unsafe { ResumeThread(self.0.handles.thread.as_raw_handle()) } != 1 {
             return Err(HostError::new("EXTENSION_PROCESS_RESUME_FAILED"));
         }
@@ -312,6 +334,9 @@ impl Running<'_> {
 
     pub fn check_authorization(&self) -> Result<()> {
         self.process.job.check_resources()?;
+        if let Some(deadline) = &self.process.experiment_deadline {
+            deadline.check()?;
+        }
         #[cfg(feature = "desktop")]
         if let Some(watch) = &self.revocation {
             return watch.check();
@@ -500,6 +525,35 @@ mod tests {
             "EXTENSION_PROCESS_CREATE_FAILED"
         );
         assert!(profile.folder().unwrap().is_dir());
+        profile.remove().unwrap();
+    }
+    #[test]
+    fn expired_experiment_cannot_resume_a_suspended_process() {
+        let profile = Profile::create().unwrap();
+        let entry = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32/cmd.exe");
+        let limits = crate::experiment_policy::ExecutionLimits {
+            wall_seconds: 1,
+            cpu_seconds: 1,
+            ..Default::default()
+        }
+        .validate()
+        .unwrap();
+        let suspended =
+            Suspended::create_experiment(&profile, &entry, data(&profile, &entry), &limits)
+                .unwrap();
+        let observer = suspended.0.handles.process.try_clone().unwrap();
+        assert_eq!(
+            unsafe { WaitForSingleObject(observer.as_raw_handle(), 5000) },
+            WAIT_OBJECT_0
+        );
+        // Safety: this process stays suspended until the independent watchdog
+        // terminates it; no command interpreter instruction is ever executed.
+        assert_eq!(
+            unsafe { suspended.resume() }.err().unwrap().code,
+            "EXTENSION_TOOL_DEADLINE_EXCEEDED"
+        );
+        drop(observer);
         profile.remove().unwrap();
     }
 }

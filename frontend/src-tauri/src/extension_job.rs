@@ -15,6 +15,15 @@ pub struct Job {
     state: std::sync::Arc<std::sync::atomic::AtomicU8>,
     _monitor: Option<ResourceMonitor>,
 }
+enum DiskCheck {
+    Scratch(PathBuf),
+    Experiment(crate::experiment_disk::DiskBudget),
+}
+struct KernelLimits {
+    processes: u32,
+    memory: usize,
+    cpu_ticks: Option<i64>,
+}
 impl Job {
     pub(crate) fn clone_for_deadline(&self) -> Result<Self> {
         Ok(Self {
@@ -36,6 +45,36 @@ impl Job {
         Self::with_process_limit(16, Some(scratch.to_owned()))
     }
     fn with_process_limit(processes: u32, scratch: Option<PathBuf>) -> Result<Self> {
+        Self::with_limits(
+            KernelLimits {
+                processes,
+                memory: 512 * 1024 * 1024,
+                cpu_ticks: None,
+            },
+            scratch.map(DiskCheck::Scratch),
+        )
+    }
+    pub(crate) fn for_experiment(
+        profile: &crate::extension_container::Profile,
+        limits: &crate::experiment_policy::ValidatedLimits,
+    ) -> Result<Self> {
+        let folder = profile.folder()?;
+        // The profile's complete package directory includes AC, Temp and any
+        // sibling private state. A model cannot supply an arbitrary root here.
+        let root = folder
+            .parent()
+            .ok_or_else(|| HostError::new("EXPERIMENT_DISK_INSPECTION_FAILED"))?;
+        let disk = crate::experiment_disk::DiskBudget::open(root, limits)?;
+        Self::with_limits(
+            KernelLimits {
+                processes: limits.processes(),
+                memory: limits.memory_bytes(),
+                cpu_ticks: Some(limits.cpu_ticks()),
+            },
+            Some(DiskCheck::Experiment(disk)),
+        )
+    }
+    fn with_limits(budget: KernelLimits, disk: Option<DiskCheck>) -> Result<Self> {
         let raw = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if raw.is_null() {
             return Err(HostError::new("EXTENSION_RESOURCE_UNAVAILABLE"));
@@ -49,11 +88,17 @@ impl Job {
             BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
                 LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
                     | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
-                    | JOB_OBJECT_LIMIT_JOB_MEMORY,
-                ActiveProcessLimit: processes,
+                    | JOB_OBJECT_LIMIT_JOB_MEMORY
+                    | if budget.cpu_ticks.is_some() {
+                        JOB_OBJECT_LIMIT_JOB_TIME
+                    } else {
+                        0
+                    },
+                ActiveProcessLimit: budget.processes,
+                PerJobUserTimeLimit: budget.cpu_ticks.unwrap_or(0),
                 ..Default::default()
             },
-            JobMemoryLimit: 512 * 1024 * 1024,
+            JobMemoryLimit: budget.memory,
             ..Default::default()
         };
         job.set(JobObjectExtendedLimitInformation, &limits)?;
@@ -70,7 +115,7 @@ impl Job {
             },
         };
         job.set(JobObjectCpuRateControlInformation, &cpu)?;
-        job._monitor = Some(ResourceMonitor::arm(&job, scratch)?);
+        job._monitor = Some(ResourceMonitor::arm(&job, disk)?);
         Ok(job)
     }
     pub fn check_resources(&self) -> Result<()> {
@@ -141,6 +186,7 @@ impl Job {
 /// 测得连续十秒满载。只有原始 Job 拥有监视器，观察和期限副本不拥有。
 const JOB_MEMORY_LIMIT: u32 = 10; // JOB_OBJECT_MSG_JOB_MEMORY_LIMIT
 const JOB_PROCESS_LIMIT: u32 = 3; // JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT
+const JOB_CPU_TIME_LIMIT: u32 = 1; // JOB_OBJECT_MSG_END_OF_JOB_TIME (Windows SDK)
 const JOB_NOTIFICATION_LIMIT: u32 = 11; // JOB_OBJECT_MSG_NOTIFICATION_LIMIT (Windows SDK)
 const SCRATCH_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
 struct ResourceMonitor {
@@ -148,7 +194,7 @@ struct ResourceMonitor {
     worker: Option<std::thread::JoinHandle<()>>,
 }
 impl ResourceMonitor {
-    fn arm(job: &Job, scratch: Option<PathBuf>) -> Result<Self> {
+    fn arm(job: &Job, disk: Option<DiskCheck>) -> Result<Self> {
         use std::sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
@@ -190,11 +236,22 @@ impl ResourceMonitor {
                 // 仍持有 Job 句柄时终止整个进程树。
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     while !thread_stop.load(Ordering::Acquire) {
-                        if scratch
-                            .as_deref()
-                            .is_some_and(|path| scratch_usage(path).is_err())
-                        {
-                            return 6;
+                        if let Some(disk) = &disk {
+                            match disk {
+                                DiskCheck::Scratch(path) if scratch_usage(path).is_err() => {
+                                    return 6
+                                }
+                                DiskCheck::Experiment(budget) => {
+                                    if let Err(error) = budget.usage() {
+                                        return if error.code == "EXPERIMENT_DISK_LIMIT_EXCEEDED" {
+                                            6
+                                        } else {
+                                            2
+                                        };
+                                    }
+                                }
+                                _ => {}
+                            }
                         }
                         let (mut code, mut key, mut pointer) = (0, 0, std::ptr::null_mut());
                         let ok = unsafe {
@@ -216,6 +273,9 @@ impl ResourceMonitor {
                         }
                         if key != 1 {
                             return 2;
+                        }
+                        if code == JOB_CPU_TIME_LIMIT {
+                            return 1;
                         }
                         // 这些硬上限通知在 Windows 上是尽力投递；即使通知丢失，
                         // 内核仍执行已配置的分配上限。

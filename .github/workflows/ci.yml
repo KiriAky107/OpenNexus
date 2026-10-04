@@ -129,6 +129,10 @@ jobs:
         run: cargo test --lib --locked 'workspace::' -- --nocapture
       - name: Test sync discovery, ordering and peer application
         run: cargo test --lib --locked sync_ -- --nocapture
+      - name: Test experiment budgets and container filesystem accounting
+        run: cargo test --lib --locked experiment_ -- --nocapture
+      - name: Test suspended process ownership and experiment expiry
+        run: cargo test --lib --locked extension_process:: -- --nocapture
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
@@ -142,5 +146,6 @@ jobs:
           include-hidden-files: true
           path: |
             .build/experiment-runtime/probe-result.json
+            .build/experiment-runtime/policy-probe-result.json
             .build/experiment-runtime/signatures.json
           if-no-files-found: warn

@@ -37,6 +37,9 @@ def main():
         chunks = []
         while True:
             chunks.append(bytearray(32 * 1024 * 1024))
+    if mode == "cpu":
+        while True:
+            pass
     if mode == "processes":
         while True:
             subprocess.Popen([sys.executable, "-I", "-B", "-X", "utf8", __file__, "child"], close_fds=True,
@@ -45,6 +48,20 @@ def main():
         with (scratch / "large.bin").open("wb") as output:
             for _ in range(18):
                 output.write(b"\x00" * (16 * 1024 * 1024))
+            output.flush()
+        time.sleep(120)
+    if mode in ("outside", "file-stream", "directory-stream"):
+        target = Path("outside-large.bin")
+        if mode == "file-stream":
+            target.write_bytes(b"main")
+            target = Path("outside-large.bin:hidden")
+        elif mode == "directory-stream":
+            target = Path("stream-directory")
+            target.mkdir()
+            target = Path("stream-directory:hidden")
+        with target.open("wb") as output:
+            for _ in range(3):
+                output.write(b"\x00" * (8 * 1024 * 1024))
             output.flush()
         time.sleep(120)
     inputs, private, port = Path(sys.argv[2]), Path(sys.argv[3]), int(sys.argv[4])

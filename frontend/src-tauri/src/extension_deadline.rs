@@ -30,7 +30,16 @@ impl ToolDeadline {
         Self::with_budget(job, TOOL_BUDGET)
     }
     fn with_budget(job: &Job, budget: Duration) -> Result<Self> {
-        if budget.is_zero() || budget > TOOL_BUDGET {
+        Self::with_ceiling(job, budget, TOOL_BUDGET)
+    }
+    pub(crate) fn arm_experiment(
+        job: &Job,
+        limits: &crate::experiment_policy::ValidatedLimits,
+    ) -> Result<Self> {
+        Self::with_ceiling(job, limits.wall(), Duration::from_secs(120))
+    }
+    fn with_ceiling(job: &Job, budget: Duration, ceiling: Duration) -> Result<Self> {
+        if budget.is_zero() || budget > ceiling {
             return Err(HostError::new("EXTENSION_TOOL_BUDGET_INVALID"));
         }
         let expires = Instant::now() + budget;

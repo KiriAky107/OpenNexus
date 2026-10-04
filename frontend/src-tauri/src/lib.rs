@@ -108,6 +108,10 @@ pub mod extension_instance;
 #[cfg(windows)]
 mod process_creation;
 
+#[cfg(windows)]
+mod experiment_disk;
+pub mod experiment_policy;
+
 #[cfg(all(test, windows))]
 mod experiment_runtime_probe;
 

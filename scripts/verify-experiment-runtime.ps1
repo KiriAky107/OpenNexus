@@ -20,7 +20,7 @@ try {
     try {
         Push-Location frontend/src-tauri
         try {
-            cargo test --lib --release --locked experiment_runtime_probe::packaged_python_isolation_and_owned_process_tree -- --ignored --exact --nocapture
+            cargo test --lib --release --locked experiment_runtime_probe:: -- --ignored --test-threads=1 --nocapture
             if ($LASTEXITCODE -ne 0) { throw 'Native AppContainer runtime probe failed' }
         } finally { Pop-Location }
     } finally { $env:OPENNEXUS_PROBE_PARENT_TOKEN = $priorToken }
