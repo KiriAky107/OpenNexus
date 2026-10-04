@@ -93,6 +93,7 @@ function hideToolbar() {
 }
 const editorRoot = ref<HTMLElement | null>(null)
 const loading = ref(true)
+let navigationReady = false
 const allHeadingsFolded = ref(false)
 const hasFoldableHeadings = ref(false)
 const fontSizeInput = ref(16)
@@ -535,7 +536,12 @@ onMounted(async () => {
   // Navigation needs the visible scroll container and an owned DOM selection.
   // ProseMirror ignores scroll requests while the editor still has no focus.
   await nextTick()
+  // Milkdown list node views restore the selection captured at mount in a RAF.
+  // Apply queued navigation after that restoration, or it overwrites the cited
+  // range even though the first scroll/selection transaction succeeded.
+  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
   if (disposed || !isCurrentDocument()) return
+  navigationReady = true
   installCommands()
   navigateHeading(editorStore.headingRequest)
   navigateReference(editorStore.referenceRequest)
@@ -544,7 +550,7 @@ onMounted(async () => {
 
 watch([() => settingsStore.spellCheck, () => settingsStore.language], applyProofingPreferences)
 function navigateHeading(request: typeof editorStore.headingRequest) {
-  if (!request || request.path !== editorStore.currentFilePath || !crepe || loading.value || disposed || !isCurrentDocument()) return
+  if (!request || request.path !== editorStore.currentFilePath || !crepe || !navigationReady || disposed || !isCurrentDocument()) return
   crepe.editor.action(ctx => {
     const view = ctx.get(editorViewCtx)
     let index = 0
@@ -558,7 +564,7 @@ function navigateHeading(request: typeof editorStore.headingRequest) {
 }
 watch(() => editorStore.headingRequest, navigateHeading, { flush: 'post' })
 function navigateReference(request: typeof editorStore.referenceRequest) {
-  if (!request || request.path !== editorStore.currentFilePath || !crepe || loading.value || disposed || !isCurrentDocument()) return
+  if (!request || request.path !== editorStore.currentFilePath || !crepe || !navigationReady || disposed || !isCurrentDocument()) return
   crepe.editor.action(ctx => {
     const view=ctx.get(editorViewCtx), matches:Array<{from:number;to:number}>=[]
     view.state.doc.descendants((node,position)=>{
@@ -573,7 +579,7 @@ function navigateReference(request: typeof editorStore.referenceRequest) {
 watch(()=>editorStore.referenceRequest,navigateReference,{ flush: 'post' })
 
 function navigateBlock(request: typeof editorStore.blockRequest) {
-  if (!request || request.path !== editorStore.currentFilePath || !crepe || loading.value || disposed || !isCurrentDocument()) return
+  if (!request || request.path !== editorStore.currentFilePath || !crepe || !navigationReady || disposed || !isCurrentDocument()) return
   crepe.editor.action(ctx => {
     const view = ctx.get(editorViewCtx), parser = ctx.get(parserCtx)
     const prefixLength = metadata.value?.prefix.length ?? 0

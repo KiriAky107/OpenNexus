@@ -117,6 +117,9 @@ it('reveals a citation received before the writing editor mounts only after its 
   }])
   const editor = (wrapper.vm as unknown as { getEditor: () => Editor }).getEditor()
   const view = editor.action(ctx => ctx.get(editorViewCtx))
+  // List node views restore their mount-time selection on the next animation
+  // frame. The citation must still own the range after those callbacks settle.
+  await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
   expect(view.state.doc.textBetween(view.state.selection.from, view.state.selection.to)).toBe(scrolls[0]!.selected)
 })
 
