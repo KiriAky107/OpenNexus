@@ -1,14 +1,13 @@
 fn main() {
     let manifest = std::path::Path::new("../../.build/sidecar/manifest.json");
     println!("cargo:rerun-if-changed={}", manifest.display());
-    let content = if cfg!(feature = "desktop")
-        && std::env::var("PROFILE").as_deref() == Ok("release")
-    {
-        std::fs::read(manifest)
-            .expect("Build Core with scripts/build-core.py before a release Host")
-    } else {
-        b"{}".to_vec()
-    };
+    let content =
+        if cfg!(feature = "desktop") && std::env::var("PROFILE").as_deref() == Ok("release") {
+            std::fs::read(manifest)
+                .expect("Build Core with scripts/build-core.py before a release Host")
+        } else {
+            b"{}".to_vec()
+        };
     std::fs::write(
         std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("core-manifest.json"),
         content,
