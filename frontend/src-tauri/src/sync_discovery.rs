@@ -1,7 +1,11 @@
 //! 根据已提交的快照协调外部编辑的文件，而不是根据 UI 读取缓存。
 use crate::workspace::{HostError, Result, Workspace};
 use rusqlite::{params, OptionalExtension};
-use std::{collections::HashSet, fs, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::Path,
+};
 use uuid::Uuid;
 /// 仅文件传输。逻辑记录单独接收自己的版本白名单。
 pub fn allowed(path: &str) -> bool {
@@ -98,7 +102,6 @@ impl Workspace {
                 seen.insert(entry.file_id);
             }
         }
-        let mut changes = 0;
         // Queue the retired occupant's deletion before the replacement's put.
         // The observed path is the last public path, even when identity
         // reconciliation moved a tombstone into internal metadata storage.
@@ -111,32 +114,21 @@ impl Workspace {
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             rows
         };
-        for (file_id, path) in previous {
-            if seen.contains(&file_id) || !self.sync_path_enabled(&path)? {
+        let mut deletions = Vec::new();
+        for (file_id, path) in &previous {
+            if seen.contains(file_id) || !self.sync_path_enabled(path)? {
                 continue;
             }
-            if self.resolve(&path)?.exists()
+            if self.resolve(path)?.exists()
                 && self
-                    .entry(&path)?
-                    .is_none_or(|entry| entry.file_id == file_id && !entry.deleted)
+                    .entry(path)?
+                    .is_none_or(|entry| entry.file_id == *file_id && !entry.deleted)
             {
                 continue;
             }
-            let operation = Uuid::new_v4().to_string();
-            let tx = self.db.transaction()?;
-            tx.execute(
-                "UPDATE files SET deleted=1,revision=revision+1 WHERE id=?1 AND deleted=0",
-                [&file_id],
-            )?;
-            tx.execute("INSERT INTO outbox SELECT ?1,id,revision,?3,'','delete',X'','pending' FROM files WHERE id=?2",params![operation,file_id,path])?;
-            tx.execute(
-                "UPDATE sync_observed SET deleted=1 WHERE file_id=?1",
-                [&file_id],
-            )?;
-            tx.commit()?;
-            self.changed_path(&path);
-            changes += 1;
+            deletions.push((file_id.clone(), path.clone()));
         }
+        let mut puts = Vec::new();
         for path in paths {
             let target = self.resolve(&path)?;
             let (digest, _) = self.cached_sync_file_info(&target, &path)?;
@@ -165,18 +157,211 @@ impl Workspace {
             let operation = Uuid::new_v4().to_string();
             self.store_payload_file(&operation, &target, &digest)?;
             let file_id = previous.map_or_else(|| Uuid::new_v4().to_string(), |e| e.file_id);
-            let tx = self.db.transaction()?;
-            tx.execute("INSERT INTO files VALUES (?1,?2,?3,1,0) ON CONFLICT(path) DO UPDATE SET hash=excluded.hash,revision=files.revision+1,deleted=0",params![file_id,path,digest])?;
-            tx.execute("INSERT INTO outbox SELECT ?1,id,revision,path,hash,'put',X'','pending' FROM files WHERE id=?2",params![operation,file_id])?;
-            tx.execute("INSERT INTO sync_observed VALUES (?1,?2,?3,0) ON CONFLICT(file_id) DO UPDATE SET path=excluded.path,hash=excluded.hash,deleted=0",params![file_id,path,digest])?;
-            tx.commit()?;
+            puts.push(DiscoveredPut {
+                file_id,
+                path,
+                digest,
+                operation,
+            });
+        }
+        let ordered = self.order_discovered_puts(&previous, &deletions, &puts)?;
+        // Publish the entire plan at once. In particular, a cycle's temporary
+        // put can never become sendable without its already-spooled final put.
+        let tx = self.db.transaction()?;
+        for (file_id, path) in &deletions {
+            tx.execute(
+                "UPDATE files SET deleted=1,revision=revision+1 WHERE id=?1 AND deleted=0",
+                [file_id],
+            )?;
+            tx.execute("INSERT INTO outbox SELECT ?1,id,revision,?3,'','delete',X'','pending' FROM files WHERE id=?2",params![Uuid::new_v4().to_string(),file_id,path])?;
+            tx.execute(
+                "UPDATE sync_observed SET deleted=1 WHERE file_id=?1",
+                [file_id],
+            )?;
+        }
+        for put in &puts {
+            tx.execute("INSERT INTO files VALUES (?1,?2,?3,1,0) ON CONFLICT(path) DO UPDATE SET hash=excluded.hash,revision=files.revision+1,deleted=0",params![put.file_id,put.path,put.digest])?;
+            tx.execute("INSERT INTO sync_observed VALUES (?1,?2,?3,0) ON CONFLICT(file_id) DO UPDATE SET path=excluded.path,hash=excluded.hash,deleted=0",params![put.file_id,put.path,put.digest])?;
+        }
+        for planned in ordered {
+            let put = &puts[planned.index];
+            if planned.operation != put.operation {
+                tx.execute(
+                    "INSERT INTO payloads SELECT ?1,hash,size FROM payloads WHERE operation_id=?2",
+                    params![planned.operation, put.operation],
+                )?;
+            }
+            tx.execute("INSERT INTO outbox SELECT ?1,id,revision,?3,?4,'put',X'','pending' FROM files WHERE id=?2",params![planned.operation,put.file_id,planned.path,put.digest])?;
+        }
+        tx.commit()?;
+        let changes = deletions.len() + puts.len();
+        for (_, path) in deletions {
             self.changed_path(&path);
-            seen.insert(file_id);
-            changes += 1;
+        }
+        for put in puts {
+            self.changed_path(&put.path);
         }
         Ok(changes)
     }
+
+    fn order_discovered_puts(
+        &self,
+        previous: &[(String, String)],
+        deletions: &[(String, String)],
+        puts: &[DiscoveredPut],
+    ) -> Result<Vec<PlannedPut>> {
+        if puts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let deleted: HashSet<_> = deletions.iter().map(|(id, _)| id.as_str()).collect();
+        let mut positions: HashMap<_, _> = previous
+            .iter()
+            .filter(|(id, _)| !deleted.contains(id.as_str()))
+            .map(|(id, path)| Ok((id.as_str(), self.sync_path_key(path)?)))
+            .collect::<Result<_>>()?;
+        let mut occupied: HashMap<_, _> = positions
+            .iter()
+            .map(|(id, path)| (path.clone(), *id))
+            .collect();
+        let indices: HashMap<_, _> = puts
+            .iter()
+            .enumerate()
+            .map(|(index, put)| (put.file_id.as_str(), index))
+            .collect();
+        let mut reserved: HashSet<_> = occupied.keys().cloned().collect();
+        for put in puts {
+            reserved.insert(self.sync_path_key(&put.path)?);
+        }
+        let mut states = vec![0u8; puts.len()];
+        let mut ordered = Vec::new();
+        for start in 0..puts.len() {
+            if states[start] == 2 {
+                continue;
+            }
+            let mut stack = vec![start];
+            states[start] = 1;
+            while let Some(&index) = stack.last() {
+                let put = &puts[index];
+                let target = self.sync_path_key(&put.path)?;
+                if let Some(owner) = occupied
+                    .get(&target)
+                    .copied()
+                    .filter(|id| *id != put.file_id)
+                {
+                    let dependency = *indices
+                        .get(owner)
+                        .ok_or_else(|| HostError::new("PATH_CONFLICT"))?;
+                    if states[dependency] == 0 {
+                        states[dependency] = 1;
+                        stack.push(dependency);
+                        continue;
+                    }
+                    if states[dependency] == 2 {
+                        return Err(HostError::new("PATH_CONFLICT"));
+                    }
+                    // Break a cycle with an ordinary v1 put, preserving identity
+                    // and collision checks on older receivers. Only the peer
+                    // sees this transient name; local files/references stay put.
+                    let staged = &puts[dependency];
+                    let path = self.sync_rename_staging_path(&staged.path, &reserved)?;
+                    let key = self.sync_path_key(&path)?;
+                    if let Some(old) = positions.insert(owner, key.clone()) {
+                        occupied.remove(&old);
+                    }
+                    occupied.insert(key.clone(), owner);
+                    reserved.insert(key);
+                    ordered.push(PlannedPut {
+                        index: dependency,
+                        path,
+                        operation: Uuid::new_v4().to_string(),
+                    });
+                    continue;
+                }
+                if let Some(old) = positions.insert(put.file_id.as_str(), target.clone()) {
+                    occupied.remove(&old);
+                }
+                occupied.insert(target, put.file_id.as_str());
+                ordered.push(PlannedPut {
+                    index,
+                    path: put.path.clone(),
+                    operation: put.operation.clone(),
+                });
+                states[index] = 2;
+                stack.pop();
+            }
+        }
+        Ok(ordered)
+    }
+
+    fn sync_rename_staging_path(
+        &self,
+        destination: &str,
+        reserved: &HashSet<String>,
+    ) -> Result<String> {
+        let destination = Path::new(destination);
+        let parent = destination.parent().unwrap_or_else(|| Path::new(""));
+        let extension = destination
+            .extension()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| HostError::new("SYNC_CLASS_UNSUPPORTED"))?;
+        loop {
+            let path = parent
+                .join(format!(
+                    "OpenNexus-sync-rename-{}.{}",
+                    Uuid::new_v4(),
+                    extension
+                ))
+                .to_string_lossy()
+                .replace('\\', "/");
+            if !self.sync_path_enabled(&path)? {
+                return Err(HostError::new("SYNC_CLASS_UNSUPPORTED"));
+            }
+            if !reserved.contains(&self.sync_path_key(&path)?) && !self.resolve(&path)?.exists() {
+                let queued: bool = self.db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM outbox WHERE path=?1 AND state IN ('pending','queued'))",
+                    [&path], |row| row.get(0))?;
+                if !queued {
+                    return Ok(path);
+                }
+            }
+        }
+    }
+
+    fn sync_path_key(&self, path: &str) -> Result<String> {
+        // Use the actual filesystem's spelling rules, including case-sensitive
+        // Windows directories. Unicode uppercasing can merge distinct names.
+        #[cfg(windows)]
+        {
+            let target = self.resolve(path)?;
+            Ok(if target.exists() {
+                target.canonicalize()?
+            } else {
+                target
+            }
+            .to_string_lossy()
+            .into_owned())
+        }
+        #[cfg(not(windows))]
+        Ok(path.to_owned())
+    }
 }
+
+struct DiscoveredPut {
+    file_id: String,
+    path: String,
+    digest: String,
+    operation: String,
+}
+
+struct PlannedPut {
+    index: usize,
+    path: String,
+    operation: String,
+}
+
+#[cfg(test)]
+#[path = "sync_rename_tests.rs"]
+mod rename_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

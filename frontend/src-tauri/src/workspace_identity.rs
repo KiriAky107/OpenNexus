@@ -16,29 +16,85 @@ fn windows_identity_parts(identity: &str) -> Option<(&str, &str)> {
 }
 
 #[cfg(windows)]
-fn tunneled_identity<'a>(
-    identity: &str,
-    destination: Option<&Previous>,
+struct WindowsIdentityIndex<'a> {
     previous: &'a BTreeMap<String, Previous>,
-) -> Option<&'a str> {
-    // NTFS name tunneling transfers a recently removed destination's birth
-    // time to a renamed file. Accept that change only with both its native
-    // index and the destination's recorded birth time; never by bytes alone.
-    let (native, birth) = windows_identity_parts(identity)?;
-    let target = destination?.identity.as_deref()?;
-    let (target_native, target_birth) = windows_identity_parts(target)?;
-    if target_native == native || target_birth != birth {
-        return None;
+    native: BTreeMap<&'a str, Option<&'a str>>,
+    destinations: Option<BTreeMap<std::path::PathBuf, Vec<&'a Previous>>>,
+}
+
+#[cfg(windows)]
+impl<'a> WindowsIdentityIndex<'a> {
+    fn new(previous: &'a BTreeMap<String, Previous>) -> Self {
+        let mut native = BTreeMap::new();
+        for old in previous.values().filter(|old| !old.entry.deleted) {
+            if let Some(identity) = old.identity.as_deref() {
+                if let Some((index, _)) = windows_identity_parts(identity) {
+                    // Multiple hard links cannot establish a unique source.
+                    native
+                        .entry(index)
+                        .and_modify(|value| *value = None)
+                        .or_insert(Some(identity));
+                }
+            }
+        }
+        Self {
+            previous,
+            native,
+            destinations: None,
+        }
     }
-    let mut matches = previous
-        .values()
-        .filter(|old| !old.entry.deleted)
-        .filter_map(|old| old.identity.as_deref())
-        .filter(|old| {
-            windows_identity_parts(old).is_some_and(|(old_native, _)| old_native == native)
-        });
-    let found = matches.next()?;
-    matches.next().is_none().then_some(found)
+
+    fn contains_native(&self, identity: &str) -> bool {
+        windows_identity_parts(identity).is_some_and(|(native, _)| self.native.contains_key(native))
+    }
+
+    fn tunneled_identity(
+        &mut self,
+        identity: &str,
+        path: &str,
+        mut canonical: impl FnMut(&str) -> Result<Option<std::path::PathBuf>>,
+    ) -> Result<Option<&'a str>> {
+        // Newly created files and ambiguous hard links never need filesystem
+        // alias lookups. Only a previously known native index can be tunneled.
+        let Some((native, birth)) = windows_identity_parts(identity) else {
+            return Ok(None);
+        };
+        let Some(original) = self.native.get(native).copied().flatten() else {
+            return Ok(None);
+        };
+        let matches = |old: &Previous| {
+            old.identity
+                .as_deref()
+                .and_then(windows_identity_parts)
+                .is_some_and(|(target_native, target_birth)| {
+                    target_native != native && target_birth == birth
+                })
+        };
+        if let Some(destination) = self.previous.get(path) {
+            return Ok(matches(destination).then_some(original));
+        }
+        // Build actual filesystem aliases once per reconciliation, only if a
+        // known source needs a changed-case destination lookup. Case-sensitive
+        // Windows directories remain distinct; no Unicode folding is involved.
+        if self.destinations.is_none() {
+            let mut destinations: BTreeMap<_, Vec<_>> = BTreeMap::new();
+            for old in self.previous.values().filter(|old| old.identity.is_some()) {
+                if let Some(path) = canonical(&old.entry.path)? {
+                    destinations.entry(path).or_default().push(old);
+                }
+            }
+            self.destinations = Some(destinations);
+        }
+        let Some(path) = canonical(path)? else {
+            return Ok(None);
+        };
+        Ok(self
+            .destinations
+            .as_ref()
+            .and_then(|destinations| destinations.get(&path))
+            .is_some_and(|entries| entries.iter().any(|old| matches(old)))
+            .then_some(original))
+    }
 }
 
 impl Workspace {
@@ -119,6 +175,8 @@ impl Workspace {
                 old_identities.entry(identity).or_default().push(old);
             }
         }
+        #[cfg(windows)]
+        let mut windows_identities = WindowsIdentityIndex::new(&previous);
         let mut current_identities: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut matched_identities = BTreeMap::new();
         for (path, item) in next.iter() {
@@ -127,7 +185,15 @@ impl Workspace {
                 let identity = if old_identities.contains_key(identity.as_str()) {
                     identity.as_str()
                 } else {
-                    tunneled_identity(identity, previous.get(path), &previous)
+                    windows_identities
+                        .tunneled_identity(identity, path, |path| {
+                            let target = self.resolve(path)?;
+                            if target.exists() {
+                                Ok(Some(target.canonicalize()?))
+                            } else {
+                                Ok(None)
+                            }
+                        })?
                         .unwrap_or(identity.as_str())
                 };
                 matched_identities.insert(path.clone(), identity.to_owned());
@@ -175,14 +241,7 @@ impl Workspace {
             } else {
                 #[cfg(windows)]
                 if same_path.is_some()
-                    && identity.is_some_and(|identity| {
-                        windows_identity_parts(identity).is_some_and(|(native, _)| {
-                            old_identities.keys().any(|old| {
-                                windows_identity_parts(old)
-                                    .is_some_and(|(old_native, _)| old_native == native)
-                            })
-                        })
-                    })
+                    && identity.is_some_and(|identity| windows_identities.contains_native(identity))
                 {
                     return Err(HostError::new("FILE_IDENTITY_CONFLICT"));
                 }
@@ -280,5 +339,112 @@ impl Workspace {
         }
         tx.commit()?;
         Ok(())
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn previous(path: &str, native: usize, birth: usize) -> Previous {
+        Previous {
+            entry: Entry {
+                file_id: format!("file-{native}"),
+                path: path.to_owned(),
+                hash: String::new(),
+                revision: 1,
+                deleted: false,
+                is_folder: false,
+                updated_at: None,
+            },
+            identity: Some(format!("1:0:{native}:0:{birth}")),
+        }
+    }
+
+    #[test]
+    fn fresh_native_identities_skip_all_canonical_destination_queries() {
+        let previous: BTreeMap<_, _> = (0..2048)
+            .map(|index| {
+                let path = format!("old-{index}.md");
+                (path.clone(), previous(&path, index, 1))
+            })
+            .collect();
+        let mut identities = WindowsIdentityIndex::new(&previous);
+        let mut queries = 0;
+        for index in 2048..6144 {
+            let found = identities
+                .tunneled_identity(
+                    &format!("1:0:{index}:0:2"),
+                    &format!("new-{index}.md"),
+                    |_| {
+                        queries += 1;
+                        Ok(None)
+                    },
+                )
+                .unwrap();
+            assert!(found.is_none());
+        }
+        assert_eq!(queries, 0);
+        assert!(identities.destinations.is_none());
+    }
+
+    #[test]
+    fn batch_case_aliases_build_the_canonical_destination_index_only_once() {
+        const COUNT: usize = 1024;
+        let mut previous = BTreeMap::new();
+        for index in 0..COUNT {
+            for (path, native, birth) in [
+                (format!("source-{index}.md"), index, 1),
+                (format!("TARGET-{index}.md"), index + COUNT, 2),
+            ] {
+                previous.insert(path.clone(), self::previous(&path, native, birth));
+            }
+        }
+        let mut identities = WindowsIdentityIndex::new(&previous);
+        let mut queries: BTreeMap<String, usize> = BTreeMap::new();
+        for index in 0..COUNT {
+            let found = identities
+                .tunneled_identity(
+                    &format!("1:0:{index}:0:2"),
+                    &format!("target-{index}.md"),
+                    |path| {
+                        *queries.entry(path.to_owned()).or_default() += 1;
+                        Ok((!path.starts_with("source-"))
+                            .then(|| PathBuf::from(path.to_ascii_lowercase())))
+                    },
+                )
+                .unwrap();
+            assert_eq!(found, Some(format!("1:0:{index}:0:1").as_str()));
+        }
+        assert_eq!(queries.len(), COUNT * 3);
+        assert!(queries.values().all(|count| *count == 1));
+    }
+
+    #[test]
+    fn canonical_index_keeps_case_sensitive_destinations_and_ambiguous_sources_distinct() {
+        let mut previous = BTreeMap::from([
+            ("a.md".into(), previous("a.md", 1, 1)),
+            ("B.md".into(), previous("B.md", 2, 2)),
+        ]);
+        let mut identities = WindowsIdentityIndex::new(&previous);
+        // A case-sensitive filesystem resolves these to different destinations.
+        assert!(identities
+            .tunneled_identity("1:0:1:0:2", "b.md", |path| Ok(Some(PathBuf::from(path))))
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            identities
+                .tunneled_identity("1:0:1:0:2", "B.md", |_| unreachable!())
+                .unwrap(),
+            Some("1:0:1:0:1")
+        );
+        previous.insert("hard-link.md".into(), self::previous("hard-link.md", 1, 1));
+        let mut identities = WindowsIdentityIndex::new(&previous);
+        assert!(identities
+            .tunneled_identity("1:0:1:0:2", "b.md", |_| unreachable!())
+            .unwrap()
+            .is_none());
+        assert!(identities.destinations.is_none());
     }
 }
