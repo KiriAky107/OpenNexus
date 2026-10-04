@@ -89,7 +89,6 @@ fn native_probe(experimental: bool) {
         output_mib: 1,
         ..Default::default()
     };
-    let validated = limits.validate().unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -152,6 +151,19 @@ fn native_probe(experimental: bool) {
     let executable = runtime.join("python.exe");
     let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
     let launch = |mode: &str| {
+        // CPU seconds and elapsed seconds are different measurements. Allow a
+        // loaded VM enough wall time to consume the independently small CPU cap.
+        let selected = if mode == "cpu" {
+            crate::experiment_policy::ExecutionLimits {
+                wall_seconds: 60,
+                cpu_seconds: 1,
+                ..limits.clone()
+            }
+            .validate()
+            .unwrap()
+        } else {
+            limits.validate().unwrap()
+        };
         let arguments = vec![
             "-I".into(),
             "-B".into(),
@@ -173,7 +185,7 @@ fn native_probe(experimental: bool) {
         )
         .unwrap();
         let suspended = if experimental {
-            Suspended::create_experiment(&profile, &executable, data, &validated).unwrap()
+            Suspended::create_experiment(&profile, &executable, data, &selected).unwrap()
         } else {
             Suspended::create(&profile, &executable, data).unwrap()
         };
@@ -252,15 +264,16 @@ fn native_probe(experimental: bool) {
     for (mode, expected) in resource_probes {
         let _ = fs::remove_file(scratch.0.join("error.txt"));
         let running = launch(mode);
+        let timeout = if mode == "cpu" { 55 } else { 12 };
         let deadline = running
-            .start_test_tool_call(Duration::from_secs(15))
+            .start_test_tool_call(Duration::from_secs(timeout + 3))
             .unwrap();
         let start = Instant::now();
         let outcome = loop {
             if let Err(error) = running.check_authorization() {
                 break error.code;
             }
-            if start.elapsed() > Duration::from_secs(12) {
+            if start.elapsed() > Duration::from_secs(timeout) {
                 let _ = running.terminate();
                 panic!(
                     "resource probe {mode} did not trip; fixture: {}",
@@ -269,7 +282,18 @@ fn native_probe(experimental: bool) {
             }
             std::thread::sleep(Duration::from_millis(25));
         };
-        assert_eq!(outcome, expected);
+        let elapsed_ms = start.elapsed().as_millis();
+        let user_cpu_ticks = running.test_job().unwrap().user_cpu_ticks().unwrap();
+        assert_eq!(
+            outcome, expected,
+            "mode={mode}; actual user CPU ticks={user_cpu_ticks}"
+        );
+        if mode == "cpu" {
+            assert!(
+                user_cpu_ticks >= 10_000_000,
+                "did not consume the 1 s CPU budget"
+            );
+        }
         assert!(running.wait(Duration::from_secs(5)).unwrap().is_some());
         let start = Instant::now();
         while running.active_test_processes().unwrap() != 0
@@ -280,7 +304,9 @@ fn native_probe(experimental: bool) {
         assert_eq!(running.active_test_processes().unwrap(), 0);
         resources.insert(
             mode.into(),
-            serde_json::json!({"error": outcome, "remaining_processes": 0}),
+            serde_json::json!({"error": outcome, "remaining_processes": 0,
+                "user_cpu_ticks": user_cpu_ticks, "elapsed_ms": elapsed_ms,
+                "cpu_budget_seconds": if mode == "cpu" { 1 } else { limits.cpu_seconds }}),
         );
         drop(deadline);
         drop(running);

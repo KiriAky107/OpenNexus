@@ -45,7 +45,7 @@ Windows 为 CPython 提供的实际 TEMP 是容器 `AC/Temp`，自定义 TEMP �
 | 项目 | 默认值 | 可配置范围 | 当前执行状态 |
 | --- | --- | --- | --- |
 | 墙钟时间 | 60 秒 | 1–120 秒 | 创建暂停进程前启动独立 watchdog；恢复执行前复核；到期终止整个 Job |
-| 用户态 CPU 总时间 | 30 秒 | 1–60 秒且不超过墙钟 | Windows Job 按全部进程累计；另保留约一个逻辑处理器的 CPU rate 上限 |
+| 用户态 CPU 总时间 | 30 秒 | 1–60 秒且不超过墙钟 | Windows Job 按全部进程累计；监视线程也查询实际 CPU 用时；另保留约一个逻辑处理器的 CPU rate 上限 |
 | Job 内存 | 256 MiB | 64–512 MiB | 内核限制分配，资源通知触发整个 Job 终止 |
 | Job 进程数 | 4 | 1–8 | 内核限制全部派生进程，包含 Windows 实际创建的辅助进程 |
 | 私有目录占用 | 64 MiB | 8–128 MiB | 统计整个独占容器包目录，包括 `AC/Temp` 及其他子目录和命名数据流 |
@@ -57,7 +57,7 @@ Windows 为 CPython 提供的实际 TEMP 是容器 `AC/Temp`，自定义 TEMP �
 
 目录监控间隔为 100 ms 加扫描耗时，属于发现超限后终止的监控，不能承诺写入字节精确停在上限。快速写入后删除可能发生在两次扫描之间；容器注册表存储也不属于文件目录统计。独立墙钟 watchdog 不依赖目录扫描、UI 或授权轮询，仍能终止整个进程树。生产入口开放前必须继续评估这些存储范围与瞬时写入风险，并完成并发、日志、输出、授权和安装包控制。
 
-新的真实进程探测以 8 秒墙钟、2 秒用户态 CPU、256 MiB 内存、8 进程和 8 MiB 目录预算验证死循环、内存和进程耗尽、Temp 外的普通文件、文件隐藏流及目录隐藏流。每种超限均得到对应底层资源错误且剩余进程为零；无额外工具计时器、无持续授权轮询时，运行自身的 watchdog 也终止了已确认存在后代的进程树。`policy-probe-result.json` 保留实际限额和结果；底层复用的错误码仍使用 `EXTENSION_*`，后续结构化执行接口统一映射为实验状态。
+新的真实进程探测以 8 秒墙钟、2 秒用户态 CPU、256 MiB 内存、8 进程和 8 MiB 目录预算验证内存和进程耗尽、Temp 外的普通文件、文件隐藏流及目录隐藏流。CPU 死循环单独使用 1 秒 CPU／60 秒墙钟，核对真实 Job CPU 计数确实达到 CPU 预算；虚拟机调度等待不计作 CPU 时间。实验策略不采用扩展十秒窗口的 rate-pressure 通知，避免该通知和总 CPU 预算混淆；原有扩展策略保持独立。每种超限均得到对应底层资源错误且剩余进程为零；无额外工具计时器、无持续授权轮询时，8 秒 watchdog 也终止了已确认存在后代的进程树。`policy-probe-result.json` 保留实际限额、CPU 计数和耗时；底层复用的错误码仍使用 `EXTENSION_*`，后续结构化执行接口统一映射为实验状态。
 
 CPU 时间的含义见 [Windows Job 基本限额](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_limit_information)，文件流大小及分配大小见 [FILE_STREAM_INFO](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_stream_info)。
 

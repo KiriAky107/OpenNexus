@@ -109,13 +109,17 @@ impl Job {
         let cpu = JOBOBJECT_CPU_RATE_CONTROL_INFORMATION {
             ControlFlags: JOB_OBJECT_CPU_RATE_CONTROL_ENABLE
                 | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP
-                | JOB_OBJECT_CPU_RATE_CONTROL_NOTIFY,
+                | if budget.cpu_ticks.is_none() {
+                    JOB_OBJECT_CPU_RATE_CONTROL_NOTIFY
+                } else {
+                    0
+                },
             Anonymous: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0 {
                 CpuRate: (10000 / processors).max(1),
             },
         };
         job.set(JobObjectCpuRateControlInformation, &cpu)?;
-        job._monitor = Some(ResourceMonitor::arm(&job, disk)?);
+        job._monitor = Some(ResourceMonitor::arm(&job, disk, budget.cpu_ticks)?);
         Ok(job)
     }
     pub fn check_resources(&self) -> Result<()> {
@@ -180,6 +184,28 @@ impl Job {
         }
         Ok(accounting.ActiveProcesses)
     }
+    /// Cumulative user-mode execution for the complete Job, in 100 ns ticks.
+    pub fn user_cpu_ticks(&self) -> Result<i64> {
+        query_cpu_ticks(&self.handle)
+    }
+}
+
+fn query_cpu_ticks(handle: &OwnedHandle) -> Result<i64> {
+    let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+    if unsafe {
+        QueryInformationJobObject(
+            handle.as_raw_handle(),
+            JobObjectBasicAccountingInformation,
+            (&mut accounting as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+            size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+            std::ptr::null_mut(),
+        )
+    } == 0
+        || accounting.TotalUserTime < 0
+    {
+        return Err(HostError::new("EXTENSION_RESOURCE_QUERY_FAILED"));
+    }
+    Ok(accounting.TotalUserTime)
 }
 
 /// Windows 通知使用十秒窗口和 ToleranceHigh（允许超出预算 60%），不表示已经
@@ -194,7 +220,7 @@ struct ResourceMonitor {
     worker: Option<std::thread::JoinHandle<()>>,
 }
 impl ResourceMonitor {
-    fn arm(job: &Job, disk: Option<DiskCheck>) -> Result<Self> {
+    fn arm(job: &Job, disk: Option<DiskCheck>, cpu_ticks: Option<i64>) -> Result<Self> {
         use std::sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
@@ -213,15 +239,17 @@ impl ResourceMonitor {
                 CompletionPort: port.as_raw_handle(),
             },
         )?;
-        job.set(
-            JobObjectNotificationLimitInformation,
-            &JOBOBJECT_NOTIFICATION_LIMIT_INFORMATION {
-                LimitFlags: JOB_OBJECT_LIMIT_RATE_CONTROL,
-                RateControlTolerance: ToleranceHigh,
-                RateControlToleranceInterval: ToleranceIntervalShort,
-                ..Default::default()
-            },
-        )?;
+        if cpu_ticks.is_none() {
+            job.set(
+                JobObjectNotificationLimitInformation,
+                &JOBOBJECT_NOTIFICATION_LIMIT_INFORMATION {
+                    LimitFlags: JOB_OBJECT_LIMIT_RATE_CONTROL,
+                    RateControlTolerance: ToleranceHigh,
+                    RateControlToleranceInterval: ToleranceIntervalShort,
+                    ..Default::default()
+                },
+            )?;
+        }
         let owned_job = job
             .handle
             .try_clone()
@@ -236,6 +264,16 @@ impl ResourceMonitor {
                 // 仍持有 Job 句柄时终止整个进程树。
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     while !thread_stop.load(Ordering::Acquire) {
+                        // Kernel time limits are checked periodically. Observe
+                        // actual aggregate CPU too, independently of wall time
+                        // and the extension's ten-second rate-pressure policy.
+                        if let Some(limit) = cpu_ticks {
+                            match query_cpu_ticks(&owned_job) {
+                                Ok(used) if used >= limit => return 1,
+                                Ok(_) => {}
+                                Err(_) => return 2,
+                            }
+                        }
                         if let Some(disk) = &disk {
                             match disk {
                                 DiskCheck::Scratch(path) if scratch_usage(path).is_err() => {
@@ -713,5 +751,54 @@ mod tests {
             unsafe { WaitForSingleObject(child.process.as_raw_handle(), 5000) },
             WAIT_OBJECT_0
         );
+    }
+    #[test]
+    fn experiment_cpu_budget_does_not_use_extension_rate_notifications() {
+        let profile = crate::extension_container::Profile::create().unwrap();
+        let limits = crate::experiment_policy::ExecutionLimits::default()
+            .validate()
+            .unwrap();
+        let job = Job::for_experiment(&profile, &limits).unwrap();
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        assert_ne!(
+            unsafe {
+                QueryInformationJobObject(
+                    job.handle.as_raw_handle(),
+                    JobObjectExtendedLimitInformation,
+                    (&mut info as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        assert_ne!(
+            info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_JOB_TIME,
+            0
+        );
+        assert_eq!(
+            info.BasicLimitInformation.PerJobUserTimeLimit,
+            limits.cpu_ticks()
+        );
+        let mut rate = JOBOBJECT_CPU_RATE_CONTROL_INFORMATION::default();
+        assert_ne!(
+            unsafe {
+                QueryInformationJobObject(
+                    job.handle.as_raw_handle(),
+                    JobObjectCpuRateControlInformation,
+                    (&mut rate as *mut JOBOBJECT_CPU_RATE_CONTROL_INFORMATION).cast(),
+                    size_of::<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>() as u32,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        assert_eq!(
+            rate.ControlFlags,
+            JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP
+        );
+        assert_eq!(job.user_cpu_ticks().unwrap(), 0);
+        drop(job);
+        profile.remove().unwrap();
     }
 }
