@@ -132,7 +132,7 @@ jobs:
       - name: Test experiment budgets and container filesystem accounting
         run: cargo test --lib --locked experiment_ -- --nocapture
       - name: Test suspended process ownership and experiment expiry
-        run: cargo test --lib --locked extension_process:: -- --nocapture
+        run: cargo test --lib --locked 'extension_process::' -- --nocapture
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
