@@ -108,4 +108,7 @@ pub mod extension_instance;
 #[cfg(windows)]
 mod process_creation;
 
+#[cfg(all(test, windows))]
+mod experiment_runtime_probe;
+
 pub mod sync_scope;

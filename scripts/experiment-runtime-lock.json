@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "runtime_id": "python-3.13.16-windows-x64",
+  "version": "3.13.16",
+  "architecture": "x86_64",
+  "source": "https://www.python.org/ftp/python/3.13.16/python-3.13.16-embeddable-amd64.zip",
+  "source_manifest": "https://www.python.org/ftp/python/3.13.16/windows-3.13.16.json",
+  "source_manifest_sha256": "e95d3e68177b2c459f3b6415245dae02357018d9b0c8de85fd0c877996688c09",
+  "archive_sha256": "589dc1e9d02549ca5f680710307ff9b77f6e3ffc4aa3efccd7fa54eeeafac94b",
+  "archive_bytes": 11439788,
+  "entrypoint": "python.exe",
+  "path_configuration": "python313._pth"
+}

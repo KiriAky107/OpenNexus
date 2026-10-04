@@ -23,6 +23,10 @@ jobs:
       - run: git diff --check
       - run: python3 scripts/check-doc-links.py
       - run: python3 scripts/check-release-notes.py
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - run: python3 scripts/test_prepare_experiment_runtime.py
 
   backend:
     runs-on: ubuntu-latest
@@ -125,3 +129,18 @@ jobs:
         run: cargo test --lib --locked 'workspace::' -- --nocapture
       - name: Test sync discovery, ordering and peer application
         run: cargo test --lib --locked sync_ -- --nocapture
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Verify locked embedded Python and native isolation prototype
+        working-directory: .
+        run: ./scripts/verify-experiment-runtime.ps1
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: experiment-runtime-probe
+          include-hidden-files: true
+          path: |
+            .build/experiment-runtime/probe-result.json
+            .build/experiment-runtime/signatures.json
+          if-no-files-found: warn
