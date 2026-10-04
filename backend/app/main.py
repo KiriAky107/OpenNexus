@@ -35,6 +35,8 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        from app.services import chat_persistence
+        await chat_persistence.shutdown()
         from app.benchmarks import service as benchmark_service
         await benchmark_service.shutdown()
         await container.agent.shutdown()

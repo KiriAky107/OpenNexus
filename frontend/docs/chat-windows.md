@@ -12,4 +12,11 @@ After a stream completes, fails or is stopped, retry first reloads a window endi
 
 When a response ends, is cancelled or disconnects, unfinished chat tools are marked interrupted in the live view and saved history. Existing tool results and delegated Agent links are preserved; the Agent's own lifecycle is queried separately.
 
+Response history is written in an awaited background thread carrying the original
+Vault context. The stream sends its terminal event only after the commit; a failed
+write reports `CHAT_HISTORY_SAVE_FAILED`. Cancellation, including ASGI disconnect
+and repeated task cancellation, waits for the same write instead of abandoning it.
+Core shutdown drains outstanding response writes. Database lock waits therefore
+leave the event loop available to other requests.
+
 Synthetic 10,000-message tests record body rows, payload and timings without user data. The window service decodes 60 bodies for both initial loading and ID lookup. Full parent metadata traversal is still proportional to branch length; this change bounds body/JSON/network work rather than caching entire conversations.

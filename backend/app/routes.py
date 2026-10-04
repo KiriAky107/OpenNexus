@@ -551,12 +551,17 @@ async def chat(request: ChatRequest) -> StreamingResponse:
         argument_buffers: dict[str, str] = {}
         usage: dict | None = None
         activity: list[dict] = []
+        terminal_event = None
+        persistence_failed = False
         try:
             from app.services.chat_retrieval import stream as retrieval_stream
             async with aclosing(retrieval_stream(request, provider)) as events:
                 async for event in events:
                     event = event.model_copy(update={"sequence": sequence})
                     sequence += 1
+                    if event.event == ModelEventType.done:
+                        terminal_event = event
+                        break
                     if event.event == ModelEventType.citation:
                         citations.append(event.data)
                     elif event.event == ModelEventType.text_delta:
@@ -642,7 +647,8 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                 data={"status": "failed"}, timestamp=utc_now()
             )
             yield as_sse(error.event.value, error.model_dump_json())
-            yield as_sse(done.event.value, done.model_dump_json())
+            sequence += 1
+            terminal_event = done
         finally:
             from app.services import chat_budget
             chat_budget.close_response(conversation_id, assistant_message_id)
@@ -653,21 +659,37 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                 if call['status'] == 'running':
                     call.update(status='error', error_message='Response ended before the tool result was confirmed; check the actual run status.')
             if conversation_id and (assistant_content or assistant_thinking or citations or tool_calls):
-                chat_history.append_message(
-                    conversation_id,
-                    message_id=assistant_message_id,
-                    role="assistant",
-                    content=assistant_content,
-                    thinking=assistant_thinking or None,
-                    citations=citations,
-                    tool_calls=tool_calls,
-                    usage=usage,
-                    activity=activity,
-                    parent_message_id=user_message_id,
-                    workspace_context=request.workspace_context.model_dump() if request.workspace_context else None,
-                    attachments=request.attachments,
-                    context_captured=True,
-                )
+                from app.services import chat_persistence
+                try:
+                    await chat_persistence.save(
+                        conversation_id,
+                        message_id=assistant_message_id,
+                        role="assistant",
+                        content=assistant_content,
+                        thinking=assistant_thinking or None,
+                        citations=citations,
+                        tool_calls=tool_calls,
+                        usage=usage,
+                        activity=activity,
+                        parent_message_id=user_message_id,
+                        workspace_context=request.workspace_context.model_dump() if request.workspace_context else None,
+                        attachments=request.attachments,
+                        context_captured=True,
+                    )
+                except Exception:
+                    persistence_failed = True
+
+        # Completion becomes visible only after history commits. Disconnected
+        # generators unwind above and never attempt to yield from their finally.
+        if persistence_failed:
+            error = ModelEvent(event=ModelEventType.error, sequence=sequence,
+                               data={'code': 'CHAT_HISTORY_SAVE_FAILED',
+                                     'message': '回复未能保存到历史，请保留当前内容后重试。'}, timestamp=utc_now())
+            yield as_sse(error.event.value, error.model_dump_json())
+            terminal_event = ModelEvent(event=ModelEventType.done, sequence=sequence + 1,
+                                       data={'status': 'failed'}, timestamp=utc_now())
+        if terminal_event is not None:
+            yield as_sse(terminal_event.event.value, terminal_event.model_dump_json())
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
