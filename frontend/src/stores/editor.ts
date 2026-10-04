@@ -6,7 +6,7 @@ import { getNote } from '@/services/noteService'
 import { resolveBlockLocation } from '@/features/editor/blockLocation'
 import { t } from '@/i18n'
 import { ApiErrorClass } from '@/services/apiClient'
-import { DesktopError } from '@/services/platform/desktop'
+import { contentHash, DesktopError } from '@/services/platform/desktop'
 import { workspaceDocumentType } from '@/services/workspaceDocuments'
 import { normalizeWorkspacePath } from '@/services/workspacePaths'
 import { useWorkspaceStore } from './workspace'
@@ -18,6 +18,7 @@ export const useEditorStore = defineStore('editor', () => {
   const content = ref('')
   const contentRevision = ref(0)
   let diskContent: string | undefined
+  let diskHash: { source: string; hash: Promise<string> } | undefined
   const saveStatus = ref<SaveStatus>('idle')
   const lastSavedAt = ref<string | null>(null)
   const currentNoteId = ref<string | null>(null)
@@ -220,12 +221,18 @@ export const useEditorStore = defineStore('editor', () => {
     }
   }
 
-  async function checkExternalFile(): Promise<boolean> {
+  async function checkExternalFile(observedHash?: string): Promise<boolean> {
     if (!currentFilePath.value || pendingSave || diskContent === undefined) return false
     // Conflicts already require explicit recovery; never replace unsaved text.
     if (saveStatus.value === 'conflict') return true
     const path = currentFilePath.value, baseline = diskContent, document = documentVersion
     try {
+      if (observedHash) {
+        if (diskHash?.source !== baseline) diskHash = { source: baseline, hash: contentHash(baseline) }
+        const hash = await diskHash.hash
+        if (document !== documentVersion || path !== currentFilePath.value || pendingSave || diskContent !== baseline) return false
+        if (hash === observedHash) { externalReadError.value = false; return true }
+      }
       const latest = await workspaceService.readFileContent(path)
       if (document !== documentVersion || path !== currentFilePath.value || pendingSave || diskContent !== baseline) return false
       externalReadError.value = false
@@ -274,6 +281,7 @@ export const useEditorStore = defineStore('editor', () => {
     currentNoteId.value = null
     content.value = ''
     diskContent = undefined
+    diskHash = undefined
     externalReadError.value = false
     saveStatus.value = 'idle'
     lastSavedAt.value = null

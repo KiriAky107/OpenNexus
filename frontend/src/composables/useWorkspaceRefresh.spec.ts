@@ -8,6 +8,7 @@ import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceRefresh } from './useWorkspaceRefresh'
 import type { FileNode } from '@/contracts'
 import * as service from '@/services/workspaceService'
+import { contentHash } from '@/services/platform/desktop'
 
 const native = vi.hoisted(() => ({ desktop: true, listen: vi.fn(), stop: vi.fn() }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: native.listen }))
@@ -33,24 +34,27 @@ async function start() {
   return { workspace, editor, refresh, check, missing }
 }
 
-it('does not poll every two seconds or reread the active body when idle', async () => {
+it('does not poll every two seconds and supplies the known revision for cheap body checks', async () => {
   const { refresh, check } = await start()
   await vi.advanceTimersByTimeAsync(10000)
   expect(refresh).toHaveBeenCalledTimes(1)
   await vi.advanceTimersByTimeAsync(20000)
   expect(refresh).toHaveBeenCalledTimes(2)
   expect(refresh).toHaveBeenLastCalledWith(false)
-  expect(check).not.toHaveBeenCalled()
+  expect(check).toHaveBeenCalledTimes(2)
+  expect(check).toHaveBeenLastCalledWith('old')
 })
 it('ignores other vault events and rereads only changed active content', async () => {
   const { workspace, refresh, check, missing } = await start()
+  check.mockClear()
   event({ payload: { vault_id: 'other', revision: 1, paths: ['a.md'] } }); await flushPromises()
   expect(refresh).toHaveBeenCalledTimes(1)
   event({ payload: { vault_id: 'vault', revision: 2, paths: ['unrelated.md'] } }); await flushPromises()
-  expect(check).not.toHaveBeenCalled()
+  expect(check).toHaveBeenCalledExactlyOnceWith('old')
   refresh.mockImplementationOnce(async () => { workspace.fileTree = [node('new')] })
   event({ payload: { vault_id: 'vault', revision: 3, paths: ['a.md'] } }); await flushPromises()
-  expect(check).toHaveBeenCalledOnce()
+  expect(check).toHaveBeenCalledTimes(2)
+  expect(check).toHaveBeenLastCalledWith('new')
   refresh.mockImplementationOnce(async () => { workspace.fileTree = [] })
   event({ payload: { vault_id: 'vault', revision: 4, paths: ['a.md'] } }); await flushPromises()
   expect(missing).toHaveBeenCalledOnce()
@@ -69,6 +73,7 @@ it('queues one follow-up refresh and preserves focus rescan while an event is ru
 })
 it('does not let a previous vault request inspect the next editor', async () => {
   const { workspace, refresh, check, missing } = await start()
+  check.mockClear()
   let release!: () => void
   refresh.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
   event({ payload: { vault_id: 'vault', revision: 2, paths: ['a.md'] } })
@@ -101,14 +106,15 @@ it('retries a failed body read even after the tree has accepted the new hash', a
   vi.spyOn(service, 'getNoteId').mockResolvedValue('a')
   const read = vi.spyOn(service, 'readFileContent').mockResolvedValue('original')
   await editor.loadFile('/a.md')
-  refresh.mockImplementationOnce(async () => { workspace.fileTree = [node('new')] })
+  const changedHash = await contentHash('external update')
+  refresh.mockImplementationOnce(async () => { workspace.fileTree = [node(changedHash)] })
   read.mockRejectedValueOnce(new Error('temporary file lock'))
   window.dispatchEvent(new Event('focus')); await flushPromises()
   expect(editor.content).toBe('original')
-  expect(editor.externalReadError).toBe(true)
+  await vi.waitFor(() => expect(editor.externalReadError).toBe(true))
   read.mockResolvedValue('external update')
   window.dispatchEvent(new Event('focus')); await flushPromises()
-  expect(editor.content).toBe('external update')
+  await vi.waitFor(() => expect(editor.content).toBe('external update'))
   expect(editor.externalReadError).toBe(false)
   expect(read).toHaveBeenCalledTimes(3)
   window.dispatchEvent(new Event('focus')); await flushPromises()
@@ -132,7 +138,46 @@ it('retries a body check skipped while saving without replacing newer unsaved in
   editor.updateContent('new unsaved input'); editor.cancelPendingAutoSave()
   read.mockResolvedValue('external update')
   window.dispatchEvent(new Event('focus')); await flushPromises()
-  expect(read).toHaveBeenCalledTimes(2)
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2))
   expect(editor.content).toBe('new unsaved input')
   expect(editor.saveStatus).toBe('conflict')
+})
+
+it('checks the successful body revision after an independent tree refresh absorbs the change', async () => {
+  const { workspace, editor, refresh, check } = await start()
+  check.mockRestore(); editor.closeFile()
+  vi.spyOn(service, 'getNoteId').mockResolvedValue('a')
+  const read = vi.spyOn(service, 'readFileContent').mockResolvedValue('original')
+  await editor.loadFile('/a.md')
+  workspace.fileTree = [node(await contentHash('original'))]
+  window.dispatchEvent(new Event('focus')); await flushPromises()
+  expect(read).toHaveBeenCalledTimes(1)
+  const hash = await contentHash('external update')
+  refresh.mockImplementationOnce(async () => { workspace.fileTree = [node(hash)] })
+  await workspace.refreshFileTree(true)
+  read.mockResolvedValue('external update')
+  window.dispatchEvent(new Event('focus')); await flushPromises()
+  await vi.waitFor(() => expect(editor.content).toBe('external update'))
+  expect(read).toHaveBeenCalledTimes(2)
+  window.dispatchEvent(new Event('focus')); await flushPromises()
+  expect(read).toHaveBeenCalledTimes(2)
+})
+
+it('retains a failed revision across refresh-composable unmount and remount', async () => {
+  const { workspace, editor, check } = await start()
+  check.mockRestore(); editor.closeFile()
+  vi.spyOn(service, 'getNoteId').mockResolvedValue('a')
+  const read = vi.spyOn(service, 'readFileContent').mockResolvedValue('original')
+  await editor.loadFile('/a.md')
+  workspace.fileTree = [node(await contentHash('external update'))]
+  read.mockRejectedValueOnce(new Error('temporary lock'))
+  window.dispatchEvent(new Event('focus')); await flushPromises()
+  await vi.waitFor(() => expect(editor.externalReadError).toBe(true))
+  wrapper!.unmount(); wrapper = undefined
+  read.mockResolvedValue('external update')
+  wrapper = mount(defineComponent({ setup() { useWorkspaceRefresh(); return () => null } }))
+  await flushPromises()
+  await vi.waitFor(() => expect(editor.content).toBe('external update'))
+  expect(editor.externalReadError).toBe(false)
+  expect(read).toHaveBeenCalledTimes(3)
 })

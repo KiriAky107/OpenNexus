@@ -29,11 +29,13 @@ write into a newly loaded document, including reopening the same path. Backgroun
 external-content reads and save completions check that identity as well. Actual
 external deletion still exposes recovery and preserves unsaved text.
 
-Workspace refresh retains a pending body check independently of the file tree
-hash. A temporary read failure, or a check skipped while saving, is retried on
-the next workspace refresh even if the hash is unchanged. Only a successful
-read or an explicit conflict acknowledges the body change. Failed reads show
-an automatic-retry notice and retain the current editor text.
+Workspace refresh compares the tree revision with the editor's last successful
+disk content, using a cached SHA-256 digest. Another caller refreshing the tree,
+or the refresh view being remounted, cannot acknowledge a body it has not read.
+A temporary read failure, or a check skipped while saving, is retried on the
+next workspace refresh even if the tree hash is unchanged. Matching revisions
+avoid a body read and reuse the cached digest. Failed reads show an automatic-
+retry notice and retain the current editor text; conflicts need explicit recovery.
 
 AI citations and search results share one navigation flow. Once the file is
 loaded, its current Note API response resolves the block ID to the parser's
