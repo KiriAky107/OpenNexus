@@ -87,4 +87,14 @@ describe('navigateToCitation', () => {
     expect(d.highlightBlock).not.toHaveBeenCalled()
     expect(d.navigate).not.toHaveBeenCalled()
   })
+
+  it('does not route after a block lookup has been superseded', async () => {
+    let current = true
+    const { deps: d } = deps({
+      loadFile: vi.fn(async path => ({ path, isCurrent: () => current })),
+      highlightBlock: vi.fn(async () => { current = false }),
+    })
+    await navigateToCitation({ file_path: 'notes/a.md', block_id: 'b' }, d)
+    expect(d.navigate).not.toHaveBeenCalled()
+  })
 })

@@ -12,7 +12,7 @@ export interface CitationTarget {
 
 export interface CitationNavigationDeps {
   loadFile: (filePath: string) => Promise<FileNavigation | null>
-  highlightBlock: (blockId: string) => void
+  highlightBlock: (blockId: string) => Promise<void> | void
   navigate: (path: string) => Promise<unknown> | unknown
 }
 
@@ -39,7 +39,8 @@ export async function navigateToCitation(
   if (!navigation?.isCurrent()) return
 
   const blockId = asPath(target.block_id)
-  if (blockId) deps.highlightBlock(blockId)
+  if (blockId) await deps.highlightBlock(blockId)
+  if (!navigation.isCurrent()) return
 
   await deps.navigate('/workspace')
 }

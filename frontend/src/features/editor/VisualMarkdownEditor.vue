@@ -535,6 +535,7 @@ onMounted(async () => {
   if (!disposed) installCommands()
   if (!disposed) navigateHeading(editorStore.headingRequest)
   if (!disposed) navigateReference(editorStore.referenceRequest)
+  if (!disposed) navigateBlock(editorStore.blockRequest)
 })
 
 watch([() => settingsStore.spellCheck, () => settingsStore.language], applyProofingPreferences)
@@ -566,6 +567,30 @@ function navigateReference(request: typeof editorStore.referenceRequest) {
   })
 }
 watch(()=>editorStore.referenceRequest,navigateReference)
+
+function navigateBlock(request: typeof editorStore.blockRequest) {
+  if (!request || request.path !== editorStore.currentFilePath || !crepe || loading.value || !isCurrentDocument()) return
+  crepe.editor.action(ctx => {
+    const view = ctx.get(editorViewCtx), parser = ctx.get(parserCtx)
+    const prefixLength = metadata.value?.prefix.length ?? 0
+    const body = editorStore.content.slice(prefixLength)
+    const full = parser(body)
+    // Compare parsed prefixes against the live document so Markdown syntax,
+    // nested containers and UTF-16 source offsets map to ProseMirror positions.
+    const position = (offset: number, bias: number) => {
+      const relative = Math.max(0, offset - prefixLength)
+      const parsed = relative ? parser(body.slice(0, relative)) : null
+      // Heading IDs are assigned by a live plugin after parsing. Compare two
+      // parsed documents so those generated attributes do not look like edits.
+      const at = parsed && full ? (full.content.findDiffStart(parsed.content) ?? full.content.size) : 0
+      return TextSelection.near(view.state.doc.resolve(Math.min(at, view.state.doc.content.size)), bias).from
+    }
+    const from = position(request.offset, 1), to = request.length ? position(request.offset + request.length, -1) : from
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, from, Math.max(from, to))).scrollIntoView())
+    view.focus()
+  })
+}
+watch(() => editorStore.blockRequest, navigateBlock)
 
 onBeforeUnmount(() => { disposed = true; disposeCommands?.(); diagramPreviews.clear(); imageUrls.forEach(URL.revokeObjectURL); imageUrls.clear(); disposeLinkNavigation?.(); disposeCodeLabels?.(); disposeLanguagePicker?.(); void crepe?.destroy() })
 

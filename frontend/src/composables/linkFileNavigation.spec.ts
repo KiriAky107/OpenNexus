@@ -6,6 +6,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
 import * as service from '@/services/workspaceService'
+import * as notes from '@/services/noteService'
 import { navigateMarkdownHref } from '@/services/markdownLinkService'
 import EditorHeader from '@/features/editor/EditorHeader.vue'
 import { navigateToCitation } from './useCitationNavigation'
@@ -26,6 +27,7 @@ beforeEach(() => {
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
   vi.spyOn(service, 'getNoteId').mockResolvedValue('note')
   vi.spyOn(service, 'readFileContent').mockResolvedValue('# 结论\n\n正文')
+  vi.spyOn(notes, 'getNote').mockResolvedValue({ note_id: 'note', file_path: path, title: '结论', tags: [], created_at: '', updated_at: '', markdown: '# 结论\n\n正文', blocks: [] })
   vi.spyOn(service, 'refreshTree').mockImplementation(async () => tree())
   const workspace = useWorkspaceStore()
   workspace.hasVault = true; workspace.vaultId = 'vault'; workspace.fileTree = tree()

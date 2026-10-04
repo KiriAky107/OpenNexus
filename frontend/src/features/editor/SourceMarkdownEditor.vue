@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { EditorState, Compartment } from '@codemirror/state'
-import { EditorView, keymap, lineNumbers } from '@codemirror/view'
+import { EditorState, Compartment, StateEffect, StateField } from '@codemirror/state'
+import { Decoration, type DecorationSet, EditorView, keymap, lineNumbers } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, isolateHistory, undo, redo } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
 import { useEditorStore } from '@/stores/editor'
@@ -18,6 +18,19 @@ const root = ref<HTMLElement | null>(null), error = ref('')
 const imageInput = ref<HTMLInputElement | null>(null)
 const conflicts = ref<PropertyConflict[]>([]), choices = ref<PropertyChoices>({})
 const proofing = new Compartment()
+const highlightPassage = StateEffect.define<{ from: number; to: number }>()
+const passageHighlight = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, transaction) {
+    if (transaction.docChanged) return Decoration.none
+    for (const effect of transaction.effects) if (effect.is(highlightPassage)) {
+      const { from, to } = effect.value
+      return to > from ? Decoration.set([Decoration.mark({ class: 'cm-citation-highlight' }).range(from, to)]) : Decoration.none
+    }
+    return value
+  },
+  provide: field => EditorView.decorations.from(field),
+})
 let view: EditorView | undefined, dispose: (() => void) | undefined
 let pending: { content: string; path: string | null; from: number; to: number; state: EditorState } | undefined
 function attributes() {
@@ -83,7 +96,7 @@ function applyImport() {
 }
 onMounted(() => {
   view = new EditorView({ parent: root.value!, state: EditorState.create({ doc: props.initialContent, extensions: [
-    history(), keymap.of([...defaultKeymap, ...historyKeymap]), lineNumbers(), markdown(), proofing.of(attributes()),
+    history(), keymap.of([...defaultKeymap, ...historyKeymap]), lineNumbers(), markdown(), proofing.of(attributes()), passageHighlight,
     EditorView.lineWrapping,
     EditorView.domEventHandlers({
       paste(event) {
@@ -106,9 +119,11 @@ onMounted(() => {
       '.cm-scroller': { fontFamily: 'var(--font-editor-mono)', fontSize: 'var(--font-editor-size)', overflow: 'auto' },
       '.cm-gutters': { backgroundColor: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)', border: 'none' },
       '.cm-content': { padding: '24px 8px', minHeight: '100%' } }),
+    EditorView.theme({ '.cm-citation-highlight': { backgroundColor: 'var(--color-accent-soft)', outline: '1px solid var(--color-border-focus)' } }),
   ] }) })
   navigateHeading(editor.headingRequest)
   navigateReference(editor.referenceRequest)
+  navigateBlock(editor.blockRequest)
   dispose = registerEditorCommands({ available, handlers: {
     'editor.import-note-properties': importProperties,
     'editor.undo': () => undo(view!) ? { ok: true } : { ok: false, reason: 'unavailable' },
@@ -119,15 +134,23 @@ watch(() => [settings.spellCheck, settings.language], () => view?.dispatch({ eff
 function navigateHeading(request: typeof editor.headingRequest) {
   if (!view || !request || request.path !== editor.currentFilePath) return
   const offset = Math.min(view.state.doc.length, request.offset)
-  view.dispatch({ selection: { anchor: offset }, effects: EditorView.scrollIntoView(offset, { y: 'start' }) }); view.focus()
+  view.dispatch({ selection: { anchor: offset }, effects: [EditorView.scrollIntoView(offset, { y: 'start' }), highlightPassage.of({ from: 0, to: 0 })] }); view.focus()
 }
 watch(() => editor.headingRequest, navigateHeading)
 function navigateReference(request: typeof editor.referenceRequest) {
   if (!view || !request || request.path !== editor.currentFilePath) return
   const from = Math.min(request.offset,view.state.doc.length), to = Math.min(from+request.length,view.state.doc.length)
-  view.dispatch({selection:{anchor:from,head:to},effects:EditorView.scrollIntoView(from,{y:'center'})}); view.focus()
+  view.dispatch({selection:{anchor:from,head:to},effects:[EditorView.scrollIntoView(from,{y:'center'}),highlightPassage.of({from:0,to:0})]}); view.focus()
 }
 watch(() => editor.referenceRequest,navigateReference)
+function navigateBlock(request: typeof editor.blockRequest) {
+  if (!view || !request || request.path !== editor.currentFilePath || !isCurrentDocument()) return
+  const position = (offset: number) => Math.min(editor.content.slice(0, offset).replace(/\r\n?/g, '\n').length, view!.state.doc.length)
+  const from = position(request.offset), to = position(request.offset + request.length)
+  view.dispatch({ selection: { anchor: from, head: to }, effects: [EditorView.scrollIntoView(from, { y: 'center' }), highlightPassage.of({ from, to })] })
+  view.focus()
+}
+watch(() => editor.blockRequest, navigateBlock)
 onBeforeUnmount(() => { dispose?.(); view?.destroy(); pending = undefined })
 </script>
 

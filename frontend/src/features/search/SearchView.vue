@@ -1,15 +1,14 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import type { SearchResult } from '@/contracts'
-import { useEditorStore } from '@/stores/editor'
+import { useCitationNavigation } from '@/composables/useCitationNavigation'
 import { useSearchStore } from '@/stores/search'
 import { t } from '@/i18n'
 
 const searchStore = useSearchStore()
 onMounted(() => { void searchStore.loadHistory() })
-const editorStore = useEditorStore()
-const router = useRouter()
+const { openCitation } = useCitationNavigation()
+const navigationError = ref('')
 const folder = ref('')
 const tag = ref('')
 
@@ -23,10 +22,9 @@ function submitSearch() {
 }
 
 async function openResult(result: SearchResult) {
-  const navigation = await editorStore.loadFile(result.file_path)
-  if (!navigation?.isCurrent()) return
-  editorStore.highlightBlock(result.block_id)
-  await router.push('/workspace')
+  navigationError.value = ''
+  try { await openCitation(result) }
+  catch (error) { navigationError.value = error instanceof Error ? error.message : String(error) }
 }
 </script>
 
@@ -46,6 +44,7 @@ async function openResult(result: SearchResult) {
       </div>
     </form>
     <div v-if="searchStore.error" class="error-banner">{{ searchStore.error }}</div>
+    <div v-if="navigationError" class="error-banner" role="alert">{{ navigationError }}</div>
     <div v-if="searchStore.historyError" class="notice-banner">{{ searchStore.historyError }}</div>
     <div v-if="searchStore.recentQueries.length" class="search-history">
       <span class="subtle">{{ t('最近搜索（保存在应用数据中）', 'Recent searches (stored in application data)') }}</span>

@@ -70,6 +70,7 @@ const statusText = computed<Record<string, string>>(() => ({
       <span class="save-status" :class="editorStore.saveStatus">{{ statusText[editorStore.saveStatus] }}</span>
       <span v-if="editorStore.loadingFilePath" class="save-status" role="status">{{ t('正在打开文件…', 'Opening file…') }}</span>
       <span v-if="editorStore.externalReadError" class="save-status conflict" role="alert">{{ t('外部更新暂时读取失败，将自动重试', 'Could not read the external update; retrying automatically') }}</span>
+      <span v-if="editorStore.blockNavigationNotice" class="save-status" role="status">{{ editorStore.blockNavigationNotice }}</span>
       <button v-if="needsRecovery && !missingFile" class="button-secondary" @click="reload">{{ t('重新加载外部版本', 'Reload external version') }}</button>
       <span v-if="missingFile" class="save-status conflict">{{ t('原文件已删除或移动', 'Original file deleted or moved') }}</span>
       <button v-if="needsRecovery" class="button-secondary" @click="downloadCopy">{{ isMarkdown ? t('下载 Markdown 副本', 'Download Markdown copy') : t('下载 Canvas 副本', 'Download Canvas copy') }}</button>

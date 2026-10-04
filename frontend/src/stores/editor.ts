@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { SaveStatus } from '@/contracts'
 import * as workspaceService from '@/services/workspaceService'
+import { getNote } from '@/services/noteService'
+import { resolveBlockLocation } from '@/features/editor/blockLocation'
 import { t } from '@/i18n'
 import { ApiErrorClass } from '@/services/apiClient'
 import { DesktopError } from '@/services/platform/desktop'
@@ -24,13 +26,17 @@ export const useEditorStore = defineStore('editor', () => {
   const externalReadError = ref(false)
   let documentVersion = 0
   const highlightBlockId = ref<string | null>(null)
+  const blockRequest = ref<{ path: string; offset: number; length: number } | null>(null)
+  const blockNavigationNotice = ref('')
+  let blockVersion = 0
   const cursorPosition = ref({ line: 0, column: 0 })
   const headingRequest = ref<{ index: number; offset: number; path: string | null } | null>(null)
   const canvasNodeRequest = ref<{ path: string | null; nodeId: string } | null>(null)
   const referenceRequest = ref<{ path: string | null; offset: number; length: number; raw: string; occurrence: number } | null>(null)
-  function locateReference(offset: number, length: number, raw: string, occurrence = 0) { referenceRequest.value = { path: currentFilePath.value, offset, length, raw, occurrence } }
+  function locateReference(offset: number, length: number, raw: string, occurrence = 0) { blockVersion++; blockRequest.value = null; blockNavigationNotice.value = ''; referenceRequest.value = { path: currentFilePath.value, offset, length, raw, occurrence } }
   function selectCanvasNode(nodeId: string) { canvasNodeRequest.value = { path: currentFilePath.value, nodeId } }
   function jumpToHeading(index: number, offset: number) {
+    blockVersion++; blockRequest.value = null; blockNavigationNotice.value = ''
     headingRequest.value = { index, offset, path: currentFilePath.value }
   }
 
@@ -50,6 +56,7 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function updateContent(newContent: string) {
+    blockVersion++; blockRequest.value = null; blockNavigationNotice.value = ''; highlightBlockId.value = null
     content.value = newContent
     if (saveStatus.value !== 'conflict' && saveStatus.value !== 'external_changed') saveStatus.value = 'dirty'
   }
@@ -166,6 +173,7 @@ export const useEditorStore = defineStore('editor', () => {
       saveStatus.value = 'saved'
       lastSavedAt.value = new Date().toISOString()
       highlightBlockId.value = null
+      blockRequest.value = null; blockNavigationNotice.value = ''; blockVersion++
       return commitTab()
     } catch (error) {
       if (!isCurrent()) return null
@@ -175,13 +183,32 @@ export const useEditorStore = defineStore('editor', () => {
     }
   }
 
-  function highlightBlock(blockId: string) {
-    highlightBlockId.value = blockId
-    setTimeout(() => {
-      if (highlightBlockId.value === blockId) {
-        highlightBlockId.value = null
+  async function highlightBlock(blockId: string) {
+    const path = currentFilePath.value, noteId = currentNoteId.value
+    if (!path || !noteId) return
+    const workspace = useWorkspaceStore(), vault = workspace.vaultId, workspaceRevision = workspace.navigationRevision
+    const version = ++blockVersion, navigation = loadVersion, ownsDocument = captureDocument()
+    const isCurrent = () => version === blockVersion && navigation === loadVersion && ownsDocument()
+      && vault === workspace.vaultId && workspaceRevision === workspace.navigationRevision && !workspace.isLoading
+    blockNavigationNotice.value = ''; blockRequest.value = null
+    headingRequest.value = null; referenceRequest.value = null
+    try {
+      const note = await getNote(noteId)
+      if (!isCurrent()) return
+      const block = note.blocks.find(item => item.block_id === blockId)
+      const location = normalizeWorkspacePath(note.file_path) === path && block ? resolveBlockLocation(content.value, note.markdown, block) : null
+      if (location) {
+        highlightBlockId.value = blockId
+        blockRequest.value = { path, ...location }
+        return
       }
-    }, 3000)
+      blockNavigationNotice.value = t('引用段落已更新或删除，已定位到文件开头。', 'The referenced passage changed or was removed. Showing the start of the file.')
+    } catch {
+      if (!isCurrent()) return
+      blockNavigationNotice.value = t('暂时无法读取引用位置，已定位到文件开头，可重试引用。', 'Could not load the passage location. Showing the start of the file; try the reference again.')
+    }
+    highlightBlockId.value = null
+    blockRequest.value = { path, offset: 0, length: 0 }
   }
 
   function setExternalChanged() {
@@ -206,6 +233,7 @@ export const useEditorStore = defineStore('editor', () => {
       if (content.value === baseline && saveStatus.value === 'saved') {
         documentVersion++
         content.value = latest; diskContent = latest; contentRevision.value++
+        blockRequest.value = null; blockNavigationNotice.value = ''; highlightBlockId.value = null; blockVersion++
       } else {
         setExternalChanged(); saveStatus.value = 'conflict'
       }
@@ -225,6 +253,7 @@ export const useEditorStore = defineStore('editor', () => {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
     documentVersion++
     content.value = latest; diskContent = latest; saveStatus.value = 'saved'; contentRevision.value++
+    blockRequest.value = null; blockNavigationNotice.value = ''; highlightBlockId.value = null; blockVersion++
     externalReadError.value = false
   }
 
@@ -249,6 +278,7 @@ export const useEditorStore = defineStore('editor', () => {
     saveStatus.value = 'idle'
     lastSavedAt.value = null
     highlightBlockId.value = null
+    blockRequest.value = null; blockNavigationNotice.value = ''; blockVersion++
   }
 
   function renameFilePath(oldPath: string, newPath: string) {
@@ -285,6 +315,8 @@ export const useEditorStore = defineStore('editor', () => {
     loadingFilePath,
     externalReadError,
     highlightBlockId,
+    blockRequest,
+    blockNavigationNotice,
     cursorPosition,
     wordCount,
     lineCount,

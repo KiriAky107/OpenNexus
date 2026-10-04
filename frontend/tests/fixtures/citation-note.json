@@ -1,0 +1,270 @@
+{
+  "note_id": "citation-fixture",
+  "file_path": "note.md",
+  "title": "Citation fixture",
+  "tags": [],
+  "created_at": "",
+  "updated_at": "",
+  "markdown": "---\r\ntitle: Citation fixture\r\n---\r\n\r\n# Beginning\r\n\r\nEmoji before target: 中文🙂.\r\n\r\nEarlier paragraph.\r\n\r\nEarlier paragraph.\r\n\r\nEarlier paragraph.\r\n\r\nEarlier paragraph.\r\n\r\nEarlier paragraph.\r\n\r\nEarlier paragraph.\r\n\r\nEarlier paragraph.\r\n\r\nEarlier paragraph.\r\n\r\nEarlier paragraph.\r\n\r\nEarlier paragraph.\r\n\r\nEarlier paragraph.\r\n\r\nEarlier paragraph.\r\n\r\n## Target\r\n\r\nThe **cited statement** includes 中文🙂 and [a link](note.md).\r\n\r\n> Nested quoted target.\r\n> Second line.\r\n\r\n- List target one\r\n- List target two\r\n\r\n```ts\r\nconst target = \"quoted code\"\r\n```\r\n\r\nDuplicate paragraph.\r\n\r\nDuplicate paragraph.\r\n",
+  "blocks": [
+    {
+      "block_id": "blk_575d19a3176f8e3f",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning"
+      ],
+      "start_offset": 37,
+      "end_offset": 48,
+      "content": "# Beginning",
+      "content_hash": "9c7319dd71edff54",
+      "token_count": 1
+    },
+    {
+      "block_id": "blk_882786855194036c",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning"
+      ],
+      "start_offset": 52,
+      "end_offset": 78,
+      "content": "Emoji before target: 中文🙂.",
+      "content_hash": "27599a50fc341f79",
+      "token_count": 5
+    },
+    {
+      "block_id": "blk_c1fd965eefe3d90a",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning"
+      ],
+      "start_offset": 82,
+      "end_offset": 100,
+      "content": "Earlier paragraph.",
+      "content_hash": "522a59509e727e09",
+      "token_count": 2
+    },
+    {
+      "block_id": "blk_c1fd965eefe3d90a_1",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning"
+      ],
+      "start_offset": 104,
+      "end_offset": 122,
+      "content": "Earlier paragraph.",
+      "content_hash": "522a59509e727e09",
+      "token_count": 2
+    },
+    {
+      "block_id": "blk_c1fd965eefe3d90a_2",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning"
+      ],
+      "start_offset": 126,
+      "end_offset": 144,
+      "content": "Earlier paragraph.",
+      "content_hash": "522a59509e727e09",
+      "token_count": 2
+    },
+    {
+      "block_id": "blk_c1fd965eefe3d90a_3",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning"
+      ],
+      "start_offset": 148,
+      "end_offset": 166,
+      "content": "Earlier paragraph.",
+      "content_hash": "522a59509e727e09",
+      "token_count": 2
+    },
+    {
+      "block_id": "blk_c1fd965eefe3d90a_4",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning"
+      ],
+      "start_offset": 170,
+      "end_offset": 188,
+      "content": "Earlier paragraph.",
+      "content_hash": "522a59509e727e09",
+      "token_count": 2
+    },
+    {
+      "block_id": "blk_c1fd965eefe3d90a_5",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning"
+      ],
+      "start_offset": 192,
+      "end_offset": 210,
+      "content": "Earlier paragraph.",
+      "content_hash": "522a59509e727e09",
+      "token_count": 2
+    },
+    {
+      "block_id": "blk_c1fd965eefe3d90a_6",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning"
+      ],
+      "start_offset": 214,
+      "end_offset": 232,
+      "content": "Earlier paragraph.",
+      "content_hash": "522a59509e727e09",
+      "token_count": 2
+    },
+    {
+      "block_id": "blk_c1fd965eefe3d90a_7",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning"
+      ],
+      "start_offset": 236,
+      "end_offset": 254,
+      "content": "Earlier paragraph.",
+      "content_hash": "522a59509e727e09",
+      "token_count": 2
+    },
+    {
+      "block_id": "blk_c1fd965eefe3d90a_8",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning"
+      ],
+      "start_offset": 258,
+      "end_offset": 276,
+      "content": "Earlier paragraph.",
+      "content_hash": "522a59509e727e09",
+      "token_count": 2
+    },
+    {
+      "block_id": "blk_c1fd965eefe3d90a_9",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning"
+      ],
+      "start_offset": 280,
+      "end_offset": 298,
+      "content": "Earlier paragraph.",
+      "content_hash": "522a59509e727e09",
+      "token_count": 2
+    },
+    {
+      "block_id": "blk_c1fd965eefe3d90a_10",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning"
+      ],
+      "start_offset": 302,
+      "end_offset": 320,
+      "content": "Earlier paragraph.",
+      "content_hash": "522a59509e727e09",
+      "token_count": 2
+    },
+    {
+      "block_id": "blk_c1fd965eefe3d90a_11",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning"
+      ],
+      "start_offset": 324,
+      "end_offset": 342,
+      "content": "Earlier paragraph.",
+      "content_hash": "522a59509e727e09",
+      "token_count": 2
+    },
+    {
+      "block_id": "blk_cf32c6a4a945b1f0",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning",
+        "Target"
+      ],
+      "start_offset": 346,
+      "end_offset": 355,
+      "content": "## Target",
+      "content_hash": "3ba0652c2d013b55",
+      "token_count": 1
+    },
+    {
+      "block_id": "blk_f692b151a9b593e4",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning",
+        "Target"
+      ],
+      "start_offset": 359,
+      "end_offset": 419,
+      "content": "The **cited statement** includes 中文🙂 and [a link](note.md).",
+      "content_hash": "365af25e191d1061",
+      "token_count": 11
+    },
+    {
+      "block_id": "blk_28f5567f132dadcd",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning",
+        "Target"
+      ],
+      "start_offset": 423,
+      "end_offset": 462,
+      "content": "> Nested quoted target.\n> Second line.",
+      "content_hash": "7546a362f72576db",
+      "token_count": 5
+    },
+    {
+      "block_id": "blk_8ce395ef5d6b654a",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning",
+        "Target"
+      ],
+      "start_offset": 466,
+      "end_offset": 502,
+      "content": "- List target one\n- List target two",
+      "content_hash": "2a743d86f83456df",
+      "token_count": 6
+    },
+    {
+      "block_id": "blk_5844e05eec79f821",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning",
+        "Target"
+      ],
+      "start_offset": 506,
+      "end_offset": 546,
+      "content": "```ts\nconst target = \"quoted code\"\n```",
+      "content_hash": "7afd83848f33168e",
+      "token_count": 5
+    },
+    {
+      "block_id": "blk_7618f7bd7d144cb1",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning",
+        "Target"
+      ],
+      "start_offset": 550,
+      "end_offset": 570,
+      "content": "Duplicate paragraph.",
+      "content_hash": "70f84cd37ed254b1",
+      "token_count": 2
+    },
+    {
+      "block_id": "blk_7618f7bd7d144cb1_1",
+      "note_id": "citation-fixture",
+      "heading_path": [
+        "Beginning",
+        "Target"
+      ],
+      "start_offset": 574,
+      "end_offset": 594,
+      "content": "Duplicate paragraph.",
+      "content_hash": "70f84cd37ed254b1",
+      "token_count": 2
+    }
+  ]
+}

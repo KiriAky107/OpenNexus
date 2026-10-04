@@ -35,6 +35,22 @@ the next workspace refresh even if the hash is unchanged. Only a successful
 read or an explicit conflict acknowledges the body change. Failed reads show
 an automatic-retry notice and retain the current editor text.
 
+AI citations and search results share one navigation flow. Once the file is
+loaded, its current Note API response resolves the block ID to the parser's
+UTF-16 source range, including frontmatter. The range is checked against the
+returned Markdown before selection. A unique unchanged block may be relocated
+after unsaved edits; ambiguous duplicate text is never guessed. A missing block
+or failed lookup opens the start of the file with an explanatory notice.
+New navigation, edits and vault changes discard pending lookups.
+
+Source mode maps CRLF offsets into CodeMirror's normalized lines, scrolls the
+passage into view and applies a visible range decoration. Writing mode compares
+parsed Markdown prefixes to convert source offsets into ProseMirror positions,
+selects the rendered passage and reveals any folded enclosing headings. Generated
+heading IDs do not affect this mapping. The shared regression fixture was
+generated with Core's `parse_blocks` and covers CRLF, emoji, metadata, formatted
+text, quoted/list/code blocks and duplicate paragraphs in both real editors.
+
 Regression coverage uses controlled reads and saves to verify out-of-order
 completion, typing during loads and saves, returning to the current file,
 closing or changing scope, failed saves, stale editor callbacks, citations and
