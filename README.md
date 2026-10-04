@@ -70,12 +70,14 @@ Current release: [v0.5.9-beta2](https://github.com/KiriAky107/OpenNexus/releases
 
 ## What's New in 0.5.9-beta2
 
-- **Note links and AI citations**: Opening the same note through different path formats no longer reports that the file has moved.
-- **Editing during navigation**: Preserve text entered while another file is loading or a save is pending. Only the latest valid navigation updates the tab, document and location.
-- **External renames**: Preserve file identity when changing filename case or reusing a deleted filename, with matching sync updates.
-- **Concurrent chat retries**: Prepare the chosen branch, model context and response together, preventing concurrent edits from mixing parent chains.
+- **Note links, AI citations and search**: Resolve alternate path formats and reveal the actual referenced passage in both editors, with a clear notice when a passage has changed.
+- **Editing and external updates**: Preserve input during navigation and saves, retry interrupted external reads, and retain conflict checks for unsaved changes.
+- **External renames and sync**: Preserve file identities across case changes, rename chains and filename swaps; queued operations resume after interruptions.
+- **Canvas paths**: Open and preview files with literal `#` and `%` characters, preserving separate headings and self references when renaming.
+- **Chat completion**: Keep concurrent branches consistent, finish interrupted tool states, and save responses in the background with shutdown draining and visible save failures.
 - **Benchmark writes**: Save the dataset once and append case results with progress updates, reducing repeated writes while retaining reports and restart recovery.
-- **Long code blocks**: Highlight syntax in a background Worker so typing does not wait for full-document tokenization; selection, copy and undo remain available.
+- **Code blocks and streaming previews**: Highlight syntax in background Workers, merge rapid preview updates, and reuse unchanged blocks while keeping new text visible.
+- **Release checks**: GitHub CI checks both Chinese and English release notes, consistent versions and download links.
 
 Measurements and native checks are in the [beta2 validation record](frontend/docs/beta2-acceptance.md).
 

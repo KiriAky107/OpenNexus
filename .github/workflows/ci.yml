@@ -22,6 +22,7 @@ jobs:
       - uses: actions/checkout@v7
       - run: git diff --check
       - run: python3 scripts/check-doc-links.py
+      - run: python3 scripts/check-release-notes.py
 
   backend:
     runs-on: ubuntu-latest

@@ -30,6 +30,11 @@ vi.mock('./codeHighlightClient', async () => {
   } }
 })
 
+vi.mock('@/services/previewHighlighter', async () => {
+  const { computePreviewHighlight } = await import('@/services/previewHighlightProcessor')
+  return { previewHighlighter: { highlight: computePreviewHighlight, cached: () => undefined } }
+})
+
 type EditorComponent = { getEditor: () => Editor | undefined }
 
 const mounted: VueWrapper[] = []
