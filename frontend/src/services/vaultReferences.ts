@@ -1,7 +1,7 @@
 import { fromMarkdown, type Extension } from 'mdast-util-from-markdown'
 import { decodeHTMLAttribute, escapeAttribute } from 'entities'
 import { splitNoteMetadata } from '@/utils/noteMetadata'
-import { workspaceDocumentType } from './workspaceDocuments'
+import { resolveCanvasFile, workspaceDocumentType } from './workspaceDocuments'
 
 export interface VaultReference {
   source: string
@@ -45,10 +45,14 @@ function splitSuffix(raw: string): [string, string] {
 }
 
 function reference(source: string, raw: string, kind: VaultReference['kind'], paths: Set<string>, start?: number, end?: number, href = raw): VaultReference {
+  if (kind === 'canvas-file') {
+    const target = resolveCanvasFile(raw)
+    return { source, raw, target, kind, status: !target ? 'unsafe' : paths.has(target) ? 'resolved' : workspaceDocumentType(target) === 'unsupported' ? 'unsupported' : 'missing', start, end }
+  }
   if (/^https?:\/\//i.test(href)) return { source, raw, target: null, kind, status: 'external', start, end }
   if (/^(mailto|tel):/i.test(href)) return { source, raw, target: null, kind, status: 'unsupported', start, end }
   const [path, suffix] = splitSuffix(href)
-  const target = !path && suffix.startsWith('#') ? source : resolveVaultReference(source, path, kind === 'canvas-file')
+  const target = !path && suffix.startsWith('#') ? source : resolveVaultReference(source, path)
   return { source, raw, target, kind, status: !target ? 'unsafe' : paths.has(target) ? 'resolved' : workspaceDocumentType(target) === 'unsupported' ? 'unsupported' : 'missing', start, end, suffix }
 }
 

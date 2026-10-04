@@ -10,6 +10,14 @@ export function workspaceDocumentType(path: string): WorkspaceDocumentType {
 export const MAX_CANVAS_BYTES = 4 * 1024 * 1024
 export const EMPTY_CANVAS = '{\n  "nodes": [],\n  "edges": []\n}\n'
 
+/** JSON Canvas file/background fields are raw vault-relative paths, never URLs. */
+export function resolveCanvasFile(value: unknown): string | null {
+  if (typeof value !== 'string' || !value || /[\\:*?"<>|\x00-\x1f\x7f-\x9f]/.test(value)) return null
+  const valid = value.split('/').every(part => part.length > 0 && !part.startsWith('.') && !/[. ]$/.test(part)
+    && part.toLowerCase() !== 'opennexus-records' && !/^(?:CON|PRN|AUX|NUL|COM\d|LPT\d)(?:\.|$)/i.test(part))
+  return valid ? `/${value}` : null
+}
+
 export function validateCanvasContent(content: string): void {
   if (new TextEncoder().encode(content).length > MAX_CANVAS_BYTES) throw new Error('CANVAS_TOO_LARGE')
   let value: unknown
@@ -24,8 +32,7 @@ export function validateCanvasContent(content: string): void {
   const bounded = (value: unknown, min: number, max: number) => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max
   const optional = (item: Record<string, unknown>, key: string, valid: (value: unknown) => boolean) => item[key] === undefined || valid(item[key])
   const color = (value: unknown) => typeof value === 'string' && /^(?:[1-6]|#[\da-f]{6})$/i.test(value)
-  const vaultPath = (value: unknown) => typeof value === 'string' && value.length > 0 && !value.startsWith('/') && !/[\\:%?#*"<>|\x00-\x1f]/.test(value)
-    && value.split('/').every(part => part.length > 0 && part !== '.' && part !== '..' && !part.startsWith('.') && part.toLowerCase() !== 'opennexus-records')
+  const vaultPath = (value: unknown) => resolveCanvasFile(value) !== null
   for (const item of nodes) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('CANVAS_INVALID')
     const node = item as Record<string, unknown>

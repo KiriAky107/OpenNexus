@@ -11,3 +11,12 @@ The cache holds at most 96 entries and 32 MiB of stored preview data. Markdown s
 The checked-in geometry fixture uses 2000 nodes and 4000 edges. Legacy endpoint searches read node identities 8,004,000 times; indexing reads 2000 identities and resolves 8000 endpoints. Ninety frames moving one node recalculate 360 geometries instead of 360,000. Preview regressions cover unrelated updates, shared targets, revision mismatch, movement/deletion, late reads, capacity and URL disposal.
 
 On Windows 11 build 26100, WebView2 154.0.4258.48, the same synthetic canvas and 90-step drag measured a frame interval P95 of 80.1ms before optimization and 10.1ms after indexing, culling, frame merging and memoization. Frames over 50ms decreased from 43 to zero; 1064 nodes and 2130 relevant edges were rendered, compared with all 4000 edges before. JavaScript heap snapshots were 32.88/42.94 MiB before/after the baseline gesture and 25.39/39.69 MiB for the optimized gesture. These are one-machine snapshots rather than a memory-leak proof or a promise of the same frame rate elsewhere. The rendering measurements used isolated synthetic storage and a development Host/UI batch still labeled alpha2; full beta1 Core/package and installation acceptance are recorded separately during release verification.
+## File path semantics
+
+Canvas `file` and group `background` values are raw vault-relative paths.
+Characters such as `#`, `%`, `%2F` and `%23` retain their literal filename
+meaning in previews, reference scanning and rename rewrites. A node's `subpath`
+is stored separately. Paths are URL-encoded only when opening a Markdown link.
+Frontend, Core and Host apply the same traversal, hidden-directory and Windows
+reserved-name restrictions before accepting a Canvas document.
+

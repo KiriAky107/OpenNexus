@@ -136,9 +136,11 @@ def _color(value: object) -> bool:
 
 def _safe_file(value: object) -> bool:
     return (isinstance(value, str) and bool(value) and not value.startswith("/")
-            and not any(char in value for char in ("\\", ":", "\x00", "%", "?", "#", "*", '"', "<", ">", "|"))
-            and not any(ord(char) < 32 for char in value)
+            and not any(char in value for char in ("\\", ":", "\x00", "?", "*", '"', "<", ">", "|"))
+            and not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value)
             and all(part and part not in {".", ".."} and not part.startswith(".")
+                    and not part.endswith((".", " "))
+                    and not re.match(r"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\.|$)", part, re.I)
                     and part.casefold() != "opennexus-records" for part in value.split("/")))
 
 

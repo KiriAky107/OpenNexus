@@ -35,14 +35,19 @@ fn vault_file(value: &str) -> bool {
         && !value.contains(':')
         && !value.contains('\0')
         && !value.chars().any(|character| {
-            character.is_control()
-                || matches!(character, '%' | '?' | '#' | '*' | '"' | '<' | '>' | '|')
+            character.is_control() || matches!(character, '?' | '*' | '"' | '<' | '>' | '|')
         })
         && value.split('/').all(|part| {
+            let stem = part.split('.').next().unwrap_or("").to_ascii_uppercase();
             !part.is_empty()
                 && part != "."
                 && part != ".."
                 && !part.starts_with('.')
+                && !part.ends_with(['.', ' '])
+                && !["CON", "PRN", "AUX", "NUL"].contains(&stem.as_str())
+                && !(stem.len() == 4
+                    && (stem.starts_with("COM") || stem.starts_with("LPT"))
+                    && stem.as_bytes()[3].is_ascii_digit())
                 && !part.eq_ignore_ascii_case("opennexus-records")
         })
 }
@@ -177,6 +182,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn raw_file_paths_preserve_hash_and_percent_and_reject_unsafe_names() {
+        for path in [
+            "C# lesson.md",
+            "100%.md",
+            "literal%2F%23.md",
+            "%2e%2e/note.md",
+        ] {
+            let doc = serde_json::json!({"nodes":[
+                {"id":"file","type":"file","x":0,"y":0,"width":10,"height":10,"file":path,"subpath":"#heading"},
+                {"id":"group","type":"group","x":0,"y":0,"width":10,"height":10,"background":path}
+            ]});
+            assert!(
+                validate(&serde_json::to_vec(&doc).unwrap()).is_ok(),
+                "{path}"
+            );
+        }
+        for path in [
+            "../note.md",
+            "/note.md",
+            ".git/a.md",
+            "folder/.hidden/a.md",
+            "OpenNexus-Records/a.md",
+            "C:/note.md",
+            "a\\b.md",
+            "NUL.md",
+            "COM1/a.md",
+            "a./b.md",
+            "a /b.md",
+        ] {
+            assert!(!vault_file(path), "{path}");
+        }
+    }
+
+    #[test]
     fn accepts_standard_nodes_and_extra_fields() {
         let content = br##"{"nodes":[{"id":"a","type":"text","x":0,"y":-20,"width":200,"height":100,"text":"hi","custom":42},{"id":"b","type":"file","x":220,"y":0,"width":200,"height":100,"file":"notes/example.md"}],"edges":[{"id":"e","fromNode":"a","toNode":"b"}],"extra":{"keep":true}}"##;
         assert!(validate(content).is_ok());
@@ -204,7 +243,7 @@ mod tests {
         for content in [
             br#"{"nodes":{}}"#.as_slice(),
             br#"{"nodes":[{"id":"a","type":"file","x":0,"y":0,"width":1,"height":1,"file":"../secret"}]}"#,
-            br#"{"nodes":[{"id":"a","type":"file","x":0,"y":0,"width":1,"height":1,"file":"%2e%2e/secret"}]}"#,
+            br#"{"nodes":[{"id":"a","type":"file","x":0,"y":0,"width":1,"height":1,"file":".git/secret"}]}"#,
             br#"{"nodes":[{"id":"a","type":"text","x":0,"y":0,"width":1,"height":1,"text":"a"}],"edges":[{"id":"e","fromNode":"a","toNode":"missing"}]}"#,
         ] {
             assert!(validate(content).is_err());

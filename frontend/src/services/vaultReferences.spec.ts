@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { resolveVaultReference, rewriteReferences, rewritePathReferences, scanVaultReferences } from './vaultReferences'
 
 describe('vault references', () => {
+  it.each(['C# lesson.md', '100%.md', 'literal%2F%23.md'])('resolves and rewrites raw Canvas filename %s without decoding', file => {
+    const canvas = JSON.stringify({ nodes: [{ id: 'note', type: 'file', file, subpath: '#part' }, { id: 'group', type: 'group', background: file }] })
+    const paths = new Set([`/${file}`])
+    expect(scanVaultReferences('/map.canvas', canvas, paths).map(ref => [ref.target, ref.status])).toEqual([[`/${file}`, 'resolved'], [`/${file}`, 'resolved']])
+    for (const rewrite of [rewriteReferences, rewritePathReferences]) {
+      const result = JSON.parse(rewrite('/map.canvas', canvas, `/${file}`, '/new#100%.md', paths).content)
+      expect(result.nodes[0]).toEqual({ id: 'note', type: 'file', file: 'new#100%.md', subpath: '#part' })
+      expect(result.nodes[1].background).toBe('new#100%.md')
+    }
+  })
   const paths = new Set(['/notes/a.md', '/notes/b.md', '/assets/logo.png'])
 
   it('resolves only paths in the vault', () => {

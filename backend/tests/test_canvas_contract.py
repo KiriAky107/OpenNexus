@@ -15,6 +15,22 @@ def _content(extra=None):
                        "edges": [], "extension": {"preserve": True}}, ensure_ascii=False)
 
 
+@pytest.mark.parametrize("path", ["C# lesson.md", "100%.md", "literal%2F%23.md", "%2e%2e/note.md"])
+def test_canvas_raw_paths_round_trip_without_decoding(path):
+    get_settings().vault_path.mkdir(parents=True)
+    content = json.dumps({"nodes": [
+        {"id": "file", "type": "file", "x": 0, "y": 0, "width": 10, "height": 10, "file": path, "subpath": "#heading"},
+        {"id": "group", "type": "group", "x": 0, "y": 0, "width": 10, "height": 10, "background": path},
+    ]})
+    asyncio.run(canvas_service.write(canvas_service.CanvasWriteRequest(path="raw.canvas", content=content)))
+    assert canvas_service.read("raw.canvas").content == content
+
+
+@pytest.mark.parametrize("path", ["../note.md", "/note.md", ".git/a.md", "folder/.hidden/a.md", "OpenNexus-Records/a.md", "C:/note.md", "a\\b.md", "NUL.md", "COM1/a.md", "a./b.md", "a /b.md"])
+def test_canvas_rejects_unsafe_raw_paths(path):
+    assert not canvas_service._safe_file(path)
+
+
 def test_canvas_round_trip_and_revision_conflict() -> None:
     vault = get_settings().vault_path
     vault.mkdir(parents=True)
@@ -43,7 +59,7 @@ def test_invalid_canvas_never_overwrites() -> None:
     vault = get_settings().vault_path
     vault.mkdir(parents=True)
     created = asyncio.run(canvas_service.write(canvas_service.CanvasWriteRequest(path="map.canvas", content=_content())))
-    for bad in ('{"nodes":{}}', '{"nodes":[{"id":"a","type":"file","x":0,"y":0,"width":1,"height":1,"file":"../secret"}]}', '{"nodes":[{"id":"a","type":"file","x":0,"y":0,"width":1,"height":1,"file":"%2e%2e/secret"}]}', 'NaN'):
+    for bad in ('{"nodes":{}}', '{"nodes":[{"id":"a","type":"file","x":0,"y":0,"width":1,"height":1,"file":"../secret"}]}', '{"nodes":[{"id":"a","type":"file","x":0,"y":0,"width":1,"height":1,"file":".git/secret"}]}', 'NaN'):
         with pytest.raises(ApiError):
             asyncio.run(canvas_service.write(canvas_service.CanvasWriteRequest(
                 path="map.canvas", expected_content_hash=created.content_hash, content=bad)))

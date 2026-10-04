@@ -11,8 +11,7 @@ import { CanvasPreviewCache } from './canvasPreviewCache'
 import { contentHash,isDesktop } from '@/services/platform/desktop'
 import { documentPaths } from '@/services/referenceImpact'
 import { loadWorkspaceImage,readFileContent } from '@/services/workspaceService'
-import { workspaceDocumentType } from '@/services/workspaceDocuments'
-import { resolveVaultReference } from '@/services/vaultReferences'
+import { resolveCanvasFile,workspaceDocumentType } from '@/services/workspaceDocuments'
 import { navigateMarkdownHref } from '@/services/markdownLinkService'
 import { folderNoteSummary } from '@/features/workspace/folderSummary'
 import { registerEditorCommands } from '@/services/editorCommandService'
@@ -141,10 +140,10 @@ async function open(node:CanvasNode){
   try{
     if(node.type==='link'){await navigateMarkdownHref(node.url!);return}
     if(node.type!=='file')return
-    const target=resolveVaultReference(editor.currentFilePath??'/map.canvas',node.file!,true)
+    const target=resolveCanvasFile(node.file)
     if(!target||!paths.value.includes(target))throw new Error('引用目标不存在或路径不安全。')
     if(!['markdown','canvas'].includes(workspaceDocumentType(target)))return
-    await navigateMarkdownHref(target+(typeof node.subpath==='string'?node.subpath:''))
+    await navigateMarkdownHref(target.split('/').map(encodeURIComponent).join('/')+(typeof node.subpath==='string'?node.subpath:''))
   }catch(cause){error.value=String(cause)}
 }
 function color(value:unknown){if(typeof value!=='string')return'var(--color-border-default)';if(/^#[\da-f]{6}$/i.test(value))return value;return({'1':'var(--color-error)','2':'var(--color-warning)','3':'var(--color-accent-secondary)','4':'var(--color-success)','5':'var(--color-info)','6':'var(--color-accent-primary)'}as Record<string,string>)[value]??'var(--color-border-default)'}
@@ -159,7 +158,7 @@ const treeFiles=computed(()=>{
   return indexed
 })
 const previewSources=computed(()=>[...new Set(visibleNodes.value.map(node=>imagePath(node)).filter((path):path is string=>typeof path==='string'))].map(raw=>{
-  const target=resolveVaultReference(editor.currentFilePath??'/map.canvas',raw,true),entry=target?treeFiles.value.get(target):undefined
+  const target=resolveCanvasFile(raw),entry=target?treeFiles.value.get(target):undefined
   let revision=entry?.content_hash
   if(entry&&!revision){if(!unknownRevisions.has(entry))unknownRevisions.set(entry,++unknownRevision);revision=`unverified:${unknownRevisions.get(entry)}`}
   return {raw,path:target??raw,valid:Boolean(target&&entry?.type==='file'),revision,vault:workspace.vaultId,

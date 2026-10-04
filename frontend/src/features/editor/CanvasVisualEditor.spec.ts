@@ -55,6 +55,34 @@ it('uses the same group expansion for pointer and keyboard movement with one und
  wrapper.unmount()
 })
 const button=(wrapper:ReturnType<typeof mount>,text:string)=>wrapper.findAll('button').find(button=>button.text()===text)!
+it.each(['C# lesson.md','100%.md','literal%2F%23.md'])('adds, previews and opens raw file %s with a separate heading',async file=>{
+ const editor=useEditorStore();editor.content='{"nodes":[],"edges":[]}'
+ useWorkspaceStore().fileTree=[{id:'special',type:'file',path:`/${file}`,name:file,content_hash:'hash'}]
+ const wrapper=mount(CanvasVisualEditor,{attachTo:document.body});await flushPromises()
+ await button(wrapper,'笔记／图片').trigger('click')
+ const dialog=document.body.querySelector('.canvas-create')!
+ expect((dialog.querySelector('select') as HTMLSelectElement).value).toBe(file)
+ dialog.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await flushPromises()
+ expect(JSON.parse(editor.content).nodes[0].file).toBe(file)
+ expect(service.readFileContent).toHaveBeenLastCalledWith(`/${file}`)
+ expect(wrapper.text()).toContain('Real preview.')
+ await wrapper.get('.node-properties input[placeholder="#heading"]').setValue('#Actual note')
+ await wrapper.get('.node-properties').trigger('submit')
+ await wrapper.get('.node-open').trigger('click')
+ expect(navigateMarkdownHref).toHaveBeenLastCalledWith(`/${encodeURIComponent(file)}#Actual note`)
+ wrapper.unmount()
+})
+it('loads a raw image and group background containing # and percent sequences',async()=>{
+ const file='images/C#100%2F%23.png',editor=useEditorStore()
+ editor.content=JSON.stringify({nodes:[{id:'image',type:'file',x:0,y:0,width:200,height:150,file},{id:'group',type:'group',x:0,y:0,width:500,height:300,background:file}],edges:[]})
+ useWorkspaceStore().fileTree=[{id:'image',type:'file',path:`/${file}`,name:file,content_hash:'hash'}]
+ const read=vi.spyOn(service,'loadWorkspaceImage').mockResolvedValue(new Blob(['image'],{type:'image/png'}))
+ const wrapper=mount(CanvasVisualEditor);await flushPromises()
+ expect(read).toHaveBeenCalledExactlyOnceWith(file)
+ expect(wrapper.find('img').exists()).toBe(true)
+ expect(wrapper.find('.canvas-group-background').exists()).toBe(true)
+ wrapper.unmount()
+})
 it('edits using the keyboard and property inspector, preserves extensions, copies and restores through shared undo',async()=>{
  const wrapper=mount(CanvasVisualEditor);await flushPromises();expect(wrapper.text()).toContain('Real preview.')
  expect(await executeEditorCommand('editor.undo')).toEqual({ok:false,reason:'unavailable'})
