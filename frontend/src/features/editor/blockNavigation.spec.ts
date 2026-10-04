@@ -4,6 +4,7 @@ import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { EditorView } from '@codemirror/view'
 import { editorViewCtx, type Editor } from '@milkdown/kit/core'
+import { EditorView as ProseMirrorView } from '@milkdown/kit/prose/view'
 import { headingFoldTransaction, headingFoldKey } from './headingFolding'
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -92,6 +93,31 @@ it.each(targets)('selects and reveals the rendered passage for %s', async (prefi
   }
   expect(headingFoldKey.getState(view.state)?.size).toBe(0)
   expect(dispatch.mock.calls.some(([tr]) => tr.scrolledIntoView)).toBe(true)
+})
+
+it('reveals a citation received before the writing editor mounts only after its visible DOM owns focus', async () => {
+  await cite('The **cited statement**')
+  const scrolls: Array<{ loading: boolean; focused: boolean; selected: string }> = []
+  const dispatch = ProseMirrorView.prototype.dispatch
+  vi.spyOn(ProseMirrorView.prototype, 'dispatch').mockImplementation(function (this: ProseMirrorView, tr) {
+    if (tr.scrolledIntoView) scrolls.push({
+      loading: this.dom.closest('.milkdown-host')!.classList.contains('loading'),
+      focused: this.hasFocus(),
+      selected: tr.doc.textBetween(tr.selection.from, tr.selection.to, '\n', '\n').trim(),
+    })
+    // Keep the real state, DOM selection and ProseMirror scroll implementation.
+    return dispatch.call(this, tr)
+  })
+  wrapper = mount(VisualMarkdownEditor, { props: { initialContent: fixture.markdown }, attachTo: document.body })
+  await vi.waitFor(() => expect(scrolls).not.toHaveLength(0))
+  expect(scrolls).toEqual([{
+    loading: false,
+    focused: true,
+    selected: 'The cited statement includes 中文🙂 and a link.',
+  }])
+  const editor = (wrapper.vm as unknown as { getEditor: () => Editor }).getEditor()
+  const view = editor.action(ctx => ctx.get(editorViewCtx))
+  expect(view.state.doc.textBetween(view.state.selection.from, view.state.selection.to)).toBe(scrolls[0]!.selected)
 })
 
 it('shows an explicit stale-block fallback and lets a later citation recover', async () => {

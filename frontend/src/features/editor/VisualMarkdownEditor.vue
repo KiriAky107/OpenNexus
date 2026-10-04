@@ -532,29 +532,33 @@ onMounted(async () => {
   if (editorRoot.value) disposeLinkNavigation = installLinkNavigation(editorRoot.value, navigateMarkdownHref)
   applyProofingPreferences()
   loading.value = false
-  if (!disposed) installCommands()
-  if (!disposed) navigateHeading(editorStore.headingRequest)
-  if (!disposed) navigateReference(editorStore.referenceRequest)
-  if (!disposed) navigateBlock(editorStore.blockRequest)
+  // Navigation needs the visible scroll container and an owned DOM selection.
+  // ProseMirror ignores scroll requests while the editor still has no focus.
+  await nextTick()
+  if (disposed || !isCurrentDocument()) return
+  installCommands()
+  navigateHeading(editorStore.headingRequest)
+  navigateReference(editorStore.referenceRequest)
+  navigateBlock(editorStore.blockRequest)
 })
 
 watch([() => settingsStore.spellCheck, () => settingsStore.language], applyProofingPreferences)
 function navigateHeading(request: typeof editorStore.headingRequest) {
-  if (!request || request.path !== editorStore.currentFilePath || !crepe) return
+  if (!request || request.path !== editorStore.currentFilePath || !crepe || loading.value || disposed || !isCurrentDocument()) return
   crepe.editor.action(ctx => {
     const view = ctx.get(editorViewCtx)
     let index = 0
     view.state.doc.forEach((node, offset) => {
       if (node.type.name !== 'heading') return
       if (index++ !== request.index) return
-      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, offset + 1)).scrollIntoView())
       view.focus()
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, offset + 1)).scrollIntoView())
     })
   })
 }
-watch(() => editorStore.headingRequest, navigateHeading)
+watch(() => editorStore.headingRequest, navigateHeading, { flush: 'post' })
 function navigateReference(request: typeof editorStore.referenceRequest) {
-  if (!request || request.path !== editorStore.currentFilePath || !crepe) return
+  if (!request || request.path !== editorStore.currentFilePath || !crepe || loading.value || disposed || !isCurrentDocument()) return
   crepe.editor.action(ctx => {
     const view=ctx.get(editorViewCtx), matches:Array<{from:number;to:number}>=[]
     view.state.doc.descendants((node,position)=>{
@@ -563,13 +567,13 @@ function navigateReference(request: typeof editorStore.referenceRequest) {
       else if(node.text?.includes(request.raw)){const start=node.text.indexOf(request.raw);matches.push({from:position+start,to:position+start+request.raw.length})}
     })
     const target=matches[request.occurrence]??matches[0]
-    if(target){view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc,target.from,target.to)).scrollIntoView());view.focus()}
+    if(target){view.focus();view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc,target.from,target.to)).scrollIntoView())}
   })
 }
-watch(()=>editorStore.referenceRequest,navigateReference)
+watch(()=>editorStore.referenceRequest,navigateReference,{ flush: 'post' })
 
 function navigateBlock(request: typeof editorStore.blockRequest) {
-  if (!request || request.path !== editorStore.currentFilePath || !crepe || loading.value || !isCurrentDocument()) return
+  if (!request || request.path !== editorStore.currentFilePath || !crepe || loading.value || disposed || !isCurrentDocument()) return
   crepe.editor.action(ctx => {
     const view = ctx.get(editorViewCtx), parser = ctx.get(parserCtx)
     const prefixLength = metadata.value?.prefix.length ?? 0
@@ -586,11 +590,11 @@ function navigateBlock(request: typeof editorStore.blockRequest) {
       return TextSelection.near(view.state.doc.resolve(Math.min(at, view.state.doc.content.size)), bias).from
     }
     const from = position(request.offset, 1), to = request.length ? position(request.offset + request.length, -1) : from
-    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, from, Math.max(from, to))).scrollIntoView())
     view.focus()
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, from, Math.max(from, to))).scrollIntoView())
   })
 }
-watch(() => editorStore.blockRequest, navigateBlock)
+watch(() => editorStore.blockRequest, navigateBlock, { flush: 'post' })
 
 onBeforeUnmount(() => { disposed = true; disposeCommands?.(); diagramPreviews.clear(); imageUrls.forEach(URL.revokeObjectURL); imageUrls.clear(); disposeLinkNavigation?.(); disposeCodeLabels?.(); disposeLanguagePicker?.(); void crepe?.destroy() })
 

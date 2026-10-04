@@ -12,18 +12,21 @@ import EditorHeader from '@/features/editor/EditorHeader.vue'
 import { navigateToCitation } from './useCitationNavigation'
 import { useWorkspaceRefresh } from './useWorkspaceRefresh'
 import type { FileNode } from '@/contracts'
+import { contentHash } from '@/services/platform/desktop'
 
 vi.mock('@/router', () => ({ default: { push: vi.fn().mockResolvedValue(undefined) } }))
 vi.mock('@/services/platform/desktop', async original => ({ ...await original<object>(), isDesktop: () => false }))
 
 let wrapper: ReturnType<typeof mount> | undefined
 const path = '/课程/笔记.md'
+let savedHash = ''
 const tree = (): FileNode[] => [{ id: 'folder', name: '课程', path: '/课程', type: 'folder', children: [
-  { id: 'note', name: '笔记.md', path, type: 'file', content_hash: 'unchanged' },
+  { id: 'note', name: '笔记.md', path, type: 'file', content_hash: savedHash },
 ] }]
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.useFakeTimers(); setActivePinia(createPinia())
+  savedHash = await contentHash('# 结论\n\n正文')
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
   vi.spyOn(service, 'getNoteId').mockResolvedValue('note')
   vi.spyOn(service, 'readFileContent').mockResolvedValue('# 结论\n\n正文')
@@ -34,6 +37,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   wrapper?.unmount(); wrapper = undefined
+  useEditorStore().closeFile()
   vi.restoreAllMocks(); vi.useRealTimers(); localStorage.clear()
 })
 

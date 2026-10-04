@@ -49,7 +49,10 @@ Source mode maps CRLF offsets into CodeMirror's normalized lines, scrolls the
 passage into view and applies a visible range decoration. Writing mode compares
 parsed Markdown prefixes to convert source offsets into ProseMirror positions,
 selects the rendered passage and reveals any folded enclosing headings. Generated
-heading IDs do not affect this mapping. The shared regression fixture was
+heading IDs do not affect this mapping. Initial navigation waits for the visible
+editor layout and focuses the DOM selection before requesting its scroll, so
+citations received before the editor mounts also reveal the selected passage.
+The shared regression fixture was
 generated with Core's `parse_blocks` and covers CRLF, emoji, metadata, formatted
 text, quoted/list/code blocks and duplicate paragraphs in both real editors.
 
