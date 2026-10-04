@@ -174,7 +174,7 @@ export function rewritePathReferences(source: string, content: string, oldPath: 
   const pending = references.filter(ref => ref.status === 'ambiguous' || (ref.editable === false && affected(ref)) || (ref.status !== 'resolved' && moved(source) && !['external', 'unsupported'].includes(ref.status)))
   const replacement = (ref: VaultReference) => {
     const target = destination(ref.target!)
-    if (ref.raw.startsWith('#') && target === newSource) return ref.raw
+    if (ref.kind !== 'canvas-file' && ref.raw.startsWith('#') && target === newSource) return ref.raw
     if (ref.kind === 'wiki' || ref.kind === 'canvas-file') return target.slice(1) + (ref.suffix ?? '')
     const href = encodeLinkPath(relativeFrom(newSource, target)) + (ref.suffix ?? '')
     return ref.kind === 'html' ? escapeAttribute(href).replace(/'/g, '&#39;') : href
