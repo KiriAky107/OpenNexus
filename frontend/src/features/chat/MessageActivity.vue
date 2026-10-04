@@ -29,7 +29,7 @@ const aliases = computed(() => Object.fromEntries((props.message.citations || []
     <template v-for="(entry, index) in entries" :key="`${entry.type}-${entry.sequence ?? index}`">
       <template v-if="entry.type === 'text'">
         <p v-if="legacyTextOrder" class="legacy-order-note" role="note">{{ t('这条旧对话未记录正文片段的发生顺序；下方保留完整原回复，无法准确插入到各次工具调用之间。', 'This older conversation did not record when each reply segment appeared. The complete reply is preserved below, but cannot be accurately placed between tool calls.') }}</p>
-        <MarkdownContent class="message-content" :source="entry.text" :citation-aliases="aliases" :citation-numbers="citationNumbers" @citation="emit('citation', $event)" />
+        <MarkdownContent class="message-content" :source="entry.text" :streaming="streaming" :citation-aliases="aliases" :citation-numbers="citationNumbers" @citation="emit('citation', $event)" />
       </template>
       <details v-else-if="entry.type === 'thinking'" class="thinking ui-disclosure" :data-disclosure-key="`thinking:${entry.sequence ?? index}`">
         <summary>{{ t('思考过程', 'Reasoning') }}</summary>

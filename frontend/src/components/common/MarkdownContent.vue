@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import DiagramInteractions from './DiagramInteractions.vue'
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { renderMarkdown } from '@/utils/markdown'
 import { useThemeStore } from '@/stores/theme'
 import { useHeadingAppearanceStore } from '@/stores/headingAppearance'
@@ -9,7 +9,7 @@ import { useMarkdownPreferencesStore } from '@/stores/markdownPreferences'
 import { navigateMarkdownHref } from '@/services/markdownLinkService'
 const markdownPreferences = useMarkdownPreferencesStore()
 
-const props = defineProps<{ source: string; sourcePath?: string; citationNumbers?: number[]; citationAliases?: Record<string, number> }>()
+const props = defineProps<{ source: string; sourcePath?: string; citationNumbers?: number[]; citationAliases?: Record<string, number>; streaming?: boolean }>()
 const emit = defineEmits<{ citation: [number: number] }>()
 function citationClick(event: MouseEvent) {
   if (!(event.target instanceof Element)) return
@@ -25,15 +25,46 @@ function citationClick(event: MouseEvent) {
 const themeStore = useThemeStore()
 const html = ref('')
 let renderVersion = 0
+let controller: AbortController | undefined
+let timer: ReturnType<typeof setTimeout> | undefined
+let renderedOnce = false
 
 const diagramTheme = computed<'light' | 'dark'>(() => (themeStore.isDark ? 'dark' : 'light'))
 
 // 主题切换需要重渲染：Mermaid SVG 的配色在渲染时烘焙，无法靠 CSS 变量事后调整。
-watch([() => props.source, diagramTheme, () => themeStore.currentThemeId, () => JSON.stringify(markdownPreferences.normalized), () => JSON.stringify([props.citationNumbers, props.citationAliases])], async ([source, theme]) => {
+watch([() => props.source, diagramTheme, () => themeStore.currentThemeId, () => JSON.stringify(markdownPreferences.normalized), () => JSON.stringify([props.citationNumbers, props.citationAliases]), () => props.streaming], () => {
   const version = ++renderVersion
-  const result = await renderMarkdown(source, { theme, themeId: themeStore.currentThemeId, preferences: markdownPreferences.normalized, citationNumbers: props.citationNumbers, citationAliases: props.citationAliases })
-  if (version === renderVersion) html.value = result
+  controller?.abort()
+  const render = async () => {
+    timer = undefined
+    const current = renderVersion
+    controller = new AbortController()
+    const signal = controller.signal
+    const source = props.source
+    const options = { signal, theme: diagramTheme.value, themeId: themeStore.currentThemeId, preferences: markdownPreferences.normalized, citationNumbers: props.citationNumbers, citationAliases: props.citationAliases }
+    try {
+      // Keep new streamed text visible while its colors are calculated. Cached
+      // completed blocks retain their colors during this inexpensive first pass.
+      if (props.streaming) {
+        const plain = await renderMarkdown(source, { ...options, previewOnly: true })
+        if (current === renderVersion && !signal.aborted) html.value = plain
+      }
+      const result = await renderMarkdown(source, options)
+      if (current === renderVersion && !signal.aborted) html.value = result
+    } catch (error) {
+      if (!signal.aborted) console.warn('Markdown preview failed', error)
+    }
+  }
+  if (!props.streaming || !renderedOnce) {
+    clearTimeout(timer); timer = undefined
+    renderedOnce = true; void render()
+  } else if (timer === undefined) {
+    // Throttle, rather than debounce, so continuous tokens cannot postpone text
+    // updates indefinitely. The callback snapshots only the newest props.
+    timer = setTimeout(() => { if (version <= renderVersion) void render() }, 40)
+  }
 }, { immediate: true, flush: 'post' })
+onBeforeUnmount(() => { renderVersion++; clearTimeout(timer); controller?.abort() })
 </script>
 
 <template>

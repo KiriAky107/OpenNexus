@@ -2,7 +2,8 @@ import { renderFunctionPlot } from '@/services/functionPlotService'
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
 import { defaultMarkdownPreferences, type MarkdownPreferences } from '@/stores/markdownPreferences'
-import { loadCodeLanguage } from '@/services/codeHighlighter'
+import { previewHighlighter } from '@/services/previewHighlighter'
+import { plainCode } from '@/services/previewHighlightProtocol'
 export { getCodeTokenizer } from '@/services/codeHighlighter'
 import { renderMermaid, type mermaidThemeVariables } from '@/services/mermaidService'
 import { appendDiagramControls } from './diagramControls'
@@ -49,39 +50,12 @@ if (!preferences.autoLinks) marked.use({ tokenizer: { url() { return undefined }
 return marked
 }
 
-// 双主题 HTML 使用有界 LRU；大型一次性代码块不会留在缓存中。
-const highlightedBlocks = new Map<string, string>()
-let highlightedCharacters = 0
-const highlightBudget = 1_000_000
-export async function highlightCode(source: string, requestedLanguage = 'text'): Promise<string> {
-  const key = JSON.stringify([requestedLanguage.toLowerCase(), source])
-  const cached = highlightedBlocks.get(key)
-  if (cached !== undefined) {
-    highlightedBlocks.delete(key); highlightedBlocks.set(key, cached)
-    return cached
-  }
-  const { shiki, language } = await loadCodeLanguage(requestedLanguage)
-  const html = shiki.codeToHtml(source, {
-    lang: language,
-    themes: { light: 'github-light', dark: 'github-dark' },
-    defaultColor: false,
-  })
-  const cost = key.length + html.length
-  if (cost <= highlightBudget / 4) {
-// 并发调用方可能已经填充同一条目。
-    const previous = highlightedBlocks.get(key)
-    if (previous !== undefined) { highlightedCharacters -= key.length + previous.length; highlightedBlocks.delete(key) }
-    while (highlightedBlocks.size && (highlightedBlocks.size >= 64 || highlightedCharacters + cost > highlightBudget)) {
-      const oldest = highlightedBlocks.keys().next().value!
-      highlightedCharacters -= oldest.length + highlightedBlocks.get(oldest)!.length
-      highlightedBlocks.delete(oldest)
-    }
-    highlightedBlocks.set(key, html); highlightedCharacters += cost
-  }
-  return html
+export function highlightCode(source: string, requestedLanguage = 'text', signal?: AbortSignal): Promise<string> {
+  return previewHighlighter.highlight(source, requestedLanguage, signal)
 }
 
-export async function renderMarkdown(source: string, options?: { themeId?: string; theme?: 'light' | 'dark'; preferences?: MarkdownPreferences; pdf?: { plot: (source: string) => Promise<{svg: string; warnings: string[]}>; mermaidVariables: ReturnType<typeof mermaidThemeVariables> }; citationNumbers?: number[]; citationAliases?: Record<string, number> }): Promise<string> {
+export async function renderMarkdown(source: string, options?: { signal?: AbortSignal; previewOnly?: boolean; themeId?: string; theme?: 'light' | 'dark'; preferences?: MarkdownPreferences; pdf?: { plot: (source: string) => Promise<{svg: string; warnings: string[]}>; mermaidVariables: ReturnType<typeof mermaidThemeVariables> }; citationNumbers?: number[]; citationAliases?: Record<string, number> }): Promise<string> {
+  options?.signal?.throwIfAborted()
   const preferences = options?.preferences ?? defaultMarkdownPreferences
   const marked = createMarkdownParser(preferences)
   const citations = new Set(options?.citationNumbers ?? [])
@@ -111,7 +85,11 @@ export async function renderMarkdown(source: string, options?: { themeId?: strin
       code.parentElement?.replaceWith(document.createRange().createContextualFragment(mathHtml(code.textContent ?? '', true)))
       continue
     }
-    const highlighted = await highlightCode(code.textContent ?? '', requestedLanguage)
+    const source = code.textContent ?? ''
+    const highlighted = options?.previewOnly
+      ? previewHighlighter.cached(source, requestedLanguage) ?? plainCode(source)
+      : await highlightCode(source, requestedLanguage, options?.signal)
+    options?.signal?.throwIfAborted()
     const fragment = document.createRange().createContextualFragment(highlighted)
 // Shiki 用换行符分隔行 span。块布局不能把分隔符渲染成额外空行；复制时仍使用未改动的源码。
     for (const node of [...(fragment.querySelector('code')?.childNodes ?? [])]) {
@@ -127,6 +105,7 @@ export async function renderMarkdown(source: string, options?: { themeId?: strin
 
   let plotCount = 0, plotNodes = 0
   for (const { pre, source, kind } of mermaidBlocks) {
+    options?.signal?.throwIfAborted()
     try {
       // 交互预览保持数量和 AST 复杂度预算；PDF 已在隔离渲染链路中按需求解除限制。
       if (!options?.pdf && kind === 'function-plot' && ++plotCount > 16) throw new Error('函数图像数量超过 16')
@@ -147,6 +126,7 @@ export async function renderMarkdown(source: string, options?: { themeId?: strin
     }
   }
 
+  options?.signal?.throwIfAborted()
   return DOMPurify.sanitize(documentNode.body.innerHTML, {
     USE_PROFILES: { html: true },
     HTML_INTEGRATION_POINTS: { foreignobject: true },

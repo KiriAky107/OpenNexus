@@ -107,7 +107,7 @@ export async function prepareExportSnapshot(markdown:string,title:string,options
   // 仅含元数据的笔记没有正文资源，跳过请求可避免空 Markdown 触发接口的 422 校验。
   const resources:Resources=body.trim() ? await apiClient.post<Resources>('/api/exports/preview-resources',{format:'pdf',source:{type:'markdown',markdown:body,file_path:filePath},options}) : {images:[],plots:[]}
   signal?.throwIfAborted()
-  const rendered=await renderMarkdown(body,{themeId:options.theme_id,theme:dark?'dark':'light',preferences,pdf:{mermaidVariables:diagramVariables,plot:async source=>{
+  const rendered=await renderMarkdown(body,{signal,themeId:options.theme_id,theme:dark?'dark':'light',preferences,pdf:{mermaidVariables:diagramVariables,plot:async source=>{
     const plot=resources.plots.find(p=>p.source.trim()===source.trim()); if(!plot?.svg)throw Error(plot?.warnings.join('; ')||'函数图像无法导出');return plot
   }}})
   const fragment=new DOMParser().parseFromString(rendered,'text/html')

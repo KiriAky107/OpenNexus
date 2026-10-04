@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { highlightCode } from './markdown'
+vi.mock('@/services/previewHighlighter', async () => {
+  const { computePreviewHighlight } = await import('@/services/previewHighlightProcessor')
+  return { previewHighlighter: { highlight: computePreviewHighlight } }
+})
 
 describe('Shiki GitHub 双主题', () => {
   it('一次渲染同时生成 GitHub Light 和 GitHub Dark 颜色变量', async () => {
