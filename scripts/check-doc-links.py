@@ -16,7 +16,7 @@ def main() -> int:
     # These are local-only project records. Enforce the user's repository
     # policy even if a future submission bypasses .gitignore with git add -f.
     private = subprocess.check_output(
-        ["git", "ls-files", "-z", "--", "docs/", "documents/", "frontend/docs/"],
+        ["git", "ls-files", "-z", "--", "docs/", "documents/", "frontend/docs/", ".local-plans/"],
         cwd=ROOT,
     ).decode("utf-8").split("\0")
     if any(private):
