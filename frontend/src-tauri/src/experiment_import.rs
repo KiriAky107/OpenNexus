@@ -872,3 +872,733 @@ impl Workspace {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        experiment_input::{PreparedInputs, RunRequest},
+        experiment_log::CaptureSnapshot,
+        experiment_outputs::CollectedOutputs,
+        experiment_policy::ExecutionLimits,
+        experiment_runtime::RUNTIME_ID,
+        experiment_store::{Outcome, RunResult},
+    };
+    fn setup(outputs: CollectedOutputs) -> (tempfile::TempDir, Workspace, ImportRequest) {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("experiments")).unwrap();
+        std::fs::write(
+            root.path().join("experiments/source.py"),
+            b"# retained source\r\n",
+        )
+        .unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let source = ws.read("experiments/source.py").unwrap().entry;
+        let run = RunRequest {
+            vault_id: ws.vault_id.clone(),
+            operation_id: uuid::Uuid::new_v4().to_string(),
+            runtime_id: RUNTIME_ID.into(),
+            entry: SelectedFile {
+                file_id: source.file_id,
+                path: source.path,
+                hash: source.hash,
+                revision: source.revision,
+            },
+            inputs: vec![],
+            limits: ExecutionLimits::default(),
+        };
+        let prepared = PreparedInputs::prepare(&mut ws, &run.validate().unwrap()).unwrap();
+        let record = ws.experiment_prepare(prepared).unwrap();
+        ws.experiment_approve(&run.operation_id, &record.summary.fingerprint)
+            .unwrap();
+        let claimed = ws.experiment_claim(&run.operation_id).unwrap();
+        ws.experiment_running(&claimed).unwrap();
+        let mut stream = crate::experiment_log::LogBuffer::new(8192).snapshot();
+        stream.complete = true;
+        let result = RunResult {
+            outcome: Outcome::Completed,
+            exit_code: Some(0),
+            elapsed_ms: 1,
+            error: None,
+            user_cpu_ticks: Some(10),
+            peak_memory_bytes: Some(1000),
+            final_disk_bytes: Some(outputs.total_bytes),
+            logs: CaptureSnapshot {
+                stdout: stream.clone(),
+                stderr: stream,
+            },
+            outputs: None,
+        };
+        ws.experiment_finish_outputs(&claimed, result, Some(&outputs))
+            .unwrap();
+        let request = ImportRequest {
+            vault_id: ws.vault_id.clone(),
+            operation_id: uuid::Uuid::new_v4().to_string(),
+            run_id: run.operation_id,
+            selections: vec![Selection {
+                output_path: "report.md".into(),
+                destination: "results/report.md".into(),
+            }],
+        };
+        (root, ws, request)
+    }
+    fn outputs() -> CollectedOutputs {
+        let mut outputs =
+            CollectedOutputs::fixture("report.md", "# 中文报告\r\nvalue:18\r\n".as_bytes());
+        let csv = CollectedOutputs::fixture("table.csv", b"value\r\n18\r\n");
+        outputs.total_bytes += csv.total_bytes;
+        outputs.files.extend(csv.files);
+        outputs
+    }
+    fn pair(request: &mut ImportRequest) {
+        request.selections.push(Selection {
+            output_path: "table.csv".into(),
+            destination: "experiments/results/table.csv".into(),
+        });
+    }
+    #[test]
+    fn independent_confirmation_imports_exact_bytes_and_preserves_durable_origins_after_run_forget()
+    {
+        let (root, mut ws, mut request) = setup(outputs());
+        pair(&mut request);
+        let preview = ws.experiment_import_prepare(&request).unwrap();
+        assert_eq!(preview.state, ImportState::AwaitingConfirmation);
+        assert_eq!(
+            ws.experiment_import_next(&request.operation_id)
+                .unwrap()
+                .state,
+            ImportState::AwaitingConfirmation
+        );
+        assert_eq!(ws.pending_count().unwrap(), 0);
+        assert!(!root.path().join("results/report.md").exists());
+        assert_eq!(
+            ws.experiment_import_approve(&request.operation_id, "wrong")
+                .unwrap_err()
+                .code,
+            "OPERATION_PAYLOAD_CONFLICT"
+        );
+        let approved = ws
+            .experiment_import_approve(&request.operation_id, &preview.fingerprint)
+            .unwrap();
+        assert!(approved.confirmed_ms.is_some());
+        let first = ws.experiment_import_next(&request.operation_id).unwrap();
+        assert_eq!(first.state, ImportState::Approved);
+        assert_eq!(
+            first
+                .items
+                .iter()
+                .filter(|i| i.state == "committed")
+                .count(),
+            1
+        );
+        drop(ws);
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let done = ws.experiment_import_next(&request.operation_id).unwrap();
+        assert_eq!(done.state, ImportState::Completed);
+        assert_eq!(ws.pending_count().unwrap(), 2);
+        assert_eq!(
+            std::fs::read(root.path().join("results/report.md")).unwrap(),
+            "# 中文报告\r\nvalue:18\r\n".as_bytes()
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("experiments/results/table.csv")).unwrap(),
+            b"value\r\n18\r\n"
+        );
+        let before = ws.pending_count().unwrap();
+        request.selections.reverse();
+        assert_eq!(
+            ws.experiment_import_prepare(&request).unwrap().fingerprint,
+            done.fingerprint
+        );
+        assert_eq!(
+            ws.experiment_import_approve(&request.operation_id, &done.fingerprint)
+                .unwrap()
+                .confirmed_ms,
+            approved.confirmed_ms
+        );
+        assert_eq!(
+            ws.experiment_import_next(&request.operation_id)
+                .unwrap()
+                .state,
+            ImportState::Completed
+        );
+        assert_eq!(ws.pending_count().unwrap(), before);
+        let item = done.items[1].entry.as_ref().unwrap();
+        ws.rename(&item.path, "results/moved.md", &item.hash)
+            .unwrap();
+        let run = ws.experiment_record(&request.run_id).unwrap().unwrap();
+        ws.experiment_forget(&request.run_id, &run.summary.fingerprint)
+            .unwrap();
+        drop(ws);
+        let ws = Workspace::open(root.path()).unwrap();
+        let origins = ws
+            .experiment_artifact_origins(&item.file_id, 50, None)
+            .unwrap()
+            .items;
+        assert_eq!(origins.len(), 1);
+        assert_eq!(origins[0].source.fingerprint, run.summary.fingerprint);
+        assert_eq!(origins[0].execution.approval_id, run.approval_id);
+        assert_eq!(origins[0].execution.approved_ms, run.approved_ms);
+        assert_eq!(origins[0].execution.exit_code, Some(0));
+        assert_eq!(
+            origins[0].source.request.entry.hash,
+            hash(b"# retained source\r\n")
+        );
+        assert_eq!(origins[0].current_path.as_deref(), Some("results/moved.md"));
+        assert_eq!(origins[0].output.sha256, item.hash);
+        assert_eq!(
+            std::fs::read(root.path().join("results/moved.md")).unwrap(),
+            "# 中文报告\r\nvalue:18\r\n".as_bytes()
+        );
+    }
+    #[test]
+    fn full_review_preflight_checks_identity_revision_and_vault_before_any_destination_write() {
+        let (root, mut ws, mut request) = setup(outputs());
+        pair(&mut request);
+        let existing = ws
+            .write("results/report.md", "", b"manual original", "local")
+            .unwrap();
+        let preview = ws.experiment_import_prepare(&request).unwrap();
+        let same_bytes = ws
+            .write(&existing.path, &existing.hash, b"manual original", "local")
+            .unwrap();
+        assert!(same_bytes.revision > existing.revision);
+        let before = ws.pending_count().unwrap();
+        assert_eq!(
+            ws.experiment_import_approve(&request.operation_id, &preview.fingerprint)
+                .unwrap_err()
+                .code,
+            "EXPERIMENT_IMPORT_TARGET_CHANGED"
+        );
+        assert_eq!(ws.pending_count().unwrap(), before);
+        assert!(!root.path().join("experiments/results/table.csv").exists());
+        let mut second = request.clone();
+        second.operation_id = uuid::Uuid::new_v4().to_string();
+        let second_preview = ws.experiment_import_prepare(&second).unwrap();
+        ws.rename(&existing.path, "results/old.md", &existing.hash)
+            .unwrap();
+        let replacement = ws
+            .write(&existing.path, "", b"manual original", "local")
+            .unwrap();
+        assert_ne!(replacement.file_id, existing.file_id);
+        assert_eq!(replacement.hash, existing.hash);
+        assert_eq!(
+            ws.experiment_import_approve(&second.operation_id, &second_preview.fingerprint)
+                .unwrap_err()
+                .code,
+            "EXPERIMENT_IMPORT_TARGET_CHANGED"
+        );
+        let original = ws.vault_id.clone();
+        ws.vault_id = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            ws.experiment_import_approve(&request.operation_id, &preview.fingerprint)
+                .unwrap_err()
+                .code,
+            "VAULT_PERMISSION_CHANGED"
+        );
+        assert_eq!(
+            ws.experiment_import_prepare(&request).unwrap_err().code,
+            "VAULT_PERMISSION_CHANGED"
+        );
+        ws.vault_id = original;
+        assert_eq!(
+            std::fs::read(root.path().join(&existing.path)).unwrap(),
+            b"manual original"
+        );
+    }
+    #[test]
+    fn later_conflicts_are_truthful_partial_results_and_never_replay_committed_files() {
+        let (root, mut ws, mut request) = setup(outputs());
+        pair(&mut request);
+        let preview = ws.experiment_import_prepare(&request).unwrap();
+        ws.experiment_import_approve(&request.operation_id, &preview.fingerprint)
+            .unwrap();
+        let first = ws.experiment_import_next(&request.operation_id).unwrap();
+        let committed = first.items[0].entry.clone().unwrap();
+        let edited = ws
+            .write(
+                &committed.path,
+                &committed.hash,
+                b"later user edit",
+                "local",
+            )
+            .unwrap();
+        let second_target = &preview.plan.items[1].target.path;
+        let user = ws
+            .write(second_target, "", b"user created second file", "local")
+            .unwrap();
+        let partial = ws.experiment_import_next(&request.operation_id).unwrap();
+        assert_eq!(partial.state, ImportState::Partial);
+        assert_eq!(partial.items[0].state, "committed");
+        assert_eq!(partial.items[1].state, "failed");
+        assert_eq!(
+            partial.items[1].error.as_deref(),
+            Some("EXPERIMENT_IMPORT_TARGET_CHANGED")
+        );
+        let before = ws.pending_count().unwrap();
+        assert_eq!(
+            ws.experiment_import_next(&request.operation_id)
+                .unwrap()
+                .state,
+            ImportState::Partial
+        );
+        assert_eq!(ws.pending_count().unwrap(), before);
+        assert_eq!(
+            std::fs::read(root.path().join(&edited.path)).unwrap(),
+            b"later user edit"
+        );
+        assert_eq!(
+            std::fs::read(root.path().join(&user.path)).unwrap(),
+            b"user created second file"
+        );
+        assert_eq!(
+            ws.experiment_import_record(&request.operation_id)
+                .unwrap()
+                .unwrap()
+                .items[0]
+                .entry
+                .as_ref()
+                .unwrap()
+                .hash,
+            committed.hash
+        );
+    }
+    #[test]
+    fn file_identity_outbox_and_provenance_commit_together_and_restart_settles_only_accepted_work()
+    {
+        let (root, mut ws, mut request) = setup(outputs());
+        pair(&mut request);
+        let preview = ws.experiment_import_prepare(&request).unwrap();
+        ws.experiment_import_approve(&request.operation_id, &preview.fingerprint)
+            .unwrap();
+        ws.db.execute_batch("CREATE TRIGGER stop_provenance BEFORE UPDATE ON experiment_import_items WHEN NEW.state='committed' BEGIN SELECT RAISE(ABORT,'synthetic commit failure'); END").unwrap();
+        let interrupted = ws.experiment_import_next(&request.operation_id).unwrap();
+        assert_eq!(interrupted.state, ImportState::Approved);
+        assert!(interrupted.items.iter().all(|item| item.entry.is_none()));
+        assert_eq!(
+            interrupted.items[0].error.as_deref(),
+            Some("DATABASE_ERROR")
+        );
+        let item = &preview.plan.items[0];
+        assert_eq!(
+            hash(&std::fs::read(root.path().join(&item.target.path)).unwrap()),
+            item.output.sha256
+        );
+        assert!(ws.entry(&item.target.path).unwrap().is_none());
+        assert_eq!(ws.pending_count().unwrap(), 0);
+        assert!(ws
+            .experiment_artifact_origins(&item.target.file_id, 50, None)
+            .unwrap()
+            .items
+            .is_empty());
+        let cancelled = ws
+            .experiment_import_cancel(&request.operation_id, &preview.fingerprint)
+            .unwrap();
+        assert_eq!(cancelled.state, ImportState::Cancelled);
+        assert_eq!(cancelled.items[0].state, "pending");
+        assert_eq!(cancelled.items[1].state, "cancelled");
+        assert_eq!(
+            ws.experiment_import_forget(&request.operation_id, &preview.fingerprint)
+                .unwrap_err()
+                .code,
+            "EXPERIMENT_IMPORT_BUSY"
+        );
+        ws.db.execute_batch("DROP TRIGGER stop_provenance").unwrap();
+        drop(ws);
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let recovered = ws
+            .experiment_import_record(&request.operation_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.state, ImportState::Cancelled);
+        assert_eq!(recovered.items[0].state, "committed");
+        assert_eq!(recovered.items[1].state, "cancelled");
+        assert_eq!(ws.pending_count().unwrap(), 1);
+        assert_eq!(
+            recovered.items[0].entry.as_ref().unwrap().file_id,
+            item.target.file_id
+        );
+        assert_eq!(
+            ws.experiment_artifact_origins(&item.target.file_id, 50, None)
+                .unwrap()
+                .items
+                .len(),
+            1
+        );
+        assert!(!root
+            .path()
+            .join(&preview.plan.items[1].target.path)
+            .exists());
+        ws.experiment_import_next(&request.operation_id).unwrap();
+        assert_eq!(ws.pending_count().unwrap(), 1);
+        ws.experiment_import_forget(&request.operation_id, &preview.fingerprint)
+            .unwrap();
+        ws.experiment_import_forget(&request.operation_id, &preview.fingerprint)
+            .unwrap();
+        assert!(root.path().join(&item.target.path).is_file());
+        assert_eq!(
+            ws.experiment_import_prepare(&request).unwrap_err().code,
+            "EXPERIMENT_IMPORT_FORGOTTEN"
+        );
+    }
+    #[test]
+    fn schema_seventeen_backup_preserves_files_outputs_identity_and_sync_queue() {
+        let (root, mut ws, request) = setup(outputs());
+        let note = ws.write("note.md", "", b"user content", "local").unwrap();
+        ws.db.execute_batch("DROP TABLE experiment_import_items; DROP TABLE experiment_imports; PRAGMA user_version=17;").unwrap();
+        drop(ws);
+        let mut ws = Workspace::open(root.path()).unwrap();
+        assert_eq!(
+            ws.db
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            18
+        );
+        assert_eq!(ws.read("note.md").unwrap().entry.file_id, note.file_id);
+        assert_eq!(ws.pending_count().unwrap(), 1);
+        assert_eq!(
+            ws.experiment_output(&request.run_id, "table.csv")
+                .unwrap()
+                .content(),
+            b"value\r\n18\r\n"
+        );
+        let backup = std::fs::read_dir(root.path().join(".ainote"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("host-schema17-")
+            })
+            .unwrap();
+        let previous = Connection::open(backup).unwrap();
+        assert_eq!(
+            previous
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            17
+        );
+        assert_eq!(
+            previous
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name='experiment_imports'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            previous
+                .query_row("SELECT COUNT(*) FROM outbox", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        drop(previous);
+        ws.db.execute_batch("PRAGMA user_version=19;").unwrap();
+        drop(ws);
+        assert_eq!(
+            Workspace::open(root.path()).err().unwrap().code,
+            "SCHEMA_INCOMPATIBLE"
+        );
+    }
+    #[test]
+    fn invalid_targets_duplicate_choices_corrupt_plans_and_wrong_operation_payloads_fail_closed() {
+        let (root, mut ws, request) = setup(outputs());
+        for path in [
+            "../outside.md",
+            ".git/config.md",
+            "opennexus-records/persona/default.json",
+            "results/executable.py",
+            "results/table.csv",
+            "results/picture.png",
+            "results/report.md/child.md",
+        ] {
+            let mut candidate = request.clone();
+            candidate.selections[0].destination = path.into();
+            if path.ends_with("child.md") {
+                std::fs::create_dir_all(root.path().join("results")).unwrap();
+                std::fs::write(root.path().join("results/report.md"), b"parent file").unwrap();
+            }
+            assert!(
+                ws.experiment_import_prepare(&candidate).is_err(),
+                "accepted {path}"
+            );
+        }
+        std::fs::remove_file(root.path().join("results/report.md")).unwrap();
+        let mut duplicate = request.clone();
+        duplicate.selections.push(request.selections[0].clone());
+        assert!(ws.experiment_import_prepare(&duplicate).is_err());
+        let preview = ws.experiment_import_prepare(&request).unwrap();
+        let mut different = request.clone();
+        different.selections[0].destination = "another.md".into();
+        assert_eq!(
+            ws.experiment_import_prepare(&different).unwrap_err().code,
+            "OPERATION_PAYLOAD_CONFLICT"
+        );
+        let mut alias = request.clone();
+        alias.operation_id = preview.plan.items[0].write_id.clone();
+        assert_eq!(
+            ws.experiment_import_prepare(&alias).unwrap_err().code,
+            "OPERATION_PAYLOAD_CONFLICT"
+        );
+        let rejected = ws
+            .experiment_import_cancel(&request.operation_id, &preview.fingerprint)
+            .unwrap();
+        assert_eq!(rejected.state, ImportState::Rejected);
+        assert_eq!(
+            ws.experiment_import_approve(&request.operation_id, &preview.fingerprint)
+                .unwrap()
+                .state,
+            ImportState::Rejected
+        );
+        assert!(!root.path().join("results/report.md").exists());
+        let mut corrupted = preview.plan.clone();
+        corrupted.items[0].target.path = "secret.md".into();
+        ws.db
+            .execute(
+                "UPDATE experiment_imports SET plan=?2 WHERE operation_id=?1",
+                params![
+                    request.operation_id,
+                    serde_json::to_string(&corrupted).unwrap()
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            ws.experiment_import_record(&request.operation_id)
+                .unwrap_err()
+                .code,
+            "EXPERIMENT_IMPORT_CORRUPT"
+        );
+        assert_eq!(ws.pending_count().unwrap(), 0);
+    }
+    #[test]
+    fn pending_metadata_reservations_are_bounded_and_explicit_forget_reclaims_capacity() {
+        let mut outputs = CollectedOutputs::default();
+        for index in 0..32 {
+            let output = CollectedOutputs::fixture(&format!("{index}.md"), b"report");
+            outputs.total_bytes += output.total_bytes;
+            outputs.files.extend(output.files);
+        }
+        let (_root, mut ws, mut request) = setup(outputs);
+        let parent = vec!["x".repeat(200); 4].join("/");
+        request.selections = (0..32)
+            .map(|index| Selection {
+                output_path: format!("{index}.md"),
+                destination: format!("{parent}/{index}.md"),
+            })
+            .collect();
+        let mut prepared = Vec::new();
+        loop {
+            request.operation_id = uuid::Uuid::new_v4().to_string();
+            match ws.experiment_import_prepare(&request) {
+                Ok(record) => prepared.push(record),
+                Err(e) => {
+                    assert_eq!(e.code, "EXPERIMENT_IMPORT_QUOTA");
+                    break;
+                }
+            }
+            assert!(prepared.len() < 100);
+        }
+        assert!(!prepared.is_empty());
+        assert!(ws
+            .experiment_import_record(&request.operation_id)
+            .unwrap()
+            .is_none());
+        assert_eq!(ws.pending_count().unwrap(), 0);
+        let first = &prepared[0];
+        ws.experiment_import_cancel(&first.plan.request.operation_id, &first.fingerprint)
+            .unwrap();
+        ws.experiment_import_forget(&first.plan.request.operation_id, &first.fingerprint)
+            .unwrap();
+        ws.experiment_import_prepare(&request).unwrap();
+        assert_eq!(
+            ws.experiment_import_record(&first.plan.request.operation_id)
+                .unwrap_err()
+                .code,
+            "EXPERIMENT_IMPORT_FORGOTTEN"
+        );
+    }
+    #[test]
+    fn ordinary_writes_cannot_repurpose_reserved_import_or_child_identifiers() {
+        let (root, mut ws, request) = setup(outputs());
+        let preview = ws.experiment_import_prepare(&request).unwrap();
+        let item = &preview.plan.items[0];
+        let bytes = ws
+            .experiment_output(&request.run_id, &item.output.path)
+            .unwrap()
+            .content()
+            .to_vec();
+        assert_eq!(
+            ws.write_operation(&item.target.path, "", &bytes, "local", &item.write_id)
+                .unwrap_err()
+                .code,
+            "EXPERIMENT_IMPORT_AUTH_REQUIRED"
+        );
+        assert_eq!(
+            ws.write_operation(
+                "ordinary.md",
+                "",
+                b"plain note",
+                "local",
+                &request.operation_id
+            )
+            .unwrap_err()
+            .code,
+            "OPERATION_PAYLOAD_CONFLICT"
+        );
+        assert!(!root.path().join(&item.target.path).exists());
+        assert!(!root.path().join("ordinary.md").exists());
+        assert_eq!(ws.pending_count().unwrap(), 0);
+        ws.experiment_import_approve(&request.operation_id, &preview.fingerprint)
+            .unwrap();
+        assert_eq!(
+            ws.write_operation(&item.target.path, "", &bytes, "local", &item.write_id)
+                .unwrap_err()
+                .code,
+            "EXPERIMENT_IMPORT_AUTH_REQUIRED"
+        );
+        assert_eq!(
+            ws.write_with_identity(
+                &item.target.path,
+                "",
+                &bytes,
+                "remote",
+                &item.write_id,
+                Some(&item.target.file_id)
+            )
+            .unwrap_err()
+            .code,
+            "EXPERIMENT_IMPORT_AUTH_REQUIRED"
+        );
+        assert!(!root.path().join(&item.target.path).exists());
+        let done = ws.experiment_import_next(&request.operation_id).unwrap();
+        assert_eq!(done.state, ImportState::Completed);
+        assert_eq!(done.atomic_scope, "file");
+    }
+    #[test]
+    fn restart_conflict_preserves_later_user_bytes_and_reports_failure_without_a_retry_click() {
+        let (root, mut ws, request) = setup(outputs());
+        let preview = ws.experiment_import_prepare(&request).unwrap();
+        ws.experiment_import_approve(&request.operation_id, &preview.fingerprint)
+            .unwrap();
+        ws.db.execute_batch("CREATE TRIGGER stop_receipt BEFORE UPDATE ON experiment_import_items WHEN NEW.state='committed' BEGIN SELECT RAISE(ABORT,'synthetic receipt failure'); END").unwrap();
+        ws.experiment_import_next(&request.operation_id).unwrap();
+        let path = &preview.plan.items[0].target.path;
+        std::fs::write(
+            root.path().join(path),
+            b"user changed after accepted intent",
+        )
+        .unwrap();
+        ws.db.execute_batch("DROP TRIGGER stop_receipt").unwrap();
+        drop(ws);
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let failed = ws
+            .experiment_import_record(&request.operation_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed.state, ImportState::Failed);
+        assert_eq!(failed.items[0].error.as_deref(), Some("RECOVERY_CONFLICT"));
+        assert!(failed.items[0].entry.is_none());
+        assert_eq!(ws.pending_count().unwrap(), 0);
+        ws.experiment_import_next(&request.operation_id).unwrap();
+        assert_eq!(
+            std::fs::read(root.path().join(path)).unwrap(),
+            b"user changed after accepted intent"
+        );
+    }
+    #[test]
+    fn same_file_origins_page_equal_timestamps_with_a_vault_bound_cursor() {
+        let (_root, mut ws, mut request) = setup(outputs());
+        let mut ids = Vec::new();
+        let mut file_id = String::new();
+        for _ in 0..5 {
+            request.operation_id = uuid::Uuid::new_v4().to_string();
+            let preview = ws.experiment_import_prepare(&request).unwrap();
+            ws.db
+                .execute(
+                    "UPDATE experiment_imports SET created_ms=7777 WHERE operation_id=?1",
+                    [&request.operation_id],
+                )
+                .unwrap();
+            ws.experiment_import_approve(&request.operation_id, &preview.fingerprint)
+                .unwrap();
+            let done = ws.experiment_import_next(&request.operation_id).unwrap();
+            file_id = done.items[0].entry.as_ref().unwrap().file_id.clone();
+            ids.push(request.operation_id.clone());
+        }
+        ids.sort();
+        ids.reverse();
+        let one = ws.experiment_artifact_origins(&file_id, 2, None).unwrap();
+        let two = ws
+            .experiment_artifact_origins(&file_id, 2, one.next_cursor.as_ref())
+            .unwrap();
+        let three = ws
+            .experiment_artifact_origins(&file_id, 2, two.next_cursor.as_ref())
+            .unwrap();
+        let actual = one
+            .items
+            .iter()
+            .chain(&two.items)
+            .chain(&three.items)
+            .map(|item| item.import_id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, ids);
+        assert!(three.next_cursor.is_none());
+        let mut foreign = one.next_cursor.unwrap();
+        foreign.vault_id = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            ws.experiment_artifact_origins(&file_id, 2, Some(&foreign))
+                .unwrap_err()
+                .code,
+            "VAULT_PERMISSION_CHANGED"
+        );
+        assert!(ws.experiment_artifact_origins(&file_id, 0, None).is_err());
+        assert!(ws.experiment_artifact_origins(&file_id, 51, None).is_err());
+    }
+    #[test]
+    fn approved_png_import_survives_run_retention_and_keeps_original_image_bytes() {
+        let mut png_bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, 2, 1);
+            encoder.set_color(png::ColorType::Rgb);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[255, 0, 0, 0, 255, 0]).unwrap();
+            writer.finish().unwrap();
+        }
+        let (root, mut ws, mut request) = setup(CollectedOutputs::fixture("plot.png", &png_bytes));
+        request.selections[0] = Selection {
+            output_path: "plot.png".into(),
+            destination: "attachments/plot.png".into(),
+        };
+        let preview = ws.experiment_import_prepare(&request).unwrap();
+        ws.experiment_import_approve(&request.operation_id, &preview.fingerprint)
+            .unwrap();
+        let source = ws.experiment_record(&request.run_id).unwrap().unwrap();
+        ws.experiment_forget(&request.run_id, &source.summary.fingerprint)
+            .unwrap();
+        drop(ws);
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let done = ws.experiment_import_next(&request.operation_id).unwrap();
+        assert_eq!(done.state, ImportState::Completed);
+        assert_eq!(
+            std::fs::read(root.path().join("attachments/plot.png")).unwrap(),
+            png_bytes
+        );
+        let imported = done.items[0].entry.as_ref().unwrap();
+        assert!(ws
+            .tree()
+            .unwrap()
+            .iter()
+            .any(|file| file.file_id == imported.file_id && file.path == "attachments/plot.png"));
+        let origin = ws
+            .experiment_artifact_origins(&imported.file_id, 50, None)
+            .unwrap();
+        assert_eq!(origin.items[0].output.kind, OutputKind::Png);
+        assert_eq!(origin.items[0].output.sha256, hash(&png_bytes));
+        assert_eq!(origin.items[0].execution.approval_id, source.approval_id);
+        assert_eq!(ws.pending_count().unwrap(), 1);
+    }
+}
