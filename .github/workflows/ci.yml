@@ -152,6 +152,8 @@ jobs:
             Set-Content -LiteralPath $testIndex -Encoding utf8 -Value '<!doctype html><title>Host lifecycle fixture</title>'
             cargo test --bin OpenNexus --features desktop --locked lifecycle_tests:: -- --nocapture
             if ($LASTEXITCODE -ne 0) { throw 'Desktop Host lifecycle tests failed' }
+            cargo test --bin OpenNexus --features desktop --locked experiment_commands::tests:: -- --nocapture
+            if ($LASTEXITCODE -ne 0) { throw 'Experiment main-window command tests failed' }
           } finally {
             Remove-Item -LiteralPath $testIndex -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $testFrontend -ErrorAction SilentlyContinue

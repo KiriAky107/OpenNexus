@@ -65,7 +65,7 @@ pub struct SourceChunk {
     pub content_base64: String,
 }
 
-fn text_preview(text: &str) -> TextPreview {
+pub(crate) fn text_preview(text: &str) -> TextPreview {
     let mut end = text.len().min(MAX_TEXT);
     while !text.is_char_boundary(end) {
         end -= 1;

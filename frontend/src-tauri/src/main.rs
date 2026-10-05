@@ -4,6 +4,8 @@
 
 mod extension_commands;
 use extension_commands::*;
+mod experiment_commands;
+use experiment_commands::*;
 
 mod record_commands;
 use record_commands::*;
@@ -378,8 +380,13 @@ fn host_capabilities(host: State<'_, Host>) -> serde_json::Value {
         .experiment_runtime
         .get()
         .and_then(|value| value.as_ref().ok());
+    #[cfg(windows)]
+    let experiments_enabled =
+        experiment.is_some() && matches!(host.experiments.cleanup_status(), Ok(None));
+    #[cfg(not(windows))]
+    let experiments_enabled = false;
     serde_json::json!({"protocol":1,"workspace":true,"core":ready,"sync":true,"credentials":true,"extensions":cfg!(windows),"release":"preview","product":"OpenNexus",
-        "experiments": {"enabled": false, "runtime_available": experiment.is_some(), "runtime": experiment}})
+        "experiments": {"enabled": experiments_enabled, "runtime_available": experiment.is_some(), "runtime": experiment}})
 }
 
 #[derive(serde::Serialize)]
@@ -1548,6 +1555,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             host_capabilities,
+            experiment_request,
             storage_info,
             storage_choose,
             storage_use_default,

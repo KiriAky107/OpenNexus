@@ -21,7 +21,8 @@ pub(crate) const SCHEMA: &str = "
       file_id TEXT NOT NULL,state TEXT NOT NULL,receipt TEXT,error TEXT,
       PRIMARY KEY(import_id,ordinal));
     CREATE INDEX IF NOT EXISTS experiment_import_file ON experiment_import_items(file_id,state);
-    CREATE INDEX IF NOT EXISTS experiment_import_run ON experiment_imports(run_id,created_ms,operation_id);";
+    CREATE INDEX IF NOT EXISTS experiment_import_run ON experiment_imports(run_id,created_ms,operation_id);
+    CREATE INDEX IF NOT EXISTS experiment_import_history ON experiment_imports(vault_id,created_ms,operation_id);";
 const MAX_PLAN: usize = 128 * 1024;
 const MAX_RECEIPT: usize = 4096;
 const MAX_METADATA: i64 = 16 * 1024 * 1024;
@@ -250,6 +251,28 @@ pub struct ArtifactOrigin {
 pub struct OriginPage {
     pub items: Vec<ArtifactOrigin>,
     pub next_cursor: Option<crate::experiment_store::HistoryCursor>,
+}
+#[derive(Debug, Serialize)]
+pub struct ImportHistoryItem {
+    pub operation_id: String,
+    pub run_id: String,
+    pub entry: SelectedFile,
+    pub fingerprint: String,
+    pub state: ImportState,
+    pub created_ms: i64,
+    pub files: usize,
+    pub committed: usize,
+}
+#[derive(Debug, Serialize)]
+pub struct ImportHistoryPage {
+    pub items: Vec<ImportHistoryItem>,
+    pub next_cursor: Option<crate::experiment_store::HistoryCursor>,
+}
+#[derive(Debug, Serialize)]
+pub struct TargetPreview {
+    pub target: SelectedFile,
+    pub bytes: u64,
+    pub preview: Option<crate::experiment_preview::TextPreview>,
 }
 type StoredImportRow = (
     String,
@@ -515,6 +538,33 @@ fn check_destination(ws: &Workspace, path: &str) -> Result<()> {
                 {
                     return Err(error("UNSAFE_PATH"));
                 }
+                if index + 1 == parts.len() {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::MetadataExt;
+                        if meta.nlink() != 1 {
+                            return Err(error("UNSAFE_PATH"));
+                        }
+                    }
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+                        use windows_sys::Win32::Storage::FileSystem::*;
+                        let file = std::fs::OpenOptions::new()
+                            .access_mode(FILE_READ_ATTRIBUTES)
+                            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                            .open(&prefix)?;
+                        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+                        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) }
+                            == 0
+                            || info.nNumberOfLinks != 1
+                            || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                        {
+                            return Err(error("UNSAFE_PATH"));
+                        }
+                    }
+                }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
@@ -565,6 +615,125 @@ pub(crate) fn complete_write(conn: &Connection, write_id: &str, entry: &Entry) -
 }
 
 impl Workspace {
+    pub fn experiment_import_target_preview(
+        &mut self,
+        operation: &str,
+        output_path: &str,
+    ) -> Result<TargetPreview> {
+        use std::io::Read;
+        let record = self
+            .experiment_import_record(operation)?
+            .ok_or_else(invalid)?;
+        let item = record
+            .plan
+            .items
+            .iter()
+            .find(|i| i.output.path == output_path)
+            .ok_or_else(invalid)?;
+        self.scan()?;
+        check_target(self, &item.target)?;
+        if item.target.hash.is_empty() {
+            return Ok(TargetPreview {
+                target: item.target.clone(),
+                bytes: 0,
+                preview: None,
+            });
+        }
+        let file = std::fs::File::open(self.resolve(&item.target.path)?)?;
+        let bytes = file.metadata()?.len();
+        let mut preview = None;
+        if item.output.kind != OutputKind::Png {
+            let mut prefix = Vec::new();
+            file.take(64 * 1024 + 1).read_to_end(&mut prefix)?;
+            let text = String::from_utf8_lossy(&prefix);
+            let mut bounded = crate::experiment_preview::text_preview(&text);
+            bounded.truncated |= bytes > prefix.len() as u64;
+            preview = Some(bounded);
+        }
+        check_target(self, &item.target)?;
+        Ok(TargetPreview {
+            target: item.target.clone(),
+            bytes,
+            preview,
+        })
+    }
+    pub fn experiment_import_history(
+        &self,
+        run_id: &str,
+        limit: usize,
+        cursor: Option<&crate::experiment_store::HistoryCursor>,
+    ) -> Result<ImportHistoryPage> {
+        self.import_history(Some(run_id), limit, cursor)
+    }
+    pub fn experiment_all_import_history(
+        &self,
+        limit: usize,
+        cursor: Option<&crate::experiment_store::HistoryCursor>,
+    ) -> Result<ImportHistoryPage> {
+        self.import_history(None, limit, cursor)
+    }
+    fn import_history(
+        &self,
+        run_id: Option<&str>,
+        limit: usize,
+        cursor: Option<&crate::experiment_store::HistoryCursor>,
+    ) -> Result<ImportHistoryPage> {
+        if run_id.is_some_and(|id| !valid_id(id)) || !(1..=50).contains(&limit) {
+            return Err(invalid());
+        }
+        if let Some(c) = cursor {
+            if c.vault_id != self.vault_id {
+                return Err(error("VAULT_PERMISSION_CHANGED"));
+            }
+            if c.created_ms < 0 || !valid_id(&c.operation_id) {
+                return Err(invalid());
+            }
+        }
+        let mut stmt = self.db.prepare("SELECT operation_id FROM experiment_imports WHERE vault_id=?1 AND (?2 IS NULL OR run_id=?2) AND state!='forgotten' AND (?3 IS NULL OR created_ms<?3 OR (created_ms=?3 AND operation_id<?4)) ORDER BY created_ms DESC,operation_id DESC LIMIT ?5")?;
+        let ids = stmt
+            .query_map(
+                params![
+                    self.vault_id,
+                    run_id,
+                    cursor.map(|c| c.created_ms),
+                    cursor.map(|c| c.operation_id.as_str()),
+                    limit + 1
+                ],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let more = ids.len() > limit;
+        let mut items = Vec::new();
+        for id in ids.into_iter().take(limit) {
+            let record = self.experiment_import_record(&id)?.ok_or_else(corrupt)?;
+            items.push(ImportHistoryItem {
+                operation_id: id,
+                run_id: record.plan.request.run_id,
+                entry: record.plan.source.request.entry,
+                fingerprint: record.fingerprint,
+                state: record.state,
+                created_ms: record.created_ms,
+                files: record.items.len(),
+                committed: record
+                    .items
+                    .iter()
+                    .filter(|i| i.state == "committed")
+                    .count(),
+            });
+        }
+        let next_cursor = if more {
+            items
+                .last()
+                .map(|i| crate::experiment_store::HistoryCursor {
+                    vault_id: self.vault_id.clone(),
+                    created_ms: i.created_ms,
+                    operation_id: i.operation_id.clone(),
+                })
+        } else {
+            None
+        };
+        Ok(ImportHistoryPage { items, next_cursor })
+    }
     pub fn experiment_import_record(&self, operation: &str) -> Result<Option<ImportRecord>> {
         load(&self.db, &self.vault_id, operation)
     }
@@ -955,6 +1124,122 @@ mod tests {
             output_path: "table.csv".into(),
             destination: "experiments/results/table.csv".into(),
         });
+    }
+    #[test]
+    fn recoverable_import_history_and_bounded_overwrite_review_survive_restart_and_run_forget() {
+        let (root, mut ws, mut request) = setup(outputs());
+        let old = format!(
+            "<script>preserve()</script>\r\n{}",
+            "old line\r\n".repeat(500)
+        );
+        std::fs::create_dir(root.path().join("results")).unwrap();
+        std::fs::write(root.path().join("results/report.md"), &old).unwrap();
+        let first = ws.experiment_import_prepare(&request).unwrap();
+        let before = ws
+            .experiment_import_target_preview(&request.operation_id, "report.md")
+            .unwrap();
+        assert_eq!(before.target.file_id, first.plan.items[0].target.file_id);
+        assert_eq!(before.bytes, old.len() as u64);
+        let text = before.preview.unwrap();
+        assert!(text.text.starts_with("<script>preserve()</script>\r\n"));
+        assert!(text.truncated && text.lines_shown <= 200);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("results/report.md")).unwrap(),
+            old
+        );
+        let mut ids = vec![request.operation_id.clone()];
+        for _ in 0..2 {
+            request.operation_id = uuid::Uuid::new_v4().to_string();
+            ws.experiment_import_prepare(&request).unwrap();
+            ids.push(request.operation_id.clone());
+        }
+        ws.db
+            .execute("UPDATE experiment_imports SET created_ms=8888", [])
+            .unwrap();
+        let run = ws.experiment_record(&request.run_id).unwrap().unwrap();
+        ws.experiment_forget(&request.run_id, &run.summary.fingerprint)
+            .unwrap();
+        drop(ws);
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let page = ws
+            .experiment_import_history(&request.run_id, 2, None)
+            .unwrap();
+        assert!(page
+            .items
+            .iter()
+            .all(|i| i.state == ImportState::AwaitingConfirmation
+                && i.files == 1
+                && i.committed == 0));
+        let cursor = page.next_cursor.unwrap();
+        let last = ws
+            .experiment_import_history(&request.run_id, 2, Some(&cursor))
+            .unwrap();
+        assert!(last.next_cursor.is_none());
+        let actual = page
+            .items
+            .into_iter()
+            .chain(last.items)
+            .map(|i| i.operation_id)
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids.reverse();
+        assert_eq!(actual, ids);
+        let all = ws.experiment_all_import_history(50, None).unwrap();
+        assert_eq!(
+            all.items
+                .iter()
+                .map(|i| i.operation_id.clone())
+                .collect::<Vec<_>>(),
+            actual
+        );
+        assert!(all
+            .items
+            .iter()
+            .all(|i| i.run_id == request.run_id && i.entry.path == run.summary.request.entry.path));
+        let mut foreign = cursor;
+        foreign.vault_id = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            ws.experiment_import_history(&request.run_id, 2, Some(&foreign))
+                .unwrap_err()
+                .code,
+            "VAULT_PERMISSION_CHANGED"
+        );
+        assert!(ws
+            .experiment_import_history(&request.run_id, 51, None)
+            .is_err());
+        ws.experiment_import_cancel(&first.plan.request.operation_id, &first.fingerprint)
+            .unwrap();
+        ws.experiment_import_forget(&first.plan.request.operation_id, &first.fingerprint)
+            .unwrap();
+        assert_eq!(
+            ws.experiment_import_history(&request.run_id, 50, None)
+                .unwrap()
+                .items
+                .len(),
+            2
+        );
+        std::fs::write(root.path().join("results/report.md"), "manual edit").unwrap();
+        assert_eq!(
+            ws.experiment_import_target_preview(&request.operation_id, "report.md")
+                .unwrap_err()
+                .code,
+            "EXPERIMENT_IMPORT_TARGET_CHANGED"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("results/report.md")).unwrap(),
+            "manual edit"
+        );
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(outside.path(), b"outside sentinel").unwrap();
+        std::fs::remove_file(root.path().join("results/report.md")).unwrap();
+        std::fs::hard_link(outside.path(), root.path().join("results/report.md")).unwrap();
+        assert_eq!(
+            ws.experiment_import_target_preview(&request.operation_id, "report.md")
+                .unwrap_err()
+                .code,
+            "UNSAFE_PATH"
+        );
+        assert_eq!(std::fs::read(outside.path()).unwrap(), b"outside sentinel");
     }
     #[test]
     fn independent_confirmation_imports_exact_bytes_and_preserves_durable_origins_after_run_forget()

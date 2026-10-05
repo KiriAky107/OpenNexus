@@ -49,6 +49,18 @@ fn with_workspace<T>(
         .as_mut()
         .ok_or_else(|| HostError::new("VAULT_NOT_OPEN"))?)
 }
+fn with_vault<T>(
+    slot: &WorkspaceSlot,
+    vault: &str,
+    f: impl FnOnce(&mut Workspace) -> Result<T>,
+) -> Result<T> {
+    with_workspace(slot, |ws| {
+        if ws.vault_id != vault {
+            return Err(HostError::new("VAULT_PERMISSION_CHANGED"));
+        }
+        f(ws)
+    })
+}
 impl Runner {
     /// Fixed Host default storage, initialized once. Relocating vaults or the
     /// configurable data root cannot bypass an existing cleanup obligation.
@@ -105,6 +117,17 @@ impl Runner {
         fingerprint: &str,
     ) -> Result<RunRecord> {
         with_workspace(workspace, |ws| {
+            ws.experiment_approve(operation, fingerprint)
+        })
+    }
+    pub fn confirm_from_user_for_vault(
+        &self,
+        workspace: &WorkspaceSlot,
+        vault: &str,
+        operation: &str,
+        fingerprint: &str,
+    ) -> Result<RunRecord> {
+        with_vault(workspace, vault, |ws| {
             ws.experiment_approve(operation, fingerprint)
         })
     }
@@ -201,6 +224,25 @@ impl Runner {
     ) -> Result<crate::experiment_import::ImportRecord> {
         with_workspace(workspace, |ws| ws.experiment_import_next(operation))
     }
+    pub fn confirm_import_from_user_for_vault(
+        &self,
+        workspace: &WorkspaceSlot,
+        vault: &str,
+        operation: &str,
+        fingerprint: &str,
+    ) -> Result<crate::experiment_import::ImportRecord> {
+        with_vault(workspace, vault, |ws| {
+            ws.experiment_import_approve(operation, fingerprint)
+        })
+    }
+    pub fn import_next_for_vault(
+        &self,
+        workspace: &WorkspaceSlot,
+        vault: &str,
+        operation: &str,
+    ) -> Result<crate::experiment_import::ImportRecord> {
+        with_vault(workspace, vault, |ws| ws.experiment_import_next(operation))
+    }
     pub fn import_cancel(
         &self,
         workspace: &WorkspaceSlot,
@@ -240,9 +282,30 @@ impl Runner {
         operation: &str,
         fingerprint: &str,
     ) -> Result<crate::experiment_store::ForgetReceipt> {
+        self.forget_in_vault(workspace, None, operation, fingerprint)
+    }
+    pub fn forget_from_user_for_vault(
+        &self,
+        workspace: &WorkspaceSlot,
+        vault: &str,
+        operation: &str,
+        fingerprint: &str,
+    ) -> Result<crate::experiment_store::ForgetReceipt> {
+        self.forget_in_vault(workspace, Some(vault), operation, fingerprint)
+    }
+    fn forget_in_vault(
+        &self,
+        workspace: &WorkspaceSlot,
+        vault: Option<&str>,
+        operation: &str,
+        fingerprint: &str,
+    ) -> Result<crate::experiment_store::ForgetReceipt> {
         let worker = self.worker.lock().map_err(|_| busy())?;
         let cleanup = self.cleanup_status()?;
         with_workspace(workspace, |ws| {
+            if vault.is_some_and(|vault| vault != ws.vault_id) {
+                return Err(HostError::new("VAULT_PERMISSION_CHANGED"));
+            }
             if cleanup
                 .as_ref()
                 .is_some_and(|p| p.vault_id == ws.vault_id && p.operation_id == operation)
@@ -286,9 +349,32 @@ impl Runner {
     ) -> Result<RunRecord> {
         self.start(workspace, Runtime::Bundled(resource_root), operation)
     }
+    pub fn start_approved_for_vault(
+        &self,
+        workspace: WorkspaceSlot,
+        vault: &str,
+        resource_root: PathBuf,
+        operation: &str,
+    ) -> Result<RunRecord> {
+        self.start_in_vault(
+            workspace,
+            Some(vault),
+            Runtime::Bundled(resource_root),
+            operation,
+        )
+    }
     fn start(
         &self,
         workspace: WorkspaceSlot,
+        runtime: Runtime,
+        operation: &str,
+    ) -> Result<RunRecord> {
+        self.start_in_vault(workspace, None, runtime, operation)
+    }
+    fn start_in_vault(
+        &self,
+        workspace: WorkspaceSlot,
+        vault: Option<&str>,
         runtime: Runtime,
         operation: &str,
     ) -> Result<RunRecord> {
@@ -307,6 +393,9 @@ impl Runner {
         }
         let journal = self.cleanup_journal()?;
         let (owner, attempt) = with_workspace(&workspace, |ws| {
+            if vault.is_some_and(|vault| vault != ws.vault_id) {
+                return Err(HostError::new("VAULT_PERMISSION_CHANGED"));
+            }
             // Gate before consuming user approval. A different vault or new
             // Runner cannot discard the previous Host's durable obligation.
             let attempt = journal.reserve(&ws.vault_id, operation)?;
@@ -611,6 +700,88 @@ mod tests {
                 .unwrap()
                 .state,
             RunState::Failed
+        );
+    }
+    #[test]
+    fn delayed_user_decisions_never_approve_start_or_forget_a_replacement_vault() {
+        let runner = Runner::default();
+        let host_root = tempfile::tempdir().unwrap();
+        runner.initialize_cleanup(host_root.path()).unwrap();
+        let (_root, slot, request) = fixture("print(1)", ExecutionLimits::default());
+        let original = runner.prepare(&slot, &request).unwrap();
+        let (_other_root, other, mut other_request) =
+            fixture("print(1)", ExecutionLimits::default());
+        other_request.operation_id = request.operation_id.clone();
+        let replacement = runner.prepare(&other, &other_request).unwrap();
+        let previous = slot
+            .lock()
+            .unwrap()
+            .replace(other.lock().unwrap().take().unwrap());
+        for result in [
+            runner
+                .confirm_from_user_for_vault(
+                    &slot,
+                    &request.vault_id,
+                    &request.operation_id,
+                    &original.summary.fingerprint,
+                )
+                .map(|_| ()),
+            runner
+                .start_approved_for_vault(
+                    slot.clone(),
+                    &request.vault_id,
+                    host_root.path().to_owned(),
+                    &request.operation_id,
+                )
+                .map(|_| ()),
+            runner
+                .forget_from_user_for_vault(
+                    &slot,
+                    &request.vault_id,
+                    &request.operation_id,
+                    &original.summary.fingerprint,
+                )
+                .map(|_| ()),
+            runner
+                .confirm_import_from_user_for_vault(
+                    &slot,
+                    &request.vault_id,
+                    &request.operation_id,
+                    &original.summary.fingerprint,
+                )
+                .map(|_| ()),
+            runner
+                .import_next_for_vault(&slot, &request.vault_id, &request.operation_id)
+                .map(|_| ()),
+        ] {
+            assert_eq!(result.unwrap_err().code, "VAULT_PERMISSION_CHANGED");
+        }
+        assert_eq!(
+            runner
+                .record(&slot, &request.operation_id)
+                .unwrap()
+                .unwrap()
+                .summary
+                .fingerprint,
+            replacement.summary.fingerprint
+        );
+        assert_eq!(
+            runner
+                .record(&slot, &request.operation_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            RunState::AwaitingConfirmation
+        );
+        assert!(runner.cleanup_status().unwrap().is_none());
+        *slot.lock().unwrap() = previous;
+        assert_eq!(
+            runner
+                .record(&slot, &request.operation_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            RunState::AwaitingConfirmation
         );
     }
     #[test]
