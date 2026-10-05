@@ -3,14 +3,31 @@ import { useEditorStore } from '@/stores/editor'
 import { t } from '@/i18n'
 import { computed, ref } from 'vue'
 import { parseCsvPreview } from './csvPreview'
+import { useExperimentPane } from '@/composables/useExperimentPane'
 
 const editor = useEditorStore()
+const experimentPane = useExperimentPane()
 const tablePreview = ref(false)
+const isCurrentDocument = editor.captureDocument()
+const lineEnding = editor.content.includes('\r\n') ? '\r\n' : '\n'
+const displayContent = computed(() => editor.content.replace(/\r\n?/g, '\n'))
+let composing = false
 const isCsv = computed(() => editor.currentFilePath?.toLowerCase().endsWith('.csv') ?? false)
 const csvPreview = computed(() => isCsv.value ? parseCsvPreview(editor.content) : null)
 function update(event: Event) {
-  editor.updateContent((event.target as HTMLTextAreaElement).value)
-  editor.scheduleAutoSave()
+  if (!isCurrentDocument()) return
+  const value = (event.target as HTMLTextAreaElement).value.replace(/\r\n?/g, '\n').replace(/\n/g, lineEnding)
+  if (value !== editor.content) editor.updateContent(value)
+  if (composing || (event as InputEvent).isComposing) editor.cancelPendingAutoSave()
+  else if (['dirty', 'save_failed'].includes(editor.saveStatus)) editor.scheduleAutoSave()
+}
+function startComposition() {
+  composing = true
+  if (isCurrentDocument()) editor.cancelPendingAutoSave()
+}
+function endComposition(event: CompositionEvent) {
+  composing = false
+  update(event)
 }
 </script>
 
@@ -19,6 +36,7 @@ function update(event: Event) {
     <header class="experiment-editor__header">
       <span>{{ editor.currentFilePath?.split('/').at(-1) }}</span>
       <div class="experiment-editor__actions">
+        <button type="button" :aria-expanded="experimentPane.visible.value" aria-controls="experiment-panel" @click="experimentPane.open">{{ t('运行与成果', 'Runs and outputs') }}</button>
         <button v-if="isCsv" type="button" :aria-pressed="tablePreview" @click="tablePreview = !tablePreview">{{ tablePreview ? t('编辑文本', 'Edit text') : t('表格预览', 'Table preview') }}</button>
         <span>{{ editor.saveStatus === 'saving' ? t('保存中…', 'Saving…') : editor.saveStatus === 'saved' ? t('已保存', 'Saved') : editor.saveStatus === 'dirty' ? t('未保存', 'Unsaved') : '' }}</span>
       </div>
@@ -38,11 +56,13 @@ function update(event: Event) {
     <textarea
       v-else
       class="experiment-editor__source"
-      :value="editor.content"
+      :value="displayContent"
       :disabled="['conflict', 'external_changed'].includes(editor.saveStatus)"
       :spellcheck="false"
       :aria-label="t('实验文件源码', 'Experiment source')"
       @input="update"
+      @compositionstart="startComposition"
+      @compositionend="endComposition"
     />
   </section>
 </template>

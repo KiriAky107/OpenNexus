@@ -6,7 +6,7 @@ export const isDesktop = () => isTauri()
 export interface HostEntry { file_id: string; path: string; hash: string; revision: number; deleted: boolean; is_folder?: boolean; updated_at?: string }
 export interface HostDocument extends HostEntry { content: string }
 export interface HostVault { vault_id: string; path: string; name: string }
-export interface HostCapabilities { protocol: number; workspace: boolean; core: boolean; sync: boolean; credentials: boolean; extensions: boolean; release: string }
+export interface HostCapabilities { protocol: number; workspace: boolean; core: boolean; sync: boolean; credentials: boolean; extensions: boolean; release: string; experiments?: { enabled: boolean; runtime_available: boolean; runtime: { runtime_id: string; version: string; files: number } | null } }
 
 export class DesktopError extends Error {
   constructor(public code: string) { super(code); this.name = 'DesktopError' }

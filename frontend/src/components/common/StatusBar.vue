@@ -9,6 +9,8 @@ import { useProviderStore } from '@/stores/provider'
 import { useAgentStore } from '@/stores/agent'
 import { useRoute } from 'vue-router'
 import { t } from '@/i18n'
+import { isDesktop } from '@/services/platform/desktop'
+import { useExperimentPane } from '@/composables/useExperimentPane'
 
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
@@ -16,6 +18,8 @@ const providerStore = useProviderStore()
 const agentStore = useAgentStore()
 const route = useRoute()
 const workspace = useWorkspaceStore()
+const experimentPane = useExperimentPane()
+const desktop = isDesktop()
 const referencesOpen = ref(false)
 const writesOpen = ref(false)
 const NoteHistory = defineAsyncComponent(() => import('@/features/editor/NoteHistory.vue'))
@@ -95,6 +99,7 @@ const showEditorInfo = computed(() => route.name === 'workspace')
         <ControlIcon name="link" :size="13" />{{ t('反向链接', 'Backlinks') }}
       </button>
       <button v-if="workspace.hasVault" class="status-item references-trigger" aria-haspopup="dialog" :aria-expanded="writesOpen" :title="t('核对当前知识库未确定结果的 AI 写入', 'Check uncertain AI writes in this vault')" @click="writesOpen = true">{{ t('写入核对', 'Reconcile writes') }}</button>
+      <button v-if="desktop && showEditorInfo && workspace.hasVault" class="status-item references-trigger" :aria-expanded="experimentPane.visible.value" @click="experimentPane.visible.value = !experimentPane.visible.value">{{ t('实验', 'Experiments') }}</button>
       <span v-if="agentStore.isRunning" class="status-item agent-status">
         <span class="spinner" />
         {{ t('智能体运行中', 'Agent running') }}

@@ -14,8 +14,11 @@ import { EditPen } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { t } from '@/i18n'
 import FolderContents from './FolderContents.vue'
+import { useExperimentPane } from '@/composables/useExperimentPane'
 
 const WorkspaceChat = defineAsyncComponent(() => import('../chat/WorkspaceChat.vue'))
+const ExperimentPanel = defineAsyncComponent(() => import('../experiments/ExperimentPanel.vue'))
+const experimentPane = useExperimentPane()
 const chatOpened = ref(false), chatVisible = ref(false)
 function openChat() { chatOpened.value = true; chatVisible.value = true }
 const workspaceStore = useWorkspaceStore()
@@ -51,9 +54,10 @@ async function newNote() {
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <button class="workspace-chat-launcher button-secondary" aria-label="唤起 AI 聊天" title="AI 聊天" @click="openChat">AI</button>
     <WorkspaceChat v-if="chatOpened" :open="chatVisible" @close="chatVisible = false" />
+    <EditorHeader v-if="!workspaceStore.activeFolderPath && workspaceStore.activeFilePath" />
+    <div class="workspace-content">
     <FolderContents v-if="workspaceStore.activeFolderPath" :path="workspaceStore.activeFolderPath" />
     <template v-else-if="workspaceStore.activeFilePath">
-      <EditorHeader />
       <WorkspacePluginCommands><EditorPane /></WorkspacePluginCommands>
     </template>
     <div v-else class="empty-workspace">
@@ -65,6 +69,8 @@ async function newNote() {
         <div class="start-actions"><button class="button-primary" :disabled="creating" @click="newNote">{{ t('新建笔记', 'New note') }}</button><button class="button-secondary" @click="router.push({ name: 'media' })">{{ t('导入课程录音', 'Import recording') }}</button><button class="button-secondary" @click="openChat">{{ t('与笔记对话', 'Chat with notes') }}</button></div>
         <div v-if="notes.length" class="note-shortcuts"><h3>{{ t('知识库中的笔记', 'Notes in this vault') }}</h3><button v-for="note in notes" :key="note.path" :title="note.path" @click="openNote(note.path)"><span>{{ note.name.replace(/\.md$/i, '') }}</span><span aria-hidden="true">↗</span></button></div>
       </div>
+    </div>
+    <ExperimentPanel v-if="experimentPane.visible.value && workspaceStore.hasVault" />
     </div>
   </div>
 </template>
@@ -80,6 +86,7 @@ async function newNote() {
   height: 100%;
   overflow: hidden;
 }
+.workspace-content { position:relative; display:flex; flex:1; min-height:0; min-width:0; }
 
 .empty-workspace {
   flex: 1;
