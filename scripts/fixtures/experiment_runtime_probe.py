@@ -224,11 +224,11 @@ def main():
                 output.write(b"\x00" * (16 * 1024 * 1024))
             output.flush()
         time.sleep(120)
-    if mode in ("outside", "file-stream", "directory-stream"):
-        target = Path("outside-large.bin")
+    if mode in ("relative-file", "file-stream", "directory-stream"):
+        target = Path("relative-large.bin")
         if mode == "file-stream":
             target.write_bytes(b"main")
-            target = Path("outside-large.bin:hidden")
+            target = Path("relative-large.bin:hidden")
         elif mode == "directory-stream":
             target = Path("stream-directory")
             target.mkdir()
@@ -265,9 +265,11 @@ def main():
     with socket.socket() as connection:
         connection.settimeout(2)
         report["network"] = denied(lambda: connection.connect(("127.0.0.1", port)))
-    # Prove that writable container storage is broader than scratch, so the
-    # production executor cannot reuse scratch-only byte accounting.
-    Path("probe-outside-scratch.txt").write_text("synthetic", encoding="utf-8")
+    # Extensions retain their former working directory; experiments now run
+    # inside TEMP and cannot create files in the surrounding profile directory.
+    outside = scratch.parent / "probe-outside-scratch.txt"
+    report["outside_scratch_create"] = denied(lambda: outside.write_text("synthetic", encoding="utf-8"))
+    report["cwd_is_scratch"] = Path.cwd().samefile(scratch)
     (scratch / "probe.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
 
 

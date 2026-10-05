@@ -481,61 +481,8 @@ mod tests {
         for mode in [
             "basic", "nonzero", "logs", "cancel", "switch", "shutdown", "wall", "cpu",
         ] {
-            let script = format!(
-                r#"import csv, io, json, os, sys, time, subprocess
-from pathlib import Path
-mode = {mode:?}
-if sys.argv[1:] == ['child']:
-    print('child-ready', flush=True)
-    time.sleep(60)
-    sys.exit(0)
-assert len(sys.argv) == 1 and sys.flags.isolated == 1
-assert 'OPENNEXUS_PROBE_PARENT_TOKEN' not in os.environ
-if mode in ('cancel','switch','shutdown'):
-    subprocess.Popen([sys.executable,'-I','-B','-X','utf8',__file__,'child'], stdout=sys.stdout,stderr=sys.stderr,close_fds=True,creationflags=subprocess.CREATE_NO_WINDOW)
-    time.sleep(60)
-elif mode == 'wall':
-    time.sleep(60)
-elif mode == 'cpu':
-    while True: pass
-elif mode == 'nonzero':
-    print('real-failure', flush=True)
-    sys.exit(7)
-elif mode == 'logs':
-    sys.stdout.buffer.write(b'A'*(2*1024*1024));sys.stdout.flush()
-    sys.stderr.buffer.write(b'E'*(2*1024*1024));sys.stderr.flush()
-else:
-    import ctypes
-    from ctypes import wintypes
-    kernel = ctypes.WinDLL('kernel32',use_last_error=True)
-    create = kernel.CreateFileW
-    create.argtypes=[wintypes.LPCWSTR,wintypes.DWORD,wintypes.DWORD,ctypes.c_void_p,wintypes.DWORD,wintypes.DWORD,wintypes.HANDLE]
-    create.restype=wintypes.HANDLE
-    close = kernel.CloseHandle
-    close.argtypes=[wintypes.HANDLE]
-    close.restype=wintypes.BOOL
-    def acl_access(path):
-        # Query rights on owned scratch objects without changing their ACLs.
-        handle=create(str(path),0x60000,7,None,3,0x02000000,None)
-        if handle == ctypes.c_void_p(-1).value: return ctypes.get_last_error()
-        assert close(handle)
-        return 0
-    scratch_file=Path.cwd()/'worker-output.txt'
-    scratch_file.write_text('owned synthetic output',encoding='utf-8')
-    scratch_acl_access={{'root':acl_access(Path.cwd()),'created_file':acl_access(scratch_file)}}
-    rows=list(csv.DictReader(io.StringIO((Path(__file__).parent/'input.csv').read_text(encoding='utf-8'))))
-    assert sum(int(row['value']) for row in rows)==18 and rows[0]['name']=='中文'
-    try: (Path(__file__).parent/'input.csv').write_bytes(b'changed')
-    except PermissionError: input_write_denied = True
-    else: raise RuntimeError('input was writable')
-    print('NATIVE_WORKER:中文:18:'+sys.version.split()[0],flush=True)
-    print('WORKER_REPORT:'+json.dumps({{'executable':sys.executable,'runtime':sys.version.split()[0],
-        'isolated':sys.flags.isolated,'argv':sys.argv[1:],'parent_environment_inherited':
-        'OPENNEXUS_PROBE_PARENT_TOKEN' in os.environ,'input_write_denied':input_write_denied,
-        'csv_total':sum(int(row['value']) for row in rows),'first_name':rows[0]['name'],
-        'scratch_acl_access':scratch_acl_access}}),flush=True)
-"#
-            );
+            let script = include_str!("../../../scripts/fixtures/experiment_worker_probe.py")
+                .replace("MODE = None", &format!("MODE = {mode:?}"));
             let limits = ExecutionLimits {
                 wall_seconds: if mode == "wall" {
                     1
@@ -670,6 +617,33 @@ else:
                     .stdout
                     .text
                     .contains("NATIVE_WORKER:中文:18:3.13.16"));
+                let report: serde_json::Value = serde_json::from_str(
+                    result
+                        .logs
+                        .stdout
+                        .text
+                        .lines()
+                        .find_map(|line| line.strip_prefix("WORKER_REPORT:"))
+                        .unwrap(),
+                )
+                .unwrap();
+                let acl = &report["scratch_acl_access"];
+                for field in [
+                    "root",
+                    "parent",
+                    "created_file",
+                    "root_acl_change",
+                    "file_acl_change",
+                    "outside_create",
+                    "explicit_descriptor_acl_access",
+                ] {
+                    assert_eq!(acl[field], 5, "{field}: {acl}");
+                }
+                assert_eq!(acl["cwd_is_scratch"], true);
+                assert_eq!(acl["scratch_read_write_delete"], true);
+                // An explicit protected descriptor can grant rights on a NEW
+                // child; it cannot replace the pinned parent's descriptor.
+                assert_eq!(acl["protected_descriptor_acl_access"], 0);
             }
             if mode == "cpu" {
                 assert!(result.user_cpu_ticks.unwrap() >= 10_000_000);

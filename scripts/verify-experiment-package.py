@@ -166,6 +166,15 @@ def verify_worker_receipt(receipt: dict, runtime: Path, lock: dict) -> None:
             or report['parent_environment_inherited'] is not False or report['input_write_denied'] is not True
             or type(report['csv_total']) is not int or report['csv_total'] != 18 or report['first_name'] != '中文'):
         raise ValueError('Formal worker did not verify the extracted interpreter and selected inputs')
+    acl = report['scratch_acl_access']
+    for key in ('root', 'parent', 'created_file', 'root_acl_change', 'file_acl_change',
+                'outside_create', 'explicit_descriptor_acl_access'):
+        if type(acl[key]) is not int or acl[key] != 5:
+            raise ValueError('Formal worker did not verify owned filesystem access denied: ' + key)
+    if (acl['cwd_is_scratch'] is not True or acl['scratch_read_write_delete'] is not True
+            or type(acl['protected_descriptor_acl_access']) is not int
+            or acl['protected_descriptor_acl_access'] != 0):
+        raise ValueError('Formal worker omitted filesystem positive controls or explicit descriptor behavior')
 
 
 def native_probe(payload: Path, target: str, evidence: Path) -> dict:

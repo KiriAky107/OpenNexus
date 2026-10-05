@@ -547,7 +547,12 @@ fn native_probe(experimental: bool, probe: Probe) {
         fs::read_to_string(inputs.path().join("input.csv")).unwrap(),
         csv
     );
-    assert!(folder.join("probe-outside-scratch.txt").exists());
+    assert_eq!(report["outside_scratch_create"]["denied"], experimental);
+    assert_eq!(report["cwd_is_scratch"], experimental);
+    assert_eq!(
+        folder.join("probe-outside-scratch.txt").exists(),
+        !experimental
+    );
     if probe == Probe::Binding {
         for operation in [
             "entry_write",
@@ -760,7 +765,7 @@ fn native_probe(experimental: bool, probe: Probe) {
     if experimental {
         resource_probes.extend([
             ("cpu", "EXTENSION_RESOURCE_CPU_EXCEEDED"),
-            ("outside", "EXTENSION_RESOURCE_SCRATCH_EXCEEDED"),
+            ("relative-file", "EXTENSION_RESOURCE_SCRATCH_EXCEEDED"),
             ("file-stream", "EXTENSION_RESOURCE_SCRATCH_EXCEEDED"),
             ("directory-stream", "EXTENSION_RESOURCE_SCRATCH_EXCEEDED"),
         ]);
@@ -788,7 +793,14 @@ fn native_probe(experimental: bool, probe: Probe) {
         };
         let elapsed_ms = start.elapsed().as_millis();
         let user_cpu_ticks = running.test_job().unwrap().user_cpu_ticks().unwrap();
-        if ["scratch", "outside", "file-stream", "directory-stream"].contains(&mode) && experimental
+        if [
+            "scratch",
+            "relative-file",
+            "file-stream",
+            "directory-stream",
+        ]
+        .contains(&mode)
+            && experimental
         {
             assert!(
                 outcome == expected || outcome == "EXPERIMENT_WRITE_IO_LIMIT_EXCEEDED",
@@ -825,11 +837,11 @@ fn native_probe(experimental: bool, probe: Probe) {
         if mode == "scratch" {
             fs::remove_file(scratch.0.join("large.bin")).unwrap();
         }
-        if mode == "outside" || mode == "file-stream" {
-            fs::remove_file(folder.join("outside-large.bin")).unwrap();
+        if mode == "relative-file" || mode == "file-stream" {
+            fs::remove_file(scratch.0.join("relative-large.bin")).unwrap();
         }
         if mode == "directory-stream" {
-            fs::remove_dir(folder.join("stream-directory")).unwrap();
+            fs::remove_dir(scratch.0.join("stream-directory")).unwrap();
         }
     }
     let running = launch("child");
@@ -891,7 +903,7 @@ fn native_probe(experimental: bool, probe: Probe) {
         "remaining_processes": 0, "resources": resources, "deadline_ms": 750,
         "experiment_limits": if experimental { Some(&limits) } else { None },
         "independent_run_deadline_seconds": independent_deadline,
-        "host_network_positive_control": true, "container_outside_scratch_writable": true,
+        "host_network_positive_control": true, "container_outside_scratch_writable": !experimental,
         "logs": log_report,
         "production_executor_enabled": false
     })).unwrap()).unwrap();

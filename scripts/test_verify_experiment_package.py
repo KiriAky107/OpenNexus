@@ -137,7 +137,11 @@ class PackageRuntimeTests(unittest.TestCase):
                 runs['logs']['result']['logs'][stream] = log('A' * 8192, 2 * 1024 * 1024, True)
             report = dict(executable=str(runtime / lock['entrypoint']), runtime=lock['version'], isolated=1,
                           argv=[], parent_environment_inherited=False, input_write_denied=True,
-                          csv_total=18, first_name='中文')
+                          csv_total=18, first_name='中文', scratch_acl_access=dict(
+                              root=5, parent=5, created_file=5, root_acl_change=5, file_acl_change=5,
+                              outside_create=5, explicit_descriptor_acl_access=5,
+                              cwd_is_scratch=True, scratch_read_write_delete=True,
+                              protected_descriptor_acl_access=0))
             runs['basic']['result']['logs']['stdout'] = log('WORKER_REPORT:' + json.dumps(report) + '\r\n')
             receipt = dict(schema_version=1, runtime_id=lock['runtime_id'], runs=runs)
             package.verify_worker_receipt(receipt, runtime, lock)
@@ -168,6 +172,14 @@ class PackageRuntimeTests(unittest.TestCase):
                     for key in path[:-1]:
                         parent = parent[key]
                     parent[path[-1]] = value
+                    with self.assertRaises(ValueError):
+                        package.verify_worker_receipt(changed, runtime, lock)
+            for field in report['scratch_acl_access']:
+                with self.subTest(filesystem=field):
+                    changed = copy.deepcopy(receipt)
+                    altered = copy.deepcopy(report)
+                    altered['scratch_acl_access'][field] = False if field.endswith('_access') else 0
+                    changed['runs']['basic']['result']['logs']['stdout'] = log('WORKER_REPORT:' + json.dumps(altered))
                     with self.assertRaises(ValueError):
                         package.verify_worker_receipt(changed, runtime, lock)
             missing = copy.deepcopy(receipt)
