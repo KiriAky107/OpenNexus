@@ -15,6 +15,7 @@ pub struct Job {
     state: std::sync::Arc<std::sync::atomic::AtomicU8>,
     _monitor: Option<ResourceMonitor>,
     _registry: Option<crate::experiment_registry::ReadOnlyRegistry>,
+    _filesystem: Option<crate::experiment_filesystem::Filesystem>,
 }
 enum DiskCheck {
     Scratch(PathBuf),
@@ -32,6 +33,7 @@ impl Job {
             state: std::sync::Arc::clone(&self.state),
             _monitor: None,
             _registry: None,
+            _filesystem: None,
             handle: self
                 .handle
                 .try_clone()
@@ -86,6 +88,16 @@ impl Job {
         self._registry = Some(profile.restrict_experiment_registry()?);
         Ok(())
     }
+    pub(crate) fn restrict_experiment_filesystem(
+        &mut self,
+        profile: &crate::extension_container::Profile,
+        scratch: &Path,
+    ) -> Result<()> {
+        self._filesystem = Some(crate::experiment_filesystem::Filesystem::restrict(
+            profile, scratch,
+        )?);
+        Ok(())
+    }
     fn with_limits(budget: KernelLimits, disk: Option<DiskCheck>) -> Result<Self> {
         let raw = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if raw.is_null() {
@@ -96,6 +108,7 @@ impl Job {
             state: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
             _monitor: None,
             _registry: None,
+            _filesystem: None,
         };
         let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
             BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {

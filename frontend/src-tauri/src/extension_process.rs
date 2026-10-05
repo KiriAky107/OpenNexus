@@ -194,7 +194,12 @@ impl<'a> Suspended<'a> {
             .open(data.scratch())
             .map_err(|_| HostError::new("EXTENSION_RESOURCE_UNAVAILABLE"))?;
         profile.grant_scratch_modify(&scratch_handle)?;
-        let directory: Vec<u16> = folder.as_os_str().encode_wide().chain(Some(0)).collect();
+        let working = if experiment.is_some() {
+            data.scratch()
+        } else {
+            &folder
+        };
+        let directory: Vec<u16> = working.as_os_str().encode_wide().chain(Some(0)).collect();
         let mut attributes = Attributes::new(if io.is_some() { 2 } else { 1 })?;
         let caps = SECURITY_CAPABILITIES {
             AppContainerSid: profile.sid(),
@@ -284,6 +289,7 @@ impl<'a> Suspended<'a> {
             // Windows may initialize private profile storage while creating the
             // token. Seal its registry after that work, before ResumeThread.
             job.restrict_experiment_registry(profile)?;
+            job.restrict_experiment_filesystem(profile, data.scratch())?;
         }
         unsafe {
             job.assign_suspended(handles.process.as_handle())?;

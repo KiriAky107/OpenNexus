@@ -114,6 +114,8 @@ mod process_creation;
 
 #[cfg(windows)]
 mod experiment_disk;
+#[cfg(windows)]
+mod experiment_filesystem;
 pub mod experiment_policy;
 #[cfg(windows)]
 mod experiment_registry;
