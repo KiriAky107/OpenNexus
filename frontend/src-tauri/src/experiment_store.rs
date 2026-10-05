@@ -191,6 +191,67 @@ pub struct RunRecord {
     pub error: Option<String>,
     pub result: Option<RunResult>,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryCursor {
+    pub vault_id: String,
+    pub created_ms: i64,
+    pub operation_id: String,
+}
+#[derive(Debug, Serialize)]
+pub struct HistoryItem {
+    pub operation_id: String,
+    pub fingerprint: String,
+    pub entry: crate::experiment_input::SelectedFile,
+    pub runtime_id: String,
+    pub state: RunState,
+    pub created_ms: i64,
+    pub updated_ms: i64,
+    pub error: Option<String>,
+    pub elapsed_ms: Option<u64>,
+    pub exit_code: Option<u32>,
+    pub output_files: Option<usize>,
+    pub output_bytes: Option<u64>,
+    pub skipped_files: Option<usize>,
+}
+#[derive(Debug, Serialize)]
+pub struct HistoryPage {
+    pub items: Vec<HistoryItem>,
+    pub next_cursor: Option<HistoryCursor>,
+}
+#[derive(Debug, Serialize)]
+pub struct RetentionUsage {
+    pub records: u64,
+    pub forgotten_operations: u64,
+    pub payload_bytes: u64,
+    pub reserved_bytes: u64,
+    pub maximum_bytes: u64,
+    pub maximum_records: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForgetReceipt {
+    pub vault_id: String,
+    pub operation_id: String,
+    pub fingerprint: String,
+    pub forgotten_ms: i64,
+}
+fn forgotten(conn: &Connection, operation: &str) -> Result<Option<ForgetReceipt>> {
+    let value: Option<(Option<String>,bool)> = conn.query_row(
+        "SELECT CASE WHEN length(CAST(summary AS BLOB))<=1024 THEN summary END,result IS NULL AND approval_id IS NULL AND approved_ms IS NULL AND error='EXPERIMENT_RECORD_FORGOTTEN' FROM experiment_runs WHERE operation_id=?1 AND state='forgotten'",
+        [operation],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+    value.map(|(encoded, cleared)| {
+        let receipt:ForgetReceipt=serde_json::from_str(&encoded.ok_or_else(corrupt)?).map_err(|_| corrupt())?;
+        if !cleared || receipt.operation_id!=operation || receipt.forgotten_ms<0
+            || uuid::Uuid::parse_str(&receipt.vault_id).is_err()
+            || uuid::Uuid::parse_str(&receipt.operation_id).is_err()
+            || receipt.fingerprint.len()!=64 || !receipt.fingerprint.bytes().all(|b|b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {return Err(corrupt());}
+        let children:i64=conn.query_row("SELECT (SELECT COUNT(*) FROM experiment_inputs WHERE operation_id=?1)+(SELECT COUNT(*) FROM experiment_outputs WHERE operation_id=?1)",[operation],|r|r.get(0))?;
+        if children!=0 {return Err(corrupt());}
+        Ok(receipt)
+    }).transpose()
+}
 /// Only a successful durable Approved -> Starting transition can mint this
 /// owner. It cannot be decoded from RPC and is not itself a launch permission.
 pub struct ClaimedRun {
@@ -298,6 +359,13 @@ fn get(conn: &Connection, operation: &str) -> Result<Option<RunRecord>> {
 }
 impl Workspace {
     pub fn experiment_record(&self, operation: &str) -> Result<Option<RunRecord>> {
+        if let Some(receipt) = forgotten(&self.db, operation)? {
+            return Err(HostError::new(if receipt.vault_id == self.vault_id {
+                "EXPERIMENT_RECORD_FORGOTTEN"
+            } else {
+                "VAULT_PERMISSION_CHANGED"
+            }));
+        }
         let record = get(&self.db, operation)?;
         if record
             .as_ref()
@@ -306,6 +374,140 @@ impl Workspace {
             return Err(HostError::new("VAULT_PERMISSION_CHANGED"));
         }
         Ok(record)
+    }
+    /// Only metadata cards, never source/output BLOBs or full log text. Stable
+    /// descending tuple cursors handle equal timestamps without duplicates.
+    pub fn experiment_history(
+        &self,
+        limit: usize,
+        cursor: Option<&HistoryCursor>,
+    ) -> Result<HistoryPage> {
+        if !(1..=50).contains(&limit) {
+            return Err(HostError::new("EXPERIMENT_HISTORY_INVALID"));
+        }
+        if let Some(cursor) = cursor {
+            if cursor.vault_id != self.vault_id {
+                return Err(HostError::new("VAULT_PERMISSION_CHANGED"));
+            }
+            if cursor.created_ms < 0 || uuid::Uuid::parse_str(&cursor.operation_id).is_err() {
+                return Err(HostError::new("EXPERIMENT_HISTORY_INVALID"));
+            }
+        }
+        let mut statement=self.db.prepare("SELECT operation_id FROM experiment_runs WHERE state<>'forgotten' AND (?1 IS NULL OR created_ms<?1 OR (created_ms=?1 AND operation_id<?2)) ORDER BY created_ms DESC,operation_id DESC LIMIT ?3")?;
+        let ids = statement
+            .query_map(
+                params![
+                    cursor.map(|c| c.created_ms),
+                    cursor.map(|c| c.operation_id.as_str()),
+                    limit + 1
+                ],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let has_more = ids.len() > limit;
+        let mut items = Vec::new();
+        for operation in ids.iter().take(limit) {
+            let record = self.experiment_record(operation)?.ok_or_else(corrupt)?;
+            let (output_files, output_bytes, skipped_files) =
+                match record.result.as_ref().and_then(|r| r.outputs.as_ref()) {
+                    Some(OutputReport::Collected { summary }) => (
+                        Some(summary.files.len()),
+                        Some(summary.files.iter().map(|f| f.bytes).sum()),
+                        Some(summary.skipped.len()),
+                    ),
+                    _ => (None, None, None),
+                };
+            items.push(HistoryItem {
+                operation_id: operation.clone(),
+                fingerprint: record.summary.fingerprint,
+                entry: record.summary.request.entry,
+                runtime_id: record.summary.request.runtime_id,
+                state: record.state,
+                created_ms: record.created_ms,
+                updated_ms: record.updated_ms,
+                error: record.error,
+                elapsed_ms: record.result.as_ref().map(|r| r.elapsed_ms),
+                exit_code: record.result.as_ref().and_then(|r| r.exit_code),
+                output_files,
+                output_bytes,
+                skipped_files,
+            });
+        }
+        let next_cursor = if has_more {
+            items.last().map(|i| HistoryCursor {
+                vault_id: self.vault_id.clone(),
+                created_ms: i.created_ms,
+                operation_id: i.operation_id.clone(),
+            })
+        } else {
+            None
+        };
+        Ok(HistoryPage { items, next_cursor })
+    }
+    pub fn experiment_retention_usage(&self) -> Result<RetentionUsage> {
+        let (records,forgotten_operations):(u64,u64)=self.db.query_row("SELECT COUNT(CASE WHEN state<>'forgotten' THEN 1 END),COUNT(CASE WHEN state='forgotten' THEN 1 END) FROM experiment_runs",[],|r|Ok((r.get(0)?,r.get(1)?)))?;
+        Ok(RetentionUsage {
+            records,
+            forgotten_operations,
+            payload_bytes: u64::try_from(usage(&self.db)?).map_err(|_| corrupt())?,
+            reserved_bytes: u64::try_from(reservations(&self.db, None)?).map_err(|_| corrupt())?,
+            maximum_bytes: MAX_STORE as u64,
+            maximum_records: MAX_RECORDS as u64,
+        })
+    }
+    /// Explicit user cleanup of a terminal run. No filesystem operation: source
+    /// files, imports and the separate native cleanup journal are unaffected.
+    /// Retain a small identity tombstone so an old request can never run again.
+    pub fn experiment_forget(
+        &mut self,
+        operation: &str,
+        fingerprint: &str,
+    ) -> Result<ForgetReceipt> {
+        if let Some(receipt) = forgotten(&self.db, operation)? {
+            if receipt.vault_id != self.vault_id {
+                return Err(HostError::new("VAULT_PERMISSION_CHANGED"));
+            }
+            return if receipt.fingerprint == fingerprint {
+                Ok(receipt)
+            } else {
+                Err(HostError::new("OPERATION_PAYLOAD_CONFLICT"))
+            };
+        }
+        let tx = self.db.transaction()?;
+        let record = get(&tx, operation)?.ok_or_else(conflict)?;
+        if record.summary.request.vault_id != self.vault_id {
+            return Err(HostError::new("VAULT_PERMISSION_CHANGED"));
+        }
+        if record.summary.fingerprint != fingerprint {
+            return Err(HostError::new("OPERATION_PAYLOAD_CONFLICT"));
+        }
+        if !record.state.terminal() {
+            return Err(conflict());
+        }
+        let receipt = ForgetReceipt {
+            vault_id: self.vault_id.clone(),
+            operation_id: operation.into(),
+            fingerprint: fingerprint.into(),
+            forgotten_ms: now()?,
+        };
+        let encoded = serde_json::to_string(&receipt).map_err(|_| corrupt())?;
+        if encoded.len() > 1024 {
+            return Err(corrupt());
+        }
+        tx.execute(
+            "DELETE FROM experiment_outputs WHERE operation_id=?1",
+            [operation],
+        )?;
+        tx.execute(
+            "DELETE FROM experiment_inputs WHERE operation_id=?1",
+            [operation],
+        )?;
+        if tx.execute("UPDATE experiment_runs SET state='forgotten',summary=?2,result=NULL,approval_id=NULL,approved_ms=NULL,error='EXPERIMENT_RECORD_FORGOTTEN',updated_ms=?3 WHERE operation_id=?1 AND state=?4",params![operation,encoded,receipt.forgotten_ms,record.state.name()])? !=1 {return Err(conflict());}
+        if usage(&tx)? + reservations(&tx, None)? > MAX_STORE {
+            return Err(HostError::new("EXPERIMENT_RECORD_QUOTA"));
+        }
+        tx.commit()?;
+        Ok(receipt)
     }
     /// Host routes must query an existing operation before preparing new inputs.
     /// This atomically persists all snapshot bytes with the waiting record.
@@ -329,8 +531,11 @@ impl Workspace {
         }
         let time = now()?;
         let tx = self.db.transaction()?;
-        let count: i64 =
-            tx.query_row("SELECT COUNT(*) FROM experiment_runs", [], |row| row.get(0))?;
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM experiment_runs WHERE state<>'forgotten'",
+            [],
+            |row| row.get(0),
+        )?;
         if count >= MAX_RECORDS
             || usage(&tx)?
                 + reservations(&tx, None)?

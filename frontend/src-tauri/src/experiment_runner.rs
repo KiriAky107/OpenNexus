@@ -111,6 +111,45 @@ impl Runner {
     pub fn record(&self, workspace: &WorkspaceSlot, operation: &str) -> Result<Option<RunRecord>> {
         with_workspace(workspace, |ws| ws.experiment_record(operation))
     }
+    pub fn history(
+        &self,
+        workspace: &WorkspaceSlot,
+        limit: usize,
+        cursor: Option<&crate::experiment_store::HistoryCursor>,
+    ) -> Result<crate::experiment_store::HistoryPage> {
+        with_workspace(workspace, |ws| ws.experiment_history(limit, cursor))
+    }
+    pub fn retention_usage(
+        &self,
+        workspace: &WorkspaceSlot,
+    ) -> Result<crate::experiment_store::RetentionUsage> {
+        with_workspace(workspace, |ws| ws.experiment_retention_usage())
+    }
+    /// Trusted user action only; model retries may read history but cannot
+    /// discard pending cleanup diagnostics or a worker still returning.
+    pub fn forget_from_user(
+        &self,
+        workspace: &WorkspaceSlot,
+        operation: &str,
+        fingerprint: &str,
+    ) -> Result<crate::experiment_store::ForgetReceipt> {
+        let worker = self.worker.lock().map_err(|_| busy())?;
+        let cleanup = self.cleanup_status()?;
+        with_workspace(workspace, |ws| {
+            if cleanup
+                .as_ref()
+                .is_some_and(|p| p.vault_id == ws.vault_id && p.operation_id == operation)
+            {
+                return Err(HostError::new("EXPERIMENT_CLEANUP_REQUIRED"));
+            }
+            if worker.as_ref().is_some_and(|w| {
+                w.vault == ws.vault_id && w.operation == operation && !w.handle.is_finished()
+            }) {
+                return Err(HostError::new("EXPERIMENT_RUN_BUSY"));
+            }
+            ws.experiment_forget(operation, fingerprint)
+        })
+    }
     pub fn reject(
         &self,
         workspace: &WorkspaceSlot,
