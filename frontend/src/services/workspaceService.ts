@@ -162,6 +162,7 @@ export async function previewPathChange(path: string): Promise<ReferenceImpact> 
 export async function readFileContent(filePath: string): Promise<string> {
   if (workspaceDocumentType(filePath) === 'image') throw new Error('IMAGE_USE_BINARY_ASSET_API')
   if (workspaceDocumentType(filePath) === 'unsupported') throw new Error('UNSUPPORTED_DOCUMENT_TYPE')
+  if (workspaceDocumentType(filePath) === 'experiment' && !isDesktop()) throw new Error('EXPERIMENT_FILES_DESKTOP_ONLY')
   if (isDesktop()) return (await hostInvoke<HostDocument>('workspace_read', { path: nativePath(filePath) })).content
   if (workspaceDocumentType(filePath) === 'canvas') return (await apiClient.get<CanvasDocument>('/api/workspace/canvas', { params: { path: filePath } })).content
   const note = await noteService.getNote(await requireNoteId(filePath))
@@ -220,7 +221,9 @@ export async function getNoteId(filePath: string): Promise<string> {
 }
 
 export async function saveFileContent(filePath: string, content: string, expectedContent?: string): Promise<void> {
-  if (workspaceDocumentType(filePath) !== 'markdown' && workspaceDocumentType(filePath) !== 'canvas') throw new Error('UNSUPPORTED_DOCUMENT_TYPE')
+  const kind = workspaceDocumentType(filePath)
+  if (kind !== 'markdown' && kind !== 'canvas' && kind !== 'experiment') throw new Error('UNSUPPORTED_DOCUMENT_TYPE')
+  if (kind === 'experiment' && !isDesktop()) throw new Error('EXPERIMENT_FILES_DESKTOP_ONLY')
   if (workspaceDocumentType(filePath) === 'canvas') validateCanvasContent(content)
   if (isDesktop()) {
     if (expectedContent === undefined) throw new Error('EXPECTED_REVISION_REQUIRED')
@@ -247,9 +250,10 @@ export async function createFile(
   name: string,
   content = '',
 ): Promise<FileNode> {
-  const fileName = /\.(md|canvas)$/i.test(name) ? name : `${name}.md`
+  const fileName = /\.(md|canvas|py|json|csv)$/i.test(name) ? name : `${name}.md`
   const kind = workspaceDocumentType(fileName)
-  if (kind !== 'markdown' && kind !== 'canvas') throw new Error('UNSUPPORTED_DOCUMENT_TYPE')
+  if (kind !== 'markdown' && kind !== 'canvas' && kind !== 'experiment') throw new Error('UNSUPPORTED_DOCUMENT_TYPE')
+  if (kind === 'experiment' && !isDesktop()) throw new Error('EXPERIMENT_FILES_DESKTOP_ONLY')
   const initialContent = kind === 'canvas' ? (content || EMPTY_CANVAS) : content
   if (kind === 'canvas') validateCanvasContent(initialContent)
   if (isDesktop()) {

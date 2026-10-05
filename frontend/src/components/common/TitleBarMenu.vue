@@ -7,6 +7,7 @@ import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import { executeEditorCommand, getEditorCommandCapabilities, subscribeEditorCommandCapabilities, type EditorCommandId } from '@/services/editorCommandService'
 import { calloutMenuCommands, formatMenuSections, paragraphMenuSections, type EditorMenuCommand } from '@/services/editorMenu'
 import * as workspaceService from '@/services/workspaceService'
+import { workspaceDocumentType } from '@/services/workspaceDocuments'
 import ExportDialog from '@/features/editor/ExportDialog.vue'
 import ActionDialog from './ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
@@ -119,7 +120,7 @@ async function runFileAction(action: () => Promise<void>) {
 }
 async function createWorkspaceItem(type: 'file' | 'folder') {
   close()
-  const rawName = (await askPrompt(type === 'file' ? t('笔记名称', 'Note name') : t('文件夹名称', 'Folder name')))?.trim()
+  const rawName = (await askPrompt(type === 'file' ? t('文件名称', 'File name') : t('文件夹名称', 'Folder name')))?.trim()
   if (!rawName) return
   if (/[\\/]/.test(rawName) || ['.', '..'].includes(rawName)) {
     error.value = t('名称不能包含路径分隔符。', 'Names cannot contain path separators.')
@@ -133,7 +134,8 @@ async function createWorkspaceItem(type: 'file' | 'folder') {
       return
     }
     const title = rawName.replace(/\.md$/i, '')
-    const file = await workspaceService.createFile('/', rawName, `# ${title}\n\n`)
+    const initial = workspaceDocumentType(rawName) === 'experiment' ? '' : `# ${title}\n\n`
+    const file = await workspaceService.createFile('/', rawName, initial)
     workspace.addFileToTree('/', file)
     const navigation = await editor.loadFile(file.path)
     if (!navigation?.isCurrent()) return
@@ -143,7 +145,8 @@ async function createWorkspaceItem(type: 'file' | 'folder') {
 function openExport() { close(); exportOpen.value = true }
 function downloadMarkdown() {
   if (!editor.currentFilePath) return
-  const url = URL.createObjectURL(new Blob([editor.content], { type: 'text/markdown;charset=utf-8' }))
+  const markdown = workspaceDocumentType(editor.currentFilePath) === 'markdown'
+  const url = URL.createObjectURL(new Blob([editor.content], { type: markdown ? 'text/markdown;charset=utf-8' : 'text/plain;charset=utf-8' }))
   const link = document.createElement('a')
   link.href = url
   link.download = editor.currentFilePath.split('/').at(-1) ?? 'note.md'
@@ -262,7 +265,7 @@ onBeforeUnmount(() => {
           <span>{{ t('保存', 'Save') }}</span><kbd>Ctrl+S</kbd>
         </button>
         <button class="export-command" data-menu-item role="menuitem" :disabled="!editor.currentFilePath || !editor.content.trim() || fileBusy" @click="openExport"><span>{{ t('导出…', 'Export…') }}</span></button>
-        <button data-menu-item role="menuitem" :disabled="!editor.currentFilePath || fileBusy" @click="downloadMarkdown"><span>{{ t('下载 Markdown 副本', 'Download Markdown copy') }}</span></button>
+        <button data-menu-item role="menuitem" :disabled="!editor.currentFilePath || fileBusy" @click="downloadMarkdown"><span>{{ workspaceDocumentType(editor.currentFilePath ?? '') === 'markdown' ? t('下载 Markdown 副本', 'Download Markdown copy') : t('下载文件副本', 'Download file copy') }}</span></button>
         <span class="menu-separator" role="separator" />
         <button data-menu-item role="menuitem" :disabled="!editor.currentFilePath || fileBusy" @click="closeCurrentNote"><span>{{ t('关闭当前笔记', 'Close current note') }}</span></button>
       </div>

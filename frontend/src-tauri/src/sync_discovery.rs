@@ -29,7 +29,7 @@ pub fn allowed(path: &str) -> bool {
         .to_ascii_lowercase();
     matches!(
         extension.as_str(),
-        "md" | "canvas" | "png" | "jpg" | "jpeg" | "gif" | "webp"
+        "md" | "canvas" | "py" | "json" | "csv" | "png" | "jpg" | "jpeg" | "gif" | "webp"
     ) || (parts
         .first()
         .is_some_and(|v| v.eq_ignore_ascii_case("attachments"))
@@ -366,7 +366,25 @@ mod rename_tests;
 mod tests {
     use super::*;
     #[test]
-    fn canvas_and_image_external_edits_enter_sync_discovery() {
+    fn experiment_source_and_data_files_are_syncable_text_types() {
+        for path in [
+            "experiments/main.py",
+            "experiments/input.json",
+            "experiments/input.csv",
+        ] {
+            assert!(allowed(path), "{path}");
+        }
+        for path in [
+            "experiments/output.bin",
+            ".private/main.py",
+            "target/output.csv",
+        ] {
+            assert!(!allowed(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn canvas_images_and_experiment_files_enter_sync_discovery() {
         let root = tempfile::tempdir().unwrap();
         let mut ws = Workspace::open(root.path()).unwrap();
         let binding = ws
@@ -378,9 +396,13 @@ mod tests {
         )
         .unwrap();
         fs::write(root.path().join("diagram.png"), b"image-bytes").unwrap();
-        assert_eq!(ws.sync_discover(&binding.id).unwrap(), 2);
+        fs::create_dir(root.path().join("experiments")).unwrap();
+        fs::write(root.path().join("experiments/main.py"), b"print('hello')").unwrap();
+        fs::write(root.path().join("experiments/input.json"), b"{\"value\":1}").unwrap();
+        fs::write(root.path().join("experiments/input.csv"), b"value\n1\n").unwrap();
+        assert_eq!(ws.sync_discover(&binding.id).unwrap(), 5);
         assert_eq!(ws.sync_discover(&binding.id).unwrap(), 0);
-        assert_eq!(ws.pending_count().unwrap(), 2);
+        assert_eq!(ws.pending_count().unwrap(), 5);
     }
     #[test]
     fn external_edits_after_ui_reads_are_queued_once_and_deletions_survive_restart() {

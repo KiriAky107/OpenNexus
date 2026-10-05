@@ -7,6 +7,7 @@ import { noteOutline } from './outline'
 import { useRouter } from 'vue-router'
 import type { FileNode } from '@/contracts'
 import { EMPTY_CANVAS, workspaceDocumentType } from '@/services/workspaceDocuments'
+import { isDesktop } from '@/services/platform/desktop'
 import * as workspaceService from '@/services/workspaceService'
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -22,7 +23,7 @@ import { prepareReferenceChange, executeReferenceChange, type ReferenceChangePla
 const workspaceStore = useWorkspaceStore()
 const editorStore = useEditorStore()
 const router = useRouter()
-const newItemType = ref<'file' | 'canvas' | 'folder' | null>(null)
+const newItemType = ref<'file' | 'canvas' | 'experiment' | 'folder' | null>(null)
 const newItemName = ref('')
 const parentPath = ref('/')
 const selectedTreePath = ref(workspaceStore.activeFilePath ?? '/')
@@ -134,7 +135,7 @@ watch(() => workspaceStore.activeFilePath, (path) => {
   selectedFolderPath.value = containingFolder(path)
 })
 
-function beginCreate(type: 'file' | 'canvas' | 'folder', parent = '/') {
+function beginCreate(type: 'file' | 'canvas' | 'experiment' | 'folder', parent = '/') {
   if (creating.value) return
   closeContextMenu()
   createError.value = ''
@@ -152,11 +153,12 @@ async function createItem() {
   creating.value = true
   createError.value = ''
   try {
-  if (newItemType.value === 'file' || newItemType.value === 'canvas') {
+  if (newItemType.value === 'file' || newItemType.value === 'canvas' || newItemType.value === 'experiment') {
     const canvas = newItemType.value === 'canvas'
-    const extension = canvas ? '.canvas' : '.md'
-    const name = rawName.toLowerCase().endsWith(extension) ? rawName : `${rawName}${extension}`
-    const file = await workspaceService.createFile(parentPath.value, name, canvas ? EMPTY_CANVAS : `# ${rawName}\n\n`)
+    const experiment = newItemType.value === 'experiment' || (!canvas && /\.(py|json|csv)$/i.test(rawName))
+    const extension = canvas ? '.canvas' : experiment ? '.py' : '.md'
+    const name = /\.(md|canvas|py|json|csv)$/i.test(rawName) ? rawName : `${rawName}${extension}`
+    const file = await workspaceService.createFile(parentPath.value, name, canvas ? EMPTY_CANVAS : experiment ? '' : `# ${rawName}\n\n`)
     workspaceStore.addFileToTree(parentPath.value, file)
     selectedTreePath.value = file.path
     selectedFolderPath.value = parentPath.value
@@ -227,7 +229,7 @@ async function renameTarget() {
   if (newName && newName !== node.name) {
     if (/[\\/]/.test(newName) || ['.', '..'].includes(newName)) { createError.value = t('名称不能包含路径分隔符', 'Names cannot contain path separators'); closeContextMenu(); return }
     const kind = workspaceDocumentType(node.path)
-    const extension = kind === 'canvas' ? '.canvas' : kind === 'image' ? node.path.slice(node.path.lastIndexOf('.')) : '.md'
+    const extension = kind === 'canvas' ? '.canvas' : kind === 'image' || kind === 'experiment' ? node.path.slice(node.path.lastIndexOf('.')) : '.md'
     const normalizedName = node.type === 'file' && !newName.toLowerCase().endsWith(extension.toLowerCase()) ? `${newName}${extension}` : newName
     const oldPath = node.path
     const separator = oldPath.lastIndexOf('/')
@@ -324,6 +326,7 @@ function containingFolder(path: string): string {
     <div class="toolbar">
       <button type="button" :title="t('新建笔记', 'New note')" :aria-label="t('新建笔记', 'New note')" @click.stop="beginCreate('file', selectedFolderPath)"><AppIcon :icon="DocumentAdd" /></button>
       <button type="button" :title="t('新建画布', 'New canvas')" :aria-label="t('新建画布', 'New canvas')" @click.stop="beginCreate('canvas', selectedFolderPath)">◇</button>
+      <button v-if="isDesktop()" type="button" :title="t('新建实验文件', 'New experiment file')" :aria-label="t('新建实验文件', 'New experiment file')" @click.stop="beginCreate('experiment', selectedFolderPath)">{ }</button>
       <button type="button" :title="t('新建文件夹', 'New folder')" :aria-label="t('新建文件夹', 'New folder')" @click.stop="beginCreate('folder', selectedFolderPath)"><AppIcon :icon="FolderAdd" /></button>
       <button type="button" :aria-label="t('搜索文件', 'Search files')" :aria-expanded="searchVisible" @click="searchVisible = !searchVisible">{{ t('搜索', 'Search') }}</button>
       <button type="button" :aria-label="t('全部展开文件夹', 'Expand all folders')" @click="expandAllFiles">{{ t('全部展开', 'Expand all') }}</button>
@@ -332,7 +335,7 @@ function containingFolder(path: string): string {
       <input v-model="searchQuery" type="search" :placeholder="t('搜索文件或文件夹…', 'Search files or folders…')" :aria-label="t('搜索文件或文件夹', 'Search files or folders')" @focus="searchFocused = true" @blur="searchFocused = false" />
     </div>
     <form v-if="newItemType" class="new-item" @submit.prevent="createItem">
-      <input ref="createInput" v-model="newItemName" :disabled="creating" :placeholder="newItemType === 'folder' ? t('文件夹名称', 'Folder name') : newItemType === 'canvas' ? t('画布名称', 'Canvas name') : t('笔记名称', 'Note name')" />
+      <input ref="createInput" v-model="newItemName" :disabled="creating" :placeholder="newItemType === 'folder' ? t('文件夹名称', 'Folder name') : newItemType === 'canvas' ? t('画布名称', 'Canvas name') : newItemType === 'experiment' ? t('实验文件名（.py、.json 或 .csv）', 'Experiment filename (.py, .json or .csv)') : t('笔记名称', 'Note name')" />
       <button type="submit" :disabled="creating">{{ t('创建', 'Create') }}</button>
       <button type="button" :disabled="creating" @click="newItemType = null">{{ t('取消', 'Cancel') }}</button>
     </form>
@@ -376,6 +379,7 @@ function containingFolder(path: string): string {
         :style="{ left: `${contextMenuPosition.x}px`, top: `${contextMenuPosition.y}px` }" @click.stop>
         <button @click="beginCreate('file', selectedFolderPath)">{{ t('新建文件', 'New file') }}</button>
         <button @click="beginCreate('canvas', selectedFolderPath)">{{ t('新建画布', 'New canvas') }}</button>
+        <button v-if="isDesktop()" @click="beginCreate('experiment', selectedFolderPath)">{{ t('新建实验文件', 'New experiment file') }}</button>
         <button @click="beginCreate('folder', selectedFolderPath)">{{ t('新建文件夹', 'New folder') }}</button>
         <button v-if="contextTarget.path !== '/' && (!workspaceService.isWorkspaceImage(contextTarget.path) || workspaceService.isMutableWorkspaceImage(contextTarget.path))" @click="renameTarget">{{ t('重命名', 'Rename') }}</button>
         <button v-if="contextTarget.type === 'file' && (!workspaceService.isWorkspaceImage(contextTarget.path) || workspaceService.isMutableWorkspaceImage(contextTarget.path))" @click="moveTarget">{{ t('移动到文件夹', 'Move to folder') }}</button>

@@ -1,9 +1,10 @@
-export type WorkspaceDocumentType = 'markdown' | 'canvas' | 'image' | 'unsupported'
+export type WorkspaceDocumentType = 'markdown' | 'canvas' | 'image' | 'experiment' | 'unsupported'
 
 export function workspaceDocumentType(path: string): WorkspaceDocumentType {
   if (/\.md$/i.test(path)) return 'markdown'
   if (/\.canvas$/i.test(path)) return 'canvas'
   if (/\.(png|jpe?g|gif|webp)$/i.test(path)) return 'image'
+  if (/\.(py|json|csv)$/i.test(path)) return 'experiment'
   return 'unsupported'
 }
 

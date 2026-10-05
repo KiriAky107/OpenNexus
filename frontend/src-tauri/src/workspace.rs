@@ -430,6 +430,9 @@ impl Workspace {
             } else if path.extension().is_some_and(|e| {
                 e.eq_ignore_ascii_case("md")
                     || e.eq_ignore_ascii_case("canvas")
+                    || ["py", "json", "csv"]
+                        .iter()
+                        .any(|ext| e.eq_ignore_ascii_case(ext))
                     || (images
                         && ["png", "jpg", "jpeg", "gif", "webp"]
                             .iter()
@@ -948,9 +951,12 @@ impl Workspace {
                     walk(root, &path, values)?;
                 } else if path.is_file()
                     && path.extension().is_some_and(|ext| {
-                        ["md", "canvas", "png", "jpg", "jpeg", "gif", "webp"]
-                            .iter()
-                            .any(|allowed| ext.eq_ignore_ascii_case(allowed))
+                        [
+                            "md", "canvas", "py", "json", "csv", "png", "jpg", "jpeg", "gif",
+                            "webp",
+                        ]
+                        .iter()
+                        .any(|allowed| ext.eq_ignore_ascii_case(allowed))
                     })
                 {
                     values.insert(relative, crate::payloads::hash_file(&path)?);
@@ -1670,6 +1676,27 @@ mod tests {
             .unwrap();
         assert_eq!(third.file_id, first.file_id);
         assert_ne!(third.hash, first.hash);
+    }
+
+    #[test]
+    fn tree_includes_python_json_and_csv_experiment_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        let experiment = dir.path().join("experiments");
+        fs::create_dir(&experiment).unwrap();
+        for name in ["main.py", "input.json", "input.csv"] {
+            fs::write(experiment.join(name), b"source data").unwrap();
+        }
+        let paths: std::collections::HashSet<_> = ws
+            .tree()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect();
+        assert!(paths.contains("experiments"));
+        for name in ["main.py", "input.json", "input.csv"] {
+            assert!(paths.contains(&format!("experiments/{name}")));
+        }
     }
 
     #[cfg(windows)]

@@ -13,6 +13,10 @@ describe('workspace document contracts', () => {
     expect(workspaceDocumentType('/notes/a.md')).toBe('markdown')
     expect(workspaceDocumentType('/maps/a.canvas')).toBe('canvas')
     expect(workspaceDocumentType('/assets/a.png')).toBe('image')
+    expect(workspaceDocumentType('/experiments/main.py')).toBe('experiment')
+    expect(workspaceDocumentType('/experiments/input.json')).toBe('experiment')
+    expect(workspaceDocumentType('/experiments/input.csv')).toBe('experiment')
+    expect(workspaceDocumentType('/experiments/output.bin')).toBe('unsupported')
   })
 
   it('validates canvas links and preserves unknown fields', () => {

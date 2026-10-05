@@ -8,6 +8,7 @@ import { workspaceDocumentType } from '@/services/workspaceDocuments'
 const SourceMarkdownEditor = defineAsyncComponent(() => import('./SourceMarkdownEditor.vue'))
 const VisualMarkdownEditor = defineAsyncComponent(() => import('./VisualMarkdownEditor.vue'))
 const CanvasEditor = defineAsyncComponent(() => import('./CanvasEditor.vue'))
+const ExperimentFileEditor = defineAsyncComponent(() => import('./ExperimentFileEditor.vue'))
 
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
@@ -18,6 +19,7 @@ const container = ref<HTMLElement | null>(null)
 <template>
   <div ref="container" class="editor-scroll-pane">
   <CanvasEditor v-if="workspaceDocumentType(editorStore.currentFilePath ?? '') === 'canvas'" :key="`${editorStore.currentFilePath}:${editorStore.contentRevision}`" />
+  <ExperimentFileEditor v-else-if="workspaceDocumentType(editorStore.currentFilePath ?? '') === 'experiment'" :key="`${editorStore.currentFilePath}:${editorStore.contentRevision}`" />
   <VisualMarkdownEditor v-else-if="editorStore.mode === 'wysiwyg'" :key="`${editorStore.currentFilePath ?? 'empty'}:${editorStore.contentRevision}:${themeStore.resolvedCodeBlockTheme}:${settingsStore.language}`"
     :initial-content="editorStore.content" />
   <SourceMarkdownEditor v-else :key="`${editorStore.currentFilePath ?? 'empty'}:${editorStore.contentRevision}`" :initial-content="editorStore.content" />
