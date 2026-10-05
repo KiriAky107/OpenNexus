@@ -123,6 +123,7 @@ class PackageRuntimeTests(unittest.TestCase):
                     ('nonzero', 'failed', 'EXPERIMENT_NONZERO_EXIT', 7),
                     ('cancel', 'cancelled', 'EXPERIMENT_CANCELLED', 1),
                     ('switch', 'cancelled', 'EXPERIMENT_CANCELLED', None),
+                    ('shutdown', 'cancelled', 'EXPERIMENT_CANCELLED', None),
                     ('wall', 'limited', 'EXTENSION_TOOL_DEADLINE_EXCEEDED', None),
                     ('cpu', 'limited', 'EXTENSION_RESOURCE_CPU_EXCEEDED', 1)):
                 runs[mode] = dict(remaining_processes=0,
@@ -130,7 +131,7 @@ class PackageRuntimeTests(unittest.TestCase):
                     result=dict(outcome=outcome, error=error, exit_code=code, elapsed_ms=1100,
                         user_cpu_ticks=10_000_000, peak_memory_bytes=1000000, final_disk_bytes=0,
                         logs=dict(stdout=log(), stderr=log())))
-            for mode in ('cancel', 'switch'):
+            for mode in ('cancel', 'switch', 'shutdown'):
                 runs[mode]['result']['logs']['stdout'] = log('child-ready\r\n')
             for stream in ('stdout', 'stderr'):
                 runs['logs']['result']['logs'][stream] = log('A' * 8192, 2 * 1024 * 1024, True)
@@ -147,6 +148,7 @@ class PackageRuntimeTests(unittest.TestCase):
                 (('schema_version',), True), (('runtime_id',), 'other'),
                 (('runs', 'basic', 'remaining_processes'), False),
                 (('runs', 'switch', 'remaining_processes'), 1),
+                (('runs', 'shutdown', 'remaining_processes'), 1),
                 (('runs', 'nonzero', 'result', 'outcome'), 'completed'),
                 (('runs', 'nonzero', 'result', 'exit_code'), 0),
                 (('runs', 'cpu', 'result', 'user_cpu_ticks'), 0),

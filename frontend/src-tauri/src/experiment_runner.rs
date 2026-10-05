@@ -263,7 +263,23 @@ impl Runner {
         workspace: &WorkspaceSlot,
         change: impl FnOnce(&mut Option<Workspace>) -> Result<T>,
     ) -> Result<T> {
+        self.transition_if(workspace, |_| Ok(None), change)
+    }
+    /// Check a no-op while start and workspace changes are serialized. Opening
+    /// the already active vault must not cancel its experiment.
+    pub fn transition_if<T>(
+        &self,
+        workspace: &WorkspaceSlot,
+        unchanged: impl FnOnce(&Option<Workspace>) -> Result<Option<T>>,
+        change: impl FnOnce(&mut Option<Workspace>) -> Result<T>,
+    ) -> Result<T> {
         let mut worker = self.worker.lock().map_err(|_| busy())?;
+        {
+            let slot = workspace.lock().map_err(|_| busy())?;
+            if let Some(value) = unchanged(&slot)? {
+                return Ok(value);
+            }
+        }
         Self::stop_worker(&mut worker)?;
         let mut slot = workspace.lock().map_err(|_| busy())?;
         change(&mut slot)
@@ -463,7 +479,7 @@ mod tests {
             .unwrap_or_else(|| root.join(".build/experiment-runtime").join(RUNTIME_ID));
         let mut reports = std::collections::BTreeMap::new();
         for mode in [
-            "basic", "nonzero", "logs", "cancel", "switch", "wall", "cpu",
+            "basic", "nonzero", "logs", "cancel", "switch", "shutdown", "wall", "cpu",
         ] {
             let script = format!(
                 r#"import csv, io, json, os, sys, time, subprocess
@@ -475,7 +491,7 @@ if sys.argv[1:] == ['child']:
     sys.exit(0)
 assert len(sys.argv) == 1 and sys.flags.isolated == 1
 assert 'OPENNEXUS_PROBE_PARENT_TOKEN' not in os.environ
-if mode in ('cancel','switch'):
+if mode in ('cancel','switch','shutdown'):
     subprocess.Popen([sys.executable,'-I','-B','-X','utf8',__file__,'child'], stdout=sys.stdout,stderr=sys.stderr,close_fds=True,creationflags=subprocess.CREATE_NO_WINDOW)
     time.sleep(60)
 elif mode == 'wall':
@@ -489,6 +505,24 @@ elif mode == 'logs':
     sys.stdout.buffer.write(b'A'*(2*1024*1024));sys.stdout.flush()
     sys.stderr.buffer.write(b'E'*(2*1024*1024));sys.stderr.flush()
 else:
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32',use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes=[wintypes.LPCWSTR,wintypes.DWORD,wintypes.DWORD,ctypes.c_void_p,wintypes.DWORD,wintypes.DWORD,wintypes.HANDLE]
+    create.restype=wintypes.HANDLE
+    close = kernel.CloseHandle
+    close.argtypes=[wintypes.HANDLE]
+    close.restype=wintypes.BOOL
+    def acl_access(path):
+        # Query rights on owned scratch objects without changing their ACLs.
+        handle=create(str(path),0x60000,7,None,3,0x02000000,None)
+        if handle == ctypes.c_void_p(-1).value: return ctypes.get_last_error()
+        assert close(handle)
+        return 0
+    scratch_file=Path.cwd()/'worker-output.txt'
+    scratch_file.write_text('owned synthetic output',encoding='utf-8')
+    scratch_acl_access={{'root':acl_access(Path.cwd()),'created_file':acl_access(scratch_file)}}
     rows=list(csv.DictReader(io.StringIO((Path(__file__).parent/'input.csv').read_text(encoding='utf-8'))))
     assert sum(int(row['value']) for row in rows)==18 and rows[0]['name']=='中文'
     try: (Path(__file__).parent/'input.csv').write_bytes(b'changed')
@@ -498,7 +532,8 @@ else:
     print('WORKER_REPORT:'+json.dumps({{'executable':sys.executable,'runtime':sys.version.split()[0],
         'isolated':sys.flags.isolated,'argv':sys.argv[1:],'parent_environment_inherited':
         'OPENNEXUS_PROBE_PARENT_TOKEN' in os.environ,'input_write_denied':input_write_denied,
-        'csv_total':sum(int(row['value']) for row in rows),'first_name':rows[0]['name']}}),flush=True)
+        'csv_total':sum(int(row['value']) for row in rows),'first_name':rows[0]['name'],
+        'scratch_acl_access':scratch_acl_access}}),flush=True)
 "#
             );
             let limits = ExecutionLimits {
@@ -537,7 +572,7 @@ else:
                     &request.operation_id,
                 )
                 .unwrap();
-            if mode == "cancel" || mode == "switch" {
+            if mode == "cancel" || mode == "switch" || mode == "shutdown" {
                 let until = Instant::now() + Duration::from_secs(5);
                 loop {
                     if runner
@@ -568,6 +603,22 @@ else:
                     .live("wrong-vault", &request.operation_id)
                     .unwrap()
                     .is_none());
+                let current = runner
+                    .transition_if(
+                        &workspace,
+                        |slot| Ok(slot.as_ref().map(|ws| ws.vault_id.clone())),
+                        |_| panic!("opening the current vault changed workspace"),
+                    )
+                    .unwrap();
+                assert_eq!(current, request.vault_id);
+                assert_eq!(
+                    runner
+                        .record(&workspace, &request.operation_id)
+                        .unwrap()
+                        .unwrap()
+                        .state,
+                    RunState::Running
+                );
             }
             let record = if mode == "switch" {
                 let began = Instant::now();
@@ -591,6 +642,8 @@ else:
             } else {
                 if mode == "cancel" {
                     runner.cancel(&workspace, &request.operation_id).unwrap();
+                } else if mode == "shutdown" {
+                    runner.shutdown().unwrap();
                 }
                 wait(&runner, &workspace, &request.operation_id)
             };
@@ -604,7 +657,7 @@ else:
                     assert_eq!(result.outcome, Outcome::Failed);
                     assert_eq!(result.exit_code, Some(7));
                 }
-                "cancel" | "switch" => assert_eq!(result.outcome, Outcome::Cancelled),
+                "cancel" | "switch" | "shutdown" => assert_eq!(result.outcome, Outcome::Cancelled),
                 "wall" | "cpu" => assert_eq!(result.outcome, Outcome::Limited),
                 _ => unreachable!(),
             }
@@ -651,7 +704,11 @@ else:
                         )
                         .unwrap_err()
                         .code,
-                    "EXPERIMENT_STATE_CHANGED"
+                    if mode == "shutdown" {
+                        "EXPERIMENT_HOST_CLOSING"
+                    } else {
+                        "EXPERIMENT_STATE_CHANGED"
+                    }
                 );
                 runner.shutdown().unwrap();
             }

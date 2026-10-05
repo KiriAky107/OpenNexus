@@ -140,6 +140,22 @@ jobs:
       - name: Verify locked embedded Python and native isolation prototype
         working-directory: .
         run: ./scripts/verify-experiment-runtime.ps1
+      - name: Test desktop Host vault lifecycle coordination
+        run: |
+          # These tests never open a WebView. Supply a local static test page
+          # for Tauri's asset embedding; the frontend job builds the real UI.
+          $testFrontend = [IO.Path]::GetFullPath((Join-Path (Get-Location) '../dist'))
+          if (Test-Path -LiteralPath $testFrontend) { throw 'Unexpected existing Host test assets' }
+          New-Item -ItemType Directory -Path $testFrontend | Out-Null
+          $testIndex = Join-Path $testFrontend 'index.html'
+          try {
+            Set-Content -LiteralPath $testIndex -Encoding utf8 -Value '<!doctype html><title>Host lifecycle fixture</title>'
+            cargo test --bin OpenNexus --features desktop --locked lifecycle_tests:: -- --nocapture
+            if ($LASTEXITCODE -ne 0) { throw 'Desktop Host lifecycle tests failed' }
+          } finally {
+            Remove-Item -LiteralPath $testIndex -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $testFrontend -ErrorAction SilentlyContinue
+          }
       - uses: actions/upload-artifact@v7
         if: always()
         with:

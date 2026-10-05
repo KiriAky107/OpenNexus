@@ -26,6 +26,8 @@ use zeroize::Zeroizing;
 
 #[derive(Default)]
 struct Host {
+    #[cfg(windows)]
+    experiments: notesagent_host::experiment_runner::Runner,
     experiment_runtime:
         std::sync::OnceLock<Result<notesagent_host::experiment_runtime::RuntimeInfo, String>>,
     requests: Requests,
@@ -251,6 +253,60 @@ async fn github_release_check() -> Result<ReleaseCheck, String> {
 }
 
 impl Host {
+    fn transition_workspace<T>(
+        &self,
+        unchanged: impl FnOnce(&Option<Workspace>) -> Result<Option<T>, String>,
+        change: impl FnOnce(&mut Option<Workspace>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        #[cfg(windows)]
+        {
+            self.experiments
+                .transition_if(
+                    &self.workspace,
+                    |slot| {
+                        unchanged(slot)
+                            .map_err(|code| notesagent_host::workspace::HostError::new(&code))
+                    },
+                    |slot| {
+                        change(slot)
+                            .map_err(|code| notesagent_host::workspace::HostError::new(&code))
+                    },
+                )
+                .map_err(|error| error.code)
+        }
+        #[cfg(not(windows))]
+        {
+            let mut slot = self.workspace.lock().map_err(|_| "HOST_BUSY")?;
+            if let Some(value) = unchanged(&slot)? {
+                return Ok(value);
+            }
+            change(&mut slot)
+        }
+    }
+    fn open_workspace(&self, path: &Path, remember: bool) -> Result<RecentVault, String> {
+        self.transition_workspace(
+            |active| {
+                Ok(active
+                    .as_ref()
+                    .filter(|ws| path.canonicalize().is_ok_and(|path| ws.root == path))
+                    .map(info))
+            },
+            |active| {
+                let workspace = Workspace::open(path).map_err(|error| error.code)?;
+                let result = info(&workspace);
+                if remember {
+                    self.recent
+                        .lock()
+                        .map_err(|_| "HOST_BUSY")?
+                        .as_mut()
+                        .ok_or("HOST_NOT_READY")?
+                        .remember(&result)?;
+                }
+                self.replace_workspace(active, Some(workspace));
+                Ok(result)
+            },
+        )
+    }
     fn replace_workspace(&self, active: &mut Option<Workspace>, next: Option<Workspace>) {
         self.extension_authority.revoke();
         #[cfg(windows)]
@@ -1123,23 +1179,7 @@ fn workspace_choose(host: State<'_, Host>) -> Result<Option<RecentVault>, String
     else {
         return Ok(None);
     };
-    let mut guard = host.workspace.lock().map_err(|_| "HOST_BUSY")?;
-    if guard
-        .as_ref()
-        .is_some_and(|ws| ws.root == path.canonicalize().unwrap_or_default())
-    {
-        return Ok(guard.as_ref().map(info));
-    }
-    let workspace = Workspace::open(&path).map_err(|e| e.code)?;
-    let result = info(&workspace);
-    host.recent
-        .lock()
-        .map_err(|_| "HOST_BUSY")?
-        .as_mut()
-        .ok_or("HOST_NOT_READY")?
-        .remember(&result)?;
-    host.replace_workspace(&mut guard, Some(workspace));
-    Ok(Some(result))
+    host.open_workspace(&path, true).map(Some)
 }
 
 #[tauri::command]
@@ -1152,18 +1192,7 @@ fn workspace_open(host: State<'_, Host>, path: String) -> Result<RecentVault, St
         .ok_or("HOST_NOT_READY")?
         .authorized(Path::new(&path))?
         .ok_or("VAULT_NOT_AUTHORIZED")?;
-    let mut guard = host.workspace.lock().map_err(|_| "HOST_BUSY")?;
-    if guard.as_ref().is_some_and(|ws| {
-        Path::new(&authorized.path)
-            .canonicalize()
-            .is_ok_and(|path| ws.root == path)
-    }) {
-        return Ok(guard.as_ref().map(info).ok_or("VAULT_NOT_OPEN")?);
-    }
-    let workspace = Workspace::open(Path::new(&authorized.path)).map_err(|e| e.code)?;
-    let result = info(&workspace);
-    host.replace_workspace(&mut guard, Some(workspace));
-    Ok(result)
+    host.open_workspace(Path::new(&authorized.path), false)
 }
 
 #[tauri::command]
@@ -1178,18 +1207,22 @@ fn workspace_recent(host: State<'_, Host>) -> Result<Vec<RecentVault>, String> {
 
 #[tauri::command]
 fn workspace_revoke(host: State<'_, Host>) -> Result<(), String> {
-    let mut workspace = host.workspace.lock().map_err(|_| "HOST_BUSY")?;
-    host.extension_authority.revoke();
-    if let Some(active) = workspace.as_ref() {
-        host.recent
-            .lock()
-            .map_err(|_| "HOST_BUSY")?
-            .as_mut()
-            .ok_or("HOST_NOT_READY")?
-            .revoke(&active.root)?;
-    }
-    host.replace_workspace(&mut workspace, None);
-    Ok(())
+    host.transition_workspace(
+        |_| Ok(None),
+        |workspace| {
+            host.extension_authority.revoke();
+            if let Some(active) = workspace.as_ref() {
+                host.recent
+                    .lock()
+                    .map_err(|_| "HOST_BUSY")?
+                    .as_mut()
+                    .ok_or("HOST_NOT_READY")?
+                    .revoke(&active.root)?;
+            }
+            host.replace_workspace(workspace, None);
+            Ok(())
+        },
+    )
 }
 
 #[tauri::command]
@@ -1576,6 +1609,8 @@ fn main() {
         .expect("桌面 Host 启动失败")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                #[cfg(windows)]
+                let _ = app.state::<Host>().experiments.shutdown();
                 if let Ok(mut broker) = app.state::<Host>().credentials.lock() {
                     broker.take();
                 }
@@ -1596,14 +1631,25 @@ mod lifecycle_tests {
         let first = tempfile::tempdir().unwrap();
         let second = tempfile::tempdir().unwrap();
         let signal = host.extension_authority.revocation_signal();
-        let mut active = host.workspace.lock().unwrap();
-        host.replace_workspace(&mut active, Some(Workspace::open(first.path()).unwrap()));
+        let first_info = host.open_workspace(first.path(), false).unwrap();
         let initial = signal.load(Ordering::SeqCst);
-        host.replace_workspace(&mut active, Some(Workspace::open(second.path()).unwrap()));
+        assert_eq!(
+            host.open_workspace(first.path(), false).unwrap().vault_id,
+            first_info.vault_id
+        );
+        assert_eq!(signal.load(Ordering::SeqCst), initial);
+        host.open_workspace(second.path(), false).unwrap();
         assert!(signal.load(Ordering::SeqCst) > initial);
         let changed = signal.load(Ordering::SeqCst);
-        host.replace_workspace(&mut active, None);
-        assert!(active.is_none());
+        host.transition_workspace(
+            |_| Ok(None),
+            |active| {
+                host.replace_workspace(active, None);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(host.workspace.lock().unwrap().is_none());
         assert!(signal.load(Ordering::SeqCst) > changed);
     }
     #[test]

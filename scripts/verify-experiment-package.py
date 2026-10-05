@@ -106,6 +106,7 @@ def verify_worker_receipt(receipt: dict, runtime: Path, lock: dict) -> None:
         'nonzero': ('failed', 'EXPERIMENT_NONZERO_EXIT'),
         'cancel': ('cancelled', 'EXPERIMENT_CANCELLED'),
         'switch': ('cancelled', 'EXPERIMENT_CANCELLED'),
+        'shutdown': ('cancelled', 'EXPERIMENT_CANCELLED'),
         'wall': ('limited', 'EXTENSION_TOOL_DEADLINE_EXCEEDED'),
         'cpu': ('limited', 'EXTENSION_RESOURCE_CPU_EXCEEDED'),
     }
@@ -129,7 +130,7 @@ def verify_worker_receipt(receipt: dict, runtime: Path, lock: dict) -> None:
         code = result['exit_code']
         if ((mode in ('basic', 'logs') and (type(code) is not int or code != 0))
                 or (mode == 'nonzero' and (type(code) is not int or code != 7))
-                or (mode in ('cancel', 'switch', 'wall', 'cpu')
+                or (mode in ('cancel', 'switch', 'shutdown', 'wall', 'cpu')
                     and code is not None and (type(code) is not int or code == 0))):
             raise ValueError('Formal worker exit code disagrees with the outcome: ' + mode)
         for stream in ('stdout', 'stderr'):
@@ -141,7 +142,7 @@ def verify_worker_receipt(receipt: dict, runtime: Path, lock: dict) -> None:
                     or not isinstance(log['text'], str)
                     or len(log['text'].encode('utf-8')) != log['retained_bytes']):
                 raise ValueError('Formal worker did not drain bounded logs: ' + mode)
-        if mode in ('cancel', 'switch') and 'child-ready' not in result['logs']['stdout']['text']:
+        if mode in ('cancel', 'switch', 'shutdown') and 'child-ready' not in result['logs']['stdout']['text']:
             raise ValueError('Formal worker cancellation did not cover a real child: ' + mode)
         if mode == 'logs':
             for stream, log in result['logs'].items():
