@@ -9,6 +9,7 @@ pub mod credentials;
 mod experiment_contract;
 pub mod experiment_input;
 pub mod experiment_log;
+pub mod experiment_store;
 mod payloads;
 mod preference_records;
 pub mod recent;

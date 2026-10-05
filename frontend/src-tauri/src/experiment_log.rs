@@ -1,7 +1,8 @@
 //! Bounded raw log prefixes. Pipe draining continues after retention is full.
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StreamSnapshot {
     pub text: String,
     pub bytes_seen: u64,
@@ -50,7 +51,8 @@ impl LogBuffer {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CaptureSnapshot {
     pub stdout: StreamSnapshot,
     pub stderr: StreamSnapshot,

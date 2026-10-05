@@ -120,12 +120,38 @@ impl ValidatedRequest {
         &self.limits
     }
 }
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InputSummary {
     pub request: RunRequest,
     pub fingerprint: String,
     pub sizes: BTreeMap<String, usize>,
     pub total_bytes: usize,
+}
+impl InputSummary {
+    pub(crate) fn validate(&self) -> Result<ValidatedRequest> {
+        let request = self.request.validate()?;
+        if self.fingerprint != fingerprint(request.request())?
+            || self.sizes.len() != self.request.inputs.len() + 1
+            || self
+                .sizes
+                .values()
+                .any(|size| *size > MAX_FILE_BYTES as usize)
+            || self.total_bytes != self.sizes.values().sum::<usize>()
+            || self.total_bytes > MAX_TOTAL_BYTES
+            || std::iter::once(&self.request.entry)
+                .chain(&self.request.inputs)
+                .any(|file| !self.sizes.contains_key(&file.path))
+        {
+            return Err(HostError::new("EXPERIMENT_RECORD_CORRUPT"));
+        }
+        Ok(request)
+    }
+}
+fn fingerprint(request: &RunRequest) -> Result<String> {
+    let mut binding = b"opennexus-experiment-inputs-v1\0".to_vec();
+    binding.extend(serde_json::to_vec(request).map_err(|_| invalid())?);
+    Ok(hash(&binding))
 }
 /// Only Host-read, hash-checked bytes can construct this owner. Client metadata
 /// alone cannot construct an approved snapshot or modify bytes after review.
@@ -166,12 +192,10 @@ impl PreparedInputs {
         }
         // Bind the exact entry, sorted input identities/revisions/hashes, vault,
         // runtime, limits and operation. This digest is not execution authority.
-        let mut binding = b"opennexus-experiment-inputs-v1\0".to_vec();
-        binding.extend(serde_json::to_vec(&request.request).map_err(|_| invalid())?);
         Ok(Self {
             summary: InputSummary {
                 request: request.request.clone(),
-                fingerprint: hash(&binding),
+                fingerprint: fingerprint(&request.request)?,
                 sizes,
                 total_bytes,
             },
@@ -185,6 +209,25 @@ impl PreparedInputs {
         self.bytes
             .iter()
             .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+    }
+    /// Restore only from Host storage; every byte is rechecked. A summary alone
+    /// cannot reconstruct this owner, and restoring it does not authorize a run.
+    pub(crate) fn restore(summary: InputSummary, bytes: BTreeMap<String, Vec<u8>>) -> Result<Self> {
+        summary.validate()?;
+        if bytes.len() != summary.sizes.len()
+            || std::iter::once(&summary.request.entry)
+                .chain(&summary.request.inputs)
+                .any(|file| {
+                    bytes.get(&file.path).is_none_or(|bytes| {
+                        bytes.len() != summary.sizes[&file.path]
+                            || hash(bytes) != file.hash
+                            || std::str::from_utf8(bytes).is_err()
+                    })
+                })
+        {
+            return Err(HostError::new("EXPERIMENT_RECORD_CORRUPT"));
+        }
+        Ok(Self { summary, bytes })
     }
 }
 fn match_selection(entry: &Entry, selected: &SelectedFile) -> Result<()> {
