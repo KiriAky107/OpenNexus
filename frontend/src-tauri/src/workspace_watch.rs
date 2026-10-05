@@ -728,17 +728,24 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_watch_close_drains_io_before_immediate_directory_cleanup() {
-        let started = Instant::now();
+        let mut cleanup_elapsed = Duration::ZERO;
         for _ in 0..50 {
             let root = tempfile::tempdir().unwrap();
             let ws = Workspace::open(root.path()).unwrap();
             for index in 0..5 {
                 fs::write(root.path().join(format!("笔记😀-{index}.md")), b"event").unwrap();
             }
+            // Measure cancellation/draining/cleanup rather than fifty fresh
+            // schema initializations and event writes on a shared CI disk.
+            let started = Instant::now();
             drop(ws);
             root.close().unwrap();
+            cleanup_elapsed += started.elapsed();
         }
-        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(
+            cleanup_elapsed < Duration::from_secs(10),
+            "50 watcher cleanups took {cleanup_elapsed:?}"
+        );
     }
 
     #[test]
