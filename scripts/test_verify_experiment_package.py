@@ -132,10 +132,11 @@ class PackageRuntimeTests(unittest.TestCase):
                     ('cpu', 'limited', 'EXTENSION_RESOURCE_CPU_EXCEEDED', 1),
                     ('bad-output', 'failed', 'EXPERIMENT_OUTPUT_INVALID', 0),
                     ('named-stream', 'failed', 'EXPERIMENT_OUTPUT_NAMED_STREAM_REJECTED', 0),
-                    ('png-output', 'completed', None, 0)):
+                    ('png-output', 'completed', None, 0),
+                    ('journal-failure', 'failed', 'EXPERIMENT_CLEANUP_JOURNAL_FAILED', 0)):
                 outputs = dict(status='rejected', error=error) if mode in ('bad-output', 'named-stream') else dict(
                     status='collected', summary=dict(files=[], skipped=[], total_bytes=0))
-                runs[mode] = dict(remaining_processes=0, profile_removed=True, persisted_output_bytes={},
+                runs[mode] = dict(remaining_processes=0, profile_removed=True, profile_registry_removed=True, cleanup_complete=mode != 'journal-failure', cleanup_pending=mode == 'journal-failure', persisted_output_bytes={},
                     runtime=dict(runtime_id=lock['runtime_id'], version=lock['version'], files=3),
                     result=dict(outcome=outcome, error=error, exit_code=code, elapsed_ms=1100,
                         user_cpu_ticks=10_000_000, peak_memory_bytes=1000000, final_disk_bytes=0,
@@ -146,6 +147,8 @@ class PackageRuntimeTests(unittest.TestCase):
                 skipped=[],total_bytes=22)
             runs['basic']['persisted_output_bytes'] = {path:base64.b64encode(content).decode('ascii')
                 for path,content in [('worker-output.txt',b'owned synthetic output'),('protected-descriptor.txt',b'')]}
+            runs['journal-failure']['result']['outputs'] = copy.deepcopy(runs['basic']['result']['outputs'])
+            runs['journal-failure']['persisted_output_bytes'] = copy.deepcopy(runs['basic']['persisted_output_bytes'])
             def chunk(kind,data):
                 return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data))
             png=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',1,1,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(b'\x00\xff\x00\x00'))+chunk(b'IEND',b'')
@@ -174,6 +177,11 @@ class PackageRuntimeTests(unittest.TestCase):
                 (('schema_version',), True), (('runtime_id',), 'other'),
                 (('runs', 'basic', 'remaining_processes'), False),
                 (('runs', 'basic', 'profile_removed'), False),
+                (('runs', 'basic', 'cleanup_complete'), False),
+                (('runs', 'basic', 'profile_registry_removed'), False),
+                (('runs', 'basic', 'cleanup_pending'), True),
+                (('runs', 'journal-failure', 'cleanup_complete'), True),
+                (('runs', 'journal-failure', 'cleanup_pending'), False),
                 (('runs', 'basic', 'result', 'outputs', 'summary', 'total_bytes'), False),
                 (('runs', 'basic', 'result', 'outputs', 'summary', 'files'), []),
                 (('runs', 'bad-output', 'result', 'outputs', 'status'), 'collected'),

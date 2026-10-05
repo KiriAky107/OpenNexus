@@ -470,10 +470,10 @@ mod tests {
     #[test]
     fn no_approval_no_launch_and_missing_bundle_records_real_failure() {
         let _serial = crate::experiment_owner::TEST_EXECUTION_LOCK.lock().unwrap();
-        let host_root = tempfile::tempdir().unwrap();
         let runner = Runner::default();
-        runner.initialize_cleanup(host_root.path()).unwrap();
         let (_root, workspace, request) = fixture("print(1)", ExecutionLimits::default());
+        let host_root = tempfile::tempdir().unwrap();
+        runner.initialize_cleanup(host_root.path()).unwrap();
         let waiting = runner.prepare(&workspace, &request).unwrap();
         assert!(runner
             .start_approved(
@@ -530,6 +530,64 @@ mod tests {
                 .code,
             "EXPERIMENT_HOST_CLOSING"
         );
+        drop(runner);
+        host_root.close().unwrap();
+    }
+    #[test]
+    fn pending_cleanup_survives_restart_and_vault_switch_without_consuming_approval() {
+        let _serial = crate::experiment_owner::TEST_EXECUTION_LOCK.lock().unwrap();
+        let host_root = tempfile::tempdir().unwrap();
+        let alternate = host_root.path().join("unselected-host-root");
+        let runner = Runner::default();
+        runner.initialize_cleanup(host_root.path()).unwrap();
+        let (v, o) = (
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+        );
+        let attempt = runner.cleanup_journal().unwrap().reserve(&v, &o).unwrap();
+        attempt.before_create().unwrap();
+        drop(attempt);
+        drop(runner);
+        let runner = Runner::default();
+        runner.initialize_cleanup(host_root.path()).unwrap();
+        assert_eq!(
+            runner.initialize_cleanup(&alternate).unwrap_err().code,
+            "HOST_ALREADY_INITIALIZED"
+        );
+        assert!(!alternate.exists());
+        let (_vault, workspace, request) = fixture("print(1)", ExecutionLimits::default());
+        let waiting = runner.prepare(&workspace, &request).unwrap();
+        let approved = runner
+            .confirm_from_user(
+                &workspace,
+                &request.operation_id,
+                &waiting.summary.fingerprint,
+            )
+            .unwrap();
+        assert_eq!(
+            runner
+                .start_approved(
+                    workspace.clone(),
+                    PathBuf::from("Z:/missing-runtime"),
+                    &request.operation_id
+                )
+                .unwrap_err()
+                .code,
+            "EXPERIMENT_CLEANUP_REQUIRED"
+        );
+        let unchanged = runner
+            .record(&workspace, &request.operation_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.state, RunState::Approved);
+        assert_eq!(unchanged.approval_id, approved.approval_id);
+        let pending = runner.cleanup_status().unwrap().unwrap();
+        assert_eq!(pending.vault_id, v);
+        assert_eq!(pending.operation_id, o);
+        assert_eq!(
+            pending.phase,
+            crate::experiment_cleanup::CleanupPhase::Creating
+        );
     }
     pub(super) fn native() {
         let _serial = crate::experiment_owner::TEST_EXECUTION_LOCK.lock().unwrap();
@@ -554,6 +612,7 @@ mod tests {
             "bad-output",
             "named-stream",
             "png-output",
+            "journal-failure",
         ] {
             let script = include_str!("../../../scripts/fixtures/experiment_worker_probe.py")
                 .replace("MODE = None", &format!("MODE = {mode:?}"));
@@ -580,6 +639,12 @@ mod tests {
             let host_root = tempfile::tempdir().unwrap();
             let runner = Runner::default();
             runner.initialize_cleanup(host_root.path()).unwrap();
+            if mode == "journal-failure" {
+                let db =
+                    rusqlite::Connection::open(host_root.path().join("experiment-cleanup.sqlite3"))
+                        .unwrap();
+                db.execute_batch("CREATE TRIGGER fail_cleanup BEFORE DELETE ON cleanup BEGIN SELECT RAISE(ABORT,'injected cleanup commit failure');END;").unwrap();
+            }
             let waiting = runner.prepare(&workspace, &request).unwrap();
             runner
                 .confirm_from_user(
@@ -676,6 +741,14 @@ mod tests {
                     assert_eq!(result.outcome, Outcome::Completed);
                     assert_eq!(result.exit_code, Some(0));
                 }
+                "journal-failure" => {
+                    assert_eq!(result.outcome, Outcome::Failed);
+                    assert_eq!(result.exit_code, Some(0));
+                    assert_eq!(
+                        result.error.as_deref(),
+                        Some("EXPERIMENT_CLEANUP_JOURNAL_FAILED")
+                    );
+                }
                 "nonzero" => {
                     assert_eq!(result.outcome, Outcome::Failed);
                     assert_eq!(result.exit_code, Some(7));
@@ -703,7 +776,7 @@ mod tests {
             assert!(result.peak_memory_bytes.unwrap() > 0);
             assert!(result.final_disk_bytes.is_some());
             assert!(result.logs.stdout.complete && result.logs.stderr.complete);
-            if mode == "basic" {
+            if mode == "basic" || mode == "journal-failure" {
                 use crate::experiment_outputs::OutputReport;
                 let Some(OutputReport::Collected { summary }) = &result.outputs else {
                     panic!("outputs were not collected")
@@ -805,10 +878,41 @@ mod tests {
                         .code,
                     if mode == "shutdown" {
                         "EXPERIMENT_HOST_CLOSING"
+                    } else if mode == "journal-failure" {
+                        "EXPERIMENT_CLEANUP_REQUIRED"
                     } else {
                         "EXPERIMENT_STATE_CHANGED"
                     }
                 );
+                if mode == "journal-failure" {
+                    let mut next = request.clone();
+                    next.operation_id = uuid::Uuid::new_v4().to_string();
+                    let waiting = runner.prepare(&workspace, &next).unwrap();
+                    let approved = runner
+                        .confirm_from_user(
+                            &workspace,
+                            &next.operation_id,
+                            &waiting.summary.fingerprint,
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        runner
+                            .start(
+                                workspace.clone(),
+                                Runtime::Probe(runtime.clone()),
+                                &next.operation_id
+                            )
+                            .unwrap_err()
+                            .code,
+                        "EXPERIMENT_CLEANUP_REQUIRED"
+                    );
+                    let unchanged = runner
+                        .record(&workspace, &next.operation_id)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(unchanged.state, RunState::Approved);
+                    assert_eq!(unchanged.approval_id, approved.approval_id);
+                }
                 runner.shutdown().unwrap();
             }
             let stopped = runner.stopped.lock().unwrap();
@@ -818,12 +922,32 @@ mod tests {
                 stopped[0].profile_removed,
                 "profile directory survived cleanup: {mode}"
             );
+            assert!(
+                stopped[0].profile_registry_removed,
+                "owned registry survived cleanup: {mode}"
+            );
+            assert_eq!(stopped[0].cleanup_complete, mode != "journal-failure");
+            let pending = runner.cleanup_status().unwrap();
+            assert_eq!(pending.is_some(), mode == "journal-failure");
+            if let Some(pending) = &pending {
+                assert_eq!(pending.vault_id, request.vault_id);
+                assert_eq!(pending.operation_id, request.operation_id);
+                assert_eq!(
+                    pending.error.as_deref(),
+                    Some("EXPERIMENT_CLEANUP_JOURNAL_FAILED")
+                );
+                for path in [&pending.profile_root, &pending.source_root] {
+                    assert!(
+                        matches!(std::fs::symlink_metadata(path.as_ref().unwrap()),Err(e) if e.kind()==std::io::ErrorKind::NotFound)
+                    );
+                }
+            }
             let mut evidence = serde_json::to_value(&stopped[0]).unwrap();
             let mut persisted = serde_json::Map::new();
-            if mode == "basic" || mode == "png-output" {
+            if mode == "basic" || mode == "png-output" || mode == "journal-failure" {
                 let slot = workspace.lock().unwrap();
                 let ws = slot.as_ref().unwrap();
-                let paths: &[&str] = if mode == "basic" {
+                let paths: &[&str] = if mode != "png-output" {
                     &["worker-output.txt", "protected-descriptor.txt"]
                 } else {
                     &["result.png"]
@@ -839,8 +963,12 @@ mod tests {
                     );
                 }
             }
+            evidence["cleanup_pending"] = serde_json::json!(pending.is_some());
             evidence["persisted_output_bytes"] = serde_json::Value::Object(persisted);
             reports.insert(mode, evidence);
+            drop(stopped);
+            drop(runner);
+            host_root.close().unwrap();
         }
         let evidence = std::env::var_os("OPENNEXUS_PROBE_RECEIPT_DIR")
             .map(PathBuf::from)

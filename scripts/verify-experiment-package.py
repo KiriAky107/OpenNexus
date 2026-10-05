@@ -115,6 +115,7 @@ def verify_worker_receipt(receipt: dict, runtime: Path, lock: dict) -> None:
         'bad-output': ('failed', 'EXPERIMENT_OUTPUT_INVALID'),
         'named-stream': ('failed', 'EXPERIMENT_OUTPUT_NAMED_STREAM_REJECTED'),
         'png-output': ('completed', None),
+        'journal-failure': ('failed', 'EXPERIMENT_CLEANUP_JOURNAL_FAILED'),
     }
     if (type(receipt['schema_version']) is not int or receipt['schema_version'] != 1
             or receipt['runtime_id'] != lock['runtime_id'] or set(receipt['runs']) != set(expected)):
@@ -123,7 +124,9 @@ def verify_worker_receipt(receipt: dict, runtime: Path, lock: dict) -> None:
         item = receipt['runs'][mode]
         result = item['result']
         if (type(item['remaining_processes']) is not int or item['remaining_processes'] != 0
-                or item['profile_removed'] is not True
+                or item['profile_removed'] is not True or item['profile_registry_removed'] is not True
+                or item['cleanup_complete'] is not (mode != 'journal-failure')
+                or item['cleanup_pending'] is not (mode == 'journal-failure')
                 or item['runtime']['runtime_id'] != lock['runtime_id']
                 or item['runtime']['version'] != lock['version']
                 or type(item['runtime']['files']) is not int or item['runtime']['files'] <= 0
@@ -135,7 +138,7 @@ def verify_worker_receipt(receipt: dict, runtime: Path, lock: dict) -> None:
         if result['elapsed_ms'] == 0 or result['peak_memory_bytes'] == 0:
             raise ValueError('Formal worker is missing real measurements: ' + mode)
         code = result['exit_code']
-        if ((mode in ('basic', 'logs', 'bad-output', 'named-stream', 'png-output') and (type(code) is not int or code != 0))
+        if ((mode in ('basic', 'logs', 'bad-output', 'named-stream', 'png-output', 'journal-failure') and (type(code) is not int or code != 0))
                 or (mode == 'nonzero' and (type(code) is not int or code != 7))
                 or (mode in ('cancel', 'switch', 'shutdown', 'wall', 'cpu')
                     and code is not None and (type(code) is not int or code == 0))):
@@ -206,16 +209,17 @@ def verify_worker_receipt(receipt: dict, runtime: Path, lock: dict) -> None:
     if len(lines) != 1:
         raise ValueError('Formal worker is missing its real interpreter positive control')
     report = json.loads(lines[0])
-    outputs = receipt['runs']['basic']['result']['outputs']['summary']
-    files = {item['path']: item for item in outputs['files']}
-    if (len(outputs['files']) != 2 or set(files) != {'worker-output.txt', 'protected-descriptor.txt'} or outputs['skipped'] != []
-            or outputs['total_bytes'] != 22):
-        raise ValueError('Formal worker did not preserve both synthetic outputs')
-    for path, content in (('worker-output.txt', b'owned synthetic output'), ('protected-descriptor.txt', b'')):
-        if type(files[path]['bytes']) is not int or files[path] != {'path': path, 'bytes': len(content), 'sha256': hashlib.sha256(content).hexdigest(), 'kind': 'text'}:
-            raise ValueError('Formal worker output manifest is invalid: ' + path)
-        if base64.b64decode(receipt['runs']['basic']['persisted_output_bytes'][path], validate=True) != content:
-            raise ValueError('Formal worker did not read its stored bytes after cleanup: ' + path)
+    for output_mode in ('basic', 'journal-failure'):
+        outputs = receipt['runs'][output_mode]['result']['outputs']['summary']
+        files = {item['path']: item for item in outputs['files']}
+        if (len(outputs['files']) != 2 or set(files) != {'worker-output.txt', 'protected-descriptor.txt'} or outputs['skipped'] != []
+                or outputs['total_bytes'] != 22):
+            raise ValueError('Formal worker did not preserve both synthetic outputs')
+        for path, content in (('worker-output.txt', b'owned synthetic output'), ('protected-descriptor.txt', b'')):
+            if type(files[path]['bytes']) is not int or files[path] != {'path': path, 'bytes': len(content), 'sha256': hashlib.sha256(content).hexdigest(), 'kind': 'text'}:
+                raise ValueError('Formal worker output manifest is invalid: ' + path)
+            if base64.b64decode(receipt['runs'][output_mode]['persisted_output_bytes'][path], validate=True) != content:
+                raise ValueError('Formal worker did not read its stored bytes after cleanup: ' + path)
     if (report['runtime'] != lock['version'] or not Path(report['executable']).samefile(runtime / lock['entrypoint'])
             or type(report['isolated']) is not int or report['isolated'] != 1 or report['argv'] != []
             or report['parent_environment_inherited'] is not False or report['input_write_denied'] is not True
