@@ -91,6 +91,33 @@ class PackageRuntimeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 package.verify_storage_receipt(result, runtime, lock)
 
+    def test_write_receipt_requires_cumulative_limit_and_complete_tree_cleanup(self):
+        with tempfile.TemporaryDirectory(dir=self.staging, prefix='write-receipt-') as directory:
+            runtime, manifest = self.fixture(Path(directory))
+            lock = json.loads(manifest)['lock']
+            report = {'runtime': lock['version'], 'executable': str(runtime / lock['entrypoint']), 'isolated': 1}
+            item = {'error': 'EXPERIMENT_WRITE_IO_LIMIT_EXCEEDED', 'remaining_processes': 0,
+                    'write_io_bytes': 10 * 1024 * 1024, 'write_io_limit_bytes': 9 * 1024 * 1024,
+                    'filesystem_bytes': 65536, 'disk_limit_bytes': 8 * 1024 * 1024,
+                    'stdout_bytes': 0, 'stderr_bytes': 0}
+            resources = {mode: dict(item) for mode in ('write-truncate', 'write-children', 'write-delete')}
+            resources['logs'] = dict(item, error='completed', write_io_bytes=4 * 1024 * 1024,
+                                    stdout_bytes=2 * 1024 * 1024, stderr_bytes=2 * 1024 * 1024)
+            result = {'runtime_id': lock['runtime_id'], 'report': report, 'resources': resources}
+            package.verify_write_receipt(result, runtime, lock)
+            for field, value in [('remaining_processes', 1), ('remaining_processes', False),
+                                 ('write_io_bytes', 1), ('filesystem_bytes', 8 * 1024 * 1024),
+                                 ('error', 'completed')]:
+                altered = copy.deepcopy(result)
+                altered['resources']['write-children'][field] = value
+                with self.assertRaises(ValueError):
+                    package.verify_write_receipt(altered, runtime, lock)
+            result['resources']['write-delete']['error'] = 'EXTENSION_RESOURCE_MONITOR_FAILED'
+            package.verify_write_receipt(result, runtime, lock)
+            result['report']['runtime'] = 'other'
+            with self.assertRaises(ValueError):
+                package.verify_write_receipt(result, runtime, lock)
+
 
 if __name__ == '__main__':
     unittest.main()

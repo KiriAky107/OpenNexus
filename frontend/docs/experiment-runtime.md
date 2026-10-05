@@ -17,7 +17,7 @@
 ./scripts/verify-experiment-runtime.ps1
 ```
 
-脚本先运行离线归档负向测试、准备运行时，再验证所有 EXE、DLL、PYD 的 Authenticode 状态，最后串行执行两个原生 ignored 测试。输出位于忽略目录 `.build/experiment-runtime/`：`runtime.json` 位于运行时目录内，`signatures.json`、`probe-result.json` 和 `policy-probe-result.json` 位于其父目录。后两个文件分别记录既有扩展资源策略和独立实验资源策略。原生测试不接触真实知识库、应用凭据或生产安装。
+脚本先运行离线归档负向测试、准备运行时，再验证所有 EXE、DLL、PYD 的 Authenticode 状态，最后串行执行四个原生 ignored 测试。输出位于忽略目录 `.build/experiment-runtime/`：`runtime.json` 位于运行时目录内，其父目录保存签名、扩展策略、实验策略、注册表权限及累计写入审计证据。原生测试不接触真实知识库、应用凭据或生产安装。
 
 GitHub CI 的 `windows-host` 使用同一入口并保存证据；普通 Linux Host 测试不下载或执行 Windows 运行时。默认测试不会误触发实验脚本执行。
 
@@ -69,7 +69,11 @@ Windows 为 CPython 提供的实际 TEMP 是容器 `AC/Temp`，自定义 TEMP �
 
 [目录统计](../src-tauri/src/experiment_disk.rs)使用固定根目录句柄、相对目录 capability 和禁止跟随的对象打开。统计文件和目录的 NTFS DATA streams，并计入逻辑大小与预分配大小中的较大值；硬链接、重解析对象、未知对象、共享冲突和统计失败会停止运行，不作为零用量忽略。根目录不共享删除，子项可共享删除以支持原子重命名；每次扫描只相信实际打开的对象。
 
-目录监控间隔为 100 ms 加扫描耗时，属于发现超限后终止的监控，不能承诺写入字节精确停在上限。快速写入后删除可能发生在两次扫描之间。容器注册表存储不属于文件目录统计，已用下述独立只读权限限制写入。独立墙钟 watchdog 不依赖目录扫描、UI 或授权轮询，仍能终止整个进程树。生产入口开放前必须继续评估瞬时写入风险，并完成并发、日志、输出、授权和安装包控制。
+目录监控间隔为 100 ms 加扫描耗时，属于发现超限后终止的监控，不能承诺写入字节精确停在上限。快速写入后删除可能发生在两次扫描之间，因此实验 Job 另外限制生命周期累计写入 I/O，阈值由目录、最终输出及日志预算相加得到，默认 80.25 MiB。该计数包括文件及 stdout／stderr 管道、已退出的后代，不因删除或截短文件重置；不减去异步日志计数，避免竞态低估。资源线程查询原始计数，并接收 Job 写入通知，任一路发现超限都终止整个进程树。配置／查询失败则拒绝或停止，不把它当成零。
+
+累计 I/O 是独立的监控上限，仍可能在通知和终止期间超出阈值；它不是文件系统硬配额，也不代表能计量所有内存映射或稀疏预分配操作。目录统计继续检查实际逻辑／分配大小，目录竞态导致无法检查时停止。实际原生探测覆盖反复写入后截短、退出后再启动的写入子进程，以及快速写删；文件始终远低于 8 MiB，累计写入仍触发停止。另有两流合计 4 MiB 的正向控制，确认正常排空不会误用日志保留预算作为写入上限。`write-io-result.json` 保存实际计数、阈值、目录用量、耗时、零残留进程及解释器身份。Windows 的[累计 Job I/O](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_and_io_accounting_information)和[通知限额](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_notification_limit_information)分别提供计量与通知；通知本身不自动停止进程。
+
+容器注册表存储不属于文件目录统计，已用下述独立只读权限限制写入。独立墙钟 watchdog 不依赖目录扫描、UI 或授权轮询，仍能终止整个进程树。正式运行尚需完成并发、日志、输出、授权和安装包控制。
 
 新的真实进程探测以 8 秒墙钟、2 秒用户态 CPU、256 MiB 内存、8 进程和 8 MiB 目录预算验证内存和进程耗尽、Temp 外的普通文件、文件隐藏流及目录隐藏流。CPU 死循环单独使用 1 秒 CPU／60 秒墙钟，核对真实 Job CPU 计数确实达到 CPU 预算；虚拟机调度等待不计作 CPU 时间。实验策略不采用扩展十秒窗口的 rate-pressure 通知，避免该通知和总 CPU 预算混淆；原有扩展策略保持独立。每种超限均得到对应底层资源错误且剩余进程为零；无额外工具计时器、无持续授权轮询时，8 秒 watchdog 也终止了已确认存在后代的进程树。`policy-probe-result.json` 保留实际限额、CPU 计数和耗时；底层复用的错误码仍使用 `EXTENSION_*`，后续结构化执行接口统一映射为实验状态。
 
@@ -85,7 +89,7 @@ CPU 时间的含义见 [Windows Job 基本限额](https://learn.microsoft.com/en
 
 注册表位置 API 的行为见 [GetAppContainerRegistryLocation](https://learn.microsoft.com/en-us/windows/win32/api/userenv/nf-userenv-getappcontainerregistrylocation)，权限继承见 [SetSecurityInfo](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo)。本机默认 ACE 的实际行为来自探测证据；最终固定提交的 Windows CI 也需通过相同负向检查。
 
-CI 保存这份新增探测证据。[安装包核对脚本](../../scripts/verify-experiment-package.py)也将其列为必需回执，核对实际解释器的文件身份、版本与 isolated 模式、零残留进程、文件权限负向及四类注册表拒绝，并将三份 native 回执摘要纳入包验证结果。缺失证据或错误解释器不能被当作包内探测通过；这项核对在最终打包时执行，不因新增回执重复构建当前无改动的解释器。
+CI 保存注册表及累计写入探测证据。[安装包核对脚本](../../scripts/verify-experiment-package.py)将其列为必需回执，核对实际解释器的文件身份、版本与 isolated 模式、零残留进程、文件权限负向、四类注册表拒绝，以及累计写入停止和日志正向控制，并将四份 native 回执摘要纳入包验证结果。缺失证据或错误解释器不能被当作包内探测通过；这项核对在最终打包时执行，不因新增回执重复构建当前无改动的解释器。
 
 ## 真实输出捕获
 

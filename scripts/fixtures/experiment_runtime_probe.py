@@ -139,6 +139,11 @@ def open_registry_parent_for_write(winreg):
 
 def main():
     mode = sys.argv[1]
+    if mode in ("logs", "write-truncate", "write-children", "write-delete"):
+        (scratch / "write-runtime.json").write_text(json.dumps({
+            "runtime": sys.version.split()[0], "executable": sys.executable,
+            "isolated": sys.flags.isolated,
+        }), encoding="utf-8")
     if mode == "storage-audit":
         report = storage_audit(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[5])
         (scratch / "storage-audit.json").write_text(json.dumps(report), encoding="utf-8")
@@ -160,6 +165,33 @@ def main():
             sys.stderr.buffer.write(b"y" * 8192)
             sys.stdout.buffer.flush()
             sys.stderr.buffer.flush()
+            time.sleep(0.001)
+    if mode in ("write-truncate", "write-chunk"):
+        # Current allocation never reaches even 2 MiB. Truncation must not
+        # reset the Job's lifetime write counter.
+        data = b"x" * (1024 * 1024)
+        with (scratch / "churn.bin").open("w+b", buffering=0) as output:
+            remaining = 4 if mode == "write-chunk" else None
+            while remaining is None or remaining > 0:
+                output.write(data)
+                output.truncate(0)
+                output.seek(0)
+                if remaining is not None:
+                    remaining -= 1
+        return
+    if mode == "write-children":
+        # Each exited descendant writes less than the budget, but the complete
+        # tree must retain its accounting as new children are started.
+        while True:
+            child = subprocess.Popen([sys.executable, "-I", "-B", "-X", "utf8", __file__, "write-chunk"],
+                                     close_fds=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            child.wait()
+    if mode == "write-delete":
+        data = b"x" * 65536
+        while True:
+            target = scratch / "deleted.bin"
+            target.write_bytes(data)
+            target.unlink()
     if mode == "log-cancel":
         subprocess.Popen([sys.executable, "-I", "-B", "-X", "utf8", __file__, "log-child"],
                          stdout=sys.stdout, stderr=sys.stderr, close_fds=True,

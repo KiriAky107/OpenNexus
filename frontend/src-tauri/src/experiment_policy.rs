@@ -72,6 +72,11 @@ impl ValidatedLimits {
     pub fn output_bytes(&self) -> u64 {
         u64::from(self.0.output_mib) * 1024 * 1024
     }
+    /// Aggregate Job writes, including pipes and files that are later removed.
+    /// This independent ceiling is not a filesystem allocation quota.
+    pub fn write_io_bytes(&self) -> u64 {
+        self.disk_bytes() + self.output_bytes() + self.log_bytes() as u64
+    }
 }
 
 #[cfg(test)]

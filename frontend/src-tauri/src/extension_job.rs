@@ -24,6 +24,7 @@ struct KernelLimits {
     processes: u32,
     memory: usize,
     cpu_ticks: Option<i64>,
+    write_io_bytes: Option<u64>,
 }
 impl Job {
     pub(crate) fn clone_for_deadline(&self) -> Result<Self> {
@@ -52,6 +53,7 @@ impl Job {
                 processes,
                 memory: 512 * 1024 * 1024,
                 cpu_ticks: None,
+                write_io_bytes: None,
             },
             scratch.map(DiskCheck::Scratch),
         )
@@ -72,6 +74,7 @@ impl Job {
                 processes: limits.processes(),
                 memory: limits.memory_bytes(),
                 cpu_ticks: Some(limits.cpu_ticks()),
+                write_io_bytes: Some(limits.write_io_bytes()),
             },
             Some(DiskCheck::Experiment(disk)),
         )
@@ -129,7 +132,12 @@ impl Job {
             },
         };
         job.set(JobObjectCpuRateControlInformation, &cpu)?;
-        job._monitor = Some(ResourceMonitor::arm(&job, disk, budget.cpu_ticks)?);
+        job._monitor = Some(ResourceMonitor::arm(
+            &job,
+            disk,
+            budget.cpu_ticks,
+            budget.write_io_bytes,
+        )?);
         Ok(job)
     }
     pub fn check_resources(&self) -> Result<()> {
@@ -141,6 +149,7 @@ impl Job {
             4 => Err(HostError::new("EXTENSION_RESOURCE_MEMORY_EXCEEDED")),
             5 => Err(HostError::new("EXTENSION_RESOURCE_PROCESSES_EXCEEDED")),
             6 => Err(HostError::new("EXTENSION_RESOURCE_SCRATCH_EXCEEDED")),
+            7 => Err(HostError::new("EXPERIMENT_WRITE_IO_LIMIT_EXCEEDED")),
             _ => Err(HostError::new("EXTENSION_RESOURCE_MONITOR_FAILED")),
         }
     }
@@ -198,6 +207,27 @@ impl Job {
     pub fn user_cpu_ticks(&self) -> Result<i64> {
         query_cpu_ticks(&self.handle)
     }
+    /// Includes writes by exited descendants; deleting a file cannot reset it.
+    pub fn write_io_bytes(&self) -> Result<u64> {
+        query_write_io_bytes(&self.handle)
+    }
+}
+
+fn query_write_io_bytes(handle: &OwnedHandle) -> Result<u64> {
+    let mut accounting = JOBOBJECT_BASIC_AND_IO_ACCOUNTING_INFORMATION::default();
+    if unsafe {
+        QueryInformationJobObject(
+            handle.as_raw_handle(),
+            JobObjectBasicAndIoAccountingInformation,
+            (&mut accounting as *mut JOBOBJECT_BASIC_AND_IO_ACCOUNTING_INFORMATION).cast(),
+            size_of::<JOBOBJECT_BASIC_AND_IO_ACCOUNTING_INFORMATION>() as u32,
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        return Err(HostError::new("EXTENSION_RESOURCE_QUERY_FAILED"));
+    }
+    Ok(accounting.IoInfo.WriteTransferCount)
 }
 
 fn query_cpu_ticks(handle: &OwnedHandle) -> Result<i64> {
@@ -230,7 +260,12 @@ struct ResourceMonitor {
     worker: Option<std::thread::JoinHandle<()>>,
 }
 impl ResourceMonitor {
-    fn arm(job: &Job, disk: Option<DiskCheck>, cpu_ticks: Option<i64>) -> Result<Self> {
+    fn arm(
+        job: &Job,
+        disk: Option<DiskCheck>,
+        cpu_ticks: Option<i64>,
+        write_io_bytes: Option<u64>,
+    ) -> Result<Self> {
         use std::sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
@@ -249,11 +284,16 @@ impl ResourceMonitor {
                 CompletionPort: port.as_raw_handle(),
             },
         )?;
-        if cpu_ticks.is_none() {
+        if cpu_ticks.is_none() || write_io_bytes.is_some() {
             job.set(
                 JobObjectNotificationLimitInformation,
                 &JOBOBJECT_NOTIFICATION_LIMIT_INFORMATION {
-                    LimitFlags: JOB_OBJECT_LIMIT_RATE_CONTROL,
+                    LimitFlags: if write_io_bytes.is_some() {
+                        JOB_OBJECT_LIMIT_JOB_WRITE_BYTES
+                    } else {
+                        JOB_OBJECT_LIMIT_RATE_CONTROL
+                    },
+                    IoWriteBytesLimit: write_io_bytes.unwrap_or(0),
                     RateControlTolerance: ToleranceHigh,
                     RateControlToleranceInterval: ToleranceIntervalShort,
                     ..Default::default()
@@ -274,6 +314,17 @@ impl ResourceMonitor {
                 // 仍持有 Job 句柄时终止整个进程树。
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     while !thread_stop.load(Ordering::Acquire) {
+                        // A cumulative counter survives truncation, deletion and
+                        // descendant exit. It includes stdout/stderr too; never
+                        // subtract asynchronous reader counters or call it disk
+                        // allocation. Querying also covers missed notifications.
+                        if let Some(limit) = write_io_bytes {
+                            match query_write_io_bytes(&owned_job) {
+                                Ok(used) if used >= limit => return 7,
+                                Ok(_) => {}
+                                Err(_) => return 2,
+                            }
+                        }
                         // Kernel time limits are checked periodically. Observe
                         // actual aggregate CPU too, independently of wall time
                         // and the extension's ten-second rate-pressure policy.
@@ -351,6 +402,9 @@ impl ResourceMonitor {
                         }
                         if info.ViolationLimitFlags & JOB_OBJECT_LIMIT_RATE_CONTROL != 0 {
                             return 1;
+                        }
+                        if info.ViolationLimitFlags & JOB_OBJECT_LIMIT_JOB_WRITE_BYTES != 0 {
+                            return 7;
                         }
                     }
                     0
@@ -808,6 +862,22 @@ mod tests {
             JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP
         );
         assert_eq!(job.user_cpu_ticks().unwrap(), 0);
+        assert_eq!(job.write_io_bytes().unwrap(), 0);
+        let mut notification = JOBOBJECT_NOTIFICATION_LIMIT_INFORMATION::default();
+        assert_ne!(
+            unsafe {
+                QueryInformationJobObject(
+                    job.handle.as_raw_handle(),
+                    JobObjectNotificationLimitInformation,
+                    (&mut notification as *mut JOBOBJECT_NOTIFICATION_LIMIT_INFORMATION).cast(),
+                    size_of::<JOBOBJECT_NOTIFICATION_LIMIT_INFORMATION>() as u32,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        assert_eq!(notification.LimitFlags, JOB_OBJECT_LIMIT_JOB_WRITE_BYTES);
+        assert_eq!(notification.IoWriteBytesLimit, limits.write_io_bytes());
         drop(job);
         profile.remove().unwrap();
     }

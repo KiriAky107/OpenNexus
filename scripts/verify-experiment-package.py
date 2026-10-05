@@ -49,6 +49,34 @@ def verify_storage_receipt(result: dict, runtime: Path, lock: dict) -> None:
         raise ValueError('Storage audit did not verify synthetic file permissions')
 
 
+def verify_write_receipt(result: dict, runtime: Path, lock: dict) -> None:
+    report = result['report']
+    if (result['runtime_id'] != lock['runtime_id'] or report['runtime'] != lock['version']
+            or type(report['isolated']) is not int or report['isolated'] != 1
+            or not Path(report['executable']).samefile(runtime / lock['entrypoint'])):
+        raise ValueError('Write audit did not execute the extracted interpreter')
+    for mode in ('logs', 'write-truncate', 'write-children', 'write-delete'):
+        item = result['resources'][mode]
+        for field in ('remaining_processes', 'write_io_bytes', 'write_io_limit_bytes',
+                      'filesystem_bytes', 'disk_limit_bytes', 'stdout_bytes', 'stderr_bytes'):
+            if type(item[field]) is not int or item[field] < 0:
+                raise ValueError('Write audit has invalid accounting: ' + mode)
+        if (item['remaining_processes'] != 0 or item['disk_limit_bytes'] <= 0
+                or item['write_io_limit_bytes'] <= item['disk_limit_bytes']
+                or item['filesystem_bytes'] >= item['disk_limit_bytes']):
+            raise ValueError('Write audit did not verify bounded allocation and empty Job: ' + mode)
+        if mode == 'logs':
+            if (item['error'] != 'completed' or item['stdout_bytes'] < 2 * 1024 * 1024
+                    or item['stderr_bytes'] < 2 * 1024 * 1024
+                    or not item['stdout_bytes'] + item['stderr_bytes'] <= item['write_io_bytes'] < item['write_io_limit_bytes']):
+                raise ValueError('Write audit did not retain the log positive control')
+        elif mode == 'write-delete' and item['error'] == 'EXTENSION_RESOURCE_MONITOR_FAILED':
+            continue  # Namespace churn can race inspection; it must fail closed.
+        elif (item['error'] != 'EXPERIMENT_WRITE_IO_LIMIT_EXCEEDED'
+              or item['write_io_bytes'] < item['write_io_limit_bytes']):
+            raise ValueError('Write audit did not stop cumulative writes: ' + mode)
+
+
 def native_probe(payload: Path, target: str, evidence: Path) -> dict:
     """Build a test driver, then launch it with system-only PATH and package assets.
 
@@ -101,6 +129,9 @@ def native_probe(payload: Path, target: str, evidence: Path) -> dict:
         receipts[name] = hashlib.sha256((evidence / name).read_bytes()).hexdigest()
     name = 'storage-audit-result.json'
     verify_storage_receipt(json.loads((evidence / name).read_bytes()), runtime, lock)
+    receipts[name] = hashlib.sha256((evidence / name).read_bytes()).hexdigest()
+    name = 'write-io-result.json'
+    verify_write_receipt(json.loads((evidence / name).read_bytes()), runtime, lock)
     receipts[name] = hashlib.sha256((evidence / name).read_bytes()).hexdigest()
     return {'system_only_path': True, 'runtime_source': 'extracted-installer',
             'native_signatures_verified': len(signature_items),

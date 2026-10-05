@@ -71,22 +71,35 @@ impl Drop for Scratch {
 #[test]
 #[ignore = "requires prepared official embedded runtime; run scripts/verify-experiment-runtime.ps1"]
 fn packaged_python_isolation_and_owned_process_tree() {
-    native_probe(false, false);
+    native_probe(false, Probe::Full);
 }
 
 #[test]
 #[ignore = "requires prepared official embedded runtime; run scripts/verify-experiment-runtime.ps1"]
 fn experiment_policy_bounds_the_complete_container() {
-    native_probe(true, false);
+    native_probe(true, Probe::Full);
 }
 
 #[test]
 #[ignore = "requires prepared official embedded runtime; synthetic ACL and private registry audit"]
 fn experiment_storage_permissions_are_bounded() {
-    native_probe(true, true);
+    native_probe(true, Probe::Storage);
 }
 
-fn native_probe(experimental: bool, audit_only: bool) {
+#[test]
+#[ignore = "requires prepared official embedded runtime; cumulative native Job IO audit"]
+fn experiment_transient_writes_are_bounded() {
+    native_probe(true, Probe::Writes);
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Probe {
+    Full,
+    Storage,
+    Writes,
+}
+
+fn native_probe(experimental: bool, probe: Probe) {
     let limits = crate::experiment_policy::ExecutionLimits {
         wall_seconds: 8,
         cpu_seconds: 2,
@@ -211,7 +224,124 @@ fn native_probe(experimental: bool, audit_only: bool) {
         // or brokers. Production execution still needs independent authorization.
         unsafe { suspended.resume().unwrap() }
     };
-    if audit_only {
+    if probe == Probe::Writes {
+        let selected = limits.validate().unwrap();
+        let mut observations = serde_json::Map::new();
+        for mode in ["logs", "write-truncate", "write-children", "write-delete"] {
+            let (suspended, io) = Suspended::create_experiment_with_stdio(
+                &profile,
+                &executable,
+                launch_data(mode),
+                &selected,
+            )
+            .unwrap();
+            let logs = crate::experiment_log::LogCapture::start(io, &selected).unwrap();
+            let running = unsafe { suspended.resume().unwrap() };
+            let started = Instant::now();
+            let outcome = loop {
+                logs.check().unwrap();
+                if let Err(error) = running.check_authorization() {
+                    break error.code;
+                }
+                if let Some(code) = running.wait(Duration::from_millis(10)).unwrap() {
+                    if let Err(error) = running.check_authorization() {
+                        break error.code;
+                    }
+                    assert_eq!(
+                        mode,
+                        "logs",
+                        "churn unexpectedly finished: {mode}, {code}; {}",
+                        fs::read_to_string(scratch.0.join("error.txt")).unwrap_or_default()
+                    );
+                    assert_eq!(code, 0);
+                    break "completed".into();
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(7),
+                    "IO budget did not trip: {mode}"
+                );
+            };
+            let elapsed_ms = started.elapsed().as_millis();
+            assert!(running.wait(Duration::from_secs(5)).unwrap().is_some());
+            let stopped = Instant::now();
+            while running.active_test_processes().unwrap() != 0
+                && stopped.elapsed() < Duration::from_secs(5)
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(running.active_test_processes().unwrap(), 0);
+            let write_bytes = running.test_job().unwrap().write_io_bytes().unwrap();
+            let captured = logs.finish().unwrap();
+            assert!(captured.stdout.complete && captured.stderr.complete);
+            let disk =
+                crate::experiment_disk::DiskBudget::open(folder.parent().unwrap(), &selected)
+                    .unwrap();
+            let disk_bytes = disk.usage().unwrap();
+            if mode == "logs" {
+                assert_eq!(outcome, "completed");
+                assert!(write_bytes >= captured.stdout.bytes_seen + captured.stderr.bytes_seen);
+                assert!(write_bytes < selected.write_io_bytes());
+                assert_eq!(
+                    captured.stdout.bytes_seen,
+                    2 * 1024 * 1024 + "中文输出\nstdin-eof\n".len() as u64
+                );
+            } else if mode == "write-delete" {
+                // Removal can race a capability scan. It must fail closed or
+                // reach the cumulative IO ceiling, never turn a failed scan
+                // into zero usage and keep running.
+                assert!(
+                    outcome == "EXPERIMENT_WRITE_IO_LIMIT_EXCEEDED"
+                        || outcome == "EXTENSION_RESOURCE_MONITOR_FAILED",
+                    "{outcome}"
+                );
+            } else {
+                assert_eq!(outcome, "EXPERIMENT_WRITE_IO_LIMIT_EXCEEDED");
+                assert!(write_bytes >= selected.write_io_bytes());
+            }
+            assert!(
+                disk_bytes < selected.disk_bytes(),
+                "current allocation, not cumulative IO: {mode}"
+            );
+            observations.insert(mode.into(), serde_json::json!({
+                "error": outcome, "write_io_bytes": write_bytes,
+                "write_io_limit_bytes": selected.write_io_bytes(),
+                "filesystem_bytes": disk_bytes, "disk_limit_bytes": selected.disk_bytes(),
+                "elapsed_ms": elapsed_ms, "remaining_processes": 0,
+                "stdout_bytes": captured.stdout.bytes_seen, "stderr_bytes": captured.stderr.bytes_seen,
+            }));
+            drop(disk);
+            drop(running);
+            let _ = fs::remove_file(scratch.0.join("churn.bin"));
+            let _ = fs::remove_file(scratch.0.join("deleted.bin"));
+        }
+        let evidence = std::env::var_os("OPENNEXUS_PROBE_RECEIPT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join(".build/experiment-runtime"));
+        let runtime_report: serde_json::Value =
+            serde_json::from_slice(&fs::read(scratch.0.join("write-runtime.json")).unwrap())
+                .unwrap();
+        assert_eq!(runtime_report["runtime"], lock["version"]);
+        assert_eq!(runtime_report["isolated"], 1);
+        assert_eq!(
+            fs::canonicalize(runtime_report["executable"].as_str().unwrap()).unwrap(),
+            fs::canonicalize(&executable).unwrap()
+        );
+        fs::write(
+            evidence.join("write-io-result.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "runtime_id": lock["runtime_id"], "resources": observations,
+                "report": runtime_report,
+                "production_executor_enabled": false,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        grants.revoke();
+        drop(scratch);
+        profile.remove().unwrap();
+        return;
+    }
+    if probe == Probe::Storage {
         let running = launch("storage-audit");
         let code = running.wait(Duration::from_secs(15)).unwrap();
         let error = fs::read_to_string(scratch.0.join("error.txt")).unwrap_or_default();
@@ -486,10 +616,18 @@ fn native_probe(experimental: bool, audit_only: bool) {
         };
         let elapsed_ms = start.elapsed().as_millis();
         let user_cpu_ticks = running.test_job().unwrap().user_cpu_ticks().unwrap();
-        assert_eq!(
-            outcome, expected,
-            "mode={mode}; actual user CPU ticks={user_cpu_ticks}"
-        );
+        if ["scratch", "outside", "file-stream", "directory-stream"].contains(&mode) && experimental
+        {
+            assert!(
+                outcome == expected || outcome == "EXPERIMENT_WRITE_IO_LIMIT_EXCEEDED",
+                "mode={mode}; outcome={outcome}"
+            );
+        } else {
+            assert_eq!(
+                outcome, expected,
+                "mode={mode}; actual user CPU ticks={user_cpu_ticks}"
+            );
+        }
         if mode == "cpu" {
             assert!(
                 user_cpu_ticks >= 10_000_000,
