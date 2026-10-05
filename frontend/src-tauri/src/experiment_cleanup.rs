@@ -10,6 +10,7 @@ use std::{
 
 const MAX_RECORD: usize = 128 * 1024;
 pub(crate) const MAX_GRANTS: usize = 512;
+pub use crate::experiment_cleanup_job::{JobPhase, JobReceipt};
 pub use crate::experiment_cleanup_objects::{ObjectKind, ObjectReceipt};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -141,6 +142,9 @@ pub struct CleanupStatus {
     /// None marks an older path-only record; it cannot authorize recovery.
     #[serde(default)]
     pub objects: Option<CleanupObjects>,
+    /// Absent on older records; never infer a Job owner from a profile name.
+    #[serde(default)]
+    pub job: Option<JobReceipt>,
 }
 pub(crate) struct Journal {
     db: Mutex<Connection>,
@@ -195,6 +199,12 @@ fn read(db: &Connection) -> Result<Option<(String, CleanupStatus)>> {
             if let Some(objects) = &record.objects {
                 objects.validate(&record)?;
             }
+            if let Some(job) = &record.job {
+                job.validate(&token)?;
+                if record.phase != CleanupPhase::Created && job.phase != JobPhase::Planned {
+                    return Err(failed());
+                }
+            }
             Ok((token, record))
         })
         .transpose()
@@ -211,11 +221,11 @@ impl Journal {
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|_| failed())?;
-        if !(0..=2).contains(&version) {
+        if !(0..=3).contains(&version) {
             return Err(failed());
         }
         // EXTRA also syncs rollback-journal directory removal in DELETE mode.
-        db.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=EXTRA; CREATE TABLE IF NOT EXISTS cleanup (id INTEGER PRIMARY KEY CHECK(id=1),token TEXT NOT NULL,record TEXT NOT NULL); PRAGMA user_version=2;").map_err(|_| failed())?;
+        db.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=EXTRA; CREATE TABLE IF NOT EXISTS cleanup (id INTEGER PRIMARY KEY CHECK(id=1),token TEXT NOT NULL,record TEXT NOT NULL); PRAGMA user_version=3;").map_err(|_| failed())?;
         read(&db)?;
         Ok(Arc::new(Self {
             db: Mutex::new(db),
@@ -249,6 +259,7 @@ impl Journal {
             runtime_root: None,
             error: None,
             objects: Some(CleanupObjects::default()),
+            job: Some(JobReceipt::planned(&token.to_string())?),
         };
         let encoded = serde_json::to_string(&record).map_err(|_| failed())?;
         let db = self.db.lock().map_err(|_| failed())?;
@@ -273,6 +284,46 @@ impl Journal {
     }
 }
 impl Attempt {
+    pub(crate) fn job_plan(&self) -> Result<JobReceipt> {
+        let lease = self.lease.lock().map_err(|_| failed())?;
+        if lease.is_none() {
+            return Err(failed());
+        }
+        let db = self.journal.db.lock().map_err(|_| failed())?;
+        let (token, record) = read(&db)?.ok_or_else(failed)?;
+        let job = record.job.ok_or_else(failed)?;
+        if token != self.token
+            || record.phase != CleanupPhase::Created
+            || job.phase != JobPhase::Planned
+            || record.objects.as_ref().is_none_or(|objects| {
+                objects.source_grants.is_none() || objects.runtime_grants.is_none()
+            })
+        {
+            return Err(failed());
+        }
+        Ok(job)
+    }
+    pub(crate) fn job_configured(
+        &self,
+        proof: crate::experiment_cleanup_job::ConfiguredJob,
+    ) -> Result<()> {
+        let confirmed = proof.receipt();
+        self.update(|record| {
+            let mut expected = record.job.clone().ok_or_else(failed)?;
+            if record.phase != CleanupPhase::Created
+                || expected.phase != JobPhase::Planned
+                || confirmed.phase != JobPhase::Configured
+            {
+                return Err(failed());
+            }
+            expected.phase = JobPhase::Configured;
+            if confirmed != expected {
+                return Err(failed());
+            }
+            record.job = Some(confirmed);
+            Ok(())
+        })
+    }
     pub(crate) fn profile_name(&self) -> &str {
         &self.name
     }
@@ -425,6 +476,10 @@ impl Attempt {
         let (token, record) = read(&tx)?.ok_or_else(failed)?;
         if token != self.token
             || record.phase != CleanupPhase::Created
+            || record
+                .job
+                .as_ref()
+                .is_none_or(|job| job.phase != JobPhase::Configured)
             || record.source_root.is_none()
             || record.runtime_root.is_none()
             || record.objects.as_ref().is_none_or(|objects| {
@@ -564,7 +619,7 @@ mod tests {
         drop(journal);
         assert!(Journal::open(root.path()).is_err());
         let db = Connection::open(root.path().join("experiment-cleanup.sqlite3")).unwrap();
-        db.execute_batch("DELETE FROM cleanup;PRAGMA user_version=3;")
+        db.execute_batch("DELETE FROM cleanup;PRAGMA user_version=4;")
             .unwrap();
         drop(db);
         assert!(Journal::open(root.path()).is_err());
@@ -637,6 +692,7 @@ mod tests {
         attempt.before_create().unwrap();
         let mut record = serde_json::to_value(journal.status().unwrap().unwrap()).unwrap();
         record.as_object_mut().unwrap().remove("objects");
+        record.as_object_mut().unwrap().remove("job");
         journal
             .db
             .lock()
@@ -657,6 +713,7 @@ mod tests {
         let restarted = Journal::open(root.path()).unwrap();
         let record = restarted.status().unwrap().unwrap();
         assert!(record.objects.is_none());
+        assert!(record.job.is_none());
         assert_eq!(record.phase, CleanupPhase::Creating);
         assert!(restarted.reserve(&vault, &operation).is_err());
     }

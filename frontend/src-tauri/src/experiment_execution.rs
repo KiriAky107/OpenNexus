@@ -263,8 +263,13 @@ fn execute_pinned(
         &folder.join("Temp"),
         &BTreeMap::new(),
     )?;
-    let (suspended, io) =
-        Suspended::create_bound_experiment_with_stdio(&profile, &runtime_entry, data, &limits)?;
+    let (suspended, io) = Suspended::create_owned_bound_experiment_with_stdio(
+        &profile,
+        &runtime_entry,
+        data,
+        &limits,
+        attempt,
+    )?;
     let capture = LogCapture::start(io, &limits)?;
     let permit = NativePermit::issue(
         owner,

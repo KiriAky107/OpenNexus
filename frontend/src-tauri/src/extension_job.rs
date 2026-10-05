@@ -76,11 +76,26 @@ impl Job {
                 write_io_bytes: None,
             },
             scratch.map(DiskCheck::Scratch),
+            None,
         )
     }
     pub(crate) fn for_experiment(
         profile: &crate::extension_container::Profile,
         limits: &crate::experiment_policy::ValidatedLimits,
+    ) -> Result<Self> {
+        Self::experiment(profile, limits, None)
+    }
+    pub(crate) fn for_owned_experiment(
+        profile: &crate::extension_container::Profile,
+        limits: &crate::experiment_policy::ValidatedLimits,
+        attempt: &crate::experiment_cleanup::Attempt,
+    ) -> Result<Self> {
+        Self::experiment(profile, limits, Some(attempt))
+    }
+    fn experiment(
+        profile: &crate::extension_container::Profile,
+        limits: &crate::experiment_policy::ValidatedLimits,
+        attempt: Option<&crate::experiment_cleanup::Attempt>,
     ) -> Result<Self> {
         let folder = profile.folder()?;
         // The profile's complete package directory includes AC, Temp and any
@@ -97,6 +112,7 @@ impl Job {
                 write_io_bytes: Some(limits.write_io_bytes()),
             },
             Some(DiskCheck::Experiment(disk)),
+            attempt,
         )
     }
     pub(crate) fn restrict_experiment_registry(
@@ -116,13 +132,25 @@ impl Job {
         )?);
         Ok(())
     }
-    fn with_limits(budget: KernelLimits, disk: Option<DiskCheck>) -> Result<Self> {
-        let raw = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if raw.is_null() {
-            return Err(HostError::new("EXTENSION_RESOURCE_UNAVAILABLE"));
-        }
+    fn with_limits(
+        budget: KernelLimits,
+        disk: Option<DiskCheck>,
+        attempt: Option<&crate::experiment_cleanup::Attempt>,
+    ) -> Result<Self> {
+        let fresh = attempt
+            .map(|attempt| attempt.job_plan()?.create_fresh())
+            .transpose()?;
+        let handle = if let Some(fresh) = &fresh {
+            fresh.clone_handle()?
+        } else {
+            let raw = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            if raw.is_null() {
+                return Err(HostError::new("EXTENSION_RESOURCE_UNAVAILABLE"));
+            }
+            unsafe { OwnedHandle::from_raw_handle(raw) }
+        };
         let mut job = Self {
-            handle: unsafe { OwnedHandle::from_raw_handle(raw) },
+            handle,
             state: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
             _monitor: None,
             _registry: None,
@@ -169,6 +197,11 @@ impl Job {
             budget.cpu_ticks,
             budget.write_io_bytes,
         )?);
+        if let (Some(fresh), Some(attempt)) = (&fresh, attempt) {
+            // A failed durable acknowledgement drops this still-empty Job.
+            // The process factory cannot be entered before this succeeds.
+            attempt.job_configured(fresh.configured(job.creation_handle())?)?;
+        }
         Ok(job)
     }
     pub fn check_resources(&self) -> Result<()> {

@@ -1350,6 +1350,10 @@ mod tests {
                 assert!(objects.source_grants.as_ref().unwrap().len() >= 3);
                 assert!(objects.runtime_grants.as_ref().unwrap().len() >= 36);
                 assert_eq!(
+                    pending.job.as_ref().unwrap().phase,
+                    crate::experiment_cleanup::JobPhase::Configured
+                );
+                assert_eq!(
                     pending.error.as_deref(),
                     Some("EXPERIMENT_CLEANUP_JOURNAL_FAILED")
                 );

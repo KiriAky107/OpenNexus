@@ -125,7 +125,7 @@ impl<'a> Suspended<'a> {
     /// 使用显式环境和工作目录创建隐藏进程，不继承任意句柄。Profile 借用会在
     /// 所有者存活期间阻止清理；此 API 永远不会恢复扩展指令。
     pub fn create(profile: &'a Profile, executable: &Path, data: LaunchData) -> Result<Self> {
-        Self::create_inner(profile, executable, data, None, None)
+        Self::create_inner(profile, executable, data, None, None, None)
     }
     #[cfg(test)]
     pub(crate) fn create_experiment(
@@ -134,7 +134,7 @@ impl<'a> Suspended<'a> {
         data: LaunchData,
         limits: &crate::experiment_policy::ValidatedLimits,
     ) -> Result<Self> {
-        Self::create_inner(profile, executable, data, None, Some(limits))
+        Self::create_inner(profile, executable, data, None, Some(limits), None)
     }
     #[cfg(test)]
     pub(crate) fn create_bound_experiment(
@@ -157,7 +157,8 @@ impl<'a> Suspended<'a> {
         limits: &crate::experiment_policy::ValidatedLimits,
     ) -> Result<(Self, crate::extension_stdio::HostIo)> {
         let (child, host) = crate::extension_stdio::ChildIo::create()?;
-        let suspended = Self::create_inner(profile, executable, data, Some(child), Some(limits))?;
+        let suspended =
+            Self::create_inner(profile, executable, data, Some(child), Some(limits), None)?;
         Ok((suspended, host))
     }
     pub fn create_bound_experiment_with_stdio(
@@ -172,12 +173,33 @@ impl<'a> Suspended<'a> {
         suspended.0._bound_entry = Some(entry);
         Ok((suspended, host))
     }
+    pub(crate) fn create_owned_bound_experiment_with_stdio(
+        profile: &'a Profile,
+        entry: &'a crate::extension_pinned::BoundEntry<'a>,
+        data: LaunchData,
+        limits: &crate::experiment_policy::ValidatedLimits,
+        attempt: &crate::experiment_cleanup::Attempt,
+    ) -> Result<(Self, crate::extension_stdio::HostIo)> {
+        let (child, host) = crate::extension_stdio::ChildIo::create()?;
+        let mut suspended = Self::create_inner(
+            profile,
+            entry.launch_path(),
+            data,
+            Some(child),
+            Some(limits),
+            Some(attempt),
+        )?;
+        entry.verify_process_image(suspended.0.handles.process.as_handle())?;
+        suspended.0._bound_entry = Some(entry);
+        Ok((suspended, host))
+    }
     fn create_inner(
         profile: &'a Profile,
         executable: &Path,
         mut data: LaunchData,
         io: Option<crate::extension_stdio::ChildIo>,
         experiment: Option<&crate::experiment_policy::ValidatedLimits>,
+        attempt: Option<&crate::experiment_cleanup::Attempt>,
     ) -> Result<Self> {
         let bad = || HostError::new("EXTENSION_PROCESS_CREATE_FAILED");
         if !executable.is_absolute() || data.command_mut().last() != Some(&0) {
@@ -218,7 +240,10 @@ impl<'a> Suspended<'a> {
         };
         let directory: Vec<u16> = working.as_os_str().encode_wide().chain(Some(0)).collect();
         let mut job = match experiment {
-            Some(limits) => Job::for_experiment(profile, limits)?,
+            Some(limits) => match attempt {
+                Some(attempt) => Job::for_owned_experiment(profile, limits, attempt)?,
+                None => Job::for_experiment(profile, limits)?,
+            },
             None => Job::with_scratch(data.scratch())?,
         };
         // Keep both the Job and this array alive until the attribute list is
@@ -355,7 +380,8 @@ impl<'a> Suspended<'a> {
         data: LaunchData,
     ) -> Result<(Self, crate::extension_stdio::HostIo)> {
         let (child, host) = crate::extension_stdio::ChildIo::create()?;
-        let mut value = Self::create_inner(profile, entry.launch_path(), data, Some(child), None)?;
+        let mut value =
+            Self::create_inner(profile, entry.launch_path(), data, Some(child), None, None)?;
         entry.verify_process_image(value.0.handles.process.as_handle())?;
         value.0._bound_entry = Some(entry);
         Ok((value, host))
