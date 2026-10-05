@@ -251,7 +251,7 @@ export async function createFile(
   content = '',
 ): Promise<FileNode> {
   const fileName = /\.(md|canvas|py|json|csv)$/i.test(name) ? name : `${name}.md`
-  const kind = workspaceDocumentType(fileName)
+  const kind = workspaceDocumentType(`${folderPath}/${fileName}`)
   if (kind !== 'markdown' && kind !== 'canvas' && kind !== 'experiment') throw new Error('UNSUPPORTED_DOCUMENT_TYPE')
   if (kind === 'experiment' && !isDesktop()) throw new Error('EXPERIMENT_FILES_DESKTOP_ONLY')
   const initialContent = kind === 'canvas' ? (content || EMPTY_CANVAS) : content
@@ -292,6 +292,8 @@ export async function createFolder(parentPath: string, name: string): Promise<Fi
 export async function renameFile(oldPath: string, newName: string, expectedHash?: string, expectedEntries?: Record<string,string>): Promise<void> {
   if (expectedEntries) {
     const destination = `${oldPath.slice(0, oldPath.lastIndexOf('/') + 1)}${newName}`
+    if (Object.keys(expectedEntries).some(relative => workspaceDocumentType(`${oldPath}/${relative}`) === 'experiment'
+      && workspaceDocumentType(`${destination}/${relative}`) !== 'experiment')) throw new Error('EXPERIMENT_FILES_STAY_IN_EXPERIMENTS_FOLDER')
     if (isDesktop()) await hostInvoke('workspace_folder_operation', { path: nativePath(oldPath), destination: nativePath(destination), kind: 'rename', expected: expectedEntries })
     else await apiClient.post('/api/workspace/folders/rename', { path: relativePath(oldPath), new_name: newName, expected_entries: expectedEntries })
     await refreshTree(); return
@@ -305,6 +307,10 @@ export async function renameFile(oldPath: string, newName: string, expectedHash?
     if (isDesktop()) await hostInvoke('workspace_rename', { path: nativePath(path), destination: nativePath(destination), expected })
     else await apiClient.post('/api/workspace/assets/move', { path, destination, expected_content_hash: expected })
     await refreshTree(); return
+  }
+  if (workspaceDocumentType(oldPath) === 'experiment') {
+    const destination = `${oldPath.slice(0, oldPath.lastIndexOf('/') + 1)}${newName}`
+    if (workspaceDocumentType(destination) !== 'experiment') throw new Error('EXPERIMENT_FILES_STAY_IN_EXPERIMENTS_FOLDER')
   }
   if (isDesktop()) {
     const path = nativePath(oldPath)

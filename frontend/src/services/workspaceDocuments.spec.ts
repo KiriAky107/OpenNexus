@@ -16,6 +16,8 @@ describe('workspace document contracts', () => {
     expect(workspaceDocumentType('/experiments/main.py')).toBe('experiment')
     expect(workspaceDocumentType('/experiments/input.json')).toBe('experiment')
     expect(workspaceDocumentType('/experiments/input.csv')).toBe('experiment')
+    expect(workspaceDocumentType('/settings.json')).toBe('unsupported')
+    expect(workspaceDocumentType('/copy.json')).toBe('unsupported')
     expect(workspaceDocumentType('/experiments/output.bin')).toBe('unsupported')
   })
 

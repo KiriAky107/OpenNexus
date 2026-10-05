@@ -133,10 +133,20 @@ async function createWorkspaceItem(type: 'file' | 'folder') {
       workspace.addFileToTree('/', folder)
       return
     }
+    const experiment = /\.(py|json|csv)$/i.test(rawName)
+    const parent = experiment ? '/experiments' : '/'
+    if (experiment) {
+      const tree = await workspaceService.refreshTree(true)
+      workspace.fileTree = tree
+      if (!tree.some(node => node.path === parent)) {
+        const folder = await workspaceService.createFolder('/', 'experiments')
+        workspace.addFileToTree('/', folder)
+      }
+    }
     const title = rawName.replace(/\.md$/i, '')
-    const initial = workspaceDocumentType(rawName) === 'experiment' ? '' : `# ${title}\n\n`
-    const file = await workspaceService.createFile('/', rawName, initial)
-    workspace.addFileToTree('/', file)
+    const initial = experiment ? '' : `# ${title}\n\n`
+    const file = await workspaceService.createFile(parent, rawName, initial)
+    workspace.addFileToTree(parent, file)
     const navigation = await editor.loadFile(file.path)
     if (!navigation?.isCurrent()) return
     await router.push('/workspace')

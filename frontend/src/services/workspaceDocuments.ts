@@ -1,10 +1,14 @@
 export type WorkspaceDocumentType = 'markdown' | 'canvas' | 'image' | 'experiment' | 'unsupported'
 
+export function isExperimentWorkspacePath(path: string): boolean {
+  return path.replace(/^\/+/, '').split('/')[0]?.toLowerCase() === 'experiments'
+}
+
 export function workspaceDocumentType(path: string): WorkspaceDocumentType {
   if (/\.md$/i.test(path)) return 'markdown'
   if (/\.canvas$/i.test(path)) return 'canvas'
   if (/\.(png|jpe?g|gif|webp)$/i.test(path)) return 'image'
-  if (/\.(py|json|csv)$/i.test(path)) return 'experiment'
+  if (isExperimentWorkspacePath(path) && /\.(py|json|csv)$/i.test(path)) return 'experiment'
   return 'unsupported'
 }
 

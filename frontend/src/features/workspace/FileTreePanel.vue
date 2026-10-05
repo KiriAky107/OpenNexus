@@ -6,7 +6,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { noteOutline } from './outline'
 import { useRouter } from 'vue-router'
 import type { FileNode } from '@/contracts'
-import { EMPTY_CANVAS, workspaceDocumentType } from '@/services/workspaceDocuments'
+import { EMPTY_CANVAS, isExperimentWorkspacePath, workspaceDocumentType } from '@/services/workspaceDocuments'
 import { isDesktop } from '@/services/platform/desktop'
 import * as workspaceService from '@/services/workspaceService'
 import { useEditorStore } from '@/stores/editor'
@@ -158,10 +158,20 @@ async function createItem() {
     const experiment = newItemType.value === 'experiment' || (!canvas && /\.(py|json|csv)$/i.test(rawName))
     const extension = canvas ? '.canvas' : experiment ? '.py' : '.md'
     const name = /\.(md|canvas|py|json|csv)$/i.test(rawName) ? rawName : `${rawName}${extension}`
-    const file = await workspaceService.createFile(parentPath.value, name, canvas ? EMPTY_CANVAS : experiment ? '' : `# ${rawName}\n\n`)
-    workspaceStore.addFileToTree(parentPath.value, file)
+    let targetFolder = parentPath.value
+    if (experiment && !isExperimentWorkspacePath(targetFolder)) {
+      const tree = await workspaceService.refreshTree(true)
+      workspaceStore.fileTree = tree
+      if (!tree.some(node => node.path === '/experiments')) {
+        const folder = await workspaceService.createFolder('/', 'experiments')
+        workspaceStore.addFileToTree('/', folder)
+      }
+      targetFolder = '/experiments'
+    }
+    const file = await workspaceService.createFile(targetFolder, name, canvas ? EMPTY_CANVAS : experiment ? '' : `# ${rawName}\n\n`)
+    workspaceStore.addFileToTree(targetFolder, file)
     selectedTreePath.value = file.path
-    selectedFolderPath.value = parentPath.value
+    selectedFolderPath.value = targetFolder
     const navigation = await editorStore.loadFile(file.path)
     if (!navigation?.isCurrent()) return
     await router.push('/workspace')

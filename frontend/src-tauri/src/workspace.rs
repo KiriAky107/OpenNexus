@@ -430,9 +430,7 @@ impl Workspace {
             } else if path.extension().is_some_and(|e| {
                 e.eq_ignore_ascii_case("md")
                     || e.eq_ignore_ascii_case("canvas")
-                    || ["py", "json", "csv"]
-                        .iter()
-                        .any(|ext| e.eq_ignore_ascii_case(ext))
+                    || crate::experiment_contract::is_experiment_file(&relative)
                     || (images
                         && ["png", "jpg", "jpeg", "gif", "webp"]
                             .iter()
@@ -951,12 +949,10 @@ impl Workspace {
                     walk(root, &path, values)?;
                 } else if path.is_file()
                     && path.extension().is_some_and(|ext| {
-                        [
-                            "md", "canvas", "py", "json", "csv", "png", "jpg", "jpeg", "gif",
-                            "webp",
-                        ]
-                        .iter()
-                        .any(|allowed| ext.eq_ignore_ascii_case(allowed))
+                        ["md", "canvas", "png", "jpg", "jpeg", "gif", "webp"]
+                            .iter()
+                            .any(|allowed| ext.eq_ignore_ascii_case(allowed))
+                            || crate::experiment_contract::is_experiment_file(&relative)
                     })
                 {
                     values.insert(relative, crate::payloads::hash_file(&path)?);
@@ -1687,16 +1683,17 @@ mod tests {
         for name in ["main.py", "input.json", "input.csv"] {
             fs::write(experiment.join(name), b"source data").unwrap();
         }
+        fs::write(dir.path().join("settings.json"), b"{}").unwrap();
         let paths: std::collections::HashSet<_> = ws
             .tree()
             .unwrap()
             .into_iter()
             .map(|entry| entry.path)
             .collect();
-        assert!(paths.contains("experiments"));
         for name in ["main.py", "input.json", "input.csv"] {
             assert!(paths.contains(&format!("experiments/{name}")));
         }
+        assert!(!paths.contains("settings.json"));
     }
 
     #[cfg(windows)]

@@ -29,34 +29,35 @@ pub fn allowed(path: &str) -> bool {
         .to_ascii_lowercase();
     matches!(
         extension.as_str(),
-        "md" | "canvas" | "py" | "json" | "csv" | "png" | "jpg" | "jpeg" | "gif" | "webp"
-    ) || (parts
-        .first()
-        .is_some_and(|v| v.eq_ignore_ascii_case("attachments"))
-        && matches!(
-            extension.as_str(),
-            "png"
-                | "jpg"
-                | "jpeg"
-                | "gif"
-                | "webp"
-                | "svg"
-                | "pdf"
-                | "mp3"
-                | "wav"
-                | "m4a"
-                | "ogg"
-                | "flac"
-                | "mp4"
-                | "webm"
-                | "mov"
-                | "txt"
-                | "csv"
-                | "docx"
-                | "xlsx"
-                | "pptx"
-                | "bin"
-        ))
+        "md" | "canvas" | "png" | "jpg" | "jpeg" | "gif" | "webp"
+    ) || crate::experiment_contract::is_experiment_file(path)
+        || (parts
+            .first()
+            .is_some_and(|v| v.eq_ignore_ascii_case("attachments"))
+            && matches!(
+                extension.as_str(),
+                "png"
+                    | "jpg"
+                    | "jpeg"
+                    | "gif"
+                    | "webp"
+                    | "svg"
+                    | "pdf"
+                    | "mp3"
+                    | "wav"
+                    | "m4a"
+                    | "ogg"
+                    | "flac"
+                    | "mp4"
+                    | "webm"
+                    | "mov"
+                    | "txt"
+                    | "csv"
+                    | "docx"
+                    | "xlsx"
+                    | "pptx"
+                    | "bin"
+            ))
 }
 impl Workspace {
     pub(crate) fn sync_paths(&self) -> Result<Vec<String>> {
@@ -376,6 +377,9 @@ mod tests {
         }
         for path in [
             "experiments/output.bin",
+            "settings.json",
+            "copy.json",
+            "provider-settings.json",
             ".private/main.py",
             "target/output.csv",
         ] {

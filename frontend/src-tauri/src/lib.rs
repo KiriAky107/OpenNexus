@@ -6,6 +6,7 @@ pub mod core_update;
 #[cfg(windows)]
 mod credential_autounlock;
 pub mod credentials;
+mod experiment_contract;
 mod payloads;
 mod preference_records;
 pub mod recent;

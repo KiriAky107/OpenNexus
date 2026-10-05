@@ -70,11 +70,10 @@ fn supported(path: &str) -> bool {
             .split('/')
             .any(|part| part.eq_ignore_ascii_case("opennexus-records"))
         && Path::new(path).extension().is_some_and(|ext| {
-            [
-                "md", "canvas", "py", "json", "csv", "png", "jpg", "jpeg", "gif", "webp",
-            ]
-            .iter()
-            .any(|value| ext.eq_ignore_ascii_case(value))
+            ["md", "canvas", "png", "jpg", "jpeg", "gif", "webp"]
+                .iter()
+                .any(|value| ext.eq_ignore_ascii_case(value))
+                || crate::experiment_contract::is_experiment_file(path)
         })
 }
 fn below(path: &str, parent: &str) -> bool {
