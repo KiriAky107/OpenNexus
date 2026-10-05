@@ -1684,6 +1684,7 @@ mod tests {
             fs::write(experiment.join(name), b"source data").unwrap();
         }
         fs::write(dir.path().join("settings.json"), b"{}").unwrap();
+        ws.scan().unwrap();
         let paths: std::collections::HashSet<_> = ws
             .tree()
             .unwrap()
