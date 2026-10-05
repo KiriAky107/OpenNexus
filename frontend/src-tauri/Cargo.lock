@@ -3306,6 +3306,7 @@ dependencies = [
  "hmac",
  "iota_stronghold",
  "jsonschema",
+ "libc",
  "notify",
  "rand 0.8.8",
  "reqwest 0.12.28",
