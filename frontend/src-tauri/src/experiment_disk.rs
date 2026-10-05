@@ -109,7 +109,7 @@ impl DiskBudget {
     }
 }
 
-fn inspect_object(file: &File) -> Result<std::fs::Metadata> {
+pub(crate) fn inspect_object(file: &File) -> Result<std::fs::Metadata> {
     let metadata = file.metadata().map_err(|_| unavailable())?;
     if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
         || !(metadata.is_file() || metadata.is_dir())
@@ -128,6 +128,12 @@ fn inspect_object(file: &File) -> Result<std::fs::Metadata> {
 }
 
 fn stream_bytes(file: &File, count: &mut u32, limit: u32) -> Result<u64> {
+    inspect_streams(file, count, limit, false)
+}
+pub(crate) fn reject_named_streams(file: &File) -> Result<()> {
+    inspect_streams(file, &mut 0, 1, true).map(|_| ())
+}
+fn inspect_streams(file: &File, count: &mut u32, limit: u32, default_only: bool) -> Result<u64> {
     // FILE_STREAM_INFO requires eight-byte alignment. Query by the pinned handle
     // so rename/replacement cannot redirect stream enumeration to another object.
     let mut words = vec![0u64; 512];
@@ -176,6 +182,17 @@ fn stream_bytes(file: &File, count: &mut u32, limit: u32) -> Result<u64> {
             || info.StreamAllocationSize < 0
         {
             return Err(unavailable());
+        }
+        if default_only {
+            let name = unsafe {
+                std::slice::from_raw_parts(
+                    info.StreamName.as_ptr(),
+                    info.StreamNameLength as usize / 2,
+                )
+            };
+            if !name.iter().copied().eq("::$DATA".encode_utf16()) {
+                return Err(HostError::new("EXPERIMENT_OUTPUT_NAMED_STREAM_REJECTED"));
+            }
         }
         *count += 1;
         if *count > limit {
