@@ -169,6 +169,69 @@ impl Runner {
             ws.experiment_output_read(operation, path, offset, limit)
         })
     }
+    pub fn import_prepare(
+        &self,
+        workspace: &WorkspaceSlot,
+        request: &crate::experiment_import::ImportRequest,
+    ) -> Result<crate::experiment_import::ImportRecord> {
+        with_workspace(workspace, |ws| ws.experiment_import_prepare(request))
+    }
+    pub fn import_record(
+        &self,
+        workspace: &WorkspaceSlot,
+        operation: &str,
+    ) -> Result<Option<crate::experiment_import::ImportRecord>> {
+        with_workspace(workspace, |ws| ws.experiment_import_record(operation))
+    }
+    /// Trusted user review, independent of the experiment's execution consent.
+    pub fn confirm_import_from_user(
+        &self,
+        workspace: &WorkspaceSlot,
+        operation: &str,
+        fingerprint: &str,
+    ) -> Result<crate::experiment_import::ImportRecord> {
+        with_workspace(workspace, |ws| {
+            ws.experiment_import_approve(operation, fingerprint)
+        })
+    }
+    pub fn import_next(
+        &self,
+        workspace: &WorkspaceSlot,
+        operation: &str,
+    ) -> Result<crate::experiment_import::ImportRecord> {
+        with_workspace(workspace, |ws| ws.experiment_import_next(operation))
+    }
+    pub fn import_cancel(
+        &self,
+        workspace: &WorkspaceSlot,
+        operation: &str,
+        fingerprint: &str,
+    ) -> Result<crate::experiment_import::ImportRecord> {
+        with_workspace(workspace, |ws| {
+            ws.experiment_import_cancel(operation, fingerprint)
+        })
+    }
+    pub fn artifact_origins(
+        &self,
+        workspace: &WorkspaceSlot,
+        file_id: &str,
+        limit: usize,
+        cursor: Option<&crate::experiment_store::HistoryCursor>,
+    ) -> Result<crate::experiment_import::OriginPage> {
+        with_workspace(workspace, |ws| {
+            ws.experiment_artifact_origins(file_id, limit, cursor)
+        })
+    }
+    pub fn forget_import_from_user(
+        &self,
+        workspace: &WorkspaceSlot,
+        operation: &str,
+        fingerprint: &str,
+    ) -> Result<()> {
+        with_workspace(workspace, |ws| {
+            ws.experiment_import_forget(operation, fingerprint)
+        })
+    }
     /// Trusted user action only; model retries may read history but cannot
     /// discard pending cleanup diagnostics or a worker still returning.
     pub fn forget_from_user(

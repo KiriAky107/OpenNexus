@@ -11,6 +11,7 @@ pub mod experiment_cleanup;
 mod experiment_contract;
 #[cfg(windows)]
 pub mod experiment_execution;
+pub mod experiment_import;
 pub mod experiment_input;
 pub mod experiment_log;
 pub mod experiment_outputs;

@@ -161,10 +161,10 @@ impl Workspace {
         let db = Connection::open(db_path)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 17 {
+        if version > 18 {
             return Err(HostError::new("SCHEMA_INCOMPATIBLE"));
         }
-        if (1..17).contains(&version) {
+        if (1..18).contains(&version) {
             // 模式所有权更改之前独立、完整的 SQLite 备份。
             let backup = managed.join(format!("host-schema{version}-{}.sqlite3", Uuid::new_v4()));
             db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
@@ -252,8 +252,9 @@ impl Workspace {
             db.execute_batch("INSERT OR IGNORE INTO sync_observed SELECT f.id,COALESCE((SELECT o.path FROM outbox o WHERE o.file_id=f.id AND o.state IN ('pending','queued') ORDER BY rowid DESC LIMIT 1),(SELECT h.path FROM sync_heads h JOIN sync_bindings b ON h.binding=b.id WHERE h.file_id=f.id AND b.state='active'),f.path),COALESCE((SELECT o.hash FROM outbox o WHERE o.file_id=f.id AND o.state IN ('pending','queued') ORDER BY rowid DESC LIMIT 1),(SELECT h.hash FROM sync_heads h JOIN sync_bindings b ON h.binding=b.id WHERE h.file_id=f.id AND b.state='active'),f.hash),f.deleted FROM files f;")?;
         }
         db.execute_batch(crate::experiment_store::SCHEMA)?;
+        db.execute_batch(crate::experiment_import::SCHEMA)?;
         crate::experiment_store::recover(&db)?;
-        db.execute_batch("UPDATE sync_attempts SET outcome=CASE WHEN EXISTS(SELECT 1 FROM sync_jobs j WHERE j.binding=sync_attempts.binding AND j.operation_id=sync_attempts.operation_id AND j.state='acked') THEN 'succeeded' ELSE 'interrupted' END WHERE outcome='running'; PRAGMA user_version=17; COMMIT;")?;
+        db.execute_batch("UPDATE sync_attempts SET outcome=CASE WHEN EXISTS(SELECT 1 FROM sync_jobs j WHERE j.binding=sync_attempts.binding AND j.operation_id=sync_attempts.operation_id AND j.state='acked') THEN 'succeeded' ELSE 'interrupted' END WHERE outcome='running'; PRAGMA user_version=18; COMMIT;")?;
         let vault_id: String = db
             .query_row("SELECT id FROM identity", [], |r| r.get(0))
             .optional()?
@@ -649,8 +650,9 @@ impl Workspace {
         if origin != "local" && origin != "remote" {
             return Err(HostError::new("INVALID_ORIGIN"));
         }
+        let digest = content.digest();
         let fingerprint = hash(
-            &serde_json::to_vec(&(path, expected, content.digest(), origin))
+            &serde_json::to_vec(&(path, expected, &digest, origin))
                 .map_err(|_| HostError::new("INVALID_OPERATION"))?,
         );
         let previous: Option<String> = self
@@ -675,6 +677,15 @@ impl Workspace {
             return serde_json::from_value(receipt["result"].clone())
                 .map_err(|_| HostError::new("DATABASE_ERROR"));
         }
+        crate::experiment_import::check_new_write(
+            &self.db,
+            &self.vault_id,
+            operation_id,
+            path,
+            expected,
+            &digest,
+            (origin, identity),
+        )?;
         let target = self.resolve(path)?;
         let current = if target.exists() {
             crate::payloads::hash_file(&target)?
@@ -803,6 +814,7 @@ impl Workspace {
                 "UPDATE operations SET state='conflict' WHERE operation_id=?1",
                 [operation_id],
             )?;
+            crate::experiment_import::conflict_write(&tx, operation_id)?;
             tx.commit()?;
             return Err(HostError::new("RECOVERY_CONFLICT"));
         }
@@ -849,6 +861,7 @@ impl Workspace {
         )?;
         let mut result =
             serde_json::to_value(&entry).map_err(|_| HostError::new("DATABASE_ERROR"))?;
+        crate::experiment_import::complete_write(&tx, operation_id, &entry)?;
         result["expected"] = serde_json::json!(expected);
         let result =
             serde_json::to_string(&result).map_err(|_| HostError::new("DATABASE_ERROR"))?;
@@ -2062,7 +2075,7 @@ mod tests {
             ws.db
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            17
+            18
         );
         for column in ["retire_id", "restore_id"] {
             assert!(ws
@@ -2120,7 +2133,7 @@ mod tests {
             ws.db
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            17
+            18
         );
         let backup = fs::read_dir(dir.path().join(".ainote"))
             .unwrap()

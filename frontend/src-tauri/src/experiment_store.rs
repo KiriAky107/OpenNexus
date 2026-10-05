@@ -1249,7 +1249,7 @@ mod tests {
             ws.db
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            17
+            18
         );
         let backup = fs::read_dir(root.path().join(".ainote"))
             .unwrap()
@@ -1696,7 +1696,7 @@ mod tests {
             ws.db
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            17
+            18
         );
         assert!(ws
             .experiment_record(&request.operation_id)
@@ -1735,7 +1735,7 @@ mod tests {
             0
         );
         drop(previous);
-        ws.db.execute_batch("PRAGMA user_version=18;").unwrap();
+        ws.db.execute_batch("PRAGMA user_version=19;").unwrap();
         drop(ws);
         assert_eq!(
             Workspace::open(root.path()).err().unwrap().code,

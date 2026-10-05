@@ -186,7 +186,7 @@ fn valid_component(name: &str) -> bool {
             && matches!(stem.as_bytes()[3], b'1'..=b'9'))
         && !["com¹", "com²", "com³", "lpt¹", "lpt²", "lpt³"].contains(&stem.as_str())
 }
-fn valid_path(path: &str) -> bool {
+pub(crate) fn valid_path(path: &str) -> bool {
     path.len() <= MAX_PATH
         && path.split('/').count() <= MAX_DEPTH
         && path.split('/').all(valid_component)
