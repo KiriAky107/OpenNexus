@@ -211,6 +211,23 @@ impl Job {
     pub fn write_io_bytes(&self) -> Result<u64> {
         query_write_io_bytes(&self.handle)
     }
+    /// Peak committed memory for the entire Job, including exited descendants.
+    pub fn peak_memory_bytes(&self) -> Result<u64> {
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        if unsafe {
+            QueryInformationJobObject(
+                self.handle.as_raw_handle(),
+                JobObjectExtendedLimitInformation,
+                (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                std::ptr::null_mut(),
+            )
+        } == 0
+        {
+            return Err(HostError::new("EXTENSION_RESOURCE_QUERY_FAILED"));
+        }
+        Ok(limits.PeakJobMemoryUsed as u64)
+    }
 }
 
 fn query_write_io_bytes(handle: &OwnedHandle) -> Result<u64> {

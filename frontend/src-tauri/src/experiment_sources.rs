@@ -26,6 +26,9 @@ impl SourceEntry<'_> {
     }
 }
 impl<'a> RunSources<'a> {
+    pub(crate) fn is_bound_to(&self, run: &ClaimedRun) -> bool {
+        std::ptr::eq(self.run, run)
+    }
     /// Uses only already claimed, revalidated Host bytes and Host's fresh temp
     /// directory. No renderer-provided absolute path or existing tree is used.
     pub fn create(run: &'a ClaimedRun) -> Result<Self> {
@@ -77,6 +80,17 @@ impl<'a> RunSources<'a> {
     pub fn access<'b>(&'b self, profile: &'b Profile) -> Result<PackageAccess<'b>> {
         self.package.access(profile)
     }
+    pub fn finish(self) -> Result<()> {
+        let Self {
+            package,
+            _temporary: temporary,
+            run: _,
+        } = self;
+        drop(package);
+        temporary
+            .close()
+            .map_err(|_| HostError::new("EXPERIMENT_SOURCE_CLEANUP_FAILED"))
+    }
     #[cfg(test)]
     pub(crate) fn test_root(&self) -> &Path {
         self._temporary.path()
@@ -95,6 +109,7 @@ mod tests {
     };
     #[test]
     fn claimed_copies_keep_exact_bytes_and_block_edits_until_cleanup() {
+        let _serial = crate::experiment_owner::TEST_EXECUTION_LOCK.lock().unwrap();
         let vault = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(vault.path().join("experiments/中文 #%")).unwrap();
         let path = "experiments/中文 #%/main.py";

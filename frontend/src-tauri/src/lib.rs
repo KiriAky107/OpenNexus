@@ -7,6 +7,8 @@ pub mod core_update;
 mod credential_autounlock;
 pub mod credentials;
 mod experiment_contract;
+#[cfg(windows)]
+pub mod experiment_execution;
 pub mod experiment_input;
 pub mod experiment_log;
 pub mod experiment_owner;
@@ -115,6 +117,8 @@ mod experiment_disk;
 pub mod experiment_policy;
 #[cfg(windows)]
 mod experiment_registry;
+#[cfg(windows)]
+pub mod experiment_runner;
 pub mod experiment_runtime;
 #[cfg(windows)]
 pub mod experiment_runtime_bound;

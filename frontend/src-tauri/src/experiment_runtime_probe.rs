@@ -97,6 +97,11 @@ fn experiment_transient_writes_are_bounded() {
 fn experiment_pinned_runtime_executes_the_verified_entry() {
     native_probe(true, Probe::Binding);
 }
+#[test]
+#[ignore = "requires prepared official embedded runtime; approved background worker lifecycle"]
+fn experiment_formal_worker_owns_the_approved_lifecycle() {
+    crate::experiment_runner::native_worker_probe();
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Probe {

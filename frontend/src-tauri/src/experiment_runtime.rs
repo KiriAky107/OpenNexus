@@ -20,7 +20,7 @@ struct Item {
     sha256: String,
     bytes: u64,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RuntimeInfo {
     pub runtime_id: String,
     pub version: String,

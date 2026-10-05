@@ -26,6 +26,8 @@ fn global() -> &'static Arc<Coordinator> {
     static COORDINATOR: OnceLock<Arc<Coordinator>> = OnceLock::new();
     COORDINATOR.get_or_init(|| Arc::new(Coordinator::default()))
 }
+#[cfg(all(test, windows))]
+pub(crate) static TEST_EXECUTION_LOCK: Mutex<()> = Mutex::new(());
 fn unavailable() -> HostError {
     HostError::new("EXPERIMENT_RUN_OWNERSHIP_FAILED")
 }
@@ -104,6 +106,10 @@ impl RunOwner {
     }
     pub fn cancellation_requested(&self) -> bool {
         self.reservation.cancelled.load(Ordering::Acquire)
+    }
+    #[cfg(windows)]
+    pub(crate) fn cancellation_signal(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.reservation.cancelled)
     }
     pub fn mark_running(&self, ws: &mut Workspace) -> Result<()> {
         if self.cancellation_requested() {

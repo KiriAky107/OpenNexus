@@ -148,7 +148,7 @@ impl InputSummary {
         Ok(request)
     }
 }
-fn fingerprint(request: &RunRequest) -> Result<String> {
+pub(crate) fn fingerprint(request: &RunRequest) -> Result<String> {
     let mut binding = b"opennexus-experiment-inputs-v1\0".to_vec();
     binding.extend(serde_json::to_vec(request).map_err(|_| invalid())?);
     Ok(hash(&binding))

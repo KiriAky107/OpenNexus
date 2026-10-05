@@ -1,13 +1,11 @@
 //! 每次启动的匿名管道。只有子端进入显式继承列表。运行时拥有 Host 端，必须绑定帧并取消阻塞的 IO。
 use crate::workspace::{HostError, Result};
-#[cfg(any(feature = "desktop", test))]
 use std::os::windows::io::FromRawHandle;
 use std::{
     fs::File,
     os::windows::io::{AsRawHandle, OwnedHandle},
 };
 use windows_sys::Win32::Foundation::*;
-#[cfg(any(feature = "desktop", test))]
 use windows_sys::Win32::System::Pipes::CreatePipe;
 
 pub struct HostIo {
@@ -20,7 +18,6 @@ pub(crate) struct ChildIo {
     output: OwnedHandle,
     error: OwnedHandle,
 }
-#[cfg(any(feature = "desktop", test))]
 fn pair() -> Result<(OwnedHandle, OwnedHandle)> {
     let mut read = std::ptr::null_mut();
     let mut write = std::ptr::null_mut();
@@ -35,7 +32,6 @@ fn pair() -> Result<(OwnedHandle, OwnedHandle)> {
     })
 }
 impl ChildIo {
-    #[cfg(any(feature = "desktop", test))]
     pub(crate) fn create() -> Result<(Self, HostIo)> {
         let (input, host_input) = pair()?;
         let (host_output, output) = pair()?;

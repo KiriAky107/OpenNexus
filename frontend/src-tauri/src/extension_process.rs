@@ -80,12 +80,20 @@ struct Process<'a> {
     job: Job,
     experiment_deadline: Option<crate::extension_deadline::ToolDeadline>,
     _profile: &'a Profile,
-    #[cfg(any(feature = "desktop", test))]
     _bound_entry: Option<&'a crate::extension_pinned::BoundEntry<'a>>,
+    experiment_permission: Option<crate::experiment_execution::NativePermit<'a>>,
 }
 impl Drop for Process<'_> {
     fn drop(&mut self) {
         let _ = self.job.terminate();
+        if self.experiment_deadline.is_some() {
+            // Keep every borrowed runtime/input/profile/slot alive on errors
+            // and unwind too. Unknown cleanup is not evidence of an empty Job.
+            while self.job.active_processes().ok() != Some(0) {
+                let _ = self.job.terminate();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
     }
 }
 pub struct Suspended<'a>(Process<'a>);
@@ -125,7 +133,6 @@ impl<'a> Suspended<'a> {
     }
     /// Only three child pipe ends are inherited. The Host owns separate, bounded
     /// log readers; this does not authorize or resume the suspended process.
-    #[cfg(any(feature = "desktop", test))]
     pub(crate) fn create_experiment_with_stdio(
         profile: &'a Profile,
         executable: &Path,
@@ -136,7 +143,6 @@ impl<'a> Suspended<'a> {
         let suspended = Self::create_inner(profile, executable, data, Some(child), Some(limits))?;
         Ok((suspended, host))
     }
-    #[cfg(any(feature = "desktop", test))]
     pub fn create_bound_experiment_with_stdio(
         profile: &'a Profile,
         entry: &'a crate::extension_pinned::BoundEntry<'a>,
@@ -287,8 +293,8 @@ impl<'a> Suspended<'a> {
             job,
             experiment_deadline,
             _profile: profile,
-            #[cfg(any(feature = "desktop", test))]
             _bound_entry: None,
+            experiment_permission: None,
         };
         verify_identity(&process.handles, profile)?;
         Ok(Self(process))
@@ -338,6 +344,20 @@ impl<'a> Suspended<'a> {
             identity: None,
         })
     }
+    /// The closed experiment builder has bound all resources and made the
+    /// final durable approval/source transition. Retain that permission and an
+    /// independent cancellation watcher for the complete process lifetime.
+    pub(crate) fn resume_experiment(
+        mut self,
+        mut permit: crate::experiment_execution::NativePermit<'a>,
+    ) -> Result<Running<'a>> {
+        permit.arm(&self.0.job)?;
+        permit.check()?;
+        self.0.experiment_permission = Some(permit);
+        // Safety: NativePermit can only be minted by the closed builder after
+        // runtime/image/input binding, scoped grants and durable revalidation.
+        unsafe { self.resume() }
+    }
     /// # 安全性
     /// 必须满足与 resume 相同的完整资源、代理与信任前提；此外还要在恢复执行任何指令前启用撤销监控。
     #[cfg(feature = "desktop")]
@@ -379,6 +399,9 @@ impl Running<'_> {
     }
 
     pub fn check_authorization(&self) -> Result<()> {
+        if let Some(permission) = &self.process.experiment_permission {
+            permission.check()?;
+        }
         self.process.job.check_resources()?;
         if let Some(deadline) = &self.process.experiment_deadline {
             deadline.check()?;
@@ -388,6 +411,9 @@ impl Running<'_> {
             return watch.check();
         }
         Ok(())
+    }
+    pub(crate) fn job(&self) -> &Job {
+        &self.process.job
     }
     #[cfg(test)]
     pub(crate) fn test_job(&self) -> Result<crate::extension_job::Job> {
