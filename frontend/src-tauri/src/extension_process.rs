@@ -25,6 +25,23 @@ struct Attributes {
     initialized: bool,
 }
 impl Attributes {
+    fn job_list(&mut self, handles: &[windows_sys::Win32::Foundation::HANDLE]) -> Result<()> {
+        if unsafe {
+            UpdateProcThreadAttribute(
+                self.buffer.as_mut_ptr().cast(),
+                0,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+                handles.as_ptr().cast(),
+                std::mem::size_of_val(handles),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        } == 0
+        {
+            return Err(HostError::new("EXTENSION_PROCESS_ATTRIBUTES_FAILED"));
+        }
+        Ok(())
+    }
     fn new(count: u32) -> Result<Self> {
         let bad = || HostError::new("EXTENSION_PROCESS_ATTRIBUTES_FAILED");
         let mut bytes = 0;
@@ -200,7 +217,20 @@ impl<'a> Suspended<'a> {
             &folder
         };
         let directory: Vec<u16> = working.as_os_str().encode_wide().chain(Some(0)).collect();
-        let mut attributes = Attributes::new(if io.is_some() { 2 } else { 1 })?;
+        let mut job = match experiment {
+            Some(limits) => Job::for_experiment(profile, limits)?,
+            None => Job::with_scratch(data.scratch())?,
+        };
+        // Keep both the Job and this array alive until the attribute list is
+        // destroyed. The Job handle is used for assignment, never inherited.
+        let job_handles = [job.creation_handle().as_raw_handle()];
+        let mut attributes =
+            Attributes::new(1 + u32::from(io.is_some()) + u32::from(experiment.is_some()))?;
+        if experiment.is_some() {
+            // Assignment happens inside CreateProcessW. Host death after
+            // creation cannot leave a suspended child outside its owned Job.
+            attributes.job_list(&job_handles)?;
+        }
         let caps = SECURITY_CAPABILITIES {
             AppContainerSid: profile.sid(),
             Capabilities: std::ptr::null_mut(),
@@ -221,10 +251,6 @@ impl<'a> Suspended<'a> {
         {
             return Err(HostError::new("EXTENSION_PROCESS_ATTRIBUTES_FAILED"));
         }
-        let mut job = match experiment {
-            Some(limits) => Job::for_experiment(profile, limits)?,
-            None => Job::with_scratch(data.scratch())?,
-        };
         // This independent watchdog owns a Job handle and kills the whole tree
         // even if disk inspection, UI or the caller stops making progress.
         let experiment_deadline = experiment
@@ -261,7 +287,7 @@ impl<'a> Suspended<'a> {
         }
         let mut info = PROCESS_INFORMATION::default();
         let environment = data.environment().as_ptr();
-        if unsafe {
+        let created = unsafe {
             CreateProcessW(
                 executable.as_ptr(),
                 data.command_mut().as_mut_ptr(),
@@ -277,8 +303,9 @@ impl<'a> Suspended<'a> {
                 &startup.StartupInfo,
                 &mut info,
             )
-        } == 0
-        {
+        };
+        drop(attributes);
+        if created == 0 {
             return Err(bad());
         }
         let handles = Handles {
@@ -286,13 +313,16 @@ impl<'a> Suspended<'a> {
             thread: unsafe { OwnedHandle::from_raw_handle(info.hThread) },
         };
         if experiment.is_some() {
+            job.verify_member(handles.process.as_handle())?;
             // Windows may initialize private profile storage while creating the
             // token. Seal its registry after that work, before ResumeThread.
             job.restrict_experiment_registry(profile)?;
             job.restrict_experiment_filesystem(profile, data.scratch())?;
         }
-        unsafe {
-            job.assign_suspended(handles.process.as_handle())?;
+        if experiment.is_none() {
+            unsafe {
+                job.assign_suspended(handles.process.as_handle())?;
+            }
         }
         let process = Process {
             handles,
@@ -544,6 +574,55 @@ fn verify_identity(handles: &Handles, profile: &Profile) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn job_list_owns_the_child_at_creation_and_last_close_kills_it_while_suspended() {
+        let entry = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32/cmd.exe");
+        let executable: Vec<u16> = entry.as_os_str().encode_wide().chain(Some(0)).collect();
+        let job = Job::new().unwrap();
+        let jobs = [job.creation_handle().as_raw_handle()];
+        let mut attributes = Attributes::new(1).unwrap();
+        attributes.job_list(&jobs).unwrap();
+        let mut startup = STARTUPINFOEXW::default();
+        startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+        startup.lpAttributeList = attributes.buffer.as_mut_ptr().cast();
+        let mut info = PROCESS_INFORMATION::default();
+        assert_ne!(
+            unsafe {
+                CreateProcessW(
+                    executable.as_ptr(),
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &startup.StartupInfo,
+                    &mut info,
+                )
+            },
+            0
+        );
+        drop(attributes);
+        let handles = Handles {
+            process: unsafe { OwnedHandle::from_raw_handle(info.hProcess) },
+            thread: unsafe { OwnedHandle::from_raw_handle(info.hThread) },
+        };
+        // No AssignProcessToJobObject, resume, termination or other factory
+        // post-processing has occurred. This is the former crash window.
+        job.verify_member(handles.process.as_handle()).unwrap();
+        assert_eq!(job.active_processes().unwrap(), 1);
+        assert_eq!(
+            unsafe { WaitForSingleObject(handles.process.as_raw_handle(), 0) },
+            WAIT_TIMEOUT
+        );
+        drop(job);
+        assert_eq!(
+            unsafe { WaitForSingleObject(handles.process.as_raw_handle(), 5000) },
+            WAIT_OBJECT_0
+        );
+    }
     fn data(profile: &Profile, entry: &Path) -> LaunchData {
         let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
         let folder = profile.folder().unwrap();

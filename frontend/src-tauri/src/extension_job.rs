@@ -2,7 +2,7 @@
 use crate::workspace::{HostError, Result};
 use std::{
     mem::size_of,
-    os::windows::io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle},
+    os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle},
     path::{Path, PathBuf},
 };
 use windows_sys::Win32::System::{
@@ -28,6 +28,24 @@ struct KernelLimits {
     write_io_bytes: Option<u64>,
 }
 impl Job {
+    pub(crate) fn creation_handle(&self) -> BorrowedHandle<'_> {
+        self.handle.as_handle()
+    }
+    pub(crate) fn verify_member(&self, process: BorrowedHandle<'_>) -> Result<()> {
+        let mut member = 0;
+        if unsafe {
+            IsProcessInJob(
+                process.as_raw_handle(),
+                self.handle.as_raw_handle(),
+                &mut member,
+            )
+        } == 0
+            || member == 0
+        {
+            return Err(HostError::new("EXTENSION_RESOURCE_ASSIGN_FAILED"));
+        }
+        Ok(())
+    }
     pub(crate) fn clone_for_deadline(&self) -> Result<Self> {
         Ok(Self {
             state: std::sync::Arc::clone(&self.state),
