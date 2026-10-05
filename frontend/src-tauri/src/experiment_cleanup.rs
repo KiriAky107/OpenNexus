@@ -38,11 +38,13 @@ pub struct CleanupStatus {
 }
 pub(crate) struct Journal {
     db: Mutex<Connection>,
+    gate: crate::experiment_cleanup_lease::Gate,
 }
 pub(crate) struct Attempt {
     journal: Arc<Journal>,
     token: String,
     name: String,
+    lease: Mutex<Option<crate::experiment_cleanup_lease::Lease>>,
 }
 fn read(db: &Connection) -> Result<Option<(String, CleanupStatus)>> {
     let value: Option<(Option<String>, Option<String>)> = db.query_row(
@@ -92,6 +94,7 @@ impl Journal {
     pub(crate) fn open(host_root: &Path) -> Result<Arc<Self>> {
         // This root comes once from Host setup, never from a run or vault path.
         std::fs::create_dir_all(host_root).map_err(|_| failed())?;
+        let gate = crate::experiment_cleanup_lease::Gate::open(host_root)?;
         let db =
             Connection::open(host_root.join("experiment-cleanup.sqlite3")).map_err(|_| failed())?;
         db.busy_timeout(std::time::Duration::from_secs(2))
@@ -105,7 +108,10 @@ impl Journal {
         // EXTRA also syncs rollback-journal directory removal in DELETE mode.
         db.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=EXTRA; CREATE TABLE IF NOT EXISTS cleanup (id INTEGER PRIMARY KEY CHECK(id=1),token TEXT NOT NULL,record TEXT NOT NULL); PRAGMA user_version=1;").map_err(|_| failed())?;
         read(&db)?;
-        Ok(Arc::new(Self { db: Mutex::new(db) }))
+        Ok(Arc::new(Self {
+            db: Mutex::new(db),
+            gate,
+        }))
     }
     pub(crate) fn status(&self) -> Result<Option<CleanupStatus>> {
         let db = self.db.lock().map_err(|_| failed())?;
@@ -115,6 +121,13 @@ impl Journal {
         if uuid::Uuid::parse_str(vault).is_err() || uuid::Uuid::parse_str(operation).is_err() {
             return Err(failed());
         }
+        let lease = self.gate.acquire().map_err(|error| {
+            if error.code == "EXPERIMENT_CLEANUP_OWNER_ACTIVE" {
+                required()
+            } else {
+                error
+            }
+        })?;
         let token = uuid::Uuid::new_v4();
         let name = format!("OpenNexus.sandbox.{}", token.simple());
         let record = CleanupStatus {
@@ -145,6 +158,7 @@ impl Journal {
             journal: Arc::clone(self),
             token: token.to_string(),
             name,
+            lease: Mutex::new(Some(lease)),
         }))
     }
 }
@@ -153,6 +167,10 @@ impl Attempt {
         &self.name
     }
     fn update(&self, change: impl FnOnce(&mut CleanupStatus) -> Result<()>) -> Result<()> {
+        let lease = self.lease.lock().map_err(|_| failed())?;
+        if lease.is_none() {
+            return Err(failed());
+        }
         let mut db = self.journal.db.lock().map_err(|_| failed())?;
         let tx = db.transaction().map_err(|_| failed())?;
         let (token, mut record) = read(&tx)?.ok_or_else(failed)?;
@@ -230,6 +248,10 @@ impl Attempt {
     /// Only before the native factory was entered. Missing means an already
     /// completed obligation; a creating/created obligation stays durable.
     pub(crate) fn release_unstarted(&self) -> Result<bool> {
+        let mut lease = self.lease.lock().map_err(|_| failed())?;
+        if lease.is_none() {
+            return Ok(false);
+        }
         let mut db = self.journal.db.lock().map_err(|_| failed())?;
         let tx = db.transaction().map_err(|_| failed())?;
         let Some((token, record)) = read(&tx)? else {
@@ -244,6 +266,8 @@ impl Attempt {
         tx.execute("DELETE FROM cleanup WHERE id=1 AND token=?1", [&self.token])
             .map_err(|_| failed())?;
         tx.commit().map_err(|_| failed())?;
+        drop(db);
+        lease.take();
         Ok(true)
     }
     pub(crate) fn complete(
@@ -251,6 +275,10 @@ impl Attempt {
         proof: crate::experiment_execution::CleanupProof<'_>,
     ) -> Result<()> {
         if !std::ptr::eq(self, proof.attempt()) {
+            return Err(failed());
+        }
+        let mut lease = self.lease.lock().map_err(|_| failed())?;
+        if lease.is_none() {
             return Err(failed());
         }
         let mut db = self.journal.db.lock().map_err(|_| failed())?;
@@ -265,7 +293,10 @@ impl Attempt {
         }
         tx.execute("DELETE FROM cleanup WHERE id=1 AND token=?1", [&self.token])
             .map_err(|_| failed())?;
-        tx.commit().map_err(|_| failed())
+        tx.commit().map_err(|_| failed())?;
+        drop(db);
+        lease.take();
+        Ok(())
     }
 }
 // No Drop deletion: thread unwind or Host death does not prove OS cleanup.
@@ -344,6 +375,27 @@ mod tests {
             status.error.as_deref(),
             Some("EXPERIMENT_SOURCE_CLEANUP_FAILED")
         );
+    }
+    #[test]
+    fn released_attempt_cannot_unlock_or_change_the_next_attempt() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = Journal::open(root.path()).unwrap();
+        let other = Journal::open(root.path()).unwrap();
+        let (v, o) = ids();
+        let first = journal.reserve(&v, &o).unwrap();
+        assert!(first.release_unstarted().unwrap());
+        let (v2, o2) = ids();
+        let second = other.reserve(&v2, &o2).unwrap();
+        assert!(first.before_create().is_err());
+        assert!(!first.release_unstarted().unwrap());
+        assert_eq!(journal.status().unwrap().unwrap().operation_id, o2);
+        assert_eq!(
+            journal.gate.acquire().err().unwrap().code,
+            "EXPERIMENT_CLEANUP_OWNER_ACTIVE"
+        );
+        assert!(second.release_unstarted().unwrap());
+        assert!(journal.status().unwrap().is_none());
+        assert!(journal.gate.acquire().is_ok());
     }
     #[test]
     fn corrupt_and_future_journals_fail_closed() {
