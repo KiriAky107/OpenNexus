@@ -12,13 +12,74 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
 from urllib.request import urlopen
 import uuid
+
+
+class FreshProfile:
+    """Claim a new application profile; never borrow an existing user's profile.
+
+    Keep the owned directory and marker for diagnostics. Only the pointer that
+    this instance created may be removed, and only while its identity and bytes
+    still match. There is no backup/restore path for a pre-existing pointer.
+    """
+
+    def __init__(self, appdata: Path, identifier: str, data: Path):
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z0-9][A-Za-z0-9-]*){2,}", identifier):
+            raise ValueError('Expected a plain reverse-DNS application identifier')
+        if len(identifier) > 200 or any(part.casefold() in {'con', 'prn', 'aux', 'nul',
+                *(f'com{i}' for i in range(1, 10)), *(f'lpt{i}' for i in range(1, 10))}
+                for part in identifier.split('.')):
+            raise ValueError('Unsafe application identifier')
+        root = appdata.resolve(strict=True)
+        self.path = root / identifier
+        # Atomic mkdir rejects existing files, profiles, links and competing claims.
+        try:
+            self.path.mkdir(mode=0o700)
+        except FileExistsError as error:
+            raise RuntimeError('Application profile already exists; it was left untouched. '
+                'Use a dedicated test build with a fresh application identifier.') from error
+        self.profile_identity = self.identity(self.path, directory=True)
+        self.marker = self.path / '.opennexus-native-smoke-owner'
+        self.owner = uuid.uuid4().hex.encode('ascii')
+        with self.marker.open('xb') as stream:
+            stream.write(self.owner)
+        self.marker_identity = self.identity(self.marker)
+        self.pointer = self.path / 'storage-location.json'
+        self.temporary = json.dumps({'data_root': str(data.resolve(strict=True))}).encode('utf-8')
+        with self.pointer.open('xb') as stream:
+            stream.write(self.temporary)
+        self.pointer_identity = self.identity(self.pointer)
+        self.removed = False
+
+    @staticmethod
+    def identity(path: Path, directory=False):
+        info = path.stat(follow_symlinks=False)
+        kind = stat.S_ISDIR if directory else stat.S_ISREG
+        if not kind(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+            raise RuntimeError('Test profile contains an unexpected link or object')
+        if not directory and info.st_nlink != 1:
+            raise RuntimeError('Test profile file has an unexpected hard link')
+        return info.st_dev, info.st_ino
+
+    def remove_pointer(self):
+        if self.removed:
+            return
+        if (self.identity(self.path, directory=True) != self.profile_identity
+                or self.identity(self.marker) != self.marker_identity
+                or self.marker.read_bytes() != self.owner
+                or self.identity(self.pointer) != self.pointer_identity
+                or self.pointer.read_bytes() != self.temporary):
+            raise RuntimeError('Test profile changed concurrently; all current files were preserved')
+        self.pointer.unlink()
+        self.removed = True
 
 
 def stop(process):
@@ -54,7 +115,8 @@ def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:
     running = subprocess.check_output(['powershell.exe','-NoProfile','-NonInteractive','-Command',
         "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'OpenNexus.exe' } | Select-Object -ExpandProperty ProcessId"],text=True).strip()
     if running:
-        raise RuntimeError('Close existing OpenNexus processes before isolated native validation')
+        raise RuntimeError('Existing OpenNexus processes were left running; '
+            'native validation requires a separate test session')
     work.mkdir(parents=True,exist_ok=True)
     work = work.resolve()
     # These directories are test-owned. The Host must start from the actual payload.
@@ -78,38 +140,26 @@ def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:
     clean_env = dict(os.environ,PATH=str(Path(os.environ['SystemRoot'])/'System32'))
     for name in ('PYTHONHOME','PYTHONPATH','VIRTUAL_ENV','CONDA_PREFIX'):
         clean_env.pop(name,None)
-    missing_loader_control = False
-    if dynamic_loader:
-        loader, hidden = payload/'WebView2Loader.dll', payload/'WebView2Loader.dll.native-hidden'
-        loader.rename(hidden)
-        process = None
-        mode = ctypes.windll.kernel32.SetErrorMode(0x8007)
-        try:
-            process = subprocess.Popen([str(host)],cwd=payload,env=clean_env,
-                stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
-            if process.wait(timeout=20)&0xffffffff != 0xc0000135:
-                raise RuntimeError('Dynamic Loader removal did not fail with 0xC0000135')
-            missing_loader_control = True
-        finally:
-            stop(process); hidden.rename(loader); ctypes.windll.kernel32.SetErrorMode(mode)
-    pointer = Path(os.environ['APPDATA'])/identifier/'storage-location.json'
-    pointer.parent.mkdir(parents=True,exist_ok=True)
-    original = pointer.read_bytes() if pointer.exists() else None
-    temporary = json.dumps({'data_root':str(data)}).encode('utf-8')
-    def restore():
-        current = pointer.read_bytes() if pointer.exists() else None
-        if current == temporary:
-            if original is None: pointer.unlink()
-            else: pointer.write_bytes(original)
-        elif current != original:
-            raise RuntimeError('Storage pointer changed concurrently; it was preserved for manual review')
+    profile = FreshProfile(Path(os.environ['APPDATA']), identifier, data)
     with socket.socket() as sock:
         sock.bind(('127.0.0.1',0)); debug_port = sock.getsockname()[1]
     env = dict(clean_env,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=f'--remote-debugging-port={debug_port}',
         WEBVIEW2_USER_DATA_FOLDER=str(work/'webview'))
     process = None
-    pointer.write_bytes(temporary)
+    missing_loader_control = False
     try:
+        if dynamic_loader:
+            loader, hidden = payload/'WebView2Loader.dll', payload/'WebView2Loader.dll.native-hidden'
+            loader.rename(hidden)
+            mode = ctypes.windll.kernel32.SetErrorMode(0x8007)
+            try:
+                process = subprocess.Popen([str(host)],cwd=payload,env=clean_env,
+                    stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
+                if process.wait(timeout=20)&0xffffffff != 0xc0000135:
+                    raise RuntimeError('Dynamic Loader removal did not fail with 0xC0000135')
+                missing_loader_control = True
+            finally:
+                stop(process); hidden.rename(loader); ctypes.windll.kernel32.SetErrorMode(mode)
         with (work/'native-host.log').open('wb') as log:
             process = subprocess.Popen([str(host)],cwd=payload,env=env,stdout=log,stderr=subprocess.STDOUT,
                 creationflags=subprocess.CREATE_NO_WINDOW)
@@ -139,11 +189,11 @@ def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:
                     time.sleep(.2)
                 storage = page.evaluate("()=>smokeInvoke('storage_info')")
                 experiments = page.evaluate("()=>smokeInvoke('host_capabilities')").get('experiments', {})
-                if not experiments.get('runtime_available') or experiments.get('enabled') is not False:
+                if not experiments.get('runtime_available') or experiments.get('enabled') is not True:
                     raise RuntimeError('Host did not discover the verified packaged experiment runtime')
                 if str(data).casefold().replace('/','\\') not in json.dumps(storage).casefold().replace('\\\\','\\'):
                     raise RuntimeError('Host did not use private test storage')
-                restore()
+                profile.remove_pointer()
                 if page.evaluate("()=>smokeApi('/api/status')")['version'] != version:
                     raise RuntimeError('Packaged Core version does not match manifest')
                 page.evaluate("async path=>{await smokePinia._s.get('workspace').openVault(path);await smokeRouter.push('/workspace')}",str(vault))
@@ -164,9 +214,10 @@ def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:
         return {'passed':True,'version':version,'host_sha256':digest(host),
             'os':platform.win32_ver(),'os_build':sys.getwindowsversion().build,'architecture':platform.machine(),
             'webview':debug.get('Browser'),'sdk_paths_removed':True,'private_storage_verified':True,
-            'storage_pointer_restored':True,'vault_documents_unchanged':True,
+            'fresh_application_profile':True,'existing_profile_touched':False,
+            'storage_pointer_removed':profile.removed,'vault_documents_unchanged':True,
             'packaged_experiment_runtime':experiments,
             'missing_loader_negative_control':missing_loader_control if dynamic_loader else 'not applicable: static Loader',
             'scope':'Extracted payload startup and exit; no installer/upgrade/uninstall or missing-Runtime validation'}
     finally:
-        stop(process);restore()
+        stop(process);profile.remove_pointer()

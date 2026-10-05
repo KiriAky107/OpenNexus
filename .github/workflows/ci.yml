@@ -23,6 +23,7 @@ jobs:
       - run: git diff --check
       - run: python3 scripts/check-doc-links.py
       - run: python3 scripts/test_verify_experiment_package.py
+      - run: python3 scripts/test_windows_native_smoke.py
       - run: python3 scripts/check-release-notes.py
       - uses: actions/setup-python@v7
         with:
