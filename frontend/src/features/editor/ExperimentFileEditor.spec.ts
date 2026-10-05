@@ -58,6 +58,19 @@ describe('experiment code editor', () => {
     expect(editor.saveStatus).toBe('saved')
   })
 
+  it('uses the advertised Ctrl+Shift+Z redo shortcut and keeps Ctrl+Y on Windows', () => {
+    const original = 'print("中文")\r\n', changed = original + '# 原生输入中文😀'
+    const { editor } = setup('/experiments/课程/示例 #%.py', original)
+    const target = view(); replace(changed)
+    const key = (value: string, shift = false) => target.contentDOM.dispatchEvent(
+      new KeyboardEvent('keydown', { key: value, code: `Key${value.toUpperCase()}`, keyCode: value.toUpperCase().charCodeAt(0), ctrlKey: true, shiftKey: shift, bubbles: true, cancelable: true }),
+    )
+    key('z'); expect(editor.content).toBe(original)
+    key('Z', true); expect(editor.content).toBe(changed)
+    key('z'); expect(editor.content).toBe(original)
+    key('y'); expect(editor.content).toBe(changed)
+  })
+
   it('cancels a pending disk save and waits until Chinese composition ends', async () => {
     const { editor, autosave } = setup('/experiments/中文.py', 'print("")\r\n')
     vi.useFakeTimers(); autosave.mockRestore()

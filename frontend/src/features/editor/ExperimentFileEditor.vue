@@ -57,7 +57,7 @@ onMounted(() => {
     return
   }
   view = new EditorView({ parent: root.value!, state: EditorState.create({ doc: editor.content, extensions: [
-    history(), keymap.of([...defaultKeymap, ...historyKeymap, ...foldKeymap, indentWithTab]),
+    history(), keymap.of([{ key: 'Mod-Shift-z', run: redo, preventDefault: true }, ...defaultKeymap, ...historyKeymap, ...foldKeymap, indentWithTab]),
     lineNumbers(), drawSelection(), highlightActiveLine(), foldGutter(), bracketMatching(), indentOnInput(), indentUnit.of('    '),
     language, syntaxHighlighting(highlighting), labels.of(attributes()),
     access.of([EditorState.readOnly.of(locked.value), EditorView.editable.of(!locked.value)]),
