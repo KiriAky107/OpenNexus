@@ -8,6 +8,7 @@ mod credential_autounlock;
 pub mod credentials;
 #[cfg(windows)]
 pub mod experiment_cleanup;
+#[cfg(any(windows, test))]
 mod experiment_cleanup_lease;
 mod experiment_contract;
 #[cfg(windows)]
