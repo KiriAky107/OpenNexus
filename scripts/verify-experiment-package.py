@@ -99,6 +99,74 @@ def verify_sources_receipt(basic: dict, sources: dict) -> None:
             raise ValueError('Native selected source operation was not denied: ' + key)
 
 
+def verify_worker_receipt(receipt: dict, runtime: Path, lock: dict) -> None:
+    """Require real formal-worker results, not merely successful process creation."""
+    expected = {
+        'basic': ('completed', None), 'logs': ('completed', None),
+        'nonzero': ('failed', 'EXPERIMENT_NONZERO_EXIT'),
+        'cancel': ('cancelled', 'EXPERIMENT_CANCELLED'),
+        'switch': ('cancelled', 'EXPERIMENT_CANCELLED'),
+        'wall': ('limited', 'EXTENSION_TOOL_DEADLINE_EXCEEDED'),
+        'cpu': ('limited', 'EXTENSION_RESOURCE_CPU_EXCEEDED'),
+    }
+    if (type(receipt['schema_version']) is not int or receipt['schema_version'] != 1
+            or receipt['runtime_id'] != lock['runtime_id'] or set(receipt['runs']) != set(expected)):
+        raise ValueError('Formal worker receipt is incomplete or from another runtime')
+    for mode, (outcome, error) in expected.items():
+        item = receipt['runs'][mode]
+        result = item['result']
+        if (type(item['remaining_processes']) is not int or item['remaining_processes'] != 0
+                or item['runtime']['runtime_id'] != lock['runtime_id']
+                or item['runtime']['version'] != lock['version']
+                or type(item['runtime']['files']) is not int or item['runtime']['files'] <= 0
+                or result['outcome'] != outcome or result['error'] != error):
+            raise ValueError('Formal worker has an invalid terminal result: ' + mode)
+        for field in ('elapsed_ms', 'user_cpu_ticks', 'peak_memory_bytes', 'final_disk_bytes'):
+            if type(result[field]) is not int or result[field] < 0:
+                raise ValueError('Formal worker has unknown or invalid accounting: ' + mode)
+        if result['elapsed_ms'] == 0 or result['peak_memory_bytes'] == 0:
+            raise ValueError('Formal worker is missing real measurements: ' + mode)
+        code = result['exit_code']
+        if ((mode in ('basic', 'logs') and (type(code) is not int or code != 0))
+                or (mode == 'nonzero' and (type(code) is not int or code != 7))
+                or (mode in ('cancel', 'switch', 'wall', 'cpu')
+                    and code is not None and (type(code) is not int or code == 0))):
+            raise ValueError('Formal worker exit code disagrees with the outcome: ' + mode)
+        for stream in ('stdout', 'stderr'):
+            log = result['logs'][stream]
+            if (log['complete'] is not True or log['read_error'] is not False
+                    or log['invalid_utf8'] is not False or type(log['truncated']) is not bool
+                    or type(log['bytes_seen']) is not int or type(log['retained_bytes']) is not int
+                    or not 0 <= log['retained_bytes'] <= min(8192, log['bytes_seen'])
+                    or not isinstance(log['text'], str)
+                    or len(log['text'].encode('utf-8')) != log['retained_bytes']):
+                raise ValueError('Formal worker did not drain bounded logs: ' + mode)
+        if mode in ('cancel', 'switch') and 'child-ready' not in result['logs']['stdout']['text']:
+            raise ValueError('Formal worker cancellation did not cover a real child: ' + mode)
+        if mode == 'logs':
+            for stream, log in result['logs'].items():
+                # CPython can also emit startup diagnostics on stderr. Count
+                # them honestly while requiring the complete fixture payload.
+                if ((stream == 'stdout' and log['bytes_seen'] != 2 * 1024 * 1024)
+                        or log['bytes_seen'] < 2 * 1024 * 1024 or log['truncated'] is not True):
+                    raise ValueError('Formal worker did not retain real truncated stream evidence')
+        if mode == 'cpu' and result['user_cpu_ticks'] < 10_000_000:
+            raise ValueError('Formal worker CPU limit was not measured as user CPU time')
+        if mode == 'wall' and result['elapsed_ms'] < 1000:
+            raise ValueError('Formal worker wall timer did not cover its configured interval')
+    text = receipt['runs']['basic']['result']['logs']['stdout']['text']
+    lines = [line.removeprefix('WORKER_REPORT:') for line in text.splitlines()
+             if line.startswith('WORKER_REPORT:')]
+    if len(lines) != 1:
+        raise ValueError('Formal worker is missing its real interpreter positive control')
+    report = json.loads(lines[0])
+    if (report['runtime'] != lock['version'] or not Path(report['executable']).samefile(runtime / lock['entrypoint'])
+            or type(report['isolated']) is not int or report['isolated'] != 1 or report['argv'] != []
+            or report['parent_environment_inherited'] is not False or report['input_write_denied'] is not True
+            or type(report['csv_total']) is not int or report['csv_total'] != 18 or report['first_name'] != '中文'):
+        raise ValueError('Formal worker did not verify the extracted interpreter and selected inputs')
+
+
 def native_probe(payload: Path, target: str, evidence: Path) -> dict:
     """Build a test driver, then launch it with system-only PATH and package assets.
 
@@ -157,6 +225,9 @@ def native_probe(payload: Path, target: str, evidence: Path) -> dict:
     receipts[name] = hashlib.sha256((evidence / name).read_bytes()).hexdigest()
     name = 'bound-runtime-result.json'
     verify_bound_receipt(json.loads((evidence / name).read_bytes()), runtime, lock)
+    receipts[name] = hashlib.sha256((evidence / name).read_bytes()).hexdigest()
+    name = 'worker-runtime-result.json'
+    verify_worker_receipt(json.loads((evidence / name).read_bytes()), runtime, lock)
     receipts[name] = hashlib.sha256((evidence / name).read_bytes()).hexdigest()
     return {'system_only_path': True, 'runtime_source': 'extracted-installer',
             'native_signatures_verified': len(signature_items),

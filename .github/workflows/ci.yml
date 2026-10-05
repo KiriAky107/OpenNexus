@@ -151,5 +151,6 @@ jobs:
             .build/experiment-runtime/storage-audit-result.json
             .build/experiment-runtime/write-io-result.json
             .build/experiment-runtime/bound-runtime-result.json
+            .build/experiment-runtime/worker-runtime-result.json
             .build/experiment-runtime/signatures.json
           if-no-files-found: warn

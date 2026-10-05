@@ -108,6 +108,82 @@ class PackageRuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, key):
                 package.verify_sources_receipt(changed, sources)
 
+    def test_formal_worker_requires_real_results_complete_logs_and_empty_process_tree(self):
+        with tempfile.TemporaryDirectory(dir=self.staging, prefix='worker-receipt-') as directory:
+            runtime, manifest = self.fixture(Path(directory))
+            lock = json.loads(manifest)['lock']
+            def log(text='', seen=None, truncated=False):
+                retained = len(text.encode('utf-8'))
+                return dict(text=text, retained_bytes=retained,
+                            bytes_seen=retained if seen is None else seen,
+                            complete=True, read_error=False, invalid_utf8=False, truncated=truncated)
+            runs = {}
+            for mode, outcome, error, code in (
+                    ('basic', 'completed', None, 0), ('logs', 'completed', None, 0),
+                    ('nonzero', 'failed', 'EXPERIMENT_NONZERO_EXIT', 7),
+                    ('cancel', 'cancelled', 'EXPERIMENT_CANCELLED', 1),
+                    ('switch', 'cancelled', 'EXPERIMENT_CANCELLED', None),
+                    ('wall', 'limited', 'EXTENSION_TOOL_DEADLINE_EXCEEDED', None),
+                    ('cpu', 'limited', 'EXTENSION_RESOURCE_CPU_EXCEEDED', 1)):
+                runs[mode] = dict(remaining_processes=0,
+                    runtime=dict(runtime_id=lock['runtime_id'], version=lock['version'], files=3),
+                    result=dict(outcome=outcome, error=error, exit_code=code, elapsed_ms=1100,
+                        user_cpu_ticks=10_000_000, peak_memory_bytes=1000000, final_disk_bytes=0,
+                        logs=dict(stdout=log(), stderr=log())))
+            for mode in ('cancel', 'switch'):
+                runs[mode]['result']['logs']['stdout'] = log('child-ready\r\n')
+            for stream in ('stdout', 'stderr'):
+                runs['logs']['result']['logs'][stream] = log('A' * 8192, 2 * 1024 * 1024, True)
+            report = dict(executable=str(runtime / lock['entrypoint']), runtime=lock['version'], isolated=1,
+                          argv=[], parent_environment_inherited=False, input_write_denied=True,
+                          csv_total=18, first_name='中文')
+            runs['basic']['result']['logs']['stdout'] = log('WORKER_REPORT:' + json.dumps(report) + '\r\n')
+            receipt = dict(schema_version=1, runtime_id=lock['runtime_id'], runs=runs)
+            package.verify_worker_receipt(receipt, runtime, lock)
+            diagnostic = copy.deepcopy(receipt)
+            diagnostic['runs']['logs']['result']['logs']['stderr']['bytes_seen'] += 129
+            package.verify_worker_receipt(diagnostic, runtime, lock)
+            cases = [
+                (('schema_version',), True), (('runtime_id',), 'other'),
+                (('runs', 'basic', 'remaining_processes'), False),
+                (('runs', 'switch', 'remaining_processes'), 1),
+                (('runs', 'nonzero', 'result', 'outcome'), 'completed'),
+                (('runs', 'nonzero', 'result', 'exit_code'), 0),
+                (('runs', 'cpu', 'result', 'user_cpu_ticks'), 0),
+                (('runs', 'wall', 'result', 'elapsed_ms'), 500),
+                (('runs', 'basic', 'result', 'peak_memory_bytes'), None),
+                (('runs', 'basic', 'result', 'final_disk_bytes'), False),
+                (('runs', 'basic', 'runtime', 'version'), 'other'),
+                (('runs', 'cancel', 'result', 'logs', 'stdout'), log()),
+                (('runs', 'logs', 'result', 'logs', 'stderr', 'truncated'), False),
+                (('runs', 'logs', 'result', 'logs', 'stdout', 'complete'), False),
+                (('runs', 'logs', 'result', 'logs', 'stdout', 'read_error'), True),
+            ]
+            for path, value in cases:
+                with self.subTest(path=path, value=value):
+                    changed = copy.deepcopy(receipt)
+                    parent = changed
+                    for key in path[:-1]:
+                        parent = parent[key]
+                    parent[path[-1]] = value
+                    with self.assertRaises(ValueError):
+                        package.verify_worker_receipt(changed, runtime, lock)
+            missing = copy.deepcopy(receipt)
+            missing['runs'].pop('switch')
+            with self.assertRaises(ValueError):
+                package.verify_worker_receipt(missing, runtime, lock)
+            wrong = runtime / 'other.exe'
+            wrong.write_bytes(b'not the bundled interpreter')
+            for field, value in (('executable', str(wrong)), ('argv', ['-c', 'unapproved']),
+                                 ('parent_environment_inherited', True), ('input_write_denied', False),
+                                 ('isolated', True), ('first_name', 'wrong'), ('csv_total', 19)):
+                with self.subTest(report=field):
+                    changed = copy.deepcopy(receipt)
+                    altered = dict(report, **{field: value})
+                    changed['runs']['basic']['result']['logs']['stdout'] = log('WORKER_REPORT:' + json.dumps(altered))
+                    with self.assertRaises(ValueError):
+                        package.verify_worker_receipt(changed, runtime, lock)
+
     def test_write_receipt_requires_cumulative_limit_and_complete_tree_cleanup(self):
         with tempfile.TemporaryDirectory(dir=self.staging, prefix='write-receipt-') as directory:
             runtime, manifest = self.fixture(Path(directory))
