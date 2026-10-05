@@ -32,11 +32,27 @@ impl<'a> RunSources<'a> {
     /// Uses only already claimed, revalidated Host bytes and Host's fresh temp
     /// directory. No renderer-provided absolute path or existing tree is used.
     pub fn create(run: &'a ClaimedRun) -> Result<Self> {
+        Self::create_inner(run, None)
+    }
+    pub(crate) fn create_for_execution(
+        run: &'a ClaimedRun,
+        attempt: &crate::experiment_cleanup::Attempt,
+    ) -> Result<Self> {
+        Self::create_inner(run, Some(attempt))
+    }
+    fn create_inner(
+        run: &'a ClaimedRun,
+        attempt: Option<&crate::experiment_cleanup::Attempt>,
+    ) -> Result<Self> {
         let bad = || HostError::new("EXPERIMENT_SOURCE_BINDING_FAILED");
         let temporary = tempfile::Builder::new()
             .prefix("opennexus-experiment-input-")
             .tempdir()
             .map_err(|_| bad())?;
+        // Record the actual Host-created root before copying or granting bytes.
+        if let Some(attempt) = attempt {
+            attempt.source_created(temporary.path())?;
+        }
         let root = Dir::open_ambient_dir(temporary.path(), cap_std::ambient_authority())
             .map_err(|_| bad())?;
         let summary = run.inputs().summary();
@@ -87,9 +103,15 @@ impl<'a> RunSources<'a> {
             run: _,
         } = self;
         drop(package);
+        let root = temporary.path().to_owned();
         temporary
             .close()
-            .map_err(|_| HostError::new("EXPERIMENT_SOURCE_CLEANUP_FAILED"))
+            .map_err(|_| HostError::new("EXPERIMENT_SOURCE_CLEANUP_FAILED"))?;
+        if !matches!(std::fs::symlink_metadata(root),Err(e) if e.kind()==std::io::ErrorKind::NotFound)
+        {
+            return Err(HostError::new("EXPERIMENT_SOURCE_CLEANUP_FAILED"));
+        }
+        Ok(())
     }
     #[cfg(test)]
     pub(crate) fn test_root(&self) -> &Path {

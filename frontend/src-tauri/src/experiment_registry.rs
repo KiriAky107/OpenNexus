@@ -31,6 +31,44 @@ impl Drop for Allocation {
 pub(crate) struct ReadOnlyRegistry {
     _keys: Vec<Key>,
 }
+/// Read only the exact name reserved by this experiment. Absence is stronger
+/// than an OS delete return value; denial or an inspection error is unknown.
+pub(crate) fn profile_is_absent(name: &str) -> Result<bool> {
+    let bad = || HostError::new("EXPERIMENT_PROFILE_CLEANUP_INCOMPLETE");
+    if !name.starts_with("OpenNexus.sandbox.")
+        || name.len() != "OpenNexus.sandbox.".len() + 32
+        || !name["OpenNexus.sandbox.".len()..]
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(bad());
+    }
+    let mut raw = std::ptr::null_mut();
+    if unsafe { RegOpenCurrentUser(KEY_READ, &mut raw) } != 0 || raw.is_null() {
+        return Err(bad());
+    }
+    let user = Key(raw as usize);
+    let path:Vec<u16>=format!("Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppContainer\\Storage\\{name}").encode_utf16().chain(Some(0)).collect();
+    raw = std::ptr::null_mut();
+    let status = unsafe {
+        RegOpenKeyExW(
+            user.raw(),
+            path.as_ptr(),
+            REG_OPTION_OPEN_LINK,
+            KEY_READ | KEY_WOW64_64KEY,
+            &mut raw,
+        )
+    };
+    if !raw.is_null() {
+        drop(Key(raw as usize));
+    }
+    match status {
+        windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND
+        | windows_sys::Win32::Foundation::ERROR_PATH_NOT_FOUND => Ok(true),
+        0 => Ok(false),
+        _ => Err(bad()),
+    }
+}
 impl ReadOnlyRegistry {
     /// The name and SID come exclusively from a successfully created Profile.
     /// A caller cannot choose another profile or redirect the current user hive.

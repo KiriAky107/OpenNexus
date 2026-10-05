@@ -20,7 +20,7 @@ impl Profile {
             uuid::Uuid::new_v4().simple()
         ))
     }
-    fn create_named(name: String) -> Result<Self> {
+    pub(crate) fn create_named(name: String) -> Result<Self> {
         let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
         let mut sid = std::ptr::null_mut();
         let status = unsafe {

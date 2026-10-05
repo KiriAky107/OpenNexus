@@ -1,5 +1,6 @@
 //! Closed Windows execution path. No request can supply argv, env or a shell.
 use crate::{
+    experiment_cleanup::Attempt,
     experiment_disk::DiskBudget,
     experiment_log::{CaptureSnapshot, LogBuffer, LogCapture},
     experiment_outputs::{CollectedOutputs, OutputReport},
@@ -39,8 +40,20 @@ pub struct ExecutionResult {
     pub remaining_processes: u32,
     pub runtime: RuntimeInfo,
     pub profile_removed: bool,
+    pub profile_registry_removed: bool,
+    pub cleanup_complete: bool,
     #[serde(skip)]
     pub(crate) outputs: Option<CollectedOutputs>,
+}
+// Closed proof: only this execution module can attest to the whole stopped
+// Job, revoked borrowed grants and physically removed owned roots.
+pub(crate) struct CleanupProof<'a> {
+    attempt: &'a Attempt,
+}
+impl CleanupProof<'_> {
+    pub(crate) fn attempt(&self) -> &Attempt {
+        self.attempt
+    }
 }
 struct Bindings<'a> {
     runtime: &'a PinnedRuntime,
@@ -191,30 +204,46 @@ fn current_workspace(owner: &RunOwner, workspace: &WorkspaceSlot) -> Result<()> 
 
 /// Call inside the owned run worker. Inventory comes from the Host build and
 /// resource directory; caller metadata cannot pick another executable/module.
-pub fn execute(
+pub(crate) fn execute(
     owner: &RunOwner,
+    attempt: &Attempt,
     resource_root: &Path,
     workspace: &WorkspaceSlot,
     live: impl FnMut(LiveRun),
 ) -> Result<ExecutionResult> {
     let runtime = PinnedRuntime::open(resource_root)?;
-    execute_pinned(owner, &runtime, workspace, live)
+    execute_pinned(owner, attempt, &runtime, workspace, live)
 }
 fn execute_pinned(
     owner: &RunOwner,
+    attempt: &Attempt,
     runtime: &PinnedRuntime,
     workspace: &WorkspaceSlot,
     mut live: impl FnMut(LiveRun),
 ) -> Result<ExecutionResult> {
     let started = Instant::now();
     let limits = owner.run().record().summary.request.limits.validate()?;
-    let profile = Profile::create()?; // Created and destroyed on this same worker.
-    let sources = RunSources::create(owner.run())?;
+    // Durable intent precedes the OS factory. A collision or unknown creation
+    // result never transfers ownership of an existing profile.
+    attempt.before_create()?;
+    let profile = Profile::create_named(attempt.profile_name().into())?;
+    let folder = profile.folder()?;
+    attempt.created(
+        folder
+            .parent()
+            .ok_or_else(|| HostError::new("EXPERIMENT_CLEANUP_JOURNAL_FAILED"))?,
+    )?;
+    let sources = RunSources::create_for_execution(owner.run(), attempt)?;
     let runtime_entry = runtime.bind_entry()?;
+    attempt.runtime_bound(
+        runtime_entry
+            .launch_path()
+            .parent()
+            .ok_or_else(|| HostError::new("EXPERIMENT_CLEANUP_JOURNAL_FAILED"))?,
+    )?;
     let source_entry = sources.entry()?;
     let runtime_access = runtime.access(&profile)?;
     let source_access = sources.access(&profile)?;
-    let folder = profile.folder()?;
     let data = LaunchData::new(
         runtime_entry.launch_path(),
         &[
@@ -375,31 +404,47 @@ fn execute_pinned(
     drop(source_entry);
     let cleanup = cleanup.and(sources.finish());
     let cleanup = cleanup.and(profile.remove());
+    let resources_clean = cleanup.is_ok();
     if let Err(cause) = cleanup {
         result.outcome = Outcome::Failed;
         result.error = Some(cause.code);
     }
     let profile_removed = matches!(std::fs::symlink_metadata(&profile_root),Err(error) if error.kind()==std::io::ErrorKind::NotFound);
-    if !profile_removed {
+    let profile_registry_removed =
+        crate::experiment_registry::profile_is_absent(attempt.profile_name()).unwrap_or(false);
+    if !profile_removed || !profile_registry_removed {
         result.outcome = Outcome::Failed;
         result.error = Some("EXPERIMENT_PROFILE_CLEANUP_INCOMPLETE".into());
+    }
+    let mut cleanup_complete = false;
+    if resources_clean && profile_removed && profile_registry_removed {
+        match attempt.complete(CleanupProof { attempt }) {
+            Ok(()) => cleanup_complete = true,
+            Err(cause) => {
+                result.outcome = Outcome::Failed;
+                result.error = Some(cause.code);
+            }
+        }
     }
     Ok(ExecutionResult {
         result,
         remaining_processes,
         runtime: runtime.info().clone(),
         profile_removed,
+        profile_registry_removed,
+        cleanup_complete,
         outputs,
     })
 }
 #[cfg(test)]
 pub(crate) fn execute_for_probe(
     owner: &RunOwner,
+    attempt: &Attempt,
     runtime_root: &Path,
     workspace: &WorkspaceSlot,
     live: impl FnMut(LiveRun),
 ) -> Result<ExecutionResult> {
     let expected = std::fs::read_to_string(runtime_root.join("runtime.json"))?;
     let runtime = PinnedRuntime::pin_for_probe(runtime_root, &expected)?;
-    execute_pinned(owner, &runtime, workspace, live)
+    execute_pinned(owner, attempt, &runtime, workspace, live)
 }

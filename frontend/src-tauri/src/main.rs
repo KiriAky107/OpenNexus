@@ -1342,6 +1342,15 @@ fn main() {
             app.manage(import);
             app.set_menu(Menu::with_items(app, &[&paragraph])?)?;
             let default_data_root = app.path().app_data_dir()?;
+            #[cfg(windows)]
+            if let Err(error) = app
+                .state::<Host>()
+                .experiments
+                .initialize_cleanup(&default_data_root)
+            {
+                // Experiments fail closed; other application features still open.
+                eprintln!("Experiment cleanup journal unavailable: {}", error.code);
+            }
             let storage_config_path = app.path().app_config_dir()?.join("storage-location.json");
             let configured_data_root = std::fs::read(&storage_config_path)
                 .ok()

@@ -1,5 +1,6 @@
 //! Owned background workers and durable experiment lifecycle. No Core RPC.
 use crate::{
+    experiment_cleanup::{CleanupStatus, Journal},
     experiment_execution::{self, LiveRun, WorkspaceSlot},
     experiment_input::{fingerprint, PreparedInputs, RunRequest},
     experiment_owner::RunOwner,
@@ -24,6 +25,7 @@ struct Worker {
 }
 #[derive(Default)]
 pub struct Runner {
+    cleanup: std::sync::OnceLock<std::result::Result<Arc<Journal>, String>>,
     worker: Mutex<Option<Worker>>,
     live: Arc<Mutex<Option<LiveRun>>>,
     shutdown: AtomicBool,
@@ -48,6 +50,33 @@ fn with_workspace<T>(
         .ok_or_else(|| HostError::new("VAULT_NOT_OPEN"))?)
 }
 impl Runner {
+    /// Fixed Host default storage, initialized once. Relocating vaults or the
+    /// configurable data root cannot bypass an existing cleanup obligation.
+    pub fn initialize_cleanup(&self, host_root: &std::path::Path) -> Result<()> {
+        let _initialization = self.worker.lock().map_err(|_| busy())?;
+        if self.cleanup.get().is_some() {
+            return Err(HostError::new("HOST_ALREADY_INITIALIZED"));
+        }
+        let journal = Journal::open(host_root).map_err(|e| e.code);
+        let error = journal.as_ref().err().cloned();
+        self.cleanup
+            .set(journal)
+            .map_err(|_| HostError::new("HOST_ALREADY_INITIALIZED"))?;
+        match error {
+            Some(code) => Err(HostError::new(&code)),
+            None => Ok(()),
+        }
+    }
+    fn cleanup_journal(&self) -> Result<&Arc<Journal>> {
+        self.cleanup
+            .get()
+            .ok_or_else(|| HostError::new("EXPERIMENT_HOST_NOT_READY"))?
+            .as_ref()
+            .map_err(|code| HostError::new(code))
+    }
+    pub fn cleanup_status(&self) -> Result<Option<CleanupStatus>> {
+        self.cleanup_journal()?.status()
+    }
     /// Retries find the existing operation before touching possibly moved or
     /// edited source files. New metadata cannot replace the existing proposal.
     pub fn prepare(&self, workspace: &WorkspaceSlot, request: &RunRequest) -> Result<RunRecord> {
@@ -130,12 +159,23 @@ impl Runner {
         if let Some(previous) = worker.take() {
             let _ = previous.handle.join();
         }
-        let owner = Arc::new(with_workspace(&workspace, |ws| {
-            RunOwner::claim(ws, operation)
-        })?);
+        let journal = self.cleanup_journal()?;
+        let (owner, attempt) = with_workspace(&workspace, |ws| {
+            // Gate before consuming user approval. A different vault or new
+            // Runner cannot discard the previous Host's durable obligation.
+            let attempt = journal.reserve(&ws.vault_id, operation)?;
+            match RunOwner::claim(ws, operation) {
+                Ok(owner) => Ok((Arc::new(owner), attempt)),
+                Err(error) => {
+                    attempt.release_unstarted()?;
+                    Err(error)
+                }
+            }
+        })?;
         let record = owner.run().record().clone();
         let started = Instant::now();
         let child_owner = Arc::clone(&owner);
+        let child_attempt = Arc::clone(&attempt);
         let child_workspace = Arc::clone(&workspace);
         let live = Arc::clone(&self.live);
         #[cfg(test)]
@@ -154,6 +194,7 @@ impl Runner {
                     match runtime {
                         Runtime::Bundled(root) => experiment_execution::execute(
                             &child_owner,
+                            &child_attempt,
                             &root,
                             &child_workspace,
                             emit,
@@ -161,13 +202,14 @@ impl Runner {
                         #[cfg(test)]
                         Runtime::Probe(root) => experiment_execution::execute_for_probe(
                             &child_owner,
+                            &child_attempt,
                             &root,
                             &child_workspace,
                             emit,
                         ),
                     }
                 }));
-                let (result, outputs) = match executed {
+                let (mut result, outputs) = match executed {
                     Ok(Ok(mut execution)) => {
                         let outputs = execution.outputs.take();
                         #[cfg(test)]
@@ -196,6 +238,15 @@ impl Runner {
                         None,
                     ),
                 };
+                // Preflight failures are known not to have entered the native
+                // factory. All later failures/unwinds keep the durable gate.
+                if let Err(cause) = child_attempt.release_unstarted() {
+                    result.outcome = crate::experiment_store::Outcome::Failed;
+                    result.error = Some(cause.code);
+                }
+                if let Some(code) = &result.error {
+                    let _ = child_attempt.note_error(code);
+                }
                 let finished = with_workspace(&child_workspace, |ws| {
                     let old = ws
                         .experiment_record(
@@ -220,19 +271,23 @@ impl Runner {
                 if let Ok(mut latest) = live.lock() {
                     *latest = None;
                 }
-                // The last owner releases the global slot only after all native,
-                // ACL/temp and durable result cleanup above has completed.
+                // Release after the native Job has stopped and persistence was
+                // attempted. Unproven resource cleanup retains the durable gate.
                 finished
             });
         let handle = match handle {
             Ok(handle) => handle,
             Err(_) => {
+                let code = attempt
+                    .release_unstarted()
+                    .err()
+                    .map_or_else(|| "EXPERIMENT_WORKER_START_FAILED".to_owned(), |e| e.code);
                 let result = experiment_execution::failure(
-                    "EXPERIMENT_WORKER_START_FAILED".into(),
+                    code.clone(),
                     started.elapsed().as_millis() as u64,
                 );
                 let _ = with_workspace(&workspace, |ws| owner.finish(ws, result));
-                return Err(HostError::new("EXPERIMENT_WORKER_START_FAILED"));
+                return Err(HostError::new(&code));
             }
         };
         *worker = Some(Worker {
@@ -415,7 +470,9 @@ mod tests {
     #[test]
     fn no_approval_no_launch_and_missing_bundle_records_real_failure() {
         let _serial = crate::experiment_owner::TEST_EXECUTION_LOCK.lock().unwrap();
+        let host_root = tempfile::tempdir().unwrap();
         let runner = Runner::default();
+        runner.initialize_cleanup(host_root.path()).unwrap();
         let (_root, workspace, request) = fixture("print(1)", ExecutionLimits::default());
         let waiting = runner.prepare(&workspace, &request).unwrap();
         assert!(runner
@@ -520,7 +577,9 @@ mod tests {
                 ..Default::default()
             };
             let (vault, workspace, request) = fixture(&script, limits);
+            let host_root = tempfile::tempdir().unwrap();
             let runner = Runner::default();
+            runner.initialize_cleanup(host_root.path()).unwrap();
             let waiting = runner.prepare(&workspace, &request).unwrap();
             runner
                 .confirm_from_user(

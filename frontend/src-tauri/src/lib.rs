@@ -6,6 +6,8 @@ pub mod core_update;
 #[cfg(windows)]
 mod credential_autounlock;
 pub mod credentials;
+#[cfg(windows)]
+pub mod experiment_cleanup;
 mod experiment_contract;
 #[cfg(windows)]
 pub mod experiment_execution;
