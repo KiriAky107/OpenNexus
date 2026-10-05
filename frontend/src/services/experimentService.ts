@@ -17,6 +17,7 @@ export interface HistoryCursor { vault_id: string; created_ms: number; operation
 export interface HistoryItem { operation_id: string; fingerprint: string; entry: SelectedFile; runtime_id: string; state: RunState; created_ms: number; error: string | null; elapsed_ms: number | null; exit_code: number | null; output_files: number | null }
 export interface Page<T> { items: T[]; next_cursor: HistoryCursor | null }
 export interface Status { available: boolean; runtime: { runtime_id: string; version: string } | null; limits: Limits; error: string | null; cleanup: { operation_id: string; phase: string; error: string | null } | null }
+export interface CleanupReview { fingerprint: string; operation_id: string; phase: string; profile_present: boolean; temporary_objects: number; borrowed_objects: number }
 export interface LiveRun { operation_id: string; elapsed_ms: number; logs: Logs }
 export interface TextPreview { text: string; truncated: boolean; lines_shown: number }
 export interface SourcePreview { source: SelectedFile; bytes: number; current_path: string | null; preview: TextPreview }
@@ -65,6 +66,14 @@ export function errorText(error: unknown): string {
     EXPERIMENT_INPUT_CHANGED: t('源文件或输入已经变化，请重新准备运行。', 'Source or inputs changed. Prepare a new run.'),
     EXPERIMENT_IMPORT_TARGET_CHANGED: t('目标文件已变化。请核对当前内容并准备新的导入。', 'A destination changed. Review its current content and prepare a new import.'),
     EXPERIMENT_CLEANUP_REQUIRED: t('上次运行仍有待核对的清理记录，暂时不能启动新的实验。', 'A previous run has cleanup awaiting verification. New experiments are currently blocked.'),
+    EXPERIMENT_CLEANUP_OWNER_ACTIVE: t('清理资源仍由运行中的应用持有，请等待实验结束后再核对。', 'Cleanup resources are still held by a running app. Review again after the experiment finishes.'),
+    EXPERIMENT_CLEANUP_JOB_ACTIVE: t('实验进程尚未全部退出，请停止运行后再核对。', 'Experiment processes have not all exited. Stop the run and review again.'),
+    EXPERIMENT_CLEANUP_UNVERIFIED: t('此记录缺少可核对的原始归属信息，不能自动清理。记录已保留。', 'This record lacks verifiable original ownership. Automatic cleanup is unavailable; the record is retained.'),
+    EXPERIMENT_CLEANUP_JOB_UNVERIFIED: t('暂时无法核对实验进程是否已退出，清理记录已保留。', 'Experiment process termination could not be verified. The cleanup record is retained.'),
+    EXPERIMENT_CLEANUP_OBJECT_CHANGED: t('临时资源的位置、身份或权限已变化，清理已停止，记录已保留。', 'A temporary resource changed location, identity or permissions. Cleanup stopped and its record is retained.'),
+    EXPERIMENT_CLEANUP_REVIEW_CHANGED: t('待清理资源已变化，请重新核对后确认。', 'The cleanup scope changed. Review it again before confirming.'),
+    EXPERIMENT_CLEANUP_JOURNAL_FAILED: t('清理记录暂时无法保存，请重新核对后重试。', 'The cleanup record could not be saved. Review again and retry.'),
+    EXPERIMENT_SOURCE_CLEANUP_FAILED: t('部分临时文件无法删除，请检查占用或只读限制后重新核对。清理记录已保留。', 'Some temporary files could not be removed. Check open handles or read-only restrictions and review again. The cleanup record is retained.'),
     EXPERIMENT_RUNTIME_UNAVAILABLE: t('当前应用未找到已验证的随包运行时。', 'The verified bundled runtime is unavailable.'),
     EXPERIMENT_PLATFORM_UNAVAILABLE: t('此平台暂不支持隔离实验运行。', 'Isolated experiment execution is unavailable on this platform.'),
     EXPERIMENT_RUN_BUSY: t('已有实验运行中，请等待结束或停止该运行。', 'An experiment is already running. Wait for it or stop it.'),

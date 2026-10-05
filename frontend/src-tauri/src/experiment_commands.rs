@@ -18,6 +18,10 @@ pub struct Request {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Action {
     Status {},
+    CleanupReview {},
+    RecoverCleanup {
+        fingerprint: String,
+    },
     Prepare {
         request: RunRequest,
     },
@@ -195,6 +199,29 @@ fn dispatch(
                     .prepare(&host.workspace, &request)
                     .map_err(|e| e.code)?,
             )
+        }
+        Action::CleanupReview {} => encoded(host.experiments.cleanup_review().map_err(|e| e.code)?),
+        Action::RecoverCleanup { fingerprint } => {
+            let Some(review) = host.experiments.cleanup_review().map_err(|e| e.code)? else {
+                return Ok(json!({"cleaned":true}));
+            };
+            if review.fingerprint != fingerprint {
+                return Err("EXPERIMENT_CLEANUP_REVIEW_CHANGED".into());
+            }
+            let description = format!("上次实验 / Previous experiment: {}\n\n临时源文件副本与目录 / Temporary source-copy objects: {}\n借用的运行时对象权限 / Borrowed runtime permissions: {}\n\n将清理已核对的实验临时资源，包括临时容器内尚未导入的文件；撤销该实验对运行时的读取权限。\nThis removes verified temporary experiment resources, including files in the temporary container that were not imported, and revokes this experiment's runtime access.\n\n已保留的运行成果、已导入的文件、知识库源文件及运行时文件将保留。\nRetained outputs, imported files, vault sources and runtime files are preserved.", review.operation_id, review.temporary_objects, review.borrowed_objects);
+            if !confirm(
+                window,
+                "清理实验临时资源 / Clean up experiment resources",
+                &description,
+            ) {
+                return Err("EXPERIMENT_USER_CANCELLED".into());
+            }
+            // Hold the vault lock across the native recovery. A switch during
+            // the dialog must not consume approval for the previous vault.
+            at_vault(host, vault, |_| {
+                host.experiments.recover_cleanup(&fingerprint)
+            })?;
+            Ok(json!({"cleaned":true}))
         }
         Action::History { limit, cursor } => encoded(at_vault(host, vault, |ws| {
             ws.experiment_history(limit, cursor.as_ref())
@@ -443,6 +470,8 @@ mod tests {
             json!({"kind":"confirm_run","operation_id":"x","fingerprint":"y","approved":true}),
             json!({"kind":"shell","command":"calc"}),
             json!({"kind":"output_preview","operation_id":"x","path":"a.md","html":true}),
+            json!({"kind":"recover_cleanup","fingerprint":"f","profile_name":"foreign"}),
+            json!({"kind":"cleanup_review","root":"C:/user-data"}),
         ] {
             assert!(
                 serde_json::from_value::<Request>(json!({"vault_id":"v","action":action})).is_err()

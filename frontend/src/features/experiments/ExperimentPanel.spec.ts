@@ -38,6 +38,59 @@ beforeEach(() => {
 })
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; vi.useRealTimers(); vi.restoreAllMocks() })
 describe('experiment user workflow', () => {
+  it('reviews cleanup without deleting and asks the Host to confirm the exact reviewed scope', async () => {
+    const pending = { ...capability, available: false, error: 'EXPERIMENT_CLEANUP_REQUIRED', cleanup: { operation_id: 'old-run', phase: 'created', error: null } }
+    const review = { fingerprint: 'c'.repeat(64), operation_id: 'old-run', phase: 'created', profile_present: true, temporary_objects: 3, borrowed_objects: 2 }
+    let cleaned = false
+    const original = host.request.getMockImplementation()!
+    host.request.mockImplementation(async (v,a) => {
+      if (a.kind === 'status') return cleaned ? capability : pending
+      if (a.kind === 'cleanup_review') return review
+      if (a.kind === 'recover_cleanup') { cleaned = true; return { cleaned: true } }
+      return original(v,a)
+    })
+    const view = await start()
+    expect(view.get('[data-action="prepare-run"]').attributes('disabled')).toBeDefined()
+    expect(view.find('[data-action="recover-cleanup"]').exists()).toBe(false)
+    await view.get('[data-action="review-cleanup"]').trigger('click'); await flushPromises()
+    expect(view.get('.cleanup-review').text()).toContain('临时文件和文件夹：3')
+    expect(host.request.mock.calls.some(([,a]) => a.kind === 'recover_cleanup')).toBe(false)
+    await view.get('[data-action="recover-cleanup"]').trigger('click'); await flushPromises()
+    expect(host.request).toHaveBeenCalledWith('vault-a', { kind: 'recover_cleanup', fingerprint: review.fingerprint })
+    expect(view.find('.cleanup-review').exists()).toBe(false)
+    expect(view.get('[data-action="prepare-run"]').attributes('disabled')).toBeUndefined()
+  })
+  it('retains pending cleanup on native cancellation and requires a fresh review', async () => {
+    const original = host.request.getMockImplementation()!
+    host.request.mockImplementation(async (v,a) => {
+      if (a.kind === 'status') return { ...capability, available: false, error: 'EXPERIMENT_CLEANUP_REQUIRED', cleanup: { operation_id: 'old-run', phase: 'created', error: null } }
+      if (a.kind === 'cleanup_review') return { fingerprint: 'c'.repeat(64), temporary_objects: 3, borrowed_objects: 2 }
+      if (a.kind === 'recover_cleanup') throw new Error('EXPERIMENT_USER_CANCELLED')
+      return original(v,a)
+    })
+    const view = await start()
+    await view.get('[data-action="review-cleanup"]').trigger('click'); await flushPromises()
+    await view.get('[data-action="recover-cleanup"]').trigger('click'); await flushPromises()
+    expect(view.get('[role="alert"]').text()).toContain('已取消操作')
+    expect(view.find('.cleanup-review').exists()).toBe(true)
+    expect(view.find('[data-action="recover-cleanup"]').exists()).toBe(false)
+    expect(view.get('[data-action="prepare-run"]').attributes('disabled')).toBeDefined()
+  })
+  it('discards a late cleanup review after switching vaults', async () => {
+    let settle!: (v: unknown) => void
+    const original = host.request.getMockImplementation()!
+    host.request.mockImplementation((v,a) => {
+      if (a.kind === 'status' && v === 'vault-a') return Promise.resolve({ ...capability, available: false, error: 'EXPERIMENT_CLEANUP_REQUIRED', cleanup: { operation_id: 'old-run', phase: 'created', error: null } })
+      if (a.kind === 'cleanup_review') return new Promise(r => { settle = r })
+      return original(v,a)
+    })
+    const view = await start()
+    await view.get('[data-action="review-cleanup"]').trigger('click')
+    useWorkspaceStore().vaultId = 'vault-b'; await flushPromises()
+    settle({ fingerprint: 'c'.repeat(64), temporary_objects: 3, borrowed_objects: 2 }); await flushPromises()
+    expect(view.find('[data-action="recover-cleanup"]').exists()).toBe(false)
+    expect(host.request.mock.calls.some(([,a]) => a.kind === 'recover_cleanup')).toBe(false)
+  })
   it('shows a rejected native run decision without starting or reporting a completed experiment', async () => {
     const original = host.request.getMockImplementation()!
     host.request.mockImplementation((v,a) => a.kind === 'confirm_run' ? Promise.resolve({ ...run, state: 'rejected' }) : original(v,a))

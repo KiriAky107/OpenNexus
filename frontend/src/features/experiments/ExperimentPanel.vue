@@ -20,6 +20,7 @@ const busy = ref(false), error = ref(''), pollingError = ref(''), imageUrl = ref
 let epoch = 0, selectionVersion = 0, previewVersion = 0, pollTimer: ReturnType<typeof setTimeout> | undefined, pollRunning = false, failures = 0, stopImport = false
 let originVersion = 0
 const pendingRun = ref<RunRequest | null>(null)
+const cleanupReview = ref<experiments.CleanupReview | null>(null)
 let pendingImport: experiments.ImportRequest | null = null
 const scripts = computed(() => candidates.value.filter(f => /\.py$/i.test(f.path)))
 const inputOptions = computed(() => candidates.value.filter(f => f.path !== entry.value))
@@ -52,6 +53,7 @@ async function refreshAllImports(vault: string, version: number, more = false) {
   allImports.value = more ? [...allImports.value, ...page.items] : page.items; allImportCursor.value = page.next_cursor
 }
 async function initialize() {
+  cleanupReview.value = null
   epoch++; resetSelection(); busy.value = false; status.value = null; candidates.value = []; history.value = []; allImports.value = []; allImportCursor.value = null; origins.value = []; originCursor.value = null; originFile.value = ''; pendingRun.value = null; pollingError.value = ''; failures = 0; inputs.value = []
   await task(async (vault, version) => {
     const [capability, available] = await Promise.all([api<Status>('status', {}, vault), experiments.files(), refreshHistory(vault, version), refreshAllImports(vault, version)])
@@ -59,6 +61,26 @@ async function initialize() {
     status.value = capability; candidates.value = available; limits.value = { ...capability.limits }
     const selected = editor.currentFilePath?.replace(/^\//, '')
     entry.value = available.find(f => f.path === selected && /\.py$/i.test(f.path))?.path ?? scripts.value[0]?.path ?? ''
+  })
+}
+async function reviewCleanup() {
+  cleanupReview.value = null
+  await task(async (vault, version) => {
+    const review = await api<experiments.CleanupReview | null>('cleanup_review', {}, vault)
+    if (current(vault, version)) cleanupReview.value = review
+  })
+}
+async function recoverCleanup() {
+  const review = cleanupReview.value
+  if (!review) return
+  await task(async (vault, version) => {
+    try {
+      await api('recover_cleanup', { fingerprint: review.fingerprint }, vault)
+      const capability = await api<Status>('status', {}, vault)
+      if (current(vault, version)) status.value = capability
+    } finally {
+      if (current(vault, version)) cleanupReview.value = null
+    }
   })
 }
 watch(() => workspace.vaultId, initialize, { immediate: true })
@@ -252,6 +274,14 @@ onBeforeUnmount(() => { epoch++; stopImport = true; stopPolling(); releaseImage(
     <div class="panel-scroll" :aria-busy="busy">
       <section class="run-form">
         <p v-if="status && !status.available" class="notice" role="status">{{ experiments.errorText(status.error ?? '') }}</p>
+        <section v-if="status?.cleanup" class="cleanup-review notice" :aria-label="t('待清理的实验资源', 'Pending experiment cleanup')">
+          <p>{{ t('上次实验的临时资源需要核对。已保存的成果和知识库文件会保留。', 'Temporary resources from a previous experiment need verification. Saved outputs and vault files are preserved.') }}</p>
+          <p v-if="status.cleanup.error" class="subtle">{{ experiments.errorText(status.cleanup.error) }}</p>
+          <p v-if="cleanupReview">{{ t('临时文件和文件夹：', 'Temporary files and folders: ') }}{{ cleanupReview.temporary_objects }} · {{ t('运行环境访问权限：', 'Runtime access permissions: ') }}{{ cleanupReview.borrowed_objects }}</p>
+          <p v-if="cleanupReview" class="subtle">{{ t('确认后会删除临时容器内尚未导入的文件；已保留的成果不受影响。', 'Confirmation removes unimported files in the temporary container; retained outputs are preserved.') }}</p>
+          <button data-action="review-cleanup" :disabled="busy" @click="reviewCleanup">{{ t('核对临时资源', 'Review temporary resources') }}</button>
+          <button v-if="cleanupReview" data-action="recover-cleanup" :disabled="busy" @click="recoverCleanup">{{ t('确认并清理', 'Confirm cleanup') }}</button>
+        </section>
         <label>{{ t('Python 源文件', 'Python source') }}<select v-model="entry" :disabled="busy"><option value="">{{ t('选择源文件', 'Select source') }}</option><option v-for="file in scripts" :key="file.file_id" :value="file.path">{{ file.path }}</option></select></label>
         <details><summary>{{ t('输入文件与资源限制', 'Inputs and limits') }}</summary>
           <fieldset :disabled="busy"><legend>{{ t('选择只读输入（最多31份）', 'Select read-only inputs (up to 31)') }}</legend><label v-for="file in inputOptions" :key="file.file_id" class="check"><input v-model="inputs" type="checkbox" :value="file.path" :disabled="inputs.length >= 31 && !inputs.includes(file.path)" />{{ file.path }}</label></fieldset>
