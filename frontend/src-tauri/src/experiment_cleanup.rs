@@ -12,6 +12,7 @@ const MAX_RECORD: usize = 128 * 1024;
 pub(crate) const MAX_GRANTS: usize = 512;
 pub use crate::experiment_cleanup_job::{JobPhase, JobReceipt};
 pub use crate::experiment_cleanup_objects::{ObjectKind, ObjectReceipt};
+pub use crate::experiment_cleanup_recovery::CleanupReview;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CleanupObjects {
@@ -235,6 +236,48 @@ impl Journal {
     pub(crate) fn status(&self) -> Result<Option<CleanupStatus>> {
         let db = self.db.lock().map_err(|_| failed())?;
         Ok(read(&db)?.map(|(_, record)| record))
+    }
+    pub(crate) fn review(&self) -> Result<Option<CleanupReview>> {
+        let lease = self.gate.acquire()?;
+        let db = self.db.lock().map_err(|_| failed())?;
+        read(&db)?
+            .map(|(token, record)| {
+                crate::experiment_cleanup_recovery::Preflight::inspect(&token, &record, &lease)
+                    .map(|p| p.review())
+            })
+            .transpose()
+    }
+    pub(crate) fn recover(&self, fingerprint: &str) -> Result<()> {
+        if fingerprint.len() != 64
+            || !fingerprint
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        {
+            return Err(HostError::new("EXPERIMENT_CLEANUP_REVIEW_CHANGED"));
+        }
+        let lease = self.gate.acquire()?;
+        let mut db = self.db.lock().map_err(|_| failed())?;
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| failed())?;
+        let Some((token, record)) = read(&tx)? else {
+            return Ok(());
+        };
+        let preflight =
+            crate::experiment_cleanup_recovery::Preflight::inspect(&token, &record, &lease)?;
+        if preflight.review().fingerprint != fingerprint {
+            return Err(HostError::new("EXPERIMENT_CLEANUP_REVIEW_CHANGED"));
+        }
+        let _proof = preflight.apply(&record, &lease)?;
+        if tx
+            .execute("DELETE FROM cleanup WHERE id=1 AND token=?1", [&token])
+            .map_err(|_| failed())?
+            != 1
+        {
+            return Err(failed());
+        }
+        tx.commit().map_err(|_| failed())?;
+        Ok(())
     }
     pub(crate) fn reserve(self: &Arc<Self>, vault: &str, operation: &str) -> Result<Arc<Attempt>> {
         if uuid::Uuid::parse_str(vault).is_err() || uuid::Uuid::parse_str(operation).is_err() {
@@ -501,6 +544,339 @@ impl Attempt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct RecoveryFixture {
+        _root: tempfile::TempDir,
+        journal: Arc<Journal>,
+        profile: crate::extension_container::Profile,
+        source: PathBuf,
+        runtime: PathBuf,
+        runtime_acl: Vec<u8>,
+    }
+    fn acl_bytes(path: &Path) -> Vec<u8> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::{
+            Foundation::LocalFree,
+            Security::{
+                Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
+                IsValidAcl, DACL_SECURITY_INFORMATION,
+            },
+        };
+        let file = acl_file(path);
+        let mut acl = std::ptr::null_mut();
+        let mut descriptor = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                GetSecurityInfo(
+                    file.as_raw_handle(),
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &mut acl,
+                    std::ptr::null_mut(),
+                    &mut descriptor,
+                )
+            },
+            0
+        );
+        assert!(!acl.is_null() && unsafe { IsValidAcl(acl) } != 0);
+        let bytes =
+            unsafe { std::slice::from_raw_parts(acl.cast::<u8>(), (*acl).AclSize as usize) }
+                .to_vec();
+        unsafe {
+            LocalFree(descriptor);
+        }
+        bytes
+    }
+    fn acl_file(path: &Path) -> std::fs::File {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::*;
+        std::fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .unwrap()
+    }
+    fn recovery_fixture() -> RecoveryFixture {
+        let root = tempfile::tempdir().unwrap();
+        let journal = Journal::open(root.path()).unwrap();
+        let (v, o) = ids();
+        let attempt = journal.reserve(&v, &o).unwrap();
+        attempt.before_create().unwrap();
+        let profile =
+            crate::extension_container::Profile::create_named(attempt.profile_name().to_string())
+                .unwrap();
+        attempt
+            .created(
+                profile.folder().unwrap().parent().unwrap(),
+                &profile.sid_bytes().unwrap(),
+            )
+            .unwrap();
+        let source = root.path().join("sources");
+        let runtime = root.path().join("runtime");
+        std::fs::create_dir_all(source.join("nested")).unwrap();
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::write(source.join("nested/entry.py"), b"private disposable copy").unwrap();
+        std::fs::write(runtime.join("python.exe"), b"preserve borrowed runtime").unwrap();
+        std::fs::write(
+            root.path().join("retained.md"),
+            b"retained vault-like bytes",
+        )
+        .unwrap();
+        attempt.source_created(&source).unwrap();
+        attempt.runtime_bound(&runtime).unwrap();
+        let runtime_acl = acl_bytes(&runtime.join("python.exe"));
+        for (kind, paths) in [
+            (
+                GrantKind::Source,
+                vec![
+                    source.clone(),
+                    source.join("nested"),
+                    source.join("nested/entry.py"),
+                ],
+            ),
+            (
+                GrantKind::Runtime,
+                vec![runtime.clone(), runtime.join("python.exe")],
+            ),
+        ] {
+            let files: Vec<_> = paths.iter().map(|p| acl_file(p)).collect();
+            attempt
+                .grants_bound(
+                    kind,
+                    files
+                        .iter()
+                        .map(|f| ObjectReceipt::capture(f).unwrap())
+                        .collect(),
+                )
+                .unwrap();
+            for file in &files {
+                profile.grant_package_read_execute(file).unwrap();
+            }
+        }
+        let job = crate::extension_job::Job::for_owned_experiment(
+            &profile,
+            &crate::experiment_policy::ExecutionLimits::default()
+                .validate()
+                .unwrap(),
+            &attempt,
+        )
+        .unwrap();
+        assert_eq!(
+            journal.status().unwrap().unwrap().job.unwrap().phase,
+            JobPhase::Configured
+        );
+        drop(job);
+        drop(attempt);
+        RecoveryFixture {
+            _root: root,
+            journal,
+            profile,
+            source,
+            runtime,
+            runtime_acl,
+        }
+    }
+    #[test]
+    fn recovery_removes_only_receipted_temporary_objects_and_preserves_runtime_and_retained_files()
+    {
+        let f = recovery_fixture();
+        let root = f.profile.folder().unwrap().parent().unwrap().to_path_buf();
+        let review = f.journal.review().unwrap().unwrap();
+        assert!(review.profile_present);
+        assert_eq!(review.temporary_objects, 3);
+        assert_eq!(review.borrowed_objects, 2);
+        assert!(f.source.exists(), "a review must not perform cleanup");
+        f.journal.recover(&review.fingerprint).unwrap();
+        let (v, o) = ids();
+        let next = f.journal.reserve(&v, &o).unwrap();
+        drop(next);
+        assert_eq!(
+            f.journal.recover(&review.fingerprint).unwrap_err().code,
+            "EXPERIMENT_CLEANUP_REVIEW_CHANGED"
+        );
+        assert_eq!(f.journal.status().unwrap().unwrap().operation_id, o);
+        let next_review = f.journal.review().unwrap().unwrap();
+        f.journal.recover(&next_review.fingerprint).unwrap();
+        assert_eq!(
+            acl_bytes(&f.runtime.join("python.exe")),
+            f.runtime_acl,
+            "only the original experiment SID ACE must be removed"
+        );
+        assert!(f.journal.status().unwrap().is_none());
+        assert!(!root.exists());
+        assert!(!f.source.exists());
+        assert_eq!(
+            std::fs::read(f.runtime.join("python.exe")).unwrap(),
+            b"preserve borrowed runtime"
+        );
+        assert_eq!(
+            std::fs::read(f._root.path().join("retained.md")).unwrap(),
+            b"retained vault-like bytes"
+        );
+        f.journal.recover(&review.fingerprint).unwrap();
+    }
+    #[test]
+    fn recovery_rechecks_scope_and_rejects_replaced_roots_without_modifying_anything() {
+        let f = recovery_fixture();
+        let review = f.journal.review().unwrap().unwrap();
+        std::fs::write(f.source.join("new.txt"), b"new since review").unwrap();
+        assert_eq!(
+            f.journal.recover(&review.fingerprint).unwrap_err().code,
+            "EXPERIMENT_CLEANUP_REVIEW_CHANGED"
+        );
+        assert_eq!(
+            std::fs::read(f.source.join("new.txt")).unwrap(),
+            b"new since review"
+        );
+        std::fs::rename(&f.source, f._root.path().join("moved-original")).unwrap();
+        std::fs::create_dir(&f.source).unwrap();
+        std::fs::write(f.source.join("foreign.txt"), b"foreign replacement").unwrap();
+        assert_eq!(
+            f.journal.review().unwrap_err().code,
+            "EXPERIMENT_CLEANUP_OBJECT_CHANGED"
+        );
+        assert_eq!(
+            std::fs::read(f.source.join("foreign.txt")).unwrap(),
+            b"foreign replacement"
+        );
+        assert!(f.profile.folder().unwrap().exists());
+        assert!(f.journal.status().unwrap().is_some());
+    }
+    #[test]
+    fn recovery_delete_commit_failure_keeps_the_obligation_and_can_be_reviewed_and_retried() {
+        let f = recovery_fixture();
+        let review = f.journal.review().unwrap().unwrap();
+        f.journal.db.lock().unwrap().execute_batch("CREATE TRIGGER fail_recovery BEFORE DELETE ON cleanup BEGIN SELECT RAISE(ABORT,'injected recovery commit failure'); END;").unwrap();
+        assert_eq!(
+            f.journal.recover(&review.fingerprint).unwrap_err().code,
+            "EXPERIMENT_CLEANUP_JOURNAL_FAILED"
+        );
+        assert!(f.journal.status().unwrap().is_some());
+        assert!(!f.source.exists());
+        let again = f.journal.review().unwrap().unwrap();
+        assert!(!again.profile_present);
+        assert_eq!(again.temporary_objects, 0);
+        assert_ne!(again.fingerprint, review.fingerprint);
+        f.journal
+            .db
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_recovery;")
+            .unwrap();
+        f.journal.recover(&again.fingerprint).unwrap();
+        assert!(f.journal.status().unwrap().is_none());
+        assert_eq!(
+            std::fs::read(f.runtime.join("python.exe")).unwrap(),
+            b"preserve borrowed runtime"
+        );
+    }
+    #[test]
+    fn recovery_refuses_active_leases_and_unproven_creating_records() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = Journal::open(root.path()).unwrap();
+        let (v, o) = ids();
+        let attempt = journal.reserve(&v, &o).unwrap();
+        assert_eq!(
+            journal.review().unwrap_err().code,
+            "EXPERIMENT_CLEANUP_OWNER_ACTIVE"
+        );
+        attempt.before_create().unwrap();
+        drop(attempt);
+        assert_eq!(
+            journal.review().unwrap_err().code,
+            "EXPERIMENT_CLEANUP_UNVERIFIED"
+        );
+        assert!(journal.status().unwrap().is_some());
+    }
+    #[test]
+    fn recovery_partial_native_failure_keeps_ownership_until_a_successful_retry() {
+        let f = recovery_fixture();
+        let file = f.source.join("nested/entry.py");
+        let mut permission = std::fs::metadata(&file).unwrap().permissions();
+        permission.set_readonly(true);
+        std::fs::set_permissions(&file, permission.clone()).unwrap();
+        let review = f.journal.review().unwrap().unwrap();
+        assert_eq!(
+            f.journal.recover(&review.fingerprint).unwrap_err().code,
+            "EXPERIMENT_SOURCE_CLEANUP_FAILED"
+        );
+        assert!(f.journal.status().unwrap().is_some());
+        assert!(file.exists());
+        assert!(f.profile.folder().unwrap().exists());
+        assert_eq!(acl_bytes(&f.runtime.join("python.exe")), f.runtime_acl);
+        permission.set_readonly(false);
+        std::fs::set_permissions(&file, permission).unwrap();
+        let review = f.journal.review().unwrap().unwrap();
+        f.journal.recover(&review.fingerprint).unwrap();
+        assert!(f.journal.status().unwrap().is_none());
+        assert!(!f.source.exists());
+    }
+    #[test]
+    fn recovery_refuses_runtime_replacements_and_external_hardlinks_before_acl_changes() {
+        let f = recovery_fixture();
+        let before = acl_bytes(&f.runtime.join("python.exe"));
+        std::fs::hard_link(
+            f._root.path().join("retained.md"),
+            f.source.join("nested/external.md"),
+        )
+        .unwrap();
+        assert_eq!(
+            f.journal.review().unwrap_err().code,
+            "EXPERIMENT_CLEANUP_OBJECT_CHANGED"
+        );
+        assert_eq!(acl_bytes(&f.runtime.join("python.exe")), before);
+        assert_eq!(
+            std::fs::read(f._root.path().join("retained.md")).unwrap(),
+            b"retained vault-like bytes"
+        );
+        std::fs::remove_file(f.source.join("nested/external.md")).unwrap();
+        std::fs::rename(
+            f.runtime.join("python.exe"),
+            f.runtime.join("moved-original.exe"),
+        )
+        .unwrap();
+        std::fs::write(
+            f.runtime.join("python.exe"),
+            b"unrelated runtime replacement",
+        )
+        .unwrap();
+        assert_eq!(
+            f.journal.review().unwrap_err().code,
+            "EXPERIMENT_CLEANUP_OBJECT_CHANGED"
+        );
+        assert_eq!(
+            std::fs::read(f.runtime.join("python.exe")).unwrap(),
+            b"unrelated runtime replacement"
+        );
+        assert!(f.source.exists());
+        assert!(f.profile.folder().unwrap().exists());
+        assert!(f.journal.status().unwrap().is_some());
+    }
+    #[test]
+    fn recovery_never_adopts_legacy_path_only_ownership() {
+        let f = recovery_fixture();
+        let mut record = serde_json::to_value(f.journal.status().unwrap().unwrap()).unwrap();
+        record.as_object_mut().unwrap().remove("objects");
+        record.as_object_mut().unwrap().remove("job");
+        f.journal
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE cleanup SET record=?1",
+                [serde_json::to_string(&record).unwrap()],
+            )
+            .unwrap();
+        assert_eq!(
+            f.journal.review().unwrap_err().code,
+            "EXPERIMENT_CLEANUP_UNVERIFIED"
+        );
+        assert!(f.source.exists());
+        assert!(f.profile.folder().unwrap().exists());
+        assert!(f.journal.status().unwrap().is_some());
+    }
     fn ids() -> (String, String) {
         (
             uuid::Uuid::new_v4().to_string(),

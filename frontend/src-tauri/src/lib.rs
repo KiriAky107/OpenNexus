@@ -14,6 +14,8 @@ mod experiment_cleanup_job;
 mod experiment_cleanup_lease;
 #[cfg(windows)]
 mod experiment_cleanup_objects;
+#[cfg(windows)]
+mod experiment_cleanup_recovery;
 mod experiment_contract;
 #[cfg(windows)]
 pub mod experiment_execution;

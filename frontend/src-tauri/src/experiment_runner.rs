@@ -89,6 +89,14 @@ impl Runner {
     pub fn cleanup_status(&self) -> Result<Option<CleanupStatus>> {
         self.cleanup_journal()?.status()
     }
+    pub fn cleanup_review(&self) -> Result<Option<crate::experiment_cleanup::CleanupReview>> {
+        self.cleanup_journal()?.review()
+    }
+    /// Called only after the main window obtains a separate native user
+    /// confirmation. The OS lease and scope fingerprint are rechecked here.
+    pub fn recover_cleanup(&self, fingerprint: &str) -> Result<()> {
+        self.cleanup_journal()?.recover(fingerprint)
+    }
     /// Retries find the existing operation before touching possibly moved or
     /// edited source files. New metadata cannot replace the existing proposal.
     pub fn prepare(&self, workspace: &WorkspaceSlot, request: &RunRequest) -> Result<RunRecord> {
@@ -1385,6 +1393,39 @@ mod tests {
                 }
             }
             evidence["cleanup_pending"] = serde_json::json!(pending.is_some());
+            if mode == "journal-failure" {
+                let review = runner.cleanup_review().unwrap().unwrap();
+                assert!(!review.profile_present);
+                assert_eq!(review.temporary_objects, 0);
+                let db =
+                    rusqlite::Connection::open(host_root.path().join("experiment-cleanup.sqlite3"))
+                        .unwrap();
+                db.execute_batch("DROP TRIGGER fail_cleanup;").unwrap();
+                runner.recover_cleanup(&review.fingerprint).unwrap();
+                assert!(runner.cleanup_status().unwrap().is_none());
+                // Recovery only clears temporary ownership. The original run
+                // result and retained output bytes remain available afterward.
+                assert!(runner
+                    .record(&workspace, &request.operation_id)
+                    .unwrap()
+                    .unwrap()
+                    .result
+                    .is_some());
+                let output = with_vault(&workspace, &request.vault_id, |ws| {
+                    ws.experiment_output_read(
+                        &request.operation_id,
+                        "worker-output.txt",
+                        0,
+                        256 * 1024,
+                    )
+                })
+                .unwrap();
+                assert_eq!(
+                    Some(&serde_json::Value::String(output.content_base64)),
+                    persisted.get("worker-output.txt")
+                );
+                evidence["cleanup_recovered"] = serde_json::json!(true);
+            }
             evidence["persisted_output_bytes"] = serde_json::Value::Object(persisted);
             reports.insert(mode, evidence);
             drop(stopped);

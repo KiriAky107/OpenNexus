@@ -192,12 +192,24 @@ impl JobReceipt {
     /// Read-only evidence for a later, separately authorized cleanup. This
     /// neither acquires the Host cleanup lease nor clears any obligation.
     pub fn stopped_after_owner_exit(&self) -> Result<()> {
+        self.stopped(false)
+    }
+    pub(crate) fn stopped_under_lease(
+        &self,
+        _lease: &crate::experiment_cleanup_lease::Lease,
+    ) -> Result<()> {
+        // The exclusive native lease spans the complete worker lifetime. Its
+        // acquisition proves that this Host cannot still own a running factory.
+        // Another live Host is rejected, even if its lease has become available.
+        self.stopped(self.owner == ProcessIdentity::current()?)
+    }
+    fn stopped(&self, same_host_stopped: bool) -> Result<()> {
         let token = self
             .name
             .strip_prefix("Global\\OpenNexus.experiment.")
             .ok_or_else(failed)?;
         self.validate(token)?;
-        if !self.owner.exited()? {
+        if !same_host_stopped && !self.owner.exited()? {
             return Err(HostError::new("EXPERIMENT_CLEANUP_OWNER_ACTIVE"));
         }
         if self.phase == JobPhase::Planned {

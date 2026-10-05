@@ -77,7 +77,8 @@ impl Profile {
     /// 此操作只会添加一条 ACE，不会清理已有权限。
     pub fn grant_package_read_execute(&self, object: &std::fs::File) -> Result<()> {
         use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
-        self.update_access(
+        Self::update_access(
+            self.sid,
             object,
             false,
             FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
@@ -93,7 +94,8 @@ impl Profile {
                 DELETE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
             },
         };
-        self.update_access(
+        Self::update_access(
+            self.sid,
             object,
             false,
             FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
@@ -103,10 +105,10 @@ impl Profile {
     }
     /// 使用最初持有的对象句柄，仅移除这个新实例对应的允许 ACE；其他安全主体的 ACL 保持不变。
     pub fn revoke_package_access(&self, object: &std::fs::File) -> Result<()> {
-        self.update_access(object, true, 0, 0, false)
+        Self::update_access(self.sid, object, true, 0, 0, false)
     }
     fn update_access(
-        &self,
+        sid: PSID,
         object: &std::fs::File,
         revoke: bool,
         permissions: u32,
@@ -179,7 +181,7 @@ impl Profile {
             Trustee: TRUSTEE_W {
                 TrusteeForm: TRUSTEE_IS_SID,
                 TrusteeType: TRUSTEE_IS_UNKNOWN,
-                ptstrName: self.sid.cast(),
+                ptstrName: sid.cast(),
                 ..Default::default()
             },
         };
@@ -206,46 +208,7 @@ impl Profile {
         Ok(())
     }
     pub fn folder(&self) -> Result<std::path::PathBuf> {
-        use std::os::windows::ffi::OsStringExt;
-        use windows_sys::Win32::{
-            Foundation::LocalFree,
-            Security::{
-                Authorization::ConvertSidToStringSidW, Isolation::GetAppContainerFolderPath,
-            },
-            System::Com::CoTaskMemFree,
-        };
-        let mut string = std::ptr::null_mut();
-        if unsafe { ConvertSidToStringSidW(self.sid, &mut string) } == 0 {
-            return Err(HostError::new("EXTENSION_CONTAINER_SID_INVALID"));
-        }
-        let mut folder = std::ptr::null_mut();
-        let status = unsafe { GetAppContainerFolderPath(string, &mut folder) };
-        unsafe {
-            LocalFree(string.cast());
-        }
-        if status < 0 || folder.is_null() {
-            if !folder.is_null() {
-                unsafe {
-                    CoTaskMemFree(folder.cast());
-                }
-            }
-            return Err(HostError::new("EXTENSION_CONTAINER_FOLDER_FAILED"));
-        }
-        let mut length = 0;
-        while length < 32768 && unsafe { *folder.add(length) } != 0 {
-            length += 1;
-        }
-        let result = if length == 32768 {
-            Err(HostError::new("EXTENSION_CONTAINER_FOLDER_FAILED"))
-        } else {
-            Ok(std::path::PathBuf::from(std::ffi::OsString::from_wide(
-                unsafe { std::slice::from_raw_parts(folder, length) },
-            )))
-        };
-        unsafe {
-            CoTaskMemFree(folder.cast());
-        }
-        result
+        sid_folder(self.sid)
     }
     /// 在删除之前停止所有容器进程并关闭其句柄。
     pub fn remove(mut self) -> Result<()> {
@@ -259,6 +222,105 @@ impl Profile {
             self.exists = false;
         }
         Ok(())
+    }
+}
+fn sid_folder(sid: PSID) -> Result<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::{
+        Foundation::LocalFree,
+        Security::{Authorization::ConvertSidToStringSidW, Isolation::GetAppContainerFolderPath},
+        System::Com::CoTaskMemFree,
+    };
+    let mut string = std::ptr::null_mut();
+    if unsafe { ConvertSidToStringSidW(sid, &mut string) } == 0 {
+        return Err(HostError::new("EXTENSION_CONTAINER_SID_INVALID"));
+    }
+    let mut folder = std::ptr::null_mut();
+    let status = unsafe { GetAppContainerFolderPath(string, &mut folder) };
+    unsafe {
+        LocalFree(string.cast());
+    }
+    if status < 0 || folder.is_null() {
+        if !folder.is_null() {
+            unsafe {
+                CoTaskMemFree(folder.cast());
+            }
+        }
+        return Err(HostError::new("EXTENSION_CONTAINER_FOLDER_FAILED"));
+    }
+    let mut length = 0;
+    while length < 32768 && unsafe { *folder.add(length) } != 0 {
+        length += 1;
+    }
+    let result = if length == 32768 {
+        Err(HostError::new("EXTENSION_CONTAINER_FOLDER_FAILED"))
+    } else {
+        Ok(std::path::PathBuf::from(std::ffi::OsString::from_wide(
+            unsafe { std::slice::from_raw_parts(folder, length) },
+        )))
+    };
+    unsafe {
+        CoTaskMemFree(folder.cast());
+    }
+    result
+}
+/// A detached SID value, not ownership of an existing profile. Dropping it
+/// frees only SID memory. The recovery protocol must separately pin and match
+/// the original SDK folder before explicitly removing a profile.
+pub(crate) struct RecoverySid {
+    name: Vec<u16>,
+    sid: PSID,
+}
+impl RecoverySid {
+    pub(crate) fn derive(name: &str, expected: &[u8]) -> Result<Self> {
+        let token = name
+            .strip_prefix("OpenNexus.sandbox.")
+            .ok_or_else(|| HostError::new("EXPERIMENT_CLEANUP_UNVERIFIED"))?;
+        let id = uuid::Uuid::parse_str(token)
+            .map_err(|_| HostError::new("EXPERIMENT_CLEANUP_UNVERIFIED"))?;
+        if name != format!("OpenNexus.sandbox.{}", id.simple()) {
+            return Err(HostError::new("EXPERIMENT_CLEANUP_UNVERIFIED"));
+        }
+        let name: Vec<_> = name.encode_utf16().chain(Some(0)).collect();
+        let mut sid = std::ptr::null_mut();
+        let status = unsafe {
+            windows_sys::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName(
+                name.as_ptr(),
+                &mut sid,
+            )
+        };
+        let value = Self { name, sid };
+        if status < 0 || sid.is_null() || unsafe { IsValidSid(sid) } == 0 {
+            return Err(HostError::new("EXPERIMENT_CLEANUP_UNVERIFIED"));
+        }
+        let length = unsafe { windows_sys::Win32::Security::GetLengthSid(sid) } as usize;
+        if !(8..=68).contains(&length)
+            || unsafe { std::slice::from_raw_parts(sid.cast::<u8>(), length) } != expected
+        {
+            return Err(HostError::new("EXPERIMENT_CLEANUP_UNVERIFIED"));
+        }
+        Ok(value)
+    }
+    pub(crate) fn folder(&self) -> Result<std::path::PathBuf> {
+        sid_folder(self.sid)
+    }
+    pub(crate) fn revoke(&self, object: &std::fs::File) -> Result<()> {
+        Profile::update_access(self.sid, object, true, 0, 0, false)
+    }
+    pub(crate) fn remove_verified_profile(&self) -> Result<()> {
+        if unsafe { DeleteAppContainerProfile(self.name.as_ptr()) } < 0 {
+            return Err(HostError::new("EXTENSION_CONTAINER_CLEANUP_FAILED"));
+        }
+        Ok(())
+    }
+}
+impl Drop for RecoverySid {
+    fn drop(&mut self) {
+        if !self.sid.is_null() {
+            unsafe {
+                FreeSid(self.sid);
+            }
+        }
     }
 }
 impl Drop for Profile {
