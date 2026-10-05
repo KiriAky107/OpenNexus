@@ -19,7 +19,18 @@ pub struct Prepared {
 
 fn sync_dir(dir: &Dir) -> Result<()> {
     #[cfg(unix)]
-    dir.try_clone()?.into_std_file().sync_all()?;
+    {
+        use cap_fs_ext::OpenOptionsMaybeDirExt;
+        // A capability directory may be an O_PATH descriptor on Linux. fsync
+        // requires a readable descriptor, opened relative to the same held
+        // directory; never rebuild an ambient path or skip durability errors.
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .maybe_dir(true)
+            .follow(FollowSymlinks::No);
+        dir.open_with(".", &options)?.into_std().sync_all()?;
+    }
     #[cfg(not(unix))]
     let _ = dir;
     Ok(())
