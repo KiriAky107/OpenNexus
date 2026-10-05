@@ -66,3 +66,24 @@ it('removes duplicate file identity and docks actions in the menu while leaving 
   expect(wrapper.text()).toContain('下载 Canvas 副本')
  } finally { wrapper.unmount();host.remove() }
 })
+
+it.each(['py', 'json', 'csv'])('keeps %s recovery copies in the source format without Markdown controls', async (extension) => {
+ const pinia=createPinia();setActivePinia(pinia)
+ const editor=useEditorStore();editor.currentFilePath=`/experiments/中文.${extension}`
+ editor.content='原始输入\r\n<script>unchanged</script>\r\n';editor.saveStatus='conflict';editor.mode='wysiwyg'
+ const objectUrl=vi.spyOn(URL,'createObjectURL').mockReturnValue('blob:recovery-fixture')
+ vi.spyOn(URL,'revokeObjectURL').mockImplementation(()=>{})
+ let filename=''
+ vi.spyOn(HTMLAnchorElement.prototype,'click').mockImplementation(function(this:HTMLAnchorElement){filename=this.download})
+ const wrapper=mount(EditorHeader,{global:{plugins:[pinia]}})
+ try {
+  expect(wrapper.find('.mode-switch').exists()).toBe(false)
+  expect(wrapper.find('.toolbar-toggle').exists()).toBe(false)
+  expect(wrapper.text()).not.toContain('导出')
+  expect(wrapper.text()).toContain('关闭当前文件')
+  await wrapper.findAll('button').find(button=>button.text()==='下载文件副本')!.trigger('click')
+  expect(filename).toBe(`中文-recovered.${extension}`)
+  expect(await (objectUrl.mock.calls[0]![0] as Blob).text()).toBe(editor.content)
+  expect(editor.content).toBe('原始输入\r\n<script>unchanged</script>\r\n')
+ } finally { wrapper.unmount() }
+})

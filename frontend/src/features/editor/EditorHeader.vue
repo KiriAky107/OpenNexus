@@ -23,15 +23,19 @@ const historyOpen = ref(false)
 const desktop = isDesktop()
 const actionsHost = ref<HTMLElement | null>(null)
 onMounted(() => { actionsHost.value = document.getElementById('editor-actions-host') })
-const isMarkdown = computed(() => workspaceDocumentType(editorStore.currentFilePath ?? 'untitled.md') !== 'canvas')
+const documentType = computed(() => workspaceDocumentType(editorStore.currentFilePath ?? 'untitled.md'))
+const isMarkdown = computed(() => documentType.value === 'markdown')
 const needsRecovery = computed(() => ['conflict', 'external_changed'].includes(editorStore.saveStatus))
 const missingFile = computed(() => needsRecovery.value && editorStore.currentFilePath === workspaceStore.activeFilePath && !workspaceStore.activeFile && !workspaceStore.treeRefreshError)
 function downloadCopy() {
-  const extension = isMarkdown.value ? 'md' : 'canvas'
+  const name = editorStore.currentFilePath?.split('/').pop() ?? 'document.md'
+  const suffix = /\.([^.]+)$/.exec(name)
+  const extension = suffix?.[1] ?? 'txt'
+  const stem = suffix ? name.slice(0, -suffix[0].length) : name
   const url = URL.createObjectURL(new Blob([editorStore.content], { type: 'text/plain;charset=utf-8' }))
   const link = document.createElement('a')
   link.href = url
-  link.download = `${(editorStore.currentFilePath?.split('/').pop() ?? `document.${extension}`).replace(/\.(md|canvas)$/i, '')}-recovered.${extension}`
+  link.download = `${stem}-recovered.${extension}`
   document.body.append(link); link.click(); link.remove()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
@@ -73,8 +77,8 @@ const statusText = computed<Record<string, string>>(() => ({
       <span v-if="editorStore.blockNavigationNotice" class="save-status" role="status">{{ editorStore.blockNavigationNotice }}</span>
       <button v-if="needsRecovery && !missingFile" class="button-secondary" @click="reload">{{ t('重新加载外部版本', 'Reload external version') }}</button>
       <span v-if="missingFile" class="save-status conflict">{{ t('原文件已删除或移动', 'Original file deleted or moved') }}</span>
-      <button v-if="needsRecovery" class="button-secondary" @click="downloadCopy">{{ isMarkdown ? t('下载 Markdown 副本', 'Download Markdown copy') : t('下载 Canvas 副本', 'Download Canvas copy') }}</button>
-      <button v-if="needsRecovery" class="button-secondary" @click="discard">{{ t('关闭当前笔记', 'Close current note') }}</button>
+      <button v-if="needsRecovery" class="button-secondary" @click="downloadCopy">{{ isMarkdown ? t('下载 Markdown 副本', 'Download Markdown copy') : documentType === 'canvas' ? t('下载 Canvas 副本', 'Download Canvas copy') : t('下载文件副本', 'Download file copy') }}</button>
+      <button v-if="needsRecovery" class="button-secondary" @click="discard">{{ isMarkdown ? t('关闭当前笔记', 'Close current note') : t('关闭当前文件', 'Close current file') }}</button>
       <span v-if="reloadError" class="save-status conflict" role="alert">{{ reloadError }}</span>
       <div v-if="isMarkdown" class="mode-switch" :aria-label="t('编辑模式', 'Editor mode')">
         <button type="button" :class="{ active: editorStore.mode === 'wysiwyg' }" @click="editorStore.setMode('wysiwyg')">{{ t('写作', 'Writing') }}</button>
