@@ -465,7 +465,7 @@ fn schema_fourteen_backup_preserves_old_database_and_sync_queue() {
         ws.db
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        16
+        17
     );
     let backup = fs::read_dir(root.path().join(".ainote"))
         .unwrap()

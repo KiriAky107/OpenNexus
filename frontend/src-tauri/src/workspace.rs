@@ -2062,7 +2062,7 @@ mod tests {
             ws.db
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            16
+            17
         );
         for column in ["retire_id", "restore_id"] {
             assert!(ws
@@ -2120,7 +2120,7 @@ mod tests {
             ws.db
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            16
+            17
         );
         let backup = fs::read_dir(dir.path().join(".ainote"))
             .unwrap()
