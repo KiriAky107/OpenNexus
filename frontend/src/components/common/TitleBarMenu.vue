@@ -134,12 +134,15 @@ async function createWorkspaceItem(type: 'file' | 'folder') {
       return
     }
     const experiment = /\.(py|json|csv)$/i.test(rawName)
-    const parent = experiment ? '/experiments' : '/'
+    let parent = experiment ? '/experiments' : '/'
     if (experiment) {
       const tree = await workspaceService.refreshTree(true)
       workspace.fileTree = tree
-      if (!tree.some(node => node.path === parent)) {
+      const existingFolder = tree.find(node => node.path.toLocaleLowerCase() === parent.toLocaleLowerCase())
+      if (existingFolder) parent = existingFolder.path
+      else {
         const folder = await workspaceService.createFolder('/', 'experiments')
+        parent = folder.path
         workspace.addFileToTree('/', folder)
       }
     }

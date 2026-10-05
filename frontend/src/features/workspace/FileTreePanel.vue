@@ -162,11 +162,13 @@ async function createItem() {
     if (experiment && !isExperimentWorkspacePath(targetFolder)) {
       const tree = await workspaceService.refreshTree(true)
       workspaceStore.fileTree = tree
-      if (!tree.some(node => node.path === '/experiments')) {
+      const existingFolder = tree.find(node => node.path.toLocaleLowerCase() === '/experiments')
+      if (existingFolder) targetFolder = existingFolder.path
+      else {
         const folder = await workspaceService.createFolder('/', 'experiments')
+        targetFolder = folder.path
         workspaceStore.addFileToTree('/', folder)
       }
-      targetFolder = '/experiments'
     }
     const file = await workspaceService.createFile(targetFolder, name, canvas ? EMPTY_CANVAS : experiment ? '' : `# ${rawName}\n\n`)
     workspaceStore.addFileToTree(targetFolder, file)
