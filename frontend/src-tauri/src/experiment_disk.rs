@@ -155,7 +155,7 @@ fn stream_bytes(file: &File, count: &mut u32, limit: u32) -> Result<u64> {
     let mut offset = 0usize;
     let mut total = 0u64;
     loop {
-        if offset % 8 != 0 || offset + size_of::<FILE_STREAM_INFO>() > length {
+        if !offset.is_multiple_of(8) || offset + size_of::<FILE_STREAM_INFO>() > length {
             return Err(unavailable());
         }
         let info = unsafe {

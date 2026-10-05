@@ -71,16 +71,22 @@ impl Drop for Scratch {
 #[test]
 #[ignore = "requires prepared official embedded runtime; run scripts/verify-experiment-runtime.ps1"]
 fn packaged_python_isolation_and_owned_process_tree() {
-    native_probe(false);
+    native_probe(false, false);
 }
 
 #[test]
 #[ignore = "requires prepared official embedded runtime; run scripts/verify-experiment-runtime.ps1"]
 fn experiment_policy_bounds_the_complete_container() {
-    native_probe(true);
+    native_probe(true, false);
 }
 
-fn native_probe(experimental: bool) {
+#[test]
+#[ignore = "requires prepared official embedded runtime; synthetic ACL and private registry audit"]
+fn experiment_storage_permissions_are_bounded() {
+    native_probe(true, true);
+}
+
+fn native_probe(experimental: bool, audit_only: bool) {
     let limits = crate::experiment_policy::ExecutionLimits {
         wall_seconds: 8,
         cpu_seconds: 2,
@@ -140,6 +146,7 @@ fn native_probe(experimental: bool) {
     drop(accepted);
     drop(control);
     let profile = Profile::create().unwrap();
+    let profile_name = profile.test_name();
     let folder = profile.folder().unwrap();
     // Windows supplies this physical TEMP to the AppContainer process. A custom
     // name in the launch block is not a reliable output location for CPython.
@@ -167,6 +174,7 @@ fn native_probe(experimental: bool) {
             inputs.path().to_string_lossy().into_owned(),
             sentinel.to_string_lossy().into_owned(),
             listener.local_addr().unwrap().port().to_string(),
+            profile_name.clone(),
         ];
         LaunchData::new(
             &executable,
@@ -203,6 +211,57 @@ fn native_probe(experimental: bool) {
         // or brokers. Production execution still needs independent authorization.
         unsafe { suspended.resume().unwrap() }
     };
+    if audit_only {
+        let running = launch("storage-audit");
+        let code = running.wait(Duration::from_secs(15)).unwrap();
+        let error = fs::read_to_string(scratch.0.join("error.txt")).unwrap_or_default();
+        assert_eq!(code, Some(0), "Storage audit failed: {error}");
+        let report: serde_json::Value =
+            serde_json::from_slice(&fs::read(scratch.0.join("storage-audit.json")).unwrap())
+                .unwrap();
+        let disk = crate::experiment_disk::DiskBudget::open(
+            folder.parent().unwrap(),
+            &limits.validate().unwrap(),
+        )
+        .unwrap();
+        let evidence = std::env::var_os("OPENNEXUS_PROBE_RECEIPT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join(".build/experiment-runtime"));
+        fs::write(
+            evidence.join("storage-audit-result.json"),
+            serde_json::to_vec_pretty(
+                &serde_json::json!({"runtime_id": lock["runtime_id"], "report": report,
+                    "profile_name": profile_name,
+                "filesystem_bytes": disk.usage().unwrap(), "disk_limit_bytes": 8 * 1024 * 1024,
+                "production_executor_enabled": false}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["input_acl_error"], 5);
+        assert_eq!(report["private_acl_error"], 5);
+        assert_eq!(report["input_write"]["denied"], true);
+        assert_eq!(report["private_read"]["denied"], true);
+        assert_eq!(report["registry_profile_verified"], true);
+        assert_eq!(
+            report["registry_write"]["denied"], true,
+            "Private registry can bypass the complete filesystem budget: {report}"
+        );
+        assert_eq!(report["registry_write"]["winerror"], 5);
+        assert_eq!(report["registry_child_write"]["denied"], true);
+        assert_eq!(report["registry_child_write"]["winerror"], 5);
+        assert_eq!(report["registry_acl"]["denied"], true);
+        assert_eq!(report["registry_acl"]["winerror"], 5);
+        assert_eq!(report["registry_parent_write"]["denied"], true);
+        assert_eq!(report["registry_parent_write"]["winerror"], 5);
+        assert_eq!(running.active_test_processes().unwrap(), 0);
+        drop(disk);
+        drop(running);
+        grants.revoke();
+        drop(scratch);
+        profile.remove().unwrap();
+        return;
+    }
     let running = launch("basic");
     let code = running.wait(Duration::from_secs(15)).unwrap();
     let error = fs::read_to_string(scratch.0.join("error.txt")).unwrap_or_default();

@@ -56,6 +56,15 @@ impl Profile {
     pub fn sid(&self) -> PSID {
         self.sid
     }
+    pub(crate) fn restrict_experiment_registry(
+        &self,
+    ) -> Result<crate::experiment_registry::ReadOnlyRegistry> {
+        crate::experiment_registry::ReadOnlyRegistry::restrict(&self.name, self.sid)
+    }
+    #[cfg(test)]
+    pub(crate) fn test_name(&self) -> String {
+        String::from_utf16(&self.name[..self.name.len() - 1]).unwrap()
+    }
     /// 授予当前实例读取和执行一个 Host 所有包对象的权限。调用方打开对象时不得跟随重解析点，
     /// 并须在整个启动期间持有已验证的包句柄。这里不使用递归继承，每个目录和文件都要分别检查、授权。
     /// 此操作只会添加一条 ACE，不会清理已有权限。

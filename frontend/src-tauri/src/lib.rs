@@ -115,6 +115,8 @@ mod process_creation;
 #[cfg(windows)]
 mod experiment_disk;
 pub mod experiment_policy;
+#[cfg(windows)]
+mod experiment_registry;
 pub mod experiment_runtime;
 
 #[cfg(all(test, windows))]

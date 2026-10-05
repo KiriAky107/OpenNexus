@@ -69,11 +69,21 @@ Windows 为 CPython 提供的实际 TEMP 是容器 `AC/Temp`，自定义 TEMP �
 
 [目录统计](../src-tauri/src/experiment_disk.rs)使用固定根目录句柄、相对目录 capability 和禁止跟随的对象打开。统计文件和目录的 NTFS DATA streams，并计入逻辑大小与预分配大小中的较大值；硬链接、重解析对象、未知对象、共享冲突和统计失败会停止运行，不作为零用量忽略。根目录不共享删除，子项可共享删除以支持原子重命名；每次扫描只相信实际打开的对象。
 
-目录监控间隔为 100 ms 加扫描耗时，属于发现超限后终止的监控，不能承诺写入字节精确停在上限。快速写入后删除可能发生在两次扫描之间；容器注册表存储也不属于文件目录统计。独立墙钟 watchdog 不依赖目录扫描、UI 或授权轮询，仍能终止整个进程树。生产入口开放前必须继续评估这些存储范围与瞬时写入风险，并完成并发、日志、输出、授权和安装包控制。
+目录监控间隔为 100 ms 加扫描耗时，属于发现超限后终止的监控，不能承诺写入字节精确停在上限。快速写入后删除可能发生在两次扫描之间。容器注册表存储不属于文件目录统计，已用下述独立只读权限限制写入。独立墙钟 watchdog 不依赖目录扫描、UI 或授权轮询，仍能终止整个进程树。生产入口开放前必须继续评估瞬时写入风险，并完成并发、日志、输出、授权和安装包控制。
 
 新的真实进程探测以 8 秒墙钟、2 秒用户态 CPU、256 MiB 内存、8 进程和 8 MiB 目录预算验证内存和进程耗尽、Temp 外的普通文件、文件隐藏流及目录隐藏流。CPU 死循环单独使用 1 秒 CPU／60 秒墙钟，核对真实 Job CPU 计数确实达到 CPU 预算；虚拟机调度等待不计作 CPU 时间。实验策略不采用扩展十秒窗口的 rate-pressure 通知，避免该通知和总 CPU 预算混淆；原有扩展策略保持独立。每种超限均得到对应底层资源错误且剩余进程为零；无额外工具计时器、无持续授权轮询时，8 秒 watchdog 也终止了已确认存在后代的进程树。`policy-probe-result.json` 保留实际限额、CPU 计数和耗时；底层复用的错误码仍使用 `EXTENSION_*`，后续结构化执行接口统一映射为实验状态。
 
 CPU 时间的含义见 [Windows Job 基本限额](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_limit_information)，文件流大小及分配大小见 [FILE_STREAM_INFO](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_stream_info)。
+
+## 私有注册表与权限审计
+
+真实隔离 Python 探测证实：默认容器可以向自己的注册表写入并读回 16 MiB，文件目录计数仅为 4 KiB，因此完整目录扫描也不能覆盖该存储。直接叠加针对 package SID 的 deny ACE，在本机探测中仍未阻止私有键写入和修改 ACL；不能据此声称已隔离。最终的[注册表权限模块](../src-tauri/src/experiment_registry.rs)移除该新实例默认的完整 package ACE，再授予普通 `KEY_READ`，保留 Host、用户、SYSTEM 和其他原有主体的权限。
+
+创建暂停进程之后、恢复之前，只处理 `Profile::create()` 生成的独占名称和 SID。Host 打开已存在的当前用户 profile storage，拒绝回退创建；遍历其全部既存子键，最多 64 键、16 层，逐键替换该 package 的完整权限。Windows 默认 `Children` 子键也有需单独处理的权限，不能只改根键。打开使用 `REG_OPTION_OPEN_LINK`，发现 `SymbolicLinkValue` 即拒绝，检查失败则销毁暂停进程。所有键句柄由 Job 持有，不交给执行进程；没有修改当前用户或系统的共享注册表 ACL。
+
+新的 `storage-audit-result.json` 记录只针对合成选定输入／私有文件的 ACL 篡改负向、私有 registry location 与当前新实例名称的核对、根键写入／既有子键写入／修改 ACL／父存储写权限的拒绝。四类注册表操作均须得到 `ERROR_ACCESS_DENIED`，选定输入仍不能写入、未授权文件仍不能读取。另以 Host 写入作为正向控制，覆盖大键树和链接标记拒绝后仍能正常删除本次 profile；正常扩展容器未接入这项实验策略。
+
+注册表位置 API 的行为见 [GetAppContainerRegistryLocation](https://learn.microsoft.com/en-us/windows/win32/api/userenv/nf-userenv-getappcontainerregistrylocation)，权限继承见 [SetSecurityInfo](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo)。本机默认 ACE 的实际行为来自探测证据；最终固定提交的 Windows CI 也需通过相同负向检查。
 
 ## 真实输出捕获
 
@@ -99,4 +109,4 @@ CPU 时间的含义见 [Windows Job 基本限额](https://learn.microsoft.com/en
 
 运行授权必须绑定知识库、入口内容哈希、选定输入、固定运行时、限额和一次性确认；写源文件、运行、导入成果分别确认。进程只接收副本与运行 ID，成果通过 Host 清单和修订检查导回，不能直接写真实知识库。不能使用模型拼接的 shell 或普通用户权限的 subprocess 作为隔离失败后的替代路径。
 
-下一批接入已验证的日志收集器，补齐输出清单、并发和取消状态，并评估私有注册表和扫描间隙的存储控制；随后贯通运行确认、Agent 工具与成果导入。最终安装包携带固定运行时及许可证，并在从包内解出的隔离副本上复用原生检查，确认没有开发目录依赖。
+下一批接入已验证的日志收集器，补齐输出清单、并发和取消状态，并继续处理扫描间隙的存储控制；随后贯通运行确认、Agent 工具与成果导入。最终安装包携带固定运行时及许可证，并在从包内解出的隔离副本上复用原生检查，确认没有开发目录依赖。

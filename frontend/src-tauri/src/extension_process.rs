@@ -102,6 +102,7 @@ impl<'a> Suspended<'a> {
     pub fn create(profile: &'a Profile, executable: &Path, data: LaunchData) -> Result<Self> {
         Self::create_inner(profile, executable, data, None, None)
     }
+    #[cfg(test)]
     pub(crate) fn create_experiment(
         profile: &'a Profile,
         executable: &Path,
@@ -184,7 +185,7 @@ impl<'a> Suspended<'a> {
         {
             return Err(HostError::new("EXTENSION_PROCESS_ATTRIBUTES_FAILED"));
         }
-        let job = match experiment {
+        let mut job = match experiment {
             Some(limits) => Job::for_experiment(profile, limits)?,
             None => Job::with_scratch(data.scratch())?,
         };
@@ -248,6 +249,11 @@ impl<'a> Suspended<'a> {
             process: unsafe { OwnedHandle::from_raw_handle(info.hProcess) },
             thread: unsafe { OwnedHandle::from_raw_handle(info.hThread) },
         };
+        if experiment.is_some() {
+            // Windows may initialize private profile storage while creating the
+            // token. Seal its registry after that work, before ResumeThread.
+            job.restrict_experiment_registry(profile)?;
+        }
         unsafe {
             job.assign_suspended(handles.process.as_handle())?;
         }
