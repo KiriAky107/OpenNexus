@@ -45,8 +45,8 @@ def native_probe(payload: Path, target: str, evidence: Path) -> dict:
     command = ['cargo', 'test', '--lib', '--release', '--locked', '--no-run', '--message-format=json']
     if target:
         command.extend(['--target', target])
-    output = subprocess.run(command, cwd=ROOT / 'frontend/src-tauri', check=True, text=True,
-                            stdout=subprocess.PIPE).stdout
+    output = subprocess.run(command, cwd=ROOT / 'frontend/src-tauri', check=True,
+                            stdout=subprocess.PIPE).stdout.decode('utf-8', errors='replace')
     drivers = []
     for line in output.splitlines():
         item = json.loads(line)
