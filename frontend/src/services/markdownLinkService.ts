@@ -3,6 +3,7 @@ import { useEditorStore } from '@/stores/editor'
 import { noteOutline } from '@/features/workspace/outline'
 import { hostInvoke, isDesktop } from '@/services/platform/desktop'
 import { resolveVaultReference } from './vaultReferences'
+import { workspaceDocumentType } from './workspaceDocuments'
 
 const externalSchemes = /^(https?:|mailto:|tel:)/i
 const unsafeSchemes = /^(javascript:|data:|file:|vbscript:)/i
@@ -16,7 +17,10 @@ export function resolveNoteLink(href: string, currentPath: string | null): { pat
   const [rawPath, rawFragment = ''] = href.split('#', 2)
   if (!rawPath && currentPath) return { path: currentPath, fragment: decode(rawFragment) }
   const path = resolveVaultReference(currentPath ?? '/current.md', rawPath ?? '')
-  if (!path || !/\.(md|canvas)$/i.test(path)) return null
+  if (!path) return null
+  const kind = workspaceDocumentType(path)
+  if (kind === 'experiment') return isDesktop() ? { path, fragment: decode(rawFragment) } : null
+  if (kind !== 'markdown' && kind !== 'canvas') return null
   return { path, fragment: decode(rawFragment) }
 }
 

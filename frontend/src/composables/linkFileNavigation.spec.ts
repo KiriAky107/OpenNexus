@@ -68,9 +68,11 @@ it.each(['课程/笔记.md', '课程\\笔记.md', '/课程/笔记.md'])('keeps c
   // Real removal must still preserve edits and offer recovery.
   editor.updateContent('保留未保存内容')
   vi.mocked(service.refreshTree).mockResolvedValue([])
-  window.dispatchEvent(new Event('focus')); await flushPromises()
+  const refreshCount = vi.mocked(service.refreshTree).mock.calls.length
+  window.dispatchEvent(new Event('focus'))
+  await vi.waitFor(() => expect(service.refreshTree).toHaveBeenCalledTimes(refreshCount + 1))
+  await vi.waitFor(() => expect(editor.saveStatus).toBe('conflict'))
   expect(wrapper.text()).toContain('原文件已删除或移动')
-  expect(editor.saveStatus).toBe('conflict')
   expect(editor.content).toBe('保留未保存内容')
 })
 

@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { resolveVaultReference, rewriteReferences, rewritePathReferences, scanVaultReferences } from './vaultReferences'
 
 describe('vault references', () => {
+  it('resolves and rewrites Markdown links to scoped experiment files', () => {
+    const source = '/notes/a.md'
+    const content = '[run](../experiments/run.py#section)'
+    const paths = new Set([source, '/experiments/run.py'])
+    expect(scanVaultReferences(source, content, paths)).toMatchObject([
+      { target: '/experiments/run.py', status: 'resolved', kind: 'markdown' },
+    ])
+    expect(rewritePathReferences(source, content, '/experiments/run.py', '/experiments/renamed.py', paths).content)
+      .toBe('[run](../experiments/renamed.py#section)')
+  })
   it('renames a Canvas self-reference whose literal filename starts with a hash', () => {
     const canvas = JSON.stringify({ nodes: [{ id: 'self', type: 'file', file: '#map.canvas', subpath: '#target' }] })
     const result = rewritePathReferences('/#map.canvas', canvas, '/#map.canvas', '/#new%.canvas', new Set(['/#map.canvas']))
