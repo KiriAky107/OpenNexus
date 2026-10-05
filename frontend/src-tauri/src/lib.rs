@@ -118,6 +118,8 @@ mod experiment_registry;
 pub mod experiment_runtime;
 #[cfg(windows)]
 pub mod experiment_runtime_bound;
+#[cfg(windows)]
+pub mod experiment_sources;
 
 #[cfg(all(test, windows))]
 mod experiment_runtime_probe;

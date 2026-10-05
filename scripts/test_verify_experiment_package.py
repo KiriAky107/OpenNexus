@@ -91,6 +91,23 @@ class PackageRuntimeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 package.verify_storage_receipt(result, runtime, lock)
 
+    def test_source_receipt_requires_selected_read_only_copies_and_host_positive_control(self):
+        operations = ('entry_write', 'entry_delete', 'source_folder_rename', 'neighbor_create', 'original_unselected_read')
+        basic = {key: {'denied': True} for key in operations}
+        sources = dict(outside_profile=True, bytes_preserved=True, unselected_absent=True,
+                       host_original_editable=True, selected_files=2)
+        package.verify_sources_receipt(basic, sources)
+        for key in sources:
+            changed = dict(sources)
+            changed[key] = False
+            with self.assertRaises(ValueError):
+                package.verify_sources_receipt(basic, changed)
+        for key in operations:
+            changed = copy.deepcopy(basic)
+            changed[key]['denied'] = False
+            with self.assertRaisesRegex(ValueError, key):
+                package.verify_sources_receipt(changed, sources)
+
     def test_write_receipt_requires_cumulative_limit_and_complete_tree_cleanup(self):
         with tempfile.TemporaryDirectory(dir=self.staging, prefix='write-receipt-') as directory:
             runtime, manifest = self.fixture(Path(directory))

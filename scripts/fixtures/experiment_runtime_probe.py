@@ -253,6 +253,15 @@ def main():
         "outside_read": denied(lambda: private.read_bytes()),
         "parent_environment_absent": "OPENNEXUS_PROBE_PARENT_TOKEN" not in os.environ,
     }
+    if mode == "sources":
+        entry = Path(__file__)
+        report.update({
+            "entry_write": denied(lambda: entry.write_bytes(b"changed")),
+            "entry_delete": denied(lambda: entry.unlink()),
+            "source_folder_rename": denied(lambda: inputs.rename(inputs.with_name("moved"))),
+            "neighbor_create": denied(lambda: (inputs / "injected.py").write_bytes(b"print(1)")),
+            "original_unselected_read": denied(lambda: Path(sys.argv[6]).read_bytes()),
+        })
     with socket.socket() as connection:
         connection.settimeout(2)
         report["network"] = denied(lambda: connection.connect(("127.0.0.1", port)))

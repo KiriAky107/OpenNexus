@@ -158,6 +158,58 @@ fn native_probe(experimental: bool, probe: Probe) {
     .unwrap();
     let csv = "name,value\r\n中文,7\r\nexample,11\r\n";
     fs::write(inputs.path().join("input.csv"), csv).unwrap();
+    let source_owner = if probe == Probe::Binding {
+        use crate::experiment_input::{PreparedInputs, RunRequest, SelectedFile};
+        let directory = inputs.path().join("experiments");
+        fs::create_dir(&directory).unwrap();
+        fs::copy(&script, directory.join("main.py")).unwrap();
+        fs::write(directory.join("input.csv"), csv).unwrap();
+        fs::write(
+            directory.join("unselected.json"),
+            b"synthetic unselected secret",
+        )
+        .unwrap();
+        let mut ws = crate::workspace::Workspace::open(inputs.path()).unwrap();
+        let mut select = |path: &str| {
+            let file = ws.read(path).unwrap().entry;
+            SelectedFile {
+                file_id: file.file_id,
+                path: file.path,
+                hash: file.hash,
+                revision: file.revision,
+            }
+        };
+        let entry = select("experiments/main.py");
+        let data = select("experiments/input.csv");
+        let request = RunRequest {
+            vault_id: ws.vault_id.clone(),
+            operation_id: uuid::Uuid::new_v4().to_string(),
+            runtime_id: crate::experiment_runtime::RUNTIME_ID.into(),
+            entry,
+            inputs: vec![data],
+            limits: limits.clone(),
+        };
+        let prepared = PreparedInputs::prepare(&mut ws, &request.validate().unwrap()).unwrap();
+        let waiting = ws.experiment_prepare(prepared).unwrap();
+        ws.experiment_approve(&request.operation_id, &waiting.summary.fingerprint)
+            .unwrap();
+        Some(crate::experiment_owner::RunOwner::claim(&mut ws, &request.operation_id).unwrap())
+    } else {
+        None
+    };
+    let sources = source_owner
+        .as_ref()
+        .map(|owner| crate::experiment_sources::RunSources::create(owner.run()).unwrap());
+    let source_entry = sources.as_ref().map(|sources| sources.entry().unwrap());
+    let script = source_entry
+        .as_ref()
+        .map(|entry| entry.path().to_owned())
+        .unwrap_or(script);
+    let input_folder = if source_entry.is_some() {
+        script.parent().unwrap().to_owned()
+    } else {
+        inputs.path().to_owned()
+    };
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     // Positive control: the very same listening endpoint is reachable by Host.
@@ -198,9 +250,14 @@ fn native_probe(experimental: bool, probe: Probe) {
     if let Some(bound) = &bound_entry {
         assert!(bound.path().to_string_lossy().starts_with(r"\\?\Volume{"));
     }
-    grants.pin(inputs.path(), None);
-    grants.pin(&script, None);
-    grants.pin(&inputs.path().join("input.csv"), None);
+    let mut source_access = sources
+        .as_ref()
+        .map(|sources| sources.access(&profile).unwrap());
+    if sources.is_none() {
+        grants.pin(inputs.path(), None);
+        grants.pin(&script, None);
+        grants.pin(&inputs.path().join("input.csv"), None);
+    }
     let executable = bound_entry
         .as_ref()
         .map(|bound| bound.launch_path().to_owned())
@@ -214,10 +271,15 @@ fn native_probe(experimental: bool, probe: Probe) {
             "utf8".into(),
             script.to_string_lossy().into_owned(),
             mode.into(),
-            inputs.path().to_string_lossy().into_owned(),
+            input_folder.to_string_lossy().into_owned(),
             sentinel.to_string_lossy().into_owned(),
             listener.local_addr().unwrap().port().to_string(),
             profile_name.clone(),
+            inputs
+                .path()
+                .join("experiments/unselected.json")
+                .to_string_lossy()
+                .into_owned(),
         ];
         LaunchData::new(
             &executable,
@@ -370,6 +432,7 @@ fn native_probe(experimental: bool, probe: Probe) {
         .unwrap();
         grants.revoke();
         drop(runtime_access);
+        drop(source_access);
         drop(scratch);
         profile.remove().unwrap();
         return;
@@ -436,11 +499,16 @@ fn native_probe(experimental: bool, probe: Probe) {
         drop(running);
         grants.revoke();
         drop(runtime_access);
+        drop(source_access);
         drop(scratch);
         profile.remove().unwrap();
         return;
     }
-    let running = launch("basic");
+    let running = launch(if probe == Probe::Binding {
+        "sources"
+    } else {
+        "basic"
+    });
     let code = running.wait(Duration::from_secs(15)).unwrap();
     let error = fs::read_to_string(scratch.0.join("error.txt")).unwrap_or_default();
     assert_eq!(code, Some(0), "Python startup/fixture failed: {error}");
@@ -476,6 +544,38 @@ fn native_probe(experimental: bool, probe: Probe) {
     );
     assert!(folder.join("probe-outside-scratch.txt").exists());
     if probe == Probe::Binding {
+        for operation in [
+            "entry_write",
+            "entry_delete",
+            "source_folder_rename",
+            "neighbor_create",
+            "original_unselected_read",
+        ] {
+            assert_eq!(
+                report[operation]["denied"], true,
+                "{operation}: {}",
+                report[operation]
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(input_folder.join("input.csv")).unwrap(),
+            csv
+        );
+        assert_eq!(
+            fs::read(&script).unwrap(),
+            include_bytes!("../../../scripts/fixtures/experiment_runtime_probe.py")
+        );
+        assert!(!input_folder.join("unselected.json").exists());
+        assert!(!fs::canonicalize(&input_folder)
+            .unwrap()
+            .starts_with(fs::canonicalize(&folder).unwrap()));
+        // The original selected bytes remain editable by Host, but the child
+        // receives only the pinned snapshot in its separate read-only tree.
+        fs::write(
+            inputs.path().join("experiments/input.csv"),
+            b"later Host edit",
+        )
+        .unwrap();
         let stopped = Instant::now();
         while running.active_test_processes().unwrap() != 0
             && stopped.elapsed() < Duration::from_secs(5)
@@ -491,12 +591,16 @@ fn native_probe(experimental: bool, probe: Probe) {
             serde_json::to_vec_pretty(&serde_json::json!({
                 "runtime_id": lock["runtime_id"], "basic": report, "volume_guid_entry": bound_entry.as_ref().unwrap().path(),
                 "remaining_processes": 0, "host_network_positive_control": true,
+                "sources": { "outside_profile": true, "selected_files": 2,
+                    "bytes_preserved": true, "unselected_absent": true, "host_original_editable": true },
                 "production_executor_enabled": false,
             }))
             .unwrap(),
         )
         .unwrap();
         drop(running);
+        source_access.take().unwrap().finish().unwrap();
+        drop(source_access);
         runtime_access.take().unwrap().finish().unwrap();
         drop(runtime_access);
         grants.revoke();
@@ -788,6 +892,7 @@ fn native_probe(experimental: bool, probe: Probe) {
     })).unwrap()).unwrap();
     grants.revoke();
     drop(runtime_access);
+    drop(source_access);
     drop(scratch);
     profile.remove().unwrap();
 }

@@ -86,6 +86,17 @@ def verify_bound_receipt(result: dict, runtime: Path, lock: dict) -> None:
             or not Path(result['volume_guid_entry']).samefile(runtime / lock['entrypoint'])
             or type(result['remaining_processes']) is not int or result['remaining_processes'] != 0):
         raise ValueError('Native bound runtime did not verify the extracted interpreter and empty Job')
+    verify_sources_receipt(basic, result['sources'])
+
+
+def verify_sources_receipt(basic: dict, sources: dict) -> None:
+    if (type(sources['selected_files']) is not int or sources['selected_files'] != 2
+            or any(sources[key] is not True for key in (
+                'outside_profile', 'bytes_preserved', 'unselected_absent', 'host_original_editable'))):
+        raise ValueError('Native bound runtime did not verify the selected source copies')
+    for key in ('entry_write', 'entry_delete', 'source_folder_rename', 'neighbor_create', 'original_unselected_read'):
+        if basic[key]['denied'] is not True:
+            raise ValueError('Native selected source operation was not denied: ' + key)
 
 
 def native_probe(payload: Path, target: str, evidence: Path) -> dict:
