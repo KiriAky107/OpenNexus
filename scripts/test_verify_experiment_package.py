@@ -1,6 +1,10 @@
 """Installer trust checks with offline synthetic payloads; never launch them."""
 import importlib.util
 import copy
+import hashlib
+import base64
+import struct
+import zlib
 import json
 from pathlib import Path
 import tempfile
@@ -125,12 +129,30 @@ class PackageRuntimeTests(unittest.TestCase):
                     ('switch', 'cancelled', 'EXPERIMENT_CANCELLED', None),
                     ('shutdown', 'cancelled', 'EXPERIMENT_CANCELLED', None),
                     ('wall', 'limited', 'EXTENSION_TOOL_DEADLINE_EXCEEDED', None),
-                    ('cpu', 'limited', 'EXTENSION_RESOURCE_CPU_EXCEEDED', 1)):
-                runs[mode] = dict(remaining_processes=0,
+                    ('cpu', 'limited', 'EXTENSION_RESOURCE_CPU_EXCEEDED', 1),
+                    ('bad-output', 'failed', 'EXPERIMENT_OUTPUT_INVALID', 0),
+                    ('named-stream', 'failed', 'EXPERIMENT_OUTPUT_NAMED_STREAM_REJECTED', 0),
+                    ('png-output', 'completed', None, 0)):
+                outputs = dict(status='rejected', error=error) if mode in ('bad-output', 'named-stream') else dict(
+                    status='collected', summary=dict(files=[], skipped=[], total_bytes=0))
+                runs[mode] = dict(remaining_processes=0, profile_removed=True, persisted_output_bytes={},
                     runtime=dict(runtime_id=lock['runtime_id'], version=lock['version'], files=3),
                     result=dict(outcome=outcome, error=error, exit_code=code, elapsed_ms=1100,
                         user_cpu_ticks=10_000_000, peak_memory_bytes=1000000, final_disk_bytes=0,
-                        logs=dict(stdout=log(), stderr=log())))
+                        logs=dict(stdout=log(), stderr=log()), outputs=outputs))
+            runs['basic']['result']['outputs']['summary'] = dict(files=[
+                dict(path=path,bytes=len(content),sha256=hashlib.sha256(content).hexdigest(),kind='text')
+                for path,content in [('worker-output.txt',b'owned synthetic output'),('protected-descriptor.txt',b'')]],
+                skipped=[],total_bytes=22)
+            runs['basic']['persisted_output_bytes'] = {path:base64.b64encode(content).decode('ascii')
+                for path,content in [('worker-output.txt',b'owned synthetic output'),('protected-descriptor.txt',b'')]}
+            def chunk(kind,data):
+                return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data))
+            png=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',1,1,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(b'\x00\xff\x00\x00'))+chunk(b'IEND',b'')
+            runs['png-output']['result']['outputs']['summary'] = dict(files=[dict(
+                path='result.png',bytes=len(png),sha256=hashlib.sha256(png).hexdigest(),kind='png')],skipped=[],total_bytes=len(png))
+            runs['png-output']['persisted_output_bytes']={'result.png':base64.b64encode(png).decode('ascii')}
+            runs['png-output']['result']['logs']['stdout'] = log('generated-png\r\n')
             for mode in ('cancel', 'switch', 'shutdown'):
                 runs[mode]['result']['logs']['stdout'] = log('child-ready\r\n')
             for stream in ('stdout', 'stderr'):
@@ -151,6 +173,14 @@ class PackageRuntimeTests(unittest.TestCase):
             cases = [
                 (('schema_version',), True), (('runtime_id',), 'other'),
                 (('runs', 'basic', 'remaining_processes'), False),
+                (('runs', 'basic', 'profile_removed'), False),
+                (('runs', 'basic', 'result', 'outputs', 'summary', 'total_bytes'), False),
+                (('runs', 'basic', 'result', 'outputs', 'summary', 'files'), []),
+                (('runs', 'bad-output', 'result', 'outputs', 'status'), 'collected'),
+                (('runs', 'named-stream', 'result', 'outputs', 'error'), 'completed'),
+                (('runs', 'png-output', 'result', 'outputs', 'summary', 'files'), []),
+                (('runs', 'png-output', 'persisted_output_bytes','result.png'), base64.b64encode(b'invalid PNG').decode('ascii')),
+                (('runs', 'basic', 'persisted_output_bytes','worker-output.txt'), base64.b64encode(b'wrong').decode('ascii')),
                 (('runs', 'switch', 'remaining_processes'), 1),
                 (('runs', 'shutdown', 'remaining_processes'), 1),
                 (('runs', 'nonzero', 'result', 'outcome'), 'completed'),

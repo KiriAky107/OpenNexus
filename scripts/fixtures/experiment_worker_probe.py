@@ -193,6 +193,22 @@ elif MODE == 'logs':
     sys.stdout.flush()
     sys.stderr.buffer.write(b'E' * (2 * 1024 * 1024))
     sys.stderr.flush()
+elif MODE == 'bad-output':
+    (Path.cwd() / 'bad.json').write_bytes(b'{broken json')
+elif MODE == 'named-stream':
+    (Path.cwd() / 'output.txt').write_bytes(b'visible')
+    (Path.cwd() / 'output.txt:hidden').write_bytes(b'hidden')
+elif MODE == 'png-output':
+    import struct
+    import zlib
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    png = b'\x89PNG\r\n\x1a\n'
+    png += chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0))
+    png += chunk(b'IDAT', zlib.compress(b'\x00\xff\x00\x00'))
+    png += chunk(b'IEND', b'')
+    (Path.cwd() / 'result.png').write_bytes(png)
+    print('generated-png', flush=True)
 else:
     scratch_acl_access = filesystem_report()
     rows = list(csv.DictReader(io.StringIO((Path(__file__).parent / 'input.csv').read_text(encoding='utf-8'))))

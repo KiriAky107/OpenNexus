@@ -1,11 +1,14 @@
 """Check the installer's interpreter inventory and run only owned native probes."""
 from __future__ import annotations
 import hashlib
+import base64
 import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
+import struct
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('experiment_builder', ROOT / 'scripts/prepare-experiment-runtime.py')
@@ -109,6 +112,9 @@ def verify_worker_receipt(receipt: dict, runtime: Path, lock: dict) -> None:
         'shutdown': ('cancelled', 'EXPERIMENT_CANCELLED'),
         'wall': ('limited', 'EXTENSION_TOOL_DEADLINE_EXCEEDED'),
         'cpu': ('limited', 'EXTENSION_RESOURCE_CPU_EXCEEDED'),
+        'bad-output': ('failed', 'EXPERIMENT_OUTPUT_INVALID'),
+        'named-stream': ('failed', 'EXPERIMENT_OUTPUT_NAMED_STREAM_REJECTED'),
+        'png-output': ('completed', None),
     }
     if (type(receipt['schema_version']) is not int or receipt['schema_version'] != 1
             or receipt['runtime_id'] != lock['runtime_id'] or set(receipt['runs']) != set(expected)):
@@ -117,6 +123,7 @@ def verify_worker_receipt(receipt: dict, runtime: Path, lock: dict) -> None:
         item = receipt['runs'][mode]
         result = item['result']
         if (type(item['remaining_processes']) is not int or item['remaining_processes'] != 0
+                or item['profile_removed'] is not True
                 or item['runtime']['runtime_id'] != lock['runtime_id']
                 or item['runtime']['version'] != lock['version']
                 or type(item['runtime']['files']) is not int or item['runtime']['files'] <= 0
@@ -128,11 +135,49 @@ def verify_worker_receipt(receipt: dict, runtime: Path, lock: dict) -> None:
         if result['elapsed_ms'] == 0 or result['peak_memory_bytes'] == 0:
             raise ValueError('Formal worker is missing real measurements: ' + mode)
         code = result['exit_code']
-        if ((mode in ('basic', 'logs') and (type(code) is not int or code != 0))
+        if ((mode in ('basic', 'logs', 'bad-output', 'named-stream', 'png-output') and (type(code) is not int or code != 0))
                 or (mode == 'nonzero' and (type(code) is not int or code != 7))
                 or (mode in ('cancel', 'switch', 'shutdown', 'wall', 'cpu')
                     and code is not None and (type(code) is not int or code == 0))):
             raise ValueError('Formal worker exit code disagrees with the outcome: ' + mode)
+        outputs = result['outputs']
+        if mode in ('bad-output', 'named-stream'):
+            if outputs != {'status': 'rejected', 'error': error}:
+                raise ValueError('Formal worker hid rejected output files: ' + mode)
+        elif (outputs['status'] != 'collected' or type(outputs['summary']['total_bytes']) is not int
+              or outputs['summary']['total_bytes'] < 0):
+            raise ValueError('Formal worker omitted collected output evidence: ' + mode)
+        if mode == 'png-output':
+            summary = outputs['summary']
+            if (len(summary['files']) != 1 or summary['skipped'] != []
+                    or summary['files'][0]['path'] != 'result.png' or summary['files'][0]['kind'] != 'png'
+                    or type(summary['files'][0]['bytes']) is not int
+                    or summary['files'][0]['bytes'] < 60 or summary['total_bytes'] != summary['files'][0]['bytes']
+                    or len(summary['files'][0]['sha256']) != 64
+                    or 'generated-png' not in result['logs']['stdout']['text']):
+                raise ValueError('Formal worker omitted the native generated PNG positive control')
+            data = base64.b64decode(item['persisted_output_bytes']['result.png'], validate=True)
+            if (set(item['persisted_output_bytes']) != {'result.png'} or len(data) > 4096
+                    or len(data) != summary['total_bytes'] or not data.startswith(b'\x89PNG\r\n\x1a\n')
+                    or hashlib.sha256(data).hexdigest() != summary['files'][0]['sha256']):
+                raise ValueError('Formal worker did not verify the persisted PNG bytes after cleanup')
+            offset, chunks = 8, []
+            while offset < len(data):
+                if offset + 12 > len(data):
+                    raise ValueError('Native generated PNG is truncated')
+                length = int.from_bytes(data[offset:offset + 4], 'big')
+                end = offset + length + 12
+                if end > len(data) or zlib.crc32(data[offset + 4:end - 4]) != int.from_bytes(data[end - 4:end], 'big'):
+                    raise ValueError('Native generated PNG has invalid chunks')
+                chunks.append((data[offset + 4:offset + 8], data[offset + 8:end - 4]))
+                offset = end
+            if ([kind for kind, _ in chunks] != [b'IHDR', b'IDAT', b'IEND']
+                    or chunks[0][1] != struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0) or chunks[-1][1] != b''):
+                raise ValueError('Native generated PNG differs from its positive control')
+            decoder = zlib.decompressobj()
+            if (decoder.decompress(chunks[1][1], 5) != b'\x00\xff\x00\x00' or not decoder.eof
+                    or decoder.unused_data or decoder.unconsumed_tail):
+                raise ValueError('Native generated PNG did not preserve the real pixel')
         for stream in ('stdout', 'stderr'):
             log = result['logs'][stream]
             if (log['complete'] is not True or log['read_error'] is not False
@@ -161,6 +206,16 @@ def verify_worker_receipt(receipt: dict, runtime: Path, lock: dict) -> None:
     if len(lines) != 1:
         raise ValueError('Formal worker is missing its real interpreter positive control')
     report = json.loads(lines[0])
+    outputs = receipt['runs']['basic']['result']['outputs']['summary']
+    files = {item['path']: item for item in outputs['files']}
+    if (len(outputs['files']) != 2 or set(files) != {'worker-output.txt', 'protected-descriptor.txt'} or outputs['skipped'] != []
+            or outputs['total_bytes'] != 22):
+        raise ValueError('Formal worker did not preserve both synthetic outputs')
+    for path, content in (('worker-output.txt', b'owned synthetic output'), ('protected-descriptor.txt', b'')):
+        if type(files[path]['bytes']) is not int or files[path] != {'path': path, 'bytes': len(content), 'sha256': hashlib.sha256(content).hexdigest(), 'kind': 'text'}:
+            raise ValueError('Formal worker output manifest is invalid: ' + path)
+        if base64.b64decode(receipt['runs']['basic']['persisted_output_bytes'][path], validate=True) != content:
+            raise ValueError('Formal worker did not read its stored bytes after cleanup: ' + path)
     if (report['runtime'] != lock['version'] or not Path(report['executable']).samefile(runtime / lock['entrypoint'])
             or type(report['isolated']) is not int or report['isolated'] != 1 or report['argv'] != []
             or report['parent_environment_inherited'] is not False or report['input_write_denied'] is not True

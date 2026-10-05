@@ -486,7 +486,17 @@ mod tests {
             .unwrap_or_else(|| root.join(".build/experiment-runtime").join(RUNTIME_ID));
         let mut reports = std::collections::BTreeMap::new();
         for mode in [
-            "basic", "nonzero", "logs", "cancel", "switch", "shutdown", "wall", "cpu",
+            "basic",
+            "nonzero",
+            "logs",
+            "cancel",
+            "switch",
+            "shutdown",
+            "wall",
+            "cpu",
+            "bad-output",
+            "named-stream",
+            "png-output",
         ] {
             let script = include_str!("../../../scripts/fixtures/experiment_worker_probe.py")
                 .replace("MODE = None", &format!("MODE = {mode:?}"));
@@ -603,13 +613,29 @@ mod tests {
             };
             let result = record.result.unwrap();
             match mode {
-                "basic" | "logs" => {
+                "basic" | "logs" | "png-output" => {
                     assert_eq!(result.outcome, Outcome::Completed);
                     assert_eq!(result.exit_code, Some(0));
                 }
                 "nonzero" => {
                     assert_eq!(result.outcome, Outcome::Failed);
                     assert_eq!(result.exit_code, Some(7));
+                }
+                "bad-output" | "named-stream" => {
+                    assert_eq!(result.outcome, Outcome::Failed);
+                    assert_eq!(result.exit_code, Some(0));
+                    assert!(matches!(
+                        result.outputs,
+                        Some(crate::experiment_outputs::OutputReport::Rejected { .. })
+                    ));
+                    assert_eq!(
+                        result.error.as_deref(),
+                        Some(if mode == "bad-output" {
+                            "EXPERIMENT_OUTPUT_INVALID"
+                        } else {
+                            "EXPERIMENT_OUTPUT_NAMED_STREAM_REJECTED"
+                        })
+                    );
                 }
                 "cancel" | "switch" | "shutdown" => assert_eq!(result.outcome, Outcome::Cancelled),
                 "wall" | "cpu" => assert_eq!(result.outcome, Outcome::Limited),
@@ -619,6 +645,26 @@ mod tests {
             assert!(result.final_disk_bytes.is_some());
             assert!(result.logs.stdout.complete && result.logs.stderr.complete);
             if mode == "basic" {
+                use crate::experiment_outputs::OutputReport;
+                let Some(OutputReport::Collected { summary }) = &result.outputs else {
+                    panic!("outputs were not collected")
+                };
+                assert_eq!(summary.files.len(), 2);
+                assert_eq!(summary.total_bytes, 22);
+                let slot = workspace.lock().unwrap();
+                let ws = slot.as_ref().unwrap();
+                assert_eq!(
+                    ws.experiment_output(&request.operation_id, "worker-output.txt")
+                        .unwrap()
+                        .content(),
+                    b"owned synthetic output"
+                );
+                assert!(ws
+                    .experiment_output(&request.operation_id, "protected-descriptor.txt")
+                    .unwrap()
+                    .content()
+                    .is_empty());
+                drop(slot);
                 assert!(result
                     .logs
                     .stdout
@@ -654,6 +700,19 @@ mod tests {
             }
             if mode == "cpu" {
                 assert!(result.user_cpu_ticks.unwrap() >= 10_000_000);
+            }
+            if mode == "png-output" {
+                let slot = workspace.lock().unwrap();
+                let ws = slot.as_ref().unwrap();
+                let output = ws
+                    .experiment_output(&request.operation_id, "result.png")
+                    .unwrap();
+                assert_eq!(
+                    output.manifest().kind,
+                    crate::experiment_outputs::OutputKind::Png
+                );
+                assert!(output.content().starts_with(b"\x89PNG\r\n\x1a\n"));
+                assert!(result.logs.stdout.text.contains("generated-png"));
             }
             if mode == "logs" {
                 assert_eq!(result.logs.stdout.bytes_seen, 2 * 1024 * 1024);
@@ -696,7 +755,33 @@ mod tests {
             let stopped = runner.stopped.lock().unwrap();
             assert_eq!(stopped.len(), 1);
             assert_eq!(stopped[0].remaining_processes, 0);
-            reports.insert(mode, serde_json::to_value(&stopped[0]).unwrap());
+            assert!(
+                stopped[0].profile_removed,
+                "profile directory survived cleanup: {mode}"
+            );
+            let mut evidence = serde_json::to_value(&stopped[0]).unwrap();
+            let mut persisted = serde_json::Map::new();
+            if mode == "basic" || mode == "png-output" {
+                let slot = workspace.lock().unwrap();
+                let ws = slot.as_ref().unwrap();
+                let paths: &[&str] = if mode == "basic" {
+                    &["worker-output.txt", "protected-descriptor.txt"]
+                } else {
+                    &["result.png"]
+                };
+                for path in paths {
+                    let chunk = ws
+                        .experiment_output_read(&request.operation_id, path, 0, 256 * 1024)
+                        .unwrap();
+                    assert!(chunk.next_offset.is_none());
+                    persisted.insert(
+                        (*path).into(),
+                        serde_json::Value::String(chunk.content_base64),
+                    );
+                }
+            }
+            evidence["persisted_output_bytes"] = serde_json::Value::Object(persisted);
+            reports.insert(mode, evidence);
         }
         let evidence = std::env::var_os("OPENNEXUS_PROBE_RECEIPT_DIR")
             .map(PathBuf::from)
