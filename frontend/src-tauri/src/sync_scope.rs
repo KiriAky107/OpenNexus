@@ -194,7 +194,7 @@ mod tests {
             ws.db
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            15
+            16
         );
     }
     #[test]
