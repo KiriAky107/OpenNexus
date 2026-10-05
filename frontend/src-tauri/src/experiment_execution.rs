@@ -2,6 +2,7 @@
 use crate::{
     experiment_disk::DiskBudget,
     experiment_log::{CaptureSnapshot, LogBuffer, LogCapture},
+    experiment_outputs::{CollectedOutputs, OutputReport},
     experiment_owner::RunOwner,
     experiment_runtime::{RuntimeInfo, RUNTIME_ID},
     experiment_runtime_bound::PinnedRuntime,
@@ -37,6 +38,9 @@ pub struct ExecutionResult {
     pub result: RunResult,
     pub remaining_processes: u32,
     pub runtime: RuntimeInfo,
+    pub profile_removed: bool,
+    #[serde(skip)]
+    pub(crate) outputs: Option<CollectedOutputs>,
 }
 struct Bindings<'a> {
     runtime: &'a PinnedRuntime,
@@ -150,6 +154,7 @@ fn empty_logs() -> CaptureSnapshot {
 }
 pub(crate) fn failure(code: String, elapsed_ms: u64) -> RunResult {
     RunResult {
+        outputs: None,
         outcome: outcome(&code),
         exit_code: None,
         elapsed_ms,
@@ -336,7 +341,26 @@ fn execute_pinned(
     if error.is_none() && exit_code != Some(0) {
         error = Some("EXPERIMENT_NONZERO_EXIT".into());
     }
+    // The complete Job is zero and both streams have drained. Capture immutable
+    // bytes before deleting the owned profile; never accept caller output paths.
+    let (outputs, output_report) = match crate::experiment_outputs::collect(&profile, &limits) {
+        Ok(outputs) => {
+            let report = outputs.report();
+            (Some(outputs), report)
+        }
+        Err(cause) => {
+            if error.is_none() {
+                error = Some(cause.code.clone());
+            }
+            (None, OutputReport::Rejected { error: cause.code })
+        }
+    };
+    let profile_root = folder
+        .parent()
+        .ok_or_else(|| HostError::new("EXPERIMENT_PROFILE_CLEANUP_INCOMPLETE"))?
+        .to_owned();
     let mut result = RunResult {
+        outputs: Some(output_report),
         outcome: error.as_deref().map_or(Outcome::Completed, outcome),
         exit_code,
         elapsed_ms: started.elapsed().as_millis() as u64,
@@ -355,10 +379,17 @@ fn execute_pinned(
         result.outcome = Outcome::Failed;
         result.error = Some(cause.code);
     }
+    let profile_removed = matches!(std::fs::symlink_metadata(&profile_root),Err(error) if error.kind()==std::io::ErrorKind::NotFound);
+    if !profile_removed {
+        result.outcome = Outcome::Failed;
+        result.error = Some("EXPERIMENT_PROFILE_CLEANUP_INCOMPLETE".into());
+    }
     Ok(ExecutionResult {
         result,
         remaining_processes,
         runtime: runtime.info().clone(),
+        profile_removed,
+        outputs,
     })
 }
 #[cfg(test)]

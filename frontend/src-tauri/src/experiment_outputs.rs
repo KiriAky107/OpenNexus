@@ -22,7 +22,7 @@ fn exceeded() -> HostError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum OutputKind {
+pub enum OutputKind {
     Text,
     Markdown,
     Json,
@@ -31,7 +31,7 @@ pub(crate) enum OutputKind {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct OutputManifest {
+pub struct OutputManifest {
     pub path: String,
     pub bytes: u64,
     pub sha256: String,
@@ -59,12 +59,12 @@ impl ValidatedOutput {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum SkippedReason {
+pub enum SkippedReason {
     UnsupportedType,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct SkippedOutput {
+pub struct SkippedOutput {
     pub path: String,
     pub bytes: u64,
     pub reason: SkippedReason,
@@ -74,6 +74,100 @@ pub(crate) struct CollectedOutputs {
     pub(crate) files: Vec<ValidatedOutput>,
     pub(crate) skipped: Vec<SkippedOutput>,
     pub(crate) total_bytes: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputSummary {
+    pub files: Vec<OutputManifest>,
+    pub skipped: Vec<SkippedOutput>,
+    pub total_bytes: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OutputReport {
+    Collected { summary: OutputSummary },
+    Rejected { error: String },
+}
+#[derive(Debug, Serialize)]
+pub struct OutputChunk {
+    pub manifest: OutputManifest,
+    pub offset: usize,
+    pub next_offset: Option<usize>,
+    pub content_base64: String,
+}
+fn name_key(path: &str) -> String {
+    use unicode_casefold::UnicodeCaseFold;
+    use unicode_normalization::UnicodeNormalization;
+    path.case_fold().collect::<String>().nfc().collect()
+}
+impl OutputReport {
+    pub(crate) fn validate(&self, limit: u64) -> Result<()> {
+        let Self::Collected { summary } = self else {
+            let Self::Rejected { error } = self else {
+                unreachable!()
+            };
+            if error.is_empty()
+                || error.len() > 96
+                || !error
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+            {
+                return Err(invalid());
+            }
+            return Ok(());
+        };
+        if summary.files.len() + summary.skipped.len() > MAX_FILES {
+            return Err(exceeded());
+        }
+        let mut paths = std::collections::BTreeSet::new();
+        let mut total = 0u64;
+        for (path, bytes) in summary
+            .files
+            .iter()
+            .map(|f| (&f.path, f.bytes))
+            .chain(summary.skipped.iter().map(|f| (&f.path, f.bytes)))
+        {
+            if !valid_path(path) || bytes > MAX_FILE_BYTES || !paths.insert(name_key(path)) {
+                return Err(invalid());
+            }
+            total = total.checked_add(bytes).ok_or_else(exceeded)?;
+        }
+        if total != summary.total_bytes || total > limit {
+            return Err(exceeded());
+        }
+        for manifest in &summary.files {
+            if manifest.sha256.len() != 64
+                || !manifest
+                    .sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
+}
+impl CollectedOutputs {
+    pub(crate) fn report(&self) -> OutputReport {
+        OutputReport::Collected {
+            summary: OutputSummary {
+                files: self.files.iter().map(|f| f.manifest.clone()).collect(),
+                skipped: self.skipped.clone(),
+                total_bytes: self.total_bytes,
+            },
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture(path: &str, bytes: &[u8]) -> Self {
+        Self {
+            files: vec![validate(path, bytes.to_vec(), MAX_FILE_BYTES)
+                .unwrap()
+                .unwrap()],
+            skipped: vec![],
+            total_bytes: bytes.len() as u64,
+        }
+    }
 }
 
 fn valid_component(name: &str) -> bool {
@@ -331,14 +425,7 @@ fn collect_directory(root: &std::path::Path, limits: &ValidatedLimits) -> Result
             if !valid_path(&path) {
                 return Err(invalid());
             }
-            use unicode_casefold::UnicodeCaseFold;
-            use unicode_normalization::UnicodeNormalization;
-            if !names.insert(
-                path.case_fold()
-                    .collect::<String>()
-                    .nfc()
-                    .collect::<String>(),
-            ) {
+            if !names.insert(name_key(&path)) {
                 return Err(invalid());
             }
             let mut file = entry.open_with(&options).map_err(|_| failed())?.into_std();

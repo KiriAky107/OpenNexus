@@ -11,8 +11,7 @@ mod experiment_contract;
 pub mod experiment_execution;
 pub mod experiment_input;
 pub mod experiment_log;
-#[allow(dead_code)] // Closed output foundation; persistence and trusted import are next.
-pub(crate) mod experiment_outputs;
+pub mod experiment_outputs;
 pub mod experiment_owner;
 pub mod experiment_store;
 mod payloads;

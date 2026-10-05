@@ -167,26 +167,33 @@ impl Runner {
                         ),
                     }
                 }));
-                let result = match executed {
-                    Ok(Ok(execution)) => {
+                let (result, outputs) = match executed {
+                    Ok(Ok(mut execution)) => {
+                        let outputs = execution.outputs.take();
                         #[cfg(test)]
                         {
                             let result = execution.result.clone();
                             stopped.lock().unwrap().push(execution);
-                            result
+                            (result, outputs)
                         }
                         #[cfg(not(test))]
                         {
-                            execution.result
+                            (execution.result, outputs)
                         }
                     }
-                    Ok(Err(error)) => experiment_execution::failure(
-                        error.code,
-                        started.elapsed().as_millis() as u64,
+                    Ok(Err(error)) => (
+                        experiment_execution::failure(
+                            error.code,
+                            started.elapsed().as_millis() as u64,
+                        ),
+                        None,
                     ),
-                    Err(_) => experiment_execution::failure(
-                        "EXPERIMENT_WORKER_FAILED".into(),
-                        started.elapsed().as_millis() as u64,
+                    Err(_) => (
+                        experiment_execution::failure(
+                            "EXPERIMENT_WORKER_FAILED".into(),
+                            started.elapsed().as_millis() as u64,
+                        ),
+                        None,
                     ),
                 };
                 let finished = with_workspace(&child_workspace, |ws| {
@@ -208,7 +215,7 @@ impl Runner {
                     {
                         return Ok(old);
                     }
-                    child_owner.finish(ws, result)
+                    child_owner.finish_outputs(ws, result, outputs.as_ref())
                 });
                 if let Ok(mut latest) = live.lock() {
                     *latest = None;

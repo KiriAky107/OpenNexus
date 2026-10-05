@@ -122,6 +122,15 @@ impl RunOwner {
     pub fn finish(&self, ws: &mut Workspace, result: RunResult) -> Result<RunRecord> {
         ws.experiment_finish(&self.run, result)
     }
+    #[cfg(windows)]
+    pub(crate) fn finish_outputs(
+        &self,
+        ws: &mut Workspace,
+        result: RunResult,
+        outputs: Option<&crate::experiment_outputs::CollectedOutputs>,
+    ) -> Result<RunRecord> {
+        ws.experiment_finish_outputs(&self.run, result, outputs)
+    }
     /// The Host first records cancellation, then signals the matching worker.
     /// A different operation or vault never receives the stop signal.
     pub fn request_cancel(ws: &mut Workspace, operation: &str) -> Result<RunRecord> {

@@ -2,6 +2,7 @@
 use crate::{
     experiment_input::{InputSummary, PreparedInputs, MAX_FILES, MAX_FILE_BYTES},
     experiment_log::CaptureSnapshot,
+    experiment_outputs::{CollectedOutputs, OutputReport, ValidatedOutput},
     workspace::{HostError, Result, Workspace},
 };
 use rusqlite::{params, Connection, OptionalExtension};
@@ -23,6 +24,9 @@ pub(crate) const SCHEMA: &str = "
       approval_id TEXT, approved_ms INTEGER, error TEXT, result TEXT);
     CREATE TABLE IF NOT EXISTS experiment_inputs (
       operation_id TEXT NOT NULL, path TEXT NOT NULL, content BLOB NOT NULL,
+      PRIMARY KEY(operation_id,path));
+    CREATE TABLE IF NOT EXISTS experiment_outputs (
+      operation_id TEXT NOT NULL, path TEXT NOT NULL, manifest TEXT NOT NULL, content BLOB NOT NULL,
       PRIMARY KEY(operation_id,path));";
 
 fn corrupt() -> HostError {
@@ -130,10 +134,17 @@ pub struct RunResult {
     pub peak_memory_bytes: Option<u64>,
     pub final_disk_bytes: Option<u64>,
     pub logs: CaptureSnapshot,
+    #[serde(default)]
+    pub outputs: Option<OutputReport>,
 }
 impl RunResult {
     fn validate(&self, summary: &InputSummary) -> Result<()> {
         let budget = summary.validate()?.limits().log_bytes() / 2;
+        if let Some(outputs) = &self.outputs {
+            outputs
+                .validate(summary.validate()?.limits().output_bytes())
+                .map_err(|_| corrupt())?;
+        }
         if self.error.as_ref().is_some_and(|code| {
             code.is_empty()
                 || code.len() > 96
@@ -158,6 +169,11 @@ impl RunResult {
             }
         }
         if self.outcome == Outcome::Completed && (self.exit_code != Some(0) || self.error.is_some())
+        {
+            return Err(corrupt());
+        }
+        if self.outcome == Outcome::Completed
+            && matches!(self.outputs, Some(OutputReport::Rejected { .. }))
         {
             return Err(corrupt());
         }
@@ -197,7 +213,11 @@ pub(crate) fn recover(conn: &Connection) -> Result<()> {
     Ok(())
 }
 fn usage(conn: &Connection) -> Result<i64> {
-    Ok(conn.query_row("SELECT COALESCE((SELECT SUM(length(content)) FROM experiment_inputs),0) + COALESCE((SELECT SUM(length(CAST(summary AS BLOB))+COALESCE(length(CAST(result AS BLOB)),0)) FROM experiment_runs),0)",[],|row|row.get(0))?)
+    Ok(conn.query_row("SELECT COALESCE((SELECT SUM(length(content)) FROM experiment_inputs),0) + COALESCE((SELECT SUM(length(content)+length(CAST(manifest AS BLOB))) FROM experiment_outputs),0) + COALESCE((SELECT SUM(length(CAST(summary AS BLOB))+COALESCE(length(CAST(result AS BLOB)),0)) FROM experiment_runs),0)",[],|row|row.get(0))?)
+}
+fn reservations(conn: &Connection, except: Option<&str>) -> Result<i64> {
+    let count:i64=conn.query_row("SELECT COUNT(*) FROM experiment_runs WHERE state IN ('awaiting_confirmation','approved','starting','running','cancel_requested') AND (?1 IS NULL OR operation_id<>?1)",[except],|row|row.get(0))?;
+    count.checked_mul(MAX_RESULT as i64).ok_or_else(corrupt)
 }
 fn get(conn: &Connection, operation: &str) -> Result<Option<RunRecord>> {
     let record=conn.query_row("SELECT CASE WHEN length(CAST(summary AS BLOB))<=?2 THEN summary END,state,created_ms,updated_ms,approval_id,approved_ms,error,CASE WHEN length(CAST(result AS BLOB))<=?3 THEN result END, result IS NOT NULL FROM experiment_runs WHERE operation_id=?1",
@@ -242,6 +262,18 @@ fn get(conn: &Connection, operation: &str) -> Result<Option<RunRecord>> {
         if result.outcome.state() != state {
             return Err(corrupt());
         }
+    }
+    let (count,bytes):(usize,u64)=conn.query_row("SELECT COUNT(*),COALESCE(SUM(length(content)),0) FROM experiment_outputs WHERE operation_id=?1",[operation],|row|Ok((row.get(0)?,row.get(1)?)))?;
+    match result.as_ref().and_then(|r| r.outputs.as_ref()) {
+        Some(OutputReport::Collected { summary: outputs }) => {
+            if count != outputs.files.len()
+                || bytes != outputs.files.iter().map(|f| f.bytes).sum::<u64>()
+            {
+                return Err(corrupt());
+            }
+        }
+        _ if count != 0 => return Err(corrupt()),
+        _ => {}
     }
     if matches!(
         state,
@@ -300,7 +332,12 @@ impl Workspace {
         let count: i64 =
             tx.query_row("SELECT COUNT(*) FROM experiment_runs", [], |row| row.get(0))?;
         if count >= MAX_RECORDS
-            || usage(&tx)? + summary.total_bytes as i64 + encoded.len() as i64 > MAX_STORE
+            || usage(&tx)?
+                + reservations(&tx, None)?
+                + summary.total_bytes as i64
+                + encoded.len() as i64
+                + MAX_RESULT as i64
+                > MAX_STORE
         {
             return Err(HostError::new("EXPERIMENT_RECORD_QUOTA"));
         }
@@ -358,6 +395,11 @@ impl Workspace {
         let old = self.experiment_record(operation)?.ok_or_else(conflict)?;
         if old.state != RunState::Approved {
             return Err(conflict());
+        }
+        // New prepares reserve complete terminal logs. Legacy pending records
+        // must also have capacity before any native execution can start.
+        if usage(&self.db)? + reservations(&self.db, None)? > MAX_STORE {
+            return Err(HostError::new("EXPERIMENT_RECORD_QUOTA"));
         }
         let time = now()?;
         let approved = old.approved_ms.ok_or_else(corrupt)?;
@@ -444,7 +486,15 @@ impl Workspace {
     pub(crate) fn experiment_finish(
         &mut self,
         run: &ClaimedRun,
+        result: RunResult,
+    ) -> Result<RunRecord> {
+        self.experiment_finish_outputs(run, result, None)
+    }
+    pub(crate) fn experiment_finish_outputs(
+        &mut self,
+        run: &ClaimedRun,
         mut result: RunResult,
+        outputs: Option<&CollectedOutputs>,
     ) -> Result<RunRecord> {
         let old = self.check_claim(run)?;
         if old.state.terminal() {
@@ -462,15 +512,113 @@ impl Workspace {
         if old.state == RunState::Starting && result.outcome == Outcome::Completed {
             return Err(conflict());
         }
+        if let Some(outputs) = outputs {
+            let report = outputs.report();
+            report
+                .validate(old.summary.validate()?.limits().output_bytes())
+                .map_err(|_| corrupt())?;
+            result.outputs = Some(report);
+        } else if matches!(result.outputs, Some(OutputReport::Collected { .. })) {
+            return Err(corrupt());
+        }
         result.validate(&old.summary)?;
-        let encoded = serde_json::to_string(&result).map_err(|_| corrupt())?;
-        if encoded.len() > MAX_RESULT || usage(&self.db)? + encoded.len() as i64 > MAX_STORE {
-            self.db.execute("UPDATE experiment_runs SET state='failed',error='EXPERIMENT_RECORD_QUOTA',updated_ms=?2 WHERE operation_id=?1",params![old.summary.request.operation_id,now()?])?;
+        let mut encoded = serde_json::to_string(&result).map_err(|_| corrupt())?;
+        if encoded.len() > MAX_RESULT {
+            return Err(corrupt());
+        }
+        let tx = self.db.transaction()?;
+        let mut stored = Vec::new();
+        let mut output_bytes = 0i64;
+        if let Some(outputs) = outputs {
+            for output in &outputs.files {
+                let manifest = serde_json::to_string(output.manifest()).map_err(|_| corrupt())?;
+                output_bytes = output_bytes
+                    .checked_add(manifest.len() as i64 + output.content().len() as i64)
+                    .ok_or_else(corrupt)?;
+                stored.push((output, manifest));
+            }
+        }
+        let available =
+            MAX_STORE - usage(&tx)? - reservations(&tx, Some(&old.summary.request.operation_id))?;
+        if encoded.len() as i64 + output_bytes > available {
+            // Keep complete real logs/measurements using the reserved terminal
+            // space. Reject all output bytes atomically, never a partial set.
+            if old.state != RunState::CancelRequested {
+                result.outcome = Outcome::Failed;
+            }
+            result.error = Some("EXPERIMENT_RECORD_QUOTA".into());
+            result.outputs = Some(OutputReport::Rejected {
+                error: "EXPERIMENT_RECORD_QUOTA".into(),
+            });
+            encoded = serde_json::to_string(&result).map_err(|_| corrupt())?;
+            stored.clear();
+        }
+        if encoded.len() > MAX_RESULT || encoded.len() as i64 > available {
             return Err(HostError::new("EXPERIMENT_RECORD_QUOTA"));
         }
-        self.db.execute("UPDATE experiment_runs SET state=?2,result=?3,error=?4,updated_ms=?5 WHERE operation_id=?1 AND state=?6",params![old.summary.request.operation_id,result.outcome.state().name(),encoded,result.error,now()?,old.state.name()])?;
+        for (output, manifest) in stored {
+            tx.execute(
+                "INSERT INTO experiment_outputs VALUES(?1,?2,?3,?4)",
+                params![
+                    old.summary.request.operation_id,
+                    output.manifest().path,
+                    manifest,
+                    output.content()
+                ],
+            )?;
+        }
+        if tx.execute("UPDATE experiment_runs SET state=?2,result=?3,error=?4,updated_ms=?5 WHERE operation_id=?1 AND state=?6",params![old.summary.request.operation_id,result.outcome.state().name(),encoded,result.error,now()?,old.state.name()])? !=1 { return Err(conflict()) }
+        tx.commit()?;
         self.experiment_record(&old.summary.request.operation_id)?
             .ok_or_else(corrupt)
+    }
+    /// Internal Host read only. The result's current vault and exact manifest
+    /// bind these bytes; no renderer/model supplies storage content here.
+    pub(crate) fn experiment_output(&self, operation: &str, path: &str) -> Result<ValidatedOutput> {
+        let record = self.experiment_record(operation)?.ok_or_else(conflict)?;
+        let Some(OutputReport::Collected { summary }) = record.result.and_then(|r| r.outputs)
+        else {
+            return Err(HostError::new("EXPERIMENT_OUTPUT_NOT_FOUND"));
+        };
+        let expected = summary
+            .files
+            .iter()
+            .find(|f| f.path == path)
+            .ok_or_else(|| HostError::new("EXPERIMENT_OUTPUT_NOT_FOUND"))?;
+        let limit = record.summary.validate()?.limits().output_bytes();
+        let (manifest,content):(Option<String>,Option<Vec<u8>>)=self.db.query_row("SELECT CASE WHEN length(CAST(manifest AS BLOB))<=4096 THEN manifest END,CASE WHEN length(content)<=?3 AND length(content)<=16777216 THEN content END FROM experiment_outputs WHERE operation_id=?1 AND path=?2",params![operation,path,limit],|row|Ok((row.get(0)?,row.get(1)?))).optional()?.ok_or_else(corrupt)?;
+        let stored: crate::experiment_outputs::OutputManifest =
+            serde_json::from_str(&manifest.ok_or_else(corrupt)?).map_err(|_| corrupt())?;
+        if &stored != expected {
+            return Err(corrupt());
+        }
+        ValidatedOutput::restore(expected, content.ok_or_else(corrupt)?, limit)
+            .map_err(|_| corrupt())
+    }
+    /// Data-only read for the future trusted preview/broker. It validates the
+    /// complete stored file while returning at most 256 KiB per response.
+    pub fn experiment_output_read(
+        &self,
+        operation: &str,
+        path: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<crate::experiment_outputs::OutputChunk> {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        if !(1..=256 * 1024).contains(&limit) {
+            return Err(HostError::new("EXPERIMENT_OUTPUT_RANGE_INVALID"));
+        }
+        let output = self.experiment_output(operation, path)?;
+        if offset > output.content().len() {
+            return Err(HostError::new("EXPERIMENT_OUTPUT_RANGE_INVALID"));
+        }
+        let end = offset.saturating_add(limit).min(output.content().len());
+        Ok(crate::experiment_outputs::OutputChunk {
+            manifest: output.manifest().clone(),
+            offset,
+            next_offset: (end < output.content().len()).then_some(end),
+            content_base64: STANDARD.encode(&output.content()[offset..end]),
+        })
     }
 }
 
@@ -530,6 +678,7 @@ mod tests {
             user_cpu_ticks: Some(120),
             peak_memory_bytes: Some(1000),
             final_disk_bytes: Some(0),
+            outputs: None,
             logs: CaptureSnapshot {
                 stderr: stdout.clone(),
                 stdout,
@@ -884,7 +1033,7 @@ mod tests {
         let note = ws.write("note.md", "", b"old note", "local").unwrap();
         ws.db
             .execute_batch(
-                "DROP TABLE experiment_inputs; DROP TABLE experiment_runs; PRAGMA user_version=15;",
+                "DROP TABLE experiment_outputs; DROP TABLE experiment_inputs; DROP TABLE experiment_runs; PRAGMA user_version=15;",
             )
             .unwrap();
         drop(ws);
@@ -895,7 +1044,7 @@ mod tests {
             ws.db
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            16
+            17
         );
         let backup = fs::read_dir(root.path().join(".ainote"))
             .unwrap()
@@ -930,6 +1079,241 @@ mod tests {
                     .get::<_, i64>(0))
                 .unwrap(),
             1
+        );
+    }
+    fn started(ws: &mut Workspace, request: &RunRequest) -> ClaimedRun {
+        let waiting = prepare(ws, request);
+        approve(ws, &waiting);
+        let run = ws.experiment_claim(&request.operation_id).unwrap();
+        ws.experiment_running(&run).unwrap();
+        run
+    }
+    #[test]
+    fn outputs_are_atomic_immutable_vault_bound_and_verified_after_restart() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let (root, mut ws, request) = setup();
+        let run = started(&mut ws, &request);
+        let bytes = "# 中文结果\r\nvalue:18\r\n".as_bytes();
+        let outputs = CollectedOutputs::fixture("结果/report.md", bytes);
+        let done = ws
+            .experiment_finish_outputs(&run, result(), Some(&outputs))
+            .unwrap();
+        assert_eq!(done.state, RunState::Completed);
+        let first = ws
+            .experiment_output_read(&request.operation_id, "结果/report.md", 0, 4)
+            .unwrap();
+        assert_eq!(STANDARD.decode(first.content_base64).unwrap(), &bytes[..4]);
+        assert_eq!(first.next_offset, Some(4));
+        assert_eq!(
+            STANDARD
+                .decode(
+                    ws.experiment_output_read(&request.operation_id, "结果/report.md", 4, 256)
+                        .unwrap()
+                        .content_base64
+                )
+                .unwrap(),
+            &bytes[4..]
+        );
+        assert!(ws
+            .experiment_output_read(&request.operation_id, "结果/report.md", bytes.len() + 1, 16)
+            .is_err());
+        assert!(ws
+            .experiment_output_read(&request.operation_id, "结果/report.md", 0, 256 * 1024 + 1)
+            .is_err());
+        let changed = CollectedOutputs::fixture("结果/report.md", b"changed");
+        ws.experiment_finish_outputs(&run, result(), Some(&changed))
+            .unwrap();
+        assert_eq!(
+            ws.experiment_output(&request.operation_id, "结果/report.md")
+                .unwrap()
+                .content(),
+            bytes
+        );
+        let vault = ws.vault_id.clone();
+        ws.vault_id = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            ws.experiment_output(&request.operation_id, "结果/report.md")
+                .unwrap_err()
+                .code,
+            "VAULT_PERMISSION_CHANGED"
+        );
+        ws.vault_id = vault;
+        assert!(ws
+            .experiment_output(&uuid::Uuid::new_v4().to_string(), "结果/report.md")
+            .is_err());
+        drop(ws);
+        let ws = Workspace::open(root.path()).unwrap();
+        assert_eq!(
+            ws.experiment_output(&request.operation_id, "结果/report.md")
+                .unwrap()
+                .content(),
+            bytes
+        );
+        ws.db
+            .execute(
+                "UPDATE experiment_outputs SET content=?2 WHERE operation_id=?1",
+                params![request.operation_id, vec![b'X'; bytes.len()]],
+            )
+            .unwrap();
+        assert_eq!(
+            ws.experiment_output(&request.operation_id, "结果/report.md")
+                .unwrap_err()
+                .code,
+            "EXPERIMENT_RECORD_CORRUPT"
+        );
+        assert_eq!(
+            fs::read(root.path().join("experiments/中文 #%.py")).unwrap(),
+            "print('中文')\r\n".as_bytes()
+        );
+    }
+    #[test]
+    fn failing_terminal_commit_rolls_back_all_output_bytes() {
+        let (_root, mut ws, request) = setup();
+        let run = started(&mut ws, &request);
+        let outputs = CollectedOutputs::fixture("report.txt", b"immutable");
+        ws.db.execute_batch("CREATE TRIGGER fail_terminal BEFORE UPDATE ON experiment_runs WHEN NEW.state='completed' BEGIN SELECT RAISE(ABORT,'synthetic terminal failure'); END;").unwrap();
+        assert!(ws
+            .experiment_finish_outputs(&run, result(), Some(&outputs))
+            .is_err());
+        assert_eq!(
+            ws.experiment_record(&request.operation_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            RunState::Running
+        );
+        assert_eq!(
+            ws.db
+                .query_row("SELECT COUNT(*) FROM experiment_outputs", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        ws.db.execute_batch("DROP TRIGGER fail_terminal;").unwrap();
+        ws.experiment_finish_outputs(&run, result(), Some(&outputs))
+            .unwrap();
+        assert_eq!(
+            ws.experiment_output(&request.operation_id, "report.txt")
+                .unwrap()
+                .content(),
+            b"immutable"
+        );
+    }
+    #[test]
+    fn output_quota_rejects_all_files_but_keeps_reserved_real_terminal_logs() {
+        let (_root, mut ws, mut request) = setup();
+        let outputs = CollectedOutputs::fixture("large.txt", &vec![b'A'; 16 * 1024 * 1024]);
+        for _ in 0..3 {
+            request.operation_id = uuid::Uuid::new_v4().to_string();
+            let run = started(&mut ws, &request);
+            assert_eq!(
+                ws.experiment_finish_outputs(&run, result(), Some(&outputs))
+                    .unwrap()
+                    .state,
+                RunState::Completed
+            );
+        }
+        request.operation_id = uuid::Uuid::new_v4().to_string();
+        let run = started(&mut ws, &request);
+        let mut terminal = result();
+        let mut log = crate::experiment_log::LogBuffer::new(8192);
+        log.append(b"real completed calculation");
+        terminal.logs.stdout = log.snapshot();
+        terminal.logs.stdout.complete = true;
+        let done = ws
+            .experiment_finish_outputs(&run, terminal, Some(&outputs))
+            .unwrap();
+        assert_eq!(done.state, RunState::Failed);
+        let actual = done.result.unwrap();
+        assert_eq!(actual.error.as_deref(), Some("EXPERIMENT_RECORD_QUOTA"));
+        assert_eq!(actual.logs.stdout.text, "real completed calculation");
+        assert_eq!(actual.exit_code, Some(0));
+        assert!(matches!(
+            actual.outputs,
+            Some(OutputReport::Rejected { .. })
+        ));
+        assert_eq!(
+            ws.db
+                .query_row(
+                    "SELECT COUNT(*) FROM experiment_outputs WHERE operation_id=?1",
+                    [&request.operation_id],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert!(usage(&ws.db).unwrap() <= MAX_STORE);
+        assert_eq!(reservations(&ws.db, None).unwrap(), 0);
+    }
+    #[test]
+    fn schema_sixteen_backup_preserves_legacy_results_and_future_schema_is_refused() {
+        let (root, mut ws, request) = setup();
+        let run = started(&mut ws, &request);
+        let done = ws.experiment_finish(&run, result()).unwrap();
+        let mut legacy = serde_json::to_value(done.result.unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("outputs");
+        ws.db
+            .execute(
+                "UPDATE experiment_runs SET result=?2 WHERE operation_id=?1",
+                params![
+                    request.operation_id,
+                    serde_json::to_string(&legacy).unwrap()
+                ],
+            )
+            .unwrap();
+        ws.db
+            .execute_batch("DROP TABLE experiment_outputs; PRAGMA user_version=16;")
+            .unwrap();
+        drop(ws);
+        let ws = Workspace::open(root.path()).unwrap();
+        assert_eq!(
+            ws.db
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            17
+        );
+        assert!(ws
+            .experiment_record(&request.operation_id)
+            .unwrap()
+            .unwrap()
+            .result
+            .unwrap()
+            .outputs
+            .is_none());
+        let backup = fs::read_dir(root.path().join(".ainote"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("host-schema16-")
+            })
+            .unwrap();
+        let previous = Connection::open(backup).unwrap();
+        assert_eq!(
+            previous
+                .query_row("SELECT COUNT(*) FROM experiment_runs", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            previous
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name='experiment_outputs'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        drop(previous);
+        ws.db.execute_batch("PRAGMA user_version=18;").unwrap();
+        drop(ws);
+        assert_eq!(
+            Workspace::open(root.path()).err().unwrap().code,
+            "SCHEMA_INCOMPATIBLE"
         );
     }
 }

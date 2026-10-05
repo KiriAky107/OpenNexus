@@ -161,10 +161,10 @@ impl Workspace {
         let db = Connection::open(db_path)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 16 {
+        if version > 17 {
             return Err(HostError::new("SCHEMA_INCOMPATIBLE"));
         }
-        if (1..16).contains(&version) {
+        if (1..17).contains(&version) {
             // 模式所有权更改之前独立、完整的 SQLite 备份。
             let backup = managed.join(format!("host-schema{version}-{}.sqlite3", Uuid::new_v4()));
             db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
@@ -253,7 +253,7 @@ impl Workspace {
         }
         db.execute_batch(crate::experiment_store::SCHEMA)?;
         crate::experiment_store::recover(&db)?;
-        db.execute_batch("UPDATE sync_attempts SET outcome=CASE WHEN EXISTS(SELECT 1 FROM sync_jobs j WHERE j.binding=sync_attempts.binding AND j.operation_id=sync_attempts.operation_id AND j.state='acked') THEN 'succeeded' ELSE 'interrupted' END WHERE outcome='running'; PRAGMA user_version=16; COMMIT;")?;
+        db.execute_batch("UPDATE sync_attempts SET outcome=CASE WHEN EXISTS(SELECT 1 FROM sync_jobs j WHERE j.binding=sync_attempts.binding AND j.operation_id=sync_attempts.operation_id AND j.state='acked') THEN 'succeeded' ELSE 'interrupted' END WHERE outcome='running'; PRAGMA user_version=17; COMMIT;")?;
         let vault_id: String = db
             .query_row("SELECT id FROM identity", [], |r| r.get(0))
             .optional()?
