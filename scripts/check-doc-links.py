@@ -13,6 +13,15 @@ LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 
 def main() -> int:
     failures: list[str] = []
+    # These are local-only project records. Enforce the user's repository
+    # policy even if a future submission bypasses .gitignore with git add -f.
+    private = subprocess.check_output(
+        ["git", "ls-files", "-z", "--", "docs/", "documents/", "frontend/docs/"],
+        cwd=ROOT,
+    ).decode("utf-8").split("\0")
+    if any(private):
+        print("本地文档不得提交：" + ", ".join(filter(None, private)))
+        return 1
     # Check repository documentation without traversing ignored vaults or runtimes.
     paths = subprocess.check_output(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.md"],

@@ -79,8 +79,6 @@ Current release: [v0.5.9-beta2](https://github.com/KiriAky107/OpenNexus/releases
 - **Code blocks and streaming previews**: Highlight syntax in background Workers, merge rapid preview updates, and reuse unchanged blocks while keeping new text visible.
 - **Release checks**: GitHub CI checks both Chinese and English release notes, consistent versions and download links.
 
-Measurements and native checks are in the [beta2 validation record](frontend/docs/beta2-acceptance.md).
-
 ## Highlights
 
 - 📁 **Portable Vault Files**: Notes use Markdown, structured maps use JSON Canvas, and referenced images remain ordinary vault files. File moves preserve stable identities and the original extensions.
@@ -229,8 +227,6 @@ On desktop, the title bar identifies the current file, while Save and Markdown e
 Search a saved conversation to locate a message or visible operation. In **Benchmark**, import a dataset for the current vault, run it more than once, and select a baseline and candidate under **Run comparison**. Comparable runs must be completed and share their dataset content hash; unavailable metrics stay missing. Run records and reports survive app restarts.
 
 The comparison separates quality from time and cost. **Regressions only** includes individual failed Agent checks even when both runs failed overall. Expand a case to inspect its original evidence and configuration differences. Use **Refresh** to discover runs completed elsewhere when this page has no active run.
-
-For performance measurements and native checks, see the [beta2 validation record](frontend/docs/beta2-acceptance.md).
 
 ---
 

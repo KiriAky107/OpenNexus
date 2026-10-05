@@ -157,7 +157,7 @@ cargo clippy --all-targets --features desktop -- -D warnings
 * **桌面集成验收**：凡涉及原生弹窗交互、伴生进程生命周期管理、PDF/DOCX 导出或安装包配置的变动，需通过本地完整打包运行验证（`pnpm desktop:build`）。
 * **文档语法检查**：Markdown 内部相对链接必须保持有效，代码围栏格式正确，Mermaid 图表在 GitHub 上能够正常无错解析。
 
-CI 使用 [GitHub Actions](https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml)，配置位于 `.github/workflows/ci.yml`。[手动 Windows 打包工作流](https://github.com/KiriAky107/OpenNexus/actions/workflows/windows-rc.yml) 支持普通未签名构建与可选签名 RC，和本地构建共用 `tauri.bundle.conf.json`，验证最终安装包内容及仅使用系统 PATH 的原生启动。可复现命令和验收范围见 [Windows 打包验证](frontend/docs/windows-package.md)。凭据迁移的反复强制中断验收仍作为独立发布检查；托管 runner 的检查不能替代 Windows 10 安装验收。
+CI 使用 [GitHub Actions](https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml)，配置位于 `.github/workflows/ci.yml`。[手动 Windows 打包工作流](https://github.com/KiriAky107/OpenNexus/actions/workflows/windows-rc.yml) 支持普通未签名构建与可选签名 RC，和本地构建共用 `tauri.bundle.conf.json`，验证最终安装包内容及仅使用系统 PATH 的原生启动。凭据迁移的反复强制中断验收仍作为独立发布检查。
 
 ---
 

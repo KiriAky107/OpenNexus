@@ -156,7 +156,7 @@ cargo clippy --all-targets --features desktop -- -D warnings
 * **Packaged Acceptance**: Changes affecting native file dialogs, sidecar lifecycle, PDF/DOCX exporters, or installer behavior must be verified via a local packaged build (`pnpm desktop:build`).
 * **Documentation Checks**: Markdown files must maintain valid internal links, correct code blocks, and compliant Mermaid syntax.
 
-CI runs in [GitHub Actions](https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml), using `.github/workflows/ci.yml`. The [manual Windows package workflow](https://github.com/KiriAky107/OpenNexus/actions/workflows/windows-rc.yml) supports unsigned builds and optional signed RCs, shares `tauri.bundle.conf.json` with local builds, and verifies the final installer payload and native startup with a system-only PATH. See [reproducible commands and test scope](frontend/docs/windows-package.md). The repeated-crash credential migration acceptance remains a separate release check. Hosted-runner checks do not replace Windows 10 installation acceptance.
+CI runs in [GitHub Actions](https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml), using `.github/workflows/ci.yml`. The [manual Windows package workflow](https://github.com/KiriAky107/OpenNexus/actions/workflows/windows-rc.yml) supports unsigned builds and optional signed RCs, shares `tauri.bundle.conf.json` with local builds, and verifies the final installer payload and native startup with a system-only PATH. The repeated-crash credential migration acceptance remains a separate release check.
 
 ---
 

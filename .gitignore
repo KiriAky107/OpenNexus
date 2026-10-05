@@ -7,6 +7,7 @@ frontend/*.tsbuildinfo
 # Private project documentation and local submission materials
 /docs/
 /documents/
+/frontend/docs/
 
 # Backend
 backend/.venv/
