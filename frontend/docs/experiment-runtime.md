@@ -17,7 +17,7 @@
 ./scripts/verify-experiment-runtime.ps1
 ```
 
-脚本先运行离线归档负向测试、准备运行时，再验证所有 EXE、DLL、PYD 的 Authenticode 状态，最后串行执行四个原生 ignored 测试。输出位于忽略目录 `.build/experiment-runtime/`：`runtime.json` 位于运行时目录内，其父目录保存签名、扩展策略、实验策略、注册表权限及累计写入审计证据。原生测试不接触真实知识库、应用凭据或生产安装。
+脚本先运行离线归档负向测试、准备运行时，再验证所有 EXE、DLL、PYD 的 Authenticode 状态，最后串行执行五个原生 ignored 测试。输出位于忽略目录 `.build/experiment-runtime/`：`runtime.json` 位于运行时目录内，其父目录保存签名、扩展策略、实验策略、注册表权限、累计写入及固定解释器绑定证据。原生测试不接触真实知识库、应用凭据或生产安装。
 
 GitHub CI 的 `windows-host` 使用同一入口并保存证据；普通 Linux Host 测试不下载或执行 Windows 运行时。默认测试不会误触发实验脚本执行。
 
@@ -36,6 +36,12 @@ python scripts/verify-windows-package.py --installer <本次构建的安装包> 
 源码 `.py`、UTF-8 JSON／CSV 和标准库文本计算已通过原生夹具。桌面文件树现可在 Vault 根目录的 `experiments/` 下创建、编辑、重命名和同步 `.py`、`.json`、`.csv` UTF-8 文本；将 JSON 限定在该目录，避免把同名应用设置文件意外加入同步。桌面 Markdown 正文可用知识库相对链接打开实验文件，路径限制在 Vault 内；打开只进入纯文本编辑器，不会执行。CSV 可切换到只读表格预览，限于前 200 行、40 列、256K UTF-16 字符及每格 4096 字符；原文和保存内容不截断。旧版桌面客户端会忽略这些新类型，Sync 服务按既有通用文件协议存储字节。浏览器版暂不支持创建或编辑实验文件。执行确认、运行详情、日志及成果导入仍待接入。此处的安装包为实施中的技术产物，正式版本材料在整体验收后统一生成。
 
 ## 隔离模型与原型验收
+
+[每次运行的解释器守卫](../src-tauri/src/experiment_runtime_bound.rs)从 Tauri 资源位置和 Host 内嵌清单打开固定发行包，重新验证来源锁、全部字节和 receipt。所有模块、配置、许可证与 receipt 都持有不共享写入／删除的句柄；固定入口通过卷 GUID、原生文件身份和逐组件祖先句柄绑定。授予新实例读取的 ACL 生命周期借用这些所有者，正常退出及部分授予失败均只撤销该实例的允许项。缺少内嵌资源清单的开发构建或不支持的平台不会从用户 PATH 选择解释器。
+
+本机实际探测发现：`CreateProcessW` 用卷 GUID 或 GLOBALROOT 的物理路径创建这个解释器时返回 Win32 87，而由同一个文件句柄导出的规范 DOS 路径能创建暂停进程。因此守卫保留物理卷路径及祖先锁，以文件句柄导出的 DOS 名称创建；随即用 [QueryFullProcessImageNameW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-queryfullprocessimagenamew) 的 `PROCESS_NAME_NATIVE` 核对实际暂停进程映像，必须逐字等于固定文件的 [原生卷路径](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfinalpathnamebyhandlew)。不接受客户端路径，不恢复未经核对的进程；名称、API 查询或身份检查失败会销毁尚未执行的进程。此处的 Win32 87 是本机证据，不泛指所有 Windows 环境。
+
+`bound-runtime-result.json` 记录实际隔离 Python 3.13.16 计算、解释器身份、卷 GUID 入口及零残留进程。普通负向测试另覆盖原有写句柄、硬链接、额外模块、伪 receipt、真实 junction 祖先，以及把其他进程映像冒充固定入口；释放守卫后只读锁与 ACL 可正常清理。这些资源绑定不等于用户批准或原生执行许可，正式运行器仍须绑定一次性确认、并发槽、源输入和运行记录。
 
 [原生测试](../src-tauri/src/experiment_runtime_probe.rs)为每次探测建立独占 AppContainer，无网络 capabilities。先创建暂停进程、绑定 Job、核对容器身份，再恢复执行。运行时与选定输入的读取句柄在整个运行期间保持打开，禁止共享写入或删除；单独授予该实例 SID 读取权限，退出后撤销授权。所选源码和 CSV 是测试副本，其他文件未授权。
 
@@ -89,7 +95,7 @@ CPU 时间的含义见 [Windows Job 基本限额](https://learn.microsoft.com/en
 
 注册表位置 API 的行为见 [GetAppContainerRegistryLocation](https://learn.microsoft.com/en-us/windows/win32/api/userenv/nf-userenv-getappcontainerregistrylocation)，权限继承见 [SetSecurityInfo](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo)。本机默认 ACE 的实际行为来自探测证据；最终固定提交的 Windows CI 也需通过相同负向检查。
 
-CI 保存注册表及累计写入探测证据。[安装包核对脚本](../../scripts/verify-experiment-package.py)将其列为必需回执，核对实际解释器的文件身份、版本与 isolated 模式、零残留进程、文件权限负向、四类注册表拒绝，以及累计写入停止和日志正向控制，并将四份 native 回执摘要纳入包验证结果。缺失证据或错误解释器不能被当作包内探测通过；这项核对在最终打包时执行，不因新增回执重复构建当前无改动的解释器。
+CI 保存注册表、累计写入及固定运行时探测证据。[安装包核对脚本](../../scripts/verify-experiment-package.py)将其列为必需回执，核对实际解释器的文件身份、版本与 isolated 模式、零残留进程、文件权限负向、四类注册表拒绝、累计写入停止和日志正向控制，以及固定卷入口与包内解释器的文件身份，并将五份 native 回执摘要纳入包验证结果。缺失证据或错误解释器不能被当作包内探测通过；这项核对在最终打包时执行，不因新增回执重复构建当前无改动的解释器。
 
 ## 真实输出捕获
 

@@ -92,11 +92,18 @@ fn experiment_transient_writes_are_bounded() {
     native_probe(true, Probe::Writes);
 }
 
+#[test]
+#[ignore = "requires prepared official embedded runtime; fixed native interpreter identity"]
+fn experiment_pinned_runtime_executes_the_verified_entry() {
+    native_probe(true, Probe::Binding);
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Probe {
     Full,
     Storage,
     Writes,
+    Binding,
 }
 
 fn native_probe(experimental: bool, probe: Probe) {
@@ -166,15 +173,38 @@ fn native_probe(experimental: bool, probe: Probe) {
     let scratch = Scratch(folder.join("Temp"));
     fs::create_dir_all(&scratch.0).unwrap();
     let mut grants = Grants::new(&profile);
-    grants.pin(&runtime, None);
-    for (name, entry) in manifest["files"].as_object().unwrap() {
-        assert!(!name.contains(['/', '\\']), "flat runtime inventory");
-        grants.pin(&runtime.join(name), Some(entry["sha256"].as_str().unwrap()));
+    let pinned_runtime = if probe == Probe::Binding {
+        Some(
+            crate::experiment_runtime_bound::PinnedRuntime::pin_for_probe(
+                &runtime,
+                &fs::read_to_string(runtime.join("runtime.json")).unwrap(),
+            )
+            .unwrap(),
+        )
+    } else {
+        grants.pin(&runtime, None);
+        for (name, entry) in manifest["files"].as_object().unwrap() {
+            assert!(!name.contains(['/', '\\']), "flat runtime inventory");
+            grants.pin(&runtime.join(name), Some(entry["sha256"].as_str().unwrap()));
+        }
+        None
+    };
+    let bound_entry = pinned_runtime
+        .as_ref()
+        .map(|pinned| pinned.bind_entry().unwrap());
+    let mut runtime_access = pinned_runtime
+        .as_ref()
+        .map(|pinned| pinned.access(&profile).unwrap());
+    if let Some(bound) = &bound_entry {
+        assert!(bound.path().to_string_lossy().starts_with(r"\\?\Volume{"));
     }
     grants.pin(inputs.path(), None);
     grants.pin(&script, None);
     grants.pin(&inputs.path().join("input.csv"), None);
-    let executable = runtime.join("python.exe");
+    let executable = bound_entry
+        .as_ref()
+        .map(|bound| bound.launch_path().to_owned())
+        .unwrap_or_else(|| runtime.join("python.exe"));
     let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
     let launch_data = |mode: &str| {
         let arguments = vec![
@@ -214,7 +244,9 @@ fn native_probe(experimental: bool, probe: Probe) {
             limits.validate().unwrap()
         };
         let data = launch_data(mode);
-        let suspended = if experimental {
+        let suspended = if let Some(bound) = &bound_entry {
+            Suspended::create_bound_experiment(&profile, bound, data, &selected).unwrap()
+        } else if experimental {
             Suspended::create_experiment(&profile, &executable, data, &selected).unwrap()
         } else {
             Suspended::create(&profile, &executable, data).unwrap()
@@ -337,6 +369,7 @@ fn native_probe(experimental: bool, probe: Probe) {
         )
         .unwrap();
         grants.revoke();
+        drop(runtime_access);
         drop(scratch);
         profile.remove().unwrap();
         return;
@@ -402,6 +435,7 @@ fn native_probe(experimental: bool, probe: Probe) {
         drop(disk);
         drop(running);
         grants.revoke();
+        drop(runtime_access);
         drop(scratch);
         profile.remove().unwrap();
         return;
@@ -441,6 +475,35 @@ fn native_probe(experimental: bool, probe: Probe) {
         csv
     );
     assert!(folder.join("probe-outside-scratch.txt").exists());
+    if probe == Probe::Binding {
+        let stopped = Instant::now();
+        while running.active_test_processes().unwrap() != 0
+            && stopped.elapsed() < Duration::from_secs(5)
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(running.active_test_processes().unwrap(), 0);
+        let evidence = std::env::var_os("OPENNEXUS_PROBE_RECEIPT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join(".build/experiment-runtime"));
+        fs::write(
+            evidence.join("bound-runtime-result.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "runtime_id": lock["runtime_id"], "basic": report, "volume_guid_entry": bound_entry.as_ref().unwrap().path(),
+                "remaining_processes": 0, "host_network_positive_control": true,
+                "production_executor_enabled": false,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        drop(running);
+        runtime_access.take().unwrap().finish().unwrap();
+        drop(runtime_access);
+        grants.revoke();
+        drop(scratch);
+        profile.remove().unwrap();
+        return;
+    }
     drop(running);
 
     let log_report =
@@ -724,6 +787,7 @@ fn native_probe(experimental: bool, probe: Probe) {
         "production_executor_enabled": false
     })).unwrap()).unwrap();
     grants.revoke();
+    drop(runtime_access);
     drop(scratch);
     profile.remove().unwrap();
 }

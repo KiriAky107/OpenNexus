@@ -80,7 +80,7 @@ struct Process<'a> {
     job: Job,
     experiment_deadline: Option<crate::extension_deadline::ToolDeadline>,
     _profile: &'a Profile,
-    #[cfg(feature = "desktop")]
+    #[cfg(any(feature = "desktop", test))]
     _bound_entry: Option<&'a crate::extension_pinned::BoundEntry<'a>>,
 }
 impl Drop for Process<'_> {
@@ -111,6 +111,18 @@ impl<'a> Suspended<'a> {
     ) -> Result<Self> {
         Self::create_inner(profile, executable, data, None, Some(limits))
     }
+    #[cfg(test)]
+    pub(crate) fn create_bound_experiment(
+        profile: &'a Profile,
+        entry: &'a crate::extension_pinned::BoundEntry<'a>,
+        data: LaunchData,
+        limits: &crate::experiment_policy::ValidatedLimits,
+    ) -> Result<Self> {
+        let mut suspended = Self::create_experiment(profile, entry.launch_path(), data, limits)?;
+        entry.verify_process_image(suspended.0.handles.process.as_handle())?;
+        suspended.0._bound_entry = Some(entry);
+        Ok(suspended)
+    }
     /// Only three child pipe ends are inherited. The Host owns separate, bounded
     /// log readers; this does not authorize or resume the suspended process.
     #[cfg(any(feature = "desktop", test))]
@@ -122,6 +134,19 @@ impl<'a> Suspended<'a> {
     ) -> Result<(Self, crate::extension_stdio::HostIo)> {
         let (child, host) = crate::extension_stdio::ChildIo::create()?;
         let suspended = Self::create_inner(profile, executable, data, Some(child), Some(limits))?;
+        Ok((suspended, host))
+    }
+    #[cfg(any(feature = "desktop", test))]
+    pub fn create_bound_experiment_with_stdio(
+        profile: &'a Profile,
+        entry: &'a crate::extension_pinned::BoundEntry<'a>,
+        data: LaunchData,
+        limits: &crate::experiment_policy::ValidatedLimits,
+    ) -> Result<(Self, crate::extension_stdio::HostIo)> {
+        let (mut suspended, host) =
+            Self::create_experiment_with_stdio(profile, entry.launch_path(), data, limits)?;
+        entry.verify_process_image(suspended.0.handles.process.as_handle())?;
+        suspended.0._bound_entry = Some(entry);
         Ok((suspended, host))
     }
     fn create_inner(
@@ -262,7 +287,7 @@ impl<'a> Suspended<'a> {
             job,
             experiment_deadline,
             _profile: profile,
-            #[cfg(feature = "desktop")]
+            #[cfg(any(feature = "desktop", test))]
             _bound_entry: None,
         };
         verify_identity(&process.handles, profile)?;
@@ -275,7 +300,8 @@ impl<'a> Suspended<'a> {
         entry: &'a crate::extension_pinned::BoundEntry<'a>,
         data: LaunchData,
     ) -> Result<Self> {
-        let mut value = Self::create(profile, entry.path(), data)?;
+        let mut value = Self::create(profile, entry.launch_path(), data)?;
+        entry.verify_process_image(value.0.handles.process.as_handle())?;
         value.0._bound_entry = Some(entry);
         Ok(value)
     }
@@ -287,7 +313,8 @@ impl<'a> Suspended<'a> {
         data: LaunchData,
     ) -> Result<(Self, crate::extension_stdio::HostIo)> {
         let (child, host) = crate::extension_stdio::ChildIo::create()?;
-        let mut value = Self::create_inner(profile, entry.path(), data, Some(child), None)?;
+        let mut value = Self::create_inner(profile, entry.launch_path(), data, Some(child), None)?;
+        entry.verify_process_image(value.0.handles.process.as_handle())?;
         value.0._bound_entry = Some(entry);
         Ok((value, host))
     }

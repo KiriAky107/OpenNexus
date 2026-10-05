@@ -40,6 +40,8 @@ impl Drop for PackageAccess<'_> {
 pub struct BoundEntry<'a> {
     name: String,
     path: std::path::PathBuf,
+    launch_path: std::path::PathBuf,
+    native_image: Vec<u16>,
     _ancestors: Vec<File>,
     _package: &'a PinnedPackage,
 }
@@ -52,6 +54,38 @@ impl BoundEntry<'_> {
     }
     pub fn path(&self) -> &std::path::Path {
         &self.path
+    }
+    /// Derived from the held file; suspended image verification is mandatory
+    /// before resume because process creation needs the DOS form on Windows.
+    pub fn launch_path(&self) -> &std::path::Path {
+        &self.launch_path
+    }
+    pub fn verify_process_image(
+        &self,
+        process: std::os::windows::io::BorrowedHandle<'_>,
+    ) -> Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::Threading::{
+            QueryFullProcessImageNameW, PROCESS_NAME_NATIVE,
+        };
+        let bad = || HostError::new("EXTENSION_ENTRY_BINDING_FAILED");
+        let mut name = vec![0u16; 32768];
+        let mut length = name.len() as u32;
+        if unsafe {
+            QueryFullProcessImageNameW(
+                process.as_raw_handle(),
+                PROCESS_NAME_NATIVE,
+                name.as_mut_ptr(),
+                &mut length,
+            )
+        } == 0
+            || length == 0
+            || length as usize >= name.len()
+            || name[..length as usize] != self.native_image
+        {
+            return Err(bad());
+        }
+        Ok(())
     }
 }
 fn identity(file: &File) -> Result<(u32, u32, u32)> {
@@ -70,16 +104,13 @@ fn identity(file: &File) -> Result<(u32, u32, u32)> {
     ))
 }
 fn final_volume_path(file: &File) -> Result<std::path::PathBuf> {
+    final_path(file, VOLUME_NAME_GUID)
+}
+fn final_path(file: &File, volume: u32) -> Result<std::path::PathBuf> {
     use std::os::windows::{ffi::OsStringExt, io::AsRawHandle};
     let bad = || HostError::new("EXTENSION_ENTRY_BINDING_FAILED");
-    let length = unsafe {
-        GetFinalPathNameByHandleW(
-            file.as_raw_handle(),
-            std::ptr::null_mut(),
-            0,
-            VOLUME_NAME_GUID,
-        )
-    };
+    let length =
+        unsafe { GetFinalPathNameByHandleW(file.as_raw_handle(), std::ptr::null_mut(), 0, volume) };
     if length == 0 || length >= 32767 {
         return Err(bad());
     }
@@ -89,7 +120,7 @@ fn final_volume_path(file: &File) -> Result<std::path::PathBuf> {
             file.as_raw_handle(),
             buffer.as_mut_ptr(),
             buffer.len() as u32,
-            VOLUME_NAME_GUID,
+            volume,
         )
     };
     if written == 0 || written as usize >= buffer.len() {
@@ -120,11 +151,22 @@ fn directory(parent: &Dir, name: &str) -> Result<Dir> {
 impl PinnedPackage {
     /// `root` 与清单来自已验证的 Host 存储。实例停止前必须保留此所有者；此处不接受渲染进程提供的文件系统路径。调用方还必须限制原生启动所使用的祖先目录。
     pub fn open(root: &Dir, inventory: &Inventory, expected_tree: &str) -> Result<Self> {
+        if expected_tree.len() != 64 {
+            return Err(HostError::new("EXTENSION_STORE_CORRUPT"));
+        }
+        let pinned = Self::from_inventory(root, inventory)?;
+        if pinned.tree_sha256 != expected_tree {
+            return Err(HostError::new("EXTENSION_STORE_CORRUPT"));
+        }
+        Ok(pinned)
+    }
+    /// Hash authority must come from Host-verified metadata. This pins every
+    /// object before checking its exact contents and cannot grant permission.
+    pub(crate) fn from_inventory(root: &Dir, inventory: &Inventory) -> Result<Self> {
         let bad = || HostError::new("EXTENSION_STORE_CORRUPT");
         if inventory.files.is_empty()
             || inventory.files.len() > 2048
             || inventory.expanded_size > 50 * 1024 * 1024
-            || expected_tree.len() != 64
         {
             return Err(bad());
         }
@@ -179,9 +221,6 @@ impl PinnedPackage {
         // 当验证重新打开它们时，所有现有对象都已被固定。共享违规或哈希不匹配会释放整个集合。
         pinned.tree_sha256 =
             crate::extension_unpack::verify_tree(&pinned.directories[""], inventory)?;
-        if pinned.tree_sha256 != expected_tree {
-            return Err(bad());
-        }
         Ok(pinned)
     }
     /// 通过拥有的文件句柄进行解析，然后逐个组件固定卷根路径并比较本机文件标识。如果卷 GUID 查找不可用，则不允许驱动器号或 UNC 回退。
@@ -249,9 +288,24 @@ impl PinnedPackage {
         if identity(handles.last().ok_or_else(bad)?)? != identity(expected)? {
             return Err(bad());
         }
+        let launch_path = final_path(expected, VOLUME_NAME_DOS)?;
+        if !matches!(launch_path.components().next(), Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::VerbatimDisk(_)))
+        {
+            return Err(bad());
+        }
+        if identity(&open(&launch_path)?)? != identity(expected)? {
+            return Err(bad());
+        }
+        use std::os::windows::ffi::OsStrExt;
+        let native_image = final_path(expected, VOLUME_NAME_NT)?
+            .as_os_str()
+            .encode_wide()
+            .collect();
         Ok(BoundEntry {
             name: name.to_owned(),
             path: current,
+            launch_path,
+            native_image,
             _ancestors: handles,
             _package: self,
         })
@@ -394,6 +448,13 @@ mod tests {
             .to_string_lossy()
             .starts_with(r"\\?\Volume{"));
         assert_eq!(std::fs::read(bound.path()).unwrap(), b"verified bytes");
+        assert!(bound
+            .verify_process_image(unsafe {
+                std::os::windows::io::BorrowedHandle::borrow_raw(
+                    windows_sys::Win32::System::Threading::GetCurrentProcess(),
+                )
+            })
+            .is_err());
         let moved = temp.path().join("moved");
         assert!(std::fs::rename(&parent, &moved).is_err());
         drop(bound);

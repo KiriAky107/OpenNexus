@@ -267,7 +267,7 @@ impl Drop for Profile {
     }
 }
 
-#[cfg(all(test, feature = "desktop"))]
+#[cfg(test)]
 pub(crate) fn test_acl_entries(object: &std::fs::File) -> Vec<Vec<u8>> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::{

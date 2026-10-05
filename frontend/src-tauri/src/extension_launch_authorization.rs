@@ -210,7 +210,7 @@ impl Context<'_> {
             }
         }
         let data = LaunchData::new(
-            entry.path(),
+            entry.launch_path(),
             &claims.arguments,
             self.system_root,
             self.container_data,

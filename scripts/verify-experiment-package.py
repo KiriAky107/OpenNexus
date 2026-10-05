@@ -77,6 +77,17 @@ def verify_write_receipt(result: dict, runtime: Path, lock: dict) -> None:
             raise ValueError('Write audit did not stop cumulative writes: ' + mode)
 
 
+def verify_bound_receipt(result: dict, runtime: Path, lock: dict) -> None:
+    basic = result['basic']
+    if (result['runtime_id'] != lock['runtime_id'] or basic['runtime'] != lock['version']
+            or type(basic['isolated']) is not int or basic['isolated'] != 1
+            or not Path(basic['executable']).samefile(runtime / lock['entrypoint'])
+            or not str(result['volume_guid_entry']).startswith('\\\\?\\Volume{')
+            or not Path(result['volume_guid_entry']).samefile(runtime / lock['entrypoint'])
+            or type(result['remaining_processes']) is not int or result['remaining_processes'] != 0):
+        raise ValueError('Native bound runtime did not verify the extracted interpreter and empty Job')
+
+
 def native_probe(payload: Path, target: str, evidence: Path) -> dict:
     """Build a test driver, then launch it with system-only PATH and package assets.
 
@@ -132,6 +143,9 @@ def native_probe(payload: Path, target: str, evidence: Path) -> dict:
     receipts[name] = hashlib.sha256((evidence / name).read_bytes()).hexdigest()
     name = 'write-io-result.json'
     verify_write_receipt(json.loads((evidence / name).read_bytes()), runtime, lock)
+    receipts[name] = hashlib.sha256((evidence / name).read_bytes()).hexdigest()
+    name = 'bound-runtime-result.json'
+    verify_bound_receipt(json.loads((evidence / name).read_bytes()), runtime, lock)
     receipts[name] = hashlib.sha256((evidence / name).read_bytes()).hexdigest()
     return {'system_only_path': True, 'runtime_source': 'extracted-installer',
             'native_signatures_verified': len(signature_items),

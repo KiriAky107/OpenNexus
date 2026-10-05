@@ -33,10 +33,8 @@ pub mod workspace_broker;
 
 pub mod sync_retry;
 
-#[cfg(feature = "desktop")]
 pub mod extension_package;
 
-#[cfg(feature = "desktop")]
 pub mod extension_manifest;
 
 #[cfg(feature = "desktop")]
@@ -45,7 +43,6 @@ pub mod extension_store;
 #[cfg(feature = "desktop")]
 pub mod extension_dependencies;
 
-#[cfg(feature = "desktop")]
 pub mod extension_unpack;
 
 #[cfg(feature = "desktop")]
@@ -76,7 +73,7 @@ pub mod extension_process;
 #[cfg(windows)]
 pub mod extension_deadline;
 
-#[cfg(all(windows, feature = "desktop"))]
+#[cfg(windows)]
 pub mod extension_pinned;
 
 #[cfg(all(windows, feature = "desktop"))]
@@ -118,6 +115,8 @@ pub mod experiment_policy;
 #[cfg(windows)]
 mod experiment_registry;
 pub mod experiment_runtime;
+#[cfg(windows)]
+pub mod experiment_runtime_bound;
 
 #[cfg(all(test, windows))]
 mod experiment_runtime_probe;
