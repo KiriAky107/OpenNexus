@@ -125,6 +125,50 @@ impl Runner {
     ) -> Result<crate::experiment_store::RetentionUsage> {
         with_workspace(workspace, |ws| ws.experiment_retention_usage())
     }
+    pub fn source_preview(
+        &self,
+        workspace: &WorkspaceSlot,
+        operation: &str,
+        path: &str,
+    ) -> Result<crate::experiment_preview::SourcePreview> {
+        with_workspace(workspace, |ws| {
+            ws.experiment_source_preview(operation, path)
+        })
+    }
+    pub fn source_read(
+        &self,
+        workspace: &WorkspaceSlot,
+        operation: &str,
+        path: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<crate::experiment_preview::SourceChunk> {
+        with_workspace(workspace, |ws| {
+            ws.experiment_source_read(operation, path, offset, limit)
+        })
+    }
+    pub fn output_preview(
+        &self,
+        workspace: &WorkspaceSlot,
+        operation: &str,
+        path: &str,
+    ) -> Result<crate::experiment_preview::OutputPreview> {
+        with_workspace(workspace, |ws| {
+            ws.experiment_output_preview(operation, path)
+        })
+    }
+    pub fn output_read(
+        &self,
+        workspace: &WorkspaceSlot,
+        operation: &str,
+        path: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<crate::experiment_outputs::OutputChunk> {
+        with_workspace(workspace, |ws| {
+            ws.experiment_output_read(operation, path, offset, limit)
+        })
+    }
     /// Trusted user action only; model retries may read history but cannot
     /// discard pending cleanup diagnostics or a worker still returning.
     pub fn forget_from_user(

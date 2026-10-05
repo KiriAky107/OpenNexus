@@ -15,6 +15,7 @@ pub mod experiment_input;
 pub mod experiment_log;
 pub mod experiment_outputs;
 pub mod experiment_owner;
+pub mod experiment_preview;
 pub mod experiment_store;
 mod payloads;
 mod preference_records;
