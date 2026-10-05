@@ -13,6 +13,7 @@ export function workspaceDocumentType(path: string): WorkspaceDocumentType {
 }
 
 export const MAX_CANVAS_BYTES = 4 * 1024 * 1024
+export const MAX_EXPERIMENT_EDITOR_BYTES = 2 * 1024 * 1024
 export const EMPTY_CANVAS = '{\n  "nodes": [],\n  "edges": []\n}\n'
 
 /** JSON Canvas file/background fields are raw vault-relative paths, never URLs. */

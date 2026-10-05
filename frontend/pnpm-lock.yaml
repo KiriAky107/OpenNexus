@@ -11,9 +11,15 @@ importers:
       '@codemirror/commands':
         specifier: 6.11.0
         version: 6.11.0
+      '@codemirror/lang-json':
+        specifier: 6.0.2
+        version: 6.0.2
       '@codemirror/lang-markdown':
         specifier: ^6.5.0
         version: 6.5.2
+      '@codemirror/lang-python':
+        specifier: 6.2.1
+        version: 6.2.1
       '@codemirror/language':
         specifier: 6.12.4
         version: 6.12.4
@@ -29,6 +35,9 @@ importers:
       '@element-plus/icons-vue':
         specifier: ^2.3.2
         version: 2.3.2(vue@3.5.42(typescript@5.9.3))
+      '@lezer/highlight':
+        specifier: 1.2.3
+        version: 1.2.3
       '@milkdown/crepe':
         specifier: 7.22.1
         version: 7.22.1(prosemirror-model@1.25.11)(prosemirror-state@1.4.4)(prosemirror-view@1.42.3)(typescript@5.9.3)
