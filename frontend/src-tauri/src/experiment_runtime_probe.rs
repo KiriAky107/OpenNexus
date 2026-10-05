@@ -216,6 +216,14 @@ fn native_probe(experimental: bool, audit_only: bool) {
         let code = running.wait(Duration::from_secs(15)).unwrap();
         let error = fs::read_to_string(scratch.0.join("error.txt")).unwrap_or_default();
         assert_eq!(code, Some(0), "Storage audit failed: {error}");
+        let start = Instant::now();
+        while running.active_test_processes().unwrap() != 0
+            && start.elapsed() < Duration::from_secs(5)
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let remaining = running.active_test_processes().unwrap();
+        assert_eq!(remaining, 0);
         let report: serde_json::Value =
             serde_json::from_slice(&fs::read(scratch.0.join("storage-audit.json")).unwrap())
                 .unwrap();
@@ -232,12 +240,19 @@ fn native_probe(experimental: bool, audit_only: bool) {
             serde_json::to_vec_pretty(
                 &serde_json::json!({"runtime_id": lock["runtime_id"], "report": report,
                     "profile_name": profile_name,
+                    "remaining_processes": remaining,
                 "filesystem_bytes": disk.usage().unwrap(), "disk_limit_bytes": 8 * 1024 * 1024,
                 "production_executor_enabled": false}),
             )
             .unwrap(),
         )
         .unwrap();
+        assert_eq!(report["runtime"], lock["version"]);
+        assert_eq!(report["isolated"], 1);
+        assert_eq!(
+            fs::canonicalize(report["executable"].as_str().unwrap()).unwrap(),
+            fs::canonicalize(&executable).unwrap()
+        );
         assert_eq!(report["input_acl_error"], 5);
         assert_eq!(report["private_acl_error"], 5);
         assert_eq!(report["input_write"]["denied"], true);
@@ -254,7 +269,6 @@ fn native_probe(experimental: bool, audit_only: bool) {
         assert_eq!(report["registry_acl"]["winerror"], 5);
         assert_eq!(report["registry_parent_write"]["denied"], true);
         assert_eq!(report["registry_parent_write"]["winerror"], 5);
-        assert_eq!(running.active_test_processes().unwrap(), 0);
         drop(disk);
         drop(running);
         grants.revoke();

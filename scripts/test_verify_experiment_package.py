@@ -1,5 +1,6 @@
 """Installer trust checks with offline synthetic payloads; never launch them."""
 import importlib.util
+import copy
 import json
 from pathlib import Path
 import tempfile
@@ -61,6 +62,34 @@ class PackageRuntimeTests(unittest.TestCase):
             (runtime / 'runtime.json').hardlink_to(outside)
             with self.assertRaisesRegex(ValueError, 'receipt is unsafe'):
                 package.verify_payload(payload, manifest)
+
+    def test_storage_receipt_rejects_wrong_runtime_missing_denial_and_running_job(self):
+        with tempfile.TemporaryDirectory(dir=self.staging, prefix='storage-receipt-') as directory:
+            runtime, manifest = self.fixture(Path(directory))
+            lock = json.loads(manifest)['lock']
+            report = {'runtime': lock['version'], 'executable': str(runtime / lock['entrypoint']),
+                      'isolated': 1, 'registry_profile_verified': True,
+                      'input_acl_error': 5, 'private_acl_error': 5,
+                      'input_write': {'denied': True}, 'private_read': {'denied': True}}
+            operations = ('registry_write', 'registry_child_write', 'registry_acl', 'registry_parent_write')
+            report.update({key: {'denied': True, 'winerror': 5} for key in operations})
+            result = {'runtime_id': lock['runtime_id'], 'remaining_processes': 0, 'report': report}
+            package.verify_storage_receipt(result, runtime, lock)
+            for field, invalid in [('runtime_id', 'other'), ('remaining_processes', 1), ('remaining_processes', False)]:
+                altered = copy.deepcopy(result)
+                altered[field] = invalid
+                with self.assertRaises(ValueError):
+                    package.verify_storage_receipt(altered, runtime, lock)
+            for key in operations:
+                altered = copy.deepcopy(result)
+                altered['report'][key]['denied'] = False
+                with self.assertRaisesRegex(ValueError, key):
+                    package.verify_storage_receipt(altered, runtime, lock)
+            wrong = runtime / 'other.exe'
+            wrong.write_bytes(b'other synthetic interpreter')
+            result['report']['executable'] = str(wrong)
+            with self.assertRaises(ValueError):
+                package.verify_storage_receipt(result, runtime, lock)
 
 
 if __name__ == '__main__':

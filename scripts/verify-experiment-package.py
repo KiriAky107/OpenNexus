@@ -33,6 +33,22 @@ def verify_payload(payload: Path, expected_bytes: bytes) -> dict:
             'archive_sha256': lock['archive_sha256'], 'license_present': 'LICENSE.txt' in expected['files']}
 
 
+def verify_storage_receipt(result: dict, runtime: Path, lock: dict) -> None:
+    report = result['report']
+    if (result['runtime_id'] != lock['runtime_id'] or report['runtime'] != lock['version']
+            or type(report['isolated']) is not int or report['isolated'] != 1
+            or not Path(report['executable']).samefile(runtime / lock['entrypoint'])
+            or type(result['remaining_processes']) is not int or result['remaining_processes'] != 0
+            or report['registry_profile_verified'] is not True):
+        raise ValueError('Storage audit did not verify the extracted interpreter and empty Job')
+    for key in ('registry_write', 'registry_child_write', 'registry_acl', 'registry_parent_write'):
+        if report[key]['denied'] is not True or report[key]['winerror'] != 5:
+            raise ValueError('Storage audit did not verify access denied: ' + key)
+    if (report['input_acl_error'] != 5 or report['private_acl_error'] != 5
+            or report['input_write']['denied'] is not True or report['private_read']['denied'] is not True):
+        raise ValueError('Storage audit did not verify synthetic file permissions')
+
+
 def native_probe(payload: Path, target: str, evidence: Path) -> dict:
     """Build a test driver, then launch it with system-only PATH and package assets.
 
@@ -83,6 +99,9 @@ def native_probe(payload: Path, target: str, evidence: Path) -> dict:
         if not Path(result['basic']['executable']).samefile(runtime / lock['entrypoint']):
             raise ValueError('Native probe did not execute the extracted interpreter')
         receipts[name] = hashlib.sha256((evidence / name).read_bytes()).hexdigest()
+    name = 'storage-audit-result.json'
+    verify_storage_receipt(json.loads((evidence / name).read_bytes()), runtime, lock)
+    receipts[name] = hashlib.sha256((evidence / name).read_bytes()).hexdigest()
     return {'system_only_path': True, 'runtime_source': 'extracted-installer',
             'native_signatures_verified': len(signature_items),
             'test_driver_sha256': hashlib.sha256(Path(drivers[0]).read_bytes()).hexdigest(),

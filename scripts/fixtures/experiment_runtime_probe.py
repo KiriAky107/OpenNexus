@@ -35,6 +35,7 @@ def storage_audit(inputs, private, expected_profile):
     # Only synthetic files created by this test. Never attempt to modify the
     # prepared interpreter or real user data, even for a negative test.
     report = {"input_acl_error": set_acl(str(inputs / "input.csv"), 1, 4, None, None, None, None),
+              "runtime": sys.version.split()[0], "executable": sys.executable, "isolated": sys.flags.isolated,
               "private_acl_error": set_acl(str(private), 1, 4, None, None, None, None),
               "input_write": denied(lambda: (inputs / "input.csv").write_bytes(b"changed")),
               "private_read": denied(lambda: private.read_bytes())}

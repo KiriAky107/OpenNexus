@@ -85,6 +85,8 @@ CPU 时间的含义见 [Windows Job 基本限额](https://learn.microsoft.com/en
 
 注册表位置 API 的行为见 [GetAppContainerRegistryLocation](https://learn.microsoft.com/en-us/windows/win32/api/userenv/nf-userenv-getappcontainerregistrylocation)，权限继承见 [SetSecurityInfo](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo)。本机默认 ACE 的实际行为来自探测证据；最终固定提交的 Windows CI 也需通过相同负向检查。
 
+CI 保存这份新增探测证据。[安装包核对脚本](../../scripts/verify-experiment-package.py)也将其列为必需回执，核对实际解释器的文件身份、版本与 isolated 模式、零残留进程、文件权限负向及四类注册表拒绝，并将三份 native 回执摘要纳入包验证结果。缺失证据或错误解释器不能被当作包内探测通过；这项核对在最终打包时执行，不因新增回执重复构建当前无改动的解释器。
+
 ## 真实输出捕获
 
 [日志收集器](../src-tauri/src/experiment_log.rs)使用两个 Host 所有的匿名管道读线程，stdin 直接关闭为 EOF。按原始字节保留固定长度前缀，达到预算后继续读取并计数，避免脚本因满管道卡住；两个流不会相互挤占保留空间。展示时用 UTF-8 替换解码，并明确记录 `invalid_utf8`，保留边界切断一个多字节字符也属于解码损失。`complete` 只代表观察到 EOF，不能代替运行成功状态。
