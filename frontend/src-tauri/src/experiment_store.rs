@@ -1286,6 +1286,227 @@ mod tests {
             1
         );
     }
+    #[test]
+    fn history_pages_equal_timestamps_without_logs_and_rejects_foreign_cursors() {
+        let (_root, mut ws, request) = setup();
+        let mut expected = Vec::new();
+        for _ in 0..5 {
+            let mut next = request.clone();
+            next.operation_id = uuid::Uuid::new_v4().to_string();
+            prepare(&mut ws, &next);
+            expected.push(next.operation_id);
+        }
+        ws.db
+            .execute(
+                "UPDATE experiment_runs SET created_ms=1000,updated_ms=1000",
+                [],
+            )
+            .unwrap();
+        expected.sort_by(|a, b| b.cmp(a));
+        let first = ws.experiment_history(2, None).unwrap();
+        assert_eq!(
+            first
+                .items
+                .iter()
+                .map(|i| i.operation_id.clone())
+                .collect::<Vec<_>>(),
+            expected[..2]
+        );
+        assert!(first
+            .items
+            .iter()
+            .all(|i| i.output_files.is_none() && i.elapsed_ms.is_none()));
+        let json = serde_json::to_value(&first).unwrap();
+        assert!(json["items"][0].get("logs").is_none());
+        assert!(json["items"][0].get("inputs").is_none());
+        let second = ws
+            .experiment_history(2, first.next_cursor.as_ref())
+            .unwrap();
+        let third = ws
+            .experiment_history(2, second.next_cursor.as_ref())
+            .unwrap();
+        assert_eq!(
+            second
+                .items
+                .iter()
+                .map(|i| i.operation_id.clone())
+                .collect::<Vec<_>>(),
+            expected[2..4]
+        );
+        assert_eq!(third.items[0].operation_id, expected[4]);
+        assert!(third.next_cursor.is_none());
+        let mut foreign = first.next_cursor.unwrap();
+        foreign.vault_id = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            ws.experiment_history(2, Some(&foreign)).unwrap_err().code,
+            "VAULT_PERMISSION_CHANGED"
+        );
+        assert!(ws.experiment_history(0, None).is_err());
+        assert!(ws.experiment_history(51, None).is_err());
+        let usage = ws.experiment_retention_usage().unwrap();
+        assert_eq!(usage.records, 5);
+        assert_eq!(usage.forgotten_operations, 0);
+        assert_eq!(usage.reserved_bytes, 5 * MAX_RESULT as u64);
+    }
+    #[test]
+    fn explicit_forget_is_atomic_durable_and_never_removes_imports_or_replays_a_run() {
+        let (root, mut ws, request) = setup();
+        let run = started(&mut ws, &request);
+        let outputs = CollectedOutputs::fixture("report.txt", b"retained synthetic output");
+        let record = ws
+            .experiment_finish_outputs(&run, result(), Some(&outputs))
+            .unwrap();
+        fs::write(
+            root.path().join("imported.md"),
+            b"user retained imported report",
+        )
+        .unwrap();
+        let imported = ws.read("imported.md").unwrap();
+        let pending = ws.pending_count().unwrap();
+        let source = fs::read(root.path().join(&request.entry.path)).unwrap();
+        let before = ws.experiment_retention_usage().unwrap();
+        let page = ws.experiment_history(10, None).unwrap();
+        assert_eq!(page.items[0].output_files, Some(1));
+        assert_eq!(page.items[0].output_bytes, Some(25));
+        let receipt = ws
+            .experiment_forget(&request.operation_id, &record.summary.fingerprint)
+            .unwrap();
+        assert_eq!(
+            ws.experiment_forget(&request.operation_id, &record.summary.fingerprint)
+                .unwrap()
+                .forgotten_ms,
+            receipt.forgotten_ms
+        );
+        assert_eq!(
+            ws.experiment_record(&request.operation_id)
+                .unwrap_err()
+                .code,
+            "EXPERIMENT_RECORD_FORGOTTEN"
+        );
+        assert_eq!(
+            ws.experiment_claim(&request.operation_id)
+                .err()
+                .unwrap()
+                .code,
+            "EXPERIMENT_RECORD_FORGOTTEN"
+        );
+        assert!(ws
+            .experiment_output_read(&request.operation_id, "report.txt", 0, 32)
+            .is_err());
+        assert!(ws.experiment_history(10, None).unwrap().items.is_empty());
+        let after = ws.experiment_retention_usage().unwrap();
+        assert_eq!(after.records, 0);
+        assert_eq!(after.forgotten_operations, 1);
+        assert_eq!(after.reserved_bytes, 0);
+        assert!(after.payload_bytes < before.payload_bytes);
+        assert_eq!(ws.pending_count().unwrap(), pending);
+        assert_eq!(
+            ws.read("imported.md").unwrap().entry.file_id,
+            imported.entry.file_id
+        );
+        assert_eq!(
+            fs::read(root.path().join(&request.entry.path)).unwrap(),
+            source
+        );
+        assert_eq!(
+            fs::read(root.path().join("imported.md")).unwrap(),
+            b"user retained imported report"
+        );
+        let inputs = PreparedInputs::prepare(&mut ws, &request.validate().unwrap()).unwrap();
+        assert_eq!(
+            ws.experiment_prepare(inputs).unwrap_err().code,
+            "EXPERIMENT_RECORD_FORGOTTEN"
+        );
+        drop(run);
+        drop(ws);
+        let mut ws = Workspace::open(root.path()).unwrap();
+        assert_eq!(
+            ws.experiment_record(&request.operation_id)
+                .unwrap_err()
+                .code,
+            "EXPERIMENT_RECORD_FORGOTTEN"
+        );
+        assert_eq!(
+            ws.experiment_forget(&request.operation_id, &receipt.fingerprint)
+                .unwrap()
+                .forgotten_ms,
+            receipt.forgotten_ms
+        );
+        assert_eq!(
+            ws.experiment_forget(&request.operation_id, &"a".repeat(64))
+                .unwrap_err()
+                .code,
+            "OPERATION_PAYLOAD_CONFLICT"
+        );
+        let mut fresh = request.clone();
+        fresh.operation_id = uuid::Uuid::new_v4().to_string();
+        prepare(&mut ws, &fresh);
+        assert_eq!(ws.experiment_retention_usage().unwrap().records, 1);
+    }
+    #[test]
+    fn forget_failure_rolls_back_payloads_and_cannot_cross_vault_or_active_states() {
+        let (_root, mut ws, request) = setup();
+        let waiting = prepare(&mut ws, &request);
+        assert_eq!(
+            ws.experiment_forget(&request.operation_id, &waiting.summary.fingerprint)
+                .unwrap_err()
+                .code,
+            "EXPERIMENT_STATE_CHANGED"
+        );
+        approve(&mut ws, &waiting);
+        assert!(ws
+            .experiment_forget(&request.operation_id, &waiting.summary.fingerprint)
+            .is_err());
+        let run = ws.experiment_claim(&request.operation_id).unwrap();
+        assert!(ws
+            .experiment_forget(&request.operation_id, &waiting.summary.fingerprint)
+            .is_err());
+        ws.experiment_running(&run).unwrap();
+        assert!(ws
+            .experiment_forget(&request.operation_id, &waiting.summary.fingerprint)
+            .is_err());
+        ws.experiment_cancel(&request.operation_id).unwrap();
+        assert!(ws
+            .experiment_forget(&request.operation_id, &waiting.summary.fingerprint)
+            .is_err());
+        let outputs = CollectedOutputs::fixture("report.txt", b"preserve on failure");
+        ws.experiment_finish_outputs(&run, result(), Some(&outputs))
+            .unwrap();
+        let before = ws.experiment_retention_usage().unwrap().payload_bytes;
+        let vault = ws.vault_id.clone();
+        ws.vault_id = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            ws.experiment_forget(&request.operation_id, &waiting.summary.fingerprint)
+                .unwrap_err()
+                .code,
+            "VAULT_PERMISSION_CHANGED"
+        );
+        ws.vault_id = vault;
+        ws.db.execute_batch("CREATE TRIGGER fail_forget BEFORE UPDATE ON experiment_runs WHEN NEW.state='forgotten' BEGIN SELECT RAISE(ABORT,'injected failure');END;").unwrap();
+        assert!(ws
+            .experiment_forget(&request.operation_id, &waiting.summary.fingerprint)
+            .is_err());
+        assert_eq!(
+            ws.experiment_record(&request.operation_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            RunState::Cancelled
+        );
+        assert_eq!(
+            ws.experiment_retention_usage().unwrap().payload_bytes,
+            before
+        );
+        assert_eq!(
+            ws.experiment_output(&request.operation_id, "report.txt")
+                .unwrap()
+                .content(),
+            b"preserve on failure"
+        );
+        ws.db.execute_batch("DROP TRIGGER fail_forget;").unwrap();
+        ws.experiment_forget(&request.operation_id, &waiting.summary.fingerprint)
+            .unwrap();
+    }
     fn started(ws: &mut Workspace, request: &RunRequest) -> ClaimedRun {
         let waiting = prepare(ws, request);
         approve(ws, &waiting);

@@ -628,6 +628,98 @@ mod tests {
             crate::experiment_cleanup::CleanupPhase::Creating
         );
     }
+    #[test]
+    fn forgotten_retry_does_not_read_moved_sources_or_create_another_proposal() {
+        let host_root = tempfile::tempdir().unwrap();
+        let runner = Runner::default();
+        runner.initialize_cleanup(host_root.path()).unwrap();
+        let (vault, workspace, request) = fixture("print(1)", ExecutionLimits::default());
+        let waiting = runner.prepare(&workspace, &request).unwrap();
+        runner
+            .reject(
+                &workspace,
+                &request.operation_id,
+                &waiting.summary.fingerprint,
+            )
+            .unwrap();
+        runner
+            .forget_from_user(
+                &workspace,
+                &request.operation_id,
+                &waiting.summary.fingerprint,
+            )
+            .unwrap();
+        std::fs::rename(
+            vault.path().join("experiments/main.py"),
+            vault.path().join("experiments/moved.py"),
+        )
+        .unwrap();
+        assert_eq!(
+            runner.prepare(&workspace, &request).unwrap_err().code,
+            "EXPERIMENT_RECORD_FORGOTTEN"
+        );
+        assert!(runner
+            .history(&workspace, 10, None)
+            .unwrap()
+            .items
+            .is_empty());
+        assert_eq!(
+            runner
+                .retention_usage(&workspace)
+                .unwrap()
+                .forgotten_operations,
+            1
+        );
+        drop(runner);
+        host_root.close().unwrap();
+    }
+    #[test]
+    fn user_forget_cannot_discard_unresolved_native_cleanup_diagnostics() {
+        let host_root = tempfile::tempdir().unwrap();
+        let runner = Runner::default();
+        runner.initialize_cleanup(host_root.path()).unwrap();
+        let (_vault, workspace, request) = fixture("print(1)", ExecutionLimits::default());
+        let waiting = runner.prepare(&workspace, &request).unwrap();
+        runner
+            .reject(
+                &workspace,
+                &request.operation_id,
+                &waiting.summary.fingerprint,
+            )
+            .unwrap();
+        let attempt = runner
+            .cleanup_journal()
+            .unwrap()
+            .reserve(&request.vault_id, &request.operation_id)
+            .unwrap();
+        attempt.before_create().unwrap();
+        assert_eq!(
+            runner
+                .forget_from_user(
+                    &workspace,
+                    &request.operation_id,
+                    &waiting.summary.fingerprint
+                )
+                .unwrap_err()
+                .code,
+            "EXPERIMENT_CLEANUP_REQUIRED"
+        );
+        assert_eq!(
+            runner
+                .record(&workspace, &request.operation_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            RunState::Rejected
+        );
+        assert_eq!(
+            runner.cleanup_status().unwrap().unwrap().operation_id,
+            request.operation_id
+        );
+        drop(attempt);
+        drop(runner);
+        host_root.close().unwrap();
+    }
     pub(super) fn native() {
         let _serial = crate::experiment_owner::TEST_EXECUTION_LOCK.lock().unwrap();
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
