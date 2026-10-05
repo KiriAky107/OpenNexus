@@ -156,6 +156,28 @@ fn native_probe(experimental: bool) {
     grants.pin(&inputs.path().join("input.csv"), None);
     let executable = runtime.join("python.exe");
     let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+    let launch_data = |mode: &str| {
+        let arguments = vec![
+            "-I".into(),
+            "-B".into(),
+            "-X".into(),
+            "utf8".into(),
+            script.to_string_lossy().into_owned(),
+            mode.into(),
+            inputs.path().to_string_lossy().into_owned(),
+            sentinel.to_string_lossy().into_owned(),
+            listener.local_addr().unwrap().port().to_string(),
+        ];
+        LaunchData::new(
+            &executable,
+            &arguments,
+            &system,
+            &folder,
+            &scratch.0,
+            &BTreeMap::new(),
+        )
+        .unwrap()
+    };
     let launch = |mode: &str| {
         // CPU seconds and elapsed seconds are different measurements. Allow a
         // loaded VM enough wall time to consume the independently small CPU cap.
@@ -170,26 +192,7 @@ fn native_probe(experimental: bool) {
         } else {
             limits.validate().unwrap()
         };
-        let arguments = vec![
-            "-I".into(),
-            "-B".into(),
-            "-X".into(),
-            "utf8".into(),
-            script.to_string_lossy().into_owned(),
-            mode.into(),
-            inputs.path().to_string_lossy().into_owned(),
-            sentinel.to_string_lossy().into_owned(),
-            listener.local_addr().unwrap().port().to_string(),
-        ];
-        let data = LaunchData::new(
-            &executable,
-            &arguments,
-            &system,
-            &folder,
-            &scratch.0,
-            &BTreeMap::new(),
-        )
-        .unwrap();
+        let data = launch_data(mode);
         let suspended = if experimental {
             Suspended::create_experiment(&profile, &executable, data, &selected).unwrap()
         } else {
@@ -236,6 +239,122 @@ fn native_probe(experimental: bool) {
     );
     assert!(folder.join("probe-outside-scratch.txt").exists());
     drop(running);
+
+    let log_report =
+        if experimental {
+            let selected = crate::experiment_policy::ExecutionLimits {
+                log_kib: 16,
+                ..limits.clone()
+            }
+            .validate()
+            .unwrap();
+            let mut observations = serde_json::Map::new();
+            for mode in ["logs", "log-cancel"] {
+                let _ = fs::remove_file(scratch.0.join("log-child-ready"));
+                let (suspended, io) = Suspended::create_experiment_with_stdio(
+                    &profile,
+                    &executable,
+                    launch_data(mode),
+                    &selected,
+                )
+                .unwrap();
+                let logs = crate::experiment_log::LogCapture::start(io, &selected).unwrap();
+                // Same pinned runtime/entry/input authority as the other synthetic probes.
+                let running = unsafe { suspended.resume().unwrap() };
+                if mode == "logs" {
+                    let start = Instant::now();
+                    loop {
+                        logs.check().unwrap();
+                        running.check_authorization().unwrap();
+                        if let Some(code) = running.wait(Duration::from_millis(20)).unwrap() {
+                            assert_eq!(code, 0);
+                            break;
+                        }
+                        assert!(
+                            start.elapsed() < Duration::from_secs(7),
+                            "log flood did not drain"
+                        );
+                    }
+                } else {
+                    let start = Instant::now();
+                    while !scratch.0.join("log-child-ready").exists()
+                        && start.elapsed() < Duration::from_secs(5)
+                    {
+                        logs.check().unwrap();
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    assert!(scratch.0.join("log-child-ready").exists());
+                    assert!(running.active_test_processes().unwrap() >= 2);
+                    while {
+                        let snapshot = logs.snapshot().unwrap();
+                        !(snapshot.stdout.truncated && snapshot.stderr.truncated)
+                    } && start.elapsed() < Duration::from_secs(5)
+                    {
+                        logs.check().unwrap();
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    assert!(logs.snapshot().unwrap().stdout.truncated);
+                }
+                running.terminate().unwrap();
+                assert!(running.wait(Duration::from_secs(5)).unwrap().is_some());
+                let start = Instant::now();
+                while running.active_test_processes().unwrap() != 0
+                    && start.elapsed() < Duration::from_secs(5)
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                assert_eq!(running.active_test_processes().unwrap(), 0);
+                let captured = logs.finish().unwrap();
+                assert!(captured.stdout.complete && captured.stderr.complete);
+                assert!(!captured.stdout.read_error && !captured.stderr.read_error);
+                assert!(captured.stdout.truncated && captured.stderr.truncated);
+                assert_eq!(captured.stdout.retained_bytes, 8192);
+                assert_eq!(captured.stderr.retained_bytes, 8192);
+                if mode == "logs" {
+                    assert!(captured.stdout.text.starts_with("中文输出\nstdin-eof\n"));
+                    assert!(!captured.stdout.invalid_utf8 && captured.stderr.invalid_utf8);
+                    assert_eq!(
+                        captured.stdout.bytes_seen,
+                        2 * 1024 * 1024 + "中文输出\nstdin-eof\n".len() as u64
+                    );
+                    // CPython may emit this startup diagnostic when its final-path
+                    // lookup cannot traverse ungranted ancestors. Keep and count it
+                    // as real stderr; do not grant extra parent-directory access.
+                    let startup = captured.stderr.text.split_once('\u{fffd}').unwrap().0;
+                    let expected = format!(
+                        "Failed to find real location of {}\n",
+                        executable.to_string_lossy().replace('/', "\\")
+                    );
+                    assert!(
+                        startup.is_empty() || startup == expected,
+                        "unexpected startup diagnostic: {startup:?}"
+                    );
+                    assert_eq!(
+                        captured.stderr.bytes_seen,
+                        2 * 1024 * 1024 + 1 + startup.len() as u64
+                    );
+                }
+                let summarize = |stream: &crate::experiment_log::StreamSnapshot| {
+                    serde_json::json!({
+                        "text_prefix": stream.text.chars().take(160).collect::<String>(),
+                        "bytes_seen": stream.bytes_seen,
+                        "retained_bytes": stream.retained_bytes,
+                        "truncated": stream.truncated,
+                        "invalid_utf8": stream.invalid_utf8,
+                        "complete": stream.complete,
+                        "read_error": stream.read_error,
+                    })
+                };
+                observations.insert(mode.into(), serde_json::json!({
+                "stdout": summarize(&captured.stdout), "stderr": summarize(&captured.stderr),
+                "remaining_processes": 0,
+            }));
+                drop(running);
+            }
+            Some(observations)
+        } else {
+            None
+        };
 
     let running = launch("cancel");
     let start = Instant::now();
@@ -390,6 +509,7 @@ fn native_probe(experimental: bool) {
         "experiment_limits": if experimental { Some(&limits) } else { None },
         "independent_run_deadline_seconds": independent_deadline,
         "host_network_positive_control": true, "container_outside_scratch_writable": true,
+        "logs": log_report,
         "production_executor_enabled": false
     })).unwrap()).unwrap();
     grants.revoke();

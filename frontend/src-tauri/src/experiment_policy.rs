@@ -66,6 +66,12 @@ impl ValidatedLimits {
     pub fn objects(&self) -> u32 {
         self.0.objects
     }
+    pub fn log_bytes(&self) -> usize {
+        self.0.log_kib as usize * 1024
+    }
+    pub fn output_bytes(&self) -> u64 {
+        u64::from(self.0.output_mib) * 1024 * 1024
+    }
 }
 
 #[cfg(test)]

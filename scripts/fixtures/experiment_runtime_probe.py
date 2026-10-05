@@ -24,6 +24,29 @@ def denied(operation):
 
 def main():
     mode = sys.argv[1]
+    if mode == "logs":
+        assert sys.stdin.buffer.read(1) == b""
+        sys.stdout.buffer.write("中文输出\nstdin-eof\n".encode("utf-8"))
+        sys.stderr.buffer.write(b"\xff")
+        for _ in range(256):
+            sys.stdout.buffer.write(b"x" * 8192)
+            sys.stderr.buffer.write(b"y" * 8192)
+        sys.stdout.buffer.flush()
+        sys.stderr.buffer.flush()
+        return
+    if mode == "log-child":
+        (scratch / "log-child-ready").write_text(str(os.getpid()), encoding="utf-8")
+        while True:
+            sys.stdout.buffer.write(b"x" * 8192)
+            sys.stderr.buffer.write(b"y" * 8192)
+            sys.stdout.buffer.flush()
+            sys.stderr.buffer.flush()
+    if mode == "log-cancel":
+        subprocess.Popen([sys.executable, "-I", "-B", "-X", "utf8", __file__, "log-child"],
+                         stdout=sys.stdout, stderr=sys.stderr, close_fds=True,
+                         creationflags=subprocess.CREATE_NO_WINDOW)
+        time.sleep(120)
+        return
     if mode == "child":
         (scratch / "child-ready").write_text(str(os.getpid()), encoding="utf-8")
         time.sleep(120)

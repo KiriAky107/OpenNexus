@@ -7,6 +7,7 @@ pub mod core_update;
 mod credential_autounlock;
 pub mod credentials;
 mod experiment_contract;
+pub mod experiment_log;
 mod payloads;
 mod preference_records;
 pub mod recent;

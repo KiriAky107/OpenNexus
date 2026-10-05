@@ -110,6 +110,19 @@ impl<'a> Suspended<'a> {
     ) -> Result<Self> {
         Self::create_inner(profile, executable, data, None, Some(limits))
     }
+    /// Only three child pipe ends are inherited. The Host owns separate, bounded
+    /// log readers; this does not authorize or resume the suspended process.
+    #[cfg(any(feature = "desktop", test))]
+    pub(crate) fn create_experiment_with_stdio(
+        profile: &'a Profile,
+        executable: &Path,
+        data: LaunchData,
+        limits: &crate::experiment_policy::ValidatedLimits,
+    ) -> Result<(Self, crate::extension_stdio::HostIo)> {
+        let (child, host) = crate::extension_stdio::ChildIo::create()?;
+        let suspended = Self::create_inner(profile, executable, data, Some(child), Some(limits))?;
+        Ok((suspended, host))
+    }
     fn create_inner(
         profile: &'a Profile,
         executable: &Path,
