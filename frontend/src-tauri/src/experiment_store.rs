@@ -354,7 +354,7 @@ impl Workspace {
     }
     /// The runner must acquire a global concurrency slot before this claim, and
     /// still validate runtime integrity / create its owned isolation afterwards.
-    pub fn experiment_claim(&mut self, operation: &str) -> Result<ClaimedRun> {
+    pub(crate) fn experiment_claim(&mut self, operation: &str) -> Result<ClaimedRun> {
         let old = self.experiment_record(operation)?.ok_or_else(conflict)?;
         if old.state != RunState::Approved {
             return Err(conflict());
@@ -388,8 +388,20 @@ impl Workspace {
         tx.commit()?;
         Ok(ClaimedRun { record, inputs })
     }
-    pub fn experiment_running(&mut self, run: &ClaimedRun) -> Result<()> {
-        self.check_claim(run)?;
+    pub(crate) fn experiment_running(&mut self, run: &ClaimedRun) -> Result<()> {
+        let old = self.check_claim(run)?;
+        if old.state != RunState::Starting {
+            return Err(conflict());
+        }
+        let time = now()?;
+        let approved = old.approved_ms.ok_or_else(corrupt)?;
+        if time < approved || time - approved > APPROVAL_MS {
+            self.db.execute("UPDATE experiment_runs SET state='awaiting_confirmation',approval_id=NULL,approved_ms=NULL,updated_ms=?2 WHERE operation_id=?1 AND state='starting'",params![old.summary.request.operation_id,time])?;
+            return Err(HostError::new("EXPERIMENT_APPROVAL_EXPIRED"));
+        }
+        // Binding resources can take time. Revalidate again at the last durable
+        // transition before the runner may resume its still-suspended process.
+        self.experiment_validate_current(&old)?;
         if self.db.execute("UPDATE experiment_runs SET state='running',updated_ms=?3 WHERE operation_id=?1 AND state='starting' AND approval_id=?2",params![run.record.summary.request.operation_id,run.record.approval_id,now()?])?!=1 {return Err(conflict())}
         Ok(())
     }
@@ -429,7 +441,7 @@ impl Workspace {
     /// Called only after the runner has observed/terminated the complete Job.
     /// Cancellation recorded before completion wins; retries return the first
     /// durable terminal result instead of overwriting or launching again.
-    pub fn experiment_finish(
+    pub(crate) fn experiment_finish(
         &mut self,
         run: &ClaimedRun,
         mut result: RunResult,
@@ -746,6 +758,47 @@ mod tests {
             )
             .unwrap();
         assert!(ws.experiment_record(&request.operation_id).is_err());
+    }
+    #[test]
+    fn pre_resume_transition_rechecks_source_expiry_and_recorded_cancellation() {
+        for scenario in ["source", "expiry", "cancel"] {
+            let (root, mut ws, request) = setup();
+            let waiting = prepare(&mut ws, &request);
+            approve(&mut ws, &waiting);
+            let run = ws.experiment_claim(&request.operation_id).unwrap();
+            match scenario {
+                "source" => {
+                    fs::write(root.path().join(&request.entry.path), b"print('changed')").unwrap()
+                }
+                "expiry" => {
+                    ws.db
+                        .execute(
+                            "UPDATE experiment_runs SET approved_ms=?2 WHERE operation_id=?1",
+                            params![request.operation_id, now().unwrap() - APPROVAL_MS - 1000],
+                        )
+                        .unwrap();
+                }
+                "cancel" => {
+                    ws.experiment_cancel(&request.operation_id).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(ws.experiment_running(&run).is_err());
+            let state = ws
+                .experiment_record(&request.operation_id)
+                .unwrap()
+                .unwrap()
+                .state;
+            assert_eq!(
+                state,
+                match scenario {
+                    "source" => RunState::Failed,
+                    "expiry" => RunState::AwaitingConfirmation,
+                    "cancel" => RunState::CancelRequested,
+                    _ => unreachable!(),
+                }
+            );
+        }
     }
     #[test]
     fn broken_logs_and_nonzero_exit_cannot_be_completed_and_cannot_cross_vault() {
