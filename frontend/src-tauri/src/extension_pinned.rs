@@ -316,6 +316,29 @@ impl PinnedPackage {
     pub fn access<'a>(&'a self, profile: &'a Profile) -> Result<PackageAccess<'a>> {
         self.access_with(profile, || self.grant_read_execute(profile))
     }
+    pub(crate) fn access_for_experiment<'a>(
+        &'a self,
+        profile: &'a Profile,
+        attempt: &crate::experiment_cleanup::Attempt,
+        kind: crate::experiment_cleanup::GrantKind,
+    ) -> Result<PackageAccess<'a>> {
+        if self.directories.len() + self.files.len() > crate::experiment_cleanup::MAX_GRANTS {
+            return Err(HostError::new("EXPERIMENT_CLEANUP_JOURNAL_FAILED"));
+        }
+        let mut receipts = Vec::new();
+        for dir in self.directories.values() {
+            receipts.push(crate::experiment_cleanup_objects::ObjectReceipt::capture(
+                &dir.try_clone()?.into_std_file(),
+            )?);
+        }
+        for file in self.files.values() {
+            receipts.push(crate::experiment_cleanup_objects::ObjectReceipt::capture(
+                file,
+            )?);
+        }
+        attempt.grants_bound(kind, receipts)?;
+        self.access(profile)
+    }
     fn access_with<'a>(
         &'a self,
         profile: &'a Profile,
@@ -371,6 +394,78 @@ impl PinnedPackage {
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+    #[test]
+    fn experiment_receipt_failure_cannot_change_even_the_first_package_acl() {
+        use crate::experiment_cleanup::{GrantKind, Journal};
+        let host_root = tempfile::tempdir().unwrap();
+        let journal = Journal::open(host_root.path()).unwrap();
+        let attempt = journal
+            .reserve(
+                &uuid::Uuid::new_v4().to_string(),
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .unwrap();
+        attempt.before_create().unwrap();
+        let profile = Profile::create_named(attempt.profile_name().into()).unwrap();
+        attempt
+            .created(
+                profile.folder().unwrap().parent().unwrap(),
+                &profile.sid_bytes().unwrap(),
+            )
+            .unwrap();
+        let (temp, root, inventory, hash) = fixture();
+        let pinned = PinnedPackage::open(&root, &inventory, &hash).unwrap();
+        attempt.runtime_bound(temp.path()).unwrap();
+        let snapshot = || {
+            let mut entries = Vec::new();
+            for directory in pinned.directories.values() {
+                entries.push(crate::extension_container::test_acl_entries(
+                    &directory.try_clone().unwrap().into_std_file(),
+                ));
+            }
+            for file in pinned.files.values() {
+                entries.push(crate::extension_container::test_acl_entries(file));
+            }
+            entries
+        };
+        let before = snapshot();
+        let faults =
+            rusqlite::Connection::open(host_root.path().join("experiment-cleanup.sqlite3"))
+                .unwrap();
+        faults.execute_batch("CREATE TRIGGER fail_receipt BEFORE UPDATE ON cleanup BEGIN SELECT RAISE(ABORT,'injected receipt failure');END;").unwrap();
+        assert!(pinned
+            .access_for_experiment(&profile, &attempt, GrantKind::Runtime)
+            .is_err());
+        assert_eq!(snapshot(), before);
+        assert!(journal
+            .status()
+            .unwrap()
+            .unwrap()
+            .objects
+            .unwrap()
+            .runtime_grants
+            .is_none());
+        faults.execute_batch("DROP TRIGGER fail_receipt;").unwrap();
+        let access = pinned
+            .access_for_experiment(&profile, &attempt, GrantKind::Runtime)
+            .unwrap();
+        assert_eq!(
+            journal
+                .status()
+                .unwrap()
+                .unwrap()
+                .objects
+                .unwrap()
+                .runtime_grants
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_ne!(snapshot(), before);
+        access.finish().unwrap();
+        assert_eq!(snapshot(), before);
+        profile.remove().unwrap();
+    }
     fn fixture() -> (tempfile::TempDir, Dir, Inventory, String) {
         let temp = tempfile::tempdir().unwrap();
         std::fs::create_dir(temp.path().join("sub")).unwrap();

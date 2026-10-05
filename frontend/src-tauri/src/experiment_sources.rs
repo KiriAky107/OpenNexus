@@ -96,6 +96,17 @@ impl<'a> RunSources<'a> {
     pub fn access<'b>(&'b self, profile: &'b Profile) -> Result<PackageAccess<'b>> {
         self.package.access(profile)
     }
+    pub(crate) fn access_for_execution<'b>(
+        &'b self,
+        profile: &'b Profile,
+        attempt: &crate::experiment_cleanup::Attempt,
+    ) -> Result<PackageAccess<'b>> {
+        self.package.access_for_experiment(
+            profile,
+            attempt,
+            crate::experiment_cleanup::GrantKind::Source,
+        )
+    }
     pub fn finish(self) -> Result<()> {
         let Self {
             package,

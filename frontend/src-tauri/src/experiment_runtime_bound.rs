@@ -77,6 +77,17 @@ impl PinnedRuntime {
     pub fn access<'a>(&'a self, profile: &'a Profile) -> Result<PackageAccess<'a>> {
         self.package.access(profile)
     }
+    pub(crate) fn access_for_execution<'a>(
+        &'a self,
+        profile: &'a Profile,
+        attempt: &crate::experiment_cleanup::Attempt,
+    ) -> Result<PackageAccess<'a>> {
+        self.package.access_for_experiment(
+            profile,
+            attempt,
+            crate::experiment_cleanup::GrantKind::Runtime,
+        )
+    }
 }
 
 #[cfg(test)]

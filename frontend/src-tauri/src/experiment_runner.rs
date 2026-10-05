@@ -1341,6 +1341,14 @@ mod tests {
             if let Some(pending) = &pending {
                 assert_eq!(pending.vault_id, request.vault_id);
                 assert_eq!(pending.operation_id, request.operation_id);
+                let objects = pending
+                    .objects
+                    .as_ref()
+                    .expect("physical ownership receipts must survive journal failure");
+                assert!(objects.profile.is_some() && objects.profile_sid.is_some());
+                assert!(objects.source.is_some() && objects.runtime.is_some());
+                assert!(objects.source_grants.as_ref().unwrap().len() >= 3);
+                assert!(objects.runtime_grants.as_ref().unwrap().len() >= 36);
                 assert_eq!(
                     pending.error.as_deref(),
                     Some("EXPERIMENT_CLEANUP_JOURNAL_FAILED")

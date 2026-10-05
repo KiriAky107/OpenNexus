@@ -8,7 +8,110 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-const MAX_RECORD: usize = 16 * 1024;
+const MAX_RECORD: usize = 128 * 1024;
+pub(crate) const MAX_GRANTS: usize = 512;
+pub use crate::experiment_cleanup_objects::{ObjectKind, ObjectReceipt};
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CleanupObjects {
+    pub profile: Option<ObjectReceipt>,
+    pub profile_sid: Option<Vec<u8>>,
+    pub source: Option<ObjectReceipt>,
+    pub runtime: Option<ObjectReceipt>,
+    pub source_grants: Option<Vec<ObjectReceipt>>,
+    pub runtime_grants: Option<Vec<ObjectReceipt>>,
+}
+#[derive(Clone, Copy)]
+pub(crate) enum GrantKind {
+    Source,
+    Runtime,
+}
+fn derived_sid(name: &str) -> Result<Vec<u8>> {
+    use windows_sys::Win32::Security::{
+        FreeSid, GetLengthSid, IsValidSid, Isolation::DeriveAppContainerSidFromAppContainerName,
+    };
+    let name: Vec<_> = name.encode_utf16().chain(Some(0)).collect();
+    let mut sid = std::ptr::null_mut();
+    let status = unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) };
+    let result = if status < 0 || sid.is_null() || unsafe { IsValidSid(sid) } == 0 {
+        Err(failed())
+    } else {
+        let length = unsafe { GetLengthSid(sid) } as usize;
+        if !(8..=68).contains(&length) {
+            Err(failed())
+        } else {
+            Ok(unsafe { std::slice::from_raw_parts(sid.cast::<u8>(), length) }.to_vec())
+        }
+    };
+    if !sid.is_null() {
+        unsafe {
+            FreeSid(sid);
+        }
+    }
+    result
+}
+impl CleanupObjects {
+    fn validate(&self, record: &CleanupStatus) -> Result<()> {
+        let roots = [&self.profile, &self.source, &self.runtime];
+        for receipt in roots.iter().filter_map(|value| value.as_ref()) {
+            receipt.validate()?;
+            if receipt.kind != ObjectKind::Directory {
+                return Err(failed());
+            }
+        }
+        if record.phase != CleanupPhase::Created {
+            if roots.iter().any(|value| value.is_some())
+                || self.profile_sid.is_some()
+                || self.source_grants.is_some()
+                || self.runtime_grants.is_some()
+            {
+                return Err(failed());
+            }
+            return Ok(());
+        }
+        if self.profile.is_none()
+            || self.profile_sid.as_ref() != Some(&derived_sid(&record.profile_name)?)
+            || self.source.is_some() != record.source_root.is_some()
+            || self.runtime.is_some() != record.runtime_root.is_some()
+        {
+            return Err(failed());
+        }
+        for (index, left) in roots.iter().filter_map(|value| value.as_ref()).enumerate() {
+            for right in roots
+                .iter()
+                .filter_map(|value| value.as_ref())
+                .skip(index + 1)
+            {
+                if left.path.starts_with(&right.path) || right.path.starts_with(&left.path) {
+                    return Err(failed());
+                }
+            }
+        }
+        for (root, receipts) in [
+            (&self.source, &self.source_grants),
+            (&self.runtime, &self.runtime_grants),
+        ] {
+            if let Some(receipts) = receipts {
+                let root = root.as_ref().ok_or_else(failed)?;
+                if receipts.is_empty() || receipts.len() > MAX_GRANTS || !receipts.contains(root) {
+                    return Err(failed());
+                }
+                let mut identities = std::collections::BTreeSet::new();
+                let mut paths = std::collections::BTreeSet::new();
+                for receipt in receipts {
+                    receipt.validate()?;
+                    if !receipt.path.starts_with(&root.path)
+                        || !identities.insert((receipt.volume, receipt.file_id))
+                        || !paths.insert(&receipt.path)
+                    {
+                        return Err(failed());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
 fn failed() -> HostError {
     HostError::new("EXPERIMENT_CLEANUP_JOURNAL_FAILED")
 }
@@ -35,6 +138,9 @@ pub struct CleanupStatus {
     pub source_root: Option<PathBuf>,
     pub runtime_root: Option<PathBuf>,
     pub error: Option<String>,
+    /// None marks an older path-only record; it cannot authorize recovery.
+    #[serde(default)]
+    pub objects: Option<CleanupObjects>,
 }
 pub(crate) struct Journal {
     db: Mutex<Connection>,
@@ -86,6 +192,9 @@ fn read(db: &Connection) -> Result<Option<(String, CleanupStatus)>> {
             {
                 return Err(failed());
             }
+            if let Some(objects) = &record.objects {
+                objects.validate(&record)?;
+            }
             Ok((token, record))
         })
         .transpose()
@@ -102,11 +211,11 @@ impl Journal {
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|_| failed())?;
-        if !(0..=1).contains(&version) {
+        if !(0..=2).contains(&version) {
             return Err(failed());
         }
         // EXTRA also syncs rollback-journal directory removal in DELETE mode.
-        db.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=EXTRA; CREATE TABLE IF NOT EXISTS cleanup (id INTEGER PRIMARY KEY CHECK(id=1),token TEXT NOT NULL,record TEXT NOT NULL); PRAGMA user_version=1;").map_err(|_| failed())?;
+        db.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=EXTRA; CREATE TABLE IF NOT EXISTS cleanup (id INTEGER PRIMARY KEY CHECK(id=1),token TEXT NOT NULL,record TEXT NOT NULL); PRAGMA user_version=2;").map_err(|_| failed())?;
         read(&db)?;
         Ok(Arc::new(Self {
             db: Mutex::new(db),
@@ -139,6 +248,7 @@ impl Journal {
             source_root: None,
             runtime_root: None,
             error: None,
+            objects: Some(CleanupObjects::default()),
         };
         let encoded = serde_json::to_string(&record).map_err(|_| failed())?;
         let db = self.db.lock().map_err(|_| failed())?;
@@ -178,6 +288,9 @@ impl Attempt {
             return Err(failed());
         }
         change(&mut record)?;
+        if let Some(objects) = &record.objects {
+            objects.validate(&record)?;
+        }
         let encoded = serde_json::to_string(&record).map_err(|_| failed())?;
         if encoded.len() > MAX_RECORD {
             return Err(failed());
@@ -203,31 +316,57 @@ impl Attempt {
             Ok(())
         })
     }
-    pub(crate) fn created(&self, root: &Path) -> Result<()> {
+    pub(crate) fn created(&self, root: &Path, sid: &[u8]) -> Result<()> {
+        let (receipt, _held) = ObjectReceipt::directory(root)?;
         self.update(|r| {
             if r.phase != CleanupPhase::Creating || !root.is_absolute() {
                 return Err(failed());
             }
             r.phase = CleanupPhase::Created;
             r.profile_root = Some(root.into());
+            let objects = r.objects.as_mut().ok_or_else(failed)?;
+            objects.profile = Some(receipt);
+            objects.profile_sid = Some(sid.into());
             Ok(())
         })
     }
     pub(crate) fn source_created(&self, root: &Path) -> Result<()> {
+        let (receipt, _held) = ObjectReceipt::directory(root)?;
         self.update(|r| {
             if r.phase != CleanupPhase::Created || r.source_root.is_some() || !root.is_absolute() {
                 return Err(failed());
             }
             r.source_root = Some(root.into());
+            r.objects.as_mut().ok_or_else(failed)?.source = Some(receipt);
             Ok(())
         })
     }
     pub(crate) fn runtime_bound(&self, root: &Path) -> Result<()> {
+        let (receipt, _held) = ObjectReceipt::directory(root)?;
         self.update(|r| {
             if r.phase != CleanupPhase::Created || r.runtime_root.is_some() || !root.is_absolute() {
                 return Err(failed());
             }
             r.runtime_root = Some(root.into());
+            r.objects.as_mut().ok_or_else(failed)?.runtime = Some(receipt);
+            Ok(())
+        })
+    }
+    /// Complete target intent is committed before the first borrowed ACL is changed.
+    pub(crate) fn grants_bound(&self, kind: GrantKind, receipts: Vec<ObjectReceipt>) -> Result<()> {
+        self.update(|record| {
+            if record.phase != CleanupPhase::Created {
+                return Err(failed());
+            }
+            let objects = record.objects.as_mut().ok_or_else(failed)?;
+            let targets = match kind {
+                GrantKind::Source => &mut objects.source_grants,
+                GrantKind::Runtime => &mut objects.runtime_grants,
+            };
+            if targets.is_some() {
+                return Err(failed());
+            }
+            *targets = Some(receipts);
             Ok(())
         })
     }
@@ -288,6 +427,9 @@ impl Attempt {
             || record.phase != CleanupPhase::Created
             || record.source_root.is_none()
             || record.runtime_root.is_none()
+            || record.objects.as_ref().is_none_or(|objects| {
+                objects.source_grants.is_none() || objects.runtime_grants.is_none()
+            })
         {
             return Err(failed());
         }
@@ -360,7 +502,15 @@ mod tests {
         let attempt = journal.reserve(&v, &o).unwrap();
         assert!(other.reserve(&v, &o).is_err());
         attempt.before_create().unwrap();
-        attempt.created(root.path()).unwrap();
+        for name in ["profile", "sources", "runtime"] {
+            std::fs::create_dir(root.path().join(name)).unwrap();
+        }
+        attempt
+            .created(
+                &root.path().join("profile"),
+                &derived_sid(attempt.profile_name()).unwrap(),
+            )
+            .unwrap();
         attempt
             .source_created(&root.path().join("sources"))
             .unwrap();
@@ -414,9 +564,100 @@ mod tests {
         drop(journal);
         assert!(Journal::open(root.path()).is_err());
         let db = Connection::open(root.path().join("experiment-cleanup.sqlite3")).unwrap();
-        db.execute_batch("DELETE FROM cleanup;PRAGMA user_version=2;")
+        db.execute_batch("DELETE FROM cleanup;PRAGMA user_version=3;")
             .unwrap();
         drop(db);
         assert!(Journal::open(root.path()).is_err());
+    }
+    #[test]
+    fn object_receipts_survive_restart_and_reject_foreign_or_repeated_grant_intents() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = Journal::open(root.path()).unwrap();
+        let (vault, operation) = ids();
+        let attempt = journal.reserve(&vault, &operation).unwrap();
+        for name in ["profile", "sources", "runtime", "foreign"] {
+            std::fs::create_dir(root.path().join(name)).unwrap();
+        }
+        attempt.before_create().unwrap();
+        let sid = derived_sid(attempt.profile_name()).unwrap();
+        assert!(attempt
+            .created(&root.path().join("profile"), b"forged sid")
+            .is_err());
+        assert_eq!(
+            journal.status().unwrap().unwrap().phase,
+            CleanupPhase::Creating
+        );
+        attempt.created(&root.path().join("profile"), &sid).unwrap();
+        attempt
+            .source_created(&root.path().join("sources"))
+            .unwrap();
+        attempt.runtime_bound(&root.path().join("runtime")).unwrap();
+        let source = journal
+            .status()
+            .unwrap()
+            .unwrap()
+            .objects
+            .unwrap()
+            .source
+            .unwrap();
+        let foreign = ObjectReceipt::directory(&root.path().join("foreign"))
+            .unwrap()
+            .0;
+        assert!(attempt
+            .grants_bound(GrantKind::Source, vec![source.clone(), foreign])
+            .is_err());
+        assert!(journal
+            .status()
+            .unwrap()
+            .unwrap()
+            .objects
+            .unwrap()
+            .source_grants
+            .is_none());
+        attempt
+            .grants_bound(GrantKind::Source, vec![source.clone()])
+            .unwrap();
+        assert!(attempt
+            .grants_bound(GrantKind::Source, vec![source.clone()])
+            .is_err());
+        drop(attempt);
+        drop(journal);
+        let restarted = Journal::open(root.path()).unwrap();
+        let record = restarted.status().unwrap().unwrap();
+        assert_eq!(record.objects.unwrap().source_grants.unwrap(), vec![source]);
+        assert_eq!(record.phase, CleanupPhase::Created);
+        assert!(restarted.reserve(&vault, &operation).is_err());
+    }
+    #[test]
+    fn legacy_path_only_records_remain_durable_and_are_not_backfilled_with_current_objects() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = Journal::open(root.path()).unwrap();
+        let (vault, operation) = ids();
+        let attempt = journal.reserve(&vault, &operation).unwrap();
+        attempt.before_create().unwrap();
+        let mut record = serde_json::to_value(journal.status().unwrap().unwrap()).unwrap();
+        record.as_object_mut().unwrap().remove("objects");
+        journal
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE cleanup SET record=?1",
+                [serde_json::to_string(&record).unwrap()],
+            )
+            .unwrap();
+        journal
+            .db
+            .lock()
+            .unwrap()
+            .execute_batch("PRAGMA user_version=1")
+            .unwrap();
+        drop(attempt);
+        drop(journal);
+        let restarted = Journal::open(root.path()).unwrap();
+        let record = restarted.status().unwrap().unwrap();
+        assert!(record.objects.is_none());
+        assert_eq!(record.phase, CleanupPhase::Creating);
+        assert!(restarted.reserve(&vault, &operation).is_err());
     }
 }

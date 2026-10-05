@@ -56,6 +56,13 @@ impl Profile {
     pub fn sid(&self) -> PSID {
         self.sid
     }
+    pub(crate) fn sid_bytes(&self) -> Result<Vec<u8>> {
+        let length = unsafe { windows_sys::Win32::Security::GetLengthSid(self.sid) } as usize;
+        if !(8..=68).contains(&length) {
+            return Err(HostError::new("EXTENSION_CONTAINER_SID_INVALID"));
+        }
+        Ok(unsafe { std::slice::from_raw_parts(self.sid.cast::<u8>(), length) }.to_vec())
+    }
     pub(crate) fn restrict_experiment_registry(
         &self,
     ) -> Result<crate::experiment_registry::ReadOnlyRegistry> {

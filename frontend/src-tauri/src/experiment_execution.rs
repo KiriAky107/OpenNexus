@@ -232,6 +232,7 @@ fn execute_pinned(
         folder
             .parent()
             .ok_or_else(|| HostError::new("EXPERIMENT_CLEANUP_JOURNAL_FAILED"))?,
+        &profile.sid_bytes()?,
     )?;
     let sources = RunSources::create_for_execution(owner.run(), attempt)?;
     let runtime_entry = runtime.bind_entry()?;
@@ -242,8 +243,8 @@ fn execute_pinned(
             .ok_or_else(|| HostError::new("EXPERIMENT_CLEANUP_JOURNAL_FAILED"))?,
     )?;
     let source_entry = sources.entry()?;
-    let runtime_access = runtime.access(&profile)?;
-    let source_access = sources.access(&profile)?;
+    let runtime_access = runtime.access_for_execution(&profile, attempt)?;
+    let source_access = sources.access_for_execution(&profile, attempt)?;
     let data = LaunchData::new(
         runtime_entry.launch_path(),
         &[

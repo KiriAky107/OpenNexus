@@ -10,6 +10,8 @@ pub mod credentials;
 pub mod experiment_cleanup;
 #[cfg(any(windows, test))]
 mod experiment_cleanup_lease;
+#[cfg(windows)]
+mod experiment_cleanup_objects;
 mod experiment_contract;
 #[cfg(windows)]
 pub mod experiment_execution;
