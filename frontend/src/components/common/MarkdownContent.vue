@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import DiagramInteractions from './DiagramInteractions.vue'
-import { computed, ref, watch, onBeforeUnmount } from 'vue'
-import { renderMarkdown } from '@/utils/markdown'
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { MarkdownPreview } from '@/utils/markdownPreview'
 import { useThemeStore } from '@/stores/theme'
 import { useHeadingAppearanceStore } from '@/stores/headingAppearance'
 const headingAppearance = useHeadingAppearanceStore()
@@ -23,7 +23,8 @@ function citationClick(event: MouseEvent) {
   void navigateMarkdownHref(href, props.sourcePath)
 }
 const themeStore = useThemeStore()
-const html = ref('')
+const content = ref<HTMLElement>()
+let preview: MarkdownPreview | undefined
 let renderVersion = 0
 let controller: AbortController | undefined
 let timer: ReturnType<typeof setTimeout> | undefined
@@ -32,7 +33,7 @@ let renderedOnce = false
 const diagramTheme = computed<'light' | 'dark'>(() => (themeStore.isDark ? 'dark' : 'light'))
 
 // 主题切换需要重渲染：Mermaid SVG 的配色在渲染时烘焙，无法靠 CSS 变量事后调整。
-watch([() => props.source, diagramTheme, () => themeStore.currentThemeId, () => JSON.stringify(markdownPreferences.normalized), () => JSON.stringify([props.citationNumbers, props.citationAliases]), () => props.streaming], () => {
+function scheduleRender() {
   const version = ++renderVersion
   controller?.abort()
   const render = async () => {
@@ -43,14 +44,14 @@ watch([() => props.source, diagramTheme, () => themeStore.currentThemeId, () => 
     const source = props.source
     const options = { signal, theme: diagramTheme.value, themeId: themeStore.currentThemeId, preferences: markdownPreferences.normalized, citationNumbers: props.citationNumbers, citationAliases: props.citationAliases }
     try {
+      if (!content.value) return
+      preview ??= new MarkdownPreview(content.value)
       // Keep new streamed text visible while its colors are calculated. Cached
       // completed blocks retain their colors during this inexpensive first pass.
       if (props.streaming) {
-        const plain = await renderMarkdown(source, { ...options, previewOnly: true })
-        if (current === renderVersion && !signal.aborted) html.value = plain
+        await preview.render(source, { ...options, previewOnly: true })
       }
-      const result = await renderMarkdown(source, options)
-      if (current === renderVersion && !signal.aborted) html.value = result
+      if (current === renderVersion && !signal.aborted) await preview.render(source, options)
     } catch (error) {
       if (!signal.aborted) console.warn('Markdown preview failed', error)
     }
@@ -63,12 +64,14 @@ watch([() => props.source, diagramTheme, () => themeStore.currentThemeId, () => 
     // updates indefinitely. The callback snapshots only the newest props.
     timer = setTimeout(() => { if (version <= renderVersion) void render() }, 40)
   }
-}, { immediate: true, flush: 'post' })
-onBeforeUnmount(() => { renderVersion++; clearTimeout(timer); controller?.abort() })
+}
+watch([() => props.source, diagramTheme, () => themeStore.currentThemeId, () => JSON.stringify(markdownPreferences.normalized), () => JSON.stringify([props.citationNumbers, props.citationAliases]), () => props.streaming], scheduleRender, { immediate: true, flush: 'post' })
+onMounted(() => { renderedOnce = false; scheduleRender() })
+onBeforeUnmount(() => { renderVersion++; clearTimeout(timer); controller?.abort(); preview?.dispose() })
 </script>
 
 <template>
-  <DiagramInteractions :data-heading-style="headingAppearance.preferences.custom ? 'custom' : undefined" :style="headingAppearance.cssVariables"><div class="markdown-content" @click="citationClick" :data-code-wrap="markdownPreferences.normalized.wrapCode" :data-line-numbers="markdownPreferences.normalized.lineNumbers" :style="{ '--markdown-code-indent': markdownPreferences.normalized.indent }" v-html="html" /></DiagramInteractions>
+  <DiagramInteractions :data-heading-style="headingAppearance.preferences.custom ? 'custom' : undefined" :style="headingAppearance.cssVariables"><div ref="content" class="markdown-content" @click="citationClick" :data-code-wrap="markdownPreferences.normalized.wrapCode" :data-line-numbers="markdownPreferences.normalized.lineNumbers" :style="{ '--markdown-code-indent': markdownPreferences.normalized.indent }" /></DiagramInteractions>
 </template>
 
 <style>

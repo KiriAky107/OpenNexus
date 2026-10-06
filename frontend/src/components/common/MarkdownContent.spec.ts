@@ -2,17 +2,25 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { renderMarkdown } from '@/utils/markdown'
+import { MarkdownPreview } from '@/utils/markdownPreview'
+import { navigateMarkdownHref } from '@/services/markdownLinkService'
 import MarkdownContent from './MarkdownContent.vue'
 
-vi.mock('@/utils/markdown', () => ({ renderMarkdown: vi.fn() }))
+vi.mock('@/utils/markdownPreview', () => ({ MarkdownPreview: vi.fn() }))
 vi.mock('./DiagramInteractions.vue', () => ({ default: { template: '<div><slot /></div>' } }))
+vi.mock('@/services/markdownLinkService', () => ({ navigateMarkdownHref: vi.fn() }))
 const pending: { source: string; signal?: AbortSignal; resolve: (html: string) => void }[] = []
 beforeEach(() => {
   setActivePinia(createPinia()); vi.useFakeTimers(); pending.length = 0
-  vi.mocked(renderMarkdown).mockReset().mockImplementation((source, options) => options?.previewOnly
-    ? Promise.resolve(`<p>plain ${source}</p>`)
-    : new Promise(resolve => { pending.push({ source, signal: options?.signal, resolve }) }))
+  vi.mocked(navigateMarkdownHref).mockClear()
+  vi.mocked(MarkdownPreview).mockReset().mockImplementation(function (root: HTMLElement) {
+    return { dispose: vi.fn(), render: vi.fn((source, options) => options?.previewOnly
+      ? Promise.resolve().then(() => { if (!options.signal?.aborted) root.innerHTML = `<p>plain ${source}</p>` })
+      : new Promise<void>(resolve => { pending.push({ source, signal: options?.signal, resolve: html => {
+        if (!options?.signal?.aborted) root.innerHTML = html
+        resolve()
+      } }) })) } as unknown as MarkdownPreview
+  })
 })
 afterEach(() => { vi.useRealTimers() })
 
@@ -45,4 +53,17 @@ it('renders the final stream snapshot immediately and cancels work when unmounte
   expect(pending.at(-1)!.signal?.aborted).toBe(true)
   await vi.advanceTimersByTimeAsync(100)
   expect(pending).toHaveLength(2)
+})
+
+it('preserves delegated citation and vault-relative link navigation on incrementally installed blocks', async () => {
+  const wrapper = mount(MarkdownContent, { props: { source: 'body', sourcePath: 'notes/source.md', citationNumbers: [2] } })
+  await flushPromises()
+  pending[0]!.resolve('<p><button data-citation-number="2">[2]</button> <a href="../experiments/lesson%23.py">Source</a></p>')
+  await flushPromises()
+  await wrapper.get('button').trigger('click')
+  expect(wrapper.emitted('citation')).toEqual([[2]])
+  expect(navigateMarkdownHref).not.toHaveBeenCalled()
+  await wrapper.get('a').trigger('click')
+  expect(navigateMarkdownHref).toHaveBeenCalledExactlyOnceWith('../experiments/lesson%23.py', 'notes/source.md')
+  wrapper.unmount()
 })

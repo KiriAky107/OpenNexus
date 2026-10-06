@@ -20,11 +20,19 @@
 .editor-pane.source { caret-color: var(--color-accent-primary); }
 .markdown-content .shiki code { display: block; min-width: max-content; padding: 0; background: transparent; font: inherit; }
 .markdown-content .shiki .line { display: block; min-height: 1lh; }
+.markdown-content .shiki .markdown-code-chunk { display: block; }
+/* All source remains in the DOM for selection/search/copy. Fixed-height rows
+   can skip offscreen layout; wrapped rows retain ordinary measured layout. */
+.markdown-content[data-code-wrap='false'] .markdown-code-chunk {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto calc(var(--preview-line-count) * 1lh);
+}
 .markdown-content[data-code-wrap] .shiki { tab-size: var(--markdown-code-indent, 4); }
 .markdown-content[data-code-wrap='true'] .shiki code { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .markdown-content[data-line-numbers='true'] .shiki code { counter-reset: code-line; }
 .markdown-content[data-line-numbers='true'] .shiki .line { position: relative; padding-inline-start: 3.5em; }
 .markdown-content[data-line-numbers='true'] .shiki .line::before { counter-increment: code-line; content: counter(code-line); position: absolute; inset-inline-start: 0; width: 2.5em; text-align: end; color: var(--color-code-muted); user-select: none; }
+.markdown-content[data-line-numbers='true'] .shiki .line[data-preview-line-number]::before { content: attr(data-preview-line-number); }
 :is(.milkdown-host, .editor-pane.source) { scrollbar-color: var(--color-border-default) var(--color-background-primary); }
 .editor-scroll-buttons { position: absolute; right: 24px; bottom: 24px; z-index: 10; display: flex; flex-direction: column; gap: 8px; }
 .editor-scroll-buttons button { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; min-height: 38px; padding: 0; border-radius: var(--radius-md); background: var(--color-editor-scroll-background); color: var(--color-editor-scroll-text); border: 1px solid var(--color-border-default); box-shadow: var(--shadow-sm); }

@@ -18,7 +18,19 @@ function mathHtml(source: string, displayMode: boolean) {
   return `<${displayMode ? 'div' : 'span'} class="markdown-math" role="math" aria-label="${label}">${result}</${displayMode ? 'div' : 'span'}>`
 }
 
-function createMarkdownParser(preferences: MarkdownPreferences) {
+export interface MarkdownRenderOptions {
+  signal?: AbortSignal
+  previewOnly?: boolean
+  themeId?: string
+  theme?: 'light' | 'dark'
+  preferences?: MarkdownPreferences
+  pdf?: { plot: (source: string) => Promise<{svg: string; warnings: string[]}>; mermaidVariables: ReturnType<typeof mermaidThemeVariables> }
+  citationNumbers?: number[]
+  citationAliases?: Record<string, number>
+}
+
+export function createMarkdownParser(options?: MarkdownRenderOptions) {
+const preferences = options?.preferences ?? defaultMarkdownPreferences
 const marked = new Marked()
 marked.use({ renderer: { blockquote(token) {
   if (!preferences.callouts) return false
@@ -47,17 +59,6 @@ if (preferences.math) marked.use({extensions:[
 
 marked.setOptions({ gfm: true, breaks: true })
 if (!preferences.autoLinks) marked.use({ tokenizer: { url() { return undefined } } })
-return marked
-}
-
-export function highlightCode(source: string, requestedLanguage = 'text', signal?: AbortSignal): Promise<string> {
-  return previewHighlighter.highlight(source, requestedLanguage, signal)
-}
-
-export async function renderMarkdown(source: string, options?: { signal?: AbortSignal; previewOnly?: boolean; themeId?: string; theme?: 'light' | 'dark'; preferences?: MarkdownPreferences; pdf?: { plot: (source: string) => Promise<{svg: string; warnings: string[]}>; mermaidVariables: ReturnType<typeof mermaidThemeVariables> }; citationNumbers?: number[]; citationAliases?: Record<string, number> }): Promise<string> {
-  options?.signal?.throwIfAborted()
-  const preferences = options?.preferences ?? defaultMarkdownPreferences
-  const marked = createMarkdownParser(preferences)
   const citations = new Set(options?.citationNumbers ?? [])
   if (citations.size) marked.use({ extensions: [{ name: 'citation', level: 'inline',
     start: text => text.indexOf('['),
@@ -68,8 +69,33 @@ export async function renderMarkdown(source: string, options?: { signal?: AbortS
     },
     renderer: token => `<button type="button" class="inline-citation" data-citation-number="${token.number}" aria-label="查看来源 ${token.number}">[${token.number}]</button>`,
   }] })
-  const html = marked.parse(source, { async: false }) as string
+return marked
+}
+
+export function highlightCode(source: string, requestedLanguage = 'text', signal?: AbortSignal): Promise<string> {
+  return previewHighlighter.highlight(source, requestedLanguage, signal)
+}
+
+export async function renderMarkdown(source: string, options?: MarkdownRenderOptions): Promise<string> {
+  options?.signal?.throwIfAborted()
+  const html = createMarkdownParser(options).parse(source, { async: false }) as string
+  const fragment = await renderMarkdownFragment(html, options)
+  const container = document.createElement('div')
+  container.append(fragment)
+  return container.innerHTML
+}
+
+// Preview callers defer ordinary code into bounded DOM batches. Opaque slots
+// preserve the caller's empty placeholders across sanitation's cloned fragment;
+// their prefix cannot occur in the input HTML.
+export async function renderMarkdownFragment(html: string, options?: MarkdownRenderOptions,
+  deferCode?: (source: string, language: string) => HTMLElement): Promise<DocumentFragment> {
+  options?.signal?.throwIfAborted()
+  const preferences = options?.preferences ?? defaultMarkdownPreferences
   const documentNode = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html')
+  let slotPrefix = crypto.randomUUID()
+  while (html.includes(slotPrefix)) slotPrefix = crypto.randomUUID()
+  const slots: HTMLElement[] = []
 
   const mermaidBlocks: { pre: Element; source: string; kind: string }[] = []
 
@@ -86,6 +112,12 @@ export async function renderMarkdown(source: string, options?: { signal?: AbortS
       continue
     }
     const source = code.textContent ?? ''
+    if (deferCode) {
+      const slot = deferCode(source, requestedLanguage)
+      slot.dataset.markdownCodeSlot = slotPrefix + '-' + slots.length
+      slots.push(slot); code.parentElement?.replaceWith(slot)
+      continue
+    }
     const highlighted = options?.previewOnly
       ? previewHighlighter.cached(source, requestedLanguage) ?? plainCode(source)
       : await highlightCode(source, requestedLanguage, options?.signal)
@@ -127,7 +159,8 @@ export async function renderMarkdown(source: string, options?: { signal?: AbortS
   }
 
   options?.signal?.throwIfAborted()
-  return DOMPurify.sanitize(documentNode.body.innerHTML, {
+  const fragment = DOMPurify.sanitize(documentNode.body.innerHTML, {
+    RETURN_DOM_FRAGMENT: true,
     USE_PROFILES: { html: true },
     HTML_INTEGRATION_POINTS: { foreignobject: true },
     ADD_TAGS: ['svg', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon',
@@ -141,9 +174,16 @@ export async function renderMarkdown(source: string, options?: { signal?: AbortS
       'xlink:href', 'href', 'clip-path', 'gradientUnits', 'gradientTransform', 'stop-color',
       'stop-opacity', 'offset', 'patternUnits', 'patternTransform', 'target'],
   })
+  options?.signal?.throwIfAborted()
+  for (const [index, slot] of slots.entries()) {
+    const clone = fragment.querySelector(`[data-markdown-code-slot="${slotPrefix}-${index}"]`)
+    slot.removeAttribute('data-markdown-code-slot')
+    if (clone) clone.replaceWith(slot)
+  }
+  return fragment
 }
 
-function appendCodeToolbar(container: HTMLElement, language: string, source: string, diagram = false) {
+export function appendCodeToolbar(container: HTMLElement, language: string, source: string, diagram = false) {
   const header = document.createElement('div')
   header.className = 'markdown-code-toolbar tools'
   const label = document.createElement('span'); label.textContent = language
