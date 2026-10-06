@@ -22,6 +22,14 @@ it('opens the persona application target from installed packages without implici
   expect(controls.invoke.mock.calls.map(call=>call[0])).toEqual(['extension_installed']);wrapper.unmount()
 })
 
+it('opens template targets without implicitly importing or running anything',async()=>{
+  controls.invoke.mockResolvedValue({...page,items:[{...item,release:{...item.release,type:'template'}}]})
+  const wrapper=component();await flushPromises()
+  await wrapper.findAll('button').find(button=>button.text()==='导入模板')!.trigger('click');await flushPromises()
+  expect(wrapper.text()).toContain('逐个确认导入')
+  expect(controls.invoke.mock.calls.map(call=>call[0])).toEqual(['extension_installed']);wrapper.unmount()
+})
+
 it('shows the native vault-bound installed version and incomplete health state without claiming it is running',async()=>{
   controls.invoke.mockResolvedValue({...page,items:[{...item,pending_operation:'checking-operation'}]})
   const wrapper=component();await flushPromises()
