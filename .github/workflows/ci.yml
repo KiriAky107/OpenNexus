@@ -211,6 +211,10 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Installed package state and sealed rollback tests failed' }
             cargo test --lib --features desktop --locked 'extension_candidates::' -- --nocapture
             if ($LASTEXITCODE -ne 0) { throw 'Reviewed persona application and target revision tests failed' }
+            cargo test --lib --features desktop --locked 'extension_template_apply::' -- --nocapture
+            if ($LASTEXITCODE -ne 0) { throw 'Reviewed template import identity and cancellation tests failed' }
+            cargo test --lib --features desktop --locked 'extension_template_apply::tests::imported_template_runs_only_after_independent_approval_and_preserves_origins' -- --ignored --exact --nocapture
+            if ($LASTEXITCODE -ne 0) { throw 'Native independently approved template execution and artifact provenance failed' }
             cargo test --bin OpenNexus --features desktop --locked 'extension_activation::tests::' -- --nocapture
             if ($LASTEXITCODE -ne 0) { throw 'Native grouped package health and rollback tests failed' }
             cargo test --lib --features desktop --locked 'extension_instance::tests::' -- --nocapture
