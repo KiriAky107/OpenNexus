@@ -40,9 +40,10 @@ def main() -> None:
     parser.add_argument('--agent-experiment-ui', action='store_true', help='Exercise real Core Agent proposals, native consent, outcomes and cancellation in that owned WebView')
     parser.add_argument('--chat-experiment-ui', action='store_true', help='Exercise actual chat and collaboration experiment approvals and stable result links in that owned WebView')
     parser.add_argument('--preview-ui', action='store_true', help='Measure streamed 100/1000/5000-line code in the production native WebView')
+    parser.add_argument('--experiment-links-ui', action='store_true', help='Verify rendered source/input/result links through native reference review and tree moves')
     parser.add_argument('--experiment-probe', action='store_true', help='Probe the extracted interpreter in an owned AppContainer')
     args = parser.parse_args()
-    if (args.experiment_ui or args.agent_experiment_ui or args.chat_experiment_ui or args.preview_ui) and not args.native_smoke:
+    if (args.experiment_ui or args.agent_experiment_ui or args.chat_experiment_ui or args.preview_ui or args.experiment_links_ui) and not args.native_smoke:
         parser.error('Experiment UI checks require --native-smoke')
     release = ROOT / 'frontend/src-tauri/target' / args.target / 'release'
     candidates = [args.installer] if args.installer else list((release / 'bundle/nsis').glob('*.exe'))
@@ -120,11 +121,14 @@ def main() -> None:
                 if args.preview_ui:
                     from windows_preview_smoke import exercise
                     results['preview'] = exercise(page, process, work, vault)
+                if args.experiment_links_ui:
+                    from windows_experiment_links_smoke import exercise
+                    results['links'] = exercise(page, process, work, vault)
                 return results
             config = json.loads((ROOT/'frontend/src-tauri/tauri.conf.json').read_text(encoding='utf-8'))
             evidence = Path(tempfile.mkdtemp(prefix='native-', dir=staging))
             report['native_smoke'] = verify(payload, manifest['core_version'], config['identifier'], evidence, dynamic,
-                extra_checks=checks if args.experiment_ui or args.agent_experiment_ui or args.chat_experiment_ui or args.preview_ui else None)
+                extra_checks=checks if args.experiment_ui or args.agent_experiment_ui or args.chat_experiment_ui or args.preview_ui or args.experiment_links_ui else None)
             report['native_smoke']['evidence_directory'] = evidence.relative_to(ROOT).as_posix()
     (staging / 'package-verification.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(report, indent=2))

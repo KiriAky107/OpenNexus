@@ -107,7 +107,7 @@ jobs:
 
       - name: Verify actual installer payload and dependencies
         shell: pwsh
-        run: uv run --frozen --directory backend --group packaging python ../scripts/verify-windows-package.py --target x86_64-pc-windows-msvc --native-smoke --experiment-ui --agent-experiment-ui --chat-experiment-ui --preview-ui --experiment-probe
+        run: uv run --frozen --directory backend --group packaging python ../scripts/verify-windows-package.py --target x86_64-pc-windows-msvc --native-smoke --experiment-ui --agent-experiment-ui --chat-experiment-ui --preview-ui --experiment-links-ui --experiment-probe
       - name: Verify release signatures
         if: inputs.signed
         shell: pwsh
@@ -129,6 +129,7 @@ jobs:
             .build/windows/native-*/native-canvas.png
             .build/windows/native-*/native-experiment.png
             .build/windows/native-*/native-agent-experiments.png
+            .build/windows/native-*/native-experiment-links.png
             .build/windows-rc-sha256.json
 
       - name: Clean signing material

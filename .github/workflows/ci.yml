@@ -228,6 +228,8 @@ jobs:
             cargo test --lib --features desktop --locked 'extension_trust::' -- --include-ignored --nocapture
             if ($LASTEXITCODE -ne 0) { throw 'Community Host live verification tests failed' }
             $env:OPENNEXUS_SYNC_SERVER_DIR = Join-Path $env:GITHUB_WORKSPACE '.build/sync-server'
+            cargo test --test experiment_sync --features desktop --locked -- --nocapture
+            if ($LASTEXITCODE -ne 0) { throw 'Two-device experiment links and stable identities failed' }
             cargo test --test sync_push --features desktop,sync-e2ee-prototype --locked e2ee_prototype_actual_opaque_storage_resume_dedup_quota_and_offline_bundle -- --exact --nocapture
             if ($LASTEXITCODE -ne 0) { throw 'Ciphertext object storage integration failed' }
           } finally {
