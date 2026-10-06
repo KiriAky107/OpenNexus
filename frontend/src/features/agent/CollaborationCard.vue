@@ -11,6 +11,8 @@ const workspace = useWorkspaceStore()
 const group = ref<Collaboration>()
 const error = ref('')
 const busy = ref(false)
+const groupError = computed(() => group.value?.status === 'cancelled' && group.value.error === 'CancelledError'
+  ? '' : group.value?.error)
 let generation = 0
 let refreshId = 0
 let timer: ReturnType<typeof setTimeout> | undefined
@@ -42,7 +44,7 @@ async function act(operation: () => Promise<unknown>) {
   <section class="panel collaboration-card">
     <header class="inline-actions"><strong>{{ group?.title || t('协作任务', 'Collaboration') }}</strong><span class="badge" :class="{ success: group?.status === 'completed', error: group?.status === 'failed', warning: ['awaiting_confirmation', 'waiting_budget'].includes(group?.status || ''), info: group?.status === 'running' }">{{ statusLabel(group?.status) }}</span>
       <button class="button-secondary" @click="refresh()">{{ t('刷新', 'Refresh') }}</button></header>
-    <p v-if="error || group?.error" class="error-banner" role="alert">{{ error || group?.error }}</p>
+    <p v-if="error || groupError" class="error-banner" role="alert">{{ error || groupError }}</p>
     <template v-if="group">
       <p>{{ t('完成', 'Completed') }} {{ group.members.filter(member => member.status === 'completed').length }} / {{ group.members.length }} · Token {{ group.token_usage }} / {{ group.plan.token_budget }}</p>
       <div v-if="group.status === 'awaiting_confirmation'" class="inline-actions">
