@@ -4,6 +4,7 @@ import type { ApiAgentRun, AgentEvent } from '@/contracts'
 import api from '@/services/apiClient'
 import { getAgentTrace, cancelAgentRun } from '@/services/agentService'
 import PermissionReview from './PermissionReview.vue'
+import ExperimentEvent from './ExperimentEvent.vue'
 import { useWorkspaceStore } from '@/stores/workspace'
 import BudgetConfirmation from './BudgetConfirmation.vue'
 import MarkdownContent from '@/components/common/MarkdownContent.vue'
@@ -31,6 +32,11 @@ const artifacts = computed(() => events.value.filter(event => event.event === 'T
   && ['notes.create', 'notes.update', 'notes.patch_markdown', 'tasks.create', 'tasks.update'].includes(String(event.data.name)))
   .map(event => ({ event, output: event.data.output as Record<string, unknown> | undefined }))
   .filter(item => item.output && (typeof item.output.note_id === 'string' || typeof item.output.task_id === 'string')))
+const experiments = computed(() => {
+  const latest = new Map<unknown, AgentEvent>()
+  for (const event of events.value) if (event.event === 'ExperimentState') latest.set(event.data.operation_id, event)
+  return [...latest.values()]
+})
 async function openArtifact(output: Record<string, unknown>) {
   const version = generation
   try {
@@ -108,9 +114,10 @@ async function act(operation: () => Promise<unknown>) {
     <p v-if="error || run?.error_message" class="error-banner" role="alert">{{ error || run?.error_message }}</p>
     <div v-if="artifacts.length" class="inline-actions"><button v-for="item in artifacts" :key="item.event.sequence" class="button-secondary" @click="openArtifact(item.output!)">{{ item.output!.task_id ? t('查看任务', 'View task') : t('打开笔记', 'Open note') }}: {{ item.output!.title || item.output!.file_path || t('执行产出', 'Created result') }}</button></div>
     <BudgetConfirmation :run-id="runId" :status="run?.status" :events="events" @resolved="refresh()" />
+    <ExperimentEvent v-for="event in experiments" :key="String(event.data.operation_id)" :data="event.data" @open-file="openCitation($event)" />
     <section v-for="permission in permissions" :key="String(permission.data.request_id)" class="permission-card">
       <strong>{{ t('等待操作授权', 'Permission required') }} · {{ toolLabel(String((permission.data.tool_call as Record<string, unknown>)?.name)) }}</strong>
-      <PermissionReview :run-id="runId" :request-id="String(permission.data.request_id)" :call="permission.data.tool_call as Record<string, unknown>" @resolved="refresh()" />
+      <PermissionReview v-if="!permissionDialog || !activePermission || permission.data.request_id !== activePermission.data.request_id" :run-id="runId" :request-id="String(permission.data.request_id)" :call="permission.data.tool_call as Record<string, unknown>" @resolved="refresh()" />
     </section>
     <AppDialog v-if="permissionDialog && activePermission" :label="t('确认智能体操作', 'Confirm Agent action')" @close="dismissedPermission = String(activePermission.data.request_id)">
       <div class="modal permission-modal">

@@ -39,9 +39,24 @@ it('opens a permission dialog in chat and keeps the inline action when postponed
   await flushPromises()
   expect(wrapper.get('[data-dialog]').text()).toContain('确认智能体操作')
   expect(wrapper.get('[data-dialog]').text()).toContain('允许本次')
+  expect(getPermissionPreview).toHaveBeenCalledTimes(1)
   await wrapper.findAll('[data-dialog] button').find(button => button.text() === '稍后处理')!.trigger('click')
   expect(wrapper.find('[data-dialog]').exists()).toBe(false)
   expect(wrapper.get('.permission-card').text()).toContain('允许本次')
+  await flushPromises()
+  expect(getPermissionPreview).toHaveBeenCalledTimes(2)
+  wrapper.unmount()
+})
+it('shows the latest real experiment outcome in chat even with execution details collapsed', async () => {
+  vi.mocked(api.get).mockResolvedValue({ ...current, status: 'completed' })
+  vi.mocked(getAgentTrace).mockResolvedValue({ items: ['running', 'failed'].map((status, index) => ({
+    event: 'ExperimentState', run_id: 'run_a', sequence: index + 1, timestamp: '',
+    data: { kind: 'experiment_run', vault_id: 'vault-a', operation_id: 'owned-experiment', state: status },
+  })), has_more: false } as never)
+  const wrapper = mount(RunActivity, { props: { runId: 'run_a' } }); await flushPromises()
+  expect(wrapper.findAll('.experiment-event')).toHaveLength(1)
+  expect(wrapper.get('.experiment-event').text()).toContain('实验运行 · 失败')
+  expect(wrapper.get('.run-details').attributes('open')).toBeUndefined()
   wrapper.unmount()
 })
 it('ignores a late response after switching vaults', async () => {
