@@ -1,5 +1,6 @@
 //! Durable Agent review identities. Core prepares/reads/cancels proposals;
-//! only the main window's native user decision can approve them. No launch RPC.
+//! only the main window's native user decision can approve them. The desktop
+//! adapter can consume that recorded consent through its owned Runner.
 use crate::{
     experiment_import::{ImportRecord, ImportRequest, ImportState, Selection},
     experiment_input::{fingerprint, PreparedInputs, RunRequest, SelectedFile, MAX_FILES},
@@ -74,6 +75,29 @@ struct Read {
     vault_id: String,
     context: Context,
     operation_id: String,
+}
+#[cfg(any(windows, test))]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Execution {
+    vault_id: String,
+    context: Context,
+    operation_id: String,
+    fingerprint: String,
+}
+#[cfg(any(windows, test))]
+fn execution_review<T>(
+    ws: &Workspace,
+    p: &Execution,
+    review: impl FnOnce(&Workspace, &str, &str) -> Result<Review<T>>,
+) -> Result<Review<T>> {
+    bound(ws, &p.vault_id)?;
+    p.context.validate()?;
+    let r = review(ws, &p.operation_id, &p.fingerprint)?;
+    if r.context != p.context {
+        return Err(changed());
+    }
+    Ok(r)
 }
 #[derive(Debug, Serialize)]
 pub struct Review<T> {
@@ -434,17 +458,133 @@ impl Workspace {
         self.experiment_agent_import_review(operation, fingerprint)
     }
 }
+fn core_value(review: impl Serialize) -> Result<Value> {
+    let mut value = serde_json::to_value(review).map_err(|_| bad())?;
+    // Keep original capture counters and audit bytes in the Host. Agent reads
+    // receive bounded display prefixes, including explicit display truncation.
+    for name in ["stdout", "stderr"] {
+        let Some(stream) = value
+            .get_mut("record")
+            .and_then(|record| record.get_mut("result"))
+            .and_then(|result| result.get_mut("logs"))
+            .and_then(|logs| logs.get_mut(name))
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        if let Some(text) = stream.get("text").and_then(Value::as_str) {
+            let mut end = text.len().min(16 * 1024);
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            let truncated = end < text.len();
+            let prefix = text[..end].to_owned();
+            stream.insert("text".into(), Value::String(prefix));
+            stream.insert("displayed_bytes".into(), Value::from(end));
+            stream.insert("display_truncated".into(), Value::Bool(truncated));
+        }
+    }
+    Ok(value)
+}
+
+/// This adapter is called by the desktop transport with its own Runner,
+/// resource root and original vault slot. None are supplied by Core/model JSON.
+#[cfg(windows)]
+pub fn is_execution_request(request: &Value) -> bool {
+    matches!(
+        request["rpc"].as_str(),
+        Some("workspace.experiment_agent.start_run" | "workspace.experiment_agent.import_next")
+    )
+}
+#[cfg(windows)]
+pub fn dispatch_execution(
+    runner: &crate::experiment_runner::Runner,
+    workspace: &crate::experiment_execution::WorkspaceSlot,
+    resource_root: &std::path::Path,
+    request: &Value,
+) -> std::result::Result<Value, String> {
+    let execute = || -> Result<Value> {
+        let p: Execution = serde_json::from_value(request["params"].clone()).map_err(|_| bad())?;
+        let mut slot = workspace.lock().map_err(|_| HostError::new("HOST_BUSY"))?;
+        let ws = slot
+            .as_mut()
+            .ok_or_else(|| HostError::new("VAULT_NOT_OPEN"))?;
+        match request["rpc"].as_str().unwrap_or_default() {
+            "workspace.experiment_agent.start_run" => {
+                let r = execution_review(ws, &p, Workspace::experiment_agent_run_review)?;
+                if r.record.state == RunState::AwaitingConfirmation {
+                    return Err(HostError::new("EXPERIMENT_CONFIRMATION_REQUIRED"));
+                }
+                if r.record.state != RunState::Approved {
+                    return core_value(r);
+                }
+                drop(slot);
+                if let Err(error) = runner.start_approved_for_vault(
+                    workspace.clone(),
+                    &p.vault_id,
+                    resource_root.to_owned(),
+                    &p.operation_id,
+                ) {
+                    // A duplicate concurrent start can race the first claim.
+                    // Reconcile the exact same bound record instead of replaying.
+                    let mut slot = workspace.lock().map_err(|_| HostError::new("HOST_BUSY"))?;
+                    let ws = slot
+                        .as_mut()
+                        .ok_or_else(|| HostError::new("VAULT_NOT_OPEN"))?;
+                    let current = execution_review(ws, &p, Workspace::experiment_agent_run_review)?;
+                    if current.record.state == RunState::Approved
+                        || current.record.state == RunState::AwaitingConfirmation
+                    {
+                        return Err(error);
+                    }
+                    return core_value(current);
+                }
+                let mut slot = workspace.lock().map_err(|_| HostError::new("HOST_BUSY"))?;
+                let ws = slot
+                    .as_mut()
+                    .ok_or_else(|| HostError::new("VAULT_NOT_OPEN"))?;
+                core_value(execution_review(
+                    ws,
+                    &p,
+                    Workspace::experiment_agent_run_review,
+                )?)
+            }
+            "workspace.experiment_agent.import_next" => {
+                let r = execution_review(ws, &p, Workspace::experiment_agent_import_review)?;
+                if r.record.state == ImportState::AwaitingConfirmation {
+                    return Err(HostError::new("EXPERIMENT_CONFIRMATION_REQUIRED"));
+                }
+                if r.record.state != ImportState::Approved {
+                    return core_value(r);
+                }
+                drop(slot);
+                runner.import_next_for_vault(workspace, &p.vault_id, &p.operation_id)?;
+                let mut slot = workspace.lock().map_err(|_| HostError::new("HOST_BUSY"))?;
+                let ws = slot
+                    .as_mut()
+                    .ok_or_else(|| HostError::new("VAULT_NOT_OPEN"))?;
+                core_value(execution_review(
+                    ws,
+                    &p,
+                    Workspace::experiment_agent_import_review,
+                )?)
+            }
+            _ => Err(HostError::new("HOST_METHOD_DENIED")),
+        }
+    };
+    execute().map_err(|error| error.code)
+}
 pub(crate) fn dispatch(ws: &mut Workspace, request: &Value) -> std::result::Result<Value, String> {
     let mut run = || -> Result<Value> {
         let params = &request["params"];
         match request["rpc"].as_str().unwrap_or_default() {
             "workspace.experiment_agent.prepare_run" => {
                 let p = serde_json::from_value::<RunDraft>(params.clone()).map_err(|_| bad())?;
-                serde_json::to_value(prepare_run(ws, p)?).map_err(|_| bad())
+                core_value(prepare_run(ws, p)?)
             }
             "workspace.experiment_agent.prepare_import" => {
                 let p = serde_json::from_value::<ImportDraft>(params.clone()).map_err(|_| bad())?;
-                serde_json::to_value(prepare_import(ws, p)?).map_err(|_| bad())
+                core_value(prepare_import(ws, p)?)
             }
             method @ ("workspace.experiment_agent.run_record"
             | "workspace.experiment_agent.import_record"
@@ -472,9 +612,9 @@ pub(crate) fn dispatch(ws: &mut Workspace, request: &Value) -> std::result::Resu
                     ws.experiment_import_cancel(&p.operation_id, &r.fingerprint)?;
                 }
                 if kind == "run" {
-                    serde_json::to_value(run_review(ws, b)?).map_err(|_| bad())
+                    core_value(run_review(ws, b)?)
                 } else {
-                    serde_json::to_value(import_review(ws, b)?).map_err(|_| bad())
+                    core_value(import_review(ws, b)?)
                 }
             }
             _ => Err(HostError::new("HOST_METHOD_DENIED")),
@@ -532,11 +672,16 @@ mod tests {
         .unwrap()
     }
     fn completed(ws: &mut Workspace, review: &Value) -> String {
+        completed_with_log(ws, review, b"")
+    }
+    fn completed_with_log(ws: &mut Workspace, review: &Value, stdout: &[u8]) -> String {
         let r = approve(ws, review);
         let op = r.operation_id;
         let claimed = ws.experiment_claim(&op).unwrap();
         ws.experiment_running(&claimed).unwrap();
-        let mut stream = LogBuffer::new(8192).snapshot();
+        let mut buffer = LogBuffer::new(32 * 1024);
+        buffer.append(stdout);
+        let mut stream = buffer.snapshot();
         stream.complete = true;
         let result = RunResult {
             outcome: Outcome::Completed,
@@ -548,7 +693,11 @@ mod tests {
             final_disk_bytes: Some(30),
             logs: CaptureSnapshot {
                 stdout: stream.clone(),
-                stderr: stream,
+                stderr: {
+                    let mut empty = LogBuffer::new(8192).snapshot();
+                    empty.complete = true;
+                    empty
+                },
             },
             outputs: None,
         };
@@ -670,7 +819,7 @@ mod tests {
             .is_none());
     }
     #[test]
-    fn core_cannot_approve_launch_or_import_and_cannot_add_shell_parameters() {
+    fn unprivileged_dispatch_cannot_approve_launch_or_import_and_cannot_add_shell_parameters() {
         let (_root, mut ws, id) = setup();
         let p = draft(&ws, &id);
         for name in [
@@ -902,5 +1051,224 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 0);
+    }
+    #[test]
+    fn agent_log_prefixes_preserve_utf8_capture_counters_and_host_audit() {
+        let (_root, mut ws, id) = setup();
+        let p = draft(&ws, &id);
+        let r = rpc(&mut ws, "prepare_run", p).unwrap();
+        assert!(r["record"]["result"].is_null());
+        let raw = "中文🙂\r\n".repeat(4000);
+        let op = completed_with_log(&mut ws, &r, raw.as_bytes());
+        let stored = ws.experiment_record(&op).unwrap().unwrap();
+        let query = read(&ws, &r);
+        let actual = rpc(&mut ws, "run_record", query).unwrap();
+        let log = &actual["record"]["result"]["logs"]["stdout"];
+        let prefix = log["text"].as_str().unwrap();
+        assert!(prefix.len() <= 16 * 1024);
+        assert!(stored
+            .result
+            .as_ref()
+            .unwrap()
+            .logs
+            .stdout
+            .text
+            .starts_with(prefix));
+        assert_eq!(log["bytes_seen"], raw.len());
+        assert_eq!(log["retained_bytes"], 32 * 1024);
+        assert_eq!(log["displayed_bytes"], prefix.len());
+        assert_eq!(log["display_truncated"], true);
+        assert!(stored.result.as_ref().unwrap().logs.stdout.text.len() > prefix.len());
+        assert_eq!(
+            serde_json::to_value(ws.experiment_record(&op).unwrap().unwrap()).unwrap(),
+            serde_json::to_value(stored).unwrap()
+        );
+    }
+    fn execution_params(ws: &Workspace, review: &Value) -> Value {
+        let mut params = read(ws, review);
+        params["fingerprint"] = review["fingerprint"].clone();
+        params
+    }
+    #[test]
+    fn consumption_checks_exact_task_ticket_fingerprint_vault_and_fields() {
+        let (_root, mut ws, id) = setup();
+        let p = draft(&ws, &id);
+        let r = rpc(&mut ws, "prepare_run", p).unwrap();
+        approve(&mut ws, &r);
+        let base = execution_params(&ws, &r);
+        for field in ["agent_run_id", "tool_call_id", "request_id"] {
+            let mut q = base.clone();
+            q["context"][field] = json!("foreign");
+            let p = serde_json::from_value(q).unwrap();
+            assert_eq!(
+                execution_review(&ws, &p, Workspace::experiment_agent_run_review)
+                    .unwrap_err()
+                    .code,
+                "AGENT_EXPERIMENT_REVIEW_CHANGED"
+            );
+        }
+        let mut q = base.clone();
+        q["fingerprint"] = json!("0".repeat(64));
+        assert!(execution_review(
+            &ws,
+            &serde_json::from_value(q).unwrap(),
+            Workspace::experiment_agent_run_review
+        )
+        .is_err());
+        let mut q = base.clone();
+        q["vault_id"] = json!(uuid::Uuid::new_v4().to_string());
+        assert_eq!(
+            execution_review(
+                &ws,
+                &serde_json::from_value(q).unwrap(),
+                Workspace::experiment_agent_run_review
+            )
+            .unwrap_err()
+            .code,
+            "VAULT_PERMISSION_CHANGED"
+        );
+        for (field, value) in [
+            ("approved", json!(true)),
+            ("command", json!("python")),
+            ("runtime_root", json!("C:/private")),
+        ] {
+            let mut q = base.clone();
+            q[field] = value;
+            assert!(serde_json::from_value::<Execution>(q).is_err());
+        }
+        assert_eq!(
+            execution_review(
+                &ws,
+                &serde_json::from_value(base).unwrap(),
+                Workspace::experiment_agent_run_review
+            )
+            .unwrap()
+            .record
+            .state,
+            RunState::Approved
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn desktop_transport_requires_native_consent_and_import_retries_do_not_write_twice() {
+        use crate::experiment_runner::Runner;
+        use std::sync::{Arc, Mutex};
+        let (root, mut ws, id) = setup();
+        let p = draft(&ws, &id);
+        let r = rpc(&mut ws, "prepare_run", p).unwrap();
+        let unapproved =
+            json!({"rpc":"workspace.experiment_agent.start_run","params":execution_params(&ws,&r)});
+        let source = completed(&mut ws, &r);
+        let p = import_draft(&ws, &source);
+        let import = rpc(&mut ws, "prepare_import", p).unwrap();
+        let request = json!({"rpc":"workspace.experiment_agent.import_next","params":execution_params(&ws,&import)});
+        let op = import["operation_id"].as_str().unwrap();
+        let fp = import["fingerprint"].as_str().unwrap();
+        let runner = Runner::default();
+        runner
+            .initialize_cleanup(&root.path().join("host-data"))
+            .unwrap();
+        let workspace = Arc::new(Mutex::new(Some(ws)));
+        // A completed run can be queried through start without being replayed.
+        let existing = dispatch_execution(&runner, &workspace, root.path(), &unapproved).unwrap();
+        assert_eq!(existing["record"]["state"], "completed");
+        assert_eq!(
+            dispatch_execution(&runner, &workspace, root.path(), &request).unwrap_err(),
+            "EXPERIMENT_CONFIRMATION_REQUIRED"
+        );
+        assert!(!root.path().join("成果/report.md").exists());
+        workspace
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .experiment_agent_approve_import_from_user(op, fp)
+            .unwrap();
+        let committed = dispatch_execution(&runner, &workspace, root.path(), &request).unwrap();
+        assert_eq!(committed["record"]["state"], "completed");
+        let first = std::fs::read(root.path().join("成果/report.md")).unwrap();
+        assert_eq!(first, "# 中文成果\r\n".as_bytes());
+        std::fs::write(root.path().join("成果/report.md"), b"later human edit").unwrap();
+        assert_eq!(
+            dispatch_execution(&runner, &workspace, root.path(), &request).unwrap(),
+            committed
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("成果/report.md")).unwrap(),
+            b"later human edit"
+        );
+        let mut bad = request;
+        bad["params"]["context"]["request_id"] = json!("foreign_ticket");
+        assert_eq!(
+            dispatch_execution(&runner, &workspace, root.path(), &bad).unwrap_err(),
+            "AGENT_EXPERIMENT_REVIEW_CHANGED"
+        );
+        runner.shutdown().unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn desktop_start_claims_once_and_never_runs_an_unbundled_interpreter() {
+        use crate::experiment_runner::Runner;
+        use std::sync::{Arc, Mutex};
+        let _lock = crate::experiment_owner::TEST_EXECUTION_LOCK.lock().unwrap();
+        let (root, mut ws, id) = setup();
+        let p = draft(&ws, &id);
+        let r = rpc(&mut ws, "prepare_run", p).unwrap();
+        let request =
+            json!({"rpc":"workspace.experiment_agent.start_run","params":execution_params(&ws,&r)});
+        let runner = Runner::default();
+        runner
+            .initialize_cleanup(&root.path().join("host-data"))
+            .unwrap();
+        let resources = root.path().join("missing-resources");
+        let op = r["operation_id"].as_str().unwrap();
+        let workspace = Arc::new(Mutex::new(Some(ws)));
+        assert_eq!(
+            dispatch_execution(&runner, &workspace, &resources, &request).unwrap_err(),
+            "EXPERIMENT_CONFIRMATION_REQUIRED"
+        );
+        workspace
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .experiment_agent_approve_run_from_user(op, r["fingerprint"].as_str().unwrap())
+            .unwrap();
+        let first = dispatch_execution(&runner, &workspace, &resources, &request).unwrap();
+        assert_ne!(first["record"]["state"], "approved");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+        let final_record = loop {
+            let r = runner.record(&workspace, op).unwrap().unwrap();
+            if matches!(
+                r.state,
+                RunState::Completed
+                    | RunState::Failed
+                    | RunState::Cancelled
+                    | RunState::Limited
+                    | RunState::Interrupted
+                    | RunState::Rejected
+            ) {
+                break r;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "missing runtime must fail promptly"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        assert_eq!(final_record.state, RunState::Failed);
+        assert!(final_record.result.as_ref().unwrap().error.is_some());
+        let replay = dispatch_execution(&runner, &workspace, &resources, &request).unwrap();
+        assert_eq!(replay["record"]["state"], "failed");
+        assert_eq!(
+            replay["record"]["approval_id"],
+            json!(final_record.approval_id)
+        );
+        runner.shutdown().unwrap();
+        assert!(runner.cleanup_status().unwrap().is_none());
+        assert_eq!(
+            std::fs::read(root.path().join("experiments/课程 #%.py")).unwrap(),
+            "print('中文')\r\n".as_bytes()
+        );
     }
 }

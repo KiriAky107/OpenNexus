@@ -29,7 +29,7 @@ use zeroize::Zeroizing;
 #[derive(Default)]
 struct Host {
     #[cfg(windows)]
-    experiments: notesagent_host::experiment_runner::Runner,
+    experiments: Arc<notesagent_host::experiment_runner::Runner>,
     experiment_runtime:
         std::sync::OnceLock<Result<notesagent_host::experiment_runtime::RuntimeInfo, String>>,
     requests: Requests,
@@ -1480,7 +1480,20 @@ fn main() {
                 )
             };
             let workspace_state = app.state::<Host>().workspace.clone();
+            #[cfg(windows)]
+            let agent_runner = Arc::clone(&app.state::<Host>().experiments);
+            #[cfg(windows)]
+            let agent_resource_root = app.path().resource_dir()?;
             let core = core.with_broker(Arc::new(move |request| {
+                #[cfg(windows)]
+                if notesagent_host::experiment_agent::is_execution_request(request) {
+                    return notesagent_host::experiment_agent::dispatch_execution(
+                        &agent_runner,
+                        &workspace_state,
+                        &agent_resource_root,
+                        request,
+                    );
+                }
                 if request["rpc"]
                     .as_str()
                     .is_some_and(|method| method.starts_with("workspace."))

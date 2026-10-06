@@ -1,4 +1,5 @@
-//! Owned background workers and durable experiment lifecycle. No Core RPC.
+//! Owned background workers and durable experiment lifecycle. Native user
+//! consent is consumed through a vault-bound Host entry point.
 use crate::{
     experiment_cleanup::{CleanupStatus, Journal},
     experiment_execution::{self, LiveRun, WorkspaceSlot},
