@@ -87,6 +87,34 @@ impl Drop for OwnedServer {
 }
 
 #[tokio::test]
+#[ignore = "requires scripts/check_community_tls.py process-scoped HTTPS fixture"]
+async fn actual_https_roots_require_trust_hostname_and_validity() {
+    let endpoints: Value = serde_json::from_str(
+        &std::env::var("OPENNEXUS_COMMUNITY_TLS_ENDPOINTS").expect("owned TLS fixture is required"),
+    )
+    .unwrap();
+    let trusted = Client::new(endpoints["trusted"].as_str().unwrap()).unwrap();
+    let source = trusted.json("catalog/v1/sources").await.unwrap();
+    assert_eq!(source["source_id"], "owned-tls-fixture");
+    for name in ["untrusted", "mismatch", "expired"] {
+        let client = Client::new(endpoints[name].as_str().unwrap()).unwrap();
+        assert_eq!(
+            client.json("catalog/v1/sources").await.err().unwrap().code,
+            "EXTENSION_TRUST_UNAVAILABLE",
+            "{name} certificate must be rejected"
+        );
+    }
+    assert_eq!(
+        trusted.json("redirect").await.err().unwrap().code,
+        "EXTENSION_TRUST_UNAVAILABLE"
+    );
+    assert_eq!(
+        Client::new("http://127.0.0.1/").err().unwrap().code,
+        "EXTENSION_SOURCE_INVALID"
+    );
+}
+
+#[tokio::test]
 #[ignore = "requires OPENNEXUS_COMMUNITY_SERVER_DIR with frozen fixture dependencies"]
 async fn actual_community_old_version_signature_archive_and_withdrawal() {
     let service = PathBuf::from(

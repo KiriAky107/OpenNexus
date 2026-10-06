@@ -227,8 +227,10 @@ jobs:
             cargo test --lib --features desktop --locked 'extension_instance::tests::' -- --nocapture
             if ($LASTEXITCODE -ne 0) { throw 'Native instance generation and cleanup tests failed' }
             $env:OPENNEXUS_COMMUNITY_SERVER_DIR = Join-Path $env:GITHUB_WORKSPACE '.build/community-server'
-            cargo test --lib --features desktop --locked 'extension_trust::' -- --include-ignored --nocapture
+            cargo test --lib --features desktop --locked 'extension_trust::' -- --include-ignored --skip actual_https_roots_require_trust_hostname_and_validity --nocapture
             if ($LASTEXITCODE -ne 0) { throw 'Community Host live verification tests failed' }
+            & (Join-Path $env:OPENNEXUS_COMMUNITY_SERVER_DIR '.venv/Scripts/python.exe') ../../scripts/check_community_tls.py
+            if ($LASTEXITCODE -ne 0) { throw 'Community HTTPS certificate and redirect validation failed' }
             $env:OPENNEXUS_SYNC_SERVER_DIR = Join-Path $env:GITHUB_WORKSPACE '.build/sync-server'
             cargo test --test experiment_sync --features desktop --locked -- --nocapture
             if ($LASTEXITCODE -ne 0) { throw 'Two-device experiment links and stable identities failed' }
