@@ -163,7 +163,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: KiriAky107/Community-for-OpenNexus
-          ref: fac29fb0c621fef6ee6d479327ffc3d0fb377288
+          ref: 2df53d86b23ad3b176569035b6a18c125aa8bd76
           path: .build/community-server
           persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
@@ -181,9 +181,11 @@ jobs:
         run: |
           uv sync --frozen --directory .build/community-server
           if ($LASTEXITCODE -ne 0) { throw 'Community fixture installation failed' }
-          $desktopContract = Get-FileHash 'frontend/src/services/fixtures/community-v1-catalog.json' -Algorithm SHA256
-          $serviceContract = Get-FileHash '.build/community-server/tests/fixtures/community-v1-catalog.json' -Algorithm SHA256
-          if ($desktopContract.Hash -ne $serviceContract.Hash) { throw 'Community and Desktop contract bytes differ' }
+          foreach ($contractName in @('community-v1-catalog.json', 'community-v1-templates.json')) {
+            $desktopContract = Get-FileHash (Join-Path 'frontend/src/services/fixtures' $contractName) -Algorithm SHA256
+            $serviceContract = Get-FileHash (Join-Path '.build/community-server/tests/fixtures' $contractName) -Algorithm SHA256
+            if ($desktopContract.Hash -ne $serviceContract.Hash) { throw ('Community and Desktop contract bytes differ: ' + $contractName) }
+          }
       - name: Verify locked embedded Python and native isolation prototype
         working-directory: .
         run: ./scripts/verify-experiment-runtime.ps1
