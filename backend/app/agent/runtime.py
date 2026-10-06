@@ -239,10 +239,10 @@ class AgentRuntime:
     async def permission_preview(self, run_id: str, request_id: str) -> dict:
         self.get_run(run_id)
         from app.errors import ApiError
-        from app.services.note_preview import WRITE_TOOLS, preview_write
+        from app.services.tool_write_preview import WRITE_TOOLS, preview_write
         ticket = self.permissions.get_ticket(run_id, request_id)
         if not ticket or ticket.future.done() or not ticket.tool_call or ticket.tool_call.name not in WRITE_TOOLS:
-            raise ApiError(404, 'PERMISSION_REQUEST_NOT_FOUND', '待预览的笔记操作不存在。')
+            raise ApiError(404, 'PERMISSION_REQUEST_NOT_FOUND', '待预览的文件操作不存在。')
         ticket.preview = None
         preview = await preview_write(ticket.tool_call)
         if ticket.future.done():
@@ -257,10 +257,11 @@ class AgentRuntime:
             return False
         ticket = self.permissions.get_ticket(run_id, request_id)
         from app.errors import ApiError
-        from app.services.note_preview import WRITE_TOOLS, validate_preview
+        from app.services.tool_write_preview import WRITE_TOOLS, validate_preview
         if ticket and not ticket.future.done() and decision != 'deny' and ticket.tool_call and ticket.tool_call.name in WRITE_TOOLS:
             if decision != 'allow_once' or not ticket.preview or preview_token != ticket.preview['token']:
-                raise ApiError(409, 'NOTE_PREVIEW_REQUIRED', '请预览当前修改并仅允许本次写入。')
+                code = 'EXPERIMENT_PREVIEW_REQUIRED' if ticket.tool_call.name == 'experiments.files.write' else 'NOTE_PREVIEW_REQUIRED'
+                raise ApiError(409, code, '请预览当前修改并仅允许本次写入。')
             approved_preview = ticket.preview
             await validate_preview(ticket.tool_call, approved_preview)
             if ticket.preview is not approved_preview:
@@ -844,7 +845,7 @@ class AgentRuntime:
     async def _invoke_tool(self, record: RunRecord, call: ToolCall, permission=None, reviewed_write=None) -> ToolResult:
         # Serialize potential writes across members. Permission decisions remain
         # outside the lock, and optimistic revision checks still run in each tool.
-        read_only = call.name in {'notes.read', 'notes.list', 'notes.search', 'rag.search', 'tasks.read', 'tasks.list', 'markdown.catalog', 'skills.list', 'plugins.list', 'attachments.read', 'system.echo', 'math.add'}
+        read_only = call.name in {'notes.read', 'notes.list', 'notes.search', 'rag.search', 'tasks.read', 'tasks.list', 'markdown.catalog', 'skills.list', 'plugins.list', 'attachments.read', 'experiments.files.list', 'experiments.files.read', 'system.echo', 'math.add'}
         if not read_only:
             async with self._write_lock:
                 return await self._invoke_tool_unlocked(record, call, permission, reviewed_write)
@@ -876,7 +877,7 @@ class AgentRuntime:
                 error_code='TOOL_PERMISSION_CHANGED', error_message='Tool permissions changed; review a new execution request.')
         try:
             if reviewed_write:
-                from app.services.note_preview import validate_preview
+                from app.services.tool_write_preview import validate_preview
                 from app.errors import ApiError
                 try:
                     await validate_preview(call, reviewed_write)

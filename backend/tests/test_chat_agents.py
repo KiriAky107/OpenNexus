@@ -87,6 +87,19 @@ def test_chat_rejects_unlisted_agent_tool_selection():
         ), request))
 
 
+def test_chat_source_tools_are_discoverable_and_survive_the_operator_skill_ceiling():
+    from app.container import container
+    request = ChatRequest(provider_id='mock', model='mock-1', allow_agent=True, messages=[])
+    available = {item.name for item in chat_agents._available_agent_tools(request)}
+    configuration = chat_agents._operator_configuration(request)
+    assert configuration is not None
+    for name in ['experiments.files.list', 'experiments.files.read', 'experiments.files.write']:
+        assert name in available and name in configuration.allowed_tools
+        assert container.tools.get(name).definition.permission in configuration.permissions
+    assert 'experiments.run' not in configuration.permissions
+    assert 'experiments.import' not in configuration.permissions
+
+
 def test_chat_creation_ignores_model_supplied_provider_override(monkeypatch):
     from app.container import container
 

@@ -51,6 +51,11 @@ export interface NoteDiff {
   truncated: boolean
 }
 export interface NoteWritePreview {
+  kind?: 'experiment_file'
+  file_id?: string | null
+  overwrite?: boolean
+  before_bytes?: number
+  after_bytes?: number
   token: string
   file_path: string
   note_id: string | null

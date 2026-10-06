@@ -18,6 +18,10 @@ KNOWN_PERMISSIONS = frozenset(
         "notes.search",
         "notes.write",
         "notes.delete",
+        "experiments.files.read",
+        "experiments.files.write",
+        "experiments.run",
+        "experiments.import",
         "tasks.read",
         "tasks.write",
         "attachments.read",
@@ -31,6 +35,12 @@ KNOWN_PERMISSIONS = frozenset(
     }
 )
 
+# A session or policy grant never substitutes for review of another write,
+# execution, or import. Read grants remain scoped to the current Agent run.
+ONCE_ONLY_PERMISSIONS = frozenset({
+    "experiments.files.write", "experiments.run", "experiments.import",
+})
+
 
 class PermissionPolicy:
     def __init__(self) -> None:
@@ -39,6 +49,10 @@ class PermissionPolicy:
             "notes.search": PermissionMode.allow,
             "notes.delete": PermissionMode.confirm,
             "notes.write": PermissionMode.confirm,
+            "experiments.files.read": PermissionMode.confirm,
+            "experiments.files.write": PermissionMode.confirm,
+            "experiments.run": PermissionMode.deny,
+            "experiments.import": PermissionMode.deny,
             "tasks.read": PermissionMode.allow,
             "tasks.write": PermissionMode.confirm,
             "attachments.read": PermissionMode.allow,
@@ -52,6 +66,8 @@ class PermissionPolicy:
         }
 
     def set_rule(self, permission: str, mode: PermissionMode) -> None:
+        if permission in ONCE_ONLY_PERMISSIONS and mode == PermissionMode.allow:
+            mode = PermissionMode.confirm
         self._rules[permission] = mode
 
     def mode_for(self, permission: str | None) -> PermissionMode:
@@ -107,6 +123,8 @@ class PermissionManager:
         if ticket is None or ticket.future.done():
             return False
         if decision == "allow_session":
+            if ticket.permission in ONCE_ONLY_PERMISSIONS:
+                return False
             # 会话授权只存在于进程内，应用重启后按默认策略重新确认。
             self._session_grants.add((run_id, ticket.permission))
         ticket.future.set_result(decision)

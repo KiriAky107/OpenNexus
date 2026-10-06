@@ -56,3 +56,23 @@ it('discards a preview fetched under the previous vault', async () => {
   expect(button(wrapper, '允许本次').attributes('disabled')).toBeDefined()
   wrapper.unmount()
 })
+it('reviews exact source-file bytes and offers only a one-time write decision', async () => {
+  vi.mocked(getPermissionPreview).mockResolvedValue({ ...preview, kind: 'experiment_file',
+    file_path: 'experiments/课程 #%.py', overwrite: true, before_bytes: 18, after_bytes: 24 })
+  const wrapper = mount(PermissionReview, { props: { ...props, allowSession: true,
+    call: { name: 'experiments.files.write', arguments: { content: 'print(2)' } } } })
+  expect(button(wrapper, '允许本次').attributes('disabled')).toBeDefined()
+  await flushPromises()
+  expect(wrapper.text()).toContain('替换实验文件')
+  expect(wrapper.text()).toContain('18 → 24 B')
+  expect(wrapper.text()).toContain('运行与成果导入需要另行确认')
+  expect(wrapper.findAll('button').some(item => item.text() === '本次会话允许')).toBe(false)
+  await button(wrapper, '允许本次').trigger('click'); await flushPromises()
+  expect(respondToPermission).toHaveBeenCalledWith('run', 'request', 'allow_once', 'revision-one')
+  wrapper.unmount()
+})
+it.each(['experiments.run', 'experiments.import'])('does not offer session approval for %s', async name => {
+  const wrapper = mount(PermissionReview, { props: { ...props, allowSession: true, call: { name } } })
+  expect(wrapper.findAll('button').some(item => item.text() === '本次会话允许')).toBe(false)
+  wrapper.unmount()
+})

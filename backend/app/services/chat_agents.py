@@ -90,6 +90,7 @@ def operation_id(call, request):
         identity.append(call.arguments)
     return hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 ALLOWED_TOOLS = ['chat-policy.plan', 'notes.search', 'rag.search', 'notes.read', 'notes.list', 'notes.create', 'notes.update', 'notes.move', 'notes.rename', 'notes.delete', 'notes.patch_markdown', 'markdown.catalog', 'markdown.compose', 'function_plot.compose', 'tasks.create', 'tasks.update', 'tasks.list', 'tasks.read', 'tasks.delete', 'attachments.read', 'audio.transcribe', 'audio.transcription_status', 'skills.list', 'skills.create', 'skills.update', 'plugins.list', 'plugins.create']
+ALLOWED_TOOLS += ['experiments.files.list', 'experiments.files.read', 'experiments.files.write']
 
 
 def _operator_configuration(request):
