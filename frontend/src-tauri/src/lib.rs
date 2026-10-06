@@ -45,6 +45,9 @@ pub mod sync_discovery;
 pub mod sync_inbox;
 pub mod sync_initial;
 pub mod sync_resolution;
+pub mod sync_review;
+#[cfg(test)]
+mod sync_review_tests;
 pub mod sync_state;
 pub mod workspace;
 pub mod workspace_broker;

@@ -167,7 +167,7 @@ impl Workspace {
             .is_some_and(|value| value["state"] == "committed")
         {
             let conflict_source = self.resolve(&path)?;
-            let current = if conflict_source.is_file() {
+            let mut current = if conflict_source.is_file() {
                 crate::payloads::hash_file(&conflict_source)?
             } else {
                 String::new()
@@ -178,6 +178,16 @@ impl Workspace {
             let source_renamed = self
                 .operation(&rename)?
                 .is_some_and(|value| value["state"] == "committed");
+            if let Some(guards) =
+                self.sync_check_review_paths(binding, sequence, &retire, &rename)?
+            {
+                current = guards
+                    .iter()
+                    .find(|guard| guard.path == path)
+                    .ok_or_else(|| HostError::new("SYNC_RESOLUTION_CHANGED"))?
+                    .hash
+                    .clone();
+            }
             if current != expected && !target_retired && !source_renamed {
                 return Err(HostError::new("REVISION_CONFLICT"));
             }
@@ -204,7 +214,16 @@ impl Workspace {
                 .path_for_id(&revision.file_id)
                 .unwrap_or_else(|_| revision.path.clone());
             let source = self.resolve(&source_path)?;
-            let mut source_hash = if source.is_file() {
+            let mut source_hash = if let Some(guards) =
+                self.sync_check_review_paths(binding, sequence, &retire, &rename)?
+            {
+                guards
+                    .iter()
+                    .find(|guard| guard.path == source_path)
+                    .ok_or_else(|| HostError::new("SYNC_CONFLICT_CHANGED"))?
+                    .hash
+                    .clone()
+            } else if source.is_file() {
                 crate::payloads::hash_file(&source)?
             } else {
                 String::new()
@@ -275,7 +294,18 @@ impl Workspace {
                         &rename,
                         "remote",
                     )?;
-                    source_hash = crate::payloads::hash_file(&self.resolve(&revision.path)?)?;
+                    source_hash = if let Some(guards) =
+                        self.sync_check_review_paths(binding, sequence, &retire, &rename)?
+                    {
+                        guards
+                            .iter()
+                            .find(|guard| guard.path == revision.path)
+                            .ok_or_else(|| HostError::new("SYNC_CONFLICT_CHANGED"))?
+                            .hash
+                            .clone()
+                    } else {
+                        crate::payloads::hash_file(&self.resolve(&revision.path)?)?
+                    };
                 }
                 let digest = revision
                     .hash

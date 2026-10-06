@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::io::Write;
 use uuid::Uuid;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RemoteRevision {
     pub vault_id: String,
     pub sequence: i64,
