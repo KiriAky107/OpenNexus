@@ -944,9 +944,24 @@ impl Workspace {
         &self,
         root: &Path,
     ) -> Result<std::collections::BTreeMap<String, String>> {
+        let root = root.canonicalize()?;
+        let logical_root = root
+            .strip_prefix(&self.root)
+            .map_err(|_| HostError::new("UNSAFE_PATH"))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        self.directory_manifest_for(&root, &logical_root)
+    }
+
+    fn directory_manifest_for(
+        &self,
+        root: &Path,
+        logical_root: &str,
+    ) -> Result<std::collections::BTreeMap<String, String>> {
         fn walk(
             root: &Path,
             directory: &Path,
+            logical_root: &str,
             values: &mut std::collections::BTreeMap<String, String>,
         ) -> Result<()> {
             for item in fs::read_dir(directory)? {
@@ -965,13 +980,15 @@ impl Workspace {
                     .replace('\\', "/");
                 if path.is_dir() {
                     values.insert(relative, String::new());
-                    walk(root, &path, values)?;
+                    walk(root, &path, logical_root, values)?;
                 } else if path.is_file()
                     && path.extension().is_some_and(|ext| {
                         ["md", "canvas", "png", "jpg", "jpeg", "gif", "webp"]
                             .iter()
                             .any(|allowed| ext.eq_ignore_ascii_case(allowed))
-                            || crate::experiment_contract::is_experiment_file(&relative)
+                            || crate::experiment_contract::is_experiment_file(&format!(
+                                "{logical_root}/{relative}"
+                            ))
                     })
                 {
                     values.insert(relative, crate::payloads::hash_file(&path)?);
@@ -982,7 +999,7 @@ impl Workspace {
             Ok(())
         }
         let mut manifest = std::collections::BTreeMap::new();
-        walk(root, root, &mut manifest)?;
+        walk(root, root, logical_root, &mut manifest)?;
         Ok(manifest)
     }
 
@@ -1012,6 +1029,19 @@ impl Workspace {
         }
         if &self.directory_manifest(&source)? != expected {
             return Err(HostError::new("REVISION_CONFLICT"));
+        }
+        if kind == "rename"
+            && expected.iter().any(|(relative, digest)| {
+                !digest.is_empty()
+                    && crate::experiment_contract::is_experiment_file(&format!("{path}/{relative}"))
+                    && !crate::experiment_contract::is_experiment_file(&format!(
+                        "{destination}/{relative}"
+                    ))
+            })
+        {
+            return Err(HostError::new(
+                "EXPERIMENT_FILES_STAY_IN_EXPERIMENTS_FOLDER",
+            ));
         }
         if kind == "rename" && self.resolve(destination)?.exists() {
             return Err(HostError::new("PATH_CONFLICT"));
@@ -1124,7 +1154,17 @@ impl Workspace {
             )?;
             fs::rename(&source, &target)?;
         }
-        if !target.is_dir() || linked(&target)? || self.directory_manifest(&target)? != expected {
+        // Trash has a private physical path; retained files keep their original
+        // logical type while the reviewed delete journal is being completed.
+        let logical_root = if kind == "rename" {
+            &destination
+        } else {
+            &path
+        };
+        if !target.is_dir()
+            || linked(&target)?
+            || self.directory_manifest_for(&target, logical_root)? != expected
+        {
             return abort(self);
         }
         for (operation, _, _) in &operations {
@@ -1500,6 +1540,88 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn experiment_folder_manifest_keeps_vault_scope_for_moves_and_trash_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        let source = ws
+            .write(
+                "experiments/课程 # %2F/source.py",
+                "",
+                b"print('retained')\r\n",
+                "local",
+            )
+            .unwrap();
+        ws.write(
+            "experiments/课程 # %2F/nested/input.json",
+            "",
+            b"{\"values\":[1]}\r\n",
+            "local",
+        )
+        .unwrap();
+        ws.write(
+            "experiments/课程 # %2F/nested/DATA.csv",
+            "",
+            b"x,y\r\n1,2\r\n",
+            "local",
+        )
+        .unwrap();
+        let old = "experiments/课程 # %2F";
+        let expected = ws.directory_manifest(&dir.path().join(old)).unwrap();
+        let operations_before = ws
+            .db
+            .query_row("SELECT COUNT(*) FROM operations", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap();
+        assert_eq!(expected.len(), 4);
+        assert_eq!(expected["nested"], "");
+        assert_eq!(
+            ws.mutate_directory(old, "outside", "rename", &expected)
+                .unwrap_err()
+                .code,
+            "EXPERIMENT_FILES_STAY_IN_EXPERIMENTS_FOLDER"
+        );
+        assert!(dir.path().join(old).is_dir());
+        assert!(!dir.path().join("outside").exists());
+        assert_eq!(
+            ws.db
+                .query_row("SELECT COUNT(*) FROM operations", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            operations_before
+        );
+        let new = "experiments/已归档 # %2F";
+        ws.mutate_directory(old, new, "rename", &expected).unwrap();
+        assert_eq!(
+            ws.path_for_id(&source.file_id).unwrap(),
+            format!("{new}/source.py")
+        );
+        drop(ws);
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        assert_eq!(
+            ws.directory_manifest(&dir.path().join(new)).unwrap(),
+            expected
+        );
+        ws.mutate_directory(new, "", "delete", &expected).unwrap();
+        assert!(!dir.path().join(new).exists());
+        assert!(ws.path_for_id(&source.file_id).is_err());
+        assert_eq!(
+            ws.db
+                .query_row("SELECT COUNT(*) FROM directory_ops", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        let outside = dir.path().join("unscoped");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("source.py"), b"untrusted").unwrap();
+        assert_eq!(
+            ws.directory_manifest(&outside).unwrap_err().code,
+            "UNSUPPORTED_FOLDER_CONTENT"
+        );
+    }
 
     #[test]
     fn reviewed_folder_move_and_delete_keep_identities_and_sync_receipts() {
