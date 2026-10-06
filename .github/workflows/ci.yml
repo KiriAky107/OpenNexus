@@ -155,6 +155,10 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Desktop Host lifecycle tests failed' }
             cargo test --bin OpenNexus --features desktop --locked experiment_commands::tests:: -- --nocapture
             if ($LASTEXITCODE -ne 0) { throw 'Experiment main-window command tests failed' }
+            cargo test --lib --features desktop --locked sync_account::tests:: -- --nocapture
+            if ($LASTEXITCODE -ne 0) { throw 'Sync account metadata tests failed' }
+            cargo test --lib --features desktop --locked sync_auth::tests:: -- --nocapture
+            if ($LASTEXITCODE -ne 0) { throw 'Sync device credential scope tests failed' }
           } finally {
             Remove-Item -LiteralPath $testIndex -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $testFrontend -ErrorAction SilentlyContinue
