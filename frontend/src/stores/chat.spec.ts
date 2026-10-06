@@ -37,6 +37,39 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+it('keeps a follow-up send when the timeline also refreshes the latest window', async () => {
+  const store = useChatStore()
+  store.selectedProviderId = 'real'; store.selectedModel = 'model'
+  await store.sendMessage('original')
+  vi.mocked(streamChat).mock.calls[0]![1].onDone?.()
+  const saved = JSON.parse(JSON.stringify(store.messages)) as ChatMessage[]
+  const pending = deferred<Awaited<ReturnType<typeof loadConversationWindow>>>()
+  vi.mocked(loadConversationWindow).mockImplementation(() => pending.promise)
+  const sending = store.sendMessage('follow-up')
+  const timeline = store.showLatest()
+  pending.resolve(windowOf(saved))
+  await Promise.all([sending, timeline])
+  expect(streamChat).toHaveBeenCalledTimes(2)
+  expect(vi.mocked(streamChat).mock.calls[1]![0].messages[0]!.content).toBe('follow-up')
+})
+
+it('still cancels a follow-up send while a shared latest-window read is pending', async () => {
+  const store = useChatStore()
+  store.selectedProviderId = 'real'; store.selectedModel = 'model'
+  await store.sendMessage('original')
+  vi.mocked(streamChat).mock.calls[0]![1].onDone?.()
+  const saved = JSON.parse(JSON.stringify(store.messages)) as ChatMessage[]
+  const pending = deferred<Awaited<ReturnType<typeof loadConversationWindow>>>()
+  vi.mocked(loadConversationWindow).mockImplementation(() => pending.promise)
+  const sending = store.sendMessage('cancelled follow-up')
+  const timeline = store.showLatest()
+  store.stopGeneration()
+  pending.resolve(windowOf(saved))
+  await Promise.all([sending, timeline])
+  expect(streamChat).toHaveBeenCalledTimes(1)
+  expect(store.isStreaming).toBe(false)
+})
+
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.mocked(streamChat).mockReset().mockReturnValue({ cancel: vi.fn() } as unknown as SseClient)

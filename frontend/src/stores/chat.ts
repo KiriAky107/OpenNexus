@@ -32,6 +32,8 @@ export const useChatStore = defineStore('chat', () => {
   const atLatest = ref(true)
   const selectedLeaf = ref<string | null>(null)
   let windowVersion = 0, selectionVersion = 0, tailNeedsRefresh = false, completedLive = false
+  let latestLoading: { conversation: string | null; vault: string | null; load: number;
+    selection: number; window: number; promise: Promise<boolean> } | undefined
   const isStreaming = ref(false)
   const pendingBudget = ref<PendingBudget | null>(null)
   const budgetDecisionBusy = ref(false)
@@ -144,9 +146,21 @@ export const useChatStore = defineStore('chat', () => {
   }
   async function showLatest() {
     if (atLatest.value && !tailNeedsRefresh) return true
-    const loaded = await readWindow()
-    if (loaded) tailNeedsRefresh = false
-    return loaded
+    // Rendering can request the same tail while sending refreshes its branch
+    // guard. Share that read so the timeline cannot supersede the user's send.
+    const matches = (pending: NonNullable<typeof latestLoading>) =>
+      pending.conversation === activeConversationId.value && pending.vault === workspace.vaultId
+      && pending.load === loadVersion && pending.selection === selectionVersion && pending.window === windowVersion
+    if (latestLoading && matches(latestLoading)) return latestLoading.promise
+    const reading = readWindow()
+    const pending = { conversation: activeConversationId.value, vault: workspace.vaultId,
+      load: loadVersion, selection: selectionVersion, window: windowVersion, promise: Promise.resolve(false) }
+    pending.promise = reading.then(loaded => {
+      if (loaded && matches(pending)) tailNeedsRefresh = false
+      return loaded
+    }).finally(() => { if (latestLoading === pending) latestLoading = undefined })
+    latestLoading = pending
+    return pending.promise
   }
   function captureReading(): ChatReadingSnapshot {
     return { conversation: activeConversationId.value, vault: workspace.vaultId, selection: selectionVersion,
