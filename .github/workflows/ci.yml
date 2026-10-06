@@ -207,6 +207,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Sync device credential scope tests failed' }
             cargo test --lib --features desktop --locked 'extension_store::' -- --nocapture
             if ($LASTEXITCODE -ne 0) { throw 'Installed package state and sealed rollback tests failed' }
+            cargo test --lib --features desktop --locked 'extension_candidates::' -- --nocapture
+            if ($LASTEXITCODE -ne 0) { throw 'Reviewed persona application and target revision tests failed' }
             cargo test --bin OpenNexus --features desktop --locked 'extension_activation::tests::' -- --nocapture
             if ($LASTEXITCODE -ne 0) { throw 'Native grouped package health and rollback tests failed' }
             cargo test --lib --features desktop --locked 'extension_instance::tests::' -- --nocapture
