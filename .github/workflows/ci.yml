@@ -205,6 +205,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Sync account metadata tests failed' }
             cargo test --lib --features desktop --locked sync_auth::tests:: -- --nocapture
             if ($LASTEXITCODE -ne 0) { throw 'Sync device credential scope tests failed' }
+            cargo test --lib --features desktop --locked 'extension_store::' -- --nocapture
+            if ($LASTEXITCODE -ne 0) { throw 'Installed package state and sealed rollback tests failed' }
             $env:OPENNEXUS_COMMUNITY_SERVER_DIR = Join-Path $env:GITHUB_WORKSPACE '.build/community-server'
             cargo test --lib --features desktop --locked 'extension_trust::' -- --include-ignored --nocapture
             if ($LASTEXITCODE -ne 0) { throw 'Community Host live verification tests failed' }
