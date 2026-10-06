@@ -51,7 +51,7 @@ fn unsafe_file() -> HostError {
 fn valid_id(value: &str) -> bool {
     uuid::Uuid::parse_str(value).is_ok_and(|id| !id.is_nil() && id.to_string() == value)
 }
-fn valid_path(value: &str) -> bool {
+pub(crate) fn valid_path(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 1024
         && is_experiment_file(value)
@@ -286,7 +286,7 @@ fn checked(file: &std::fs::File, directory: bool) -> Result<()> {
     }
     Ok(())
 }
-fn open_root(path: &std::path::Path) -> Result<Dir> {
+pub(crate) fn open_root(path: &std::path::Path) -> Result<Dir> {
     // The root is captured by Host Workspace, never from a renderer parameter.
     #[cfg(windows)]
     {
@@ -317,7 +317,7 @@ fn open_root(path: &std::path::Path) -> Result<Dir> {
         Ok(Dir::from_std_file(file))
     }
 }
-fn read_selected(root: &Dir, path: &str) -> Result<Vec<u8>> {
+pub(crate) fn read_selected(root: &Dir, path: &str) -> Result<Vec<u8>> {
     let parts: Vec<_> = path.split('/').collect();
     let mut parents = vec![root.try_clone().map_err(|_| unsafe_file())?];
     for part in &parts[..parts.len() - 1] {

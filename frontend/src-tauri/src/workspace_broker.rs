@@ -116,6 +116,12 @@ fn decode<T: serde::de::DeserializeOwned>(value: &Value) -> Result<T, String> {
     serde_json::from_value(value.clone()).map_err(|_| "WORKSPACE_REQUEST_INVALID".into())
 }
 pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
+    if request["rpc"]
+        .as_str()
+        .is_some_and(|name| name.starts_with("workspace.experiments."))
+    {
+        return crate::experiment_file_broker::dispatch(ws, request);
+    }
     let params = &request["params"];
     match request["rpc"].as_str().unwrap_or_default() {
         "workspace.records.list" => {
@@ -260,6 +266,9 @@ pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
             let p: Read = decode(params)?;
             bound(ws, &p.vault_id)?;
             let relative = ws.path_for_id(&p.file_id).map_err(|e| e.code)?;
+            if !relative.to_ascii_lowercase().ends_with(".md") {
+                return Err("CORE_NOTE_TYPE_UNSUPPORTED".into());
+            }
             let path = ws.resolve(&relative).map_err(|e| e.code)?;
             let metadata = std::fs::metadata(path).map_err(|_| "FILESYSTEM_ERROR")?;
             if metadata.len() > 1024 * 1024 {

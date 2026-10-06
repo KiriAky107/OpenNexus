@@ -19,6 +19,7 @@ mod experiment_cleanup_recovery;
 mod experiment_contract;
 #[cfg(windows)]
 pub mod experiment_execution;
+mod experiment_file_broker;
 pub mod experiment_import;
 pub mod experiment_input;
 pub mod experiment_log;
