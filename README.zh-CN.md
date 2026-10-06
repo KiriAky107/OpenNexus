@@ -341,8 +341,10 @@ erDiagram
 | 项目仓库 | 职责定位 | 技术实现 |
 | --- | --- | --- |
 | **[OpenNexus](https://github.com/KiriAky107/OpenNexus)** | 桌面主程序与内置 AI 核心引擎 | Tauri 2, Rust, Vue 3, FastAPI |
-| **[Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus)** | 可选的自建端到端加密同步后端 | Rust / Go, PostgreSQL, S3 |
+| **[Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus)** | 可选的自托管同步服务 | Python / FastAPI, PostgreSQL, S3 |
 | **[Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus)** | 官方与社区插件、技能、预设模板中心 | 静态托管服务 / 包注册表原型 |
+
+Sync v1 通过 HTTPS 传输原始内容及路径。握手声明 `transport-only`：服务可以读取存储的内容，这不是端到端加密。桌面会在同步前核对该传输格式，并在同步设置中展示服务能力及连接安全状态。HTTP 仅可通过显式的 HTTP 测试选项开启。
 
 ---
 

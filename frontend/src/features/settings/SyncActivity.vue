@@ -28,7 +28,7 @@ const byteLabel = computed(() => transfer.value?.phase === 'receiving' ? t('已�
       <p class="path">{{ transfer.direction === 'upload' ? t('上传', 'Upload') : t('下载', 'Download') }} · {{ transfer.path }}</p>
       <progress :aria-label="byteLabel" :max="Math.max(1, transfer.total_bytes)" :value="transfer.bytes_done" />
       <p>{{ byteLabel }} · {{ syncBytes(transfer.bytes_done) }} / {{ syncBytes(transfer.total_bytes) }}</p>
-      <p>{{ t('本对象本轮传输', 'Bytes transferred for this object this cycle') }} {{ syncBytes(transfer.transferred_bytes) }}<span v-if="transfer.resumed_bytes"> · {{ t('恢复已确认偏移', 'Resumed confirmed offset') }} {{ syncBytes(transfer.resumed_bytes) }}</span></p>
+      <p>{{ transfer.direction === 'upload' ? t('本对象本轮确认上传', 'Upload bytes confirmed for this object this cycle') : t('本对象本轮接收', 'Bytes received for this object this cycle') }} {{ syncBytes(transfer.transferred_bytes) }}<span v-if="transfer.resumed_bytes"> · {{ t('恢复已确认偏移', 'Resumed confirmed offset') }} {{ syncBytes(transfer.resumed_bytes) }}</span></p>
     </template>
     <p v-if="error" role="alert">{{ t('最近记录的同步错误', 'Last recorded sync error') }} · {{ syncError(error) }}</p>
     <p class="subtle">{{ t('一轮成功不表示队列已清空。下载接收进度不等于校验成功，待审核冲突单独处理。', 'A successful cycle does not mean the queue is empty. Receiving download bytes does not mean verification succeeded; review conflicts separately.') }}</p>

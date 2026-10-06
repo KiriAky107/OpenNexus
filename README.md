@@ -343,8 +343,10 @@ To keep dependencies clean and packaging predictable, services are maintained in
 | Repository | Scope | Stack |
 | --- | --- | --- |
 | **[OpenNexus](https://github.com/KiriAky107/OpenNexus)** | Desktop Application & AI Core | Tauri 2, Rust, Vue 3, FastAPI |
-| **[Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus)** | Optional E2EE Sync Server | Rust / Go, PostgreSQL, S3 |
+| **[Sync-for-OpenNexus](https://github.com/KiriAky107/Sync-for-OpenNexus)** | Optional self-hosted sync service | Python / FastAPI, PostgreSQL, S3 |
 | **[Community-for-OpenNexus](https://github.com/KiriAky107/Community-for-OpenNexus)** | Plugin catalog, skills, and templates | Static Catalog & Registry |
+
+Sync v1 transfers raw content and paths over HTTPS. Its handshake declares `transport-only`: the service can read stored content, and this is not end-to-end encryption. The desktop checks this wire format before synchronizing and displays the service capability and connection security in Sync settings. HTTP is available only through the explicit HTTP test option.
 
 ---
 

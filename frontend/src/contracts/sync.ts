@@ -53,4 +53,13 @@ export interface SyncAccount {
   checked_at: number
   vault: { id: string; name: string; sequence: number; used: number; quota: number }
   devices: Array<{ id: string; name: string; revoked: boolean }>
+  capabilities: SyncCapabilities
+}
+export interface SyncCapabilities {
+  protocol: 1
+  chunk_size: number
+  max_object_size: number
+  encryption: 'transport-only'
+  transport_security: 'tls' | 'test-http'
+  features: { version: 1; objects: string; revisions: string; paths: string; uploads: string; execution: false } | null
 }

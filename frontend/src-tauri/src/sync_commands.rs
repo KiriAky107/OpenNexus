@@ -438,11 +438,15 @@ pub async fn sync_account_status(
     let _guard = host.sync.gate.try_lock().map_err(|_| "SYNC_BUSY")?;
     let binding = account_binding(&host, &request.vault_id, &request.binding_id)?;
     let remote_vault = &binding.remote_vault;
-    let details = sync_auth::authenticated(
+    let (capabilities, details) = sync_auth::authenticated(
         &host.credentials,
         &binding.endpoint,
         &binding.account,
-        |client| async move { client.account_details(remote_vault).await },
+        |client| async move {
+            let capabilities = client.capabilities().await?;
+            let details = client.account_details(remote_vault).await?;
+            Ok((capabilities, details))
+        },
     )
     .await
     .map_err(|error| error.code)?;
@@ -451,7 +455,7 @@ pub async fn sync_account_status(
         sync_auth::device_id(&host.credentials, &binding.endpoint, &binding.account)
             .map_err(|error| error.code)?;
     Ok(
-        json!({"vault_id":request.vault_id,"binding_id":request.binding_id,"current_device_id":current_device_id,"vault":details.vault,"devices":details.devices,"checked_at":now()}),
+        json!({"vault_id":request.vault_id,"binding_id":request.binding_id,"current_device_id":current_device_id,"vault":details.vault,"devices":details.devices,"capabilities":capabilities,"checked_at":now()}),
     )
 }
 #[derive(Clone, Deserialize)]

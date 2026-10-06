@@ -22,6 +22,7 @@ export function syncError(cause: unknown) {
     case 'SYNC_NETWORK_ERROR': message = t('连接服务失败，请检查网络与服务地址。', 'Cannot reach the service. Check the network and service address.'); break
     case 'SYNC_IO_FAILED': case 'SYNC_SPOOL_FAILED': message = t('本地读写失败，请检查磁盘空间和文件访问权限。', 'Local file access failed. Check disk space and file permissions.'); break
     case 'PROTOCOL_INCOMPATIBLE': message = t('服务协议不兼容，请核对桌面与服务版本。', 'The service protocol is incompatible. Check desktop and service versions.'); break
+    case 'SYNC_ENCRYPTION_INCOMPATIBLE': message = t('服务声明的内容加密格式不兼容，已停止同步。请核对服务配置。', 'The declared content encryption format is incompatible. Sync stopped. Check the service configuration.'); break
     case 'SYNC_OBJECT_CORRUPT': case 'SYNC_SPOOL_CORRUPT': case 'HASH_MISMATCH': message = t('内容校验失败，文件没有作为成功传输处理。', 'Content verification failed. The file was not accepted as a successful transfer.'); break
     case 'REVISION_CONFLICT': case 'SYNC_CONFLICT_CHANGED': message = t('文件修订已变化，请刷新并审核冲突。', 'The file revision changed. Refresh and review the conflict.'); break
     case 'SYNC_CANCELLED': message = t('本轮同步已停止，确认过的上传偏移可在重试时恢复。', 'This sync cycle stopped. Retry can resume confirmed upload offsets.'); break
