@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 
-def exercise(page, process, work: Path, vault: Path):
+def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 5000)):
     if vault.resolve() != work.resolve() / 'vault' or process.poll() is not None:
         raise RuntimeError('Preview checks require a live verifier-owned native payload')
     page.evaluate('()=>smokeRouter.push("/chat")')
@@ -19,7 +19,7 @@ def exercise(page, process, work: Path, vault: Path):
     # store lifecycle, so it cannot overwrite synthetic rendering fixtures.
     page.evaluate('async()=>await smokePinia._s.get("chat").createNewConversation()')
     samples = []
-    for count in (100, 1000, 5000):
+    for count in line_counts:
         result = page.evaluate(r'''async lines => {
             const store=smokePinia._s.get('chat'), frame=()=>new Promise(requestAnimationFrame);
             const source=Array.from({length:lines},(_,i)=>`export const value${i}: number = Math.max(${i}, 1) + 2; // preview`).join('\n');
@@ -91,11 +91,13 @@ def exercise(page, process, work: Path, vault: Path):
                 if(!window.find(probe) || getSelection()?.toString()!==probe)throw Error('Browser search could not reach offscreen code');
                 getSelection().removeAllRanges();
                 // A cancelled render must not overwrite the user's final text.
+                const obsoleteJobStart=jobs.length;
                 store.isStreaming=true;store.messages[0].content='```typescript\n'+source+'\nconst obsolete = 1;\n```';
                 await new Promise(resolve=>setTimeout(resolve,60));
                 store.messages[0].content='Final replacement '+lines;store.isStreaming=false;
                 await until(()=>dom()?.textContent.trim()==='Final replacement '+lines);
-                await new Promise(resolve=>setTimeout(resolve,500));
+                await until(()=>jobs.slice(obsoleteJobStart).every(job=>job.elapsed_ms!==undefined));
+                await new Promise(resolve=>setTimeout(resolve,50));
                 if(dom()?.textContent.trim()!=='Final replacement '+lines)throw Error('Stale preview replaced final text');
                 await frame();
                 return {lines,text_ms:textMs,color_ms:colorMs,code_tokens:initialTokens,
@@ -103,6 +105,7 @@ def exercise(page, process, work: Path, vault: Path):
                     unchanged_worker_jobs:unchangedWorkerJobs,worker_jobs:jobs.map(({start,...job})=>job),next_frame_ms:changes,
                     renderer_js_heap_bytes:{before:heapBefore,colored:heapColored,tail:heapTail},
                     offscreen_code_search_preserved:true,
+                    obsolete_worker_jobs_completed:jobs.slice(obsoleteJobStart).every(job=>job.elapsed_ms!==undefined),
                     long_tasks:tasks.length,max_long_task_ms:Math.max(0,...tasks),
                     max_frame_gap_ms:Math.max(0,...frames),final_text_preserved:true,copy_source_preserved:true};
             } finally {
