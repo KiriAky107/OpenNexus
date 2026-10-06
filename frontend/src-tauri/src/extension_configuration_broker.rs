@@ -38,9 +38,7 @@ pub async fn dispatch(
         .candidate_package_online(&candidate.slot, &candidate.vault_id)
         .await
         .map_err(|error| error.code)?;
-    let material = store
-        .runtime_package(&candidate.slot, &candidate.vault_id, None)
-        .map_err(|error| error.code)?;
+    let material = &verified.runtime;
     if !matches!(material.release.kind.as_str(), "mcp" | "model") {
         return Err("EXTENSION_CANDIDATE_TYPE".into());
     }

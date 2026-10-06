@@ -62,6 +62,7 @@ pub mod sync_retry;
 
 pub mod extension_package;
 
+mod extension_configurations;
 pub mod extension_manifest;
 pub mod extension_templates;
 

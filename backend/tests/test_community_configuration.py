@@ -1,5 +1,6 @@
 from contextlib import closing
 import json
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -17,6 +18,7 @@ from app.providers.credentials import EncryptedCredentialStore
 from app.services import community_configuration as service
 
 SLOT = 'a' * 64
+SHARED = json.loads((Path(__file__).resolve().parents[2] / 'frontend/src/services/fixtures/community-v1-configurations.json').read_text('utf-8'))
 
 
 class Bridge:
@@ -58,6 +60,28 @@ def model(bridge):
         'source': spec.repository, 'revision': spec.revision, 'license': spec.license,
         'resources': {'ram_gb': 8}, 'verified_platforms': ['windows', 'linux'],
         'model_key': spec.key, 'runtime_config': {'embedding_model': spec.key, 'cpu_threads': 4}})
+
+
+@pytest.mark.parametrize('case', SHARED['cases'], ids=lambda case: case['name'])
+def test_shared_configuration_contract_uses_actual_target_validation_and_persistence(owned, case):
+    bridge, registry = owned
+    bridge.material.update(kind=case['kind'], manifest=case['manifest'])
+    previous = configuration()
+    target = 'mcp:new' if case['kind'] == 'mcp' else 'model:local_runtime'
+    if not case['target_application']:
+        with pytest.raises((ApiError, McpRegistryError)):
+            service.preview(SLOT, target, registry)
+        assert configuration() == previous and registry.list() == []
+        return
+    review = service.preview(SLOT, target, registry)
+    assert configuration() == previous and registry.list() == []
+    receipt = apply(review, registry)
+    assert service.operation(receipt['operation_id'], review['fingerprint'], registry) == receipt
+    assert service.snapshot(case['kind'], review['target'], registry) == review['after']
+    if case['kind'] == 'mcp':
+        current = registry.get(review['target'][4:])
+        assert not current.enabled and not current.trusted and current.tools_count == 0
+    assert not (get_settings().data_dir / 'models').exists()
 
 
 def test_create_is_reviewed_disabled_and_receipt_survives_registry_restart(owned):

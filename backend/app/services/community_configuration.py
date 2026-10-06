@@ -17,6 +17,7 @@ from app.database.db import connect, transaction
 from app.errors import ApiError
 from app.local_models.catalog import CATALOG
 from app.local_models.runtime import RuntimeConfig, configuration, configure_in_transaction
+from app.services.catalog_configuration_manifest import validate_configuration
 
 _lock = threading.RLock()
 _digest = re.compile(r'^[0-9a-f]{64}$')
@@ -66,14 +67,12 @@ def schema(conn):
 
 
 class RuntimeProposal(RuntimeConfig):
-    model_config = ConfigDict(extra='forbid')
+    model_config = ConfigDict(extra='forbid', strict=True)
 
 
 def proposal(material, before, registry):
     manifest = dict(material['manifest'])
     if material['kind'] == 'mcp':
-        for key in ('schema_version', 'configuration_schema'):
-            manifest.pop(key, None)
         manifest.setdefault('name', material['package_name'])
         # Community bundles carry declarations, not credential values. Existing
         # declarations are retained so applying a package cannot erase credentials.
@@ -86,6 +85,9 @@ def proposal(material, before, registry):
                 # A legacy plain credential must not be copied into review
                 # storage or returned as a before/after field.
                 fail('CATALOG_PLAINTEXT_SECRET', 422)
+        validate_configuration(material['kind'], manifest)
+        for key in ('schema_version', 'configuration_schema'):
+            manifest.pop(key, None)
         for field in ('secret_environment_keys', 'secret_header_keys'):
             declared = manifest.get(field, [])
             if not isinstance(declared, list) or not all(isinstance(key, str) for key in declared):
@@ -100,6 +102,7 @@ def proposal(material, before, registry):
         data.update(version=(before or {}).get('version', 0) + 1, enabled=False,
                     approved_digest=None, tested_digest=None)
         return data
+    validate_configuration(material['kind'], manifest)
     allowed = {'schema_version', 'permissions', 'configuration_schema', 'name', 'source', 'revision',
                'license', 'resources', 'verified_platforms', 'model_key', 'runtime_config'}
     if set(manifest) - allowed or not isinstance(manifest.get('runtime_config'), dict):

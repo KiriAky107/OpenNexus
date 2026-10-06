@@ -95,29 +95,7 @@ pub fn validate(release: &Release, bytes: &[u8]) -> Result<Value> {
         let valid = match release.kind.as_str() {
             "persona" => value["system_prompt"].is_string(),
             "template" => crate::extension_templates::validate_release(release, &value).is_ok(),
-            "model" => {
-                ["source", "revision", "license"]
-                    .iter()
-                    .all(|k| value[*k].as_str().is_some_and(|s| !s.is_empty()))
-                    && value["resources"]
-                        .as_object()
-                        .is_some_and(|v| !v.is_empty())
-                    && value["verified_platforms"]
-                        .as_array()
-                        .is_some_and(|v| !v.is_empty() && v.iter().all(Value::is_string))
-            }
-            "mcp" => match value["transport"].as_str() {
-                Some("stdio") => {
-                    value["args"]
-                        .as_array()
-                        .is_some_and(|v| v.iter().all(Value::is_string))
-                        && value
-                            .get("command")
-                            .is_none_or(|v| v.as_str().is_some_and(|s| !s.is_empty()))
-                }
-                Some("streamable_http" | "sse") => true,
-                _ => false,
-            },
+            "model" | "mcp" => crate::extension_configurations::valid(&release.kind, &value),
             _ => false,
         };
         if !valid {
@@ -240,6 +218,52 @@ mod tests {
         template_release.min_app_version = "0.5.9".into();
         let experiment = &fixture["cases"][2]["manifest"];
         assert!(validate(&template_release, &serde_json::to_vec(experiment).unwrap()).is_err());
+    }
+    #[test]
+    fn shared_configuration_archives_use_real_signature_and_manifest_verification() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        use ed25519_dalek::{Signer as _, SigningKey};
+        use std::io::Write;
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../src/services/fixtures/community-v1-configurations.json"
+        ))
+        .unwrap();
+        let signer = SigningKey::from_bytes(&[7; 32]);
+        let public = signer.verifying_key().to_bytes();
+        for case in fixture["cases"].as_array().unwrap() {
+            let kind = case["kind"].as_str().unwrap();
+            let mut item = release(kind);
+            let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            zip.start_file(
+                format!("{kind}.json"),
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(&serde_json::to_vec(&case["manifest"]).unwrap())
+                .unwrap();
+            let archive = zip.finish().unwrap().into_inner();
+            item.sha256 = crate::workspace::hash(&archive);
+            item.size = archive.len() as u64;
+            item.signature =
+                STANDARD.encode(signer.sign(&item.signed_payload().unwrap()).to_bytes());
+            let result = item.verify_package(
+                &public,
+                &item.key_id,
+                &item.namespace,
+                false,
+                false,
+                &archive,
+            );
+            assert_eq!(
+                result.is_ok(),
+                case["accepted"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+            if let Ok((_, manifest)) = result {
+                assert_eq!(manifest, case["manifest"]);
+            }
+        }
     }
     #[test]
     fn declarative_types_enforce_contract_and_nested_secret_exclusion() {

@@ -1,0 +1,936 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "mcp-stdio-secret-declarations",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+          "lesson_server.py"
+        ],
+        "environment": {
+          "LESSON_MODE": "read"
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ]
+      },
+      "accepted": true,
+      "target_application": true
+    },
+    {
+      "name": "mcp-streamable-http",
+      "kind": "mcp",
+      "manifest": {
+        "transport": "streamable_http",
+        "url": "https://catalog.example/mcp",
+        "secret_header_keys": [
+          "Authorization"
+        ]
+      },
+      "accepted": true,
+      "target_application": true
+    },
+    {
+      "name": "mcp-sse",
+      "kind": "mcp",
+      "manifest": {
+        "transport": "sse",
+        "url": "https://catalog.example/sse"
+      },
+      "accepted": true,
+      "target_application": true
+    },
+    {
+      "name": "mcp-legacy-metadata-only",
+      "kind": "mcp",
+      "manifest": {
+        "transport": "stdio",
+        "args": []
+      },
+      "accepted": true,
+      "target_application": false
+    },
+    {
+      "name": "mcp-numeric-argument",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+          42
+        ],
+        "environment": {
+          "LESSON_MODE": "read"
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ]
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "mcp-arguments-not-array",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": "python",
+        "args": "server.py",
+        "environment": {
+          "LESSON_MODE": "read"
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ]
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "mcp-empty-command",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": " ",
+        "args": [
+          "lesson_server.py"
+        ],
+        "environment": {
+          "LESSON_MODE": "read"
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ]
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "mcp-invalid-transport",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "shell",
+        "command": "python",
+        "args": [
+          "lesson_server.py"
+        ],
+        "environment": {
+          "LESSON_MODE": "read"
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ]
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "mcp-plain-auth-header",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+          "lesson_server.py"
+        ],
+        "environment": {
+          "LESSON_MODE": "read"
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ],
+        "headers": {
+          "Authorization": "fixture-plain-value"
+        }
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "mcp-plain-token-environment",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+          "lesson_server.py"
+        ],
+        "environment": {
+          "ACCESS_TOKEN": "fixture-plain-value"
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ]
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "mcp-numeric-environment",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+          "lesson_server.py"
+        ],
+        "environment": {
+          "MODE": 42
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ]
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "mcp-enablement-in-manifest",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+          "lesson_server.py"
+        ],
+        "environment": {
+          "LESSON_MODE": "read"
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ],
+        "enabled": true
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "mcp-trust-in-manifest",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+          "lesson_server.py"
+        ],
+        "environment": {
+          "LESSON_MODE": "read"
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ],
+        "approved_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "mcp-test-in-manifest",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+          "lesson_server.py"
+        ],
+        "environment": {
+          "LESSON_MODE": "read"
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ],
+        "tested_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "mcp-target-version-in-manifest",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+          "lesson_server.py"
+        ],
+        "environment": {
+          "LESSON_MODE": "read"
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ],
+        "version": 2
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "mcp-duplicate-secret-declarations",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+          "lesson_server.py"
+        ],
+        "environment": {
+          "LESSON_MODE": "read"
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ],
+        "secret_header_keys": [
+          "Authorization",
+          "Authorization"
+        ]
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "mcp-invalid-secret-declarations",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+          "lesson_server.py"
+        ],
+        "environment": {
+          "LESSON_MODE": "read"
+        },
+        "secret_environment_keys": [
+          42
+        ]
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "mcp-duplicate-permissions",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [
+          "notes.read",
+          "notes.read"
+        ],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+          "lesson_server.py"
+        ],
+        "environment": {
+          "LESSON_MODE": "read"
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ]
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "mcp-boolean-schema",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": true,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+          "lesson_server.py"
+        ],
+        "environment": {
+          "LESSON_MODE": "read"
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ]
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "mcp-unknown-schema",
+      "kind": "mcp",
+      "manifest": {
+        "schema_version": 2,
+        "permissions": [],
+        "name": "课程工具 · Lesson tools",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+          "lesson_server.py"
+        ],
+        "environment": {
+          "LESSON_MODE": "read"
+        },
+        "secret_environment_keys": [
+          "LESSON_API_KEY"
+        ]
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-granite-runtime",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "granite",
+          "device": "cpu",
+          "cpu_threads": 4,
+          "memory_limit_mb": 8192,
+          "gpu_memory_limit_mb": 4096,
+          "timeout_seconds": 1800
+        }
+      },
+      "accepted": true,
+      "target_application": true
+    },
+    {
+      "name": "model-bekko-runtime",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "hotchpotch/bekko-embedding-v1-a8m",
+        "revision": "c721113d59a1d91b447450324f51c4b3332c924a",
+        "license": "MIT",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "bekko",
+        "runtime_config": {
+          "embedding_model": "bekko",
+          "cpu_threads": 2
+        }
+      },
+      "accepted": true,
+      "target_application": true
+    },
+    {
+      "name": "model-legacy-metadata-only",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ]
+      },
+      "accepted": true,
+      "target_application": false
+    },
+    {
+      "name": "model-valid-other-revision-no-target",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "other-fixed-revision",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "granite",
+          "device": "cpu",
+          "cpu_threads": 4,
+          "memory_limit_mb": 8192,
+          "gpu_memory_limit_mb": 4096,
+          "timeout_seconds": 1800
+        }
+      },
+      "accepted": true,
+      "target_application": false
+    },
+    {
+      "name": "model-resources-not-object",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": [
+          "ram_gb",
+          8
+        ],
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "granite",
+          "device": "cpu",
+          "cpu_threads": 4,
+          "memory_limit_mb": 8192,
+          "gpu_memory_limit_mb": 4096,
+          "timeout_seconds": 1800
+        }
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-resources-empty",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {},
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "granite",
+          "device": "cpu",
+          "cpu_threads": 4,
+          "memory_limit_mb": 8192,
+          "gpu_memory_limit_mb": 4096,
+          "timeout_seconds": 1800
+        }
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-platforms-not-array",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": "windows",
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "granite",
+          "device": "cpu",
+          "cpu_threads": 4,
+          "memory_limit_mb": 8192,
+          "gpu_memory_limit_mb": 4096,
+          "timeout_seconds": 1800
+        }
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-platforms-empty",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [],
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "granite",
+          "device": "cpu",
+          "cpu_threads": 4,
+          "memory_limit_mb": 8192,
+          "gpu_memory_limit_mb": 4096,
+          "timeout_seconds": 1800
+        }
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-platform-not-text",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          42
+        ],
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "granite",
+          "device": "cpu",
+          "cpu_threads": 4,
+          "memory_limit_mb": 8192,
+          "gpu_memory_limit_mb": 4096,
+          "timeout_seconds": 1800
+        }
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-empty-source",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": " ",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "granite",
+          "device": "cpu",
+          "cpu_threads": 4,
+          "memory_limit_mb": 8192,
+          "gpu_memory_limit_mb": 4096,
+          "timeout_seconds": 1800
+        }
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-model-key-only",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "granite",
+        "runtime_config": null
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-runtime-not-object",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "granite",
+        "runtime_config": []
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-runtime-model-mismatch",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "bekko"
+        }
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-runtime-version",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "granite",
+          "version": 1
+        }
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-runtime-unknown-field",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "granite",
+          "shell": "run"
+        }
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-runtime-string-budget",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "granite",
+          "cpu_threads": "4"
+        }
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-runtime-boolean-budget",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "granite",
+          "cpu_threads": true
+        }
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-runtime-low-budget",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "granite",
+          "memory_limit_mb": 1023
+        }
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-runtime-high-budget",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "granite",
+          "cpu_threads": 33
+        }
+      },
+      "accepted": false,
+      "target_application": false
+    },
+    {
+      "name": "model-runtime-invalid-device",
+      "kind": "model",
+      "manifest": {
+        "schema_version": 1,
+        "permissions": [],
+        "source": "ibm-granite/granite-embedding-97m-multilingual-r2",
+        "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
+        "license": "Apache-2.0",
+        "resources": {
+          "ram_gb": 8
+        },
+        "verified_platforms": [
+          "windows",
+          "linux"
+        ],
+        "model_key": "granite",
+        "runtime_config": {
+          "embedding_model": "granite",
+          "device": "auto"
+        }
+      },
+      "accepted": false,
+      "target_application": false
+    }
+  ]
+}
