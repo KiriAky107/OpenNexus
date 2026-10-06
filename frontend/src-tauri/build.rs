@@ -53,6 +53,8 @@ fn main() {
             "extension_rollback_preview",
             "extension_install_status",
             "extension_installed",
+            "extension_persona_preview",
+            "extension_persona_apply",
             "extension_uninstall",
             "extension_enable",
             "extension_disable",

@@ -68,6 +68,9 @@ pub mod extension_manifest;
 pub mod extension_store;
 
 #[cfg(feature = "desktop")]
+pub mod extension_candidates;
+
+#[cfg(feature = "desktop")]
 pub mod extension_dependencies;
 
 pub mod extension_unpack;

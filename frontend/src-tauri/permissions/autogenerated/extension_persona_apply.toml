@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-extension-persona-apply"
+description = "Enables the extension_persona_apply command without any pre-configured scope."
+commands.allow = ["extension_persona_apply"]
+
+[[permission]]
+identifier = "deny-extension-persona-apply"
+description = "Denies the extension_persona_apply command without any pre-configured scope."
+commands.deny = ["extension_persona_apply"]

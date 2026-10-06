@@ -15,6 +15,8 @@ use uuid::Uuid;
 
 mod catalog_view;
 pub use catalog_view::{InstalledPackage, InstalledPage};
+mod candidates;
+pub use candidates::VerifiedCandidate;
 
 pub struct Signer<'a> {
     pub public_key: &'a [u8; 32],

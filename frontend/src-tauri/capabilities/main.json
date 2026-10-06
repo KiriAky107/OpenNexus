@@ -68,6 +68,8 @@
     "allow-extension-rollback-preview",
     "allow-extension-install-status",
     "allow-extension-installed",
+    "allow-extension-persona-preview",
+    "allow-extension-persona-apply",
     "allow-extension-uninstall",
     "allow-extension-enable",
     "allow-extension-disable",

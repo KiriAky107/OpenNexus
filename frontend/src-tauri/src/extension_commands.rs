@@ -18,7 +18,7 @@ pub struct Review {
 }
 #[derive(Default)]
 pub struct Reviews(pub Mutex<HashMap<String, Review>>);
-fn main_window(window: &WebviewWindow) -> Result<(), String> {
+pub(super) fn main_window(window: &WebviewWindow) -> Result<(), String> {
     if window.label() != "main" {
         return Err("EXTENSION_WINDOW_DENIED".into());
     }

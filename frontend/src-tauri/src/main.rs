@@ -4,6 +4,8 @@
 
 mod extension_commands;
 use extension_commands::*;
+mod extension_candidate_commands;
+use extension_candidate_commands::*;
 mod experiment_commands;
 #[cfg(windows)]
 mod extension_activation;
@@ -1584,6 +1586,8 @@ fn main() {
             extension_install_confirm,
             extension_install_rollback,
             extension_installed,
+            extension_persona_preview,
+            extension_persona_apply,
             extension_install_status,
             extension_rollback_preview,
             extension_uninstall,
