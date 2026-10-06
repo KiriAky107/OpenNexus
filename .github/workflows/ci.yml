@@ -156,7 +156,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: KiriAky107/Sync-for-OpenNexus
-          ref: 27335831b726a601a956ef9e9eddcefebaa7aaff
+          ref: 8795c4b241aeceac81fc6e9981358f693b09d712
           path: .build/sync-server
           persist-credentials: false
       - name: Check out the fixed Community catalog fixture
