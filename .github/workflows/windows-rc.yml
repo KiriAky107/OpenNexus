@@ -7,6 +7,10 @@ on:
         description: Sign Host, installer and Core with configured release secrets
         type: boolean
         default: false
+      publish:
+        description: Publish this fixed commit as a new verified GitHub Release
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -18,7 +22,7 @@ concurrency:
 jobs:
   package:
     runs-on: windows-2022
-    timeout-minutes: 50
+    timeout-minutes: 75
     env:
       CARGO_TERM_COLOR: always
       CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
@@ -85,6 +89,10 @@ jobs:
           [IO.File]::WriteAllText((Join-Path $env:GITHUB_WORKSPACE 'frontend/src-tauri/tauri.rc.conf.json'), $signingConfig, [Text.UTF8Encoding]::new($false))
           Remove-Item -LiteralPath $pfxPath -Force
 
+      - name: Record fixed source bytes before compilation
+        shell: pwsh
+        run: python scripts/record-build-source.py --commit $env:GITHUB_SHA
+
       - name: Build Core
         shell: pwsh
         env:
@@ -125,6 +133,7 @@ jobs:
             .build/sidecar/manifest.sig
             .build/sidecar/public-key.hex
             .build/windows/package-verification.json
+            .build/source-provenance/*.json
             .build/windows/experiment-*/*.json
             .build/windows/native-*/native-canvas.png
             .build/windows/native-*/native-experiment.png
@@ -145,3 +154,58 @@ jobs:
           }
           Remove-Item -LiteralPath $signingDirectory -Force -ErrorAction SilentlyContinue
           Remove-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'frontend/src-tauri/tauri.rc.conf.json') -Force -ErrorAction SilentlyContinue
+
+  publish:
+    if: inputs.publish
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v8
+        with:
+          name: OpenNexus-windows-x64-${{ github.sha }}
+          path: .build/publish-input
+      - name: Prepare the fixed source, installer and bilingual release inputs
+        run: |
+          python - <<'PY'
+          import json, subprocess, sys
+          from pathlib import Path
+          root = Path.cwd()
+          version = json.loads((root / 'frontend/package.json').read_text('utf-8'))['version']
+          installers = list((root / '.build/publish-input').rglob('*.exe'))
+          receipts = list((root / '.build/publish-input').rglob('package-verification.json'))
+          assert len(installers) == len(receipts) == 1, 'A single verified package is required'
+          subprocess.run([sys.executable, 'scripts/prepare-release.py', '--repository', '${{ github.repository }}',
+              '--product', 'OpenNexus', '--version', version, '--commit', '${{ github.sha }}',
+              '--output', '.build/publication', '--installer', str(installers[0]),
+              '--verification', str(receipts[0]), '--notes', '.github/release-notes/' + version + '.md'], check=True)
+          PY
+          python scripts/github_release.py precheck --offline --plan .build/publication/release-plan.json
+      - name: Stage verified assets, publish and independently verify
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/github_release.py precheck --plan .build/publication/release-plan.json
+          python scripts/github_release.py stage --plan .build/publication/release-plan.json
+          python scripts/github_release.py publish --plan .build/publication/release-plan.json
+          python scripts/github_release.py verify --plan .build/publication/release-plan.json
+      - name: Preserve complete publication inputs and recovery receipts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: OpenNexus-publication-${{ github.sha }}
+          retention-days: 30
+          include-hidden-files: true
+          compression-level: 0
+          path: |
+            .build/publication/**
+            !.build/publication/**/*.lock
+          if-no-files-found: warn

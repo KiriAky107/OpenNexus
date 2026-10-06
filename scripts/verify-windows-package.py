@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+from release_plan import build_source, require
 
 
 def digest(path: Path) -> str:
@@ -98,6 +99,15 @@ def main() -> None:
             'dynamic_loader_dependency': dynamic, 'loader': loader,
             'microsoft_signatures_verified': os.name == 'nt', 'runtime_bootstrapper_embedded': True,
             'experiment_runtime': runtime_report}
+        report['source_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+        report['source_clean'] = not subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip()
+        source_receipt = ROOT/'.build/source-provenance'/f'{report["source_commit"]}.json'
+        report['build_source_verified'] = False
+        if source_receipt.exists():
+            recorded = json.loads(source_receipt.read_text('utf-8'))
+            actual_source = build_source(ROOT, report['source_commit'])
+            require(recorded == actual_source, 'PACKAGE_BUILD_SOURCE_CHANGED')
+            report['build_source_verified'] = True
         if args.experiment_probe:
             evidence = Path(tempfile.mkdtemp(prefix='experiment-', dir=staging))
             report['experiment_runtime']['native_probe'] = experiment.native_probe(payload, args.target, evidence)
@@ -130,6 +140,11 @@ def main() -> None:
             report['native_smoke'] = verify(payload, manifest['core_version'], config['identifier'], evidence, dynamic,
                 extra_checks=checks if args.experiment_ui or args.agent_experiment_ui or args.chat_experiment_ui or args.preview_ui or args.experiment_links_ui else None)
             report['native_smoke']['evidence_directory'] = evidence.relative_to(ROOT).as_posix()
+        if report['build_source_verified']:
+            # Native checks can take minutes. Bind the final receipt to the same
+            # compiler inputs and precompile receipt captured before those checks.
+            require(recorded == build_source(ROOT, report['source_commit'])
+                    and recorded == json.loads(source_receipt.read_text('utf-8')), 'PACKAGE_BUILD_SOURCE_CHANGED')
     (staging / 'package-verification.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(report, indent=2))
 
