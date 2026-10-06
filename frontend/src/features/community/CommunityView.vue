@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { CommunityKey, CommunityRelease, CommunitySource, PackageKind } from '@/contracts/community'
-import { cachedCatalog, discoverSource, fetchCatalog, installRelease, loadSources, saveSources } from '@/services/communityService'
+import { cachedCatalog, discoverSource, fetchCatalog, installRelease, isCommunityNetworkError, loadSources, saveSources } from '@/services/communityService'
 import { isDesktop } from '@/services/platform/desktop'
 import { reviewTrust, confirmTrust, type TrustReview } from '@/services/extensionTrustService'
 import DesktopPackages from './DesktopPackages.vue'
 import AppDialog from '@/components/common/AppDialog.vue'
+import { catalogPageSize } from '@/services/communityCatalogCache'
+import { localeTag, t } from '@/i18n'
 
 const kinds: { id: PackageKind | ''; label: string }[] = [
   { id: '', label: '全部' }, { id: 'theme', label: '主题' }, { id: 'skill', label: 'Skill' },
@@ -19,6 +21,10 @@ const items = ref<CommunityRelease[]>([]), detail = ref<CommunityRelease | null>
 const candidateKeys = ref<CommunityKey[]>([]), candidateUrl = ref('')
 const candidateSourceId = ref(''), candidateEnabled = ref(true), trustReviews = ref<TrustReview[]>([])
 const busy = ref(false), error = ref(''), notice = ref(''), offline = ref(false)
+const offset = ref(0), total = ref(0), checkedAt = ref('')
+const pages = computed(() => Math.max(1, Math.ceil(total.value / catalogPageSize)))
+const currentPage = computed(() => Math.floor(offset.value / catalogPageSize) + 1)
+const checkedTime = computed(() => checkedAt.value ? new Date(checkedAt.value).toLocaleString(localeTag()) : '')
 let controller: AbortController | undefined
 let version = 0
 const candidates = ref<{ key: string; value: string }[]>([])
@@ -29,6 +35,12 @@ refreshCandidates()
 function removeCandidate(key: string) { localStorage.removeItem(key); refreshCandidates() }
 function cancel() { version++; controller?.abort(); busy.value = false }
 onBeforeUnmount(cancel)
+function clearCatalog() {
+  items.value = []; detail.value = null; offset.value = 0; total.value = 0; checkedAt.value = ''; offline.value = false
+}
+watch([selectedSource, query, kind, () => JSON.stringify(sources.value.find(item => item.id === selectedSource.value))], () => {
+  cancel(); clearCatalog(); error.value = ''; notice.value = ''
+}, { flush: 'sync' })
 function source(): CommunitySource {
   const value = sources.value.find(item => item.id === selectedSource.value)
   if (!value) throw new Error('请先添加并选择一个来源')
@@ -60,15 +72,27 @@ function trustSource() {
     if (current()) { selectedSource.value = value.id; candidateUrl.value = ''; candidateKeys.value = []; trustReviews.value = []; notice.value = snapshot.enabled ? '来源公钥已固定。可以搜索目录。' : '来源已停用。'; items.value = [] }
   })
 }
-function search() {
+function search() { loadPage(0) }
+function changePage(delta: number) { loadPage(Math.max(0, offset.value + delta * catalogPageSize)) }
+function loadPage(target: number) {
+  detail.value = null
   void run(async (signal, current) => {
-    const selected = source()
+    const selected = source(), q = query.value, category = kind.value
+    items.value = []; total.value = 0; checkedAt.value = ''; offline.value = false; offset.value = target
+    function display(result: Awaited<ReturnType<typeof fetchCatalog>>, cached: boolean) {
+      if (!current()) return
+      items.value = result.items; total.value = result.total; offset.value = result.offset; checkedAt.value = result.cache?.checkedAt ?? ''; offline.value = cached
+    }
     try {
-      const result = await fetchCatalog(selected, query.value, kind.value, signal)
-      if (current()) { items.value = result.items; offline.value = false; notice.value = result.total > result.items.length ? `展示前 ${result.items.length} 项，请缩小搜索范围。` : '' }
+      const result = await fetchCatalog(selected, q, category, signal, target, catalogPageSize)
+      display(result, false)
     } catch (reason) {
-      const cached = cachedCatalog(selected)
-      if (current() && cached) { items.value = cached.items; offline.value = true }
+      if (signal.aborted || !current()) return
+      if (isCommunityNetworkError(reason)) {
+        const cached = cachedCatalog(selected, q, category, target, catalogPageSize)
+        if (cached) { display(cached, true); notice.value = t('暂时无法连接来源，已显示此查询的缓存。', 'The source is unavailable. Showing the cache for this query.'); return }
+        throw new Error(t('暂时无法连接来源，此查询没有离线缓存。请恢复网络后重试。', 'The source is unavailable and this query has no offline cache. Reconnect and try again.'))
+      }
       throw reason
     }
   })
@@ -113,10 +137,16 @@ function toggleSource() {
     <p v-if="busy" role="status">正在处理…</p>
     <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
     <p v-if="notice" class="notice-banner" role="status">{{ notice }}</p>
-    <p v-if="offline">当前为离线缓存，仅供浏览；安装需要重新核对撤回和签名状态。</p>
+    <p v-if="offline" role="status">{{ t('当前为此查询的离线缓存，仅供浏览；安装需要重新核对撤回和签名状态。', 'Showing the offline cache for this query. Installation requires a fresh revocation and signature check.') }}</p>
+    <p v-if="checkedTime" class="subtle">{{ t('最近核对：', 'Last checked: ') }}{{ checkedTime }}</p>
+    <nav v-if="total > 0" class="catalog-pagination" :aria-label="t('社区目录分页', 'Catalog pages')">
+      <button class="btn" :disabled="busy || offset === 0" @click="changePage(-1)">{{ t('上一页', 'Previous') }}</button>
+      <span role="status">{{ t(`第 ${currentPage} / ${pages} 页 · ${total} 项`, `Page ${currentPage} / ${pages} · ${total} releases`) }}</span>
+      <button class="btn" :disabled="busy || offset + catalogPageSize >= total" @click="changePage(1)">{{ t('下一页', 'Next') }}</button>
+    </nav>
     <div v-if="!busy && !items.length" class="empty-state"><div><strong>浏览社区扩展</strong><p>连接来源后，可按类别寻找主题、Skill、Plugin 和笔记模板。</p><p class="subtle">尚无目录结果；请选择来源并搜索。</p></div></div>
     <div class="community-grid">
-      <button v-for="item in items" :key="item.release_id" class="community-card" @click="detail = item">
+      <button v-for="item in items" :key="item.release_id" class="community-card" :disabled="busy" @click="detail = item">
         <strong>{{ item.name }}</strong><span>{{ item.type }} · {{ item.version }}</span>
         <span>{{ item.description }}</span><span>{{ item.namespace }}/{{ item.package_id }} · {{ item.license }}</span>
         <span v-if="item.withdrawn">已撤回</span>
@@ -129,6 +159,7 @@ function toggleSource() {
       <details v-for="item in candidates" :key="item.key"><summary>{{ item.key.replace('community-candidate:', '') }}</summary><pre>{{ item.value }}</pre><button class="btn" @click="removeCandidate(item.key)">删除候选</button></details>
     </section>
     <AppDialog v-if="candidateUrl" label="核对来源公钥" @close="candidateUrl = ''; trustReviews = []">
+      <section class="modal-card community-dialog">
       <p v-if="error" role="alert">{{ error }}</p><p>{{ candidateUrl }}</p><p>请与来源维护者公布的公钥核对。确认后固定这些公钥；密钥改变时不会自动信任。</p>
       <p>来源标识：{{ candidateSourceId }} · {{ candidateEnabled ? '启用' : '停用' }}</p>
       <pre>{{ JSON.stringify(candidateKeys, null, 2) }}</pre>
@@ -139,15 +170,16 @@ function toggleSource() {
       </div>
       <p v-if="trustReviews.length">确认在两分钟内有效。过期或设置已改变时，请关闭对话框并重新检查来源。</p>
       <button class="btn btn-primary" :disabled="busy || !candidateKeys.length" @click="trustSource">确认来源设置</button>
+      </section>
     </AppDialog>
     <AppDialog v-if="detail" label="发行详情与安装" @close="detail = null">
-      <template v-if="detail">
+      <section v-if="detail" class="modal-card community-dialog">
         <h2>{{ detail.name }} {{ detail.version }}</h2><p>{{ detail.description }}</p>
         <dl><dt>作者 / 来源</dt><dd>{{ detail.author_id }} / {{ detail.namespace }}</dd><dt>许可证</dt><dd>{{ detail.license }}</dd><dt>大小 / 摘要</dt><dd>{{ detail.size }} 字节<br />{{ detail.sha256 }}</dd><dt>兼容平台</dt><dd>{{ detail.platforms.join(', ') }} / {{ detail.architectures.join(', ') }}</dd><dt>权限</dt><dd>{{ detail.permissions.join(', ') || '无' }}</dd><dt>依赖</dt><dd>{{ JSON.stringify(detail.dependencies) }}</dd></dl>
         <pre>{{ detail.changelog }}</pre>
         <p>安装不会自动启用包或其依赖。人设、模板、MCP 与模型方案仅保存为可检查的候选。</p>
         <button class="btn btn-primary" :disabled="busy || detail.withdrawn || offline" @click="install">{{ isDesktop() ? '校验并暂存' : '校验并安装' }}</button>
-      </template>
+      </section>
     </AppDialog>
   </main>
 </template>
@@ -162,11 +194,14 @@ function toggleSource() {
 label { display: grid; gap: var(--space-xs); }
 input, select { color: var(--color-text-primary); background: var(--color-background-secondary); border: 1px solid var(--color-border-subtle); padding: var(--space-sm); }
 .community-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: var(--space-md); }
+.catalog-pagination { display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-sm);margin-block:var(--space-md); }
+.catalog-pagination span { overflow-wrap:anywhere; }
 .community-card { display: grid; gap: var(--space-sm); text-align: left; padding: var(--space-lg); color: var(--color-text-primary); background: var(--color-background-secondary); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); overflow-wrap: anywhere; }
 .btn { min-height:36px;padding:8px 14px;border:1px solid var(--color-border-default);border-radius:var(--radius-md);background:var(--color-surface-primary);color:var(--color-text-primary); }
 .btn-primary { background:var(--color-accent-primary);color:var(--color-text-inverse);border-color:transparent; }
 input,select { border-radius:var(--radius-md);min-height:38px; }
 .community-controls label { flex:1;min-width:160px; }
 .saved-candidates { margin-top: var(--space-xl); }
+.community-dialog { width:min(680px,100%);padding:var(--space-xl);border:1px solid var(--color-border-default);border-radius:var(--radius-lg);background:var(--color-surface-primary); }
 pre, dd { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
 </style>

@@ -4,7 +4,7 @@ import { beforeEach, expect, it, vi } from 'vitest'
 const service = vi.hoisted(() => ({ discover: vi.fn(), review: vi.fn(), confirm: vi.fn(), save: vi.fn() }))
 vi.mock('@/services/platform/desktop', () => ({ isDesktop: () => true }))
 vi.mock('@/services/extensionTrustService', () => ({ reviewTrust: service.review, confirmTrust: service.confirm }))
-vi.mock('@/services/communityService', () => ({ loadSources: () => [], saveSources: service.save, discoverSource: service.discover, cachedCatalog: vi.fn(), fetchCatalog: vi.fn(), installRelease: vi.fn() }))
+vi.mock('@/services/communityService', () => ({ loadSources: () => [], saveSources: service.save, discoverSource: service.discover, cachedCatalog: vi.fn(), fetchCatalog: vi.fn(), installRelease: vi.fn(), isCommunityNetworkError: () => false }))
 import CommunityView from './CommunityView.vue'
 beforeEach(() => { vi.clearAllMocks(); localStorage.clear() })
 it('requires explicit confirmation and does not save when Host rejects it', async () => {

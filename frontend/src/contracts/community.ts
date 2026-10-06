@@ -9,4 +9,7 @@ export interface CommunityRelease {
   dependencies: Record<string, string>; permissions: string[]; changelog: string; published_at: string
   key_id: string; signature: string; release_id: string; withdrawn: boolean; download_path: string
 }
-export interface CommunityCatalog { schema_version: 1; items: CommunityRelease[]; total: number; offset: number }
+export interface CommunityCatalog {
+  schema_version: 1; items: CommunityRelease[]; total: number; offset: number; limit?: number
+  cache?: { fetchedAt: string; checkedAt: string; revalidated: boolean }
+}

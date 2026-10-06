@@ -1,12 +1,13 @@
 /** 只请求用户配置来源；公钥固定、签名及摘要检查先于任何安装 API。 */
 import type { CommunityCatalog, CommunityRelease, CommunitySource, CommunityKey } from '@/contracts/community'
-import { valid, gt, lt } from 'semver'
+import { SemVer, gt, lt } from 'semver'
 import { invoke } from '@tauri-apps/api/core'
 import { isDesktop } from './platform/desktop'
 import appPackage from '../../package.json'
 import { decodeThemePackage, inspectThemePackage, installTheme } from './themePackageService'
 import { installSkill } from './skillService'
 import { installPlugin } from './pluginService'
+import { cachedPage, catalogIdentity, catalogPageSize, normalizedCommunitySource, readCatalogCache, validateCatalog, writeCatalogCache } from './communityCatalogCache'
 
 const sourceStorage = 'community-sources-v1'
 export function loadSources(): CommunitySource[] {
@@ -15,22 +16,30 @@ export function loadSources(): CommunitySource[] {
 export function saveSources(sources: CommunitySource[]) { localStorage.setItem(sourceStorage, JSON.stringify(sources)) }
 
 function sourceUrl(source: CommunitySource, path: string) {
-  const base = new URL(source.url)
-  if (base.username || base.password || base.search || base.hash || (base.protocol !== 'https:' && !(base.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname)))) throw new Error('来源必须是 HTTPS；本机开发可用 HTTP。')
+  const base = new URL(normalizedCommunitySource(source.url))
   const url = new URL(path, base)
   if (url.origin !== base.origin || !url.pathname.startsWith('/catalog/v1/')) throw new Error('发行地址不属于已固定的社区来源')
   return url
 }
 
-async function download(source: CommunitySource, path: string, maxSize: number, signal?: AbortSignal): Promise<Uint8Array> {
+class CommunityRequestError extends Error {
+  constructor(public readonly status: number) { super(`社区请求失败 (${status})`) }
+}
+export function isCommunityNetworkError(reason: unknown): boolean {
+  return reason instanceof TypeError || (reason instanceof DOMException && reason.name === 'AbortError') || (reason instanceof CommunityRequestError && (reason.status >= 500 || reason.status === 429 || reason.status === 408))
+}
+async function requestBytes(source: CommunitySource, path: string, maxSize: number, signal?: AbortSignal, etag?: string | null): Promise<{ bytes: Uint8Array | null; etag: string | null }> {
   const controller = new AbortController()
   const abort = () => controller.abort()
   signal?.addEventListener('abort', abort, { once: true })
   if (signal?.aborted) abort()
   const timeout = setTimeout(abort, 30000)
   try {
-    const response = await fetch(sourceUrl(source, path), { credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer', signal: controller.signal })
-    if (!response.ok || !response.body) throw new Error(`社区请求失败 (${response.status})`)
+    signal?.throwIfAborted()
+    const response = await fetch(sourceUrl(source, path), { credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer', cache: 'no-store', signal: controller.signal, headers: etag ? { 'If-None-Match': etag } : {} })
+    controller.signal.throwIfAborted()
+    if (response.status === 304 && etag) return { bytes: null, etag: response.headers.get('ETag') ?? etag }
+    if (!response.ok || !response.body) throw new CommunityRequestError(response.status)
     const reader = response.body.getReader(), chunks: Uint8Array[] = []
     let size = 0
     try {
@@ -45,8 +54,14 @@ async function download(source: CommunitySource, path: string, maxSize: number, 
     const bytes = new Uint8Array(size)
     let offset = 0
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length }
-    return bytes
+    controller.signal.throwIfAborted()
+    return { bytes, etag: response.headers.get('ETag') }
   } finally { clearTimeout(timeout); signal?.removeEventListener('abort', abort) }
+}
+async function download(source: CommunitySource, path: string, maxSize: number, signal?: AbortSignal): Promise<Uint8Array> {
+  const response = await requestBytes(source, path, maxSize, signal)
+  if (!response.bytes) throw new Error('社区响应缺少正文')
+  return response.bytes
 }
 
 export async function discoverSource(url: string, signal?: AbortSignal): Promise<{ source_id: string; keys: CommunityKey[] }> {
@@ -59,16 +74,47 @@ export async function discoverKeys(url: string, signal?: AbortSignal): Promise<C
   return (await discoverSource(url, signal)).keys
 }
 
-export async function fetchCatalog(source: CommunitySource, q = '', kind = '', signal?: AbortSignal): Promise<CommunityCatalog> {
+export async function fetchCatalog(source: CommunitySource, q = '', kind = '', signal?: AbortSignal, offset = 0, limit = catalogPageSize): Promise<CommunityCatalog> {
   if (!source.enabled) throw new Error('来源已停用')
-  const value = JSON.parse(new TextDecoder().decode(await download(source, `/catalog/v1/packages?q=${encodeURIComponent(q)}${kind ? `&type=${encodeURIComponent(kind)}` : ''}&limit=100`, 2 * 1024 * 1024, signal)))
-  if (value.schema_version !== 1 || !Array.isArray(value.items)) throw new Error('不支持的社区目录协议')
-  // 缓存只用于离线浏览；安装仍会重新拉取发行与撤回状态。
-  localStorage.setItem(`community-cache:${source.id}`, JSON.stringify(value))
-  return value
+  const identity = catalogIdentity(source, q, kind, offset, limit)
+  const old = readCatalogCache(identity, offset, limit)
+  const response = await requestBytes(source, `/catalog/v1/packages?q=${encodeURIComponent(q)}${kind ? `&type=${encodeURIComponent(kind)}` : ''}&offset=${offset}&limit=${limit}`, 2 * 1024 * 1024, signal, old?.etag)
+  signal?.throwIfAborted()
+  if (!source.enabled || catalogIdentity(source, q, kind, offset, limit) !== identity) throw new DOMException('社区来源已改变', 'AbortError')
+  const now = new Date().toISOString()
+  if (!response.bytes) {
+    if (!old) throw new Error('社区缓存无法重新核对')
+    const refreshed = { ...old, checkedAt: now, etag: response.etag }
+    writeCatalogCache(refreshed)
+    return cachedPage(refreshed, true)
+  }
+  const value = validateCatalog(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(response.bytes)), offset, limit)
+  const record = { identity, etag: response.etag, fetchedAt: now, checkedAt: now, data: value }
+  writeCatalogCache(record)
+  return cachedPage(record)
 }
-export function cachedCatalog(source: CommunitySource): CommunityCatalog | null {
-  try { return JSON.parse(localStorage.getItem(`community-cache:${source.id}`) ?? 'null') } catch { return null }
+export function cachedCatalog(source: CommunitySource, q = '', kind = '', offset = 0, limit = catalogPageSize): CommunityCatalog | null {
+  try {
+    const record = readCatalogCache(catalogIdentity(source, q, kind, offset, limit), offset, limit)
+    return record ? cachedPage(record) : null
+  } catch { return null }
+}
+
+async function liveRelease(source: CommunitySource, selected: CommunityRelease, signal?: AbortSignal): Promise<CommunityRelease> {
+  try {
+    return JSON.parse(new TextDecoder().decode(await download(source, `/catalog/v1/releases/${encodeURIComponent(selected.release_id)}`, 2 * 1024 * 1024, signal)))
+  } catch (error) {
+    if (!(error instanceof CommunityRequestError) || error.status !== 404) throw error
+    // Older sources have no ID lookup. Their package-version endpoint avoids
+    // the first catalog page and is still read live, with a bounded response.
+    const versions = JSON.parse(new TextDecoder().decode(await download(source, `/catalog/v1/packages/${encodeURIComponent(selected.namespace)}/${encodeURIComponent(selected.package_id)}/releases?version=${encodeURIComponent(selected.version)}&limit=100`, 2 * 1024 * 1024, signal)))
+    if (!Array.isArray(versions.items)) throw new Error('不支持的社区发行协议')
+    const paged = ['schema_version', 'total', 'offset', 'limit'].some(field => Object.hasOwn(versions, field))
+    if (versions.items.length > 4096 || (paged && (versions.schema_version !== 1 || versions.offset !== 0 || versions.limit !== 100 || versions.total !== versions.items.length || versions.total > 100))) throw new Error('发行列表不完整，请刷新来源')
+    const matching = versions.items.filter((item: CommunityRelease) => item.release_id === selected.release_id)
+    if (matching.length !== 1) throw new Error('发行已变更或撤回，请刷新目录')
+    return matching[0]
+  }
 }
 
 function canonical(value: unknown): string {
@@ -79,10 +125,19 @@ function canonical(value: unknown): string {
 const bytes64 = (value: string) => Uint8Array.from(atob(value), char => char.charCodeAt(0))
 const signedFields = ['schema_version', 'namespace', 'package_id', 'type', 'version', 'name', 'author_id', 'license', 'description', 'sha256', 'size', 'platforms', 'architectures', 'min_app_version', 'max_app_version', 'dependencies', 'permissions', 'changelog', 'published_at', 'key_id'] as const
 
+function canonicalVersion(value: string): boolean {
+  if (typeof value !== 'string' || value.length > 120) return false
+  try {
+    const version = new SemVer(value)
+    const canonical = `${version.major}.${version.minor}.${version.patch}${version.prerelease.length ? `-${version.prerelease.join('.')}` : ''}${version.build.length ? `+${version.build.join('.')}` : ''}`
+    return canonical === value
+  } catch { return false }
+}
+
 export async function verifyRelease(release: CommunityRelease, pinned: CommunityKey, bytes: Uint8Array) {
   if (release.withdrawn || pinned.revoked || pinned.key_id !== release.key_id || pinned.namespace !== release.namespace) throw new Error('发行或签名密钥已撤回，或来源不匹配')
-  if (!valid(release.version) || !valid(release.min_app_version) || gt(release.min_app_version, appPackage.version)
-      || (release.max_app_version && (!valid(release.max_app_version) || lt(release.max_app_version, appPackage.version)))) throw new Error('发行版本与当前应用不兼容')
+  if (!canonicalVersion(release.version) || !canonicalVersion(release.min_app_version) || gt(release.min_app_version, appPackage.version)
+      || (release.max_app_version && (!canonicalVersion(release.max_app_version) || lt(release.max_app_version, appPackage.version) || lt(release.max_app_version, release.min_app_version)))) throw new Error('发行版本与当前应用不兼容')
   const key = await crypto.subtle.importKey('raw', bytes64(pinned.public_key), { name: 'Ed25519' }, false, ['verify'])
   const metadata = Object.fromEntries(signedFields.map(field => [field, release[field]]))
   if (!await crypto.subtle.verify('Ed25519', key, bytes64(release.signature), new TextEncoder().encode(canonical(metadata)))) throw new Error('发行签名无效')
@@ -112,9 +167,9 @@ export async function installRelease(source: CommunitySource, selected: Communit
       throw error
     } finally { signal?.removeEventListener('abort', cancel); cancel() }
   }
-  const catalog = await fetchCatalog(source, '', selected.type, signal)
-  const release = catalog.items.find(item => item.release_id === selected.release_id)
-  if (!release || release.sha256 !== selected.sha256 || release.withdrawn) throw new Error('发行已变更或撤回，请刷新目录')
+  const release = await liveRelease(source, selected, signal)
+  if (!release || release.release_id !== selected.release_id || release.namespace !== selected.namespace || release.package_id !== selected.package_id || release.version !== selected.version || release.type !== selected.type || release.sha256 !== selected.sha256 || release.withdrawn) throw new Error('发行已变更或撤回，请刷新目录')
+  if (release.signature !== selected.signature || canonical(Object.fromEntries(signedFields.map(field => [field, release[field]]))) !== canonical(Object.fromEntries(signedFields.map(field => [field, selected[field]])))) throw new Error('发行说明或权限已变更，请刷新后重新审核')
   const liveKeys = await discoverKeys(source.url, signal)
   const pinned = source.keys.find(key => key.key_id === release.key_id && key.namespace === release.namespace)
   const live = liveKeys.find(key => key.key_id === release.key_id)
