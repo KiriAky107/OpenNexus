@@ -7,11 +7,21 @@ vi.mock('@/services/platform/desktop',()=>({hostInvoke:controls.invoke}))
 vi.mock('@/services/communityService',()=>({findCompatibleUpdate:controls.update,stageDesktopRelease:controls.stage,loadSources:()=>[]}))
 vi.mock('@/stores/workspace',async()=>{const {reactive}=await import('vue');controls.workspace=reactive(controls.workspace);return {useWorkspaceStore:()=>controls.workspace}})
 import InstalledPackages from './InstalledPackages.vue'
+const configApi=vi.hoisted(()=>({get:vi.fn(),post:vi.fn()}))
+vi.mock('@/services/apiClient',()=>({default:configApi}))
 const source={id:'source',url:'https://catalog.example/',enabled:true,source_id:'fixture',keys:[vector.key]}
 const item={slot:'slot',package_key:'package',source:source.url,release:vector.release,revision:'revision',pending_operation:null,configuration:{},rollback_operation_id:'old-update-operation'}
 const page={items:[item],total:1,offset:0,limit:20,app_version:'0.6.0',platform:'windows',architecture:'x86_64'}
 function component(){return mount(InstalledPackages,{props:{refreshKey:0,sources:[source]},global:{stubs:{AppDialog:{template:'<section><slot /></section>'}}}})}
 beforeEach(()=>{controls.invoke.mockReset();controls.update.mockReset();controls.stage.mockReset();controls.workspace.vaultId='vault-one'})
+
+it.each(['mcp','model'])('opens the %s configuration target without implicit application',async kind=>{
+  controls.invoke.mockResolvedValue({...page,items:[{...item,release:{...item.release,type:kind}}]})
+  configApi.get.mockReset();configApi.post.mockReset();configApi.get.mockResolvedValue({kind,items:[{id:kind==='mcp'?'mcp:new':'model:local_runtime',label:'Actual target'}]})
+  const wrapper=component();await flushPromises()
+  await wrapper.findAll('button').find(button=>button.text()==='应用配置')!.trigger('click');await flushPromises()
+  expect(wrapper.find('option[value="'+(kind==='mcp'?'mcp:new':'model:local_runtime')+'"]').exists()).toBe(true);expect(configApi.post).not.toHaveBeenCalled();expect(controls.invoke).toHaveBeenCalledTimes(1);wrapper.unmount()
+})
 
 it('opens the persona application target from installed packages without implicitly previewing or writing',async()=>{
   controls.invoke.mockResolvedValue({...page,items:[{...item,release:{...item.release,type:'persona'}}]})
