@@ -301,16 +301,17 @@ async function deleteTarget() {
 async function moveTarget() {
   const node = contextTarget.value
   if (!node || node.type !== 'file') return
+  const oldPath = node.path, fileName = node.name
   const folder = (await askPrompt(t('目标文件夹（知识库内路径）', 'Destination folder in this vault'), '/'))?.trim()
   if (!folder) return closeContextMenu()
   const targetFolder = `/${folder.replace(/^\/+|\/+$/g, '')}`
-  const newPath = `${targetFolder.replace(/\/$/, '')}/${node.name}`
+  const newPath = `${targetFolder.replace(/\/$/, '')}/${fileName}`
   try {
-    const review = await reviewChange(node.path, newPath)
+    const review = await reviewChange(oldPath, newPath)
     if (!review) return closeContextMenu()
-    describeResult(await executeReferenceChange(review.plan, review.update, expected => workspaceService.moveFile(node.path, targetFolder, { expectedHash: expected!, reviewed: true }), review.assertScope))
-    workspaceStore.renamePath(node.path, newPath, node.name)
-    editorStore.renameFilePath(node.path, newPath)
+    describeResult(await executeReferenceChange(review.plan, review.update, expected => workspaceService.moveFile(oldPath, targetFolder, { expectedHash: expected!, reviewed: true }), review.assertScope))
+    workspaceStore.renamePath(oldPath, newPath, fileName)
+    editorStore.renameFilePath(oldPath, newPath)
     await workspaceStore.refreshFileTree(); await editorStore.checkExternalFile()
   } catch (error) { createError.value = String(error) }
   closeContextMenu()

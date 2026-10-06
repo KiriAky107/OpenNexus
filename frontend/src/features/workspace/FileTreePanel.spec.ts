@@ -125,6 +125,54 @@ describe('FileTreePanel file switching', () => {
     expect(create).toHaveBeenCalledWith('/数据结构', '子目录')
   })
 
+  it('rebases the open editor when moving its mutable file tree node', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workspace', component: { template: '<div />' } }] })
+    await router.push('/workspace')
+    const store = useWorkspaceStore(), editor = useEditorStore()
+    await store.openVault('C:/vault')
+    const oldPath = '/索引 #%.md', newPath = '/资料/索引 #%.md', content = '# 索引\r\n'
+    let diskPath = oldPath
+    store.fileTree = [
+      { id: 'note-index', note_id: 'note-index', name: '索引 #%.md', path: oldPath, type: 'file' },
+      { id: 'folder-target', name: '资料', path: '/资料', type: 'folder', is_open: true, children: [] },
+    ]
+    const node = store.fileTree[0]!
+    vi.spyOn(workspaceService, 'refreshTree').mockImplementation(async () => store.fileTree)
+    vi.mocked(workspaceService.getFileTree).mockImplementation(async () => store.fileTree)
+    vi.mocked(workspaceService.readFileContent).mockImplementation(async path => {
+      if (path !== diskPath) throw new Error('FILE_NOT_FOUND')
+      return content
+    })
+    vi.mocked(workspaceService.getNoteId).mockResolvedValue('note-index')
+    const move = vi.spyOn(workspaceService, 'moveFile').mockImplementation(async () => { diskPath = newPath })
+    wrapper = mount(FileTreePanel, { attachTo: document.body, global: { plugins: [router] } })
+    await wrapper.findAll('.tree-node').find(item => item.text().includes('索引 #%.md'))!.trigger('click')
+    await flushPromises()
+    expect(editor.currentFilePath).toBe(oldPath)
+    await wrapper.findAll('.tree-node').find(item => item.text().includes('索引 #%.md'))!.trigger('contextmenu')
+    ;[...document.querySelectorAll<HTMLButtonElement>('.context-menu button')].find(item => item.textContent === '移动到文件夹')!.click()
+    await flushPromises()
+    const input = document.querySelector<HTMLInputElement>('.action-dialog input')!
+    input.value = '/资料'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await flushPromises()
+    await vi.waitFor(() => {
+      expect(document.querySelector('.create-error')?.textContent ?? '').toBe('')
+      expect(document.querySelector('.reference-review')).not.toBeNull()
+    })
+    ;[...document.querySelectorAll<HTMLButtonElement>('.reference-review button')].find(item => item.textContent === '移动并保留引用原文')!.click()
+    await flushPromises()
+    expect(move).toHaveBeenCalledWith(oldPath, '/资料', { expectedHash: expect.any(String), reviewed: true })
+    expect(node.path).toBe(newPath)
+    expect(store.activeFilePath).toBe(newPath)
+    expect(editor.currentFilePath).toBe(newPath)
+    expect(editor.saveStatus).toBe('saved')
+    expect(editor.externalReadError).toBe(false)
+    expect(editor.content).toBe(content)
+    expect(editor.currentNoteId).toBe('note-index')
+  })
+
   it('collapses nested headings and requests navigation to a duplicate heading', async () => {
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workspace', component: { template: '<div />' } }] })
     await router.push('/workspace')
