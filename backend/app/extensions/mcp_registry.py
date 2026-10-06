@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import threading
 from datetime import UTC, datetime
@@ -52,6 +53,13 @@ class _McpConnectionBackend(PluginBackend):
     tool_timeout_seconds: float = Field(default=30, ge=1, le=300)
 
 
+class _CatalogReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation_id: str = Field(pattern=r"^[0-9a-f-]{36}$")
+    fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    after_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class _McpServerRecord(McpServerConfig):
     """已验证磁盘上的表示形式以及旧 C.1 记录的默认值。"""
 
@@ -66,6 +74,7 @@ class _McpServerRecord(McpServerConfig):
     )
     last_tested_at: datetime | None = None
     last_test_succeeded: bool | None = None
+    catalog_receipts: list[_CatalogReceipt] = Field(default_factory=list, max_length=128)
 
 
 class McpRegistryError(RuntimeError):
@@ -210,6 +219,62 @@ class McpServerRegistry:
                 last_tested_at=None,
                 last_test_succeeded=None,
             )
+            record["catalog_receipts"] = previous.get("catalog_receipts", [])
+            updated = {**self._records, server_id: record}
+            self._write(updated)
+            self._records = updated
+            self._last_status.pop(server_id, None)
+            self._summaries.pop(server_id, None)
+        return self.get(server_id)
+
+    def catalog_snapshot(self, server_id: str) -> dict[str, Any] | None:
+        """Only explicit configuration fields and lifecycle state; never secret values."""
+        with self._lock:
+            record = self._records.get(server_id)
+            if record is None:
+                return None
+            return {key: record.get(key) for key in (
+                *McpServerConfig.model_fields, "version", "enabled", "approved_digest", "tested_digest",
+            )}
+
+    def catalog_receipt(self, server_id: str, operation_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            record = self._records.get(server_id, {})
+            return next((dict(value) for value in record.get("catalog_receipts", [])
+                         if value["operation_id"] == operation_id), None)
+
+    @_serialized_lifecycle
+    def apply_catalog(self, server_id: str, request: McpServerCreateRequest,
+                      expected: dict[str, Any] | None, receipt: dict[str, str], authorize) -> McpServer:
+        """Commit the target and receipt in one replacement; application never starts it."""
+        self._validate(request)
+        if not _SERVER_ID.fullmatch(server_id):
+            raise McpRegistryError("MCP_SERVER_NOT_FOUND", "Invalid target.")
+        _CatalogReceipt.model_validate(receipt)
+        with self._lock:
+            if self.catalog_snapshot(server_id) != expected:
+                raise McpRegistryError("MCP_SERVER_VERSION_CONFLICT", "The target changed.", status_code=409)
+            previous = self._records.get(server_id, {})
+            history = list(previous.get("catalog_receipts", []))
+            if len(history) >= 128:
+                raise McpRegistryError("CATALOG_RECEIPT_LIMIT", "Target receipt storage is full.", status_code=409)
+            if not previous and len(self._records) >= _MAX_MCP_SERVERS:
+                raise McpRegistryError("MCP_SERVER_LIMIT_REACHED", "Server limit reached.", status_code=409)
+            for field in ("secret_environment_keys", "secret_header_keys"):
+                if not set(previous.get(field, [])).issubset(getattr(request, field)):
+                    raise McpRegistryError("CATALOG_SECRET_REMOVAL", "Existing secret declarations must be retained.")
+        authorize()
+        if previous:
+            self.disable(server_id)
+        record = request.model_dump(mode="json")
+        record["name"] = request.name.strip()
+        record["command"] = request.command.strip() if request.command else None
+        record["url"] = request.url.strip() if request.url else None
+        record.update(version=previous.get("version", 0) + 1, secret_environment_version=2,
+                      enabled=False, approved_digest=None, tested_digest=None,
+                      last_tested_at=None, last_test_succeeded=None, catalog_receipts=[*history, receipt])
+        with self._lock:
+            authorize()
             updated = {**self._records, server_id: record}
             self._write(updated)
             self._records = updated
@@ -982,15 +1047,15 @@ class McpServerRegistry:
         temporary = self._path.with_suffix(".tmp")
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            temporary.write_text(
-                json.dumps(
+            with temporary.open("w", encoding="utf-8") as stream:
+                stream.write(json.dumps(
                     records if records is not None else self._records,
                     ensure_ascii=False,
                     indent=2,
                     sort_keys=True,
-                ),
-                encoding="utf-8",
-            )
+                ))
+                stream.flush()
+                os.fsync(stream.fileno())
             temporary.replace(self._path)
         except OSError as exc:
             temporary.unlink(missing_ok=True)

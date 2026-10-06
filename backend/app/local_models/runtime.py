@@ -73,13 +73,20 @@ def configuration():
 def configure(request):
     from app.database.db import transaction
     configuration()
-    with closing(connect()) as conn, transaction(conn):
-        row = conn.execute("SELECT config_json FROM local_runtime_config WHERE id=1").fetchone()
-        previous = RuntimeConfig.model_validate_json(row[0]) if row else RuntimeConfig()
-        if request.version != previous.version:
-            raise ApiError(409, "VERSION_CONFLICT", "Local runtime settings changed; reload first.")
-        request = request.model_copy(update={"version": request.version + 1})
-        conn.execute("INSERT OR REPLACE INTO local_runtime_config VALUES (1,?)", (request.model_dump_json(),))
+    with closing(connect()) as conn, transaction(conn, immediate=True):
+        request = configure_in_transaction(conn, request)
+    return request
+
+
+def configure_in_transaction(conn, request):
+    """Shared validation/CAS; caller can atomically include a reviewed receipt."""
+    request = RuntimeConfig.model_validate(request.model_dump())
+    row = conn.execute("SELECT config_json FROM local_runtime_config WHERE id=1").fetchone()
+    previous = RuntimeConfig.model_validate_json(row[0]) if row else RuntimeConfig()
+    if request.version != previous.version:
+        raise ApiError(409, "VERSION_CONFLICT", "Local runtime settings changed; reload first.")
+    request = request.model_copy(update={"version": request.version + 1})
+    conn.execute("INSERT OR REPLACE INTO local_runtime_config VALUES (1,?)", (request.model_dump_json(),))
     return request
 
 

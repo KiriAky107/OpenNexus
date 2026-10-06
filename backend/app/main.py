@@ -19,6 +19,7 @@ from app.usage_routes import router as usage_router
 from app.provider_preview_routes import router as provider_preview_router
 from app.schemas import HealthResponse, ServiceStatusResponse
 from app.log_routes import router as log_router
+from app.community_configuration_routes import router as community_configuration_router
 from app.operation_logs import install_logging, log_event, request_id, shutdown_logging
 
 settings = get_settings()
@@ -84,6 +85,7 @@ app.include_router(local_model_router)
 app.include_router(usage_router)
 app.include_router(provider_preview_router)
 app.include_router(log_router)
+app.include_router(community_configuration_router)
 from app.plot_routes import router as plot_router
 app.include_router(plot_router)
 
