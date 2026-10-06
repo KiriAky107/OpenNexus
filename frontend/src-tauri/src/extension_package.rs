@@ -47,23 +47,7 @@ fn identity(s: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 fn version(s: &str) -> bool {
-    if s.len() > 80 {
-        return false;
-    }
-    let (core, pre) = s
-        .split_once('-')
-        .map(|(a, b)| (a, Some(b)))
-        .unwrap_or((s, None));
-    let parts: Vec<_> = core.split('.').collect();
-    parts.len() == 3
-        && parts
-            .iter()
-            .all(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
-        && pre.is_none_or(|v| {
-            !v.is_empty()
-                && v.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b".-".contains(&b))
-        })
+    s.len() <= 120 && semver::Version::parse(s).is_ok()
 }
 impl Release {
     /// 完整执行离线包检查；在线撤销信息的时效性与运行时权限仍由 Host 负责。
@@ -114,6 +98,15 @@ impl Release {
                 .all(|s| bounded(s, 1, 80))
             && version(&self.min_app_version)
             && self.max_app_version.as_ref().is_none_or(|s| version(s))
+            && self.max_app_version.as_ref().is_none_or(|max| {
+                match (
+                    semver::Version::parse(&self.min_app_version),
+                    semver::Version::parse(max),
+                ) {
+                    (Ok(min), Ok(max)) => max.cmp_precedence(&min) != std::cmp::Ordering::Less,
+                    _ => false,
+                }
+            })
             && self.dependencies.len() <= 64
             && self
                 .dependencies

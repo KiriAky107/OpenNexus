@@ -61,6 +61,27 @@ struct Source {
 #[serde(deny_unknown_fields)]
 struct Releases {
     items: Vec<Value>,
+    schema_version: Option<u32>,
+    total: Option<usize>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+impl Releases {
+    fn validate(&self) -> Result<()> {
+        match (self.schema_version, self.total, self.offset, self.limit) {
+            // Earlier v1 services return the complete version family and ignore
+            // the optional exact-version query. Keep that response compatible.
+            (None, None, None, None) if self.items.len() <= 4096 => Ok(()),
+            // New services apply the exact-version predicate in SQL. A partial
+            // page or inconsistent count cannot authorize an installation.
+            (Some(1), Some(total), Some(0), Some(100))
+                if total == self.items.len() && total <= 100 =>
+            {
+                Ok(())
+            }
+            _ => Err(unavailable()),
+        }
+    }
 }
 fn unavailable() -> HostError {
     HostError::new("EXTENSION_TRUST_UNAVAILABLE")
@@ -192,17 +213,20 @@ impl Client {
         if key.revoked {
             return Err(HostError::new("EXTENSION_KEY_REVOKED"));
         }
-        let list: Releases = serde_json::from_value(
-            self.json(&format!(
+        let mut versions = self
+            .source
+            .join(&format!(
                 "catalog/v1/packages/{}/{}/releases",
                 release.namespace, release.package_id
             ))
-            .await?,
-        )
-        .map_err(|_| unavailable())?;
-        if list.items.len() > 4096 {
-            return Err(unavailable());
-        }
+            .map_err(|_| unavailable())?;
+        versions
+            .query_pairs_mut()
+            .append_pair("version", &release.version)
+            .append_pair("limit", "100");
+        let list: Releases = serde_json::from_value(self.json(versions.as_str()).await?)
+            .map_err(|_| unavailable())?;
+        list.validate()?;
         let mut found = Vec::new();
         for mut item in list.items {
             if item.get("version").and_then(Value::as_str) != Some(release.version.as_str()) {
@@ -259,6 +283,10 @@ impl Client {
         Ok(checked)
     }
 }
+
+#[cfg(test)]
+#[path = "extension_trust_fixture_tests.rs"]
+mod fixture_tests;
 
 #[cfg(test)]
 mod tests {
