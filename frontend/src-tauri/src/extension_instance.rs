@@ -632,13 +632,20 @@ mod tests {
         let package = temp.path().join("package");
         std::fs::create_dir(&package).unwrap();
         let executable = package.join("entry.exe");
+        let compiler_output = temp.path().join("compiler");
+        std::fs::create_dir(&compiler_output).unwrap();
+        let compiled_executable = compiler_output.join("entry.exe");
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/sandbox_network_probe.rs");
         let compiled = std::process::Command::new("rustc")
             .arg("--edition=2021")
+            // Exercise compiler side artifacts, which must never enter the package
+            // inventory. The real package verifier keeps its exact-file check.
+            .args(["-C", "debuginfo=1"])
+            .arg("--emit=link,metadata")
             .arg(fixture)
             .arg("-o")
-            .arg(&executable)
+            .arg(&compiled_executable)
             .output()
             .unwrap();
         assert!(
@@ -646,6 +653,7 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&compiled.stderr)
         );
+        std::fs::copy(&compiled_executable, &executable).unwrap();
         let bytes = std::fs::read(&executable).unwrap();
         let files: BTreeMap<String, String> =
             [("entry.exe".into(), format!("{:x}", Sha256::digest(&bytes)))]
