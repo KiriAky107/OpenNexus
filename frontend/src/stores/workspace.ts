@@ -202,7 +202,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   function renamePath(oldPath: string, newPath: string, newName: string) {
     navigationRevision.value++
     const node = findNodeByPath(fileTree.value, oldPath)
-    if (!node) return
     // 文件夹重命名必须同步改写所有后代、标签页和当前文件路径。
     const updateNodePath = (current: FileNode) => {
       if (current.path === oldPath) current.name = newName
@@ -211,7 +210,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       }
       current.children?.forEach(updateNodePath)
     }
-    updateNodePath(node)
+    if (node) updateNodePath(node)
     openFiles.value = openFiles.value.map((path) =>
       path === oldPath || path.startsWith(`${oldPath}/`) ? `${newPath}${path.slice(oldPath.length)}` : path
     )

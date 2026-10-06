@@ -146,6 +146,29 @@ it('preserves a rename racing an outstanding save as a recoverable conflict', as
   expect(editor.content).toBe('keep moved edit')
 })
 
+it('reloads a clean renamed note after the watcher reported its old path missing', async () => {
+  const editor = useEditorStore()
+  editor.setExternalChanged()
+  editor.externalReadError = true
+  editor.renameFilePath('/a.md', '/moved.md')
+  vi.mocked(service.readFileContent).mockResolvedValueOnce('reviewed moved references')
+  expect(await editor.checkExternalFile()).toBe(true)
+  expect(editor.currentFilePath).toBe('/moved.md')
+  expect(editor.content).toBe('reviewed moved references')
+  expect(editor.saveStatus).toBe('saved')
+  expect(editor.externalReadError).toBe(false)
+  expect((await editor.loadFile('/b.md'))?.isCurrent()).toBe(true)
+})
+
+it('moves open tabs even if the watcher already replaced the old tree entry', () => {
+  const workspace = useWorkspaceStore()
+  workspace.fileTree = [{ id: 'moved', path: '/moved.md', name: 'moved.md', type: 'file' }]
+  workspace.renamePath('/a.md', '/moved.md', 'moved.md')
+  expect(workspace.activeFilePath).toBe('/moved.md')
+  expect(workspace.openFiles).toContain('/moved.md')
+  expect(workspace.openFiles).not.toContain('/a.md')
+})
+
 it('fails recoverably for an orphaned saving state instead of looping', async () => {
   const editor = useEditorStore()
   editor.saveStatus = 'saving'

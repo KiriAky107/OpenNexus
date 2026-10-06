@@ -298,6 +298,10 @@ export const useEditorStore = defineStore('editor', () => {
         cancelPendingAutoSave()
         saveStatus.value = 'conflict'
       }
+      // A watcher can observe the missing old path while a reviewed move is
+      // completing. A clean document can safely read the new path afterward.
+      if (!pendingSave && content.value === diskContent && saveStatus.value === 'external_changed') saveStatus.value = 'saved'
+      externalReadError.value = false
       documentVersion++
       currentFilePath.value = `${newPath}${currentFilePath.value.slice(oldPath.length)}`
     }
