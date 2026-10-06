@@ -12,3 +12,9 @@ export function getStatus(): Promise<SystemStatus> {
 export function getPermissionPolicy(): Promise<Record<string, 'allow' | 'confirm' | 'deny'>> {
   return apiClient.get('/api/permissions/policy', { timeoutMs: 10000 })
 }
+
+export type ExperimentPermission = 'experiments.run' | 'experiments.import'
+export interface ExperimentPermissionPolicy { revision: number; rules: Record<ExperimentPermission, 'confirm' | 'deny'> }
+export const getExperimentPermissions = () => apiClient.get<ExperimentPermissionPolicy>('/api/permissions/experiments')
+export const updateExperimentPermission = (permission: ExperimentPermission, mode: 'confirm' | 'deny', expected_revision: number) =>
+  apiClient.put<ExperimentPermissionPolicy>('/api/permissions/experiments', { permission, mode, expected_revision })

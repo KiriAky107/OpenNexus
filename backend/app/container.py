@@ -94,6 +94,8 @@ def build_container() -> ApplicationContainer:
     skills.restore()
 
     policy = PermissionPolicy()
+    from app.services.experiment_permissions import restore as restore_experiment_permissions
+    restore_experiment_permissions(policy)
     permissions = PermissionManager(policy)
     agent = AgentRuntime(
         providers=providers,

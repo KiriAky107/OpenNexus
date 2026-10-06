@@ -159,6 +159,23 @@ async def get_permission_policy() -> dict[str, str]:
             for permission in sorted(KNOWN_PERMISSIONS)}
 
 
+from app.services.experiment_permissions import Update as ExperimentPermissionUpdate
+
+
+@router.get('/permissions/experiments', tags=['Permissions'])
+async def get_experiment_permissions():
+    from app.services.experiment_permissions import read
+    return await asyncio.to_thread(read)
+
+
+@router.put('/permissions/experiments', tags=['Permissions'])
+async def update_experiment_permissions(request: ExperimentPermissionUpdate):
+    # A settings action permits proposals only. It cannot mint Host approval,
+    # execute code, import files, or change any other permission category.
+    from app.services.experiment_permissions import update
+    return await asyncio.to_thread(update, request, container.permissions.policy)
+
+
 async def mcp_call_async(operation):
     """甚至注册表读取也可以等待生命周期锁；让所有 MCP 工作脱离事件循环。"""
     try:

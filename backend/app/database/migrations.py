@@ -294,6 +294,12 @@ MIGRATIONS: list[str] = [
         SELECT run_id,COALESCE(json_extract(run_json,'$.config_snapshot'),'{}') FROM benchmark_runs;
     UPDATE benchmark_runs SET run_json=json_remove(run_json,'$.config_snapshot.dataset_cases'),
         report_json=CASE WHEN report_json IS NULL THEN NULL ELSE json_remove(report_json,'$.config_snapshot.dataset_cases') END;""",
+    # v26: proposal switches live in the device Core database, outside Vault sync.
+    """CREATE TABLE experiment_permission_policy (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+        revision INTEGER NOT NULL CHECK(revision>0),
+        rules TEXT NOT NULL
+    );""",
 ]
 
 

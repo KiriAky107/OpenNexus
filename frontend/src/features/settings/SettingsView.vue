@@ -15,6 +15,7 @@ import UsageCard from './UsageCard.vue'
 import SyncSettings from './SyncSettings.vue'
 import CredentialVaultSettings from './CredentialVaultSettings.vue'
 import StorageLocationSettings from './StorageLocationSettings.vue'
+import ExperimentPermissions from './ExperimentPermissions.vue'
 import { isDesktop } from '@/services/platform/desktop'
 import { useProviderStore } from '@/stores/provider'
 import { useSettingsStore } from '@/stores/settings'
@@ -170,7 +171,13 @@ async function chooseDefaultModel(provider: ProviderConfig, event: Event) {
       <ModelRoutingSettings />
     </div>
 
-    <div v-else-if="activeSection === 'permissions'" class="panel settings-section"><h2>{{ t('权限策略', 'Permission Policy') }}</h2><p class="muted section-description">{{ t('以下为后端当前生效的权限策略；全局策略编辑尚未开放，运行时按实际权限请求确认。', 'These policies are active in the backend. Global policy editing is not yet available; runtime requests are confirmed as needed.') }}</p><p v-if="!Object.keys(settingsStore.permissionPolicy).length" class="subtle">{{ t('尚未获取权限策略，请检查后端连接并重新检测。', 'Permission policy is unavailable. Check the backend connection and try again.') }}</p><div class="permission-list"><div v-for="(policy, permission) in settingsStore.permissionPolicy" :key="permission" class="setting-row"><span><strong>{{ permission }}</strong></span><span>{{ policy === 'allow' ? t('允许', 'Allow') : policy === 'confirm' ? t('每次确认', 'Confirm each time') : t('拒绝', 'Deny') }}</span></div></div></div>
+    <div v-else-if="activeSection === 'permissions'" class="panel settings-section">
+      <h2>{{ t('权限策略', 'Permission Policy') }}</h2>
+      <p class="muted section-description">{{ t('实验请求可单独启停。以下显示当前生效的权限策略，实际操作仍按对应权限确认。', 'Experiment proposals can be enabled separately. The list below shows active policies; each action still follows its permission review.') }}</p>
+      <ExperimentPermissions v-if="isDesktop()" @changed="settingsStore.loadDiagnostics()" />
+      <p v-if="!Object.keys(settingsStore.permissionPolicy).length" class="subtle">{{ t('尚未获取权限策略，请检查后端连接并重新检测。', 'Permission policy is unavailable. Check the backend connection and try again.') }}</p>
+      <div class="permission-list"><div v-for="(policy, permission) in settingsStore.permissionPolicy" :key="permission" class="setting-row"><span><strong>{{ permission }}</strong></span><span>{{ policy === 'allow' ? t('允许', 'Allow') : policy === 'confirm' ? t('每次确认', 'Confirm each time') : t('拒绝', 'Deny') }}</span></div></div>
+    </div>
 
     <SyncSettings v-else-if="activeSection === 'sync'" />
     <div v-else-if="activeSection === 'ai-core'" class="panel settings-section"><h2>{{ t('AI Core 诊断', 'AI Core Diagnostics') }}</h2><div v-if="settingsStore.diagnosticsError" class="error-banner">{{ settingsStore.diagnosticsError }}</div><div class="diagnostic-grid"><div class="item-card"><span class="badge" :class="{ success: settingsStore.aiCoreStatus === 'running', error: settingsStore.aiCoreStatus === 'error' }">{{ settingsStore.aiCoreStatus }}</span><h3>{{ t('AI Core 连接状态', 'AI Core connection') }}</h3><p class="subtle">{{ t('AI Core 不可用时，Markdown 编辑仍可继续使用。', 'Markdown editing remains available when AI Core is offline.') }}</p></div><div class="item-card"><strong>{{ settingsStore.aiCoreAddress }}</strong><h3>{{ t('开发 API 地址', 'Development API address') }}</h3><p class="subtle">{{ t('正式桌面环境由 Sidecar Manager 动态提供。', 'The desktop build will provide this through Sidecar Manager.') }}</p></div></div><div class="inline-actions diagnostic-actions"><button class="button-primary" @click="settingsStore.loadDiagnostics">{{ t('重新检测', 'Check again') }}</button><span class="subtle">{{ t('当前 Web 端不支持重启后端进程，请在运行后端的终端中操作。', 'The web build cannot restart the backend. Use the terminal running it.') }}</span></div></div>
