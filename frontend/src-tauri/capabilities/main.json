@@ -8,6 +8,7 @@
   "permissions": [
     "core:default",
     "allow-host-capabilities",
+    "allow-experiment-request",
     "allow-storage-info",
     "allow-storage-choose",
     "allow-storage-use-default",

@@ -38,6 +38,7 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "host_capabilities",
+            "experiment_request",
             "storage_info",
             "storage_choose",
             "storage_use_default",
