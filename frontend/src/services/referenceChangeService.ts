@@ -2,7 +2,8 @@ import * as workspace from './workspaceService'
 import { contentHash } from './platform/desktop'
 import { VaultLinkIndex } from './vaultLinkIndex'
 import { documentPaths } from './referenceImpact'
-import { resolveVaultReference, rewritePathReferences, type VaultReference, type ReferenceEdit } from './vaultReferences'
+import { rewritePathReferences, type VaultReference, type ReferenceEdit } from './vaultReferences'
+import { resolveCanvasFile } from './workspaceDocuments'
 import type { FileNode } from '@/contracts'
 
 export interface ReferenceChangePlan {
@@ -13,7 +14,8 @@ export interface ReferenceChangePlan {
   tree: FileNode[]
 }
 export async function prepareReferenceChange(oldPath: string, newPath: string | null): Promise<ReferenceChangePlan> {
-  if (newPath && (resolveVaultReference('/reference.md', newPath, true) !== newPath || newPath === oldPath || newPath.startsWith(`${oldPath}/`))) throw new Error('INVALID_DESTINATION_PATH')
+  // Tree destinations are literal vault paths, not percent-encoded link URLs.
+  if (newPath && (resolveCanvasFile(newPath.slice(1)) !== newPath || newPath === oldPath || newPath.startsWith(`${oldPath}/`))) throw new Error('INVALID_DESTINATION_PATH')
   const tree = await workspace.refreshTree(), paths = new Set(documentPaths(tree)), index = new VaultLinkIndex()
   await index.update(tree, workspace.readFileContent)
   if (index.errors.length) throw new Error(`无法读取引用来源：${index.errors.map(item => item.path).join('、')}`)

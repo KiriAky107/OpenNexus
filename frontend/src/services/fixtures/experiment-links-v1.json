@@ -1,0 +1,124 @@
+{
+  "schema": 1,
+  "initial_note_path": "索引.md",
+  "files": [
+    {
+      "label": "实验源",
+      "path": "experiments/课程 # %2F/源 #%.py",
+      "content": "from pathlib import Path\r\nPath(\"must-not-run.txt\").write_text(\"执行了\", encoding=\"utf-8\")\r\n# 中文😀\r\n"
+    },
+    {
+      "label": "JSON输入",
+      "path": "experiments/课程 # %2F/输入 #%.json",
+      "content": "{\"values\":[1,2,3],\"label\":\"中文😀\"}\r\n"
+    },
+    {
+      "label": "CSV输入",
+      "path": "experiments/课程 # %2F/DATA.csv",
+      "content": "姓名,值\r\n甲,1\r\n乙,2\r\n"
+    },
+    {
+      "label": "导入成果",
+      "path": "实验成果/报告 #%.md",
+      "content": "# 导入成果\r\n\r\n合计：6；中文😀。\r\n"
+    },
+    {
+      "label": "索引",
+      "path": "索引.md",
+      "content": "# 实验引用😀\r\n\r\n[实验源](experiments/%E8%AF%BE%E7%A8%8B%20%23%20%252F/%E6%BA%90%20%23%25.py)\r\n[JSON输入](experiments/%E8%AF%BE%E7%A8%8B%20%23%20%252F/%E8%BE%93%E5%85%A5%20%23%25.json)\r\n[CSV输入](experiments/%E8%AF%BE%E7%A8%8B%20%23%20%252F/DATA.csv)\r\n[导入成果](%E5%AE%9E%E9%AA%8C%E6%88%90%E6%9E%9C/%E6%8A%A5%E5%91%8A%20%23%25.md)\r\n\r\n`[代码示例](experiments/课程/旧.py)`\r\n"
+    }
+  ],
+  "steps": [
+    {
+      "kind": "file",
+      "old_path": "experiments/课程 # %2F/源 #%.py",
+      "new_path": "experiments/课程 # %2F/源已改名 #%2F.py",
+      "note_path": "索引.md",
+      "note_content": "# 实验引用😀\r\n\r\n[实验源](experiments/%E8%AF%BE%E7%A8%8B%20%23%20%252F/%E6%BA%90%E5%B7%B2%E6%94%B9%E5%90%8D%20%23%252F.py)\r\n[JSON输入](experiments/%E8%AF%BE%E7%A8%8B%20%23%20%252F/%E8%BE%93%E5%85%A5%20%23%25.json)\r\n[CSV输入](experiments/%E8%AF%BE%E7%A8%8B%20%23%20%252F/DATA.csv)\r\n[导入成果](%E5%AE%9E%E9%AA%8C%E6%88%90%E6%9E%9C/%E6%8A%A5%E5%91%8A%20%23%25.md)\r\n\r\n`[代码示例](experiments/课程/旧.py)`\r\n",
+      "linked_paths": [
+        "experiments/课程 # %2F/源已改名 #%2F.py",
+        "experiments/课程 # %2F/输入 #%.json",
+        "experiments/课程 # %2F/DATA.csv",
+        "实验成果/报告 #%.md"
+      ]
+    },
+    {
+      "kind": "file",
+      "old_path": "experiments/课程 # %2F/输入 #%.json",
+      "new_path": "experiments/课程 # %2F/输入已改名 #%2F.json",
+      "note_path": "索引.md",
+      "note_content": "# 实验引用😀\r\n\r\n[实验源](experiments/%E8%AF%BE%E7%A8%8B%20%23%20%252F/%E6%BA%90%E5%B7%B2%E6%94%B9%E5%90%8D%20%23%252F.py)\r\n[JSON输入](experiments/%E8%AF%BE%E7%A8%8B%20%23%20%252F/%E8%BE%93%E5%85%A5%E5%B7%B2%E6%94%B9%E5%90%8D%20%23%252F.json)\r\n[CSV输入](experiments/%E8%AF%BE%E7%A8%8B%20%23%20%252F/DATA.csv)\r\n[导入成果](%E5%AE%9E%E9%AA%8C%E6%88%90%E6%9E%9C/%E6%8A%A5%E5%91%8A%20%23%25.md)\r\n\r\n`[代码示例](experiments/课程/旧.py)`\r\n",
+      "linked_paths": [
+        "experiments/课程 # %2F/源已改名 #%2F.py",
+        "experiments/课程 # %2F/输入已改名 #%2F.json",
+        "experiments/课程 # %2F/DATA.csv",
+        "实验成果/报告 #%.md"
+      ]
+    },
+    {
+      "kind": "file",
+      "old_path": "experiments/课程 # %2F/DATA.csv",
+      "new_path": "experiments/课程 # %2F/data.csv",
+      "note_path": "索引.md",
+      "note_content": "# 实验引用😀\r\n\r\n[实验源](experiments/%E8%AF%BE%E7%A8%8B%20%23%20%252F/%E6%BA%90%E5%B7%B2%E6%94%B9%E5%90%8D%20%23%252F.py)\r\n[JSON输入](experiments/%E8%AF%BE%E7%A8%8B%20%23%20%252F/%E8%BE%93%E5%85%A5%E5%B7%B2%E6%94%B9%E5%90%8D%20%23%252F.json)\r\n[CSV输入](experiments/%E8%AF%BE%E7%A8%8B%20%23%20%252F/data.csv)\r\n[导入成果](%E5%AE%9E%E9%AA%8C%E6%88%90%E6%9E%9C/%E6%8A%A5%E5%91%8A%20%23%25.md)\r\n\r\n`[代码示例](experiments/课程/旧.py)`\r\n",
+      "linked_paths": [
+        "experiments/课程 # %2F/源已改名 #%2F.py",
+        "experiments/课程 # %2F/输入已改名 #%2F.json",
+        "experiments/课程 # %2F/data.csv",
+        "实验成果/报告 #%.md"
+      ]
+    },
+    {
+      "kind": "folder",
+      "old_path": "experiments/课程 # %2F",
+      "new_path": "experiments/归档 # %2F",
+      "note_path": "索引.md",
+      "note_content": "# 实验引用😀\r\n\r\n[实验源](experiments/%E5%BD%92%E6%A1%A3%20%23%20%252F/%E6%BA%90%E5%B7%B2%E6%94%B9%E5%90%8D%20%23%252F.py)\r\n[JSON输入](experiments/%E5%BD%92%E6%A1%A3%20%23%20%252F/%E8%BE%93%E5%85%A5%E5%B7%B2%E6%94%B9%E5%90%8D%20%23%252F.json)\r\n[CSV输入](experiments/%E5%BD%92%E6%A1%A3%20%23%20%252F/data.csv)\r\n[导入成果](%E5%AE%9E%E9%AA%8C%E6%88%90%E6%9E%9C/%E6%8A%A5%E5%91%8A%20%23%25.md)\r\n\r\n`[代码示例](experiments/课程/旧.py)`\r\n",
+      "linked_paths": [
+        "experiments/归档 # %2F/源已改名 #%2F.py",
+        "experiments/归档 # %2F/输入已改名 #%2F.json",
+        "experiments/归档 # %2F/data.csv",
+        "实验成果/报告 #%.md"
+      ]
+    },
+    {
+      "kind": "file",
+      "old_path": "实验成果/报告 #%.md",
+      "new_path": "实验成果/归档报告 #%2F.md",
+      "note_path": "索引.md",
+      "note_content": "# 实验引用😀\r\n\r\n[实验源](experiments/%E5%BD%92%E6%A1%A3%20%23%20%252F/%E6%BA%90%E5%B7%B2%E6%94%B9%E5%90%8D%20%23%252F.py)\r\n[JSON输入](experiments/%E5%BD%92%E6%A1%A3%20%23%20%252F/%E8%BE%93%E5%85%A5%E5%B7%B2%E6%94%B9%E5%90%8D%20%23%252F.json)\r\n[CSV输入](experiments/%E5%BD%92%E6%A1%A3%20%23%20%252F/data.csv)\r\n[导入成果](%E5%AE%9E%E9%AA%8C%E6%88%90%E6%9E%9C/%E5%BD%92%E6%A1%A3%E6%8A%A5%E5%91%8A%20%23%252F.md)\r\n\r\n`[代码示例](experiments/课程/旧.py)`\r\n",
+      "linked_paths": [
+        "experiments/归档 # %2F/源已改名 #%2F.py",
+        "experiments/归档 # %2F/输入已改名 #%2F.json",
+        "experiments/归档 # %2F/data.csv",
+        "实验成果/归档报告 #%2F.md"
+      ]
+    },
+    {
+      "kind": "file",
+      "old_path": "索引.md",
+      "new_path": "索引 #%.md",
+      "note_path": "索引 #%.md",
+      "note_content": "# 实验引用😀\r\n\r\n[实验源](experiments/%E5%BD%92%E6%A1%A3%20%23%20%252F/%E6%BA%90%E5%B7%B2%E6%94%B9%E5%90%8D%20%23%252F.py)\r\n[JSON输入](experiments/%E5%BD%92%E6%A1%A3%20%23%20%252F/%E8%BE%93%E5%85%A5%E5%B7%B2%E6%94%B9%E5%90%8D%20%23%252F.json)\r\n[CSV输入](experiments/%E5%BD%92%E6%A1%A3%20%23%20%252F/data.csv)\r\n[导入成果](%E5%AE%9E%E9%AA%8C%E6%88%90%E6%9E%9C/%E5%BD%92%E6%A1%A3%E6%8A%A5%E5%91%8A%20%23%252F.md)\r\n\r\n`[代码示例](experiments/课程/旧.py)`\r\n",
+      "linked_paths": [
+        "experiments/归档 # %2F/源已改名 #%2F.py",
+        "experiments/归档 # %2F/输入已改名 #%2F.json",
+        "experiments/归档 # %2F/data.csv",
+        "实验成果/归档报告 #%2F.md"
+      ]
+    },
+    {
+      "kind": "file",
+      "old_path": "索引 #%.md",
+      "new_path": "资料/索引 #%.md",
+      "note_path": "资料/索引 #%.md",
+      "note_content": "# 实验引用😀\r\n\r\n[实验源](../experiments/%E5%BD%92%E6%A1%A3%20%23%20%252F/%E6%BA%90%E5%B7%B2%E6%94%B9%E5%90%8D%20%23%252F.py)\r\n[JSON输入](../experiments/%E5%BD%92%E6%A1%A3%20%23%20%252F/%E8%BE%93%E5%85%A5%E5%B7%B2%E6%94%B9%E5%90%8D%20%23%252F.json)\r\n[CSV输入](../experiments/%E5%BD%92%E6%A1%A3%20%23%20%252F/data.csv)\r\n[导入成果](../%E5%AE%9E%E9%AA%8C%E6%88%90%E6%9E%9C/%E5%BD%92%E6%A1%A3%E6%8A%A5%E5%91%8A%20%23%252F.md)\r\n\r\n`[代码示例](experiments/课程/旧.py)`\r\n",
+      "linked_paths": [
+        "experiments/归档 # %2F/源已改名 #%2F.py",
+        "experiments/归档 # %2F/输入已改名 #%2F.json",
+        "experiments/归档 # %2F/data.csv",
+        "实验成果/归档报告 #%2F.md"
+      ]
+    }
+  ]
+}
