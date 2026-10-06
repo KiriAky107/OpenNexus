@@ -39,6 +39,14 @@ enum Action {
         operation_id: String,
         fingerprint: String,
     },
+    ConfirmAgentRun {
+        operation_id: String,
+        fingerprint: String,
+    },
+    ConfirmAgentImport {
+        operation_id: String,
+        fingerprint: String,
+    },
     StartApproved {
         operation_id: String,
     },
@@ -164,6 +172,35 @@ fn run_description(record: &notesagent_host::experiment_store::RunRecord) -> Str
     text
 }
 #[cfg(windows)]
+fn import_description(record: &notesagent_host::experiment_import::ImportRecord) -> String {
+    let mut text = "将选择的成果写入当前知识库。每个文件单独提交，多文件可能部分成功。\nImport selected outputs into this vault. Each file commits separately; a batch may partially succeed.\n\n".to_string();
+    for item in &record.plan.items {
+        text.push_str(&format!(
+            "{} → {}\n{} B · {} · r{}\nSHA-256: {}\n\n",
+            item.output.path,
+            item.target.path,
+            item.output.bytes,
+            if item.target.hash.is_empty() {
+                "新文件 / New file"
+            } else {
+                "覆盖 / Replace"
+            },
+            item.target.revision,
+            item.output.sha256
+        ));
+    }
+    text
+}
+#[cfg(any(windows, test))]
+fn reject_agent_manual(ws: &Workspace, operation: &str) -> notesagent_host::workspace::Result<()> {
+    if ws.experiment_is_agent_operation(operation)? {
+        return Err(notesagent_host::workspace::HostError::new(
+            "AGENT_EXPERIMENT_REQUIRES_REVIEW",
+        ));
+    }
+    Ok(())
+}
+#[cfg(windows)]
 fn dispatch(
     window: &WebviewWindow,
     host: &Host,
@@ -238,6 +275,7 @@ fn dispatch(
             operation_id,
             fingerprint,
         } => {
+            at_vault(host, vault, |ws| reject_agent_manual(ws, &operation_id))?;
             let record = at_vault(host, vault, |ws| ws.experiment_record(&operation_id))?
                 .ok_or("EXPERIMENT_OPERATION_NOT_FOUND")?;
             if record.summary.fingerprint != fingerprint {
@@ -269,16 +307,69 @@ fn dispatch(
                     .map_err(|e| e.code)?,
             )
         }
-        Action::StartApproved { operation_id } => encoded(
-            host.experiments
-                .start_approved_for_vault(
-                    host.workspace.clone(),
-                    vault,
-                    resource_root,
-                    &operation_id,
-                )
-                .map_err(|e| e.code)?,
-        ),
+        Action::ConfirmAgentRun {
+            operation_id,
+            fingerprint,
+        } => {
+            let review = at_vault(host, vault, |ws| {
+                ws.experiment_agent_run_review(&operation_id, &fingerprint)
+            })?;
+            if review.record.state != RunState::AwaitingConfirmation {
+                return encoded(review);
+            }
+            let text=format!("Agent: {}\nTool call: {}\n\n{}\n本次仅记录批准；Agent 工具须重新核对当前权限后才可启动。\nThis records consent only; the Agent tool must recheck its current permissions before starting.",
+                review.context.agent_run_id,review.context.tool_call_id,run_description(&review.record));
+            if !confirm(window, "确认 Agent 运行 / Confirm Agent run", &text) {
+                at_vault(host, vault, |ws| {
+                    ws.experiment_reject(&operation_id, &fingerprint)
+                })?;
+                return encoded(at_vault(host, vault, |ws| {
+                    ws.experiment_agent_run_review(&operation_id, &fingerprint)
+                })?);
+            }
+            encoded(at_vault(host, vault, |ws| {
+                ws.experiment_agent_approve_run_from_user(&operation_id, &fingerprint)
+            })?)
+        }
+        Action::ConfirmAgentImport {
+            operation_id,
+            fingerprint,
+        } => {
+            let review = at_vault(host, vault, |ws| {
+                ws.experiment_agent_import_review(&operation_id, &fingerprint)
+            })?;
+            if review.record.state
+                != notesagent_host::experiment_import::ImportState::AwaitingConfirmation
+            {
+                return encoded(review);
+            }
+            let text=format!("Agent: {}\nTool call: {}\n\n{}\n本次仅记录批准；Agent 工具须重新核对导入权限后才可提交文件。\nThis records consent only; the Agent tool must recheck import permission before committing files.",
+                review.context.agent_run_id,review.context.tool_call_id,import_description(&review.record));
+            if !confirm(window, "确认 Agent 导入 / Confirm Agent import", &text) {
+                at_vault(host, vault, |ws| {
+                    ws.experiment_import_cancel(&operation_id, &fingerprint)
+                })?;
+                return encoded(at_vault(host, vault, |ws| {
+                    ws.experiment_agent_import_review(&operation_id, &fingerprint)
+                })?);
+            }
+            encoded(at_vault(host, vault, |ws| {
+                ws.experiment_agent_approve_import_from_user(&operation_id, &fingerprint)
+            })?)
+        }
+        Action::StartApproved { operation_id } => {
+            at_vault(host, vault, |ws| reject_agent_manual(ws, &operation_id))?;
+            encoded(
+                host.experiments
+                    .start_approved_for_vault(
+                        host.workspace.clone(),
+                        vault,
+                        resource_root,
+                        &operation_id,
+                    )
+                    .map_err(|e| e.code)?,
+            )
+        }
         Action::RejectRun {
             operation_id,
             fingerprint,
@@ -335,6 +426,7 @@ fn dispatch(
             operation_id,
             fingerprint,
         } => {
+            at_vault(host, vault, |ws| reject_agent_manual(ws, &operation_id))?;
             let record = at_vault(host, vault, |ws| ws.experiment_import_record(&operation_id))?
                 .ok_or("EXPERIMENT_IMPORT_INVALID")?;
             if record.fingerprint != fingerprint {
@@ -344,22 +436,7 @@ fn dispatch(
             {
                 return encoded(record);
             }
-            let mut text = "将选择的成果写入当前知识库。每个文件单独提交，多文件可能部分成功。\nImport selected outputs into this vault. Each file commits separately; a batch may partially succeed.\n\n".to_string();
-            for item in &record.plan.items {
-                text.push_str(&format!(
-                    "{} → {}\n{} B · {} · r{}\nSHA-256: {}\n\n",
-                    item.output.path,
-                    item.target.path,
-                    item.output.bytes,
-                    if item.target.hash.is_empty() {
-                        "新文件 / New file"
-                    } else {
-                        "覆盖 / Replace"
-                    },
-                    item.target.revision,
-                    item.output.sha256
-                ));
-            }
+            let text = import_description(&record);
             if !confirm(window, "确认导入 / Confirm import", &text) {
                 return encoded(at_vault(host, vault, |ws| {
                     ws.experiment_import_cancel(&operation_id, &fingerprint)
@@ -376,11 +453,14 @@ fn dispatch(
                     .map_err(|e| e.code)?,
             )
         }
-        Action::ImportNext { operation_id } => encoded(
-            host.experiments
-                .import_next_for_vault(&host.workspace, vault, &operation_id)
-                .map_err(|e| e.code)?,
-        ),
+        Action::ImportNext { operation_id } => {
+            at_vault(host, vault, |ws| reject_agent_manual(ws, &operation_id))?;
+            encoded(
+                host.experiments
+                    .import_next_for_vault(&host.workspace, vault, &operation_id)
+                    .map_err(|e| e.code)?,
+            )
+        }
         Action::CancelImport {
             operation_id,
             fingerprint,
@@ -464,6 +544,47 @@ pub async fn experiment_request(
 mod tests {
     use super::*;
     #[test]
+    fn manual_actions_reject_agent_proposals_before_and_after_consent() {
+        use notesagent_host::{
+            experiment_input::PreparedInputs, experiment_policy::ExecutionLimits, workspace_broker,
+        };
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("experiments")).unwrap();
+        std::fs::write(root.path().join("experiments/main.py"), b"print(1)").unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let file = ws.read("experiments/main.py").unwrap().entry;
+        let context = json!({"agent_run_id":"run_test","tool_call_id":"call_test","request_id":"request_test"});
+        let prepare = json!({
+            "rpc":"workspace.experiment_agent.prepare_run", "params":{
+                "vault_id":ws.vault_id, "context":context,
+                "entry_file_id":file.file_id,"input_file_ids":[],"limits":ExecutionLimits::default()
+            }
+        });
+        let review = workspace_broker::dispatch(&mut ws, &prepare).unwrap();
+        let operation = review["operation_id"].as_str().unwrap();
+        let fingerprint = review["fingerprint"].as_str().unwrap();
+        assert_eq!(
+            reject_agent_manual(&ws, operation).unwrap_err().code,
+            "AGENT_EXPERIMENT_REQUIRES_REVIEW"
+        );
+        ws.experiment_agent_approve_run_from_user(operation, fingerprint)
+            .unwrap();
+        assert!(reject_agent_manual(&ws, operation).is_err());
+        let cancel = json!({"rpc":"workspace.experiment_agent.cancel_run", "params":{
+            "vault_id":ws.vault_id,"context":context,"operation_id":operation
+        }});
+        workspace_broker::dispatch(&mut ws, &cancel).unwrap();
+        assert!(reject_agent_manual(&ws, operation).is_err());
+
+        // A genuine separately prepared manual run still uses its manual UI.
+        let mut manual: RunRequest =
+            serde_json::from_value(review["record"]["summary"]["request"].clone()).unwrap();
+        manual.operation_id = uuid::Uuid::new_v4().to_string();
+        let inputs = PreparedInputs::prepare(&mut ws, &manual.validate().unwrap()).unwrap();
+        ws.experiment_prepare(inputs).unwrap();
+        assert!(reject_agent_manual(&ws, &manual.operation_id).is_ok());
+    }
+    #[test]
     fn model_payload_cannot_supply_commands_paths_or_user_approval() {
         for action in [
             json!({"kind":"status","command":"python"}),
@@ -472,6 +593,8 @@ mod tests {
             json!({"kind":"output_preview","operation_id":"x","path":"a.md","html":true}),
             json!({"kind":"recover_cleanup","fingerprint":"f","profile_name":"foreign"}),
             json!({"kind":"cleanup_review","root":"C:/user-data"}),
+            json!({"kind":"confirm_agent_run","operation_id":"x","fingerprint":"y","approved":true}),
+            json!({"kind":"confirm_agent_import","operation_id":"x","fingerprint":"y","context":{"agent_run_id":"foreign"}}),
         ] {
             assert!(
                 serde_json::from_value::<Request>(json!({"vault_id":"v","action":action})).is_err()

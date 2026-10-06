@@ -77,7 +77,7 @@ pub struct ImportRequest {
     pub selections: Vec<Selection>,
 }
 impl ImportRequest {
-    fn canonical(&self) -> Result<Self> {
+    pub(crate) fn canonical(&self) -> Result<Self> {
         if !valid_id(&self.vault_id)
             || !valid_id(&self.operation_id)
             || !valid_id(&self.run_id)
@@ -493,7 +493,7 @@ fn target(ws: &Workspace, path: &str) -> Result<SelectedFile> {
     }
 }
 #[cfg_attr(not(windows), allow(dead_code))] // Native trusted user route is Windows-only.
-fn check_target(ws: &Workspace, expected: &SelectedFile) -> Result<()> {
+pub(crate) fn check_target(ws: &Workspace, expected: &SelectedFile) -> Result<()> {
     check_destination(ws, &expected.path)?;
     let resolved = ws.resolve(&expected.path)?;
     let current = ws.entry(&expected.path)?;

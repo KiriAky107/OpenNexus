@@ -253,6 +253,7 @@ impl Workspace {
         }
         db.execute_batch(crate::experiment_store::SCHEMA)?;
         db.execute_batch(crate::experiment_file_broker::SCHEMA)?;
+        db.execute_batch(crate::experiment_agent::SCHEMA)?;
         db.execute_batch(crate::experiment_import::SCHEMA)?;
         crate::experiment_store::recover(&db)?;
         db.execute_batch("UPDATE sync_attempts SET outcome=CASE WHEN EXISTS(SELECT 1 FROM sync_jobs j WHERE j.binding=sync_attempts.binding AND j.operation_id=sync_attempts.operation_id AND j.state='acked') THEN 'succeeded' ELSE 'interrupted' END WHERE outcome='running'; PRAGMA user_version=18; COMMIT;")?;

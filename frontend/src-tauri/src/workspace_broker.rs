@@ -118,6 +118,12 @@ fn decode<T: serde::de::DeserializeOwned>(value: &Value) -> Result<T, String> {
 pub fn dispatch(ws: &mut Workspace, request: &Value) -> Result<Value, String> {
     if request["rpc"]
         .as_str()
+        .is_some_and(|name| name.starts_with("workspace.experiment_agent."))
+    {
+        return crate::experiment_agent::dispatch(ws, request);
+    }
+    if request["rpc"]
+        .as_str()
         .is_some_and(|name| name.starts_with("workspace.experiments."))
     {
         return crate::experiment_file_broker::dispatch(ws, request);
