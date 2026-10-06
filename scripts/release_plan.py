@@ -159,6 +159,11 @@ class Plan:
             require(result.get('experiment_runtime', {}).get('native_probe', {}).get('runtime_source') == 'extracted-installer', 'PACKAGED_RUNTIME_PROBE_REQUIRED')
         else:
             require(result.get('version') == p['version'] and result.get('passed') is True, 'SERVICE_VERIFICATION_REQUIRED')
+            deployment = next((a for a in assets if a.get('kind') == 'deployment'), None)
+            require(deployment is not None and result.get('deployment_sha256') == deployment['sha256'], 'DEPLOYMENT_VERIFICATION_MISMATCH')
+            probe = result.get('deployment_probe', {})
+            require(probe.get('passed') is True and probe.get('cleanup_complete') is True
+                    and probe.get('module_origin_verified') is True, 'PACKAGED_SERVICE_PROBE_REQUIRED')
         original = p.get('original')
         if original is not None:
             require(isinstance(original, dict) and isinstance(original.get('release_id'), int) and original['release_id'] > 0 and COMMIT.fullmatch(original.get('tag_ref_sha', '')) and COMMIT.fullmatch(original.get('tag_commit', '')), 'ORIGINAL_IDENTITY_REQUIRED')

@@ -152,7 +152,9 @@ class PublicationTests(unittest.TestCase):
         note += '\n'.join('https://github.com/owner/project/releases/download/v0.6.0/'+a['name'] for a in assets)+'\n'
         (self.base/'RELEASE-NOTES.md').write_text(note, 'utf-8')
         receipt = self.base/'verification.json'
-        receipt.write_text(json.dumps({'source_commit': self.commit, 'source_clean': True, 'version': '0.6.0', 'passed': True}), 'utf-8')
+        deployment = next(a for a in assets if a['kind'] == 'deployment')
+        receipt.write_text(json.dumps({'source_commit': self.commit, 'source_clean': True, 'version': '0.6.0', 'passed': True,
+            'deployment_sha256': deployment['sha256'], 'deployment_probe': {'passed': True, 'cleanup_complete': True, 'module_origin_verified': True}}), 'utf-8')
         self.plan_data.update(assets=assets, notes_file='RELEASE-NOTES.md', notes_sha256=text_digest(note), verification={'file': receipt.name, 'sha256': digest(receipt)})
         atomic_json(self.base/'release-plan.json', self.plan_data)
 
@@ -356,6 +358,26 @@ class PublicationTests(unittest.TestCase):
     def test_changed_verification_receipt_is_not_trusted(self):
         (self.base/'verification.json').write_text('{"passed":true}', 'utf-8')
         with self.assertRaisesRegex(ReleaseError, 'VERIFICATION_CHANGED'):
+            Plan(self.plan.path)
+
+    def test_service_receipt_must_bind_the_actual_deployment_archive(self):
+        receipt = self.base/'verification.json'
+        data = json.loads(receipt.read_text('utf-8'))
+        data['deployment_sha256'] = '0'*64
+        receipt.write_text(json.dumps(data), 'utf-8')
+        self.plan_data['verification']['sha256'] = digest(receipt)
+        atomic_json(self.plan.path, self.plan_data)
+        with self.assertRaisesRegex(ReleaseError, 'DEPLOYMENT_VERIFICATION_MISMATCH'):
+            Plan(self.plan.path)
+
+    def test_service_receipt_cannot_approve_an_unfinished_packaged_probe(self):
+        receipt = self.base/'verification.json'
+        data = json.loads(receipt.read_text('utf-8'))
+        data['deployment_probe']['cleanup_complete'] = False
+        receipt.write_text(json.dumps(data), 'utf-8')
+        self.plan_data['verification']['sha256'] = digest(receipt)
+        atomic_json(self.plan.path, self.plan_data)
+        with self.assertRaisesRegex(ReleaseError, 'PACKAGED_SERVICE_PROBE_REQUIRED'):
             Plan(self.plan.path)
 
     def test_new_owned_draft_notes_change_is_rejected_before_tag_or_asset_mutations(self):

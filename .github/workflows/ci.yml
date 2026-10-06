@@ -26,6 +26,7 @@ jobs:
       - run: python3 scripts/test_windows_native_smoke.py
       - run: python3 scripts/check-release-notes.py
       - run: python3 scripts/test_github_release.py
+      - run: python3 scripts/test_service_release.py
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
