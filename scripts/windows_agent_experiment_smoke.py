@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import time
 
 from windows_experiment_smoke import click_confirmation
 
@@ -16,7 +17,7 @@ def exercise(page, process, work: Path, vault: Path):
             const requestId=await smokeInvoke('core_request_prepare',{timeoutMs:60000});
             try {
                 const response=await smokeInvoke('core_request',{request:{requestId,path,method,
-                    body:body===null?null:JSON.stringify(body),bodyBase64:null,contentType:'application/json',
+                    body,bodyBase64:null,contentType:'application/json',
                     idempotencyKey:method==='GET'?null:crypto.randomUUID()}});
                 const value=JSON.parse(response.body);
                 if(response.status>=400)throw new Error('Core '+response.status+' '+JSON.stringify(value));
@@ -53,9 +54,20 @@ def exercise(page, process, work: Path, vault: Path):
             'tool_timeout_seconds':90,'run_timeout_seconds':180,'allow_network':False})
         return run['run_id']
 
+    def until(operation, description, timeout=60):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            value = operation()
+            if value:
+                return value
+            time.sleep(.1)
+        raise TimeoutError(description)
+
     def wait(run):
-        page.wait_for_function('async run=>["completed","failed","cancelled"].includes((await agentSmokeApi("/api/agent/runs/"+run)).status)', arg=run, timeout=60000)
-        return api('/api/agent/runs/'+run)
+        def terminal():
+            value = api('/api/agent/runs/'+run)
+            return value if value['status'] in ('completed', 'failed', 'cancelled') else None
+        return until(terminal, 'Agent did not reach a terminal state')
 
     def review(run):
         page.evaluate('run=>smokeRouter.push("/agent/runs/"+run)', run)
@@ -75,10 +87,10 @@ def exercise(page, process, work: Path, vault: Path):
     assert host('history', limit=10, cursor=None)['items'] == []
     page.evaluate('() => smokeRouter.push("/settings")')
     page.get_by_role('button', name='权限', exact=True).click()
-    page.get_by_label('允许 Agent 提出运行请求', exact=True).check()
-    page.wait_for_function('async()=> (await agentSmokeApi("/api/permissions/policy"))["experiments.run"]==="confirm"')
-    page.get_by_label('允许 Agent 提出成果导入请求', exact=True).check()
-    page.wait_for_function('async()=> (await agentSmokeApi("/api/permissions/policy"))["experiments.import"]==="confirm"')
+    page.get_by_label('允许 Agent 提出运行请求', exact=True).click()
+    until(lambda: api('/api/permissions/policy')['experiments.run'] == 'confirm', 'Run proposal setting was not saved')
+    page.get_by_label('允许 Agent 提出成果导入请求', exact=True).click()
+    until(lambda: api('/api/permissions/policy')['experiments.import'] == 'confirm', 'Import proposal setting was not saved')
     evidence = hashlib.sha256(entry.read_bytes()).hexdigest()
     confirmations = []
     print('AGENT_UI native rejection and real execution', flush=True)
@@ -129,10 +141,15 @@ def exercise(page, process, work: Path, vault: Path):
     review(cancel_id)
     confirmations.append(click_confirmation(page, process, '.permission-review-content button.button-primary',
         '确认 Agent 运行 / Confirm Agent run', hashlib.sha256(slow.read_bytes()).hexdigest(), True))
-    page.wait_for_function('async run=>(await agentSmokeApi("/api/agent/runs/"+run+"/trace?after_sequence=-1&limit=100")).items.some(e=>e.event==="ExperimentState" && e.data.state==="running")', arg=cancel_id)
+    until(lambda: any(event['event'] == 'ExperimentState' and event['data']['state'] == 'running'
+        for event in api('/api/agent/runs/'+cancel_id+'/trace?after_sequence=-1&limit=100')['items']),
+        'Cancellation must wait for actual Host running evidence')
     page.get_by_role('button', name='取消运行', exact=True).click()
     assert wait(cancel_id)['status'] == 'cancelled'
-    page.wait_for_function('async()=>{const value=await smokeInvoke("experiment_request",{request:{vault_id:smokePinia._s.get("workspace").vaultId,action:{kind:"status"}}});return value.cleanup===null && value.available}', timeout=30000)
+    def cleaned():
+        value = host('status')
+        return value['cleanup'] is None and value['available']
+    until(cleaned, 'Owned experiment cleanup did not complete', timeout=30)
     cancelled = host('history', limit=10, cursor=None)['items'][0]
     assert cancelled['state'] == 'cancelled'
     page.screenshot(path=str(work/'native-agent-experiments.png'))
