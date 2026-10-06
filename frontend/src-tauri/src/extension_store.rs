@@ -13,6 +13,9 @@ use std::{
 };
 use uuid::Uuid;
 
+mod catalog_view;
+pub use catalog_view::{InstalledPackage, InstalledPage};
+
 pub struct Signer<'a> {
     pub public_key: &'a [u8; 32],
     pub key_id: &'a str,

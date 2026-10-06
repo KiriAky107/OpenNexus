@@ -200,10 +200,64 @@ pub async fn extension_install_confirm(
 }
 
 #[tauri::command]
-pub async fn extension_install_rollback(
+pub async fn extension_installed(
     window: WebviewWindow,
     host: State<'_, Host>,
+    vault_id: String,
+    offset: u32,
+    limit: u32,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let workspace = host.workspace.clone();
+    let extensions = host.extensions.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let workspace = workspace.lock().map_err(|_| "HOST_BUSY")?;
+        if workspace.as_ref().ok_or("VAULT_NOT_OPEN")?.vault_id != vault_id {
+            return Err("VAULT_CHANGED".into());
+        }
+        let store = extensions.lock().map_err(|_| "HOST_BUSY")?;
+        let page = store
+            .as_ref()
+            .ok_or("EXTENSIONS_NOT_READY")?
+            .installed(&vault_id, offset, limit)
+            .map_err(|e| e.code)?;
+        serde_json::to_value(page).map_err(|_| "EXTENSION_LIST_FAILED".into())
+    })
+    .await
+    .map_err(|_| "EXTENSION_LIST_FAILED".to_string())?
+}
+
+#[tauri::command]
+pub async fn extension_install_status(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+    vault_id: String,
     operation_id: String,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let workspace = host.workspace.clone();
+    let extensions = host.extensions.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let workspace = workspace.lock().map_err(|_| "HOST_BUSY")?;
+        if workspace.as_ref().ok_or("VAULT_NOT_OPEN")?.vault_id != vault_id {
+            return Err("VAULT_CHANGED".into());
+        }
+        let store = extensions.lock().map_err(|_| "HOST_BUSY")?;
+        let receipt = store
+            .as_ref()
+            .ok_or("EXTENSIONS_NOT_READY")?
+            .installation_status(&operation_id, &vault_id)
+            .map_err(|e| e.code)?;
+        serde_json::to_value(receipt).map_err(|_| "EXTENSION_STATUS_FAILED".into())
+    })
+    .await
+    .map_err(|_| "EXTENSION_STATUS_FAILED".to_string())?
+}
+
+#[tauri::command]
+pub async fn extension_rollback_preview(
+    window: WebviewWindow,
+    host: State<'_, Host>,
     installed_operation_id: String,
     vault_id: String,
 ) -> Result<Value, String> {
@@ -216,13 +270,57 @@ pub async fn extension_install_rollback(
             return Err("VAULT_CHANGED".into());
         }
         let mut store = extensions.lock().map_err(|_| "HOST_BUSY")?;
+        let preview = store
+            .as_mut()
+            .ok_or("EXTENSIONS_NOT_READY")?
+            .rollback_preview(&installed_operation_id, &vault_id)
+            .map_err(|e| e.code)?;
+        serde_json::to_value(preview).map_err(|_| "EXTENSION_PREVIEW_INVALID".into())
+    })
+    .await
+    .map_err(|_| "EXTENSION_PREVIEW_FAILED".to_string())?
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RollbackConfirmation {
+    request_id: String,
+    operation_id: String,
+    installed_operation_id: String,
+    vault_id: String,
+    fingerprint: String,
+}
+
+#[tauri::command]
+pub async fn extension_install_rollback(
+    window: WebviewWindow,
+    host: State<'_, Host>,
+    request: RollbackConfirmation,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let mut lease = host.extension_requests.claim(&request.request_id)?;
+    let checkpoint = lease.checkpoint();
+    let workspace = host.workspace.clone();
+    let extensions = host.extensions.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let workspace = workspace.lock().map_err(|_| "HOST_BUSY")?;
+        if workspace.as_ref().ok_or("VAULT_NOT_OPEN")?.vault_id != request.vault_id {
+            return Err("VAULT_CHANGED".into());
+        }
+        let mut store = extensions.lock().map_err(|_| "HOST_BUSY")?;
         let store = store.as_mut().ok_or("EXTENSIONS_NOT_READY")?;
-        let changes = store
-            .rollback_changes(&installed_operation_id)
-            .map_err(|error| error.code)?;
-        let receipt =
-            tauri::async_runtime::block_on(store.switch_online(&operation_id, &vault_id, &changes))
-                .map_err(|error| error.code)?;
+        let receipt = tauri::async_runtime::block_on(lease.run(async {
+            checkpoint()?;
+            store
+                .rollback_reviewed(
+                    &request.operation_id,
+                    &request.installed_operation_id,
+                    &request.vault_id,
+                    &request.fingerprint,
+                )
+                .await
+                .map_err(|error| error.code)
+        }))?;
         serde_json::to_value(receipt).map_err(|_| "EXTENSION_ROLLBACK_FAILED".into())
     })
     .await

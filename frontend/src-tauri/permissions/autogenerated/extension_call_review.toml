@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-extension-call-review"
+description = "Enables the extension_call_review command without any pre-configured scope."
+commands.allow = ["extension_call_review"]
+
+[[permission]]
+identifier = "deny-extension-call-review"
+description = "Denies the extension_call_review command without any pre-configured scope."
+commands.deny = ["extension_call_review"]

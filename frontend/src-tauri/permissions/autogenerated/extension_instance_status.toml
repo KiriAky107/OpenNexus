@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-extension-instance-status"
+description = "Enables the extension_instance_status command without any pre-configured scope."
+commands.allow = ["extension_instance_status"]
+
+[[permission]]
+identifier = "deny-extension-instance-status"
+description = "Denies the extension_instance_status command without any pre-configured scope."
+commands.deny = ["extension_instance_status"]
