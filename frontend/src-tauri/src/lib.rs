@@ -41,6 +41,7 @@ pub mod session_lock;
 pub mod sync_account;
 #[cfg(feature = "desktop")]
 pub mod sync_auth;
+pub mod sync_capabilities;
 #[cfg(feature = "desktop")]
 pub mod sync_client;
 pub mod sync_discovery;

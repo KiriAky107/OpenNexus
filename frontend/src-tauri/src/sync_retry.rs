@@ -113,7 +113,10 @@ impl Workspace {
             previous.failures.saturating_add(1)
         };
         let halted = matches!(status, 401 | 403 | 413 | 426 | 507)
-            || matches!(code, "PROTOCOL_INCOMPATIBLE" | "SYNC_LOGIN_REQUIRED");
+            || matches!(
+                code,
+                "PROTOCOL_INCOMPATIBLE" | "SYNC_ENCRYPTION_INCOMPATIBLE" | "SYNC_LOGIN_REQUIRED"
+            );
         let retry_at = now.saturating_add(
             retry_after
                 .unwrap_or(2u64.saturating_pow(failures.min(8)))
@@ -205,6 +208,15 @@ mod tests {
             ws.sync_retry(&b.id).unwrap().error.as_deref(),
             Some("SYNC_REMOTE_ERROR")
         );
+        ws.sync_retry_fail(&b.id, "SYNC_ENCRYPTION_INCOMPATIBLE", 0, None, 1200)
+            .unwrap();
+        drop(ws);
+        ws = Workspace::open(dir.path()).unwrap();
+        let state = ws.sync_retry(&b.id).unwrap();
+        assert!(state.halted);
+        assert_eq!(state.error.as_deref(), Some("SYNC_ENCRYPTION_INCOMPATIBLE"));
+        ws.sync_retry_clear(&b.id).unwrap();
+        assert!(!ws.sync_retry(&b.id).unwrap().halted);
         ws.sync_unbind(&b.id).unwrap();
         let next = ws
             .sync_bind_empty("https://sync.example", "other", "account")

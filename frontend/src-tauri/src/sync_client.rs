@@ -237,16 +237,14 @@ impl SyncClient {
         serde_json::from_value(value).map_err(|_| SyncError::new("SYNC_RESPONSE_INVALID"))
     }
     pub async fn handshake(&self) -> Result<()> {
+        self.capabilities().await.map(|_| ())
+    }
+    pub async fn capabilities(&self) -> Result<crate::sync_capabilities::Capabilities> {
         let result = self
             .json(Method::GET, "sync/v1/handshake?protocol=1", None)
             .await?;
-        if result["protocol"] != 1
-            || result["chunk_size"] != 1048576
-            || result["max_object_size"] != 104857600
-        {
-            return Err(SyncError::new("PROTOCOL_INCOMPATIBLE"));
-        }
-        Ok(())
+        crate::sync_capabilities::parse(&result, self.endpoint.scheme() == "https")
+            .map_err(Into::into)
     }
     pub async fn snapshot(&self, remote_vault: &str) -> Result<crate::sync_initial::Snapshot> {
         identifier(remote_vault)?;

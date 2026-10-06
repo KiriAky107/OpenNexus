@@ -77,6 +77,10 @@ async fn real_service_progress_reports_confirmed_resume_verified_download_and_re
     let client = SyncClient::new(&endpoint, Zeroizing::new(first.access_token.clone()), true)
         .unwrap()
         .with_progress(Arc::new(move |event| observed.lock().unwrap().push(event)));
+    let capabilities = client.capabilities().await.unwrap();
+    assert_eq!(capabilities.encryption, "transport-only");
+    assert_eq!(capabilities.transport_security, "test-http");
+    assert!(!capabilities.features.as_ref().unwrap().execution);
     let vault = client
         .json(
             reqwest::Method::POST,

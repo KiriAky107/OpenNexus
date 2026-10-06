@@ -1,0 +1,28 @@
+{
+  "handshake": {
+    "protocol": 1,
+    "max_object_size": 104857600,
+    "chunk_size": 1048576,
+    "encryption": "transport-only",
+    "history_retention": "indefinite",
+    "cursor_retention": "indefinite",
+    "sharing": false,
+    "features": {
+      "version": 1,
+      "objects": "opaque-bytes-sha256",
+      "revisions": "stable-file-id-cas",
+      "paths": "portable-nfc-casefold",
+      "uploads": "confirmed-offset",
+      "execution": false
+    }
+  },
+  "paths": [
+    { "path": "experiments/课程 #%.py", "desktop_sync": true, "content": "print('同步不会运行')\r\n" },
+    { "path": "experiments/input.json", "desktop_sync": true, "content": "{\"value\": 1}\r\n" },
+    { "path": "experiments/input.csv", "desktop_sync": true, "content": "value\r\n1\r\n" },
+    { "path": "Experiments/MAIN.PY", "desktop_sync": true, "content": "print('unchanged bytes')\n" },
+    { "path": "scripts/main.py", "desktop_sync": false, "content": "print('not selected by desktop')\n" },
+    { "path": "experiments/__pycache__/cached.py", "desktop_sync": false, "content": "print('not selected by desktop')\n" },
+    { "path": "experiments/output.bin", "desktop_sync": false, "content": "opaque bytes" }
+  ]
+}

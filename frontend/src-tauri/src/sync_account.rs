@@ -29,7 +29,7 @@ fn invalid() -> SyncError {
 fn name(value: &Value) -> Result<String, SyncError> {
     value
         .as_str()
-        .filter(|value| value.chars().count() <= 100)
+        .filter(|value| value.chars().count() <= 120)
         .map(str::to_owned)
         .ok_or_else(invalid)
 }
@@ -126,5 +126,10 @@ mod tests {
         let mut bad = vaults.clone();
         bad["items"][0]["used"] = json!(-1);
         assert!(parse("vault", &bad, &devices).is_err());
+        let mut names = vaults.clone();
+        names["items"][0]["name"] = json!("名".repeat(120));
+        assert!(parse("vault", &names, &devices).is_ok());
+        names["items"][0]["name"] = json!("名".repeat(121));
+        assert!(parse("vault", &names, &devices).is_err());
     }
 }
