@@ -15,6 +15,11 @@ required-features = ["desktop"]
 [features]
 default = []
 desktop = ["dep:tauri", "tauri/custom-protocol", "dep:tauri-build", "dep:rfd", "dep:reqwest", "dep:tokio"]
+sync-e2ee-prototype = ["dep:hkdf", "dep:x25519-dalek"]
+
+[[example]]
+name = "sync_e2ee_prototype"
+required-features = ["sync-e2ee-prototype"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -40,7 +45,9 @@ iota_stronghold = "2.1"
 argon2 = "0.5"
 chacha20poly1305 = "0.10"
 fernet = { version = "0.2", default-features = false, features = ["rustcrypto"] }
-ed25519-dalek = { version = "2.2", default-features = false, features = ["std"] }
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std", "zeroize"] }
+hkdf = { version = "0.12.4", optional = true }
+x25519-dalek = { version = "2.0.1", optional = true, features = ["static_secrets"] }
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 unicode-normalization = "0.1"
 unicode-casefold = "0.2"

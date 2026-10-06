@@ -3304,6 +3304,7 @@ dependencies = [
  "ed25519-dalek",
  "fernet",
  "fs2",
+ "hkdf",
  "hmac",
  "iota_stronghold",
  "jsonschema",
@@ -3328,6 +3329,7 @@ dependencies = [
  "url",
  "uuid",
  "windows-sys 0.61.2",
+ "x25519-dalek",
  "zeroize",
  "zip",
 ]
@@ -7065,6 +7067,7 @@ checksum = "c7e468321c81fb07fa7f4c636c3972b9100f0346e5b6a9f2bd0603a52f7ed277"
 dependencies = [
  "curve25519-dalek",
  "rand_core 0.6.4",
+ "serde",
  "zeroize",
 ]
 
