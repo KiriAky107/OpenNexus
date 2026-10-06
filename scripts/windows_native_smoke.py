@@ -107,7 +107,7 @@ def digest(path):
         return hashlib.file_digest(stream,'sha256').hexdigest()
 
 
-def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:bool):
+def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:bool, *, extra_checks=None):
     if os.name != 'nt':
         raise RuntimeError('Native payload startup requires Windows')
     from playwright.sync_api import sync_playwright
@@ -168,7 +168,7 @@ def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:
                 browser = playwright.chromium.connect_over_cdp(f'http://127.0.0.1:{debug_port}')
                 page = browser.contexts[0].pages[0]
                 page.set_default_timeout(60000)
-                page.wait_for_function('Boolean(window.__TAURI_INTERNALS__ && document.querySelector("#app")?.__vue_app__)')
+                page.wait_for_function('() => Boolean(window.__TAURI_INTERNALS__ && document.querySelector("#app")?.__vue_app__)')
                 errors = []
                 page.on('pageerror',lambda error:errors.append(str(error)))
                 page.evaluate('''() => {
@@ -197,7 +197,7 @@ def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:
                 if page.evaluate("()=>smokeApi('/api/status')")['version'] != version:
                     raise RuntimeError('Packaged Core version does not match manifest')
                 page.evaluate("async path=>{await smokePinia._s.get('workspace').openVault(path);await smokeRouter.push('/workspace')}",str(vault))
-                page.wait_for_function("smokePinia._s.has('editor')")
+                page.wait_for_function("() => smokePinia._s.has('editor')")
                 page.evaluate("async()=>{await smokePinia._s.get('editor').loadFile('/研究.canvas');smokePinia._s.get('workspace').openFile('/研究.canvas')}")
                 page.locator('.canvas-node').first.wait_for()
                 if page.locator('.canvas-node').count()!=3: raise RuntimeError('Canvas did not render all test nodes')
@@ -208,6 +208,13 @@ def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:
                 dialog.wait_for();dialog.press('Escape')
                 if errors: raise RuntimeError('Native UI errors: '+str(errors))
                 page.screenshot(path=str(work/'native-canvas.png'))
+                try:
+                    extra = extra_checks(page, process, work, vault) if extra_checks else None
+                except Exception:
+                    page.screenshot(path=str(work/'native-ui-failure.png'))
+                    (work/'native-ui-failure.txt').write_text(page.locator('#app').inner_text(), encoding='utf-8')
+                    raise
+                if errors: raise RuntimeError('Native UI errors: '+str(errors))
                 page.get_by_label('关闭窗口',exact=True).click();process.wait(timeout=30)
         if any(digest(vault/name)!=sha for name,sha in before.items()):
             raise RuntimeError('Startup smoke modified test document bytes')
@@ -217,6 +224,7 @@ def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:
             'fresh_application_profile':True,'existing_profile_touched':False,
             'storage_pointer_removed':profile.removed,'vault_documents_unchanged':True,
             'packaged_experiment_runtime':experiments,
+            'additional_checks':extra,
             'missing_loader_negative_control':missing_loader_control if dynamic_loader else 'not applicable: static Loader',
             'scope':'Extracted payload startup and exit; no installer/upgrade/uninstall or missing-Runtime validation'}
     finally:
