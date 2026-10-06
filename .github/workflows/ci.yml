@@ -100,6 +100,19 @@ jobs:
       # The production-strength repeated-crash migration test runs in release acceptance.
       - run: cargo test --lib --locked -- --skip credentials::tests::b04_migration_survives_twenty_hard_terminations_per_boundary
       - run: cargo clippy --lib --locked -- -D warnings
+      - name: Test the offline encryption protocol prototype
+        run: 'cargo test --lib --features sync-e2ee-prototype --locked sync_e2ee_prototype::'
+      - name: Check prototype primitives and generated-data measurement
+        run: cargo clippy --lib --example sync_e2ee_prototype --features sync-e2ee-prototype --locked -- -D warnings
+      - name: Measure authenticated streaming and ciphertext quota
+        run: |
+          mkdir -p ../../.build
+          cargo run --quiet --example sync_e2ee_prototype --features sync-e2ee-prototype --locked > ../../.build/sync-e2ee-metrics.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sync-e2ee-offline-metrics-${{ github.sha }}
+          path: .build/sync-e2ee-metrics.json
+          if-no-files-found: error
 
   windows-host:
     runs-on: windows-2022
@@ -138,6 +151,21 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
+      - name: Check out the fixed Sync object protocol fixture
+        uses: actions/checkout@v7
+        with:
+          repository: KiriAky107/Sync-for-OpenNexus
+          ref: 27335831b726a601a956ef9e9eddcefebaa7aaff
+          path: .build/sync-server
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: '0.9.24'
+          enable-cache: true
+          cache-dependency-glob: .build/sync-server/uv.lock
+      - name: Install the fixed isolated Sync fixture
+        working-directory: .
+        run: uv sync --frozen --directory .build/sync-server
       - name: Verify locked embedded Python and native isolation prototype
         working-directory: .
         run: ./scripts/verify-experiment-runtime.ps1
@@ -159,6 +187,9 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Sync account metadata tests failed' }
             cargo test --lib --features desktop --locked sync_auth::tests:: -- --nocapture
             if ($LASTEXITCODE -ne 0) { throw 'Sync device credential scope tests failed' }
+            $env:OPENNEXUS_SYNC_SERVER_DIR = Join-Path $env:GITHUB_WORKSPACE '.build/sync-server'
+            cargo test --test sync_push --features desktop,sync-e2ee-prototype --locked e2ee_prototype_actual_opaque_storage_resume_dedup_quota_and_offline_bundle -- --exact --nocapture
+            if ($LASTEXITCODE -ne 0) { throw 'Ciphertext object storage integration failed' }
           } finally {
             Remove-Item -LiteralPath $testIndex -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $testFrontend -ErrorAction SilentlyContinue

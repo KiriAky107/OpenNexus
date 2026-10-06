@@ -24,6 +24,330 @@ impl Drop for Server {
     }
 }
 
+// Only the offline prototype's opaque blobs use the existing v1 object API.
+// No encrypted revision is committed: v1 has no encrypted-vault metadata mode.
+#[cfg(feature = "sync-e2ee-prototype")]
+#[tokio::test]
+async fn e2ee_prototype_actual_opaque_storage_resume_dedup_quota_and_offline_bundle() {
+    use notesagent_host::sync_e2ee_prototype::*;
+    use sha2::{Digest, Sha256};
+    use std::io::{Cursor, Read};
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join(".opennexus-test"), b"fixture").unwrap();
+    let service = sync_service_root()
+        .expect("OPENNEXUS_SYNC_SERVER_DIR required for actual prototype storage test");
+    let python = service.join(if cfg!(windows) {
+        ".venv/Scripts/python.exe"
+    } else {
+        ".venv/bin/python"
+    });
+    let mut server = Server(
+        Command::new(&python)
+            .args(["-m", "tests.host_fixture"])
+            .arg(root.path())
+            .current_dir(&service)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let mut line = String::new();
+    BufReader::new(server.0.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let ready: Value = serde_json::from_str(&line).unwrap();
+    let endpoint = format!("http://127.0.0.1:{}", ready["port"]);
+    let public = SyncClient::new(&endpoint, Zeroizing::new(String::new()), true).unwrap();
+    let first = public
+        .login(
+            "rust-fixture",
+            Zeroizing::new("controlled-fixture-password".into()),
+            "Cipher A",
+        )
+        .await
+        .unwrap();
+    let second = public
+        .login(
+            "rust-fixture",
+            Zeroizing::new("controlled-fixture-password".into()),
+            "Cipher B",
+        )
+        .await
+        .unwrap();
+    let client =
+        SyncClient::new(&endpoint, Zeroizing::new(first.access_token.clone()), true).unwrap();
+    assert_eq!(
+        client.capabilities().await.unwrap().encryption,
+        "transport-only"
+    );
+    let vault = client
+        .json(
+            reqwest::Method::POST,
+            "sync/v1/vaults",
+            Some(json!({"name":"Cipher object fixture"})),
+        )
+        .await
+        .unwrap();
+    let remote = vault["vault_id"].as_str().unwrap();
+    let owner = VaultOwner::new(remote).unwrap();
+    let device = DeviceSecret::new().unwrap();
+    let grant = owner
+        .grant(
+            &second.device_id,
+            device.public_key(),
+            HistoryAccess::AllRetained,
+        )
+        .unwrap();
+    let peer = device
+        .accept(&grant, owner.public_key(), remote, &second.device_id, 1)
+        .unwrap();
+    let plaintext = b"print('must not execute, private source')\r\n".repeat(60000);
+    assert!(plaintext.len() > CHUNK_BYTES * 2);
+    let object = seal_content(
+        owner.keys(),
+        "file-cipher-fixture1",
+        plaintext.len() as u64,
+        Cursor::new(&plaintext),
+    )
+    .unwrap();
+    let reference = object.reference().clone();
+    let hash: String = reference
+        .cipher_sha256
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let uploads = format!("sync/v1/vaults/{remote}/uploads");
+    let begin = client
+        .json(
+            reqwest::Method::POST,
+            &uploads,
+            Some(json!({"content_hash":hash,"size":reference.cipher_bytes})),
+        )
+        .await
+        .unwrap();
+    let upload = format!("{uploads}/{}", begin["upload_id"].as_str().unwrap());
+    let http = reqwest::Client::new();
+    let mut chunk = vec![0; CHUNK_BYTES];
+    object.reader_at(0).unwrap().read_exact(&mut chunk).unwrap();
+    let confirmed: Value = http
+        .put(format!("{endpoint}/{upload}?offset=0"))
+        .bearer_auth(&first.access_token)
+        .body(chunk.clone())
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(confirmed["offset"], CHUNK_BYTES);
+    // Simulate a lost response/local counter: query the durable server offset.
+    let receipt = client
+        .json(reqwest::Method::GET, &upload, None)
+        .await
+        .unwrap();
+    assert_eq!(receipt["offset"], CHUNK_BYTES);
+    let duplicate = http
+        .put(format!("{endpoint}/{upload}?offset=0"))
+        .bearer_auth(&first.access_token)
+        .body(chunk)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status().as_u16(), 409);
+    let mut offset = receipt["offset"].as_u64().unwrap();
+    let mut resumed = object.reader_at(offset).unwrap();
+    while offset < reference.cipher_bytes {
+        let count = (reference.cipher_bytes - offset).min(CHUNK_BYTES as u64) as usize;
+        let mut chunk = vec![0; count];
+        resumed.read_exact(&mut chunk).unwrap();
+        let ack: Value = http
+            .put(format!("{endpoint}/{upload}?offset={offset}"))
+            .bearer_auth(&first.access_token)
+            .body(chunk)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        offset += count as u64;
+        assert_eq!(ack["offset"].as_u64().unwrap(), offset);
+    }
+    let complete = client
+        .json(reqwest::Method::POST, &format!("{upload}/complete"), None)
+        .await
+        .unwrap();
+    assert_eq!(complete["content_hash"], hash);
+    let dedup = client
+        .json(
+            reqwest::Method::POST,
+            &uploads,
+            Some(json!({"content_hash":hash,"size":reference.cipher_bytes})),
+        )
+        .await
+        .unwrap();
+    assert_eq!(dedup["complete"], true);
+    assert!(dedup["upload_id"].is_null());
+    let usage = client.account_details(remote).await.unwrap();
+    assert_eq!(usage.vault.used, reference.cipher_bytes);
+    assert!(usage.vault.used > plaintext.len() as u64);
+    let encrypted = http
+        .get(format!("{endpoint}/sync/v1/vaults/{remote}/objects/{hash}"))
+        .bearer_auth(&second.access_token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    assert_eq!(
+        <[u8; 32]>::from(Sha256::digest(&encrypted)),
+        reference.cipher_sha256
+    );
+    let mut actual = Vec::new();
+    open_content(&peer, &reference, Cursor::new(&encrypted))
+        .unwrap()
+        .read_to_end(&mut actual)
+        .unwrap();
+    assert_eq!(actual, plaintext);
+    let again = seal_content(
+        owner.keys(),
+        "file-cipher-fixture1",
+        plaintext.len() as u64,
+        Cursor::new(&plaintext),
+    )
+    .unwrap();
+    assert_ne!(again.reference().cipher_sha256, reference.cipher_sha256);
+
+    // Only this test's fresh marker-owned database is adjusted, never a user DB.
+    let db = rusqlite::Connection::open(root.path().join("sync.sqlite3")).unwrap();
+    assert_eq!(
+        db.query_row("SELECT COUNT(*) FROM revisions", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    db.execute("UPDATE vaults SET quota=used WHERE id=?1", [remote])
+        .unwrap();
+    let again_hash: String = again
+        .reference()
+        .cipher_sha256
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let rejected = client
+        .json(
+            reqwest::Method::POST,
+            &uploads,
+            Some(json!({"content_hash":again_hash,"size":again.reference().cipher_bytes})),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(rejected.status, 413);
+    assert_eq!(rejected.code, "QUOTA_EXCEEDED");
+    drop(db);
+    let recovery_secret = RecoverySecret::new().unwrap();
+    let recovery_envelope = owner.recovery(&recovery_secret).unwrap();
+    let revision_context = RevisionContext {
+        operation_id: "operation-cipher-001".into(),
+        base_revision: 0,
+        metadata_epoch: 1,
+        object: reference.clone(),
+    };
+    let revision = seal_revision(
+        owner.keys(),
+        revision_context.clone(),
+        &RevisionMetadata {
+            file_id: "file-cipher-fixture1".into(),
+            path: "experiments/private-course.py".into(),
+        },
+    )
+    .unwrap();
+    std::fs::write(root.path().join("prototype-material.json"), serde_json::to_vec(&json!({"reference":reference,"grant":grant,"revision":revision,"recovery":recovery_envelope})).unwrap()).unwrap();
+    // This is an offline prototype bundle, not the PostgreSQL/S3 backup CLI.
+    let backup = Command::new(&python)
+        .args([
+            "-c",
+            r#"
+import json, sys
+from pathlib import Path
+from zipfile import ZipFile, ZIP_STORED
+import hashlib
+root = Path(sys.argv[1])
+assert (root / '.opennexus-test').is_file()
+materials = (root / 'prototype-material.json').read_bytes()
+reference = json.loads(materials)['reference']
+checksum = bytes(reference['cipher_sha256']).hex()
+source = root / 'objects' / reference['vault_id'] / checksum
+bundle = root / 'offline-cipher-bundle.zip'
+with ZipFile(bundle, 'x', compression=ZIP_STORED) as archive:
+    archive.write(source, 'object.bin')
+    archive.writestr('materials.json', materials)
+with ZipFile(bundle) as archive:
+    assert set(archive.namelist()) == {'object.bin', 'materials.json'}
+    content = archive.read('object.bin')
+    assert hashlib.sha256(content).hexdigest() == checksum
+    assert archive.read('materials.json') == materials
+    (root / 'restored-object.bin').write_bytes(content)
+    (root / 'restored-material.json').write_bytes(archive.read('materials.json'))
+print(json.dumps({'bundle_bytes': bundle.stat().st_size, 'object_bytes': len(content)}))
+"#,
+        ])
+        .arg(root.path())
+        .current_dir(&service)
+        .output()
+        .unwrap();
+    assert!(
+        backup.status.success(),
+        "{}",
+        String::from_utf8_lossy(&backup.stderr)
+    );
+    let backup_receipt: Value = serde_json::from_slice(&backup.stdout).unwrap();
+    assert_eq!(backup_receipt["object_bytes"], reference.cipher_bytes);
+    let restored_cipher = std::fs::read(root.path().join("restored-object.bin")).unwrap();
+    assert_eq!(
+        <[u8; 32]>::from(Sha256::digest(&restored_cipher)),
+        reference.cipher_sha256
+    );
+    let restored_material: Value =
+        serde_json::from_slice(&std::fs::read(root.path().join("restored-material.json")).unwrap())
+            .unwrap();
+    let restored_envelope: RecoveryEnvelope =
+        serde_json::from_value(restored_material["recovery"].clone()).unwrap();
+    let recovered = VaultOwner::recover(
+        &restored_envelope,
+        &recovery_secret,
+        remote,
+        owner.public_key(),
+        1,
+    )
+    .unwrap();
+    let restored_revision: RevisionEnvelope =
+        serde_json::from_value(restored_material["revision"].clone()).unwrap();
+    assert_eq!(
+        open_revision(recovered.keys(), &revision_context, &restored_revision, 1)
+            .unwrap()
+            .path,
+        "experiments/private-course.py"
+    );
+    let mut recovered_source = Vec::new();
+    open_content(recovered.keys(), &reference, Cursor::new(&restored_cipher))
+        .unwrap()
+        .read_to_end(&mut recovered_source)
+        .unwrap();
+    assert_eq!(recovered_source, plaintext);
+    println!(
+        "{}",
+        json!({"prototype_only":true,"opaque_object_api":"v1","plaintext_bytes":plaintext.len(),"ciphertext_bytes":reference.cipher_bytes,"confirmed_resume_bytes":CHUNK_BYTES,"dedup_retry":true,"fresh_encryption_distinct":true,"quota_rejected":true,"offline_cipher_bundle_restored":true,"bundle_bytes":backup_receipt["bundle_bytes"],"encrypted_revisions_committed":0})
+    );
+}
+
 #[tokio::test]
 async fn real_service_progress_reports_confirmed_resume_verified_download_and_revoked_devices() {
     use notesagent_host::sync_progress::{Direction, Event, TransferPhase};
