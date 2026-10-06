@@ -358,6 +358,15 @@ impl Runner {
     ) -> Result<RunRecord> {
         self.start(workspace, Runtime::Bundled(resource_root), operation)
     }
+    #[cfg(test)]
+    pub(crate) fn start_approved_for_probe(
+        &self,
+        workspace: WorkspaceSlot,
+        runtime_root: PathBuf,
+        operation: &str,
+    ) -> Result<RunRecord> {
+        self.start(workspace, Runtime::Probe(runtime_root), operation)
+    }
     pub fn start_approved_for_vault(
         &self,
         workspace: WorkspaceSlot,

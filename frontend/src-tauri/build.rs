@@ -55,6 +55,8 @@ fn main() {
             "extension_installed",
             "extension_persona_preview",
             "extension_persona_apply",
+            "extension_template_preview",
+            "extension_template_apply",
             "extension_uninstall",
             "extension_enable",
             "extension_disable",

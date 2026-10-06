@@ -464,7 +464,7 @@ pub(crate) fn conflict_write(conn: &Connection, write_id: &str) -> Result<()> {
     conn.execute("UPDATE experiment_imports SET state=CASE WHEN EXISTS(SELECT 1 FROM experiment_import_items WHERE import_id=?1 AND state='committed') THEN 'partial' ELSE 'failed' END WHERE operation_id=?1 AND state='approved'",[id])?;
     Ok(())
 }
-fn target(ws: &Workspace, path: &str) -> Result<SelectedFile> {
+pub(crate) fn target(ws: &Workspace, path: &str) -> Result<SelectedFile> {
     check_destination(ws, path)?;
     let resolved = ws.resolve(path)?;
     let current = ws.entry(path)?;

@@ -597,7 +597,7 @@ impl Workspace {
         )
     }
 
-    fn write_authorized(
+    pub(crate) fn write_authorized(
         &mut self,
         path: &str,
         expected: &str,
