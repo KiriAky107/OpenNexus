@@ -1216,10 +1216,6 @@ impl Workspace {
     }
 
     pub fn rename(&mut self, path: &str, destination: &str, expected: &str) -> Result<Entry> {
-        let target = self.resolve(destination)?;
-        if target.exists() {
-            return Err(HostError::new("PATH_CONFLICT"));
-        }
         let operation = self.prepare_file_op("rename", path, destination, expected)?;
         self.apply_file_op(&operation)?;
         self.entry(destination)?
@@ -1540,6 +1536,55 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn manual_case_rename_reuses_identity_and_rejects_real_destination_conflicts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        let source = ws
+            .write("experiments/课程/DATA.csv", "", b"x,y\r\n1,2\r\n", "local")
+            .unwrap();
+        let renamed = ws
+            .rename(
+                "experiments/课程/DATA.csv",
+                "experiments/课程/data.csv",
+                &source.hash,
+            )
+            .unwrap();
+        assert_eq!(renamed.file_id, source.file_id);
+        assert_eq!(renamed.path, "experiments/课程/data.csv");
+        assert_eq!(ws.path_for_id(&source.file_id).unwrap(), renamed.path);
+        let names: Vec<_> = fs::read_dir(dir.path().join("experiments/课程"))
+            .unwrap()
+            .map(|item| item.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["data.csv"]);
+        assert_eq!(
+            ws.rename(&renamed.path, &renamed.path, &renamed.hash)
+                .unwrap_err()
+                .code,
+            "PATH_CONFLICT"
+        );
+        ws.write("experiments/课程/other.csv", "", b"other\r\n", "local")
+            .unwrap();
+        assert_eq!(
+            ws.rename(&renamed.path, "experiments/课程/other.csv", &renamed.hash)
+                .unwrap_err()
+                .code,
+            "PATH_CONFLICT"
+        );
+        drop(ws);
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        assert_eq!(
+            ws.read(&renamed.path).unwrap().entry.file_id,
+            source.file_id
+        );
+        assert_eq!(
+            ws.read("experiments/课程/other.csv").unwrap().content,
+            "other\r\n"
+        );
+    }
 
     #[test]
     fn experiment_folder_manifest_keeps_vault_scope_for_moves_and_trash_recovery() {
