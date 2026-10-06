@@ -38,12 +38,15 @@ mod runtime_compat;
 #[cfg(windows)]
 pub mod session_lock;
 #[cfg(feature = "desktop")]
+pub mod sync_account;
+#[cfg(feature = "desktop")]
 pub mod sync_auth;
 #[cfg(feature = "desktop")]
 pub mod sync_client;
 pub mod sync_discovery;
 pub mod sync_inbox;
 pub mod sync_initial;
+pub mod sync_progress;
 pub mod sync_resolution;
 pub mod sync_review;
 #[cfg(test)]

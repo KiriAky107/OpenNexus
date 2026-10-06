@@ -64,6 +64,18 @@ pub fn available(credentials: &Credentials, endpoint: &str, account: &str) -> Re
         .map(|v| v.is_some())
     })
 }
+pub fn device_id(credentials: &Credentials, endpoint: &str, account: &str) -> Result<String> {
+    let id = identity(endpoint, account);
+    let encoded = broker(credentials, |broker| broker.resolve(&id.scope, &id))?
+        .ok_or_else(|| SyncError::new("SYNC_LOGIN_REQUIRED"))?;
+    let saved: SavedSession =
+        serde_json::from_slice(&encoded).map_err(|_| SyncError::new("SYNC_SESSION_INVALID"))?;
+    if saved.endpoint != endpoint || saved.account != account {
+        return Err(SyncError::new("SYNC_SESSION_INVALID"));
+    }
+    crate::sync_client::identifier(&saved.session.device_id)?;
+    Ok(saved.session.device_id.clone())
+}
 /// 删除受保护的 HTTP 未来会关闭任何锁定纪元更改的正在进行的操作。
 pub async fn guarded<T>(
     credentials: &Credentials,
@@ -212,6 +224,11 @@ mod tests {
         };
         save(&credentials, &saved).unwrap();
         assert!(available(&credentials, &saved.endpoint, &saved.account).unwrap());
+        assert_eq!(
+            device_id(&credentials, &saved.endpoint, &saved.account).unwrap(),
+            "device"
+        );
+        assert!(device_id(&credentials, &saved.endpoint, "other").is_err());
         assert!(!available(&credentials, "https://other.example/", &saved.account).unwrap());
         assert!(!available(&credentials, &saved.endpoint, "other").unwrap());
         let bytes = std::fs::read(root.path().join("credentials")).unwrap();

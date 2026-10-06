@@ -1,5 +1,6 @@
 //! 有界同步 v1 传输。没有重定向，没有带有令牌的 URL，没有隐式重试。
 use crate::{
+    sync_progress::{Direction, Event, Transfer, TransferPhase},
     sync_state::{Binding, Job},
     workspace::Workspace,
 };
@@ -102,6 +103,7 @@ pub struct SyncClient {
     endpoint: Url,
     client: Client,
     token: Zeroizing<String>,
+    progress: Option<Arc<dyn Fn(Event) + Send + Sync>>,
 }
 
 impl SyncClient {
@@ -127,7 +129,17 @@ impl SyncClient {
             endpoint: url,
             client,
             token,
+            progress: None,
         })
+    }
+    pub fn with_progress(mut self, progress: Arc<dyn Fn(Event) + Send + Sync>) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+    fn report(&self, event: Event) {
+        if let Some(progress) = &self.progress {
+            progress(event);
+        }
     }
     pub async fn json(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
         self.send(method, path, body.map(|v| v.to_string().into_bytes()), true)
@@ -329,6 +341,20 @@ impl SyncClient {
             job: &job,
             finished: false,
         };
+        let mut transfer = Transfer::new(
+            Direction::Upload,
+            &job.path,
+            job.size as u64,
+            if job.operation == "put" && job.base_revision.is_none() {
+                TransferPhase::Sending
+            } else {
+                TransferPhase::Committing
+            },
+        );
+        if job.base_revision.is_some() {
+            transfer.bytes_done = transfer.total_bytes;
+        }
+        self.report(Event::Transfer(transfer));
         let result = async {
             if job.operation == "put" && job.base_revision.is_none() {
                 self.upload(workspace, binding, &job).await?;
@@ -342,6 +368,7 @@ impl SyncClient {
                 )
                 .await?;
             workspace.access(|ws| ws.sync_ack(&job, &revision))?;
+            self.report(Event::Processed(Direction::Upload));
             Ok(true)
         }
         .await;
@@ -384,6 +411,7 @@ impl SyncClient {
                     ws.sync_apply_pending(&binding.id)?;
                     Ok(())
                 })?;
+                self.report(Event::Processed(Direction::Download));
             }
             return Ok(count);
         }
@@ -435,6 +463,7 @@ impl SyncClient {
                 ws.sync_apply_pending(&binding.id)?;
                 Ok(())
             })?;
+            self.report(Event::Processed(Direction::Download));
         }
         Ok(items.len())
     }
@@ -452,9 +481,19 @@ impl SyncClient {
             ws.check_binding(&binding.id)?;
             ws.sync_spool(digest)
         })?;
+        let mut transfer = Transfer::new(
+            Direction::Download,
+            &revision.path,
+            revision.size as u64,
+            TransferPhase::Receiving,
+        );
+        self.report(Event::Transfer(transfer.clone()));
         if target.exists() {
             crate::payloads::verify(&target, digest, revision.size as u64)?;
             workspace.access(|ws| ws.check_binding(&binding.id))?;
+            transfer.bytes_done = transfer.total_bytes;
+            transfer.phase = TransferPhase::Cached;
+            self.report(Event::Transfer(transfer));
             return Ok(());
         }
         let url = self
@@ -497,6 +536,9 @@ impl SyncClient {
             workspace.access(|ws| ws.check_binding(&binding.id))?;
             std::io::Write::write_all(&mut file, &chunk)?;
             hasher.update(&chunk);
+            transfer.bytes_done = length;
+            transfer.transferred_bytes = length;
+            self.report(Event::Transfer(transfer.clone()));
         }
         if length != revision.size as u64 || format!("{:x}", hasher.finalize()) != digest {
             return Err(SyncError::new("SYNC_OBJECT_CORRUPT"));
@@ -504,6 +546,8 @@ impl SyncClient {
         file.as_file().sync_all()?;
         file.persist_noclobber(target)
             .map_err(|_| SyncError::new("SYNC_SPOOL_FAILED"))?;
+        transfer.phase = TransferPhase::Verified;
+        self.report(Event::Transfer(transfer));
         Ok(())
     }
     async fn upload(
@@ -545,6 +589,14 @@ impl SyncClient {
                 )
                 .await?;
             if response["complete"] == true {
+                let mut transfer = Transfer::new(
+                    Direction::Upload,
+                    &job.path,
+                    job.size as u64,
+                    TransferPhase::Cached,
+                );
+                transfer.bytes_done = transfer.total_bytes;
+                self.report(Event::Transfer(transfer));
                 return Ok(());
             }
             upload_id = Some(
@@ -557,6 +609,16 @@ impl SyncClient {
         }
         let id = upload_id.ok_or_else(|| SyncError::new("SYNC_RESPONSE_INVALID"))?;
         identifier(&id)?;
+        let resumed = offset;
+        let mut transfer = Transfer::new(
+            Direction::Upload,
+            &job.path,
+            job.size as u64,
+            TransferPhase::Sending,
+        );
+        transfer.bytes_done = resumed;
+        transfer.resumed_bytes = resumed;
+        self.report(Event::Transfer(transfer.clone()));
         file.seek(SeekFrom::Start(offset))?;
         while offset < job.size as u64 {
             workspace.access(|ws| ws.check_binding(&binding.id))?;
@@ -576,6 +638,9 @@ impl SyncClient {
                 return Err(SyncError::new("SYNC_RESPONSE_INVALID"));
             }
             offset += count as u64;
+            transfer.bytes_done = offset;
+            transfer.transferred_bytes = offset - resumed;
+            self.report(Event::Transfer(transfer.clone()));
         }
         let value = self
             .json(Method::POST, &format!("{base}/{id}/complete"), None)
@@ -583,10 +648,12 @@ impl SyncClient {
         if value["complete"] != true || value["content_hash"] != job.hash {
             return Err(SyncError::new("SYNC_RESPONSE_INVALID"));
         }
+        transfer.phase = TransferPhase::Committing;
+        self.report(Event::Transfer(transfer));
         Ok(())
     }
 }
-fn identifier(value: &str) -> Result<()> {
+pub(crate) fn identifier(value: &str) -> Result<()> {
     if value.is_empty()
         || value.len() > 80
         || !value

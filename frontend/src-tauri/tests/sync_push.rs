@@ -25,6 +25,169 @@ impl Drop for Server {
 }
 
 #[tokio::test]
+async fn real_service_progress_reports_confirmed_resume_verified_download_and_revoked_devices() {
+    use notesagent_host::sync_progress::{Direction, Event, TransferPhase};
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join(".opennexus-test"), b"fixture").unwrap();
+    let Some(service) = sync_service_root() else {
+        eprintln!("skipped: set OPENNEXUS_SYNC_SERVER_DIR for real progress/account checks");
+        return;
+    };
+    let python = service.join(if cfg!(windows) {
+        ".venv/Scripts/python.exe"
+    } else {
+        ".venv/bin/python"
+    });
+    let mut server = Server(
+        Command::new(python)
+            .args(["-m", "tests.host_fixture"])
+            .arg(root.path())
+            .current_dir(service)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let mut line = String::new();
+    BufReader::new(server.0.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let ready: Value = serde_json::from_str(&line).unwrap();
+    let endpoint = format!("http://127.0.0.1:{}", ready["port"]);
+    let public = SyncClient::new(&endpoint, Zeroizing::new(String::new()), true).unwrap();
+    let first = public
+        .login(
+            "rust-fixture",
+            Zeroizing::new("controlled-fixture-password".into()),
+            "Progress A",
+        )
+        .await
+        .unwrap();
+    let second = public
+        .login(
+            "rust-fixture",
+            Zeroizing::new("controlled-fixture-password".into()),
+            "Progress B",
+        )
+        .await
+        .unwrap();
+    let uploads = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let observed = uploads.clone();
+    let client = SyncClient::new(&endpoint, Zeroizing::new(first.access_token.clone()), true)
+        .unwrap()
+        .with_progress(Arc::new(move |event| observed.lock().unwrap().push(event)));
+    let vault = client
+        .json(
+            reqwest::Method::POST,
+            "sync/v1/vaults",
+            Some(json!({"name":"Progress fixture"})),
+        )
+        .await
+        .unwrap();
+    let remote = vault["vault_id"].as_str().unwrap();
+    let local = tempfile::tempdir().unwrap();
+    let body = b"print('must not execute on sync')\n".repeat(70000);
+    assert!(body.len() > 2 * 1048576);
+    let mut ws = Workspace::open(local.path()).unwrap();
+    ws.write("experiments/课程 #%.py", "", &body, "local")
+        .unwrap();
+    let binding = ws
+        .sync_bind_empty(&endpoint, remote, "rust-fixture")
+        .unwrap();
+    let job = ws.sync_next(&binding.id).unwrap().unwrap();
+    let begin = client
+        .json(
+            reqwest::Method::POST,
+            &format!("sync/v1/vaults/{remote}/uploads"),
+            Some(json!({"content_hash":job.hash,"size":job.size})),
+        )
+        .await
+        .unwrap();
+    let upload_id = begin["upload_id"].as_str().unwrap();
+    let receipt: Value = reqwest::Client::new()
+        .put(format!(
+            "{endpoint}/sync/v1/vaults/{remote}/uploads/{upload_id}?offset=0"
+        ))
+        .bearer_auth(&first.access_token)
+        .body(body[..1048576].to_vec())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(receipt["offset"], 1048576);
+    ws.sync_upload(&job, Some(upload_id)).unwrap();
+    let workspace = Arc::new(Mutex::new(ws));
+    assert!(client.push_one(&workspace, &binding).await.unwrap());
+    let events = uploads.lock().unwrap();
+    assert!(events.iter().any(|event| matches!(event, Event::Transfer(value) if value.phase==TransferPhase::Sending && value.resumed_bytes==1048576 && value.bytes_done==1048576 && value.transferred_bytes==0)));
+    assert!(events.iter().any(|event| matches!(event, Event::Transfer(value) if value.phase==TransferPhase::Committing && value.bytes_done==body.len() as u64 && value.transferred_bytes==body.len() as u64-1048576)));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::Processed(Direction::Upload)))
+            .count(),
+        1
+    );
+    drop(events);
+    let info = client.account_details(remote).await.unwrap();
+    assert_eq!(info.vault.used, body.len() as u64);
+    assert!(info
+        .devices
+        .iter()
+        .any(|device| device.id == second.device_id && !device.revoked));
+    let serialized = serde_json::to_string(&info).unwrap();
+    assert!(
+        !serialized.contains(&first.access_token) && !serialized.contains(&second.refresh_token)
+    );
+
+    let downloads = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let observed = downloads.clone();
+    let client_b = SyncClient::new(&endpoint, Zeroizing::new(second.access_token.clone()), true)
+        .unwrap()
+        .with_progress(Arc::new(move |event| observed.lock().unwrap().push(event)));
+    let other = tempfile::tempdir().unwrap();
+    let mut ws_b = Workspace::open(other.path()).unwrap();
+    let binding_b = ws_b
+        .sync_bind_download(&endpoint, remote, "rust-fixture")
+        .unwrap();
+    let workspace_b = Arc::new(Mutex::new(ws_b));
+    assert_eq!(
+        client_b.pull_page(&workspace_b, &binding_b).await.unwrap(),
+        1
+    );
+    assert_eq!(
+        std::fs::read(other.path().join("experiments/课程 #%.py")).unwrap(),
+        body
+    );
+    let events = downloads.lock().unwrap();
+    assert!(events.iter().any(|event| matches!(event, Event::Transfer(value) if value.phase==TransferPhase::Receiving && value.bytes_done>0 && value.transferred_bytes==value.bytes_done)));
+    assert!(events.iter().any(|event| matches!(event, Event::Transfer(value) if value.phase==TransferPhase::Verified && value.bytes_done==body.len() as u64)));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::Processed(Direction::Download)))
+            .count(),
+        1
+    );
+    drop(events);
+    client.revoke_device(&second.device_id).await.unwrap();
+    assert_eq!(
+        client_b.account_details(remote).await.unwrap_err().status,
+        401
+    );
+    assert!(client
+        .account_details(remote)
+        .await
+        .unwrap()
+        .devices
+        .iter()
+        .any(|device| device.id == second.device_id && device.revoked));
+}
+
+#[tokio::test]
 async fn s01_actual_service_preserves_offline_chains_and_response_loss_idempotency() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join(".opennexus-test"), b"fixture").unwrap();

@@ -256,6 +256,7 @@ impl Workspace {
         db.execute_batch(crate::experiment_agent::SCHEMA)?;
         db.execute_batch(crate::experiment_import::SCHEMA)?;
         db.execute_batch(crate::sync_review::SCHEMA)?;
+        db.execute_batch(crate::sync_progress::SCHEMA)?;
         crate::experiment_store::recover(&db)?;
         db.execute_batch("UPDATE sync_attempts SET outcome=CASE WHEN EXISTS(SELECT 1 FROM sync_jobs j WHERE j.binding=sync_attempts.binding AND j.operation_id=sync_attempts.operation_id AND j.state='acked') THEN 'succeeded' ELSE 'interrupted' END WHERE outcome='running'; PRAGMA user_version=18; COMMIT;")?;
         let vault_id: String = db
