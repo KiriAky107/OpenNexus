@@ -116,7 +116,7 @@ jobs:
 
   windows-host:
     runs-on: windows-2022
-    timeout-minutes: 35
+    timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: always
       CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
@@ -140,6 +140,7 @@ jobs:
           key: windows-host-msvc-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('frontend/src-tauri/Cargo.lock', 'frontend/src-tauri/Cargo.toml') }}-${{ github.sha }}
           restore-keys: |
             windows-host-msvc-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('frontend/src-tauri/Cargo.lock', 'frontend/src-tauri/Cargo.toml') }}-
+            windows-host-msvc-${{ steps.rust.outputs.cachekey }}-
       - name: Test native watcher, stable identities and workspace recovery
         run: cargo test --lib --locked 'workspace::' -- --nocapture
       - name: Test sync discovery, ordering and peer application
