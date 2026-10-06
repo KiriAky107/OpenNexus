@@ -100,6 +100,50 @@ export function cachedCatalog(source: CommunitySource, q = '', kind = '', offset
   } catch { return null }
 }
 
+export async function findCompatibleUpdate(source: CommunitySource, installed: Pick<CommunityRelease, 'namespace' | 'package_id' | 'version' | 'type'>, runtime: { app_version: string; platform: string; architecture: string }, signal?: AbortSignal): Promise<CommunityRelease | null> {
+  const identity = catalogIdentity(source, '', installed.type, 0, 100)
+  if (!canonicalVersion(installed.version) || !canonicalVersion(runtime.app_version)) throw new Error('无法比较当前安装或应用的版本，请重新核对安装状态')
+  const assertCurrentSource = () => {
+    signal?.throwIfAborted()
+    if (!source.enabled || catalogIdentity(source, '', installed.type, 0, 100) !== identity) throw new Error('社区来源已改变，请重新查询')
+  }
+  if (!source.enabled || !source.source_id) throw new Error('请先重新检查并确认此来源的公钥')
+  const live = await discoverSource(source.url, signal)
+  assertCurrentSource()
+  const pinned = source.keys.filter(key => key.namespace === installed.namespace)
+  if (live.source_id !== source.source_id || !pinned.length || pinned.some(key => {
+    const current = live.keys.filter(item => item.key_id === key.key_id)
+    return current.length !== 1 || current[0]!.namespace !== key.namespace || current[0]!.public_key !== key.public_key || current[0]!.revoked !== key.revoked
+  })) throw new Error('来源公钥或撤回状态已变化，请重新核对来源')
+  let best: CommunityRelease | null = null, offset = 0, total: number | undefined
+  do {
+    signal?.throwIfAborted()
+    const path = `/catalog/v1/packages/${encodeURIComponent(installed.namespace)}/${encodeURIComponent(installed.package_id)}/releases?offset=${offset}&limit=100`
+    const page = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await download(source, path, 4 * 1024 * 1024, signal)))
+    assertCurrentSource()
+    if (!Array.isArray(page.items)) throw new Error('不支持的发行版本协议')
+    const paged = ['schema_version', 'total', 'offset', 'limit'].some(key => Object.hasOwn(page, key))
+    if (paged) {
+      if (page.schema_version !== 1 || page.offset !== offset || page.limit !== 100 || !Number.isSafeInteger(page.total) || page.total < 0 || page.items.length > 100 || page.items.length > Math.max(0, page.total - offset) || (page.total > offset && !page.items.length) || (total !== undefined && total !== page.total)) throw new Error('发行版本分页已变化，请重新查询')
+      total = page.total
+    } else if (offset !== 0 || page.items.length > 4096) throw new Error('发行版本列表不完整')
+    const ids = new Set<string>()
+    for (const item of page.items as CommunityRelease[]) {
+      if (!item || typeof item.release_id !== 'string' || !item.release_id || ids.has(item.release_id) || item.namespace !== installed.namespace || item.package_id !== installed.package_id || item.type !== installed.type || typeof item.name !== 'string' || typeof item.description !== 'string' || typeof item.changelog !== 'string' || typeof item.withdrawn !== 'boolean' || ![item.platforms, item.architectures, item.permissions].every(values => Array.isArray(values) && values.every(value => typeof value === 'string'))) throw new Error('来源返回了不匹配的发行版本')
+      ids.add(item.release_id)
+      // Legacy noncanonical records stay browseable, but cannot be updates.
+      if (!canonicalVersion(item.version) || !canonicalVersion(item.min_app_version) || (item.max_app_version !== null && item.max_app_version !== undefined && !canonicalVersion(item.max_app_version))) continue
+      if (item.withdrawn || !gt(item.version, installed.version) || gt(item.min_app_version, runtime.app_version) || (item.max_app_version && (lt(item.max_app_version, runtime.app_version) || lt(item.max_app_version, item.min_app_version))) || !item.platforms.includes(runtime.platform) || !item.architectures.includes(runtime.architecture)) continue
+      if (!pinned.some(key => key.key_id === item.key_id && !key.revoked)) throw new Error('更新使用了未确认或已撤销的密钥，请重新核对来源')
+      if (!best || gt(item.version, best.version)) best = item
+    }
+    offset += page.items.length
+    if (!paged) break
+  } while (offset < total!)
+  assertCurrentSource()
+  return best
+}
+
 async function liveRelease(source: CommunitySource, selected: CommunityRelease, signal?: AbortSignal): Promise<CommunityRelease> {
   try {
     return JSON.parse(new TextDecoder().decode(await download(source, `/catalog/v1/releases/${encodeURIComponent(selected.release_id)}`, 2 * 1024 * 1024, signal)))

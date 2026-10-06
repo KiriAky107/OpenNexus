@@ -3,7 +3,9 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { hostInvoke } from '@/services/platform/desktop'
 import { useWorkspaceStore } from '@/stores/workspace'
 import AppDialog from '@/components/common/AppDialog.vue'
-const props = defineProps<{ refreshKey: number }>()
+import InstalledPackages from './InstalledPackages.vue'
+import type { CommunitySource } from '@/contracts/community'
+const props = defineProps<{ refreshKey: number; sources?: CommunitySource[] }>()
 const workspace = useWorkspaceStore()
 interface Package { package_key: string; source: string; namespace: string; package_id: string; version: string; state: string }
 interface Preview { fingerprint: string; dependencies: { packages: Array<{ package_key: string; namespace: string; package_id: string; kind: string; version: string; permissions: string[] }> }; changes: Array<{ target: { slot: string; package_key: string; configuration: unknown }; expected_revision: string | null }> }
@@ -79,6 +81,7 @@ onBeforeUnmount(() => ++generation)
 </script>
 
 <template>
+  <InstalledPackages :refresh-key="refreshKey" :sources="sources" />
   <section class="desktop-packages panel" aria-label="桌面已暂存包">
     <header class="section-heading">
       <div>

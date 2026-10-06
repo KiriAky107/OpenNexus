@@ -11,7 +11,7 @@ vi.mock('@/stores/workspace', async () => {
 import DesktopPackages from './DesktopPackages.vue'
 const item = { package_key: 'package-key', source: 'https://example.com/', namespace: 'examples', package_id: 'reviewer', version: '1.0.0', state: 'staged' }
 beforeEach(() => { native.invoke.mockReset(); native.workspace.vaultId = 'vault-one' })
-function component() { return mount(DesktopPackages, { props: { refreshKey: 0 }, global: { stubs: { AppDialog: { template: '<section><slot /></section>' } } } }) }
+function component() { return mount(DesktopPackages, { props: { refreshKey: 0 }, global: { stubs: { InstalledPackages: true, AppDialog: { template: '<section><slot /></section>' } } } }) }
 it('uses themed surfaces for the section, empty state, and staged package rows', async () => {
   native.invoke.mockResolvedValueOnce([])
   const empty = component(); await flushPromises()

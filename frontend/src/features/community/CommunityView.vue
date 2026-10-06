@@ -153,7 +153,7 @@ function toggleSource() {
       </button>
     </div>
     </section>
-    <DesktopPackages v-if="isDesktop()" :refresh-key="stagedRefresh" />
+    <DesktopPackages v-if="isDesktop()" :refresh-key="stagedRefresh" :sources="sources" />
     <section v-if="candidates.length" class="saved-candidates panel">
       <h2>已保存的声明式候选</h2><p>这些候选尚未应用到人设、MCP 或模型运行配置。</p>
       <details v-for="item in candidates" :key="item.key"><summary>{{ item.key.replace('community-candidate:', '') }}</summary><pre>{{ item.value }}</pre><button class="btn" @click="removeCandidate(item.key)">删除候选</button></details>
