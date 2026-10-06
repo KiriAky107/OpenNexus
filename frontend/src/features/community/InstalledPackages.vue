@@ -6,6 +6,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { findCompatibleUpdate, loadSources, stageDesktopRelease } from '@/services/communityService'
 import { normalizedCommunitySource } from '@/services/communityCatalogCache'
 import AppDialog from '@/components/common/AppDialog.vue'
+import PersonaCandidateDialog from './PersonaCandidateDialog.vue'
 import { t } from '@/i18n'
 
 const props = defineProps<{ refreshKey: number; sources?: CommunitySource[] }>()
@@ -18,11 +19,13 @@ const result = ref<Page | null>(null), offset = ref(0), busy = ref(false), error
 const selected = ref<Installed | null>(null), update = ref<CommunityRelease | null>(null), rollback = ref<Preview | null>(null), notice = ref('')
 const configuration = ref('{}'), prepared = ref<{ rootKey: string; preview: Preview; configurations: Record<string, unknown> } | null>(null)
 const applying = ref(false), completed = ref('')
+const candidateSlot = ref<string | null>(null)
 let generation = 0, controller: AbortController | undefined
 let activeRequest: string | undefined
 function cancelRequest() { controller?.abort(); if (activeRequest) void hostInvoke('extension_stage_cancel', { requestId: activeRequest }).catch(() => undefined) }
 function cancel() { ++generation; cancelRequest(); busy.value = false; applying.value = false }
-function clear() { cancel(); selected.value = null; update.value = null; rollback.value = null; prepared.value = null; error.value = ''; notice.value = ''; completed.value = '' }
+function clear() { cancel(); selected.value = null; update.value = null; rollback.value = null; prepared.value = null; candidateSlot.value = null; error.value = ''; notice.value = ''; completed.value = '' }
+function appliedPersona() { void refresh(offset.value, t('当前知识库人设已应用，对话和智能体将使用新设置。', 'The vault persona was applied. Chats and agents will use the new settings.')) }
 function sourceFor(item: Installed) {
   return (props.sources ?? loadSources()).find(source => { try { return normalizedCommunitySource(source.url) === item.source } catch { return false } })
 }
@@ -145,9 +148,10 @@ onMounted(() => refresh(0)); onBeforeUnmount(cancel)
     <p v-if="result && !result.items.length && !busy">{{ t('本页没有已安装包。', 'There are no installed packages on this page.') }}</p>
     <ul v-if="result" class="installed-list"><li v-for="item in result.items" :key="item.slot" class="item-card">
       <div><strong>{{ item.release.name }} · {{ item.release.version }}</strong><p>{{ item.source }}</p><p>{{ item.pending_operation ? t('安装等待健康检查，尚未完成', 'Installation awaits health checks and is incomplete') : t('已安装；运行状态另行确认', 'Installed; runtime state is checked separately') }}</p></div>
-      <div class="actions"><button class="button-secondary" :disabled="busy || !!item.pending_operation" @click="inspect(item, 'update')">{{ t('查询兼容更新', 'Check compatible updates') }}</button><button v-if="item.rollback_operation_id" class="button-secondary" :disabled="busy || !!item.pending_operation" @click="inspect(item, 'rollback')">{{ t('预览回滚', 'Preview rollback') }}</button></div>
+      <div class="actions"><button class="button-secondary" :disabled="busy || !!item.pending_operation" @click="inspect(item, 'update')">{{ t('查询兼容更新', 'Check compatible updates') }}</button><button v-if="item.rollback_operation_id" class="button-secondary" :disabled="busy || !!item.pending_operation" @click="inspect(item, 'rollback')">{{ t('预览回滚', 'Preview rollback') }}</button><button v-if="item.release.type === 'persona'" class="button-secondary" :disabled="busy || !!item.pending_operation" @click="candidateSlot = item.slot">{{ t('应用人设', 'Apply persona') }}</button></div>
     </li></ul>
     <nav v-if="result && result.total > 0" :aria-label="t('已安装包分页', 'Installed package pages')"><button class="button-secondary" :disabled="busy || offset === 0" @click="refresh(offset - 20)">{{ t('上一页', 'Previous') }}</button><span>{{ t(`第 ${Math.floor(offset / 20) + 1} / ${Math.ceil(result.total / 20)} 页 · ${result.total} 项`, `Page ${Math.floor(offset / 20) + 1} / ${Math.ceil(result.total / 20)} · ${result.total} packages`) }}</span><button class="button-secondary" :disabled="busy || offset + 20 >= result.total" @click="refresh(offset + 20)">{{ t('下一页', 'Next') }}</button></nav>
+    <PersonaCandidateDialog v-if="candidateSlot" :slot="candidateSlot" :source-revision="JSON.stringify(props.sources) ?? ''" @close="candidateSlot = null" @applied="appliedPersona" />
     <AppDialog v-if="selected" :label="t('更新与回滚预览', 'Update and rollback preview')" :dismissible="!applying" @close="clear"><section class="modal-card package-review">
       <h2>{{ selected.release.name }} · {{ selected.release.version }}</h2><p v-if="busy" role="status">{{ t('正在核对…', 'Checking…') }}</p><p v-if="error" role="alert">{{ error }}</p><p v-if="notice" role="status">{{ notice }}</p>
       <template v-if="update"><h3>{{ selected.release.version }} → {{ update.version }}</h3><p>{{ update.description }}</p><h4>{{ t('变更说明', 'Changelog') }}</h4><pre>{{ update.changelog }}</pre><h4>{{ t('新增权限', 'Added permissions') }}</h4><p>{{ update.permissions.filter(permission => !selected!.release.permissions.includes(permission)).join('、') || t('无', 'None') }}</p><h4>{{ t('移除权限', 'Removed permissions') }}</h4><p>{{ selected.release.permissions.filter(permission => !update!.permissions.includes(permission)).join('、') || t('无', 'None') }}</p></template>

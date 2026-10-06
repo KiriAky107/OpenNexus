@@ -13,6 +13,15 @@ const page={items:[item],total:1,offset:0,limit:20,app_version:'0.6.0',platform:
 function component(){return mount(InstalledPackages,{props:{refreshKey:0,sources:[source]},global:{stubs:{AppDialog:{template:'<section><slot /></section>'}}}})}
 beforeEach(()=>{controls.invoke.mockReset();controls.update.mockReset();controls.stage.mockReset();controls.workspace.vaultId='vault-one'})
 
+it('opens the persona application target from installed packages without implicitly previewing or writing',async()=>{
+  controls.invoke.mockResolvedValue({...page,items:[{...item,release:{...item.release,type:'persona'}}]})
+  const wrapper=component();await flushPromises()
+  await wrapper.findAll('button').find(button=>button.text()==='应用人设')!.trigger('click');await flushPromises()
+  expect(wrapper.find('select').exists()).toBe(true)
+  expect(wrapper.text()).toContain('当前知识库人设')
+  expect(controls.invoke.mock.calls.map(call=>call[0])).toEqual(['extension_installed']);wrapper.unmount()
+})
+
 it('shows the native vault-bound installed version and incomplete health state without claiming it is running',async()=>{
   controls.invoke.mockResolvedValue({...page,items:[{...item,pending_operation:'checking-operation'}]})
   const wrapper=component();await flushPromises()
