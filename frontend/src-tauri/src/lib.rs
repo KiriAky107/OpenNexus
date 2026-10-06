@@ -63,6 +63,7 @@ pub mod sync_retry;
 pub mod extension_package;
 
 pub mod extension_manifest;
+pub mod extension_templates;
 
 #[cfg(feature = "desktop")]
 pub mod extension_store;

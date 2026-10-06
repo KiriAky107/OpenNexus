@@ -94,12 +94,7 @@ pub fn validate(release: &Release, bytes: &[u8]) -> Result<Value> {
         }
         let valid = match release.kind.as_str() {
             "persona" => value["system_prompt"].is_string(),
-            "template" => {
-                value["markdown"].is_string()
-                    && value
-                        .get("executable")
-                        .is_none_or(|v| v == false || v.is_null())
-            }
+            "template" => crate::extension_templates::validate_release(release, &value).is_ok(),
             "model" => {
                 ["source", "revision", "license"]
                     .iter()
@@ -221,6 +216,30 @@ mod tests {
         )
         .is_err());
         assert!(validate(&persona, b"system_prompt: YAML is not JSON").is_err());
+    }
+    #[test]
+    fn shared_experiment_templates_use_the_manifest_gate() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../src/services/fixtures/community-v1-templates.json"
+        ))
+        .unwrap();
+        let mut template_release = release("template");
+        template_release.min_app_version = "0.6.0".into();
+        for case in fixture["cases"].as_array().unwrap() {
+            assert_eq!(
+                validate(
+                    &template_release,
+                    &serde_json::to_vec(&case["manifest"]).unwrap()
+                )
+                .is_ok(),
+                case["accepted"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+        template_release.min_app_version = "0.5.9".into();
+        let experiment = &fixture["cases"][2]["manifest"];
+        assert!(validate(&template_release, &serde_json::to_vec(experiment).unwrap()).is_err());
     }
     #[test]
     fn declarative_types_enforce_contract_and_nested_secret_exclusion() {

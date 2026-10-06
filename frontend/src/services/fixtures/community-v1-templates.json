@@ -1,0 +1,1007 @@
+{
+  "schema_version": 1,
+  "contract": "community-template/experiment-v1",
+  "limits": {
+    "files": 32,
+    "file_utf8_bytes": 65536,
+    "total_utf8_bytes": 524288
+  },
+  "cases": [
+    {
+      "name": "legacy-markdown",
+      "accepted": true,
+      "manifest": {
+        "markdown": "# {{title}}"
+      }
+    },
+    {
+      "name": "legacy-null-executable",
+      "accepted": true,
+      "manifest": {
+        "markdown": "# Legacy",
+        "executable": null
+      }
+    },
+    {
+      "name": "unicode-literal-paths-and-crlf",
+      "accepted": true,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "auto-run-flag",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": true,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "numeric-executable",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": 0,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unknown-experiment-field",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            }
+          ],
+          "command": "python"
+        }
+      }
+    },
+    {
+      "name": "unknown-file-field",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n",
+              "executable": true
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "missing-entry-file",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "missing.py",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "entry-is-input",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv",
+            "课程 #%.PY"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unknown-input",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv",
+            "missing.json"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "duplicate-input",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "case-collision",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "INPUTS/TABLE.CSV",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unicode-portable-collision",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "straße.py",
+              "content": ""
+            },
+            {
+              "path": "STRASSE.py",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "file-directory-collision",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "data.py",
+              "content": ""
+            },
+            {
+              "path": "DATA.PY/item.json",
+              "content": "{}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "null-experiment",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": null
+      }
+    },
+    {
+      "name": "future-experiment-schema",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 2,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "boolean-schema",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": true,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "empty-files",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": []
+        }
+      }
+    },
+    {
+      "name": "unsafe-path-../outside.py",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "../outside.py",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unsafe-path-/absolute.py",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "/absolute.py",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unsafe-path-C:/outside.py",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "C:/outside.py",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unsafe-path-dir\\windows.py",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "dir\\windows.py",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unsafe-path-CON.py",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "CON.py",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unsafe-path-conin$.csv",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "conin$.csv",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unsafe-path-COM¹.json",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "COM¹.json",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unsafe-path-.ainote/data.json",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": ".ainote/data.json",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unsafe-path-.git/data.py",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": ".git/data.py",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unsafe-path-opennexus-records/default.json",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "opennexus-records/default.json",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unsafe-path-trailing /data.csv",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "trailing /data.csv",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unsafe-path-name.py.",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "name.py.",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unsafe-path-data.md",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "data.md",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unsafe-path-dir:stream.py",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "dir:stream.py",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "unsafe-path-control.py",
+      "accepted": false,
+      "manifest": {
+        "markdown": "# 课程实验\r\nRun after reviewing inputs.",
+        "executable": false,
+        "experiment": {
+          "schema_version": 1,
+          "entry": "课程 #%.PY",
+          "inputs": [
+            "inputs/数据.JSON",
+            "inputs/table.csv"
+          ],
+          "files": [
+            {
+              "path": "课程 #%.PY",
+              "content": "print(\"课程 # %\")\r\n"
+            },
+            {
+              "path": "inputs/数据.JSON",
+              "content": "{\"数值\": [1, 2]}\r\n"
+            },
+            {
+              "path": "inputs/table.csv",
+              "content": "name,value\r\n中文,2\r\n"
+            },
+            {
+              "path": "control.py",
+              "content": ""
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
