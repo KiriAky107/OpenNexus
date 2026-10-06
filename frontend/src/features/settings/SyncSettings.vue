@@ -5,12 +5,15 @@ import { hostInvoke } from '@/services/platform/desktop'
 import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
 import { t } from '@/i18n'
-import type { SyncConflict } from '@/contracts/sync'
+import type { SyncConflict, SyncActivity as Activity } from '@/contracts/sync'
 import SyncConflictReview from './SyncConflictReview.vue'
+import SyncActivity from './SyncActivity.vue'
+import SyncAccount from './SyncAccount.vue'
+import { syncError } from './syncPresentation'
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 interface Binding { id: string; endpoint: string; account: string; remote_vault: string; cursor: number }
 type OptionalScope = { persona: boolean; layout: boolean; conversations: boolean; agent_history: boolean; provider_settings: boolean; extension_installations: boolean }
-interface Status { optional_scope?: OptionalScope; vault_id: string; binding: Binding | null; paused: boolean; pending: number; conflicts: SyncConflict[]; credential_state: string; running: boolean; error: string | null; retry_in: number | null; failures: number; halted: boolean; attempts?: Array<{ operation_id: string; path: string; attempts: number; outcome: string; error: string | null }> }
+interface Status { optional_scope?: OptionalScope; vault_id: string; binding: Binding | null; paused: boolean; pending: number; conflicts: SyncConflict[]; credential_state: string; running: boolean; error: string | null; retry_in: number | null; failures: number; halted: boolean; activity?: Activity | null; last_cycle_success_at?: number | null; attempts?: Array<{ operation_id: string; path: string; attempts: number; outcome: string; error: string | null }> }
 interface RemoteVault { id: string; name: string; sequence: number; used: number; quota: number }
 const status = ref<Status | null>(null)
 const endpoint = ref('https://'), account = ref(''), password = ref(''), device = ref('OpenNexus Desktop'), testHttp = ref(false)
@@ -30,9 +33,11 @@ async function merge() {
 }
 let timer: ReturnType<typeof setInterval> | undefined
 let mounted = true
+let refreshVersion = 0
 async function refresh() {
+  const version = ++refreshVersion
   const next = await hostInvoke<Status>('sync_status')
-  if (!mounted) return
+  if (!mounted || version !== refreshVersion) return
   status.value = next
   if (next.binding) { endpoint.value = next.binding.endpoint; account.value = next.binding.account; connected.value = next.credential_state === 'ready' }
 }
@@ -40,7 +45,7 @@ async function act(action: () => Promise<void>) {
   if (busy.value) return
   busy.value = true; message.value = ''
   try { await action(); await refresh() }
-  catch (error) { message.value = error instanceof Error ? error.message : 'SYNC_FAILED' }
+  catch (error) { message.value = syncError(error) }
   finally { busy.value = false }
 }
 function setScope(kind: keyof OptionalScope, event: Event) {
@@ -135,8 +140,10 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
     <div v-if="status?.binding" class="sync-bound">
       <p>{{ status.binding.endpoint }} · {{ status.binding.account }}</p>
       <p aria-live="polite">{{ status.paused ? t('已暂停', 'Paused') : status.running ? t('同步中', 'Syncing') : status.halted ? t('自动同步已停止，请处理错误后重试', 'Automatic sync stopped; resolve the error and retry') : t('等待下一轮同步', 'Waiting for next sync') }} · {{ t('待上传', 'Pending') }} {{ status.pending }}</p>
-      <p v-if="status.credential_state !== 'ready'" role="status">{{ status.credential_state }}</p>
-      <p v-if="status.error" role="alert">{{ status.error }}<span v-if="status.retry_in && !status.halted"> · {{ status.retry_in }}s</span></p>
+      <p v-if="status.credential_state !== 'ready'" role="status">{{ syncError(status.credential_state) }}</p>
+      <p v-if="status.retry_in && !status.halted" role="status">{{ t('自动重试等待', 'Automatic retry wait') }} · {{ status.retry_in }}s</p>
+      <SyncActivity :activity="status.activity" :last-success="status.last_cycle_success_at" :error="status.error" />
+      <SyncAccount :key="`${status.vault_id}:${status.binding.id}`" :vault-id="status.vault_id" :binding-id="status.binding.id" :remote-vault-id="status.binding.remote_vault" :disabled="busy || status.running || status.credential_state !== 'ready'" />
       <div class="inline-actions">
         <button :disabled="busy || status.running || status.paused" @click="act(async () => { await hostInvoke('sync_run') })">{{ t('立即同步', 'Sync now') }}</button>
         <button :disabled="busy" @click="act(async () => { await hostInvoke('sync_pause', { bindingId: status!.binding!.id, paused: !status!.paused }) })">{{ status.paused ? t('继续同步', 'Resume sync') : t('暂停同步', 'Pause sync') }}</button>

@@ -1604,6 +1604,8 @@ fn main() {
             sync_set_scope,
             sync_resolve,
             sync_conflict_review,
+            sync_account_status,
+            sync_revoke_device,
             sync_logout,
             sync_run,
             credentials_status,
