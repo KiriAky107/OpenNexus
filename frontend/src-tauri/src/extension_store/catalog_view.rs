@@ -263,6 +263,43 @@ impl ExtensionStore {
             state,
         }))
     }
+
+    /// Bind the complete pending group to its durable reviewed targets. The Host
+    /// still verifies each archive/tree/configuration and every runtime health.
+    pub fn installation_targets(
+        &self,
+        operation: &str,
+        vault: &str,
+    ) -> Result<Vec<crate::extension_transaction::Active>> {
+        let receipt = self
+            .installation_status(operation, vault)?
+            .ok_or_else(|| HostError::new("EXTENSION_INSTALL_UNKNOWN"))?;
+        if receipt.state != "checking" {
+            return Err(HostError::new("EXTENSION_INSTALL_NOT_PENDING"));
+        }
+        let json: String = self.db.query_row(
+            "SELECT after_state FROM extension_transactions WHERE id=?1",
+            [operation],
+            |row| row.get(0),
+        )?;
+        let changes: Vec<crate::extension_transaction::Change> =
+            serde_json::from_str(&json).map_err(|_| HostError::new("EXTENSION_STORE_CORRUPT"))?;
+        changes
+            .into_iter()
+            .map(|change| {
+                let active = self
+                    .active_installation(&change.target.slot)?
+                    .ok_or_else(|| HostError::new("EXTENSION_INSTALL_CONFLICT"))?;
+                if active.pending_operation.as_deref() != Some(operation)
+                    || active.target != change.target
+                    || active.revision != hash(&serde_json::to_vec(&active.target).unwrap())
+                {
+                    return Err(HostError::new("EXTENSION_INSTALL_CONFLICT"));
+                }
+                Ok(active)
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

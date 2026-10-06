@@ -37,6 +37,8 @@ fn now_ms() -> Result<u64> {
 }
 pub type ResumeCheck = Box<dyn FnOnce(&Claims) -> Result<()> + Send>;
 pub struct LaunchSpec {
+    /// Exact active-target revision, including configuration; not just version.
+    pub installation_revision: String,
     pub package: cap_std::fs::Dir,
     pub inventory: Inventory,
     pub claims: Claims,
@@ -66,6 +68,7 @@ pub struct Snapshot {
     pub error: Option<String>,
 }
 struct Control {
+    installation_revision: String,
     stop: AtomicBool,
     #[cfg(test)]
     job: Mutex<Option<crate::extension_job::Job>>,
@@ -175,10 +178,16 @@ impl<T> Drop for Ticket<T> {
 }
 #[derive(Clone)]
 pub struct Endpoint {
+    key: String,
     control: Arc<Control>,
     commands: SyncSender<Command>,
 }
 impl Endpoint {
+    pub fn ready_for_revision(&self, revision: &str) -> bool {
+        self.control.installation_revision == revision
+            && self.control.status() == Status::Ready
+            && !self.control.stop.load(Ordering::Acquire)
+    }
     fn submit<T>(&self, build: impl FnOnce(Request<T>) -> Command) -> Result<Ticket<T>> {
         if self.control.status() != Status::Ready || self.control.stop.load(Ordering::Acquire) {
             return Err(HostError::new("EXTENSION_INSTANCE_NOT_READY"));
@@ -272,13 +281,12 @@ impl Registry {
                 .map_err(|_| HostError::new("EXTENSION_INSTANCE_INVALID"))?
             )
         );
-        if self.entries.contains_key(&key) {
-            return Err(HostError::new("EXTENSION_INSTANCE_ALREADY_RUNNING"));
-        }
+        self.check_start_identity(&key)?;
         if self.entries.len() >= 16 {
             return Err(HostError::new("EXTENSION_INSTANCE_LIMIT"));
         }
         let control = Arc::new(Control {
+            installation_revision: spec.installation_revision.clone(),
             stop: AtomicBool::new(false),
             #[cfg(test)]
             job: Mutex::new(None),
@@ -290,6 +298,7 @@ impl Registry {
         });
         let (commands, receiver) = mpsc::sync_channel(4);
         let endpoint = Endpoint {
+            key: key.clone(),
             control: Arc::clone(&control),
             commands,
         };
@@ -335,6 +344,22 @@ impl Registry {
         );
         Ok(endpoint)
     }
+    fn check_start_identity(&self, key: &str) -> Result<()> {
+        if let Some(entry) = self.entries.get(key) {
+            // A retried installation must not reinterpret quarantined cleanup as
+            // an ordinary duplicate and restore pointers beneath that instance.
+            return Err(HostError::new(
+                if cleanup_failed(&entry.endpoint)
+                    || entry.endpoint.control.stop.load(Ordering::Acquire)
+                {
+                    "EXTENSION_INSTALL_CLEANUP_REQUIRED"
+                } else {
+                    "EXTENSION_INSTANCE_ALREADY_RUNNING"
+                },
+            ));
+        }
+        Ok(())
+    }
     /// 只回收已确认结束的线程，不能仅因请求停止或状态改变就让旧代实例与替代实例重叠。
     pub fn reap(&mut self) {
         let done: Vec<_> = self
@@ -373,6 +398,41 @@ impl Registry {
         }
     }
 
+    /// Stop only this generation and require native cleanup before replacement.
+    /// An obsolete endpoint cannot stop a newer instance with the same identity.
+    pub fn stop_and_join(&mut self, endpoint: &Endpoint) -> Result<()> {
+        let Some(entry) = self.entries.get(&endpoint.key) else {
+            return if matches!(endpoint.snapshot().status, Status::Stopped | Status::Failed)
+                && !cleanup_failed(endpoint)
+            {
+                Ok(())
+            } else {
+                Err(HostError::new("EXTENSION_INSTANCE_NOT_OWNED"))
+            };
+        };
+        if !Arc::ptr_eq(&entry.endpoint.control, &endpoint.control) {
+            return Err(HostError::new("EXTENSION_INSTANCE_NOT_OWNED"));
+        }
+        endpoint.stop();
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !entry.worker.is_finished() {
+            if std::time::Instant::now() >= deadline {
+                return Err(HostError::new("EXTENSION_INSTALL_CLEANUP_REQUIRED"));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if cleanup_failed(endpoint) {
+            return Err(HostError::new("EXTENSION_INSTALL_CLEANUP_REQUIRED"));
+        }
+        if let Some(entry) = self.entries.remove(&endpoint.key) {
+            entry
+                .worker
+                .join()
+                .map_err(|_| HostError::new("EXTENSION_INSTALL_CLEANUP_REQUIRED"))?;
+        }
+        Ok(())
+    }
+
     /// 请求停止并等待所有实例释放工具、进程、容器和包 ACL。
     pub fn stop_all_and_join(&mut self) {
         self.stop_all();
@@ -385,6 +445,23 @@ impl Registry {
         self.reap();
         self.entries.len()
     }
+    pub fn ready_count(&self) -> usize {
+        self.entries
+            .values()
+            .filter(|entry| entry.endpoint.snapshot().status == Status::Ready)
+            .count()
+    }
+}
+fn cleanup_failed(endpoint: &Endpoint) -> bool {
+    endpoint.snapshot().error.as_deref().is_some_and(|code| {
+        matches!(
+            code,
+            "EXTENSION_CONTAINER_CLEANUP_FAILED"
+                | "EXTENSION_CONTAINER_ACL_REVOKE_FAILED"
+                | "EXTENSION_RESOURCE_TERMINATE_FAILED"
+                | "EXTENSION_INSTANCE_WORKER_FAILED"
+        )
+    })
 }
 impl Drop for Registry {
     fn drop(&mut self) {
@@ -624,6 +701,7 @@ mod tests {
                 expires_at_ms: now_ms().unwrap() + 120_000,
             };
             LaunchSpec {
+                installation_revision: "fixture-revision".into(),
                 package: dir.try_clone().unwrap(),
                 inventory: inventory(),
                 permit: authority.issue(&claims, now_ms().unwrap()).unwrap(),
@@ -654,6 +732,8 @@ mod tests {
             endpoint.snapshot().error
         );
         assert_eq!(endpoint.snapshot().tool_count, 1);
+        assert!(endpoint.ready_for_revision("fixture-revision"));
+        assert!(!endpoint.ready_for_revision("another-revision"));
         let first_identity = serde_json::to_value(endpoint.snapshot().identity.unwrap()).unwrap();
         let review = endpoint
             .review("echo".into(), json!({}))
@@ -941,6 +1021,7 @@ mod tests {
     fn channel() -> (Endpoint, Receiver<Command>) {
         let (commands, receiver) = mpsc::sync_channel(4);
         let control = Arc::new(Control {
+            installation_revision: "fixture-revision".into(),
             stop: AtomicBool::new(false),
             job: Mutex::new(None),
             active: Mutex::new(None),
@@ -949,7 +1030,14 @@ mod tests {
             tools: Mutex::new(Vec::new()),
             error: Mutex::new(None),
         });
-        (Endpoint { control, commands }, receiver)
+        (
+            Endpoint {
+                key: "fixture-key".into(),
+                control,
+                commands,
+            },
+            receiver,
+        )
     }
     #[test]
     fn bounded_queue_and_stop_prevent_queued_work_from_executing() {
@@ -990,11 +1078,57 @@ mod tests {
         *endpoint.control.error.lock().unwrap() = Some("EXTENSION_CONTAINER_CLEANUP_FAILED".into());
         let worker = std::thread::spawn(|| {});
         wait_for(|| worker.is_finished());
+        let owned = endpoint.clone();
         let mut registry = Registry::default();
         registry
             .entries
-            .insert("quarantined".into(), Entry { endpoint, worker });
+            .insert(endpoint.key.clone(), Entry { endpoint, worker });
         registry.reap();
         assert_eq!(registry.entries.len(), 1);
+        assert_eq!(
+            registry.check_start_identity(&owned.key).unwrap_err().code,
+            "EXTENSION_INSTALL_CLEANUP_REQUIRED"
+        );
+        assert_eq!(
+            registry.stop_and_join(&owned).unwrap_err().code,
+            "EXTENSION_INSTALL_CLEANUP_REQUIRED"
+        );
+        assert_eq!(registry.entries.len(), 1);
+    }
+
+    #[test]
+    fn an_old_endpoint_cannot_stop_a_new_generation_of_the_same_identity() {
+        let (old, _) = channel();
+        let (current, _) = channel();
+        let control = Arc::clone(&current.control);
+        let worker = std::thread::spawn(move || {
+            while !control.stop.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            control.status.store(3, Ordering::Release);
+        });
+        let mut registry = Registry::default();
+        registry.entries.insert(
+            current.key.clone(),
+            Entry {
+                endpoint: current.clone(),
+                worker,
+            },
+        );
+        assert_eq!(
+            registry.stop_and_join(&old).unwrap_err().code,
+            "EXTENSION_INSTANCE_NOT_OWNED"
+        );
+        assert!(current.ready_for_revision("fixture-revision"));
+        assert_eq!(
+            registry
+                .check_start_identity(&current.key)
+                .unwrap_err()
+                .code,
+            "EXTENSION_INSTANCE_ALREADY_RUNNING"
+        );
+        registry.stop_and_join(&current).unwrap();
+        assert_eq!(current.snapshot().status, Status::Stopped);
+        assert!(registry.entries.is_empty());
     }
 }

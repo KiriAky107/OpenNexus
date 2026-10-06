@@ -135,6 +135,13 @@ fn pending_and_recovered_operations_are_reported_without_granting_completion() {
     let (operation, _) = install(&mut store, &release, &archive, &key, &vault, false);
     let page = store.installed(&vault, 0, 20).unwrap();
     assert_eq!(
+        store
+            .installation_targets(&operation, &vault)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
         page.items[0].pending_operation.as_deref(),
         Some(operation.as_str())
     );
@@ -161,6 +168,13 @@ fn pending_and_recovered_operations_are_reported_without_granting_completion() {
     drop(store);
     let store = ExtensionStore::open(root.path()).unwrap();
     assert!(store.installed(&vault, 0, 20).unwrap().items.is_empty());
+    assert_eq!(
+        store
+            .installation_targets(&operation, &vault)
+            .unwrap_err()
+            .code,
+        "EXTENSION_INSTALL_NOT_PENDING"
+    );
     assert_eq!(
         store
             .installation_status(&operation, &vault)

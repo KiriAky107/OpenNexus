@@ -5,6 +5,8 @@
 mod extension_commands;
 use extension_commands::*;
 mod experiment_commands;
+#[cfg(windows)]
+mod extension_activation;
 use experiment_commands::*;
 
 mod record_commands;
@@ -36,6 +38,7 @@ struct Host {
     extensions: Arc<Mutex<Option<notesagent_host::extension_store::ExtensionStore>>>,
     extension_reviews: extension_commands::Reviews,
     extension_requests: Requests,
+    extension_activation: Mutex<()>,
     extension_authority: Arc<notesagent_host::extension_permit::Authority>,
     #[cfg(windows)]
     extension_instances: Mutex<notesagent_host::extension_instance::Registry>,
