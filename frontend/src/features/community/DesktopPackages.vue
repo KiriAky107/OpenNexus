@@ -12,7 +12,9 @@ interface Preview { fingerprint: string; dependencies: { packages: Array<{ packa
 const packages = ref<Package[]>([]), page = ref(0), busy = ref(false), error = ref('')
 const selected = ref<Package | null>(null), configuration = ref('{}'), preview = ref<Preview | null>(null)
 const completed = ref('')
+const installedRefresh = ref(0)
 let generation = 0
+let activeRequest: { id: string; generation: number } | undefined
 const errors: Record<string, string> = {
   VAULT_CHANGED: '笔记库已切换，请重新预览。', VAULT_NOT_OPEN: '请先打开笔记库。',
   EXTENSION_DEPENDENCY_MISSING: '依赖尚未暂存，请先从同一来源获取依赖包。',
@@ -21,6 +23,9 @@ const errors: Record<string, string> = {
   EXTENSION_CONFIG_SECRET: '配置包含秘密字段，请勿将凭据填入包配置。',
   EXTENSION_KEY_REVOKED: '签名键已撤销，不能继续安装。',
   EXTENSION_RELEASE_WITHDRAWN: '此版本已撤回，不能继续安装。',
+  EXTENSION_GROUP_NOT_HEALTHY: '部分运行依赖未通过健康检查，请刷新安装状态后重新预览。',
+  EXTENSION_INSTALL_CLEANUP_REQUIRED: '扩展停止或清理尚未确认，安装仍未完成。请刷新状态，不要重复安装。',
+  EXTENSION_UPDATE_ROLLED_BACK_RUNTIME_STOPPED: '版本已恢复，但原扩展未能重新运行，请核对来源和运行状态。',
 }
 function message(reason: unknown) {
   const code = reason instanceof Error ? reason.message : String(reason)
@@ -51,37 +56,47 @@ async function install() {
   if (!selected.value || !preview.value || !workspace.vaultId) return
   const vaultId = workspace.vaultId, rootKey = selected.value.package_key, reviewed = preview.value
   const current = ++generation; busy.value = true; error.value = ''; completed.value = ''
+  let requestId: string | undefined
+  const operationId = crypto.randomUUID()
   try {
     const parsed = JSON.parse(configuration.value)
-    const requestId = await hostInvoke<string>('extension_stage_prepare')
-    const operationId = crypto.randomUUID()
-    await hostInvoke('extension_install_confirm', { request: {
+    requestId = await hostInvoke<string>('extension_stage_prepare')
+    if (current !== generation || workspace.vaultId !== vaultId) {
+      await hostInvoke('extension_stage_cancel', { requestId }); return
+    }
+    activeRequest = { id: requestId, generation: current }
+    const receipt = await hostInvoke<{ operation_id: string; state: string }>('extension_install_confirm', { request: {
       request_id: requestId, operation_id: operationId, fingerprint: reviewed.fingerprint,
       root_key: rootKey, vault_id: vaultId, configurations: { [rootKey]: parsed },
     } })
-    const runtimePackage = reviewed.dependencies.packages.find(item => item.kind === 'plugin' || item.kind === 'mcp')
-    if (!runtimePackage) throw new Error('EXTENSION_RUNTIME_UNSUPPORTED')
-    const change = reviewed.changes.find(item => item.target.package_key === runtimePackage.package_key)
-    if (!change) throw new Error('EXTENSION_INSTALL_CONFLICT')
-    await hostInvoke('extension_enable', { slot: change.target.slot, vaultId, installOperationId: operationId })
+    if (receipt?.operation_id !== operationId || receipt.state !== 'complete') throw new Error('EXTENSION_GROUP_NOT_HEALTHY')
+    if (workspace.vaultId === vaultId) installedRefresh.value++
     if (generation === current && workspace.vaultId === vaultId) {
-      completed.value = '安装和运行健康检查已完成。'
+      completed.value = reviewed.dependencies.packages.some(item => item.kind === 'plugin' || item.kind === 'mcp') ? '安装和全部运行依赖健康检查已完成。' : '安装已完成；声明式配置尚未应用到目标。'
       preview.value = null
       await refresh()
     }
-  } catch (reason) { if (generation === current) error.value = message(reason) }
-  finally { if (generation === current) busy.value = false }
+  } catch (reason) {
+    if (workspace.vaultId === vaultId) installedRefresh.value++
+    if (generation === current) { preview.value = null; error.value = message(reason) }
+  }
+  finally {
+    if (activeRequest?.id === requestId) activeRequest = undefined
+    if (requestId) void hostInvoke('extension_stage_cancel', { requestId }).catch(() => undefined)
+    if (generation === current) busy.value = false
+  }
 }
-function close() { ++generation; selected.value = null; preview.value = null; busy.value = false }
+function cancelRequest() { if (activeRequest) void hostInvoke('extension_stage_cancel', { requestId: activeRequest.id }).catch(() => undefined); activeRequest = undefined }
+function close() { cancelRequest(); ++generation; selected.value = null; preview.value = null; busy.value = false }
 watch(() => workspace.vaultId, close)
 watch(configuration, () => { preview.value = null })
 watch(() => props.refreshKey, () => { page.value = 0; close(); void refresh() })
 onMounted(refresh)
-onBeforeUnmount(() => ++generation)
+onBeforeUnmount(() => { cancelRequest(); ++generation })
 </script>
 
 <template>
-  <InstalledPackages :refresh-key="refreshKey" :sources="sources" />
+  <InstalledPackages :refresh-key="refreshKey + installedRefresh" :sources="sources" />
   <section class="desktop-packages panel" aria-label="桌面已暂存包">
     <header class="section-heading">
       <div>
@@ -122,7 +137,7 @@ onBeforeUnmount(() => ++generation)
           <p>请求权限：{{ item.permissions.join('、') || '无' }}</p>
         </li></ul>
         <details><summary>检查配置</summary><pre>{{ JSON.stringify(preview.changes.map(change => change.target.configuration), null, 2) }}</pre></details>
-        <p>确认后将按以上摘要安装，并只在原生沙箱运行健康后提交活动版本。</p>
+        <p>确认后将按以上摘要安装。运行型包的全部依赖将在原生沙箱中检查；声明式配置安装后仍需另行选择目标应用。</p>
         <button class="btn primary" :disabled="busy" @click="install">确认安装并启用</button>
       </div>
     </AppDialog>

@@ -189,27 +189,40 @@ export async function verifyRelease(release: CommunityRelease, pinned: Community
   if (digest !== release.sha256 || bytes.length !== release.size) throw new Error('发行内容摘要或长度无效')
 }
 
-export async function installRelease(source: CommunitySource, selected: CommunityRelease, signal?: AbortSignal): Promise<string> {
-  if (isDesktop()) {
+export interface DesktopStageReceipt { operation_id: string; package_key: string; archive_sha256: string; version: string; state: string }
+export async function stageDesktopRelease(source: CommunitySource, selected: CommunityRelease, signal?: AbortSignal): Promise<DesktopStageReceipt> {
+    if (!isDesktop()) throw new Error('DESKTOP_UNAVAILABLE')
     signal?.throwIfAborted()
     if (!source.enabled || selected.withdrawn) throw new Error('来源已停用或发行已撤回')
+    const origin = normalizedCommunitySource(source.url)
     const release = { ...selected } as Partial<CommunityRelease>
     delete release.release_id; delete release.withdrawn; delete release.download_path
+    const locator = [origin, selected.namespace, selected.package_id, selected.version]
+    const expectedKey = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(locator))))).map(byte => byte.toString(16).padStart(2, '0')).join('')
     const operationId = crypto.randomUUID()
     const requestId = await invoke<string>('extension_stage_prepare')
     const cancel = () => { void invoke('extension_stage_cancel', { requestId }).catch(() => undefined) }
+    const checked = (receipt: DesktopStageReceipt | null): DesktopStageReceipt => {
+      if (!receipt || receipt.operation_id !== operationId || receipt.package_key !== expectedKey || receipt.archive_sha256 !== release.sha256 || receipt.version !== locator[3] || receipt.state !== 'staged') throw new Error('桌面暂存回执与选择的发行不一致')
+      return receipt
+    }
     signal?.addEventListener('abort', cancel, { once: true })
     try {
       if (signal?.aborted) { cancel(); signal.throwIfAborted() }
-      await invoke('extension_stage', { request: { request_id: requestId, operation_id: operationId, source: source.url, release } })
-      return '已校验并暂存到桌面安装库，尚未安装或启用'
+      return checked(await invoke<DesktopStageReceipt>('extension_stage', { request: { request_id: requestId, operation_id: operationId, source: origin, release } }))
     } catch (error) {
       if (signal?.aborted) {
-        const receipt = await invoke<{ state: string } | null>('extension_stage_status', { operationId }).catch(() => null)
-        if (receipt?.state === 'staged') return '取消前已完成暂存，尚未安装或启用'
+        const receipt = await invoke<DesktopStageReceipt | null>('extension_stage_status', { operationId }).catch(() => null)
+        if (receipt?.state === 'staged') return checked(receipt)
       }
       throw error
     } finally { signal?.removeEventListener('abort', cancel); cancel() }
+}
+
+export async function installRelease(source: CommunitySource, selected: CommunityRelease, signal?: AbortSignal): Promise<string> {
+  if (isDesktop()) {
+    await stageDesktopRelease(source, selected, signal)
+    return signal?.aborted ? '取消前已完成暂存，尚未安装或启用' : '已校验并暂存到桌面安装库，尚未安装或启用'
   }
   const release = await liveRelease(source, selected, signal)
   if (!release || release.release_id !== selected.release_id || release.namespace !== selected.namespace || release.package_id !== selected.package_id || release.version !== selected.version || release.type !== selected.type || release.sha256 !== selected.sha256 || release.withdrawn) throw new Error('发行已变更或撤回，请刷新目录')
