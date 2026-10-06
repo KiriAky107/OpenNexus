@@ -19,6 +19,26 @@ function event(
  * Semaphore），事件会交错到达。所以建树只能靠 id 关联，不能靠相邻顺序。
  */
 describe('buildTraceNodes', () => {
+  it('attaches interleaved experiment states by tool ID without finishing an active tool early', () => {
+    const events = [event('ToolCall', { tool_call_id: 'one', name: 'experiments.run' }), event('ToolCall', { tool_call_id: 'two', name: 'experiments.import' }),
+      event('ExperimentState', { tool_call_id: 'two', kind: 'experiment_import', state: 'partial', operation_id: 'import-id' }),
+      event('ExperimentState', { tool_call_id: 'one', kind: 'experiment_run', state: 'running', operation_id: 'run-id' })]
+    const nodes = buildTraceNodes(events)
+    expect(nodes).toHaveLength(2)
+    expect(nodes[0]?.status).toBe('running')
+    expect(nodes[0]?.children[0]?.status).toBe('running')
+    expect(nodes[1]?.children[0]?.type).toBe('experiment')
+    expect(nodes[1]?.children[0]?.status).toBe('error')
+    expect(nodes[1]?.children[0]?.title).toContain('部分成功')
+    events.push(event('ToolResult', { tool_call_id: 'two', success: false }))
+    expect(buildTraceNodes(events)[1]?.status).toBe('error')
+  })
+  it('retains orphan experiment states after partial history recovery and never marks cancellation complete', () => {
+    const nodes = buildTraceNodes([event('ExperimentState', { state: 'cancelled', kind: 'experiment_run', tool_call_id: 'missing' }),
+      event('ExperimentState', { state: 'approved', kind: 'experiment_run' })])
+    expect(nodes.map(node => node.type)).toEqual(['experiment', 'experiment'])
+    expect(nodes.map(node => node.status)).toEqual(['cancelled', 'pending'])
+  })
   it('工具事件按 parent_model_call_id 归属，即使出现在 ModelCallCompleted 之后', () => {
     const nodes = buildTraceNodes([
       event('RunStarted'),

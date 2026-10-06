@@ -15,6 +15,7 @@ import { permissionLabel, runStatusLabel, toolLabel } from './labels'
 import ToolOption from './ToolOption.vue'
 import { useCitationNavigation } from '@/composables/useCitationNavigation'
 import { localeTag, t } from '@/i18n'
+import { stateText } from '@/services/experimentService'
 
 const route = useRoute()
 const router = useRouter()
@@ -36,11 +37,12 @@ const visibleTools = computed(() => agentStore.tools.filter(tool => `${tool.name
 const output = computed(() => agentStore.activeRun?.output || [...agentStore.events].reverse().find(event => event.event === 'RunCompleted')?.data.output || '')
 const currentActivity = computed(() => {
   if (agentStore.activeRun?.status === 'waiting_budget') return t('等待您确认追加 Token 预算', 'Waiting for your token budget decision')
-  const event = [...agentStore.events].reverse().find(event => ['ToolCall', 'ModelCallStarted', 'PermissionRequired', 'RunCompleted', 'RunFailed', 'RunCancelled'].includes(event.event))
+  const event = [...agentStore.events].reverse().find(event => ['ToolCall', 'ExperimentState', 'ModelCallStarted', 'PermissionRequired', 'RunCompleted', 'RunFailed', 'RunCancelled'].includes(event.event))
   if (!event) return t('等待开始', 'Waiting to start')
   if (event.event === 'ToolCall') return `${t('正在调用', 'Using')} ${toolLabel(String(event.data.name || ''))}`
   if (event.event === 'ModelCallStarted') return t('模型正在处理任务', 'The model is working on the task')
   if (event.event === 'PermissionRequired') return t('等待您确认操作权限', 'Waiting for your permission')
+  if (event.event === 'ExperimentState') return `${event.data.kind === 'experiment_import' ? t('成果导入', 'Output import') : t('实验运行', 'Experiment run')} · ${stateText(String(event.data.state))}`
   return eventText(event) || t('运行已结束，请检查结果', 'Run ended; review the result')
 })
 

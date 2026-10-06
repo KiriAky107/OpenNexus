@@ -41,6 +41,17 @@ async function switchToTree(wrapper: ReturnType<typeof mountTree>) {
 }
 
 describe('TraceTimeline 树形视图', () => {
+  it('keeps partially imported experiment states in the error filter and their tool ancestry', async () => {
+    const events = [event('ToolCall', { tool_call_id: 'import-call', name: 'experiments.import' }),
+      event('ExperimentState', { tool_call_id: 'import-call', name: 'experiments.import', kind: 'experiment_import', state: 'partial', operation_id: 'import-id' })]
+    const wrapper = mount(TraceTimeline, { props: { events }, global: { stubs: { ExperimentEvent: true } } })
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    expect(wrapper.findAll('.event-card')).toHaveLength(1)
+    await switchToTree(wrapper)
+    expect(wrapper.findAll('.tree-node')).toHaveLength(2)
+    expect(wrapper.text()).toContain('部分成功')
+    wrapper.unmount()
+  })
   it('bounds rendered events while searching the complete history', async () => {
     const events = Array.from({ length: 1000 }, (_, i) => event('TextDelta', { text: `message-${i}` }))
     const wrapper = mountTree(events)

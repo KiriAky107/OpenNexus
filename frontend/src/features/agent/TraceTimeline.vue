@@ -4,6 +4,7 @@ import { computed, ref, watch } from 'vue'
 import type { TraceNode, AgentEvent } from '@/contracts'
 import { buildTraceNodes, getToolCallsFromEvents, getTotalDuration } from '@/services/traceService'
 import { eventLabel, localizeDetails } from './labels'
+import ExperimentEvent from './ExperimentEvent.vue'
 
 const props = defineProps<{
   events: AgentEvent[]
@@ -25,6 +26,10 @@ const query = ref('')
 const eventType = ref('')
 const toolName = ref('')
 const errorsOnly = ref(false)
+function isFailure(event: AgentEvent) {
+  return event.event.endsWith('Failed') || Boolean(event.data.error_code) || event.data.success === false || event.data.is_error === true
+    || (event.event === 'ExperimentState' && ['failed', 'limited', 'partial', 'interrupted'].includes(String(event.data.state)))
+}
 const eventTypes = computed(() => [...new Set(props.events.map(event => event.event))])
 const toolNames = computed(() => [...new Set(props.events.filter(event => event.event === 'ToolCall').map(event => String(event.data.name ?? '')))].filter(Boolean))
 const filtering = computed(() => Boolean(query.value.trim() || eventType.value || toolName.value || errorsOnly.value))
@@ -32,7 +37,7 @@ const filteredEvents = computed(() => {
   const toolIds = new Set(props.events.filter(event => event.event === 'ToolCall' && event.data.name === toolName.value).map(event => event.data.tool_call_id))
   return props.events.filter(event => (!eventType.value || event.event === eventType.value)
     && (!toolName.value || (event.data.tool_call_id != null && toolIds.has(event.data.tool_call_id)))
-    && (!errorsOnly.value || event.event.endsWith('Failed') || Boolean(event.data.error_code) || event.data.success === false || event.data.is_error === true)
+    && (!errorsOnly.value || isFailure(event))
     && (!query.value.trim() || `${eventLabel(event.event)} ${event.event} ${JSON.stringify(event.data)}`.toLowerCase().includes(query.value.trim().toLowerCase())))
 })
 const filteredTree = computed(() => {
@@ -120,6 +125,7 @@ function getNodeIcon(type: TraceNode['type']): string {
     model_call: '🤖',
     tool_call: '🔧',
     tool_result: '✅',
+    experiment: '▶',
     text: '💬',
     thinking: '🧠',
     citation: '📚',
@@ -234,7 +240,7 @@ watch(pageCount, count => { page.value = Math.min(page.value, count) })
             <div class="event-header">
               <span class="event-badge" :class="{
                 success: event.event === 'RunCompleted' || event.event === 'ModelCallCompleted',
-                error: event.event.endsWith('Failed') || event.event === 'RunFailed',
+                error: isFailure(event),
                 warning: event.event === 'PermissionRequired',
                 info: event.event === 'ToolCall' || event.event === 'ModelCallStarted',
               }">{{ eventLabel(event.event as any) }}</span>
@@ -260,6 +266,7 @@ watch(pageCount, count => { page.value = Math.min(page.value, count) })
               <span class="perm-label">权限:</span>
               <code>{{ event.data.permission as string }}</code>
             </div>
+            <ExperimentEvent v-if="event.event === 'ExperimentState'" :data="event.data" @open-file="emit('open-citation', $event)" />
           </div>
           <div v-if="isDetailOpen(`event-${event.sequence}`) && showDetails" class="event-detail">
             <details open class="ui-disclosure">
@@ -313,6 +320,7 @@ watch(pageCount, count => { page.value = Math.min(page.value, count) })
           </button>
         </div>
         <div v-if="isDetailOpen(item.node.id) && showDetails" class="node-detail">
+          <ExperimentEvent v-if="item.node.type === 'experiment'" :data="item.node.data" @open-file="emit('open-citation', $event)" />
           <pre>{{ prettyData(item.node.data) }}</pre>
         </div>
       </div>

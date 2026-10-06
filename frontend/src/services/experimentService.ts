@@ -7,7 +7,7 @@ export interface RunRequest { vault_id: string; operation_id: string; runtime_id
 export interface InputSummary { request: RunRequest; fingerprint: string; sizes: Record<string, number>; total_bytes: number }
 export type RunState = 'awaiting_confirmation' | 'approved' | 'starting' | 'running' | 'cancel_requested' | 'rejected' | 'cancelled' | 'completed' | 'failed' | 'limited' | 'interrupted'
 export type ImportState = 'awaiting_confirmation' | 'approved' | 'completed' | 'partial' | 'failed' | 'cancelled' | 'rejected'
-export interface StreamLog { text: string; bytes_seen: number; retained_bytes: number; truncated: boolean; invalid_utf8: boolean; complete: boolean; read_error: boolean }
+export interface StreamLog { text: string; bytes_seen: number; retained_bytes: number; truncated: boolean; invalid_utf8: boolean; complete: boolean; read_error: boolean; displayed_bytes?: number; display_truncated?: boolean }
 export interface Logs { stdout: StreamLog; stderr: StreamLog }
 export interface OutputManifest { path: string; bytes: number; sha256: string; kind: 'text' | 'markdown' | 'json' | 'csv' | 'png' }
 export type OutputReport = { status: 'collected'; summary: { files: OutputManifest[]; skipped: { path: string; bytes: number; reason: string }[]; total_bytes: number } } | { status: 'rejected'; error: string }
@@ -28,6 +28,12 @@ export interface ImportRequest { vault_id: string; operation_id: string; run_id:
 export interface ImportRecord { plan: { request: ImportRequest; source: InputSummary; execution: { outcome: string; exit_code: number | null; elapsed_ms: number }; items: { output: OutputManifest; target: SelectedFile; write_id: string }[] }; fingerprint: string; state: ImportState; created_ms: number; confirmed_ms: number | null; items: { state: string; entry: HostEntry | null; error: string | null }[]; atomic_scope: 'file' }
 export interface ImportHistoryItem { operation_id: string; run_id: string; entry: SelectedFile; fingerprint: string; state: ImportState; created_ms: number; files: number; committed: number }
 export interface Origin { import_id: string; run_id: string; source: InputSummary; execution: { outcome: string; exit_code: number | null; elapsed_ms: number }; output: OutputManifest; imported: HostEntry; current_path: string | null; created_ms: number }
+export interface AgentContext { agent_run_id: string; tool_call_id: string; request_id: string }
+interface AgentReviewBinding { vault_id: string; operation_id: string; fingerprint: string; context: AgentContext }
+export type NativeAgentReview = AgentReviewBinding & (
+  { kind: 'experiment_run'; record: RunRecord } | { kind: 'experiment_import'; record: ImportRecord }
+)
+export type AgentExperimentReview = NativeAgentReview & { token: string }
 
 // All requests keep their original vault binding, including retries after a
 // dialog or network/IPC interruption. The Host checks it under its file lock.

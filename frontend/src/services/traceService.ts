@@ -1,4 +1,6 @@
 import type { AgentEvent, TraceNode, TraceNodeType } from '@/contracts'
+import { stateText } from './experimentService'
+import { t } from '@/i18n'
 
 /**
  * 把扁平事件流折叠成调用树。
@@ -84,6 +86,13 @@ export function buildTraceNodes(events: AgentEvent[]): TraceNode[] {
         continue
       }
 
+      case 'ExperimentState': {
+        const parent = toolCallId ? toolCalls.get(toolCallId) : undefined
+        if (parent) { node.parent_id = parent.id; parent.children.push(node) }
+        else attach(node, parentModelCallId, modelCalls, roots)
+        continue
+      }
+
       default: {
         attach(node, parentModelCallId, modelCalls, roots)
         continue
@@ -130,6 +139,7 @@ function mapEventType(eventType: AgentEvent['event']): TraceNodeType {
       return 'model_call'
     case 'ToolCall': return 'tool_call'
     case 'ToolResult': return 'tool_result'
+    case 'ExperimentState': return 'experiment'
     case 'TextDelta': return 'text'
     case 'ThinkingDelta': return 'thinking'
     case 'Citation': return 'citation'
@@ -152,6 +162,7 @@ function getNodeTitle(event: AgentEvent): string {
     case 'ModelCallFailed': return '模型调用失败'
     case 'ToolCall': return `工具调用：${event.data.name ?? '未知工具'}`
     case 'ToolResult': return `工具结果：${event.data.name ?? '未知工具'}`
+    case 'ExperimentState': return `${event.data.kind === 'experiment_import' ? t('成果导入', 'Output import') : t('实验运行', 'Experiment run')} · ${stateText(String(event.data.state))}`
     case 'TextDelta': return '回复文本'
     case 'ThinkingDelta': return '思考中'
     case 'Citation': return '引用来源'
@@ -191,6 +202,8 @@ function getNodeSubtitle(event: AgentEvent): string | undefined {
       return String(data.permission ?? '')
     case 'PermissionResolved':
       return String(data.decision ?? '')
+    case 'ExperimentState':
+      return typeof data.operation_id === 'string' ? data.operation_id : undefined
     default:
       return undefined
   }
@@ -198,6 +211,14 @@ function getNodeSubtitle(event: AgentEvent): string | undefined {
 
 function getNodeStatus(event: AgentEvent): TraceNode['status'] {
   switch (event.event) {
+    case 'ExperimentState': {
+      const state = event.data.state
+      if (state === 'completed') return 'completed'
+      if (['failed', 'limited', 'partial', 'interrupted'].includes(String(state))) return 'error'
+      if (state === 'cancelled' || state === 'rejected') return 'cancelled'
+      if (['starting', 'running', 'cancel_requested'].includes(String(state))) return 'running'
+      return 'pending'
+    }
     case 'RunFailed':
     case 'ModelCallFailed':
       return 'error'

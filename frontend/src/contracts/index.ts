@@ -987,6 +987,7 @@ export type TraceNodeType =
   | 'model_call'
   | 'tool_call'
   | 'tool_result'
+  | 'experiment'
   | 'text'
   | 'thinking'
   | 'citation'

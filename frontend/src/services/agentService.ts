@@ -111,7 +111,8 @@ export async function respondToPermission(
   })
 }
 
-export const getPermissionPreview = (runId: string, requestId: string) => apiClient.get<import('./noteService').NoteWritePreview>(`/api/agent/runs/${runId}/permissions/${requestId}/preview`)
+export type PermissionPreview = import('./noteService').NoteWritePreview | import('./experimentService').AgentExperimentReview
+export const getPermissionPreview = (runId: string, requestId: string) => apiClient.get<PermissionPreview>(`/api/agent/runs/${runId}/permissions/${requestId}/preview`)
 
 export async function extendAgentBudget(runId: string, requestId: string, additionalTokens: number): Promise<OperationResponse> {
   return apiClient.post(`/api/agent/runs/${runId}/budget/${requestId}`, { additional_tokens: additionalTokens })
