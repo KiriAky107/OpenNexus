@@ -1485,11 +1485,23 @@ fn main() {
                 )
             };
             let workspace_state = app.state::<Host>().workspace.clone();
+            let catalog_state = app.state::<Host>().extensions.clone();
             #[cfg(windows)]
             let agent_runner = Arc::clone(&app.state::<Host>().experiments);
             #[cfg(windows)]
             let agent_resource_root = app.path().resource_dir()?;
             let core = core.with_broker(Arc::new(move |request| {
+                if request["rpc"].as_str() == Some("catalog.configuration_candidate") {
+                    let workspace = workspace_state.lock().map_err(|_| "HOST_BUSY")?;
+                    let ws = workspace.as_ref().ok_or("WORKSPACE_NOT_OPEN")?;
+                    let mut catalogs = catalog_state.lock().map_err(|_| "HOST_BUSY")?;
+                    let store = catalogs.as_mut().ok_or("EXTENSIONS_NOT_READY")?;
+                    return tauri::async_runtime::block_on(
+                        notesagent_host::extension_configuration_broker::dispatch(
+                            store, ws, request,
+                        ),
+                    );
+                }
                 #[cfg(windows)]
                 if notesagent_host::experiment_agent::is_execution_request(request) {
                     return notesagent_host::experiment_agent::dispatch_execution(
