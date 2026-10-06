@@ -244,7 +244,9 @@ class AgentRuntime:
         if not ticket or ticket.future.done() or not ticket.tool_call or ticket.tool_call.name not in WRITE_TOOLS:
             raise ApiError(404, 'PERMISSION_REQUEST_NOT_FOUND', '待预览的文件操作不存在。')
         ticket.preview = None
-        preview = await preview_write(ticket.tool_call)
+        if self.permissions.mode_for(ticket.permission, run_id) == PermissionMode.deny:
+            raise ApiError(403, 'PERMISSION_DENIED', '当前权限不允许此操作。')
+        preview = await preview_write(ticket.tool_call, run_id, request_id)
         if ticket.future.done():
             raise ApiError(409, 'PERMISSION_REQUEST_RESOLVED', '操作已处理。')
         ticket.preview = preview
@@ -257,15 +259,24 @@ class AgentRuntime:
             return False
         ticket = self.permissions.get_ticket(run_id, request_id)
         from app.errors import ApiError
-        from app.services.tool_write_preview import WRITE_TOOLS, validate_preview
+        from app.services.tool_write_preview import WRITE_TOOLS, validate_preview, cancel_preview
         if ticket and not ticket.future.done() and decision != 'deny' and ticket.tool_call and ticket.tool_call.name in WRITE_TOOLS:
             if decision != 'allow_once' or not ticket.preview or preview_token != ticket.preview['token']:
-                code = 'EXPERIMENT_PREVIEW_REQUIRED' if ticket.tool_call.name == 'experiments.files.write' else 'NOTE_PREVIEW_REQUIRED'
-                raise ApiError(409, code, '请预览当前修改并仅允许本次写入。')
+                code = 'EXPERIMENT_PREVIEW_REQUIRED' if ticket.tool_call.name.startswith('experiments.') else 'NOTE_PREVIEW_REQUIRED'
+                raise ApiError(409, code, '请审核当前操作并仅允许本次。')
+            if self.permissions.mode_for(ticket.permission, run_id) == PermissionMode.deny:
+                raise ApiError(403, 'PERMISSION_DENIED', '当前权限不允许此操作。')
             approved_preview = ticket.preview
             await validate_preview(ticket.tool_call, approved_preview)
             if ticket.preview is not approved_preview:
                 raise ApiError(409, 'NOTE_PREVIEW_STALE', '预览已刷新，请重新确认。')
+        if ticket and not ticket.future.done() and decision == 'deny':
+            try:
+                await cancel_preview(ticket.preview)
+            except ApiError:
+                # A missing Host must not prevent the person from denying a
+                # ticket. No Core path can consume consent after this decision.
+                pass
         resolved = self.permissions.resolve(run_id, request_id, decision)
         if resolved:
             await self._publish(
@@ -884,6 +895,17 @@ class AgentRuntime:
                 except ApiError as exc:
                     return ToolResult(tool_call_id=call.tool_call_id, name=call.name, success=False,
                                       error_code=exc.code, error_message=exc.message)
+            async def experiment_progress(data):
+                await self._publish(record, AgentEventType.experiment_state,
+                    {**data, 'tool_call_id': call.tool_call_id, 'name': call.name})
+
+            def still_authorized():
+                return (not record.run.cancelled and record.run.status not in TERMINAL_STATUSES
+                        and call.name in record.allowed_tools
+                        and self.permissions.mode_for(permission, record.run.run_id) != PermissionMode.deny
+                        and self.tools.contains(call.name)
+                        and self.tools.get(call.name).definition.permission == permission)
+
             return await asyncio.wait_for(
                 self.tools.execute(
                     call,
@@ -891,6 +913,8 @@ class AgentRuntime:
                         run_id=record.run.run_id,
                         tool_call_id=call.tool_call_id,
                         reviewed_write=reviewed_write,
+                        progress=experiment_progress,
+                        is_authorized=still_authorized,
                     ),
                 ),
                 timeout=record.request.tool_timeout_seconds,

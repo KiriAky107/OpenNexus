@@ -140,3 +140,5 @@ def register(registry: ToolRegistry) -> None:
     ]:
         registry.register(ToolDefinition(name=name, description=description,
             parameters=model.model_json_schema(), permission=permission), model, executor)
+    from app.agent.experiment_actions import register as register_actions
+    register_actions(registry)

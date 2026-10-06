@@ -450,6 +450,7 @@ class AgentEventType(str, Enum):
     thinking_delta = "ThinkingDelta"
     tool_call = "ToolCall"
     tool_result = "ToolResult"
+    experiment_state = "ExperimentState"
     permission_required = "PermissionRequired"
     usage = "Usage"
     citation = "Citation"

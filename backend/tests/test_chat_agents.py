@@ -96,8 +96,11 @@ def test_chat_source_tools_are_discoverable_and_survive_the_operator_skill_ceili
     for name in ['experiments.files.list', 'experiments.files.read', 'experiments.files.write']:
         assert name in available and name in configuration.allowed_tools
         assert container.tools.get(name).definition.permission in configuration.permissions
-    assert 'experiments.run' not in configuration.permissions
-    assert 'experiments.import' not in configuration.permissions
+    from app.agent.permissions import PermissionMode
+    for name in ['experiments.run', 'experiments.import']:
+        assert name in available and name in configuration.allowed_tools
+        assert name in configuration.permissions
+        assert container.permissions.mode_for(name) == PermissionMode.deny
 
 
 def test_chat_creation_ignores_model_supplied_provider_override(monkeypatch):

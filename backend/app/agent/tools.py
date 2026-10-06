@@ -22,6 +22,8 @@ class ToolExecutionContext:
     run_id: str
     tool_call_id: str | None = None
     reviewed_write: dict | None = None
+    progress: Callable[[dict], Awaitable[None]] | None = None
+    is_authorized: Callable[[], bool] | None = None
 
 
 @dataclass(slots=True)
@@ -38,10 +40,11 @@ class ToolNotFoundError(LookupError):
 class ToolExecutionError(RuntimeError):
     """Executor 可预期失败，保留领域错误码而不是折叠成通用异常。"""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, output: dict | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.output = output
 
 
 class ToolRegistry:
@@ -141,6 +144,7 @@ class ToolRegistry:
                 tool_call_id=call.tool_call_id,
                 name=call.name,
                 success=False,
+                output=exc.output if isinstance(exc, ToolExecutionError) else None,
                 error_code=exc.code,
                 error_message=exc.message,
                 duration_ms=round((perf_counter() - started) * 1000),

@@ -158,6 +158,7 @@ export type AgentEventType =
   | 'ThinkingDelta'
   | 'ToolCall'
   | 'ToolResult'
+  | 'ExperimentState'
   | 'PermissionRequired'
   | 'Usage'
   | 'Citation'

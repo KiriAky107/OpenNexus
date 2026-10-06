@@ -17,6 +17,7 @@ const eventLabels: Record<AgentEventType, string> = {
   ThinkingDelta: '思考过程',
   ToolCall: '调用工具',
   ToolResult: '工具结果',
+  ExperimentState: '实验状态',
   PermissionRequired: '请求权限',
   Usage: '用量统计',
   Citation: '引用来源',
@@ -44,6 +45,7 @@ const eventLabelsEn: Record<AgentEventType, string> = {
   StepsRequired: 'More steps required', StepsResolved: 'Step limit extended',
   RunStarted: 'Run started', TextDelta: 'Response', ThinkingDelta: 'Reasoning',
   ToolCall: 'Tool call', ToolResult: 'Tool result', PermissionRequired: 'Permission required',
+  ExperimentState: 'Experiment state',
   Usage: 'Usage', Citation: 'Citation', ModelCallStarted: 'Model call started',
   ModelCallCompleted: 'Model call completed', ModelCallFailed: 'Model call failed',
   PermissionResolved: 'Permission resolved', RunCompleted: 'Run completed',
@@ -51,6 +53,11 @@ const eventLabelsEn: Record<AgentEventType, string> = {
 }
 
 const toolLabels: Record<string, string> = {
+  'experiments.files.list': '列出实验文件',
+  'experiments.files.read': '读取实验文件',
+  'experiments.files.write': '编写实验文件',
+  'experiments.run': '隔离运行实验',
+  'experiments.import': '导入实验成果',
   'markdown.catalog': 'Markdown 格式目录',
   'markdown.compose': '生成 Markdown 片段',
   'notes.patch_markdown': '局部修改 Markdown',
@@ -131,6 +138,10 @@ function mcpName(name: string): string | undefined {
 }
 
 const permissionLabels: Record<string, string> = {
+  'experiments.files.read': '读取实验文件',
+  'experiments.files.write': '编写实验文件',
+  'experiments.run': '隔离运行实验（逐次确认）',
+  'experiments.import': '导入实验成果（逐次确认）',
   'notes.search': '搜索笔记',
   'notes.read': '读取笔记',
   'notes.write': '修改笔记',
