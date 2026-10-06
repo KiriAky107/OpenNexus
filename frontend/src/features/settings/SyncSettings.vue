@@ -5,16 +5,16 @@ import { hostInvoke } from '@/services/platform/desktop'
 import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
 import { t } from '@/i18n'
+import type { SyncConflict } from '@/contracts/sync'
+import SyncConflictReview from './SyncConflictReview.vue'
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 interface Binding { id: string; endpoint: string; account: string; remote_vault: string; cursor: number }
-interface Conflict { sequence: number; local_path: string; local_hash: string; current_hash?: string; current_path?: string; remote: { path: string; operation: string } }
 type OptionalScope = { persona: boolean; layout: boolean; conversations: boolean; agent_history: boolean; provider_settings: boolean; extension_installations: boolean }
-interface Status { optional_scope?: OptionalScope; vault_id: string; binding: Binding | null; paused: boolean; pending: number; conflicts: Conflict[]; credential_state: string; running: boolean; error: string | null; retry_in: number | null; failures: number; halted: boolean; attempts?: Array<{ operation_id: string; path: string; attempts: number; outcome: string; error: string | null }> }
+interface Status { optional_scope?: OptionalScope; vault_id: string; binding: Binding | null; paused: boolean; pending: number; conflicts: SyncConflict[]; credential_state: string; running: boolean; error: string | null; retry_in: number | null; failures: number; halted: boolean; attempts?: Array<{ operation_id: string; path: string; attempts: number; outcome: string; error: string | null }> }
 interface RemoteVault { id: string; name: string; sequence: number; used: number; quota: number }
 const status = ref<Status | null>(null)
 const endpoint = ref('https://'), account = ref(''), password = ref(''), device = ref('OpenNexus Desktop'), testHttp = ref(false)
 const connected = ref(false), busy = ref(false), message = ref(''), remoteVaults = ref<RemoteVault[]>([]), selected = ref(''), newName = ref('')
-const copies = ref<Record<number, string>>({})
 interface Preview { fingerprint: string; boundary: number; items: Array<{ path: string; action: string }> }
 const preview = ref<Preview | null>(null), previewPage = ref(0)
 const previewItems = computed(() => preview.value?.items.slice(previewPage.value * 100, (previewPage.value + 1) * 100) ?? [])
@@ -83,13 +83,6 @@ async function unbind() {
   if (!binding || !(await askConfirm(t('解除当前绑定并封存待上传任务？本地文件仍保留。', 'Unbind and archive pending uploads? Local files are retained.')))) return
   await act(async () => { await hostInvoke('sync_unbind', { bindingId: binding.id }); remoteVaults.value = []; selected.value = '' })
 }
-async function resolve(conflict: Conflict, choice: 'local' | 'remote' | 'copy') {
-  const binding = status.value?.binding
-  const destination = choice === 'copy' ? copies.value[conflict.sequence] ?? '' : ''
-  if (!binding || (choice === 'copy' && !destination)) return
-  if (!(await askConfirm(t(`确认解决 ${conflict.local_path} 的冲突？`, `Resolve the conflict for ${conflict.local_path}?`)))) return
-  await act(async () => { await hostInvoke('sync_resolve', { bindingId: binding.id, sequence: conflict.sequence, choice, destination, expected: conflict.current_hash ?? conflict.local_hash }) })
-}
 onMounted(() => {
   void refresh().catch(error => { message.value = error instanceof Error ? error.message : 'SYNC_FAILED' })
   timer = setInterval(() => { if (!busy.value) void refresh().catch(() => {}) }, 1500)
@@ -100,7 +93,7 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
   <section class="panel settings-section sync-settings" aria-labelledby="sync-title">
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
     <h2 id="sync-title">OpenNexus Sync</h2>
-    <p>{{ t('同步当前 Vault 的 Markdown 与常用附件。登录前请先解锁设备凭据保险库。', 'Sync Markdown and supported attachments in the current vault. Unlock the device credential vault before signing in.') }}</p>
+    <p>{{ t('同步当前知识库的笔记、experiments 下的源文件与输入数据，以及保留的附件和成果。登录前请先解锁设备凭据保险库。', 'Sync notes, source files and input data under experiments, and retained attachments and outputs in this vault. Unlock the device credential vault before signing in.') }}</p>
     <p class="subtle">{{ t('默认同步笔记、附件、任务、主题设置和编辑器偏好。两边都有数据时先预览合并；密钥、权限和本机路径不随设置同步。', 'Notes, attachments, tasks, theme settings and editor preferences sync by default. Preview a merge when both vaults contain data. Secrets, permissions and device paths stay local.') }}</p>
     <p v-if="message" class="error-banner" role="alert">{{ message }}</p>
     <article v-for="issue in preferenceSyncIssues" :key="issue.kind" class="sync-conflict" role="status">
@@ -154,11 +147,9 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
         <summary>{{ t('上传作业恢复记录（最多 20 项）', 'Upload recovery records (up to 20)') }}</summary>
         <p v-for="job in status.attempts" :key="job.operation_id">{{ job.path }} · {{ t('尝试次数', 'Attempts') }} {{ job.attempts }} · {{ job.outcome === 'interrupted' ? t('上次上传已中断，将从已确认位置恢复', 'Previous upload interrupted; resumes from the confirmed offset') : job.outcome === 'failed' ? t('上次尝试失败', 'Last attempt failed') : t('上传处理中', 'Upload in progress') }}<span v-if="job.error"> · {{ job.error }}</span></p>
       </details>
-      <article v-for="conflict in status.conflicts" :key="conflict.sequence" class="sync-conflict">
+      <article v-for="conflict in status.conflicts" :key="`${status.vault_id}:${status.binding?.id}:${conflict.sequence}`" class="sync-conflict">
         <h3>{{ conflict.local_path }}</h3><p>{{ t('远端版本', 'Remote revision') }} {{ conflict.sequence }} · {{ conflict.remote.operation }} · {{ conflict.remote.path }}</p>
-        <div class="inline-actions"><button :disabled="busy" @click="resolve(conflict, 'local')">{{ t('保留本地', 'Keep local') }}</button><button :disabled="busy" @click="resolve(conflict, 'remote')">{{ t('采用远端', 'Use remote') }}</button></div>
-        <p v-if="conflict.local_path.startsWith('opennexus-records/')">{{ t('可将本地设置保留为 attachments 目录下的文本副本；副本供查看和恢复，不会自动应用。', 'Keep local settings as a text copy under attachments for inspection and recovery; the copy is not applied automatically.') }}</p>
-        <label>{{ t('副本相对路径', 'Relative copy path') }}<input v-model="copies[conflict.sequence]" :placeholder="conflict.local_path.startsWith('opennexus-records/') ? 'attachments/settings-copy.txt' : 'conflicts/note-copy.md'" /></label><button :disabled="busy || !copies[conflict.sequence]" @click="resolve(conflict, 'copy')">{{ t('另存本地副本并采用远端', 'Save local copy and use remote') }}</button>
+        <SyncConflictReview v-if="status.binding" :vault-id="status.vault_id" :binding-id="status.binding.id" :conflict="conflict" :disabled="busy" @resolved="refresh" />
       </article>
     </div>
   </section>

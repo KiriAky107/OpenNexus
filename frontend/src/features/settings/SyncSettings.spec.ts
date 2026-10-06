@@ -5,6 +5,7 @@ import { hostInvoke } from '@/services/platform/desktop'
 import SyncSettings from './SyncSettings.vue'
 vi.mock('@/services/platform/preferenceSync', () => ({ preferenceSyncIssues: [], resolvePreferenceDraft: vi.fn(), seedCurrentPreferences: vi.fn() }))
 vi.mock('@/services/platform/desktop', () => ({ hostInvoke: vi.fn() }))
+vi.mock('@/stores/editor', () => ({ useEditorStore: () => ({ currentFilePath: '', saveStatus: 'saved' }) }))
 const confirm = vi.hoisted(() => vi.fn())
 vi.mock('@/composables/useActionDialog', () => ({ useActionDialog: () => ({ actionDialog: null, resolveAction: vi.fn(), askConfirm: confirm }) }))
 afterEach(() => { vi.useRealTimers(); vi.resetAllMocks() })
@@ -26,13 +27,17 @@ it('clears login password, explicitly opts into HTTP and stops polling on unmoun
 })
 it('cancels destructive choices and binds accepted conflict decisions to their snapshot', async () => {
   const state = { ...empty(), binding: { id: 'binding', endpoint: 'https://test.example/', account: 'test', remote_vault: 'remote', cursor: 7 }, credential_state: 'ready', conflicts: [{ sequence: 7, local_path: 'note.md', local_hash: 'original-hash', remote: { path: 'note.md', operation: 'put' } }] }
-  vi.mocked(hostInvoke).mockResolvedValue(state)
+  const review = { vault_id: 'local', binding_id: 'binding', sequence: 7, local_path: 'note.md', local_file_id: 'file', related: [], remote: { path: 'note.md', base_revision: 0 }, local: { exists: true, hash: 'original-hash', byte_size: 5, text: 'local', preview_bytes: 5, truncated: false }, incoming: { exists: true, hash: 'remote-hash', byte_size: 6, text: 'remote', preview_bytes: 6, truncated: false }, base: null, fingerprint: 'reviewed' }
+  vi.mocked(hostInvoke).mockImplementation(async command => command === 'sync_conflict_review' ? review : command === 'sync_status' ? state : undefined)
   const wrapper = mount(SyncSettings); await flushPromises()
+  expect(wrapper.text()).not.toContain('采用远端')
+  await wrapper.findAll('button').find(button => button.text() === '读取正文与差异')!.trigger('click'); await flushPromises()
+  expect(wrapper.text()).toContain('两方比较')
   const button = wrapper.findAll('button').find(button => button.text() === '采用远端')!
   confirm.mockResolvedValue(false); await button.trigger('click'); await flushPromises()
   expect(vi.mocked(hostInvoke).mock.calls.some(([command]) => command === 'sync_resolve')).toBe(false)
   confirm.mockResolvedValue(true); await button.trigger('click'); await flushPromises()
-  expect(hostInvoke).toHaveBeenCalledWith('sync_resolve', { bindingId: 'binding', sequence: 7, choice: 'remote', destination: '', expected: 'original-hash' })
+  expect(hostInvoke).toHaveBeenCalledWith('sync_resolve', { request: { vault_id: 'local', binding_id: 'binding', sequence: 7, choice: 'remote', destination: '', expected: 'original-hash', fingerprint: 'reviewed' } })
   expect(wrapper.get('input[type=url]').attributes('disabled')).toBeDefined()
   wrapper.unmount()
 })

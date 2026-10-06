@@ -1603,6 +1603,7 @@ fn main() {
             sync_status,
             sync_set_scope,
             sync_resolve,
+            sync_conflict_review,
             sync_logout,
             sync_run,
             credentials_status,

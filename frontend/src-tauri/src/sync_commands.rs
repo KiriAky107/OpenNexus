@@ -15,7 +15,7 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::State;
+use tauri::{Manager, State, WebviewWindow};
 use zeroize::Zeroizing;
 #[derive(Default)]
 pub struct Runtime {
@@ -318,17 +318,68 @@ pub fn sync_status(host: State<'_, Host>) -> Result<Value, String> {
     )
 }
 #[tauri::command]
-pub fn sync_resolve(
-    host: State<'_, Host>,
+pub async fn sync_resolve(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    request: ResolveConflict,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("SYNC_MAIN_WINDOW_REQUIRED".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        with_workspace(&app.state::<Host>(), |ws| {
+            if ws.vault_id != request.vault_id {
+                return Err(notesagent_host::workspace::HostError::new(
+                    "VAULT_PERMISSION_CHANGED",
+                ));
+            }
+            ws.sync_resolve_reviewed(
+                &request.binding_id,
+                request.sequence,
+                &request.choice,
+                &request.destination,
+                &request.expected,
+                &request.fingerprint,
+            )
+        })
+    })
+    .await
+    .map_err(|_| "HOST_BUSY".to_owned())?
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResolveConflict {
+    vault_id: String,
     binding_id: String,
     sequence: i64,
     choice: String,
     destination: String,
     expected: String,
-) -> Result<(), String> {
-    with_workspace(&host, |ws| {
-        ws.sync_resolve(&binding_id, sequence, &choice, &destination, &expected)
+    fingerprint: String,
+}
+#[tauri::command]
+pub async fn sync_conflict_review(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    vault_id: String,
+    binding_id: String,
+    sequence: i64,
+) -> Result<notesagent_host::sync_review::ConflictReview, String> {
+    if window.label() != "main" {
+        return Err("SYNC_MAIN_WINDOW_REQUIRED".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        with_workspace(&app.state::<Host>(), |ws| {
+            if ws.vault_id != vault_id {
+                return Err(notesagent_host::workspace::HostError::new(
+                    "VAULT_PERMISSION_CHANGED",
+                ));
+            }
+            ws.sync_conflict_review(&binding_id, sequence)
+        })
     })
+    .await
+    .map_err(|_| "HOST_BUSY".to_owned())?
 }
 #[tauri::command]
 pub async fn sync_logout(
