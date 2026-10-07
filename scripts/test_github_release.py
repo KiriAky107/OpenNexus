@@ -70,9 +70,13 @@ class FakeGitHub:
             if route.endswith('/releases/latest'):
                 return copy.deepcopy(self.latest)
             if '/releases/tags/' in route:
-                return copy.deepcopy(self.release)
+                return copy.deepcopy(self.release) if self.release and not self.release['draft'] else None
             if route.endswith('/assets'):
                 return copy.deepcopy(list(self.assets.values()))
+            if route.endswith('/releases'):
+                return [copy.deepcopy(self.release)] if self.release else []
+            if '/releases/' in route and route.rsplit('/', 1)[1].isdigit():
+                return copy.deepcopy(self.release) if self.release and self.release['id'] == int(route.rsplit('/', 1)[1]) else None
             raise AssertionError(route)
         self.writes.append((method, route, copy.deepcopy(body)))
         if method == 'POST' and route.endswith('/releases'):
@@ -195,6 +199,53 @@ class PublicationTests(unittest.TestCase):
                 self.publisher(api).publish()
                 self.assertEqual(api.uploads, 3)
                 (self.base/'release-journal.json').unlink()
+
+    def test_draft_id_resumes_without_creating_or_uploading_twice(self):
+        api = self.api()
+        self.publisher(api).stage()
+        count = len(api.writes)
+        self.assertIsNone(api.request('GET', '/repos/owner/project/releases/tags/v0.6.0'))
+        self.publisher(api).precheck()
+        self.publisher(api).stage()
+        self.assertEqual(len(api.writes), count)
+        self.assertEqual(api.uploads, 3)
+
+    def test_deleted_owned_draft_does_not_create_a_replacement(self):
+        api = self.api()
+        self.publisher(api).stage()
+        count = len(api.writes)
+        api.release = None
+        with self.assertRaisesRegex(ReleaseError, 'OWNED_RELEASE_DISAPPEARED'):
+            self.publisher(api).stage()
+        self.assertEqual(len(api.writes), count)
+
+    def test_lost_create_response_with_two_drafts_requires_reconciliation(self):
+        api = self.api()
+        api.fault = 'create-after'
+        with self.assertRaises(ReleaseError):
+            self.publisher(api).stage()
+        request = api.request
+        duplicate = {**api.release, 'id': 1001}
+        def listed(method, path, body=None, file=None):
+            if method == 'GET' and urlsplit(path).path.endswith('/releases'):
+                return [copy.deepcopy(api.release), copy.deepcopy(duplicate)]
+            return request(method, path, body, file)
+        count = len(api.writes)
+        with patch.object(api, 'request', side_effect=listed):
+            with self.assertRaisesRegex(ReleaseError, 'AMBIGUOUS_RELEASES_FOR_TAG'):
+                self.publisher(api).stage()
+        self.assertEqual(len(api.writes), count)
+
+    def test_unowned_draft_blocks_creation_even_when_tag_lookup_is_empty(self):
+        api = self.api(original=True)
+        api.release['draft'] = True
+        api.ref = None
+        self.plan_data['original'] = None
+        atomic_json(self.plan.path, self.plan_data)
+        (self.base/'release-journal.json').unlink(missing_ok=True)
+        with self.assertRaisesRegex(ReleaseError, 'RELEASE_ALREADY_EXISTS'):
+            self.publisher(api).stage()
+        self.assertEqual(api.writes, [])
 
     def test_owned_incomplete_upload_requires_age_and_preserves_recent_uncertainty(self):
         api = self.api()

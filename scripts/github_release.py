@@ -141,14 +141,33 @@ class Publisher:
         return old
 
     def release(self):
-        release = self.api.request('GET', self.prefix+'/releases/tags/'+quote(self.p['tag'], safe=''))
         original = self.p.get('original')
+        known = self.journal.events('created')
+        if not original and known:
+            # Tag lookup only returns published releases. A durable draft ID
+            # must remain authoritative across interrupted asset uploads.
+            release = self.api.request('GET', self.prefix+'/releases/'+str(known[-1]['id']))
+            require(release is not None, 'OWNED_RELEASE_DISAPPEARED')
+        else:
+            release = self.api.request('GET', self.prefix+'/releases/tags/'+quote(self.p['tag'], safe=''))
+            if release is None and not original:
+                # A create response may have been lost before its ID was saved.
+                # Authenticated listings include drafts; never create a second
+                # release while a same-tag draft has an uncertain owner.
+                candidates, page = [], 1
+                while True:
+                    items = self.api.request('GET', self.prefix+f'/releases?per_page=100&page={page}')
+                    candidates.extend(item for item in items if item['tag_name'] == self.p['tag'])
+                    if len(items) < 100:
+                        break
+                    page += 1
+                require(len(candidates) <= 1, 'AMBIGUOUS_RELEASES_FOR_TAG')
+                release = candidates[0] if candidates else None
         if original:
             require(release and release['id'] == original['release_id'] and release['tag_name'] == self.p['tag'], 'ORIGINAL_RELEASE_CHANGED')
         elif release:
             created = self.journal.events('create-intent')
             require(created and release['tag_name'] == self.p['tag'] and release['target_commitish'] == self.p['commit'], 'RELEASE_ALREADY_EXISTS')
-            known = self.journal.events('created')
             if known:
                 require(release['id'] == known[-1]['id'], 'RELEASE_ID_CHANGED')
                 require(text_digest(release['body']) == self.p['notes_sha256'] and not release['prerelease'], 'OWNED_RELEASE_NOTES_CHANGED')
