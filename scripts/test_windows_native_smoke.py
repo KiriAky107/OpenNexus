@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from windows_native_smoke import FreshProfile
+from windows_native_smoke import FreshProfile, preserve_owned_profile
 
 
 class FreshProfileTests(unittest.TestCase):
@@ -88,6 +88,47 @@ class FreshProfileTests(unittest.TestCase):
             profile.remove_pointer()
         self.assertEqual(other.read_bytes(), profile.temporary)
         self.assertTrue(profile.pointer.exists())
+
+    def test_archive_cannot_move_an_owned_profile_outside_its_parent(self):
+        profile = self.claim()
+        evidence = profile.path/'evidence.txt'
+        evidence.write_bytes(b'preserve diagnostics')
+        with self.assertRaisesRegex(RuntimeError, 'identity or path'):
+            preserve_owned_profile(profile, self.root/(self.identifier+'.native-smoke-escape'))
+        self.assertEqual(evidence.read_bytes(), b'preserve diagnostics')
+        self.assertTrue(profile.path.is_dir())
+
+    def test_archive_does_not_replace_a_preexisting_destination(self):
+        profile = self.claim()
+        target = self.appdata/(self.identifier+'.native-smoke-existing')
+        target.mkdir()
+        (target/'user-state').write_bytes(b'keep')
+        with self.assertRaisesRegex(RuntimeError, 'identity or path'):
+            preserve_owned_profile(profile, target)
+        self.assertEqual((target/'user-state').read_bytes(), b'keep')
+        self.assertEqual(profile.marker.read_bytes(), profile.owner)
+
+    def test_archive_rejects_a_changed_marker_after_pointer_removal(self):
+        profile = self.claim()
+        profile.remove_pointer()
+        profile.marker.write_bytes(b'other owner')
+        with self.assertRaisesRegex(RuntimeError, 'identity or path'):
+            preserve_owned_profile(profile, self.appdata/(self.identifier+'.native-smoke-changed'))
+        self.assertEqual(profile.marker.read_bytes(), b'other owner')
+        self.assertTrue(profile.path.is_dir())
+
+    @unittest.skipUnless(os.name == 'nt', 'Uses the native Windows directory move')
+    def test_archive_preserves_owned_directory_identity_and_diagnostics(self):
+        profile = self.claim()
+        (profile.path/'evidence.txt').write_bytes(b'owned diagnostics\r\n')
+        target = self.appdata/(self.identifier+'.native-smoke-completed')
+        result = preserve_owned_profile(profile, target)
+        self.assertTrue(result['preserved'])
+        self.assertFalse(profile.path.exists())
+        self.assertEqual(FreshProfile.identity(target, directory=True), profile.profile_identity)
+        self.assertEqual((target/'evidence.txt').read_bytes(), b'owned diagnostics\r\n')
+        self.assertEqual((target/profile.marker.name).read_bytes(), profile.owner)
+        self.assertFalse((target/'storage-location.json').exists())
 
 
 if __name__ == '__main__':

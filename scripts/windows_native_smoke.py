@@ -107,7 +107,59 @@ def digest(path):
         return hashlib.file_digest(stream,'sha256').hexdigest()
 
 
-def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:bool, *, extra_checks=None):
+def preserve_owned_profile(profile: FreshProfile, destination: Path):
+    """Archive this invocation's profile after exit, without deleting its data."""
+    profile.remove_pointer()
+    source = profile.path.resolve(strict=True)
+    target = destination.absolute()
+    # MSIX may map the profile into LocalCache while APPDATA still names Roaming.
+    # Only translate the exact parent used by this invocation's fresh claim.
+    if target.parent == profile.path.parent.absolute():
+        target = source.parent / target.name
+    if (source.name != profile.path.name or target.parent.resolve(strict=True) != source.parent
+            or not target.name.startswith(source.name + '.native-smoke-') or os.path.lexists(target)
+            or profile.identity(source, directory=True) != profile.profile_identity
+            or profile.identity(source / profile.marker.name) != profile.marker_identity
+            or (source / profile.marker.name).read_bytes() != profile.owner):
+        raise RuntimeError('Owned profile archive failed identity or path checks')
+    request = {'source': str(source), 'target': str(target), 'root': str(source.parent),
+               'marker_sha256': hashlib.sha256(profile.owner).hexdigest()}
+    # Use one shell for validation and the directory move, with literal paths.
+    command = r'''
+$ErrorActionPreference = 'Stop'
+$claim = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$root = [IO.Path]::GetFullPath($claim.root)
+$source = [IO.Path]::GetFullPath($claim.source)
+$target = [IO.Path]::GetFullPath($claim.target)
+if ([IO.Path]::GetDirectoryName($source) -ne $root -or
+    [IO.Path]::GetDirectoryName($target) -ne $root -or
+    (Test-Path -LiteralPath $target) -or
+    (Test-Path -LiteralPath (Join-Path $source 'storage-location.json'))) { throw 'Unsafe profile move' }
+$item = Get-Item -LiteralPath $source
+$marker = Join-Path $source '.opennexus-native-smoke-owner'
+$hasher = [Security.Cryptography.SHA256]::Create()
+try { $markerHash = [BitConverter]::ToString($hasher.ComputeHash([IO.File]::ReadAllBytes($marker))).Replace('-','').ToLowerInvariant() }
+finally { $hasher.Dispose() }
+if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+    ((Get-Item -LiteralPath $marker).Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+    $markerHash -ne $claim.marker_sha256) {
+    throw 'Profile ownership changed'
+}
+if (Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'OpenNexus.exe' }) { throw 'Host still running' }
+[IO.Directory]::Move($source, $target)
+'''
+    moved = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command],
+                           input=json.dumps(request), text=True, capture_output=True)
+    if moved.returncode:
+        raise RuntimeError('Owned profile archive failed; current files were preserved: '+moved.stderr.strip())
+    if (source.exists() or profile.identity(target, directory=True) != profile.profile_identity
+            or profile.identity(target / profile.marker.name) != profile.marker_identity
+            or (target / profile.marker.name).read_bytes() != profile.owner):
+        raise RuntimeError('Preserved profile identity changed')
+    return {**request, 'preserved': True, 'directory_identity': list(profile.profile_identity)}
+
+
+def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:bool, *, extra_checks=None, profile_archive=None):
     if os.name != 'nt':
         raise RuntimeError('Native payload startup requires Windows')
     from playwright.sync_api import sync_playwright
@@ -229,3 +281,6 @@ def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:
             'scope':'Extracted payload startup and exit; no installer/upgrade/uninstall or missing-Runtime validation'}
     finally:
         stop(process);profile.remove_pointer()
+        if profile_archive is not None:
+            preserved = preserve_owned_profile(profile, Path(profile_archive))
+            (work/'native-profile-preserved.json').write_text(json.dumps(preserved, indent=2)+'\n', 'utf-8')
