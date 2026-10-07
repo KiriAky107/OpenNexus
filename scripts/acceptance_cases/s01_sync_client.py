@@ -3,32 +3,22 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
-import subprocess
 from pathlib import Path
+from sync_test_service import configure_service, source_receipts, run_exact
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST = "s01_actual_service_preserves_offline_chains_and_response_loss_idempotency"
-
-
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def result(case_id: str, status: str, reason: str, assertions: list[dict]) -> dict:
     evidence = f"cargo exact integration test {TEST}"
     for assertion in assertions:
         assertion.update({"status": status, "evidence": evidence})
-    files = []
-    for relative in ("frontend/src-tauri/tests/sync_push.rs", "server sync/tests/host_fixture.py"):
-        files.append({"path": relative, "sha256": sha256(ROOT / relative)})
+    files = source_receipts(ROOT, ("frontend/src-tauri/tests/sync_push.rs", "sync-service/tests/host_fixture.py"),
+        allow_missing=status != 'PASSED')
     return {
         "schema": 1,
         "case_id": case_id,
@@ -63,6 +53,12 @@ def main() -> int:
         payload = result(case_id, "FAILED", "S-01 requires the registered case ID and Cargo.", assertions)
         output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return 1
+    try:
+        configure_service()
+    except RuntimeError as error:
+        payload = result(case_id, 'FAILED', str(error), assertions)
+        output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        return 1
     command = [
         cargo,
         "test",
@@ -78,10 +74,7 @@ def main() -> int:
         "--exact",
         "--nocapture",
     ]
-    completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
-    print(completed.stdout, end="")
-    print(completed.stderr, end="")
-    passed = completed.returncode == 0 and "1 passed; 0 failed" in completed.stdout
+    passed = run_exact(command, cwd=ROOT)
     payload = result(
         case_id,
         "PASSED" if passed else "FAILED",

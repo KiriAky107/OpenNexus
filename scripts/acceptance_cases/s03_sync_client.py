@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
-import subprocess
 from pathlib import Path
+from sync_test_service import configure_service, source_receipts, run_exact as run_service_exact
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "frontend" / "src-tauri" / "Cargo.toml"
@@ -18,34 +17,21 @@ TARGET_RENAME_TEST = (
 )
 
 
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def run_exact(command: list[str]) -> bool:
-    completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
-    print(completed.stdout, end="")
-    print(completed.stderr, end="")
-    return completed.returncode == 0 and "1 passed; 0 failed" in completed.stdout
+    return run_service_exact(command, cwd=ROOT)
 
 
 def result(case_id: str, status: str, reason: str, assertions: list[dict]) -> dict:
     evidence = f"cargo exact tests {SERVICE_TEST} and {TARGET_RENAME_TEST}"
     for assertion in assertions:
         assertion.update({"status": status, "evidence": evidence})
-    files = []
-    for relative in (
+    files = source_receipts(ROOT, (
         "frontend/src-tauri/src/workspace.rs",
         "frontend/src-tauri/src/sync_inbox.rs",
         "frontend/src-tauri/src/sync_resolution.rs",
         "frontend/src-tauri/tests/sync_conflicts.rs",
-        "server sync/tests/host_fixture.py",
-    ):
-        files.append({"path": relative, "sha256": sha256(ROOT / relative)})
+        "sync-service/tests/host_fixture.py",
+    ), allow_missing=status != 'PASSED')
     return {
         "schema": 1,
         "case_id": case_id,
@@ -90,6 +76,13 @@ def main() -> int:
     ]
     cargo = shutil.which(os.environ.get("CARGO", "cargo"))
     passed = case_id == "S-03" and cargo is not None
+    if passed:
+        try:
+            configure_service()
+        except RuntimeError as error:
+            payload = result(case_id, 'FAILED', str(error), assertions)
+            output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+            return 1
     if passed:
         passed = run_exact(
             [
