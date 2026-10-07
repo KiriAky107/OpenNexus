@@ -54,8 +54,15 @@ struct Level {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Headings {
     custom: bool,
+    #[serde(default = "enabled_heading_option")]
+    center_title: bool,
+    #[serde(default = "enabled_heading_option")]
+    markers: bool,
     family: String,
     levels: Vec<Level>,
+}
+fn enabled_heading_option() -> bool {
+    true
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -300,7 +307,11 @@ pub fn validate(kind: &str, value: &Value) -> Result<()> {
         }
         "theme_settings" => {
             let value: Theme = decode(value)?;
-            let _ = value.headings.custom;
+            let _ = (
+                value.headings.custom,
+                value.headings.center_title,
+                value.headings.markers,
+            );
             !value.theme_id.is_empty()
                 && value.theme_id.len() <= 128
                 && value
@@ -536,6 +547,33 @@ mod tests {
         bad["windowPath"] = json!("private-device-path");
         assert!(validate("layout", &bad).is_err());
         assert!(crate::records::path_for("layout", "other").is_err());
+    }
+    #[test]
+    fn theme_record_accepts_current_heading_options_and_legacy_defaults() {
+        let headings: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/heading-appearance-v1.json"))
+                .unwrap();
+        let theme = json!({"themeId":"light","fontEditorSize":16,"fontEditorFamily":"system-ui","lineHeight":1.6,"codeBlockTheme":"auto","headings":headings});
+        let path = crate::records::path_for("theme_settings", "appearance").unwrap();
+        let record = json!({"schema":1,"kind":"theme_settings","id":"appearance","data":theme});
+        crate::records::validate(&path, &serde_json::to_vec(&record).unwrap()).unwrap();
+        let parsed: Theme = decode(&theme).unwrap();
+        assert!(!parsed.headings.center_title && !parsed.headings.markers);
+        let mut legacy = theme.clone();
+        for field in ["centerTitle", "markers"] {
+            legacy["headings"].as_object_mut().unwrap().remove(field);
+        }
+        validate("theme_settings", &legacy).unwrap();
+        let parsed: Theme = decode(&legacy).unwrap();
+        assert!(parsed.headings.center_title && parsed.headings.markers);
+        for field in ["centerTitle", "markers", "devicePath"] {
+            let mut invalid = theme.clone();
+            invalid["headings"][field] = json!("not-a-boolean");
+            assert_eq!(
+                validate("theme_settings", &invalid).unwrap_err().code,
+                "RECORD_SCHEMA_INVALID"
+            );
+        }
     }
     #[test]
     fn portable_preferences_reject_unowned_nested_fields_and_invalid_values() {

@@ -1,0 +1,14 @@
+{
+  "custom": false,
+  "centerTitle": false,
+  "markers": false,
+  "family": "inherit",
+  "levels": [
+    { "size": 32, "weight": 700 },
+    { "size": 28, "weight": 700 },
+    { "size": 24, "weight": 700 },
+    { "size": 21, "weight": 700 },
+    { "size": 18, "weight": 700 },
+    { "size": 16, "weight": 700 }
+  ]
+}

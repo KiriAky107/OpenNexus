@@ -3,7 +3,15 @@ import { beforeEach, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 import { normalizeHeadingAppearance, useHeadingAppearanceStore } from './headingAppearance'
+import portableHeadings from '../../src-tauri/tests/fixtures/heading-appearance-v1.json'
 beforeEach(() => { localStorage.clear(); setActivePinia(createPinia()) })
+it('exports the heading shape accepted by the Host theme record contract', () => {
+  expect(normalizeHeadingAppearance(portableHeadings)).toEqual(portableHeadings)
+  const legacy = { ...portableHeadings } as Partial<typeof portableHeadings>
+  delete legacy.centerTitle
+  delete legacy.markers
+  expect(normalizeHeadingAppearance(legacy)).toEqual({ ...portableHeadings, centerTitle: true, markers: true })
+})
 it('persists heading preferences and restores theme defaults without residual overrides', async () => {
   const store = useHeadingAppearanceStore()
   expect(store.cssVariables).toEqual({})
