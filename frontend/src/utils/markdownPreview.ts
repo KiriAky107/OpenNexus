@@ -89,7 +89,8 @@ function codeReadingAnchor(block: CodeBlock) {
     const left = Math.max(0, code.left, area.left), right = Math.min(view.innerWidth, code.right, area.right)
     if (bottom <= top || right <= left) return
     const line = block.pre.ownerDocument.elementFromPoint?.((left + right) / 2, (top + bottom) / 2)?.closest('.line')
-    if (line && block.code.contains(line)) return { line, viewport, top: line.getBoundingClientRect().top }
+    if (line && block.code.contains(line)) return { line, viewport, top: line.getBoundingClientRect().top,
+      scrollTop: viewport.scrollTop, viewportTop: area.top, viewportBottom: area.bottom }
     return
   }
 }
@@ -98,6 +99,18 @@ function retainCodeAnchor(anchor: ReturnType<typeof codeReadingAnchor>) {
   if (!anchor?.line.isConnected) return
   const delta = anchor.line.getBoundingClientRect().top - anchor.top
   if (Math.abs(delta) > 0.01) anchor.viewport.scrollTop += delta
+  anchor.scrollTop = anchor.viewport.scrollTop
+}
+
+function nextCodeAnchor(block: CodeBlock, anchor: ReturnType<typeof codeReadingAnchor>) {
+  if (anchor?.line.isConnected && anchor.viewport.scrollTop === anchor.scrollTop) {
+    const area = anchor.viewport.getBoundingClientRect()
+    // Keep fractional correction debt across task boundaries. Resetting the
+    // target every batch accumulates subpixel scroll rounding into visible drift.
+    if (area.top === anchor.viewportTop && area.bottom === anchor.viewportBottom) return anchor
+  }
+  // A scroll or resized viewport during the yield starts a new reading target.
+  return codeReadingAnchor(block)
 }
 
 // Shiki's bounded worker output has one balanced line span per newline. Each
@@ -170,9 +183,9 @@ async function colorCode(block: CodeBlock, signal?: AbortSignal) {
     if (block.nextColoredLine < block.lines.length && (committed >= 32 || performance.now() - commitStart > 6)) {
       retainCodeAnchor(anchor)
       await yieldPreview(signal)
-      // Take a fresh anchor after yielding so scrolling during coloring remains
-      // the user's choice, rather than restoring an old whole-render position.
-      anchor = codeReadingAnchor(block); committed = 0; commitStart = performance.now()
+      // Keep the correction target unless the viewport changed during the
+      // yield; a user's scroll starts a new target rather than being undone.
+      anchor = nextCodeAnchor(block, anchor); committed = 0; commitStart = performance.now()
     }
   }
   retainCodeAnchor(anchor)

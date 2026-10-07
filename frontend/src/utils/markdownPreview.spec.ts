@@ -153,6 +153,51 @@ it('retains diagram zoom/source state until a theme change rerenders the diagram
   expect(root.querySelector('.markdown-mermaid')).not.toBe(diagram)
 })
 
+it.each([false, true])('carries subpixel scroll corrections across batches while respecting a user scroll (%s)', async userScroll => {
+  const source = Array.from({ length: 256 }, (_, index) => `line ${index}`).join('\n')
+  const markdown = '```text\n' + source + '\n```'
+  vi.mocked(previewHighlighter.highlight).mockImplementation(async text => {
+    const holder = document.createElement('div'); holder.innerHTML = plainCode(text)
+    for (const line of holder.querySelectorAll('.line')) {
+      const token = document.createElement('span'); token.textContent = line.textContent
+      token.style.setProperty('--shiki-light', '#123456'); line.replaceChildren(token)
+    }
+    return holder.innerHTML
+  })
+  const root = document.createElement('div'), renderer = new MarkdownPreview(root)
+  root.style.overflowY = 'auto'; document.body.append(root)
+  let scroll = 1_000
+  Object.defineProperties(root, {
+    scrollHeight: { value: 20_000 }, clientHeight: { value: 200 },
+    scrollTop: { get: () => scroll, set: (value: number) => { scroll = Math.round(value) } },
+  })
+  await renderer.render(markdown, { previewOnly: true })
+  const pre = root.querySelector<HTMLElement>('.shiki')!, line = root.querySelectorAll<HTMLElement>('.line')[128]!
+  const viewportRect = vi.spyOn(root, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 500, 200))
+  const preRect = vi.spyOn(pre, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 10, 500, 20_000))
+  const lineRect = vi.spyOn(line, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0,
+    100 + root.querySelectorAll('.line > span[style]').length / 32 * .3 - (scroll - 1_000), 500, 20))
+  const original = Object.getOwnPropertyDescriptor(document, 'elementFromPoint')
+  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => line })
+  let scrolled = false
+  const observer = new MutationObserver(() => {
+    if (userScroll && !scrolled && root.querySelector('.line > span[style]')) {
+      scroll += 80; scrolled = true
+    }
+  })
+  observer.observe(root, { childList: true, subtree: true })
+  try {
+    await renderer.render(markdown)
+    expect(root.querySelector('[data-highlight-state="complete"]')).not.toBeNull()
+    expect(scrolled).toBe(userScroll)
+    expect(Math.abs(line.getBoundingClientRect().top - 100 + (userScroll ? 80 : 0))).toBeLessThan(1)
+  } finally {
+    observer.disconnect(); root.remove(); viewportRect.mockRestore(); preRect.mockRestore(); lineRect.mockRestore()
+    if (original) Object.defineProperty(document, 'elementFromPoint', original)
+    else Reflect.deleteProperty(document, 'elementFromPoint')
+  }
+})
+
 it('renders growing/open and closed fences, lists and math without losing literal source', async () => {
   const root = document.createElement('div'), renderer = new MarkdownPreview(root)
   await renderer.render('```text\n[1] <unsafe>')
