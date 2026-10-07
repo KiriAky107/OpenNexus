@@ -233,6 +233,42 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                 if(wrapped && getComputedStyle(initialCode.querySelector('code')).whiteSpace!=='pre-wrap')
                     throw Error('Native wrapped fixture did not enable wrapping');
                 getSelection().removeAllRanges();
+                phase('application_search');
+                // Exercise the production search controls as well as native
+                // browser find. Hidden copy buffers must not become duplicate
+                // matches, and locating a result must survive deferred layout.
+                store.isStreaming=true;
+                const searchInput=document.querySelector('.conversation-search input');
+                if(!searchInput)throw Error('Native preview has no conversation search');
+                searchInput.value=probe+':';searchInput.dispatchEvent(new Event('input',{bubbles:true}));
+                await until(()=>document.querySelector('.conversation-search .search-hit'));
+                document.querySelector('.conversation-search .search-hit').click();
+                await until(()=>document.querySelector('.search-selected .search-navigation .inline-actions span'));
+                const navigation=document.querySelector('.search-selected .search-navigation');
+                if(navigation.querySelector('.inline-actions span').textContent.trim()!=='1 / 1')
+                    throw Error('Native search counted the hidden copy buffer');
+                const matchLine=dom().querySelector(`.line[data-preview-line-number="${Math.floor(lines/2)+1}"]`);
+                const match=Array.from(matchLine.querySelectorAll('span')).find(span=>span.textContent===probe) || matchLine;
+                const searchPositions=[];
+                const recordSearch=()=>{
+                    const box=match.getBoundingClientRect(),view=timeline.getBoundingClientRect();
+                    const point=box.top+Math.min(box.height,timeline.clientHeight)/2;
+                    return {top:box.top,scroll_top:timeline.scrollTop,
+                        center_offset:point-view.top-timeline.clientTop-timeline.clientHeight/2,
+                        visible:box.bottom>view.top && box.top<view.bottom};
+                };
+                for(let i=0;i<14;i++){await frame();searchPositions.push(recordSearch());}
+                const firstSearch=searchPositions.at(-1);
+                if(!firstSearch.visible || Math.abs(firstSearch.center_offset)>2)
+                    throw Error('Native application search left the matched code out of place: '+JSON.stringify(firstSearch));
+                navigation.querySelectorAll('button')[1].click();
+                for(let i=0;i<8;i++)await frame();
+                const nextSearch=recordSearch();
+                if(!nextSearch.visible || Math.abs(nextSearch.center_offset)>2)
+                    throw Error('Native next-match navigation displaced the result');
+                searchInput.value='';searchInput.dispatchEvent(new Event('input',{bubbles:true}));
+                await until(()=>!document.querySelector('.search-selected'));
+                store.isStreaming=false;
                 phase('obsolete_render');
                 // A cancelled render must not overwrite the user's final text.
                 const obsoleteJobStart=jobs.length;
@@ -263,6 +299,7 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                     renderer_js_heap_bytes:{before:heapBefore,colored:heapColored,tail:heapTail},
                     native_thread_cpu:threadCpu,
                     offscreen_code_search_preserved:true,
+                    application_search:{match_count:1,positions:searchPositions,next_match:nextSearch,hidden_copy_not_matched:true},
                     reading_anchor_setup:anchorSetup,
                     reading_anchor_delta_px:anchorDelta,reading_anchor_preserved:true,
                     pending_color_anchor_delta_px:pendingAnchorDelta,

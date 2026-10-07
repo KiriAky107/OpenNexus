@@ -21,6 +21,7 @@ import ConversationSearch from './ConversationSearch.vue'
 import type { ChatSearchHit } from '@/services/chatService'
 import { paintSearchRanges, visibleMatchRanges } from './searchHighlight'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { revealSearchTarget } from '@/utils/revealSearchTarget'
 
 const router = useRouter()
 const suggestions = computed(() => [t('根据我的笔记整理本周复习重点', 'Summarize this week’s revision priorities from my notes'), t('解释笔记中的关键概念，并注明来源', 'Explain the key concepts in my notes and cite sources'), t('帮我规划一个循序渐进的学习任务', 'Help me plan a step-by-step study task')])
@@ -76,9 +77,17 @@ function restoreDetails() {
 }
 watch(() => visibleMessages.value.map(m => m.message_id).join('\n'), async () => { await nextTick(); restoreDetails() }, { flush: 'post' })
 let ranges: Range[] = [], locateVersion = 0
+let cancelSearchPlacement: (() => void) | undefined
+function stopSearchPlacement() { cancelSearchPlacement?.(); cancelSearchPlacement = undefined }
+function revealMatch(fallback?: HTMLElement) {
+  stopSearchPlacement()
+  const target = ranges[matchIndex.value]?.startContainer.parentElement ?? fallback
+  if (target && timeline.value) cancelSearchPlacement = revealSearchTarget(target, timeline.value)
+}
 let versionSwitch: Promise<unknown> | undefined
 let readingPosition: { top: number; count: number; window: number | null; conversation: string | null; vault: string | null; snapshot: ChatReadingSnapshot; disclosures: Map<string, Record<string, boolean>> } | undefined
 async function clearSearch() {
+  stopSearchPlacement()
   const version = ++locateVersion; searchLocation.value = undefined; ranges = []; paintSearchRanges([])
   const position = readingPosition; readingPosition = undefined
   if (!position || position.conversation !== chatStore.activeConversationId || position.vault !== workspace.vaultId) return
@@ -93,6 +102,7 @@ async function clearSearch() {
   if (timeline.value) timeline.value.scrollTop = position.top
 }
 async function locateHit(hit: ChatSearchHit, query: string) {
+  stopSearchPlacement()
   const version = ++locateVersion, conversation = chatStore.activeConversationId, vault = workspace.vaultId
   if (!readingPosition) {
     rememberDetails()
@@ -112,7 +122,7 @@ async function locateHit(hit: ChatSearchHit, query: string) {
   searchLocation.value = { hit, query }; matchIndex.value = 0
   matchCount.value = 0; loadError.value = ''
   await nextTick()
-  if (version !== locateVersion) return
+  if (disposed || version !== locateVersion || conversation !== chatStore.activeConversationId || vault !== workspace.vaultId) return
   const article = Array.from(timeline.value?.querySelectorAll<HTMLElement>('[data-message-id]') || []).find(e => e.dataset.messageId === hit.message_id)
   let target = article
   if (hit.tool_call_id && article) {
@@ -121,16 +131,16 @@ async function locateHit(hit: ChatSearchHit, query: string) {
   }
   if (target) {
     ranges = visibleMatchRanges(target, query); matchCount.value = ranges.length; paintSearchRanges(ranges)
-    target.scrollIntoView?.({ block: 'center' }); target.focus({ preventScroll: true })
+    revealMatch(target); target.focus({ preventScroll: true })
   }
 }
 function nextMatch(direction: number) {
   if (!ranges.length) return
   matchIndex.value = (matchIndex.value + direction + ranges.length) % ranges.length
   paintSearchRanges(ranges, matchIndex.value)
-  ranges[matchIndex.value]?.startContainer.parentElement?.scrollIntoView?.({ block: 'center' })
+  revealMatch()
 }
-onBeforeUnmount(() => { locateVersion++; paintSearchRanges([]) })
+onBeforeUnmount(() => { locateVersion++; stopSearchPlacement(); paintSearchRanges([]) })
 const nearBottom = ref(true)
 const hasNewActivity = ref(false)
 function trackScroll() {
@@ -140,6 +150,7 @@ function trackScroll() {
   if (nearBottom.value) hasNewActivity.value = false
 }
 async function latest() {
+  locateVersion++; stopSearchPlacement()
   if (!chatStore.atLatest || searchWindow.value !== null) rememberDetails()
   if (!await chatStore.showLatest()) return
   searchWindow.value = null
@@ -148,6 +159,7 @@ async function latest() {
   nearBottom.value = true; hasNewActivity.value = false
 }
 async function older() {
+  locateVersion++; stopSearchPlacement()
   rememberDetails()
   nearBottom.value = false
   if (searchWindow.value !== null && searchWindow.value > 0) { searchWindow.value = Math.max(0, searchWindow.value - 30); return }
@@ -166,6 +178,7 @@ async function older() {
   if (element) element.scrollTop = top + (kept ? kept.offsetTop - offset : element.scrollHeight - height)
 }
 async function later() {
+  locateVersion++; stopSearchPlacement()
   rememberDetails()
   nearBottom.value = false
   if (!await chatStore.loadLater()) return

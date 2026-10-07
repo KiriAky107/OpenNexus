@@ -5,7 +5,7 @@ export function visibleMatchRanges(root: HTMLElement, query: string): Range[] {
   let node: Node | null
   while ((node = walker.nextNode())) {
     const parent = node.parentElement
-    if (parent?.closest('.thinking, .tool-result, .context-snapshot, .search-navigation, .message-actions, .usage, .legacy-order-note, time, button, script, style')) continue
+    if (parent?.closest('[hidden], .thinking, .tool-result, .context-snapshot, .search-navigation, .message-actions, .usage, .legacy-order-note, time, button, script, style')) continue
     if (node.textContent) nodes.push(node as Text)
   }
   const text = nodes.map(n => n.data).join('').toLowerCase(), term = query.toLowerCase()
