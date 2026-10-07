@@ -43,6 +43,8 @@ def main():
     database.add_user('native-fixture', 'controlled-fixture-password')
     fault = threading.Event()
     counts = {'changes_503': 0, 'changes_success': 0}
+    latency = {'seconds': 0.0}
+    counts.update(refresh_success=0, upload_requests=0, upload_body_bytes=0, active_upload_requests=0, max_active_upload_requests=0)
 
     @app.middleware('http')
     async def controlled_outage(request, call_next):
@@ -51,7 +53,21 @@ def main():
             counts['changes_503'] += 1
             return JSONResponse({'error': {'code': 'TEMPORARILY_UNAVAILABLE', 'details': {}}},
                                 status_code=503, headers={'Retry-After': '8'})
-        response = await call_next(request)
+        upload = request.method == 'PUT' and '/uploads/' in request.url.path
+        if upload:
+            counts['upload_requests'] += 1
+            counts['upload_body_bytes'] += int(request.headers.get('content-length', '0'))
+            counts['active_upload_requests'] += 1
+            counts['max_active_upload_requests'] = max(counts['max_active_upload_requests'], counts['active_upload_requests'])
+        try:
+            if latency['seconds']:
+                await asyncio.sleep(latency['seconds'])
+            response = await call_next(request)
+        finally:
+            if upload:
+                counts['active_upload_requests'] -= 1
+        if request.url.path.endswith('/auth/refresh') and response.status_code == 200:
+            counts['refresh_success'] += 1
         if changes and response.status_code == 200:
             counts['changes_success'] += 1
         return response
@@ -76,6 +92,26 @@ def main():
                 if action == 'fault':
                     fault.set() if command['enabled'] else fault.clear()
                     emit({'action': action, 'enabled': fault.is_set()})
+                elif action == 'latency':
+                    seconds = command.get('seconds')
+                    if not isinstance(seconds, (float, int)) or isinstance(seconds, bool) or not 0 <= seconds <= 2:
+                        raise ValueError('INVALID_OWNED_LATENCY')
+                    latency['seconds'] = float(seconds)
+                    emit({'action': action, 'seconds': latency['seconds']})
+                elif action == 'quota':
+                    quota = command.get('bytes')
+                    if type(quota) is not int or not 0 <= quota <= 1024**3:
+                        raise ValueError('INVALID_OWNED_QUOTA')
+                    with database.transaction() as conn:
+                        changed = conn.execute(text('UPDATE vaults SET quota=:quota WHERE id=:id AND used<=:quota'),
+                            {'quota': quota, 'id': command['vault_id']}).rowcount
+                    if changed != 1:
+                        raise ValueError('OWNED_VAULT_NOT_UPDATED')
+                    emit({'action': action, 'quota': quota, 'updated_vaults': changed})
+                elif action == 'expire_access':
+                    with database.transaction() as conn:
+                        changed = conn.execute(text('UPDATE sessions SET expires=0')).rowcount
+                    emit({'action': action, 'expired_sessions': changed})
                 elif action == 'state':
                     with database.transaction() as conn:
                         # Deliberately exclude all session and password columns.
