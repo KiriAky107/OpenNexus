@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections import deque
 import hashlib
 import io
 import json
+import math
 from pathlib import Path
 import socket
 import sys
@@ -24,6 +26,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from community.app import Registry, create_app
 from community.package import Release, signed_payload
+from fastapi.responses import Response
 if not Path(sys.modules['community.app'].__file__).resolve().is_relative_to(service):
     raise RuntimeError('Community fixture loaded a different service module')
 
@@ -88,6 +91,26 @@ async def main():
     spki = base64.b64encode(hashlib.sha256(leaf.public_key().public_bytes(
         serialization.Encoding.DER,serialization.PublicFormat.SubjectPublicKeyInfo)).digest()).decode()
     app = create_app(registry, 'native-catalog-fixture', ('http://tauri.localhost','https://tauri.localhost','tauri://localhost'))
+    network = {'status': 200, 'delay': 0.0, 'active': 0}
+    requests = deque(maxlen=512)
+
+    @app.middleware('http')
+    async def observe_catalog(request, call_next):
+        if not request.url.path.startswith('/catalog/v1/'):
+            return await call_next(request)
+        record = {'path': request.url.path, 'query': request.url.query,
+            'if_none_match': request.headers.get('if-none-match'), 'status': None}
+        requests.append(record)
+        status, delay = network['status'], network['delay']
+        network['active'] += 1
+        try:
+            if delay:
+                await asyncio.sleep(delay)
+            response = await call_next(request) if status == 200 else Response(status_code=status)
+            record['status'] = response.status_code
+            return response
+        finally:
+            network['active'] -= 1
     sock = socket.socket(); sock.bind(('127.0.0.1',0)); sock.listen(128)
     server = uvicorn.Server(uvicorn.Config(app,log_config=None,access_log=False,timeout_graceful_shutdown=1,
         ssl_certfile=str(cert_path),ssl_keyfile=str(key_path)))
@@ -106,6 +129,23 @@ async def main():
                     with registry.connect() as conn:
                         conn.execute("UPDATE keys SET revoked=1 WHERE id='native-key'")
                     result=True
+                elif request['action']=='network':
+                    status, delay = request['status'], request.get('delay', 0)
+                    if type(status) is not int or status not in {200, 403, 503}:
+                        raise RuntimeError('Unsupported owned catalog response')
+                    if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not math.isfinite(delay) or not 0 <= delay <= 5:
+                        raise RuntimeError('Owned catalog delay is out of range')
+                    network.update(status=status, delay=float(delay))
+                    result={'status':status,'delay':delay}
+                elif request['action']=='stats':
+                    result={'active':network['active'],'requests':list(requests)}
+                elif request['action']=='rotate-key':
+                    replacement=Ed25519PrivateKey.generate().public_key().public_bytes(
+                        serialization.Encoding.Raw,serialization.PublicFormat.Raw)
+                    with registry.connect() as conn:
+                        if conn.execute("UPDATE keys SET public_key=? WHERE id='native-key'",(replacement,)).rowcount != 1:
+                            raise RuntimeError('Owned signing key disappeared')
+                    result={'public_key':base64.b64encode(replacement).decode('ascii')}
                 else: raise RuntimeError('Unknown owned fixture control')
                 print(json.dumps({'action':request['action'],'result':result}),flush=True)
         finally: server.should_exit=True
