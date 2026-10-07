@@ -43,6 +43,13 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                 phaseStart=end;phaseName=name;
             };
             const jobs=[], workers=new WeakSet(), listeners=[], originalPost=Worker.prototype.postMessage;
+            const readingAnchors=[], originalPoint=document.elementFromPoint;
+            document.elementFromPoint=function(x,y){
+                const found=Reflect.apply(originalPoint,this,[x,y]), line=found?.closest('.line');
+                if(readingAnchors.length<512)readingAnchors.push({x,y,line:line?.dataset.previewLineNumber ?? null,
+                    top:line?.getBoundingClientRect().top ?? null,found:found?.className ?? null});
+                return found;
+            };
             Worker.prototype.postMessage=function(message,...rest){
                 if(!workers.has(this)){
                     workers.add(this);const listener=event=>{
@@ -86,12 +93,29 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                 let pendingAnchorDelta=null;
                 let pendingAnchorTop=null;
                 let pendingAnchorLine=null, pendingAnchorBefore=null;
+                let plainAnchorSettlingDelta=null;
                 const pendingLineNumber=String(Math.floor(lines/2)+1);
                 if(wrapped && verifyPendingAnchor){
                     phase('plain_viewport_anchor');
                     const plainLine=dom()?.querySelector(`.line[data-preview-line-number="${pendingLineNumber}"]`);
                     if(!plainLine)throw Error('Plain code has no reading anchor');
                     plainLine.scrollIntoView({block:'center'});await frame();await frame();
+                    const initialPlainTop=plainLine.getBoundingClientRect().top;
+                    // content-visibility can refine estimated heights after
+                    // scrollIntoView. Establish a stable *plain* reading position
+                    // before timing the separate coloring operation. Keep the
+                    // same two-pixel coloring threshold and report settling.
+                    plainLine.closest('pre').getBoundingClientRect();
+                    let previousTop=plainLine.getBoundingClientRect().top, stableFrames=0;
+                    const settlingDeadline=performance.now()+2000;
+                    while(stableFrames<5){
+                        if(dom()?.querySelector('.markdown-code-block[data-highlight-state="complete"]'))
+                            throw Error('Coloring completed before a stable plain reading position could be measured');
+                        if(performance.now()>settlingDeadline)throw Error('Plain reading position did not settle');
+                        await frame();const top=plainLine.getBoundingClientRect().top;
+                        stableFrames=Math.abs(top-previousTop)<=0.05 ? stableFrames+1 : 0;previousTop=top;
+                    }
+                    plainAnchorSettlingDelta=Math.abs(previousTop-initialPlainTop);
                     pendingAnchorTop=plainLine.getBoundingClientRect().top;
                     pendingAnchorLine=plainLine;
                     pendingAnchorBefore={top:pendingAnchorTop,scroll_top:document.querySelector('.message-timeline').scrollTop,
@@ -110,7 +134,7 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                     window.nativePreviewDiagnosis={lines,wrapped,before:pendingAnchorBefore,
                         after:{top:coloredLine.getBoundingClientRect().top,scroll_top:document.querySelector('.message-timeline').scrollTop,
                             chunk_top:coloredLine.parentElement.getBoundingClientRect().top,line_height:coloredLine.getBoundingClientRect().height},
-                        same_line_node:pendingAnchorLine===coloredLine,delta_px:pendingAnchorDelta};
+                            same_line_node:pendingAnchorLine===coloredLine,delta_px:pendingAnchorDelta,reading_anchor_calls:readingAnchors};
                     if(pendingAnchorDelta>2)throw Error('Coloring displaced the wrapped reading anchor by '+pendingAnchorDelta+' pixels');
                 }
                 phase('integrity_validation');
@@ -203,6 +227,7 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                     offscreen_code_search_preserved:true,
                     reading_anchor_delta_px:anchorDelta,reading_anchor_preserved:true,
                     pending_color_anchor_delta_px:pendingAnchorDelta,
+                    plain_anchor_settling_delta_px:plainAnchorSettlingDelta,
                     obsolete_worker_jobs_completed:jobs.slice(obsoleteJobStart).every(job=>job.elapsed_ms!==undefined),
                     long_tasks:tasks.length,max_long_task_ms:Math.max(0,...tasks.map(task=>task.duration)),
                     long_task_phases:longTaskPhases,
@@ -211,6 +236,7 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                     max_frame_gap_ms:Math.max(0,...frames),final_text_preserved:true,copy_source_preserved:true};
             } finally {
                 watching=false;observer.disconnect();store.isStreaming=false;Worker.prototype.postMessage=originalPost;
+                document.elementFromPoint=originalPoint;
                 preferences.apply(savedPreferences);
                 for(const [worker,listener] of listeners)worker.removeEventListener('message',listener);
             }
