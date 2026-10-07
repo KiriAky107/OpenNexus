@@ -87,7 +87,7 @@ def exercise(page, process, work: Path, vault: Path, *, require_default_policy=T
         return selector
 
     def open_chat():
-        page.evaluate('()=>smokeRouter.push("/chat")')
+        page.evaluate('async()=>{await smokeRouter.push("/chat")}')
         page.locator('.composer textarea').wait_for()
         until(lambda: page.evaluate('()=>!smokePinia._s.get("provider").isLoading && !smokePinia._s.get("skill").isLoading && smokePinia._s.get("chat").canSend'), 'Chat configuration did not finish loading')
         page.evaluate('async()=>{await smokePinia._s.get("chat").loadConversations();await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame)}')
@@ -111,7 +111,22 @@ def exercise(page, process, work: Path, vault: Path, *, require_default_policy=T
         page.get_by_label('允许管理与委托智能体', exact=True).check()
         page.get_by_label('检索知识库', exact=True).uncheck()
 
+    def opened_file(path, description):
+        # An event can open the same path that is already held by the editor.
+        # Its async file lookup and route navigation still have to finish before
+        # the next chat navigation; a path-only check returns too early.
+        navigation_waits.append(page.evaluate('''expected => ({expected,
+            route:smokeRouter.currentRoute.value.name,
+            editor_path:smokePinia._s.get('editor').currentFilePath})
+        ''', path))
+        until(lambda: page.evaluate('''path =>
+            smokeRouter.currentRoute.value.name === 'workspace' &&
+            smokePinia._s.get('editor').currentFilePath === path &&
+            smokePinia._s.get('workspace').activeFilePath === path
+        ''', path), description)
+
     confirmations = []
+    navigation_waits = []
     source_path = 'experiments/原生聊天/运行 #%.py'
     folder = vault / 'experiments/原生聊天'
     folder.mkdir(parents=True)
@@ -200,10 +215,10 @@ def exercise(page, process, work: Path, vault: Path, *, require_default_policy=T
     origin = host('origins', file_id=imported['entry']['file_id'], limit=10, cursor=None)['items'][0]
     assert origin['run_id'] == source_run and origin['source']['request']['entry']['file_id'] == entry_id
     page.locator('.experiment-event').filter(has_text='成果导入').last.get_by_role('button', name='打开导入文件', exact=True).click()
-    until(lambda: page.evaluate('()=>smokePinia._s.get("editor").currentFilePath') == '/实验成果/聊天 #%.md', 'Imported file did not open')
+    opened_file('/实验成果/聊天 #%.md', 'Imported file did not open')
     # The real rendered note link must preserve encoded literal #/% characters.
     page.locator('.ProseMirror a').filter(has_text='实验源').first.click(modifiers=['Control'])
-    until(lambda: page.evaluate('()=>smokePinia._s.get("editor").currentFilePath') == '/' + source_path, 'Experiment note link did not open')
+    opened_file('/' + source_path, 'Experiment note link did not open')
     renamed = 'experiments/原生聊天/改名 #%.py'
     page.evaluate('([path,destination,expected])=>smokeInvoke("workspace_rename",{path,destination,expected})', [source_path, renamed, evidence])
     page.evaluate('''([oldPath,newPath])=>{
@@ -216,7 +231,7 @@ def exercise(page, process, work: Path, vault: Path, *, require_default_policy=T
     open_chat()
     source_button = page.locator('.experiment-event').filter(has_text='实验运行').get_by_role('button', name='打开源文件', exact=False).last
     source_button.click()
-    until(lambda: page.evaluate('()=>smokePinia._s.get("editor").currentFilePath') == '/' + renamed, 'Renamed event source did not open')
+    opened_file('/' + renamed, 'Renamed event source did not open')
     open_chat()
 
     print('GROUP_UI plan approval never grants run consent; finite delegated budget', flush=True)
@@ -278,6 +293,7 @@ def exercise(page, process, work: Path, vault: Path, *, require_default_policy=T
         'source_sha256': evidence, 'imported_sha256': output_hash, 'crlf_preserved': True,
         'selected_json_csv_inputs': True, 'default_run_denied': require_default_policy, 'saving_did_not_run': True,
         'rejected_import_preserved_original': True, 'encoded_note_link_opened': True,
-        'renamed_event_source_opened': True, 'group_plan_independent_of_run_consent': True,
+        'renamed_event_source_opened': True, 'file_navigation_waits': navigation_waits,
+        'group_plan_independent_of_run_consent': True,
         'manual_unlimited_member_uses_finite_group_budget': True, 'downstream_tools_ceiling': True,
         'cancelled_pending_permission_and_downstream': True}
