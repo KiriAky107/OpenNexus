@@ -144,8 +144,9 @@ def exercise(page, process, work: Path, vault: Path, catalog: NativeCatalog):
     detail.wait_for()
     detail.get_by_role('button', name='校验并暂存', exact=True).click()
     panel.get_by_role('alert').wait_for()
-    if 'EXTENSION_TRUST_CHANGED' not in panel.get_by_role('alert').inner_text():
-        raise RuntimeError('A changed live signing key was not rejected: '+panel.get_by_role('alert').inner_text())
+    error = panel.get_by_role('alert').inner_text()
+    if 'EXTENSION_TRUST_CHANGED' not in error and '来源公钥或信任设置已改变' not in error:
+        raise RuntimeError('A changed live signing key was not rejected: '+error)
     if staged(page) or installed(page) or page.evaluate("()=>localStorage.getItem('community-sources-v1')") != saved_source:
         raise RuntimeError('A changed signing key altered packages or saved trust without confirmation')
     detail.press('Escape')

@@ -46,11 +46,28 @@ function source(): CommunitySource {
   if (!value) throw new Error('请先添加并选择一个来源')
   return value
 }
+function failureMessage(reason: unknown): string {
+  const code = reason instanceof Error ? reason.message : String(reason)
+  switch (code) {
+    case 'EXTENSION_TRUST_CHANGED':
+      return t('来源公钥或信任设置已改变。请重新检查来源并核对公钥后再试。', 'The source key or trust settings have changed. Check the source and confirm its public key again before retrying.')
+    case 'EXTENSION_SOURCE_UNTRUSTED':
+      return t('请先检查来源并确认公钥，再获取社区包。', 'Check the source and confirm its public key before getting packages.')
+    case 'EXTENSION_KEY_REVOKED':
+      return t('此包的签名密钥已撤销，无法继续。请联系来源维护者核对。', 'This package’s signing key has been revoked. Contact the source maintainer before continuing.')
+    case 'EXTENSION_RELEASE_WITHDRAWN':
+      return t('此版本已撤回。请刷新目录并选择其他可用版本。', 'This release has been withdrawn. Refresh the catalog and choose an available release.')
+    case 'EXTENSION_TRUST_STALE':
+      return t('来源确认已过期或设置已改变。请关闭此预览，重新检查并核对来源。', 'The source confirmation has expired or its settings have changed. Close this preview and check the source again.')
+    default:
+      return code
+  }
+}
 async function run(action: (signal: AbortSignal, current: () => boolean) => Promise<void>) {
   cancel(); const request = ++version
   controller = new AbortController(); busy.value = true; error.value = ''; notice.value = ''
   try { await action(controller.signal, () => request === version) }
-  catch (reason) { if (request === version) error.value = reason instanceof Error ? reason.message : String(reason) }
+  catch (reason) { if (request === version) error.value = failureMessage(reason) }
   finally { if (request === version) busy.value = false }
 }
 function inspectSource() {
