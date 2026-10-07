@@ -45,7 +45,7 @@ def result(case_id: str, status: str, reason: str, assertions: list[dict]) -> di
         "files": files,
         "revisions": [
             {"scope": "actual two-client HTTP classification roundtrip", "default_records": 6, "all_selected_records": 12},
-            {"scope": "logical schema", "version": 1, "workspace_schema": 13},
+            {"scope": "logical schema", "version": 1, "workspace_schema": 18},
         ],
     }
 

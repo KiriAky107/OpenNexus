@@ -136,6 +136,16 @@ class ServiceBindingTests(unittest.TestCase):
         with self.assertRaisesRegex(runner.AcceptanceError,'SERVICE_LOCKFILE_UNAVAILABLE'):
             runner._repository_evidence({})
 
+    def test_rename_crash_failure_cannot_be_hidden_by_successful_pull_and_upload(self):
+        module=importlib.import_module('s02_sync_client');output=self.root/'S02-rename-failed.json'
+        with patch.dict(os.environ,{'OPENNEXUS_SYNC_SERVER_DIR':str(self.service),'OPENNEXUS_ACCEPTANCE_CASE_ID':'S-02'}), patch(
+            'sys.argv',['s02','--config','unused.json','--output',str(output)]
+        ), patch.object(module.shutil,'which',return_value='cargo'), patch.object(module,'run_exact',side_effect=[True,False,True]) as oracle:
+            self.assertEqual(module.main(),1)
+            self.assertEqual(oracle.call_count,3)
+            self.assertIn(module.RENAME_TEST,oracle.call_args_list[1].args[0])
+            self.assertEqual(json.loads(output.read_text('utf-8'))['status'],'FAILED')
+
 
 if __name__ == '__main__':
     unittest.main()
