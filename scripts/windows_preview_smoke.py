@@ -1,6 +1,6 @@
 """Measure production streamed Markdown in the verifier-owned native WebView2.
 
-Synthetic Pinia messages exercise rendering only, without model or network calls.
+Synthetic Pinia messages exercise rendering and local search without model calls.
 Timing measures the actual WebView main thread; it is not OS input latency.
 """
 from __future__ import annotations
@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 
-def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 5000), *, wrapped_line_counts=(), verify_pending_anchor=False, verify_worker_timing=False, warm_pass=False, verify_thread_cpu=False):
+def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 5000), *, wrapped_line_counts=(5000,), verify_pending_anchor=False, verify_worker_timing=False, warm_pass=False, verify_thread_cpu=False):
     if vault.resolve() != work.resolve() / 'vault' or process.poll() is not None:
         raise RuntimeError('Preview checks require a live verifier-owned native payload')
     page.evaluate('()=>smokeRouter.push("/chat")')

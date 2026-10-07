@@ -19,7 +19,7 @@
     <a href="https://github.com/KiriAky107/OpenNexus/releases">发布日志</a>
   </p>
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.5.9--beta2-5865f2?style=flat-square" alt="版本" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.6.0-5865f2?style=flat-square" alt="版本" /></a>
     <a href="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml"><img src="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="平台" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="桌面端 Tauri" />
@@ -33,7 +33,7 @@
 
 ---
 
-当前版本：[v0.5.9-beta2](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta2)。
+当前版本：[v0.6.0](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0)。
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 桌面编辑器：精简文件操作、大纲、公式与函数图" width="95%" />
@@ -67,16 +67,16 @@
 
 ---
 
-## 0.5.9-beta2 更新
+## 0.6.0 更新
 
-- **正文链接、AI 引用与搜索**：兼容不同路径格式，在两种编辑器中定位实际引用段落；段落发生变化时明确提示。
-- **编辑与外部更新**：保留文件切换和保存期间的输入，外部正文读取中断后继续重试，未保存内容仍受冲突检查保护。
-- **外部重命名与同步**：大小写改名、连续改名与文件名交换时保留文件身份，中断后继续执行已保存的同步队列。
-- **画布文件路径**：正确打开和预览名称含字面 `#`、`%` 的文件，改名时保留独立标题定位及自引用。
-- **聊天收尾**：保持并发分支一致，结束被中断的工具状态；回复在后台保存，退出时等待完成，保存失败时显示提示。
-- **Benchmark 写入**：数据集只保存一次，逐条追加样本结果与进度，减少重复写入，同时保留报告与重启恢复。
-- **代码块与流式预览**：语法高亮转入后台 Worker，合并频繁预览更新并复用未变化代码块，新文本及时显示。
-- **发布检查**：GitHub CI 检查中英文更新说明、版本一致性与下载链接。
+- **实验文件与编辑**：在知识库的 `experiments/` 中创建、编辑和保存 Python、JSON、CSV 文件；改名和移动保留文件身份、正文链接与成果来源。
+- **随包运行环境**：安装包提供 Python 3.13.16，选定源文件和输入在 AppContainer 与 Job Object 中运行；查看真实输出和资源状态，随时停止整个进程树。
+- **Agent 实验流程**：分别审核文件修改、实际运行和成果导入。批准绑定源版本及输入，重试查询既有结果，聊天和多 Agent 使用同一套确认记录。
+- **成果与运行历史**：预览文本、JSON、CSV 和图片，逐项选择目标路径与覆盖方式；运行记录保留源版本、退出状态、截断标识及导入回执，可从笔记打开来源。
+- **Sync 配套更新**：同步保留的源文件、输入和成果，展示文件与字节进度、配额、设备及退避状态；审核冲突正文差异，并从持久化位置恢复中断操作。
+- **Community 配套更新**：完整分页目录、ETag 缓存及离线反馈；审核已安装包的更新、依赖和权限，应用 Persona、实验模板、MCP 配置和模型方案，失败时恢复安装事务。
+- **长回复与代码搜索**：复用稳定 Markdown 块，分批着色并保留完整复制内容；尾部更新保持阅读位置，搜索跳过隐藏复制缓冲区，并校正延迟布局后的命中位置。
+- **交付与运维**：三仓库使用 GitHub CI 和可恢复发布流程；安装包包含 WebView2Loader 与实验运行时，服务提供部署包、readiness、备份校验及恢复命令。
 
 ## 核心亮点
 
@@ -100,10 +100,10 @@
 
 ### Windows 桌面端安装（推荐）
 
-1. 前往 [0.5.9-beta2 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta2) 下载 Windows x64 安装包。本地构建可按[打包发布](#打包发布)步骤进行。
+1. 前往 [0.6.0 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0) 下载 Windows x64 安装包。本地构建可按[打包发布](#打包发布)步骤进行。
 2. *(可选)* 通过 PowerShell 校验 SHA-256 完整性：
 ```powershell
-   Get-FileHash .\OpenNexus_0.5.9-beta2_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.6.0_x64-setup.exe -Algorithm SHA256
    # 与同一 Release 中的 SHA256SUMS.txt 比对。
 
 ```
@@ -228,6 +228,24 @@ flowchart LR
 
 ---
 
+### 6. 从源文件到实验成果
+
+1. 将[示例源文件](examples/experiments/summary.py)、[CSV 输入](examples/experiments/inputs/data.csv)和[JSON 设置](examples/experiments/inputs/settings.json)按原目录结构复制到当前知识库的 `experiments/demo/` 下。
+2. 打开 `summary.py`，进入底栏的“实验”，选择这两个输入。检查源文件、输入、运行环境和资源设置，单独确认运行。
+3. 查看真实输出、退出状态和成果清单，预览 `results/summary.json`、`results/summary.csv` 和 `results/report.md`，逐项选择导入目标。
+4. 从运行历史或笔记打开已导入的报告及成果来源。AI 也可以准备源文件和运行请求，写入、运行、导入分别审核。
+
+```mermaid
+flowchart LR
+    Edit[编辑源文件与输入] --> Review[审核源版本与运行请求]
+    Review --> Run[随包 Python · 隔离运行]
+    Run --> Output[日志与成果预览]
+    Output --> Import[选择目标并确认导入]
+    Import --> Note[笔记引用与持久来源记录]
+```
+
+<div align="center"><img src=".github/assets/opennexus-experiments.png" alt="实验成果逐项预览、导入回执及来源记录" width="95%" /></div>
+
 ## 系统架构
 
 OpenNexus 采用三层解耦架构，严格划分安全信任边界，兼顾本地计算性能与前端交互体验：
@@ -263,6 +281,10 @@ flowchart LR
     CORE --- LLM
     CORE <--> MCP
     HOST <--> SYNC
+    HOST -->|已审核的源文件与输入| RUN[AppContainer + Job · 随包 Python]
+    RUN --> OUTPUT[私有日志与成果]
+    OUTPUT -->|Host 审核选择性导入| HOST
+    HOST <--> CATALOG[独立 Community 目录]
 
 ```
 
@@ -335,6 +357,8 @@ erDiagram
 ---
 
 ## 生态项目
+
+配套版本：OpenNexus **0.6.0**、Sync for OpenNexus **0.6.0**、Community for OpenNexus **0.6.0**。Sync 使用 `/sync/v1`，Community 使用 `/catalog/v1`；产品版本与协议版本分别维护。
 
 为确保单机版本的纯粹性并降低维护依赖，网络同步与公共服务拆分至独立代码库维护：
 
@@ -430,7 +454,7 @@ pnpm desktop:build
 
 ```
 
-构建完成的安装包将输出至 `frontend/src-tauri/target/release/bundle/nsis/`。[0.5.9-beta2 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.5.9-beta2) 同时提供固定发布提交的源码压缩包与 SHA-256 清单。
+构建完成的安装包将输出至 `frontend/src-tauri/target/release/bundle/nsis/`。[0.6.0 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0) 同时提供固定发布提交的源码压缩包与 SHA-256 清单。
 
 Windows 安装包会在 `OpenNexus.exe` 同目录包含匹配架构、带微软签名的 `WebView2Loader.dll`，打包前从依赖锁定的 WebView2 SDK 准备。WebView2 Runtime 安装程序不会替应用提供这个 DLL。内嵌引导程序会在需要时安装 Runtime，仍需联网。解压安装包后可运行 `python scripts/verify-windows-loader.py <安装包解压目录>`，检查主程序与 Loader 架构及 SDK 哈希，避免构建机上已有的 SDK 掩盖漏打包问题。
 
