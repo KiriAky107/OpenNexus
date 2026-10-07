@@ -72,6 +72,58 @@ def installed(page):
     return page.evaluate("async()=>smokeInvoke('extension_installed',{vaultId:smokePinia._s.get('workspace').vaultId,offset:0,limit:20})")['items']
 
 
+def run_imported_template(page, process, work: Path, vault: Path, source_hash: str):
+    from windows_experiment_smoke import click_confirmation
+    entry = 'experiments/native-community/课程 #%.py'
+    history = page.evaluate("()=>smokeInvoke('experiment_request',{request:{vault_id:smokePinia._s.get('workspace').vaultId,action:{kind:'history',limit:10,cursor:null}}})")
+    if history['items']:
+        raise RuntimeError('Importing the template unexpectedly created a run')
+    page.evaluate("async path=>{await smokeRouter.push('/workspace');await smokePinia._s.get('workspace').refreshFileTree();await smokePinia._s.get('editor').loadFile('/'+path);smokePinia._s.get('workspace').openFile('/'+path)}",entry)
+    page.get_by_role('button', name='实验', exact=True).click()
+    panel = page.locator('#experiment-panel')
+    panel.wait_for()
+    page.wait_for_function("()=>document.querySelector('#experiment-panel .panel-scroll')?.getAttribute('aria-busy')==='false'")
+    panel.locator('.run-form select').select_option(entry)
+    panel.get_by_text('输入文件与资源限制', exact=True).click()
+    for path in ['inputs/data.json','inputs/表格.csv']:
+        panel.locator(f'input[type=checkbox][value="experiments/native-community/{path}"]').check()
+    panel.get_by_label('墙钟秒数', exact=True).fill('30')
+    panel.get_by_label('CPU秒数', exact=True).fill('30')
+    panel.locator('[data-action=prepare-run]').click()
+    panel.locator('[data-action=confirm-run]').wait_for()
+    approved = click_confirmation(page,process,'[data-action=confirm-run]','确认运行 / Confirm run',source_hash)
+    page.wait_for_function("()=>['已完成','失败','已超限停止'].includes(document.querySelector('.run-detail h3')?.textContent)")
+    if panel.locator('.run-detail > .section-heading > h3').inner_text() != '已完成':
+        raise RuntimeError('Imported template execution failed: '+panel.locator('.run-detail').inner_text())
+    evidence = page.evaluate("async()=>{const vault_id=smokePinia._s.get('workspace').vaultId;const history=await smokeInvoke('experiment_request',{request:{vault_id,action:{kind:'history',limit:10,cursor:null}}});const operation_id=history.items[0].operation_id;return {operation_id,record:await smokeInvoke('experiment_request',{request:{vault_id,action:{kind:'record',operation_id}}})}}")
+    run = evidence['record']
+    if run['summary']['request']['entry']['hash'] != source_hash or run['result']['exit_code'] != 0 or 'TEMPLATE_RUN:中文:6:' not in run['result']['logs']['stdout']['text']:
+        raise RuntimeError('The actual run differs from the imported source and reviewed inputs')
+    destination = vault/'课程成果/社区报告.md'
+    if destination.exists():
+        raise RuntimeError('Running the template unexpectedly imported its result')
+    json_output=panel.locator('.outputs .output-item').filter(has_text='result.json')
+    json_output.get_by_role('button',name='预览',exact=True).click()
+    page.wait_for_function("()=>document.querySelector('.output-preview')?.textContent.includes('total')")
+    report=panel.locator('.outputs .output-item').filter(has_text='报告.md')
+    report.locator('input[type=checkbox]').check()
+    report.get_by_label('知识库目标路径',exact=True).fill('课程成果/社区报告.md')
+    panel.locator('[data-action=prepare-import]').click()
+    panel.locator('[data-action=confirm-import]').wait_for()
+    output_hash=next(item['sha256'] for item in run['result']['outputs']['summary']['files'] if item['path']=='报告.md')
+    import_approved=click_confirmation(page,process,'[data-action=confirm-import]','确认导入 / Confirm import',output_hash)
+    page.wait_for_function("()=>document.querySelector('.import-plan h3')?.textContent.includes('已完成')")
+    if destination.read_bytes() != '# 课程成果\r\n总计：6\r\n'.encode('utf-8') or hashlib.sha256(destination.read_bytes()).hexdigest()!=output_hash:
+        raise RuntimeError('The imported result lost its reviewed bytes or CRLF')
+    panel.locator('.import-plan').get_by_role('button',name='打开成果',exact=True).click()
+    panel.get_by_role('button',name='查看当前文件的成果来源',exact=True).click()
+    panel.locator('.origins article').first.wait_for()
+    if source_hash not in panel.locator('.origins article').first.inner_text():
+        raise RuntimeError('The result provenance lost the imported template source hash')
+    page.screenshot(path=str(work/'native-community-template-result.png'))
+    return {'operation_id':evidence['operation_id'],'source_sha256':source_hash,'result':run['result'],'run_approved':approved,'import_approved':import_approved,'imported_sha256':output_hash,'origin_visible':True,'template_import_did_not_run':True,'run_did_not_import':True}
+
+
 def exercise(page, process, work: Path, vault: Path, catalog: NativeCatalog):
     if vault.resolve() != work.resolve() / 'vault':
         raise RuntimeError('Community acceptance requires the owned test vault')
@@ -182,6 +234,10 @@ def exercise(page, process, work: Path, vault: Path, catalog: NativeCatalog):
             if not all((vault / path).is_file() for path in paths): raise RuntimeError('Real template import is incomplete')
             if 'TEMPLATE_RUN' not in (vault/paths[0]).read_text('utf-8'): raise RuntimeError('Imported source differs')
             results['template'] = {'files': paths, 'source_sha256': hashlib.sha256((vault/paths[0]).read_bytes()).hexdigest()}
+            checkpoint()
+            results['template']['independent_run_and_result_import'] = run_imported_template(page,process,work,vault,results['template']['source_sha256'])
+            page.evaluate("()=>smokeRouter.push('/community')")
+            page.locator('.community-page').wait_for()
         else:
             item.get_by_role('button', name='应用配置', exact=True).click()
             dialog = page.get_by_role('dialog', name='应用社区配置', exact=True)
