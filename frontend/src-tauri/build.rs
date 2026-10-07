@@ -45,6 +45,7 @@ fn main() {
             "open_external_url",
             "github_release_check",
             "extension_trust_review",
+            "community_catalog_request",
             "extension_trust_confirm",
             "extension_trust_confirm_group",
             "extension_install_preview",

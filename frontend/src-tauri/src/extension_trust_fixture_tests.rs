@@ -112,6 +112,36 @@ async fn actual_https_roots_require_trust_hostname_and_validity() {
         Client::new("http://127.0.0.1/").err().unwrap().code,
         "EXTENSION_SOURCE_INVALID"
     );
+    let mut request = crate::community_catalog::Request {
+        source: endpoints["trusted"].as_str().unwrap().into(),
+        path: "/catalog/v1/packages?q=fixture&limit=30".into(),
+        max_bytes: 1024,
+        if_none_match: None,
+    };
+    let page = crate::community_catalog::fetch(&request).await.unwrap();
+    assert_eq!(page.status, 200);
+    assert!(page.body_base64.is_some());
+    assert_eq!(page.etag.as_deref(), Some("\"owned-page\""));
+    request.if_none_match = page.etag;
+    let unchanged = crate::community_catalog::fetch(&request).await.unwrap();
+    assert_eq!(unchanged.status, 304);
+    assert!(unchanged.body_base64.is_none());
+    request.path = "/catalog/v1/sources".into();
+    request.if_none_match = None;
+    request.max_bytes = 8;
+    assert_eq!(
+        crate::community_catalog::fetch(&request)
+            .await
+            .err()
+            .unwrap()
+            .code,
+        "COMMUNITY_RESPONSE_LIMIT"
+    );
+    request.path = "/catalog/v1/releases/redirect".into();
+    request.max_bytes = 1024;
+    let redirect = crate::community_catalog::fetch(&request).await.unwrap();
+    assert_eq!(redirect.status, 302);
+    assert!(redirect.body_base64.is_none());
 }
 
 #[tokio::test]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-community-catalog-request"
+description = "Enables the community_catalog_request command without any pre-configured scope."
+commands.allow = ["community_catalog_request"]
+
+[[permission]]
+identifier = "deny-community-catalog-request"
+description = "Denies the community_catalog_request command without any pre-configured scope."
+commands.deny = ["community_catalog_request"]

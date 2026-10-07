@@ -4,6 +4,8 @@
 
 mod extension_commands;
 use extension_commands::*;
+mod community_catalog_commands;
+use community_catalog_commands::*;
 mod extension_candidate_commands;
 use extension_candidate_commands::*;
 mod experiment_commands;
@@ -1594,6 +1596,7 @@ fn main() {
             extension_trust_review,
             extension_trust_confirm,
             extension_trust_confirm_group,
+            community_catalog_request,
             extension_install_preview,
             extension_install_confirm,
             extension_install_rollback,

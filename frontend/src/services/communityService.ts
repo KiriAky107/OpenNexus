@@ -36,6 +36,31 @@ async function requestBytes(source: CommunitySource, path: string, maxSize: numb
   const timeout = setTimeout(abort, 30000)
   try {
     signal?.throwIfAborted()
+    if (isDesktop()) {
+      const url = sourceUrl(source, path)
+      const requestId = await invoke<string>('extension_stage_prepare')
+      const cancel = () => { void invoke('extension_stage_cancel', { requestId }).catch(() => undefined) }
+      controller.signal.addEventListener('abort', cancel, { once: true })
+      try {
+        if (controller.signal.aborted) { cancel(); controller.signal.throwIfAborted() }
+        const response = await invoke<{status:number;body_base64:string|null;etag:string|null}>('community_catalog_request', {request:{request_id:requestId,query:{source:normalizedCommunitySource(source.url),path:url.pathname+url.search,max_bytes:maxSize,if_none_match:etag??null}}})
+        controller.signal.throwIfAborted()
+        if (!response || !Number.isInteger(response.status) || (response.etag !== null && typeof response.etag !== 'string')) throw new Error('桌面社区响应无效')
+        if (response.status === 304 && etag) return {bytes:null,etag:response.etag??etag}
+        if (response.status !== 200 || typeof response.body_base64 !== 'string') throw new CommunityRequestError(response.status)
+        const bytes = bytes64(response.body_base64)
+        if (bytes.length > maxSize) throw new Error('社区响应超过大小限制')
+        return {bytes,etag:response.etag}
+      } catch (reason) {
+        controller.signal.throwIfAborted()
+        if (reason === 'EXTENSION_TRUST_UNAVAILABLE' || reason === 'REQUEST_TIMEOUT') throw new TypeError('暂时无法连接社区来源')
+        if (reason === 'REQUEST_CANCELLED') throw new DOMException('社区请求已取消','AbortError')
+        throw reason
+      } finally {
+        controller.signal.removeEventListener('abort',cancel)
+        await invoke('extension_stage_cancel',{requestId}).catch(()=>undefined)
+      }
+    }
     const response = await fetch(sourceUrl(source, path), { credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer', cache: 'no-store', signal: controller.signal, headers: etag ? { 'If-None-Match': etag } : {} })
     controller.signal.throwIfAborted()
     if (response.status === 304 && etag) return { bytes: null, etag: response.headers.get('ETag') ?? etag }

@@ -87,6 +87,53 @@ fn unavailable() -> HostError {
     HostError::new("EXTENSION_TRUST_UNAVAILABLE")
 }
 impl Client {
+    pub(crate) async fn catalog_request(
+        &self,
+        path: &str,
+        limit: usize,
+        etag: Option<&str>,
+    ) -> Result<crate::community_catalog::Reply> {
+        let mut request = self
+            .http
+            .get(self.source.join(path).map_err(|_| unavailable())?)
+            .header("Cache-Control", "no-cache, no-store");
+        if let Some(etag) = etag {
+            request = request.header("If-None-Match", etag);
+        }
+        let mut response = request.send().await.map_err(|_| unavailable())?;
+        let status = response.status().as_u16();
+        let reply_etag = response
+            .headers()
+            .get("ETag")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| value.len() <= 1024)
+            .map(str::to_owned);
+        if status != 200 {
+            return Ok(crate::community_catalog::Reply {
+                status,
+                body_base64: None,
+                etag: reply_etag,
+            });
+        }
+        if response
+            .content_length()
+            .is_some_and(|size| size > limit as u64)
+        {
+            return Err(HostError::new("COMMUNITY_RESPONSE_LIMIT"));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| unavailable())? {
+            if bytes.len() + chunk.len() > limit {
+                return Err(HostError::new("COMMUNITY_RESPONSE_LIMIT"));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(crate::community_catalog::Reply {
+            status,
+            body_base64: Some(STANDARD.encode(bytes)),
+            etag: reply_etag,
+        })
+    }
     pub fn new(source: &str) -> Result<Self> {
         let mut url =
             reqwest::Url::parse(source).map_err(|_| HostError::new("EXTENSION_SOURCE_INVALID"))?;

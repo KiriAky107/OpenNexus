@@ -93,6 +93,9 @@ pub mod extension_config;
 #[cfg(feature = "desktop")]
 pub mod extension_trust;
 
+#[cfg(feature = "desktop")]
+pub mod community_catalog;
+
 #[cfg(windows)]
 pub mod extension_job;
 pub mod extension_legacy;

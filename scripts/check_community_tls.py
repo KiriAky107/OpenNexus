@@ -30,6 +30,8 @@ def authority(label: str):
         .not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=2))
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
         .add_extension(x509.KeyUsage(False, False, False, False, False, True, True, None, None), critical=True)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), critical=False)
         .sign(key, hashes.SHA256())
     )
     return key, cert
@@ -53,6 +55,8 @@ def certificate(root: Path, name: str, ca, *, mismatch=False, expired=False):
         .add_extension(x509.SubjectAlternativeName(names), critical=False)
         .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
         .add_extension(x509.KeyUsage(True, False, False, False, False, False, False, None, None), critical=True)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
         .sign(ca_key, hashes.SHA256())
     )
     cert_path, key_path = root / (name + '.pem'), root / (name + '.key')
@@ -70,16 +74,24 @@ class Endpoint:
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 endpoint.requests.append(self.path)
-                if self.path == '/redirect':
+                if self.path in {'/redirect','/catalog/v1/releases/redirect'}:
                     self.send_response(302)
                     self.send_header('Location', endpoint.url + 'followed')
                     self.send_header('Content-Length', '0')
                     self.end_headers()
                     return
+                if self.path.startswith('/catalog/v1/packages'):
+                    if self.headers.get('If-None-Match') == '"owned-page"':
+                        self.send_response(304)
+                        self.send_header('ETag','"owned-page"')
+                        self.end_headers()
+                        return
                 body = json.dumps({'schema_version': 1, 'source_id': 'owned-tls-fixture', 'keys': []}).encode()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Content-Length', str(len(body)))
+                if self.path.startswith('/catalog/v1/packages'):
+                    self.send_header('ETag','"owned-page"')
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -141,7 +153,8 @@ def main() -> int:
             proof['cargo_exit'] = result.returncode
             proof['http_requests'] = {name: endpoint.requests for name, endpoint in endpoints.items()}
             proof['passed'] = result.returncode == 0 and proof['http_requests'] == {
-                'trusted': ['/catalog/v1/sources', '/redirect'],
+                'trusted': ['/catalog/v1/sources', '/redirect', '/catalog/v1/packages?q=fixture&limit=30',
+                            '/catalog/v1/packages?q=fixture&limit=30', '/catalog/v1/sources', '/catalog/v1/releases/redirect'],
                 'untrusted': [], 'mismatch': [], 'expired': [],
             }
         finally:
