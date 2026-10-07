@@ -98,12 +98,12 @@ def exercise(page, process, work: Path, vault: Path, catalog: NativeCatalog):
     page.locator('.community-page').wait_for()
     page.get_by_label('来源地址', exact=False).fill(catalog.ready['url'])
     page.get_by_role('button', name='检查来源与公钥', exact=True).click()
-    page.wait_for_function("()=>Boolean(document.querySelector('[role=dialog]'))||Boolean(document.querySelector('.community-panel [role=alert]'))")
-    error=page.locator('.community-panel [role=alert]')
+    review = page.get_by_role('dialog', name='核对来源公钥', exact=True)
+    error=page.locator('.community-page [role=alert]')
+    review.or_(error).first.wait_for()
     if error.count():
         checkpoint()
         raise RuntimeError('Real catalog discovery failed: '+error.inner_text())
-    review = page.get_by_role('dialog', name='核对来源公钥', exact=True)
     review.wait_for()
     if 'native-key' not in review.inner_text():
         raise RuntimeError('Real source signing key was not displayed')
@@ -125,7 +125,7 @@ def exercise(page, process, work: Path, vault: Path, catalog: NativeCatalog):
     model_before = page.evaluate("()=>smokeApi('/api/local-models')")
     mcp_before = page.evaluate("()=>smokeApi('/api/mcp/servers')")['items']
     checkpoint()
-    for kind in ['persona', 'template', 'model', 'mcp']:
+    for kind in ['persona', 'model', 'mcp', 'template']:
         print('NATIVE_COMMUNITY install ' + kind, flush=True)
         page.get_by_label('关键词', exact=False).fill('原生 ' + kind)
         page.get_by_role('button', name='搜索 / 刷新', exact=True).click()
@@ -136,6 +136,10 @@ def exercise(page, process, work: Path, vault: Path, catalog: NativeCatalog):
         detail = page.get_by_role('dialog', name='发行详情与安装', exact=True)
         detail.get_by_role('button', name='校验并暂存', exact=True).click()
         staged = page.locator('.desktop-packages .item-card').filter(has_text='examples/native-' + kind)
+        source_error = page.locator('.community-panel [role=alert]')
+        staged.or_(source_error).first.wait_for()
+        if source_error.count():
+            raise RuntimeError('Native staging ' + kind + ': ' + source_error.inner_text())
         staged.wait_for()
         detail.press('Escape')
         staged.get_by_role('button', name='查看安装预览', exact=True).click()
@@ -144,7 +148,7 @@ def exercise(page, process, work: Path, vault: Path, catalog: NativeCatalog):
         confirm = install.get_by_role('button', name='确认安装并启用', exact=True)
         confirm.wait_for()
         confirm.click()
-        page.wait_for_function("()=>document.querySelector('.desktop-packages')?.textContent?.includes('安装已完成')||Boolean(document.querySelector('[role=dialog] [role=alert]'))")
+        page.wait_for_function("()=>document.querySelector('.desktop-packages')?.textContent?.includes('安装已完成')||Boolean(document.querySelector('dialog[open] [role=alert], [role=dialog] [role=alert], .desktop-packages [role=alert]'))")
         failure = install.locator('[role=alert]')
         if failure.count(): raise RuntimeError('Native install ' + kind + ': ' + failure.inner_text())
         install.press('Escape')
@@ -154,7 +158,7 @@ def exercise(page, process, work: Path, vault: Path, catalog: NativeCatalog):
         if kind == 'persona':
             item.get_by_role('button', name='应用人设', exact=True).click()
             dialog = page.get_by_role('dialog', name='应用社区人设', exact=True)
-            dialog.get_by_label('应用目标', exact=True).select_option('workspace_persona')
+            dialog.get_by_label('应用目标', exact=False).select_option('workspace_persona')
             dialog.get_by_role('button', name='预览人设差异', exact=True).click()
             dialog.get_by_role('button', name='确认应用人设', exact=True).wait_for()
             dialog.get_by_role('button', name='确认应用人设', exact=True).click()
@@ -182,7 +186,7 @@ def exercise(page, process, work: Path, vault: Path, catalog: NativeCatalog):
             item.get_by_role('button', name='应用配置', exact=True).click()
             dialog = page.get_by_role('dialog', name='应用社区配置', exact=True)
             target = 'mcp:new' if kind == 'mcp' else 'model:local_runtime'
-            dialog.get_by_label('应用目标', exact=True).select_option(target)
+            dialog.get_by_label('应用目标', exact=False).select_option(target)
             dialog.get_by_role('button', name='预览配置差异', exact=True).click()
             dialog.get_by_role('button', name='确认应用配置', exact=True).wait_for()
             dialog.get_by_role('button', name='确认应用配置', exact=True).click()

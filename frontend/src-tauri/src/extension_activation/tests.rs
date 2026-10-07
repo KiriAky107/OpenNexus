@@ -88,6 +88,17 @@ impl Harness {
         mode: Option<&str>,
         dependencies: BTreeMap<String, String>,
     ) -> String {
+        self.stage_with_configuration(id, version, mode, dependencies, None)
+    }
+    fn stage_with_configuration(
+        &self,
+        id: &str,
+        version: &str,
+        mode: Option<&str>,
+        dependencies: BTreeMap<String, String>,
+        configuration: Option<Value>,
+    ) -> String {
+        let is_mcp = mode.is_some() || configuration.is_some();
         let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let manifest = if let Some(mode) = mode {
             archive
@@ -98,6 +109,11 @@ impl Harness {
                 .start_file("mcp.json", SimpleFileOptions::default())
                 .unwrap();
             json!({"transport":"stdio","command":"entry.exe","args":[mode]})
+        } else if let Some(configuration) = configuration {
+            archive
+                .start_file("mcp.json", SimpleFileOptions::default())
+                .unwrap();
+            configuration
         } else {
             archive
                 .start_file("persona.json", SimpleFileOptions::default())
@@ -117,7 +133,7 @@ impl Harness {
         }
         let mut release: Release = serde_json::from_value(template["release"].clone()).unwrap();
         release.package_id = id.into();
-        release.kind = if mode.is_some() { "mcp" } else { "persona" }.into();
+        release.kind = if is_mcp { "mcp" } else { "persona" }.into();
         release.version = version.into();
         release.dependencies = dependencies;
         release.sha256 = hash(&archive);
@@ -239,6 +255,74 @@ impl Drop for Harness {
             .stop_all_and_join();
         self.host.extension_endpoints.lock().unwrap().clear();
     }
+}
+
+#[test]
+fn declarative_mcp_installations_commit_without_runtime_or_execution_grants() {
+    for manifest in [
+        json!({"transport":"streamable_http","url":"https://catalog.example/mcp","secret_header_keys":["Authorization"]}),
+        json!({"transport":"sse","url":"https://catalog.example/sse"}),
+        json!({"transport":"stdio","command":"python","args":["lesson_server.py"]}),
+    ] {
+        let fixture = Harness::new();
+        let key = fixture.stage_with_configuration(
+            "configuration",
+            "1.0.0",
+            None,
+            BTreeMap::new(),
+            Some(manifest),
+        );
+        let (operation, slots) = fixture.pending(key);
+        assert_eq!(
+            fixture.activate(&operation, &|| Ok(())).unwrap().state,
+            "complete"
+        );
+        assert_eq!(fixture.state(&operation), "complete");
+        assert_eq!(fixture.revisions(&slots).len(), 1);
+        assert!(fixture.host.extension_endpoints.lock().unwrap().is_empty());
+        assert_eq!(
+            fixture
+                .host
+                .extension_instances
+                .lock()
+                .unwrap()
+                .active_count(),
+            0
+        );
+    }
+}
+
+#[test]
+fn runtime_to_configuration_update_stops_the_old_generation() {
+    let fixture = Harness::new();
+    let key = fixture.stage("replacement", "1.0.0", Some("mcp"), BTreeMap::new());
+    let (operation, slots) = fixture.pending(key);
+    fixture.activate(&operation, &|| Ok(())).unwrap();
+    let old = fixture.endpoints(&slots).remove(0);
+    let key = fixture.stage_with_configuration(
+        "replacement",
+        "2.0.0",
+        None,
+        BTreeMap::new(),
+        Some(json!({"transport":"streamable_http","url":"https://catalog.example/mcp"})),
+    );
+    let (update, new_slots) = fixture.pending(key);
+    assert_eq!(new_slots, slots);
+    assert_eq!(
+        fixture.activate(&update, &|| Ok(())).unwrap().state,
+        "complete"
+    );
+    assert_eq!(old.snapshot().status, Status::Stopped);
+    assert!(fixture.host.extension_endpoints.lock().unwrap().is_empty());
+    assert_eq!(
+        fixture
+            .host
+            .extension_instances
+            .lock()
+            .unwrap()
+            .active_count(),
+        0
+    );
 }
 
 #[test]

@@ -31,6 +31,25 @@ fn current_vault(host: &Host, vault: &str) -> Result<(), String> {
     }
     Ok(())
 }
+fn requires_runtime(package: &RuntimePackage) -> bool {
+    if package.release.kind == "plugin" {
+        return true;
+    }
+    if package.release.kind != "mcp" {
+        return false;
+    }
+    let backend = package.manifest.get("backend").unwrap_or(&package.manifest);
+    backend.get("transport").and_then(serde_json::Value::as_str) == Some("stdio")
+        && backend
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|entry| {
+                package
+                    .inventory
+                    .files
+                    .contains_key(entry.trim_start_matches("./"))
+            })
+}
 fn spec(
     host: &Host,
     runtime: RuntimePackage,
@@ -254,14 +273,16 @@ fn activate_pending(
         })?;
         let mut plans = Vec::new();
         for runtime in materials {
-            if !matches!(runtime.release.kind.as_str(), "plugin" | "mcp") {
-                continue;
-            }
             let slot = runtime.active.target.slot.clone();
             let revision = runtime.active.revision.clone();
-            plans.push((slot, revision, spec(host, runtime, vault, Some(operation))?));
+            let plan = if requires_runtime(&runtime) {
+                Some(spec(host, runtime, vault, Some(operation))?)
+            } else {
+                None
+            };
+            plans.push((slot, revision, plan));
         }
-        if plans.len() > 16 {
+        if plans.iter().filter(|(_, _, plan)| plan.is_some()).count() > 16 {
             return Err("EXTENSION_INSTANCE_LIMIT".into());
         }
         let mut required = BTreeMap::<String, Endpoint>::new();
@@ -274,6 +295,18 @@ fn activate_pending(
                 .map_err(|_| "HOST_BUSY")?
                 .get(&slot)
                 .cloned();
+            let Some(plan) = plan else {
+                // A runtime-to-configuration update must also stop its predecessor.
+                if let Some(old) = old {
+                    stop(host, &old)?;
+                    host.extension_endpoints
+                        .lock()
+                        .map_err(|_| "HOST_BUSY")?
+                        .remove(&slot);
+                    stopped.push(slot);
+                }
+                continue;
+            };
             if let Some(old) = old {
                 if old.ready_for_revision(&revision) {
                     required.insert(slot, old);
@@ -306,7 +339,7 @@ fn activate_pending(
             for target in &current {
                 let material =
                     store.runtime_package(&target.target.slot, vault, Some(operation))?;
-                if matches!(material.release.kind.as_str(), "plugin" | "mcp")
+                if requires_runtime(&material)
                     && !required
                         .get(&target.target.slot)
                         .is_some_and(|endpoint| endpoint.ready_for_revision(&target.revision))

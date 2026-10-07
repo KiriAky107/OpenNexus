@@ -72,7 +72,7 @@ async function install() {
     if (receipt?.operation_id !== operationId || receipt.state !== 'complete') throw new Error('EXTENSION_GROUP_NOT_HEALTHY')
     if (workspace.vaultId === vaultId) installedRefresh.value++
     if (generation === current && workspace.vaultId === vaultId) {
-      completed.value = reviewed.dependencies.packages.some(item => item.kind === 'plugin' || item.kind === 'mcp') ? '安装和全部运行依赖健康检查已完成。' : '安装已完成；声明式配置尚未应用到目标。'
+      completed.value = '安装已完成；请在已安装列表中查看运行状态或选择目标应用。'
       preview.value = null
       await refresh()
     }

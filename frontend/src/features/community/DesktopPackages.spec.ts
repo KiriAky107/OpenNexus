@@ -63,7 +63,7 @@ it('accepts only the durable native completion after all runtime dependencies ar
     root_key: 'package-key', vault_id: 'vault-one', configurations: { 'package-key': {} },
   } })
   expect(native.invoke.mock.calls.some(call => call[0] === 'extension_enable')).toBe(false)
-  expect(wrapper.text()).toContain('安装和全部运行依赖健康检查已完成')
+  expect(wrapper.text()).toContain('安装已完成；请在已安装列表中查看运行状态或选择目标应用')
   wrapper.unmount(); vi.unstubAllGlobals()
 })
 it('discards delayed preview after switching Vault', async () => {
@@ -91,6 +91,6 @@ it('completes declarative installation without inventing a runtime or applying i
   await wrapper.findAll('button').find(button=>button.text()==='查看安装预览')!.trigger('click')
   await wrapper.findAll('button').find(button=>button.text()==='检查依赖、权限与配置')!.trigger('click');await flushPromises()
   await wrapper.findAll('button').find(button=>button.text()==='确认安装并启用')!.trigger('click');await flushPromises()
-  expect(wrapper.text()).toContain('声明式配置尚未应用到目标')
+  expect(wrapper.text()).toContain('选择目标应用')
   expect(native.invoke.mock.calls.some(call=>call[0]==='extension_enable')).toBe(false);wrapper.unmount()
 })

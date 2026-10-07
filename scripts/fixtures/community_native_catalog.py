@@ -62,7 +62,7 @@ async def main():
         release = Release(namespace='examples', package_id=package, type=kind, version=version, name=name,
             author_id='native-fixture-author', license='MIT', description='Owned native HTTPS fixture · 中文 #%',
             sha256=hashlib.sha256(blob).hexdigest(), size=len(blob), platforms=['windows'], architectures=['x86_64'],
-            min_app_version='0.2.0', permissions=[], changelog='Reviewed native fixture', published_at='2026-10-07T00:00:00Z',
+            min_app_version='0.6.0' if kind == 'template' else '0.2.0', permissions=[], changelog='Reviewed native fixture', published_at='2026-10-07T00:00:00Z',
             key_id='native-key', signature='')
         release.signature = base64.b64encode(signer.sign(signed_payload(release))).decode()
         identity = f'native-{counter:04}'
