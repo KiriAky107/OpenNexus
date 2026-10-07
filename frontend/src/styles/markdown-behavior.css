@@ -21,9 +21,10 @@
 .markdown-content .shiki code { display: block; min-width: max-content; padding: 0; background: transparent; font: inherit; }
 .markdown-content .shiki .line { display: block; min-height: 1lh; }
 .markdown-content .shiki .markdown-code-chunk { display: block; }
-/* All source remains in the DOM for selection/search/copy. Fixed-height rows
-   can skip offscreen layout; wrapped rows retain ordinary measured layout. */
-.markdown-content[data-code-wrap='false'] .markdown-code-chunk {
+/* Keep complete source available to selection/search/copy while deferring
+   offscreen token layout. The browser remembers measured chunk heights;
+   scroll anchoring absorbs changes when a wrapped chunk first becomes visible. */
+.markdown-content .markdown-code-chunk {
   content-visibility: auto;
   contain-intrinsic-block-size: auto calc(var(--preview-line-count) * 1lh);
 }

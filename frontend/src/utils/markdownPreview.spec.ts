@@ -96,10 +96,47 @@ it('yields while coloring a large block and resumes cancelled coloring without r
   await expect(work).rejects.toMatchObject({ name: 'AbortError' })
   await renderer.render('```text\n' + source + '\n```\n\nTail updated')
   expect(root.querySelector('.shiki')).toBe(pre)
-  expect(pre.querySelector('.line')).not.toBe(first)
+  expect(pre.querySelector('.line')).toBe(first)
   expect([...pre.querySelectorAll('.line')].map(line => line.textContent).join('\n')).toBe(source + '\n')
   expect(root.querySelector('[data-highlight-state="complete"]')).not.toBeNull()
   expect(previewHighlighter.highlight).toHaveBeenCalledTimes(1)
+})
+
+it('resumes partially committed colors without replacing reading rows, losing text or repainting moved tokens', async () => {
+  const source = Array.from({ length: 240 }, (_, i) => `line ${i} <unsafe> & 中文`).join('\n')
+  const markdown = '```text\n' + source + '\n```\n\nTail'
+  vi.mocked(previewHighlighter.highlight).mockImplementation(async text => {
+    const holder = document.createElement('div'); holder.innerHTML = plainCode(text)
+    for (const line of holder.querySelectorAll('.line')) {
+      const token = document.createElement('span'); token.textContent = line.textContent
+      token.style.setProperty('--shiki-light', '#123456'); line.replaceChildren(token)
+    }
+    return holder.innerHTML
+  })
+  const root = document.createElement('div'), renderer = new MarkdownPreview(root), controller = new AbortController()
+  await renderer.render(markdown, { previewOnly: true })
+  const lines = [...root.querySelectorAll('.line')], chunks = [...root.querySelectorAll('.markdown-code-chunk')]
+  const observer = new MutationObserver(records => {
+    if (records.some(record => record.target instanceof Element && record.target.matches('.line')
+        && [...record.addedNodes].some(node => node instanceof HTMLElement && node.style.getPropertyValue('--shiki-light')))) {
+      observer.disconnect(); controller.abort()
+    }
+  })
+  observer.observe(root, { childList: true, subtree: true })
+  await expect(renderer.render(markdown, { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' })
+  const committed = [...root.querySelectorAll('.line > span[style]')]
+  expect(committed.length).toBeGreaterThan(0)
+  expect(committed.length).toBeLessThan(lines.length)
+  expect(lines.map(line => line.textContent).join('\n')).toBe(source + '\n')
+  await renderer.render(markdown + ' updated')
+  expect([...root.querySelectorAll('.line')]).toEqual(lines)
+  expect([...root.querySelectorAll('.markdown-code-chunk')]).toEqual(chunks)
+  expect([...root.querySelectorAll('.line > span[style]')].slice(0, committed.length)).toEqual(committed)
+  expect(root.querySelectorAll('.line > span[style]')).toHaveLength(lines.length)
+  expect(lines.map(line => line.textContent).join('\n')).toBe(source + '\n')
+  expect(root.querySelector('[data-highlight-state="complete"]')).not.toBeNull()
+  expect(previewHighlighter.highlight).toHaveBeenCalledTimes(1)
+  expect(root.querySelector('unsafe')).toBeNull()
 })
 
 it('retains diagram zoom/source state until a theme change rerenders the diagram', async () => {

@@ -13,6 +13,7 @@ interface CodeBlock {
   coloredChunk?: HTMLElement
   html?: string[]
   nextLine: number
+  nextColoredLine: number
   complete: boolean
 }
 interface Block {
@@ -67,7 +68,7 @@ async function createCode(source: string, language: string, signal?: AbortSignal
     }
   }
   signal?.throwIfAborted()
-  return { source, language, wrapper, pre, code, lines: nodes, nextLine: 0, complete: false }
+  return { source, language, wrapper, pre, code, lines: nodes, nextLine: 0, nextColoredLine: 0, complete: false }
 }
 
 function createChunk(lines: number) {
@@ -75,6 +76,28 @@ function createChunk(lines: number) {
   chunk.className = 'markdown-code-chunk'
   chunk.style.setProperty('--preview-line-count', String(lines))
   return chunk
+}
+
+function codeReadingAnchor(block: CodeBlock) {
+  const view = block.pre.ownerDocument.defaultView
+  if (!view || !block.pre.isConnected) return
+  for (let viewport = block.pre; viewport; viewport = viewport.parentElement!) {
+    if (!/^(auto|scroll|overlay)$/.test(view.getComputedStyle(viewport).overflowY)
+        || viewport.scrollHeight <= viewport.clientHeight) continue
+    const code = block.pre.getBoundingClientRect(), area = viewport.getBoundingClientRect()
+    const top = Math.max(0, code.top, area.top), bottom = Math.min(view.innerHeight, code.bottom, area.bottom)
+    const left = Math.max(0, code.left, area.left), right = Math.min(view.innerWidth, code.right, area.right)
+    if (bottom <= top || right <= left) return
+    const line = block.pre.ownerDocument.elementFromPoint?.((left + right) / 2, (top + bottom) / 2)?.closest('.line')
+    if (line && block.code.contains(line)) return { line, viewport, top: line.getBoundingClientRect().top }
+    return
+  }
+}
+
+function retainCodeAnchor(anchor: ReturnType<typeof codeReadingAnchor>) {
+  if (!anchor?.line.isConnected) return
+  const delta = anchor.line.getBoundingClientRect().top - anchor.top
+  if (Math.abs(delta) > 0.01) anchor.viewport.scrollTop += delta
 }
 
 // Shiki's bounded worker output has one balanced line span per newline. Each
@@ -128,14 +151,32 @@ async function colorCode(block: CodeBlock, signal?: AbortSignal) {
       block.nextLine++
       block.coloredChunk!.append(line); block.coloredLines!.push(line as HTMLElement)
     }
-    // Construct colors in small detached batches. Mutating the live code on
-    // every batch otherwise repeatedly lays out all preceding rows. Plain
-    // source remains visible/copyable until one completed color commit.
+    // Sanitize in detached batches before applying tokens to the existing rows.
     if (block.nextLine < block.html.length) await yieldPreview(signal)
   }
+  // Keep the measured chunks and reading-anchor rows. Replacing their parent
+  // discards intrinsic heights and displaces a reader in wrapped code. Commit
+  // tokens in bounded tasks; progress survives cancellation without replaying
+  // already moved children or clearing rows on the next render.
+  let committed = 0, anchor = codeReadingAnchor(block), commitStart = performance.now()
+  while (block.nextColoredLine < block.lines.length) {
+    signal?.throwIfAborted()
+    const index = block.nextColoredLine
+    const colored = block.coloredLines![index]!, line = block.lines[index]!
+    line.replaceChildren(...colored.childNodes)
+    const style = colored.getAttribute('style')
+    if (style !== null) line.setAttribute('style', style)
+    block.nextColoredLine++; committed++
+    if (block.nextColoredLine < block.lines.length && (committed >= 32 || performance.now() - commitStart > 6)) {
+      retainCodeAnchor(anchor)
+      await yieldPreview(signal)
+      // Take a fresh anchor after yielding so scrolling during coloring remains
+      // the user's choice, rather than restoring an old whole-render position.
+      anchor = codeReadingAnchor(block); committed = 0; commitStart = performance.now()
+    }
+  }
+  retainCodeAnchor(anchor)
   signal?.throwIfAborted()
-  block.code.replaceChildren(block.colored!)
-  block.lines = block.coloredLines!
   block.colored = undefined; block.coloredLines = undefined; block.coloredChunk = undefined
   block.complete = true; block.html = undefined
   block.wrapper.dataset.highlightState = 'complete'
