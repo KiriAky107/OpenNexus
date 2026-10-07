@@ -170,9 +170,9 @@ class Publisher:
             require(created and release['tag_name'] == self.p['tag'] and release['target_commitish'] == self.p['commit'], 'RELEASE_ALREADY_EXISTS')
             if known:
                 require(release['id'] == known[-1]['id'], 'RELEASE_ID_CHANGED')
-                require(text_digest(release['body']) == self.p['notes_sha256'] and not release['prerelease'], 'OWNED_RELEASE_NOTES_CHANGED')
+                require(text_digest(release['body']) == self.p['notes_sha256'] and release['prerelease'] == self.plan.prerelease, 'OWNED_RELEASE_NOTES_CHANGED')
             else:
-                require(release['draft'] and text_digest(release['body']) == self.p['notes_sha256'], 'UNOWNED_DRAFT_RELEASE')
+                require(release['draft'] and release['prerelease'] == self.plan.prerelease and text_digest(release['body']) == self.p['notes_sha256'], 'UNOWNED_DRAFT_RELEASE')
                 require(datetime.fromisoformat(release['created_at'].replace('Z', '+00:00')).timestamp() >= datetime.fromisoformat(created[0]['at']).timestamp()-5, 'DRAFT_PREDATES_INTENT')
         return release
 
@@ -262,7 +262,7 @@ class Publisher:
         if release is None:
             self.journal.record('create-intent', commit=self.p['commit'])
             release = self.api.request('POST', self.prefix+'/releases', {'tag_name': self.p['tag'], 'target_commitish': self.p['commit'],
-                'name': self.p['product']+' '+self.p['version'], 'body': self.plan.notes, 'draft': True, 'prerelease': False})
+                'name': self.p['product']+' '+self.p['version'], 'body': self.plan.notes, 'draft': True, 'prerelease': self.plan.prerelease})
             self.journal.record('created', id=release['id'])
         elif not self.p.get('original') and not self.journal.events('created'):
             # A create response was lost; release() has checked the original intent.
@@ -344,14 +344,16 @@ class Publisher:
             promoted = self.api.request('PATCH', self.prefix+'/releases/assets/'+str(staged['id']), {'name': asset['name']})
             require(promoted['id'] == staged['id'] and promoted['name'] == asset['name'] and self.matches(promoted, asset), 'ASSET_PROMOTION_MISMATCH')
             self.journal.record('promoted', id=promoted['id'], name=asset['name'])
-        desired = not release['draft'] and not release['prerelease'] and text_digest(release['body']) == self.p['notes_sha256'] and release['target_commitish'] == self.p['commit']
+        desired = not release['draft'] and release['prerelease'] == self.plan.prerelease and text_digest(release['body']) == self.p['notes_sha256'] and release['target_commitish'] == self.p['commit']
         latest = self.api.request('GET', self.prefix+'/releases/latest') if desired else None
-        if desired and latest and latest['id'] == release['id']:
+        correct_latest = (not latest or latest['id'] != release['id']) if self.plan.prerelease else (latest and latest['id'] == release['id'])
+        if desired and correct_latest:
             updated = release
         else:
             self.journal.record('publish-intent', release_id=release['id'], notes_sha256=self.p['notes_sha256'])
             updated = self.api.request('PATCH', self.prefix+'/releases/'+str(release['id']), {'name': self.p['product']+' '+self.p['version'],
-                'body': self.plan.notes, 'target_commitish': self.p['commit'], 'draft': False, 'prerelease': False, 'make_latest': 'true'})
+                'body': self.plan.notes, 'target_commitish': self.p['commit'], 'draft': False,
+                'prerelease': self.plan.prerelease, 'make_latest': 'false' if self.plan.prerelease else 'true'})
         require(updated['id'] == release['id'] and text_digest(updated['body']) == self.p['notes_sha256'], 'PUBLISHED_NOTES_MISMATCH')
         self.verify(allow_originals=True)
         current = self.assets(updated)
@@ -368,10 +370,14 @@ class Publisher:
 
     def verify(self, *, allow_originals=False):
         release = self.release()
-        require(release is not None and not release['draft'] and not release['prerelease'], 'FORMAL_RELEASE_REQUIRED')
+        require(release is not None and not release['draft'], 'PUBLISHED_RELEASE_REQUIRED')
+        require(release['prerelease'] == self.plan.prerelease, 'RELEASE_STAGE_MISMATCH')
         require(text_digest(release['body']) == self.p['notes_sha256'] and release['target_commitish'] == self.p['commit'], 'RELEASE_NOTES_OR_COMMIT_MISMATCH')
         require(self.tag() == {'ref_sha': self.p['commit'], 'commit': self.p['commit']}, 'RELEASE_TAG_MISMATCH')
-        require(self.api.request('GET', self.prefix+'/releases/latest')['id'] == release['id'], 'RELEASE_NOT_LATEST')
+        latest = self.api.request('GET', self.prefix+'/releases/latest')
+        is_latest = bool(latest and latest['id'] == release['id'])
+        require(not is_latest if self.plan.prerelease else is_latest,
+                'PRERELEASE_MARKED_LATEST' if self.plan.prerelease else 'RELEASE_NOT_LATEST')
         current = self.assets(release)
         expected = {asset['name'] for asset in self.p['assets']}
         if allow_originals:
@@ -381,7 +387,8 @@ class Publisher:
             require(self.matches(current[asset['name']], asset), 'RELEASE_ASSET_HASH_MISMATCH')
         self.journal.record('verified', release_id=release['id'], commit=self.p['commit'], assets=[{'name': a['name'], 'sha256': a['sha256']} for a in self.p['assets']])
         return {'repository': self.p['repository'], 'release_id': release['id'], 'tag': self.p['tag'],
-                'commit': self.p['commit'], 'assets_verified': len(self.p['assets']), 'latest': True, 'formal': True}
+                'commit': self.p['commit'], 'assets_verified': len(self.p['assets']), 'latest': is_latest,
+                'formal': not self.plan.prerelease, 'prerelease': self.plan.prerelease}
 
 
 def snapshot(api, repository, tag, output):

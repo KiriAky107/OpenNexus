@@ -9,16 +9,17 @@ import shutil
 import subprocess
 import sys
 
-from release_plan import COMMIT, PRIVATE, VERSION, Plan, ReleaseError, atomic_json, check_local_source, digest, fixed_archive, require, text_digest
+from release_plan import COMMIT, PRIVATE, VERSION, Plan, ReleaseError, atomic_json, check_local_source, digest, fixed_archive, prerelease_for_version, require, text_digest
 
 
 def git(root, *args):
     return subprocess.check_output(['git', *args], cwd=root)
 
 
-def prepare(root, output, *, repository, product, version, commit, notes, verification, installer=None, deployment=None, original=None):
+def prepare(root, output, *, repository, product, version, commit, notes, verification, installer=None, deployment=None, original=None, prerelease=None):
     root, output = Path(root).resolve(), Path(output).resolve()
     require(COMMIT.fullmatch(commit) and VERSION.fullmatch(version), 'FIXED_VERSION_AND_COMMIT_REQUIRED')
+    prerelease = prerelease_for_version(version, prerelease)
     require(re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository), 'REPOSITORY_INVALID')
     require(isinstance(product, str) and 0 < len(product) <= 100 and '\n' not in product and '\r' not in product, 'PRODUCT_INVALID')
     require(git(root, 'rev-parse', 'HEAD').decode().strip() == commit and not git(root, 'status', '--porcelain').strip(), 'FIXED_CLEAN_CHECKOUT_REQUIRED')
@@ -55,7 +56,7 @@ def prepare(root, output, *, repository, product, version, commit, notes, verifi
     release_notes.write_text(Path(notes).read_text('utf-8').replace('\r\n', '\n'), encoding='utf-8', newline='\n')
     receipt = output/'verification.json'
     shutil.copyfile(verification, receipt)
-    data = {'schema': 1, 'repository': repository, 'product': product, 'version': version, 'tag': 'v'+version, 'commit': commit,
+    data = {'schema': 1, 'repository': repository, 'product': product, 'version': version, 'tag': 'v'+version, 'commit': commit, 'prerelease': prerelease,
             'assets': assets, 'notes_file': release_notes.name, 'notes_sha256': text_digest(release_notes.read_text('utf-8')),
             'verification': {'file': receipt.name, 'sha256': digest(receipt)}, 'original': original}
     path = output/'release-plan.json'
@@ -81,11 +82,17 @@ def main():
     parser.add_argument('--installer', type=Path)
     parser.add_argument('--deployment', type=Path)
     parser.add_argument('--original', type=Path, help='Explicit original identity snapshot for an authorized same-version replacement')
+    stage = parser.add_mutually_exclusive_group()
+    stage.add_argument('--prerelease', dest='prerelease', action='store_const', const=True, default=None,
+                       help='Publish an alpha/beta version as a GitHub prerelease (inferred from version by default)')
+    stage.add_argument('--stable', dest='prerelease', action='store_const', const=False,
+                       help='Publish a version without a prerelease suffix as the stable Latest release')
     args = parser.parse_args()
     try:
         result = prepare(args.repository_dir, args.output, repository=args.repository, product=args.product, version=args.version,
                          commit=args.commit, notes=args.notes, verification=args.verification, installer=args.installer,
-                         deployment=args.deployment, original=json.loads(args.original.read_text('utf-8')) if args.original else None)
+                         deployment=args.deployment, original=json.loads(args.original.read_text('utf-8')) if args.original else None,
+                         prerelease=args.prerelease)
         print(json.dumps(result, indent=2))
         return 0
     except ReleaseError as error:

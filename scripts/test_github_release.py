@@ -104,7 +104,8 @@ class FakeGitHub:
             return copy.deepcopy(self.assets[ident])
         if method == 'PATCH' and '/releases/' in route:
             self.release.update(body)
-            self.latest = copy.deepcopy(self.release)
+            if not self.release['draft'] and not self.release['prerelease'] and body.get('make_latest') == 'true':
+                self.latest = copy.deepcopy(self.release)
             self.fail('publish-after')
             return copy.deepcopy(self.release)
         raise AssertionError((method, route))
@@ -148,16 +149,17 @@ class PublicationTests(unittest.TestCase):
         self.temp.cleanup()
 
     def rewrite(self, files):
+        version = self.plan_data['version']
         assets = [{'name': p.name, 'file': p.name, 'kind': 'source' if '_source.' in p.name else 'deployment', 'bytes': p.stat().st_size, 'sha256': digest(p)} for p in files]
         sums = self.base/'SHA256SUMS.txt'
         sums.write_text(''.join(f'{a["sha256"]}  {a["name"]}\n' for a in assets), 'utf-8')
         assets.append({'name': sums.name, 'file': sums.name, 'kind': 'checksums', 'bytes': sums.stat().st_size, 'sha256': digest(sums)})
-        note = '# Project 0.6.0\n\n## 更新内容\n\n- '+('真实恢复检查，保护用户原始数据并支持中断后继续。'*3)+'\n\n## English\n\n- '+('Verified source and deployment inputs preserve the original data and permit resuming an interrupted upload after checking the remote identifiers and all hashes. '*4)+'\n\n'
-        note += '\n'.join('https://github.com/owner/project/releases/download/v0.6.0/'+a['name'] for a in assets)+'\n'
+        note = f'# Project {version}\n\n## 更新内容\n\n- '+('真实恢复检查，保护用户原始数据并支持中断后继续。'*3)+'\n\n## English\n\n- '+('Verified source and deployment inputs preserve the original data and permit resuming an interrupted upload after checking the remote identifiers and all hashes. '*4)+'\n\n'
+        note += '\n'.join(f'https://github.com/owner/project/releases/download/v{version}/'+a['name'] for a in assets)+'\n'
         (self.base/'RELEASE-NOTES.md').write_text(note, 'utf-8')
         receipt = self.base/'verification.json'
         deployment = next(a for a in assets if a['kind'] == 'deployment')
-        receipt.write_text(json.dumps({'source_commit': self.commit, 'source_clean': True, 'version': '0.6.0', 'passed': True,
+        receipt.write_text(json.dumps({'source_commit': self.commit, 'source_clean': True, 'version': version, 'passed': True,
             'deployment_sha256': deployment['sha256'], 'deployment_probe': {'passed': True, 'cleanup_complete': True, 'module_origin_verified': True}}), 'utf-8')
         self.plan_data.update(assets=assets, notes_file='RELEASE-NOTES.md', notes_sha256=text_digest(note), verification={'file': receipt.name, 'sha256': digest(receipt)})
         atomic_json(self.base/'release-plan.json', self.plan_data)
@@ -187,6 +189,70 @@ class PublicationTests(unittest.TestCase):
         self.publisher(api).publish()
         self.assertEqual(len(api.writes), count)
         self.assertEqual((api.uploads, api.tag_writes), (3, 1))
+
+    def prerelease_plan(self, version='0.6.1-alpha1'):
+        self.plan_data.update(version=version, tag='v'+version, prerelease=True)
+        files = []
+        for kind in ('source', 'deploy'):
+            file = self.base/f'project_0.6.0_{kind}.zip'
+            target = file.with_name(f'project_{version}_{kind}.zip')
+            file.rename(target)
+            files.append(target)
+        self.rewrite(files)
+        self.plan = Plan(self.plan.path)
+
+    def test_prerelease_preserves_stable_latest_and_repeated_publish(self):
+        self.prerelease_plan()
+        api = self.api()
+        api.latest = {'id': 42, 'tag_name': 'v0.6.0', 'prerelease': False, 'draft': False}
+        self.publisher(api).stage()
+        self.assertTrue(api.release['draft'] and api.release['prerelease'])
+        result = self.publisher(api).publish()
+        self.assertTrue(result['prerelease'])
+        self.assertFalse(result['formal'] or result['latest'])
+        self.assertEqual(api.latest['id'], 42)
+        self.assertEqual(next(body for method, route, body in reversed(api.writes) if route.endswith('/releases/1000'))['make_latest'], 'false')
+        count = len(api.writes)
+        self.publisher(api).publish()
+        self.assertEqual(len(api.writes), count)
+
+    def test_prerelease_without_stable_release_and_lost_publish_response(self):
+        self.prerelease_plan('0.6.1-beta1')
+        api = self.api()
+        self.publisher(api).stage()
+        api.fault = 'publish-after'
+        with self.assertRaises(ReleaseError):
+            self.publisher(api).publish()
+        result = self.publisher(api).publish()
+        self.assertTrue(result['prerelease'])
+        self.assertFalse(result['latest'])
+        self.assertEqual((api.uploads, api.tag_writes), (3, 1))
+        api.latest = copy.deepcopy(api.release)
+        with self.assertRaisesRegex(ReleaseError, 'PRERELEASE_MARKED_LATEST'):
+            self.publisher(api).verify()
+
+    def test_plan_rejects_stage_version_disagreement_and_non_boolean_flags(self):
+        for value, error in [(True, 'RELEASE_STAGE_VERSION_MISMATCH'), (1, 'PRERELEASE_FLAG_INVALID'), (None, 'PRERELEASE_FLAG_INVALID')]:
+            with self.subTest(value=value):
+                data = dict(self.plan_data, prerelease=value)
+                atomic_json(self.plan.path, data)
+                with self.assertRaisesRegex(ReleaseError, error):
+                    Plan(self.plan.path)
+        atomic_json(self.plan.path, self.plan_data)
+
+    def test_prepare_infers_prerelease_and_rejects_explicit_stable_before_writing(self):
+        self.prerelease_plan()
+        prepare = load_prepare().prepare
+        common = dict(repository='owner/project', product='Project', version=self.plan_data['version'], commit=self.commit,
+                      notes=self.base/'RELEASE-NOTES.md', verification=self.base/'verification.json',
+                      deployment=self.base/f'project_{self.plan_data["version"]}_deploy.zip')
+        output = self.root/'prepared-prerelease'
+        result = prepare(self.repo, output, **common)
+        self.assertTrue(Plan(result['plan']).prerelease)
+        rejected = self.root/'rejected-stable'
+        with self.assertRaisesRegex(ReleaseError, 'RELEASE_STAGE_VERSION_MISMATCH'):
+            prepare(self.repo, rejected, prerelease=False, **common)
+        self.assertFalse(rejected.exists())
 
     def test_upload_lost_response_is_queried_and_not_uploaded_twice(self):
         for fault in ['upload-before', 'upload-after', 'create-after']:

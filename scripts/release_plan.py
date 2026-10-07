@@ -26,6 +26,14 @@ def require(value, code):
         raise ReleaseError(code)
 
 
+def prerelease_for_version(version, explicit=None):
+    """Keep the stage consistent with a version such as 0.6.0-alpha2."""
+    inferred = '-' in version.split('+', 1)[0]
+    require(explicit is None or isinstance(explicit, bool), 'PRERELEASE_FLAG_INVALID')
+    require(explicit is None or explicit == inferred, 'RELEASE_STAGE_VERSION_MISMATCH')
+    return inferred
+
+
 def digest(path):
     with Path(path).open('rb') as source:
         return hashlib.file_digest(source, 'sha256').hexdigest()
@@ -118,6 +126,8 @@ class Plan:
         require(p.get('schema') == 1, 'PLAN_SCHEMA_INVALID')
         require(isinstance(p.get('repository'), str) and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', p['repository']), 'REPOSITORY_INVALID')
         require(isinstance(p.get('version'), str) and VERSION.fullmatch(p['version']), 'VERSION_INVALID')
+        require('prerelease' not in p or isinstance(p['prerelease'], bool), 'PRERELEASE_FLAG_INVALID')
+        self.prerelease = prerelease_for_version(p['version'], p.get('prerelease'))
         require(p.get('tag') == 'v'+p['version'] and COMMIT.fullmatch(p.get('commit', '')), 'TAG_OR_COMMIT_INVALID')
         require(isinstance(p.get('product'), str) and len(p['product']) <= 100 and '\n' not in p['product'], 'PRODUCT_INVALID')
         assets = p.get('assets')
