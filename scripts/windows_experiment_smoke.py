@@ -82,6 +82,7 @@ def click_confirmation(page, process, selector, title, evidence, yes=True):
 def exercise(page, process, work: Path, vault: Path):
     if vault.resolve() != (work.resolve() / 'vault'):
         raise RuntimeError('Experiment UI checks require the verifier-owned synthetic vault')
+    page.evaluate('()=>smokeRouter.push("/workspace")')
     print('EXPERIMENT_UI source editing', flush=True)
     folder = vault / 'experiments' / '课程'
     folder.mkdir(parents=True)

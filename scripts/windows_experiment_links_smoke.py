@@ -9,6 +9,7 @@ import time
 def exercise(page, process, work: Path, vault: Path):
     if vault.resolve() != work.resolve() / 'vault':
         raise RuntimeError('Link checks require the verifier-owned synthetic vault')
+    page.evaluate('()=>smokeRouter.push("/workspace")')
     root = Path(__file__).resolve().parents[1]
     fixture = json.loads((root / 'frontend/src/services/fixtures/experiment-links-v1.json').read_text('utf-8'))
     if fixture['schema'] != 1:
@@ -34,7 +35,7 @@ def exercise(page, process, work: Path, vault: Path):
     note_path = fixture['initial_note_path']
 
     def open_note():
-        page.evaluate("async path=>{await smokePinia._s.get('editor').loadFile('/'+path);await smokePinia._s.get('editor').checkExternalFile()}", note_path)
+        page.evaluate("async path=>{await smokePinia._s.get('editor').loadFile('/'+path);await smokePinia._s.get('editor').checkExternalFile();smokePinia._s.get('workspace').openFile('/'+path)}", note_path)
         page.locator('.ProseMirror').first.wait_for()
 
     def links(paths):

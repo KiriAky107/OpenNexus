@@ -5,6 +5,7 @@ Requires 7-Zip. The report stays in .build/windows; no installed user data is us
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -62,7 +63,9 @@ def main() -> None:
     spec.loader.exec_module(module)
     manifest_bytes = (ROOT / '.build/sidecar/manifest.json').read_bytes()
     manifest = json.loads(manifest_bytes)
-    with tempfile.TemporaryDirectory(prefix='package-', dir=staging) as directory:
+    # Preserve exact extracted bytes for diagnosis/revalidation. A failed UI
+    # check must not be replaced by a cleanup error while Windows unloads DLLs.
+    with contextlib.nullcontext(tempfile.mkdtemp(prefix='package-', dir=staging)) as directory:
         payload = Path(directory)
         subprocess.run([seven_zip, 'x', str(installer), '-o' + directory, '-y', '-bb0'],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -95,6 +98,7 @@ def main() -> None:
         runtime_inventory = (ROOT / '.build/experiment-runtime' / runtime_lock['runtime_id'] / 'runtime.json').read_bytes()
         runtime_report = experiment.verify_payload(payload, runtime_inventory)
         report = {'installer': installer.name, 'installer_sha256': digest(installer),
+            'payload_directory': payload.relative_to(ROOT).as_posix(),
             'target': args.target or 'host-default', 'core_files_verified': len(actual),
             'host_version': manifest['host_version'], 'core_version': manifest['core_version'],
             'dynamic_loader_dependency': dynamic, 'loader': loader,

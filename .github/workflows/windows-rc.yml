@@ -121,6 +121,7 @@ jobs:
         shell: pwsh
         run: ./scripts/verify-windows-rc.ps1
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
           name: OpenNexus-windows-x64-${{ github.sha }}
           if-no-files-found: error
@@ -139,6 +140,9 @@ jobs:
             .build/windows/native-*/native-experiment.png
             .build/windows/native-*/native-agent-experiments.png
             .build/windows/native-*/native-experiment-links.png
+            .build/windows/native-*/native-ui-failure.png
+            .build/windows/native-*/native-ui-failure.txt
+            .build/windows/native-*/*.json
             .build/windows-rc-sha256.json
 
       - name: Clean signing material
