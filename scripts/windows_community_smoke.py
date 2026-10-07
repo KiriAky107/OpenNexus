@@ -124,6 +124,61 @@ def run_imported_template(page, process, work: Path, vault: Path, source_hash: s
     return {'operation_id':evidence['operation_id'],'source_sha256':source_hash,'result':run['result'],'run_approved':approved,'import_approved':import_approved,'imported_sha256':output_hash,'origin_visible':True,'template_import_did_not_run':True,'run_did_not_import':True}
 
 
+def exercise_update_controls(page, vault: Path, catalog: NativeCatalog):
+    persona_before = page.evaluate("()=>smokeApi('/api/settings/persona')")
+    original = next(item for item in installed(page) if item['release']['type']=='persona')
+    catalog.control('publish-update')
+    persona = page.locator('.installed-packages .item-card').filter(has_text='原生 persona')
+    persona.get_by_role('button',name='查询兼容更新',exact=True).click()
+    review = page.get_by_role('dialog',name='更新与回滚预览',exact=True)
+    review.get_by_role('button',name='校验包并预览依赖',exact=True).wait_for()
+    if '1.0.0 → 1.1.0' not in review.inner_text():
+        raise RuntimeError('Native update review did not identify both signed versions')
+    review.get_by_role('button',name='校验包并预览依赖',exact=True).click()
+    review.get_by_role('button',name='确认更新',exact=True).wait_for()
+    review.get_by_role('button',name='确认更新',exact=True).click()
+    review.wait_for(state='hidden')
+    updated = next(item for item in installed(page) if item['release']['type']=='persona')
+    if updated['release']['version']!='1.1.0' or updated['slot']!=original['slot'] or updated['pending_operation'] is not None:
+        raise RuntimeError('Native update did not commit the reviewed revision to the same slot')
+    if page.evaluate("()=>smokeApi('/api/settings/persona')")!=persona_before:
+        raise RuntimeError('Installing the update silently changed the applied persona')
+    persona.get_by_role('button',name='预览回滚',exact=True).click()
+    review.get_by_role('button',name='确认回滚',exact=True).wait_for()
+    review.get_by_role('button',name='确认回滚',exact=True).click()
+    review.wait_for(state='hidden')
+    rolled_back = next(item for item in installed(page) if item['release']['type']=='persona')
+    if rolled_back['release']['version']!='1.0.0' or rolled_back['slot']!=original['slot'] or rolled_back['pending_operation'] is not None:
+        raise RuntimeError('Reviewed rollback did not restore the original signed package')
+    if page.evaluate("()=>smokeApi('/api/settings/persona')")!=persona_before:
+        raise RuntimeError('Rolling back package metadata silently rewrote its applied target')
+    catalog.control('withdraw',kind='template')
+    template = page.locator('.installed-packages .item-card').filter(has_text='原生 template')
+    template.get_by_role('button',name='导入模板',exact=True).click()
+    dialog = page.get_by_role('dialog',name='导入社区模板',exact=True)
+    dialog.get_by_label('实验目录',exact=True).fill('experiments/withdraw-check')
+    dialog.get_by_label('笔记路径（可选）',exact=True).fill('撤回模板.md')
+    dialog.get_by_role('button',name='预览文件差异',exact=True).click()
+    dialog.locator('[role=alert]').wait_for()
+    if '撤回' not in dialog.locator('[role=alert]').inner_text() or dialog.locator('.file-review').count():
+        raise RuntimeError('A withdrawn template was still offered for import')
+    if (vault/'experiments/withdraw-check').exists() or (vault/'撤回模板.md').exists():
+        raise RuntimeError('Withdrawn template verification wrote to the vault')
+    dialog.get_by_role('button',name='关闭',exact=True).click()
+    registry_before = page.evaluate("()=>smokeApi('/api/mcp/servers')")
+    catalog.control('revoke')
+    mcp = page.locator('.installed-packages .item-card').filter(has_text='原生 mcp')
+    mcp.get_by_role('button',name='应用配置',exact=True).click()
+    configuration = page.get_by_role('dialog',name='应用社区配置',exact=True)
+    configuration.locator('[role=alert]').wait_for()
+    if '撤销' not in configuration.locator('[role=alert]').inner_text():
+        raise RuntimeError('A revoked signing key did not block target configuration review')
+    if page.evaluate("()=>smokeApi('/api/mcp/servers')")!=registry_before:
+        raise RuntimeError('Revoked configuration review changed the existing MCP registry')
+    configuration.get_by_role('button',name='关闭',exact=True).click()
+    return {'update_version':'1.1.0','rollback_version':'1.0.0','slot_unchanged':True,'target_persona_unchanged':True,'withdrawn_template_rejected_without_writes':True,'revoked_signer_rejected_without_registry_change':True}
+
+
 def exercise(page, process, work: Path, vault: Path, catalog: NativeCatalog):
     if vault.resolve() != work.resolve() / 'vault':
         raise RuntimeError('Community acceptance requires the owned test vault')
@@ -271,6 +326,8 @@ def exercise(page, process, work: Path, vault: Path, catalog: NativeCatalog):
                 results[kind] = {'slot': row['slot'], 'target': target, 'registry_entry': server, 'execution_not_granted': True}
         checkpoint()
     results['applying_does_not_grant_execution'] = results['model']['no_runtime_started'] and results['mcp']['execution_not_granted']
+    checkpoint()
+    results['updates_and_revocation'] = exercise_update_controls(page,vault,catalog)
     page.screenshot(path=str(work / 'native-community-installed.png'))
     results['installed_packages'] = installed(page)
     return results
