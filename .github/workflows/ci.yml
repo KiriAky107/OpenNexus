@@ -98,6 +98,9 @@ jobs:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
       - run: uv sync --frozen --directory ../../backend
+      - name: Check native command declarations and main-window access
+        working-directory: .
+        run: python -m unittest discover -s scripts -p test_desktop_command_permissions.py -v
       - run: cargo fmt --check
       # The production-strength repeated-crash migration test runs in release acceptance.
       - run: cargo test --lib --locked -- --skip credentials::tests::b04_migration_survives_twenty_hard_terminations_per_boundary

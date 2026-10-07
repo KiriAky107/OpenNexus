@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sync-account-status"
+description = "Enables the sync_account_status command without any pre-configured scope."
+commands.allow = ["sync_account_status"]
+
+[[permission]]
+identifier = "deny-sync-account-status"
+description = "Denies the sync_account_status command without any pre-configured scope."
+commands.deny = ["sync_account_status"]
