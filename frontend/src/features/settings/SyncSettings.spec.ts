@@ -10,6 +10,48 @@ const confirm = vi.hoisted(() => vi.fn())
 vi.mock('@/composables/useActionDialog', () => ({ useActionDialog: () => ({ actionDialog: null, resolveAction: vi.fn(), askConfirm: confirm }) }))
 afterEach(() => { vi.useRealTimers(); vi.resetAllMocks() })
 const empty = () => ({ vault_id: 'local', binding: null, paused: false, pending: 0, conflicts: [], credential_state: 'unbound', running: false, error: null, retry_in: null })
+it('clears a manual cycle error only after the same binding completes a successful cycle', async () => {
+  vi.useFakeTimers()
+  const binding = { id: 'binding', endpoint: 'https://test.example/', account: 'test', remote_vault: 'remote', cursor: 7 }
+  let state = { ...empty(), binding, credential_state: 'ready', activity: { phase: 'complete' }, error: null as string | null }
+  vi.mocked(hostInvoke).mockImplementation(async command => {
+    if (command === 'sync_status') return state
+    if (command === 'sync_run') throw new Error('TEMPORARILY_UNAVAILABLE')
+    return undefined
+  })
+  const wrapper = mount(SyncSettings); await flushPromises()
+  await wrapper.findAll('button').find(button => button.text() === '立即同步')!.trigger('click'); await flushPromises()
+  expect(wrapper.get('.error-banner').text()).toContain('TEMPORARILY_UNAVAILABLE')
+  state = { ...state, activity: { phase: 'failed' }, error: null }
+  await vi.advanceTimersByTimeAsync(1500)
+  expect(wrapper.find('.error-banner').exists()).toBe(true)
+  state = { ...state, activity: { phase: 'complete' }, error: 'TEMPORARILY_UNAVAILABLE' }
+  await vi.advanceTimersByTimeAsync(1500)
+  expect(wrapper.find('.error-banner').exists()).toBe(true)
+  state = { ...state, error: null, binding: { ...binding, id: 'other' } }
+  await vi.advanceTimersByTimeAsync(1500)
+  expect(wrapper.find('.error-banner').exists()).toBe(true)
+  state = { ...state, binding }
+  await vi.advanceTimersByTimeAsync(1500)
+  expect(wrapper.find('.error-banner').exists()).toBe(false)
+  expect(wrapper.get('.sync-activity').text()).toContain('本轮已完成')
+  wrapper.unmount()
+})
+it('keeps an unrelated operation error when a completed cycle is polled', async () => {
+  vi.useFakeTimers(); confirm.mockResolvedValue(true)
+  const state = { ...empty(), credential_state: 'ready', binding: { id: 'binding', endpoint: 'https://test.example/', account: 'test', remote_vault: 'remote', cursor: 7 }, activity: { phase: 'complete' } }
+  vi.mocked(hostInvoke).mockImplementation(async command => {
+    if (command === 'sync_status') return state
+    if (command === 'sync_unbind') throw new Error('SYNC_BINDING_CHANGED')
+    return undefined
+  })
+  const wrapper = mount(SyncSettings); await flushPromises()
+  await wrapper.findAll('button').find(button => button.text() === '解除绑定')!.trigger('click'); await flushPromises()
+  expect(wrapper.find('.error-banner').exists()).toBe(true)
+  await vi.advanceTimersByTimeAsync(3000)
+  expect(wrapper.find('.error-banner').exists()).toBe(true)
+  wrapper.unmount()
+})
 it('does not let an older status request overwrite a newer vault and binding', async () => {
   vi.useFakeTimers()
   const answers: Array<(value: unknown) => void> = []

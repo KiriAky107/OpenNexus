@@ -34,18 +34,23 @@ async function merge() {
 let timer: ReturnType<typeof setInterval> | undefined
 let mounted = true
 let refreshVersion = 0
+let messageCycleBinding: string | null = null
 async function refresh() {
   const version = ++refreshVersion
   const next = await hostInvoke<Status>('sync_status')
   if (!mounted || version !== refreshVersion) return
   status.value = next
+  if (messageCycleBinding && next.binding?.id === messageCycleBinding && !next.error && next.activity?.phase === 'complete') {
+    message.value = ''; messageCycleBinding = null
+  }
   if (next.binding) { endpoint.value = next.binding.endpoint; account.value = next.binding.account; connected.value = next.credential_state === 'ready' }
 }
-async function act(action: () => Promise<void>) {
+async function act(action: () => Promise<void>, cycle = false) {
   if (busy.value) return
-  busy.value = true; message.value = ''
+  const cycleBinding = cycle ? status.value?.binding?.id ?? null : null
+  busy.value = true; message.value = ''; messageCycleBinding = null
   try { await action(); await refresh() }
-  catch (error) { message.value = syncError(error) }
+  catch (error) { message.value = syncError(error); messageCycleBinding = cycleBinding }
   finally { busy.value = false }
 }
 function setScope(kind: keyof OptionalScope, event: Event) {
@@ -145,7 +150,7 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
       <SyncActivity :activity="status.activity" :last-success="status.last_cycle_success_at" :error="status.error" />
       <SyncAccount :key="`${status.vault_id}:${status.binding.id}`" :vault-id="status.vault_id" :binding-id="status.binding.id" :remote-vault-id="status.binding.remote_vault" :disabled="busy || status.running || status.credential_state !== 'ready'" />
       <div class="inline-actions">
-        <button :disabled="busy || status.running || status.paused" @click="act(async () => { await hostInvoke('sync_run') })">{{ t('立即同步', 'Sync now') }}</button>
+        <button :disabled="busy || status.running || status.paused" @click="act(async () => { await hostInvoke('sync_run') }, true)">{{ t('立即同步', 'Sync now') }}</button>
         <button :disabled="busy" @click="act(async () => { await hostInvoke('sync_pause', { bindingId: status!.binding!.id, paused: !status!.paused }) })">{{ status.paused ? t('继续同步', 'Resume sync') : t('暂停同步', 'Pause sync') }}</button>
         <button :disabled="busy" @click="unbind">{{ t('解除绑定', 'Unbind') }}</button>
         <button :disabled="busy" @click="act(async () => { await hostInvoke('sync_logout', { endpoint, account }); connected = false })">{{ t('退出登录', 'Sign out') }}</button>
