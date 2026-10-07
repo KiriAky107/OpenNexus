@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 
-def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 5000), *, wrapped_line_counts=(), verify_pending_anchor=False):
+def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 5000), *, wrapped_line_counts=(), verify_pending_anchor=False, verify_worker_timing=False, warm_pass=False):
     if vault.resolve() != work.resolve() / 'vault' or process.poll() is not None:
         raise RuntimeError('Preview checks require a live verifier-owned native payload')
     page.evaluate('()=>smokeRouter.push("/chat")')
@@ -19,17 +19,22 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
     # store lifecycle, so it cannot overwrite synthetic rendering fixtures.
     page.evaluate('async()=>await smokePinia._s.get("chat").createNewConversation()')
     samples = []
-    cases = [(count, False) for count in line_counts] + [(count, True) for count in wrapped_line_counts]
-    for count, wrapped in cases:
-        result = page.evaluate(r'''async ({lines, wrapped, verifyPendingAnchor}) => {
+    cases = [(count, False, 'typescript') for count in line_counts] + [(count, True, 'typescript') for count in wrapped_line_counts]
+    if warm_pass:
+        # The ts alias reuses the loaded grammar but has a distinct broker key.
+        # Identical source therefore exercises actual tokenization again,
+        # rather than timing a cached HTML response as a warm Worker run.
+        cases += [(count, wrapped, 'ts') for count, wrapped, _ in cases.copy()]
+    for count, wrapped, language in cases:
+        result = page.evaluate(r'''async ({lines, wrapped, language, verifyPendingAnchor, verifyWorkerTiming}) => {
             const store=smokePinia._s.get('chat'), frame=()=>new Promise(requestAnimationFrame);
             const preferences=smokePinia._s.get('markdown-preferences');
             const savedPreferences={...preferences.normalized};
             preferences.apply({...savedPreferences,wrapCode:wrapped});
             const suffix=wrapped ? ' / 中文 #%'.repeat(8) : '';
             const source=Array.from({length:lines},(_,i)=>`export const value${i}: number = Math.max(${i}, 1) + 2; // preview${suffix}`).join('\n');
-            const markdown='```typescript\n'+source+'\n```\n\nStreaming marker';
-            const message={message_id:'native-preview-'+lines+'-'+wrapped,conversation_id:store.activeConversationId,role:'assistant',
+            const markdown='```'+language+'\n'+source+'\n```\n\nStreaming marker';
+            const message={message_id:'native-preview-'+lines+'-'+wrapped+'-'+language,conversation_id:store.activeConversationId,role:'assistant',
                 content:markdown,created_at:new Date().toISOString(),citations:[],tool_calls:[],activity:[]};
             const tasks=[], frames=[], phases=[];
             let phaseStart=performance.now(), phaseName='initial_text';
@@ -42,7 +47,19 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                 if(!workers.has(this)){
                     workers.add(this);const listener=event=>{
                         const job=jobs.find(job=>job.id===event.data.id && job.elapsed_ms===undefined);
-                        if(job){job.elapsed_ms=performance.now()-job.start;job.has_colors=Boolean(event.data.html)}
+                        if(job){
+                            job.elapsed_ms=performance.now()-job.start;job.has_colors=Boolean(event.data.html);
+                            job.response_characters=event.data.html?.length ?? 0;
+                            const timing=event.data.timing;
+                            if(timing){
+                                if(!['language_load_ms','highlight_ms','worker_ms'].every(key=>Number.isFinite(timing[key]) && timing[key]>=0))
+                                    throw Error('Invalid native Worker timing');
+                                job.worker_timing=timing;
+                                // Aggregate message cloning, scheduling and handler overhead;
+                                // clocks from different realms are never subtracted directly.
+                                job.message_and_scheduling_ms=Math.max(0,job.elapsed_ms-timing.worker_ms);
+                            }
+                        }
                     };this.addEventListener('message',listener);listeners.push([this,listener]);
                 }
                 const start=performance.now();
@@ -105,6 +122,8 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                 const initialTokens=dom().querySelectorAll('pre code span:not(.markdown-code-chunk)').length;
                 const heapColored=heap();
                 const jobsAfterInitial=jobs.length;
+                if(verifyWorkerTiming && (!jobsAfterInitial || jobs.slice(0,jobsAfterInitial).some(job=>job.has_colors && !job.worker_timing)))
+                    throw Error('Actual colored preview has no Worker measurement');
                 let codeMutations=0;
                 const changed=records=>{for(const record of records){if(initialCode.contains(record.target))codeMutations++}};
                 const mutations=new MutationObserver(changed);mutations.observe(dom(),{childList:true,subtree:true});
@@ -195,10 +214,12 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                 preferences.apply(savedPreferences);
                 for(const [worker,listener] of listeners)worker.removeEventListener('message',listener);
             }
-        }''', {'lines':count,'wrapped':wrapped,'verifyPendingAnchor':verify_pending_anchor})
+        }''', {'lines':count,'wrapped':wrapped,'language':language,'verifyPendingAnchor':verify_pending_anchor,'verifyWorkerTiming':verify_worker_timing})
+        result['highlight_language'] = language
+        result['measurement_pass'] = 'grammar_reuse' if language == 'ts' else 'initial'
         samples.append(result)
         print('NATIVE_PREVIEW_SAMPLE', json.dumps(result), flush=True)
         (work / 'native-preview-samples.json').write_text(json.dumps(samples, indent=2) + '\n', encoding='utf-8')
     page.screenshot(path=str(work / 'native-preview.png'))
     return {'passed': True, 'samples': samples,
-        'measurement': 'Actual WebView2 production Markdown component with synthetic streamed messages; main-thread and frame observations, not OS input latency'}
+        'measurement': 'Actual WebView2 production Markdown component with synthetic streamed messages. Worker timings are elapsed grammar-load and synchronous-tokenizer durations, not OS CPU usage; round trip minus Worker time includes message cloning and scheduling, not pure transfer time.'}
