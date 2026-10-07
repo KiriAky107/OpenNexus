@@ -70,7 +70,7 @@ def exercise(page, process, work: Path, vault: Path):
     links([file['path'] for file in fixture['files'][:4]])
     completed = []
     for index, step in enumerate(fixture['steps']):
-        print('EXPERIMENT_LINK_UI', step['old_path'], '->', step['new_path'], flush=True)
+        print('EXPERIMENT_LINK_UI', json.dumps({'from': step['old_path'], 'to': step['new_path']}, ensure_ascii=True), flush=True)
         # Changing a basename and its parent are separate reviewable UI actions.
         # The contract's referring-note move first uses a basename rename below.
         if PurePosixPath(step['old_path']).name != PurePosixPath(step['new_path']).name and PurePosixPath(step['old_path']).parent != PurePosixPath(step['new_path']).parent:
