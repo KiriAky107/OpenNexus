@@ -248,10 +248,14 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                 if(navigation.querySelector('.inline-actions span').textContent.trim()!=='1 / 1')
                     throw Error('Native search counted the hidden copy buffer');
                 const matchLine=dom().querySelector(`.line[data-preview-line-number="${Math.floor(lines/2)+1}"]`);
-                const match=Array.from(matchLine.querySelectorAll('span')).find(span=>span.textContent===probe) || matchLine;
+                const match=Array.from(matchLine.querySelectorAll('span')).find(span=>span.textContent.trim()===probe) || matchLine;
                 const searchPositions=[];
                 const recordSearch=()=>{
-                    const box=match.getBoundingClientRect(),view=timeline.getBoundingClientRect();
+                    const range=Array.from(CSS.highlights?.get('opennexus-chat-current') || [])[0];
+                    if(!range || range.toString()!==probe+':')throw Error('Native search did not paint the expected text range');
+                    // A logical code line can wrap across multiple screen rows.
+                    // Measure the actual highlighted text, rather than its row.
+                    const box=range.getBoundingClientRect(),view=timeline.getBoundingClientRect();
                     const point=box.top+Math.min(box.height,timeline.clientHeight)/2;
                     return {top:box.top,scroll_top:timeline.scrollTop,
                         center_offset:point-view.top-timeline.clientTop-timeline.clientHeight/2,
@@ -311,7 +315,7 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                     renderer_js_heap_bytes:{before:heapBefore,colored:heapColored,tail:heapTail},
                     native_thread_cpu:threadCpu,
                     offscreen_code_search_preserved:true,
-                    application_search:{match_count:1,positions:searchPositions,next_match:nextSearch,hidden_copy_not_matched:true},
+                    application_search:{match_count:1,positions:searchPositions,next_match:nextSearch,hidden_copy_not_matched:true,measured_actual_highlight:true},
                     reading_anchor_setup:anchorSetup,
                     reading_anchor_delta_px:anchorDelta,reading_anchor_preserved:true,
                     pending_color_anchor_delta_px:pendingAnchorDelta,
