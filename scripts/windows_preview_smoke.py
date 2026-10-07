@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 
-def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 5000), *, wrapped_line_counts=(), verify_pending_anchor=False, verify_worker_timing=False, warm_pass=False):
+def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 5000), *, wrapped_line_counts=(), verify_pending_anchor=False, verify_worker_timing=False, warm_pass=False, verify_thread_cpu=False):
     if vault.resolve() != work.resolve() / 'vault' or process.poll() is not None:
         raise RuntimeError('Preview checks require a live verifier-owned native payload')
     page.evaluate('()=>smokeRouter.push("/chat")')
@@ -26,7 +26,7 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
         # rather than timing a cached HTML response as a warm Worker run.
         cases += [(count, wrapped, 'ts') for count, wrapped, _ in cases.copy()]
     for count, wrapped, language in cases:
-        result = page.evaluate(r'''async ({lines, wrapped, language, verifyPendingAnchor, verifyWorkerTiming}) => {
+        result = page.evaluate(r'''async ({lines, wrapped, language, verifyPendingAnchor, verifyWorkerTiming, verifyThreadCpu}) => {
             const store=smokePinia._s.get('chat'), frame=()=>new Promise(requestAnimationFrame);
             const preferences=smokePinia._s.get('markdown-preferences');
             const savedPreferences={...preferences.normalized};
@@ -82,14 +82,18 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
             const observeFrame=now=>{frames.push(now-previous);previous=now;if(watching)requestAnimationFrame(observeFrame)};
             requestAnimationFrame(observeFrame);
             const start=performance.now();
+            const threadCpu=[];
+            const cpuMark=async name=>threadCpu.push({phase:name,counters:await window.smokePreviewThreadCpu()});
             const heap=()=>performance.memory?.usedJSHeapSize ?? null, heapBefore=heap();
-            store.messages=[message];store.liveMessage=store.messages[0];store.isStreaming=true;
             const dom=()=>document.querySelector(`[data-message-id="${message.message_id}"] .markdown-content`);
             const until=async test=>{const deadline=performance.now()+60000;while(!test()){
                 if(performance.now()>deadline)throw Error('Native preview condition timeout');await frame()}};
             try {
+                if(verifyThreadCpu)await cpuMark('before_text');
+                store.messages=[message];store.liveMessage=store.messages[0];store.isStreaming=true;
                 await until(()=>dom()?.textContent.includes('Streaming marker'));
                 const textMs=performance.now()-start;
+                if(verifyThreadCpu)await cpuMark('after_plain');
                 let pendingAnchorDelta=null;
                 let pendingAnchorTop=null;
                 let pendingAnchorLine=null, pendingAnchorBefore=null;
@@ -126,6 +130,7 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                 await until(()=>dom()?.querySelector('.markdown-code-block[data-highlight-state="complete"]') &&
                     dom()?.querySelector('span[style*="--shiki-light"]'));
                 const colorMs=performance.now()-start;
+                if(verifyThreadCpu)await cpuMark('after_color');
                 if(pendingAnchorTop!==null){
                     await frame();await frame();
                     const coloredLine=dom()?.querySelector(`.line[data-preview-line-number="${pendingLineNumber}"]`);
@@ -153,6 +158,7 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                 const mutations=new MutationObserver(changed);mutations.observe(dom(),{childList:true,subtree:true});
                 const changes=[];
                 phase('tail_updates');
+                if(verifyThreadCpu)await cpuMark('before_tail');
                 for(let i=0;i<12;i++){
                     const before=performance.now();store.messages[0].content=markdown+' '+i;
                     await frame();changes.push(performance.now()-before);
@@ -162,6 +168,7 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                 await until(()=>dom()?.textContent.includes('Streaming marker 11') &&
                     dom()?.querySelector('.markdown-code-block[data-highlight-state="complete"]'));
                 changed(mutations.takeRecords());mutations.disconnect();
+                if(verifyThreadCpu)await cpuMark('after_tail');
                 phase('retained_code_validation');
                 if(code()!==source+'\n')throw Error('Unchanged source was lost during streaming');
                 const unchangedCodeIdentity=initialCode===dom().querySelector('.shiki');
@@ -173,29 +180,59 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                 if(unchangedWorkerJobs)throw Error('Unchanged code was submitted to the Worker again');
                 const heapTail=heap();
                 phase('offscreen_browser_search');
+                if(verifyThreadCpu)await cpuMark('before_browser_find');
                 const probe='value'+Math.floor(lines/2);
                 if(!window.find(probe) || getSelection()?.toString()!==probe)throw Error('Browser search could not reach offscreen code');
                 getSelection().removeAllRanges();
                 await frame();
+                if(verifyThreadCpu)await cpuMark('after_browser_find');
                 phase('viewport_anchor');
                 const timeline=document.querySelector('.message-timeline');
                 const anchor=finalLines[Math.floor(lines/2)];
                 if(!timeline || !anchor)throw Error('Native preview has no reading viewport');
-                anchor.scrollIntoView({block:'center'});await frame();await frame();
+                // Establish the fixture's reading position before changing
+                // text. ScrollIntoView can activate estimated offscreen chunks;
+                // record that independent settling rather than attributing it
+                // to a stream update that has not happened yet.
+                const anchorDeadline=performance.now()+2000;
+                const anchorSetup=[];
+                let anchorVisible=false;
+                for(let attempt=0;attempt<3 && !anchorVisible;attempt++){
+                    anchor.scrollIntoView({block:'center'});await frame();await frame();
+                    const initialTop=anchor.getBoundingClientRect().top;
+                    let previousTop=initialTop, previousScroll=timeline.scrollTop, stableFrames=0;
+                    while(stableFrames<5){
+                        if(performance.now()>anchorDeadline)throw Error('Fixture reading position did not settle');
+                        await frame();const top=anchor.getBoundingClientRect().top, scrollTop=timeline.scrollTop;
+                        stableFrames=Math.abs(top-previousTop)<=0.05 && Math.abs(scrollTop-previousScroll)<=0.05 ? stableFrames+1 : 0;
+                        previousTop=top;previousScroll=scrollTop;
+                    }
+                    const rect=anchor.getBoundingClientRect(), area=timeline.getBoundingClientRect();
+                    anchorVisible=rect.bottom>Math.max(0,area.top) && rect.top<Math.min(innerHeight,area.bottom);
+                    anchorSetup.push({initial_top:initialTop,settled_top:previousTop,
+                        settling_delta_px:Math.abs(previousTop-initialTop),visible:anchorVisible});
+                }
+                if(!anchorVisible)throw Error('Fixture reading target is outside the viewport after settling');
                 const anchorBefore=anchor.getBoundingClientRect().top;
                 const timelineBefore=timeline.scrollTop;
+                window.nativePreviewTailDiagnosis={lines,wrapped,before:{top:anchorBefore,scroll_top:timelineBefore,
+                    chunk_top:anchor.parentElement.getBoundingClientRect().top,line_height:anchor.getBoundingClientRect().height},after:null};
                 const codeJobsBeforeAnchor=jobs.length;
                 store.isStreaming=true;store.messages[0].content=markdown+' anchor update';
                 await until(()=>dom()?.textContent.includes('Streaming marker anchor update'));
                 await frame();await frame();
                 const anchorAfter=anchor.getBoundingClientRect().top;
                 const anchorDelta=Math.abs(anchorAfter-anchorBefore);
+                window.nativePreviewTailDiagnosis.after={top:anchorAfter,scroll_top:timeline.scrollTop,
+                    chunk_top:anchor.parentElement.getBoundingClientRect().top,line_height:anchor.getBoundingClientRect().height,
+                    same_code_node:initialCode===dom().querySelector('.shiki'),worker_job_delta:jobs.length-codeJobsBeforeAnchor,delta_px:anchorDelta};
                 if(anchorDelta>2 || Math.abs(timeline.scrollTop-timelineBefore)>2)
                     throw Error('Streaming displaced the reading anchor by '+anchorDelta+' pixels');
                 if(initialCode!==dom().querySelector('.shiki') || jobs.length!==codeJobsBeforeAnchor)
                     throw Error('A tail update rebuilt or recolored the anchored code');
                 if(wrapped && getComputedStyle(initialCode.querySelector('code')).whiteSpace!=='pre-wrap')
                     throw Error('Native wrapped fixture did not enable wrapping');
+                getSelection().removeAllRanges();
                 phase('obsolete_render');
                 // A cancelled render must not overwrite the user's final text.
                 const obsoleteJobStart=jobs.length;
@@ -224,7 +261,9 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                     unchanged_code_node_retained:unchangedCodeIdentity,unchanged_code_child_mutations:codeMutations,
                     unchanged_worker_jobs:unchangedWorkerJobs,worker_jobs:jobs.map(({start,...job})=>job),next_frame_ms:changes,
                     renderer_js_heap_bytes:{before:heapBefore,colored:heapColored,tail:heapTail},
+                    native_thread_cpu:threadCpu,
                     offscreen_code_search_preserved:true,
+                    reading_anchor_setup:anchorSetup,
                     reading_anchor_delta_px:anchorDelta,reading_anchor_preserved:true,
                     pending_color_anchor_delta_px:pendingAnchorDelta,
                     plain_anchor_settling_delta_px:plainAnchorSettlingDelta,
@@ -240,7 +279,7 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                 preferences.apply(savedPreferences);
                 for(const [worker,listener] of listeners)worker.removeEventListener('message',listener);
             }
-        }''', {'lines':count,'wrapped':wrapped,'language':language,'verifyPendingAnchor':verify_pending_anchor,'verifyWorkerTiming':verify_worker_timing})
+        }''', {'lines':count,'wrapped':wrapped,'language':language,'verifyPendingAnchor':verify_pending_anchor,'verifyWorkerTiming':verify_worker_timing,'verifyThreadCpu':verify_thread_cpu})
         result['highlight_language'] = language
         result['measurement_pass'] = 'grammar_reuse' if language == 'ts' else 'initial'
         samples.append(result)
