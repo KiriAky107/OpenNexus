@@ -34,7 +34,10 @@ export function revealSearchTarget(target: HTMLElement, viewport: HTMLElement): 
     } else stable++
     // Bound work even if a live response keeps changing. A new result, manual
     // scroll, navigation or component disposal cancels this placement earlier.
-    if (++frames >= 24 || stable >= 5 || performance.now() - started >= 2000) { stop(); return }
+    const elapsed = performance.now() - started
+    // A deferred chunk can resize the timeline after several quiet frames.
+    // Keep observing through the first layout turn, then release stable results.
+    if (++frames >= 120 || (stable >= 5 && elapsed >= 300) || elapsed >= 2000) { stop(); return }
     frame = requestAnimationFrame(place)
   }
   place()

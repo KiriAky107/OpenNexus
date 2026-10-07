@@ -2,14 +2,16 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { revealSearchTarget } from './revealSearchTarget'
 
-let callbacks: Map<number, FrameRequestCallback>, nextFrame: number
+let callbacks: Map<number, FrameRequestCallback>, nextFrame: number, now: number
 beforeEach(() => {
-  callbacks = new Map(); nextFrame = 0
+  callbacks = new Map(); nextFrame = 0; now = 0
+  vi.spyOn(performance, 'now').mockImplementation(() => now)
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callbacks.set(++nextFrame, callback); return nextFrame })
   vi.stubGlobal('cancelAnimationFrame', (id: number) => { callbacks.delete(id) })
 })
-afterEach(() => { document.body.replaceChildren(); vi.unstubAllGlobals(); vi.useRealTimers() })
+afterEach(() => { document.body.replaceChildren(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers() })
 function frame() {
+  now += 16
   const pending = [...callbacks.values()]; callbacks.clear()
   for (const callback of pending) callback(performance.now())
 }
@@ -27,10 +29,19 @@ it('keeps the matched line centered after a delayed 2100px chunk expansion, then
   expect(viewport.scrollTop).toBe(900)
   shift(2100); frame()
   expect(viewport.scrollTop).toBe(3000)
-  for (let i = 0; i < 5; i++) frame()
+  for (let i = 0; i < 24; i++) frame()
   expect(callbacks.size).toBe(0)
   shift(500); frame()
   expect(viewport.scrollTop).toBe(3000)
+})
+it('corrects a late layout shift after more than five initially quiet frames', () => {
+  const { viewport, target, shift } = fixture()
+  revealSearchTarget(target, viewport)
+  for (let i = 0; i < 9; i++) frame()
+  shift(21); frame()
+  expect(viewport.scrollTop).toBe(921)
+  for (let i = 0; i < 24; i++) frame()
+  expect(callbacks.size).toBe(0)
 })
 it.each(['wheel', 'touchstart', 'pointerdown'])('lets %s stop placement immediately', event => {
   const { viewport, target, shift } = fixture()
@@ -54,13 +65,13 @@ it('does not chase a detached target or keep a live changing response in a scrol
   revealSearchTarget(first.target, first.viewport); first.target.remove(); frame()
   expect(callbacks.size).toBe(0)
   revealSearchTarget(second.target, second.viewport)
-  for (let i = 0; i < 30; i++) { second.shift(10); frame() }
+  for (let i = 0; i < 130; i++) { second.shift(10); frame() }
   expect(callbacks.size).toBe(0)
 })
 it('accepts a viewport edge when the result cannot be centered', () => {
   const { viewport, target } = fixture(20)
   revealSearchTarget(target, viewport)
-  for (let i = 0; i < 6; i++) frame()
+  for (let i = 0; i < 24; i++) frame()
   expect(viewport.scrollTop).toBe(0)
   expect(callbacks.size).toBe(0)
 })

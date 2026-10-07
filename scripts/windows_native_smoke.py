@@ -268,7 +268,7 @@ def verify(payload:Path, version:str, identifier:str, work:Path, dynamic_loader:
                     try:
                         page.screenshot(path=str(work/'native-ui-failure.png'), timeout=5000)
                         (work/'native-ui-failure.txt').write_text(page.locator('#app').inner_text(), encoding='utf-8')
-                        state = page.evaluate("()=>({url:location.href,route:smokeRouter.currentRoute.value.name,editor_path:smokePinia._s.get('editor').currentFilePath,alerts:Array.from(document.querySelectorAll('[role=alert]'),e=>e.textContent)})")
+                        state = page.evaluate("()=>({url:location.href,route:smokeRouter.currentRoute.value.name,editor_path:smokePinia._s.get('editor').currentFilePath,search:window.nativeSearchDiagnosis ?? null,alerts:Array.from(document.querySelectorAll('[role=alert]'),e=>e.textContent)})")
                         state['error_type'] = type(error).__name__
                         (work/'native-ui-failure.json').write_text(json.dumps(state,ensure_ascii=False,indent=2)+'\n','utf-8')
                     except Exception:

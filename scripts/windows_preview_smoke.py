@@ -257,10 +257,22 @@ def exercise(page, process, work: Path, vault: Path, line_counts=(100, 1000, 500
                         center_offset:point-view.top-timeline.clientTop-timeline.clientHeight/2,
                         visible:box.bottom>view.top && box.top<view.bottom};
                 };
-                for(let i=0;i<14;i++){await frame();searchPositions.push(recordSearch());}
+                const searchStarted=performance.now();let stableSearch=0;
+                while(performance.now()-searchStarted<2000){
+                    await frame();const point=recordSearch();searchPositions.push(point);
+                    stableSearch=point.visible && Math.abs(point.center_offset)<=2 ? stableSearch+1 : 0;
+                    if(stableSearch>=5 && performance.now()-searchStarted>=300)break;
+                }
                 const firstSearch=searchPositions.at(-1);
-                if(!firstSearch.visible || Math.abs(firstSearch.center_offset)>2)
+                if(!firstSearch.visible || Math.abs(firstSearch.center_offset)>2){
+                    const range=Array.from(CSS.highlights?.get('opennexus-chat-current') || [])[0];
+                    const rect=node=>{const r=node?.getBoundingClientRect();return r ? {top:r.top,height:r.height,bottom:r.bottom} : null};
+                    window.nativeSearchDiagnosis={lines,wrapped,positions:searchPositions,
+                        range:rect(range),range_parent:rect(range?.startContainer.parentElement),
+                        range_parent_tag:range?.startContainer.parentElement?.outerHTML.slice(0,500),
+                        measured_match:rect(match),measured_line:rect(matchLine),viewport:rect(timeline),viewport_client_height:timeline.clientHeight};
                     throw Error('Native application search left the matched code out of place: '+JSON.stringify(firstSearch));
+                }
                 navigation.querySelectorAll('button')[1].click();
                 for(let i=0;i<8;i++)await frame();
                 const nextSearch=recordSearch();
