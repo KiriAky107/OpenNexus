@@ -94,6 +94,48 @@ class ServiceBindingTests(unittest.TestCase):
                 self.assertEqual(result['reason'], 'SYNC_ACCEPTANCE_SERVICE_NOT_CONFIGURED')
                 self.assertFalse(any(row['path'].startswith('sync-service/') for row in result['files']))
 
+    def test_production_stack_checks_service_before_initializing_dependencies(self):
+        from sync_production_stack import SyncProductionStack
+        with self.assertRaisesRegex(RuntimeError, 'NOT_CONFIGURED'):
+            SyncProductionStack({}, self.root, 'missing-service')
+
+    def test_production_drivers_refuse_missing_service_without_starting_processes(self):
+        cases=[('S-04','s04_sync_service'),('S-05','s05_sync_uploads'),('S-06','s06_sync_security'),
+            ('S-07','s07_sync_backup'),('S-09','s09_sync_performance')]
+        for case,name in cases:
+            module=importlib.import_module(name);output=self.root/(case+'.json')
+            with self.subTest(case=case), patch.dict(os.environ,{'OPENNEXUS_ACCEPTANCE_CASE_ID':case}), patch(
+                'sys.argv',[name,'--config','unused.json','--output',str(output)]
+            ), patch('subprocess.Popen') as child, patch('subprocess.run') as command, (
+                patch.object(module.platform,'platform',return_value='test-platform') if case=='S-09' else contextlib.nullcontext()
+            ):
+                self.assertEqual(module.main(),1);child.assert_not_called();command.assert_not_called()
+                result=json.loads(output.read_text('utf-8'))
+                self.assertEqual(result['status'],'FAILED')
+                self.assertEqual(result['reason'],'SYNC_ACCEPTANCE_SERVICE_NOT_CONFIGURED')
+
+    def test_repository_evidence_uses_the_two_configured_service_locks(self):
+        import phase3_acceptance as runner
+        (self.service/'uv.lock').write_bytes(b'configured-sync-lock')
+        community=self.root/'split-community';community.mkdir()
+        (community/'uv.lock').write_bytes(b'configured-community-lock')
+        mirror=self.root/'server sync/uv.lock';mirror.parent.mkdir();mirror.write_bytes(b'stale-lock')
+        with patch.dict(os.environ,{'OPENNEXUS_SYNC_SERVER_DIR':str(self.service),
+            'OPENNEXUS_COMMUNITY_SERVER_DIR':str(community)}), patch.object(runner,'ROOT',self.root), patch(
+                'phase3_acceptance.subprocess.run',return_value=subprocess.CompletedProcess(['git'],0,'fixed-commit','')
+            ):
+            evidence=runner._repository_evidence({})
+        self.assertEqual(evidence['lock_sha256'],{
+            'sync-service/uv.lock':hashlib.sha256(b'configured-sync-lock').hexdigest(),
+            'community-service/uv.lock':hashlib.sha256(b'configured-community-lock').hexdigest()})
+        self.assertEqual(evidence['service_roots'],{'sync-service':str(self.service),'community-service':str(community)})
+
+    def test_configured_lock_cannot_silently_disappear_from_the_snapshot(self):
+        import phase3_acceptance as runner
+        os.environ['OPENNEXUS_SYNC_SERVER_DIR']=str(self.service)
+        with self.assertRaisesRegex(runner.AcceptanceError,'SERVICE_LOCKFILE_UNAVAILABLE'):
+            runner._repository_evidence({})
+
 
 if __name__ == '__main__':
     unittest.main()

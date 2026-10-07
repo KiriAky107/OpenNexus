@@ -650,16 +650,25 @@ def _write_junit(path: Path, results: list[dict[str, Any]], elapsed: float) -> N
 
 def _repository_evidence(config: dict[str, Any]) -> dict[str, Any]:
     locks = {}
-    for relative in ("backend/uv.lock", "frontend/pnpm-lock.yaml", "frontend/src-tauri/Cargo.lock", "server sync/uv.lock", "community-server/uv.lock"):
+    for relative in ("backend/uv.lock", "frontend/pnpm-lock.yaml", "frontend/src-tauri/Cargo.lock"):
         path = ROOT / relative
         if path.is_file():
             locks[relative] = _sha256(path)
+    service_roots = {}
+    for service, variable in (('sync-service','OPENNEXUS_SYNC_SERVER_DIR'), ('community-service','OPENNEXUS_COMMUNITY_SERVER_DIR')):
+        configured = os.environ.get(variable)
+        if configured:
+            directory = Path(configured).resolve(); lock = directory / 'uv.lock'
+            if not lock.is_file():
+                raise AcceptanceError('SERVICE_LOCKFILE_UNAVAILABLE')
+            locks[service + '/uv.lock'] = _sha256(lock)
+            service_roots[service] = str(directory)
     artifacts = {}
     for name, raw in config.get("artifacts", {}).items():
         path = Path(raw)
         artifacts[name] = _sha256(path) if path.is_file() else None
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=False).stdout.strip()
-    return {"commit": commit or None, "lock_sha256": locks, "artifact_sha256": artifacts}
+    return {"commit": commit or None, "lock_sha256": locks, "artifact_sha256": artifacts, 'service_roots':service_roots}
 
 
 def repository_changes() -> tuple[str, ...]:

@@ -15,12 +15,12 @@ import time
 
 from sync_production_stack import (
     ROOT,
-    SERVICE,
     SyncProductionStack,
     call,
     sha256,
     wait_http,
 )
+from sync_test_service import configure_service, source_receipts, SyncServiceError
 
 FILE_COUNT = 10_000
 NOTE_COUNT = 9_990
@@ -92,18 +92,12 @@ def result(case_id: str, status: str, reason: str, facts: dict) -> dict:
             "initialization_runs": facts.get("initialization_runs", 0),
             "migration_failures": facts.get("migration_failures", 0),
         },
-        "files": [
-            {"path": relative, "sha256": sha256(ROOT / relative)}
-            for relative in (
-                "server sync/compose.yaml",
-                "server sync/sync_server/__main__.py",
-                "server sync/sync_server/database.py",
-                "server sync/sync_server/operations.py",
-                "server sync/sync_server/storage.py",
-                "scripts/acceptance_cases/sync_production_stack.py",
-                "scripts/acceptance_cases/s07_sync_backup.py",
-            )
-        ],
+        "files": source_receipts(ROOT, (
+            "sync-service/compose.yaml", "sync-service/sync_server/__main__.py",
+            "sync-service/sync_server/database.py", "sync-service/sync_server/operations.py",
+            "sync-service/sync_server/storage.py", "scripts/acceptance_cases/sync_production_stack.py",
+            "scripts/acceptance_cases/s07_sync_backup.py",
+        ), allow_missing=status != 'PASSED'),
         "revisions": [
             {
                 "scope": "runtime",
@@ -141,7 +135,7 @@ def _stable_id(kind: str, index: int, length: int = 32) -> str:
 
 
 def seed_worker() -> int:
-    sys.path.insert(0, str(SERVICE))
+    sys.path.insert(0, str(configure_service(fixture=False)))
     from sqlalchemy import text
 
     from sync_server.database import Database
@@ -265,7 +259,7 @@ def seed_worker() -> int:
 
 
 def digest_worker(mode: str) -> int:
-    sys.path.insert(0, str(SERVICE))
+    sys.path.insert(0, str(configure_service(fixture=False)))
     from sqlalchemy import text
 
     from sync_server.database import Database
@@ -378,7 +372,7 @@ def run_operation(stack: SyncProductionStack, command: str, directory: Path) -> 
             "--io-workers",
             "16",
         ],
-        cwd=SERVICE,
+        cwd=stack.service,
         env=stack.service_env,
         capture_output=True,
         text=True,
@@ -404,6 +398,7 @@ def main() -> int:
     source_username = ""
     source_password = ""
     try:
+        configure_service(fixture=False)
         config = json.loads(Path(args.config).read_text(encoding="utf-8"))
         data_root = Path(os.environ["OPENNEXUS_ACCEPTANCE_DATA_ROOT"]).resolve()
         data_root.mkdir(parents=True, exist_ok=True)
@@ -517,7 +512,7 @@ def main() -> int:
         before_migration = run_worker(restored_stack, "digest-full")
         migration = subprocess.run(
             [str(restored_stack.server_python), "-m", "sync_server", "migrate"],
-            cwd=SERVICE,
+            cwd=configure_service(fixture=False),
             env=restored_stack.service_env,
             capture_output=True,
             text=True,
@@ -538,7 +533,7 @@ def main() -> int:
         facts.update({"active_stage": "complete", "active_iteration": FILE_COUNT})
         status = "PASSED"
     except BaseException as error:
-        reason = "S07_ORACLE_FAILED:" + type(error).__name__
+        reason = str(error) if isinstance(error, SyncServiceError) else "S07_ORACLE_FAILED:" + type(error).__name__
     finally:
         if source_stack is not None:
             source_stack.stop()

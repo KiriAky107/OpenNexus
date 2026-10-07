@@ -7,17 +7,21 @@ from pathlib import Path
 import subprocess
 
 
+class SyncServiceError(RuntimeError):
+    """Known safe preflight codes, without remote response or credential text."""
+
+
 def configure_service(*, fixture: bool = True) -> Path:
     configured = os.environ.get('OPENNEXUS_SYNC_SERVER_DIR')
     if not configured:
-        raise RuntimeError('SYNC_ACCEPTANCE_SERVICE_NOT_CONFIGURED')
+        raise SyncServiceError('SYNC_ACCEPTANCE_SERVICE_NOT_CONFIGURED')
     service = Path(configured).resolve()
     required = [service / 'sync_server/app.py',
         service / ('.venv/Scripts/python.exe' if os.name == 'nt' else '.venv/bin/python')]
     if fixture:
         required.append(service / 'tests/host_fixture.py')
     if not all(path.is_file() for path in required):
-        raise RuntimeError('SYNC_ACCEPTANCE_SERVICE_INCOMPLETE')
+        raise SyncServiceError('SYNC_ACCEPTANCE_SERVICE_INCOMPLETE')
     # Child Rust processes resolve this from their own working directory.
     os.environ['OPENNEXUS_SYNC_SERVER_DIR'] = str(service)
     return service

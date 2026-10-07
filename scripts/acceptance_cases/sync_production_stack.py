@@ -12,9 +12,9 @@ import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from sync_test_service import configure_service
 
 ROOT = Path(__file__).resolve().parents[2]
-SERVICE = ROOT / "server sync"
 MINIO_RELEASE = "RELEASE.2025-09-07T16-13-09Z"
 MINIO_SHA256 = "af709e6ba68488404e85acdd22a3030d0f5e56a108d4b27d744f18ceb50861b4"
 
@@ -85,6 +85,7 @@ class SyncProductionStack:
     """拥有一个验收案例的一次性生产依赖堆栈。"""
 
     def __init__(self, config: dict, data_root: Path, case_tag: str):
+        self.service = configure_service(fixture=False)
         self.config = config
         self.data_root = data_root
         self.case_tag = case_tag.lower()
@@ -106,7 +107,7 @@ class SyncProductionStack:
         self.postgres = executable("postgres")
         self.psql = executable("psql")
         self.minio_server = Path(config["artifacts"]["minio_server"]).resolve()
-        self.server_python = SERVICE / (".venv/Scripts/python.exe" if os.name == "nt" else ".venv/bin/python")
+        self.server_python = self.service / (".venv/Scripts/python.exe" if os.name == "nt" else ".venv/bin/python")
         required = (
             self.initdb,
             self.pg_ctl,
@@ -227,7 +228,7 @@ class SyncProductionStack:
     def initialize(self) -> None:
         subprocess.run(
             [str(self.server_python), "-m", "sync_server", "initialize"],
-            cwd=SERVICE,
+            cwd=self.service,
             env=self.service_env,
             stdout=self.sync_log,
             stderr=subprocess.STDOUT,
@@ -240,7 +241,7 @@ class SyncProductionStack:
             return
         self.sync = subprocess.Popen(
             [str(self.server_python), "-m", "sync_server", "serve", "--workers", "2"],
-            cwd=SERVICE,
+            cwd=self.service,
             env=self.service_env,
             stdout=self.sync_log,
             stderr=subprocess.STDOUT,
@@ -319,7 +320,7 @@ class SyncProductionStack:
                 "Database(os.environ['SYNC_DATABASE_URL']).add_user("
                 "os.environ['ACCEPTANCE_EXTRA_USERNAME'],os.environ['ACCEPTANCE_EXTRA_PASSWORD'])",
             ],
-            cwd=SERVICE,
+            cwd=self.service,
             env=environment,
             stdout=self.sync_log,
             stderr=subprocess.STDOUT,

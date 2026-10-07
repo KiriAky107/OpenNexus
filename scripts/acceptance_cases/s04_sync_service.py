@@ -16,9 +16,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from sync_test_service import configure_service, source_receipts, SyncServiceError
 
 ROOT = Path(__file__).resolve().parents[2]
-SERVICE = ROOT / "server sync"
 MINIO_SHA256 = "af709e6ba68488404e85acdd22a3030d0f5e56a108d4b27d744f18ceb50861b4"
 
 
@@ -110,17 +110,11 @@ def result(case_id: str, status: str, reason: str, facts: dict) -> dict:
             "conflict_responses": facts.get("race", {}).get("conflict", 0),
             "worker_count": facts.get("worker_count", 0),
         },
-        "files": [
-            {"path": relative, "sha256": sha256(ROOT / relative)}
-            for relative in (
-                "server sync/sync_server/app.py",
-                "server sync/sync_server/database.py",
-                "server sync/sync_server/storage.py",
-                "server sync/sync_server/__main__.py",
-                "server sync/compose.yaml",
-                "server sync/uv.lock",
-            )
-        ],
+        "files": source_receipts(ROOT, (
+            "sync-service/sync_server/app.py", "sync-service/sync_server/database.py",
+            "sync-service/sync_server/storage.py", "sync-service/sync_server/__main__.py",
+            "sync-service/compose.yaml", "sync-service/uv.lock",
+        ), allow_missing=status != 'PASSED'),
         "revisions": [
             {"scope": "runtime", "postgres": facts.get("postgres_version"), "minio": facts.get("minio_version")},
             {"scope": "same-base race", "attempts": 100, **facts.get("race", {})},
@@ -144,6 +138,7 @@ def main() -> int:
     minio = sync = None
     handles = []
     try:
+        service = configure_service(fixture=False)
         config = json.loads(Path(args.config).read_text(encoding="utf-8"))
         initdb = Path(config["artifacts"]["postgres_initdb"]).resolve()
         pg_bin = initdb.parent
@@ -151,7 +146,7 @@ def main() -> int:
         createdb = pg_bin / ("createdb.exe" if os.name == "nt" else "createdb")
         postgres = pg_bin / ("postgres.exe" if os.name == "nt" else "postgres")
         minio_server = Path(config["artifacts"]["minio_server"]).resolve()
-        server_python = SERVICE / (".venv/Scripts/python.exe" if os.name == "nt" else ".venv/bin/python")
+        server_python = service / (".venv/Scripts/python.exe" if os.name == "nt" else ".venv/bin/python")
         if not all(path.is_file() for path in (initdb, pg_ctl, createdb, postgres, minio_server, server_python)):
             raise RuntimeError("PRODUCTION_RUNTIME_MISSING")
         postgres_version = subprocess.check_output(
@@ -240,7 +235,7 @@ def main() -> int:
                 "-c",
                 "import os,boto3; from sync_server.database import Database; d=Database(os.environ['SYNC_DATABASE_URL']); d.migrate(); d.add_user(os.environ['S04_USERNAME'],os.environ['S04_PASSWORD']); boto3.client('s3',endpoint_url=os.environ['SYNC_S3_ENDPOINT']).create_bucket(Bucket=os.environ['SYNC_S3_BUCKET'])",
             ],
-            cwd=SERVICE,
+            cwd=service,
             env=service_env,
             stdout=sync_log,
             stderr=subprocess.STDOUT,
@@ -249,7 +244,7 @@ def main() -> int:
         )
         sync = subprocess.Popen(
             [str(server_python), "-m", "sync_server", "serve", "--workers", "2"],
-            cwd=SERVICE,
+            cwd=service,
             env=service_env,
             stdout=sync_log,
             stderr=subprocess.STDOUT,
@@ -361,7 +356,7 @@ def main() -> int:
         assert sync.poll() is None and minio.poll() is None
         status = "PASSED"
     except BaseException as error:
-        reason = "S04_ORACLE_FAILED:" + type(error).__name__
+        reason = str(error) if isinstance(error, SyncServiceError) else "S04_ORACLE_FAILED:" + type(error).__name__
     finally:
         stop_tree(sync)
         stop_tree(minio)

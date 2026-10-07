@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from sync_production_stack import ROOT, SyncProductionStack, call, sha256
+from sync_test_service import configure_service, source_receipts, SyncServiceError
 
 ROUNDS = 100
 
@@ -82,20 +83,13 @@ def result(case_id: str, status: str, reason: str, facts: dict) -> dict:
             "ready_recovery_max_ms": facts.get("ready_recovery_max_ms", 0),
             "worker_count": facts.get("worker_count", 0),
         },
-        "files": [
-            {"path": relative, "sha256": sha256(ROOT / relative)}
-            for relative in (
-                "server sync/sync_server/app.py",
-                "server sync/sync_server/database.py",
-                "server sync/sync_server/readiness.py",
-                "server sync/sync_server/storage.py",
-                "server sync/tests/test_protocol.py",
-                "server sync/tests/test_production_storage.py",
-                "server sync/tests/test_readiness.py",
-                "scripts/acceptance_cases/sync_production_stack.py",
-                "scripts/acceptance_cases/s06_sync_security.py",
-            )
-        ],
+        "files": source_receipts(ROOT, (
+            "sync-service/sync_server/app.py", "sync-service/sync_server/database.py",
+            "sync-service/sync_server/readiness.py", "sync-service/sync_server/storage.py",
+            "sync-service/tests/test_protocol.py", "sync-service/tests/test_production_storage.py",
+            "sync-service/tests/test_readiness.py", "scripts/acceptance_cases/sync_production_stack.py",
+            "scripts/acceptance_cases/s06_sync_security.py",
+        ), allow_missing=status != 'PASSED'),
         "revisions": [
             {
                 "scope": "runtime",
@@ -200,6 +194,7 @@ def main() -> int:
     stack = None
     staging_available = None
     try:
+        configure_service(fixture=False)
         config = json.loads(Path(args.config).read_text(encoding="utf-8"))
         stack = SyncProductionStack(
             config, Path(os.environ["OPENNEXUS_ACCEPTANCE_DATA_ROOT"]), "s06"
@@ -456,7 +451,7 @@ def main() -> int:
         stack.assert_running()
         status = "PASSED"
     except BaseException as error:
-        reason = "S06_ORACLE_FAILED:" + type(error).__name__
+        reason = str(error) if isinstance(error, SyncServiceError) else "S06_ORACLE_FAILED:" + type(error).__name__
     finally:
         if stack is not None and staging_available is not None:
             if stack.staging.is_file():

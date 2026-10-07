@@ -18,7 +18,8 @@ import sys
 from threading import Event, Thread
 import time
 
-from sync_production_stack import ROOT, SERVICE, SyncProductionStack, call, sha256
+from sync_production_stack import ROOT, SyncProductionStack, call, sha256
+from sync_test_service import configure_service, source_receipts, SyncServiceError
 
 LOAD_SECONDS = 30 * 60
 LOAD_RATE = 20
@@ -448,7 +449,7 @@ async def initial_sync_worker() -> int:
 
 
 def validate_load_worker() -> int:
-    sys.path.insert(0, str(SERVICE))
+    sys.path.insert(0, str(configure_service(fixture=False)))
     from sqlalchemy import text
 
     from sync_server.database import Database
@@ -752,16 +753,11 @@ def result(case_id: str, status: str, reason: str, facts: dict) -> dict:
             "worker_count": facts.get("worker_count", 0),
             "client_count": facts.get("client_count", 0),
         },
-        "files": [
-            {"path": relative, "sha256": sha256(ROOT / relative)}
-            for relative in (
-                "server sync/sync_server/app.py",
-                "server sync/sync_server/database.py",
-                "server sync/sync_server/storage.py",
-                "scripts/acceptance_cases/sync_production_stack.py",
-                "scripts/acceptance_cases/s09_sync_performance.py",
-            )
-        ],
+        "files": source_receipts(ROOT, (
+            "sync-service/sync_server/app.py", "sync-service/sync_server/database.py",
+            "sync-service/sync_server/storage.py", "scripts/acceptance_cases/sync_production_stack.py",
+            "scripts/acceptance_cases/s09_sync_performance.py",
+        ), allow_missing=status != 'PASSED'),
         "revisions": [
             {
                 "scope": "runtime",
@@ -815,6 +811,7 @@ def main() -> int:
     stack = None
     execution_guard = WindowsExecutionGuard()
     try:
+        configure_service(fixture=False)
         config = json.loads(Path(args.config).read_text(encoding="utf-8"))
         data_root = Path(os.environ["OPENNEXUS_ACCEPTANCE_DATA_ROOT"]).resolve()
         data_root.mkdir(parents=True, exist_ok=True)
@@ -937,7 +934,7 @@ def main() -> int:
         else:
             reason = "DEVELOPMENT_PROFILE_COMPLETE"
     except BaseException as error:
-        reason = "S09_ORACLE_FAILED:" + type(error).__name__
+        reason = str(error) if isinstance(error, SyncServiceError) else "S09_ORACLE_FAILED:" + type(error).__name__
         if str(error) in {
             "S09_SCHEDULE_GAP",
             "S09_POWER_GUARD_FAILED",

@@ -14,7 +14,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from sync_production_stack import ROOT, SERVICE, SyncProductionStack, call, sha256, stop_tree
+from sync_production_stack import ROOT, SyncProductionStack, call, sha256, stop_tree
+from sync_test_service import configure_service, source_receipts, SyncServiceError
 
 ROUNDS = 100
 
@@ -78,18 +79,12 @@ def result(case_id: str, status: str, reason: str, facts: dict) -> dict:
             "max_cleanup_latency_ms": facts.get("max_cleanup_latency_ms", 0),
             "worker_count": facts.get("worker_count", 0),
         },
-        "files": [
-            {"path": relative, "sha256": sha256(ROOT / relative)}
-            for relative in (
-                "server sync/sync_server/app.py",
-                "server sync/sync_server/database.py",
-                "server sync/sync_server/maintenance.py",
-                "server sync/sync_server/storage.py",
-                "server sync/tests/test_production_storage.py",
-                "scripts/acceptance_cases/sync_production_stack.py",
-                "scripts/acceptance_cases/s05_sync_uploads.py",
-            )
-        ],
+        "files": source_receipts(ROOT, (
+            "sync-service/sync_server/app.py", "sync-service/sync_server/database.py",
+            "sync-service/sync_server/maintenance.py", "sync-service/sync_server/storage.py",
+            "sync-service/tests/test_production_storage.py",
+            "scripts/acceptance_cases/sync_production_stack.py", "scripts/acceptance_cases/s05_sync_uploads.py",
+        ), allow_missing=status != 'PASSED'),
         "revisions": [
             {
                 "scope": "runtime",
@@ -176,7 +171,7 @@ class CleanupClient:
         )
         self.process = subprocess.Popen(
             [str(stack.server_python), "-u", "-c", program],
-            cwd=SERVICE,
+            cwd=configure_service(fixture=False),
             env=stack.service_env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -221,6 +216,7 @@ def main() -> int:
     status = "FAILED"
     stack = cleanup_client = None
     try:
+        configure_service(fixture=False)
         config = json.loads(Path(args.config).read_text(encoding="utf-8"))
         stack = SyncProductionStack(
             config, Path(os.environ["OPENNEXUS_ACCEPTANCE_DATA_ROOT"]), "s05"
@@ -431,7 +427,7 @@ def main() -> int:
         facts.update({"active_stage": "complete", "active_iteration": ROUNDS})
         status = "PASSED"
     except BaseException as error:
-        reason = "S05_ORACLE_FAILED:" + type(error).__name__
+        reason = str(error) if isinstance(error, SyncServiceError) else "S05_ORACLE_FAILED:" + type(error).__name__
     finally:
         if cleanup_client is not None:
             cleanup_client.close()
