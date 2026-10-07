@@ -125,8 +125,8 @@ function onTreeScroll(event: Event) {
   const top = (event.target as HTMLElement).scrollTop
   if (top < lastScrollTop) searchVisible.value = true
   else if (top > lastScrollTop && !searchFocused.value && !searchQuery.value) searchVisible.value = false
+  if (top !== lastScrollTop) closeContextMenu()
   lastScrollTop = top
-  closeContextMenu()
 }
 
 watch(() => workspaceStore.activeFilePath, (path) => {
@@ -226,6 +226,10 @@ async function openNode(node: FileNode) {
 function openContextMenu(event: MouseEvent, node: FileNode) {
   event.preventDefault()
   event.stopPropagation()
+  // Scrolling a node into view can queue an event before this menu opens.
+  // Only a later change in scroll position should dismiss the new menu.
+  const tree = (event.target as HTMLElement).closest<HTMLElement>('.tree')
+  if (tree) lastScrollTop = tree.scrollTop
   selectedTreePath.value = node.path
   selectedFolderPath.value = node.type === 'folder' ? node.path : containingFolder(node.path)
   contextTarget.value = node

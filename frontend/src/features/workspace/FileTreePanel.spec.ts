@@ -125,6 +125,22 @@ describe('FileTreePanel file switching', () => {
     expect(create).toHaveBeenCalledWith('/数据结构', '子目录')
   })
 
+  it('keeps a just-opened context menu through a queued scroll, then dismisses it on new scrolling', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workspace', component: { template: '<div />' } }] })
+    await router.push('/workspace')
+    await useWorkspaceStore().openVault('C:/vault')
+    wrapper = mount(FileTreePanel, { attachTo: document.body, global: { plugins: [router] } })
+    const tree = wrapper.get('.tree')
+    const element = tree.element as HTMLElement
+    element.scrollTop = 240
+    await wrapper.findAll('.tree-node').find(node => node.text().includes('红黑树'))!.trigger('contextmenu')
+    await tree.trigger('scroll')
+    expect(document.querySelector('.context-menu')?.textContent).toContain('重命名')
+    element.scrollTop = 280
+    await tree.trigger('scroll')
+    expect(document.querySelector('.context-menu')).toBeNull()
+  })
+
   it('rebases the open editor when moving its mutable file tree node', async () => {
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workspace', component: { template: '<div />' } }] })
     await router.push('/workspace')
