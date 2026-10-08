@@ -138,7 +138,7 @@ onBeforeUnmount(() => { cancelRequest(); ++generation })
         </li></ul>
         <details><summary>检查配置</summary><pre>{{ JSON.stringify(preview.changes.map(change => change.target.configuration), null, 2) }}</pre></details>
         <p>确认后将按以上摘要安装。运行型包的全部依赖将在原生沙箱中检查；声明式配置安装后仍需另行选择目标应用。</p>
-        <button class="btn primary" :disabled="busy" @click="install">确认安装并启用</button>
+        <button class="btn primary" :disabled="busy" @click="install">确认安装</button>
       </div>
     </AppDialog>
   </section>

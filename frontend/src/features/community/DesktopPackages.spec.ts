@@ -35,7 +35,7 @@ it('loads durable staged metadata and requires explicit confirmation before inst
   await flushPromises()
   expect(native.invoke).toHaveBeenLastCalledWith('extension_install_preview', { request: { root_key: 'package-key', vault_id: 'vault-one', configurations: { 'package-key': {} } } })
   expect(wrapper.text()).toContain('notes.read')
-  expect(wrapper.text()).toContain('确认安装并启用')
+  expect(wrapper.text()).toContain('确认安装')
   expect(native.invoke.mock.calls.every(call => ['extension_staged', 'extension_install_preview'].includes(call[0]))).toBe(true)
   wrapper.unmount()
 })
@@ -56,7 +56,7 @@ it('accepts only the durable native completion after all runtime dependencies ar
   await wrapper.findAll('button').find(button => button.text() === '查看安装预览')!.trigger('click')
   await wrapper.findAll('button').find(button => button.text() === '检查依赖、权限与配置')!.trigger('click')
   await flushPromises()
-  await wrapper.findAll('button').find(button => button.text() === '确认安装并启用')!.trigger('click')
+  await wrapper.findAll('button').find(button => button.text() === '确认安装')!.trigger('click')
   await flushPromises()
   expect(native.invoke).toHaveBeenCalledWith('extension_install_confirm', { request: {
     request_id: 'request-id', operation_id: 'operation-id', fingerprint: 'fingerprint',
@@ -90,7 +90,7 @@ it('completes declarative installation without inventing a runtime or applying i
   const wrapper=component();await flushPromises()
   await wrapper.findAll('button').find(button=>button.text()==='查看安装预览')!.trigger('click')
   await wrapper.findAll('button').find(button=>button.text()==='检查依赖、权限与配置')!.trigger('click');await flushPromises()
-  await wrapper.findAll('button').find(button=>button.text()==='确认安装并启用')!.trigger('click');await flushPromises()
+  await wrapper.findAll('button').find(button=>button.text()==='确认安装')!.trigger('click');await flushPromises()
   expect(wrapper.text()).toContain('选择目标应用')
   expect(native.invoke.mock.calls.some(call=>call[0]==='extension_enable')).toBe(false);wrapper.unmount()
 })
