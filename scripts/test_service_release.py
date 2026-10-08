@@ -61,6 +61,25 @@ class ServiceReleaseTests(unittest.TestCase):
         self.assertEqual(original.read_bytes(), b'original')
         self.assertFalse((self.root/'outside').exists())
 
+    def test_community_bundle_preserves_offline_example_inputs_and_manual_server(self):
+        files = {
+            'examples/measurement-summary/metadata.json': '{"version":"1.0.0"}\n',
+            'examples/measurement-summary/payload/template.json': '{"executable":false}\n',
+            'examples/measurement-summary/payload/LICENSE': 'Example license\n',
+            'examples/summary-mcp/server.py': '# explicitly run by the user\n',
+        }
+        for name, content in files.items():
+            path = self.repo/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content.encode())
+        self.commit()
+        result = package(self.repo, self.output, 'community', self.sha)
+        with zipfile.ZipFile(self.output/result['deployment']) as archive:
+            for name, content in files.items():
+                self.assertEqual(archive.read(name), content.encode())
+            self.assertNotIn('tests/private-fixture.py', archive.namelist())
+        self.assertFalse((self.output/'verification.json').exists())
+
     def test_dirty_source_is_refused_before_any_build_directory_is_created(self):
         (self.repo/'community/__main__.py').write_text('# changed source', 'utf-8')
         with self.assertRaisesRegex(ReleaseError, 'FIXED_CLEAN_BUILD_SOURCE_REQUIRED'):

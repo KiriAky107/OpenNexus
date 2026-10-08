@@ -30,7 +30,7 @@ def included(kind, name):
         return name in common | {'Dockerfile', 'Dockerfile.objects', '.dockerignore', 'compose.yaml', '.env.example',
                                   'Caddyfile.example', 'tools/operations_probe.py'} or name.startswith('sync_server/') or (
                                       name.startswith('console/') and not name.startswith('console/tests/'))
-    return name in common or name.startswith(('community/', 'deployment/'))
+    return name in common or name.startswith(('community/', 'deployment/', 'examples/'))
 
 
 def package(root, output, kind, commit):
