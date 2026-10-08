@@ -18,6 +18,7 @@ let activeRequest: { id: string; generation: number } | undefined
 const errors: Record<string, string> = {
   VAULT_CHANGED: '笔记库已切换，请重新预览。', VAULT_NOT_OPEN: '请先打开笔记库。',
   EXTENSION_DEPENDENCY_MISSING: '依赖尚未暂存，请先从同一来源获取依赖包。',
+  EXTENSION_DEPENDENCY_CONFLICT: '已暂存依赖的版本不满足要求，请从同一来源获取符合版本范围的依赖包，再重新预览。',
   EXTENSION_SOURCE_UNTRUSTED: '请先检查并确认该来源的公钥。',
   EXTENSION_CONFIG_INVALID: '配置不符合包的声明，请检查配置内容。',
   EXTENSION_CONFIG_SECRET: '配置包含秘密字段，请勿将凭据填入包配置。',
