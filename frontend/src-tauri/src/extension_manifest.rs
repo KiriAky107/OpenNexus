@@ -215,9 +215,15 @@ mod tests {
                 case["name"]
             );
         }
-        template_release.min_app_version = "0.5.9".into();
         let experiment = &fixture["cases"][2]["manifest"];
-        assert!(validate(&template_release, &serde_json::to_vec(experiment).unwrap()).is_err());
+        for minimum in ["0.6.0-beta1", "0.6.0-beta2", "0.6.0", "0.6.1"] {
+            template_release.min_app_version = minimum.into();
+            assert!(validate(&template_release, &serde_json::to_vec(experiment).unwrap()).is_ok());
+        }
+        for minimum in ["0.5.9", "0.6.0-alpha1"] {
+            template_release.min_app_version = minimum.into();
+            assert!(validate(&template_release, &serde_json::to_vec(experiment).unwrap()).is_err());
+        }
     }
     #[test]
     fn shared_configuration_archives_use_real_signature_and_manifest_verification() {

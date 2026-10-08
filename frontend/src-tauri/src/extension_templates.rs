@@ -33,7 +33,7 @@ pub fn validate_release(release: &Release, manifest: &Value) -> Result<Option<Ex
     let template = validate(manifest)?;
     if template.is_some()
         && semver::Version::parse(&release.min_app_version).map_err(|_| invalid())?
-            < semver::Version::new(0, 6, 0)
+            < semver::Version::parse("0.6.0-beta1").expect("valid experiment template minimum")
     {
         return Err(HostError::new("EXTENSION_TEMPLATE_APP_VERSION"));
     }
