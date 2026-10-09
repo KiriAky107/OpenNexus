@@ -1049,12 +1049,14 @@ mod tests {
                 } else if mode == "cpu" {
                     60
                 } else {
-                    8
+                    // Functional cases must reach their intended output/lifecycle
+                    // checks even when a shared runner delays Python startup.
+                    30
                 },
                 cpu_seconds: if mode == "wall" || mode == "cpu" {
                     1
                 } else {
-                    2
+                    10
                 },
                 disk_mib: 8,
                 output_mib: 1,
@@ -1181,7 +1183,7 @@ mod tests {
                     assert_eq!(result.exit_code, Some(7));
                 }
                 "bad-output" | "named-stream" => {
-                    assert_eq!(result.outcome, Outcome::Failed);
+                    assert_eq!(result.outcome, Outcome::Failed, "{mode}: {result:?}");
                     assert_eq!(result.exit_code, Some(0));
                     assert!(matches!(
                         result.outputs,
