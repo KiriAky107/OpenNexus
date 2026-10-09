@@ -1,10 +1,16 @@
 import os
+import tomllib
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
 # backend 目录（本文件位于 backend/app/config.py，父目录的父目录即 backend）
 BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+
+def project_version() -> str:
+    """Read the same unnormalized version in source and packaged Core."""
+    return tomllib.loads((BACKEND_DIR / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 
 
 @dataclass(frozen=True)
@@ -33,7 +39,7 @@ def get_settings() -> Settings:
     data_dir = Path(os.getenv("APP_DATA_DIR", str(BACKEND_DIR / "data")))
     return Settings(
         name=os.getenv("APP_NAME", "OpenNexus AI Core"),
-        version=os.getenv("APP_VERSION", "0.6.0"),
+        version=os.getenv("APP_VERSION") or project_version(),
         environment=os.getenv("APP_ENVIRONMENT", "development"),
         host=os.getenv("APP_HOST", "127.0.0.1"),
         port=int(os.getenv("APP_PORT", "8000")),
