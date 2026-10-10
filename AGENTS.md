@@ -23,3 +23,10 @@ For example, prefer “Review the current and historical content, then restore a
 Keep private plans, internal `docs`, local checklists, receipts and test data out of commits. Public README files, this writing guide and user-requested public documentation are separate deliverables. Do not repeatedly audit unchanged documentation tracking.
 
 Group changes into meaningful commits and run checks appropriate to the affected behavior. Preserve user data, credentials, production instances and existing release backups. Never claim unfinished work or an unverified release as complete.
+
+## Git workflow
+
+- Name branches by engineering purpose: `feat/<scope>`, `fix/<scope>`, `perf/<scope>`, `refactor/<scope>`, `test/<scope>`, `docs/<scope>`, `chore/<scope>`, `release/<version>` or `hotfix/<scope>`. Use concise lowercase words separated by hyphens and a concrete scope or version.
+- Never use `codex` or another agent, model or tool name as a branch prefix. This applies to local and remote branches in OpenNexus, Sync and Community.
+- Keep `main` as the integration branch. Start a suitably named branch for each new task; do not reuse a completed release branch for unrelated work.
+- Preserve commit identities when renaming branches. Keep release tags and packaged source pinned to their verified commits, even when later documentation commits advance a branch.
