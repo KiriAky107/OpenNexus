@@ -81,6 +81,37 @@ it('does not let a previous vault request inspect the next editor', async () => 
   release(); await flushPromises()
   expect(check).not.toHaveBeenCalled(); expect(missing).not.toHaveBeenCalled()
 })
+it('does not mark a reopened path missing from an earlier document refresh', async () => {
+  const { workspace, editor, refresh, check, missing } = await start()
+  check.mockClear(); missing.mockRestore(); editor.closeFile()
+  vi.spyOn(service, 'getNoteId').mockImplementation(async path => path)
+  vi.spyOn(service, 'readFileContent').mockImplementation(async path => `body:${path}`)
+  await editor.loadFile('/a.md')
+  let release!: () => void
+  refresh.mockImplementationOnce(() => new Promise(resolve => { release = () => { workspace.fileTree = []; resolve() } }))
+  event({ payload: { vault_id: 'vault', revision: 2, paths: ['a.md'] } })
+  await editor.loadFile('/b.md'); await editor.loadFile('/a.md')
+  release(); await flushPromises()
+  expect(editor.saveStatus).toBe('saved')
+  expect(editor.content).toBe('body:/a.md')
+  expect(check).not.toHaveBeenCalled()
+})
+it('does not apply a prior background check after an explicit same-path reload', async () => {
+  const { workspace, editor, refresh, check, missing } = await start()
+  check.mockClear(); missing.mockRestore(); editor.closeFile()
+  vi.spyOn(service, 'getNoteId').mockResolvedValue('a')
+  const read = vi.spyOn(service, 'readFileContent').mockResolvedValue('original')
+  await editor.loadFile('/a.md')
+  let release!: () => void
+  refresh.mockImplementationOnce(() => new Promise(resolve => { release = () => { workspace.fileTree = []; resolve() } }))
+  event({ payload: { vault_id: 'vault', revision: 2, paths: ['a.md'] } })
+  read.mockResolvedValueOnce('explicitly reloaded')
+  await editor.reloadExternalFile()
+  release(); await flushPromises()
+  expect(editor.saveStatus).toBe('saved')
+  expect(editor.content).toBe('explicitly reloaded')
+  expect(check).not.toHaveBeenCalled()
+})
 it('unsubscribes even if listener registration finishes after unmount', async () => {
   let release!: (stop: () => void) => void
   native.listen.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))

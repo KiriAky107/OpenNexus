@@ -23,8 +23,10 @@ export function useWorkspaceRefresh() {
     try {
       if (document.visibilityState !== 'hidden' && workspace.hasVault) {
         const vault = workspace.vaultId, path = editor.currentFilePath
+        const ownsDocument = editor.captureDocument(), navigation = workspace.navigationRevision
         await workspace.refreshFileTree(explicit)
-        if (!stopped && vault === workspace.vaultId && path && path === editor.currentFilePath) {
+        if (!stopped && vault === workspace.vaultId && path && ownsDocument()
+          && navigation === workspace.navigationRevision && !workspace.isLoading) {
           const current = workspace.findNodeByPath(workspace.fileTree, path)
           if (!current) editor.setExternalChanged()
           else await editor.checkExternalFile(current.content_hash)
