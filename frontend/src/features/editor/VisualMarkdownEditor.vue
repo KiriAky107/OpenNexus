@@ -82,6 +82,7 @@ const layout = useLayoutPreferencesStore()
 const canUndo = ref(false)
 const canRedo = ref(false)
 const commandError = ref('')
+const linkError = ref('')
 async function toolbarCommand(id: EditorCommandId) {
   const result = await executeEditorCommand(id)
   commandError.value = result.ok ? '' : t('当前无法执行此操作。', 'This action is not available right now.')
@@ -530,7 +531,13 @@ onMounted(async () => {
   await crepe.create()
   if (editorRoot.value) disposeLanguagePicker = installLanguagePickerPopover(editorRoot.value)
   if (editorRoot.value) disposeCodeLabels = installCodeBlockLabels(editorRoot.value)
-  if (editorRoot.value) disposeLinkNavigation = installLinkNavigation(editorRoot.value, navigateMarkdownHref)
+  if (editorRoot.value) disposeLinkNavigation = installLinkNavigation(editorRoot.value, href => {
+    if (disposed || !isCurrentDocument()) return false
+    linkError.value = ''
+    return navigateMarkdownHref(href)
+  }, reason => {
+    if (!disposed && isCurrentDocument()) linkError.value = reason instanceof Error ? reason.message : t('链接打开失败，请重试。', 'Could not open the link. Please try again.')
+  })
   applyProofingPreferences()
   loading.value = false
   // Navigation needs the visible scroll container and an owned DOM selection.
@@ -611,6 +618,7 @@ defineExpose({ getEditor: () => crepe?.editor })
   <DiagramInteractions class="visual-editor" :class="{ 'hide-code-line-numbers': !markdownPreferences.lineNumbers }" :data-heading-style="headingAppearance.preferences.custom ? 'custom' : undefined" :style="headingAppearance.cssVariables">
     <p v-if="imageError" class="image-error" role="alert">{{ imageError }}</p>
     <p v-if="commandError" class="image-error" role="alert">{{ commandError }}</p>
+    <p v-if="linkError" class="image-error" role="alert">{{ linkError }}</p>
     <div v-show="layout.editorToolbarVisible && !layout.focusMode" class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
       <div class="toolbar-group" role="group" :aria-label="t('编辑历史', 'Edit history')">
         <button type="button" :disabled="loading || !canUndo" :title="t('撤销 (Ctrl+Z)', 'Undo (Ctrl+Z)')" :aria-label="t('撤销', 'Undo')" @pointerdown.prevent="toolbarCommand('editor.undo')" @click="$event.detail === 0 && toolbarCommand('editor.undo')"><ControlIcon name="undo" /></button>

@@ -149,6 +149,23 @@ describe('VisualMarkdownEditor formatting toolbars', () => {
     } finally { open.mockRestore() }
   })
 
+  it('shows a failed note link and clears the alert on the next attempt without changing Markdown', async () => {
+    const store = useEditorStore(); store.currentFilePath = '/test.md'
+    const open = vi.spyOn(store, 'loadFile').mockRejectedValueOnce(new Error('The file is temporarily locked')).mockResolvedValueOnce(null)
+    const wrapper = mount(VisualMarkdownEditor, { props: { initialContent: '[Note](./other.md)' }, attachTo: document.body })
+    mounted.push(wrapper)
+    const editor = await waitForEditor(wrapper), before = editor.action(getMarkdown())
+    const link = wrapper.get('.ProseMirror a')
+    await link.trigger('click', { ctrlKey: true, button: 0 })
+    await vi.waitFor(() => expect(wrapper.get('[role="alert"]').text()).toBe('The file is temporarily locked'))
+    expect(open).toHaveBeenCalledWith('/other.md')
+    expect(store.currentFilePath).toBe('/test.md')
+    expect(editor.action(getMarkdown())).toBe(before)
+    await link.trigger('click', { ctrlKey: true, button: 0 })
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(editor.action(getMarkdown())).toBe(before)
+  })
+
   it('applies syntax and renderer preferences when opening the visual editor', async () => {
     const preferences = useMarkdownPreferencesStore()
     preferences.preferences.heading = 'setext'

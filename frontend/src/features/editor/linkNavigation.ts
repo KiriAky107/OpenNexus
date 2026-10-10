@@ -1,5 +1,15 @@
 /** 统一接管编辑器链接，让桌面端内部文件、媒体定位和外部 URL 使用各自安全的导航通道。 */
-export function installLinkNavigation(root: HTMLElement, open: (href: string) => unknown | Promise<unknown>): () => void {
+export function installLinkNavigation(
+  root: HTMLElement,
+  open: (href: string) => unknown | Promise<unknown>,
+  onError: (reason: unknown) => void,
+): () => void {
+  let generation = 0
+  async function follow(href: string) {
+    const current = ++generation
+    try { await open(href) }
+    catch (reason) { if (current === generation) onError(reason) }
+  }
   const navigate = (event: MouseEvent) => {
     if (event.button !== 0 || event.altKey) return
     const target = event.target instanceof Element ? event.target : (event.target as Node | null)?.parentElement
@@ -11,8 +21,8 @@ export function installLinkNavigation(root: HTMLElement, open: (href: string) =>
     event.preventDefault()
     if (!event.ctrlKey && !event.metaKey) return
     event.stopPropagation()
-    void open(href)
+    void follow(href)
   }
   root.addEventListener('click', navigate, true)
-  return () => root.removeEventListener('click', navigate, true)
+  return () => { generation++; root.removeEventListener('click', navigate, true) }
 }
