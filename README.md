@@ -20,7 +20,7 @@
   </p>
 
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.6.0--beta1-5865f2?style=flat-square" alt="Version" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.6.0--beta2-5865f2?style=flat-square" alt="Version" /></a>
     <a href="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml"><img src="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="Platform" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="Desktop Tauri" />
@@ -34,9 +34,11 @@
 
 ---
 
-Current release: [v0.6.0-beta1](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta1).
+Current release: [v0.6.0-beta2](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta2).
 
-This update clarifies Community installation and dependency checks, supports signed experiment templates on beta clients, and keeps the desktop and bundled AI Core versions consistent. [Sync 0.7.0](https://github.com/KiriAky107/Sync-for-OpenNexus/releases/tag/v0.7.0) adds history recovery and storage administration; [Community 0.7.0](https://github.com/KiriAky107/Community-for-OpenNexus/releases/tag/v0.7.0) adds the web workbench, offline signing tools and licensed examples.
+This update prevents outdated background checks from marking a reopened or reloaded note as deleted or moved. Failed Ctrl / Command link navigation now shows an error while preserving the Markdown; errors from earlier attempts cannot replace the current feedback.
+
+[Sync 0.7.0](https://github.com/KiriAky107/Sync-for-OpenNexus/releases/tag/v0.7.0) adds history recovery and storage administration; [Community 0.7.0](https://github.com/KiriAky107/Community-for-OpenNexus/releases/tag/v0.7.0) adds the web workbench, offline signing tools and licensed examples.
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus desktop editor with compact file controls, outline, formulas, and a function plot" width="95%" />
@@ -103,10 +105,10 @@ This update clarifies Community installation and dependency checks, supports sig
 
 ### Windows Desktop (Recommended)
 
-1. Download the Windows x64 installer from the [0.6.0-beta1 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta1). For a local build, follow [Packaging](#packaging).
+1. Download the Windows x64 installer from the [0.6.0-beta2 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta2). For a local build, follow [Packaging](#packaging).
 2. *(Optional)* Verify integrity via PowerShell:
 ```powershell
-   Get-FileHash .\OpenNexus_0.6.0-beta1_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.6.0-beta2_x64-setup.exe -Algorithm SHA256
    # Compare with SHA256SUMS.txt from the same release.
 
 ```
@@ -362,7 +364,7 @@ erDiagram
 
 ## Ecosystem Repositories
 
-Companion releases: OpenNexus **0.6.0-beta1**, Sync for OpenNexus **0.7.0**, and Community for OpenNexus **0.7.0**. Sync uses `/sync/v1`; Community uses `/catalog/v1`. Product versions and protocol versions are maintained separately.
+Companion releases: OpenNexus **0.6.0-beta2**, Sync for OpenNexus **0.7.0**, and Community for OpenNexus **0.7.0**. Sync uses `/sync/v1`; Community uses `/catalog/v1`. Product versions and protocol versions are maintained separately.
 
 To keep dependencies clean and packaging predictable, services are maintained in separate repositories:
 
@@ -458,7 +460,7 @@ pnpm desktop:build
 
 ```
 
-The output installer will be generated in `frontend/src-tauri/target/release/bundle/nsis/`. The [0.6.0-beta1 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta1) also provides a source archive of its fixed release commit and a SHA-256 list.
+The output installer will be generated in `frontend/src-tauri/target/release/bundle/nsis/`. The [0.6.0-beta2 release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta2) also provides a source archive of its fixed release commit and a SHA-256 list.
 
 Windows installers include the architecture-matched, Microsoft-signed `WebView2Loader.dll` beside `OpenNexus.exe`, resolved from the locked WebView2 SDK before bundling. The WebView2 Runtime installer does not supply this app-side DLL. The embedded bootstrapper installs the Runtime if needed and still requires internet access. To check an extracted installer, run `python scripts/verify-windows-loader.py <extracted-installer-directory>`; this checks the Host/Loader architecture and SDK hash, so an SDK installed on the build machine cannot hide a missing DLL.
 

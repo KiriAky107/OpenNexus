@@ -19,7 +19,7 @@
     <a href="https://github.com/KiriAky107/OpenNexus/releases">发布日志</a>
   </p>
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.6.0--beta1-5865f2?style=flat-square" alt="版本" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.6.0--beta2-5865f2?style=flat-square" alt="版本" /></a>
     <a href="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml"><img src="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="平台" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="桌面端 Tauri" />
@@ -33,9 +33,11 @@
 
 ---
 
-当前版本：[v0.6.0-beta1](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta1)。
+当前版本：[v0.6.0-beta2](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta2)。
 
-本次更新完善 Community 安装与依赖提示，让 beta 客户端支持签名实验模板，并保持桌面端与随包 AI Core 的版本一致。[Sync 0.7.0](https://github.com/KiriAky107/Sync-for-OpenNexus/releases/tag/v0.7.0) 增加历史恢复与存储管理；[Community 0.7.0](https://github.com/KiriAky107/Community-for-OpenNexus/releases/tag/v0.7.0) 增加网页工作台、离线签名工具与有许可的真实示例。
+本次更新避免迟到的后台检查把重新打开或手动重载的笔记误报为已删除或移动。按 Ctrl / Command 打开正文链接失败时，会显示提示并保留原 Markdown；旧尝试的错误不会覆盖当前操作的反馈。
+
+[Sync 0.7.0](https://github.com/KiriAky107/Sync-for-OpenNexus/releases/tag/v0.7.0) 增加历史恢复与存储管理；[Community 0.7.0](https://github.com/KiriAky107/Community-for-OpenNexus/releases/tag/v0.7.0) 增加网页工作台、离线签名工具与有许可的真实示例。
 
 <div align="center">
   <img src=".github/assets/opennexus-workspace.png" alt="OpenNexus 桌面编辑器：精简文件操作、大纲、公式与函数图" width="95%" />
@@ -102,10 +104,10 @@
 
 ### Windows 桌面端安装（推荐）
 
-1. 前往 [0.6.0-beta1 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta1) 下载 Windows x64 安装包。本地构建可按[打包发布](#打包发布)步骤进行。
+1. 前往 [0.6.0-beta2 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta2) 下载 Windows x64 安装包。本地构建可按[打包发布](#打包发布)步骤进行。
 2. *(可选)* 通过 PowerShell 校验 SHA-256 完整性：
 ```powershell
-   Get-FileHash .\OpenNexus_0.6.0-beta1_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.6.0-beta2_x64-setup.exe -Algorithm SHA256
    # 与同一 Release 中的 SHA256SUMS.txt 比对。
 
 ```
@@ -360,7 +362,7 @@ erDiagram
 
 ## 生态项目
 
-配套版本：OpenNexus **0.6.0-beta1**、Sync for OpenNexus **0.7.0**、Community for OpenNexus **0.7.0**。Sync 使用 `/sync/v1`，Community 使用 `/catalog/v1`；产品版本与协议版本分别维护。
+配套版本：OpenNexus **0.6.0-beta2**、Sync for OpenNexus **0.7.0**、Community for OpenNexus **0.7.0**。Sync 使用 `/sync/v1`，Community 使用 `/catalog/v1`；产品版本与协议版本分别维护。
 
 为确保单机版本的纯粹性并降低维护依赖，网络同步与公共服务拆分至独立代码库维护：
 
@@ -456,7 +458,7 @@ pnpm desktop:build
 
 ```
 
-构建完成的安装包将输出至 `frontend/src-tauri/target/release/bundle/nsis/`。[0.6.0-beta1 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta1) 同时提供固定发布提交的源码压缩包与 SHA-256 清单。
+构建完成的安装包将输出至 `frontend/src-tauri/target/release/bundle/nsis/`。[0.6.0-beta2 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta2) 同时提供固定发布提交的源码压缩包与 SHA-256 清单。
 
 Windows 安装包会在 `OpenNexus.exe` 同目录包含匹配架构、带微软签名的 `WebView2Loader.dll`，打包前从依赖锁定的 WebView2 SDK 准备。WebView2 Runtime 安装程序不会替应用提供这个 DLL。内嵌引导程序会在需要时安装 Runtime，仍需联网。解压安装包后可运行 `python scripts/verify-windows-loader.py <安装包解压目录>`，检查主程序与 Loader 架构及 SDK 哈希，避免构建机上已有的 SDK 掩盖漏打包问题。
 
