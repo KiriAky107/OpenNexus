@@ -3,7 +3,7 @@ import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
 import ExportDialog from './ExportDialog.vue'
 import NoteHistory from './NoteHistory.vue'
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
 import { isDesktop } from '@/services/platform/desktop'
@@ -18,6 +18,9 @@ const layout = useLayoutPreferencesStore()
 const workspaceStore = useWorkspaceStore()
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 const reloadError = ref('')
+let reloadVersion = 0
+let disposed = false
+onBeforeUnmount(() => { disposed = true; reloadVersion++ })
 const exportOpen = ref(false)
 const historyOpen = ref(false)
 const desktop = isDesktop()
@@ -48,10 +51,17 @@ async function discard() {
   reloadError.value = ''
 }
 async function reload() {
-  const path = editorStore.currentFilePath, snapshot = editorStore.content
+  const snapshot = editorStore.content
+  const ownsDocument = editorStore.captureDocument()
   if (!(await askConfirm(t('重新加载会丢弃当前未保存内容。请先复制需要保留的文字。继续吗？', 'Reload discards unsaved edits. Copy any text you need to keep first. Continue?')))) return
-  if (path !== editorStore.currentFilePath || snapshot !== editorStore.content) return
-  try { await editorStore.reloadExternalFile(); reloadError.value = '' } catch (error) { reloadError.value = error instanceof Error ? error.message : '重新加载失败' }
+  if (!ownsDocument() || snapshot !== editorStore.content) return
+  const version = ++reloadVersion
+  reloadError.value = ''
+  try { await editorStore.reloadExternalFile() }
+  catch (error) {
+    if (disposed || version !== reloadVersion || !ownsDocument() || snapshot !== editorStore.content) return
+    reloadError.value = error instanceof Error ? error.message : t('重新加载失败', 'Reload failed')
+  }
 }
 
 const statusText = computed<Record<string, string>>(() => ({

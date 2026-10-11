@@ -252,11 +252,12 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   async function reloadExternalFile() {
-    loadVersion++; loadingFilePath.value = null
+    const version = ++loadVersion
+    loadingFilePath.value = null
     const path = currentFilePath.value, snapshot = content.value, document = documentVersion
     if (!path || pendingSave) return
     const latest = await workspaceService.readFileContent(path)
-    if (document !== documentVersion || path !== currentFilePath.value || content.value !== snapshot || pendingSave) return
+    if (version !== loadVersion || document !== documentVersion || path !== currentFilePath.value || content.value !== snapshot || pendingSave) return
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
     documentVersion++
     content.value = latest; diskContent = latest; saveStatus.value = 'saved'; contentRevision.value++

@@ -87,3 +87,42 @@ it.each(['py', 'json', 'csv'])('keeps %s recovery copies in the source format wi
   expect(editor.content).toBe('原始输入\r\n<script>unchanged</script>\r\n')
  } finally { wrapper.unmount() }
 })
+
+it.each(['failed retry', 'successful retry and navigation'])('does not replace a %s with an older reload failure', async (scenario) => {
+ const pinia = createPinia(); setActivePinia(pinia)
+ const read = vi.spyOn(service, 'readFileContent').mockResolvedValue('original')
+ vi.spyOn(service, 'getNoteId').mockResolvedValue('id')
+ const editor = useEditorStore(), workspace = useWorkspaceStore()
+ workspace.fileTree = [{ id: 'a', path: '/a.md', name: 'a.md', type: 'file' }]
+ await editor.loadFile('/a.md'); editor.setExternalChanged()
+ const wrapper = mount(EditorHeader, { global: { plugins: [pinia], stubs: { ActionDialog: { name: 'ActionDialog', template: '<div />', emits: ['resolve'] } } } })
+ let failOlder!: (reason: Error) => void
+ const older = new Promise<string>((_, reject) => { failOlder = reject })
+ read.mockReturnValueOnce(older)
+ const confirmReload = async () => {
+  await wrapper.findAll('button').find(button => button.text() === '重新加载外部版本')!.trigger('click')
+  wrapper.findComponent({ name: 'ActionDialog' }).vm.$emit('resolve', '')
+  await flushPromises()
+ }
+ try {
+  await confirmReload()
+  if (scenario === 'failed retry') read.mockRejectedValueOnce(new Error('new retry: permission denied'))
+  else read.mockResolvedValueOnce('recovered A')
+  await confirmReload()
+  if (scenario === 'failed retry') expect(wrapper.get('[role="alert"]').text()).toBe('new retry: permission denied')
+  else {
+   expect(editor.content).toBe('recovered A')
+   read.mockResolvedValueOnce('other file')
+   await editor.loadFile('/b.md'); await flushPromises()
+  }
+  failOlder(new Error('old request: timed out')); await flushPromises()
+  expect(wrapper.text()).not.toContain('old request: timed out')
+  if (scenario === 'failed retry') {
+   expect(wrapper.get('[role="alert"]').text()).toBe('new retry: permission denied')
+   expect([editor.content, editor.saveStatus]).toEqual(['original', 'external_changed'])
+  } else {
+   expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+   expect([editor.currentFilePath, editor.content, editor.saveStatus]).toEqual(['/b.md', 'other file', 'saved'])
+  }
+ } finally { wrapper.unmount(); localStorage.clear() }
+})
