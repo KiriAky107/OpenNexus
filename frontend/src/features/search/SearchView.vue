@@ -13,6 +13,7 @@ const folder = ref('')
 const tag = ref('')
 
 function submitSearch() {
+  navigationError.value = ''
   void searchStore.doSearch({
     query: searchStore.query,
     mode: searchStore.mode,
