@@ -20,7 +20,7 @@
   </p>
 
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.6.0--beta4-5865f2?style=flat-square" alt="Version" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.6.0--beta5-5865f2?style=flat-square" alt="Version" /></a>
     <a href="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml"><img src="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="Platform" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="Desktop Tauri" />
