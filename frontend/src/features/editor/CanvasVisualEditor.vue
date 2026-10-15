@@ -25,7 +25,7 @@ const toolsOpen=ref(false),toolsMenu=ref<HTMLElement>(),toolsTrigger=ref<HTMLBut
 let fittedAll=false,viewReady=false
 const model=new CanvasModel(editor.content),document=shallowRef(model.document),historyRevision=ref(0)
 const viewport=ref<HTMLElement>(),viewportSize=ref({width:800,height:600}),pan=ref({x:60,y:60}),zoom=ref(1)
-const selected=ref<string[]>([]),selectedEdge=ref(''),error=ref(''),nodeFilter=ref(''),nodeCount=ref(100)
+const selected=ref<string[]>([]),selectedEdge=ref(''),error=ref(''),navigationError=ref(''),nodeFilter=ref(''),nodeCount=ref(100)
 const isCurrentDocument=editor.captureDocument()
 const readOnly=computed(()=>!isCurrentDocument()||['conflict','external_changed'].includes(editor.saveStatus))
 const canUndo=computed(()=>{void historyRevision.value;return model.canUndo}),canRedo=computed(()=>{void historyRevision.value;return model.canRedo})
@@ -125,7 +125,12 @@ function keydown(event:KeyboardEvent){
   const movement:Record<string,[number,number]>={arrowleft:[-1,0],arrowright:[1,0],arrowup:[0,-1],arrowdown:[0,1]}
   if(movement[key]&&selected.value.length){event.preventDefault();const[dx,dy]=movement[key];change(()=>model.move(selected.value,dx*(event.shiftKey?1:10),dy*(event.shiftKey?1:10)))}
 }
-function locate(id:string){select(id);sidebar.value=true;void nextTick(()=>{fit([id]);viewport.value?.focus()})}
+function locate(id:string){
+  if(!model.document.nodes.some(node=>node.id===id)){
+    selected.value=[];selectedEdge.value='';navigationError.value=t('画布节点已不存在，请重新检查引用。','The canvas node no longer exists. Recheck references.');return
+  }
+  navigationError.value='';select(id);sidebar.value=true;void nextTick(()=>{fit([id]);viewport.value?.focus()})
+}
 function closeTools(event:PointerEvent){if(!toolsMenu.value?.contains(event.target as Node))toolsOpen.value=false}
 async function toggleTools(){toolsOpen.value=!toolsOpen.value;if(toolsOpen.value){await nextTick();toolsMenu.value?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus()}}
 function toolsKeys(event:KeyboardEvent){
@@ -236,7 +241,7 @@ onBeforeUnmount(()=>{disposed=true;previewGeneration++;cancelGesture();window.re
         <button class="button-secondary inspector-toggle" :aria-expanded="sidebar" :aria-label="sidebar?t('隐藏右侧栏','Hide right sidebar'):t('显示右侧栏','Show right sidebar')" :title="sidebar?t('隐藏右侧栏','Hide right sidebar'):t('显示右侧栏','Show right sidebar')" @click="sidebar=!sidebar"><ControlIcon name="panelClose" :class="{ mirrored: sidebar }" /><span>{{ t('节点与属性','Nodes and properties') }}</span></button>
       </div>
     </div>
-    <p v-if="error" class="error-banner canvas-error" role="alert">{{ error }}</p>
+    <p v-if="navigationError || error" class="error-banner canvas-error" role="alert">{{ navigationError || error }}</p>
     <div class="canvas-body">
       <div ref="viewport" class="canvas-viewport" tabindex="0" role="region" :aria-label="t('可编辑画布：Shift 多选，空格拖动平移，方向键移动节点，Home 显示全部','Editable canvas: Shift selects multiple nodes, Space-drag pans, arrow keys move nodes, Home fits all')" @pointerdown.self="begin($event)" @pointermove="move" @pointerup="end" @pointercancel="cancelGesture" @wheel="wheel" @contextmenu.prevent @blur="space=false">
         <div class="canvas-world" :style="{transform:`translate(${pan.x}px,${pan.y}px) scale(${zoom})`}">

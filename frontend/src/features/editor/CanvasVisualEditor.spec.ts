@@ -33,6 +33,14 @@ it('keeps native Enter and Space on the target button and focuses only a node-le
  expect(wrapper.get('[aria-label="节点内容"]').element).toHaveProperty('value','Root')
  wrapper.unmount()
 })
+it('reports a removed canvas target without selecting a phantom node',async()=>{
+ const editor=useEditorStore(),wrapper=mount(CanvasVisualEditor);await flushPromises()
+ editor.selectCanvasNode('removed-node');await flushPromises()
+ expect(wrapper.get('[role="alert"]').text()).toContain('画布节点已不存在')
+ expect(wrapper.find('[aria-label="节点内容"]').exists()).toBe(false)
+ expect(wrapper.findAll('.canvas-node.selected')).toHaveLength(0)
+ wrapper.unmount()
+})
 it('uses the same group expansion for pointer and keyboard movement with one undo',async()=>{
  const editor=useEditorStore(),source=JSON.stringify({nodes:[
   {id:'group',type:'group',x:0,y:0,width:600,height:400,label:'Group'},
