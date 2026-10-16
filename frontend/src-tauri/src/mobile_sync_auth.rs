@@ -524,6 +524,10 @@ impl<S: SecretStore> Auth<S> {
             {
                 return Err(SyncError::new("SYNC_AUTH_IDENTITY_CHANGED"));
             }
+            // A repeated original disconnect may belong to another profile.
+            // Refuse it before deleting credentials, not only during the final
+            // journal reconciliation after the irreversible local removal.
+            self.journal.require_selected(&current)?;
             if current.phase != Phase::Disconnected {
                 let device = current
                     .device_id
@@ -699,6 +703,71 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    #[tokio::test]
+    async fn retrying_old_erasure_cannot_remove_an_unselected_profile_before_reconciliation() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .extend([Ok(reply("device-a", "a")), Ok(reply("device-b", "b"))]);
+        let (owner, first) = lease();
+        let a = scope();
+        let b = Scope::new("https://other.example", "reader").unwrap();
+        let a_id = id();
+        let b_id = id();
+        let disconnect = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        auth.login(&first, login(&a_id, &a), &remote, 100)
+            .await
+            .unwrap();
+        store.fail_remove.store(true, Ordering::SeqCst);
+        assert!(auth
+            .local_disconnect(&first, existing(&disconnect, &a_id, &a), 101)
+            .is_err());
+        assert_eq!(
+            auth.journal.find(&disconnect).unwrap().unwrap().phase,
+            Phase::ErasePending
+        );
+        owner.invalidate_identity();
+        let second = owner.lease().unwrap();
+        auth.login(&second, login(&b_id, &b), &remote, 102)
+            .await
+            .unwrap();
+        let original_a = store.read(&a, "device-a").unwrap().unwrap();
+        let original_b = store.read(&b, "device-b").unwrap().unwrap();
+        let removals = store.removes.load(Ordering::SeqCst);
+        assert_eq!(
+            auth.local_disconnect(&second, existing(&disconnect, &a_id, &a), 103)
+                .err()
+                .unwrap()
+                .code,
+            "SYNC_AUTH_SELECTION_CHANGED"
+        );
+        assert_eq!(store.removes.load(Ordering::SeqCst), removals);
+        assert_eq!(*store.read(&a, "device-a").unwrap().unwrap(), *original_a);
+        assert_eq!(*store.read(&b, "device-b").unwrap().unwrap(), *original_b);
+        let revision = auth.selection(&second).unwrap().unwrap().revision;
+        owner.invalidate_identity();
+        let selected = owner.lease().unwrap();
+        auth.choose_profile(&selected, &id(), &disconnect, 2, Some(revision))
+            .unwrap();
+        assert_eq!(
+            auth.local_disconnect(&selected, existing(&disconnect, &a_id, &a), 104)
+                .unwrap()
+                .intent
+                .unwrap()
+                .phase,
+            Phase::Disconnected
+        );
+        assert!(store.read(&a, "device-a").unwrap().is_none());
+        assert_eq!(*store.read(&b, "device-b").unwrap().unwrap(), *original_b);
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 2);
+        assert_eq!(remote.logouts.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
