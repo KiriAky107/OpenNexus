@@ -237,17 +237,38 @@ public final class RuntimeProbe extends Instrumentation {
 
     private void selectTheme(String current, String next) {
         clickMenu("Settings");
-        AccessibilityNodeInfo option = waitNode(node -> APP.equals(string(node.getPackageName()))
-            && label(node, next, false) && node.isEnabled() && node.isCheckable(), "shared desktop theme card: " + next);
+        waitNode(node -> themeCard(node, current) && descendantLabel(node, "Active"), "original active theme card: " + current);
+        AccessibilityNodeInfo option = waitNode(node -> themeCard(node, next), "shared desktop theme card: " + next);
         option.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId());
-        option = waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, next, false)
-            && node.isEnabled() && node.isCheckable(), "visible shared theme card: " + next);
+        option = waitNode(node -> themeCard(node, next), "visible shared theme card: " + next);
         // Exactly one real tap; selected state alone does not prove rendered colors.
         activate(option);
-        waitNode(node -> label(node, next, false) && node.isCheckable() && node.isChecked(), "selected theme card: " + next);
+        // WebView exposes aria-pressed as ToggleButton, not an Android checkable row.
+        // The Active badge must belong to this exact card, not the previous selection.
+        waitNode(node -> themeCard(node, next) && descendantLabel(node, "Active"), "selected theme card: " + next);
         retainThemeCards(next);
         click("Close", false);
         waitLabel("New note");
+    }
+
+    private boolean themeCard(AccessibilityNodeInfo node, String name) {
+        return APP.equals(string(node.getPackageName())) && label(node, name, false)
+            && node.isEnabled() && node.isClickable()
+            && "android.widget.ToggleButton".equals(string(node.getClassName()));
+    }
+
+    private boolean descendantLabel(AccessibilityNodeInfo root, String text) {
+        List<AccessibilityNodeInfo> children = new ArrayList<>();
+        children.add(root);
+        for (int index = 0; index < children.size() && index < 200; index++) {
+            AccessibilityNodeInfo node = children.get(index);
+            if (index > 0 && node.isVisibleToUser() && label(node, text, false)) return true;
+            for (int child = 0; child < node.getChildCount(); child++) {
+                AccessibilityNodeInfo value = node.getChild(child);
+                if (value != null) children.add(value);
+            }
+        }
+        return false;
     }
 
     private void retainThemeCards(String current) {
