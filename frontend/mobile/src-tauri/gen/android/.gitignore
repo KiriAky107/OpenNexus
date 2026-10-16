@@ -1,5 +1,7 @@
 *.iml
 .gradle
+# Kotlin Gradle persistent data, not buildSrc source or compiler inputs.
+/buildSrc/.kotlin/
 /local.properties
 /.idea/caches
 /.idea/libraries
