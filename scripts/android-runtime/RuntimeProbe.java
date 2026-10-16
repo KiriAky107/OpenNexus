@@ -120,6 +120,37 @@ public final class RuntimeProbe extends Instrumentation {
                     if (phase.equals("canvas-drag")) save();
                     else { SystemClock.sleep(600); waitLabel("Saved"); }
                     break;
+                case "markdown-image":
+                    create("New note", "runtime-image.md");
+                    setText(editable(null), "# Original picker image\n");
+                    hideKeyboard();
+                    clickMenu("More actions");
+                    click("Add image", false);
+                    chooseOriginalImage();
+                    waitNode(node -> node.isEditable() && string(node.getText()).contains("![](attachments/"), "applied original Markdown image reference");
+                    waitLabel("Draft kept on this device");
+                    save();
+                    break;
+                case "markdown-image-reopen":
+                    open("runtime-image.md");
+                    require(string(editable(null).getText()).contains("![](attachments/"), "System-selected original image reference missing after cold launch");
+                    hideKeyboard();
+                    clickMenu("More actions");
+                    click("Read preview", false);
+                    break;
+                case "canvas-image":
+                    create("New canvas", "runtime-image.canvas");
+                    clickMenu("Add node");
+                    click("Import original image", false);
+                    chooseOriginalImage();
+                    waitOriginalImageNode();
+                    waitLabel("Draft kept on this device");
+                    save();
+                    break;
+                case "canvas-image-reopen":
+                    open("runtime-image.canvas");
+                    waitOriginalImageNode();
+                    break;
                 case "export":
                     click("Export saved content", false);
                     click("Prepare content snapshot", false);
@@ -158,6 +189,29 @@ public final class RuntimeProbe extends Instrumentation {
         click(next, false);
         waitLabel(next);
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "New note", false), "theme returned to the owned vault");
+    }
+
+    private boolean documentsUi(AccessibilityNodeInfo node) {
+        return string(node.getPackageName()).endsWith(".documentsui");
+    }
+
+    private void waitOriginalImageNode() {
+        waitNode(node -> string(node.getText()).contains("attachments/")
+            || string(node.getContentDescription()).contains("attachments/"), "original image node");
+    }
+
+    private void clickMenu(String text) {
+        activate(waitNode(node -> label(node, text, false) && node.isEnabled() && node.isClickable(), "clickable menu: " + text));
+    }
+
+    private void chooseOriginalImage() {
+        // Wry uses FileChooserParams.createIntent(); select the owned original in
+        // Android's real DocumentsUI instead of injecting a URI into the WebView.
+        waitNode(this::documentsUi, "system document picker");
+        activate(waitNode(node -> documentsUi(node) && label(node, "Show roots", false), "system picker roots"));
+        activate(waitNode(node -> documentsUi(node) && label(node, "Downloads", false), "owned Downloads location"));
+        activate(waitNode(node -> documentsUi(node) && label(node, "opennexus-ci-original.png", false), "owned original PNG"));
+        waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Back", false), "return from original system picker");
     }
 
     private void open(String path) { click(path, true); waitLabel("Back"); }

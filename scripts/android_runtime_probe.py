@@ -4,6 +4,7 @@ This is intentionally unavailable on developer machines and physical devices. Ac
 Unicode input is checked as text entry, not reported as Chinese IME composition acceptance.
 """
 import argparse
+import base64
 from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
@@ -28,6 +29,9 @@ DRAFT = BODY + '未保存的恢复草稿 / recovered draft\n'
 NODE = '中文画布节点 😀 / original canvas text'
 IME_TEXT = '中文组合输入 😀'
 BACK_DRAFT = '# 系统返回键草稿 😀\nBack keeps the native draft before leaving.\n'
+IMAGE_BODY = '# Original picker image\n'
+# Owned deterministic 2x2 RGBA PNG. No user gallery data or storage permission.
+IMAGE_BYTES = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAG0lEQVR4nGN45JD0X2l5238G8/TL/78f8/gPAFY9Ckass/NvAAAAAElFTkSuQmCC')
 
 
 def require(value, message):
@@ -321,7 +325,7 @@ class Probe:
     def original(self, name):
         return self.private(self.root + 'vault/' + name).stdout
 
-    def draft_rows(self):
+    def database_rows(self, query):
         snapshot = Path(tempfile.mkdtemp(prefix='draft-snapshot-', dir=self.tools))
         database = snapshot / 'mobile-drafts.sqlite3'
         for suffix in ('', '-wal', '-shm'):
@@ -330,7 +334,43 @@ class Probe:
                 Path(str(database) + suffix).write_bytes(value.stdout)
         with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:
             require(db.execute('PRAGMA integrity_check').fetchone() == ('ok',), 'Draft database integrity check failed')
-            return db.execute('SELECT path,content,generation,saved_generation FROM drafts ORDER BY path').fetchall()
+            return db.execute(query).fetchall()
+
+    def draft_rows(self):
+        return self.database_rows('SELECT path,content,generation,saved_generation FROM drafts ORDER BY path')
+
+    def stage_original_image(self):
+        require_hosted_emulator(self.args.serial)
+        destination = '/sdcard/Download/opennexus-ci-original.png'
+        require(self.shell('test', '!', '-e', destination, check=False).returncode == 0, 'Owned picker original already exists; refusing to replace it')
+        source = self.tools / 'original-picker-image.png'
+        require(not source.exists(), 'Picker source already exists')
+        source.write_bytes(IMAGE_BYTES)
+        self.device('push', source, destination)
+        device_hash = self.shell('sha256sum', destination).stdout.decode().split()[0]
+        require(device_hash == digest(IMAGE_BYTES), 'Staged system picker original hash mismatch')
+        require(self.device('exec-out', 'cat', destination).stdout == IMAGE_BYTES, 'System picker source bytes changed')
+        (self.output / 'picker-original.png').write_bytes(IMAGE_BYTES)
+        (self.output / 'picker-original.json').write_text(json.dumps({'origin': 'synthetic owned RGBA fixture in this exclusive hosted emulator',
+            'path': destination, 'sha256': digest(IMAGE_BYTES), 'size': len(IMAGE_BYTES), 'permissions_added': []}, indent=2) + '\n', 'utf-8')
+
+    def verify_original_images(self):
+        asset = f'attachments/{digest(IMAGE_BYTES)[:2]}/{digest(IMAGE_BYTES)}.png'
+        require(self.original(asset) == IMAGE_BYTES, 'System-selected image was re-encoded or replaced')
+        markdown = self.original('runtime-image.md')
+        reference = ('![](' + asset + ')').encode()
+        require(markdown.count(reference) == 1 and markdown.replace(reference, b'') == IMAGE_BODY.encode(), 'Image insertion changed the original Markdown or duplicated its reference')
+        canvas = self.original('runtime-image.canvas')
+        nodes = json.loads(canvas)['nodes']
+        require(len(nodes) == 1 and nodes[0]['type'] == 'file' and nodes[0]['file'] == asset, 'Canvas image node differs from the chosen original')
+        rows = self.database_rows('SELECT operation_id,path,asset_path,hash,size,state FROM image_intents ORDER BY path')
+        require(len(rows) == 2 and len({row[0] for row in rows}) == 2
+            and {row[1] for row in rows} == {'runtime-image.md', 'runtime-image.canvas'}
+            and all(row[2:] == (asset, digest(IMAGE_BYTES), len(IMAGE_BYTES), 'committed') for row in rows),
+            'Exactly one committed original image receipt per target is required')
+        receipts = [dict(zip(('operation_id', 'path', 'asset_path', 'sha256', 'size', 'state'), row)) for row in rows]
+        (self.output / 'image-import-receipts.json').write_text(json.dumps(receipts, indent=2) + '\n', 'utf-8')
+        return {'runtime-image.md': markdown, 'runtime-image.canvas': canvas, asset: IMAGE_BYTES}
 
     def verify_export(self, originals):
         paths = self.shell('run-as', APP, 'find', self.root + 'exports', '-name', '*.delivery.json', '-type', 'f').stdout.decode().splitlines()
@@ -393,11 +433,19 @@ class Probe:
         require(len(moved['nodes']) == 1 and moved['nodes'][0]['id'] == document['nodes'][0]['id']
             and moved['nodes'][0]['text'] == NODE, 'Drag changed node identity or original text')
         require((moved['nodes'][0]['x'], moved['nodes'][0]['y']) != (document['nodes'][0]['x'], document['nodes'][0]['y']), 'Real touch did not move the Canvas node')
+        self.stage_original_image()
+        self.phase('markdown-image')
+        self.phase('markdown-image-reopen')
+        self.phase('canvas-image')
+        self.phase('canvas-image-reopen')
+        images = self.verify_original_images()
         self.phase('export')
-        originals = {'runtime-note.md': (DRAFT + IME_TEXT).encode(), 'runtime.canvas': after}
+        originals = {'runtime-note.md': (DRAFT + IME_TEXT).encode(), 'runtime.canvas': after, **images}
         export = self.verify_export(originals)
         for name, data in originals.items():
-            (self.output / name).write_bytes(data)
+            path = self.output / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
         proof = {'schema': 1, 'passed': True, 'at': datetime.now(timezone.utc).isoformat(),
             'source_commit': self.args.commit, 'runtime_tools_commit': self.args.tools_commit,
             'compiled_from': self.args.build_origin, 'package': APP, 'apk_sha256': self.binding['sha256'],
@@ -409,7 +457,9 @@ class Probe:
             'input_method': 'Accessibility for baseline text; real Android InputMethodService/InputConnection for pinyin, Chinese composing text and candidate confirmation. Test-only IME, not Gboard/Sogou or physical-device proof.',
             'system_back': 'Actual Android Back key; durable draft recovery and own-task background; not predictive gesture animation proof',
             'physical_phone_verified': False, 'Chinese_IME_verified': True, 'commercial_Chinese_IME_verified': False, 'sync_verified': False,
-            'disk_full_verified': False, 'image_picker_verified': False, 'published': False}
+            'disk_full_verified': False, 'image_picker_verified': True,
+            'image_picker_scope': 'Real system document picker selects an owned synthetic PNG; original bytes, two native receipts, cold reopen and exported bytes verified. Not camera or user-gallery acceptance.',
+            'published': False}
         (self.output / 'runtime-proof.json').write_text(json.dumps(proof, ensure_ascii=False, indent=2) + '\n', 'utf-8')
         print(json.dumps(proof, ensure_ascii=False, indent=2))
 

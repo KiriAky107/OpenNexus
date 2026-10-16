@@ -5,14 +5,56 @@ from pathlib import Path
 import tempfile
 import subprocess
 import sqlite3
+import struct
 import unittest
+import zlib
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from android_runtime_probe import APP, DRIVER, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job
+from android_runtime_probe import APP, DRIVER, IMAGE_BODY, IMAGE_BYTES, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_original_picker_fixture_is_a_complete_decodable_rgba_png(self):
+        self.assertTrue(IMAGE_BYTES.startswith(b'\x89PNG\r\n\x1a\n'))
+        position = 8; image_data = b''; kinds = []
+        while position < len(IMAGE_BYTES):
+            size = struct.unpack('>I', IMAGE_BYTES[position:position + 4])[0]
+            kind = IMAGE_BYTES[position + 4:position + 8]
+            data = IMAGE_BYTES[position + 8:position + 8 + size]
+            crc = struct.unpack('>I', IMAGE_BYTES[position + 8 + size:position + 12 + size])[0]
+            self.assertEqual(zlib.crc32(kind + data) & 0xffffffff, crc)
+            if kind == b'IHDR': self.assertEqual(struct.unpack('>IIBBBBB', data), (2, 2, 8, 6, 0, 0, 0))
+            if kind == b'IDAT': image_data += data
+            kinds.append(kind); position += size + 12
+        self.assertEqual(kinds, [b'IHDR', b'IDAT', b'IEND'])
+        self.assertEqual(position, len(IMAGE_BYTES))
+        self.assertEqual(zlib.decompress(image_data), bytes([0, 226, 64, 98, 255, 34, 167, 134, 255, 0, 55, 103, 211, 255, 247, 198, 72, 255]))
+
+    def test_picker_setup_refuses_an_existing_destination_before_pushing_any_bytes(self):
+        probe = Probe.__new__(Probe); probe.args = SimpleNamespace(serial='emulator-5562')
+        probe.shell = lambda *args, **kwargs: subprocess.CompletedProcess([], 1, b'', b'')
+        probe.device = lambda *args, **kwargs: self.fail('An existing picker file must not be replaced')
+        with patch('android_runtime_probe.require_hosted_emulator'):
+            with self.assertRaisesRegex(RuntimeError, 'refusing to replace'): probe.stage_original_image()
+
+    def test_image_acceptance_rejects_reencoded_bytes_duplicate_receipts_or_changed_note(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe = Probe.__new__(Probe); probe.output = Path(directory)
+            asset = f'attachments/{digest(IMAGE_BYTES)[:2]}/{digest(IMAGE_BYTES)}.png'
+            reference = ('![](' + asset + ')').encode()
+            originals = {asset: IMAGE_BYTES, 'runtime-image.md': IMAGE_BODY.encode() + reference,
+                'runtime-image.canvas': json.dumps({'nodes': [{'type': 'file', 'file': asset}]}).encode()}
+            rows = [(str(i), path, asset, digest(IMAGE_BYTES), len(IMAGE_BYTES), 'committed')
+                for i, path in enumerate(('runtime-image.md', 'runtime-image.canvas'))]
+            probe.original = originals.__getitem__; probe.database_rows = lambda _: rows
+            self.assertEqual(probe.verify_original_images(), {key: originals[key] for key in ('runtime-image.md', 'runtime-image.canvas', asset)})
+            cases = [({asset: b'reencoded PNG'}, rows), ({}, rows + rows[:1]),
+                ({'runtime-image.md': b'changed note' + reference}, rows)]
+            for changed, observed in cases:
+                probe.original = {**originals, **changed}.__getitem__; probe.database_rows = lambda _: observed
+                with self.assertRaises(RuntimeError): probe.verify_original_images()
+
     def installed_probe(self, directory, copied, hashes=None, avd='opennexus-ci-73-1', states=None):
         root=Path(directory);probe=Probe.__new__(Probe)
         probe.output=root/'evidence';probe.output.mkdir();probe.tools=root/'private-read-copies';probe.tools.mkdir()
