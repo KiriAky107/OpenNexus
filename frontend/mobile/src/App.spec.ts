@@ -81,3 +81,12 @@ it('resolves a Canvas file reference from the Vault root even when the Canvas is
   expect(host.mobileRequest).toHaveBeenCalledWith({ kind: 'read_path', path: 'Notes/original.md' })
   wrapper.unmount()
 })
+
+it('keeps native content export reachable from the shared desktop landing without preparing a snapshot automatically', async () => {
+  host.mobileCapabilities.mockResolvedValue({protocol:1,platform:'android',workspace:true,notes:true,exports:true,version:'0.1.0-dev1'})
+  const wrapper=mount(App);await flushPromises()
+  await wrapper.findAll('button').find(button=>button.text()==='Export saved content')!.trigger('click');await flushPromises()
+  expect(wrapper.text()).toContain('Prepare content snapshot')
+  expect(host.mobileRequest.mock.calls.some(([request])=>request.kind==='prepare_export')).toBe(false)
+  wrapper.unmount()
+})

@@ -439,7 +439,7 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
     </main>
 
     <WorkspaceLanding v-else-if="tab === 'notes' && !query && !directory" :notes="fileNodes.filter(node => node.type === 'file')" :error="listError || session.state.error" @new-note="openPath('create', 'markdown')" @open-note="path => { const entry = notePage.items.find(item => item.path === path); if (entry) openNote(entry) }">
-      <template #actions><button class="button-primary" @click="openPath('create', 'markdown')">{{ copy.newNote }}</button><button class="button-secondary" @click="openPath('create', 'canvas')">{{ canvasCopy.newCanvas }}</button><button class="button-secondary" @click="secondaryOpen = true">{{ t('文件', 'Files') }}</button></template>
+      <template #actions><button class="button-primary" @click="openPath('create', 'markdown')">{{ copy.newNote }}</button><button class="button-secondary" @click="openPath('create', 'canvas')">{{ canvasCopy.newCanvas }}</button><button class="button-secondary" @click="secondaryOpen = true">{{ t('文件', 'Files') }}</button><button v-if="exportAllowed" class="button-secondary" :disabled="actionBusy || navigationBusy" @click="openExport">{{ copy.exportContent }}</button></template>
     </WorkspaceLanding>
     <main v-else class="notes-page">
       <p class="vault-status">{{ copy.ready }}</p>
