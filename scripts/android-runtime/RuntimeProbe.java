@@ -142,7 +142,12 @@ public final class RuntimeProbe extends Instrumentation {
                     waitLabel("Composing text…");
                     waitNode(node -> label(node, "Save", false) && !node.isEnabled(), "Save disabled during original IME composition");
                     CompositionIme.compose(APP, IME_TEXT);
-                    waitNode(node -> node.isEditable() && string(node.getText()).contains(IME_TEXT), "unconfirmed Chinese composition");
+                    // Android WebView can expose the current EditContext
+                    // candidate as a visible child TextView while the editable
+                    // root still reports only the committed document. Scope
+                    // the observation to that actual named editor, never a
+                    // global label, and keep Save disabled until confirmation.
+                    waitNode(node -> editorContainsText(node, IME_TEXT), "unconfirmed Chinese composition inside the owned editor");
                     waitLabel("Composing text…");
                     progress.append("IME: confirm Chinese candidate\n");
                     CompositionIme.confirm(APP);
@@ -159,7 +164,7 @@ public final class RuntimeProbe extends Instrumentation {
                     inputText(noteBody(), BACK_DRAFT);
                     hideKeyboard();
                     pressBack();
-                    waitLabel("New note");
+                    waitNotesLanding();
                     break;
                 case "back-recover":
                     clickMenu("Main navigation");
@@ -168,9 +173,20 @@ public final class RuntimeProbe extends Instrumentation {
                     require(string(noteBody().getText()).contains("系统返回键草稿"), "Back draft did not survive process termination");
                     hideKeyboard();
                     pressBack();
-                    waitLabel("New note");
+                    // Closing the recovered editor returns to its drafts tab.
+                    // New note exists on both that tab and the notes landing;
+                    // it cannot prove that the next Back backgrounds the app.
+                    waitNode(node -> APP.equals(string(node.getPackageName())) && node.isClickable()
+                        && label(node, "runtime-back.md", true), "original recovered draft row after closing its editor");
+                    progress.append("Back transition: recovered editor -> original drafts list\n");
                     pressBack();
-                    waitNode(node -> !APP.equals(string(node.getPackageName())));
+                    waitNotesLanding();
+                    progress.append("Back transition: drafts list -> notes landing\n");
+                    pressBack();
+                    waitNode(node -> node.getParent() == null && !string(node.getPackageName()).isEmpty()
+                        && !APP.equals(string(node.getPackageName()))
+                        && !getContext().getPackageName().equals(string(node.getPackageName())),
+                        "foreign active root after Back from the verified notes landing");
                     break;
                 case "canvas":
                     create("New canvas", CANVAS);
@@ -401,9 +417,19 @@ public final class RuntimeProbe extends Instrumentation {
         AccessibilityNodeInfo row = waitNode(node -> label(node, path, false)
             && node.isEnabled() && fileDrawerRow(node), "file drawer row: " + path);
         activate(row, this::fileDrawerRow);
-        waitLabel("Back");
+        final String name = path.substring(path.lastIndexOf('/') + 1);
+        // The actual opened title is the navigation result, independently of
+        // whether a separate Back control is present in the current AX tree.
+        waitNode(node -> APP.equals(string(node.getPackageName())) && !node.isClickable()
+            && label(node, name, false) && titleBarControl(node), "opened document title in the owned workspace: " + name);
     }
     private void save() { hideKeyboard(); click("Save", false); waitLabel("Saved"); }
+    private void waitNotesLanding() {
+        waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Start writing", false),
+            "owned notes landing heading (not the drafts tab New note action)");
+        waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Notes in this vault", false),
+            "original saved notes on the owned landing");
+    }
     private void waitLabel(String text) { waitNode(node -> label(node, text, false), "label: " + text); }
     private void click(String text, boolean prefix) {
         AccessibilityNodeInfo node = waitNode(value -> label(value, text, prefix) && value.isEnabled(), "enabled action: " + text);
@@ -424,6 +450,23 @@ public final class RuntimeProbe extends Instrumentation {
             && label(node, "Markdown note body", false), "visible owned Markdown body (not file search)");
     }
 
+    private boolean editorContainsText(AccessibilityNodeInfo root, String text) {
+        if (!APP.equals(string(root.getPackageName())) || !root.isEditable()
+            || !label(root, "Markdown note body", false) || !root.isVisibleToUser()) return false;
+        List<AccessibilityNodeInfo> nodes = new ArrayList<>();
+        nodes.add(root);
+        for (int index = 0; index < nodes.size() && index < 200; index++) {
+            AccessibilityNodeInfo node = nodes.get(index);
+            if (APP.equals(string(node.getPackageName())) && node.isVisibleToUser()
+                && string(node.getText()).contains(text)) return true;
+            for (int child = 0; child < node.getChildCount(); child++) {
+                AccessibilityNodeInfo value = node.getChild(child);
+                if (value != null) nodes.add(value);
+            }
+        }
+        return false;
+    }
+
     private AccessibilityNodeInfo editable(String original) {
         return waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
             && string(node.getText()).equals(original), "original Canvas property text");
@@ -441,7 +484,7 @@ public final class RuntimeProbe extends Instrumentation {
     private void inputText(AccessibilityNodeInfo node, String value) throws Exception {
         require(APP.equals(string(node.getPackageName())) && node.isEditable(), "Refusing text outside the owned editor");
         progress.append("IME: commit ").append(value.length()).append(" original UTF-16 units\n");
-        activateNoteBody();
+        activateNoteBody(node);
         CompositionIme.awaitTarget(APP);
         long now = SystemClock.uptimeMillis();
         // Select the actual editor document through its normal keyboard handler.
@@ -495,6 +538,19 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void activateNoteBody() {
+        activateNoteBody(noteBody());
+    }
+
+    private void activateNoteBody(AccessibilityNodeInfo observed) {
+        require(APP.equals(string(observed.getPackageName())) && observed.isEditable()
+            && label(observed, "Markdown note body", false) && observed.isVisibleToUser(),
+            "Refusing focus outside the observed owned Markdown body");
+        // Empty rich contenteditable nodes can leave the AX tree while idle.
+        // Focus the freshly observed named editor before checking stable tap
+        // bounds. No text is sent here; exact role and InputConnection ownership
+        // are still required by the following actions.
+        require(observed.isFocused() || observed.performAction(AccessibilityNodeInfo.ACTION_FOCUS),
+            "Owned named editor refused input focus; no text sent");
         // The requested semantic name is known by the caller. Do not infer it
         // from a soon-to-be-replaced virtual node or retain its resource id.
         progress.append("tap target: owned Markdown note body editable role\n");
