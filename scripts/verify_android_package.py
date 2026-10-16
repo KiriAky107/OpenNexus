@@ -17,8 +17,10 @@ def package_identity(badging, *, package, version, version_code):
     match = re.search(r"^package: name='([^']+)' versionCode='([^']+)' versionName='([^']*)'", badging, re.M)
     require(match is not None, 'ANDROID_PACKAGE_IDENTITY_MISSING')
     require(match.groups() == (package, str(version_code), version), 'ANDROID_PACKAGE_IDENTITY_MISMATCH')
-    require(re.search(r"^sdkVersion:'24'$", badging, re.M), 'ANDROID_MIN_SDK_MISMATCH')
-    require(re.search(r"^targetSdkVersion:'36'$", badging, re.M), 'ANDROID_TARGET_SDK_MISMATCH')
+    minimum = re.findall(r"^(?:minSdkVersion|sdkVersion):'([0-9]+)'$", badging, re.M)
+    target = re.findall(r"^targetSdkVersion:'([0-9]+)'$", badging, re.M)
+    require(minimum == ['24'], 'ANDROID_MIN_SDK_MISMATCH')
+    require(target == ['36'], 'ANDROID_TARGET_SDK_MISMATCH')
 
 
 def verify_libraries(apk, native_dir, abis):
@@ -64,6 +66,8 @@ def main():
     require(apk.is_file() and not apk.is_symlink(), 'ANDROID_APK_MISSING')
     tools = args.sdk / 'build-tools/36.0.0'
     badging = subprocess.check_output([str(tools / 'aapt2'), 'dump', 'badging', str(apk)], text=True)
+    print(json.dumps({'apk_metadata': [line for line in badging.splitlines()
+        if line.startswith(('package:', 'sdkVersion:', 'minSdkVersion:', 'targetSdkVersion:', 'native-code:'))]}), flush=True)
     package = config['identifier'] + config['bundle']['android']['debugApplicationIdSuffix']
     package_identity(badging, package=package, version=config['version'], version_code=config['bundle']['android']['versionCode'])
     certificates = subprocess.check_output([str(tools / 'apksigner'), 'verify', '--verbose', '--print-certs', str(apk)], text=True)
