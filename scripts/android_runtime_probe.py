@@ -415,8 +415,9 @@ class Probe:
 
     def run(self):
         self.boot()
-        for theme in ('dark', 'light', 'sepia', 'system'):
-            self.phase('theme-' + theme)
+        if self.args.scope == 'all':
+            for theme in ('dark', 'light', 'sepia', 'system'):
+                self.phase('theme-' + theme)
         self.enable_test_ime()
         self.phase('markdown')
         require(self.original('runtime-note.md') == BODY.encode(), 'Saved Markdown bytes differ from actual UI text')
@@ -475,7 +476,8 @@ class Probe:
             'signer_certificate_sha256': self.binding['signer_certificate_sha256'],
             'device': {'kind': 'github-hosted-android-emulator', 'api': 36, 'abi': 'x86_64', 'serial': self.args.serial},
             'phases': self.phases, 'files_sha256': {name: digest(data) for name, data in originals.items()},
-            'theme_ui': 'Actual shared desktop theme card choices and cold reloads; rendered card screenshots/window observations retained for appearance review',
+            'scope': self.args.scope, 'theme_ui_verified': self.args.scope == 'all',
+            'theme_ui': 'Actual shared desktop theme card choices and cold reloads; rendered card screenshots/window observations retained for appearance review' if self.args.scope == 'all' else 'Not repeated in lifecycle scope; theme acceptance requires independent same-APK evidence',
             'system_destination': export, 'draft_database_integrity': 'ok',
             'input_method': 'Real Android InputMethodService/InputConnection for source/rich body text, pinyin, Chinese composing text and candidate confirmation; accessibility only for ordinary path/property fields. Test-only IME, not Gboard/Sogou or physical-device proof.',
             'system_back': 'Actual Android Back key; durable draft recovery and own-task background; not predictive gesture animation proof',
@@ -498,6 +500,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
+    parser.add_argument('--scope', choices=('all', 'lifecycle'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:

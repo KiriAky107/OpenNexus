@@ -272,6 +272,7 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void retainThemeCards(String current) {
+        settleUi();
         File file = new File(getContext().getFilesDir(), "theme-cards-" + current + ".png");
         require(!file.exists(), "Theme card evidence already exists");
         Bitmap bitmap = ui.takeScreenshot();
@@ -356,12 +357,31 @@ public final class RuntimeProbe extends Instrumentation {
     private void activate(AccessibilityNodeInfo node) {
         // WebView accepting ACTION_CLICK does not prove that a user tap reached its handler.
         // Send exactly one real tap to the freshly observed target; never replay a write.
+        settleUi();
+        require(node.refresh(), "Observed UI target was replaced before the tap");
         Rect bounds = new Rect(); node.getBoundsInScreen(bounds);
+        Rect previous = new Rect(bounds);
+        int stable = 0;
+        for (int frame = 0; frame < 12 && stable < 3; frame++) {
+            SystemClock.sleep(32);
+            require(node.refresh(), "Observed UI target was replaced while settling");
+            node.getBoundsInScreen(bounds);
+            stable = bounds.equals(previous) ? stable + 1 : 0;
+            previous.set(bounds);
+        }
+        require(stable >= 3, "Observed UI target did not reach stable screen bounds");
         require(node.isVisibleToUser() && node.isEnabled() && !bounds.isEmpty(), "UI target has no visible enabled bounds");
         long time = SystemClock.uptimeMillis();
         touch(time, time, MotionEvent.ACTION_DOWN, bounds.centerX(), bounds.centerY());
         SystemClock.sleep(60);
         touch(time, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, bounds.centerX(), bounds.centerY());
+    }
+
+    private void settleUi() {
+        try { ui.waitForIdle(250, 5000); }
+        catch (java.util.concurrent.TimeoutException error) {
+            throw new IllegalStateException("Accessibility did not reach an idle frame; no tap or write replayed", error);
+        }
     }
 
     private void drag(float x, float y, float endX, float endY, boolean cancel) {
