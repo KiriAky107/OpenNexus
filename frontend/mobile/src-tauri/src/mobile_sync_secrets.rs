@@ -34,8 +34,8 @@ pub(crate) struct CredentialScope(String);
 impl CredentialScope {
     pub(crate) fn for_client(client: &SyncClient, account: &str, device: &str) -> Result<Self> {
         if account.is_empty()
-            || account.len() > 128
-            || account.contains(['\r', '\n', '\0'])
+            || account.chars().count() > 80
+            || account.chars().any(char::is_control)
             || device.is_empty()
             || device.len() > 80
             || !device
