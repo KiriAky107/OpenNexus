@@ -58,6 +58,8 @@ it('dismisses floating tools on outside touch, Escape or read-only review withou
   await wrapper!.get('.ProseMirror').trigger('pointerdown')
   expect(wrapper!.get('.markdown-toolbar').isVisible()).toBe(false)
   await toggle.trigger('click')
+  await wrapper!.get('.markdown-toolbar').trigger('keydown', { key: 'Escape', isComposing: true })
+  expect(wrapper!.get('.markdown-toolbar').isVisible()).toBe(true)
   await wrapper!.get('.markdown-toolbar').trigger('keydown', { key: 'Escape' })
   expect(wrapper!.get('.markdown-toolbar').isVisible()).toBe(false)
   expect(document.activeElement).toBe(toggle.element)

@@ -87,7 +87,7 @@ function outsideFormatting(event: PointerEvent) {
   if (event.target instanceof Node && !formattingRoot.value?.contains(event.target)) closeFormatting()
 }
 function escapeFormatting(event: KeyboardEvent) {
-  if (event.key !== 'Escape' || !closeFormatting()) return
+  if (event.isComposing || composing.value || event.key !== 'Escape' || !closeFormatting()) return
   event.preventDefault(); event.stopPropagation()
   formattingToggle.value?.focus({ preventScroll: true })
 }
