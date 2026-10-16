@@ -15,6 +15,10 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+#[cfg(test)]
+#[path = "mobile_sync_access_tests.rs"]
+mod mobile_sync_access_tests;
+
 #[derive(Debug)]
 pub struct SyncError {
     pub code: String,
@@ -76,6 +80,18 @@ impl WorkspaceAccess for Arc<Mutex<Option<Workspace>>> {
 impl From<crate::workspace::HostError> for SyncError {
     fn from(value: crate::workspace::HostError) -> Self {
         Self::new(&value.code)
+    }
+}
+impl WorkspaceAccess for Arc<Mutex<Option<crate::mobile_workspace::MobileWorkspace>>> {
+    fn access<T>(
+        &self,
+        action: impl FnOnce(&mut Workspace) -> crate::workspace::Result<T>,
+    ) -> Result<T> {
+        let mut guard = self.lock().map_err(|_| SyncError::new("HOST_BUSY"))?;
+        let engine = guard
+            .as_mut()
+            .ok_or_else(|| SyncError::new("MOBILE_STORAGE_UNAVAILABLE"))?;
+        action(&mut engine.workspace).map_err(Into::into)
     }
 }
 impl From<std::io::Error> for SyncError {
