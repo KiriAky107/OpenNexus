@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile",
+  "description": "Local mobile app window may query its Host and private vault; remote pages have no access.",
+  "windows": ["main"],
+  "permissions": ["core:default", "allow-mobile-capabilities", "allow-mobile-vault"]
+}

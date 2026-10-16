@@ -1,0 +1,90 @@
+name: Android
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/mobile/**'
+      - 'frontend/src-tauri/**'
+      - 'frontend/package.json'
+      - 'frontend/pnpm-lock.yaml'
+      - 'scripts/*android*'
+      - '.github/workflows/android.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'frontend/mobile/**'
+      - 'frontend/src-tauri/**'
+      - 'scripts/*android*'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  debug-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: '3'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.build/android-target
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: corepack enable
+      - run: corepack prepare pnpm@10.28.0 --activate
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - name: Install the fixed Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          manager="$ANDROID_HOME/cmdline-tools/latest/bin"
+          if [[ -x "$manager/android" ]]; then
+            for package in platforms/android-36 build-tools/36.0.0 ndk/30.0.16248370; do
+              "$manager/android" --no-metrics --sdk="$ANDROID_HOME" sdk --ignore-outdated-xmls install "$package"
+            done
+          else
+            "$manager/sdkmanager" --sdk_root="$ANDROID_HOME" --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;30.0.16248370' </dev/null
+          fi
+          test -f "$ANDROID_HOME/ndk/30.0.16248370/source.properties"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
+      - run: pnpm --dir frontend install --frozen-lockfile
+      - name: Check mobile boundaries and packaging verification
+        run: |
+          pnpm --dir frontend test mobile/src/native.spec.ts mobile/src/App.spec.ts
+          python3 -m unittest discover -s scripts -p test_verify_android_package.py -v
+      - name: Freeze the checkout before compiling
+        run: python3 scripts/record-build-source.py --commit "$GITHUB_SHA"
+      - name: Build both native Android ABIs
+        working-directory: frontend
+        run: pnpm android build --debug --target aarch64 x86_64 --features custom-protocol --apk --ci
+      - name: Verify actual APK bytes, identity, signing and compiled libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t apks < <(rg --files frontend/mobile/src-tauri/gen/android/app/build/outputs/apk/universal/debug -g '*.apk')
+          test "${#apks[@]}" -eq 1
+          python3 scripts/verify_android_package.py --commit "$GITHUB_SHA" \
+            --source-proof ".build/source-provenance/$GITHUB_SHA.json" \
+            --apk "${apks[0]}" --native-dir "$CARGO_TARGET_DIR" --sdk "$ANDROID_HOME" \
+            --output .build/android-package-proof/package-verification.json
+          cp "${apks[0]}" .build/android-package-proof/OpenNexus-android-debug.apk
+          cp ".build/source-provenance/$GITHUB_SHA.json" .build/android-package-proof/source-provenance.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: OpenNexus-android-debug-${{ github.sha }}
+          path: .build/android-package-proof/
+          if-no-files-found: error

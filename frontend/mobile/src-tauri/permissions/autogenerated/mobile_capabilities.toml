@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mobile-capabilities"
+description = "Enables the mobile_capabilities command without any pre-configured scope."
+commands.allow = ["mobile_capabilities"]
+
+[[permission]]
+identifier = "deny-mobile-capabilities"
+description = "Denies the mobile_capabilities command without any pre-configured scope."
+commands.deny = ["mobile_capabilities"]

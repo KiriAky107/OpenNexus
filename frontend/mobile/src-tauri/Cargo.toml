@@ -1,0 +1,20 @@
+[package]
+name = "opennexus-mobile"
+version = "0.1.0-dev1"
+edition = "2021"
+rust-version = "1.89"
+
+[lib]
+name = "opennexus_mobile"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dependencies]
+tauri = { version = "=2.11.5", features = [] }
+serde = { version = "1", features = ["derive"] }
+notesagent_host = { package = "notesagent-desktop", path = "../../src-tauri", default-features = false }
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }

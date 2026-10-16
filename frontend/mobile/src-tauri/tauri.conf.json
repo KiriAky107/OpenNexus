@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenNexus",
+  "version": "0.1.0-dev1",
+  "identifier": "cc.kronecker.opennexus",
+  "build": {
+    "beforeDevCommand": "pnpm --dir .. exec vite --config mobile/vite.config.ts",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm --dir .. mobile:build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{ "label": "main", "title": "OpenNexus" }],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'",
+      "capabilities": ["mobile"]
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["icons/icon.png"],
+    "android": { "minSdkVersion": 24, "versionCode": 1, "debugApplicationIdSuffix": ".dev" }
+  }
+}
