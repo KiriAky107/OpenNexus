@@ -23,6 +23,23 @@ CLOUDFLARED_URL='https://github.com/cloudflare/cloudflared/releases/download/202
 CLOUDFLARED_SHA256='3bfc539f45d2620c71debb7a86be0efa737ed5ccbad9eb85c787116900e5c586'
 CLOUDFLARED_BYTES=40227032
 DOCS='https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/'
+HANDSHAKE_PATH='/sync/v1/handshake?protocol=1'
+
+
+def origin_handshake(endpoint):
+    require_hosted()
+    require(endpoint=='http://127.0.0.1:19073' or re.fullmatch(
+        r'https://[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com',endpoint),'OWNED_AUTH_ORIGIN_INVALID')
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self,request,fp,code,message,headers,newurl):return None
+    opener=urllib.request.build_opener(NoRedirect)
+    with opener.open(endpoint+HANDSHAKE_PATH,timeout=5) as response:
+        require(response.status==200 and response.geturl()==endpoint+HANDSHAKE_PATH,'OWNED_AUTH_ORIGIN_NOT_READY')
+        data=response.read(65537);require(len(data)<=65536,'OWNED_AUTH_ORIGIN_NOT_READY')
+    value=json.loads(data)
+    require(isinstance(value,dict) and value.get('protocol')==1 and value.get('chunk_size')==1048576
+        and value.get('max_object_size')==104857600 and value.get('encryption')=='transport-only','OWNED_AUTH_ORIGIN_NOT_READY')
+    return {name:value[name] for name in ('protocol','chunk_size','max_object_size','encryption')}
 
 
 def minimal_environment(root):
@@ -150,8 +167,7 @@ class HostedOrigin:
         deadline=time.monotonic()+45
         while True:
             try:
-                with urllib.request.urlopen('http://127.0.0.1:19073/sync/v1/capabilities',timeout=3) as response:
-                    require(response.status==200,'OWNED_AUTH_ORIGIN_NOT_READY');break
+                origin_handshake('http://127.0.0.1:19073');break
             except Exception:
                 require(time.monotonic()<deadline,'OWNED_AUTH_ORIGIN_NOT_READY');time.sleep(.25)
         asset=download_cloudflared(self.root)
@@ -170,16 +186,14 @@ class HostedOrigin:
         deadline=time.monotonic()+90
         while True:
             try:
-                with urllib.request.urlopen(endpoint+'/sync/v1/capabilities',timeout=5) as response:
-                    require(response.status==200 and response.geturl()==endpoint+'/sync/v1/capabilities','OWNED_AUTH_TUNNEL_NOT_READY')
-                    response.read(65537);break
+                handshake=origin_handshake(endpoint);break
             except Exception:
                 require(time.monotonic()<deadline,'OWNED_AUTH_TUNNEL_NOT_READY');time.sleep(.5)
         atomic_json(self.root/'device-private.json',{'endpoint':endpoint,'accounts':accounts},exclusive=True)
         self.state.update(result='ready',endpoint=endpoint,cloudflared=asset,bucket=bucket);self.save()
         return {'source':SERVICE_SHA,'endpoint':endpoint,'providers':'Owned PostgreSQL17.6/S3 and actual production initialize/create-user CLI',
             'images':[{'requested':item['image'],'resolved_id':item['image_id']} for item in self.state['containers']],
-            'cloudflared':asset,'Android_TLS_or_auth_verified':False,'secrets_in_artifacts':False}
+            'handshake':handshake,'cloudflared':asset,'Android_TLS_or_auth_verified':False,'secrets_in_artifacts':False}
 
     def stop(self):
         require_hosted()

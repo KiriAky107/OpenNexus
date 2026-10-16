@@ -11,6 +11,34 @@ import android_auth_hosted as module
 
 
 class HostedOriginBoundaries(unittest.TestCase):
+    def test_readiness_calls_the_real_v1_handshake_and_retains_only_the_protocol_contract(self):
+        contract={'protocol':1,'chunk_size':1048576,'max_object_size':104857600,'encryption':'transport-only'}
+        endpoint='https://owned-unit-only.trycloudflare.com'
+        response=io.BytesIO(__import__('json').dumps({**contract,'unrequested':'not retained'}).encode())
+        response.status=200;response.geturl=lambda:endpoint+'/sync/v1/handshake?protocol=1'
+        opener=Mock();opener.open.return_value=response
+        with patch.object(module,'require_hosted'),patch.object(module.urllib.request,'build_opener',return_value=opener):
+            self.assertEqual(module.origin_handshake(endpoint),contract)
+        self.assertEqual(opener.open.call_args.args,(endpoint+'/sync/v1/handshake?protocol=1',))
+
+    def test_readiness_refuses_html_oversized_wrong_protocol_or_redirected_content(self):
+        endpoint='http://127.0.0.1:19073';url=endpoint+'/sync/v1/handshake?protocol=1'
+        candidates=[(b'<html>not the service</html>',url),(b'x'*65537,url),(b'{"protocol":2}',url),
+            (b'{}','https://another.example/redirected')]
+        for body,final_url in candidates:
+            response=io.BytesIO(body);response.status=200;response.geturl=lambda value=final_url:value
+            opener=Mock();opener.open.return_value=response
+            with patch.object(module,'require_hosted'),patch.object(module.urllib.request,'build_opener',return_value=opener):
+                with self.assertRaises((RuntimeError,ValueError)):module.origin_handshake(endpoint)
+
+    def test_readiness_refuses_a_developer_host_or_unowned_endpoint_before_network(self):
+        with patch.object(module,'require_hosted',side_effect=RuntimeError('owned host required')),patch.object(module.urllib.request,'build_opener') as network:
+            with self.assertRaises(RuntimeError):module.origin_handshake('http://127.0.0.1:19073')
+            network.assert_not_called()
+        with patch.object(module,'require_hosted'),patch.object(module.urllib.request,'build_opener') as network:
+            with self.assertRaises(RuntimeError):module.origin_handshake('https://production.example')
+            network.assert_not_called()
+
     def test_child_environment_has_no_ambient_cloud_or_repository_credentials(self):
         source={'PATH':'owned-path','GITHUB_TOKEN':'private-repository-token','ACTIONS_RUNTIME_TOKEN':'private-action-token',
             'AWS_SESSION_TOKEN':'private-cloud-token','SYNC_DATABASE_URL':'private-production-pointer','HOME':'user-home',
