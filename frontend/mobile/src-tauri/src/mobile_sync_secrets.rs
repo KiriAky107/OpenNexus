@@ -33,10 +33,15 @@ type Result<T> = std::result::Result<T, SecretError>;
 pub(crate) struct CredentialScope(String);
 impl CredentialScope {
     pub(crate) fn for_client(client: &SyncClient, account: &str, device: &str) -> Result<Self> {
-        if account.is_empty()
-            || account.chars().count() > 80
-            || account.chars().any(char::is_control)
-            || device.is_empty()
+        let scope = notesagent_host::mobile_sync_session::Scope::new(client.endpoint(), account)
+            .map_err(|_| SecretError("SYNC_CREDENTIALS_INVALID"))?;
+        Self::for_identity(&scope, device)
+    }
+    fn for_identity(
+        scope: &notesagent_host::mobile_sync_session::Scope,
+        device: &str,
+    ) -> Result<Self> {
+        if device.is_empty()
             || device.len() > 80
             || !device
                 .bytes()
@@ -44,7 +49,7 @@ impl CredentialScope {
         {
             return Err(SecretError("SYNC_CREDENTIALS_INVALID"));
         }
-        let aad = serde_json::to_string(&(1, client.endpoint(), account, device))
+        let aad = serde_json::to_string(&(1, scope.endpoint(), scope.account(), device))
             .map_err(|_| SecretError("SYNC_CREDENTIALS_INVALID"))?;
         if aad.len() + NAMESPACE.len() + 1 > 2048 {
             return Err(SecretError("SYNC_CREDENTIALS_INVALID"));
@@ -56,6 +61,42 @@ impl CredentialScope {
 pub(crate) struct NativeSecretStore {
     vm: JavaVM,
     object: Global<JObject<'static>>,
+}
+
+/// The auth coordinator consumes the same native broker as the signed worker
+/// tests. The borrowed application object is never returned through IPC.
+impl notesagent_host::mobile_sync_auth::SecretStore for &NativeSecretStore {
+    fn read(
+        &self,
+        scope: &notesagent_host::mobile_sync_session::Scope,
+        device: &str,
+    ) -> notesagent_host::workspace::Result<Option<Zeroizing<Vec<u8>>>> {
+        let scope = CredentialScope::for_identity(scope, device)
+            .map_err(|error| notesagent_host::workspace::HostError::new(error.0))?;
+        NativeSecretStore::read(self, &scope)
+            .map_err(|error| notesagent_host::workspace::HostError::new(error.0))
+    }
+    fn put(
+        &self,
+        scope: &notesagent_host::mobile_sync_session::Scope,
+        device: &str,
+        value: Zeroizing<Vec<u8>>,
+    ) -> notesagent_host::workspace::Result<()> {
+        let scope = CredentialScope::for_identity(scope, device)
+            .map_err(|error| notesagent_host::workspace::HostError::new(error.0))?;
+        NativeSecretStore::put(self, &scope, value)
+            .map_err(|error| notesagent_host::workspace::HostError::new(error.0))
+    }
+    fn remove(
+        &self,
+        scope: &notesagent_host::mobile_sync_session::Scope,
+        device: &str,
+    ) -> notesagent_host::workspace::Result<()> {
+        let scope = CredentialScope::for_identity(scope, device)
+            .map_err(|error| notesagent_host::workspace::HostError::new(error.0))?;
+        NativeSecretStore::remove(self, &scope)
+            .map_err(|error| notesagent_host::workspace::HostError::new(error.0))
+    }
 }
 
 fn safe_code(message: &str) -> SecretError {
