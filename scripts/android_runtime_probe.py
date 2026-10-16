@@ -169,6 +169,7 @@ class Probe:
         self.original_hardware_ime = None
         self.tls_initializations = []
         self.keystore_test_result = None
+        self.native_auth_read_result = None
 
     def command(self, command, *, timeout=90, input=None, check=True):
         result = subprocess.run([str(value) for value in command], input=input, capture_output=True, timeout=timeout)
@@ -548,6 +549,26 @@ class Probe:
     def draft_rows(self):
         return self.database_rows('SELECT path,content,generation,saved_generation FROM drafts ORDER BY path')
 
+    def check_empty_native_auth_index(self):
+        snapshot=Path(tempfile.mkdtemp(prefix='auth-read-snapshot-',dir=self.tools))
+        database=snapshot/'mobile-sync-auth.sqlite3'
+        for suffix in ('','-wal','-shm'):
+            result=self.private(self.root+'mobile-sync-auth.sqlite3'+suffix,check=False)
+            if result.returncode==0:Path(str(database)+suffix).write_bytes(result.stdout)
+        require(database.is_file(),'Native authentication index was not created by the actual command gateway')
+        with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True)) as db:
+            require(db.execute('PRAGMA integrity_check').fetchone()==('ok',),'Native authentication metadata integrity failed')
+            counts={name:db.execute('SELECT COUNT(*) FROM '+name).fetchone()[0]
+                for name in ('auth_scopes','auth_intents','auth_profile_choices','auth_selection')}
+            require(all(count==0 for count in counts.values()),'Reading connection settings created an authentication operation or selection')
+        proof={'passed':True,'source_commit':self.args.commit,'runtime_tools_commit':self.args.tools_commit,
+            'apk_sha256':self.binding['sha256'],'actual_native_current_and_profile_UI_read':True,
+            'original_metadata_counts':counts,'database_integrity':'ok','login_or_HTTPS_verified':False,
+            'selected_credential_decryption_verified':False,'network_auth_mutation_requested':False,
+            'scope':'Actual application main-window Auth IPC, Activity foreground lease and initialized native store; empty metadata reads only'}
+        (self.output/'native-auth-read-proof.json').write_text(json.dumps(proof,indent=2)+'\n','utf-8')
+        self.native_auth_read_result=proof
+
     def stage_original_image(self):
         require_hosted_emulator(self.args.serial)
         destination = '/sdcard/Download/opennexus-ci-original.png'
@@ -671,6 +692,9 @@ class Probe:
         else:
             self.phase('theme-diagnostic-dark')
             self.phase('theme-diagnostic-reset')
+        if self.binding.get('native_auth_gateway',{}).get('present') is True:
+            self.phase('auth-read')
+            self.check_empty_native_auth_index()
         self.enable_test_ime()
         self.phase('markdown')
         require(self.original('runtime-note.md') == BODY.encode(), 'Saved Markdown bytes differ from actual UI text')
@@ -732,6 +756,7 @@ class Probe:
             'scope': self.args.scope, 'theme_choices_verified': self.args.scope == 'all',
             'native_tls_initializations': self.tls_initializations,
             'native_keystore_tests': self.keystore_test_result,
+            'native_auth_gateway_read': self.native_auth_read_result,
             'native_theme_contrast_verified': False,
             'theme_style_diagnostic': 'theme-diagnostic-dark-computed-styles.json' if self.args.scope == 'lifecycle' else None,
             'theme_ui': 'Actual shared desktop theme card choices and cold reloads; rendered card screenshots/window observations retained for appearance review' if self.args.scope == 'all' else 'Not repeated in lifecycle scope; theme acceptance requires independent same-APK evidence',

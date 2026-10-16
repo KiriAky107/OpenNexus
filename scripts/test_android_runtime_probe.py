@@ -15,6 +15,30 @@ from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAG
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_auth_read_acceptance_requires_the_original_empty_index_and_cannot_claim_https(self):
+        for rows in (0,1):
+            with self.subTest(rows=rows), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);database=root/'original.sqlite3'
+                with closing(sqlite3.connect(database)) as db:
+                    for name in ('auth_scopes','auth_intents','auth_profile_choices','auth_selection'):
+                        db.execute('CREATE TABLE '+name+'(id TEXT)')
+                    if rows:db.execute("INSERT INTO auth_intents VALUES ('owned-original')")
+                    db.commit()
+                original=database.read_bytes();probe=Probe.__new__(Probe);probe.tools=root/'tools';probe.tools.mkdir()
+                probe.output=root/'output';probe.output.mkdir();probe.root='files/owned/'
+                probe.args=SimpleNamespace(commit='fixed',tools_commit='tools');probe.binding={'sha256':'a'*64}
+                probe.private=Mock(side_effect=lambda path,check=False:subprocess.CompletedProcess([],0,original,b'')
+                    if path.endswith('mobile-sync-auth.sqlite3') else subprocess.CompletedProcess([],1,b'',b''))
+                if rows:
+                    with self.assertRaisesRegex(Exception,'created an authentication operation'):probe.check_empty_native_auth_index()
+                    self.assertFalse((probe.output/'native-auth-read-proof.json').exists())
+                else:
+                    probe.check_empty_native_auth_index();proof=json.loads((probe.output/'native-auth-read-proof.json').read_text())
+                    self.assertTrue(proof['actual_native_current_and_profile_UI_read'])
+                    self.assertFalse(proof['login_or_HTTPS_verified']);self.assertFalse(proof['selected_credential_decryption_verified'])
+                    self.assertEqual(sum(proof['original_metadata_counts'].values()),0)
+                self.assertEqual(database.read_bytes(),original)
+
     def test_ime_wait_observes_exact_registration_before_any_mutating_command(self):
         with tempfile.TemporaryDirectory() as directory:
             probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562')

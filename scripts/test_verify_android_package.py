@@ -13,6 +13,30 @@ spec.loader.exec_module(module)
 
 
 class AndroidPackageBindingTests(unittest.TestCase):
+    def test_native_auth_gateway_requires_compiled_markers_in_each_abi_including_chunk_boundaries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);cap=root/'frontend/mobile/src-tauri/capabilities/mobile.json';cap.parent.mkdir(parents=True)
+            cap.write_text(json.dumps({'windows':['main'],'permissions':['allow-mobile-sync-auth']}))
+            for abi in ('arm64-v8a','x86_64'):
+                binary=root/module.MACHINES[abi][1]/'debug/libopennexus_mobile.so';binary.parent.mkdir(parents=True)
+                binary.write_bytes(b'x'*(1024*1024-4)+b'mobile_sync_auth\x00auth_profile_choices\x00SYNC_AUTH_SELECTION_CHANGED')
+            proof=module.verify_native_auth_gateway(root,root,['arm64-v8a','x86_64'])
+            self.assertTrue(proof['present']);self.assertFalse(proof['actual_UI_read_verified'])
+            self.assertFalse(proof['actual_HTTPS_or_login_verified']);self.assertFalse(proof['token_read_IPC'])
+            binary.write_bytes(b'mobile_sync_auth\x00SYNC_AUTH_SELECTION_CHANGED')
+            with self.assertRaisesRegex(Exception,'NATIVE_AUTH_GATEWAY_MISSING'):
+                module.verify_native_auth_gateway(root,root,['arm64-v8a','x86_64'])
+
+    def test_native_auth_gateway_refuses_remote_or_other_window_permissions_before_reading_libraries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);cap=root/'frontend/mobile/src-tauri/capabilities/mobile.json';cap.parent.mkdir(parents=True)
+            for value in [ {'windows':['other'],'permissions':['allow-mobile-sync-auth']},
+                {'windows':['main'],'permissions':['allow-mobile-sync-auth'],'remote':{'urls':['https://other.example']}},
+                {'windows':['main'],'permissions':[]}, {'windows':['main'],'local':False,'permissions':['allow-mobile-sync-auth']} ]:
+                cap.write_text(json.dumps(value))
+                with self.assertRaisesRegex(Exception,'AUTH_WINDOW_SCOPE_INVALID'):
+                    module.verify_native_auth_gateway(root,root,['x86_64'])
+
     def test_native_foreground_bridge_requires_the_real_activity_method_and_unique_exports(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);apk=root/'synthetic-dex.zip'

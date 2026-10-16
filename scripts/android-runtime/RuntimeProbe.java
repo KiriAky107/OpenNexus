@@ -55,6 +55,17 @@ public final class RuntimeProbe extends Instrumentation {
                 case "theme-system": selectTheme("Sepia", "System"); break;
                 case "theme-diagnostic-dark": selectTheme("System", "Dark", false); break;
                 case "theme-diagnostic-reset": selectTheme("Dark", "System"); break;
+                case "auth-read":
+                    clickTitleBar("Settings");
+                    click("Sync account", false);
+                    waitLabel("Server connection and sign-in");
+                    waitLabel("No device connection records yet.");
+                    waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
+                        && node.isPassword() && string(node.getText()).isEmpty(), "empty password in the shared connection form");
+                    progress.append("auth: native current/profile read, no sign-in or credentials entered\n");
+                    click("Close", false);
+                    waitLabel("Start writing");
+                    break;
                 case "markdown":
                     create("New note", NOTE);
                     inputText(noteBody(), BODY);
