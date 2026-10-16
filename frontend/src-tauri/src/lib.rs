@@ -5,6 +5,7 @@ pub mod core;
 pub mod core_update;
 #[cfg(windows)]
 mod credential_autounlock;
+#[cfg(not(target_os = "android"))]
 pub mod credentials;
 pub mod experiment_agent;
 #[cfg(windows)]
