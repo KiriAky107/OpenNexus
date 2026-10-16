@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.Instrumentation;
 import android.app.UiAutomation;
 import android.graphics.Rect;
+import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.util.Log;
@@ -15,6 +16,8 @@ import android.view.accessibility.AccessibilityWindowInfo;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Predicate;
+import java.io.File;
+import java.io.FileOutputStream;
 
 /** Separate test app drives the installed APK through Android accessibility and real touch events. */
 public final class RuntimeProbe extends Instrumentation {
@@ -192,9 +195,23 @@ public final class RuntimeProbe extends Instrumentation {
         AccessibilityNodeInfo option = waitNode(node -> label(node, next, false)
             && node.isEnabled() && node.isCheckable(), "native theme option: " + next);
         progress.append("native option: ").append(option.getClassName()).append(" / ").append(next).append('\n');
+        retainNativePopup(current);
         activate(option);
         waitNode(node -> label(node, next, false) && node.isClickable() && !node.isCheckable(), "collapsed selected theme: " + next);
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "New note", false), "theme returned to the owned vault");
+    }
+
+    private void retainNativePopup(String current) {
+        File file = new File(getContext().getFilesDir(), "theme-popup-" + current + ".png");
+        require(!file.exists(), "Native popup evidence already exists");
+        Bitmap bitmap = ui.takeScreenshot();
+        require(bitmap != null, "Native popup screenshot unavailable");
+        try (FileOutputStream output = new FileOutputStream(file)) {
+            require(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output), "Native popup screenshot failed");
+            output.flush(); output.getFD().sync();
+            progress.append("native popup screenshot: ").append(file.getName()).append('\n');
+        } catch (java.io.IOException error) { throw new IllegalStateException("Native popup evidence could not be retained", error); }
+        finally { bitmap.recycle(); }
     }
 
     private boolean documentsUi(AccessibilityNodeInfo node) {

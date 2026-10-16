@@ -304,6 +304,11 @@ class Probe:
             (self.output / f'{phase}.xml').write_bytes(tree)
         if phase.startswith('theme-'):
             (self.output / f'{phase}-window.txt').write_bytes(self.shell('dumpsys', 'window', 'windows', check=False).stdout)
+            current = {'theme-dark': 'System', 'theme-light': 'Dark', 'theme-sepia': 'Light', 'theme-system': 'Sepia'}[phase]
+            filename = f'theme-popup-{current}.png'
+            popup = self.device('exec-out', 'run-as', DRIVER, 'cat', 'files/' + filename, check=False).stdout
+            if popup.startswith(b'\x89PNG\r\n\x1a\n'):
+                (self.output / filename).write_bytes(popup)
 
     def phase(self, phase):
         self.force_stop()
