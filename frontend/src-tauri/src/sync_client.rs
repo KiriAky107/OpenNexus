@@ -122,20 +122,25 @@ pub struct SyncClient {
     progress: Option<Arc<dyn Fn(Event) + Send + Sync>>,
 }
 
+pub(crate) fn canonical_endpoint(endpoint: &str, allow_test_http: bool) -> Result<Url> {
+    let mut url = Url::parse(endpoint).map_err(|_| SyncError::new("SYNC_ENDPOINT_INVALID"))?;
+    if (url.scheme() != "https" && !(allow_test_http && url.scheme() == "http"))
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !matches!(url.path(), "" | "/")
+    {
+        return Err(SyncError::new("SYNC_ENDPOINT_INVALID"));
+    }
+    url.set_path("/");
+    Ok(url)
+}
+
 impl SyncClient {
     pub fn new(endpoint: &str, token: Zeroizing<String>, allow_test_http: bool) -> Result<Self> {
-        let mut url = Url::parse(endpoint).map_err(|_| SyncError::new("SYNC_ENDPOINT_INVALID"))?;
-        if (url.scheme() != "https" && !(allow_test_http && url.scheme() == "http"))
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-            || !matches!(url.path(), "" | "/")
-        {
-            return Err(SyncError::new("SYNC_ENDPOINT_INVALID"));
-        }
-        url.set_path("/");
+        let url = canonical_endpoint(endpoint, allow_test_http)?;
         let builder = Client::builder()
             .timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none());
