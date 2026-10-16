@@ -131,9 +131,12 @@ onMounted(() => {
   } })
 })
 watch(() => [settings.spellCheck, settings.language], () => view?.dispatch({ effects: proofing.reconfigure(attributes()) }))
+function sourcePosition(offset: number) {
+  return Math.min(editor.content.slice(0, offset).replace(/\r\n?/g, '\n').length, view!.state.doc.length)
+}
 function navigateHeading(request: typeof editor.headingRequest) {
   if (!view || !request || request.path !== editor.currentFilePath) return
-  const offset = Math.min(view.state.doc.length, request.offset)
+  const offset = sourcePosition(request.offset)
   view.dispatch({ selection: { anchor: offset }, effects: [EditorView.scrollIntoView(offset, { y: 'start' }), highlightPassage.of({ from: 0, to: 0 })] }); view.focus()
 }
 watch(() => editor.headingRequest, navigateHeading)
@@ -145,8 +148,7 @@ function navigateReference(request: typeof editor.referenceRequest) {
 watch(() => editor.referenceRequest,navigateReference)
 function navigateBlock(request: typeof editor.blockRequest) {
   if (!view || !request || request.path !== editor.currentFilePath || !isCurrentDocument()) return
-  const position = (offset: number) => Math.min(editor.content.slice(0, offset).replace(/\r\n?/g, '\n').length, view!.state.doc.length)
-  const from = position(request.offset), to = position(request.offset + request.length)
+  const from = sourcePosition(request.offset), to = sourcePosition(request.offset + request.length)
   view.dispatch({ selection: { anchor: from, head: to }, effects: [EditorView.scrollIntoView(from, { y: 'center' }), highlightPassage.of({ from, to })] })
   view.focus()
 }

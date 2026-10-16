@@ -7,6 +7,7 @@ import { executeEditorCommand } from '@/services/editorCommandService'
 import { useEditorStore } from '@/stores/editor'
 import * as workspace from '@/services/workspaceService'
 import { EditorView } from '@codemirror/view'
+import { noteOutline } from '../workspace/outline'
 
 let wrapper: VueWrapper | undefined
 const original = '***\ntitle: 中文\ntags: [一, 二, 一]\ncustom: [1, false]\n---\n# 正文\n'
@@ -19,6 +20,26 @@ beforeEach(async () => {
   wrapper = mount(SourceMarkdownEditor, { props: { initialContent: store.content }, attachTo: document.body })
 })
 afterEach(() => { wrapper?.unmount(); useEditorStore().closeFile(); vi.restoreAllMocks() })
+
+it.each([false, true])('places a CRLF outline request at the heading start (queued: %s)', async queued => {
+  wrapper!.unmount(); wrapper = undefined
+  const source = ['---', 'title: 中文🙂', '---', '', '# First', '', 'Paragraph', '', '## Second', '', 'Body'].join('\r\n')
+  vi.mocked(workspace.readFileContent).mockResolvedValue(source)
+  const store = useEditorStore(); await store.loadFile('/windows.md')
+  const request = () => store.jumpToHeading(1, source.indexOf('## Second'))
+  if (queued) request()
+  wrapper = mount(SourceMarkdownEditor, { props: { initialContent: source }, attachTo: document.body })
+  if (!queued) { request(); await wrapper.vm.$nextTick() }
+  const view = EditorView.findFromDOM(wrapper.get('.cm-editor').element as HTMLElement)!
+  const from = view.state.selection.main.from
+  expect(view.state.doc.lineAt(from).text).toBe('## Second')
+  expect(from).toBe(view.state.doc.lineAt(from).from)
+  const first = noteOutline(source)[0]!
+  store.jumpToHeading(first.index, first.offset); await wrapper.vm.$nextTick()
+  expect(view.state.selection.main.from).toBe(view.state.doc.toString().indexOf('# First'))
+  expect(store.content).toBe(source); expect(store.saveStatus).toBe('saved')
+  expect(workspace.saveFileContent).not.toHaveBeenCalled()
+})
 
 it('ignores a late input callback from the old view after another file opens', async () => {
   const store = useEditorStore()
