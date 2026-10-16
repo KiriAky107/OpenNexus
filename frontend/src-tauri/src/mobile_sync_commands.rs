@@ -53,6 +53,11 @@ pub enum Request {
         offset: usize,
         limit: usize,
     },
+    Vaults {
+        expected: Selection,
+        offset: usize,
+        limit: usize,
+    },
     Operation {
         endpoint: String,
         account: String,
@@ -104,6 +109,9 @@ pub enum Response {
     },
     Profiles {
         profiles: Profiles,
+    },
+    Vaults {
+        page: crate::mobile_sync_vaults::Page,
     },
     Operation {
         state: State,
@@ -168,6 +176,14 @@ pub async fn execute<S: SecretStore>(
         }
         Request::Profiles { offset, limit } => Response::Profiles {
             profiles: auth.profiles(lease, offset, limit)?,
+        },
+        Request::Vaults {
+            expected,
+            offset,
+            limit,
+        } => Response::Vaults {
+            page: crate::mobile_sync_vaults::list(auth, lease, expected, offset, limit, now)
+                .await?,
         },
         Request::Operation {
             endpoint,
@@ -312,6 +328,7 @@ pub fn public_error(error: SyncError) -> String {
         | "SYNC_SESSION_INVALID"
         | "SYNC_TIME_INVALID"
         | "SYNC_TLS_UNAVAILABLE"
+        | "SYNC_VAULT_PAGE_INVALID"
         | "LOGIN_FAILED"
         | "RATE_LIMITED"
         | "INVALID_REQUEST"

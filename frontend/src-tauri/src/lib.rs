@@ -41,6 +41,8 @@ pub mod mobile_sync_foreground;
 pub mod mobile_sync_session;
 #[cfg(feature = "sync-http")]
 mod mobile_sync_transfer;
+#[cfg(feature = "sync-http")]
+pub mod mobile_sync_vaults;
 pub mod mobile_workspace;
 mod payloads;
 mod preference_records;
