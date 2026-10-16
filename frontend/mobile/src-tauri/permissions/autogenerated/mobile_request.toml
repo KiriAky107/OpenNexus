@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mobile-request"
+description = "Enables the mobile_request command without any pre-configured scope."
+commands.allow = ["mobile_request"]
+
+[[permission]]
+identifier = "deny-mobile-request"
+description = "Denies the mobile_request command without any pre-configured scope."
+commands.deny = ["mobile_request"]

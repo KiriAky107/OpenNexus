@@ -157,6 +157,43 @@ impl DraftStore {
         self.get(id)
     }
 
+    pub fn copy_as(&self, ws: &Workspace, id: &str, session: &str, path: &str) -> Result<Draft> {
+        let original = self.get(id)?;
+        if original.edit_session != session || Uuid::parse_str(session).is_err() {
+            return Err(HostError::new("DRAFT_SESSION_CHANGED"));
+        }
+        Self::validate_path(ws, path)?;
+        if ws.resolve(path)?.exists() {
+            return Err(HostError::new("FILE_ALREADY_EXISTS"));
+        }
+        let exists: bool = self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM drafts WHERE path=?1)",
+            [path],
+            |row| row.get(0),
+        )?;
+        if exists {
+            return Err(HostError::new("DRAFT_PATH_IN_USE"));
+        }
+        let id = Uuid::new_v4().to_string();
+        self.db.execute(
+            "INSERT INTO drafts VALUES (?1,NULL,?2,'',1,0,?3,?4)",
+            params![id, path, original.content, Uuid::new_v4().to_string()],
+        )?;
+        self.get(&id)
+    }
+
+    pub fn discard(&mut self, ws: &Workspace, id: &str, session: &str) -> Result<()> {
+        let original = self.get(id)?;
+        if original.edit_session != session || Uuid::parse_str(session).is_err() {
+            return Err(HostError::new("DRAFT_SESSION_CHANGED"));
+        }
+        if let Some(pending) = self.pending(id)? {
+            self.cancel_save(ws, &pending.operation_id)?;
+        }
+        self.db.execute("DELETE FROM drafts WHERE id=?1", [id])?;
+        Ok(())
+    }
+
     pub fn list(&self, offset: usize, limit: usize) -> Result<DraftPage> {
         if !(1..=100).contains(&limit) || offset > i64::MAX as usize {
             return Err(HostError::new("MOBILE_PAGE_INVALID"));
@@ -181,7 +218,14 @@ impl DraftStore {
     }
 
     pub fn create(&self, ws: &Workspace, path: &str) -> Result<Draft> {
+        self.create_with_content(ws, path, "")
+    }
+
+    pub fn create_with_content(&self, ws: &Workspace, path: &str, content: &str) -> Result<Draft> {
         Self::validate_path(ws, path)?;
+        if content.len() > MAX_NOTE_BYTES {
+            return Err(HostError::new("MOBILE_DRAFT_INVALID"));
+        }
         if ws.resolve(path)?.exists() {
             return Err(HostError::new("FILE_ALREADY_EXISTS"));
         }
@@ -195,8 +239,8 @@ impl DraftStore {
         }
         let id = Uuid::new_v4().to_string();
         self.db.execute(
-            "INSERT INTO drafts VALUES (?1,NULL,?2,'',1,0,'',?3)",
-            params![id, path, Uuid::new_v4().to_string()],
+            "INSERT INTO drafts VALUES (?1,NULL,?2,'',1,0,?3,?4)",
+            params![id, path, content, Uuid::new_v4().to_string()],
         )?;
         self.get(&id)
     }
@@ -374,6 +418,21 @@ impl DraftStore {
                 tx.commit()?;
             }
         }
+        self.intent(operation_id)
+    }
+
+    pub fn cancel_save(&mut self, ws: &Workspace, operation_id: &str) -> Result<SaveIntent> {
+        let observed = self.observe_save(ws, operation_id)?;
+        if observed.state == "committed" {
+            return Ok(observed);
+        }
+        if ws.operation(operation_id)?.is_some() {
+            return Err(HostError::new("OPERATION_RECOVERY_REQUIRED"));
+        }
+        self.db.execute(
+            "UPDATE save_intents SET state='cancelled' WHERE operation_id=?1",
+            [operation_id],
+        )?;
         self.intent(operation_id)
     }
 

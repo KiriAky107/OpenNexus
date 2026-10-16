@@ -1,10 +1,12 @@
-use notesagent_host::workspace::Workspace;
+use notesagent_host::mobile_workspace::{MobileRequest, MobileResponse, MobileWorkspace};
 use serde::Serialize;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 struct MobileState {
-    workspace: Arc<Mutex<Result<Workspace, String>>>,
+    engine: Arc<Mutex<Option<MobileWorkspace>>>,
+    private_root: PathBuf,
 }
 
 #[derive(Serialize)]
@@ -13,16 +15,11 @@ struct Capabilities {
     platform: &'static str,
     version: &'static str,
     workspace: bool,
+    notes: bool,
     core: bool,
     sync: bool,
     credentials: bool,
     experiments: bool,
-}
-
-#[derive(Serialize)]
-struct VaultSnapshot {
-    vault_id: String,
-    note_count: usize,
 }
 
 fn main_window(window: &tauri::WebviewWindow) -> Result<(), String> {
@@ -44,6 +41,7 @@ fn mobile_capabilities(window: tauri::WebviewWindow) -> Result<Capabilities, Str
         },
         version: env!("CARGO_PKG_VERSION"),
         workspace: true,
+        notes: true,
         core: false,
         sync: false,
         credentials: false,
@@ -55,24 +53,44 @@ fn mobile_capabilities(window: tauri::WebviewWindow) -> Result<Capabilities, Str
 async fn mobile_vault(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, MobileState>,
-) -> Result<VaultSnapshot, String> {
+) -> Result<MobileResponse, String> {
     main_window(&window)?;
-    let workspace = Arc::clone(&state.workspace);
+    let engine = Arc::clone(&state.engine);
+    let root = state.private_root.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut guard = workspace.lock().map_err(|_| "MOBILE_HOST_BUSY")?;
-        let vault = guard.as_mut().map_err(|code| code.clone())?;
-        let entries = vault.tree().map_err(|error| error.code)?;
-        Ok(VaultSnapshot {
-            vault_id: vault.vault_id.clone(),
-            note_count: entries
-                .iter()
-                .filter(|entry| {
-                    !entry.deleted
-                        && !entry.is_folder
-                        && entry.path.to_ascii_lowercase().ends_with(".md")
-                })
-                .count(),
-        })
+        let mut guard = engine.lock().map_err(|_| "MOBILE_HOST_BUSY".to_owned())?;
+        if guard.is_none() {
+            *guard = Some(MobileWorkspace::open(&root).map_err(|error| error.code)?);
+        }
+        guard
+            .as_mut()
+            .ok_or_else(|| "MOBILE_STORAGE_UNAVAILABLE".to_owned())?
+            .snapshot()
+            .map_err(|error| error.code)
+    })
+    .await
+    .map_err(|_| "MOBILE_HOST_INTERRUPTED".to_owned())?
+}
+
+#[tauri::command]
+async fn mobile_request(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, MobileState>,
+    request: MobileRequest,
+) -> Result<MobileResponse, String> {
+    main_window(&window)?;
+    let engine = Arc::clone(&state.engine);
+    let root = state.private_root.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut guard = engine.lock().map_err(|_| "MOBILE_HOST_BUSY".to_owned())?;
+        if guard.is_none() {
+            *guard = Some(MobileWorkspace::open(&root).map_err(|error| error.code)?);
+        }
+        guard
+            .as_mut()
+            .ok_or_else(|| "MOBILE_STORAGE_UNAVAILABLE".to_owned())?
+            .dispatch(request)
+            .map_err(|error| error.code)
     })
     .await
     .map_err(|_| "MOBILE_HOST_INTERRUPTED".to_owned())?
@@ -82,16 +100,17 @@ async fn mobile_vault(
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let root = app.path().app_data_dir()?.join("vault");
-            let workspace = std::fs::create_dir_all(&root)
-                .map_err(|_| "MOBILE_STORAGE_UNAVAILABLE".to_owned())
-                .and_then(|_| Workspace::open(&root).map_err(|error| error.code));
             app.manage(MobileState {
-                workspace: Arc::new(Mutex::new(workspace)),
+                engine: Arc::new(Mutex::new(None)),
+                private_root: app.path().app_data_dir()?,
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![mobile_capabilities, mobile_vault])
+        .invoke_handler(tauri::generate_handler![
+            mobile_capabilities,
+            mobile_vault,
+            mobile_request
+        ])
         .run(tauri::generate_context!())
         .expect("Failed to start OpenNexus mobile");
 }

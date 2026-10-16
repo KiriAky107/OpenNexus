@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/mobile-schema.json",
   "identifier": "mobile",
-  "description": "Local mobile app window may query its Host and private vault; remote pages have no access.",
+  "description": "The local mobile window may use the narrow note/draft API for its private Vault. Remote pages have no access.",
   "windows": ["main"],
-  "permissions": ["core:default", "allow-mobile-capabilities", "allow-mobile-vault"]
+  "permissions": ["core:default", "allow-mobile-capabilities", "allow-mobile-vault", "allow-mobile-request"]
 }
