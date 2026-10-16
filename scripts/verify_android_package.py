@@ -20,6 +20,7 @@ TLS_ARTIFACTS = {
 TLS_CLASSES = ['Lorg/rustls/platformverifier/' + name + ';' for name in ('CertificateVerifier', 'StatusCode', 'VerificationResult')]
 TLS_SYMBOL = 'Java_cc_kronecker_opennexus_MainActivity_initializeSyncTls'
 BROKER_SYMBOL = 'Java_cc_kronecker_opennexus_sync_NativeCredentialProbe_roundTrip'
+FOREGROUND_SYMBOL = 'Java_cc_kronecker_opennexus_MainActivity_syncForegroundChanged'
 TEST_PACKAGE = 'cc.kronecker.opennexus.dev.test'
 TEST_RUNNER = 'androidx.test.runner.AndroidJUnitRunner'
 
@@ -69,6 +70,24 @@ def verify_native_broker(apk, native_dir, abis, symbol_tool):
         symbols[abi] = BROKER_SYMBOL
     return {'class_descriptors':classes, 'native_symbols':symbols, 'debug_test_entry_only':True,
         'WebView_read_command':False, 'Rust_worker_verified':False, 'login_connected':False}
+
+
+def verify_native_foreground(apk, native_dir, abis, symbol_tool):
+    descriptor = 'Lcc/kronecker/opennexus/MainActivity;'
+    with zipfile.ZipFile(apk) as archive:
+        dex = [archive.read(name) for name in archive.namelist() if re.fullmatch(r'classes(?:\d+)?\.dex', name)]
+        require(any(descriptor.encode() in data and b'syncForegroundChanged' in data for data in dex),
+            'ANDROID_FOREGROUND_JVM_BRIDGE_MISSING')
+    symbols = {}
+    for abi in abis:
+        require(abi in MACHINES, 'ANDROID_ABI_UNSUPPORTED')
+        library = native_dir / MACHINES[abi][1] / 'debug/libopennexus_mobile.so'
+        table = subprocess.check_output([str(symbol_tool), '--defined-only', '--dynamic', str(library)], text=True)
+        require(sum(line.split()[-1] == FOREGROUND_SYMBOL for line in table.splitlines() if line.split()) == 1,
+            'ANDROID_FOREGROUND_JNI_SYMBOL_MISSING')
+        symbols[abi] = FOREGROUND_SYMBOL
+    return {'class_descriptor':descriptor, 'native_symbols':symbols, 'WebView_lifecycle_command':False,
+        'actual_background_cancellation_verified':False}
 
 
 def verify_platform_tls(apk, native_dir, abis, symbol_tool, origin_file):
@@ -191,6 +210,8 @@ def main():
     native_tests = verify_native_tests(args.instrumentation_apk.resolve(), tools, fingerprints[0])
     native_secret_broker = verify_native_broker(apk, args.native_dir, args.abis,
         args.sdk / 'ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm')
+    native_foreground = verify_native_foreground(apk, args.native_dir, args.abis,
+        args.sdk / 'ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm')
     kotlin_sha256 = verify_generated_mobile_files(root)
     proof = {'schema': 1, 'passed': True, 'kind': 'android-debug', 'source_commit': args.commit,
         'source_clean': True, 'source_proof': args.source_proof.name, 'package': package, 'version': config['version'],
@@ -202,6 +223,7 @@ def main():
         'native_tls':native_tls,
         'native_tests':native_tests,
         'native_secret_broker':native_secret_broker,
+        'native_foreground':native_foreground,
         'rustc': subprocess.check_output(['rustc', '-Vv'], text=True).strip(),
         'java': subprocess.run(['java', '-version'], capture_output=True, text=True, check=True).stderr.strip()}
     require(not args.output.exists(), 'ANDROID_PACKAGE_PROOF_EXISTS')

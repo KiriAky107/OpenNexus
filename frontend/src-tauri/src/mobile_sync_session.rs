@@ -699,12 +699,12 @@ mod tests {
         );
         // Non-ASCII labels can grow through IDNA. Always bound the canonical
         // result as well as the original text, rather than shortening a host.
-        let idna = format!("https://{}", vec!["一"; 90].join("."));
+        let idna = format!("https://{}", vec!["一"; 140].join("."));
         assert!(idna.len() < 1024);
-        match Scope::new(&idna, "reader") {
-            Ok(scope) => assert!(scope.endpoint().len() <= 1024),
-            Err(error) => assert_eq!(error.code, "SYNC_ENDPOINT_INVALID"),
-        }
+        assert_eq!(
+            Scope::new(&idna, "reader").err().unwrap().code,
+            "SYNC_ENDPOINT_INVALID"
+        );
     }
     #[cfg(unix)]
     #[test]

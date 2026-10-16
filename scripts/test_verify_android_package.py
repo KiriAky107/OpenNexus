@@ -13,6 +13,24 @@ spec.loader.exec_module(module)
 
 
 class AndroidPackageBindingTests(unittest.TestCase):
+    def test_native_foreground_bridge_requires_the_real_activity_method_and_unique_exports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);apk=root/'synthetic-dex.zip'
+            def dex(value):
+                with zipfile.ZipFile(apk,'w') as archive:archive.writestr('classes.dex',value)
+            dex('Lcc/kronecker/opennexus/MainActivity; syncForegroundChanged')
+            symbol='00001234 T '+module.FOREGROUND_SYMBOL+'\n'
+            with patch.object(module.subprocess,'check_output',return_value=symbol):
+                proof=module.verify_native_foreground(apk,root,['arm64-v8a','x86_64'],root/'llvm-nm')
+                self.assertFalse(proof['actual_background_cancellation_verified'])
+                self.assertEqual(len(proof['native_symbols']),2)
+            for bad in [symbol+symbol,'00001234 T Java_cc_kronecker_opennexus_MainActivity_sync_1foreground_1changed\n']:
+                with patch.object(module.subprocess,'check_output',return_value=bad), self.assertRaisesRegex(Exception,'FOREGROUND_JNI_SYMBOL_MISSING'):
+                    module.verify_native_foreground(apk,root,['x86_64'],root/'llvm-nm')
+            dex('Lcc/kronecker/unrelated/MainActivity; syncForegroundChanged')
+            with self.assertRaisesRegex(Exception,'FOREGROUND_JVM_BRIDGE_MISSING'):
+                module.verify_native_foreground(apk,root,['x86_64'],root/'llvm-nm')
+
     def test_native_secret_probe_requires_the_debug_class_and_both_callable_jni_exports(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);apk=root/'synthetic-dex.zip'

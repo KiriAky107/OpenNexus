@@ -32,6 +32,8 @@ pub mod experiment_store;
 pub mod mobile_drafts;
 pub mod mobile_export;
 #[cfg(feature = "sync-http")]
+pub mod mobile_sync_foreground;
+#[cfg(feature = "sync-http")]
 pub mod mobile_sync_session;
 pub mod mobile_workspace;
 mod payloads;

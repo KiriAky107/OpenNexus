@@ -7,6 +7,28 @@ import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
   private external fun initializeSyncTls(context: Context)
+  private external fun syncForegroundChanged(active: Boolean)
+
+  override fun onStart() {
+    super.onStart()
+    try {
+      syncForegroundChanged(true)
+    } catch (_: LinkageError) {
+      Log.w("OpenNexusSync", "SYNC_FOREGROUND_UNAVAILABLE")
+    }
+  }
+
+  override fun onStop() {
+    try {
+      // Cancel native work before delegating the transition. JS visibility and
+      // process destructors cannot provide this ordering on Android.
+      syncForegroundChanged(false)
+    } catch (_: LinkageError) {
+      Log.w("OpenNexusSync", "SYNC_FOREGROUND_UNAVAILABLE")
+    } finally {
+      super.onStop()
+    }
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
