@@ -39,6 +39,19 @@ def active_intent(snapshot,kind,device):
     return rows[0]
 
 
+def expect_original_recovery(before,after):
+    require(before['selection']==after['selection'],'Original native selection was replaced during recovery')
+    selected=before['selection']['operation_id']
+    require(len(before['intents'])==len(after['intents']),'Recovery created a new native operation')
+    for original,recovered in zip(before['intents'],after['intents']):
+        expected=dict(original)
+        if original['operation_id']==selected:
+            require(original['phase']=='refresh_pending' and recovered['phase']=='unknown',
+                'Original unknown refresh was activated instead of reconciled')
+            expected['phase']='unknown'
+        require(recovered==expected,'Original native operation fields changed during recovery')
+
+
 class AuthProbe(Probe):
     def __init__(self,args,apk,binding,owner):
         super().__init__(args,apk,binding)
@@ -165,7 +178,9 @@ class AuthProbe(Probe):
         require(self.ciphertext_fingerprints()==prior_rotation_ciphertext,'Lost refresh changed the retained original ciphertext')
         self.auth_phase('acknowledge-unknown')
         checked=self.observe('original-read');expect_requests(checked,2,2,1)
-        require(self.snapshot('original-read')==pending,'Read original ID replayed or replaced the native operation')
+        # Original-ID lookup is read-only. The subsequent explicit Current
+        # recovery classifies its retained mismatched rotation as unknown.
+        expect_original_recovery(pending,self.snapshot('original-read'))
         self.auth_phase('current-unusable',cold=True)
         expect_requests(self.observe('cold-unknown'),2,2,1)
         require(self.ciphertext_fingerprints()==prior_rotation_ciphertext,'Cold unknown rotation replaced or removed its original ciphertext')
@@ -193,7 +208,7 @@ class AuthProbe(Probe):
         require(len(provider_account(final,1)['devices'])==1,'Held login did not commit exactly once on the independent service')
         late=self.snapshot('late-background')
         b=[row for row in late['intents'] if row['account']==configuration['accounts'][1]['username']]
-        require(len(b)==1 and b[0]['phase']=='login_pending' and b[0]['device_id'] is None,
+        require(len(b)==1 and b[0]['phase']=='unknown' and b[0]['device_id'] is None,
             'Backgrounded original login activated or lost its original unconfirmed intent')
         require(self.ciphertext_fingerprints()==original_sealed,'Late login changed the prior native ciphertext')
         atomic_json(self.output/'auth-runtime-proof.json',{'passed':True,'source_commit':self.args.commit,

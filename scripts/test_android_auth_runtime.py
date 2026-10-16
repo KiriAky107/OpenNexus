@@ -7,6 +7,19 @@ import android_auth_runtime as module
 
 
 class AuthRuntimeBoundaries(unittest.TestCase):
+    def test_current_recovery_may_mark_original_unknown_without_replacing_its_id_generation_device_or_selection(self):
+        from copy import deepcopy
+        before={'selection':{'operation_id':'original','revision':3},'intents':[
+            {'operation_id':'original','phase':'refresh_pending','generation':2,'device_id':'device-a'}]}
+        after=deepcopy(before);after['intents'][0]['phase']='unknown'
+        module.expect_original_recovery(before,after)
+        candidates=[]
+        for key,value in [('phase','active'),('operation_id','new'),('generation',3),('device_id','device-b')]:
+            changed=deepcopy(after);changed['intents'][0][key]=value;candidates.append(changed)
+        changed=deepcopy(after);changed['selection']['revision']=4;candidates.append(changed)
+        for changed in candidates:
+            with self.assertRaises(RuntimeError):module.expect_original_recovery(before,changed)
+
     def configuration(self):
         return {'endpoint':'https://owned-unit-only.trycloudflare.com','accounts':[
             {'username':'android-owned-'+kind+'-'+'a'*12,'password':'unit_only_private_password_'+'b'*20,
