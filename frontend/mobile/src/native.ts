@@ -1,6 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { onBackButtonPress } from '@tauri-apps/api/app'
 import type { ExportDelivery, MobileRequest } from './types'
+import type { AuthRequest, AuthResponse } from './syncAuthTypes'
 
 export interface MobileCapabilities {
   protocol: number
@@ -37,6 +38,10 @@ export async function mobileVault(): Promise<MobileVault> {
 export async function mobileRequest<T>(request: MobileRequest): Promise<T> {
   if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
   return invoke<T>('mobile_request', { request })
+}
+export async function mobileSyncAuth(request: AuthRequest): Promise<AuthResponse> {
+  if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
+  return invoke<AuthResponse>('mobile_sync_auth', { request })
 }
 export async function mobileSaveExport(ticket: string): Promise<ExportDelivery> {
   if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
