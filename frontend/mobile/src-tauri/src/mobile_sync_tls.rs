@@ -15,7 +15,7 @@ pub fn sync_foreground_changed<'caller>(
     _activity: JObject<'caller>,
     active: jni::sys::jboolean,
 ) {
-    if active != 0 {
+    if active {
         foreground().on_start();
     } else {
         foreground().on_stop();
