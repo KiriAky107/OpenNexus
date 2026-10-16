@@ -164,7 +164,7 @@ public final class RuntimeProbe extends Instrumentation {
                     inputText(noteBody(), BACK_DRAFT);
                     hideKeyboard();
                     pressBack();
-                    waitLabel("New note");
+                    waitNotesLanding();
                     break;
                 case "back-recover":
                     clickMenu("Main navigation");
@@ -173,9 +173,20 @@ public final class RuntimeProbe extends Instrumentation {
                     require(string(noteBody().getText()).contains("系统返回键草稿"), "Back draft did not survive process termination");
                     hideKeyboard();
                     pressBack();
-                    waitLabel("New note");
+                    // Closing the recovered editor returns to its drafts tab.
+                    // New note exists on both that tab and the notes landing;
+                    // it cannot prove that the next Back backgrounds the app.
+                    waitNode(node -> APP.equals(string(node.getPackageName())) && node.isClickable()
+                        && label(node, "runtime-back.md", true), "original recovered draft row after closing its editor");
+                    progress.append("Back transition: recovered editor -> original drafts list\n");
                     pressBack();
-                    waitNode(node -> !APP.equals(string(node.getPackageName())));
+                    waitNotesLanding();
+                    progress.append("Back transition: drafts list -> notes landing\n");
+                    pressBack();
+                    waitNode(node -> node.getParent() == null && !string(node.getPackageName()).isEmpty()
+                        && !APP.equals(string(node.getPackageName()))
+                        && !getContext().getPackageName().equals(string(node.getPackageName())),
+                        "foreign active root after Back from the verified notes landing");
                     break;
                 case "canvas":
                     create("New canvas", CANVAS);
@@ -413,6 +424,12 @@ public final class RuntimeProbe extends Instrumentation {
             && label(node, name, false) && titleBarControl(node), "opened document title in the owned workspace: " + name);
     }
     private void save() { hideKeyboard(); click("Save", false); waitLabel("Saved"); }
+    private void waitNotesLanding() {
+        waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Start writing", false),
+            "owned notes landing heading (not the drafts tab New note action)");
+        waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Notes in this vault", false),
+            "original saved notes on the owned landing");
+    }
     private void waitLabel(String text) { waitNode(node -> label(node, text, false), "label: " + text); }
     private void click(String text, boolean prefix) {
         AccessibilityNodeInfo node = waitNode(value -> label(value, text, prefix) && value.isEnabled(), "enabled action: " + text);
