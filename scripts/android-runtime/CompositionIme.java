@@ -41,6 +41,9 @@ public final class CompositionIme extends InputMethodService {
     static void selectEnd(String packageName, int end) throws Exception {
         edit(packageName, connection -> connection.setSelection(end, end));
     }
+    static void commit(String packageName, String text) throws Exception {
+        edit(packageName, connection -> connection.commitText(text, 1));
+    }
     static void compose(String packageName, String text) throws Exception {
         edit(packageName, connection -> connection.setComposingText(text, 1));
     }

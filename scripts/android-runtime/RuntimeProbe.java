@@ -55,14 +55,14 @@ public final class RuntimeProbe extends Instrumentation {
                 case "theme-system": selectTheme("Sepia", "System"); break;
                 case "markdown":
                     create("New note", NOTE);
-                    setText(editable(null), BODY);
+                    inputText(editable(null), BODY);
                     save();
                     break;
                 case "rich-markdown":
                     create("New note", "runtime-rich.md");
                     click("Writing", false);
                     AccessibilityNodeInfo rich = richBody();
-                    setText(rich, RICH_TEXT);
+                    inputText(rich, RICH_TEXT);
                     rich = richBody();
                     setSelection(rich, 0, RICH_TEXT.length());
                     clickMenu("Bold");
@@ -76,7 +76,7 @@ public final class RuntimeProbe extends Instrumentation {
                 case "rich-image":
                     create("New note", "runtime-rich-image.md");
                     click("Writing", false);
-                    setText(richBody(), RICH_IMAGE_TEXT);
+                    inputText(richBody(), RICH_IMAGE_TEXT);
                     setSelection(richBody(), RICH_IMAGE_TEXT.length(), RICH_IMAGE_TEXT.length());
                     hideKeyboard();
                     clickMenu("More actions");
@@ -92,7 +92,7 @@ public final class RuntimeProbe extends Instrumentation {
                 case "draft":
                     open(NOTE);
                     require(string(editable(null).getText()).contains("离线正文"), "Original note text missing");
-                    setText(editable(null), DRAFT);
+                    inputText(editable(null), DRAFT);
                     waitLabel("Draft kept on this device");
                     break;
                 case "recover":
@@ -126,7 +126,7 @@ public final class RuntimeProbe extends Instrumentation {
                     break;
                 case "back-draft":
                     create("New note", "runtime-back.md");
-                    setText(editable(null), BACK_DRAFT);
+                    inputText(editable(null), BACK_DRAFT);
                     hideKeyboard();
                     pressBack();
                     waitLabel("New note");
@@ -161,7 +161,7 @@ public final class RuntimeProbe extends Instrumentation {
                     break;
                 case "markdown-image":
                     create("New note", "runtime-image.md");
-                    setText(editable(null), "# Original picker image\n");
+                    inputText(editable(null), "# Original picker image\n");
                     hideKeyboard();
                     clickMenu("More actions");
                     click("Add image", false);
@@ -318,7 +318,9 @@ public final class RuntimeProbe extends Instrumentation {
     private static String string(CharSequence value) { return value == null ? "" : value.toString(); }
     private static boolean label(AccessibilityNodeInfo node, String text, boolean prefix) {
         String actual = string(node.getText()), description = string(node.getContentDescription());
-        return actual.equals(text) || description.equals(text)
+        // Android WebView exposes an editable ARIA name as hint text.
+        String hint = Build.VERSION.SDK_INT >= 26 ? string(node.getHintText()) : "";
+        return actual.equals(text) || description.equals(text) || hint.equals(text)
             || prefix && (actual.startsWith(text + " ") || description.startsWith(text + " "));
     }
 
@@ -332,6 +334,22 @@ public final class RuntimeProbe extends Instrumentation {
         Bundle text = new Bundle();
         text.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
         require(node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, text), "Accessibility text input rejected");
+        SystemClock.sleep(250);
+    }
+
+    private void inputText(AccessibilityNodeInfo node, String value) throws Exception {
+        require(APP.equals(string(node.getPackageName())) && node.isEditable(), "Refusing text outside the owned editor");
+        progress.append("IME: commit ").append(value.length()).append(" original UTF-16 units\n");
+        activate(node);
+        CompositionIme.awaitTarget(APP);
+        long now = SystemClock.uptimeMillis();
+        // Select the actual editor document through its normal keyboard handler.
+        // Accessibility ACTION_SET_TEXT on WebView contenteditable flattens breaks.
+        for (int action : new int[] { KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP }) {
+            require(ui.injectInputEvent(new KeyEvent(now, SystemClock.uptimeMillis(), action,
+                KeyEvent.KEYCODE_A, 0, KeyEvent.META_CTRL_ON), true), "Original editor select-all rejected");
+        }
+        CompositionIme.commit(APP, value);
         SystemClock.sleep(250);
     }
 

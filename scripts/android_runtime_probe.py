@@ -1,7 +1,7 @@
 """Run the exact CI APK on an exclusive hosted emulator, preserving real UI and file evidence.
 
-This is intentionally unavailable on developer machines and physical devices. Accessibility
-Unicode input is checked as text entry, not reported as Chinese IME composition acceptance.
+This is intentionally unavailable on developer machines and physical devices. A test-only
+Android InputConnection drives actual editor text and composition, not a commercial IME.
 """
 import argparse
 import base64
@@ -330,7 +330,17 @@ class Probe:
             self.root = paths[0].removesuffix('mobile-drafts.sqlite3')
 
     def original(self, name):
-        return self.private(self.root + 'vault/' + name).stdout
+        require(name and not name.startswith('/') and '\\' not in name and ':' not in name
+            and all(part not in ('', '.', '..') for part in name.split('/')), 'Unsafe original observation name')
+        value = self.private(self.root + 'vault/' + name).stdout
+        ordinal = getattr(self, 'original_observations', 0) + 1
+        directory = self.output / 'original-observations' / f'{ordinal:03d}'
+        directory.mkdir(parents=True, exist_ok=False)
+        target = directory / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(value)
+        self.original_observations = ordinal
+        return value
 
     def database_rows(self, query):
         snapshot = Path(tempfile.mkdtemp(prefix='draft-snapshot-', dir=self.tools))
@@ -407,6 +417,7 @@ class Probe:
         self.boot()
         for theme in ('dark', 'light', 'sepia', 'system'):
             self.phase('theme-' + theme)
+        self.enable_test_ime()
         self.phase('markdown')
         require(self.original('runtime-note.md') == BODY.encode(), 'Saved Markdown bytes differ from actual UI text')
         self.phase('rich-markdown')
@@ -420,14 +431,10 @@ class Probe:
         require(any(path == 'runtime-note.md' and content == DRAFT and generation > saved for path, content, generation, saved in rows), 'Confirmed local draft missing after force-stop')
         self.phase('recover')
         require(self.original('runtime-note.md') == DRAFT.encode(), 'Recovered and saved Markdown bytes mismatch')
-        self.enable_test_ime()
-        try:
-            self.phase('ime-compose')
-            require(self.original('runtime-note.md') == (DRAFT + IME_TEXT).encode(), 'Confirmed Chinese IME input changed original Markdown bytes')
-            self.phase('ime-recover')
-            require(self.original('runtime-note.md') == (DRAFT + IME_TEXT).encode(), 'Reopening changed confirmed Chinese IME input')
-        finally:
-            self.restore_test_ime()
+        self.phase('ime-compose')
+        require(self.original('runtime-note.md') == (DRAFT + IME_TEXT).encode(), 'Confirmed Chinese IME input changed original Markdown bytes')
+        self.phase('ime-recover')
+        require(self.original('runtime-note.md') == (DRAFT + IME_TEXT).encode(), 'Reopening changed confirmed Chinese IME input')
         self.phase('back-draft')
         require(any(path == 'runtime-back.md' and content == BACK_DRAFT and generation > saved
             for path, content, generation, saved in self.draft_rows()), 'System Back left before the original draft was durable')
@@ -470,7 +477,7 @@ class Probe:
             'phases': self.phases, 'files_sha256': {name: digest(data) for name, data in originals.items()},
             'theme_ui': 'Actual shared desktop theme card choices and cold reloads; rendered card screenshots/window observations retained for appearance review',
             'system_destination': export, 'draft_database_integrity': 'ok',
-            'input_method': 'Accessibility for baseline text; real Android InputMethodService/InputConnection for pinyin, Chinese composing text and candidate confirmation. Test-only IME, not Gboard/Sogou or physical-device proof.',
+            'input_method': 'Real Android InputMethodService/InputConnection for source/rich body text, pinyin, Chinese composing text and candidate confirmation; accessibility only for ordinary path/property fields. Test-only IME, not Gboard/Sogou or physical-device proof.',
             'system_back': 'Actual Android Back key; durable draft recovery and own-task background; not predictive gesture animation proof',
             'physical_phone_verified': False, 'Chinese_IME_verified': True, 'commercial_Chinese_IME_verified': False, 'sync_verified': False,
             'disk_full_verified': False, 'shared_rich_writing_verified': True, 'image_picker_verified': True,

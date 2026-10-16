@@ -15,6 +15,18 @@ from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAG
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_original_observations_retain_each_exact_read_before_any_later_assertion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe = Probe.__new__(Probe); probe.output = Path(directory); probe.root = './owned/'
+            data = iter([b'first\r\n\r\noriginal\n', b'later\n'])
+            probe.private = lambda path: subprocess.CompletedProcess([], 0, next(data), b'')
+            self.assertEqual(probe.original('runtime-note.md'), b'first\r\n\r\noriginal\n')
+            self.assertEqual(probe.original('runtime-note.md'), b'later\n')
+            self.assertEqual((probe.output/'original-observations/001/runtime-note.md').read_bytes(), b'first\r\n\r\noriginal\n')
+            self.assertEqual((probe.output/'original-observations/002/runtime-note.md').read_bytes(), b'later\n')
+            for name in ('../foreign', '/foreign', 'a//b', 'C:/foreign', 'a\\b'):
+                with self.assertRaisesRegex(RuntimeError, 'Unsafe original'): probe.original(name)
+
     def test_original_picker_fixture_is_a_complete_decodable_rgba_png(self):
         self.assertTrue(IMAGE_BYTES.startswith(b'\x89PNG\r\n\x1a\n'))
         position = 8; image_data = b''; kinds = []
