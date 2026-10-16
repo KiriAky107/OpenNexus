@@ -17,16 +17,25 @@ pub struct Scope {
 }
 impl Scope {
     pub fn new(endpoint: &str, account: &str) -> Result<Self> {
+        // Bound native metadata before URL parsing and again after IDNA
+        // normalization. This also leaves room in the Keystore AAD scope.
+        if endpoint.len() > 1024 {
+            return Err(HostError::new("SYNC_ENDPOINT_INVALID"));
+        }
         if account.is_empty()
             || account.chars().count() > 80
             || account.chars().any(char::is_control)
         {
             return Err(HostError::new("SYNC_LOGIN_INVALID"));
         }
+        let endpoint = canonical_endpoint(endpoint, false)
+            .map_err(|e| HostError::new(&e.code))?
+            .to_string();
+        if endpoint.len() > 1024 {
+            return Err(HostError::new("SYNC_ENDPOINT_INVALID"));
+        }
         Ok(Self {
-            endpoint: canonical_endpoint(endpoint, false)
-                .map_err(|e| HostError::new(&e.code))?
-                .to_string(),
+            endpoint,
             account: account.into(),
         })
     }
@@ -673,6 +682,29 @@ mod tests {
         journal.db.pragma_update(None, "user_version", 2).unwrap();
         drop(journal);
         assert!(Journal::open(root.path()).is_err());
+    }
+    #[test]
+    fn native_auth_scope_bounds_raw_and_normalized_endpoint_without_truncating_identity() {
+        assert_eq!(
+            Scope::new("https://SYNC.example:443", &"用".repeat(80))
+                .unwrap()
+                .endpoint(),
+            "https://sync.example/"
+        );
+        assert!(Scope::new("https://sync.example", &"用".repeat(81)).is_err());
+        let oversized = format!("https://{}", "a".repeat(1020));
+        assert_eq!(
+            Scope::new(&oversized, "reader").err().unwrap().code,
+            "SYNC_ENDPOINT_INVALID"
+        );
+        // Non-ASCII labels can grow through IDNA. Always bound the canonical
+        // result as well as the original text, rather than shortening a host.
+        let idna = format!("https://{}", vec!["一"; 90].join("."));
+        assert!(idna.len() < 1024);
+        match Scope::new(&idna, "reader") {
+            Ok(scope) => assert!(scope.endpoint().len() <= 1024),
+            Err(error) => assert_eq!(error.code, "SYNC_ENDPOINT_INVALID"),
+        }
     }
     #[cfg(unix)]
     #[test]
