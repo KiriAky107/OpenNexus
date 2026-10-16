@@ -15,6 +15,28 @@ from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAG
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_ime_wait_observes_exact_registration_before_any_mutating_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562')
+            expected=DRIVER+'/.CompositionIme'
+            probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b''),
+                subprocess.CompletedProcess([],0,(expected+'Other\n').encode()),subprocess.CompletedProcess([],0,(expected+'\n').encode())])
+            with patch('android_runtime_probe.require_hosted_emulator'),patch('android_runtime_probe.time.sleep'):
+                probe.wait_test_ime()
+            self.assertEqual(probe.shell.call_count,3)
+            for call in probe.shell.call_args_list:self.assertEqual(call.args,('ime','list','-a','-s'))
+            proof=json.loads((probe.output/'ime-registration.json').read_text())
+            self.assertEqual([x['registered'] for x in proof['observations']],[False,False,True])
+
+    def test_ime_registration_timeout_is_bounded_and_cannot_enable_an_unknown_service(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562')
+            probe.shell=Mock(return_value=subprocess.CompletedProcess([],0,b'other.package/.IME\n'))
+            with patch('android_runtime_probe.require_hosted_emulator'),patch('android_runtime_probe.time.monotonic',side_effect=[0,0,16]),patch('android_runtime_probe.time.sleep'):
+                with self.assertRaisesRegex(RuntimeError,'no enable/set attempted'):probe.wait_test_ime()
+            self.assertEqual(probe.shell.call_count,2)
+            for call in probe.shell.call_args_list:self.assertEqual(call.args,('ime','list','-a','-s'))
+
     def test_unavailable_webview_diagnostic_does_not_skip_original_failed_phase_capture(self):
         with tempfile.TemporaryDirectory() as directory:
             probe=Probe.__new__(Probe);probe.output=Path(directory);probe.root=None;probe.phases=[];probe.activity=APP+'/.MainActivity'

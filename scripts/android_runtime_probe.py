@@ -340,6 +340,25 @@ class Probe:
             '--key-pass', 'pass:android', '--out', signed, aligned])
         self.device('install', '--no-streaming', signed)
 
+    def wait_test_ime(self):
+        require_hosted_emulator(self.args.serial)
+        expected = DRIVER + '/.CompositionIme'
+        deadline = time.monotonic() + 15
+        observations = []
+        while True:
+            # Package installation can finish before InputMethodManager handles
+            # its package-added event. Only observe registration here; never
+            # replay enable/set or modify an unrecognized service's settings.
+            result = self.shell('ime', 'list', '-a', '-s', check=False)
+            listing = result.stdout.decode('utf-8', 'replace')[:16384]
+            registered = result.returncode == 0 and expected in listing.splitlines()
+            observations.append({'returncode':result.returncode,'registered':registered,'listing':listing})
+            (self.output/'ime-registration.json').write_text(json.dumps({'expected':expected,'observations':observations[-32:]},indent=2)+'\n','utf-8')
+            if registered:
+                return
+            require(time.monotonic() < deadline, 'Owned test IME was not registered before the bounded deadline; no enable/set attempted')
+            time.sleep(.25)
+
     def enable_test_ime(self):
         require_hosted_emulator(self.args.serial)
         original = self.shell('settings', 'get', 'secure', 'default_input_method').stdout.decode().strip()
@@ -347,6 +366,7 @@ class Probe:
         require(original != DRIVER + '/.CompositionIme', 'Test IME already selected before this owned run')
         hardware = self.shell('settings', 'get', 'secure', 'show_ime_with_hard_keyboard').stdout.decode().strip()
         require(hardware in ('0', '1', 'null'), 'Original hosted-emulator hardware-keyboard preference is unknown')
+        self.wait_test_ime()
         self.original_ime = original
         self.original_hardware_ime = hardware
         self.shell('ime', 'enable', DRIVER + '/.CompositionIme')
