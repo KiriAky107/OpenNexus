@@ -6,6 +6,13 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      check_scope:
+        description: 'Run all checks, or only the standalone Sync transport feature'
+        type: choice
+        options: [all, sync-http]
+        default: all
+        required: false
 
 permissions:
   contents: read
@@ -16,6 +23,7 @@ concurrency:
 
 jobs:
   docs:
+    if: github.event_name != 'workflow_dispatch' || inputs.check_scope != 'sync-http'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -33,6 +41,7 @@ jobs:
       - run: python3 scripts/test_prepare_experiment_runtime.py
 
   backend:
+    if: github.event_name != 'workflow_dispatch' || inputs.check_scope != 'sync-http'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -56,6 +65,7 @@ jobs:
       - run: uv run --frozen pytest
 
   frontend:
+    if: github.event_name != 'workflow_dispatch' || inputs.check_scope != 'sync-http'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -79,6 +89,7 @@ jobs:
       - run: pnpm build
 
   rust:
+    if: github.event_name != 'workflow_dispatch' || inputs.check_scope != 'sync-http'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     defaults:
@@ -126,6 +137,7 @@ jobs:
           if-no-files-found: error
 
   windows-host:
+    if: github.event_name != 'workflow_dispatch' || inputs.check_scope != 'sync-http'
     runs-on: windows-2022
     timeout-minutes: 60
     env:
@@ -266,3 +278,22 @@ jobs:
             .build/experiment-runtime/worker-runtime-result.json
             .build/experiment-runtime/signatures.json
           if-no-files-found: warn
+
+  sync-http:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CARGO_BUILD_JOBS: '2'
+    defaults:
+      run:
+        working-directory: frontend/src-tauri
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - name: Test the standalone transport, account metadata and durable Sync state
+        run: cargo test --lib --no-default-features --features sync-http --locked sync_ -- --nocapture
+      - name: Check the transport without the desktop feature
+        run: cargo clippy --lib --no-default-features --features sync-http --locked -- -D warnings
