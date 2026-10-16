@@ -1818,7 +1818,10 @@ mod tests {
         original_port.start_attempt(&job).unwrap();
         foreground.invalidate_identity();
         let current = foreground.lease().unwrap();
-        auth.login(&current, login(&second, &scope), &remote, 102)
+        let disconnect = id();
+        auth.local_disconnect(&current, existing(&disconnect, &first, &scope), 102)
+            .unwrap();
+        auth.login(&current, login(&second, &scope), &remote, 103)
             .await
             .unwrap();
         assert_eq!(
@@ -1831,7 +1834,7 @@ mod tests {
                 &current,
                 &scope,
                 &second,
-                103,
+                104,
                 move |_, device| async move { Ok(device.workspace(next_engine)) },
             )
             .await
