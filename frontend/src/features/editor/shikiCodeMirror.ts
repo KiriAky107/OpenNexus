@@ -6,6 +6,9 @@ import type { CodeTheme } from '@/services/codeHighlighter'
 import { codeHighlights } from './codeHighlightClient'
 import { MAX_HIGHLIGHT_CHARACTERS, type HighlightResult } from './codeHighlightProtocol'
 
+export const refreshShikiTheme = StateEffect.define<void>()
+type ThemeSource = CodeTheme | (() => CodeTheme)
+const resolvedTheme = (source: ThemeSource): CodeTheme => typeof source === 'function' ? source() : source
 const highlighted = StateEffect.define<{ owner: object; document: Text; result?: HighlightResult }>()
 
 function visibleDecorations(view: EditorView, result: HighlightResult): DecorationSet {
@@ -24,7 +27,7 @@ function visibleDecorations(view: EditorView, result: HighlightResult): Decorati
   return Decoration.set(ranges, true)
 }
 
-export async function shikiLanguage(language: string, theme: CodeTheme): Promise<LanguageSupport> {
+export async function shikiLanguage(language: string, theme: ThemeSource): Promise<LanguageSupport> {
   const highlights = ViewPlugin.fromClass(class {
     decorations: DecorationSet = Decoration.none
     private revision = 0
@@ -42,6 +45,7 @@ export async function shikiLanguage(language: string, theme: CodeTheme): Promise
         this.schedule(30)
       }
       for (const transaction of update.transactions) for (const effect of transaction.effects) {
+        if (effect.is(refreshShikiTheme)) { this.revision++; this.result=undefined; this.decorations=Decoration.none; this.schedule(0) }
         if (effect.is(highlighted) && effect.value.owner === this && effect.value.document === update.state.doc) {
           this.result = effect.value.result ? { document: effect.value.document, value: effect.value.result } : undefined
           this.decorations = this.result ? visibleDecorations(update.view, this.result.value) : Decoration.none
@@ -58,13 +62,13 @@ export async function shikiLanguage(language: string, theme: CodeTheme): Promise
       // Do not flatten the document or clone/tokenize it in an input transaction.
       this.timer = setTimeout(() => {
         if (this.disposed) return
-        const document = this.view.state.doc, revision = this.revision
+        const document = this.view.state.doc, revision = this.revision, currentTheme = resolvedTheme(theme)
         const receive = (result?: HighlightResult) => {
-          if (this.disposed || this.revision !== revision || this.view.state.doc !== document) return
+          if (this.disposed || this.revision !== revision || this.view.state.doc !== document || resolvedTheme(theme) !== currentTheme) return
           this.view.dispatch({ effects: highlighted.of({ owner: this, document, result }), annotations: Transaction.addToHistory.of(false) })
         }
         if (document.length > MAX_HIGHLIGHT_CHARACTERS) { receive(); return }
-        codeHighlights.request(this, { source: document.toString(), language, theme }, receive)
+        codeHighlights.request(this, { source: document.toString(), language, theme: currentTheme }, receive)
       }, delay)
     }
 
@@ -81,7 +85,7 @@ export async function shikiLanguage(language: string, theme: CodeTheme): Promise
   return new LanguageSupport(parser, highlights)
 }
 
-export function shikiLanguages(theme: CodeTheme): LanguageDescription[] {
+export function shikiLanguages(theme: ThemeSource): LanguageDescription[] {
   return [
     LanguageDescription.of({ name: 'function-plot', alias: ['Function Plot'], load: () => shikiLanguage('text', theme) }),
     ...bundledLanguagesInfo.map(info => LanguageDescription.of({

@@ -3,7 +3,7 @@ import { $prose } from '@milkdown/kit/utils'
 import { Plugin } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
-import { loadWorkspaceImage, resolveWorkspaceAssetPath } from '@/services/workspaceService'
+import type { RichEditorPlatform } from './richEditorPlatform'
 import './htmlPreview.css'
 
 const inlineTags = new Set(['strong', 'b', 'em', 'i', 's', 'del', 'u', 'mark', 'sub', 'sup', 'small', 'kbd', 'span', 'a', 'code'])
@@ -38,7 +38,7 @@ export function safeHtmlFragment(source: string): DocumentFragment {
   return fragment
 }
 
-export function htmlPreviewPlugin(context: () => { path: string | null; noteId: string | null }) {
+export function htmlPreviewPlugin(context: () => { path: string | null; noteId: string | null }, assets: RichEditorPlatform['assets']) {
   const cache = new WeakMap<ProseNode, DecorationSet>()
   return $prose(() => new Plugin({
     props: {
@@ -101,14 +101,17 @@ export function htmlPreviewPlugin(context: () => { path: string | null; noteId: 
               return true
             }
             dom.className = 'html-preview-content'
-            dom.replaceChildren(safeHtmlFragment(source))
+            const fragment = safeHtmlFragment(source), target = context()
+            const localImages = new Map<HTMLImageElement, string>()
+            for (const image of fragment.querySelectorAll('img')) {
+              const path = target.path && assets.resolvePath(target.path, image.getAttribute('src') ?? '')
+              if (path || !assets.remoteImages) image.removeAttribute('src')
+              if (path) localImages.set(image, path)
+            }
+            dom.replaceChildren(fragment)
             if (/<(?:div|p|table|details|figure|ul|ol|blockquote|pre|h[1-6])(?:\s|>)/i.test(source)) dom.classList.add('html-preview-block')
-            const target = context()
-            for (const image of dom.querySelectorAll('img')) {
-              const path = target.path && resolveWorkspaceAssetPath(target.path, image.getAttribute('src') ?? '')
-              if (!path) continue
-              image.removeAttribute('src')
-              void loadWorkspaceImage(path, target.path!, target.noteId).then(blob => {
+            for (const [image, path] of localImages) {
+              void assets.read(path, target.path!, target.noteId).then(blob => {
                 if (generation !== current) return
                 const url = URL.createObjectURL(blob); urls.push(url); image.src = url
               }).catch(() => { if (generation === current) image.title = 'Image could not be loaded' })

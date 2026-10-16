@@ -4,7 +4,7 @@ import { Compartment } from '@codemirror/state'
 import { history, undo, redo } from '@codemirror/commands'
 import { bundledLanguagesInfo } from 'shiki/langs'
 import { EditorView } from '@codemirror/view'
-import { shikiLanguage, shikiLanguages } from './shikiCodeMirror'
+import { shikiLanguage, shikiLanguages, refreshShikiTheme } from './shikiCodeMirror'
 import { getCodeTokenizer } from '@/services/codeHighlighter'
 import { computeHighlight } from './codeHighlightProcessor'
 import { codeHighlights } from './codeHighlightClient'
@@ -138,3 +138,23 @@ it('loads every bundled grammar and produces tokens with both GitHub themes', as
     }
   }
 }, 120000)
+
+it('refreshes a live theme without replacing source, selection or history and drops the old highlight reply', async () => {
+  vi.useFakeTimers()
+  let theme:'github-light'|'github-dark'='github-light'
+  const support=await shikiLanguage('javascript',()=>theme)
+  vi.mocked(codeHighlights.request).mockImplementation(()=>{})
+  const view=new EditorView({doc:'const value = 1',extensions:[support,history()]});editors.push(view)
+  await vi.advanceTimersByTimeAsync(0)
+  const old=vi.mocked(codeHighlights.request).mock.calls[0]!
+  view.dispatch({changes:{from:view.state.doc.length,insert:';'},selection:{anchor:3}})
+  const source=view.state.doc.toString();theme='github-dark';view.dispatch({effects:refreshShikiTheme.of()})
+  await vi.advanceTimersByTimeAsync(0)
+  const current=vi.mocked(codeHighlights.request).mock.calls.at(-1)!
+  expect(current[1].theme).toBe('github-dark')
+  current[2]({spans:new Uint32Array([0,5,0]),styles:['color:blue']})
+  old[2]({spans:new Uint32Array([0,5,0]),styles:['color:red']})
+  expect(view.dom.querySelector('.shiki-token')?.getAttribute('style')).toContain('blue')
+  expect(view.state.doc.toString()).toBe(source);expect(view.state.selection.main.head).toBe(3)
+  expect(undo(view)).toBe(true);expect(view.state.doc.toString()).toBe('const value = 1')
+})
