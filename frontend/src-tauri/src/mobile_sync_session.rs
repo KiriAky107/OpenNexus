@@ -6,7 +6,7 @@ use crate::{
     workspace::{HostError, Result},
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use uuid::Uuid;
 
@@ -112,7 +112,8 @@ pub struct Rejection {
     pub code: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Selection {
     pub revision: i64,
     pub endpoint: String,

@@ -513,6 +513,28 @@ impl<S: SecretStore> Auth<S> {
         })?;
         self.erase(lease, request.scope, request.operation_id, now)
     }
+    /// Explicitly retry only the local part of the exact selected original
+    /// disconnect. No transport call, replacement intent or revocation claim.
+    pub fn resume_erasure(
+        &mut self,
+        lease: &Lease,
+        scope: &Scope,
+        operation: &str,
+        now: u64,
+    ) -> Result<State> {
+        lease.with_current(|| {
+            let intent = self.expected(scope, operation)?;
+            self.journal.require_selected(&intent)?;
+            if !matches!(intent.phase, Phase::ErasePending | Phase::Disconnected)
+                || !(intent.kind == "local_disconnect"
+                    || intent.kind == "logout" && intent.server_logout_confirmed)
+            {
+                return Err(SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"));
+            }
+            Ok(())
+        })?;
+        self.erase(lease, scope, operation, now)
+    }
     fn erase(&mut self, lease: &Lease, scope: &Scope, id: &str, now: u64) -> Result<State> {
         lease.with_current(|| {
             let current = self
@@ -703,6 +725,253 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    #[tokio::test]
+    async fn native_command_frozen_selection_refuses_stale_login_and_replayed_receipt_never_switches_back(
+    ) {
+        use crate::mobile_sync_commands::{execute, Request, Response};
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .extend([Ok(reply("device-a", "a")), Ok(reply("device-b", "b"))]);
+        let (owner, first) = lease();
+        let mut auth = Auth::open(root.path(), store).unwrap();
+        let a_id = id();
+        let b_id = id();
+        let stale_id = id();
+        let login_request =
+            |operation: &str, account: &str, expected: Option<Selection>| -> Request {
+                serde_json::from_value(
+                    serde_json::json!({"action":"login","operation_id":operation,
+                "endpoint":"https://sync.example","account":account,"device_name":"Owned phone",
+                "password":"owned-original-password", "expected":expected}),
+                )
+                .unwrap()
+            };
+        let a = execute(
+            &mut auth,
+            &first,
+            login_request(&a_id, "reader-a", None),
+            &remote,
+            100,
+        )
+        .await
+        .unwrap();
+        let Response::Current { state, .. } = a else {
+            panic!("Expected current connection")
+        };
+        assert!(state.authenticated);
+        let revision_a = auth.selection(&first).unwrap().unwrap();
+        owner.invalidate_identity();
+        let second = owner.lease().unwrap();
+        execute(
+            &mut auth,
+            &second,
+            login_request(&b_id, "reader-b", Some(revision_a.clone())),
+            &remote,
+            101,
+        )
+        .await
+        .unwrap();
+        let revision_b = auth.selection(&second).unwrap();
+        let error = execute(
+            &mut auth,
+            &second,
+            login_request(&stale_id, "reader-c", Some(revision_a)),
+            &remote,
+            102,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(error.code, "SYNC_AUTH_SELECTION_CHANGED");
+        assert!(auth.journal.find(&stale_id).unwrap().is_none());
+        let replay = execute(
+            &mut auth,
+            &second,
+            login_request(&a_id, "reader-a", None),
+            &remote,
+            103,
+        )
+        .await
+        .unwrap();
+        let Response::Operation { state } = replay else {
+            panic!("Expected historical receipt")
+        };
+        assert!(!state.authenticated);
+        assert_eq!(state.intent.unwrap().operation_id, a_id);
+        assert_eq!(auth.selection(&second).unwrap(), revision_b);
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn native_command_lost_refresh_only_reads_original_receipt_without_replaying_rotation() {
+        use crate::mobile_sync_commands::{execute, Request, Response};
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote.replies.lock().unwrap().extend([
+            Ok(reply("device-a", "original")),
+            Err(SyncError::new("SYNC_NETWORK_ERROR")),
+        ]);
+        let (_owner, active) = lease();
+        let scope = scope();
+        let login_id = id();
+        let rotation = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        auth.login(&active, login(&login_id, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let original = store.read(&scope, "device-a").unwrap().unwrap();
+        let frozen = auth.selection(&active).unwrap().unwrap();
+        let value = serde_json::json!({"action":"refresh","operation_id":rotation,"previous_operation":login_id,
+            "endpoint":scope.endpoint(),"account":scope.account(),"expected":frozen});
+        assert!(execute(
+            &mut auth,
+            &active,
+            serde_json::from_value::<Request>(value.clone()).unwrap(),
+            &remote,
+            101
+        )
+        .await
+        .is_err());
+        let replay = execute(
+            &mut auth,
+            &active,
+            serde_json::from_value(value).unwrap(),
+            &remote,
+            102,
+        )
+        .await
+        .unwrap();
+        let Response::Operation { state } = replay else {
+            panic!("Expected original receipt")
+        };
+        assert!(!state.authenticated);
+        assert!(!state.expired);
+        assert_eq!(state.intent.unwrap().operation_id, rotation);
+        assert_eq!(remote.refreshes.load(Ordering::SeqCst), 1);
+        assert_eq!(*store.read(&scope, "device-a").unwrap().unwrap(), *original);
+    }
+
+    #[tokio::test]
+    async fn native_command_local_erasure_retry_requires_current_frozen_profile_and_never_calls_logout(
+    ) {
+        use crate::mobile_sync_commands::{execute, Request, Response};
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "original")));
+        let (owner, active) = lease();
+        let scope = scope();
+        let login_id = id();
+        let disconnect = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        auth.login(&active, login(&login_id, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let original = store.read(&scope, "device-a").unwrap().unwrap();
+        let frozen = auth.selection(&active).unwrap().unwrap();
+        let command = serde_json::json!({"action":"disconnect","operation_id":disconnect,"previous_operation":login_id,
+            "endpoint":scope.endpoint(),"account":scope.account(),"expected":frozen});
+        store.fail_remove.store(true, Ordering::SeqCst);
+        assert!(execute(
+            &mut auth,
+            &active,
+            serde_json::from_value::<Request>(command.clone()).unwrap(),
+            &remote,
+            101
+        )
+        .await
+        .is_err());
+        let removals = store.removes.load(Ordering::SeqCst);
+        let replay = execute(
+            &mut auth,
+            &active,
+            serde_json::from_value(command).unwrap(),
+            &remote,
+            102,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(replay, Response::Operation { .. }));
+        assert_eq!(store.removes.load(Ordering::SeqCst), removals);
+        assert_eq!(*store.read(&scope, "device-a").unwrap().unwrap(), *original);
+        let selected = auth.selection(&active).unwrap().unwrap();
+        let stale = serde_json::json!({"action":"resume_erasure","operation_id":disconnect,"endpoint":scope.endpoint(),
+            "account":scope.account(),"expected":frozen});
+        assert_eq!(
+            execute(
+                &mut auth,
+                &active,
+                serde_json::from_value::<Request>(stale).unwrap(),
+                &remote,
+                103
+            )
+            .await
+            .err()
+            .unwrap()
+            .code,
+            "SYNC_AUTH_SELECTION_CHANGED"
+        );
+        owner.invalidate_identity();
+        let current = owner.lease().unwrap();
+        let resume = serde_json::json!({"action":"resume_erasure","operation_id":disconnect,"endpoint":scope.endpoint(),
+            "account":scope.account(),"expected":selected});
+        let result = execute(
+            &mut auth,
+            &current,
+            serde_json::from_value(resume).unwrap(),
+            &remote,
+            104,
+        )
+        .await
+        .unwrap();
+        let Response::Current { state, .. } = result else {
+            panic!("Expected current disconnect state")
+        };
+        assert_eq!(state.intent.unwrap().phase, Phase::Disconnected);
+        assert!(!state.authenticated);
+        assert!(store.read(&scope, "device-a").unwrap().is_none());
+        assert_eq!(remote.logouts.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn queued_native_command_loses_its_lease_before_any_journal_or_transport_work() {
+        use crate::mobile_sync_commands::{execute, Request};
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        let (owner, queued) = lease();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        let request = serde_json::from_value::<Request>(
+            serde_json::json!({"action":"login","operation_id":operation,
+            "endpoint":"https://sync.example","account":"reader","device_name":"Owned phone",
+            "password":"owned-original-password","expected":null}),
+        )
+        .unwrap();
+        owner.invalidate_identity();
+        assert_eq!(
+            execute(&mut auth, &queued, request, &remote, 100)
+                .await
+                .err()
+                .unwrap()
+                .code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert!(auth.journal.find(&operation).unwrap().is_none());
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 0);
+        assert_eq!(store.puts.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

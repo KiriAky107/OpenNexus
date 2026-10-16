@@ -34,6 +34,8 @@ pub mod mobile_export;
 #[cfg(feature = "sync-http")]
 pub mod mobile_sync_auth;
 #[cfg(feature = "sync-http")]
+pub mod mobile_sync_commands;
+#[cfg(feature = "sync-http")]
 pub mod mobile_sync_foreground;
 #[cfg(feature = "sync-http")]
 pub mod mobile_sync_session;
