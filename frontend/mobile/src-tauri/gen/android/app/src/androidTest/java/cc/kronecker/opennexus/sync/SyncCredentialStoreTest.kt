@@ -44,6 +44,19 @@ class SyncCredentialStoreTest {
         assertFalse(original.contentEquals(record(scope).readBytes()))
     }
 
+    @Test fun rustWorkerUsesTheScopedJniStoreAndClearsTheTransferredOriginal() {
+        val consumed=secret.copyOf()
+        val returned=NativeCredentialProbe.roundTrip(context,namespace,"reader","device-one",consumed)
+        try { assertArrayEquals(secret,returned) } finally { returned.fill(0) }
+        assertTrue(consumed.all { it==0.toByte() })
+        assertNull(store.read("[1,\"https://owned.invalid/\",\"reader\",\"device-one\"]"))
+        for ((account,device) in listOf("reader\nother" to "device-one","reader" to "../other")) {
+            val rejected=secret.copyOf()
+            assertThrows(RuntimeException::class.java) { NativeCredentialProbe.roundTrip(context,namespace,account,device,rejected) }
+            assertTrue(rejected.all { it==0.toByte() })
+        }
+    }
+
     @Test fun rejectsDeviceAccountEndpointSubstitutionAndTamperedCiphertext() {
         store.put(scope, secret.copyOf()); val original=record(scope).readBytes()
         for (other in listOf(scope.replace("device-one", "device-two"), scope.replace("reader", "other"), scope.replace("owned.invalid", "different.invalid"))) {

@@ -19,6 +19,8 @@ notesagent_host = { package = "notesagent-desktop", path = "../../src-tauri", de
 [target.'cfg(target_os = "android")'.dependencies]
 notesagent_host = { package = "notesagent-desktop", path = "../../src-tauri", default-features = false, features = ["sync-http"] }
 jni = { version = "=0.22.4", default-features = false }
+serde_json = "1"
+zeroize = "=1.9.0"
 
 [build-dependencies]
 tauri-build = { version = "=2.6.3", features = [] }

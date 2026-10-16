@@ -3421,8 +3421,10 @@ dependencies = [
  "jni 0.22.4",
  "notesagent-desktop",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
+ "zeroize",
 ]
 
 [[package]]

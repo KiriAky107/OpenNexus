@@ -8,6 +8,9 @@ pub fn initialize_sync_tls<'caller>(
     application_context: JObject<'caller>,
 ) {
     environment
-        .with_env(|env| notesagent_host::sync_tls::initialize(env, application_context))
+        .with_env(|env| {
+            crate::mobile_sync_secrets::initialize(env, &application_context)?;
+            notesagent_host::sync_tls::initialize(env, application_context)
+        })
         .resolve::<ThrowRuntimeExAndDefault>();
 }

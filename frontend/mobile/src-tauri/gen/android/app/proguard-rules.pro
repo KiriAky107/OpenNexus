@@ -23,3 +23,4 @@
 # These names are resolved from Rust through JNI rather than Java call sites.
 -keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }
 -keep class cc.kronecker.opennexus.MainActivity { *; }
+-keep class cc.kronecker.opennexus.sync.SyncCredentialStore { *; }

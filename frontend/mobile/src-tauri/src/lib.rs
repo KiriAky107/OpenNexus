@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex};
 use tauri::Manager;
 mod mobile_files;
 #[cfg(target_os = "android")]
+mod mobile_sync_secrets;
+#[cfg(target_os = "android")]
 mod mobile_sync_tls;
 
 struct MobileState {
