@@ -103,6 +103,11 @@ export function createSyncAuthSession(native: NativeAuth, uuid: () => string = (
   }
   function login(endpoint: string, account: string, deviceName: string, password: string) {
     if (!requireIdle() || state.pending) return Promise.resolve(false)
+    const characters = password.length <= 1024 ? [...password].length : 0
+    if (characters < 12 || characters > 256
+      || new TextEncoder().encode(password).byteLength > 1024) {
+      state.error = 'SYNC_LOGIN_INVALID'; return Promise.resolve(false)
+    }
     const original: Original = { kind: 'login', operation_id: uuid(), endpoint, account }
     return perform({ action: 'login', operation_id: original.operation_id, endpoint, account, device_name: deviceName,
       password, expected: copy(state.selection) }, mutationReply, original)

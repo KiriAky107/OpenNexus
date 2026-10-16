@@ -28,6 +28,7 @@ function feedback(code: string) {
     case 'SYNC_FOREGROUND_CHANGED': case 'SYNC_FOREGROUND_REQUIRED': return t('连接操作已停止。回到应用后读取原操作结果。', 'The connection operation stopped. Read its original result after returning to the app.')
     case 'SYNC_AUTH_INTENT_NOT_FOUND': return t('尚无该原编号的本机记录。不会自动重新发送。', 'No local record exists for that original ID. It will not be sent again automatically.')
     case 'SYNC_ENDPOINT_INVALID': return t('请输入完整的 HTTPS 服务地址。', 'Enter a complete HTTPS service address.')
+    case 'SYNC_LOGIN_INVALID': return t('请核对账户、设备名称，以及 12–256 个字符的密码。', 'Check the account, device name and a password containing 12–256 characters.')
     default: return syncError(code)
   }
 }

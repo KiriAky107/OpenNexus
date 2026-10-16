@@ -156,4 +156,14 @@ describe('mobile native authentication request ownership', () => {
     expect(rpc.mock.calls.some(([request]) => request.action === 'logout')).toBe(false)
     expect(session.state.current?.intent?.account).toBe('reader-b')
   })
+  it('rejects an invalid password before creating an intent or sending sensitive IPC', async () => {
+    const { session, rpc } = make(async () => current())
+    for (const value of ['short', '私'.repeat(257), 'x'.repeat(1025)]) {
+      expect(await session.login('https://sync.example', 'reader-a', 'Owned phone', value)).toBe(false)
+      expect(session.state.error).toBe('SYNC_LOGIN_INVALID')
+      expect(session.state.pending).toBeNull()
+    }
+    expect(rpc).not.toHaveBeenCalled()
+    expect(JSON.stringify(session.state)).not.toContain('short')
+  })
 })
