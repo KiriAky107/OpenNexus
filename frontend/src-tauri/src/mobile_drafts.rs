@@ -13,6 +13,31 @@ mod images;
 pub use images::ImageIntent;
 
 pub const MAX_NOTE_BYTES: usize = 1024 * 1024;
+pub const EMPTY_CANVAS: &str = "{\n  \"nodes\": [],\n  \"edges\": []\n}\n";
+
+pub(crate) fn document_limit(path: &str) -> Option<usize> {
+    if crate::canvas_contract::is_canvas(path) {
+        Some(crate::canvas_contract::MAX_CANVAS_BYTES)
+    } else if path.to_ascii_lowercase().ends_with(".md") {
+        Some(MAX_NOTE_BYTES)
+    } else {
+        None
+    }
+}
+
+fn draft_content_bound(path: &str, content: &str) -> Result<()> {
+    if document_limit(path).is_none_or(|limit| content.len() > limit) {
+        return Err(HostError::new("MOBILE_DRAFT_INVALID"));
+    }
+    Ok(())
+}
+
+fn same_document_type(before: &str, after: &str) -> Result<()> {
+    if crate::canvas_contract::is_canvas(before) != crate::canvas_contract::is_canvas(after) {
+        return Err(HostError::new("MOBILE_DOCUMENT_TYPE_CHANGED"));
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Draft {
@@ -132,7 +157,7 @@ impl DraftStore {
     }
 
     fn validate_path(ws: &Workspace, path: &str) -> Result<()> {
-        if path.len() > 1024 || !path.to_ascii_lowercase().ends_with(".md") {
+        if path.len() > 1024 || document_limit(path).is_none() {
             return Err(HostError::new("MOBILE_NOTE_PATH_INVALID"));
         }
         ws.resolve(path)?;
@@ -168,6 +193,8 @@ impl DraftStore {
             return Err(HostError::new("DRAFT_SESSION_CHANGED"));
         }
         Self::validate_path(ws, path)?;
+        same_document_type(&original.path, path)?;
+        draft_content_bound(path, &original.content)?;
         if ws.resolve(path)?.exists() {
             return Err(HostError::new("FILE_ALREADY_EXISTS"));
         }
@@ -228,14 +255,20 @@ impl DraftStore {
     }
 
     pub fn create(&self, ws: &Workspace, path: &str) -> Result<Draft> {
-        self.create_with_content(ws, path, "")
+        self.create_with_content(
+            ws,
+            path,
+            if crate::canvas_contract::is_canvas(path) {
+                EMPTY_CANVAS
+            } else {
+                ""
+            },
+        )
     }
 
     pub fn create_with_content(&self, ws: &Workspace, path: &str, content: &str) -> Result<Draft> {
         Self::validate_path(ws, path)?;
-        if content.len() > MAX_NOTE_BYTES {
-            return Err(HostError::new("MOBILE_DRAFT_INVALID"));
-        }
+        draft_content_bound(path, content)?;
         if ws.resolve(path)?.exists() {
             return Err(HostError::new("FILE_ALREADY_EXISTS"));
         }
@@ -273,7 +306,7 @@ impl DraftStore {
         ws.tree()?;
         let path = ws.path_for_id(file_id)?;
         Self::validate_path(ws, &path)?;
-        if std::fs::metadata(ws.resolve(&path)?)?.len() > MAX_NOTE_BYTES as u64 {
+        if std::fs::metadata(ws.resolve(&path)?)?.len() > document_limit(&path).unwrap() as u64 {
             return Err(HostError::new("CORE_NOTE_TOO_LARGE"));
         }
         let Document { entry, content } = ws.read(&path)?;
@@ -306,7 +339,7 @@ impl DraftStore {
         generation: i64,
         content: &str,
     ) -> Result<Draft> {
-        if generation < 1 || content.len() > MAX_NOTE_BYTES {
+        if generation < 1 {
             return Err(HostError::new("MOBILE_DRAFT_INVALID"));
         }
         let tx = self.db.transaction()?;
@@ -318,6 +351,8 @@ impl DraftStore {
             )
             .optional()?
             .ok_or_else(|| HostError::new("DRAFT_NOT_FOUND"))?;
+        // Invalid JSON remains a recoverable draft, but cannot become a save intent.
+        draft_content_bound(&old.path, content)?;
         if old.edit_session != edit_session || Uuid::parse_str(edit_session).is_err() {
             return Err(HostError::new("DRAFT_SESSION_CHANGED"));
         }
@@ -377,6 +412,10 @@ impl DraftStore {
         let draft = self.get(draft_id)?;
         if draft.generation != generation {
             return Err(HostError::new("DRAFT_GENERATION_CONFLICT"));
+        }
+        draft_content_bound(&draft.path, &draft.content)?;
+        if crate::canvas_contract::is_canvas(&draft.path) {
+            crate::canvas_contract::validate(draft.content.as_bytes())?;
         }
         // A duplicate click after an acknowledged commit returns its original receipt identity.
         if draft.generation == draft.saved_generation {

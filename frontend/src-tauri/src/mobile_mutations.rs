@@ -127,6 +127,7 @@ impl DraftStore {
         }
         if kind == "rename" {
             Self::validate_path(ws, destination)?;
+            super::same_document_type(&entry.path, destination)?;
         }
         let id = Uuid::new_v4().to_string();
         self.db.execute(

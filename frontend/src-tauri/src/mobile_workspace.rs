@@ -1,6 +1,6 @@
 //! Narrow mobile API over the native-owned Vault. No desktop RPC or caller-supplied root.
 use crate::mobile_drafts::{
-    Draft, DraftStore, ImageIntent, MutationIntent, SaveIntent, MAX_NOTE_BYTES,
+    document_limit, Draft, DraftStore, ImageIntent, MutationIntent, SaveIntent, EMPTY_CANVAS,
 };
 use crate::workspace::{Document, HostError, Result, Workspace};
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,10 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 pub type MobileResponse = Value;
+
+#[cfg(test)]
+#[path = "mobile_canvas_tests.rs"]
+mod canvas_tests;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -158,9 +162,7 @@ impl MobileWorkspace {
             .tree()?
             .iter()
             .filter(|entry| {
-                !entry.deleted
-                    && !entry.is_folder
-                    && entry.path.to_ascii_lowercase().ends_with(".md")
+                !entry.deleted && !entry.is_folder && document_limit(&entry.path).is_some()
             })
             .count();
         Ok(json!({"vault_id":self.workspace.vault_id,"note_count":note_count}))
@@ -169,10 +171,9 @@ impl MobileWorkspace {
     fn read(&mut self, file_id: &str) -> Result<Document> {
         self.workspace.tree()?;
         let path = self.workspace.path_for_id(file_id)?;
-        if !path.to_ascii_lowercase().ends_with(".md") {
-            return Err(HostError::new("CORE_NOTE_TYPE_UNSUPPORTED"));
-        }
-        if std::fs::metadata(self.workspace.resolve(&path)?)?.len() > MAX_NOTE_BYTES as u64 {
+        let limit =
+            document_limit(&path).ok_or_else(|| HostError::new("CORE_NOTE_TYPE_UNSUPPORTED"))?;
+        if std::fs::metadata(self.workspace.resolve(&path)?)?.len() > limit as u64 {
             return Err(HostError::new("CORE_NOTE_TOO_LARGE"));
         }
         self.workspace.read(&path)
@@ -243,7 +244,7 @@ impl MobileWorkspace {
         entries.retain(|e| {
             !e.deleted
                 && !e.is_folder
-                && e.path.to_ascii_lowercase().ends_with(".md")
+                && document_limit(&e.path).is_some()
                 && e.path.starts_with(&prefix)
         });
         entries.sort_by(|a, b| a.path.cmp(&b.path));
@@ -263,7 +264,7 @@ impl MobileWorkspace {
                 matching.push(entry);
             } else {
                 let path = self.workspace.resolve(&entry.path)?;
-                if std::fs::metadata(path)?.len() > MAX_NOTE_BYTES as u64 {
+                if std::fs::metadata(path)?.len() > document_limit(&entry.path).unwrap() as u64 {
                     unsearched_large_notes += 1;
                     continue;
                 }
@@ -322,7 +323,13 @@ impl MobileWorkspace {
                 let draft = self.drafts.create_with_content(
                     &self.workspace,
                     &path,
-                    content.as_deref().unwrap_or(""),
+                    content
+                        .as_deref()
+                        .unwrap_or(if crate::canvas_contract::is_canvas(&path) {
+                            EMPTY_CANVAS
+                        } else {
+                            ""
+                        }),
                 )?;
                 value(self.draft_view(&draft.id, false)?)
             }

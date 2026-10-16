@@ -123,11 +123,15 @@ impl DraftStore {
         if content_base64.len() > MAX_ENCODED_BYTES {
             return Err(HostError::new("MOBILE_IMAGE_TOO_LARGE"));
         }
+        let draft = self.get(draft_id)?;
+        if crate::canvas_contract::is_canvas(&draft.path) {
+            // Canvas assets need a frozen node update, never Markdown syntax inserted into JSON.
+            return Err(HostError::new("MOBILE_IMAGE_TARGET_UNSUPPORTED"));
+        }
         let bytes = STANDARD
             .decode(content_base64)
             .map_err(|_| HostError::new("WORKSPACE_IMAGE_UNSUPPORTED"))?;
         let extension = image_extension(&bytes)?;
-        let draft = self.get(draft_id)?;
         if draft.edit_session != edit_session || Uuid::parse_str(edit_session).is_err() {
             return Err(HostError::new("DRAFT_SESSION_CHANGED"));
         }
