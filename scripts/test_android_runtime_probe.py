@@ -15,6 +15,37 @@ from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAG
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_failed_editor_capture_keeps_empty_original_and_dirty_draft_without_replaying_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe = Probe.__new__(Probe); probe.output = Path(directory); probe.root = './owned/'
+            probe.args = SimpleNamespace(serial='emulator-5562'); calls = []
+            probe.wait_owned_connection = lambda: calls.append('revalidate owned AVD')
+            probe.force_stop = lambda: calls.append('stop own package')
+            def private(path):
+                if path == './owned/vault/runtime-rich.md': return subprocess.CompletedProcess([], 0, b'', b'')
+                raise RuntimeError('Synthetic target does not exist')
+            probe.private = private
+            probe.draft_rows = lambda: [('runtime-rich.md', 'original\r\n\n草稿 😀\n', 2, 1)]
+            with patch('android_runtime_probe.require_hosted_emulator'):
+                probe.capture_failed_editor_state('rich-markdown')
+            report = json.loads((probe.output/'rich-markdown-failed-native-state.json').read_text('utf-8'))
+            self.assertEqual(calls, ['revalidate owned AVD', 'stop own package'])
+            self.assertEqual((probe.output/'original-observations/001/runtime-rich.md').read_bytes(), b'')
+            self.assertEqual(report['originals']['runtime-rich.md'], {'size': 0, 'sha256': digest(b'')})
+            self.assertEqual(report['draft_rows'][0][1], 'original\r\n\n草稿 😀\n')
+
+    def test_failed_capture_rejects_foreign_origin_before_reading_or_stopping_anything(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe = Probe.__new__(Probe); probe.output = Path(directory)
+            probe.args = SimpleNamespace(serial='unowned-phone')
+            probe.wait_owned_connection = lambda: self.fail('Foreign target must not be observed')
+            probe.force_stop = lambda: self.fail('Foreign target must not be stopped')
+            with patch('android_runtime_probe.require_hosted_emulator', side_effect=RuntimeError('Not owned')):
+                probe.capture_failed_editor_state('owned-phase')
+            report = json.loads((probe.output/'owned-phase-failed-native-state.json').read_text('utf-8'))
+            self.assertEqual(report['observation_error'], 'RuntimeError')
+            self.assertEqual(report['originals'], {})
+
     def test_style_observation_refuses_ambiguous_app_process_before_forwarding(self):
         with tempfile.TemporaryDirectory() as directory:
             probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562')

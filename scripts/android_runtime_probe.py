@@ -324,7 +324,10 @@ class Probe:
         text = result.stdout.decode('utf-8', 'replace')
         (self.output / f'{phase}.log').write_text(text, 'utf-8')
         self.capture(phase)
-        require(f'OPENNEXUS_RUNTIME_PHASE_OK {phase}' in text and 'OPENNEXUS_RUNTIME_FAILED' not in text,
+        passed = f'OPENNEXUS_RUNTIME_PHASE_OK {phase}' in text and 'OPENNEXUS_RUNTIME_FAILED' not in text
+        if not passed and self.root is not None:
+            self.capture_failed_editor_state(phase)
+        require(passed,
             f'Actual Android UI phase failed: {phase}; see preserved UI log and screenshot')
         self.phases.append({'phase': phase, 'duration_ms': round((time.monotonic() - start) * 1000), 'passed': True})
         if phase == 'theme-diagnostic-dark':
@@ -334,6 +337,28 @@ class Probe:
             paths = self.shell('run-as', APP, 'find', '.', '-name', 'mobile-drafts.sqlite3', '-type', 'f').stdout.decode().splitlines()
             require(len(paths) == 1, 'Native draft database origin is ambiguous')
             self.root = paths[0].removesuffix('mobile-drafts.sqlite3')
+
+    def capture_failed_editor_state(self, phase):
+        report = {'scope': 'Owned hosted fixture after failed phase and force-stop; no UI action or write replay',
+            'originals': {}, 'phase': phase}
+        try:
+            require_hosted_emulator(self.args.serial)
+            self.wait_owned_connection()
+            self.force_stop()
+            # These are exclusively the probe's own synthetic targets. Do not
+            # enumerate arbitrary files or read native credential/config stores.
+            for name in ('runtime-note.md', 'runtime-rich.md', 'runtime.canvas',
+                    'runtime-back.md', 'runtime-image.md', 'runtime-rich-image.md', 'runtime-image.canvas'):
+                try:
+                    value = self.original(name)
+                    report['originals'][name] = {'size': len(value), 'sha256': digest(value)}
+                except Exception as error:
+                    report['originals'][name] = {'unavailable': type(error).__name__}
+            report['draft_rows'] = self.draft_rows()
+        except Exception as error:
+            report['observation_error'] = type(error).__name__
+        (self.output / f'{phase}-failed-native-state.json').write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + '\n', 'utf-8')
 
     def read_native_styles(self, phase):
         require_hosted_emulator(self.args.serial)

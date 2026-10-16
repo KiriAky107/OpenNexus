@@ -391,9 +391,15 @@ public final class RuntimeProbe extends Instrumentation {
         final String expectedText = string(node.getText()), expectedDescription = string(node.getContentDescription());
         final String expectedHint = Build.VERSION.SDK_INT >= 26 ? string(node.getHintText()) : "";
         final String expectedId = string(node.getViewIdResourceName());
+        final boolean namedEditable = node.isEditable() && (!expectedHint.isEmpty() || !expectedDescription.isEmpty());
         require(!expectedText.isEmpty() || !expectedDescription.isEmpty() || !expectedHint.isEmpty() || !expectedId.isEmpty(), "Cannot reacquire an unnamed target");
+        // A named editor's value/placeholder is mutable during editor hydration.
+        // Its accessible name, role, package and optional container identify it;
+        // file/content assertions remain separate from locating the input control.
         Predicate<AccessibilityNodeInfo> sameTarget = value -> expectedPackage.equals(string(value.getPackageName()))
-            && expectedClass.equals(string(value.getClassName())) && expectedText.equals(string(value.getText()))
+            && expectedClass.equals(string(value.getClassName()))
+            && (!namedEditable || value.isEditable())
+            && (namedEditable || expectedText.equals(string(value.getText())))
             && expectedDescription.equals(string(value.getContentDescription())) && expectedId.equals(string(value.getViewIdResourceName()))
             && (Build.VERSION.SDK_INT < 26 || expectedHint.equals(string(value.getHintText())))
             && (container == null || within(value, container));
