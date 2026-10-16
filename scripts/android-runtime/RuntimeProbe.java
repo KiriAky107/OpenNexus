@@ -142,7 +142,12 @@ public final class RuntimeProbe extends Instrumentation {
                     waitLabel("Composing text…");
                     waitNode(node -> label(node, "Save", false) && !node.isEnabled(), "Save disabled during original IME composition");
                     CompositionIme.compose(APP, IME_TEXT);
-                    waitNode(node -> node.isEditable() && string(node.getText()).contains(IME_TEXT), "unconfirmed Chinese composition");
+                    // Android WebView can expose the current EditContext
+                    // candidate as a visible child TextView while the editable
+                    // root still reports only the committed document. Scope
+                    // the observation to that actual named editor, never a
+                    // global label, and keep Save disabled until confirmation.
+                    waitNode(node -> editorContainsText(node, IME_TEXT), "unconfirmed Chinese composition inside the owned editor");
                     waitLabel("Composing text…");
                     progress.append("IME: confirm Chinese candidate\n");
                     CompositionIme.confirm(APP);
@@ -422,6 +427,23 @@ public final class RuntimeProbe extends Instrumentation {
     private AccessibilityNodeInfo noteBody() {
         return waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
             && label(node, "Markdown note body", false), "visible owned Markdown body (not file search)");
+    }
+
+    private boolean editorContainsText(AccessibilityNodeInfo root, String text) {
+        if (!APP.equals(string(root.getPackageName())) || !root.isEditable()
+            || !label(root, "Markdown note body", false) || !root.isVisibleToUser()) return false;
+        List<AccessibilityNodeInfo> nodes = new ArrayList<>();
+        nodes.add(root);
+        for (int index = 0; index < nodes.size() && index < 200; index++) {
+            AccessibilityNodeInfo node = nodes.get(index);
+            if (APP.equals(string(node.getPackageName())) && node.isVisibleToUser()
+                && string(node.getText()).contains(text)) return true;
+            for (int child = 0; child < node.getChildCount(); child++) {
+                AccessibilityNodeInfo value = node.getChild(child);
+                if (value != null) nodes.add(value);
+            }
+        }
+        return false;
     }
 
     private AccessibilityNodeInfo editable(String original) {
