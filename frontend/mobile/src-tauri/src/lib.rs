@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
+mod mobile_files;
 
 struct MobileState {
     engine: Arc<Mutex<Option<MobileWorkspace>>>,
@@ -16,6 +17,8 @@ struct Capabilities {
     version: &'static str,
     workspace: bool,
     notes: bool,
+    exports: bool,
+    external_links: bool,
     core: bool,
     sync: bool,
     credentials: bool,
@@ -42,6 +45,8 @@ fn mobile_capabilities(window: tauri::WebviewWindow) -> Result<Capabilities, Str
         version: env!("CARGO_PKG_VERSION"),
         workspace: true,
         notes: true,
+        exports: cfg!(target_os = "android"),
+        external_links: cfg!(target_os = "android"),
         core: false,
         sync: false,
         credentials: false,
@@ -99,6 +104,7 @@ async fn mobile_request(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(mobile_files::init())
         .setup(|app| {
             app.manage(MobileState {
                 engine: Arc::new(Mutex::new(None)),
@@ -109,7 +115,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             mobile_capabilities,
             mobile_vault,
-            mobile_request
+            mobile_request,
+            mobile_files::mobile_save_export,
+            mobile_files::mobile_export_delivery,
+            mobile_files::mobile_open_external
         ])
         .run(tauri::generate_context!())
         .expect("Failed to start OpenNexus mobile");

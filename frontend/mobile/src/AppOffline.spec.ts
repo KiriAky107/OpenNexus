@@ -3,9 +3,10 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { EditorView } from '@codemirror/view'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import App from './App.vue'
+import MobilePreview from './MobilePreview.vue'
 import type { Draft, DraftView, ImageIntent, MobileRequest, MutationIntent, NoteDocument, SaveIntent } from './types'
 
-const host = vi.hoisted(() => ({ mobileCapabilities: vi.fn(), mobileVault: vi.fn(), mobileRequest: vi.fn() }))
+const host = vi.hoisted(() => ({ mobileCapabilities: vi.fn(), mobileVault: vi.fn(), mobileRequest: vi.fn(), mobileOpenExternal: vi.fn() }))
 vi.mock('./native', () => host)
 let wrapper: VueWrapper | undefined
 let doc: NoteDocument, draft: Draft, pending: SaveIntent | null, mutation: MutationIntent | null, present: boolean
@@ -62,6 +63,32 @@ afterEach(() => { wrapper?.unmount(); wrapper = undefined })
 async function start() { wrapper = mount(App, { attachTo: document.body }); await flushPromises(); return wrapper }
 function button(label: string) { const found = wrapper!.findAll('button').find(b => b.text() === label); expect(found, label).toBeDefined(); return found! }
 async function open() { await wrapper!.get('[data-note-row]').trigger('click'); await flushPromises() }
+
+it('opens a reviewed original external link only after the explicit confirmation',async()=>{
+  host.mobileCapabilities.mockResolvedValue({protocol:1,platform:'android',workspace:true,notes:true,external_links:true,version:'0.1.0-dev1'})
+  host.mobileOpenExternal.mockResolvedValue({state:'opened'})
+  await start();await open();await wrapper!.get('.file-actions summary').trigger('click');await button('Read preview').trigger('click');await flushPromises()
+  wrapper!.getComponent(MobilePreview).vm.$emit('link','https://example.com/original?a=%25');await flushPromises()
+  expect(host.mobileOpenExternal).not.toHaveBeenCalled();expect(wrapper!.get('.mobile-dialog').text()).toContain('https://example.com/original?a=%25')
+  await button('Open').trigger('click');await flushPromises();expect(host.mobileOpenExternal).toHaveBeenCalledExactlyOnceWith('https://example.com/original?a=%25')
+  expect(doc.content).toBe('original\r\n中文 😀')
+})
+
+it('resolves a reviewed local link through a bounded native path read before switching the editor',async()=>{
+  host.mobileRequest.mockImplementation(async (request:MobileRequest)=>{
+    if(request.kind==='read_path')return {...doc,file_id:'linked-file',path:'dir/中文.md',content:'linked original'}
+    if(request.kind==='open_note' && request.file_id==='linked-file'){
+      draft={...draft,id:'linked-draft',file_id:'linked-file',path:'dir/中文.md',content:'linked original',edit_session:'linked-lease'}
+      return snapshot()
+    }
+    return api(request)
+  })
+  await start();await open();await wrapper!.get('.file-actions summary').trigger('click');await button('Read preview').trigger('click');await flushPromises()
+  wrapper!.getComponent(MobilePreview).vm.$emit('link','dir/%E4%B8%AD%E6%96%87.md');await flushPromises();await button('Open').trigger('click');await flushPromises()
+  expect(host.mobileRequest.mock.calls.find(([r])=>r.kind==='read_path')?.[0]).toEqual({kind:'read_path',path:'dir/中文.md'})
+  expect(wrapper!.get('.document-title').text()).toBe('中文.md')
+  expect(wrapper!.get('.cm-editor').text()).toContain('linked original')
+})
 
 it('imports the selected original image into the real editor at its raw cursor and keeps undo', async () => {
   await start(); await open()

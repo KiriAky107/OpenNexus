@@ -1,5 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
-import type { MobileRequest } from './types'
+import type { ExportDelivery, MobileRequest } from './types'
 
 export interface MobileCapabilities {
   protocol: number
@@ -7,6 +7,8 @@ export interface MobileCapabilities {
   version: string
   workspace: boolean
   notes: boolean
+  exports?: boolean
+  external_links?: boolean
   core: boolean
   sync: boolean
   credentials: boolean
@@ -32,4 +34,16 @@ export async function mobileVault(): Promise<MobileVault> {
 export async function mobileRequest<T>(request: MobileRequest): Promise<T> {
   if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
   return invoke<T>('mobile_request', { request })
+}
+export async function mobileSaveExport(ticket: string): Promise<ExportDelivery> {
+  if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
+  return invoke<ExportDelivery>('mobile_save_export', { ticket })
+}
+export async function mobileExportDelivery(ticket: string, deliveryId?: string): Promise<ExportDelivery> {
+  if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
+  return invoke<ExportDelivery>('mobile_export_delivery', { ticket, deliveryId: deliveryId ?? null })
+}
+export async function mobileOpenExternal(href: string): Promise<{ state: string }> {
+  if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
+  return invoke('mobile_open_external', { href })
 }

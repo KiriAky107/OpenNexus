@@ -3,7 +3,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import logo from '../../src/assets/opennexus-logo.svg'
 import MobileEditor from './MobileEditor.vue'
 import MobilePreview from './MobilePreview.vue'
-import { mobileCapabilities, mobileRequest, mobileVault } from './native'
+import ExportPanel from './ExportPanel.vue'
+import { mobileCapabilities, mobileOpenExternal, mobileRequest, mobileVault } from './native'
+import { mobileVaultPath } from './mobileMarkdown'
 import { createNoteSession, errorCode } from './noteSession'
 import { createImageSession } from './imageSession'
 import { errorText, languageKey, savedLanguage, text, type Language } from './locale'
@@ -16,6 +18,7 @@ const preview = ref(false), fileActions = ref<HTMLDetailsElement>()
 const imageBlocked = computed(() => images.state.busy || Boolean(images.state.pending) || images.state.unknown)
 let imageSelection: { key: string; generation: number; from: number; to: number } | null = null
 const ready = ref(false), booting = ref(false), bootError = ref(''), version = ref('')
+const exportOpen = ref(false), exportAllowed = ref(false), externalAllowed = ref(false)
 const tab = ref<'notes' | 'drafts' | 'pending'>('notes'), query = ref(''), directory = ref(''), offset = ref(0)
 const notePage = ref<NotePage>({ items: [], total: 0, directories: [], unsearched_large_notes: 0 })
 const draftPage = ref<Page<DraftSummary>>({ items: [], total: 0 }), pendingPage = ref<Page<PendingOperation>>({ items: [], total: 0 })
@@ -64,7 +67,7 @@ async function boot() {
     if (!capabilities.notes) throw new Error('MOBILE_NOTES_UNAVAILABLE')
     await mobileVault()
     if (disposed || revision !== bootRevision) return
-    version.value = capabilities.version; ready.value = true; await load()
+    version.value = capabilities.version; exportAllowed.value = capabilities.exports === true; externalAllowed.value = capabilities.external_links === true; ready.value = true; await load()
   } catch (error) { if (!disposed && revision === bootRevision) bootError.value = errorCode(error) }
   finally { if (!disposed && revision === bootRevision) booting.value = false }
 }
@@ -84,6 +87,30 @@ function selectImage() {
   imageInput.value?.click()
 }
 function togglePreview() { if (fileActions.value) fileActions.value.open = false; preview.value = !preview.value; editor.value?.blur() }
+async function openExport() {
+  await runEditor(async () => {
+    await session.flush(); editor.value?.blur()
+    if (fileActions.value) fileActions.value.open = false
+    exportOpen.value = true
+  })
+}
+function canOpenLink(href: string) { return /^https?:\/\//i.test(href) ? externalAllowed.value : Boolean(session.state.view && mobileVaultPath(session.state.view.draft.path,href)) }
+async function openReviewedLink() {
+  const active=dialog.value;if (!active || active.kind!=='link' || active.busy) return
+  active.busy=true;active.error=''
+  try {
+    if (/^https?:\/\//i.test(active.href)) await mobileOpenExternal(active.href)
+    else {
+      const source=session.state.view?.draft.path,path=source ? mobileVaultPath(source,active.href) : null
+      if (!path) throw Error('MOBILE_LINK_UNSUPPORTED')
+      const document=await mobileRequest<NoteDocument>({kind:'read_path',path})
+      if (dialog.value!==active) return
+      await session.openNote(document.file_id)
+    }
+    if (dialog.value===active) dialog.value=null
+  } catch (error) { if (dialog.value===active) active.error=errorCode(error) }
+  finally { if (dialog.value===active) active.busy=false }
+}
 async function imageSelected(event: Event) {
   const input = event.target as HTMLInputElement, file = input.files?.[0], selected = imageSelection
   input.value = ''; imageSelection = null
@@ -252,6 +279,7 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
         <input ref="imageInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/gif,image/webp" :aria-label="copy.addImage" @change="imageSelected" />
         <details ref="fileActions" class="file-actions"><summary>{{ copy.more }}</summary><div class="action-menu">
           <button class="quiet" :disabled="session.state.composing" @click="togglePreview">{{ preview ? copy.editText : copy.preview }}</button>
+          <button v-if="exportAllowed" class="quiet" :disabled="session.state.composing || session.state.saving || imageBlocked" @click="openExport">{{ copy.exportContent }}</button>
           <button class="quiet" :disabled="preview || session.state.composing || session.state.saving || Boolean(session.state.pendingSave) || imageBlocked" @click="selectImage">{{ copy.addImage }}</button>
           <button class="quiet" :disabled="session.state.composing" @click="openPath('copy')">{{ copy.copy }}</button>
           <button class="quiet" :disabled="dirty || session.state.saving || actionBusy || imageBlocked" @click="reviewFile('rename')">{{ copy.rename }}</button>
@@ -285,7 +313,7 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
       <details v-if="session.state.error === 'REVISION_CONFLICT' && current" class="feedback"><summary>{{ copy.currentVersion }}</summary><pre>{{ current.content }}</pre><button class="quiet" @click="openPath('copy')">{{ copy.copy }}</button></details>
       <p v-if="session.state.view.current_error" class="feedback">{{ copy.missing }}</p>
       <MobileEditor v-show="!preview" :key="documentKey()" ref="editor" :model-value="session.state.content" :label="copy.body" :language="language"
-        :read-only="Boolean(dialog) || actionBusy || imageBlocked" @update:model-value="session.edit" @composition-start="session.compositionStart"
+        :read-only="Boolean(dialog) || exportOpen || actionBusy || imageBlocked" @update:model-value="session.edit" @composition-start="session.compositionStart"
         @composition-end="session.compositionEnd" @error="session.reportError" />
       <MobilePreview v-if="preview" :content="session.state.content" :path="session.state.view.draft.path" :label="copy.preview"
         :image-unavailable="copy.imageUnavailable" :image-limit="copy.imageLimit" @link="href => dialog = { kind: 'link', href, busy: false, error: '' }" />
@@ -293,7 +321,7 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
 
     <main v-else class="notes-page">
       <p class="vault-status">{{ copy.ready }}</p>
-      <div class="library-actions"><button @click="openPath('create')">{{ copy.newNote }}</button><button class="quiet" :disabled="loading" @click="load">{{ copy.refresh }}</button></div>
+      <div class="library-actions"><button @click="openPath('create')">{{ copy.newNote }}</button><button class="quiet" :disabled="loading" @click="load">{{ copy.refresh }}</button><button v-if="exportAllowed" class="quiet" @click="openExport">{{ copy.exportContent }}</button></div>
       <nav class="library-tabs" :aria-label="copy.notes">
         <button class="quiet" :aria-pressed="tab === 'notes'" @click="selectTab('notes')">{{ copy.notes }}</button>
         <button class="quiet" :aria-pressed="tab === 'drafts'" @click="selectTab('drafts')">{{ copy.drafts }} <span>{{ number(draftPage.total) }}</span></button>
@@ -344,7 +372,8 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
         </template>
         <template v-else-if="dialog.kind === 'link'">
           <h2 id="dialog-title">{{ copy.linkAddress }}</h2><pre>{{ dialog.href }}</pre>
-          <div class="button-row"><button class="quiet" @click="cancelDialog">{{ copy.close }}</button></div>
+          <p v-if="dialog.error" role="alert">{{ displayError(dialog.error) }}</p>
+          <div class="button-row"><button class="quiet" :disabled="dialog.busy" @click="cancelDialog">{{ copy.close }}</button><button :disabled="dialog.busy || !canOpenLink(dialog.href)" @click="openReviewedLink">{{ copy.open }}</button></div>
         </template>
         <template v-else>
           <h2 id="dialog-title">{{ copy.discardTitle }}</h2><p>{{ copy.discardHelp }}</p>
@@ -353,5 +382,6 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
         </template>
       </section>
     </div>
+    <ExportPanel v-if="exportOpen" :language="language" @language="value => language=value" @close="exportOpen=false" />
   </div>
 </template>

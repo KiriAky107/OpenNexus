@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mobileCapabilities, mobileVault, mobileRequest } from './native'
+import { mobileCapabilities, mobileVault, mobileRequest, mobileSaveExport, mobileExportDelivery, mobileOpenExternal } from './native'
 
 const host = vi.hoisted(() => ({ isTauri: vi.fn(), invoke: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => host)
@@ -14,6 +14,9 @@ describe('mobile native boundary', () => {
       await expect(mobileCapabilities()).rejects.toThrow('MOBILE_HOST_REQUIRED')
       await expect(mobileVault()).rejects.toThrow('MOBILE_HOST_REQUIRED')
       await expect(mobileRequest({ kind: 'list_pending', offset: 0, limit: 20 })).rejects.toThrow('MOBILE_HOST_REQUIRED')
+      await expect(mobileSaveExport('original')).rejects.toThrow('MOBILE_HOST_REQUIRED')
+      await expect(mobileExportDelivery('original')).rejects.toThrow('MOBILE_HOST_REQUIRED')
+      await expect(mobileOpenExternal('https://example.com')).rejects.toThrow('MOBILE_HOST_REQUIRED')
       expect(host.invoke).not.toHaveBeenCalled()
       expect(fetch).not.toHaveBeenCalled()
     } finally { fetch.mockRestore() }
@@ -39,5 +42,13 @@ describe('mobile native boundary', () => {
     host.invoke.mockResolvedValue({ state: 'prepared', operation_id: 'original' })
     await mobileRequest({ kind: 'observe_save', operation_id: 'original' })
     expect(host.invoke).toHaveBeenCalledExactlyOnceWith('mobile_request', { request: { kind: 'observe_save', operation_id: 'original' } })
+  })
+  it('keeps native file destinations out of the export request and queries an original delivery by identity',async()=>{
+    host.isTauri.mockReturnValue(true);host.invoke.mockResolvedValue({state:'saved'})
+    await mobileSaveExport('original-sealed-ticket');await mobileExportDelivery('original-sealed-ticket','original-attempt')
+    expect(host.invoke.mock.calls).toEqual([
+      ['mobile_save_export',{ticket:'original-sealed-ticket'}],
+      ['mobile_export_delivery',{ticket:'original-sealed-ticket',deliveryId:'original-attempt'}],
+    ])
   })
 })

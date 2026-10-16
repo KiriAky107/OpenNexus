@@ -47,6 +47,19 @@ def verify_libraries(apk, native_dir, abis):
     return checked
 
 
+def verify_mobile_files(apk, permissions):
+    forbidden = {'android.permission.MANAGE_EXTERNAL_STORAGE', 'android.permission.READ_EXTERNAL_STORAGE',
+        'android.permission.WRITE_EXTERNAL_STORAGE', 'android.permission.READ_MEDIA_IMAGES', 'android.permission.CAMERA'}
+    actual = set(re.findall(r"uses-permission(?:-sdk-\d+)?: name='([^']+)'", permissions))
+    require(not actual.intersection(forbidden), 'ANDROID_BROAD_FILE_PERMISSION')
+    descriptor = b'Lcc/kronecker/opennexus/files/MobileFilesPlugin;'
+    with zipfile.ZipFile(apk) as archive:
+        dex = [name for name in archive.namelist() if re.fullmatch(r'classes(?:\d+)?\.dex', name)]
+        require(any(descriptor in archive.read(name) for name in dex), 'ANDROID_FILES_PLUGIN_CLASS_MISSING')
+    return {'class_descriptor': descriptor.decode(), 'broad_storage_or_camera_permissions': False,
+        'native_class_presence_only': True, 'SAF_destination_execution_verified': False}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repository-dir', type=Path, default=Path(__file__).resolve().parents[1])
@@ -74,12 +87,18 @@ def main():
     fingerprints = re.findall(r'^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]{64})$', certificates, re.M)
     require(len(fingerprints) == 1, 'ANDROID_SIGNING_IDENTITY_MISSING')
     libraries = verify_libraries(apk, args.native_dir, args.abis)
-    proof = {'schema': 1, 'passed': True, 'kind': 'android-debug-bootstrap', 'source_commit': args.commit,
+    permissions = subprocess.check_output([str(tools / 'aapt2'), 'dump', 'permissions', str(apk)], text=True)
+    files_plugin = verify_mobile_files(apk, permissions)
+    kotlin = root / 'frontend/mobile/android/MobileFilesPlugin.kt'
+    generated_kotlin = root / 'frontend/mobile/src-tauri/gen/android/app/src/main/java/cc/kronecker/opennexus/files/MobileFilesPlugin.kt'
+    require(generated_kotlin.is_file() and not generated_kotlin.is_symlink() and generated_kotlin.read_bytes() == kotlin.read_bytes(), 'ANDROID_FILES_PLUGIN_SOURCE_CHANGED')
+    proof = {'schema': 1, 'passed': True, 'kind': 'android-debug', 'source_commit': args.commit,
         'source_clean': True, 'source_proof': args.source_proof.name, 'package': package, 'version': config['version'],
         'version_code': config['bundle']['android']['versionCode'], 'min_sdk': 24, 'target_sdk': 36,
         'apk': apk.name, 'bytes': apk.stat().st_size, 'sha256': digest(apk), 'libraries': libraries,
         'signer_certificate_sha256': fingerprints[0].lower(), 'debug_signing': True,
         'actual_device_execution_verified': False, 'published': False,
+        'files_plugin': {**files_plugin, 'source_sha256': digest(kotlin)},
         'rustc': subprocess.check_output(['rustc', '-Vv'], text=True).strip(),
         'java': subprocess.run(['java', '-version'], capture_output=True, text=True, check=True).stderr.strip()}
     require(not args.output.exists(), 'ANDROID_PACKAGE_PROOF_EXISTS')

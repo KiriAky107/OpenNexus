@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mobile-save-export"
+description = "Enables the mobile_save_export command without any pre-configured scope."
+commands.allow = ["mobile_save_export"]
+
+[[permission]]
+identifier = "deny-mobile-save-export"
+description = "Denies the mobile_save_export command without any pre-configured scope."
+commands.deny = ["mobile_save_export"]

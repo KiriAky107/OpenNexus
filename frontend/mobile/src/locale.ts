@@ -27,6 +27,12 @@ const en = {
   reviewAgain: 'Read current content again', needsCheck: 'Save result needs checking', savedVersion: 'Saved version',
   addImage: 'Add image', importingImage: 'Importing original image…', imagePending: 'Check the original image import before editing. Its exact reference and draft change are retained.',
   preview: 'Read preview', editText: 'Edit Markdown', imageUnavailable: 'Image not loaded:', imageLimit: 'Preview limit: 32 images and 12 MiB. Other original images remain in the vault.', linkAddress: 'Original link address',
+  exportContent: 'Export saved content', exportScope: 'Includes saved Markdown, Canvas files and original images with their paths. Recovery drafts, databases, history and credentials are excluded. Open the extracted vault folder on desktop.',
+  exportLimits: 'Up to 2,000 files, 64 MiB per file and 256 MiB of original content. Save unfinished changes before preparing a snapshot.',
+  freezeExport: 'Prepare content snapshot', frozenExport: 'Original frozen snapshot', exportFiles: 'Files and ZIP size',
+  exportNeedsCheck: 'The save result needs checking.', exportVerified: 'Saved file bytes verified', exportNotStarted: 'No destination selected yet',
+  exportUnknownHelp: 'Check the original destination first. Choosing a new location creates another copy of this same snapshot; an unconfirmed original file is kept.',
+  exportNewCopy: 'Save original snapshot at a new location', chooseDestination: 'Choose save location', preparedExports: 'Prepared snapshots', noExports: 'No prepared snapshots',
 }
 const zh: Record<keyof typeof en, string> = {
   language: '界面语言', ready: '本机知识库已打开', checking: '正在打开本机知识库…', retry: '重试',
@@ -51,6 +57,12 @@ const zh: Record<keyof typeof en, string> = {
   reviewAgain: '重新读取当前正文', needsCheck: '保存结果待核对', savedVersion: '已保存版本',
   addImage: '添加图片', importingImage: '正在导入原图片…', imagePending: '请先核对原图片导入。原引用和草稿变更已保留，核对后可继续编辑。',
   preview: '阅读预览', editText: '编辑 Markdown', imageUnavailable: '图片未加载：', imageLimit: '本次预览上限为 32 张图片、12 MiB；其余原图仍保留在知识库中。', linkAddress: '原链接地址',
+  exportContent: '导出已保存内容', exportScope: '包含已保存的 Markdown、画布和原图片，保留路径关系；不包含恢复草稿、数据库、历史或凭据。可在桌面打开解压后的 vault 文件夹。',
+  exportLimits: '上限为 2,000 个文件、每文件 64 MiB、原内容共 256 MiB。请在准备快照前保存未完成的更改。',
+  freezeExport: '准备内容快照', frozenExport: '原冻结快照', exportFiles: '文件数与 ZIP 大小',
+  exportNeedsCheck: '保存结果需要核对。', exportVerified: '已保存，文件原字节核对通过', exportNotStarted: '尚未选择保存位置',
+  exportUnknownHelp: '请先核对原保存位置。另选位置会保存同一原快照的另一份副本，尚未确认的原文件会保留。',
+  exportNewCopy: '在新位置保存原快照', chooseDestination: '选择保存位置', preparedExports: '已准备的快照', noExports: '还没有已准备的快照',
 }
 export const text = (language: Language) => language === 'zh-CN' ? zh : en
 const errors: Record<string, [string, string]> = {
@@ -79,6 +91,13 @@ const errors: Record<string, [string, string]> = {
   MOBILE_SELECTION_INVALID: ['选区已失效，请重新选择插入位置。', 'The selection is invalid. Choose the insertion point again.'],
   MOBILE_EDITOR_CONTENT_CHANGED: ['正文状态已改变，未替换当前输入。请核对原操作或保留为新笔记。', 'The document state changed. Current input was kept. Check the original operation or keep a new note.'],
   PENDING_IMAGE_REQUIRES_REVIEW: ['请先核对原图片导入，再决定是否按原内容重试。', 'Check the original image import before deciding whether to retry it.'],
+  MOBILE_EXPORT_RESULT_UNKNOWN: ['尚未确认文件保存结果，请核对原保存位置。', 'The file save is not confirmed. Check the original destination.'],
+  MOBILE_EXPORT_CHANGED: ['原内容包已改变，未写入目标。请重新准备并审阅快照。', 'The original snapshot changed. Nothing was written to a destination. Prepare and review a new snapshot.'],
+  MOBILE_EXPORT_TOO_LARGE: ['内容超过导出上限，未创建目标文件。', 'The content exceeds export limits. No destination file was created.'],
+  MOBILE_EXPORT_PICKER_FAILED: ['无法打开系统保存位置选择器，请稍后重试。', 'The system save picker could not open. Try again later.'],
+  MOBILE_EXPORT_BUSY: ['请先完成当前保存位置选择。', 'Finish the current save selection first.'],
+  MOBILE_LINK_OPEN_FAILED: ['无法打开此链接，请保留原地址后重试。', 'The link could not open. Keep its original address and try again.'],
+  MOBILE_LINK_UNSUPPORTED: ['此链接不能作为外部网页打开。', 'This link cannot be opened as an external web page.'],
 }
 export function errorText(code: string, language: Language) {
   return errors[code]?.[language === 'zh-CN' ? 0 : 1] ?? (language === 'zh-CN' ? '未能完成操作。请保留当前正文，再核对或重试。' : 'The action did not complete. Keep the current text, then check or retry.')

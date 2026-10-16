@@ -11,6 +11,20 @@ spec.loader.exec_module(module)
 
 
 class AndroidPackageBindingTests(unittest.TestCase):
+    def test_requires_packaged_native_files_class_and_rejects_broad_file_permissions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / 'synthetic-dex-container.zip'
+            with zipfile.ZipFile(apk, 'w') as archive:
+                archive.writestr('classes.dex', b'synthetic DEX descriptor table Lcc/kronecker/opennexus/files/MobileFilesPlugin;')
+            module.verify_mobile_files(apk,"uses-permission: name='android.permission.INTERNET'\n")
+            for permission in ['MANAGE_EXTERNAL_STORAGE','READ_MEDIA_IMAGES','WRITE_EXTERNAL_STORAGE','READ_EXTERNAL_STORAGE','CAMERA']:
+                with self.assertRaisesRegex(Exception,'ANDROID_BROAD_FILE_PERMISSION'):
+                    module.verify_mobile_files(apk,f"uses-permission: name='android.permission.{permission}'\n")
+            with zipfile.ZipFile(apk, 'w') as archive:
+                archive.writestr('classes.dex', b'no native plugin class')
+            with self.assertRaisesRegex(Exception,'ANDROID_FILES_PLUGIN_CLASS_MISSING'):
+                module.verify_mobile_files(apk,'')
+
     def test_accepts_current_aapt2_sdk_label_and_rejects_ambiguous_or_changed_levels(self):
         identity = "package: name='cc.kronecker.opennexus.dev' versionCode='1' versionName='0.1.0-dev1'\n"
         arguments = dict(package='cc.kronecker.opennexus.dev', version='0.1.0-dev1', version_code=1)

@@ -35,6 +35,7 @@ export type MobileRequest =
   | { kind: 'list_notes'; offset: number; limit: number; query: string; directory: string }
   | { kind: 'list_drafts' | 'list_pending'; offset: number; limit: number }
   | { kind: 'open_note' | 'read_note'; file_id: string }
+  | { kind: 'read_path'; path: string }
   | { kind: 'open_draft' | 'draft_status'; draft_id: string }
   | { kind: 'create_draft'; path: string; content?: string }
   | { kind: 'persist_draft'; draft_id: string; edit_session: string; generation: number; content: string }
@@ -46,5 +47,16 @@ export type MobileRequest =
   | { kind: 'prepare_image'; draft_id: string; edit_session: string; generation: number; from: number; to: number; content_base64: string }
   | { kind: 'observe_image' | 'apply_image' | 'cancel_image'; operation_id: string }
   | { kind: 'read_image'; path: string }
+  | { kind: 'prepare_export' }
+  | { kind: 'list_exports'; offset: number; limit: number }
+  | { kind: 'export_status'; ticket: string }
+
+export interface ExportReceipt {
+  ticket: string; filename: string; sha256: string; size: number; file_count: number; content_bytes: number
+}
+export interface ExportDelivery {
+  ticket: string; delivery_id?: string; state: 'not_started' | 'choosing' | 'writing' | 'unknown' | 'cancelled' | 'saved'
+  sha256?: string; size?: number; verified_at?: number; error?: string
+}
 
 export type NativeRequest = <T>(request: MobileRequest) => Promise<T>
