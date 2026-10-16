@@ -830,5 +830,9 @@ defineExpose({ acknowledgeDocument: () => { lastRenderedMarkdown = crepe?.editor
 @media (max-width: 680px) { .toolbar-select select { min-width: 46px; width: 46px; } }
 .touch-editor .markdown-toolbar button,.touch-editor .toolbar-select { min-height: 44px; min-width: 44px; }
 .touch-editor .markdown-toolbar { max-height: 28dvh; }
+.touch-editor .toolbar-group { flex-wrap: wrap; max-width: 100%; min-width: 0; box-sizing: border-box; }
+.touch-editor .font-size-input { height: auto; min-height: 44px; }
+.touch-editor .font-size-input input { width: 64px; min-height: 40px; padding: 4px 6px; appearance: textfield; }
+.touch-editor .font-size-input input::-webkit-inner-spin-button { -webkit-appearance: none; }
 .touch-editor :deep(.ProseMirror) { font-size: max(16px, var(--font-editor-size)); padding-bottom: max(90px, env(safe-area-inset-bottom)); }
 </style>
