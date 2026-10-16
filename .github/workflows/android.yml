@@ -128,6 +128,9 @@ jobs:
           test "$RUNNER_ENVIRONMENT" = github-hosted
           test "$RUNNER_OS" = Linux
           mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_EMULATOR_HOME"
+          # The headless QEMU binary still links libpulse.so.0 on the hosted image.
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libpulse0
           manager="$ANDROID_HOME/cmdline-tools/latest/bin"
           if [[ -x "$manager/android" ]]; then
             for package in platforms/android-36 build-tools/36.0.0 platform-tools emulator system-images/android-36/google_apis/x86_64; do
@@ -138,6 +141,11 @@ jobs:
           fi
           test -c /dev/kvm
           sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          ldd "$ANDROID_HOME/emulator/qemu/linux-x86_64/qemu-system-x86_64" > .build/android-runtime/emulator-dependencies.txt
+          if grep -q 'not found' .build/android-runtime/emulator-dependencies.txt; then
+            cat .build/android-runtime/emulator-dependencies.txt
+            exit 1
+          fi
           "$ANDROID_HOME/emulator/emulator" -accel-check
           printf 'no\n' | "$manager/avdmanager" create avd --name "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --package 'system-images;android-36;google_apis;x86_64' --device pixel_7
           "$ANDROID_HOME/emulator/emulator" -version > .build/android-runtime/emulator-version.txt 2>&1
@@ -150,14 +158,7 @@ jobs:
           --output .build/android-runtime/evidence
       - name: Stop only this job's emulator
         if: always()
-        shell: bash
-        run: |
-          if [[ -x "$ANDROID_HOME/platform-tools/adb" ]]; then
-            owned_name=$("$ANDROID_HOME/platform-tools/adb" -s emulator-5562 emu avd name 2>/dev/null | head -n 1 | tr -d '\r')
-            if [[ "$owned_name" = "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" ]]; then
-              "$ANDROID_HOME/platform-tools/adb" -s emulator-5562 emu kill
-            fi
-          fi
+        run: python3 scripts/android_runtime_probe.py --sdk "$ANDROID_HOME" --stop-owned
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -166,4 +167,5 @@ jobs:
             .build/android-runtime/evidence/
             .build/android-runtime/emulator.log
             .build/android-runtime/emulator-version.txt
+            .build/android-runtime/emulator-dependencies.txt
           if-no-files-found: warn

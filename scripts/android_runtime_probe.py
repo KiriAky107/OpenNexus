@@ -52,6 +52,22 @@ def require_hosted_emulator(serial):
     require(serial == 'emulator-5562', 'Refusing an unowned emulator or physical device')
 
 
+def stop_owned_emulator(adb, serial, avd):
+    require_hosted_emulator(serial)
+    def command(*args):
+        return subprocess.run([str(adb), '-s', serial, *args], capture_output=True, timeout=20)
+    observed = command('emu', 'avd', 'name')
+    if observed.returncode:
+        text = (observed.stdout + observed.stderr).decode('utf-8', 'replace').lower()
+        require('not found' in text or 'no emulator detected' in text, 'Emulator state is unknown; no guessed process was stopped')
+        return {'state': 'not_present', 'stop_requested': False}
+    names = observed.stdout.decode('utf-8', 'replace').splitlines()
+    require(names and names[0].strip() == avd, 'AVD ownership mismatch; no process was stopped')
+    stopped = command('emu', 'kill')
+    require(stopped.returncode == 0, 'Owned emulator stop request failed')
+    return {'state': 'stop_requested', 'stop_requested': True, 'avd': avd}
+
+
 class Probe:
     def __init__(self, args, apk, binding):
         self.args, self.apk, self.binding = args, apk, binding
@@ -248,13 +264,19 @@ class Probe:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--bundle', type=Path, required=True)
-    parser.add_argument('--commit', required=True)
+    parser.add_argument('--bundle', type=Path)
+    parser.add_argument('--commit')
     parser.add_argument('--sdk', type=Path, required=True)
     parser.add_argument('--serial', default='emulator-5562')
-    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--stop-owned', action='store_true')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
+    if args.stop_owned:
+        expected = f'opennexus-ci-{os.environ["GITHUB_RUN_ID"]}-{os.environ["GITHUB_RUN_ATTEMPT"]}'
+        print(json.dumps(stop_owned_emulator(args.sdk / 'platform-tools/adb', args.serial, expected)))
+        return
+    require(args.bundle and args.commit and args.output, 'Runtime needs a fixed bundle, commit and exclusive evidence output')
     apk, binding = validate_binding(args.bundle, args.commit)
     from release_plan import build_source
     require(json.loads((args.bundle / 'source-provenance.json').read_text('utf-8'))

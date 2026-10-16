@@ -2,13 +2,37 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
-from android_runtime_probe import APP, digest, require_hosted_emulator, validate_binding
+from android_runtime_probe import APP, digest, require_hosted_emulator, stop_owned_emulator, validate_binding
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_cleanup_does_not_fail_or_kill_when_no_emulator_ever_started(self):
+        absent = subprocess.CompletedProcess([], 1, b'', b"error: device 'emulator-5562' not found")
+        with patch('android_runtime_probe.require_hosted_emulator'), patch('android_runtime_probe.subprocess.run', return_value=absent) as run:
+            result = stop_owned_emulator(Path('/owned/adb'), 'emulator-5562', 'owned-ci-avd')
+        self.assertEqual(result, {'state': 'not_present', 'stop_requested': False})
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0][-3:], ['emu', 'avd', 'name'])
+
+    def test_cleanup_rejects_other_avds_and_does_not_guess_an_offline_process(self):
+        for result in [subprocess.CompletedProcess([], 0, b'other-avd\nOK\n', b''),
+            subprocess.CompletedProcess([], 1, b'', b'error: device offline')]:
+            with patch('android_runtime_probe.require_hosted_emulator'), patch('android_runtime_probe.subprocess.run', return_value=result) as run:
+                with self.assertRaises(RuntimeError):
+                    stop_owned_emulator(Path('/owned/adb'), 'emulator-5562', 'owned-ci-avd')
+            self.assertEqual(run.call_count, 1)
+
+    def test_cleanup_sends_stop_only_after_matching_the_exact_owned_avd(self):
+        replies = [subprocess.CompletedProcess([], 0, b'owned-ci-avd\nOK\n', b''), subprocess.CompletedProcess([], 0, b'OK\n', b'')]
+        with patch('android_runtime_probe.require_hosted_emulator'), patch('android_runtime_probe.subprocess.run', side_effect=replies) as run:
+            result = stop_owned_emulator(Path('/owned/adb'), 'emulator-5562', 'owned-ci-avd')
+        self.assertTrue(result['stop_requested'])
+        self.assertEqual(run.call_args.args[0], [str(Path('/owned/adb')), '-s', 'emulator-5562', 'emu', 'kill'])
+
     def test_developer_machine_and_phone_are_rejected_before_adb(self):
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(RuntimeError, 'GitHub-hosted'):
