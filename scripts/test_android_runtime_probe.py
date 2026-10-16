@@ -157,6 +157,23 @@ class RuntimeBoundaries(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'ownership mismatch'):probe.verify_installed(path)
             self.assertEqual([call[0] for call in calls],['get-state','emu'])
 
+    def test_theme_diagnostic_capture_keeps_the_actual_selected_card_screenshot(self):
+        png = b'\x89PNG\r\n\x1a\nowned screenshot'
+        for phase, choice in [('theme-diagnostic-dark', 'Dark'), ('theme-diagnostic-reset', 'System')]:
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                probe = Probe.__new__(Probe); probe.output = Path(directory); calls = []
+                def device(*args, **kwargs):
+                    calls.append(args)
+                    data = b'<?xml version="1.0"?><hierarchy />' if args[0:2] == ('exec-out', 'cat') else png
+                    return subprocess.CompletedProcess([], 0, data, b'')
+                probe.device = device
+                probe.shell = lambda *args, **kwargs: subprocess.CompletedProcess([], 0, b'owned window', b'')
+                probe.capture(phase)
+                self.assertEqual((probe.output / f'{phase}.png').read_bytes(), png)
+                self.assertEqual((probe.output / f'theme-cards-{choice}.png').read_bytes(), png)
+                self.assertIn(('exec-out', 'run-as', DRIVER, 'cat', f'files/theme-cards-{choice}.png'), calls)
+                self.assertEqual((probe.output / f'{phase}-window.txt').read_bytes(), b'owned window')
+
     def test_test_ime_rejects_unknown_original_selection_before_any_setting_change(self):
         probe=Probe.__new__(Probe);probe.args=SimpleNamespace(serial='emulator-5562')
         probe.original_ime=None;probe.original_hardware_ime=None

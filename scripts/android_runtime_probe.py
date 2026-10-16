@@ -307,7 +307,10 @@ class Probe:
             (self.output / f'{phase}.xml').write_bytes(tree)
         if phase.startswith('theme-'):
             (self.output / f'{phase}-window.txt').write_bytes(self.shell('dumpsys', 'window', 'windows', check=False).stdout)
-            selected = {'theme-dark': 'Dark', 'theme-light': 'Light', 'theme-sepia': 'Sepia', 'theme-system': 'System'}[phase]
+            selected = {'theme-dark': 'Dark', 'theme-light': 'Light', 'theme-sepia': 'Sepia',
+                'theme-system': 'System', 'theme-diagnostic-dark': 'Dark', 'theme-diagnostic-reset': 'System'}.get(phase)
+            if selected is None:
+                return
             filename = f'theme-cards-{selected}.png'
             popup = self.device('exec-out', 'run-as', DRIVER, 'cat', 'files/' + filename, check=False).stdout
             if popup.startswith(b'\x89PNG\r\n\x1a\n'):
