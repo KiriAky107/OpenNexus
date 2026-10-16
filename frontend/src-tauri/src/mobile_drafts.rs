@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use uuid::Uuid;
 
+#[path = "mobile_mutations.rs"]
+mod mutations;
+pub use mutations::MutationIntent;
+
 pub const MAX_NOTE_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -16,6 +20,7 @@ pub struct Draft {
     pub generation: i64,
     pub saved_generation: i64,
     pub content: String,
+    pub edit_session: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -60,6 +65,7 @@ fn draft_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Draft> {
         generation: row.get(4)?,
         saved_generation: row.get(5)?,
         content: row.get(6)?,
+        edit_session: row.get(7)?,
     })
 }
 
@@ -77,7 +83,8 @@ fn intent_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SaveIntent> {
     })
 }
 
-const DRAFT_COLUMNS: &str = "id,file_id,path,base_hash,generation,saved_generation,content";
+const DRAFT_COLUMNS: &str =
+    "id,file_id,path,base_hash,generation,saved_generation,content,edit_session";
 const INTENT_COLUMNS: &str =
     "operation_id,draft_id,generation,file_id,path,expected,content,state,error";
 
@@ -92,7 +99,7 @@ impl DraftStore {
         let db = Connection::open(path)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 1 {
+        if version > 2 {
             return Err(HostError::new("SCHEMA_INCOMPATIBLE"));
         }
         db.execute_batch(
@@ -100,15 +107,22 @@ impl DraftStore {
             CREATE TABLE IF NOT EXISTS drafts (
                 id TEXT PRIMARY KEY,file_id TEXT UNIQUE,path TEXT NOT NULL UNIQUE,
                 base_hash TEXT NOT NULL,generation INTEGER NOT NULL,
-                saved_generation INTEGER NOT NULL,content TEXT NOT NULL);
+                saved_generation INTEGER NOT NULL,content TEXT NOT NULL,edit_session TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS save_intents (
                 operation_id TEXT PRIMARY KEY,draft_id TEXT NOT NULL,generation INTEGER NOT NULL,
                 file_id TEXT,path TEXT NOT NULL,expected TEXT NOT NULL,content TEXT NOT NULL,
                 state TEXT NOT NULL,error TEXT);
             CREATE UNIQUE INDEX IF NOT EXISTS active_draft_save
                 ON save_intents(draft_id) WHERE state='prepared';
-            PRAGMA user_version=1; COMMIT;",
+            ",
         )?;
+        if version == 1 {
+            db.execute_batch(
+                "ALTER TABLE drafts ADD COLUMN edit_session TEXT NOT NULL DEFAULT '';",
+            )?;
+        }
+        db.execute_batch("PRAGMA user_version=2; COMMIT;")?;
+        mutations::initialize(&db)?;
         Ok(Self { db })
     }
 
@@ -129,6 +143,18 @@ impl DraftStore {
             )
             .optional()?
             .ok_or_else(|| HostError::new("DRAFT_NOT_FOUND"))
+    }
+
+    /// A new editor owns a new lease; queued writes from older views are rejected.
+    pub fn checkout(&self, id: &str) -> Result<Draft> {
+        if self.db.execute(
+            "UPDATE drafts SET edit_session=?1 WHERE id=?2",
+            params![Uuid::new_v4().to_string(), id],
+        )? == 0
+        {
+            return Err(HostError::new("DRAFT_NOT_FOUND"));
+        }
+        self.get(id)
     }
 
     pub fn list(&self, offset: usize, limit: usize) -> Result<DraftPage> {
@@ -169,8 +195,8 @@ impl DraftStore {
         }
         let id = Uuid::new_v4().to_string();
         self.db.execute(
-            "INSERT INTO drafts VALUES (?1,NULL,?2,'',1,0,'')",
-            params![id, path],
+            "INSERT INTO drafts VALUES (?1,NULL,?2,'',1,0,'',?3)",
+            params![id, path, Uuid::new_v4().to_string()],
         )?;
         self.get(&id)
     }
@@ -185,8 +211,10 @@ impl DraftStore {
             )
             .optional()?;
         // A dirty recovered draft is never replaced by a later disk read.
-        if let Some(draft) = existing {
-            return Ok(draft);
+        if let Some(draft) = &existing {
+            if draft.generation != draft.saved_generation || self.pending(&draft.id)?.is_some() {
+                return self.checkout(&draft.id);
+            }
         }
         ws.tree()?;
         let path = ws.path_for_id(file_id)?;
@@ -195,15 +223,35 @@ impl DraftStore {
             return Err(HostError::new("CORE_NOTE_TOO_LARGE"));
         }
         let Document { entry, content } = ws.read(&path)?;
+        if let Some(draft) = existing {
+            self.db.execute(
+                "UPDATE drafts SET path=?1,base_hash=?2,content=?3 WHERE id=?4",
+                params![entry.path, entry.hash, content, draft.id],
+            )?;
+            return self.checkout(&draft.id);
+        }
         let id = Uuid::new_v4().to_string();
         self.db.execute(
-            "INSERT INTO drafts VALUES (?1,?2,?3,?4,0,0,?5)",
-            params![id, entry.file_id, entry.path, entry.hash, content],
+            "INSERT INTO drafts VALUES (?1,?2,?3,?4,0,0,?5,?6)",
+            params![
+                id,
+                entry.file_id,
+                entry.path,
+                entry.hash,
+                content,
+                Uuid::new_v4().to_string()
+            ],
         )?;
         self.get(&id)
     }
 
-    pub fn persist(&mut self, id: &str, generation: i64, content: &str) -> Result<Draft> {
+    pub fn persist(
+        &mut self,
+        id: &str,
+        edit_session: &str,
+        generation: i64,
+        content: &str,
+    ) -> Result<Draft> {
         if generation < 1 || content.len() > MAX_NOTE_BYTES {
             return Err(HostError::new("MOBILE_DRAFT_INVALID"));
         }
@@ -216,6 +264,9 @@ impl DraftStore {
             )
             .optional()?
             .ok_or_else(|| HostError::new("DRAFT_NOT_FOUND"))?;
+        if old.edit_session != edit_session || Uuid::parse_str(edit_session).is_err() {
+            return Err(HostError::new("DRAFT_SESSION_CHANGED"));
+        }
         if generation < old.generation || (generation == old.generation && content != old.content) {
             return Err(HostError::new("DRAFT_GENERATION_CONFLICT"));
         }
@@ -249,8 +300,14 @@ impl DraftStore {
         &mut self,
         ws: &Workspace,
         draft_id: &str,
+        edit_session: &str,
         generation: i64,
     ) -> Result<SaveIntent> {
+        if self.get(draft_id)?.edit_session != edit_session
+            || Uuid::parse_str(edit_session).is_err()
+        {
+            return Err(HostError::new("DRAFT_SESSION_CHANGED"));
+        }
         if let Some(pending) = self.pending(draft_id)? {
             let observed = self.observe_save(ws, &pending.operation_id)?;
             if observed.state == "prepared" {
@@ -376,6 +433,83 @@ mod tests {
     use super::*;
 
     #[test]
+    fn schema_one_upgrade_retains_original_draft_and_requires_a_fresh_editor_lease() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Connection::open(temp.path().join("mobile-drafts.sqlite3")).unwrap();
+        database.execute_batch("CREATE TABLE drafts(id TEXT PRIMARY KEY,file_id TEXT UNIQUE,path TEXT NOT NULL UNIQUE,base_hash TEXT NOT NULL,generation INTEGER NOT NULL,saved_generation INTEGER NOT NULL,content TEXT NOT NULL); PRAGMA user_version=1;").unwrap();
+        database
+            .execute(
+                "INSERT INTO drafts VALUES ('original',NULL,'中文.md','',2,0,?1)",
+                ["原草稿\r\n😀"],
+            )
+            .unwrap();
+        drop(database);
+        let mut store = DraftStore::open(temp.path()).unwrap();
+        let original = store.get("original").unwrap();
+        assert_eq!(original.content, "原草稿\r\n😀");
+        assert_eq!(original.generation, 2);
+        assert_eq!(
+            store.persist("original", "", 3, "bad").unwrap_err().code,
+            "DRAFT_SESSION_CHANGED"
+        );
+        let current = store.checkout("original").unwrap();
+        assert_eq!(
+            store
+                .persist("original", &current.edit_session, 3, "继续编辑")
+                .unwrap()
+                .content,
+            "继续编辑"
+        );
+    }
+
+    #[test]
+    fn a_new_editor_lease_rejects_all_late_writes_and_clean_notes_reload_current_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("vault");
+        std::fs::create_dir(&root).unwrap();
+        let mut ws = Workspace::open(&root).unwrap();
+        let entry = ws.write("a.md", "", b"base", "local").unwrap();
+        let mut store = DraftStore::open(temp.path()).unwrap();
+        let old = store.open_note(&mut ws, &entry.file_id).unwrap();
+        ws.write("a.md", &entry.hash, b"independent", "local")
+            .unwrap();
+        let current = store.open_note(&mut ws, &entry.file_id).unwrap();
+        assert_eq!(current.content, "independent");
+        assert_ne!(old.edit_session, current.edit_session);
+        assert_eq!(
+            store
+                .persist(&old.id, &old.edit_session, 500, "late old view")
+                .unwrap_err()
+                .code,
+            "DRAFT_SESSION_CHANGED"
+        );
+        assert_eq!(
+            store
+                .prepare_save(&ws, &old.id, &old.edit_session, old.generation)
+                .unwrap_err()
+                .code,
+            "DRAFT_SESSION_CHANGED"
+        );
+        store
+            .persist(&current.id, &current.edit_session, 1, "new view typing")
+            .unwrap();
+        let reopened = store.open_note(&mut ws, &entry.file_id).unwrap();
+        assert_eq!(reopened.content, "new view typing");
+        assert_eq!(
+            store
+                .persist(
+                    &current.id,
+                    &current.edit_session,
+                    999,
+                    "late previous view"
+                )
+                .unwrap_err()
+                .code,
+            "DRAFT_SESSION_CHANGED"
+        );
+    }
+
+    #[test]
     fn recovered_draft_pages_are_bounded_metadata_without_note_bodies() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("vault");
@@ -383,7 +517,9 @@ mod tests {
         let ws = Workspace::open(&root).unwrap();
         let mut store = DraftStore::open(temp.path()).unwrap();
         let first = store.create(&ws, "a.md").unwrap();
-        store.persist(&first.id, 2, "私有正文 😀").unwrap();
+        store
+            .persist(&first.id, &first.edit_session, 2, "私有正文 😀")
+            .unwrap();
         let second = store.create(&ws, "b.md").unwrap();
         let page = store.list(0, 1).unwrap();
         assert_eq!(page.total, 2);
@@ -404,15 +540,18 @@ mod tests {
         let mut store = DraftStore::open(temp.path()).unwrap();
         let draft = store.create(&ws, "中文 😀.md").unwrap();
         let expected = store
-            .persist(&draft.id, 2, "第一行\r\n# 标题 😀\n")
+            .persist(&draft.id, &draft.edit_session, 2, "第一行\r\n# 标题 😀\n")
             .unwrap();
         assert_eq!(
-            store.persist(&draft.id, 1, "late").unwrap_err().code,
+            store
+                .persist(&draft.id, &draft.edit_session, 1, "late")
+                .unwrap_err()
+                .code,
             "DRAFT_GENERATION_CONFLICT"
         );
         assert_eq!(
             store
-                .persist(&draft.id, 2, "changed same generation")
+                .persist(&draft.id, &draft.edit_session, 2, "changed same generation")
                 .unwrap_err()
                 .code,
             "DRAFT_GENERATION_CONFLICT"
@@ -432,9 +571,11 @@ mod tests {
         let mut store = DraftStore::open(temp.path()).unwrap();
         let draft = store.create(&ws, "a.md").unwrap();
         store
-            .persist(&draft.id, 2, "acknowledged bytes\r\n")
+            .persist(&draft.id, &draft.edit_session, 2, "acknowledged bytes\r\n")
             .unwrap();
-        let intent = store.prepare_save(&ws, &draft.id, 2).unwrap();
+        let intent = store
+            .prepare_save(&ws, &draft.id, &draft.edit_session, 2)
+            .unwrap();
         assert!(ws.operation(&intent.operation_id).unwrap().is_none());
         assert_eq!(
             store.observe_save(&ws, &intent.operation_id).unwrap().state,
@@ -450,7 +591,12 @@ mod tests {
         )
         .unwrap();
         store
-            .persist(&draft.id, 3, "newer typing must remain")
+            .persist(
+                &draft.id,
+                &draft.edit_session,
+                3,
+                "newer typing must remain",
+            )
             .unwrap();
         drop(store);
         drop(ws);
@@ -484,15 +630,26 @@ mod tests {
         let mut ws = Workspace::open(&root).unwrap();
         let mut store = DraftStore::open(temp.path()).unwrap();
         let draft = store.create(&ws, "a.md").unwrap();
-        store.persist(&draft.id, 2, "one").unwrap();
-        let first = store.prepare_save(&ws, &draft.id, 2).unwrap();
+        store
+            .persist(&draft.id, &draft.edit_session, 2, "one")
+            .unwrap();
+        let first = store
+            .prepare_save(&ws, &draft.id, &draft.edit_session, 2)
+            .unwrap();
         store.apply_save(&mut ws, &first.operation_id).unwrap();
         assert_eq!(
-            store.prepare_save(&ws, &draft.id, 2).unwrap().operation_id,
+            store
+                .prepare_save(&ws, &draft.id, &draft.edit_session, 2)
+                .unwrap()
+                .operation_id,
             first.operation_id
         );
-        store.persist(&draft.id, 3, "two").unwrap();
-        let second = store.prepare_save(&ws, &draft.id, 3).unwrap();
+        store
+            .persist(&draft.id, &draft.edit_session, 3, "two")
+            .unwrap();
+        let second = store
+            .prepare_save(&ws, &draft.id, &draft.edit_session, 3)
+            .unwrap();
         store.apply_save(&mut ws, &second.operation_id).unwrap();
         store.observe_save(&ws, &first.operation_id).unwrap();
         assert_eq!(store.get(&draft.id).unwrap().base_hash, hash(b"two"));
@@ -513,8 +670,12 @@ mod tests {
         let entry = ws.write("a.md", "", b"base", "local").unwrap();
         let mut store = DraftStore::open(temp.path()).unwrap();
         let draft = store.open_note(&mut ws, &entry.file_id).unwrap();
-        store.persist(&draft.id, 1, "local draft").unwrap();
-        let intent = store.prepare_save(&ws, &draft.id, 1).unwrap();
+        store
+            .persist(&draft.id, &draft.edit_session, 1, "local draft")
+            .unwrap();
+        let intent = store
+            .prepare_save(&ws, &draft.id, &draft.edit_session, 1)
+            .unwrap();
         ws.write("a.md", &entry.hash, b"independent", "local")
             .unwrap();
         assert_eq!(
@@ -541,11 +702,20 @@ mod tests {
         let ws = Workspace::open(&root).unwrap();
         let mut store = DraftStore::open(temp.path()).unwrap();
         let draft = store.create(&ws, "a.md").unwrap();
-        store.persist(&draft.id, 2, "one").unwrap();
-        let intent = store.prepare_save(&ws, &draft.id, 2).unwrap();
-        store.persist(&draft.id, 3, "two").unwrap();
+        store
+            .persist(&draft.id, &draft.edit_session, 2, "one")
+            .unwrap();
+        let intent = store
+            .prepare_save(&ws, &draft.id, &draft.edit_session, 2)
+            .unwrap();
+        store
+            .persist(&draft.id, &draft.edit_session, 3, "two")
+            .unwrap();
         assert_eq!(
-            store.prepare_save(&ws, &draft.id, 3).unwrap_err().code,
+            store
+                .prepare_save(&ws, &draft.id, &draft.edit_session, 3)
+                .unwrap_err()
+                .code,
             "PENDING_SAVE_REQUIRES_REVIEW"
         );
         assert_eq!(store.intent(&intent.operation_id).unwrap().content, "one");
@@ -560,7 +730,9 @@ mod tests {
         let ws = Workspace::open(&root).unwrap();
         let mut store = DraftStore::open(temp.path()).unwrap();
         let draft = store.create(&ws, "a.md").unwrap();
-        let old = store.persist(&draft.id, 2, "keep").unwrap();
+        let old = store
+            .persist(&draft.id, &draft.edit_session, 2, "keep")
+            .unwrap();
         let pages: i64 = store
             .db
             .query_row("PRAGMA page_count", [], |row| row.get(0))
@@ -571,7 +743,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             store
-                .persist(&draft.id, 3, &"large".repeat(100000))
+                .persist(&draft.id, &draft.edit_session, 3, &"large".repeat(100000))
                 .unwrap_err()
                 .code,
             "QUOTA_EXCEEDED"
@@ -598,7 +770,12 @@ mod tests {
         let draft = store.create(&ws, "a.md").unwrap();
         assert_eq!(
             store
-                .persist(&draft.id, 2, &"x".repeat(MAX_NOTE_BYTES + 1))
+                .persist(
+                    &draft.id,
+                    &draft.edit_session,
+                    2,
+                    &"x".repeat(MAX_NOTE_BYTES + 1)
+                )
                 .unwrap_err()
                 .code,
             "MOBILE_DRAFT_INVALID"
