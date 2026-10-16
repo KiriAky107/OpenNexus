@@ -2,7 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CanvasModel, nodeBounds, type CanvasNode, type CanvasEdge } from '../../src/features/editor/canvasModel'
 import { CanvasGeometry, intersects } from '../../src/features/editor/canvasGeometry'
-import { canvasColor as color } from '../../src/features/editor/canvasColors'
+import CanvasScene from '../../src/features/editor/CanvasScene.vue'
+import CanvasToolbar from '../../src/features/editor/CanvasToolbar.vue'
 import { resolveCanvasFile } from '../../src/services/workspaceDocuments'
 import { CanvasGestures, type CanvasGestureTarget } from './canvasGestures'
 import { canvasText } from './canvasLocale'
@@ -11,7 +12,8 @@ import type { Language } from './locale'
 
 const props = defineProps<{ modelValue: string; language: Language; readOnly?: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [source: string]; error: [code: string]; compositionStart: []; compositionEnd: []; link: [href: string]; image: []; validation: [pending: boolean] }>()
-const host = ref<HTMLElement>(), revision = ref(0), selected = ref<string[]>([]), edgeId = ref('')
+const scene = ref<InstanceType<typeof CanvasScene>>()
+const host = computed(() => scene.value?.element), revision = ref(0), selected = ref<string[]>([]), edgeId = ref('')
 const multi = ref(false), connecting = ref(false), connectFrom = ref(''), panel = ref(false), localError = ref('')
 const addType = ref<'file' | 'link' | null>(null), addValue = ref(''), clipboard = ref('')
 const repairOpen = ref(false), repairValue = ref(props.modelValue), invalid = ref(false)
@@ -19,7 +21,7 @@ const copy = computed(() => canvasText(props.language))
 const rawFields = ref<Record<string, string>>(Object.create(null)), invalidFields = ref(new Set<string>())
 const feedback = computed(() => localError.value || invalidFields.value.size ? copy.value.invalidValue : '')
 let model: CanvasModel | undefined, gestures: CanvasGestures | undefined, geometry: CanvasGeometry | undefined
-const composing = ref(false), toolsMenu = ref<HTMLDetailsElement>()
+const composing = ref(false), toolsMenu = ref<InstanceType<typeof CanvasToolbar>>()
 let batch = '', disposed = false, resizeObserver: ResizeObserver | undefined
 const dimensions = ref({ width: 390, height: 500 })
 const imageCache = createCanvasImages()
@@ -43,15 +45,21 @@ const bounds = computed(() => ({ left: -view.value.x / view.value.zoom - 80, top
 const visibleNodes = computed(() => { revision.value; return nodes.value.map(node => gestures?.preview.get(node.id) ?? node)
   .filter(node => intersects({ left: node.x, right: node.x + node.width, top: node.y, bottom: node.y + node.height }, bounds.value)) })
 watch(() => visibleNodes.value.flatMap(node => [node.type === 'file' ? node.file ?? '' : '', node.background ?? '']).filter(value => canvasImagePath(value)).sort().join('\n'), value => imageCache.bind(value ? value.split('\n') : []), { immediate: true })
-const image = (path: unknown) => { const resolved = canvasImagePath(path); return resolved ? imageCache.items[resolved] : undefined }
-const imageError = (path: string) => { const resolved = canvasImagePath(path); if (resolved) imageCache.failed(resolved) }
+const scenePreviews = computed(() => Object.fromEntries(nodes.value.flatMap(node => [node.file, node.background]).filter((path): path is string => typeof path === 'string').map(path => {
+  const key = canvasImagePath(path), image = key ? imageCache.items[key] : undefined
+  return [path, { url: image?.url, text: image?.error === 'limit' ? copy.value.imageLimit : image?.url ? undefined : copy.value.imageUnavailable }]
+})))
+function imageError(path: string) { const key = canvasImagePath(path); if (key) imageCache.failed(key) }
+function requestOpen(node: CanvasNode) { if (composing.value || invalidFields.value.size) return; if (node.type === 'link') emit('link',node.url!); else if (node.type === 'file' && resolveCanvasFile(node.file)) emit('link',node.file!) }
+const sceneOrder = computed(() => new Map(nodes.value.map((node,index) => [node.id,index])))
+function selectEdge(id: string) { if (composing.value || invalidFields.value.size || props.readOnly) return; edgeId.value = id; selected.value = [] }
 const edges = computed(() => { revision.value; return geometry?.project(gestures?.preview ?? new Map()).filter(item => item.geometry && intersects(item.geometry.bounds, bounds.value)) ?? [] })
 const hasSelection = computed(() => Boolean(selected.value.length || activeEdge.value))
 const title = (node: CanvasNode) => node.type === 'text' ? node.text ?? '' : node.type === 'file' ? node.file ?? '' : node.type === 'link' ? node.url ?? '' : node.label ?? ''
 function guarded(action: () => boolean | unknown, fieldInput = false) {
   if (!model || props.readOnly || composing.value || disposed || (!fieldInput && invalidFields.value.size)) return false
   localError.value = ''
-  try { const before = model.source; action(); if (model.source !== before) { if (!fieldInput) rawFields.value = Object.create(null); notify() }; if (toolsMenu.value) toolsMenu.value.open = false; return true }
+  try { const before = model.source; action(); if (model.source !== before) { if (!fieldInput) rawFields.value = Object.create(null); notify() }; toolsMenu.value?.closeMenu(); return true }
   catch { localError.value = copy.value.invalidValue; return false }
 }
 function point(event: PointerEvent) { const box = host.value!.getBoundingClientRect(); return { x: event.clientX - box.left, y: event.clientY - box.top } }
@@ -98,7 +106,7 @@ function add(type: CanvasNode['type'], value = '') {
   const position = gestures.world({ x: dimensions.value.width / 2 - 100, y: dimensions.value.height / 2 - 60 })
   return guarded(() => { const id = model!.add(type, position.x, position.y, value); selected.value = [id]; edgeId.value = ''; panel.value = true; batch = crypto.randomUUID() })
 }
-function addReference(type: 'file' | 'link') { cancel(); addType.value = type; addValue.value = ''; localError.value = ''; if (toolsMenu.value) toolsMenu.value.open = false }
+function addReference(type: 'file' | 'link') { cancel(); addType.value = type; addValue.value = ''; localError.value = ''; toolsMenu.value?.closeMenu() }
 function confirmReference() { const type = addType.value; if (type && add(type, addValue.value)) addType.value = null }
 function property() { cancel(); if (invalidFields.value.size) return; panel.value = !panel.value; batch = crypto.randomUUID() }
 function keyboardSelect(id: string) {
@@ -122,7 +130,7 @@ function repairInput() { if (!composing.value && !props.readOnly) emit('update:m
 function endComposition(event: CompositionEvent, key: string, edge = false) { composing.value = false; field(event, key, edge); emit('compositionEnd') }
 function remove() { guarded(() => { model!.remove(selected.value, edgeId.value || undefined); selected.value = []; edgeId.value = ''; panel.value = false }) }
 function duplicate() { guarded(() => { selected.value = model!.paste(model!.copy(selected.value)); edgeId.value = '' }) }
-function copySelection() { if (model && selected.value.length) clipboard.value = model.copy(selected.value); if (toolsMenu.value) toolsMenu.value.open = false }
+function copySelection() { if (model && selected.value.length) clipboard.value = model.copy(selected.value); toolsMenu.value?.closeMenu() }
 function paste() { if (clipboard.value) guarded(() => { selected.value = model!.paste(clipboard.value); edgeId.value = '' }) }
 function undo() { if (invalidFields.value.size) { discardFields(); return }; guarded(() => { model!.undo(); discardFields(); selected.value = selected.value.filter(id => model!.document.nodes.some(node => node.id === id)); if (!model!.document.edges.some(edge => edge.id === edgeId.value)) edgeId.value = ''; panel.value = false }) }
 function redo() { guarded(() => model!.redo()) }
@@ -146,7 +154,7 @@ defineExpose({ undo, redo, cancel, source: () => model?.source ?? props.modelVal
     if (composing.value || invalidFields.value.size) return true
     if (gestures?.pointers.size) { cancel(); return true }
     if (addType.value) { addType.value = null; return true }
-    if (toolsMenu.value?.open) { toolsMenu.value.open = false; return true }
+    if (toolsMenu.value?.closeMenu()) return true
     if (repairOpen.value) { repairOpen.value = false; return true }
     if (panel.value) { panel.value = false; return true }
     if (connecting.value || multi.value) { connecting.value = false; multi.value = false; connectFrom.value = ''; return true }
@@ -164,36 +172,15 @@ defineExpose({ undo, redo, cancel, source: () => model?.source ?? props.modelVal
       <div v-if="repairOpen" class="repair"><textarea v-model="repairValue" :aria-label="copy.repairLabel" :disabled="readOnly" @input="repairInput" @compositionstart="startComposition" @compositionend="finishComposition(); repairInput()" /><button :disabled="readOnly || composing" @click="applyRepair">{{ copy.repairApply }}</button></div>
     </template>
     <template v-else>
-      <nav class="canvas-toolbar" :aria-label="copy.canvas">
-        <button class="quiet" :disabled="readOnly || composing" @click="add('text', copy.textName)">{{ copy.text }}</button>
-        <details ref="toolsMenu"><summary>{{ copy.add }}</summary><div class="canvas-menu">
-          <button class="quiet" :disabled="readOnly || composing" @click="addReference('file')">{{ copy.file }}</button><button class="quiet" :disabled="readOnly || composing" @click="addReference('link')">{{ copy.link }}</button><button class="quiet" :disabled="readOnly || composing" @click="add('group', copy.groupName)">{{ copy.group }}</button>
-          <button class="quiet" :disabled="readOnly || composing" @click="cancel(); emit('image')">{{ copy.importImage }}</button>
-          <button class="quiet" :disabled="readOnly || composing || !selected.length" @click="copySelection">{{ copy.copy }}</button><button class="quiet" :disabled="readOnly || composing || !clipboard" @click="paste">{{ copy.paste }}</button><button class="quiet" :disabled="readOnly || composing || !selected.length" @click="duplicate">{{ copy.duplicate }}</button>
-          <button class="quiet" :disabled="readOnly || composing || !hasSelection" @click="remove">{{ copy.remove }}</button>
-        </div></details>
-        <button class="quiet" :disabled="readOnly || composing" :aria-pressed="multi" @click="cancel(); multi = !multi; connecting = false">{{ copy.select }}</button>
-        <button class="quiet" :disabled="readOnly || composing" :aria-pressed="connecting" @click="cancel(); connecting = !connecting; connectFrom = ''; multi = false">{{ copy.connect }}</button>
-        <button class="quiet" :disabled="!hasSelection || composing" @click="property">{{ copy.properties }}</button><button class="quiet" @click="fit">{{ copy.fit }}</button>
-      </nav>
+      <CanvasToolbar ref="toolsMenu" :language="language" touch :read-only="Boolean(readOnly || composing)" :selection-count="selected.length" :edge-selected="Boolean(edgeId)" :can-undo="Boolean(model?.canUndo)" :can-redo="Boolean(model?.canRedo)" :node-count="nodes.length" :sidebar="panel" :show-inspector="false" :arrange-enabled="false"
+        @add-text="add('text',copy.textName)" @add-file="addReference('file')" @add-link="addReference('link')" @group="add('group',copy.groupName)" @connect="guarded(()=>model!.connect(selected[0]!,selected[1]!))" @undo="undo" @redo="redo" @copy="copySelection" @paste="paste" @remove="remove">
+        <template #selection><button class="button-secondary" :disabled="readOnly || composing" :aria-pressed="multi" @click="cancel();multi=!multi;connecting=false">{{ copy.select }}</button><button class="button-secondary" :disabled="readOnly || composing" :aria-pressed="connecting" @click="cancel();connecting=!connecting;connectFrom='';multi=false">{{ copy.connect }}</button><button class="button-secondary" :disabled="!hasSelection || composing" @click="property">{{ copy.properties }}</button><button class="button-secondary" @click="fit">{{ copy.fit }}</button></template>
+        <template #tools><button role="menuitem" :disabled="readOnly || composing" @click="cancel();emit('image')">{{ copy.importImage }}</button><button role="menuitem" :disabled="readOnly || composing || !selected.length" @click="duplicate">{{ copy.duplicate }}</button></template>
+      </CanvasToolbar>
       <p class="canvas-hint" role="status">{{ connecting ? copy.connectHelp : copy.hint }} <span v-if="hasSelection">{{ copy.selected }}: {{ selected.length || 1 }}</span></p>
       <p v-if="feedback" role="alert">{{ feedback }} <button v-if="invalidFields.size" class="quiet" @click="discardFields">{{ copy.discardFields }}</button></p>
-      <div ref="host" class="canvas-viewport" :aria-label="copy.canvas" @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="cancel" @lostpointercapture="lost">
-        <p v-if="!nodes.length" class="canvas-empty">{{ copy.empty }}</p>
-        <div class="canvas-world" :style="{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }">
-          <svg class="canvas-connections" aria-hidden="true"><defs><marker id="mobile-canvas-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--color-text-secondary)" /></marker></defs>
-            <g v-for="item in edges" :key="item.edge.id"><path :d="item.geometry!.path" class="edge" :class="{ chosen: edgeId === item.edge.id }" :stroke="color(item.edge.color, 'var(--color-text-secondary)')" :marker-start="item.edge.fromEnd === 'arrow' ? 'url(#mobile-canvas-arrow)' : undefined" :marker-end="item.edge.toEnd !== 'none' ? 'url(#mobile-canvas-arrow)' : undefined" />
-              <path :d="item.geometry!.path" class="edge-hit" :data-edge="item.edge.id" :style="{ strokeWidth: `${18 / view.zoom}px` }" /><text v-if="item.edge.label" :x="item.geometry!.x" :y="item.geometry!.y - 10">{{ item.edge.label }}</text></g>
-          </svg>
-          <div v-for="node in visibleNodes" :key="node.id" role="button" tabindex="0" :aria-label="title(node) || copy[node.type === 'file' ? 'file' : node.type]" :aria-pressed="selected.includes(node.id)" :data-node="node.id" class="canvas-node" :class="{ group: node.type === 'group', chosen: selected.includes(node.id) }"
-            :style="{ left: `${node.x}px`, top: `${node.y}px`, width: `${node.width}px`, height: `${node.height}px`, borderColor: color(node.color), backgroundImage: image(node.background)?.url ? `url(${image(node.background)!.url})` : undefined, backgroundSize: node.backgroundStyle === 'repeat' ? 'auto' : node.backgroundStyle === 'ratio' ? 'contain' : 'cover', backgroundRepeat: node.backgroundStyle === 'repeat' ? 'repeat' : 'no-repeat' }" @keydown.enter.prevent="keyboardSelect(node.id)" @keydown.space.prevent="keyboardSelect(node.id)">
-            <strong v-if="node.label && node.type !== 'group'">{{ node.label }}</strong>
-            <template v-if="node.type === 'file' && canvasImagePath(node.file)"><img v-if="image(node.file)?.url" :src="image(node.file)!.url" :alt="node.label || node.file" decoding="async" draggable="false" @error="imageError(node.file!)" /><p v-else>{{ image(node.file)?.error === 'limit' ? copy.imageLimit : copy.imageUnavailable }}</p></template>
-            <pre v-else>{{ title(node) }}</pre>
-            <span v-if="selected.length === 1 && selected[0] === node.id && !readOnly" data-resize="true" class="resize-handle" role="button" :aria-label="copy.resize" />
-          </div>
-        </div>
-      </div>
+      <CanvasScene ref="scene" :nodes="visibleNodes" :node-count="nodes.length" :edges="edges" :order="sceneOrder" :pan="{x:view.x,y:view.y}" :zoom="view.zoom" :selected="selected" :selected-edge="edgeId" :previews="scenePreviews" :read-only="Boolean(readOnly)" :label="copy.canvas" :empty-label="copy.empty" touch
+        @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="cancel" @lostpointercapture="lost" @node-pointer="down" @resize-pointer="down" @edge-pointer="down" @locate="keyboardSelect" @open="requestOpen" @select-edge="selectEdge" @image-error="imageError" />
       <aside v-if="panel && (activeNode || activeEdge)" class="canvas-properties" :aria-label="copy.properties">
         <button class="quiet close-panel" :disabled="composing || Boolean(invalidFields.size)" @click="panel = false">{{ copy.close }}</button>
         <template v-if="activeNode">
@@ -219,6 +206,6 @@ defineExpose({ undo, redo, cancel, source: () => model?.source ?? props.modelVal
 </template>
 
 <style scoped>
-.canvas-editor{position:relative;display:flex;flex:1;min-height:260px;flex-direction:column;overflow:hidden;background:var(--color-background-secondary)}.canvas-toolbar{display:flex;align-items:center;gap:4px;padding:6px;flex-wrap:wrap;border-bottom:1px solid var(--color-border-default)}.canvas-toolbar button,.canvas-toolbar summary{font-size:13px;min-height:40px;padding:6px 9px}.canvas-toolbar details{position:relative}.canvas-menu{position:absolute;z-index:8;top:100%;left:0;display:flex;flex-direction:column;min-width:180px;background:var(--color-surface-primary);border:1px solid var(--color-border-default);border-radius:8px;padding:6px;box-shadow:var(--shadow-md)}.canvas-hint{font-size:12px;padding:4px 10px;margin:0;color:var(--color-text-secondary)}.canvas-viewport{position:relative;flex:1;min-height:200px;overflow:hidden;touch-action:none;background-image:radial-gradient(var(--color-border-default) 1px,transparent 1px);background-size:20px 20px}.canvas-world{position:absolute;left:0;top:0;width:1px;height:1px;transform-origin:0 0}.canvas-node{background:var(--color-surface-primary);color:var(--color-text-primary);position:absolute;box-sizing:border-box;padding:12px;overflow:hidden;border:1px solid var(--color-border-default);border-radius:8px;user-select:none;touch-action:none;cursor:grab}.canvas-node img{display:block;width:100%;height:100%;object-fit:contain;pointer-events:none}.canvas-node.chosen{outline:3px solid var(--color-border-focus);outline-offset:3px}.canvas-node.group{background:color-mix(in srgb,var(--color-accent-soft) 25%,transparent);border:2px dashed var(--color-border-default);z-index:-1}.canvas-node pre{background:transparent;max-height:none;padding:0;margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:15px/1.5 var(--font-ui-sans)}.canvas-node.group pre{font-weight:600}.canvas-connections{position:absolute;width:1px;height:1px;overflow:visible;pointer-events:none}.edge{fill:none;stroke-width:2}.edge.chosen{stroke-width:4}.edge-hit{fill:none;stroke:transparent;pointer-events:stroke}.canvas-connections text{font:14px var(--font-ui-sans);fill:var(--color-text-primary);text-anchor:middle;paint-order:stroke;stroke:var(--color-background-secondary);stroke-width:4px}.resize-handle{position:absolute;right:0;bottom:0;width:30px;height:30px;border:3px solid var(--color-border-focus);border-top:0;border-left:0;border-radius:0 0 8px 0;touch-action:none}.canvas-empty{position:absolute;left:20px;right:20px;top:40%;color:var(--color-text-secondary);text-align:center}.canvas-properties{position:absolute;z-index:10;left:8px;right:8px;bottom:8px;max-height:52%;overflow:auto;padding:12px;background:var(--color-surface-primary);border:1px solid var(--color-border-default);border-radius:12px;box-shadow:var(--shadow-lg)}.canvas-properties label,.canvas-dialog label{display:flex;flex-direction:column;gap:5px;font-size:13px;margin:5px 0}.canvas-properties input,.canvas-properties select,.canvas-properties textarea,.canvas-dialog input{box-sizing:border-box;width:100%;min-height:42px;font:16px var(--font-ui-sans);border:1px solid var(--color-border-default);border-radius:5px;padding:7px}.canvas-properties textarea{min-height:90px;resize:vertical}.numeric-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px}.close-panel{float:right}.canvas-dialog{position:absolute;inset:0;z-index:15;display:grid;place-items:center;background:var(--color-background-overlay);padding:12px}.canvas-dialog form{width:100%;max-width:420px;box-sizing:border-box;padding:18px;border-radius:10px;background:var(--color-surface-primary)}.canvas-dialog form>div{display:flex;gap:8px;justify-content:flex-end}.repair{display:flex;flex:1;flex-direction:column}.repair textarea{flex:1;min-height:200px;font:14px var(--font-ui-mono);white-space:pre}.canvas-editor>p[role=alert]{padding:6px 12px;color:var(--color-error);font-size:13px;margin:0}
+.canvas-editor{position:relative;display:flex;flex:1;min-height:260px;flex-direction:column;overflow:hidden;background:var(--color-background-secondary)}.canvas-menu{position:absolute;z-index:8;top:100%;left:0;display:flex;flex-direction:column;min-width:180px;background:var(--color-surface-primary);border:1px solid var(--color-border-default);border-radius:8px;padding:6px;box-shadow:var(--shadow-md)}.canvas-hint{font-size:12px;padding:4px 10px;margin:0;color:var(--color-text-secondary)}.canvas-connections{position:absolute;width:1px;height:1px;overflow:visible;pointer-events:none}.edge{fill:none;stroke-width:2}.edge.chosen{stroke-width:4}.edge-hit{fill:none;stroke:transparent;pointer-events:stroke}.canvas-connections text{font:14px var(--font-ui-sans);fill:var(--color-text-primary);text-anchor:middle;paint-order:stroke;stroke:var(--color-background-secondary);stroke-width:4px}.resize-handle{position:absolute;right:0;bottom:0;width:30px;height:30px;border:3px solid var(--color-border-focus);border-top:0;border-left:0;border-radius:0 0 8px 0;touch-action:none}.canvas-properties{position:absolute;z-index:10;left:8px;right:8px;bottom:8px;max-height:52%;overflow:auto;padding:12px;background:var(--color-surface-primary);border:1px solid var(--color-border-default);border-radius:12px;box-shadow:var(--shadow-lg)}.canvas-properties label,.canvas-dialog label{display:flex;flex-direction:column;gap:5px;font-size:13px;margin:5px 0}.canvas-properties input,.canvas-properties select,.canvas-properties textarea,.canvas-dialog input{box-sizing:border-box;width:100%;min-height:42px;font:16px var(--font-ui-sans);border:1px solid var(--color-border-default);border-radius:5px;padding:7px}.canvas-properties textarea{min-height:90px;resize:vertical}.numeric-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px}.close-panel{float:right}.canvas-dialog{position:absolute;inset:0;z-index:15;display:grid;place-items:center;background:var(--color-background-overlay);padding:12px}.canvas-dialog form{width:100%;max-width:420px;box-sizing:border-box;padding:18px;border-radius:10px;background:var(--color-surface-primary)}.canvas-dialog form>div{display:flex;gap:8px;justify-content:flex-end}.repair{display:flex;flex:1;flex-direction:column}.repair textarea{flex:1;min-height:200px;font:14px var(--font-ui-mono);white-space:pre}.canvas-editor>p[role=alert]{padding:6px 12px;color:var(--color-error);font-size:13px;margin:0}
 .repair textarea,.canvas-properties input,.canvas-properties select,.canvas-properties textarea,.canvas-dialog input{background:var(--color-surface-primary);color:var(--color-text-primary)}
 </style>

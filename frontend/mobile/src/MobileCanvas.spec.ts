@@ -75,7 +75,7 @@ it('adds a real editable node, keeps exporter fields, and preserves its content 
   wrapper.unmount()
 })
 it('rejects an unsafe file reference without changing the current document or closing its review', async () => {
-  const wrapper = setup(); await button(wrapper, 'File or image').trigger('click')
+  const wrapper = setup(); await button(wrapper, 'Note / image').trigger('click')
   await wrapper.get('.canvas-dialog input').setValue('../private')
   await wrapper.get('.canvas-dialog form').trigger('submit')
   expect(wrapper.find('.canvas-dialog').exists()).toBe(true); expect(wrapper.emitted('update:modelValue')).toBeUndefined()
@@ -102,7 +102,7 @@ it('accepts only the frozen original image result and keeps one undo back to exa
 })
 
 it('keeps a partially typed URL visible, blocks completion and cannot clear its warning by editing another field', async () => {
-  const wrapper = setup(); await button(wrapper, 'Web link').trigger('click')
+  const wrapper = setup(); await button(wrapper, 'URL').trigger('click')
   await wrapper.get('.canvas-dialog input').setValue('https://example.org/'); await wrapper.get('.canvas-dialog form').trigger('submit')
   const inputs = wrapper.findAll<HTMLInputElement>('.canvas-properties input'), url = inputs[0]!, label = inputs[1]!
   await url.setValue('h')
@@ -117,7 +117,7 @@ it('keeps a partially typed URL visible, blocks completion and cannot clear its 
 })
 
 it('keeps an unapplied URL when keyboard selection targets another node', async () => {
-  const wrapper = setup(); await button(wrapper, 'Web link').trigger('click')
+  const wrapper = setup(); await button(wrapper, 'URL').trigger('click')
   await wrapper.get('.canvas-dialog input').setValue('https://example.org/'); await wrapper.get('.canvas-dialog form').trigger('submit')
   const url = wrapper.get<HTMLInputElement>('.canvas-properties input'); await url.setValue('h')
   await wrapper.get('[data-node="a"]').trigger('keydown.enter')
@@ -139,7 +139,7 @@ it('shows the committed drag position after a numeric property was edited', asyn
 })
 
 it('reviews a Canvas file using its original Vault-relative path', async () => {
-  const wrapper = setup(); await button(wrapper, 'File or image').trigger('click')
+  const wrapper = setup(); await button(wrapper, 'Note / image').trigger('click')
   await wrapper.get('.canvas-dialog input').setValue('Notes/original.md'); await wrapper.get('.canvas-dialog form').trigger('submit')
   await button(wrapper, 'Review file or link').trigger('click')
   expect(wrapper.emitted('link')!.at(-1)).toEqual(['Notes/original.md'])
