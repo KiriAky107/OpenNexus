@@ -2,24 +2,25 @@ fn main() {
     let release_desktop =
         cfg!(feature = "desktop") && std::env::var("PROFILE").as_deref() == Ok("release");
     let manifest = std::path::Path::new("../../.build/sidecar/manifest.json");
-    println!("cargo:rerun-if-changed={}", manifest.display());
-    let content =
-        if cfg!(feature = "desktop") && std::env::var("PROFILE").as_deref() == Ok("release") {
-            std::fs::read(manifest)
-                .expect("Build Core with scripts/build-core.py before a release Host")
-        } else {
-            b"{}".to_vec()
-        };
+    let content = if release_desktop {
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        std::fs::read(manifest)
+            .expect("Build Core with scripts/build-core.py before a release Host")
+    } else {
+        // Missing inputs keep Cargo dirty forever. Debug/test builds embed no
+        // release resources, so only register files when they are actually read.
+        b"{}".to_vec()
+    };
     std::fs::write(
         std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("core-manifest.json"),
         content,
     )
     .unwrap();
     let runtime = "../../.build/experiment-runtime/python-3.13.16-windows-x64/runtime.json";
-    println!("cargo:rerun-if-changed={runtime}");
     let runtime_content = if release_desktop
         && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
     {
+        println!("cargo:rerun-if-changed={runtime}");
         assert_eq!(
             std::env::var("CARGO_CFG_TARGET_ARCH").as_deref(),
             Ok("x86_64"),

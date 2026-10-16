@@ -101,6 +101,9 @@ jobs:
       - name: Check native command declarations and main-window access
         working-directory: .
         run: python -m unittest discover -s scripts -p test_desktop_command_permissions.py -v
+      - name: Check unchanged Host build input reuse
+        working-directory: .
+        run: python -m unittest discover -s scripts -p test_build_input_tracking.py -v
       - name: Check split Sync acceptance binding and reject skipped cases
         working-directory: .
         run: python scripts/test_sync_acceptance_service.py -v
@@ -160,6 +163,9 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
+      - name: Check unchanged Host build input reuse
+        working-directory: .
+        run: python -m unittest discover -s scripts -p test_build_input_tracking.py -v
       - name: Check out the fixed Sync object protocol fixture
         uses: actions/checkout@v7
         with:
