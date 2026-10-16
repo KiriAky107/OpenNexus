@@ -115,3 +115,21 @@ it('shows initial credential setup separately from an authenticated session', as
   expect(wrapper.text()).toContain('Complete initial password setup on your Sync service, then reconnect.')
   expect(wrapper.text()).toContain('Signed in')
 })
+it('reuses the desktop vault selector without a transfer, HTML rendering or language-triggered request', async () => {
+  vi.mocked(mobileSyncAuth).mockImplementation(async request => request.action === 'cancel' ? { kind: 'cancelled' }
+    : request.action === 'profiles' ? profiles() : request.action === 'vaults'
+      ? { kind: 'vaults', page: { selection, total: 1, offset: 0, limit: 20,
+        items: [{ id: 'remote-a', name: '<script>原知识库 😀</script>', sequence: 3, used: 12, quota: 100 }] } } : current())
+  wrapper = mount(MobileSyncConnection); await flushPromises()
+  expect(vi.mocked(mobileSyncAuth).mock.calls.some(([request]) => request.action === 'vaults')).toBe(false)
+  await button('Read remote vaults')
+  const picker = wrapper.get('.sync-vault-selector select')
+  await picker.setValue('remote-a')
+  const count = vi.mocked(mobileSyncAuth).mock.calls.length
+  appLocale.value = 'zh-CN'; await flushPromises()
+  expect(vi.mocked(mobileSyncAuth).mock.calls).toHaveLength(count)
+  expect((picker.element as HTMLSelectElement).value).toBe('remote-a')
+  expect(wrapper.get('.sync-vault-selector').text()).toContain('<script>原知识库 😀</script>')
+  expect(wrapper.findAll('script')).toHaveLength(0)
+  expect(vi.mocked(mobileSyncAuth).mock.calls.filter(([request]) => request.action === 'vaults')).toHaveLength(1)
+})

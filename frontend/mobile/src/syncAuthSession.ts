@@ -1,5 +1,5 @@
 import { reactive } from 'vue'
-import type { AuthChoice, AuthIntent, AuthProfile, AuthProfiles, AuthRequest, AuthResponse, AuthSelection, AuthState, NativeAuth } from './syncAuthTypes'
+import type { AuthChoice, AuthIntent, AuthProfile, AuthProfiles, AuthRequest, AuthResponse, AuthSelection, AuthState, AuthVaults, NativeAuth } from './syncAuthTypes'
 
 type ChoiceRequest = Extract<AuthRequest, { action: 'choose' }>
 interface Original {
@@ -9,7 +9,7 @@ interface Original {
 interface Model {
   busy: boolean; error: string; current: AuthState | null; selection: AuthSelection | null
   profiles: AuthProfiles | null; pending: Original | null; receipt: AuthState | null; choice: AuthChoice | null
-  originalMissing: boolean
+  originalMissing: boolean; vaults: AuthVaults | null
 }
 const codes = new Set(['SYNC_AUTH_IDENTITY_CHANGED', 'SYNC_AUTH_INDEX_INVALID', 'SYNC_AUTH_INTENT_INVALID',
   'SYNC_AUTH_INTENT_MISMATCH', 'SYNC_AUTH_INTENT_NOT_FOUND', 'SYNC_AUTH_PROFILE_PAGE_INVALID', 'SYNC_AUTH_RECONCILIATION_REQUIRED',
@@ -18,14 +18,14 @@ const codes = new Set(['SYNC_AUTH_IDENTITY_CHANGED', 'SYNC_AUTH_INDEX_INVALID', 
   'SYNC_FOREGROUND_REQUIRED', 'SYNC_LOGIN_INVALID', 'SYNC_LOGIN_REQUIRED', 'SYNC_NETWORK_ERROR', 'SYNC_REDIRECT_BLOCKED',
   'SYNC_RESPONSE_INVALID', 'SYNC_RESPONSE_TOO_LARGE', 'SYNC_SESSION_EXPIRED', 'SYNC_SESSION_INVALID', 'SYNC_TIME_INVALID',
   'SYNC_TLS_UNAVAILABLE', 'SYNC_PLATFORM_UNSUPPORTED', 'SYNC_CONNECTION_FAILED', 'LOGIN_FAILED', 'RATE_LIMITED',
-  'INVALID_REQUEST', 'SESSION_EXPIRED', 'MOBILE_HOST_REQUIRED', 'MOBILE_WINDOW_DENIED'])
+  'INVALID_REQUEST', 'SESSION_EXPIRED', 'MOBILE_HOST_REQUIRED', 'MOBILE_WINDOW_DENIED', 'SYNC_VAULT_PAGE_INVALID'])
 function safeError(error: unknown): string {
   const code = typeof error === 'string' ? error : error instanceof Error ? error.message : ''
   return codes.has(code) ? code : 'SYNC_CONNECTION_FAILED'
 }
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 const blank = (): Model => ({ busy: false, error: '', current: null, selection: null, profiles: null,
-  pending: null, receipt: null, choice: null, originalMissing: false })
+  pending: null, receipt: null, choice: null, originalMissing: false, vaults: null })
 
 // Only a metadata-only cancellation promise survives a settings component.
 // A freshly mounted view must wait until its predecessor's cancellation has
@@ -46,6 +46,7 @@ export function createSyncAuthSession(native: NativeAuth, uuid: () => string = (
   function current(reply: Extract<AuthResponse, { kind: 'current' }>) {
     if (reply.state.authenticated && (!matches(reply.selection, reply.state.intent) || reply.state.intent?.phase !== 'active'
       || reply.state.rejected || reply.state.expired)) throw new Error('SYNC_RESPONSE_INVALID')
+    if (!reply.state.authenticated || !state.selection || !reply.selection || !sameSelection(state.selection, reply.selection)) state.vaults = null
     state.current = copy(reply.state); state.selection = copy(reply.selection)
   }
   async function perform(request: AuthRequest, accept: (reply: AuthResponse) => void, mutation?: Original): Promise<boolean> {
@@ -54,7 +55,7 @@ export function createSyncAuthSession(native: NativeAuth, uuid: () => string = (
     const action = request.action
     if (mutation) {
       state.pending = copy(mutation); state.receipt = null; state.choice = null; state.originalMissing = false
-      state.current = null; state.profiles = null
+      state.current = null; state.profiles = null; state.vaults = null
     }
     try {
       await cancelledBeforeNextView
@@ -87,6 +88,26 @@ export function createSyncAuthSession(native: NativeAuth, uuid: () => string = (
       if (reply.kind !== 'profiles' || reply.profiles.offset !== offset || reply.profiles.limit !== 20
         || reply.profiles.items.length > 20) throw new Error('SYNC_RESPONSE_INVALID')
       state.profiles = copy(reply.profiles)
+    })
+  }
+  function vaults(offset = 0) {
+    if (!requireIdle() || state.pending || !state.current?.authenticated || !state.selection) return Promise.resolve(false)
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 1000) { state.error = 'SYNC_VAULT_PAGE_INVALID'; return Promise.resolve(false) }
+    const expected = copy(state.selection)
+    return perform({ action: 'vaults', expected, offset, limit: 20 }, reply => {
+      if (reply.kind !== 'vaults' || !reply.page?.selection || !sameSelection(expected, reply.page.selection)
+        || reply.page.offset !== offset || reply.page.limit !== 20 || !Number.isSafeInteger(reply.page.total)
+        || reply.page.total < 0 || reply.page.total > 1000 || !Array.isArray(reply.page.items)
+        || reply.page.items.length !== Math.min(20, Math.max(0, reply.page.total - offset))) throw new Error('SYNC_RESPONSE_INVALID')
+      const ids = new Set<string>()
+      const items = reply.page.items.map(row => {
+        if (!row || typeof row !== 'object' || typeof row.id !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(row.id) || ids.has(row.id)
+          || typeof row.name !== 'string' || [...row.name].length < 1 || [...row.name].length > 100
+          || ![row.sequence, row.used, row.quota].every(value => Number.isSafeInteger(value) && value >= 0)) throw new Error('SYNC_RESPONSE_INVALID')
+        ids.add(row.id)
+        return { id: row.id, name: row.name, sequence: row.sequence, used: row.used, quota: row.quota }
+      })
+      state.vaults = { selection: expected, items, total: reply.page.total, offset, limit: 20 }
     })
   }
   function mutationReply(reply: AuthResponse) {
@@ -179,6 +200,6 @@ export function createSyncAuthSession(native: NativeAuth, uuid: () => string = (
   function dispose() {
     const finishing = cancel(); disposed = true; epoch++; Object.assign(state, blank()); return finishing
   }
-  return { state, reload, profiles, login, existing, freezeProfile, choose, checkOriginal, resumeErasure,
+  return { state, reload, profiles, vaults, login, existing, freezeProfile, choose, checkOriginal, resumeErasure,
     acknowledgeOriginal, cancel, dispose }
 }

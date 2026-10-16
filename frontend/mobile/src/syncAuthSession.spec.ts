@@ -35,6 +35,69 @@ describe('mobile native authentication request ownership', () => {
     const session = createSyncAuthSession(rpc, () => operation)
     sessions.push(session); return { session, rpc }
   }
+  function vaultPage(identity = selected()): Extract<AuthResponse, { kind: 'vaults' }> {
+    return { kind: 'vaults', page: { selection: identity, offset: 0, limit: 20, total: 1,
+      items: [{ id: 'remote-a', name: '原名称 😀 <script>', sequence: 3, used: 12, quota: 100 }] } }
+  }
+  it('reads remote vaults only explicitly with the full native selection and keeps only metadata', async () => {
+    const response = vaultPage()
+    Object.assign(response.page.items[0]!, { private_provider_value: 'not-for-view-state' })
+    const { session, rpc } = make(async request => request.action === 'profiles' ? page()
+      : request.action === 'vaults' ? response : current())
+    expect(await session.vaults()).toBe(false)
+    expect(rpc).not.toHaveBeenCalled()
+    await session.reload()
+    expect(rpc.mock.calls.some(([request]) => request.action === 'vaults')).toBe(false)
+    expect(await session.vaults()).toBe(true)
+    expect(rpc).toHaveBeenLastCalledWith({ action: 'vaults', expected: selected(), offset: 0, limit: 20 })
+    expect(session.state.vaults?.items[0]?.name).toBe('原名称 😀 <script>')
+    expect(JSON.stringify(session.state.vaults)).not.toContain('private_provider_value')
+    expect(JSON.stringify(session.state.vaults)).not.toContain('not-for-view-state')
+    const calls = rpc.mock.calls.length
+    expect(await session.vaults(1001)).toBe(false)
+    expect(rpc).toHaveBeenCalledTimes(calls)
+  })
+  it('refuses a vault page with a different frozen identity, unsafe fields or invalid pagination', async () => {
+    for (const change of ['revision', 'size', 'duplicate', 'number', 'missing-name']) {
+      const response = vaultPage()
+      if (change === 'revision') response.page.selection.revision++
+      if (change === 'size') response.page.total = 1001
+      if (change === 'duplicate') { response.page.total = 2; response.page.items.push(response.page.items[0]!) }
+      if (change === 'number') response.page.items[0]!.used = Number.MAX_SAFE_INTEGER + 1
+      if (change === 'missing-name') response.page.items[0]!.name = ''
+      const { session } = make(async request => request.action === 'profiles' ? page()
+        : request.action === 'vaults' ? response : current())
+      await session.reload()
+      expect(await session.vaults()).toBe(false)
+      expect(session.state.vaults).toBeNull()
+      expect(session.state.error).toBe('SYNC_RESPONSE_INVALID')
+    }
+  })
+  it('discards a late vault reply after native cancellation and an account switch', async () => {
+    const waiting = deferred<AuthResponse>()
+    let identity = selected()
+    const { session, rpc } = make(async request => request.action === 'profiles' ? page(identity)
+      : request.action === 'vaults' ? waiting.promise : current(identity))
+    await session.reload()
+    const pending = session.vaults(); await tick()
+    await session.cancel()
+    identity = selected('reader-b', '00000000-0000-4000-8000-000000000002', 2)
+    await session.reload()
+    waiting.resolve(vaultPage()); expect(await pending).toBe(false)
+    expect(session.state.selection?.account).toBe('reader-b')
+    expect(session.state.vaults).toBeNull()
+    expect(rpc.mock.calls.filter(([request]) => request.action === 'vaults')).toHaveLength(1)
+  })
+  it('clears an old vault page even when only the current native selection revision changes', async () => {
+    let identity = selected()
+    const { session } = make(async request => request.action === 'profiles' ? page(identity)
+      : request.action === 'vaults' ? vaultPage(identity) : current(identity))
+    await session.reload(); await session.vaults()
+    expect(session.state.vaults?.total).toBe(1)
+    identity = { ...identity, revision: 2 }
+    await session.reload()
+    expect(session.state.vaults).toBeNull()
+  })
   it('retains only original metadata after a lost login and checks without another POST or a password copy', async () => {
     const { session, rpc } = make(async request => {
       if (request.action === 'login') throw new Error('SYNC_NETWORK_ERROR')

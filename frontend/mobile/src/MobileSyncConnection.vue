@@ -3,13 +3,17 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../../src/i18n'
 import AppDialog from '../../src/components/common/AppDialog.vue'
 import SyncConnectionForm from '../../src/features/settings/SyncConnectionForm.vue'
-import { syncError, syncTime } from '../../src/features/settings/syncPresentation'
+import SyncVaultSelector from '../../src/features/settings/SyncVaultSelector.vue'
+import { syncBytes, syncError, syncTime } from '../../src/features/settings/syncPresentation'
 import { mobileSyncAuth } from './native'
 import { createSyncAuthSession } from './syncAuthSession'
 import type { AuthProfile, AuthSelection } from './syncAuthTypes'
 
 const session = createSyncAuthSession(mobileSyncAuth), state = session.state
 const endpoint = ref('https://'), account = ref(''), password = ref(''), device = ref('OpenNexus Android')
+const selectedVault = ref('')
+const remoteVault = computed(() => state.vaults?.items.find(vault => vault.id === selectedVault.value))
+watch(() => state.vaults, () => { selectedVault.value = '' })
 type Confirmation = { kind: 'choose'; profile: AuthProfile; frozen: ReturnType<typeof session.freezeProfile> }
   | { kind: 'logout' | 'disconnect' | 'resume_erasure'; selection: AuthSelection }
 const confirmation = ref<Confirmation | null>(null)
@@ -29,6 +33,7 @@ function feedback(code: string) {
     case 'SYNC_AUTH_INTENT_NOT_FOUND': return t('尚无该原编号的本机记录。不会自动重新发送。', 'No local record exists for that original ID. It will not be sent again automatically.')
     case 'SYNC_ENDPOINT_INVALID': return t('请输入完整的 HTTPS 服务地址。', 'Enter a complete HTTPS service address.')
     case 'SYNC_LOGIN_INVALID': return t('请核对账户、设备名称，以及 12–256 个字符的密码。', 'Check the account, device name and a password containing 12–256 characters.')
+    case 'SYNC_VAULT_PAGE_INVALID': return t('无法读取这一页，请重新读取远端库。', 'This page is unavailable. Read the remote vaults again.')
     default: return syncError(code)
   }
 }
@@ -101,6 +106,15 @@ defineExpose({ handleBack })
       <p v-if="state.originalMissing">{{ t('未找到原记录。', 'The original record was not found.') }}</p>
       <div class="inline-actions"><button class="button-secondary" :disabled="state.busy" @click="session.checkOriginal">{{ t('只读查询原编号', 'Read original ID') }}</button><button class="button-secondary" :disabled="state.busy || !(state.receipt || state.choice || state.originalMissing)" @click="acknowledge">{{ t('保留原记录并继续', 'Keep original record and continue') }}</button></div>
     </section>
+    <section v-if="state.current?.authenticated && !state.pending" class="remote-vaults" :aria-label="t('远端库', 'Remote vaults')">
+      <button class="button-secondary" :disabled="state.busy" @click="session.vaults(0)">{{ t('读取远端库', 'Read remote vaults') }}</button>
+      <template v-if="state.vaults">
+        <p v-if="!state.vaults.total">{{ t('此账户尚无远端知识库。', 'This account has no remote vaults yet.') }}</p>
+        <SyncVaultSelector v-else v-model="selectedVault" :items="state.vaults.items" :disabled="state.busy" />
+        <p v-if="remoteVault">{{ remoteVault.name }} · {{ syncBytes(remoteVault.used) }} / {{ syncBytes(remoteVault.quota) }}</p>
+        <nav v-if="state.vaults.total > 20" class="inline-actions" :aria-label="t('远端库分页', 'Remote vault pages')"><button class="button-secondary" :disabled="state.busy || !state.vaults.offset" @click="session.vaults(state.vaults.offset - 20)">{{ t('上一页', 'Previous') }}</button><span>{{ state.vaults.offset + 1 }}–{{ Math.min(state.vaults.offset + 20,state.vaults.total) }} / {{ state.vaults.total }}</span><button class="button-secondary" :disabled="state.busy || state.vaults.offset + 20 >= state.vaults.total" @click="session.vaults(state.vaults.offset + 20)">{{ t('下一页', 'Next') }}</button></nav>
+      </template>
+    </section>
     <section v-if="state.profiles" :aria-label="t('已保存的连接', 'Saved connections')"><h4>{{ t('已保存的连接', 'Saved connections') }}</h4>
       <p v-if="!state.profiles.total">{{ t('尚无本机连接记录。', 'No device connection records yet.') }}</p>
       <article v-for="profile in state.profiles.items" :key="profile.intent.operation_id" class="profile-row"><div><strong>{{ profile.intent.account }}</strong><p>{{ profile.intent.endpoint }}</p><span>{{ phase(profile.intent.phase) }} · {{ profile.intent.device_name }}</span><p v-if="profile.selected">{{ t('当前选中', 'Currently selected') }}</p></div><button class="button-secondary" :disabled="state.busy || !!state.pending || profile.selected" @click="reviewProfile(profile)">{{ t('审核并选择', 'Review and select') }}</button></article>
@@ -121,7 +135,7 @@ defineExpose({ handleBack })
 .mobile-sync p,.mobile-sync code,.mobile-sync dd { overflow-wrap:anywhere; }
 .muted { color:var(--color-text-secondary); }
 .sync-overview,.original-result,.profile-row { padding:var(--space-md); border:1px solid var(--color-border-default); border-radius:var(--radius-md); background:var(--color-background-secondary); }
-.sync-overview,.original-result { display:grid;gap:var(--space-sm); }
+.sync-overview,.original-result,.remote-vaults { display:grid;gap:var(--space-sm); }
 dl { display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px;margin:0; } dd { margin:0; }
 .inline-actions,.profile-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
 .profile-row { justify-content:space-between; margin-block:8px; }

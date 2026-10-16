@@ -1,4 +1,5 @@
 /** Native metadata only. Sessions and access/refresh tokens have no IPC type. */
+import type { SyncRemoteVault } from '../../src/features/settings/syncVaults'
 export interface AuthSelection { revision: number; endpoint: string; account: string; operation_id: string; generation: number }
 export interface AuthIntent {
   operation_id: string; endpoint: string; account: string; device_name: string
@@ -14,12 +15,14 @@ export interface AuthState {
 export interface AuthProfile { intent: AuthIntent; rejected: AuthRejection | null; selected: boolean }
 export interface AuthProfiles { items: AuthProfile[]; total: number; offset: number; limit: number; selection: AuthSelection | null }
 export interface AuthChoice { operation_id: string; expected_revision: number | null; selection: AuthSelection }
+export interface AuthVaults { selection: AuthSelection; items: SyncRemoteVault[]; total: number; offset: number; limit: number }
 export interface AuthExisting {
   operation_id: string; previous_operation: string; endpoint: string; account: string; expected: AuthSelection
 }
 export type AuthRequest =
   | { action: 'current' | 'cancel' }
   | { action: 'profiles'; offset: number; limit: number }
+  | { action: 'vaults'; expected: AuthSelection; offset: number; limit: number }
   | { action: 'operation'; endpoint: string; account: string; operation_id: string }
   | { action: 'choice_receipt'; operation_id: string }
   | { action: 'choose'; operation_id: string; target_operation: string; generation: number; expected_revision: number | null }
@@ -29,6 +32,7 @@ export type AuthRequest =
 export type AuthResponse =
   | { kind: 'current'; selection: AuthSelection | null; state: AuthState }
   | { kind: 'profiles'; profiles: AuthProfiles }
+  | { kind: 'vaults'; page: AuthVaults }
   | { kind: 'operation'; state: AuthState }
   | { kind: 'choice'; choice: AuthChoice | null }
   | { kind: 'cancelled' }

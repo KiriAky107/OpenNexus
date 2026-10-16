@@ -10,15 +10,16 @@ import SyncConflictReview from './SyncConflictReview.vue'
 import SyncActivity from './SyncActivity.vue'
 import SyncAccount from './SyncAccount.vue'
 import SyncConnectionForm from './SyncConnectionForm.vue'
+import SyncVaultSelector from './SyncVaultSelector.vue'
+import type { SyncRemoteVault } from './syncVaults'
 import { syncError } from './syncPresentation'
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 interface Binding { id: string; endpoint: string; account: string; remote_vault: string; cursor: number }
 type OptionalScope = { persona: boolean; layout: boolean; conversations: boolean; agent_history: boolean; provider_settings: boolean; extension_installations: boolean }
 interface Status { optional_scope?: OptionalScope; vault_id: string; binding: Binding | null; paused: boolean; pending: number; conflicts: SyncConflict[]; credential_state: string; running: boolean; error: string | null; retry_in: number | null; failures: number; halted: boolean; activity?: Activity | null; last_cycle_success_at?: number | null; attempts?: Array<{ operation_id: string; path: string; attempts: number; outcome: string; error: string | null }> }
-interface RemoteVault { id: string; name: string; sequence: number; used: number; quota: number }
 const status = ref<Status | null>(null)
 const endpoint = ref('https://'), account = ref(''), password = ref(''), device = ref('OpenNexus Desktop'), testHttp = ref(false)
-const connected = ref(false), busy = ref(false), message = ref(''), remoteVaults = ref<RemoteVault[]>([]), selected = ref(''), newName = ref('')
+const connected = ref(false), busy = ref(false), message = ref(''), remoteVaults = ref<SyncRemoteVault[]>([]), selected = ref(''), newName = ref('')
 interface Preview { fingerprint: string; boundary: number; items: Array<{ path: string; action: string }> }
 const preview = ref<Preview | null>(null), previewPage = ref(0)
 const previewItems = computed(() => preview.value?.items.slice(previewPage.value * 100, (previewPage.value + 1) * 100) ?? [])
@@ -64,7 +65,7 @@ function setScope(kind: keyof OptionalScope, event: Event) {
   return act(async () => { await hostInvoke('sync_set_scope', { vaultId: current.vault_id, scope }) })
 }
 async function listVaults() {
-  const result = await hostInvoke<{ items: RemoteVault[] }>('sync_vaults', { endpoint: endpoint.value, account: account.value })
+  const result = await hostInvoke<{ items: SyncRemoteVault[] }>('sync_vaults', { endpoint: endpoint.value, account: account.value })
   remoteVaults.value = result.items
 }
 function login() {
@@ -118,7 +119,7 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
     </SyncConnectionForm></details>
     <div v-if="connected && !status?.binding" class="sync-connect">
       <button :disabled="busy" @click="act(listVaults)">{{ t('刷新远端库', 'Refresh vaults') }}</button>
-      <label>{{ t('远端库', 'Remote vault') }}<select v-model="selected"><option value="">{{ t('请选择', 'Choose a vault') }}</option><option v-for="vault in remoteVaults" :key="vault.id" :value="vault.id">{{ vault.name }} · {{ vault.sequence }}</option></select></label>
+      <SyncVaultSelector v-model="selected" :items="remoteVaults" :disabled="busy" />
       <div class="inline-actions"><input v-model="newName" :placeholder="t('新远端库名称', 'New vault name')" /><button :disabled="busy || !newName.trim()" @click="createVault">{{ t('创建远端库', 'Create vault') }}</button></div>
       <div class="inline-actions"><button :disabled="busy || !selected || !status" @click="bind('upload')">{{ t('上传到空远端', 'Upload to empty remote') }}</button><button :disabled="busy || !selected || !status" @click="bind('download')">{{ t('下载到空本地', 'Download into empty local') }}</button></div>
       <button :disabled="busy || !selected || !status" @click="previewMerge">{{ t('预览合并', 'Preview merge') }}</button>
