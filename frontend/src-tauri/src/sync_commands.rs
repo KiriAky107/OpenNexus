@@ -3,7 +3,7 @@ use super::{with_workspace, Host};
 use notesagent_host::{
     sync_auth,
     sync_client::{SyncError, WorkspaceAccess},
-    sync_progress::{Activity, Event, Phase},
+    sync_progress::{Activity, Event},
     sync_state::Binding,
 };
 use serde::{Deserialize, Serialize};
@@ -620,38 +620,7 @@ async fn cycle(
         &host.credentials,
         &binding.endpoint,
         &binding.account,
-        |client| {
-            let report = report.clone();
-            async move {
-                let client = client.with_progress(report.clone());
-                client.handshake().await?;
-                report(Event::Phase(Phase::Discover));
-                host.workspace.access(|ws| ws.sync_discover(&binding.id))?;
-                report(Event::Phase(Phase::Pull));
-                for _ in 0..10 {
-                    if client.pull_page(&host.workspace, binding).await? == 0 {
-                        break;
-                    }
-                }
-                // 在冻结任何新的远程基地之前完成固定的传入窗口。
-                if host
-                    .workspace
-                    .access(|ws| ws.sync_boundary(&binding.id))?
-                    .is_some()
-                {
-                    return Ok(());
-                }
-                report(Event::Phase(Phase::Push));
-                for _ in 0..20 {
-                    if !client.push_one(&host.workspace, binding).await? {
-                        break;
-                    }
-                }
-                report(Event::Phase(Phase::Pull));
-                client.pull_page(&host.workspace, binding).await?;
-                Ok(())
-            }
-        },
+        |client| notesagent_host::sync_cycle::run(client, &host.workspace, binding, report.clone()),
     );
     tokio::pin!(work);
     let mut tick = tokio::time::interval(Duration::from_millis(50));

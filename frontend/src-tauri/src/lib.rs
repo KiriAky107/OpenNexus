@@ -56,6 +56,8 @@ pub mod sync_auth;
 pub mod sync_capabilities;
 #[cfg(feature = "sync-http")]
 pub mod sync_client;
+#[cfg(feature = "sync-http")]
+pub mod sync_cycle;
 pub mod sync_discovery;
 #[cfg(feature = "sync-e2ee-prototype")]
 pub mod sync_e2ee_prototype;
