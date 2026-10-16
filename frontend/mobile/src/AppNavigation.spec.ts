@@ -106,7 +106,7 @@ it('closes the shared phone file drawer on Back without leaving or submitting th
 it('retains an unfinished Canvas property on Back and closes a valid property panel before leaving', async () => {
   format = 'canvas'
   const wrapper = mount(App); await flushPromises(); await create(wrapper)
-  await button(wrapper, 'Web link').trigger('click'); await wrapper.get('.canvas-dialog input').setValue('https://example.org/')
+  await button(wrapper, 'URL').trigger('click'); await wrapper.get('.canvas-dialog input').setValue('https://example.org/')
   await wrapper.get('.canvas-dialog form').trigger('submit')
   const url = wrapper.get<HTMLInputElement>('.canvas-properties input'); await url.setValue('h')
   back(); await flushPromises()

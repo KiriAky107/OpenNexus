@@ -8,6 +8,7 @@ const frontend = fileURLToPath(new URL('..', import.meta.url))
 export default defineConfig({
   root,
   plugins: [vue()],
+  worker: { format: 'es' },
   publicDir: false,
   resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } },
   build: { outDir: 'dist', emptyOutDir: true, manifest: true },

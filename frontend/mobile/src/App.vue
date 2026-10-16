@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Brush, CircleCheck, Document, FolderOpened, Search } from '@element-plus/icons-vue'
 import WorkspaceFrame from '../../src/components/common/WorkspaceFrame.vue'
 import TitleBarFrame from '../../src/components/common/TitleBarFrame.vue'
@@ -13,6 +13,8 @@ import type { FileNode } from '../../src/contracts'
 import ThemeChoices from './ThemeChoices.vue'
 import EditorToolbar from '../../src/features/editor/EditorToolbar.vue'
 import MobileEditor from './MobileEditor.vue'
+import type MobileRichEditor from './MobileRichEditor.vue'
+const RichEditor = defineAsyncComponent(() => import('./MobileRichEditor.vue'))
 import MobileCanvas from './MobileCanvas.vue'
 import MobilePreview from './MobilePreview.vue'
 import ExportPanel from './ExportPanel.vue'
@@ -35,12 +37,13 @@ const preferencesOpen = ref(false)
 function resizeWorkspace() { compact.value = window.innerWidth <= 760 }
 function closePanels() { primaryOpen.value = false; secondaryOpen.value = false }
 function togglePrimaryExpansion() { if (compact.value) primaryOpen.value = false; else primaryExpanded.value = !primaryExpanded.value }
-const session = createNoteSession(), editor = ref<InstanceType<typeof MobileEditor>>()
+const session = createNoteSession(), editor = ref<InstanceType<typeof MobileEditor> | InstanceType<typeof MobileRichEditor>>()
 const canvas = ref<InstanceType<typeof MobileCanvas>>()
 const canvasFieldsPending = ref(false)
 const isCanvas = computed(() => /\.canvas$/i.test(session.state.view?.draft.path ?? ''))
 const canvasCopy = computed(() => canvasText(language.value))
 const images = createImageSession(session, () => isCanvas.value ? canvas.value : editor.value), imageInput = ref<HTMLInputElement>()
+const editorMode=ref<'source'|'wysiwyg'>('source')
 const preview = ref(false), fileActions = ref<HTMLDetailsElement>()
 const imageBlocked = computed(() => images.state.busy || Boolean(images.state.pending) || images.state.unknown)
 let imageSelection: { key: string; generation: number; selection: ImageSelection } | null = null
@@ -170,6 +173,14 @@ async function navigateBack() {
   } catch (error) {
     if (!disposed) { if (session.state.view) session.reportError(errorCode(error)); else listError.value = errorCode(error) }
   } finally { navigationBusy.value = false }
+}
+let modeRevision = 0
+async function changeEditorMode(mode: string) {
+  const owner=documentKey(), revision=++modeRevision
+  if (!['source','wysiwyg'].includes(mode) || session.state.composing || session.state.saving || imageBlocked.value || session.state.pendingSave || session.state.unknownSave || dialog.value || exportOpen.value || navigationBusy.value) return
+  await runEditor(session.flush)
+  if (disposed || owner!==documentKey() || revision!==modeRevision || session.state.error || session.state.composing || dialog.value || exportOpen.value) return
+  preview.value=false;editorMode.value=mode as 'source'|'wysiwyg'
 }
 async function save() { await runEditor(async () => { await session.save(); await load() }) }
 function undo() { if (isCanvas.value) canvas.value?.undo(); else editor.value?.undo() }
@@ -376,7 +387,7 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
     </main>
 
     <main v-else-if="session.state.view" class="editor-page" :aria-busy="session.state.loading">
-      <EditorToolbar touch :status-text="status" :status-kind="session.state.unknownSave ? 'conflict' : dirty ? 'dirty' : 'saved'" :save-label="session.state.saving ? copy.saving : copy.save" :can-save="!navigationBusy && dirty && !session.state.saving && !session.state.composing && !session.state.pendingSave && !session.state.unknownSave && !imageBlocked && !canvasFieldsPending" @save="save">
+      <EditorToolbar touch :modes="isCanvas ? [] : [{id:'wysiwyg',label:t('写作','Writing')},{id:'source',label:t('源码','Source')}]" :mode="editorMode" @mode="changeEditorMode" :status-text="status" :status-kind="session.state.unknownSave ? 'conflict' : dirty ? 'dirty' : 'saved'" :save-label="session.state.saving ? copy.saving : copy.save" :can-save="!navigationBusy && dirty && !session.state.saving && !session.state.composing && !session.state.pendingSave && !session.state.unknownSave && !imageBlocked && !canvasFieldsPending" @save="save">
         <template #actions>
         <button class="button-secondary" :disabled="preview || session.state.composing || Boolean(dialog) || imageBlocked" @click="undo">{{ copy.undo }}</button>
         <button class="button-secondary" :disabled="preview || session.state.composing || Boolean(dialog) || imageBlocked" @click="redo">{{ copy.redo }}</button>
@@ -419,6 +430,7 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
       <MobileCanvas v-if="isCanvas" :key="documentKey()" ref="canvas" :model-value="session.state.content" :language="language"
         :read-only="Boolean(dialog) || exportOpen || actionBusy || imageBlocked || navigationBusy" @update:model-value="session.edit" @composition-start="session.compositionStart"
         @composition-end="session.compositionEnd" @error="session.reportError" @image="selectImage" @validation="pending => canvasFieldsPending = pending" @link="href => dialog = { kind: 'link', href, busy: false, error: '' }" />
+      <RichEditor v-else-if="editorMode==='wysiwyg'" v-show="!preview" :key="documentKey()" ref="editor" :model-value="session.state.content" :path="session.state.view.draft.path" :label="copy.body" :language="language" :theme="resolvedTheme" :read-only="Boolean(dialog) || exportOpen || actionBusy || imageBlocked || navigationBusy" @update:model-value="session.edit" @composition-start="session.compositionStart" @composition-end="session.compositionEnd" @error="session.reportError" @image="selectImage" @link="href => dialog = { kind: 'link', href, busy: false, error: '' }" />
       <MobileEditor v-else v-show="!preview" :key="documentKey()" ref="editor" :model-value="session.state.content" :label="copy.body" :language="language"
         :read-only="Boolean(dialog) || exportOpen || actionBusy || imageBlocked || navigationBusy" @update:model-value="session.edit" @composition-start="session.compositionStart"
         @composition-end="session.compositionEnd" @error="session.reportError" />
