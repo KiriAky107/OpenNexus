@@ -90,6 +90,7 @@ function applyImport() {
   } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason) }
 }
 const surfaceExtensions = [
+    passageHighlight,
     EditorView.domEventHandlers({
       paste(event) {
         const files = imageFiles(event.clipboardData?.files ?? null)
