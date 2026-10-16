@@ -13,6 +13,25 @@ const root = ref<HTMLElement>()
 const attributes = new Compartment(), editable = new Compartment()
 let view: EditorView | undefined, disposed = false, composition = 0
 let compositionTimer: ReturnType<typeof setTimeout> | undefined
+let editContext: EventTarget | undefined, composing = false
+function startComposition() {
+  if (disposed || props.readOnly) return
+  composition++
+  if (compositionTimer) clearTimeout(compositionTimer)
+  if (!composing) { composing = true; emit('compositionStart') }
+}
+function endComposition() {
+  if (!disposed && composing) finishComposition(++composition)
+}
+function bindEditContext(currentView?: EditorView) {
+  const next = !props.readOnly ? (currentView?.contentDOM as (HTMLElement & { editContext?: EventTarget | null }) | undefined)?.editContext ?? undefined : undefined
+  if (next === editContext) return
+  editContext?.removeEventListener('compositionstart', startComposition)
+  editContext?.removeEventListener('compositionend', endComposition)
+  editContext = next
+  editContext?.addEventListener('compositionstart', startComposition)
+  editContext?.addEventListener('compositionend', endComposition)
+}
 function contentAttributes() {
   return EditorView.contentAttributes.of({ 'aria-label': props.label, lang: props.language, spellcheck: String(props.spellcheck), autocapitalize: 'sentences' })
 }
@@ -20,16 +39,17 @@ function editability() { return [EditorView.editable.of(!props.readOnly), Editor
 function finishComposition(token: number) {
   if (disposed || token !== composition || !view) return
   if (view.compositionStarted) compositionTimer = setTimeout(() => finishComposition(token), 16)
-  else compositionTimer = setTimeout(() => { if (!disposed && token === composition) emit('compositionEnd') }, 16)
+  else compositionTimer = setTimeout(() => { if (!disposed && token === composition && composing) { composing = false; emit('compositionEnd') } }, 16)
 }
 onMounted(() => {
   view = new EditorView({ parent: root.value, state: EditorState.create({ doc: props.initialContent, extensions: [
     history(), keymap.of([...defaultKeymap, ...historyKeymap]), props.lineNumbers ? lineNumbers() : [], markdown(), EditorView.lineWrapping,
     attributes.of(contentAttributes()), editable.of(editability()),
-    EditorView.domEventHandlers({
-      compositionstart() { composition++; if (compositionTimer) clearTimeout(compositionTimer); emit('compositionStart'); return false },
-      compositionend() { finishComposition(++composition); return false },
-    }),
+    EditorView.domEventObservers({ compositionstart: startComposition, compositionend: endComposition }),
+    // Android CodeMirror uses EditContext, whose composition events do not
+    // bubble through contentDOM. Observe the owned context without replacing
+    // it or disabling the browser input API. Bind before consumer listeners.
+    EditorView.updateListener.of(update => bindEditContext(update.view)),
     EditorView.theme({
       '&': { height: '100%', color: 'var(--color-text-primary)', backgroundColor: 'var(--color-background-primary)' },
       '.cm-scroller': { fontFamily: 'var(--font-editor-mono)', fontSize: 'var(--font-editor-size)', overflow: 'auto' },
@@ -40,12 +60,13 @@ onMounted(() => {
     }),
     props.extensions,
   ] }) })
+  bindEditContext(view)
   emit('ready', view)
 })
 watch(() => [props.label, props.language, props.spellcheck, props.readOnly], () => {
   view?.dispatch({ effects: [attributes.reconfigure(contentAttributes()), editable.reconfigure(editability())], annotations: Transaction.addToHistory.of(false) })
 })
-onBeforeUnmount(() => { disposed = true; composition++; if (compositionTimer) clearTimeout(compositionTimer); view?.destroy(); view = undefined })
+onBeforeUnmount(() => { disposed = true; composition++; bindEditContext(); if (compositionTimer) clearTimeout(compositionTimer); view?.destroy(); view = undefined })
 </script>
 
 <template><div ref="root" class="source-editor-surface" :class="{ 'touch-editor': touch }" /></template>
