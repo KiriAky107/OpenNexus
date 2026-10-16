@@ -60,6 +60,14 @@ def verify_mobile_files(apk, permissions):
         'native_class_presence_only': True, 'SAF_destination_execution_verified': False}
 
 
+def verify_generated_mobile_files(root):
+    kotlin = root / 'frontend/mobile/android/MobileFilesPlugin.kt'
+    generated = root / 'frontend/mobile/src-tauri/gen/android/app/src/main/java/cc/kronecker/opennexus/files/MobileFilesPlugin.kt'
+    require(kotlin.is_file() and not kotlin.is_symlink() and generated.is_file() and not generated.is_symlink()
+        and generated.read_bytes() == kotlin.read_bytes(), 'ANDROID_FILES_PLUGIN_SOURCE_CHANGED')
+    return digest(kotlin)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repository-dir', type=Path, default=Path(__file__).resolve().parents[1])
@@ -73,6 +81,9 @@ def main():
     args = parser.parse_args()
     root = args.repository_dir.resolve()
     before = json.loads(args.source_proof.read_text('utf-8'))
+    dirty = subprocess.check_output(['git', 'status', '--porcelain'], cwd=root, text=True)
+    if dirty.strip():
+        print(json.dumps({'post_compile_source_changes': dirty.splitlines()}), flush=True)
     require(before == build_source(root, args.commit), 'ANDROID_BUILD_SOURCE_CHANGED')
     config = json.loads((root / 'frontend/mobile/src-tauri/tauri.conf.json').read_text('utf-8'))
     apk = args.apk.resolve()
@@ -89,16 +100,14 @@ def main():
     libraries = verify_libraries(apk, args.native_dir, args.abis)
     permissions = subprocess.check_output([str(tools / 'aapt2'), 'dump', 'permissions', str(apk)], text=True)
     files_plugin = verify_mobile_files(apk, permissions)
-    kotlin = root / 'frontend/mobile/android/MobileFilesPlugin.kt'
-    generated_kotlin = root / 'frontend/mobile/src-tauri/gen/android/app/src/main/java/cc/kronecker/opennexus/files/MobileFilesPlugin.kt'
-    require(generated_kotlin.is_file() and not generated_kotlin.is_symlink() and generated_kotlin.read_bytes() == kotlin.read_bytes(), 'ANDROID_FILES_PLUGIN_SOURCE_CHANGED')
+    kotlin_sha256 = verify_generated_mobile_files(root)
     proof = {'schema': 1, 'passed': True, 'kind': 'android-debug', 'source_commit': args.commit,
         'source_clean': True, 'source_proof': args.source_proof.name, 'package': package, 'version': config['version'],
         'version_code': config['bundle']['android']['versionCode'], 'min_sdk': 24, 'target_sdk': 36,
         'apk': apk.name, 'bytes': apk.stat().st_size, 'sha256': digest(apk), 'libraries': libraries,
         'signer_certificate_sha256': fingerprints[0].lower(), 'debug_signing': True,
         'actual_device_execution_verified': False, 'published': False,
-        'files_plugin': {**files_plugin, 'source_sha256': digest(kotlin)},
+        'files_plugin': {**files_plugin, 'source_sha256': kotlin_sha256},
         'rustc': subprocess.check_output(['rustc', '-Vv'], text=True).strip(),
         'java': subprocess.run(['java', '-version'], capture_output=True, text=True, check=True).stderr.strip()}
     require(not args.output.exists(), 'ANDROID_PACKAGE_PROOF_EXISTS')

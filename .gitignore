@@ -62,5 +62,7 @@ frontend/mobile/dist/
 frontend/mobile/src-tauri/target/
 frontend/mobile/src-tauri/gen/schemas/
 frontend/mobile/*.tsbuildinfo
+# Build-time mirror; the tracked mobile/android source is checked byte-for-byte in the APK verifier.
+frontend/mobile/src-tauri/gen/android/app/src/main/java/cc/kronecker/opennexus/files/MobileFilesPlugin.kt
 # Rust Workspace Service 在所选 Vault 内生成的锁与事务数据库。
 **/.ainote/

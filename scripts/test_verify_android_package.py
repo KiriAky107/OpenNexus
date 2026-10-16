@@ -11,6 +11,21 @@ spec.loader.exec_module(module)
 
 
 class AndroidPackageBindingTests(unittest.TestCase):
+    def test_generated_bridge_must_match_its_tracked_source_even_when_ignored_as_build_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            source=root/'frontend/mobile/android/MobileFilesPlugin.kt'
+            generated=root/'frontend/mobile/src-tauri/gen/android/app/src/main/java/cc/kronecker/opennexus/files/MobileFilesPlugin.kt'
+            source.parent.mkdir(parents=True);generated.parent.mkdir(parents=True)
+            source.write_bytes(b'original tracked Kotlin input\n');generated.write_bytes(source.read_bytes())
+            self.assertEqual(module.verify_generated_mobile_files(root),module.digest(source))
+            generated.write_bytes(b'changed compiled Kotlin input\n')
+            with self.assertRaisesRegex(Exception,'ANDROID_FILES_PLUGIN_SOURCE_CHANGED'):
+                module.verify_generated_mobile_files(root)
+            generated.unlink()
+            with self.assertRaisesRegex(Exception,'ANDROID_FILES_PLUGIN_SOURCE_CHANGED'):
+                module.verify_generated_mobile_files(root)
+
     def test_requires_packaged_native_files_class_and_rejects_broad_file_permissions(self):
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / 'synthetic-dex-container.zip'
