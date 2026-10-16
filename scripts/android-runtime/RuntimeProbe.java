@@ -24,6 +24,7 @@ public final class RuntimeProbe extends Instrumentation {
     private static final String BODY = "# 原始 Markdown 😀\n\n离线正文 / original content\n";
     private static final String DRAFT = BODY + "未保存的恢复草稿 / recovered draft\n";
     private static final String NODE = "中文画布节点 😀 / original canvas text";
+    private static final String IME_TEXT = "中文组合输入 😀";
     private static final String BACK_DRAFT = "# 系统返回键草稿 😀\nBack keeps the native draft before leaving.\n";
     private Bundle arguments;
     private UiAutomation ui;
@@ -62,6 +63,28 @@ public final class RuntimeProbe extends Instrumentation {
                     click(NOTE, true);
                     require(string(editable(null).getText()).contains("未保存的恢复草稿"), "Recovered draft text missing");
                     save();
+                    break;
+                case "ime-compose":
+                    open(NOTE);
+                    activate(editable(null));
+                    CompositionIme.awaitTarget(APP);
+                    CompositionIme.selectEnd(APP, DRAFT.length());
+                    progress.append("IME: original InputConnection, composing pinyin\n");
+                    CompositionIme.compose(APP, "zhongwen");
+                    waitLabel("Composing text…");
+                    waitNode(node -> label(node, "Save", false) && !node.isEnabled(), "Save disabled during original IME composition");
+                    CompositionIme.compose(APP, IME_TEXT);
+                    waitNode(node -> node.isEditable() && string(node.getText()).contains(IME_TEXT), "unconfirmed Chinese composition");
+                    waitLabel("Composing text…");
+                    progress.append("IME: confirm Chinese candidate\n");
+                    CompositionIme.confirm(APP);
+                    waitLabel("Draft kept on this device");
+                    hideKeyboard();
+                    save();
+                    break;
+                case "ime-recover":
+                    open(NOTE);
+                    require(string(editable(null).getText()).contains(IME_TEXT), "Confirmed IME text did not survive process termination");
                     break;
                 case "back-draft":
                     create("New note", "runtime-back.md");

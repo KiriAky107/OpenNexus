@@ -6,12 +6,36 @@ import tempfile
 import subprocess
 import sqlite3
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from android_runtime_probe import APP, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job
+from android_runtime_probe import APP, DRIVER, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_test_ime_rejects_unknown_original_selection_before_any_setting_change(self):
+        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(serial='emulator-5562')
+        probe.original_ime=None;probe.original_hardware_ime=None
+        for original in (b'null\n', b'not a component\n', (DRIVER+'/.CompositionIme\n').encode()):
+            calls=[]
+            probe.shell=lambda *args,**kwargs:(calls.append(args) or subprocess.CompletedProcess([],0,original,b''))
+            with patch('android_runtime_probe.require_hosted_emulator'):
+                with self.assertRaises(RuntimeError):probe.enable_test_ime()
+            self.assertEqual(len(calls),1);self.assertIsNone(probe.original_ime)
+
+    def test_test_ime_restoration_changes_only_the_exact_owned_selection(self):
+        for current in (DRIVER+'/.CompositionIme','another.ime/.Editor'):
+            probe=Probe.__new__(Probe);probe.args=SimpleNamespace(serial='emulator-5562')
+            probe.original_ime='original.ime/.Keyboard';probe.original_hardware_ime='null'
+            calls=[]
+            probe.shell=lambda *args,**kwargs:(calls.append(args) or subprocess.CompletedProcess([],0,(current+'\n').encode(),b''))
+            with patch('android_runtime_probe.require_hosted_emulator'):probe.restore_test_ime()
+            expected=[('settings','get','secure','default_input_method')]
+            if current==DRIVER+'/.CompositionIme':expected.extend([
+                ('ime','set','original.ime/.Keyboard'),('ime','disable',DRIVER+'/.CompositionIme'),
+                ('settings','delete','secure','show_ime_with_hard_keyboard')])
+            self.assertEqual(calls,expected);self.assertIsNone(probe.original_ime)
+
     def test_runtime_reuse_requires_the_exact_successful_build_job_not_an_aggregate_green_run(self):
         run={'id':42,'head_sha':'fixed-source','head_branch':'main','path':'.github/workflows/android.yml','conclusion':'failure'}
         job={'id':99,'name':'debug-apk','status':'completed','conclusion':'success'}

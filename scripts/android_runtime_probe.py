@@ -26,6 +26,7 @@ DRIVER = 'cc.kronecker.opennexus.testdriver'
 BODY = '# 原始 Markdown 😀\n\n离线正文 / original content\n'
 DRAFT = BODY + '未保存的恢复草稿 / recovered draft\n'
 NODE = '中文画布节点 😀 / original canvas text'
+IME_TEXT = '中文组合输入 😀'
 BACK_DRAFT = '# 系统返回键草稿 😀\nBack keeps the native draft before leaving.\n'
 
 
@@ -115,6 +116,8 @@ class Probe:
         self.adb = args.sdk / 'platform-tools/adb'
         self.root = None
         self.phases = []
+        self.original_ime = None
+        self.original_hardware_ime = None
 
     def command(self, command, *, timeout=90, input=None, check=True):
         result = subprocess.run([str(value) for value in command], input=input, capture_output=True, timeout=timeout)
@@ -182,12 +185,14 @@ class Probe:
         classes, dex = self.tools / 'classes', self.tools / 'dex'
         classes.mkdir(); dex.mkdir()
         self.command(['javac', '-encoding', 'UTF-8', '-source', '8', '-target', '8', '-classpath', platform,
-            '-d', classes, root / 'RuntimeProbe.java'])
+            '-d', classes, *sorted(root.glob('*.java'))])
         self.command([sdk_tools / 'd8', '--lib', platform, '--min-api', '24', '--output', dex,
             *sorted(classes.rglob('*.class'))])
         unsigned, aligned, signed = [self.tools / name for name in ('unsigned.apk', 'aligned.apk', 'driver.apk')]
+        resources = self.tools / 'resources.zip'
+        self.command([sdk_tools / 'aapt2', 'compile', '--dir', root / 'res', '-o', resources])
         self.command([sdk_tools / 'aapt2', 'link', '-I', platform, '--manifest', root / 'AndroidManifest.xml',
-            '--version-code', '1', '--version-name', 'ci', '-o', unsigned])
+            '-R', resources, '--version-code', '1', '--version-name', 'ci', '-o', unsigned])
         with zipfile.ZipFile(unsigned, 'a') as archive:
             archive.write(dex / 'classes.dex', 'classes.dex')
         self.command([sdk_tools / 'zipalign', '-f', '4', unsigned, aligned])
@@ -197,6 +202,34 @@ class Probe:
         self.command([sdk_tools / 'apksigner', 'sign', '--ks', key, '--ks-pass', 'pass:android',
             '--key-pass', 'pass:android', '--out', signed, aligned])
         self.device('install', '--no-streaming', signed)
+
+    def enable_test_ime(self):
+        require_hosted_emulator(self.args.serial)
+        original = self.shell('settings', 'get', 'secure', 'default_input_method').stdout.decode().strip()
+        require(re.fullmatch(r'[A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+', original), 'Original hosted-emulator IME cannot be identified')
+        require(original != DRIVER + '/.CompositionIme', 'Test IME already selected before this owned run')
+        hardware = self.shell('settings', 'get', 'secure', 'show_ime_with_hard_keyboard').stdout.decode().strip()
+        require(hardware in ('0', '1', 'null'), 'Original hosted-emulator hardware-keyboard preference is unknown')
+        self.original_ime = original
+        self.original_hardware_ime = hardware
+        self.shell('ime', 'enable', DRIVER + '/.CompositionIme')
+        self.shell('ime', 'set', DRIVER + '/.CompositionIme')
+        self.shell('settings', 'put', 'secure', 'show_ime_with_hard_keyboard', '1')
+
+    def restore_test_ime(self):
+        if not self.original_ime:
+            return
+        require_hosted_emulator(self.args.serial)
+        observed = self.shell('settings', 'get', 'secure', 'default_input_method', check=False).stdout.decode().strip()
+        if observed == DRIVER + '/.CompositionIme':
+            self.shell('ime', 'set', self.original_ime)
+            self.shell('ime', 'disable', DRIVER + '/.CompositionIme')
+            if self.original_hardware_ime == 'null':
+                self.shell('settings', 'delete', 'secure', 'show_ime_with_hard_keyboard')
+            elif self.original_hardware_ime in ('0', '1'):
+                self.shell('settings', 'put', 'secure', 'show_ime_with_hard_keyboard', self.original_hardware_ime)
+        self.original_ime = None
+        self.original_hardware_ime = None
 
     def capture(self, phase):
         image = self.device('exec-out', 'screencap', '-p', check=False).stdout
@@ -274,6 +307,14 @@ class Probe:
         require(any(path == 'runtime-note.md' and content == DRAFT and generation > saved for path, content, generation, saved in rows), 'Confirmed local draft missing after force-stop')
         self.phase('recover')
         require(self.original('runtime-note.md') == DRAFT.encode(), 'Recovered and saved Markdown bytes mismatch')
+        self.enable_test_ime()
+        try:
+            self.phase('ime-compose')
+            require(self.original('runtime-note.md') == (DRAFT + IME_TEXT).encode(), 'Confirmed Chinese IME input changed original Markdown bytes')
+            self.phase('ime-recover')
+            require(self.original('runtime-note.md') == (DRAFT + IME_TEXT).encode(), 'Reopening changed confirmed Chinese IME input')
+        finally:
+            self.restore_test_ime()
         self.phase('back-draft')
         require(any(path == 'runtime-back.md' and content == BACK_DRAFT and generation > saved
             for path, content, generation, saved in self.draft_rows()), 'System Back left before the original draft was durable')
@@ -294,7 +335,7 @@ class Probe:
             and moved['nodes'][0]['text'] == NODE, 'Drag changed node identity or original text')
         require((moved['nodes'][0]['x'], moved['nodes'][0]['y']) != (document['nodes'][0]['x'], document['nodes'][0]['y']), 'Real touch did not move the Canvas node')
         self.phase('export')
-        originals = {'runtime-note.md': DRAFT.encode(), 'runtime.canvas': after}
+        originals = {'runtime-note.md': (DRAFT + IME_TEXT).encode(), 'runtime.canvas': after}
         export = self.verify_export(originals)
         for name, data in originals.items():
             (self.output / name).write_bytes(data)
@@ -306,9 +347,9 @@ class Probe:
             'phases': self.phases, 'files_sha256': {name: digest(data) for name, data in originals.items()},
             'theme_ui': 'Actual native selector choices and cold reloads; screenshots/window observations preserved',
             'system_destination': export, 'draft_database_integrity': 'ok',
-            'input_method': 'Android accessibility ACTION_SET_TEXT with Unicode; not IME composition',
+            'input_method': 'Accessibility for baseline text; real Android InputMethodService/InputConnection for pinyin, Chinese composing text and candidate confirmation. Test-only IME, not Gboard/Sogou or physical-device proof.',
             'system_back': 'Actual Android Back key; durable draft recovery and own-task background; not predictive gesture animation proof',
-            'physical_phone_verified': False, 'Chinese_IME_verified': False, 'sync_verified': False,
+            'physical_phone_verified': False, 'Chinese_IME_verified': True, 'commercial_Chinese_IME_verified': False, 'sync_verified': False,
             'disk_full_verified': False, 'image_picker_verified': False, 'published': False}
         (self.output / 'runtime-proof.json').write_text(json.dumps(proof, ensure_ascii=False, indent=2) + '\n', 'utf-8')
         print(json.dumps(proof, ensure_ascii=False, indent=2))
@@ -347,9 +388,12 @@ def main():
     try:
         probe.run()
     finally:
-        log = probe.device('logcat', '-d', '-t', '1500', check=False).stdout
-        (probe.output / 'logcat.txt').write_bytes(log)
-        probe.shell('am', 'force-stop', APP, check=False)
+        try:
+            probe.restore_test_ime()
+        finally:
+            log = probe.device('logcat', '-d', '-t', '1500', check=False).stdout
+            (probe.output / 'logcat.txt').write_bytes(log)
+            probe.shell('am', 'force-stop', APP, check=False)
 
 
 if __name__ == '__main__':
