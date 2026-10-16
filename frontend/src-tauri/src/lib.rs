@@ -30,6 +30,7 @@ pub mod experiment_owner;
 pub mod experiment_preview;
 pub mod experiment_store;
 pub mod mobile_drafts;
+pub mod mobile_export;
 pub mod mobile_workspace;
 mod payloads;
 mod preference_records;

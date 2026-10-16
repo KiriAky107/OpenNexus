@@ -5,7 +5,7 @@ use crate::mobile_drafts::{
 use crate::workspace::{Document, HostError, Result, Workspace};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub type MobileResponse = Value;
 
@@ -37,6 +37,9 @@ pub enum MobileRequest {
     },
     ReadNote {
         file_id: String,
+    },
+    ReadPath {
+        path: String,
     },
     CreateDraft {
         path: String,
@@ -106,6 +109,14 @@ pub enum MobileRequest {
     ReadImage {
         path: String,
     },
+    PrepareExport {},
+    ListExports {
+        offset: usize,
+        limit: usize,
+    },
+    ExportStatus {
+        ticket: String,
+    },
 }
 
 #[derive(Serialize)]
@@ -121,6 +132,7 @@ pub struct DraftView {
 pub struct MobileWorkspace {
     pub workspace: Workspace,
     pub drafts: DraftStore,
+    private_root: PathBuf,
 }
 
 fn value<T: Serialize>(value: T) -> Result<Value> {
@@ -133,7 +145,11 @@ impl MobileWorkspace {
         std::fs::create_dir_all(&vault)?;
         let workspace = Workspace::open(&vault)?;
         let drafts = DraftStore::open(private_root)?;
-        Ok(Self { workspace, drafts })
+        Ok(Self {
+            workspace,
+            drafts,
+            private_root: private_root.to_path_buf(),
+        })
     }
 
     pub fn snapshot(&mut self) -> Result<Value> {
@@ -266,6 +282,17 @@ impl MobileWorkspace {
     pub fn dispatch(&mut self, request: MobileRequest) -> Result<Value> {
         use MobileRequest::*;
         match request {
+            PrepareExport {} => value(crate::mobile_export::prepare_export(
+                &mut self.workspace,
+                &self.private_root,
+            )?),
+            ListExports { offset, limit } => {
+                crate::mobile_export::list_exports(&self.private_root, offset, limit)
+            }
+            ExportStatus { ticket } => value(crate::mobile_export::verify_export(
+                &self.private_root,
+                &ticket,
+            )?),
             ListNotes {
                 offset,
                 limit,
@@ -275,6 +302,16 @@ impl MobileWorkspace {
             ListDrafts { offset, limit } => value(self.drafts.list(offset, limit)?),
             ListPending { offset, limit } => self.drafts.pending_operations(offset, limit),
             ReadNote { file_id } => value(self.read(&file_id)?),
+            ReadPath { path } => {
+                self.workspace.resolve(&path)?;
+                let entry = self
+                    .workspace
+                    .tree()?
+                    .into_iter()
+                    .find(|entry| !entry.deleted && !entry.is_folder && entry.path == path)
+                    .ok_or_else(|| HostError::new("FILE_NOT_FOUND"))?;
+                value(self.read(&entry.file_id)?)
+            }
             OpenNote { file_id } => {
                 let draft = self.drafts.open_note(&mut self.workspace, &file_id)?;
                 value(self.draft_view(&draft.id, false)?)
@@ -393,6 +430,57 @@ impl MobileWorkspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mobile_export_and_relative_reads_stay_bound_to_native_private_vault() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut engine = MobileWorkspace::open(temp.path()).unwrap();
+        engine
+            .workspace
+            .write("中文/a.md", "", b"# saved\r\n", "local")
+            .unwrap();
+        engine
+            .drafts
+            .create_with_content(&engine.workspace, "private-draft.md", "not exported")
+            .unwrap();
+        let original = engine
+            .dispatch(MobileRequest::ReadPath {
+                path: "中文/a.md".into(),
+            })
+            .unwrap();
+        assert_eq!(original["content"], "# saved\r\n");
+        assert!(engine
+            .dispatch(MobileRequest::ReadPath {
+                path: "../mobile-drafts.sqlite3".into()
+            })
+            .is_err());
+        assert!(serde_json::from_value::<MobileRequest>(
+            json!({"kind":"prepare_export","root":"elsewhere"})
+        )
+        .is_err());
+        let receipt = engine.dispatch(MobileRequest::PrepareExport {}).unwrap();
+        assert_eq!(receipt["file_count"], 1);
+        let ticket = receipt["ticket"].as_str().unwrap().to_owned();
+        assert_eq!(
+            engine
+                .dispatch(MobileRequest::ExportStatus { ticket })
+                .unwrap(),
+            receipt
+        );
+        let list = engine
+            .dispatch(MobileRequest::ListExports {
+                offset: 0,
+                limit: 20,
+            })
+            .unwrap();
+        assert_eq!(list["total"], 1);
+        assert!(!list.to_string().contains("not exported"));
+        assert!(engine
+            .dispatch(MobileRequest::ExportStatus {
+                ticket: "../../elsewhere".into()
+            })
+            .is_err());
+    }
 
     #[test]
     fn typed_mobile_image_import_and_read_keep_original_bytes_and_deny_paths() {
