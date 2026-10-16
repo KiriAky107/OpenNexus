@@ -370,6 +370,11 @@ public final class RuntimeProbe extends Instrumentation {
             && label(node, "Markdown note body", false), "visible owned Markdown body (not file search)");
     }
 
+    private AccessibilityNodeInfo editable(String original) {
+        return waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
+            && string(node.getText()).equals(original), "original Canvas property text");
+    }
+
     private void setText(AccessibilityNodeInfo node, String value) {
         progress.append("set text: ").append(value.length()).append(" UTF-16 units\n");
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
