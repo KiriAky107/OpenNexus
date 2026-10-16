@@ -138,6 +138,74 @@ class Probe:
     def force_stop(self):
         self.shell('am', 'force-stop', APP)
 
+    def wait_owned_connection(self):
+        require_hosted_emulator(self.args.serial)
+        expected = f'opennexus-ci-{os.environ["GITHUB_RUN_ID"]}-{os.environ["GITHUB_RUN_ATTEMPT"]}'
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            try:
+                state = self.device('get-state', check=False, timeout=5)
+                if state.returncode == 0 and state.stdout.strip() == b'device':
+                    identity = self.device('emu', 'avd', 'name', check=False, timeout=5)
+                    if identity.returncode == 0:
+                        names = identity.stdout.decode('utf-8', 'replace').splitlines()
+                        require(names and names[0].strip() == expected, 'Reconnected AVD ownership mismatch')
+                        return
+            except subprocess.TimeoutExpired:
+                pass  # Observation expiry never restarts or reinstalls the existing device/app.
+            time.sleep(1)
+        raise RuntimeError('Original owned emulator did not reconnect; no restart was attempted')
+
+    def verify_installed(self, installed_path):
+        expected = self.binding['sha256']
+        observations = {'expected_sha256': expected, 'expected_size': self.apk.stat().st_size, 'attempts': []}
+        def preserve():
+            (self.output / 'installed-apk.json').write_text(json.dumps(observations, indent=2) + '\n', 'utf-8')
+        def device_hash():
+            try:
+                result = self.shell('sha256sum', installed_path, check=False, timeout=10)
+            except subprocess.TimeoutExpired:
+                return None
+            fields = result.stdout.decode('utf-8', 'replace').split()
+            return fields[0] if result.returncode == 0 and fields and re.fullmatch(r'[0-9a-f]{64}', fields[0]) else None
+        preserve()
+        for attempt in range(1, 4):
+            self.wait_owned_connection()
+            entry = {'attempt': attempt, 'verified': False}
+            observations['attempts'].append(entry); preserve()
+            try:
+                path = self.shell('pm', 'path', APP, check=False, timeout=10)
+            except subprocess.TimeoutExpired:
+                entry['package_observation'] = 'timeout'; preserve(); continue
+            if path.returncode != 0:
+                entry['package_observation'] = 'unavailable'; preserve(); continue
+            current_path = path.stdout.decode().strip().removeprefix('package:')
+            require(current_path == installed_path, 'Installed package location changed during observation')
+            entry['device_sha256_before'] = device_hash(); preserve()
+            if entry['device_sha256_before'] is None:
+                continue  # Re-observe the same identity after a transient ADB loss; no device write.
+            require(entry['device_sha256_before'] == expected, 'Installed device APK hash differs from the fixed build')
+            copy = self.tools / f'installed-observation-{attempt}.apk'
+            require(not copy.exists(), 'An earlier installed-byte observation would be replaced')
+            try:
+                result = self.device('pull', installed_path, copy, check=False, timeout=60)
+                entry['pull_returncode'] = result.returncode
+            except subprocess.TimeoutExpired:
+                entry['pull_returncode'] = 'observation_timeout'
+            if copy.is_file() and not copy.is_symlink():
+                entry['read_size'] = copy.stat().st_size
+                with copy.open('rb') as file:
+                    entry['read_sha256'] = hashlib.file_digest(file, 'sha256').hexdigest()
+            entry['device_sha256_after'] = device_hash()
+            entry['verified'] = (entry['pull_returncode'] == 0 and entry.get('read_size') == observations['expected_size']
+                and entry.get('read_sha256') == entry['device_sha256_after'] == expected)
+            preserve()
+            if entry['verified']:
+                return
+            if entry['device_sha256_after'] is not None:
+                require(entry['device_sha256_after'] == expected, 'Device APK changed during the original read')
+        raise RuntimeError('Installed APK bytes could not be confirmed; preserved all original read observations')
+
     def boot(self):
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
@@ -163,16 +231,7 @@ class Probe:
         self.device('install', '--no-streaming', self.apk)
         installed_path = self.shell('pm', 'path', APP).stdout.decode().strip().removeprefix('package:')
         require(installed_path.startswith('/data/app/') and '\n' not in installed_path, 'Unexpected installed APK location')
-        installed = self.device('exec-out', 'cat', installed_path).stdout
-        device_sha = self.shell('sha256sum', installed_path).stdout.decode('utf-8', 'replace').split()
-        # Preserve independent device and transport observations before rejecting a mismatch.
-        # The full original APK remains required; a missing or partial read is never accepted.
-        observation = {'expected_sha256': self.binding['sha256'], 'expected_size': self.apk.stat().st_size,
-            'read_sha256': digest(installed), 'read_size': len(installed),
-            'device_sha256': device_sha[0] if device_sha else None}
-        (self.output / 'installed-apk.json').write_text(json.dumps(observation, indent=2) + '\n', 'utf-8')
-        require(observation['read_sha256'] == observation['device_sha256'] == self.binding['sha256']
-            and observation['read_size'] == observation['expected_size'], 'Installed APK bytes mismatch; see preserved device and transport observations')
+        self.verify_installed(installed_path)
         self.activity = self.shell('cmd', 'package', 'resolve-activity', '--brief', '-a', 'android.intent.action.MAIN',
             '-c', 'android.intent.category.LAUNCHER', APP).stdout.decode().strip().splitlines()[-1]
         require(self.activity.startswith(APP + '/') and re.fullmatch(r'[a-zA-Z0-9_./]+', self.activity), 'Unbound target activity')

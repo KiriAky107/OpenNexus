@@ -13,6 +13,67 @@ from android_runtime_probe import APP, DRIVER, Probe, digest, require_hosted_emu
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def installed_probe(self, directory, copied, hashes=None, avd='opennexus-ci-73-1', states=None):
+        root=Path(directory);probe=Probe.__new__(Probe)
+        probe.output=root/'evidence';probe.output.mkdir();probe.tools=root/'private-read-copies';probe.tools.mkdir()
+        probe.apk=root/'original.apk';probe.apk.write_bytes(b'original immutable APK bytes')
+        probe.binding={'sha256':digest(probe.apk.read_bytes())};probe.args=SimpleNamespace(serial='emulator-5562')
+        installed='/data/app/owned/base.apk';calls=[];copies=iter(copied);hashes=iter(hashes) if hashes else None
+        states=iter(states) if states else None
+        def device(*args,**kwargs):
+            calls.append(args)
+            if args==('get-state',):return subprocess.CompletedProcess([],0,next(states) if states else b'device\n',b'')
+            if args==('emu','avd','name'):return subprocess.CompletedProcess([],0,(avd+'\nOK\n').encode(),b'')
+            if args[0]=='pull':
+                Path(args[2]).write_bytes(next(copies));return subprocess.CompletedProcess([],0,b'one file pulled',b'')
+            raise AssertionError('Unexpected device action: '+str(args))
+        def shell(*args,**kwargs):
+            calls.append(('shell',*args))
+            if args==('pm','path',APP):return subprocess.CompletedProcess([],0,('package:'+installed+'\n').encode(),b'')
+            if args==('sha256sum',installed):
+                value=next(hashes) if hashes else probe.binding['sha256']
+                return subprocess.CompletedProcess([],0 if value else 1,((value+'  '+installed+'\n').encode() if value else b''),b'')
+            raise AssertionError('Unexpected shell write: '+str(args))
+        probe.device=device;probe.shell=shell
+        return probe,installed,calls
+
+    def test_installed_byte_reads_preserve_a_partial_original_and_confirm_only_a_full_copy(self):
+        original=b'original immutable APK bytes'
+        with tempfile.TemporaryDirectory() as directory:
+            probe,path,calls=self.installed_probe(directory,[b'partial',original])
+            with patch('android_runtime_probe.require_hosted_emulator'),patch.dict(os.environ,{'GITHUB_RUN_ID':'73','GITHUB_RUN_ATTEMPT':'1'}):
+                probe.verify_installed(path)
+            proof=json.loads((probe.output/'installed-apk.json').read_text('utf-8'))
+            self.assertEqual([entry['verified'] for entry in proof['attempts']],[False,True])
+            self.assertEqual((probe.tools/'installed-observation-1.apk').read_bytes(),b'partial')
+            self.assertEqual((probe.tools/'installed-observation-2.apk').read_bytes(),original)
+            self.assertEqual(probe.apk.read_bytes(),original)
+            self.assertEqual(sum(call[0]=='pull' for call in calls),2)
+
+    def test_device_hash_disagreement_rejects_before_copy_or_reinstall(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe,path,calls=self.installed_probe(directory,[],hashes=[digest(b'changed installed APK')])
+            with patch('android_runtime_probe.require_hosted_emulator'),patch.dict(os.environ,{'GITHUB_RUN_ID':'73','GITHUB_RUN_ATTEMPT':'1'}):
+                with self.assertRaisesRegex(RuntimeError,'device APK hash differs'):probe.verify_installed(path)
+            self.assertFalse(any(call[0] in ('pull','install') for call in calls))
+
+    def test_offline_read_reobserves_the_same_avd_without_restarting_or_reinstalling(self):
+        original=b'original immutable APK bytes';sha=digest(original)
+        with tempfile.TemporaryDirectory() as directory:
+            probe,path,calls=self.installed_probe(directory,[original],hashes=[None,sha,sha],states=[b'device\n',b'offline\n',b'device\n'])
+            with patch('android_runtime_probe.require_hosted_emulator'),patch.dict(os.environ,{'GITHUB_RUN_ID':'73','GITHUB_RUN_ATTEMPT':'1'}),patch('android_runtime_probe.time.sleep'):
+                probe.verify_installed(path)
+            proof=json.loads((probe.output/'installed-apk.json').read_text('utf-8'))
+            self.assertIsNone(proof['attempts'][0]['device_sha256_before']);self.assertTrue(proof['attempts'][1]['verified'])
+            self.assertFalse(any(call[0] in ('install','reboot','kill-server','start-server') for call in calls))
+
+    def test_read_reconnection_rejects_a_different_avd_before_accessing_the_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe,path,calls=self.installed_probe(directory,[],avd='unrelated-avd')
+            with patch('android_runtime_probe.require_hosted_emulator'),patch.dict(os.environ,{'GITHUB_RUN_ID':'73','GITHUB_RUN_ATTEMPT':'1'}):
+                with self.assertRaisesRegex(RuntimeError,'ownership mismatch'):probe.verify_installed(path)
+            self.assertEqual([call[0] for call in calls],['get-state','emu'])
+
     def test_test_ime_rejects_unknown_original_selection_before_any_setting_change(self):
         probe=Probe.__new__(Probe);probe.args=SimpleNamespace(serial='emulator-5562')
         probe.original_ime=None;probe.original_hardware_ime=None
