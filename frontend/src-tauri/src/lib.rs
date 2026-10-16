@@ -41,12 +41,12 @@ pub mod request_lifecycle;
 mod runtime_compat;
 #[cfg(windows)]
 pub mod session_lock;
-#[cfg(feature = "desktop")]
+#[cfg(feature = "sync-http")]
 pub mod sync_account;
 #[cfg(feature = "desktop")]
 pub mod sync_auth;
 pub mod sync_capabilities;
-#[cfg(feature = "desktop")]
+#[cfg(feature = "sync-http")]
 pub mod sync_client;
 pub mod sync_discovery;
 #[cfg(feature = "sync-e2ee-prototype")]

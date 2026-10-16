@@ -14,7 +14,8 @@ required-features = ["desktop"]
 
 [features]
 default = []
-desktop = ["dep:tauri", "tauri/custom-protocol", "dep:tauri-build", "dep:rfd", "dep:reqwest", "dep:tokio"]
+desktop = ["dep:tauri", "tauri/custom-protocol", "dep:tauri-build", "dep:rfd", "sync-http"]
+sync-http = ["dep:reqwest", "dep:tokio"]
 sync-e2ee-prototype = ["dep:hkdf", "dep:x25519-dalek"]
 
 [[example]]

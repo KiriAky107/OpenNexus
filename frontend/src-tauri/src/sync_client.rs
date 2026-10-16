@@ -84,7 +84,7 @@ impl From<std::io::Error> for SyncError {
     }
 }
 
-/// 仅通过 Stronghold Sync 范围持续，绝不作为 IPC 响应。
+/// 仅由宿主凭据代理持有或保存，绝不作为 IPC 响应。
 #[derive(Serialize, Deserialize)]
 pub struct Session {
     pub access_token: String,
@@ -666,6 +666,71 @@ pub(crate) fn identifier(value: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn production_endpoints_reject_plaintext_credentials_and_non_origin_urls() {
+        for endpoint in [
+            "http://sync.example/",
+            "ftp://sync.example/",
+            "https://user:password@sync.example/",
+            "https://sync.example/?token=secret",
+            "https://sync.example/#fragment",
+            "https://sync.example/other/path",
+        ] {
+            assert!(matches!(
+                SyncClient::new(endpoint, Zeroizing::new(String::new()), false),
+                Err(error) if error.code == "SYNC_ENDPOINT_INVALID"
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn owned_http_probe_keeps_tokens_in_headers_and_does_not_follow_redirects() {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let redirected = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        redirected.set_nonblocking(true).unwrap();
+        let redirect_address = redirected.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                assert!(request.len() < 64 * 1024);
+                let mut byte = [0];
+                assert_eq!(stream.read(&mut byte).unwrap(), 1);
+                request.push(byte[0]);
+            }
+            let body = br#"{"error":{"code":"SYNC_REDIRECT_BLOCKED"}}"#;
+            write!(stream,"HTTP/1.1 302 Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nLocation: http://{}/not-followed\r\nConnection: close\r\n\r\n",body.len(),redirect_address).unwrap();
+            stream.write_all(body).unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let client = SyncClient::new(
+            &format!("http://{address}"),
+            Zeroizing::new("test-only-header-token".into()),
+            true,
+        )
+        .unwrap();
+        let error = client.handshake().await.err().unwrap();
+        assert_eq!(error.status, 302);
+        assert_eq!(error.code, "SYNC_REDIRECT_BLOCKED");
+        let request = server.join().unwrap();
+        assert_eq!(
+            request.lines().next(),
+            Some("GET /sync/v1/handshake?protocol=1 HTTP/1.1")
+        );
+        assert!(request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer test-only-header-token\r\n"));
+        assert!(!request.lines().next().unwrap().contains("token"));
+        assert!(
+            matches!(redirected.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+    }
+
     #[tokio::test]
     async fn dropping_a_pending_attempt_marks_interruption_without_restart() {
         let dir = tempfile::tempdir().unwrap();
