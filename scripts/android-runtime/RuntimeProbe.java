@@ -464,17 +464,25 @@ public final class RuntimeProbe extends Instrumentation {
         final String expectedHint = Build.VERSION.SDK_INT >= 26 ? string(node.getHintText()) : "";
         final String expectedId = string(node.getViewIdResourceName());
         final boolean namedEditable = node.isEditable() && (!expectedHint.isEmpty() || !expectedDescription.isEmpty());
+        final String accessibleName = !expectedHint.isEmpty() ? expectedHint : expectedDescription;
         require(!expectedText.isEmpty() || !expectedDescription.isEmpty() || !expectedHint.isEmpty() || !expectedId.isEmpty(), "Cannot reacquire an unnamed target");
         // A named editor's value/placeholder is mutable during editor hydration.
         // Its accessible name, role, package and optional container identify it;
         // file/content assertions remain separate from locating the input control.
         Predicate<AccessibilityNodeInfo> sameTarget = value -> expectedPackage.equals(string(value.getPackageName()))
-            && expectedClass.equals(string(value.getClassName()))
-            && (!namedEditable || value.isEditable())
-            && (namedEditable || expectedText.equals(string(value.getText())))
-            && expectedDescription.equals(string(value.getContentDescription())) && expectedId.equals(string(value.getViewIdResourceName()))
-            && (Build.VERSION.SDK_INT < 26 || expectedHint.equals(string(value.getHintText())))
+            && (namedEditable
+                // During contenteditable hydration WebView can move the same
+                // ARIA name between hint and description or replace its virtual
+                // class. Require its editable role and exact accessible name,
+                // rather than a transient representation of that name/value.
+                ? value.isEditable() && label(value, accessibleName, false)
+                    && (expectedId.isEmpty() || expectedId.equals(string(value.getViewIdResourceName())))
+                : expectedClass.equals(string(value.getClassName())) && expectedText.equals(string(value.getText()))
+                    && expectedDescription.equals(string(value.getContentDescription()))
+                    && expectedId.equals(string(value.getViewIdResourceName()))
+                    && (Build.VERSION.SDK_INT < 26 || expectedHint.equals(string(value.getHintText()))))
             && (scope == null || scope.test(value));
+        progress.append("target identity: ").append(namedEditable ? "editable ARIA " + accessibleName : expectedClass).append('\n');
         node = uniqueTarget(sameTarget);
         Rect bounds = new Rect(); node.getBoundsInScreen(bounds);
         Rect previous = new Rect(bounds);
