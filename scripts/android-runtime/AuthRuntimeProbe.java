@@ -113,7 +113,7 @@ public final class AuthRuntimeProbe extends Instrumentation {
     }
     private void set(String name,String value,boolean secret) {
         stage="input-"+name.replace(' ','-');
-        AccessibilityNodeInfo node=waitFor(n->n.isEditable() && n.isEnabled() && label(n,name),true);
+        AccessibilityNodeInfo node=waitFor(n->n.isEditable() && n.isEnabled() && inputLabel(n,name),true);
         require(node.isPassword()==secret,"Wrong input role");
         Bundle input=new Bundle();input.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,value);
         require(node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,input),"Input rejected");
@@ -175,6 +175,26 @@ public final class AuthRuntimeProbe extends Instrumentation {
     private static boolean descendantLabel(AccessibilityNodeInfo node,String value,int depth) {
         if (label(node,value)) return true;if (depth>=4) return false;
         for (int i=0;i<node.getChildCount();i++) { AccessibilityNodeInfo child=node.getChild(i);if (child!=null && descendantLabel(child,value,depth+1)) return true; }
+        return false;
+    }
+    private static int editableCount(AccessibilityNodeInfo node,int depth) {
+        if (node.isEditable()) return 1;if (depth>=4) return 0;int count=0;
+        for (int i=0;i<node.getChildCount();i++) { AccessibilityNodeInfo child=node.getChild(i);if (child!=null) count+=editableCount(child,depth+1); }
+        return count;
+    }
+    private static boolean inputLabel(AccessibilityNodeInfo node,String name) {
+        if (label(node,name)) return true;
+        AccessibilityNodeInfo associated=node.getLabeledBy();
+        if (associated!=null && APP.equals(text(associated.getPackageName())) && label(associated,name)) return true;
+        // The shared form uses an HTML label wrapping its one input. Refuse a
+        // generic form/section with multiple editable descendants; never select
+        // an input by its ordinal, existing value or a guessed screen location.
+        AccessibilityNodeInfo parent=node.getParent();
+        for (int depth=0;parent!=null && depth<3;depth++,parent=parent.getParent()) {
+            if (!APP.equals(text(parent.getPackageName()))) return false;
+            int count=editableCount(parent,0);if (count>1) return false;
+            if (count==1 && descendantLabel(parent,name,0)) return true;
+        }
         return false;
     }
     private List<AccessibilityNodeInfo> nodes() {
