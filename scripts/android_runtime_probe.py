@@ -23,6 +23,7 @@ DRIVER = 'cc.kronecker.opennexus.testdriver'
 BODY = '# 原始 Markdown 😀\n\n离线正文 / original content\n'
 DRAFT = BODY + '未保存的恢复草稿 / recovered draft\n'
 NODE = '中文画布节点 😀 / original canvas text'
+BACK_DRAFT = '# 系统返回键草稿 😀\nBack keeps the native draft before leaving.\n'
 
 
 def require(value, message):
@@ -193,6 +194,7 @@ class Probe:
             for name, expected in originals.items():
                 require(archive.read('vault/' + name) == expected, 'Exported content changed: ' + name)
             require(not any(name.endswith(('.sqlite3', '.db')) for name in archive.namelist()), 'Private database leaked into content export')
+            require('vault/runtime-back.md' not in archive.namelist(), 'Unconfirmed Back draft leaked into saved content export')
         (self.output / 'system-saved-content.zip').write_bytes(actual)
         return {key: delivery[key] for key in ('ticket', 'delivery_id', 'state', 'sha256', 'size', 'verified_at')}
 
@@ -206,6 +208,13 @@ class Probe:
         require(any(path == 'runtime-note.md' and content == DRAFT and generation > saved for path, content, generation, saved in rows), 'Confirmed local draft missing after force-stop')
         self.phase('recover')
         require(self.original('runtime-note.md') == DRAFT.encode(), 'Recovered and saved Markdown bytes mismatch')
+        self.phase('back-draft')
+        require(any(path == 'runtime-back.md' and content == BACK_DRAFT and generation > saved
+            for path, content, generation, saved in self.draft_rows()), 'System Back left before the original draft was durable')
+        require(self.private(self.root + 'vault/runtime-back.md', check=False).returncode != 0, 'System Back implicitly saved an unconfirmed note')
+        self.phase('back-recover')
+        require(any(path == 'runtime-back.md' and content == BACK_DRAFT and generation > saved
+            for path, content, generation, saved in self.draft_rows()), 'Backgrounding changed the original Back draft')
         self.phase('canvas')
         before = self.original('runtime.canvas')
         document = json.loads(before)
@@ -230,6 +239,7 @@ class Probe:
             'phases': self.phases, 'files_sha256': {name: digest(data) for name, data in originals.items()},
             'system_destination': export, 'draft_database_integrity': 'ok',
             'input_method': 'Android accessibility ACTION_SET_TEXT with Unicode; not IME composition',
+            'system_back': 'Actual Android Back key; durable draft recovery and own-task background; not predictive gesture animation proof',
             'physical_phone_verified': False, 'Chinese_IME_verified': False, 'sync_verified': False,
             'disk_full_verified': False, 'image_picker_verified': False, 'published': False}
         (self.output / 'runtime-proof.json').write_text(json.dumps(proof, ensure_ascii=False, indent=2) + '\n', 'utf-8')

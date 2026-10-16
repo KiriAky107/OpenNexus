@@ -8,7 +8,9 @@ import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.InputDevice;
 import android.view.MotionEvent;
+import android.view.KeyEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Predicate;
@@ -21,6 +23,7 @@ public final class RuntimeProbe extends Instrumentation {
     private static final String BODY = "# 原始 Markdown 😀\n\n离线正文 / original content\n";
     private static final String DRAFT = BODY + "未保存的恢复草稿 / recovered draft\n";
     private static final String NODE = "中文画布节点 😀 / original canvas text";
+    private static final String BACK_DRAFT = "# 系统返回键草稿 😀\nBack keeps the native draft before leaving.\n";
     private Bundle arguments;
     private UiAutomation ui;
 
@@ -52,6 +55,23 @@ public final class RuntimeProbe extends Instrumentation {
                     click(NOTE, true);
                     require(string(editable(null).getText()).contains("未保存的恢复草稿"), "Recovered draft text missing");
                     save();
+                    break;
+                case "back-draft":
+                    create("New note", "runtime-back.md");
+                    setText(editable(null), BACK_DRAFT);
+                    hideKeyboard();
+                    pressBack();
+                    waitLabel("New note");
+                    break;
+                case "back-recover":
+                    click("Recover drafts", true);
+                    click("runtime-back.md", true);
+                    require(string(editable(null).getText()).contains("系统返回键草稿"), "Back draft did not survive process termination");
+                    hideKeyboard();
+                    pressBack();
+                    waitLabel("New note");
+                    pressBack();
+                    waitNode(node -> !APP.equals(string(node.getPackageName())));
                     break;
                 case "canvas":
                     create("New canvas", CANVAS);
@@ -150,6 +170,27 @@ public final class RuntimeProbe extends Instrumentation {
         MotionEvent event = MotionEvent.obtain(start, when, action, x, y, 0);
         event.setSource(InputDevice.SOURCE_TOUCHSCREEN);
         try { require(ui.injectInputEvent(event, true), "Touch injection rejected"); } finally { event.recycle(); }
+    }
+
+    private boolean keyboardVisible() {
+        for (AccessibilityWindowInfo window : ui.getWindows())
+            if (window.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) return true;
+        return false;
+    }
+
+    private void hideKeyboard() {
+        if (!keyboardVisible()) return;
+        pressBack();
+        long until = SystemClock.uptimeMillis() + 3000;
+        while (keyboardVisible() && SystemClock.uptimeMillis() < until) SystemClock.sleep(100);
+        require(!keyboardVisible(), "IME did not release the Back key");
+    }
+
+    private void pressBack() {
+        long start = SystemClock.uptimeMillis();
+        require(ui.injectInputEvent(new KeyEvent(start, start, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK, 0), true), "Back key down rejected");
+        SystemClock.sleep(60);
+        require(ui.injectInputEvent(new KeyEvent(start, SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK, 0), true), "Back key up rejected");
     }
 
     private AccessibilityNodeInfo waitNode(Predicate<AccessibilityNodeInfo> predicate) {
