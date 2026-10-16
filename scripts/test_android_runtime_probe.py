@@ -18,13 +18,18 @@ class RuntimeBoundaries(unittest.TestCase):
     def test_real_keystore_runner_keeps_output_and_never_replaces_existing_test_data(self):
         with tempfile.TemporaryDirectory() as directory:
             probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562',bundle=Path('/owned/bundle'))
-            probe.binding={'native_tests':{'test_class':'cc.kronecker.opennexus.sync.SyncCredentialStoreTest','runner':'androidx.test.runner.AndroidJUnitRunner','sha256':'1'*64}}
+            probe.binding={'native_tests':{'test_class':'cc.kronecker.opennexus.sync.SyncCredentialStoreTest','runner':'androidx.test.runner.AndroidJUnitRunner','sha256':'1'*64,'expected_tests':4}}
             probe.device=Mock();probe.force_stop=Mock()
             with patch('android_runtime_probe.require_hosted_emulator'):
                 probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b'',b''),subprocess.CompletedProcess([],0,b'OK (4 tests)\n',b'')])
                 probe.native_keystore_tests()
                 probe.device.assert_called_once_with('install','-t','--no-streaming',Path('/owned/bundle/OpenNexus-android-tests.apk'))
                 self.assertTrue(probe.keystore_test_result['passed']);self.assertFalse(probe.keystore_test_result['hardware_backing_claimed'])
+                probe.binding['native_tests']['expected_tests']=5
+                probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b'',b''),subprocess.CompletedProcess([],0,b'OK (4 tests)\n',b'')])
+                with self.assertRaisesRegex(Exception,'did not all pass'):probe.native_keystore_tests()
+                probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b'',b''),subprocess.CompletedProcess([],0,b'OK (5 tests)\n',b'')])
+                probe.native_keystore_tests();self.assertTrue(probe.keystore_test_result['Rust_worker_verified'])
                 probe.device.reset_mock()
                 probe.shell=Mock(return_value=subprocess.CompletedProcess([],0,('package:'+APP+'.test\n').encode(),b''))
                 with self.assertRaisesRegex(Exception,'refusing to replace'):probe.native_keystore_tests()
@@ -375,7 +380,17 @@ class RuntimeBoundaries(unittest.TestCase):
                     'expected_tests':4,'signer_certificate_sha256':'a'*64,'bytes':len(test),'sha256':digest(test)}}
             metadata=root/'package-verification.json';metadata.write_text(json.dumps(proof))
             validate_binding(root,'fixed')
+            proof['native_tests']['expected_tests']=5;metadata.write_text(json.dumps(proof))
+            with self.assertRaisesRegex(Exception,'Native Rust worker binding mismatch'):validate_binding(root,'fixed')
+            symbol='Java_cc_kronecker_opennexus_sync_NativeCredentialProbe_roundTrip'
+            proof['native_secret_broker']={'debug_test_entry_only':True,'WebView_read_command':False,
+                'native_symbols':{'arm64-v8a':symbol,'x86_64':symbol}}
+            metadata.write_text(json.dumps(proof));validate_binding(root,'fixed')
+            proof['native_secret_broker']['WebView_read_command']=True;metadata.write_text(json.dumps(proof))
+            with self.assertRaisesRegex(Exception,'Native Rust worker binding mismatch'):validate_binding(root,'fixed')
+            proof['native_tests']['expected_tests']=4
             target.write_bytes(b'changed-test')
+            metadata.write_text(json.dumps(proof))
             with self.assertRaisesRegex(Exception,'Native test APK bytes changed'):validate_binding(root,'fixed')
             target.write_bytes(test);proof['native_tests']['target_package']='some.other.app';metadata.write_text(json.dumps(proof))
             with self.assertRaisesRegex(Exception,'Native test binding mismatch'):validate_binding(root,'fixed')

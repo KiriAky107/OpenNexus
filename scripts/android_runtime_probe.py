@@ -59,10 +59,15 @@ def validate_binding(bundle, commit):
         require(native_tests.get('apk') == test_apk.name and native_tests.get('package') == APP + '.test'
             and native_tests.get('target_package') == APP and native_tests.get('runner') == 'androidx.test.runner.AndroidJUnitRunner'
             and native_tests.get('test_class') == 'cc.kronecker.opennexus.sync.SyncCredentialStoreTest'
-            and native_tests.get('expected_tests') == 4
+            and native_tests.get('expected_tests') in (4, 5)
             and native_tests.get('signer_certificate_sha256') == proof.get('signer_certificate_sha256'), 'Native test binding mismatch')
         require(test_apk.is_file() and not test_apk.is_symlink() and test_apk.stat().st_size == native_tests.get('bytes')
             and digest(test_apk.read_bytes()) == native_tests.get('sha256'), 'Native test APK bytes changed')
+        if native_tests['expected_tests'] == 5:
+            broker = proof.get('native_secret_broker', {})
+            expected = 'Java_cc_kronecker_opennexus_sync_NativeCredentialProbe_roundTrip'
+            require(broker.get('debug_test_entry_only') is True and broker.get('WebView_read_command') is False
+                and broker.get('native_symbols') == {'arm64-v8a':expected,'x86_64':expected}, 'Native Rust worker binding mismatch')
     return apk, proof
 
 
@@ -271,10 +276,13 @@ class Probe:
         output = result.stdout
         (self.output / 'keystore-device-tests.txt').write_bytes(output)
         (self.output / 'keystore-device-tests.stderr.txt').write_bytes(result.stderr)
-        require(result.returncode == 0 and b'OK (4 tests)' in output and b'FAILURES!!!' not in output and b'INSTRUMENTATION_FAILED' not in output,
+        count = binding['expected_tests']
+        require(count in (4, 5) and result.returncode == 0 and f'OK ({count} tests)'.encode() in output
+            and b'FAILURES!!!' not in output and b'INSTRUMENTATION_FAILED' not in output,
             'Actual Android Keystore tests did not all pass; preserve the original instrument output')
-        self.keystore_test_result = {'passed':True,'tests':4,'package':package,'test_APK_sha256':binding['sha256'],
+        self.keystore_test_result = {'passed':True,'tests':count,'package':package,'test_APK_sha256':binding['sha256'],
             'scope':'Actual owned API36 AndroidKeyStore/AtomicFile tests; native session broker only, not login or remote Sync',
+            'Rust_worker_verified':count == 5,
             'hardware_backing_claimed':False,'physical_phone_verified':False}
         (self.output / 'keystore-device-proof.json').write_text(json.dumps(self.keystore_test_result,indent=2)+'\n','utf-8')
         self.force_stop()

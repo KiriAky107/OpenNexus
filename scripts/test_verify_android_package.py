@@ -13,6 +13,25 @@ spec.loader.exec_module(module)
 
 
 class AndroidPackageBindingTests(unittest.TestCase):
+    def test_native_secret_probe_requires_the_debug_class_and_both_callable_jni_exports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);apk=root/'synthetic-dex.zip'
+            def classes(include_probe=True):
+                with zipfile.ZipFile(apk,'w') as archive:
+                    archive.writestr('classes.dex', 'Lcc/kronecker/opennexus/sync/SyncCredentialStore;'
+                        + ('Lcc/kronecker/opennexus/sync/NativeCredentialProbe;' if include_probe else ''))
+            classes()
+            with patch.object(module.subprocess,'check_output',return_value='00001234 T '+module.BROKER_SYMBOL+'\n'):
+                proof=module.verify_native_broker(apk,root,['arm64-v8a','x86_64'],root/'llvm-nm')
+                self.assertEqual(set(proof['native_symbols']),{'arm64-v8a','x86_64'})
+                self.assertFalse(proof['Rust_worker_verified']);self.assertFalse(proof['WebView_read_command'])
+            with patch.object(module.subprocess,'check_output',return_value='00001234 T Java_cc_kronecker_opennexus_sync_NativeCredentialProbe_round_1trip\n'):
+                with self.assertRaisesRegex(Exception,'ANDROID_SECRET_JNI_SYMBOL_MISSING'):
+                    module.verify_native_broker(apk,root,['x86_64'],root/'llvm-nm')
+            classes(False)
+            with self.assertRaisesRegex(Exception,'ANDROID_SECRET_JVM_CLASSES_MISSING'):
+                module.verify_native_broker(apk,root,['x86_64'],root/'llvm-nm')
+
     def test_device_tests_must_target_only_the_owned_dev_app_with_one_exact_runner(self):
         identity="package: name='cc.kronecker.opennexus.dev.test' versionCode='1' versionName='test'\n"
         xml='''N: android=http://schemas.android.com/apk/res/android
