@@ -28,6 +28,8 @@ public final class RuntimeProbe extends Instrumentation {
     private static final String BODY = "# 原始 Markdown 😀\n\n离线正文 / original content\n";
     private static final String DRAFT = BODY + "未保存的恢复草稿 / recovered draft\n";
     private static final String NODE = "中文画布节点 😀 / original canvas text";
+    private static final String RICH_TEXT = "共享富文本 😀 / native rich writing";
+    private static final String RICH_IMAGE_TEXT = "Original rich picker image";
     private static final String IME_TEXT = "中文组合输入 😀";
     private static final String BACK_DRAFT = "# 系统返回键草稿 😀\nBack keeps the native draft before leaving.\n";
     private Bundle arguments;
@@ -56,6 +58,37 @@ public final class RuntimeProbe extends Instrumentation {
                     setText(editable(null), BODY);
                     save();
                     break;
+                case "rich-markdown":
+                    create("New note", "runtime-rich.md");
+                    click("Writing", false);
+                    AccessibilityNodeInfo rich = richBody();
+                    setText(rich, RICH_TEXT);
+                    rich = richBody();
+                    setSelection(rich, 0, RICH_TEXT.length());
+                    clickMenu("Bold");
+                    waitLabel("Draft kept on this device");
+                    save();
+                    break;
+                case "rich-reopen":
+                    open("runtime-rich.md");
+                    require(string(editable(null).getText()).contains(RICH_TEXT), "Original rich Markdown missing after cold launch");
+                    break;
+                case "rich-image":
+                    create("New note", "runtime-rich-image.md");
+                    click("Writing", false);
+                    setText(richBody(), RICH_IMAGE_TEXT);
+                    setSelection(richBody(), RICH_IMAGE_TEXT.length(), RICH_IMAGE_TEXT.length());
+                    hideKeyboard();
+                    clickMenu("More actions");
+                    click("Add image", false);
+                    chooseOriginalImage();
+                    waitLabel("Draft kept on this device");
+                    save();
+                    break;
+                case "rich-image-reopen":
+                    open("runtime-rich-image.md");
+                    require(string(editable(null).getText()).contains("![](attachments/"), "Original rich image reference missing after cold launch");
+                    break;
                 case "draft":
                     open(NOTE);
                     require(string(editable(null).getText()).contains("离线正文"), "Original note text missing");
@@ -63,7 +96,8 @@ public final class RuntimeProbe extends Instrumentation {
                     waitLabel("Draft kept on this device");
                     break;
                 case "recover":
-                    click("Recover drafts", true);
+                    clickMenu("Main navigation");
+                    click("Recover drafts", false);
                     click(NOTE, true);
                     require(string(editable(null).getText()).contains("未保存的恢复草稿"), "Recovered draft text missing");
                     save();
@@ -98,7 +132,8 @@ public final class RuntimeProbe extends Instrumentation {
                     waitLabel("New note");
                     break;
                 case "back-recover":
-                    click("Recover drafts", true);
+                    clickMenu("Main navigation");
+                    click("Recover drafts", false);
                     click("runtime-back.md", true);
                     require(string(editable(null).getText()).contains("系统返回键草稿"), "Back draft did not survive process termination");
                     hideKeyboard();
@@ -111,7 +146,7 @@ public final class RuntimeProbe extends Instrumentation {
                     create("New canvas", CANVAS);
                     click("Text", false);
                     setText(editable("New text"), NODE);
-                    click("Close", false);
+                    click("Collapse right sidebar", false);
                     save();
                     break;
                 case "canvas-drag":
@@ -144,7 +179,7 @@ public final class RuntimeProbe extends Instrumentation {
                     break;
                 case "canvas-image":
                     create("New canvas", "runtime-image.canvas");
-                    clickMenu("Add node");
+                    clickMenu("More canvas actions");
                     click("Import original image", false);
                     chooseOriginalImage();
                     waitOriginalImageNode();
@@ -188,30 +223,43 @@ public final class RuntimeProbe extends Instrumentation {
         waitLabel("Back");
     }
 
-    private void selectTheme(String current, String next) {
-        click(current, false);
-        // WebView exposes HTML option nodes before its native dialog has opened.
-        // Their coordinates are not native popup rows. Wait for the actual
-        // checkable Android row, then make exactly one real selection.
-        AccessibilityNodeInfo option = waitNode(node -> label(node, next, false)
-            && node.isEnabled() && node.isCheckable(), "native theme option: " + next);
-        progress.append("native option: ").append(option.getClassName()).append(" / ").append(next).append('\n');
-        retainNativePopup(current);
-        activate(option);
-        waitNode(node -> label(node, next, false) && node.isClickable() && !node.isCheckable(), "collapsed selected theme: " + next);
-        waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "New note", false), "theme returned to the owned vault");
+    private AccessibilityNodeInfo richBody() {
+        return waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
+            && label(node, "Markdown note body", false), "shared rich writing body");
     }
 
-    private void retainNativePopup(String current) {
-        File file = new File(getContext().getFilesDir(), "theme-popup-" + current + ".png");
-        require(!file.exists(), "Native popup evidence already exists");
+    private void setSelection(AccessibilityNodeInfo node, int from, int to) {
+        Bundle selection = new Bundle();
+        selection.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, from);
+        selection.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, to);
+        require(node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selection), "Original editor selection rejected");
+    }
+
+    private void selectTheme(String current, String next) {
+        clickMenu("Settings");
+        AccessibilityNodeInfo option = waitNode(node -> APP.equals(string(node.getPackageName()))
+            && label(node, next, false) && node.isEnabled() && node.isCheckable(), "shared desktop theme card: " + next);
+        option.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId());
+        option = waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, next, false)
+            && node.isEnabled() && node.isCheckable(), "visible shared theme card: " + next);
+        // Exactly one real tap; selected state alone does not prove rendered colors.
+        activate(option);
+        waitNode(node -> label(node, next, false) && node.isCheckable() && node.isChecked(), "selected theme card: " + next);
+        retainThemeCards(next);
+        click("Close", false);
+        waitLabel("New note");
+    }
+
+    private void retainThemeCards(String current) {
+        File file = new File(getContext().getFilesDir(), "theme-cards-" + current + ".png");
+        require(!file.exists(), "Theme card evidence already exists");
         Bitmap bitmap = ui.takeScreenshot();
-        require(bitmap != null, "Native popup screenshot unavailable");
+        require(bitmap != null, "Theme card screenshot unavailable");
         try (FileOutputStream output = new FileOutputStream(file)) {
-            require(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output), "Native popup screenshot failed");
+            require(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output), "Theme card screenshot failed");
             output.flush(); output.getFD().sync();
-            progress.append("native popup screenshot: ").append(file.getName()).append('\n');
-        } catch (java.io.IOException error) { throw new IllegalStateException("Native popup evidence could not be retained", error); }
+            progress.append("shared theme cards screenshot: ").append(file.getName()).append('\n');
+        } catch (java.io.IOException error) { throw new IllegalStateException("Theme card evidence could not be retained", error); }
         finally { bitmap.recycle(); }
     }
 
@@ -238,7 +286,7 @@ public final class RuntimeProbe extends Instrumentation {
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Back", false), "return from original system picker");
     }
 
-    private void open(String path) { click(path, true); waitLabel("Back"); }
+    private void open(String path) { clickMenu("Files"); click(path, true); waitLabel("Back"); }
     private void save() { hideKeyboard(); click("Save", false); waitLabel("Saved"); }
     private void waitLabel(String text) { waitNode(node -> label(node, text, false), "label: " + text); }
     private void click(String text, boolean prefix) {

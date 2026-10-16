@@ -30,6 +30,8 @@ NODE = '中文画布节点 😀 / original canvas text'
 IME_TEXT = '中文组合输入 😀'
 BACK_DRAFT = '# 系统返回键草稿 😀\nBack keeps the native draft before leaving.\n'
 IMAGE_BODY = '# Original picker image\n'
+RICH_TEXT = '共享富文本 😀 / native rich writing'
+RICH_IMAGE_TEXT = 'Original rich picker image'
 # Owned deterministic 2x2 RGBA PNG. No user gallery data or storage permission.
 IMAGE_BYTES = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAG0lEQVR4nGN45JD0X2l5238G8/TL/78f8/gPAFY9Ckass/NvAAAAAElFTkSuQmCC')
 
@@ -304,8 +306,8 @@ class Probe:
             (self.output / f'{phase}.xml').write_bytes(tree)
         if phase.startswith('theme-'):
             (self.output / f'{phase}-window.txt').write_bytes(self.shell('dumpsys', 'window', 'windows', check=False).stdout)
-            current = {'theme-dark': 'System', 'theme-light': 'Dark', 'theme-sepia': 'Light', 'theme-system': 'Sepia'}[phase]
-            filename = f'theme-popup-{current}.png'
+            selected = {'theme-dark': 'Dark', 'theme-light': 'Light', 'theme-sepia': 'Sepia', 'theme-system': 'System'}[phase]
+            filename = f'theme-cards-{selected}.png'
             popup = self.device('exec-out', 'run-as', DRIVER, 'cat', 'files/' + filename, check=False).stdout
             if popup.startswith(b'\x89PNG\r\n\x1a\n'):
                 (self.output / filename).write_bytes(popup)
@@ -365,17 +367,19 @@ class Probe:
         markdown = self.original('runtime-image.md')
         reference = ('![](' + asset + ')').encode()
         require(markdown.count(reference) == 1 and markdown.replace(reference, b'') == IMAGE_BODY.encode(), 'Image insertion changed the original Markdown or duplicated its reference')
+        rich = self.original('runtime-rich-image.md')
+        require(rich.count(reference) == 1 and rich.replace(reference,b'') == (RICH_IMAGE_TEXT + '\n').encode(), 'Rich image changed original text or duplicated its reference')
         canvas = self.original('runtime-image.canvas')
         nodes = json.loads(canvas)['nodes']
         require(len(nodes) == 1 and nodes[0]['type'] == 'file' and nodes[0]['file'] == asset, 'Canvas image node differs from the chosen original')
         rows = self.database_rows('SELECT operation_id,path,asset_path,hash,size,state FROM image_intents ORDER BY path')
-        require(len(rows) == 2 and len({row[0] for row in rows}) == 2
-            and {row[1] for row in rows} == {'runtime-image.md', 'runtime-image.canvas'}
+        require(len(rows) == 3 and len({row[0] for row in rows}) == 3
+            and {row[1] for row in rows} == {'runtime-image.md', 'runtime-rich-image.md', 'runtime-image.canvas'}
             and all(row[2:] == (asset, digest(IMAGE_BYTES), len(IMAGE_BYTES), 'committed') for row in rows),
             'Exactly one committed original image receipt per target is required')
         receipts = [dict(zip(('operation_id', 'path', 'asset_path', 'sha256', 'size', 'state'), row)) for row in rows]
         (self.output / 'image-import-receipts.json').write_text(json.dumps(receipts, indent=2) + '\n', 'utf-8')
-        return {'runtime-image.md': markdown, 'runtime-image.canvas': canvas, asset: IMAGE_BYTES}
+        return {'runtime-image.md': markdown, 'runtime-rich-image.md': rich, 'runtime-image.canvas': canvas, asset: IMAGE_BYTES}
 
     def verify_export(self, originals):
         paths = self.shell('run-as', APP, 'find', self.root + 'exports', '-name', '*.delivery.json', '-type', 'f').stdout.decode().splitlines()
@@ -405,6 +409,11 @@ class Probe:
             self.phase('theme-' + theme)
         self.phase('markdown')
         require(self.original('runtime-note.md') == BODY.encode(), 'Saved Markdown bytes differ from actual UI text')
+        self.phase('rich-markdown')
+        rich = self.original('runtime-rich.md')
+        require(rich == ('**' + RICH_TEXT + '**\n').encode(), 'Shared rich toolbar did not save the actual selected bold text')
+        self.phase('rich-reopen')
+        require(self.original('runtime-rich.md') == rich, 'Cold reopen changed the actual rich Markdown bytes')
         self.phase('draft')
         require(self.original('runtime-note.md') == BODY.encode(), 'Unconfirmed draft replaced saved Markdown')
         rows = self.draft_rows()
@@ -441,11 +450,13 @@ class Probe:
         self.stage_original_image()
         self.phase('markdown-image')
         self.phase('markdown-image-reopen')
+        self.phase('rich-image')
+        self.phase('rich-image-reopen')
         self.phase('canvas-image')
         self.phase('canvas-image-reopen')
         images = self.verify_original_images()
         self.phase('export')
-        originals = {'runtime-note.md': (DRAFT + IME_TEXT).encode(), 'runtime.canvas': after, **images}
+        originals = {'runtime-rich.md': rich, 'runtime-note.md': (DRAFT + IME_TEXT).encode(), 'runtime.canvas': after, **images}
         export = self.verify_export(originals)
         for name, data in originals.items():
             path = self.output / name
@@ -457,13 +468,13 @@ class Probe:
             'signer_certificate_sha256': self.binding['signer_certificate_sha256'],
             'device': {'kind': 'github-hosted-android-emulator', 'api': 36, 'abi': 'x86_64', 'serial': self.args.serial},
             'phases': self.phases, 'files_sha256': {name: digest(data) for name, data in originals.items()},
-            'theme_ui': 'Actual native selector choices and cold reloads; screenshots/window observations preserved',
+            'theme_ui': 'Actual shared desktop theme card choices and cold reloads; rendered card screenshots/window observations retained for appearance review',
             'system_destination': export, 'draft_database_integrity': 'ok',
             'input_method': 'Accessibility for baseline text; real Android InputMethodService/InputConnection for pinyin, Chinese composing text and candidate confirmation. Test-only IME, not Gboard/Sogou or physical-device proof.',
             'system_back': 'Actual Android Back key; durable draft recovery and own-task background; not predictive gesture animation proof',
             'physical_phone_verified': False, 'Chinese_IME_verified': True, 'commercial_Chinese_IME_verified': False, 'sync_verified': False,
-            'disk_full_verified': False, 'image_picker_verified': True,
-            'image_picker_scope': 'Real system document picker selects an owned synthetic PNG; original bytes, two native receipts, cold reopen and exported bytes verified. Not camera or user-gallery acceptance.',
+            'disk_full_verified': False, 'shared_rich_writing_verified': True, 'image_picker_verified': True,
+            'image_picker_scope': 'Real system document picker selects an owned synthetic PNG; original bytes, three native receipts for source/rich Markdown and Canvas, cold reopen and exported bytes verified. Not camera or user-gallery acceptance.',
             'published': False}
         (self.output / 'runtime-proof.json').write_text(json.dumps(proof, ensure_ascii=False, indent=2) + '\n', 'utf-8')
         print(json.dumps(proof, ensure_ascii=False, indent=2))

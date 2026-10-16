@@ -11,7 +11,7 @@ import zlib
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from android_runtime_probe import APP, DRIVER, IMAGE_BODY, IMAGE_BYTES, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job
+from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAGE_BYTES, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job
 
 
 class RuntimeBoundaries(unittest.TestCase):
@@ -43,12 +43,12 @@ class RuntimeBoundaries(unittest.TestCase):
             probe = Probe.__new__(Probe); probe.output = Path(directory)
             asset = f'attachments/{digest(IMAGE_BYTES)[:2]}/{digest(IMAGE_BYTES)}.png'
             reference = ('![](' + asset + ')').encode()
-            originals = {asset: IMAGE_BYTES, 'runtime-image.md': IMAGE_BODY.encode() + reference,
+            originals = {asset: IMAGE_BYTES, 'runtime-image.md': IMAGE_BODY.encode() + reference, 'runtime-rich-image.md': (RICH_IMAGE_TEXT+'\n').encode()+reference,
                 'runtime-image.canvas': json.dumps({'nodes': [{'type': 'file', 'file': asset}]}).encode()}
             rows = [(str(i), path, asset, digest(IMAGE_BYTES), len(IMAGE_BYTES), 'committed')
-                for i, path in enumerate(('runtime-image.md', 'runtime-image.canvas'))]
+                for i, path in enumerate(('runtime-image.md', 'runtime-rich-image.md', 'runtime-image.canvas'))]
             probe.original = originals.__getitem__; probe.database_rows = lambda _: rows
-            self.assertEqual(probe.verify_original_images(), {key: originals[key] for key in ('runtime-image.md', 'runtime-image.canvas', asset)})
+            self.assertEqual(probe.verify_original_images(), {key: originals[key] for key in ('runtime-image.md', 'runtime-rich-image.md', 'runtime-image.canvas', asset)})
             cases = [({asset: b'reencoded PNG'}, rows), ({}, rows + rows[:1]),
                 ({'runtime-image.md': b'changed note' + reference}, rows)]
             for changed, observed in cases:
