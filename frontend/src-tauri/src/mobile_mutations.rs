@@ -185,11 +185,15 @@ impl DraftStore {
         if intent.state != "prepared" {
             return Err(HostError::new("MUTATION_REQUIRES_REVIEW"));
         }
-        self.require_clean_file(&intent.file_id)?;
-        ws.tree()?;
-        if ws.path_for_id(&intent.file_id)? != intent.path {
-            return Err(HostError::new("FILE_IDENTITY_CHANGED"));
+        if ws.operation(id)?.is_none() {
+            self.require_clean_file(&intent.file_id)?;
+            ws.tree()?;
+            if ws.path_for_id(&intent.file_id)? != intent.path {
+                return Err(HostError::new("FILE_IDENTITY_CHANGED"));
+            }
         }
+        // An existing durable operation must recover through Workspace's original fingerprint,
+        // even when its already-moved path no longer matches a fresh first-attempt preview.
         match ws.mutate_operation(
             &intent.kind,
             &intent.path,
@@ -235,6 +239,81 @@ impl DraftStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn original_pending_rename_recovers_after_the_file_moved_before_receipt_commit() {
+        for dirty in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().join("vault");
+            std::fs::create_dir(&root).unwrap();
+            let mut ws = Workspace::open(&root).unwrap();
+            let entry = ws.write("a.md", "", b"original", "local").unwrap();
+            let mut store = DraftStore::open(temp.path()).unwrap();
+            let editing = if dirty {
+                Some(store.open_note(&mut ws, &entry.file_id).unwrap())
+            } else {
+                None
+            };
+            let intent = store
+                .prepare_mutation(&mut ws, "rename", &entry.file_id, &entry.hash, "b.md")
+                .unwrap();
+            ws.mutate_operation("rename", "a.md", "b.md", &entry.hash, &intent.operation_id)
+                .unwrap();
+            // Reconstruct the durable pre-commit database boundary after the real file move.
+            // This is a native fault-state test, not an actual Android process-kill claim.
+            let tx = ws.db.transaction().unwrap();
+            tx.execute(
+                "UPDATE operations SET state='pending',result=NULL WHERE operation_id=?1",
+                [&intent.operation_id],
+            )
+            .unwrap();
+            tx.execute(
+                "DELETE FROM outbox WHERE operation_id=?1",
+                [&intent.operation_id],
+            )
+            .unwrap();
+            tx.execute(
+                "UPDATE files SET path='a.md',revision=?1 WHERE id=?2",
+                params![entry.revision, entry.file_id],
+            )
+            .unwrap();
+            tx.execute("INSERT INTO file_ops(id,kind,path,destination,hash,content,state,origin) VALUES (?1,'rename','a.md','b.md',?2,?3,'pending','local')",params![intent.operation_id,entry.hash,b"original".as_slice()]).unwrap();
+            tx.commit().unwrap();
+            if let Some(draft) = &editing {
+                store
+                    .persist(&draft.id, &draft.edit_session, 1, "later typing")
+                    .unwrap();
+            }
+            assert_eq!(
+                store
+                    .observe_mutation(&ws, &intent.operation_id)
+                    .unwrap()
+                    .state,
+                "prepared"
+            );
+            assert_eq!(
+                store
+                    .apply_mutation(&mut ws, &intent.operation_id)
+                    .unwrap()
+                    .state,
+                "committed"
+            );
+            assert_eq!(std::fs::read(root.join("b.md")).unwrap(), b"original");
+            assert_eq!(ws.read("b.md").unwrap().entry.file_id, entry.file_id);
+            let count: i64 = ws
+                .db
+                .query_row(
+                    "SELECT COUNT(*) FROM outbox WHERE operation_id=?1",
+                    [&intent.operation_id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1);
+            if let Some(draft) = editing {
+                assert_eq!(store.get(&draft.id).unwrap().content, "later typing");
+            }
+        }
+    }
 
     #[test]
     fn rename_and_delete_keep_identity_and_never_execute_on_query() {

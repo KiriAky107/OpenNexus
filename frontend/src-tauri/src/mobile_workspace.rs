@@ -443,6 +443,7 @@ mod tests {
             .unwrap();
         assert_eq!(reopened["draft"]["content"], content);
         assert_eq!(reopened["current"]["content"], content);
+        assert_eq!(engine.drafts.list(0, 20).unwrap().total, 0);
         assert_eq!(
             std::fs::read(engine.workspace.root.join("目录/笔记.md")).unwrap(),
             content.as_bytes()

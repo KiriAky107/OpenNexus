@@ -87,6 +87,7 @@ const DRAFT_COLUMNS: &str =
     "id,file_id,path,base_hash,generation,saved_generation,content,edit_session";
 const INTENT_COLUMNS: &str =
     "operation_id,draft_id,generation,file_id,path,expected,content,state,error";
+const RECOVERABLE: &str = "file_id IS NULL OR generation<>saved_generation OR EXISTS(SELECT 1 FROM save_intents WHERE draft_id=drafts.id AND state='prepared')";
 
 impl DraftStore {
     /// The caller supplies the native app data directory, never an IPC-controlled path.
@@ -198,10 +199,12 @@ impl DraftStore {
         if !(1..=100).contains(&limit) || offset > i64::MAX as usize {
             return Err(HostError::new("MOBILE_PAGE_INVALID"));
         }
-        let total = self
-            .db
-            .query_row("SELECT COUNT(*) FROM drafts", [], |row| row.get(0))?;
-        let mut query = self.db.prepare("SELECT id,file_id,path,generation,saved_generation,length(CAST(content AS BLOB)) FROM drafts ORDER BY path,id LIMIT ?1 OFFSET ?2")?;
+        let total = self.db.query_row(
+            &format!("SELECT COUNT(*) FROM drafts WHERE {RECOVERABLE}"),
+            [],
+            |row| row.get(0),
+        )?;
+        let mut query = self.db.prepare(&format!("SELECT id,file_id,path,generation,saved_generation,length(CAST(content AS BLOB)) FROM drafts WHERE {RECOVERABLE} ORDER BY path,id LIMIT ?1 OFFSET ?2"))?;
         let items = query
             .query_map(params![limit as i64, offset as i64], |row| {
                 Ok(DraftSummary {
@@ -445,10 +448,12 @@ impl DraftStore {
         if intent.state != "prepared" {
             return Err(HostError::new("SAVE_REQUIRES_REVIEW"));
         }
-        if let Some(file_id) = &intent.file_id {
-            ws.tree()?;
-            if ws.path_for_id(file_id)? != intent.path {
-                return Err(HostError::new("FILE_IDENTITY_CHANGED"));
+        if ws.operation(operation_id)?.is_none() {
+            if let Some(file_id) = &intent.file_id {
+                ws.tree()?;
+                if ws.path_for_id(file_id)? != intent.path {
+                    return Err(HostError::new("FILE_IDENTITY_CHANGED"));
+                }
             }
         }
         match ws.write_operation(
