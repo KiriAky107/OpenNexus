@@ -247,6 +247,48 @@ impl<S: SecretStore> Auth<S> {
             Ok(state(Some(reconciled), record.as_ref(), now))
         })
     }
+    /// Borrow the exact active native identity for one guarded foreground task.
+    /// Plaintext session bytes never become the task's argument or result.
+    pub async fn authorized<T: Send, F, Fut>(
+        &mut self,
+        lease: &Lease,
+        scope: &Scope,
+        expected_operation: &str,
+        now: u64,
+        action: F,
+    ) -> Result<T>
+    where
+        F: FnOnce(SyncClient) -> Fut + Send,
+        Fut: Future<Output = Result<T>> + Send,
+    {
+        let client = lease.with_current(|| {
+            let intent = self
+                .journal
+                .current(scope)?
+                .filter(|intent| {
+                    intent.operation_id == expected_operation && intent.phase == Phase::Active
+                })
+                .ok_or_else(|| SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"))?;
+            let record = self
+                .load(&intent)?
+                .ok_or_else(|| SyncError::new("SYNC_LOGIN_REQUIRED"))?;
+            if !record.identity().matches_intent(&intent) {
+                return Err(SyncError::new("SYNC_AUTH_IDENTITY_CHANGED"));
+            }
+            if record.must_change_credentials {
+                return Err(SyncError::new("SYNC_CREDENTIAL_CHANGE_REQUIRED"));
+            }
+            if record.expires_at <= now {
+                return Err(SyncError::new("SYNC_SESSION_EXPIRED"));
+            }
+            SyncClient::new(
+                scope.endpoint(),
+                Zeroizing::new(record.session.access_token.clone()),
+                false,
+            )
+        })?;
+        lease.guard(action(client)).await
+    }
     fn accept(&mut self, lease: &Lease, id: &str, reply: Reply, now: u64) -> Result<State> {
         lease.with_current(|| {
             let intent = self
@@ -995,5 +1037,84 @@ mod tests {
             "SYNC_AUTH_RESPONSE_MISMATCH"
         );
         assert!(!auth.recover(&lease, &scope, 201).unwrap().authenticated);
+    }
+
+    #[tokio::test]
+    async fn authorized_native_work_refuses_bootstrap_expiry_wrong_operation_and_late_identity() {
+        let value = serde_json::json!({"access_token":"owned-wire-access","refresh_token":"owned-wire-refresh",
+            "expires_in":900,"device_id":"device-a","must_change_credentials":true});
+        assert!(Reply::parse(value).unwrap().must_change_credentials);
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        let mut bootstrap = reply("device-a", "bootstrap");
+        bootstrap.must_change_credentials = true;
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .extend([Ok(bootstrap), Ok(reply("device-a", "normal"))]);
+        let (foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let rotation = id();
+        let mut auth = Auth::open(root.path(), store).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let calls = AtomicUsize::new(0);
+        assert_eq!(
+            auth.authorized(&lease, &scope, &operation, 101, |_| async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .err()
+            .unwrap()
+            .code,
+            "SYNC_CREDENTIAL_CHANGE_REQUIRED"
+        );
+        auth.refresh(
+            &lease,
+            existing(&rotation, &operation, &scope),
+            &remote,
+            200,
+        )
+        .await
+        .unwrap();
+        assert!(auth
+            .authorized(&lease, &scope, &operation, 201, |_| async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .is_err());
+        assert_eq!(
+            auth.authorized(&lease, &scope, &rotation, 1100, |_| async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .err()
+            .unwrap()
+            .code,
+            "SYNC_SESSION_EXPIRED"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            auth.authorized(&lease, &scope, &rotation, 201, |client| async move {
+                Ok(client.endpoint().to_owned())
+            })
+            .await
+            .unwrap(),
+            scope.endpoint()
+        );
+        let late = auth
+            .authorized(&lease, &scope, &rotation, 202, |_| async {
+                foreground.invalidate_identity();
+                Ok(())
+            })
+            .await;
+        assert_eq!(late.err().unwrap().code, "SYNC_FOREGROUND_CHANGED");
     }
 }
