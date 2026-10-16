@@ -82,7 +82,8 @@ public final class RuntimeProbe extends Instrumentation {
                 case "tablet-portrait":
                     open("runtime-rich.md");
                     click("Writing", false);
-                    require(string(richBody().getText()).contains(RICH_TEXT), "Original rich body missing at portrait tablet width");
+                    waitNode(node -> APP.equals(string(node.getPackageName())) && label(node,"Markdown note body",false)
+                        && string(node.getText()).contains(RICH_TEXT), "original rendered tablet document");
                     click("Format", false);
                     waitLabel("Markdown formatting toolbar");
                     settleUi();
@@ -90,9 +91,17 @@ public final class RuntimeProbe extends Instrumentation {
                 case "tablet-landscape":
                     // Same process, editor and expanded formatting panel after
                     // a real owned display configuration change; no text input.
-                    require(string(richBody().getText()).contains(RICH_TEXT), "Rotation lost the original rich document");
+                    waitNode(node -> APP.equals(string(node.getPackageName())) && label(node,"Markdown note body",false)
+                        && string(node.getText()).contains(RICH_TEXT), "same original document after tablet rotation");
                     waitLabel("Markdown formatting toolbar");
                     settleUi();
+                    break;
+                case "tablet-seed":
+                    // Independent layout fixture entered through the real
+                    // source editor. This does not claim rich text input passed.
+                    create("New note", "runtime-rich.md");
+                    inputText(noteBody(), "**" + RICH_TEXT + "**\n");
+                    save();
                     break;
                 case "rich-image":
                     create("New note", "runtime-rich-image.md");
@@ -125,7 +134,7 @@ public final class RuntimeProbe extends Instrumentation {
                     break;
                 case "ime-compose":
                     open(NOTE);
-                    activate(noteBody());
+                    activateNoteBody();
                     CompositionIme.awaitTarget(APP);
                     CompositionIme.selectEnd(APP, DRAFT.length());
                     progress.append("IME: original InputConnection, composing pinyin\n");
@@ -432,7 +441,7 @@ public final class RuntimeProbe extends Instrumentation {
     private void inputText(AccessibilityNodeInfo node, String value) throws Exception {
         require(APP.equals(string(node.getPackageName())) && node.isEditable(), "Refusing text outside the owned editor");
         progress.append("IME: commit ").append(value.length()).append(" original UTF-16 units\n");
-        activate(node);
+        activateNoteBody();
         CompositionIme.awaitTarget(APP);
         long now = SystemClock.uptimeMillis();
         // Select the actual editor document through its normal keyboard handler.
@@ -456,7 +465,6 @@ public final class RuntimeProbe extends Instrumentation {
     private void activate(AccessibilityNodeInfo node, Predicate<AccessibilityNodeInfo> scope) {
         // WebView accepting ACTION_CLICK does not prove that a user tap reached its handler.
         // Send exactly one real tap to the freshly observed target; never replay a write.
-        settleUi();
         // A WebView virtual ID can change when a read-only list finishes loading.
         // Reacquire the exact unique semantic target before sending any input.
         final String expectedPackage = string(node.getPackageName()), expectedClass = string(node.getClassName());
@@ -483,6 +491,20 @@ public final class RuntimeProbe extends Instrumentation {
                     && (Build.VERSION.SDK_INT < 26 || expectedHint.equals(string(value.getHintText()))))
             && (scope == null || scope.test(value));
         progress.append("target identity: ").append(namedEditable ? "editable ARIA " + accessibleName : expectedClass).append('\n');
+        tapUniqueTarget(sameTarget);
+    }
+
+    private void activateNoteBody() {
+        // The requested semantic name is known by the caller. Do not infer it
+        // from a soon-to-be-replaced virtual node or retain its resource id.
+        progress.append("tap target: owned Markdown note body editable role\n");
+        tapUniqueTarget(value -> APP.equals(string(value.getPackageName())) && value.isEditable()
+            && label(value, "Markdown note body", false));
+    }
+
+    private void tapUniqueTarget(Predicate<AccessibilityNodeInfo> sameTarget) {
+        settleUi();
+        AccessibilityNodeInfo node;
         node = uniqueTarget(sameTarget);
         Rect bounds = new Rect(); node.getBoundsInScreen(bounds);
         Rect previous = new Rect(bounds);
@@ -594,7 +616,11 @@ public final class RuntimeProbe extends Instrumentation {
     private String tree() {
         StringBuilder text = new StringBuilder();
         if (ui != null) for (AccessibilityNodeInfo node : nodes()) text.append(node.getClassName()).append(" | ")
-            .append(node.getText()).append(" | ").append(node.getContentDescription()).append('\n');
+            .append(node.getText()).append(" | ").append(node.getContentDescription())
+            .append(" | editable=").append(node.isEditable()).append(" visible=").append(node.isVisibleToUser())
+            .append(" enabled=").append(node.isEnabled()).append(" focused=").append(node.isFocused())
+            .append(" hint=").append(Build.VERSION.SDK_INT>=26 ? node.getHintText() : "")
+            .append(" id=").append(node.getViewIdResourceName()).append('\n');
         return text.toString();
     }
     private static void require(boolean condition, String message) { if (!condition) throw new IllegalStateException(message); }

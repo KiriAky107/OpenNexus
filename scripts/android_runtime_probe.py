@@ -394,7 +394,12 @@ class Probe:
         (self.output / f'{phase}.log').write_text(text, 'utf-8')
         self.capture(phase)
         passed = f'OPENNEXUS_RUNTIME_PHASE_OK {phase}' in text and 'OPENNEXUS_RUNTIME_FAILED' not in text
-        if not passed and self.root is not None:
+        if not passed:
+            try:
+                self.read_native_styles(phase+'-failed')
+            except Exception as error:
+                (self.output/(phase+'-failed-diagnostic-error.json')).write_text(
+                    json.dumps({'available':False,'error':type(error).__name__})+'\n','utf-8')
             self.capture_failed_editor_state(phase)
         require(passed,
             f'Actual Android UI phase failed: {phase}; see preserved UI log and screenshot')
@@ -404,9 +409,13 @@ class Probe:
         if not keep_running:
             self.force_stop()
         if self.root is None and not phase.startswith('theme-'):
-            paths = self.shell('run-as', APP, 'find', '.', '-name', 'mobile-drafts.sqlite3', '-type', 'f').stdout.decode().splitlines()
-            require(len(paths) == 1, 'Native draft database origin is ambiguous')
-            self.root = paths[0].removesuffix('mobile-drafts.sqlite3')
+            self.discover_private_root()
+
+    def discover_private_root(self):
+        paths = self.shell('run-as', APP, 'find', '.', '-name', 'mobile-drafts.sqlite3', '-type', 'f').stdout.decode().splitlines()
+        require(len(paths) == 1 and re.fullmatch(r'\./(?:[A-Za-z0-9_.-]+/)*mobile-drafts\.sqlite3', paths[0])
+            and '..' not in paths[0].split('/'), 'Native draft database origin is ambiguous')
+        self.root = paths[0].removesuffix('mobile-drafts.sqlite3')
 
     def native_tls_startup(self, phase):
         if not self.binding.get('native_tls'):
@@ -432,6 +441,8 @@ class Probe:
             require_hosted_emulator(self.args.serial)
             self.wait_owned_connection()
             self.force_stop()
+            if self.root is None:
+                self.discover_private_root()
             # These are exclusively the probe's own synthetic targets. Do not
             # enumerate arbitrary files or read native credential/config stores.
             for name in ('runtime-note.md', 'runtime-rich.md', 'runtime.canvas',
@@ -591,9 +602,9 @@ class Probe:
 
     def run_tablet(self):
         self.enable_test_ime()
-        self.phase('rich-markdown')  # One new synthetic seed on this fresh owned installation.
+        self.phase('tablet-seed')  # Source input once; no duplicate rich-input acceptance claim.
         original = self.original('runtime-rich.md')
-        require(original == ('**' + RICH_TEXT + '**\n').encode(), 'Actual tablet seed differs from selected rich Markdown')
+        require(original == ('**' + RICH_TEXT + '**\n').encode(), 'Actual source-entered tablet seed differs from original Markdown')
         rows = self.draft_rows()
         layouts = {}
         try:

@@ -15,6 +15,33 @@ from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAG
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_unavailable_webview_diagnostic_does_not_skip_original_failed_phase_capture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory);probe.root=None;probe.phases=[];probe.activity=APP+'/.MainActivity'
+            probe.force_stop=Mock();probe.native_tls_startup=Mock();probe.capture=Mock();probe.capture_failed_editor_state=Mock()
+            probe.read_native_styles=Mock(side_effect=RuntimeError('diagnostic unavailable'))
+            probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b''),subprocess.CompletedProcess([],0,b'OPENNEXUS_RUNTIME_FAILED\n')])
+            with self.assertRaisesRegex(Exception,'Actual Android UI phase failed'):probe.phase('owned-failure')
+            probe.capture_failed_editor_state.assert_called_once_with('owned-failure')
+            self.assertEqual(json.loads((probe.output/'owned-failure-failed-diagnostic-error.json').read_text())['error'],'RuntimeError')
+
+    def test_first_phase_failure_can_locate_only_the_owned_relative_private_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory);probe.root=None;probe.args=SimpleNamespace(serial='emulator-5562')
+            probe.force_stop=Mock();probe.wait_owned_connection=Mock();probe.original=Mock(return_value=b'owned synthetic original');probe.draft_rows=Mock(return_value=[])
+            probe.shell=Mock(return_value=subprocess.CompletedProcess([],0,b'./files/mobile-drafts.sqlite3\n'))
+            with patch('android_runtime_probe.require_hosted_emulator'):
+                probe.capture_failed_editor_state('first-phase')
+            self.assertEqual(probe.root,'./files/')
+            report=json.loads((probe.output/'first-phase-failed-native-state.json').read_text())
+            self.assertEqual(report['draft_rows'],[]);self.assertNotIn('observation_error',report)
+
+    def test_private_database_discovery_refuses_ambiguous_absolute_or_parent_paths(self):
+        for output in (b'/files/mobile-drafts.sqlite3\n',b'./../mobile-drafts.sqlite3\n',
+                b'./files/mobile-drafts.sqlite3\n./other/mobile-drafts.sqlite3\n',b'./files\\mobile-drafts.sqlite3\n'):
+            probe=Probe.__new__(Probe);probe.root=None;probe.shell=Mock(return_value=subprocess.CompletedProcess([],0,output))
+            with self.assertRaisesRegex(Exception,'origin is ambiguous'):probe.discover_private_root()
+            self.assertIsNone(probe.root)
     def test_tablet_geometry_requires_actual_viewport_columns_and_bounded_floating_panel(self):
         layout={'width':800,'compact':True,'rootWidth':800,'rootScrollWidth':800,
             'toolbar':{'visible':True,'left':148,'right':788,'width':640,'clientWidth':638,'scrollWidth':638},

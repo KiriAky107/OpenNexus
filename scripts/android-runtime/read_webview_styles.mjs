@@ -17,7 +17,12 @@ const expression = `JSON.stringify((()=>{
   })),
   layout:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio,rootWidth:document.documentElement.clientWidth,rootScrollWidth:document.documentElement.scrollWidth,
     compact:document.querySelector('.app-shell')?.classList.contains('compact'),editor:box('.visual-editor'),toolbar:box('.markdown-toolbar'),
-    floating:box('.floating-formatting'),main:box('.main-content'),files:box('.secondary-sidebar')}
+    floating:box('.floating-formatting'),main:box('.main-content'),files:box('.secondary-sidebar')},
+  // Only the known synthetic note editor's attributes, never values/content or credential controls.
+  editorAttributes:Array.from(document.querySelectorAll('[aria-label="Markdown note body"]')).slice(0,4).map(e=>({
+    tag:e.tagName,id:e.id,role:e.getAttribute('role'),ariaLabel:e.getAttribute('aria-label'),contentEditable:e.contentEditable,
+    disabled:e.disabled===true,readOnly:e.readOnly===true,display:getComputedStyle(e).display,visible:e.getBoundingClientRect().height>0
+  }))
   }
 })())`
 const result = await new Promise((resolve, reject) => {
