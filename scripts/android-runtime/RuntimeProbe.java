@@ -186,8 +186,14 @@ public final class RuntimeProbe extends Instrumentation {
 
     private void selectTheme(String current, String next) {
         click(current, false);
-        click(next, false);
-        waitLabel(next);
+        // WebView exposes HTML option nodes before its native dialog has opened.
+        // Their coordinates are not native popup rows. Wait for the actual
+        // checkable Android row, then make exactly one real selection.
+        AccessibilityNodeInfo option = waitNode(node -> label(node, next, false)
+            && node.isEnabled() && node.isCheckable(), "native theme option: " + next);
+        progress.append("native option: ").append(option.getClassName()).append(" / ").append(next).append('\n');
+        activate(option);
+        waitNode(node -> label(node, next, false) && node.isClickable() && !node.isCheckable(), "collapsed selected theme: " + next);
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "New note", false), "theme returned to the owned vault");
     }
 
