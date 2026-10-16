@@ -145,8 +145,10 @@ public final class RuntimeProbe extends Instrumentation {
 
     private void create(String button, String path) {
         click(button, false);
-        waitLabel("Create and edit");
+        // The real IME can cover the confirmation below the focused path field.
+        // Fill that field first, then release the IME before locating the button.
         setText(waitNode(node -> node.isEditable() && node.isFocused(), "focused note path"), path);
+        hideKeyboard();
         click("Create and edit", false);
         waitLabel("Back");
     }
@@ -159,7 +161,7 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void open(String path) { click(path, true); waitLabel("Back"); }
-    private void save() { click("Save", false); waitLabel("Saved"); }
+    private void save() { hideKeyboard(); click("Save", false); waitLabel("Saved"); }
     private void waitLabel(String text) { waitNode(node -> label(node, text, false), "label: " + text); }
     private void click(String text, boolean prefix) {
         AccessibilityNodeInfo node = waitNode(value -> label(value, text, prefix) && value.isEnabled(), "enabled action: " + text);
