@@ -3,7 +3,7 @@ import { mobileRequest } from './native'
 import { errorCode, type createNoteSession } from './noteSession'
 import type { DraftView, ImageIntent, NativeRequest } from './types'
 
-export type ImageSelection = { from: number; to: number } | { x: number; y: number }
+export type ImageSelection = { from: number; to: number } | { x: number; y: number } | { template: string; marker: string }
 export interface ImageEditor { acceptImage: (before: string, after: string) => boolean }
 const rejected = new Set(['MOBILE_IMAGE_TOO_LARGE', 'WORKSPACE_IMAGE_UNSUPPORTED', 'MOBILE_SELECTION_INVALID', 'DRAFT_SESSION_CHANGED', 'DRAFT_GENERATION_CONFLICT', 'MOBILE_DRAFT_INVALID', 'PENDING_SAVE_REQUIRES_REVIEW', 'PENDING_MUTATION_REQUIRES_REVIEW', 'MOBILE_IMAGE_TARGET_UNSUPPORTED', 'CANVAS_INVALID', 'CANVAS_TOO_LARGE', 'CANVAS_TOO_COMPLEX'])
 
@@ -42,7 +42,7 @@ export function createImageSession(notes: ReturnType<typeof createNoteSession>, 
       if (!active() || generation !== notes.state.generation) return
       const draft = notes.state.view!.draft
       const common = { draft_id: draft.id, edit_session: draft.edit_session, generation, content_base64: btoa(binary) }
-      const intent = await rpc<ImageIntent>('x' in selection ? { kind: 'prepare_canvas_image', ...common, ...selection } : { kind: 'prepare_image', ...common, ...selection })
+      const intent = await rpc<ImageIntent>('x' in selection ? { kind: 'prepare_canvas_image', ...common, ...selection } : 'template' in selection ? { kind: 'prepare_rich_image', ...common, ...selection } : { kind: 'prepare_image', ...common, ...selection })
       if (!active()) return
       state.pending = intent
       const applied = intent.state === 'committed' ? intent : await rpc<ImageIntent>({ kind: 'apply_image', operation_id: intent.operation_id })

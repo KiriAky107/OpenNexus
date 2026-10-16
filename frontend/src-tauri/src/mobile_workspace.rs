@@ -15,6 +15,9 @@ mod canvas_image_tests;
 #[cfg(test)]
 #[path = "mobile_canvas_tests.rs"]
 mod canvas_tests;
+#[cfg(test)]
+#[path = "mobile_rich_image_tests.rs"]
+mod rich_image_tests;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -110,6 +113,14 @@ pub enum MobileRequest {
         generation: i64,
         x: i64,
         y: i64,
+        content_base64: String,
+    },
+    PrepareRichImage {
+        draft_id: String,
+        edit_session: String,
+        generation: i64,
+        template: String,
+        marker: String,
         content_base64: String,
     },
     ObserveImage {
@@ -414,6 +425,22 @@ impl MobileWorkspace {
                 self.drafts
                     .cancel_mutation(&self.workspace, &operation_id)?,
             ),
+            PrepareRichImage {
+                draft_id,
+                edit_session,
+                generation,
+                template,
+                marker,
+                content_base64,
+            } => value(self.drafts.prepare_rich_image(
+                &self.workspace,
+                &draft_id,
+                &edit_session,
+                generation,
+                &template,
+                &marker,
+                &content_base64,
+            )?),
             PrepareCanvasImage {
                 draft_id,
                 edit_session,

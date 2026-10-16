@@ -18,11 +18,13 @@ function harness(mode: 'normal' | 'lost-prepare' | 'lost-apply' = 'normal', canv
       case 'open_draft': return snapshot()
       case 'persist_draft': draft = { ...draft, content: request.content, generation: request.generation }; return clone(draft)
       case 'prepare_canvas_image':
+      case 'prepare_rich_image':
       case 'prepare_image':
         intent = { operation_id: 'original-image-id', draft_id: draft.id, path: draft.path, generation: draft.generation,
           asset_path: 'attachments/ab/abcd.png', reference: canvas ? 'attachments/ab/abcd.png' : '../attachments/ab/abcd.png', hash: 'abcd', size: 4,
           content_before: draft.content, content_after: request.kind === 'prepare_canvas_image'
             ? JSON.stringify({ ...JSON.parse(draft.content), nodes: [{ id: 'original-image-node', type: 'file', file: 'attachments/ab/abcd.png', x: request.x, y: request.y, width: 320, height: 240 }] }) + '\n'
+            : request.kind === 'prepare_rich_image' ? request.template.replace(`![](opennexus-rich-image-${request.marker})`, '![](../attachments/ab/abcd.png)')
             : draft.content.slice(0, request.from) + '![](../attachments/ab/abcd.png)' + draft.content.slice(request.to), state: 'prepared', error: null }
         if (mode === 'lost-prepare' && drop) { drop = false; throw Error('MOBILE_HOST_INTERRUPTED') }
         return clone(intent)
@@ -107,4 +109,15 @@ it('does not import into another view when file bytes arrive after the original 
   for (let i = 0; i < 20; i++) await Promise.resolve()
   h.image.bind(); resolve(new ArrayBuffer(4)); await pending
   expect(h.calls.some(r => r.kind === 'prepare_image')).toBe(false); expect(h.inserted()).toBe(0); expect(h.image.state.busy).toBe(false)
+})
+
+it('freezes the actual rich-editor candidate instead of guessing raw Markdown offsets, recovering one original receipt', async () => {
+  const h=harness('lost-apply');await h.notes.openDraft('a');h.image.bind()
+  const marker='2a9846b3-58ba-4fa8-b154-7dbdf6ec875e',template=`**中文 😀**\r\n![](opennexus-rich-image-${marker})\r\n`
+  await h.image.importFile(h.file,{template,marker},h.key,1)
+  expect(h.calls.find(request=>request.kind==='prepare_rich_image')).toEqual({kind:'prepare_rich_image',draft_id:'a',edit_session:'lease-a',generation:1,template,marker,content_base64:'AQIDBA=='})
+  expect(h.calls.some(request=>request.kind==='prepare_image')).toBe(false)
+  expect(h.image.state.unknown).toBe(true);await h.image.check()
+  expect(h.calls.filter(request=>request.kind==='apply_image')).toHaveLength(1)
+  expect(h.inserted()).toBe(1);expect(h.notes.state.content).toBe('**中文 😀**\r\n![](../attachments/ab/abcd.png)\r\n')
 })

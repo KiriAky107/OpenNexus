@@ -6,9 +6,10 @@ const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 const MAX_ENCODED_BYTES: usize = MAX_IMAGE_BYTES.div_ceil(3) * 4;
 const COLUMNS: &str = "operation_id,draft_id,path,generation,asset_path,reference,hash,size,content_before,content_after,state,error";
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ImagePlacement {
     Markdown { from: usize, to: usize },
+    RichMarkdown { template: String, marker: String },
     Canvas { x: i64, y: i64 },
 }
 
@@ -137,6 +138,34 @@ impl DraftStore {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn prepare_rich_image(
+        &self,
+        ws: &Workspace,
+        draft_id: &str,
+        edit_session: &str,
+        generation: i64,
+        template: &str,
+        marker: &str,
+        content_base64: &str,
+    ) -> Result<ImageIntent> {
+        // The editor freezes a candidate, not a guessed offset in normalized Markdown.
+        if template.len() > super::MAX_NOTE_BYTES || Uuid::parse_str(marker).is_err() {
+            return Err(HostError::new("MOBILE_SELECTION_INVALID"));
+        }
+        self.prepare_image_at(
+            ws,
+            draft_id,
+            edit_session,
+            generation,
+            ImagePlacement::RichMarkdown {
+                template: template.to_owned(),
+                marker: marker.to_owned(),
+            },
+            content_base64,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_canvas_image(
         &self,
         ws: &Workspace,
@@ -171,7 +200,7 @@ impl DraftStore {
         }
         let draft = self.get(draft_id)?;
         if crate::canvas_contract::is_canvas(&draft.path)
-            != matches!(placement, ImagePlacement::Canvas { .. })
+            != matches!(&placement, ImagePlacement::Canvas { .. })
         {
             return Err(HostError::new("MOBILE_IMAGE_TARGET_UNSUPPORTED"));
         }
@@ -226,6 +255,19 @@ impl DraftStore {
                     reference,
                     &draft.content[end..]
                 );
+                (reference, after)
+            }
+            ImagePlacement::RichMarkdown { template, marker } => {
+                let token = format!("![](opennexus-rich-image-{marker})");
+                if template.matches(&token).count() != 1 {
+                    return Err(HostError::new("MOBILE_SELECTION_INVALID"));
+                }
+                let reference = format!(
+                    "{}{}",
+                    "../".repeat(draft.path.split('/').count() - 1),
+                    asset_path
+                );
+                let after = template.replacen(&token, &format!("![]({reference})"), 1);
                 (reference, after)
             }
             ImagePlacement::Canvas { x, y } => {
