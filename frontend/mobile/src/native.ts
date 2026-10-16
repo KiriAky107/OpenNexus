@@ -1,10 +1,12 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
+import type { MobileRequest } from './types'
 
 export interface MobileCapabilities {
   protocol: number
   platform: 'android'
   version: string
   workspace: boolean
+  notes: boolean
   core: boolean
   sync: boolean
   credentials: boolean
@@ -25,4 +27,9 @@ export async function mobileCapabilities(): Promise<MobileCapabilities> {
 export async function mobileVault(): Promise<MobileVault> {
   if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
   return invoke<MobileVault>('mobile_vault')
+}
+
+export async function mobileRequest<T>(request: MobileRequest): Promise<T> {
+  if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
+  return invoke<T>('mobile_request', { request })
 }
