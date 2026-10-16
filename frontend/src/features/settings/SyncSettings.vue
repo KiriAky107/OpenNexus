@@ -9,6 +9,7 @@ import type { SyncConflict, SyncActivity as Activity } from '@/contracts/sync'
 import SyncConflictReview from './SyncConflictReview.vue'
 import SyncActivity from './SyncActivity.vue'
 import SyncAccount from './SyncAccount.vue'
+import SyncConnectionForm from './SyncConnectionForm.vue'
 import { syncError } from './syncPresentation'
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
 interface Binding { id: string; endpoint: string; account: string; remote_vault: string; cursor: number }
@@ -112,14 +113,9 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
       <div v-if="issue.hasDraft" class="inline-actions"><button :disabled="busy" @click="act(() => resolvePreferenceDraft(issue.kind, 'local'))">{{ t('保留本机设置', 'Keep local settings') }}</button><button :disabled="busy" @click="act(() => resolvePreferenceDraft(issue.kind, 'remote'))">{{ t('采用工作区设置', 'Use workspace settings') }}</button></div>
     </article>
     <div class="sync-overview"><span class="badge" :class="{ success: connected, warning: status?.paused }">{{ connected ? t('已连接', 'Connected') : t('未连接', 'Not connected') }}</span><span>{{ status?.binding ? t('已绑定当前知识库', 'Current vault bound') : t('尚未绑定知识库', 'No vault bound') }}</span><span v-if="status">{{ t('待上传', 'Pending uploads') }} {{ status.pending }} · {{ t('冲突', 'Conflicts') }} {{ status.conflicts.length }}</span></div>
-    <details class="ui-disclosure connection-settings" :open="!connected"><summary>{{ t('服务器连接与登录', 'Server connection and sign-in') }}</summary><form class="sync-form" @submit.prevent="login">
-      <label>{{ t('服务器地址', 'Server URL') }}<input v-model="endpoint" required :disabled="!!status?.binding || busy" type="url" autocomplete="url" /></label>
-      <label>{{ t('账户', 'Account') }}<input v-model="account" required :disabled="!!status?.binding || busy" autocomplete="username" /></label>
-      <label>{{ t('密码', 'Password') }}<input v-model="password" required type="password" autocomplete="current-password" :disabled="busy" /></label>
-      <label>{{ t('设备名称', 'Device name') }}<input v-model="device" required maxlength="100" :disabled="busy" /></label>
+    <details class="ui-disclosure connection-settings" :open="!connected"><summary>{{ t('服务器连接与登录', 'Server connection and sign-in') }}</summary><SyncConnectionForm v-model:endpoint="endpoint" v-model:account="account" v-model:password="password" v-model:device="device" :busy="busy" :identity-locked="!!status?.binding" @login="login">
       <label class="test-http"><input v-model="testHttp" type="checkbox" :disabled="busy" />{{ t('仅测试：允许 HTTP 明文连接', 'Testing only: allow unencrypted HTTP') }}</label>
-      <button class="button-primary" :disabled="busy || !password">{{ t('登录', 'Sign in') }}</button>
-    </form></details>
+    </SyncConnectionForm></details>
     <div v-if="connected && !status?.binding" class="sync-connect">
       <button :disabled="busy" @click="act(listVaults)">{{ t('刷新远端库', 'Refresh vaults') }}</button>
       <label>{{ t('远端库', 'Remote vault') }}<select v-model="selected"><option value="">{{ t('请选择', 'Choose a vault') }}</option><option v-for="vault in remoteVaults" :key="vault.id" :value="vault.id">{{ vault.name }} · {{ vault.sequence }}</option></select></label>
