@@ -53,8 +53,16 @@ class RuntimeBoundaries(unittest.TestCase):
                 dict(layout,toolbar={**layout['toolbar'],'scrollWidth':690})]:
             with self.assertRaises(RuntimeError):validate_tablet_layout({'available':True,'styles':{'layout':invalid}},True)
         with self.assertRaisesRegex(Exception,'not observed'):validate_tablet_layout({'available':False},True)
-        landscape={**layout,'width':1280,'rootWidth':1280,'rootScrollWidth':1280,'compact':False,'files':{'visible':True}}
+        target={'visible':True,'width':44,'height':44}
+        targets={'rows':[target], 'header':[target,target], 'search':[target,target]}
+        landscape={**layout,'width':1280,'rootWidth':1280,'rootScrollWidth':1280,'compact':False,'files':{'visible':True},'fileTargets':targets}
         validate_tablet_layout({'available':True,'styles':{'layout':landscape}},False)
+        for group in ('rows','header','search'):
+            for bad in ([],[dict(target,height=28)],[dict(target,width=43.99)],[dict(target,visible=False)]):
+                with self.subTest(group=group,bad=bad), self.assertRaises(RuntimeError):
+                    validate_tablet_layout({'available':True,'styles':{'layout':dict(landscape,fileTargets=dict(targets,**{group:bad}))}},False)
+        with self.assertRaisesRegex(RuntimeError,'not observed'):
+            validate_tablet_layout({'available':True,'styles':{'layout':dict(landscape,fileTargets={})}},False)
 
     def test_owned_tablet_display_is_verified_before_mutation_and_restored_after_partial_failure(self):
         with tempfile.TemporaryDirectory() as directory:

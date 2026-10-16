@@ -8,6 +8,10 @@ const expression = `JSON.stringify((()=>{
   const box=selector=>{const e=document.querySelector(selector);if(!e)return null;const r=e.getBoundingClientRect();return {
     visible:getComputedStyle(e).display!=='none'&&r.width>0&&r.height>0,left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,
     clientWidth:e.clientWidth,scrollWidth:e.scrollWidth,position:getComputedStyle(e).position}}
+  // Geometry only, scoped to owned navigation controls; no names, paths or input values.
+  const targets=selector=>Array.from(document.querySelectorAll(selector)).slice(0,50).map(e=>{
+    const r=e.getBoundingClientRect();return {visible:getComputedStyle(e).display!=='none'&&r.width>0&&r.height>0,width:r.width,height:r.height}
+  }).filter(e=>e.visible)
   return {
   theme:document.documentElement.dataset.theme,
   root:{primary:getComputedStyle(document.documentElement).getPropertyValue('--color-text-primary'),scheme:getComputedStyle(document.documentElement).colorScheme},
@@ -17,7 +21,8 @@ const expression = `JSON.stringify((()=>{
   })),
   layout:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio,rootWidth:document.documentElement.clientWidth,rootScrollWidth:document.documentElement.scrollWidth,
     compact:document.querySelector('.app-shell')?.classList.contains('compact'),editor:box('.visual-editor'),toolbar:box('.markdown-toolbar'),
-    floating:box('.floating-formatting'),main:box('.main-content'),files:box('.secondary-sidebar')},
+    floating:box('.floating-formatting'),main:box('.main-content'),files:box('.secondary-sidebar'),
+    fileTargets:{rows:targets('.mobile-files .tree-node'),header:targets('.mobile-files .sidebar-header button'),search:targets('.mobile-files .file-search input,.mobile-files .file-search button')}},
   // Only the known synthetic note editor's attributes, never values/content or credential controls.
   editorAttributes:Array.from(document.querySelectorAll('[aria-label="Markdown note body"]')).slice(0,4).map(e=>({
     tag:e.tagName,id:e.id,role:e.getAttribute('role'),ariaLabel:e.getAttribute('aria-label'),contentEditable:e.contentEditable,

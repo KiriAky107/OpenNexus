@@ -61,6 +61,16 @@ def validate_tablet_layout(report, portrait):
         and 0 < toolbar.get('width', 0) <= 641 and toolbar.get('clientWidth', 0) + 1 >= toolbar.get('scrollWidth', 1)
         and layout.get('floating', {}).get('position') == 'absolute', 'Tablet floating formatting leaves its visible bounds')
     require(files.get('visible') is (not portrait), 'Tablet file drawer/column visibility differs from its actual width')
+    if not portrait:
+        targets = layout.get('fileTargets', {})
+        for group, minimum in (('rows', 1), ('header', 2), ('search', 2)):
+            items = targets.get(group)
+            require(isinstance(items, list) and minimum <= len(items) <= 50,
+                'Actual tablet navigation touch targets were not observed')
+            require(all(isinstance(item, dict) and item.get('visible') is True
+                and isinstance(item.get('height'), (float, int)) and item['height'] >= 44
+                and isinstance(item.get('width'), (float, int)) and item['width'] >= 44 for item in items),
+                'Actual tablet navigation targets are smaller than 44 CSS pixels')
     return layout
 
 
