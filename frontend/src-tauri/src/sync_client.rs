@@ -52,6 +52,9 @@ pub trait WorkspaceAccess: Send + Sync {
         &self,
         action: impl FnOnce(&mut Workspace) -> crate::workspace::Result<T>,
     ) -> Result<T>;
+    fn start_attempt(&self, job: &Job) -> Result<()> {
+        self.access(|ws| ws.sync_attempt_start(job))
+    }
     /// Cancellation metadata only. A foreground-scoped port may still mark the
     /// exact original attempt interrupted after it has denied all content work.
     fn interrupt_attempt(&self, job: &Job) -> Result<()> {
@@ -358,7 +361,7 @@ impl SyncClient {
         if job.state == "conflict" {
             return Err(SyncError::new("REVISION_CONFLICT"));
         }
-        workspace.access(|ws| ws.sync_attempt_start(&job))?;
+        workspace.start_attempt(&job)?;
         let mut attempt = Attempt {
             workspace,
             job: &job,

@@ -1,6 +1,7 @@
 //! Native foreground and identity epochs around the existing Sync transport.
 //! A lease never becomes current again after backgrounding or changing account.
 use crate::{
+    mobile_sync_auth::AuthenticatedDevice,
     mobile_workspace::MobileWorkspace,
     sync_client::{SyncError, WorkspaceAccess},
     sync_progress::Event,
@@ -124,6 +125,7 @@ impl Lease {
         ScopedWorkspace {
             engine,
             lease: self.clone(),
+            device: None,
         }
     }
 }
@@ -133,13 +135,52 @@ impl Lease {
 pub struct ScopedWorkspace {
     engine: Arc<Mutex<Option<MobileWorkspace>>>,
     lease: Lease,
+    device: Option<AuthenticatedDevice>,
+}
+impl ScopedWorkspace {
+    pub(crate) fn authenticated(
+        engine: Arc<Mutex<Option<MobileWorkspace>>>,
+        lease: Lease,
+        device: AuthenticatedDevice,
+    ) -> Self {
+        Self {
+            engine,
+            lease,
+            device: Some(device),
+        }
+    }
 }
 impl WorkspaceAccess for ScopedWorkspace {
     fn access<T>(
         &self,
         action: impl FnOnce(&mut crate::workspace::Workspace) -> crate::workspace::Result<T>,
     ) -> Result<T> {
-        self.lease.with_current(|| self.engine.access(action))
+        self.lease.with_current(|| {
+            self.engine.access(|ws| {
+                if let Some(device) = &self.device {
+                    if let Some(binding) = ws.sync_binding()? {
+                        if binding.endpoint != device.scope().endpoint()
+                            || binding.account != device.scope().account()
+                        {
+                            return Err(crate::workspace::HostError::new(
+                                "SYNC_AUTH_IDENTITY_CHANGED",
+                            ));
+                        }
+                    }
+                }
+                action(ws)
+            })
+        })
+    }
+    fn start_attempt(&self, job: &crate::sync_state::Job) -> Result<()> {
+        self.lease.with_current(|| {
+            let device = self
+                .device
+                .as_ref()
+                .ok_or_else(|| SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"))?;
+            self.engine
+                .access(|ws| ws.mobile_sync_attempt_start(job, device.scope(), device.device()))
+        })
     }
     fn interrupt_attempt(&self, job: &crate::sync_state::Job) -> Result<()> {
         // This fixed operation only changes the already-running attempt's
@@ -373,5 +414,37 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn foreground_workspace_without_an_authenticated_device_cannot_start_a_network_attempt() {
+        let root = tempfile::tempdir().unwrap();
+        let engine = Arc::new(Mutex::new(Some(
+            MobileWorkspace::open(root.path()).unwrap(),
+        )));
+        let foreground = Foreground::default();
+        foreground.on_start();
+        let port = foreground.lease().unwrap().workspace(engine);
+        let (binding, job) = port
+            .access(|ws| {
+                ws.write("original.md", "", b"retained", "local")?;
+                let binding = ws.sync_bind_empty("https://sync.example/", "remote", "account")?;
+                let job = ws.sync_next(&binding.id)?.unwrap();
+                Ok((binding, job))
+            })
+            .unwrap();
+        assert_eq!(
+            port.start_attempt(&job).unwrap_err().code,
+            "SYNC_AUTH_RECONCILIATION_REQUIRED"
+        );
+        assert!(port
+            .access(|ws| ws.sync_attempts(&binding.id))
+            .unwrap()
+            .is_empty());
+        foreground.on_stop();
+        assert_eq!(
+            port.start_attempt(&job).unwrap_err().code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
     }
 }

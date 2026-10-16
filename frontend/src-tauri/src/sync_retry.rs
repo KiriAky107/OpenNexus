@@ -1,6 +1,6 @@
 //! 绑定范围内的重试决定在重启后仍然有效；系统时钟变化后也会约束实际经过时间。
 use crate::workspace::{Result, Workspace};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 #[derive(Default, Debug, Serialize)]
@@ -29,11 +29,14 @@ fn machine_code(code: &str) -> &str {
         "SYNC_REMOTE_ERROR"
     }
 }
+pub(crate) fn start_attempt(db: &Connection, job: &crate::sync_state::Job) -> Result<()> {
+    db.execute("INSERT INTO sync_attempts VALUES (?1,?2,1,'running',NULL) ON CONFLICT(binding,operation_id) DO UPDATE SET attempts=MIN(attempts+1,2147483647),outcome='running',error=NULL", params![job.binding, job.operation_id])?;
+    Ok(())
+}
 impl Workspace {
     pub fn sync_attempt_start(&self, job: &crate::sync_state::Job) -> Result<()> {
         self.check_job(job)?;
-        self.db.execute("INSERT INTO sync_attempts VALUES (?1,?2,1,'running',NULL) ON CONFLICT(binding,operation_id) DO UPDATE SET attempts=MIN(attempts+1,2147483647),outcome='running',error=NULL", params![job.binding, job.operation_id])?;
-        Ok(())
+        start_attempt(&self.db, job)
     }
     pub fn sync_attempt_interrupt(&self, job: &crate::sync_state::Job) -> Result<()> {
         self.check_job(job)?;

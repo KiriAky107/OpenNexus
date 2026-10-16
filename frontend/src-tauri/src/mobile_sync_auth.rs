@@ -197,6 +197,32 @@ pub struct Auth<S: SecretStore> {
     journal: Journal,
     store: S,
 }
+
+/// Created only after the selected native record and session have been checked.
+/// It cannot be constructed from a WebView request or deserialized metadata.
+pub struct AuthenticatedDevice {
+    scope: Scope,
+    device: String,
+    lease: Lease,
+}
+impl AuthenticatedDevice {
+    pub(crate) fn scope(&self) -> &Scope {
+        &self.scope
+    }
+    pub(crate) fn device(&self) -> &str {
+        &self.device
+    }
+    pub fn workspace(
+        self,
+        engine: std::sync::Arc<std::sync::Mutex<Option<crate::mobile_workspace::MobileWorkspace>>>,
+    ) -> crate::mobile_sync_foreground::ScopedWorkspace {
+        crate::mobile_sync_foreground::ScopedWorkspace::authenticated(
+            engine,
+            self.lease.clone(),
+            self,
+        )
+    }
+}
 impl<S: SecretStore> Auth<S> {
     pub fn open(private_root: &Path, store: S) -> Result<Self> {
         Ok(Self {
@@ -326,7 +352,28 @@ impl<S: SecretStore> Auth<S> {
         F: FnOnce(SyncClient) -> Fut + Send,
         Fut: Future<Output = Result<T>> + Send,
     {
-        let client = lease.with_current(|| {
+        self.authorized_device(
+            lease,
+            scope,
+            expected_operation,
+            now,
+            move |client, _device| action(client),
+        )
+        .await
+    }
+    pub async fn authorized_device<T: Send, F, Fut>(
+        &mut self,
+        lease: &Lease,
+        scope: &Scope,
+        expected_operation: &str,
+        now: u64,
+        action: F,
+    ) -> Result<T>
+    where
+        F: FnOnce(SyncClient, AuthenticatedDevice) -> Fut + Send,
+        Fut: Future<Output = Result<T>> + Send,
+    {
+        let (client, device) = lease.with_current(|| {
             let intent = self
                 .journal
                 .current(scope)?
@@ -347,13 +394,21 @@ impl<S: SecretStore> Auth<S> {
             if record.expires_at <= now {
                 return Err(SyncError::new("SYNC_SESSION_EXPIRED"));
             }
-            SyncClient::new(
+            let client = SyncClient::new(
                 scope.endpoint(),
                 Zeroizing::new(record.session.access_token.clone()),
                 false,
-            )
+            )?;
+            Ok((
+                client,
+                AuthenticatedDevice {
+                    scope: scope.clone(),
+                    device: record.session.device_id.clone(),
+                    lease: lease.clone(),
+                },
+            ))
         })?;
-        lease.guard(action(client)).await
+        lease.guard(action(client, device)).await
     }
     fn accept(&mut self, lease: &Lease, id: &str, reply: Reply, now: u64) -> Result<State> {
         lease.with_current(|| {
@@ -1721,6 +1776,86 @@ mod tests {
             })
             .await;
         assert_eq!(late.err().unwrap().code, "SYNC_FOREGROUND_CHANGED");
+    }
+
+    #[tokio::test]
+    async fn authenticated_device_port_is_bound_to_its_original_native_lease_and_issuing_device() {
+        use crate::sync_client::WorkspaceAccess;
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote.replies.lock().unwrap().extend([
+            Ok(reply("device-a", "first")),
+            Ok(reply("device-b", "second")),
+        ]);
+        let (foreground, lease) = lease();
+        let scope = scope();
+        let first = id();
+        let second = id();
+        let mut auth = Auth::open(root.path(), store).unwrap();
+        auth.login(&lease, login(&first, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let engine = Arc::new(Mutex::new(Some(
+            crate::mobile_workspace::MobileWorkspace::open(root.path()).unwrap(),
+        )));
+        let (binding, job) = engine
+            .access(|ws| {
+                ws.write("original.md", "", b"retained-original", "local")?;
+                let binding =
+                    ws.sync_bind_empty(scope.endpoint(), "owned-vault", scope.account())?;
+                let job = ws.sync_next(&binding.id)?.unwrap();
+                Ok((binding, job))
+            })
+            .unwrap();
+        let first_engine = engine.clone();
+        let original_port = auth
+            .authorized_device(&lease, &scope, &first, 101, move |_, device| async move {
+                Ok(device.workspace(first_engine))
+            })
+            .await
+            .unwrap();
+        original_port.start_attempt(&job).unwrap();
+        foreground.invalidate_identity();
+        let current = foreground.lease().unwrap();
+        auth.login(&current, login(&second, &scope), &remote, 102)
+            .await
+            .unwrap();
+        assert_eq!(
+            original_port.start_attempt(&job).unwrap_err().code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        let next_engine = engine.clone();
+        let next = auth
+            .authorized_device(
+                &current,
+                &scope,
+                &second,
+                103,
+                move |_, device| async move { Ok(device.workspace(next_engine)) },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            next.start_attempt(&job).unwrap_err().code,
+            "SYNC_OPERATION_DEVICE_CHANGED"
+        );
+        assert_eq!(
+            engine.access(|ws| ws.sync_attempts(&binding.id)).unwrap()[0]["attempts"],
+            1
+        );
+        assert_eq!(
+            engine
+                .access(|ws| ws.sync_next(&binding.id))
+                .unwrap()
+                .unwrap()
+                .operation_id,
+            job.operation_id
+        );
+        assert_eq!(
+            engine.access(|ws| ws.read("original.md")).unwrap().content,
+            "retained-original"
+        );
     }
 
     #[tokio::test]
