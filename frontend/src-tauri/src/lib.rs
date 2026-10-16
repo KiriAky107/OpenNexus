@@ -59,6 +59,8 @@ pub mod sync_review;
 #[cfg(test)]
 mod sync_review_tests;
 pub mod sync_state;
+#[cfg(feature = "sync-http")]
+pub mod sync_tls;
 pub mod workspace;
 pub mod workspace_broker;
 

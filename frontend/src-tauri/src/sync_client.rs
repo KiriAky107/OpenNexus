@@ -136,9 +136,10 @@ impl SyncClient {
             return Err(SyncError::new("SYNC_ENDPOINT_INVALID"));
         }
         url.set_path("/");
-        let client = Client::builder()
+        let builder = Client::builder()
             .timeout(Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(reqwest::redirect::Policy::none());
+        let client = crate::sync_tls::configure(builder)?
             .build()
             .map_err(|_| SyncError::new("SYNC_CLIENT_FAILED"))?;
         Ok(Self {
