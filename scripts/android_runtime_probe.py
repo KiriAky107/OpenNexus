@@ -160,7 +160,16 @@ class Probe:
         self.device('install', '--no-streaming', self.apk)
         installed_path = self.shell('pm', 'path', APP).stdout.decode().strip().removeprefix('package:')
         require(installed_path.startswith('/data/app/') and '\n' not in installed_path, 'Unexpected installed APK location')
-        require(digest(self.device('exec-out', 'cat', installed_path).stdout) == self.binding['sha256'], 'Installed APK bytes mismatch')
+        installed = self.device('exec-out', 'cat', installed_path).stdout
+        device_sha = self.shell('sha256sum', installed_path).stdout.decode('utf-8', 'replace').split()
+        # Preserve independent device and transport observations before rejecting a mismatch.
+        # The full original APK remains required; a missing or partial read is never accepted.
+        observation = {'expected_sha256': self.binding['sha256'], 'expected_size': self.apk.stat().st_size,
+            'read_sha256': digest(installed), 'read_size': len(installed),
+            'device_sha256': device_sha[0] if device_sha else None}
+        (self.output / 'installed-apk.json').write_text(json.dumps(observation, indent=2) + '\n', 'utf-8')
+        require(observation['read_sha256'] == observation['device_sha256'] == self.binding['sha256']
+            and observation['read_size'] == observation['expected_size'], 'Installed APK bytes mismatch; see preserved device and transport observations')
         self.activity = self.shell('cmd', 'package', 'resolve-activity', '--brief', '-a', 'android.intent.action.MAIN',
             '-c', 'android.intent.category.LAUNCHER', APP).stdout.decode().strip().splitlines()[-1]
         require(self.activity.startswith(APP + '/') and re.fullmatch(r'[a-zA-Z0-9_./]+', self.activity), 'Unbound target activity')
