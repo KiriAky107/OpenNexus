@@ -1,0 +1,52 @@
+"""Owned runtime observation and secret-delivery boundaries; no device starts."""
+from argparse import Namespace
+import json
+import unittest
+from unittest.mock import Mock,patch
+import android_auth_runtime as module
+
+
+class AuthRuntimeBoundaries(unittest.TestCase):
+    def configuration(self):
+        return {'endpoint':'https://owned-unit-only.trycloudflare.com','accounts':[
+            {'username':'android-owned-'+kind+'-'+'a'*12,'password':'unit_only_private_password_'+'b'*20,
+             'device_name':'Owned Android '+kind+' unit'} for kind in ('a','b')]}
+
+    def test_password_only_enters_the_exclusive_driver_file_on_stdin_and_never_command_arguments(self):
+        probe=object.__new__(module.AuthProbe);probe.args=Namespace(serial='emulator-5562');probe.shell=Mock();probe.device=Mock()
+        config=self.configuration()
+        with patch.object(module,'require_hosted_emulator'):
+            probe.stage_owned_input(config)
+        call=probe.device.call_args
+        self.assertEqual(json.loads(call.kwargs['input']),config)
+        self.assertNotIn(config['accounts'][0]['password'],str(call.args))
+        self.assertIn('test ! -e no_backup/owned-auth.json',str(call.args))
+        self.assertIn('umask 077',str(call.args))
+
+    def test_foreign_host_endpoint_or_identity_is_refused_before_adb_or_secret_delivery(self):
+        for variant in ('developer-host','endpoint','identity'):
+            probe=object.__new__(module.AuthProbe);probe.args=Namespace(serial='emulator-5562');probe.shell=Mock();probe.device=Mock()
+            config=self.configuration()
+            if variant=='endpoint':config['endpoint']='https://production.example'
+            if variant=='identity':config['accounts'][0]['username']='existing-user'
+            with patch.object(module,'require_hosted_emulator',side_effect=RuntimeError('owned required') if variant=='developer-host' else None):
+                with self.assertRaises(RuntimeError):probe.stage_owned_input(config)
+            probe.shell.assert_not_called();probe.device.assert_not_called()
+
+    def test_provider_evidence_refuses_any_additional_post_or_unexpected_auth_error(self):
+        expected={'requests':{'counts':{'login:200':1,'refresh:200':1}}}
+        module.expect_requests(expected,1,1,0)
+        for changed in ({'login:200':2,'refresh:200':1},{'login:200':1,'refresh:200':1,'login:401':1}):
+            with self.assertRaises(RuntimeError):module.expect_requests({'requests':{'counts':changed}},1,1,0)
+
+    def test_historical_active_record_cannot_prove_a_new_or_unconfirmed_selection(self):
+        record={'operation_id':'original','kind':'login','phase':'active','device_id':'device-a'}
+        valid={'selection':{'operation_id':'original'},'intents':[record]}
+        self.assertEqual(module.active_intent(valid,'login','device-a'),record)
+        for selection,phase,kind,device in [('other','active','login','device-a'),('original','refresh_pending','login','device-a'),
+            ('original','active','refresh','device-a'),('original','active','login','device-b')]:
+            with self.assertRaises(RuntimeError):module.active_intent(
+                {'selection':{'operation_id':selection},'intents':[{**record,'phase':phase}]},kind,device)
+
+
+if __name__=='__main__':unittest.main()
