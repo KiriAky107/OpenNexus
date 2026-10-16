@@ -406,7 +406,11 @@ public final class RuntimeProbe extends Instrumentation {
         AccessibilityNodeInfo row = waitNode(node -> label(node, path, false)
             && node.isEnabled() && fileDrawerRow(node), "file drawer row: " + path);
         activate(row, this::fileDrawerRow);
-        waitLabel("Back");
+        final String name = path.substring(path.lastIndexOf('/') + 1);
+        // The actual opened title is the navigation result, independently of
+        // whether a separate Back control is present in the current AX tree.
+        waitNode(node -> APP.equals(string(node.getPackageName())) && !node.isClickable()
+            && label(node, name, false) && titleBarControl(node), "opened document title in the owned workspace: " + name);
     }
     private void save() { hideKeyboard(); click("Save", false); waitLabel("Saved"); }
     private void waitLabel(String text) { waitNode(node -> label(node, text, false), "label: " + text); }
@@ -517,6 +521,13 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void activateNoteBody() {
+        AccessibilityNodeInfo observed = noteBody();
+        // Empty rich contenteditable nodes can leave the AX tree while idle.
+        // Focus the freshly observed named editor before checking stable tap
+        // bounds. No text is sent here; exact role and InputConnection ownership
+        // are still required by the following actions.
+        require(observed.isFocused() || observed.performAction(AccessibilityNodeInfo.ACTION_FOCUS),
+            "Owned named editor refused input focus; no text sent");
         // The requested semantic name is known by the caller. Do not infer it
         // from a soon-to-be-replaced virtual node or retain its resource id.
         progress.append("tap target: owned Markdown note body editable role\n");
