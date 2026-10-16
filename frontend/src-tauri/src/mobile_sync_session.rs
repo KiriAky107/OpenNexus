@@ -829,6 +829,58 @@ mod tests {
             Phase::Unknown
         );
     }
+    #[test]
+    fn optional_rejection_metadata_preserves_existing_v1_intents_and_active_identity_on_open() {
+        let root = tempfile::tempdir().unwrap();
+        let login = Uuid::new_v4().to_string();
+        let mut journal = Journal::open(root.path()).unwrap();
+        journal
+            .prepare_login(&login, &scope(), "Owned original device")
+            .unwrap();
+        let received = journal.received_session(&login, "device").unwrap();
+        journal
+            .reconcile(&login, Some(&identity(&received)))
+            .unwrap();
+        let original = serde_json::to_value(journal.find(&login).unwrap().unwrap()).unwrap();
+        // Model the already-created native v1 database from the previous
+        // journal source, which had no optional rejection metadata table.
+        journal
+            .db
+            .execute_batch("DROP TABLE auth_rejections;")
+            .unwrap();
+        drop(journal);
+        let mut reopened = Journal::open(root.path()).unwrap();
+        assert_eq!(
+            serde_json::to_value(reopened.find(&login).unwrap().unwrap()).unwrap(),
+            original
+        );
+        assert_eq!(
+            reopened.current(&scope()).unwrap().unwrap().operation_id,
+            login
+        );
+        assert!(reopened.rejection(&login).unwrap().is_none());
+        let refresh = Uuid::new_v4().to_string();
+        assert!(
+            reopened
+                .prepare_refresh(&refresh, &login)
+                .unwrap()
+                .first_send
+        );
+        assert!(reopened
+            .record_rejection(&refresh, 401, "SESSION_EXPIRED")
+            .unwrap());
+        assert_eq!(
+            serde_json::to_value(reopened.find(&login).unwrap().unwrap()).unwrap(),
+            original
+        );
+        assert_eq!(
+            reopened
+                .db
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
     #[cfg(unix)]
     #[test]
     fn auth_index_refuses_a_symlink_without_touching_the_original_target() {
