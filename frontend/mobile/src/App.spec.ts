@@ -41,7 +41,7 @@ it('switches themes without submitting a path review or changing its original in
   await wrapper.findAll('button').find(item => item.text() === 'New note')!.trigger('click')
   await wrapper.get('.mobile-dialog input').setValue('未提交 original.md')
   const before = host.mobileRequest.mock.calls.length
-  await wrapper.get('.theme-choice select').setValue('dark'); await flushPromises()
+  await wrapper.get('.theme-choice [aria-label="Dark"]').trigger('click'); await flushPromises()
   expect(wrapper.get<HTMLInputElement>('.mobile-dialog input').element.value).toBe('未提交 original.md')
   expect(host.mobileRequest).toHaveBeenCalledTimes(before)
   expect(document.documentElement.dataset.theme).toBe('dark')

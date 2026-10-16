@@ -10,6 +10,7 @@ import FileTreeNode from '../../src/features/workspace/FileTreeNode.vue'
 import WorkspaceLanding from '../../src/features/workspace/WorkspaceLanding.vue'
 import { appLocale, t } from '../../src/i18n'
 import type { FileNode } from '../../src/contracts'
+import ThemeChoices from './ThemeChoices.vue'
 import MobileEditor from './MobileEditor.vue'
 import MobileCanvas from './MobileCanvas.vue'
 import MobilePreview from './MobilePreview.vue'
@@ -460,7 +461,7 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
 
     <AppDialog v-if="dialog" :label="copy.review" :dismissible="!dialog.busy" @close="cancelDialog">
       <section class="mobile-dialog modal-card" aria-labelledby="dialog-title">
-        <label class="language dialog-language"><span class="sr-only">{{ copy.language }}</span><select v-model="language" :aria-label="copy.language"><option value="zh-CN">中文</option><option value="en">English</option></select></label><label class="language theme-choice"><span class="sr-only">{{ copy.theme }}</span><select v-model="themeChoice" :aria-label="copy.theme"><option value="system">{{ copy.themeSystem }}</option><option value="light">{{ copy.themeLight }}</option><option value="dark">{{ copy.themeDark }}</option><option value="sepia">{{ copy.themeSepia }}</option></select></label>
+        <label class="language dialog-language"><span class="sr-only">{{ copy.language }}</span><select v-model="language" :aria-label="copy.language"><option value="zh-CN">中文</option><option value="en">English</option></select></label><details class="theme-choice"><summary>{{ copy.theme }}</summary><ThemeChoices v-model="themeChoice" :resolved="resolvedTheme" :label="copy.theme" /></details>
         <form v-if="dialog.kind === 'path'" @submit.prevent="submitPath">
           <h2 id="dialog-title">{{ dialog.action === 'create' ? (dialog.format === 'canvas' ? canvasCopy.newCanvas : copy.createTitle) : dialog.action === 'copy' ? copy.copyTitle : copy.renameTitle }}</h2>
           <label>{{ copy.path }}<input ref="pathInput" v-model="dialog.path" :disabled="dialog.busy" :aria-label="copy.path" autocomplete="off" autocapitalize="off" /></label>
@@ -491,6 +492,6 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
       </section>
     </AppDialog>
     <ExportPanel v-if="exportOpen" ref="exportPanel" :language="language" @language="value => language=value" @close="exportOpen=false" />
-    <AppDialog v-if="preferencesOpen" :label="t('设置', 'Settings')" @close="preferencesOpen = false"><section class="mobile-dialog modal-card"><header class="preferences-title"><h2>{{ t('外观与语言', 'Appearance and language') }}</h2><button type="button" class="button-secondary" @click="preferencesOpen = false">{{ copy.close }}</button></header><label>{{ copy.language }}<select v-model="language" :aria-label="copy.language"><option value="zh-CN">中文</option><option value="en">English</option></select></label><label>{{ copy.theme }}<select v-model="themeChoice" :aria-label="copy.theme"><option value="system">{{ copy.themeSystem }}</option><option value="light">{{ copy.themeLight }}</option><option value="dark">{{ copy.themeDark }}</option><option value="sepia">{{ copy.themeSepia }}</option></select></label></section></AppDialog>
+    <AppDialog v-if="preferencesOpen" :label="t('设置', 'Settings')" @close="preferencesOpen = false"><section class="mobile-dialog modal-card"><header class="preferences-title"><h2>{{ t('外观与语言', 'Appearance and language') }}</h2><button type="button" class="button-secondary" @click="preferencesOpen = false">{{ copy.close }}</button></header><label>{{ copy.language }}<select v-model="language" :aria-label="copy.language"><option value="zh-CN">中文</option><option value="en">English</option></select></label><ThemeChoices v-model="themeChoice" :resolved="resolvedTheme" :label="copy.theme" /></section></AppDialog>
   </WorkspaceFrame>
 </template>

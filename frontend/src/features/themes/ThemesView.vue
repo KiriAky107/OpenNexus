@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ThemeCard from './ThemeCard.vue'
+import ThemePreview from './ThemePreview.vue'
 import HeadingStyleSettings from '@/features/editor/HeadingStyleSettings.vue'
 import AppDialog from '@/components/common/AppDialog.vue'
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
@@ -153,31 +155,13 @@ onMounted(() => {
     </div>
 
     <div v-if="activeTab === 'installed'" class="feature-grid themes">
-      <button
-        v-for="theme in themeStore.allThemes"
-        :key="theme.theme_id"
-        class="item-card theme-card"
-        :class="{ selected: themeStore.currentThemeId === theme.theme_id }"
-        @click="themeStore.applyTheme(theme.theme_id)"
-      >
-        <div class="theme-preview" :class="theme.theme_id === 'paper-moments' ? 'preview-paper' : theme.is_dark ? 'preview-dark' : (theme.theme_id === 'sepia' ? 'preview-sepia' : 'preview-light')">
-          <span></span><span></span><span></span><div></div>
-        </div>
-        <div class="theme-info">
-          <div>
-            <strong>{{ theme.name }}</strong>
-            <p class="subtle">{{ theme.description }}</p>
-          </div>
-          <span v-if="themeStore.currentThemeId === theme.theme_id" class="badge success">{{ t('使用中', 'Active') }}</span>
-        </div>
-        <p class="subtle">
-          v{{ theme.version }} · {{ theme.builtin ? t('内置主题', 'Built-in theme') : theme.author }}
-          <span v-if="!theme.builtin"> · 自定义</span>
-        </p>
-        <div v-if="!theme.builtin" class="theme-actions" @click.stop>
-          <button class="link-btn danger" @click="themeStore.uninstallTheme(theme.theme_id)">卸载</button>
-        </div>
-      </button>
+      <ThemeCard v-for="theme in themeStore.allThemes" :key="theme.theme_id"
+        :name="theme.name" :description="theme.description" :selected="themeStore.currentThemeId === theme.theme_id"
+        :preview="theme.theme_id === 'paper-moments' ? 'paper' : theme.is_dark ? 'dark' : theme.theme_id === 'sepia' ? 'sepia' : 'light'"
+        @select="themeStore.applyTheme(theme.theme_id)">
+        <template #meta>v{{ theme.version }} · {{ theme.builtin ? t('内置主题', 'Built-in theme') : theme.author }}<span v-if="!theme.builtin"> · 自定义</span></template>
+        <template v-if="!theme.builtin" #actions><button class="link-btn danger" @click="themeStore.uninstallTheme(theme.theme_id)">卸载</button></template>
+      </ThemeCard>
     </div>
 
     <div v-else class="feature-grid themes">
@@ -186,9 +170,7 @@ onMounted(() => {
         :key="theme.theme_id"
         class="item-card theme-card"
       >
-        <div class="theme-preview" :class="theme.theme_id === 'paper-moments' ? 'preview-paper' : theme.is_dark ? 'preview-dark' : 'preview-light'">
-          <span></span><span></span><span></span><div></div>
-        </div>
+        <ThemePreview :variant="theme.theme_id === 'paper-moments' ? 'paper' : theme.is_dark ? 'dark' : 'light'" />
         <div class="theme-info">
           <div>
             <strong>{{ theme.name }}</strong>
@@ -300,30 +282,6 @@ onMounted(() => {
 
 .themes { margin-bottom: var(--space-xl); }
 .theme-card { display: grid; gap: var(--space-md); text-align: left; position: relative; }
-.theme-preview {
-  display: grid;
-  grid-template-columns: 30px 1fr;
-  grid-template-rows: repeat(3, 18px);
-  gap: 6px;
-  height: 120px;
-  padding: var(--space-md);
-  border-radius: var(--radius-md);
-  background: #fff;
-  border: 1px solid #ddd;
-}
-.theme-preview span { grid-column: 1; border-radius: 4px; background: #dfe3eb; }
-.theme-preview div { grid-column: 2; grid-row: 1 / 4; border-radius: 6px; background: #f4f5f7; }
-.preview-dark { background: #0d1117; border-color: #30363d; }
-.preview-dark span { background: #30363d; }
-.preview-dark div { background: #161b22; }
-.preview-sepia { background: #fbf3df; border-color: #ddcfad; }
-.preview-sepia span { background: #d8c69c; }
-.preview-sepia div { background: #f4e8ca; }
-.preview-paper { background: #fffdf5; border: 1px dashed #8b7865; box-shadow: 3px 3px 0 #d8e6e2, 6px 6px 0 #f0d8cf; }
-.preview-paper span { background: #efd8d0; }
-.preview-paper span:nth-child(2) { background: #d8e7e8; }
-.preview-paper span:nth-child(3) { background: #f6e9b8; }
-.preview-paper div { border: 1px solid #b5a693; background: repeating-linear-gradient(#fffef8 0 14px, #dce4db 14px 15px); }
 .theme-actions a { display: inline-flex; align-items: center; justify-content: center; text-align: center; text-decoration: none; }
 
 .theme-info { display: flex; justify-content: space-between; gap: var(--space-md); align-items: flex-start; }
