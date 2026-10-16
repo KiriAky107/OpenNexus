@@ -2,7 +2,7 @@
 //! Only State is serializable for IPC; decrypted records and sessions stay native.
 use crate::{
     mobile_sync_foreground::Lease,
-    mobile_sync_session::{Intent, Journal, Phase, Scope, StoredIdentity},
+    mobile_sync_session::{Intent, Journal, Phase, Rejection, Scope, StoredIdentity},
     sync_client::{identifier, Session, SyncClient, SyncError},
 };
 use serde::{Deserialize, Serialize};
@@ -155,8 +155,14 @@ pub struct State {
     pub expired: bool,
     pub credential_change_required: bool,
     pub expires_at: Option<u64>,
+    pub rejected: Option<Rejection>,
 }
-fn state(intent: Option<Intent>, record: Option<&Record>, now: u64) -> State {
+fn state(
+    intent: Option<Intent>,
+    record: Option<&Record>,
+    rejected: Option<Rejection>,
+    now: u64,
+) -> State {
     let active = intent.as_ref().is_some_and(|i| i.phase == Phase::Active);
     let record = record.filter(|_| active);
     let expired = record.is_some_and(|r| r.expires_at <= now);
@@ -165,6 +171,7 @@ fn state(intent: Option<Intent>, record: Option<&Record>, now: u64) -> State {
         expired,
         credential_change_required: record.is_some_and(|r| r.must_change_credentials),
         expires_at: record.map(|r| r.expires_at),
+        rejected,
         intent,
     }
 }
@@ -194,6 +201,22 @@ impl<S: SecretStore> Auth<S> {
             journal: Journal::open(private_root)?,
             store,
         })
+    }
+    fn status(&self, intent: Option<Intent>, record: Option<&Record>, now: u64) -> Result<State> {
+        let rejected = intent
+            .as_ref()
+            .map(|intent| self.journal.rejection(&intent.operation_id))
+            .transpose()?
+            .flatten();
+        Ok(state(intent, record, rejected, now))
+    }
+    fn failed<T>(&mut self, lease: &Lease, id: &str, error: SyncError) -> Result<T> {
+        lease.with_current(|| {
+            self.journal
+                .record_rejection(id, error.status, &error.code)?;
+            Ok(())
+        })?;
+        Err(error)
     }
     fn load(&self, intent: &Intent) -> Result<Option<Record>> {
         let Some(device) = intent.device_id.as_deref() else {
@@ -234,17 +257,22 @@ impl<S: SecretStore> Auth<S> {
         }
         self.recover(lease, scope, now)
     }
+    /// Read the original operation metadata without sending, activating or
+    /// replacing anything. Historical success is not a currently usable login.
+    pub fn operation(&self, lease: &Lease, scope: &Scope, id: &str, now: u64) -> Result<State> {
+        lease.with_current(|| self.status(Some(self.expected(scope, id)?), None, now))
+    }
     pub fn recover(&mut self, lease: &Lease, scope: &Scope, now: u64) -> Result<State> {
         lease.with_current(|| {
             let Some(intent) = self.journal.current(scope)? else {
-                return Ok(state(None, None, now));
+                return self.status(None, None, now);
             };
             let record = self.load(&intent)?;
             let identity = record.as_ref().map(Record::identity);
             let reconciled = self
                 .journal
                 .reconcile(&intent.operation_id, identity.as_ref())?;
-            Ok(state(Some(reconciled), record.as_ref(), now))
+            self.status(Some(reconciled), record.as_ref(), now)
         })
     }
     /// Borrow the exact active native identity for one guarded foreground task.
@@ -330,7 +358,7 @@ impl<S: SecretStore> Auth<S> {
             if ready.phase != Phase::Active {
                 return Err(SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"));
             }
-            Ok(state(Some(ready), Some(&record), now))
+            self.status(Some(ready), Some(&record), now)
         })
     }
     pub async fn login(
@@ -354,9 +382,13 @@ impl<S: SecretStore> Auth<S> {
         if !prepared.first_send {
             return self.recover_expected(lease, request.scope, request.operation_id, now);
         }
-        let reply = lease
+        let reply = match lease
             .guard(transport.login(request.scope, request.password, request.device_name))
-            .await?;
+            .await
+        {
+            Ok(reply) => reply,
+            Err(error) => return self.failed(lease, request.operation_id, error),
+        };
         self.accept(lease, request.operation_id, reply, now)
     }
     pub async fn refresh(
@@ -381,9 +413,13 @@ impl<S: SecretStore> Auth<S> {
         if !record.identity().matches_intent(&previous) {
             return Err(SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"));
         }
-        let reply = lease
+        let reply = match lease
             .guard(transport.refresh(request.scope, &record.session))
-            .await?;
+            .await
+        {
+            Ok(reply) => reply,
+            Err(error) => return self.failed(lease, request.operation_id, error),
+        };
         self.accept(lease, request.operation_id, reply, now)
     }
     pub async fn logout(
@@ -413,9 +449,12 @@ impl<S: SecretStore> Auth<S> {
         if !record.identity().matches_intent(&previous) {
             return Err(SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"));
         }
-        lease
+        if let Err(error) = lease
             .guard(transport.logout(request.scope, &record.session))
-            .await?;
+            .await
+        {
+            return self.failed(lease, request.operation_id, error);
+        }
         lease.with_current(|| {
             self.journal.received_logout(request.operation_id)?;
             Ok(())
@@ -458,7 +497,7 @@ impl<S: SecretStore> Auth<S> {
                 }
             }
             let done = self.journal.reconcile(id, None)?;
-            Ok(state(Some(done), None, now))
+            self.status(Some(done), None, now)
         })
     }
 }
@@ -1116,5 +1155,81 @@ mod tests {
             })
             .await;
         assert_eq!(late.err().unwrap().code, "SYNC_FOREGROUND_CHANGED");
+    }
+
+    #[tokio::test]
+    async fn explicit_auth_rejection_survives_reopen_and_original_operation_query_without_reposting(
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote.replies.lock().unwrap().push_back(Err(SyncError {
+            status: 401,
+            code: "LOGIN_FAILED".into(),
+            retry_after: None,
+        }));
+        let (_foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        assert_eq!(
+            auth.login(&lease, login(&operation, &scope), &remote, 100)
+                .await
+                .err()
+                .unwrap()
+                .code,
+            "LOGIN_FAILED"
+        );
+        drop(auth);
+        let mut reopened = Auth::open(root.path(), store.clone()).unwrap();
+        let status = reopened.recover(&lease, &scope, 101).unwrap();
+        assert!(!status.authenticated);
+        let rejection = status.rejected.unwrap();
+        assert_eq!(rejection.code, "LOGIN_FAILED");
+        assert_eq!(rejection.status, 401);
+        let receipt = reopened.operation(&lease, &scope, &operation, 102).unwrap();
+        assert!(!receipt.authenticated);
+        assert_eq!(receipt.rejected.unwrap().code, "LOGIN_FAILED");
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 1);
+        assert!(reopened
+            .operation(
+                &lease,
+                &Scope::new("https://other.example", scope.account()).unwrap(),
+                &operation,
+                102
+            )
+            .is_err());
+        assert_eq!(store.puts.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn proxy_or_server_5xx_is_uncertain_even_if_it_contains_a_known_auth_error_code() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote.replies.lock().unwrap().push_back(Err(SyncError {
+            status: 503,
+            code: "LOGIN_FAILED".into(),
+            retry_after: None,
+        }));
+        let (_foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), store).unwrap();
+        assert!(auth
+            .login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .is_err());
+        let status = auth.recover(&lease, &scope, 101).unwrap();
+        assert!(status.rejected.is_none());
+        assert_eq!(status.intent.unwrap().phase, Phase::Unknown);
+        assert!(
+            !auth
+                .login(&lease, login(&operation, &scope), &remote, 102)
+                .await
+                .unwrap()
+                .authenticated
+        );
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 1);
     }
 }

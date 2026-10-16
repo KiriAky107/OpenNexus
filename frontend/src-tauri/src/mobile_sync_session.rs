@@ -106,6 +106,12 @@ pub struct Prepared {
     pub first_send: bool,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct Rejection {
+    pub status: u16,
+    pub code: String,
+}
+
 /// Extracted from a successfully decrypted/read-back native broker payload, never IPC.
 #[derive(Clone)]
 pub struct StoredIdentity {
@@ -238,6 +244,7 @@ impl Journal {
                 device_name TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('login','refresh','logout','local_disconnect')),
                 phase TEXT NOT NULL CHECK(phase IN ('login_pending','store_pending','active','refresh_pending','logout_pending','erase_pending','disconnected','unknown')),
                 device_id TEXT,generation INTEGER NOT NULL CHECK(generation>0),server_logout_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(server_logout_confirmed IN (0,1)),previous_operation TEXT);
+            CREATE TABLE IF NOT EXISTS auth_rejections(operation_id TEXT PRIMARY KEY,status INTEGER NOT NULL CHECK(status BETWEEN 400 AND 499),code TEXT NOT NULL);
             PRAGMA user_version=1; COMMIT;")?;
         Ok(Self { db })
     }
@@ -247,6 +254,74 @@ impl Journal {
     }
     pub fn current(&self, scope: &Scope) -> Result<Option<Intent>> {
         current(&self.db, scope)
+    }
+    pub fn rejection(&self, id: &str) -> Result<Option<Rejection>> {
+        operation_id(id)?;
+        Ok(self
+            .db
+            .query_row(
+                "SELECT status,code FROM auth_rejections WHERE operation_id=?1",
+                [id],
+                |row| {
+                    Ok(Rejection {
+                        status: row.get(0)?,
+                        code: row.get(1)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+    /// Only documented pre-mutation Sync v1 authentication rejections qualify.
+    /// Network/5xx/invalid-success responses remain uncertain, without a receipt.
+    pub fn record_rejection(&mut self, id: &str, status: u16, code: &str) -> Result<bool> {
+        if !(400..500).contains(&status) {
+            return Ok(false);
+        }
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let intent = require_current(&tx, id)?;
+        let known = matches!(
+            (intent.kind.as_str(), status, code),
+            ("login", 401, "LOGIN_FAILED")
+                | ("login", 429, "RATE_LIMITED")
+                | ("login", 422, "INVALID_REQUEST")
+                | ("refresh", 401, "SESSION_EXPIRED")
+                | ("refresh", 422, "INVALID_REQUEST")
+                | ("logout", 401, "SESSION_EXPIRED")
+        );
+        if !known {
+            return Ok(false);
+        }
+        let old: Option<(u16, String)> = tx
+            .query_row(
+                "SELECT status,code FROM auth_rejections WHERE operation_id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((old_status, old_code)) = old {
+            if old_status != status || old_code != code {
+                return Err(HostError::new("SYNC_AUTH_INTENT_MISMATCH"));
+            }
+            return Ok(true);
+        }
+        if !matches!(
+            intent.phase,
+            Phase::LoginPending | Phase::RefreshPending | Phase::LogoutPending
+        ) {
+            return Err(HostError::new("SYNC_AUTH_RESPONSE_MISMATCH"));
+        }
+        tx.execute(
+            "INSERT INTO auth_rejections VALUES (?1,?2,?3)",
+            params![id, status, code],
+        )?;
+        tx.execute(
+            "UPDATE auth_intents SET phase='unknown' WHERE operation_id=?1",
+            [id],
+        )?;
+        tx.commit()?;
+        Ok(true)
     }
 
     pub fn prepare_login(
@@ -408,6 +483,11 @@ impl Journal {
         {
             Phase::Disconnected
         } else if matches!(intent.kind.as_str(), "login" | "refresh")
+            && !tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM auth_rejections WHERE operation_id=?1)",
+                [id],
+                |row| row.get::<_, bool>(0),
+            )?
             && matches!(
                 intent.phase,
                 Phase::StorePending | Phase::Active | Phase::Unknown
@@ -707,6 +787,46 @@ mod tests {
         assert_eq!(
             Scope::new(&idna, "reader").err().unwrap().code,
             "SYNC_ENDPOINT_INVALID"
+        );
+    }
+    #[test]
+    fn known_refresh_rejection_is_immutable_and_cannot_be_reactivated_by_matching_local_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let mut journal = Journal::open(root.path()).unwrap();
+        let login = Uuid::new_v4().to_string();
+        journal.prepare_login(&login, &scope(), "Owned").unwrap();
+        let before = journal.received_session(&login, "device").unwrap();
+        let saved = identity(&before);
+        journal.reconcile(&login, Some(&saved)).unwrap();
+        let refresh = Uuid::new_v4().to_string();
+        let pending = journal.prepare_refresh(&refresh, &login).unwrap().intent;
+        assert!(!journal
+            .record_rejection(&refresh, 503, "SESSION_EXPIRED")
+            .unwrap());
+        assert!(journal.rejection(&refresh).unwrap().is_none());
+        assert!(journal
+            .record_rejection(&refresh, 401, "SESSION_EXPIRED")
+            .unwrap());
+        assert!(journal
+            .record_rejection(&refresh, 401, "SESSION_EXPIRED")
+            .unwrap());
+        let forged_matching = identity(&pending);
+        assert_eq!(
+            journal
+                .reconcile(&refresh, Some(&forged_matching))
+                .unwrap()
+                .phase,
+            Phase::Unknown
+        );
+        drop(journal);
+        let journal = Journal::open(root.path()).unwrap();
+        assert_eq!(
+            journal.rejection(&refresh).unwrap().unwrap().code,
+            "SESSION_EXPIRED"
+        );
+        assert_eq!(
+            journal.find(&refresh).unwrap().unwrap().phase,
+            Phase::Unknown
         );
     }
     #[cfg(unix)]
