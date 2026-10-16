@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { EditorState, Compartment, StateEffect, StateField } from '@codemirror/state'
-import { Decoration, type DecorationSet, EditorView, keymap, lineNumbers } from '@codemirror/view'
-import { defaultKeymap, history, historyKeymap, isolateHistory, undo, redo } from '@codemirror/commands'
-import { markdown } from '@codemirror/lang-markdown'
+import { onBeforeUnmount, ref, watch } from 'vue'
+import { EditorState, StateEffect, StateField } from '@codemirror/state'
+import { Decoration, type DecorationSet, EditorView } from '@codemirror/view'
+import { isolateHistory, undo, redo } from '@codemirror/commands'
+import SourceEditorSurface from './SourceEditorSurface.vue'
 import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
 import { registerEditorCommands } from '@/services/editorCommandService'
@@ -14,10 +14,9 @@ import { storeWorkspaceImage, type WorkspaceAssetSource } from '@/services/works
 const props = defineProps<{ initialContent: string }>()
 const editor = useEditorStore(), settings = useSettingsStore()
 const isCurrentDocument = editor.captureDocument()
-const root = ref<HTMLElement | null>(null), error = ref('')
+const error = ref('')
 const imageInput = ref<HTMLInputElement | null>(null)
 const conflicts = ref<PropertyConflict[]>([]), choices = ref<PropertyChoices>({})
-const proofing = new Compartment()
 const highlightPassage = StateEffect.define<{ from: number; to: number }>()
 const passageHighlight = StateField.define<DecorationSet>({
   create: () => Decoration.none,
@@ -33,10 +32,6 @@ const passageHighlight = StateField.define<DecorationSet>({
 })
 let view: EditorView | undefined, dispose: (() => void) | undefined
 let pending: { content: string; path: string | null; from: number; to: number; state: EditorState } | undefined
-function attributes() {
-  return EditorView.contentAttributes.of({ spellcheck: String(settings.spellCheck), lang: settings.language,
-    'aria-label': settings.language === 'en' ? 'Markdown source editor' : 'Markdown 源码编辑器' })
-}
 function available() { return isCurrentDocument() && !!view && !!editor.currentFilePath && !['conflict', 'external_changed'].includes(editor.saveStatus) }
 function imageFiles(list: FileList | null): File[] {
   return [...(list ?? [])].filter(file => file.type.startsWith('image/'))
@@ -94,10 +89,7 @@ function applyImport() {
     pending = undefined; conflicts.value = []; view.focus()
   } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason) }
 }
-onMounted(() => {
-  view = new EditorView({ parent: root.value!, state: EditorState.create({ doc: props.initialContent, extensions: [
-    history(), keymap.of([...defaultKeymap, ...historyKeymap]), lineNumbers(), markdown(), proofing.of(attributes()), passageHighlight,
-    EditorView.lineWrapping,
+const surfaceExtensions = [
     EditorView.domEventHandlers({
       paste(event) {
         const files = imageFiles(event.clipboardData?.files ?? null)
@@ -115,12 +107,10 @@ onMounted(() => {
     EditorView.updateListener.of(update => {
       if (update.docChanged && isCurrentDocument()) { editor.updateContent(update.state.doc.toString()); editor.scheduleAutoSave(settings.autoSaveInterval) }
     }),
-    EditorView.theme({ '&': { height: '100%', color: 'var(--color-text-primary)', backgroundColor: 'var(--color-background-primary)' },
-      '.cm-scroller': { fontFamily: 'var(--font-editor-mono)', fontSize: 'var(--font-editor-size)', overflow: 'auto' },
-      '.cm-gutters': { backgroundColor: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)', border: 'none' },
-      '.cm-content': { padding: '24px 8px', minHeight: '100%' } }),
     EditorView.theme({ '.cm-citation-highlight': { backgroundColor: 'var(--color-accent-soft)', outline: '1px solid var(--color-border-focus)' } }),
-  ] }) })
+  ]
+function ready(currentView: EditorView) {
+  view = currentView
   navigateHeading(editor.headingRequest)
   navigateReference(editor.referenceRequest)
   navigateBlock(editor.blockRequest)
@@ -129,8 +119,7 @@ onMounted(() => {
     'editor.undo': () => undo(view!) ? { ok: true } : { ok: false, reason: 'unavailable' },
     'editor.redo': () => redo(view!) ? { ok: true } : { ok: false, reason: 'unavailable' },
   } })
-})
-watch(() => [settings.spellCheck, settings.language], () => view?.dispatch({ effects: proofing.reconfigure(attributes()) }))
+}
 function sourcePosition(offset: number) {
   return Math.min(editor.content.slice(0, offset).replace(/\r\n?/g, '\n').length, view!.state.doc.length)
 }
@@ -153,7 +142,7 @@ function navigateBlock(request: typeof editor.blockRequest) {
   view.focus()
 }
 watch(() => editor.blockRequest, navigateBlock)
-onBeforeUnmount(() => { dispose?.(); view?.destroy(); pending = undefined })
+onBeforeUnmount(() => { dispose?.(); view = undefined; pending = undefined })
 </script>
 
 <template>
@@ -164,7 +153,7 @@ onBeforeUnmount(() => { dispose?.(); view?.destroy(); pending = undefined })
       <input ref="imageInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple @change="selectedImages" />
     </div>
     <p v-if="error" role="alert">{{ error }}</p>
-    <div ref="root" class="source-code" />
+    <SourceEditorSurface class="source-code" :initial-content="initialContent" :extensions="surfaceExtensions" :language="settings.language" :spellcheck="settings.spellCheck" :label="settings.language === 'en' ? 'Markdown source editor' : 'Markdown 源码编辑器'" @ready="ready" />
     <AppDialog v-if="conflicts.length" label="属性冲突预览" @close="conflicts = []; pending = undefined">
       <h2>选择要保留的属性</h2>
       <div v-for="conflict in conflicts" :key="conflict.key">
