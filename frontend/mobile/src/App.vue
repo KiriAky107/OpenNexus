@@ -11,6 +11,7 @@ import WorkspaceLanding from '../../src/features/workspace/WorkspaceLanding.vue'
 import { appLocale, t } from '../../src/i18n'
 import type { FileNode } from '../../src/contracts'
 import ThemeChoices from './ThemeChoices.vue'
+import EditorToolbar from '../../src/features/editor/EditorToolbar.vue'
 import MobileEditor from './MobileEditor.vue'
 import MobileCanvas from './MobileCanvas.vue'
 import MobilePreview from './MobilePreview.vue'
@@ -375,10 +376,10 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
     </main>
 
     <main v-else-if="session.state.view" class="editor-page" :aria-busy="session.state.loading">
-      <nav class="editor-toolbar" :aria-label="copy.more">
-        <button :disabled="navigationBusy || !dirty || session.state.saving || session.state.composing || Boolean(session.state.pendingSave) || session.state.unknownSave || imageBlocked || canvasFieldsPending" @click="save">{{ session.state.saving ? copy.saving : copy.save }}</button>
-        <button class="quiet" :disabled="preview || session.state.composing || Boolean(dialog) || imageBlocked" @click="undo">{{ copy.undo }}</button>
-        <button class="quiet" :disabled="preview || session.state.composing || Boolean(dialog) || imageBlocked" @click="redo">{{ copy.redo }}</button>
+      <EditorToolbar touch :status-text="status" :status-kind="session.state.unknownSave ? 'conflict' : dirty ? 'dirty' : 'saved'" :save-label="session.state.saving ? copy.saving : copy.save" :can-save="!navigationBusy && dirty && !session.state.saving && !session.state.composing && !session.state.pendingSave && !session.state.unknownSave && !imageBlocked && !canvasFieldsPending" @save="save">
+        <template #actions>
+        <button class="button-secondary" :disabled="preview || session.state.composing || Boolean(dialog) || imageBlocked" @click="undo">{{ copy.undo }}</button>
+        <button class="button-secondary" :disabled="preview || session.state.composing || Boolean(dialog) || imageBlocked" @click="redo">{{ copy.redo }}</button>
         <input ref="imageInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/gif,image/webp" :aria-label="copy.addImage" @change="imageSelected" />
         <details ref="fileActions" class="file-actions"><summary>{{ copy.more }}</summary><div class="action-menu">
           <button v-if="!isCanvas" class="quiet" :disabled="session.state.composing" @click="togglePreview">{{ preview ? copy.editText : copy.preview }}</button>
@@ -389,8 +390,8 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
           <button class="quiet danger" :disabled="dirty || session.state.saving || actionBusy || imageBlocked" @click="reviewFile('delete')">{{ copy.delete }}</button>
           <button class="quiet" :disabled="session.state.saving || session.state.composing" @click="reviewDiscard">{{ copy.discard }}</button>
         </div></details>
-      </nav>
-      <p class="save-status" role="status">{{ status }}</p>
+        </template>
+      </EditorToolbar>
       <section v-if="images.state.busy || images.state.error || images.state.pending || images.state.unknown" class="feedback" :aria-busy="images.state.busy">
         <p v-if="images.state.busy" role="status">{{ copy.importingImage }}</p>
         <p v-if="images.state.error" role="alert">{{ displayError(images.state.error) }} <small>{{ images.state.error }}</small></p>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useEditorStore } from '@/stores/editor'
 import { useWorkspaceStore } from '@/stores/workspace'
+import EditorToolbar from './EditorToolbar.vue'
 import ExportDialog from './ExportDialog.vue'
 import NoteHistory from './NoteHistory.vue'
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
@@ -72,16 +73,19 @@ const statusText = computed<Record<string, string>>(() => ({
 
 <template>
   <Teleport :to="actionsHost ?? 'body'" :disabled="!actionsHost || needsRecovery">
-  <header class="editor-header" :class="{ docked: actionsHost && !needsRecovery }">
+  <EditorToolbar :docked="Boolean(actionsHost && !needsRecovery)" :status-text="statusText[editorStore.saveStatus] ?? ''" :status-kind="editorStore.saveStatus" :can-save="!['saving','conflict','external_changed'].includes(editorStore.saveStatus)" :modes="isMarkdown ? [{id:'wysiwyg',label:t('写作','Writing')},{id:'source',label:t('源码','Source')}] : []" :mode="editorStore.mode" @mode="value=>editorStore.setMode(value as 'wysiwyg'|'source')" @save="editorStore.save">
+    <template #dialogs>
     <ExportDialog v-if="exportOpen && isMarkdown" @close="exportOpen = false" />
     <NoteHistory v-if="historyOpen && isMarkdown && editorStore.currentNoteId" :note-id="editorStore.currentNoteId" @close="historyOpen = false" />
     <ActionDialog v-if="actionDialog" v-bind="actionDialog" @resolve="resolveAction" />
-    <div class="editor-actions">
+    </template>
+    <template #actions>
       <button v-if="!actionsHost" class="button-secondary" @pointerdown="captureWorkspaceSelection" @click="openWorkspaceExtensions">{{ t('扩展命令', 'Extension commands') }}</button>
       <button v-if="isMarkdown && editorStore.currentNoteId" class="button-secondary" @click="historyOpen = true">{{ t('修改历史', 'Change history') }}</button>
       <button v-if="isMarkdown && editorStore.mode === 'wysiwyg'" type="button" class="toolbar-toggle" :aria-pressed="layout.editorToolbarVisible" :title="layout.editorToolbarVisible ? t('隐藏编辑器工具栏', 'Hide editor toolbar') : t('显示编辑器工具栏', 'Show editor toolbar')" :aria-label="layout.editorToolbarVisible ? t('隐藏编辑器工具栏', 'Hide editor toolbar') : t('显示编辑器工具栏', 'Show editor toolbar')" @click="layout.editorToolbarVisible = !layout.editorToolbarVisible"><ControlIcon name="toolbar" /></button>
       <button v-if="!desktop && isMarkdown" class="button-secondary" @click="exportOpen = true">{{ t('导出', 'Export') }}</button>
-      <span class="save-status" :class="editorStore.saveStatus">{{ statusText[editorStore.saveStatus] }}</span>
+    </template>
+    <template #status>
       <span v-if="editorStore.loadingFilePath" class="save-status" role="status">{{ t('正在打开文件…', 'Opening file…') }}</span>
       <span v-if="editorStore.externalReadError" class="save-status conflict" role="alert">{{ t('外部更新暂时读取失败，将自动重试', 'Could not read the external update; retrying automatically') }}</span>
       <span v-if="editorStore.blockNavigationNotice" class="save-status" role="status">{{ editorStore.blockNavigationNotice }}</span>
@@ -90,42 +94,7 @@ const statusText = computed<Record<string, string>>(() => ({
       <button v-if="needsRecovery" class="button-secondary" @click="downloadCopy">{{ isMarkdown ? t('下载 Markdown 副本', 'Download Markdown copy') : documentType === 'canvas' ? t('下载 Canvas 副本', 'Download Canvas copy') : t('下载文件副本', 'Download file copy') }}</button>
       <button v-if="needsRecovery" class="button-secondary" @click="discard">{{ isMarkdown ? t('关闭当前笔记', 'Close current note') : t('关闭当前文件', 'Close current file') }}</button>
       <span v-if="reloadError" class="save-status conflict" role="alert">{{ reloadError }}</span>
-      <div v-if="isMarkdown" class="mode-switch" :aria-label="t('编辑模式', 'Editor mode')">
-        <button type="button" :class="{ active: editorStore.mode === 'wysiwyg' }" @click="editorStore.setMode('wysiwyg')">{{ t('写作', 'Writing') }}</button>
-        <button type="button" :class="{ active: editorStore.mode === 'source' }" @click="editorStore.setMode('source')">{{ t('源码', 'Source') }}</button>
-      </div>
-      <button type="button" class="save-button" :disabled="['saving','conflict','external_changed'].includes(editorStore.saveStatus)" @click="editorStore.save">{{ t('保存', 'Save') }}</button>
-    </div>
-  </header>
+    </template>
+  </EditorToolbar>
   </Teleport>
 </template>
-
-<style scoped>
-.editor-header {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: var(--space-xs) var(--space-md);
-  border-bottom: 1px solid var(--color-border-subtle);
-  color: var(--color-text-secondary);
-}
-.editor-header.docked { padding: 0; border: 0; }
-.docked .editor-actions { flex-wrap: nowrap; }
-.docked .save-status.saved, .docked .save-status.idle { display: none; }
-.docked .editor-actions > .button-secondary { padding: 3px 8px; font-size: var(--font-size-xs); }
-.docked .mode-switch button, .docked .save-button { padding: 3px 8px; font-size: var(--font-size-xs); }
-.editor-actions { flex-wrap: wrap; justify-content: flex-end; }
-.toolbar-toggle { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: var(--radius-sm); }
-.toolbar-toggle:hover, .toolbar-toggle[aria-pressed="true"] { color: var(--color-accent-primary); background: var(--color-accent-soft); }
-.toolbar-toggle:focus-visible { outline: 2px solid var(--color-border-focus); }
-.editor-actions, .mode-switch { display: flex; align-items: center; gap: var(--space-sm); }
-.save-status { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
-.save-status.dirty, .save-status.external_changed { color: var(--color-warning); }
-.save-status.save_failed, .save-status.conflict { color: var(--color-error); }
-.save-status.saved { color: var(--color-success); }
-.mode-switch { gap: 2px; padding: 2px; border-radius: var(--radius-md); background: var(--color-background-secondary); }
-.mode-switch button, .save-button { padding: 5px 9px; border-radius: var(--radius-sm); }
-.mode-switch button.active { background: var(--color-surface-primary); color: var(--color-accent-primary); box-shadow: var(--shadow-sm); }
-.save-button { background: var(--color-accent-primary); color: var(--color-text-inverse); }
-.save-button:disabled { opacity: .55; }
-</style>
