@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex};
 use tauri::Manager;
 mod mobile_files;
 #[cfg(target_os = "android")]
+mod mobile_sync_commands;
+#[cfg(target_os = "android")]
 mod mobile_sync_secrets;
 #[cfg(target_os = "android")]
 mod mobile_sync_tls;
@@ -12,6 +14,8 @@ mod mobile_sync_tls;
 struct MobileState {
     engine: Arc<Mutex<Option<MobileWorkspace>>>,
     private_root: PathBuf,
+    #[cfg(target_os = "android")]
+    sync: mobile_sync_commands::Runtime,
 }
 
 #[derive(Serialize)]
@@ -109,6 +113,27 @@ async fn mobile_request(
     .map_err(|_| "MOBILE_HOST_INTERRUPTED".to_owned())?
 }
 
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn mobile_sync_auth(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, MobileState>,
+    request: notesagent_host::mobile_sync_commands::Request,
+) -> Result<notesagent_host::mobile_sync_commands::Response, String> {
+    mobile_sync_commands::request(window, state, request).await
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn mobile_sync_auth(
+    window: tauri::WebviewWindow,
+    request: serde::de::IgnoredAny,
+) -> Result<(), String> {
+    main_window(&window)?;
+    let _ = request;
+    Err("SYNC_PLATFORM_UNSUPPORTED".into())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -117,6 +142,8 @@ pub fn run() {
             app.manage(MobileState {
                 engine: Arc::new(Mutex::new(None)),
                 private_root: app.path().app_data_dir()?,
+                #[cfg(target_os = "android")]
+                sync: mobile_sync_commands::Runtime::default(),
             });
             Ok(())
         })
@@ -124,6 +151,7 @@ pub fn run() {
             mobile_capabilities,
             mobile_vault,
             mobile_request,
+            mobile_sync_auth,
             mobile_files::mobile_save_export,
             mobile_files::mobile_export_delivery,
             mobile_files::mobile_open_external,

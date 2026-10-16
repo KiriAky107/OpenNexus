@@ -3,5 +3,5 @@
   "identifier": "mobile",
   "description": "The local mobile window may use the narrow note/draft API for its private Vault. Remote pages have no access.",
   "windows": ["main"],
-  "permissions": ["core:default", "allow-mobile-capabilities", "allow-mobile-vault", "allow-mobile-request", "allow-mobile-save-export", "allow-mobile-export-delivery", "allow-mobile-open-external", "allow-mobile-background", "allow-mobile-appearance"]
+  "permissions": ["core:default", "allow-mobile-capabilities", "allow-mobile-vault", "allow-mobile-request", "allow-mobile-sync-auth", "allow-mobile-save-export", "allow-mobile-export-delivery", "allow-mobile-open-external", "allow-mobile-background", "allow-mobile-appearance"]
 }
