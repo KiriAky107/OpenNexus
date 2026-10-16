@@ -399,7 +399,9 @@ public final class RuntimeProbe extends Instrumentation {
         if (photoPicker(picker)) {
             activate(waitNode(node -> photoPicker(node) && (label(node,"More",false) || label(node,"More options",false)),
                 "observed Photo Picker overflow"));
-            activate(waitNode(node -> photoPicker(node) && label(node,"Browse",true),"Photo Picker Browse documents action"));
+            activate(waitNode(node -> photoPicker(node)
+                && (label(node,"Browse",false) || label(node,"Browse…",false)),
+                "observed Photo Picker Browse… documents action"));
         }
         // Select the owned original through the actual provider, never inject
         // a URI, index user media, or grant broad media/storage permissions.
