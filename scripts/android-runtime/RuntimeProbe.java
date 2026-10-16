@@ -390,13 +390,27 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void chooseOriginalImage() {
-        // Wry uses FileChooserParams.createIntent(); select the owned original in
-        // Android's real DocumentsUI instead of injecting a URI into the WebView.
+        // API36 routes image GET_CONTENT through the real Photo Picker first.
+        // The owned screenshot/AX tree identifies com.google.android.photopicker
+        // and its More action. Android CTS also uses overflow -> Browse to reach
+        // DocumentsUI: platform/cts commit afa92427, PhotoPickerUiUtils.java.
+        AccessibilityNodeInfo picker=waitNode(node -> documentsUi(node) || photoPicker(node), "system image or document picker");
+        if (photoPicker(picker)) {
+            activate(waitNode(node -> photoPicker(node) && (label(node,"More",false) || label(node,"More options",false)),
+                "observed Photo Picker overflow"));
+            activate(waitNode(node -> photoPicker(node) && label(node,"Browse",true),"Photo Picker Browse documents action"));
+        }
+        // Select the owned original through the actual provider, never inject
+        // a URI, index user media, or grant broad media/storage permissions.
         waitNode(this::documentsUi, "system document picker");
         activate(waitNode(node -> documentsUi(node) && label(node, "Show roots", false), "system picker roots"));
         activate(waitNode(node -> documentsUi(node) && label(node, "Downloads", false), "owned Downloads location"));
         activate(waitNode(node -> documentsUi(node) && label(node, "opennexus-ci-original.png", false), "owned original PNG"));
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Back", false), "return from original system picker");
+    }
+
+    private boolean photoPicker(AccessibilityNodeInfo node) {
+        return "com.google.android.photopicker".equals(string(node.getPackageName()));
     }
 
     private boolean fileDrawerRow(AccessibilityNodeInfo node) {

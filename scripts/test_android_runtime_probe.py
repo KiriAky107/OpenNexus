@@ -15,6 +15,12 @@ from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAG
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_attachment_scope_does_not_repeat_the_fixed_apks_keystore_cases(self):
+        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope='attachments')
+        probe.binding={'native_tests':{'expected_tests':5}};probe.device=Mock();probe.shell=Mock()
+        probe.native_keystore_tests()
+        probe.device.assert_not_called();probe.shell.assert_not_called()
+
     def test_auth_read_acceptance_requires_the_original_empty_index_and_cannot_claim_https(self):
         for rows in (0,1):
             with self.subTest(rows=rows), tempfile.TemporaryDirectory() as directory:
