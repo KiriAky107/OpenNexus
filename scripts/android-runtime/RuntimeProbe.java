@@ -6,6 +6,7 @@ import android.app.UiAutomation;
 import android.graphics.Rect;
 import android.graphics.Bitmap;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.SystemClock;
 import android.util.Log;
 import android.view.InputDevice;
@@ -331,6 +332,9 @@ public final class RuntimeProbe extends Instrumentation {
 
     private List<AccessibilityNodeInfo> nodes() {
         List<AccessibilityNodeInfo> found = new ArrayList<>();
+        // WebView may otherwise return the pre-dialog virtual-node snapshot.
+        // This clears only the test client's accessibility cache, not app data.
+        if (Build.VERSION.SDK_INT >= 34) ui.clearCache();
         AccessibilityNodeInfo root = ui.getRootInActiveWindow();
         if (root != null) found.add(root);
         for (int index = 0; index < found.size() && found.size() < 3000; index++) {
