@@ -391,8 +391,9 @@ public final class RuntimeProbe extends Instrumentation {
 
     private void chooseOriginalImage() {
         // API36 routes image GET_CONTENT through the real Photo Picker first.
-        // The owned screenshot/AX tree identifies com.google.android.photopicker
-        // and its More action. Android CTS also uses overflow -> Browse to reach
+        // Owned screenshots/AX trees identify both the standalone photopicker
+        // and providers.media.module variants and their More action. Android
+        // CTS also uses overflow -> Browse to reach
         // DocumentsUI: platform/cts commit afa92427, PhotoPickerUiUtils.java.
         AccessibilityNodeInfo picker=waitNode(node -> documentsUi(node) || photoPicker(node), "system image or document picker");
         if (photoPicker(picker)) {
@@ -410,7 +411,9 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private boolean photoPicker(AccessibilityNodeInfo node) {
-        return "com.google.android.photopicker".equals(string(node.getPackageName()));
+        String name=string(node.getPackageName());
+        return "com.google.android.photopicker".equals(name)
+            || "com.google.android.providers.media.module".equals(name);
     }
 
     private boolean fileDrawerRow(AccessibilityNodeInfo node) {
