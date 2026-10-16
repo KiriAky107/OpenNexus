@@ -1,0 +1,32 @@
+/* Each swatch depicts the offered theme, independently of the active page theme.
+   Desktop and phone use these same sample tokens; card controls use page tokens. */
+.theme-preview[data-theme-preview='light'] {
+  --color-preview-background: #fff;
+  --color-preview-border: #ddd;
+  --color-preview-node: #dfe3eb;
+  --color-preview-surface: #f4f5f7;
+}
+.theme-preview[data-theme-preview='dark'] {
+  --color-preview-background: #0d1117;
+  --color-preview-border: #30363d;
+  --color-preview-node: #30363d;
+  --color-preview-surface: #161b22;
+}
+.theme-preview[data-theme-preview='sepia'] {
+  --color-preview-background: #fbf3df;
+  --color-preview-border: #ddcfad;
+  --color-preview-node: #d8c69c;
+  --color-preview-surface: #f4e8ca;
+}
+.theme-preview[data-theme-preview='paper'] {
+  --color-preview-background: #fffdf5;
+  --color-preview-border: #8b7865;
+  --color-preview-node: #efd8d0;
+  --color-preview-node-secondary: #d8e7e8;
+  --color-preview-node-tertiary: #f6e9b8;
+  --color-preview-surface: #fffef8;
+  --color-preview-rule: #dce4db;
+  --color-preview-rule-border: #b5a693;
+  --color-preview-stack-back: #d8e6e2;
+  --color-preview-stack-front: #f0d8cf;
+}

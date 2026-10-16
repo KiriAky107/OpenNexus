@@ -33,7 +33,7 @@ it.each([false, true])('fills an incomplete custom theme with the complete seman
 it('keeps page and component styles on semantic colors', () => {
   const rawColors: string[] = []
   for (const [path, source] of Object.entries(files)) {
-    if (!path.endsWith('.vue') || path.endsWith('.spec.ts') || path.includes('features/themes/ThemesView.vue') || path.includes('features\\themes\\ThemesView.vue')) continue
+    if (!path.endsWith('.vue') || path.endsWith('.spec.ts')) continue
     for (const match of source.matchAll(/(?:#[\da-f]{3,8}|rgba?\([^)]*\))/gi)) rawColors.push(`${path}: ${match[0]}`)
   }
   expect(rawColors).toEqual([])
