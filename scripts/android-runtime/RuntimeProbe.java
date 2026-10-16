@@ -348,7 +348,37 @@ public final class RuntimeProbe extends Instrumentation {
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Back", false), "return from original system picker");
     }
 
-    private void open(String path) { clickTitleBar("Files"); click(path, true); waitLabel("Back"); }
+    private boolean fileDrawerRow(AccessibilityNodeInfo node) {
+        if (!APP.equals(string(node.getPackageName())) || !node.isClickable()
+            || !"android.widget.Button".equals(string(node.getClassName()))) return false;
+        // The landing page may expose a recent-note button with the same name
+        // while the drawer is loading. Only the actual Files/New note/Close
+        // header identifies the shared file tree; never tap a covered card.
+        for (int depth = 0; node != null && depth < 8; depth++, node = node.getParent()) {
+            for (int child = 0; child < node.getChildCount(); child++) {
+                AccessibilityNodeInfo header = node.getChild(child);
+                if (header == null || header.getChildCount() > 4) continue;
+                boolean files = false, create = false, close = false;
+                for (int item = 0; item < header.getChildCount(); item++) {
+                    AccessibilityNodeInfo control = header.getChild(item);
+                    if (control == null || !APP.equals(string(control.getPackageName()))) continue;
+                    files |= label(control, "Files", false) && !control.isClickable();
+                    create |= label(control, "New note", false) && control.isClickable();
+                    close |= label(control, "Close", false) && control.isClickable();
+                }
+                if (files && create && close) return true;
+            }
+        }
+        return false;
+    }
+
+    private void open(String path) {
+        clickTitleBar("Files");
+        AccessibilityNodeInfo row = waitNode(node -> label(node, path, false)
+            && node.isEnabled() && fileDrawerRow(node), "file drawer row: " + path);
+        activate(row, this::fileDrawerRow);
+        waitLabel("Back");
+    }
     private void save() { hideKeyboard(); click("Save", false); waitLabel("Saved"); }
     private void waitLabel(String text) { waitNode(node -> label(node, text, false), "label: " + text); }
     private void click(String text, boolean prefix) {
