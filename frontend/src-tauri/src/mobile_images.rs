@@ -6,6 +6,12 @@ const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 const MAX_ENCODED_BYTES: usize = MAX_IMAGE_BYTES.div_ceil(3) * 4;
 const COLUMNS: &str = "operation_id,draft_id,path,generation,asset_path,reference,hash,size,content_before,content_after,state,error";
 
+#[derive(Clone, Copy)]
+enum ImagePlacement {
+    Markdown { from: usize, to: usize },
+    Canvas { x: i64, y: i64 },
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImageIntent {
     pub operation_id: String,
@@ -120,12 +126,53 @@ impl DraftStore {
         to: usize,
         content_base64: &str,
     ) -> Result<ImageIntent> {
+        self.prepare_image_at(
+            ws,
+            draft_id,
+            edit_session,
+            generation,
+            ImagePlacement::Markdown { from, to },
+            content_base64,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_canvas_image(
+        &self,
+        ws: &Workspace,
+        draft_id: &str,
+        edit_session: &str,
+        generation: i64,
+        x: i64,
+        y: i64,
+        content_base64: &str,
+    ) -> Result<ImageIntent> {
+        self.prepare_image_at(
+            ws,
+            draft_id,
+            edit_session,
+            generation,
+            ImagePlacement::Canvas { x, y },
+            content_base64,
+        )
+    }
+
+    fn prepare_image_at(
+        &self,
+        ws: &Workspace,
+        draft_id: &str,
+        edit_session: &str,
+        generation: i64,
+        placement: ImagePlacement,
+        content_base64: &str,
+    ) -> Result<ImageIntent> {
         if content_base64.len() > MAX_ENCODED_BYTES {
             return Err(HostError::new("MOBILE_IMAGE_TOO_LARGE"));
         }
         let draft = self.get(draft_id)?;
-        if crate::canvas_contract::is_canvas(&draft.path) {
-            // Canvas assets need a frozen node update, never Markdown syntax inserted into JSON.
+        if crate::canvas_contract::is_canvas(&draft.path)
+            != matches!(placement, ImagePlacement::Canvas { .. })
+        {
             return Err(HostError::new("MOBILE_IMAGE_TARGET_UNSUPPORTED"));
         }
         let bytes = STANDARD
@@ -154,28 +201,58 @@ impl DraftStore {
         Self::validate_path(ws, &draft.path)?;
         let hash = hash(&bytes);
         let asset_path = format!("attachments/{}/{}.{}", &hash[..2], hash, extension);
-        let reference = format!(
-            "{}{}",
-            "../".repeat(draft.path.split('/').count() - 1),
-            asset_path
-        );
-        let (start, end) = (
-            byte_position(&draft.content, from)?,
-            byte_position(&draft.content, to)?,
-        );
-        if start > end {
-            return Err(HostError::new("MOBILE_SELECTION_INVALID"));
-        }
-        let after = format!(
-            "{}![]({}){}",
-            &draft.content[..start],
-            reference,
-            &draft.content[end..]
-        );
-        if after.len() > MAX_NOTE_BYTES || generation == i64::MAX {
+        let pending = self.pending_image(draft_id)?;
+        let id = pending
+            .as_ref()
+            .map(|intent| intent.operation_id.clone())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let (reference, after) = match placement {
+            ImagePlacement::Markdown { from, to } => {
+                let reference = format!(
+                    "{}{}",
+                    "../".repeat(draft.path.split('/').count() - 1),
+                    asset_path
+                );
+                let (start, end) = (
+                    byte_position(&draft.content, from)?,
+                    byte_position(&draft.content, to)?,
+                );
+                if start > end {
+                    return Err(HostError::new("MOBILE_SELECTION_INVALID"));
+                }
+                let after = format!(
+                    "{}![]({}){}",
+                    &draft.content[..start],
+                    reference,
+                    &draft.content[end..]
+                );
+                (reference, after)
+            }
+            ImagePlacement::Canvas { x, y } => {
+                crate::canvas_contract::validate(draft.content.as_bytes())?;
+                let mut document: serde_json::Value = serde_json::from_str(&draft.content)
+                    .map_err(|_| HostError::new("CANVAS_INVALID"))?;
+                let object = document
+                    .as_object_mut()
+                    .ok_or_else(|| HostError::new("CANVAS_INVALID"))?;
+                let nodes = object
+                    .entry("nodes")
+                    .or_insert_with(|| serde_json::json!([]))
+                    .as_array_mut()
+                    .ok_or_else(|| HostError::new("CANVAS_INVALID"))?;
+                nodes.push(serde_json::json!({"id":format!("image-{id}"),"type":"file","x":x,"y":y,"width":320,"height":240,"file":asset_path}));
+                let after = serde_json::to_string_pretty(&document)
+                    .map_err(|_| HostError::new("HOST_SERIALIZE_FAILED"))?
+                    + "\n";
+                crate::canvas_contract::validate(after.as_bytes())?;
+                (asset_path.clone(), after)
+            }
+        };
+        super::draft_content_bound(&draft.path, &after)?;
+        if generation == i64::MAX {
             return Err(HostError::new("MOBILE_DRAFT_INVALID"));
         }
-        if let Some(pending) = self.pending_image(draft_id)? {
+        if let Some(pending) = pending {
             if pending.generation == generation
                 && pending.hash == hash
                 && pending.content_after == after
@@ -184,7 +261,6 @@ impl DraftStore {
             }
             return Err(HostError::new("PENDING_IMAGE_REQUIRES_REVIEW"));
         }
-        let id = Uuid::new_v4().to_string();
         self.db.execute(
             "INSERT INTO image_intents VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'prepared',NULL,?11)",
             params![
@@ -224,6 +300,10 @@ impl DraftStore {
             || draft.path != intent.path
         {
             return Err(HostError::new("DRAFT_GENERATION_CONFLICT"));
+        }
+        super::draft_content_bound(&intent.path, &intent.content_after)?;
+        if crate::canvas_contract::is_canvas(&intent.path) {
+            crate::canvas_contract::validate(intent.content_after.as_bytes())?;
         }
         let bytes: Vec<u8> = self.db.query_row(
             "SELECT bytes FROM image_intents WHERE operation_id=?1",

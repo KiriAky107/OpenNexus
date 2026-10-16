@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 pub type MobileResponse = Value;
 
 #[cfg(test)]
+#[path = "mobile_canvas_image_tests.rs"]
+mod canvas_image_tests;
+#[cfg(test)]
 #[path = "mobile_canvas_tests.rs"]
 mod canvas_tests;
 
@@ -99,6 +102,14 @@ pub enum MobileRequest {
         generation: i64,
         from: usize,
         to: usize,
+        content_base64: String,
+    },
+    PrepareCanvasImage {
+        draft_id: String,
+        edit_session: String,
+        generation: i64,
+        x: i64,
+        y: i64,
         content_base64: String,
     },
     ObserveImage {
@@ -403,6 +414,22 @@ impl MobileWorkspace {
                 self.drafts
                     .cancel_mutation(&self.workspace, &operation_id)?,
             ),
+            PrepareCanvasImage {
+                draft_id,
+                edit_session,
+                generation,
+                x,
+                y,
+                content_base64,
+            } => value(self.drafts.prepare_canvas_image(
+                &self.workspace,
+                &draft_id,
+                &edit_session,
+                generation,
+                x,
+                y,
+                &content_base64,
+            )?),
             PrepareImage {
                 draft_id,
                 edit_session,
