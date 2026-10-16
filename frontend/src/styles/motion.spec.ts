@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const globalStyles = [
+  new URL('./theme-tokens.css', import.meta.url),
   new URL('./tokens.css', import.meta.url),
   new URL('./features.css', import.meta.url),
 ].map((path) => readFileSync(path, 'utf8')).join('\n')
