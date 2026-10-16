@@ -177,6 +177,9 @@ jobs:
           run-id: ${{ env.APK_BUILD_RUN_ID }}
           github-token: ${{ github.token }}
           path: .build/android-runtime/package
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
       - name: Prepare an exclusive hosted emulator
         shell: bash
         run: |

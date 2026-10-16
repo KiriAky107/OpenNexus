@@ -15,6 +15,81 @@ from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAG
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_private_read_keeps_binary_bytes_and_remote_errors_distinct(self):
+        probe = Probe.__new__(Probe); probe.adb = Path('/owned/adb'); probe.args = SimpleNamespace(serial='emulator-5562')
+        raw = b'\x00original\r\n\r\n\xff'
+        replies = [subprocess.CompletedProcess([], 0, raw, b''),
+            subprocess.CompletedProcess([], 1, b'', b'No such file'),
+            subprocess.CompletedProcess([], 1, b'', b'No such file')]
+        with patch('android_runtime_probe.subprocess.run', side_effect=replies) as run:
+            self.assertEqual(probe.private('./owned/vault/original.png').stdout, raw)
+            self.assertEqual(probe.private('./owned/missing-wal', check=False).returncode, 1)
+            with self.assertRaisesRegex(RuntimeError, 'Command failed'):
+                probe.private('./owned/missing')
+        self.assertEqual(run.call_args_list[0].args[0],
+            [str(Path('/owned/adb')), '-s', 'emulator-5562', 'shell', '-T',
+                'run-as ' + APP + ' cat ./owned/vault/original.png'])
+
+    def test_failed_editor_capture_keeps_empty_original_and_dirty_draft_without_replaying_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe = Probe.__new__(Probe); probe.output = Path(directory); probe.root = './owned/'
+            probe.args = SimpleNamespace(serial='emulator-5562'); calls = []
+            probe.wait_owned_connection = lambda: calls.append('revalidate owned AVD')
+            probe.force_stop = lambda: calls.append('stop own package')
+            def private(path):
+                if path == './owned/vault/runtime-rich.md': return subprocess.CompletedProcess([], 0, b'', b'')
+                raise RuntimeError('Synthetic target does not exist')
+            probe.private = private
+            probe.draft_rows = lambda: [('runtime-rich.md', 'original\r\n\n草稿 😀\n', 2, 1)]
+            with patch('android_runtime_probe.require_hosted_emulator'):
+                probe.capture_failed_editor_state('rich-markdown')
+            report = json.loads((probe.output/'rich-markdown-failed-native-state.json').read_text('utf-8'))
+            self.assertEqual(calls, ['revalidate owned AVD', 'stop own package'])
+            self.assertEqual((probe.output/'original-observations/001/runtime-rich.md').read_bytes(), b'')
+            self.assertEqual(report['originals']['runtime-rich.md'], {'size': 0, 'sha256': digest(b'')})
+            self.assertEqual(report['draft_rows'][0][1], 'original\r\n\n草稿 😀\n')
+
+    def test_failed_capture_rejects_foreign_origin_before_reading_or_stopping_anything(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe = Probe.__new__(Probe); probe.output = Path(directory)
+            probe.args = SimpleNamespace(serial='unowned-phone')
+            probe.wait_owned_connection = lambda: self.fail('Foreign target must not be observed')
+            probe.force_stop = lambda: self.fail('Foreign target must not be stopped')
+            with patch('android_runtime_probe.require_hosted_emulator', side_effect=RuntimeError('Not owned')):
+                probe.capture_failed_editor_state('owned-phase')
+            report = json.loads((probe.output/'owned-phase-failed-native-state.json').read_text('utf-8'))
+            self.assertEqual(report['observation_error'], 'RuntimeError')
+            self.assertEqual(report['originals'], {})
+
+    def test_style_observation_refuses_ambiguous_app_process_before_forwarding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562')
+            probe.wait_owned_connection=lambda:None
+            probe.shell=lambda *args:subprocess.CompletedProcess([],0,b'1234 5678\n',b'')
+            probe.device=lambda *args,**kwargs:self.fail('Ambiguous app must not be forwarded')
+            with patch('android_runtime_probe.require_hosted_emulator'):probe.read_native_styles('owned')
+            report=json.loads((probe.output/'owned-computed-styles.json').read_text())
+            self.assertFalse(report['available']);self.assertNotIn('styles',report)
+
+    def test_style_observation_rejects_foreign_websocket_and_removes_only_own_forward(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562')
+            probe.wait_owned_connection=lambda:None
+            probe.shell=lambda *args:subprocess.CompletedProcess([],0,b'1234\n',b'')
+            calls=[]
+            def device(*args,**kwargs):
+                calls.append(args)
+                return subprocess.CompletedProcess([],0,b'45678\n' if args[1]=='tcp:0' else b'',b'')
+            probe.device=device;probe.command=lambda *args,**kwargs:self.fail('Foreign endpoint must never reach Node')
+            pages=[{'type':'page','title':'OpenNexus','webSocketDebuggerUrl':'ws://unrelated.example:45678/devtools/page/owned'}]
+            response=SimpleNamespace(status=200,read=lambda limit:json.dumps(pages).encode())
+            connection=SimpleNamespace(request=lambda *args:None,getresponse=lambda:response,close=lambda:None)
+            with patch('android_runtime_probe.require_hosted_emulator'),patch('android_runtime_probe.http.client.HTTPConnection',return_value=connection):
+                probe.read_native_styles('owned')
+            report=json.loads((probe.output/'owned-computed-styles.json').read_text())
+            self.assertFalse(report['available']);self.assertTrue(report['own_forward_removed'])
+            self.assertEqual(calls,[('forward','tcp:0','localabstract:webview_devtools_remote_1234'),('forward','--remove','tcp:45678')])
+
     def test_original_observations_retain_each_exact_read_before_any_later_assertion(self):
         with tempfile.TemporaryDirectory() as directory:
             probe = Probe.__new__(Probe); probe.output = Path(directory); probe.root = './owned/'
@@ -127,6 +202,23 @@ class RuntimeBoundaries(unittest.TestCase):
             with patch('android_runtime_probe.require_hosted_emulator'),patch.dict(os.environ,{'GITHUB_RUN_ID':'73','GITHUB_RUN_ATTEMPT':'1'}):
                 with self.assertRaisesRegex(RuntimeError,'ownership mismatch'):probe.verify_installed(path)
             self.assertEqual([call[0] for call in calls],['get-state','emu'])
+
+    def test_theme_diagnostic_capture_keeps_the_actual_selected_card_screenshot(self):
+        png = b'\x89PNG\r\n\x1a\nowned screenshot'
+        for phase, choice in [('theme-diagnostic-dark', 'Dark'), ('theme-diagnostic-reset', 'System')]:
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                probe = Probe.__new__(Probe); probe.output = Path(directory); calls = []
+                def device(*args, **kwargs):
+                    calls.append(args)
+                    data = b'<?xml version="1.0"?><hierarchy />' if args[0:2] == ('exec-out', 'cat') else png
+                    return subprocess.CompletedProcess([], 0, data, b'')
+                probe.device = device
+                probe.shell = lambda *args, **kwargs: subprocess.CompletedProcess([], 0, b'owned window', b'')
+                probe.capture(phase)
+                self.assertEqual((probe.output / f'{phase}.png').read_bytes(), png)
+                self.assertEqual((probe.output / f'theme-cards-{choice}.png').read_bytes(), png)
+                self.assertIn(('exec-out', 'run-as', DRIVER, 'cat', f'files/theme-cards-{choice}.png'), calls)
+                self.assertEqual((probe.output / f'{phase}-window.txt').read_bytes(), b'owned window')
 
     def test_test_ime_rejects_unknown_original_selection_before_any_setting_change(self):
         probe=Probe.__new__(Probe);probe.args=SimpleNamespace(serial='emulator-5562')

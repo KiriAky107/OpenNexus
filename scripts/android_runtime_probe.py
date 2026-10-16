@@ -21,6 +21,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from urllib.parse import urlsplit
 
 APP = 'cc.kronecker.opennexus.dev'
 DRIVER = 'cc.kronecker.opennexus.testdriver'
@@ -139,7 +140,9 @@ class Probe:
 
     def private(self, path, *, check=True):
         require(path and '..' not in path.split('/') and not path.startswith('/'), 'Unsafe private test path')
-        return self.device('exec-out', 'run-as', APP, 'cat', path, check=check)
+        # Shell-v2 without a PTY preserves binary bytes and the remote exit code.
+        # exec-out can report success while mixing a failing cat's error into stdout.
+        return self.device('shell', '-T', shlex.join(('run-as', APP, 'cat', path)), check=check)
 
     def force_stop(self):
         self.shell('am', 'force-stop', APP)
@@ -306,7 +309,10 @@ class Probe:
             (self.output / f'{phase}.xml').write_bytes(tree)
         if phase.startswith('theme-'):
             (self.output / f'{phase}-window.txt').write_bytes(self.shell('dumpsys', 'window', 'windows', check=False).stdout)
-            selected = {'theme-dark': 'Dark', 'theme-light': 'Light', 'theme-sepia': 'Sepia', 'theme-system': 'System'}[phase]
+            selected = {'theme-dark': 'Dark', 'theme-light': 'Light', 'theme-sepia': 'Sepia',
+                'theme-system': 'System', 'theme-diagnostic-dark': 'Dark', 'theme-diagnostic-reset': 'System'}.get(phase)
+            if selected is None:
+                return
             filename = f'theme-cards-{selected}.png'
             popup = self.device('exec-out', 'run-as', DRIVER, 'cat', 'files/' + filename, check=False).stdout
             if popup.startswith(b'\x89PNG\r\n\x1a\n'):
@@ -320,14 +326,74 @@ class Probe:
         text = result.stdout.decode('utf-8', 'replace')
         (self.output / f'{phase}.log').write_text(text, 'utf-8')
         self.capture(phase)
-        require(f'OPENNEXUS_RUNTIME_PHASE_OK {phase}' in text and 'OPENNEXUS_RUNTIME_FAILED' not in text,
+        passed = f'OPENNEXUS_RUNTIME_PHASE_OK {phase}' in text and 'OPENNEXUS_RUNTIME_FAILED' not in text
+        if not passed and self.root is not None:
+            self.capture_failed_editor_state(phase)
+        require(passed,
             f'Actual Android UI phase failed: {phase}; see preserved UI log and screenshot')
         self.phases.append({'phase': phase, 'duration_ms': round((time.monotonic() - start) * 1000), 'passed': True})
+        if phase == 'theme-diagnostic-dark':
+            self.read_native_styles(phase)
         self.force_stop()
         if self.root is None and not phase.startswith('theme-'):
             paths = self.shell('run-as', APP, 'find', '.', '-name', 'mobile-drafts.sqlite3', '-type', 'f').stdout.decode().splitlines()
             require(len(paths) == 1, 'Native draft database origin is ambiguous')
             self.root = paths[0].removesuffix('mobile-drafts.sqlite3')
+
+    def capture_failed_editor_state(self, phase):
+        report = {'scope': 'Owned hosted fixture after failed phase and force-stop; no UI action or write replay',
+            'originals': {}, 'phase': phase}
+        try:
+            require_hosted_emulator(self.args.serial)
+            self.wait_owned_connection()
+            self.force_stop()
+            # These are exclusively the probe's own synthetic targets. Do not
+            # enumerate arbitrary files or read native credential/config stores.
+            for name in ('runtime-note.md', 'runtime-rich.md', 'runtime.canvas',
+                    'runtime-back.md', 'runtime-image.md', 'runtime-rich-image.md', 'runtime-image.canvas'):
+                try:
+                    value = self.original(name)
+                    report['originals'][name] = {'size': len(value), 'sha256': digest(value)}
+                except Exception as error:
+                    report['originals'][name] = {'unavailable': type(error).__name__}
+            report['draft_rows'] = self.draft_rows()
+        except Exception as error:
+            report['observation_error'] = type(error).__name__
+        (self.output / f'{phase}-failed-native-state.json').write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + '\n', 'utf-8')
+
+    def read_native_styles(self, phase):
+        require_hosted_emulator(self.args.serial)
+        self.wait_owned_connection()
+        port = None
+        report = {'scope': 'read-only owned debug WebView, no DOM/credential/file mutation'}
+        try:
+            process = self.shell('pidof', APP).stdout.decode().strip()
+            require(re.fullmatch(r'[1-9][0-9]{0,9}', process), 'Owned app process is ambiguous')
+            port = self.device('forward', 'tcp:0', 'localabstract:webview_devtools_remote_' + process).stdout.decode().strip()
+            require(re.fullmatch(r'[0-9]{4,5}', port) and 1024 <= int(port) <= 65535, 'Unexpected owned forwarding port')
+            connection = http.client.HTTPConnection('127.0.0.1', int(port), timeout=10)
+            try:
+                connection.request('GET', '/json/list')
+                response = connection.getresponse(); data = response.read(1024*1024+1)
+                require(response.status == 200 and len(data) <= 1024*1024, 'Cannot inspect owned WebView metadata')
+                pages = [item for item in json.loads(data) if item.get('type') == 'page' and item.get('title') == 'OpenNexus']
+            finally:
+                connection.close()
+            require(len(pages) == 1, 'Owned WebView page is ambiguous')
+            socket = urlsplit(pages[0]['webSocketDebuggerUrl'])
+            require(socket.scheme == 'ws' and socket.hostname in ('127.0.0.1', 'localhost') and socket.port == int(port)
+                and re.fullmatch(r'/devtools/page/[A-Za-z0-9_-]+', socket.path) and not socket.query and not socket.fragment,
+                'Refusing an unrelated page endpoint')
+            script = Path(__file__).resolve().parent/'android-runtime/read_webview_styles.mjs'
+            observed = self.command(['node', script, 'ws://127.0.0.1:' + port + socket.path], timeout=20)
+            report.update(available=True, styles=json.loads(observed.stdout))
+        except Exception as error:
+            report.update(available=False, failure=type(error).__name__, reason=str(error)[:400])
+        finally:
+            if port and re.fullmatch(r'[0-9]{4,5}', port):
+                report['own_forward_removed'] = self.device('forward', '--remove', 'tcp:' + port, check=False).returncode == 0
+            (self.output/(phase+'-computed-styles.json')).write_text(json.dumps(report,indent=2)+'\n','utf-8')
 
     def original(self, name):
         require(name and not name.startswith('/') and '\\' not in name and ':' not in name
@@ -418,6 +484,9 @@ class Probe:
         if self.args.scope == 'all':
             for theme in ('dark', 'light', 'sepia', 'system'):
                 self.phase('theme-' + theme)
+        else:
+            self.phase('theme-diagnostic-dark')
+            self.phase('theme-diagnostic-reset')
         self.enable_test_ime()
         self.phase('markdown')
         require(self.original('runtime-note.md') == BODY.encode(), 'Saved Markdown bytes differ from actual UI text')
@@ -476,7 +545,9 @@ class Probe:
             'signer_certificate_sha256': self.binding['signer_certificate_sha256'],
             'device': {'kind': 'github-hosted-android-emulator', 'api': 36, 'abi': 'x86_64', 'serial': self.args.serial},
             'phases': self.phases, 'files_sha256': {name: digest(data) for name, data in originals.items()},
-            'scope': self.args.scope, 'theme_ui_verified': self.args.scope == 'all',
+            'scope': self.args.scope, 'theme_choices_verified': self.args.scope == 'all',
+            'native_theme_contrast_verified': False,
+            'theme_style_diagnostic': 'theme-diagnostic-dark-computed-styles.json' if self.args.scope == 'lifecycle' else None,
             'theme_ui': 'Actual shared desktop theme card choices and cold reloads; rendered card screenshots/window observations retained for appearance review' if self.args.scope == 'all' else 'Not repeated in lifecycle scope; theme acceptance requires independent same-APK evidence',
             'system_destination': export, 'draft_database_integrity': 'ok',
             'input_method': 'Real Android InputMethodService/InputConnection for source/rich body text, pinyin, Chinese composing text and candidate confirmation; accessibility only for ordinary path/property fields. Test-only IME, not Gboard/Sogou or physical-device proof.',
