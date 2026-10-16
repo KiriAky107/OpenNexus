@@ -423,7 +423,15 @@ public final class RuntimeProbe extends Instrumentation {
         waitNode(node -> APP.equals(string(node.getPackageName())) && !node.isClickable()
             && label(node, name, false) && titleBarControl(node), "opened document title in the owned workspace: " + name);
     }
-    private void save() { hideKeyboard(); click("Save", false); waitLabel("Saved"); }
+    private void save() {
+        // Save is in the visible editor toolbar. Injecting Back to hide an
+        // input window that is already closing can instead leave the editor,
+        // especially after unmounting the Canvas property field. Tap the
+        // freshly observed real action; do not navigate as a side effect.
+        progress.append("save: actual visible toolbar action, no Back injection\n");
+        click("Save", false);
+        waitLabel("Saved");
+    }
     private void waitNotesLanding() {
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Start writing", false),
             "owned notes landing heading (not the drafts tab New note action)");
