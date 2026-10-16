@@ -46,6 +46,24 @@ def digest(value):
     return hashlib.sha256(value).hexdigest()
 
 
+def validate_tablet_layout(report, portrait):
+    require(report.get('available') is True, 'Actual tablet WebView geometry was not observed')
+    layout = report.get('styles', {}).get('layout', {})
+    expected = 800 if portrait else 1280
+    require(abs(layout.get('width', 0) - expected) <= 2 and layout.get('compact') is portrait,
+        'Tablet width did not select the actual drawer/column layout')
+    require(0 < layout.get('rootScrollWidth', 0) <= layout.get('rootWidth', 0) + 1,
+        'Actual tablet root overflows horizontally')
+    toolbar, editor, main, files = [layout.get(name) or {} for name in ('toolbar', 'editor', 'main', 'files')]
+    require(toolbar.get('visible') is True and editor.get('visible') is True and main.get('visible') is True,
+        'Actual tablet editor or expanded formatting panel is missing')
+    require(0 <= toolbar.get('left', -1) and toolbar.get('right', expected+10) <= expected + 1
+        and 0 < toolbar.get('width', 0) <= 641 and toolbar.get('clientWidth', 0) + 1 >= toolbar.get('scrollWidth', 1)
+        and layout.get('floating', {}).get('position') == 'absolute', 'Tablet floating formatting leaves its visible bounds')
+    require(files.get('visible') is (not portrait), 'Tablet file drawer/column visibility differs from its actual width')
+    return layout
+
+
 def validate_binding(bundle, commit):
     proof = json.loads((bundle / 'package-verification.json').read_text('utf-8'))
     source = json.loads((bundle / 'source-provenance.json').read_text('utf-8'))
@@ -359,10 +377,17 @@ class Probe:
             if popup.startswith(b'\x89PNG\r\n\x1a\n'):
                 (self.output / filename).write_bytes(popup)
 
-    def phase(self, phase):
-        self.force_stop()
+    def phase(self, phase, *, continue_process=False, keep_running=False):
+        if not continue_process:
+            self.force_stop()
         start = time.monotonic()
-        self.shell('am', 'start', '-W', '-n', self.activity)
+        if not continue_process:
+            self.shell('am', 'start', '-W', '-n', self.activity)
+        else:
+            require_hosted_emulator(self.args.serial)
+            self.wait_owned_connection()
+            require(re.fullmatch(rb'[1-9][0-9]{0,9}', self.shell('pidof', APP).stdout.strip()),
+                'Tablet rotation requires the same single owned app process')
         self.native_tls_startup(phase)
         result = self.shell('am', 'instrument', '-w', '-e', 'phase', phase, f'{DRIVER}/.RuntimeProbe', timeout=180)
         text = result.stdout.decode('utf-8', 'replace')
@@ -374,9 +399,10 @@ class Probe:
         require(passed,
             f'Actual Android UI phase failed: {phase}; see preserved UI log and screenshot')
         self.phases.append({'phase': phase, 'duration_ms': round((time.monotonic() - start) * 1000), 'passed': True})
-        if phase == 'theme-diagnostic-dark':
+        if phase == 'theme-diagnostic-dark' or phase.startswith('tablet-'):
             self.read_native_styles(phase)
-        self.force_stop()
+        if not keep_running:
+            self.force_stop()
         if self.root is None and not phase.startswith('theme-'):
             paths = self.shell('run-as', APP, 'find', '.', '-name', 'mobile-drafts.sqlite3', '-type', 'f').stdout.decode().splitlines()
             require(len(paths) == 1, 'Native draft database origin is ambiguous')
@@ -538,8 +564,66 @@ class Probe:
         (self.output / 'system-saved-content.zip').write_bytes(actual)
         return {key: delivery[key] for key in ('ticket', 'delivery_id', 'state', 'sha256', 'size', 'verified_at')}
 
+    def tablet_display(self, width, height):
+        require_hosted_emulator(self.args.serial)
+        self.wait_owned_connection()
+        require((width, height) in ((1600, 2400), (2560, 1600)), 'Unexpected tablet display mode')
+        if not getattr(self, 'tablet_display_owned', False):
+            size = self.shell('wm', 'size').stdout.decode()
+            density = self.shell('wm', 'density').stdout.decode()
+            require(re.fullmatch(r'Physical size: [1-9][0-9]*x[1-9][0-9]*\s*', size)
+                and re.fullmatch(r'Physical density: [1-9][0-9]*\s*', density), 'Refusing to replace pre-existing display overrides')
+            (self.output / 'tablet-original-display.json').write_text(json.dumps({'size':size, 'density':density}), 'utf-8')
+            self.tablet_display_owned = True  # Also restore a partially accepted setting.
+        self.shell('wm', 'size', f'{width}x{height}')
+        self.shell('wm', 'density', '320')
+
+    def restore_tablet_display(self):
+        if not getattr(self, 'tablet_display_owned', False):
+            return
+        require_hosted_emulator(self.args.serial)
+        self.wait_owned_connection()
+        self.shell('wm', 'size', 'reset')
+        self.shell('wm', 'density', 'reset')
+        require(b'Override' not in self.shell('wm', 'size').stdout + self.shell('wm', 'density').stdout,
+            'Owned tablet display overrides were not restored')
+        self.tablet_display_owned = False
+
+    def run_tablet(self):
+        self.enable_test_ime()
+        self.phase('rich-markdown')  # One new synthetic seed on this fresh owned installation.
+        original = self.original('runtime-rich.md')
+        require(original == ('**' + RICH_TEXT + '**\n').encode(), 'Actual tablet seed differs from selected rich Markdown')
+        rows = self.draft_rows()
+        layouts = {}
+        try:
+            self.tablet_display(1600, 2400)
+            self.phase('tablet-portrait', keep_running=True)
+            portrait_pid = self.shell('pidof', APP).stdout.strip()
+            layouts['portrait'] = validate_tablet_layout(json.loads((self.output/'tablet-portrait-computed-styles.json').read_text('utf-8')), True)
+            self.tablet_display(2560, 1600)
+            self.phase('tablet-landscape', continue_process=True, keep_running=True)
+            require(self.shell('pidof', APP).stdout.strip() == portrait_pid, 'Tablet rotation restarted the process')
+            layouts['landscape'] = validate_tablet_layout(json.loads((self.output/'tablet-landscape-computed-styles.json').read_text('utf-8')), False)
+            self.force_stop()
+            require(self.original('runtime-rich.md') == original and self.draft_rows() == rows,
+                'Read-only tablet layout/rotation changed the original file or draft')
+        finally:
+            self.restore_tablet_display()
+        proof = {'source_commit':self.args.commit,'runtime_tools_commit':self.args.tools_commit,'compiled_from':self.args.build_origin,
+            'apk_sha256':self.binding['sha256'],'signer_certificate_sha256':self.binding['signer_certificate_sha256'],
+            'passed':True,'scope':'Owned API36 emulator display widths800/1280 and same-process configuration change; not a physical tablet',
+            'layouts':layouts,'original_sha256':digest(original),'original_bytes':len(original),'draft_unchanged':True,
+            'synthetic_seed_written_once':True,'read_only_after_seed':True,'same_process_pid':int(portrait_pid),
+            'owned_display_restored':True,'physical_tablet_verified':False,'physical_phone_verified':False,'published':False}
+        (self.output/'tablet-layout-proof.json').write_text(json.dumps(proof,ensure_ascii=False,indent=2)+'\n','utf-8')
+        print(json.dumps(proof,ensure_ascii=False,indent=2))
+
     def run(self):
         self.boot()
+        if self.args.scope == 'tablet':
+            self.run_tablet()
+            return
         if self.args.scope == 'all':
             for theme in ('dark', 'light', 'sepia', 'system'):
                 self.phase('theme-' + theme)
@@ -632,7 +716,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:

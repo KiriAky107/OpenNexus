@@ -79,6 +79,21 @@ public final class RuntimeProbe extends Instrumentation {
                     open("runtime-rich.md");
                     require(string(noteBody().getText()).contains(RICH_TEXT), "Original rich Markdown missing after cold launch");
                     break;
+                case "tablet-portrait":
+                    open("runtime-rich.md");
+                    click("Writing", false);
+                    require(string(richBody().getText()).contains(RICH_TEXT), "Original rich body missing at portrait tablet width");
+                    click("Format", false);
+                    waitLabel("Markdown formatting toolbar");
+                    settleUi();
+                    break;
+                case "tablet-landscape":
+                    // Same process, editor and expanded formatting panel after
+                    // a real owned display configuration change; no text input.
+                    require(string(richBody().getText()).contains(RICH_TEXT), "Rotation lost the original rich document");
+                    waitLabel("Markdown formatting toolbar");
+                    settleUi();
+                    break;
                 case "rich-image":
                     create("New note", "runtime-rich-image.md");
                     click("Writing", false);

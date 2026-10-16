@@ -11,10 +11,53 @@ import zlib
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAGE_BYTES, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job
+from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAGE_BYTES, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job, validate_tablet_layout
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_tablet_geometry_requires_actual_viewport_columns_and_bounded_floating_panel(self):
+        layout={'width':800,'compact':True,'rootWidth':800,'rootScrollWidth':800,
+            'toolbar':{'visible':True,'left':148,'right':788,'width':640,'clientWidth':638,'scrollWidth':638},
+            'editor':{'visible':True},'main':{'visible':True},'files':{'visible':False},'floating':{'position':'absolute'}}
+        report={'available':True,'styles':{'layout':layout}}
+        self.assertEqual(validate_tablet_layout(report,True),layout)
+        for invalid in [dict(layout,width=390),dict(layout,compact=False),dict(layout,rootScrollWidth=801.5),
+                dict(layout,files={'visible':True}),dict(layout,toolbar={**layout['toolbar'],'right':810}),
+                dict(layout,toolbar={**layout['toolbar'],'scrollWidth':690})]:
+            with self.assertRaises(RuntimeError):validate_tablet_layout({'available':True,'styles':{'layout':invalid}},True)
+        with self.assertRaisesRegex(Exception,'not observed'):validate_tablet_layout({'available':False},True)
+        landscape={**layout,'width':1280,'rootWidth':1280,'rootScrollWidth':1280,'compact':False,'files':{'visible':True}}
+        validate_tablet_layout({'available':True,'styles':{'layout':landscape}},False)
+
+    def test_owned_tablet_display_is_verified_before_mutation_and_restored_after_partial_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562')
+            probe.wait_owned_connection=Mock()
+            probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b'Physical size: 1080x2400\n'),
+                subprocess.CompletedProcess([],0,b'Physical density: 420\n'),RuntimeError('size mutation outcome unknown')])
+            with patch('android_runtime_probe.require_hosted_emulator'):
+                with self.assertRaisesRegex(Exception,'outcome unknown'):probe.tablet_display(1600,2400)
+                self.assertTrue(probe.tablet_display_owned)
+                probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b''),subprocess.CompletedProcess([],0,b''),
+                    subprocess.CompletedProcess([],0,b'Physical size: 1080x2400\n'),subprocess.CompletedProcess([],0,b'Physical density: 420\n')])
+                probe.restore_tablet_display()
+                self.assertEqual(probe.shell.call_args_list[0].args,('wm','size','reset'))
+                self.assertEqual(probe.shell.call_args_list[1].args,('wm','density','reset'))
+                self.assertFalse(probe.tablet_display_owned)
+                probe.shell.reset_mock();probe.restore_tablet_display();probe.shell.assert_not_called()
+
+    def test_tablet_display_refuses_existing_overrides_or_foreign_host_before_writes(self):
+        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(serial='emulator-5562');probe.wait_owned_connection=Mock()
+        with patch('android_runtime_probe.require_hosted_emulator',side_effect=RuntimeError('foreign host')):
+            probe.shell=Mock()
+            with self.assertRaisesRegex(Exception,'foreign host'):probe.tablet_display(1600,2400)
+            probe.shell.assert_not_called()
+        with patch('android_runtime_probe.require_hosted_emulator'):
+            probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b'Physical size: 1080x2400\nOverride size: 600x800\n'),
+                subprocess.CompletedProcess([],0,b'Physical density: 420\n')])
+            with self.assertRaisesRegex(Exception,'pre-existing display overrides'):probe.tablet_display(1600,2400)
+            self.assertEqual(probe.shell.call_count,2);self.assertFalse(getattr(probe,'tablet_display_owned',False))
+
     def test_real_keystore_runner_keeps_output_and_never_replaces_existing_test_data(self):
         with tempfile.TemporaryDirectory() as directory:
             probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562',bundle=Path('/owned/bundle'))

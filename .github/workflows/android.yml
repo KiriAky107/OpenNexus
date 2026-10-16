@@ -54,9 +54,9 @@ on:
         type: string
         required: false
       runtime_scope:
-        description: 'all checks, or lifecycle only when reusing an independently theme-checked APK'
+        description: 'all checks, or lifecycle/tablet on an existing fixed APK without rebuilding'
         type: choice
-        options: [all, lifecycle]
+        options: [all, lifecycle, tablet]
         default: all
         required: false
 
@@ -166,8 +166,8 @@ jobs:
           import os,re
           run,commit=os.environ['REUSE_RUN'],os.environ['REUSE_COMMIT']
           scope=os.environ['RUNTIME_SCOPE']
-          assert scope in ('all','lifecycle')
-          assert scope=='all' or bool(run), 'Lifecycle scope requires a fixed existing APK; it is not full theme acceptance'
+          assert scope in ('all','lifecycle','tablet')
+          assert scope=='all' or bool(run), 'Partial scope requires a fixed existing APK; it is not full acceptance'
           assert bool(run)==bool(commit), 'Supply both immutable APK reuse fields together'
           if run:
             assert re.fullmatch(r'[1-9][0-9]{0,17}',run) and re.fullmatch(r'[0-9a-f]{40}',commit), 'Invalid fixed APK selection'
