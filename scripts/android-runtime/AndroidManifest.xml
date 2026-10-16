@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="cc.kronecker.opennexus.testdriver">
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="36" />
+    <queries><package android:name="cc.kronecker.opennexus.dev" /></queries>
+    <application android:label="OpenNexus CI driver" android:allowBackup="false" android:debuggable="true" />
+    <instrumentation android:name="cc.kronecker.opennexus.testdriver.RuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
+</manifest>
