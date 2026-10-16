@@ -6,6 +6,7 @@ import android.app.UiAutomation;
 import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.SystemClock;
+import android.util.Log;
 import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.KeyEvent;
@@ -26,6 +27,8 @@ public final class RuntimeProbe extends Instrumentation {
     private static final String BACK_DRAFT = "# 系统返回键草稿 😀\nBack keeps the native draft before leaving.\n";
     private Bundle arguments;
     private UiAutomation ui;
+    private final StringBuilder progress = new StringBuilder();
+    private String waitingFor = "initialization";
 
     @Override public void onCreate(Bundle args) { super.onCreate(args); arguments = args; start(); }
 
@@ -103,11 +106,12 @@ public final class RuntimeProbe extends Instrumentation {
                     break;
                 default: throw new IllegalStateException("Unknown runtime phase: " + phase);
             }
-            result.putString("stream", "OPENNEXUS_RUNTIME_PHASE_OK " + phase + "\n");
+            result.putString("stream", progress + "OPENNEXUS_RUNTIME_PHASE_OK " + phase + "\n");
             result.putString("phase", phase);
             finish(0, result);
         } catch (Throwable error) {
-            result.putString("stream", "OPENNEXUS_RUNTIME_FAILED " + error + "\n" + tree());
+            result.putString("stream", progress + "OPENNEXUS_RUNTIME_FAILED while " + waitingFor
+                + "\n" + Log.getStackTraceString(error) + "\n" + tree());
             finish(1, result);
         }
     }
@@ -115,15 +119,19 @@ public final class RuntimeProbe extends Instrumentation {
     private void create(String button, String path) {
         click(button, false);
         waitLabel("Create and edit");
-        setText(waitNode(node -> node.isEditable() && node.isFocused()), path);
+        setText(waitNode(node -> node.isEditable() && node.isFocused(), "focused note path"), path);
         click("Create and edit", false);
         waitLabel("Back");
     }
 
     private void open(String path) { click(path, true); waitLabel("Back"); }
     private void save() { click("Save", false); waitLabel("Saved"); }
-    private void waitLabel(String text) { waitNode(node -> label(node, text, false)); }
-    private void click(String text, boolean prefix) { activate(waitNode(node -> label(node, text, prefix) && node.isEnabled())); }
+    private void waitLabel(String text) { waitNode(node -> label(node, text, false), "label: " + text); }
+    private void click(String text, boolean prefix) {
+        AccessibilityNodeInfo node = waitNode(value -> label(value, text, prefix) && value.isEnabled(), "enabled action: " + text);
+        progress.append("tap: ").append(text).append('\n');
+        activate(node);
+    }
     private static String string(CharSequence value) { return value == null ? "" : value.toString(); }
     private static boolean label(AccessibilityNodeInfo node, String text, boolean prefix) {
         String actual = string(node.getText()), description = string(node.getContentDescription());
@@ -132,10 +140,11 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private AccessibilityNodeInfo editable(String original) {
-        return waitNode(node -> node.isEditable() && (original == null || string(node.getText()).equals(original)));
+        return waitNode(node -> node.isEditable() && (original == null || string(node.getText()).equals(original)), "editable text");
     }
 
     private void setText(AccessibilityNodeInfo node, String value) {
+        progress.append("set text: ").append(value.length()).append(" UTF-16 units\n");
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
         Bundle text = new Bundle();
         text.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
@@ -144,11 +153,10 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void activate(AccessibilityNodeInfo node) {
-        AccessibilityNodeInfo clickable = node;
-        for (int depth = 0; depth < 5 && clickable != null && !clickable.isClickable(); depth++) clickable = clickable.getParent();
-        if (clickable != null && clickable.isEnabled() && clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return;
+        // WebView accepting ACTION_CLICK does not prove that a user tap reached its handler.
+        // Send exactly one real tap to the freshly observed target; never replay a write.
         Rect bounds = new Rect(); node.getBoundsInScreen(bounds);
-        require(!bounds.isEmpty(), "UI target has no visible bounds");
+        require(node.isVisibleToUser() && node.isEnabled() && !bounds.isEmpty(), "UI target has no visible enabled bounds");
         long time = SystemClock.uptimeMillis();
         touch(time, time, MotionEvent.ACTION_DOWN, bounds.centerX(), bounds.centerY());
         SystemClock.sleep(60);
@@ -194,6 +202,12 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private AccessibilityNodeInfo waitNode(Predicate<AccessibilityNodeInfo> predicate) {
+        return waitNode(predicate, "observed UI state");
+    }
+
+    private AccessibilityNodeInfo waitNode(Predicate<AccessibilityNodeInfo> predicate, String description) {
+        waitingFor = description;
+        progress.append("wait: ").append(description).append('\n');
         long until = SystemClock.uptimeMillis() + 25_000;
         do {
             for (AccessibilityNodeInfo node : nodes()) if (node.isVisibleToUser() && predicate.test(node)) return node;
