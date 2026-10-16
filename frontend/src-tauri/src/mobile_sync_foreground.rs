@@ -155,31 +155,36 @@ impl WorkspaceAccess for ScopedWorkspace {
         &self,
         action: impl FnOnce(&mut crate::workspace::Workspace) -> crate::workspace::Result<T>,
     ) -> Result<T> {
+        // The workspace may be busy saving an editor draft or importing an
+        // attachment. Never retain a lifecycle read guard while waiting for
+        // that mutex: Activity.onStop must be able to invalidate this lease.
+        let mut guard = self
+            .engine
+            .lock()
+            .map_err(|_| SyncError::new("HOST_BUSY"))?;
         self.lease.with_current(|| {
-            self.engine.access(|ws| {
-                if let Some(device) = &self.device {
-                    if let Some(binding) = ws.sync_binding()? {
-                        if binding.endpoint != device.scope().endpoint()
-                            || binding.account != device.scope().account()
-                        {
-                            return Err(crate::workspace::HostError::new(
-                                "SYNC_AUTH_IDENTITY_CHANGED",
-                            ));
-                        }
+            let engine = guard
+                .as_mut()
+                .ok_or_else(|| SyncError::new("MOBILE_STORAGE_UNAVAILABLE"))?;
+            let ws = &mut engine.workspace;
+            if let Some(device) = &self.device {
+                if let Some(binding) = ws.sync_binding()? {
+                    if binding.endpoint != device.scope().endpoint()
+                        || binding.account != device.scope().account()
+                    {
+                        return Err(SyncError::new("SYNC_AUTH_IDENTITY_CHANGED"));
                     }
                 }
-                action(ws)
-            })
+            }
+            action(ws).map_err(Into::into)
         })
     }
     fn start_attempt(&self, job: &crate::sync_state::Job) -> Result<()> {
-        self.lease.with_current(|| {
-            let device = self
-                .device
-                .as_ref()
-                .ok_or_else(|| SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"))?;
-            self.engine
-                .access(|ws| ws.mobile_sync_attempt_start(job, device.scope(), device.device()))
+        self.access(|ws| {
+            let device = self.device.as_ref().ok_or_else(|| {
+                crate::workspace::HostError::new("SYNC_AUTH_RECONCILIATION_REQUIRED")
+            })?;
+            ws.mobile_sync_attempt_start(job, device.scope(), device.device())
         })
     }
     fn interrupt_attempt(&self, job: &crate::sync_state::Job) -> Result<()> {
@@ -198,6 +203,38 @@ mod tests {
         time::Duration,
     };
     use tokio::sync::oneshot;
+
+    #[test]
+    fn busy_editor_workspace_does_not_block_native_stop_and_stale_access_is_refused() {
+        let foreground = Foreground::default();
+        foreground.on_start();
+        let engine = Arc::new(Mutex::new(None));
+        let port = foreground.lease().unwrap().workspace(engine.clone());
+        let editor = engine.lock().unwrap();
+        let (entered, ready) = std::sync::mpsc::channel();
+        let pending = std::thread::spawn(move || {
+            entered.send(()).unwrap();
+            port.access::<()>(|_| panic!("Backgrounded access entered the owned workspace"))
+        });
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        // Allow the worker to enter its contended mutex wait. The stopped
+        // Activity itself never waits for the editor to finish that work.
+        std::thread::sleep(Duration::from_millis(50));
+        let native = foreground.clone();
+        let (stopped, notice) = std::sync::mpsc::channel();
+        let activity = std::thread::spawn(move || {
+            native.on_stop();
+            stopped.send(()).unwrap();
+        });
+        let returned = notice.recv_timeout(Duration::from_secs(2)).is_ok();
+        // Release before asserting, including the failure path, so an older
+        // lock order produces a bounded failure rather than hanging the run.
+        drop(editor);
+        activity.join().unwrap();
+        let error = pending.join().unwrap().unwrap_err();
+        assert!(returned, "Activity.onStop waited for the editor workspace");
+        assert_eq!(error.code, "SYNC_FOREGROUND_CHANGED");
+    }
 
     #[test]
     fn native_background_and_resume_never_reactivate_an_old_lease() {
