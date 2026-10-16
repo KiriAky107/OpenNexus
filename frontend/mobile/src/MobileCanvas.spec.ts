@@ -104,7 +104,7 @@ it('accepts only the frozen original image result and keeps one undo back to exa
 it('keeps a partially typed URL visible, blocks completion and cannot clear its warning by editing another field', async () => {
   const wrapper = setup(); await button(wrapper, 'URL').trigger('click')
   await wrapper.get('.canvas-dialog input').setValue('https://example.org/'); await wrapper.get('.canvas-dialog form').trigger('submit')
-  const inputs = wrapper.findAll<HTMLInputElement>('.canvas-properties input'), url = inputs[0]!, label = inputs[1]!
+  const url=wrapper.get<HTMLTextAreaElement>('.canvas-properties textarea'),label=wrapper.get<HTMLInputElement>('.canvas-properties input:not([type=number])')
   await url.setValue('h')
   expect(url.element.value).toBe('h')
   await label.setValue('kept label')
@@ -119,11 +119,11 @@ it('keeps a partially typed URL visible, blocks completion and cannot clear its 
 it('keeps an unapplied URL when keyboard selection targets another node', async () => {
   const wrapper = setup(); await button(wrapper, 'URL').trigger('click')
   await wrapper.get('.canvas-dialog input').setValue('https://example.org/'); await wrapper.get('.canvas-dialog form').trigger('submit')
-  const url = wrapper.get<HTMLInputElement>('.canvas-properties input'); await url.setValue('h')
+  const url = wrapper.get<HTMLTextAreaElement>('.canvas-properties textarea'); await url.setValue('h')
   await wrapper.get('[data-node="a"]').trigger('keydown.enter')
-  expect(wrapper.get<HTMLInputElement>('.canvas-properties input').element.value).toBe('h')
+  expect(wrapper.get<HTMLTextAreaElement>('.canvas-properties textarea').element.value).toBe('h')
   expect(wrapper.emitted('validation')!.at(-1)).toEqual([true])
-  expect(wrapper.get('.canvas-properties').text()).toContain('Web address')
+  expect(wrapper.get('.canvas-properties').text()).toContain('URL')
   wrapper.unmount()
 })
 

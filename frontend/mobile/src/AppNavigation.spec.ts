@@ -108,7 +108,7 @@ it('retains an unfinished Canvas property on Back and closes a valid property pa
   const wrapper = mount(App); await flushPromises(); await create(wrapper)
   await button(wrapper, 'URL').trigger('click'); await wrapper.get('.canvas-dialog input').setValue('https://example.org/')
   await wrapper.get('.canvas-dialog form').trigger('submit')
-  const url = wrapper.get<HTMLInputElement>('.canvas-properties input'); await url.setValue('h')
+  const url = wrapper.get<HTMLTextAreaElement>('.canvas-properties textarea'); await url.setValue('h')
   back(); await flushPromises()
   expect(url.element.value).toBe('h'); expect(wrapper.find('.canvas-properties').exists()).toBe(true)
   expect(host.mobileBackground).not.toHaveBeenCalled()
