@@ -3,14 +3,15 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { EditorView } from '@codemirror/view'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import App from './App.vue'
-import type { Draft, DraftView, MobileRequest, MutationIntent, NoteDocument, SaveIntent } from './types'
+import type { Draft, DraftView, ImageIntent, MobileRequest, MutationIntent, NoteDocument, SaveIntent } from './types'
 
 const host = vi.hoisted(() => ({ mobileCapabilities: vi.fn(), mobileVault: vi.fn(), mobileRequest: vi.fn() }))
 vi.mock('./native', () => host)
 let wrapper: VueWrapper | undefined
 let doc: NoteDocument, draft: Draft, pending: SaveIntent | null, mutation: MutationIntent | null, present: boolean
+let image: ImageIntent | null
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
-const snapshot = (): DraftView => clone({ draft, current: draft.file_id && present ? doc : null, current_error: null, pending_save: pending, pending_mutation: mutation?.state === 'prepared' ? mutation : null })
+const snapshot = (): DraftView => clone({ draft, current: draft.file_id && present ? doc : null, current_error: null, pending_save: pending, pending_mutation: mutation?.state === 'prepared' ? mutation : null, pending_image: image?.state === 'prepared' ? image : null })
 async function api(request: MobileRequest): Promise<unknown> {
   switch (request.kind) {
     case 'list_notes': return { items: present ? [clone(doc)] : [], total: present ? 1 : 0, directories: [], unsearched_large_notes: 0 }
@@ -38,6 +39,13 @@ async function api(request: MobileRequest): Promise<unknown> {
     case 'apply_mutation': mutation = { ...mutation!, state: 'committed' }; if (mutation.kind === 'delete') present = false; return clone(mutation)
     case 'cancel_mutation': mutation = { ...mutation!, state: 'cancelled' }; return clone(mutation)
     case 'discard_draft': return { discarded: true }
+    case 'prepare_image':
+      image = { operation_id: 'original-native-image', draft_id: draft.id, path: draft.path, generation: draft.generation,
+        asset_path: 'attachments/ab/abcd.png', reference: 'attachments/ab/abcd.png', hash: 'abcd', size: 4,
+        content_before: draft.content, content_after: draft.content.slice(0,request.from)+'![](attachments/ab/abcd.png)'+draft.content.slice(request.to),state:'prepared',error:null }
+      return clone(image)
+    case 'apply_image': image = { ...image!, state: 'committed' }; draft = { ...draft, content:image.content_after,generation:image.generation+1 }; return clone(image)
+    case 'observe_image': return clone(image)
     default: throw Error(`Unexpected native request: ${request.kind}`)
   }
 }
@@ -45,7 +53,7 @@ beforeEach(() => {
   localStorage.clear(); localStorage.setItem('opennexus.mobile.language', 'en'); vi.clearAllMocks()
   doc = { file_id: 'file-a', path: 'original.md', hash: 'a'.repeat(64), revision: 1, deleted: false, is_folder: false, content: 'original\r\n中文 😀' }
   draft = { id: 'draft-a', file_id: doc.file_id, path: doc.path, base_hash: doc.hash, generation: 0, saved_generation: 0, content: doc.content, edit_session: 'lease-a' }
-  pending = null; mutation = null; present = true
+  pending = null; mutation = null; image = null; present = true
   host.mobileCapabilities.mockResolvedValue({ protocol: 1, platform: 'android', workspace: true, notes: true, version: '0.1.0-dev1' })
   host.mobileVault.mockResolvedValue({ vault_id: 'owned-vault', note_count: 1 })
   host.mobileRequest.mockImplementation(api)
@@ -54,6 +62,22 @@ afterEach(() => { wrapper?.unmount(); wrapper = undefined })
 async function start() { wrapper = mount(App, { attachTo: document.body }); await flushPromises(); return wrapper }
 function button(label: string) { const found = wrapper!.findAll('button').find(b => b.text() === label); expect(found, label).toBeDefined(); return found! }
 async function open() { await wrapper!.get('[data-note-row]').trigger('click'); await flushPromises() }
+
+it('imports the selected original image into the real editor at its raw cursor and keeps undo', async () => {
+  await start(); await open()
+  const original = doc.content, view = EditorView.findFromDOM(wrapper!.get('.cm-editor').element as HTMLElement)!
+  view.dispatch({ selection: { anchor: view.state.doc.length } })
+  await wrapper!.get('.file-actions summary').trigger('click'); await button('Add image').trigger('click')
+  const input = wrapper!.get('input[type="file"]')
+  Object.defineProperty(input.element,'files',{ value:[new File([new Uint8Array([1,2,3,4])],'chosen.png',{ type:'image/png' })],configurable:true })
+  await input.trigger('change'); await flushPromises()
+  expect(host.mobileRequest.mock.calls.find(([r])=>r.kind==='prepare_image')?.[0]).toMatchObject({ from:original.length,to:original.length,content_base64:'AQIDBA==' })
+  expect(draft.content).toBe(original+'![](attachments/ab/abcd.png)');expect(doc.content).toBe(original)
+  expect(wrapper!.get('.save-status').text()).toBe('Draft kept on this device')
+  await button('Undo').trigger('click'); await flushPromises()
+  expect(wrapper!.emitted('error')).toBeUndefined()
+  expect(view.state.doc.toString()).toBe(original.replace(/\r\n/g,'\n'))
+})
 
 it('checks and discards only the local draft while leaving saved note bytes unchanged', async () => {
   await start(); await open()

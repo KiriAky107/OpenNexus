@@ -25,6 +25,8 @@ const en = {
   close: 'Close', open: 'Open', refresh: 'Refresh', retryDraft: 'Keep draft again', missing: 'The original note is no longer available; keep the draft as a new note.',
   storage: 'Notes and recovery drafts are stored in this app’s private storage.', skipped: 'Large notes were searched by name only.',
   reviewAgain: 'Read current content again', needsCheck: 'Save result needs checking', savedVersion: 'Saved version',
+  addImage: 'Add image', importingImage: 'Importing original image…', imagePending: 'Check the original image import before editing. Its exact reference and draft change are retained.',
+  preview: 'Read preview', editText: 'Edit Markdown', imageUnavailable: 'Image not loaded:', imageLimit: 'Preview limit: 32 images and 12 MiB. Other original images remain in the vault.', linkAddress: 'Original link address',
 }
 const zh: Record<keyof typeof en, string> = {
   language: '界面语言', ready: '本机知识库已打开', checking: '正在打开本机知识库…', retry: '重试',
@@ -47,6 +49,8 @@ const zh: Record<keyof typeof en, string> = {
   close: '关闭', open: '打开', refresh: '刷新', retryDraft: '重新保留草稿', missing: '原笔记已不可用，可以将草稿保留为新笔记。',
   storage: '笔记和恢复草稿保存在此应用的私有存储中。', skipped: '较大笔记仅搜索了名称。',
   reviewAgain: '重新读取当前正文', needsCheck: '保存结果待核对', savedVersion: '已保存版本',
+  addImage: '添加图片', importingImage: '正在导入原图片…', imagePending: '请先核对原图片导入。原引用和草稿变更已保留，核对后可继续编辑。',
+  preview: '阅读预览', editText: '编辑 Markdown', imageUnavailable: '图片未加载：', imageLimit: '本次预览上限为 32 张图片、12 MiB；其余原图仍保留在知识库中。', linkAddress: '原链接地址',
 }
 export const text = (language: Language) => language === 'zh-CN' ? zh : en
 const errors: Record<string, [string, string]> = {
@@ -70,6 +74,11 @@ const errors: Record<string, [string, string]> = {
   MOBILE_DRAFT_INVALID: ['正文超过当前支持的 1 MiB 上限，或草稿版本无效。', 'The draft exceeds the current 1 MiB limit or its version is invalid.'],
   CORE_NOTE_TOO_LARGE: ['此笔记超过当前 1 MiB 的编辑上限。', 'This note exceeds the current 1 MiB editing limit.'],
   MOBILE_HOST_INTERRUPTED: ['尚未确认保存结果，请先核对原操作。', 'The save result is not confirmed. Check the original operation first.'],
+  MOBILE_IMAGE_TOO_LARGE: ['图片为空或超过 5 MiB 上限，请选择另一张图片。', 'The image is empty or exceeds 5 MiB. Choose another image.'],
+  WORKSPACE_IMAGE_UNSUPPORTED: ['请选择 PNG、JPEG、GIF 或 WebP 原图片。', 'Choose a PNG, JPEG, GIF or WebP image.'],
+  MOBILE_SELECTION_INVALID: ['选区已失效，请重新选择插入位置。', 'The selection is invalid. Choose the insertion point again.'],
+  MOBILE_EDITOR_CONTENT_CHANGED: ['正文状态已改变，未替换当前输入。请核对原操作或保留为新笔记。', 'The document state changed. Current input was kept. Check the original operation or keep a new note.'],
+  PENDING_IMAGE_REQUIRES_REVIEW: ['请先核对原图片导入，再决定是否按原内容重试。', 'Check the original image import before deciding whether to retry it.'],
 }
 export function errorText(code: string, language: Language) {
   return errors[code]?.[language === 'zh-CN' ? 0 : 1] ?? (language === 'zh-CN' ? '未能完成操作。请保留当前正文，再核对或重试。' : 'The action did not complete. Keep the current text, then check or retry.')

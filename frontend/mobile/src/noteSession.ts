@@ -1,6 +1,6 @@
 import { reactive } from 'vue'
 import { mobileRequest } from './native'
-import type { Draft, DraftView, NativeRequest, SaveIntent } from './types'
+import type { Draft, DraftView, ImageIntent, NativeRequest, SaveIntent } from './types'
 
 export function errorCode(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === 'string' ? error : 'MOBILE_OPERATION_FAILED'
@@ -135,6 +135,15 @@ export function createNoteSession(rpc: NativeRequest = mobileRequest) {
       catch (error) { fail(c, error); throw error }
     })
   }
+  async function acceptImage(intent: ImageIntent, updateEditor: () => boolean) {
+    const c = capture()
+    if (!c || c.id !== intent.draft_id || intent.state !== 'committed') throw new Error('MOBILE_EDITOR_CONTENT_CHANGED')
+    if (state.content !== intent.content_after || state.generation !== intent.generation + 1) {
+      if (state.content !== intent.content_before || state.generation !== intent.generation || !updateEditor()) throw new Error('MOBILE_EDITOR_CONTENT_CHANGED')
+    }
+    stopTimer()
+    await enqueue(() => refresh(c))
+  }
   async function original(action: 'apply_save' | 'cancel_save') {
     const c = capture(), id = state.pendingSave?.operation_id
     if (!c || !id || state.saving) return
@@ -186,7 +195,7 @@ export function createNoteSession(rpc: NativeRequest = mobileRequest) {
   }
   function dispose() { disposed = true; navigation++; epoch++; stopTimer() }
   return {
-    state, edit, flush, save, checkResult, close, closeAfterDiscard, copy, dispose, clearError, reportError,
+    state, edit, flush, save, checkResult, acceptImage, close, closeAfterDiscard, copy, dispose, clearError, reportError,
     openNote: (file_id: string) => open(() => rpc<DraftView>({ kind: 'open_note', file_id })),
     openDraft: (draft_id: string) => open(() => rpc<DraftView>({ kind: 'open_draft', draft_id })),
     create: (path: string) => open(() => rpc<DraftView>({ kind: 'create_draft', path })),

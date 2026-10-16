@@ -13,7 +13,7 @@ function mapEndings(value: readonly Ending[], changes: ChangeDesc): Ending[] {
 }
 
 /** Keep unchanged source bytes, including mixed line endings, outside CM's normalized text model. */
-export function mobileSourceText(raw: string): { doc: string; extension: Extension; read: (state: EditorState) => string } {
+export function mobileSourceText(raw: string): { doc: string; extension: Extension; read: (state: EditorState) => string; position: (state: EditorState, position: number) => number } {
   const preferred = (raw.match(/\r\n|\r|\n/)?.[0] ?? '\n') as Break
   const alternate: Ending[] = []
   let extra = 0
@@ -57,6 +57,12 @@ export function mobileSourceText(raw: string): { doc: string; extension: Extensi
   })
   return {
     doc: raw.replace(/\r\n|\r/g, '\n'), extension: [field, inversion],
+    position(state, position) {
+      if (position < 0 || position > state.doc.length) throw new Error('MOBILE_SELECTION_INVALID')
+      const format = state.field(field)
+      return state.doc.sliceString(0, position, format.preferred).length + format.alternate
+        .filter(mark => mark.pos < position).reduce((extra, mark) => extra + mark.ending.length - format.preferred.length, 0)
+    },
     read(state) {
       const format = state.field(field), parts: string[] = []
       let from = 0

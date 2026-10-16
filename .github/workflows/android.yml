@@ -64,7 +64,7 @@ jobs:
       - run: pnpm --dir frontend install --frozen-lockfile
       - name: Check mobile boundaries and packaging verification
         run: |
-          pnpm --dir frontend test mobile/src/native.spec.ts mobile/src/App.spec.ts
+          pnpm --dir frontend test mobile/src
           python3 -m unittest discover -s scripts -p test_verify_android_package.py -v
       - name: Freeze the checkout before compiling
         run: python3 scripts/record-build-source.py --commit "$GITHUB_SHA"

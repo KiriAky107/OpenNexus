@@ -2,13 +2,19 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import logo from '../../src/assets/opennexus-logo.svg'
 import MobileEditor from './MobileEditor.vue'
+import MobilePreview from './MobilePreview.vue'
 import { mobileCapabilities, mobileRequest, mobileVault } from './native'
 import { createNoteSession, errorCode } from './noteSession'
+import { createImageSession } from './imageSession'
 import { errorText, languageKey, savedLanguage, text, type Language } from './locale'
 import type { DraftSummary, Entry, MutationIntent, NoteDocument, NotePage, Page, PendingOperation, SaveIntent } from './types'
 
 const language = ref<Language>(savedLanguage()), copy = computed(() => text(language.value))
 const session = createNoteSession(), editor = ref<InstanceType<typeof MobileEditor>>()
+const images = createImageSession(session, () => editor.value), imageInput = ref<HTMLInputElement>()
+const preview = ref(false), fileActions = ref<HTMLDetailsElement>()
+const imageBlocked = computed(() => images.state.busy || Boolean(images.state.pending) || images.state.unknown)
+let imageSelection: { key: string; generation: number; from: number; to: number } | null = null
 const ready = ref(false), booting = ref(false), bootError = ref(''), version = ref('')
 const tab = ref<'notes' | 'drafts' | 'pending'>('notes'), query = ref(''), directory = ref(''), offset = ref(0)
 const notePage = ref<NotePage>({ items: [], total: 0, directories: [], unsearched_large_notes: 0 })
@@ -23,6 +29,7 @@ const status = computed(() => session.state.composing ? copy.value.input : sessi
 const total = computed(() => tab.value === 'notes' ? notePage.value.total : tab.value === 'drafts' ? draftPage.value.total : pendingPage.value.total)
 const current = computed(() => session.state.view?.current ?? null)
 const documentKey = () => session.state.view ? `${session.state.view.draft.id}:${session.state.view.draft.edit_session}` : ''
+watch(documentKey, () => { images.bind(); imageSelection = null; preview.value = false })
 const basename = (path: string) => path.split('/').at(-1) || path
 const parent = (path: string) => path.split('/').slice(0, -1).join('/')
 const displayError = (code: string) => errorText(code, language.value)
@@ -31,7 +38,8 @@ const number = (value: number) => new Intl.NumberFormat(language.value).format(v
 interface PathDialog { kind: 'path'; action: 'create' | 'copy' | 'rename'; path: string; doc: NoteDocument | null; busy: boolean; error: string }
 interface MutationDialog { kind: 'mutation'; intent: MutationIntent; doc: NoteDocument | null; busy: boolean; error: string }
 interface DiscardDialog { kind: 'discard'; id: string; edit_session: string; busy: boolean; error: string }
-const dialog = ref<PathDialog | MutationDialog | DiscardDialog | null>(null), pathInput = ref<HTMLInputElement>()
+interface LinkDialog { kind: 'link'; href: string; busy: boolean; error: string }
+const dialog = ref<PathDialog | MutationDialog | DiscardDialog | LinkDialog | null>(null), pathInput = ref<HTMLInputElement>()
 watch(language, value => { document.documentElement.lang = value; try { localStorage.setItem(languageKey, value) } catch { /* Session preference still works. */ } }, { immediate: true })
 
 async function load() {
@@ -67,6 +75,20 @@ function turnPage(delta: number) { inspectionRevision++; offset.value = Math.max
 async function runEditor(action: () => Promise<unknown>) { try { await action() } catch { /* The session owns and scopes its feedback. */ } }
 async function leave() { await runEditor(async () => { await session.close(); await load() }) }
 async function save() { await runEditor(async () => { await session.save(); await load() }) }
+function selectImage() {
+  const selection = editor.value?.selection()
+  if (!selection || imageBlocked.value || session.state.composing || session.state.pendingSave) return
+  imageSelection = { key: documentKey(), generation: session.state.generation, ...selection }
+  if (fileActions.value) fileActions.value.open = false
+  editor.value?.blur()
+  imageInput.value?.click()
+}
+function togglePreview() { if (fileActions.value) fileActions.value.open = false; preview.value = !preview.value; editor.value?.blur() }
+async function imageSelected(event: Event) {
+  const input = event.target as HTMLInputElement, file = input.files?.[0], selected = imageSelection
+  input.value = ''; imageSelection = null
+  if (file && selected) await images.importFile(file, { from: selected.from, to: selected.to }, selected.key, selected.generation)
+}
 function openNote(entry: Entry) { inspectionRevision++; notice.value = ''; void runEditor(() => session.openNote(entry.file_id)) }
 function openDraft(draft: DraftSummary) { inspectionRevision++; notice.value = ''; void runEditor(() => session.openDraft(draft.id)) }
 function openPath(action: 'create' | 'copy') {
@@ -162,8 +184,8 @@ async function inspect(operation: PendingOperation) {
   const active = () => !disposed && revision === inspectionRevision && key === documentKey()
   listError.value = ''
   try {
-    if (operation.kind === 'save') {
-      const result = await mobileRequest<SaveIntent>({ kind: 'observe_save', operation_id: operation.operation_id })
+    if (operation.kind === 'save' || operation.kind === 'image') {
+      const result = await mobileRequest<SaveIntent>({ kind: operation.kind === 'save' ? 'observe_save' : 'observe_image', operation_id: operation.operation_id })
       if (!active()) return
       if (result.state === 'committed') notice.value = copy.value.completed
       if (operation.draft_id) await session.openDraft(operation.draft_id)
@@ -200,14 +222,14 @@ async function discard() {
 }
 function pause() { if (document.visibilityState === 'hidden') void session.flush().catch(() => undefined) }
 onMounted(() => { void boot(); document.addEventListener('visibilitychange', pause) })
-onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspectionRevision++; document.removeEventListener('visibilitychange', pause); session.dispose() })
+onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspectionRevision++; document.removeEventListener('visibilitychange', pause); images.dispose(); session.dispose() })
 </script>
 
 <template>
   <div class="mobile-workspace" :class="{ editing: session.state.view }">
     <header class="workspace-header">
       <template v-if="session.state.view">
-        <button class="quiet" :disabled="session.state.saving || session.state.composing || actionBusy" @click="leave">{{ copy.back }}</button>
+        <button class="quiet" :disabled="session.state.saving || session.state.composing || actionBusy || imageBlocked" @click="leave">{{ copy.back }}</button>
         <div class="document-title" :title="session.state.view.draft.path">{{ basename(session.state.view.draft.path) }}</div>
       </template>
       <div v-else class="brand"><img :src="logo" alt="" /><strong>OpenNexus</strong></div>
@@ -224,17 +246,29 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
 
     <main v-else-if="session.state.view" class="editor-page" :aria-busy="session.state.loading">
       <nav class="editor-toolbar" :aria-label="copy.more">
-        <button :disabled="!dirty || session.state.saving || session.state.composing || Boolean(session.state.pendingSave) || session.state.unknownSave" @click="save">{{ session.state.saving ? copy.saving : copy.save }}</button>
-        <button class="quiet" :disabled="session.state.composing || Boolean(dialog)" @click="editor?.undo()">{{ copy.undo }}</button>
-        <button class="quiet" :disabled="session.state.composing || Boolean(dialog)" @click="editor?.redo()">{{ copy.redo }}</button>
-        <details class="file-actions"><summary>{{ copy.more }}</summary><div class="action-menu">
+        <button :disabled="!dirty || session.state.saving || session.state.composing || Boolean(session.state.pendingSave) || session.state.unknownSave || imageBlocked" @click="save">{{ session.state.saving ? copy.saving : copy.save }}</button>
+        <button class="quiet" :disabled="preview || session.state.composing || Boolean(dialog) || imageBlocked" @click="editor?.undo()">{{ copy.undo }}</button>
+        <button class="quiet" :disabled="preview || session.state.composing || Boolean(dialog) || imageBlocked" @click="editor?.redo()">{{ copy.redo }}</button>
+        <input ref="imageInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/gif,image/webp" :aria-label="copy.addImage" @change="imageSelected" />
+        <details ref="fileActions" class="file-actions"><summary>{{ copy.more }}</summary><div class="action-menu">
+          <button class="quiet" :disabled="session.state.composing" @click="togglePreview">{{ preview ? copy.editText : copy.preview }}</button>
+          <button class="quiet" :disabled="preview || session.state.composing || session.state.saving || Boolean(session.state.pendingSave) || imageBlocked" @click="selectImage">{{ copy.addImage }}</button>
           <button class="quiet" :disabled="session.state.composing" @click="openPath('copy')">{{ copy.copy }}</button>
-          <button class="quiet" :disabled="dirty || session.state.saving || actionBusy" @click="reviewFile('rename')">{{ copy.rename }}</button>
-          <button class="quiet danger" :disabled="dirty || session.state.saving || actionBusy" @click="reviewFile('delete')">{{ copy.delete }}</button>
+          <button class="quiet" :disabled="dirty || session.state.saving || actionBusy || imageBlocked" @click="reviewFile('rename')">{{ copy.rename }}</button>
+          <button class="quiet danger" :disabled="dirty || session.state.saving || actionBusy || imageBlocked" @click="reviewFile('delete')">{{ copy.delete }}</button>
           <button class="quiet" :disabled="session.state.saving || session.state.composing" @click="reviewDiscard">{{ copy.discard }}</button>
         </div></details>
       </nav>
       <p class="save-status" role="status">{{ status }}</p>
+      <section v-if="images.state.busy || images.state.error || images.state.pending || images.state.unknown" class="feedback" :aria-busy="images.state.busy">
+        <p v-if="images.state.busy" role="status">{{ copy.importingImage }}</p>
+        <p v-if="images.state.error" role="alert">{{ displayError(images.state.error) }} <small>{{ images.state.error }}</small></p>
+        <template v-if="images.state.pending || images.state.unknown">
+          <p>{{ copy.imagePending }}</p>
+          <details v-if="images.state.pending"><summary>{{ copy.details }}</summary><code>{{ images.state.pending.operation_id }}</code><p>{{ images.state.pending.reference }}</p><code>{{ images.state.pending.hash }}</code><pre>{{ images.state.pending.content_after }}</pre></details>
+          <div class="button-row"><button class="quiet" :disabled="images.state.busy" @click="images.check">{{ copy.check }}</button><button v-if="images.state.pending" :disabled="images.state.busy" @click="images.retry">{{ copy.retryOriginal }}</button><button v-if="images.state.pending" class="quiet" :disabled="images.state.busy" @click="images.cancel">{{ copy.cancelOriginal }}</button></div>
+        </template>
+      </section>
       <section v-if="session.state.error" class="feedback" role="alert">
         <p>{{ displayError(session.state.error) }}</p><small>{{ session.state.error }}</small>
         <div class="button-row"><button class="quiet" @click="runEditor(session.flush)">{{ copy.retryDraft }}</button><button class="quiet" @click="openPath('copy')">{{ copy.copy }}</button></div>
@@ -250,9 +284,11 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
       </section>
       <details v-if="session.state.error === 'REVISION_CONFLICT' && current" class="feedback"><summary>{{ copy.currentVersion }}</summary><pre>{{ current.content }}</pre><button class="quiet" @click="openPath('copy')">{{ copy.copy }}</button></details>
       <p v-if="session.state.view.current_error" class="feedback">{{ copy.missing }}</p>
-      <MobileEditor :key="documentKey()" ref="editor" :model-value="session.state.content" :label="copy.body" :language="language"
-        :read-only="Boolean(dialog) || actionBusy" @update:model-value="session.edit" @composition-start="session.compositionStart"
+      <MobileEditor v-show="!preview" :key="documentKey()" ref="editor" :model-value="session.state.content" :label="copy.body" :language="language"
+        :read-only="Boolean(dialog) || actionBusy || imageBlocked" @update:model-value="session.edit" @composition-start="session.compositionStart"
         @composition-end="session.compositionEnd" @error="session.reportError" />
+      <MobilePreview v-if="preview" :content="session.state.content" :path="session.state.view.draft.path" :label="copy.preview"
+        :image-unavailable="copy.imageUnavailable" :image-limit="copy.imageLimit" @link="href => dialog = { kind: 'link', href, busy: false, error: '' }" />
     </main>
 
     <main v-else class="notes-page">
@@ -305,6 +341,10 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
           <details v-if="dialog.doc"><summary>{{ copy.currentVersion }}</summary><pre>{{ dialog.doc.content }}</pre></details>
           <p v-if="dialog.error" role="alert">{{ displayError(dialog.error) }} <small>{{ dialog.error }}</small></p>
           <div class="button-row"><button class="quiet" :disabled="dialog.busy" @click="cancelDialog">{{ dialog.intent.state === 'committed' ? copy.close : copy.cancel }}</button><button class="quiet" :disabled="dialog.busy" @click="checkMutation">{{ copy.check }}</button><button v-if="dialog.intent.state === 'prepared'" :disabled="dialog.busy" @click="applyMutation">{{ copy.confirm }}</button></div>
+        </template>
+        <template v-else-if="dialog.kind === 'link'">
+          <h2 id="dialog-title">{{ copy.linkAddress }}</h2><pre>{{ dialog.href }}</pre>
+          <div class="button-row"><button class="quiet" @click="cancelDialog">{{ copy.close }}</button></div>
         </template>
         <template v-else>
           <h2 id="dialog-title">{{ copy.discardTitle }}</h2><p>{{ copy.discardHelp }}</p>

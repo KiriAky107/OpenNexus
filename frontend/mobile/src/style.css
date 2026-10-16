@@ -60,6 +60,11 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-heig
 .editor-toolbar > button:first-child { flex: 1; }
 .save-status { flex: none; color: #577263; font-size: 12px; margin: 10px 4px; }
 .mobile-editor { flex: 1; min-height: 120px; overflow: hidden; border: 1px solid #dce4dd; border-radius: 16px; background: #fff; }
+.mobile-preview { flex: 1; min-height: 120px; overflow: auto; padding: 18px 16px 70px; border: 1px solid #dce4dd; border-radius: 16px; background: #fff; line-height: 1.75; overflow-wrap: anywhere; }
+.mobile-preview img { display: block; max-width: 100%; height: auto; border-radius: 8px; margin: 12px 0; }
+.mobile-preview table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.mobile-preview th, .mobile-preview td { border: 1px solid #dce4dd; padding: 6px 10px; }
+.mobile-preview .image-placeholder { display: block; color: #62716a; font-size: 13px; }
 .file-actions { position: relative; flex: none; }
 .file-actions summary { cursor: pointer; list-style: none; display: flex; align-items: center; min-height: 48px; padding: 10px; font-size: 13px; color: #234d43; border: 1px solid #d6dfd7; border-radius: 14px; }
 .action-menu { position: absolute; right: 0; top: 54px; z-index: 5; min-width: 210px; display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid #d6dfd7; border-radius: 16px; background: #fff; box-shadow: 0 10px 35px #233b2930; }

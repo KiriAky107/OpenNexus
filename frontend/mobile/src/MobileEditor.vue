@@ -64,6 +64,16 @@ defineExpose({
   focus: () => view?.focus(),
   selectedText: () => view?.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to) ?? '',
   blur: () => view?.contentDOM.blur(),
+  selection: () => view ? { from: source.position(view.state, view.state.selection.main.from), to: source.position(view.state, view.state.selection.main.to) } : null,
+  acceptImage(before: string, after: string) {
+    if (!view || view.compositionStarted || source.read(view.state) !== before) return false
+    let from = 0, oldEnd = before.length, newEnd = after.length
+    while (from < oldEnd && from < newEnd && before[from] === after[from]) from++
+    while (oldEnd > from && newEnd > from && before[oldEnd-1] === after[newEnd-1]) { oldEnd--; newEnd-- }
+    const cmPosition = (raw: number) => before.slice(0, raw).replace(/\r\n|\r/g, '\n').length
+    view.dispatch({ changes: { from: cmPosition(from), to: cmPosition(oldEnd), insert: after.slice(from, newEnd) }, annotations: Transaction.userEvent.of('input.image') })
+    return source.read(view.state) === after
+  },
 })
 </script>
 

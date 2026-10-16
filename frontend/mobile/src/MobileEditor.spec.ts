@@ -41,3 +41,17 @@ it('blocks toolbar insertion in a readonly view and refuses foreign model replac
   expect(view.state.doc.toString()).toBe('keep my input')
   expect(wrapper.emitted('error')).toEqual([['MOBILE_EDITOR_CONTENT_CHANGED']])
 })
+
+it('maps a CRLF/emoji cursor into original UTF-16 bytes and undoes an acknowledged image insertion', async () => {
+  const original = '# 中文\r\n😀\nend'
+  wrapper = mount(MobileEditor, { props: { modelValue: original, label: 'Body', language: 'en', readOnly: true }, attachTo: document.body })
+  const view = EditorView.findFromDOM(wrapper.get('.cm-editor').element as HTMLElement)!
+  view.dispatch({ selection: { anchor: 7 } })
+  const exposed = wrapper.vm as unknown as { selection: () => { from: number; to: number }; acceptImage: (before: string, after: string) => boolean; undo: () => boolean }
+  expect(exposed.selection()).toEqual({ from: 8, to: 8 })
+  const after = original.slice(0, 8) + '![](../attachments/ab/image.png)' + original.slice(8)
+  expect(exposed.acceptImage(original, after)).toBe(true)
+  expect(wrapper.emitted('update:modelValue')!.at(-1)![0]).toBe(after)
+  await wrapper.setProps({ modelValue: after, readOnly: false }); expect(exposed.undo()).toBe(true)
+  expect(wrapper.emitted('update:modelValue')!.at(-1)![0]).toBe(original)
+})
