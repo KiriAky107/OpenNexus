@@ -30,28 +30,36 @@ export class CanvasModel {
   source:string
   private past:string[]=[]
   private future:string[]=[]
+  private batch:string|undefined
   constructor(source:string){this.source=source;this.document=parseCanvas(source)}
   get canUndo(){return!!this.past.length}get canRedo(){return!!this.future.length}
-  change(update:(document:CanvasDocument)=>void){
+  acceptSource(source:string){
+    const document=parseCanvas(source);if(source===this.source)return false
+    this.past.push(this.source);let size=this.past.reduce((total,item)=>total+item.length*2,0)
+    while(this.past.length>50||size>32*1024*1024&&this.past.length>1)size-=this.past.shift()!.length*2
+    this.batch=undefined;this.future=[];this.source=source;this.document=document;return true
+  }
+  change(update:(document:CanvasDocument)=>void,batch?:string){
     const document=clone(this.document);update(document)
     const source=JSON.stringify(document,null,2)+'\n';validateCanvasContent(source)
     if(JSON.stringify(document)===JSON.stringify(this.document))return false
-    this.past.push(this.source);let size=this.past.reduce((total,item)=>total+item.length*2,0)
+    if(!batch||batch!==this.batch)this.past.push(this.source)
+    this.batch=batch;let size=this.past.reduce((total,item)=>total+item.length*2,0)
     while(this.past.length>50||size>32*1024*1024&&this.past.length>1)size-=this.past.shift()!.length*2
     this.future=[];this.source=source;this.document=document;return true
   }
-  undo(){const source=this.past.pop();if(source===undefined)return false;this.future.push(this.source);this.source=source;this.document=parseCanvas(source);return true}
-  redo(){const source=this.future.pop();if(source===undefined)return false;this.past.push(this.source);this.source=source;this.document=parseCanvas(source);return true}
+  undo(){this.batch=undefined;const source=this.past.pop();if(source===undefined)return false;this.future.push(this.source);this.source=source;this.document=parseCanvas(source);return true}
+  redo(){this.batch=undefined;const source=this.future.pop();if(source===undefined)return false;this.past.push(this.source);this.source=source;this.document=parseCanvas(source);return true}
   add(type:CanvasNode['type'],x:number,y:number,value=''){
     const id=crypto.randomUUID(),node:CanvasNode={id,type,x:Math.round(x),y:Math.round(y),width:type==='group'?600:300,height:type==='group'?420:180}
     if(type==='text')node.text=value;if(type==='file')node.file=value;if(type==='link')node.url=value;if(type==='group')node.label=value
     this.change(document=>{if(type==='group')document.nodes.unshift(node);else document.nodes.push(node)});return id
   }
-  updateNode(id:string,fields:Partial<CanvasNode>){return this.change(document=>{const node=document.nodes.find(node=>node.id===id);if(node)Object.assign(node,fields,{id:node.id,type:node.type})})}
+  updateNode(id:string,fields:Partial<CanvasNode>,batch?:string){return this.change(document=>{const node=document.nodes.find(node=>node.id===id);if(node)Object.assign(node,fields,{id:node.id,type:node.type})},batch)}
   move(ids:string[],dx:number,dy:number){const set=new Set(movementIds(this.document.nodes,ids));return this.change(document=>document.nodes.forEach(node=>{if(set.has(node.id)){node.x+=Math.round(dx);node.y+=Math.round(dy)}}))}
   remove(ids:string[],edgeId?:string){const set=new Set(ids);return this.change(document=>{document.nodes=document.nodes.filter(node=>!set.has(node.id));document.edges=document.edges.filter(edge=>edge.id!==edgeId&&!set.has(edge.fromNode)&&!set.has(edge.toNode))})}
   connect(from:string,to:string,label=''){const id=crypto.randomUUID();this.change(document=>document.edges.push({id,fromNode:from,toNode:to,label}));return id}
-  updateEdge(id:string,fields:Partial<CanvasEdge>){return this.change(document=>{const edge=document.edges.find(edge=>edge.id===id);if(edge)Object.assign(edge,fields,{id:edge.id})})}
+  updateEdge(id:string,fields:Partial<CanvasEdge>,batch?:string){return this.change(document=>{const edge=document.edges.find(edge=>edge.id===id);if(edge)Object.assign(edge,fields,{id:edge.id})},batch)}
   copy(ids:string[]){const set=new Set(ids);return JSON.stringify({opennexus_canvas:1,nodes:this.document.nodes.filter(node=>set.has(node.id)),edges:this.document.edges.filter(edge=>set.has(edge.fromNode)&&set.has(edge.toNode))})}
   paste(source:string,dx=40,dy=40){
     const value=JSON.parse(source)

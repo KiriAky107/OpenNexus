@@ -2,6 +2,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, expect, it, vi } from 'vitest'
 import App from './App.vue'
+import MobileCanvas from './MobileCanvas.vue'
 
 const host = vi.hoisted(() => ({ mobileCapabilities: vi.fn(), mobileVault: vi.fn(), mobileRequest: vi.fn() }))
 vi.mock('./native', () => host)
@@ -28,5 +29,39 @@ it('changes interface language without rereading or changing the native vault', 
   expect(host.mobileCapabilities).toHaveBeenCalledTimes(1)
   expect(host.mobileVault).toHaveBeenCalledTimes(1)
   expect(host.mobileRequest).toHaveBeenCalledTimes(nativeReads)
+  wrapper.unmount()
+})
+
+it('creates a Canvas through its own native format route and opens free editing instead of Markdown', async () => {
+  const raw = '{\n  "nodes": [],\n  "edges": []\n}\n'
+  host.mobileRequest.mockImplementation(async request => {
+    if (request.kind === 'create_draft') return { draft: { id: 'canvas', file_id: null, path: request.path, base_hash: '', generation: 1, saved_generation: 0, content: raw, edit_session: 'canvas-lease' }, current: null, current_error: null, pending_save: null, pending_mutation: null }
+    return { items: [], total: 0, directories: [], unsearched_large_notes: 0 }
+  })
+  const wrapper = mount(App); await flushPromises()
+  await wrapper.findAll('button').find(item => item.text() === 'New canvas')!.trigger('click')
+  await wrapper.get('.mobile-dialog input').setValue('Canvas/ideas')
+  await wrapper.get('.mobile-dialog form').trigger('submit'); await flushPromises()
+  expect(host.mobileRequest).toHaveBeenCalledWith({ kind: 'create_draft', path: 'Canvas/ideas.canvas' })
+  expect(wrapper.find('.canvas-viewport').exists()).toBe(true); expect(wrapper.find('.cm-editor').exists()).toBe(false)
+  await wrapper.findAll('.canvas-toolbar button').find(item => item.text() === 'Text')!.trigger('click')
+  expect(wrapper.findAll('.canvas-node')).toHaveLength(1)
+  expect(wrapper.text()).toContain('New text')
+  wrapper.unmount()
+})
+
+it('resolves a Canvas file reference from the Vault root even when the Canvas is in a nested folder', async () => {
+  host.mobileRequest.mockImplementation(async request => {
+    if (request.kind === 'create_draft') return { draft: { id: 'nested', file_id: null, path: request.path, base_hash: '', generation: 1, saved_generation: 0, content: '{"nodes":[],"edges":[]}', edit_session: 'lease' }, current: null, current_error: null, pending_save: null, pending_mutation: null }
+    if (request.kind === 'read_path') return { file_id: 'target', path: 'Notes/original.md', content: 'original', hash: 'hash', revision: 1 }
+    if (request.kind === 'open_note') return { draft: { id: 'target-draft', file_id: 'target', path: 'Notes/original.md', base_hash: 'hash', generation: 1, saved_generation: 1, content: 'original', edit_session: 'target-lease' }, current: null, current_error: null, pending_save: null, pending_mutation: null }
+    return { items: [], total: 0, directories: [], unsearched_large_notes: 0 }
+  })
+  const wrapper = mount(App); await flushPromises()
+  await wrapper.findAll('button').find(item => item.text() === 'New canvas')!.trigger('click')
+  await wrapper.get('.mobile-dialog input').setValue('Canvas/nested.canvas'); await wrapper.get('.mobile-dialog form').trigger('submit'); await flushPromises()
+  wrapper.getComponent(MobileCanvas).vm.$emit('link', 'Notes/original.md'); await flushPromises()
+  await wrapper.findAll('.mobile-dialog button').find(item => item.text() === 'Open')!.trigger('click'); await flushPromises()
+  expect(host.mobileRequest).toHaveBeenCalledWith({ kind: 'read_path', path: 'Notes/original.md' })
   wrapper.unmount()
 })

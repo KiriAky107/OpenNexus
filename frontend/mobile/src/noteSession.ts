@@ -7,7 +7,7 @@ export function errorCode(error: unknown): string {
 }
 
 interface Capture { epoch: number; id: string; session: string; generation: number; content: string }
-const knownRejection = new Set(['REVISION_CONFLICT', 'INVALID_OPERATION', 'UNSAFE_PATH', 'FILE_IDENTITY_CHANGED', 'SAVE_REQUIRES_REVIEW', 'DRAFT_SESSION_CHANGED', 'DRAFT_GENERATION_CONFLICT', 'PENDING_SAVE_REQUIRES_REVIEW'])
+const knownRejection = new Set(['REVISION_CONFLICT', 'INVALID_OPERATION', 'UNSAFE_PATH', 'FILE_IDENTITY_CHANGED', 'SAVE_REQUIRES_REVIEW', 'DRAFT_SESSION_CHANGED', 'DRAFT_GENERATION_CONFLICT', 'PENDING_SAVE_REQUIRES_REVIEW', 'CANVAS_INVALID', 'CANVAS_TOO_LARGE', 'CANVAS_TOO_COMPLEX'])
 
 export function createNoteSession(rpc: NativeRequest = mobileRequest) {
   const state = reactive({

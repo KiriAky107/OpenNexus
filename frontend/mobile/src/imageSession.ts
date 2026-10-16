@@ -3,9 +3,9 @@ import { mobileRequest } from './native'
 import { errorCode, type createNoteSession } from './noteSession'
 import type { DraftView, ImageIntent, NativeRequest } from './types'
 
-interface Selection { from: number; to: number }
+export type ImageSelection = { from: number; to: number } | { x: number; y: number }
 export interface ImageEditor { acceptImage: (before: string, after: string) => boolean }
-const rejected = new Set(['MOBILE_IMAGE_TOO_LARGE', 'WORKSPACE_IMAGE_UNSUPPORTED', 'MOBILE_SELECTION_INVALID', 'DRAFT_SESSION_CHANGED', 'DRAFT_GENERATION_CONFLICT', 'MOBILE_DRAFT_INVALID', 'PENDING_SAVE_REQUIRES_REVIEW', 'PENDING_MUTATION_REQUIRES_REVIEW'])
+const rejected = new Set(['MOBILE_IMAGE_TOO_LARGE', 'WORKSPACE_IMAGE_UNSUPPORTED', 'MOBILE_SELECTION_INVALID', 'DRAFT_SESSION_CHANGED', 'DRAFT_GENERATION_CONFLICT', 'MOBILE_DRAFT_INVALID', 'PENDING_SAVE_REQUIRES_REVIEW', 'PENDING_MUTATION_REQUIRES_REVIEW', 'MOBILE_IMAGE_TARGET_UNSUPPORTED', 'CANVAS_INVALID', 'CANVAS_TOO_LARGE', 'CANVAS_TOO_COMPLEX'])
 
 export function createImageSession(notes: ReturnType<typeof createNoteSession>, editor: () => ImageEditor | undefined, rpc: NativeRequest = mobileRequest) {
   const state = reactive({ busy: false, pending: null as ImageIntent | null, unknown: false, error: '' })
@@ -29,7 +29,7 @@ export function createImageSession(notes: ReturnType<typeof createNoteSession>, 
     catch (error) { if (active()) { state.error = errorCode(error); state.unknown = !rejected.has(state.error) } }
     finally { if (active()) state.busy = false }
   }
-  async function importFile(file: File, selection: Selection, selectedKey: string, generation: number) {
+  async function importFile(file: File, selection: ImageSelection, selectedKey: string, generation: number) {
     if (selectedKey !== key() || generation !== notes.state.generation) { state.error = 'MOBILE_EDITOR_CONTENT_CHANGED'; return }
     if (state.pending || state.unknown) { state.error = 'PENDING_IMAGE_REQUIRES_REVIEW'; return }
     return perform(async active => {
@@ -41,7 +41,8 @@ export function createImageSession(notes: ReturnType<typeof createNoteSession>, 
       for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192))
       if (!active() || generation !== notes.state.generation) return
       const draft = notes.state.view!.draft
-      const intent = await rpc<ImageIntent>({ kind: 'prepare_image', draft_id: draft.id, edit_session: draft.edit_session, generation, ...selection, content_base64: btoa(binary) })
+      const common = { draft_id: draft.id, edit_session: draft.edit_session, generation, content_base64: btoa(binary) }
+      const intent = await rpc<ImageIntent>('x' in selection ? { kind: 'prepare_canvas_image', ...common, ...selection } : { kind: 'prepare_image', ...common, ...selection })
       if (!active()) return
       state.pending = intent
       const applied = intent.state === 'committed' ? intent : await rpc<ImageIntent>({ kind: 'apply_image', operation_id: intent.operation_id })

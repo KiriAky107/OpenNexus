@@ -45,6 +45,7 @@ export type MobileRequest =
   | { kind: 'discard_draft'; draft_id: string; edit_session: string }
   | { kind: 'prepare_mutation'; action: 'rename' | 'delete'; file_id: string; expected: string; destination: string }
   | { kind: 'prepare_image'; draft_id: string; edit_session: string; generation: number; from: number; to: number; content_base64: string }
+  | { kind: 'prepare_canvas_image'; draft_id: string; edit_session: string; generation: number; x: number; y: number; content_base64: string }
   | { kind: 'observe_image' | 'apply_image' | 'cancel_image'; operation_id: string }
   | { kind: 'read_image'; path: string }
   | { kind: 'prepare_export' }
