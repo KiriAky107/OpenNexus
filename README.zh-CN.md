@@ -19,7 +19,7 @@
     <a href="https://github.com/KiriAky107/OpenNexus/releases">发布日志</a>
   </p>
   <p>
-    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.6.0--beta5-5865f2?style=flat-square" alt="版本" /></a>
+    <a href="https://github.com/KiriAky107/OpenNexus/releases"><img src="https://img.shields.io/badge/Version-0.6.0--beta6-5865f2?style=flat-square" alt="版本" /></a>
     <a href="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml"><img src="https://github.com/KiriAky107/OpenNexus/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows_x64-2563eb?style=flat-square" alt="平台" />
     <img src="https://img.shields.io/badge/Desktop-Tauri_2-f97316?style=flat-square" alt="桌面端 Tauri" />
@@ -33,9 +33,9 @@
 
 ---
 
-当前版本：[v0.6.0-beta5](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta5)。
+当前版本：[v0.6.0-beta6](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta6)。
 
-画布反向链接指向已删除节点时，现在会明确提示目标不存在，并保留当前视图，不再产生幽灵选择或适配到无效坐标。
+Windows CRLF 换行笔记的大纲现在能在源码模式准确定位标题开头，包含笔记属性、重复标题和代码围栏的笔记也能正确跳转。
 
 [Sync 0.8.0](https://github.com/KiriAky107/Sync-for-OpenNexus/releases/tag/v0.8.0) 增加只读回收计划、设备进度、运维诊断与双语控制台；[Community 0.8.0](https://github.com/KiriAky107/Community-for-OpenNexus/releases/tag/v0.8.0) 增加聚合目录、文本审核、审计与公钥视图、队列筛选及双语工作台。
 
@@ -104,10 +104,10 @@
 
 ### Windows 桌面端安装（推荐）
 
-1. 前往 [0.6.0-beta5 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta5) 下载 Windows x64 安装包。本地构建可按[打包发布](#打包发布)步骤进行。
+1. 前往 [0.6.0-beta6 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta6) 下载 Windows x64 安装包。本地构建可按[打包发布](#打包发布)步骤进行。
 2. *(可选)* 通过 PowerShell 校验 SHA-256 完整性：
 ```powershell
-   Get-FileHash .\OpenNexus_0.6.0-beta5_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\OpenNexus_0.6.0-beta6_x64-setup.exe -Algorithm SHA256
    # 与同一 Release 中的 SHA256SUMS.txt 比对。
 
 ```
@@ -362,7 +362,7 @@ erDiagram
 
 ## 生态项目
 
-配套版本：OpenNexus **0.6.0-beta5**、Sync for OpenNexus **0.8.0**、Community for OpenNexus **0.8.0**。Sync 使用 `/sync/v1`，Community 使用 `/catalog/v1`；产品版本与协议版本分别维护。
+配套版本：OpenNexus **0.6.0-beta6**、Sync for OpenNexus **0.8.0**、Community for OpenNexus **0.8.0**。Sync 使用 `/sync/v1`，Community 使用 `/catalog/v1`；产品版本与协议版本分别维护。
 
 为确保单机版本的纯粹性并降低维护依赖，网络同步与公共服务拆分至独立代码库维护：
 
@@ -458,7 +458,7 @@ pnpm desktop:build
 
 ```
 
-构建完成的安装包将输出至 `frontend/src-tauri/target/release/bundle/nsis/`。[0.6.0-beta5 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta5) 同时提供固定发布提交的源码压缩包与 SHA-256 清单。
+构建完成的安装包将输出至 `frontend/src-tauri/target/release/bundle/nsis/`。[0.6.0-beta6 Release](https://github.com/KiriAky107/OpenNexus/releases/tag/v0.6.0-beta6) 同时提供固定发布提交的源码压缩包与 SHA-256 清单。
 
 Windows 安装包会在 `OpenNexus.exe` 同目录包含匹配架构、带微软签名的 `WebView2Loader.dll`，打包前从依赖锁定的 WebView2 SDK 准备。WebView2 Runtime 安装程序不会替应用提供这个 DLL。内嵌引导程序会在需要时安装 Runtime，仍需联网。解压安装包后可运行 `python scripts/verify-windows-loader.py <安装包解压目录>`，检查主程序与 Loader 架构及 SDK 哈希，避免构建机上已有的 SDK 掩盖漏打包问题。
 
