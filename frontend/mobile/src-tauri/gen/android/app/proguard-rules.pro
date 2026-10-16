@@ -19,3 +19,7 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# These names are resolved from Rust through JNI rather than Java call sites.
+-keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }
+-keep class cc.kronecker.opennexus.MainActivity { *; }

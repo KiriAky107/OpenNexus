@@ -13,6 +13,27 @@ val tauriProperties = Properties().apply {
     }
 }
 
+val platformVerifierVersion = "0.2.0"
+val platformVerifierLock = file("../../../Cargo.lock").readLines()
+    .dropWhile { it.trim() != "name = \"rustls-platform-verifier-android\"" }
+    .drop(1).firstOrNull()?.trim()
+check(platformVerifierLock == "version = \"$platformVerifierVersion\"") {
+    "The Android TLS JVM component must match Cargo.lock"
+}
+repositories {
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = "rustlsPlatformVerifier"
+                // Fixed upstream archive commit; keep the JVM artifact and
+                // Rust dependency in the same reviewed compatibility set.
+                url = uri("https://raw.githubusercontent.com/rustls/rustls-platform-verifier/1aa691352a5e0c215210dfc9a3c2f2078639dc91/android-release-support/maven/")
+            }
+        }
+        filter { includeModule("org.rustls", "rustls-platform-verifier") }
+    }
+}
+
 android {
     compileSdk = 36
     ndkVersion = "30.0.16248370"
@@ -60,6 +81,7 @@ rust {
 }
 
 dependencies {
+    implementation("org.rustls:rustls-platform-verifier:$platformVerifierVersion")
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")

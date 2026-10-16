@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 mod mobile_files;
+#[cfg(target_os = "android")]
+mod mobile_sync_tls;
 
 struct MobileState {
     engine: Arc<Mutex<Option<MobileWorkspace>>>,

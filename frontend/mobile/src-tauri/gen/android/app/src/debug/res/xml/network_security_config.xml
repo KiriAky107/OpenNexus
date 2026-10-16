@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Preserve the existing debug-only Tauri development-server behavior.
+         Release keeps the verifier library's default-deny/CRL-specific policy;
+         the native Sync endpoint validator requires HTTPS in production. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
