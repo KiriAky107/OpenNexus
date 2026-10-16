@@ -64,9 +64,13 @@ public final class RuntimeProbe extends Instrumentation {
                     create("New note", "runtime-rich.md");
                     click("Writing", false);
                     AccessibilityNodeInfo rich = richBody();
+                    for (AccessibilityNodeInfo node : nodes())
+                        require(!node.isVisibleToUser() || !APP.equals(string(node.getPackageName()))
+                            || !label(node, "Markdown formatting toolbar", false), "Phone formatting must start collapsed");
                     inputText(rich, RICH_TEXT);
                     rich = richBody();
                     setSelection(rich, 0, RICH_TEXT.length());
+                    click("Format", false);
                     clickFormatting("Bold");
                     waitLabel("Draft kept on this device");
                     save();
@@ -321,10 +325,10 @@ public final class RuntimeProbe extends Instrumentation {
     private void clickFormatting(String text) {
         final String scope = "Markdown formatting toolbar";
         // The editor's selection bubble exposes the same formatting labels.
-        // Address the shared fixed toolbar by its actual accessible container.
+        // Address the expanded shared toolbar by its actual accessible container.
         AccessibilityNodeInfo node = waitNode(value -> APP.equals(string(value.getPackageName()))
             && label(value, text, false) && value.isEnabled() && value.isClickable()
-            && within(value, scope), "fixed formatting toolbar: " + text);
+            && within(value, scope), "expanded formatting toolbar: " + text);
         activate(node, scope);
     }
 
