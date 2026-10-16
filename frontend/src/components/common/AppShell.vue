@@ -5,6 +5,7 @@ import { useThemeStore } from '@/stores/theme'
 import { useEditorStore } from '@/stores/editor'
 import { useSettingsStore } from '@/stores/settings'
 import PrimarySidebar from './PrimarySidebar.vue'
+import WorkspaceFrame from './WorkspaceFrame.vue'
 import SecondarySidebar from './SecondarySidebar.vue'
 import StatusBar from './StatusBar.vue'
 import TitleBar from './TitleBar.vue'
@@ -78,44 +79,13 @@ defineExpose({ openCitation })
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'theme-dark': themeStore.isDark }">
-    <TitleBar />
-    <TitleBarMenu v-if="desktop" />
-    <div class="app-body">
-      <PrimarySidebar v-show="!layout.focusMode" />
-      <SecondarySidebar v-if="secondaryComponent" v-show="!layout.focusMode" :component="secondaryComponent" />
-      <main class="main-content">
-        <slot />
-      </main>
-    </div>
-    <StatusBar />
-    <CommandPalette />
-    <NotificationCenter />
-  </div>
+  <WorkspaceFrame :class="{ 'theme-dark': themeStore.isDark }">
+    <template #titlebar><TitleBar /></template>
+    <template #menu><TitleBarMenu v-if="desktop" /></template>
+    <template #primary><PrimarySidebar v-show="!layout.focusMode" /></template>
+    <template #secondary><SecondarySidebar v-if="secondaryComponent" v-show="!layout.focusMode" :component="secondaryComponent" /></template>
+    <slot />
+    <template #status><StatusBar /></template>
+    <template #overlays><CommandPalette /><NotificationCenter /></template>
+  </WorkspaceFrame>
 </template>
-
-<style scoped>
-.app-shell {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  width: 100vw;
-  background: var(--color-background-secondary);
-  color: var(--color-text-primary);
-}
-
-.app-body {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.main-content {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  background: var(--color-background-primary);
-  isolation: isolate;
-}
-</style>
