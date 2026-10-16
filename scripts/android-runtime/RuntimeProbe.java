@@ -467,7 +467,7 @@ public final class RuntimeProbe extends Instrumentation {
     private void inputText(AccessibilityNodeInfo node, String value) throws Exception {
         require(APP.equals(string(node.getPackageName())) && node.isEditable(), "Refusing text outside the owned editor");
         progress.append("IME: commit ").append(value.length()).append(" original UTF-16 units\n");
-        activateNoteBody();
+        activateNoteBody(node);
         CompositionIme.awaitTarget(APP);
         long now = SystemClock.uptimeMillis();
         // Select the actual editor document through its normal keyboard handler.
@@ -521,7 +521,13 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void activateNoteBody() {
-        AccessibilityNodeInfo observed = noteBody();
+        activateNoteBody(noteBody());
+    }
+
+    private void activateNoteBody(AccessibilityNodeInfo observed) {
+        require(APP.equals(string(observed.getPackageName())) && observed.isEditable()
+            && label(observed, "Markdown note body", false) && observed.isVisibleToUser(),
+            "Refusing focus outside the observed owned Markdown body");
         // Empty rich contenteditable nodes can leave the AX tree while idle.
         // Focus the freshly observed named editor before checking stable tap
         // bounds. No text is sent here; exact role and InputConnection ownership
