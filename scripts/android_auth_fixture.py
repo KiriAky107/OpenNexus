@@ -35,6 +35,7 @@ def require_hosted():
     require(sys.platform == 'linux' and os.environ.get('GITHUB_ACTIONS') == 'true'
             and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
             and os.environ.get('RUNNER_OS') == 'Linux'
+            and os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch'
             and os.environ.get('GITHUB_REPOSITORY') == 'KiriAky107/OpenNexus', 'OWNED_AUTH_HOST_REQUIRED')
 
 
@@ -240,15 +241,33 @@ def observe_provider(root):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=('serve','observe','control'))
+    parser.add_argument('action',choices=('serve','observe','control','seed'))
     parser.add_argument('--operation');parser.add_argument('--mode',choices=sorted(MODES));parser.add_argument('--expected-revision',type=int)
-    parser.add_argument('--retry-original',action='store_true');args=parser.parse_args()
+    parser.add_argument('--retry-original',action='store_true');parser.add_argument('--owner-run');args=parser.parse_args()
     root=owned_root();require(root.is_dir(),'OWNED_AUTH_NOT_PREPARED')
     if args.action=='control':
         require(args.operation is not None and args.mode is not None and args.expected_revision is not None,'OWNED_AUTH_CONTROL_INVALID')
         print(json.dumps(arm_control(root,args.operation,args.mode,args.expected_revision,retry=args.retry_original)))
     elif args.action=='observe':print(json.dumps(observe_provider(root)))
+    elif args.action=='seed':
+        config=fixed_service(root)
+        require(len(config['accounts'])==2,'OWNED_AUTH_ENV_INVALID')
+        atomic_json(root/'seed-intent.json',{'source':SERVICE_SHA,'accounts':[a['username'] for a in config['accounts']]},exclusive=True)
+        # Exercise the fixed production create-user CLI while keeping its
+        # synthetic password in a protected file, never a process argument.
+        import getpass,runpy
+        original_argv=sys.argv;original_getpass=getpass.getpass
+        try:
+            for account in config['accounts']:
+                require(re.fullmatch(r'android-owned-[ab]-[0-9a-f]{12}',account['username'])
+                    and 40<=len(account['password'])<=100,'OWNED_AUTH_ENV_INVALID')
+                getpass.getpass=lambda prompt='',value=account['password']:value
+                sys.argv=['sync_server','create-user','--username',account['username']]
+                runpy.run_module('sync_server',run_name='__main__')
+        finally:sys.argv=original_argv;getpass.getpass=original_getpass
+        atomic_json(root/'seed-receipt.json',observe_provider(root),exclusive=True)
     else:
+        require(args.owner_run==os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT'],'OWNED_AUTH_RUN_INVALID')
         fixed_service(root)
         from sync_server.__main__ import application
         import uvicorn

@@ -14,6 +14,16 @@ def operation():return str(uuid.uuid4())
 
 
 class OwnedAuthControlTests(unittest.TestCase):
+    def test_supported_manual_run_derives_an_exclusive_path_without_starting_or_creating_anything(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory).resolve()
+            environment={'GITHUB_ACTIONS':'true','RUNNER_ENVIRONMENT':'github-hosted','RUNNER_OS':'Linux',
+                'GITHUB_REPOSITORY':'KiriAky107/OpenNexus','GITHUB_EVENT_NAME':'workflow_dispatch',
+                'GITHUB_RUN_ID':'1234','GITHUB_RUN_ATTEMPT':'1','GITHUB_WORKSPACE':str(root)}
+            with patch.dict(os.environ,environment,clear=True),patch.object(module.sys,'platform','linux'),patch.object(module.subprocess,'check_output') as process:
+                target=module.owned_root();self.assertEqual(target,root/'.build/android-runtime/owned-auth-1234-1')
+                self.assertFalse(target.exists());process.assert_not_called()
+
     def test_developer_self_hosted_and_other_repository_are_refused_before_provider_access(self):
         candidates=[{}, {'GITHUB_ACTIONS':'true','RUNNER_ENVIRONMENT':'self-hosted','RUNNER_OS':'Linux','GITHUB_REPOSITORY':'KiriAky107/OpenNexus'},
             {'GITHUB_ACTIONS':'true','RUNNER_ENVIRONMENT':'github-hosted','RUNNER_OS':'Linux','GITHUB_REPOSITORY':'other/repository'}]
