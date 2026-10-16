@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       check_scope:
-        description: 'Run all checks, or only the standalone Sync transport feature'
+        description: 'Run all checks, or only the standalone Sync transport and Android TLS checks'
         type: choice
         options: [all, sync-http]
         default: all
@@ -297,3 +297,36 @@ jobs:
         run: cargo test --lib --no-default-features --features sync-http --locked sync_ -- --nocapture
       - name: Check the transport without the desktop feature
         run: cargo clippy --lib --no-default-features --features sync-http --locked -- -D warnings
+
+  sync-http-android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CARGO_BUILD_JOBS: '2'
+    defaults:
+      run:
+        working-directory: frontend/src-tauri
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+          components: clippy
+      - name: Install the fixed NDK for the Android transport check
+        shell: bash
+        run: |
+          set -euo pipefail
+          manager="$ANDROID_HOME/cmdline-tools/latest/bin"
+          if [[ -x "$manager/android" ]]; then
+            "$manager/android" --no-metrics --sdk="$ANDROID_HOME" sdk --ignore-outdated-xmls install ndk/30.0.16248370
+          else
+            "$manager/sdkmanager" --sdk_root="$ANDROID_HOME" --install 'ndk;30.0.16248370' </dev/null
+          fi
+          toolchain="$ANDROID_HOME/ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          test -x "$toolchain/aarch64-linux-android24-clang"
+          echo "CC_aarch64_linux_android=$toolchain/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "CXX_aarch64_linux_android=$toolchain/aarch64-linux-android24-clang++" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$toolchain/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$toolchain/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+      - name: Check the actual Android TrustManager and JNI types
+        run: cargo clippy --lib --target aarch64-linux-android --no-default-features --features sync-http --locked -- -D warnings
