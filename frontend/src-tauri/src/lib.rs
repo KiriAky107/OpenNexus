@@ -29,6 +29,7 @@ pub mod experiment_outputs;
 pub mod experiment_owner;
 pub mod experiment_preview;
 pub mod experiment_store;
+pub mod mobile_drafts;
 mod payloads;
 mod preference_records;
 pub mod recent;
