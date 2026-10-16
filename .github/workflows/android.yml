@@ -75,7 +75,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t apks < <(rg --files frontend/mobile/src-tauri/gen/android/app/build/outputs/apk/universal/debug -g '*.apk')
+          shopt -s nullglob
+          apks=(frontend/mobile/src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk)
           test "${#apks[@]}" -eq 1
           python3 scripts/verify_android_package.py --commit "$GITHUB_SHA" \
             --source-proof ".build/source-provenance/$GITHUB_SHA.json" \
