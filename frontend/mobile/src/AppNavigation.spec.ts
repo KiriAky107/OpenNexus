@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, expect, it, vi } from 'vitest'
+import { installTestDialogApi } from './dialogTestSupport'
 import App from './App.vue'
+
+installTestDialogApi()
 
 const host = vi.hoisted(() => ({ mobileCapabilities: vi.fn(), mobileVault: vi.fn(), mobileRequest: vi.fn(), mobileOnBack: vi.fn(), mobileBackground: vi.fn() }))
 vi.mock('./native', () => host)
@@ -35,7 +38,9 @@ async function create(wrapper: ReturnType<typeof mount>) {
 it('uses one native Back listener and backgrounds only from the root, with cleanup on unmount', async () => {
   const wrapper = mount(App); await flushPromises()
   expect(host.mobileOnBack).toHaveBeenCalledTimes(1)
-  await wrapper.get('.workspace-header select').setValue('zh-CN'); expect(host.mobileBackground).not.toHaveBeenCalled()
+  await wrapper.get('.titlebar [aria-label="Settings"]').trigger('click'); await flushPromises()
+  await wrapper.get('[aria-label="Interface language"]').setValue('zh-CN'); expect(host.mobileBackground).not.toHaveBeenCalled()
+  back(); await flushPromises(); expect(wrapper.find('dialog').exists()).toBe(false); expect(host.mobileBackground).not.toHaveBeenCalled()
   back(); await flushPromises(); expect(host.mobileBackground).toHaveBeenCalledTimes(1)
   wrapper.unmount(); expect(unregister).toHaveBeenCalledTimes(1)
   back(); await flushPromises(); expect(host.mobileBackground).toHaveBeenCalledTimes(1)
@@ -76,6 +81,26 @@ it('closes a creation review before leaving the vault and never submits it on Ba
   expect(host.mobileRequest.mock.calls.some(([r]) => r.kind === 'create_draft')).toBe(false)
   expect(host.mobileBackground).not.toHaveBeenCalled()
   wrapper.unmount()
+})
+
+it('closes the shared phone file drawer on Back without leaving or submitting the edited document', async () => {
+  const width = window.innerWidth
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+  const wrapper = mount(App)
+  try {
+    await flushPromises(); await create(wrapper)
+    wrapper.getComponent({ name: 'MobileEditor' }).vm.$emit('update:modelValue', 'keep the original unsaved input')
+    await wrapper.get('.titlebar [aria-label="Files"]').trigger('click')
+    expect(wrapper.get('.app-shell').classes()).toContain('secondary-open')
+    const writes = host.mobileRequest.mock.calls.filter(([request]) => request.kind === 'persist_draft').length
+    back(); await flushPromises()
+    expect(wrapper.get('.app-shell').classes()).not.toContain('secondary-open')
+    expect(wrapper.find('.editor-page').exists()).toBe(true)
+    expect(host.mobileRequest.mock.calls.filter(([request]) => request.kind === 'persist_draft')).toHaveLength(writes)
+    expect(host.mobileBackground).not.toHaveBeenCalled()
+  } finally {
+    wrapper.unmount(); Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
+  }
 })
 
 it('retains an unfinished Canvas property on Back and closes a valid property panel before leaving', async () => {
@@ -123,6 +148,6 @@ it('shows a retryable startup failure if the promised Android Back listener cann
   expect(wrapper.find('.notes-page').exists()).toBe(false)
   host.mobileOnBack.mockImplementation(async handler => { back = handler; return { unregister } })
   await button(wrapper, 'Try again').trigger('click'); await flushPromises()
-  expect(wrapper.find('.notes-page').exists()).toBe(true)
+  expect(wrapper.find('.empty-workspace').exists()).toBe(true)
   wrapper.unmount()
 })

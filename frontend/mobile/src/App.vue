@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import logo from '../../src/assets/opennexus-logo.svg'
+import { Brush, CircleCheck, Document, FolderOpened, Search } from '@element-plus/icons-vue'
+import WorkspaceFrame from '../../src/components/common/WorkspaceFrame.vue'
+import TitleBarFrame from '../../src/components/common/TitleBarFrame.vue'
+import PrimaryNavigation from '../../src/components/common/PrimaryNavigation.vue'
+import ControlIcon from '../../src/components/common/ControlIcon.vue'
+import AppDialog from '../../src/components/common/AppDialog.vue'
+import FileTreeNode from '../../src/features/workspace/FileTreeNode.vue'
+import WorkspaceLanding from '../../src/features/workspace/WorkspaceLanding.vue'
+import { appLocale, t } from '../../src/i18n'
+import type { FileNode } from '../../src/contracts'
 import MobileEditor from './MobileEditor.vue'
 import MobileCanvas from './MobileCanvas.vue'
 import MobilePreview from './MobilePreview.vue'
@@ -17,7 +26,13 @@ import type { DraftSummary, Entry, MutationIntent, NoteDocument, NotePage, Page,
 
 const language = ref<Language>(savedLanguage()), copy = computed(() => text(language.value))
 const appearanceEnabled = ref(false)
-const { choice: themeChoice, nativeError: themeError, retryNative: retryTheme } = useMobileTheme(appearanceEnabled)
+const { choice: themeChoice, resolved: resolvedTheme, nativeError: themeError, retryNative: retryTheme } = useMobileTheme(appearanceEnabled)
+const compact = ref(window.innerWidth <= 760), primaryOpen = ref(false), secondaryOpen = ref(false)
+const primaryExpanded = ref(false)
+const preferencesOpen = ref(false)
+function resizeWorkspace() { compact.value = window.innerWidth <= 760 }
+function closePanels() { primaryOpen.value = false; secondaryOpen.value = false }
+function togglePrimaryExpansion() { if (compact.value) primaryOpen.value = false; else primaryExpanded.value = !primaryExpanded.value }
 const session = createNoteSession(), editor = ref<InstanceType<typeof MobileEditor>>()
 const canvas = ref<InstanceType<typeof MobileCanvas>>()
 const canvasFieldsPending = ref(false)
@@ -48,6 +63,34 @@ const documentKey = () => session.state.view ? `${session.state.view.draft.id}:$
 watch(documentKey, () => { images.bind(); imageSelection = null; preview.value = false; canvasFieldsPending.value = false })
 const basename = (path: string) => path.split('/').at(-1) || path
 const parent = (path: string) => path.split('/').slice(0, -1).join('/')
+const fileNodes = computed<FileNode[]>(() => [
+  ...notePage.value.directories.map(path => ({ id: `folder:${path}`, name: basename(path), path, type: 'folder' as const })),
+  ...notePage.value.items.map(entry => ({ id: entry.file_id, name: basename(entry.path), path: entry.path, type: 'file' as const })),
+])
+const navigationGroups = computed(() => [
+  { key: 'knowledge', label: t('知识与学习', 'Knowledge'), items: [
+    { name: 'workspace', icon: FolderOpened, label: t('工作区', 'Workspace') },
+    { name: 'search', icon: Search, label: t('搜索', 'Search') },
+    { name: 'drafts', icon: Document, label: copy.value.drafts },
+    { name: 'pending', icon: CircleCheck, label: copy.value.pending },
+  ] },
+  { key: 'extensions', label: t('外观', 'Appearance'), items: [{ name: 'themes', icon: Brush, label: t('主题', 'Themes') }] },
+])
+async function navigateSection(name: string) {
+  if (session.state.composing || session.state.saving || imageBlocked.value || canvasFieldsPending.value) return
+  closePanels()
+  if (name === 'themes' || name === 'settings') { preferencesOpen.value = true; return }
+  if (name === 'workspace' || name === 'search') {
+    if (name === 'search') secondaryOpen.value = true
+    else if (session.state.view) { secondaryOpen.value = true; return }
+    selectTab('notes')
+  } else if (name === 'drafts' || name === 'pending') { await leave(); if (!session.state.view) selectTab(name) }
+}
+async function openTreeNode(node: FileNode) {
+  if (node.type === 'folder') { enterDirectory(node.path); return }
+  const entry = notePage.value.items.find(entry => entry.file_id === node.id)
+  if (entry) { await openNote(entry); if (session.state.view?.draft.file_id === entry.file_id) closePanels() }
+}
 const displayError = (code: string) => errorText(code, language.value)
 const number = (value: number) => new Intl.NumberFormat(language.value).format(value)
 
@@ -56,7 +99,7 @@ interface MutationDialog { kind: 'mutation'; intent: MutationIntent; doc: NoteDo
 interface DiscardDialog { kind: 'discard'; id: string; edit_session: string; busy: boolean; error: string }
 interface LinkDialog { kind: 'link'; href: string; busy: boolean; error: string }
 const dialog = ref<PathDialog | MutationDialog | DiscardDialog | LinkDialog | null>(null), pathInput = ref<HTMLInputElement>()
-watch(language, value => { document.documentElement.lang = value; try { localStorage.setItem(languageKey, value) } catch { /* Session preference still works. */ } }, { immediate: true })
+watch(language, value => { appLocale.value = value; document.documentElement.lang = value; try { localStorage.setItem(languageKey, value) } catch { /* Session preference still works. */ } }, { immediate: true })
 
 async function load() {
   const revision = ++listRevision, selected = tab.value, page = offset.value, q = query.value, folder = directory.value
@@ -111,6 +154,8 @@ async function navigateBack() {
   try {
     if (dialog.value) { await cancelDialog(); return }
     if (exportOpen.value) { exportPanel.value?.handleBack(); return }
+    if (preferencesOpen.value) { preferencesOpen.value = false; return }
+    if (primaryOpen.value || secondaryOpen.value) { closePanels(); return }
     if (canvasFieldsPending.value) return
     if (fileActions.value?.open) { fileActions.value.open = false; return }
     if (preview.value) { preview.value = false; return }
@@ -298,25 +343,28 @@ async function discard() {
   finally { if (dialog.value === active) active.busy = false }
 }
 function pause() { if (document.visibilityState === 'hidden') void session.flush().catch(() => undefined) }
-onMounted(() => { void boot(); document.addEventListener('visibilitychange', pause) })
-onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspectionRevision++; void Promise.resolve(backListener?.unregister()).catch(() => undefined); backListener = undefined; document.removeEventListener('visibilitychange', pause); images.dispose(); session.dispose() })
+onMounted(() => { void boot(); window.addEventListener('resize', resizeWorkspace); document.addEventListener('visibilitychange', pause) })
+onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspectionRevision++; void Promise.resolve(backListener?.unregister()).catch(() => undefined); backListener = undefined; window.removeEventListener('resize', resizeWorkspace); document.removeEventListener('visibilitychange', pause); images.dispose(); session.dispose() })
 </script>
 
 <template>
-  <div class="mobile-workspace" :class="{ editing: session.state.view }">
-    <header class="workspace-header">
-      <template v-if="session.state.view">
-        <button class="quiet" :disabled="navigationBusy || session.state.saving || session.state.composing || actionBusy || imageBlocked || canvasFieldsPending" @click="leave">{{ copy.back }}</button>
-        <div class="document-title" :title="session.state.view.draft.path">{{ basename(session.state.view.draft.path) }}</div>
-      </template>
-      <div v-else class="brand"><img :src="logo" alt="" /><strong>OpenNexus</strong></div>
-      <div class="appearance-controls"><label class="language"><span class="sr-only">{{ copy.language }}</span>
-        <select v-model="language" :aria-label="copy.language"><option value="zh-CN">中文</option><option value="en">English</option></select>
-      </label>
-      <label class="language theme-choice"><span class="sr-only">{{ copy.theme }}</span>
-        <select v-model="themeChoice" :aria-label="copy.theme"><option value="system">{{ copy.themeSystem }}</option><option value="light">{{ copy.themeLight }}</option><option value="dark">{{ copy.themeDark }}</option><option value="sepia">{{ copy.themeSepia }}</option></select>
-      </label></div>
-    </header>
+  <WorkspaceFrame class="android-workspace" :compact="compact" :primary-open="primaryOpen" :secondary-open="secondaryOpen" :close-panels-label="copy.close" @close-panels="closePanels">
+    <template #titlebar>
+      <TitleBarFrame :compact="compact" :document-title="session.state.view ? basename(session.state.view.draft.path) : t('工作区', 'Workspace')" :dirty="dirty" :dark="resolvedTheme === 'dark'">
+        <template #leading><button v-if="compact" class="icon-btn" type="button" :aria-label="t('主导航', 'Main navigation')" :aria-expanded="primaryOpen" @click="primaryOpen = !primaryOpen; secondaryOpen = false"><ControlIcon name="outline" /></button><button v-if="compact" class="icon-btn" type="button" :aria-label="t('文件', 'Files')" :aria-expanded="secondaryOpen" @click="secondaryOpen = !secondaryOpen; primaryOpen = false"><ControlIcon name="files" /></button></template>
+        <button v-if="session.state.view" class="icon-btn" type="button" :aria-label="copy.back" :disabled="navigationBusy || session.state.saving || session.state.composing || actionBusy || imageBlocked || canvasFieldsPending" @click="leave"><ControlIcon name="panelClose" /></button>
+        <button class="icon-btn" type="button" :aria-label="resolvedTheme === 'dark' ? t('切换浅色主题', 'Switch to light theme') : t('切换深色主题', 'Switch to dark theme')" @click="themeChoice = resolvedTheme === 'dark' ? 'light' : 'dark'"><ControlIcon :name="resolvedTheme === 'dark' ? 'sun' : 'moon'" /></button>
+        <button class="icon-btn" type="button" :aria-label="t('设置', 'Settings')" @click="preferencesOpen = true"><ControlIcon name="toolbar" /></button>
+      </TitleBarFrame>
+    </template>
+    <template #primary><PrimaryNavigation :groups="navigationGroups" :current-name="tab === 'notes' ? 'workspace' : tab" :expanded="compact || primaryExpanded" :system-open="false" @navigate="navigateSection" @toggle-expanded="togglePrimaryExpansion" @toggle-system="() => undefined" /></template>
+    <template #secondary>
+      <aside class="secondary-sidebar mobile-files">
+        <header class="sidebar-header"><strong>{{ t('文件', 'Files') }}</strong><button class="icon-btn" type="button" :disabled="!ready" :aria-label="copy.newNote" @click="openPath('create', 'markdown')">+</button><button class="icon-btn" type="button" :aria-label="copy.close" @click="secondaryOpen = false"><ControlIcon name="panelClose" /></button></header>
+        <form v-if="ready" class="file-search" @submit.prevent="search"><input v-model="query" :aria-label="copy.search" :placeholder="copy.search" /><button class="button-secondary">{{ copy.find }}</button></form>
+        <div class="sidebar-content"><p v-if="!ready">{{ booting ? copy.checking : displayError(bootError) }}</p><template v-else><button v-if="directory" class="button-secondary" @click="enterDirectory(parent(directory))">../ {{ directory }}</button><FileTreeNode v-for="node in fileNodes" :key="node.id" :node="node" :active-path="session.state.view?.draft.path ?? null" @open="openTreeNode" /><p v-if="!fileNodes.length">{{ copy.noNotes }}</p><nav v-if="notePage.total > size" class="pagination"><button :disabled="offset === 0 || loading" @click="turnPage(-1)">{{ copy.previous }}</button><button :disabled="offset + size >= notePage.total || loading" @click="turnPage(1)">{{ copy.next }}</button></nav></template></div>
+      </aside>
+    </template>
     <p v-if="themeError" class="theme-notice" role="status">{{ copy.themeNativeFailed }}<button class="quiet" @click="retryTheme">{{ copy.retry }}</button></p>
 
     <main v-if="!ready" class="startup-card" :aria-busy="booting">
@@ -376,6 +424,9 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
         :image-unavailable="copy.imageUnavailable" :image-limit="copy.imageLimit" @link="href => dialog = { kind: 'link', href, busy: false, error: '' }" />
     </main>
 
+    <WorkspaceLanding v-else-if="tab === 'notes' && !query && !directory" :notes="fileNodes.filter(node => node.type === 'file')" :error="listError || session.state.error" @new-note="openPath('create', 'markdown')" @open-note="path => { const entry = notePage.items.find(item => item.path === path); if (entry) openNote(entry) }">
+      <template #actions><button class="button-primary" @click="openPath('create', 'markdown')">{{ copy.newNote }}</button><button class="button-secondary" @click="openPath('create', 'canvas')">{{ canvasCopy.newCanvas }}</button><button class="button-secondary" @click="secondaryOpen = true">{{ t('文件', 'Files') }}</button></template>
+    </WorkspaceLanding>
     <main v-else class="notes-page">
       <p class="vault-status">{{ copy.ready }}</p>
       <div class="library-actions"><button @click="openPath('create', 'markdown')">{{ copy.newNote }}</button><button class="quiet" @click="openPath('create', 'canvas')">{{ canvasCopy.newCanvas }}</button><button class="quiet" :disabled="loading" @click="load">{{ copy.refresh }}</button><button v-if="exportAllowed" class="quiet" @click="openExport">{{ copy.exportContent }}</button></div>
@@ -407,9 +458,9 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
       <footer><p>{{ copy.storage }}</p><span>OpenNexus {{ version }}</span></footer>
     </main>
 
-    <div v-if="dialog" class="dialog-backdrop" @keydown.esc.prevent="cancelDialog">
-      <section class="mobile-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
-        <label class="language dialog-language"><span class="sr-only">{{ copy.language }}</span><select v-model="language" :aria-label="copy.language"><option value="zh-CN">中文</option><option value="en">English</option></select></label>
+    <AppDialog v-if="dialog" :label="copy.review" :dismissible="!dialog.busy" @close="cancelDialog">
+      <section class="mobile-dialog modal-card" aria-labelledby="dialog-title">
+        <label class="language dialog-language"><span class="sr-only">{{ copy.language }}</span><select v-model="language" :aria-label="copy.language"><option value="zh-CN">中文</option><option value="en">English</option></select></label><label class="language theme-choice"><span class="sr-only">{{ copy.theme }}</span><select v-model="themeChoice" :aria-label="copy.theme"><option value="system">{{ copy.themeSystem }}</option><option value="light">{{ copy.themeLight }}</option><option value="dark">{{ copy.themeDark }}</option><option value="sepia">{{ copy.themeSepia }}</option></select></label>
         <form v-if="dialog.kind === 'path'" @submit.prevent="submitPath">
           <h2 id="dialog-title">{{ dialog.action === 'create' ? (dialog.format === 'canvas' ? canvasCopy.newCanvas : copy.createTitle) : dialog.action === 'copy' ? copy.copyTitle : copy.renameTitle }}</h2>
           <label>{{ copy.path }}<input ref="pathInput" v-model="dialog.path" :disabled="dialog.busy" :aria-label="copy.path" autocomplete="off" autocapitalize="off" /></label>
@@ -438,7 +489,8 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
           <div class="button-row"><button class="quiet" :disabled="dialog.busy" @click="cancelDialog">{{ copy.cancel }}</button><button class="danger" :disabled="dialog.busy" @click="discard">{{ copy.discard }}</button></div>
         </template>
       </section>
-    </div>
+    </AppDialog>
     <ExportPanel v-if="exportOpen" ref="exportPanel" :language="language" @language="value => language=value" @close="exportOpen=false" />
-  </div>
+    <AppDialog v-if="preferencesOpen" :label="t('设置', 'Settings')" @close="preferencesOpen = false"><section class="mobile-dialog modal-card"><header class="preferences-title"><h2>{{ t('外观与语言', 'Appearance and language') }}</h2><button type="button" class="button-secondary" @click="preferencesOpen = false">{{ copy.close }}</button></header><label>{{ copy.language }}<select v-model="language" :aria-label="copy.language"><option value="zh-CN">中文</option><option value="en">English</option></select></label><label>{{ copy.theme }}<select v-model="themeChoice" :aria-label="copy.theme"><option value="system">{{ copy.themeSystem }}</option><option value="light">{{ copy.themeLight }}</option><option value="dark">{{ copy.themeDark }}</option><option value="sepia">{{ copy.themeSepia }}</option></select></label></section></AppDialog>
+  </WorkspaceFrame>
 </template>

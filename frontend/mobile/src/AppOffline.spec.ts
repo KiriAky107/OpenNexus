@@ -2,9 +2,12 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { EditorView } from '@codemirror/view'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { installTestDialogApi } from './dialogTestSupport'
 import App from './App.vue'
 import MobilePreview from './MobilePreview.vue'
 import type { Draft, DraftView, ImageIntent, MobileRequest, MutationIntent, NoteDocument, SaveIntent } from './types'
+
+installTestDialogApi()
 
 const host = vi.hoisted(() => ({ mobileCapabilities: vi.fn(), mobileVault: vi.fn(), mobileRequest: vi.fn(), mobileOpenExternal: vi.fn() }))
 vi.mock('./native', () => host)
@@ -62,7 +65,7 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = undefined })
 async function start() { wrapper = mount(App, { attachTo: document.body }); await flushPromises(); return wrapper }
 function button(label: string) { const found = wrapper!.findAll('button').find(b => b.text() === label); expect(found, label).toBeDefined(); return found! }
-async function open() { await wrapper!.get('[data-note-row]').trigger('click'); await flushPromises() }
+async function open() { await wrapper!.get('.tree-node[aria-label="original.md"]').trigger('click'); await flushPromises() }
 
 it('opens a reviewed original external link only after the explicit confirmation',async()=>{
   host.mobileCapabilities.mockResolvedValue({protocol:1,platform:'android',workspace:true,notes:true,external_links:true,version:'0.1.0-dev1'})
@@ -86,7 +89,7 @@ it('resolves a reviewed local link through a bounded native path read before swi
   await start();await open();await wrapper!.get('.file-actions summary').trigger('click');await button('Read preview').trigger('click');await flushPromises()
   wrapper!.getComponent(MobilePreview).vm.$emit('link','dir/%E4%B8%AD%E6%96%87.md');await flushPromises();await button('Open').trigger('click');await flushPromises()
   expect(host.mobileRequest.mock.calls.find(([r])=>r.kind==='read_path')?.[0]).toEqual({kind:'read_path',path:'dir/中文.md'})
-  expect(wrapper!.get('.document-title').text()).toBe('中文.md')
+  expect(wrapper!.get('.titlebar .file-name').text()).toBe('中文.md')
   expect(wrapper!.get('.cm-editor').text()).toContain('linked original')
 })
 
@@ -133,12 +136,12 @@ it('wires real editor bytes through draft persistence and the original frozen sa
 it('preserves a frozen deletion across an accessible dialog language switch', async () => {
   await start(); await open(); await wrapper!.get('.file-actions summary').trigger('click')
   await button('Delete').trigger('click'); await flushPromises()
-  expect(wrapper!.get('[role="dialog"]').text()).toContain('original-native-file-action')
-  expect(wrapper!.get('[role="dialog"]').text()).toContain('original.md')
+  expect(wrapper!.get('dialog').text()).toContain('original-native-file-action')
+  expect(wrapper!.get('dialog').text()).toContain('original.md')
   const count = host.mobileRequest.mock.calls.length, frozen = clone(mutation)
   await wrapper!.get('.mobile-dialog select').setValue('zh-CN'); await flushPromises()
   expect(host.mobileRequest).toHaveBeenCalledTimes(count); expect(mutation).toEqual(frozen)
-  expect(wrapper!.get('[role="dialog"]').text()).toContain('审阅删除')
+  expect(wrapper!.get('dialog').text()).toContain('审阅删除')
   await button('执行已审阅的操作').trigger('click'); await flushPromises()
   expect(host.mobileRequest.mock.calls.filter(([r]) => r.kind === 'apply_mutation').map(([r]) => r)).toEqual([{ kind: 'apply_mutation', operation_id: 'original-native-file-action' }])
 })
@@ -160,10 +163,10 @@ it('does not let an earlier failed search overwrite the current results', async 
     if (request.kind === 'list_notes' && request.query === 'latest') return Promise.resolve({ items: [{ ...doc, path: 'latest.md' }], total: 1, directories: [], unsearched_large_notes: 0 })
     return api(request)
   })
-  await start(); await wrapper!.get('.search-row input').setValue('old'); await wrapper!.get('.search-row').trigger('submit'); await flushPromises()
-  await wrapper!.get('.search-row input').setValue('latest'); await wrapper!.get('.search-row').trigger('submit'); await flushPromises()
+  await start(); await wrapper!.get('.file-search input').setValue('old'); await wrapper!.get('.file-search').trigger('submit'); await flushPromises()
+  await wrapper!.get('.file-search input').setValue('latest'); await wrapper!.get('.file-search').trigger('submit'); await flushPromises()
   rejectOld(Error('earlier request failed')); await flushPromises()
-  expect(wrapper!.get('[data-note-row]').text()).toContain('latest.md')
+  expect(wrapper!.get('.tree-node[aria-label="latest.md"]').text()).toContain('latest.md')
   expect(wrapper!.find('[role="alert"]').exists()).toBe(false)
 })
 

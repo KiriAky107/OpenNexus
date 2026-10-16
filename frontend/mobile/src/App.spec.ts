@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, expect, it, vi } from 'vitest'
+import { installTestDialogApi } from './dialogTestSupport'
 import App from './App.vue'
 import MobileCanvas from './MobileCanvas.vue'
+
+installTestDialogApi()
 
 const host = vi.hoisted(() => ({ mobileCapabilities: vi.fn(), mobileVault: vi.fn(), mobileRequest: vi.fn() }))
 vi.mock('./native', () => host)
@@ -19,11 +22,12 @@ beforeEach(() => {
 it('changes interface language without rereading or changing the native vault', async () => {
   const wrapper = mount(App)
   await flushPromises()
-  expect(wrapper.text()).toContain('Local vault opened')
+  expect(wrapper.find('.empty-workspace').exists()).toBe(true)
   const nativeReads = host.mobileRequest.mock.calls.length
-  await wrapper.get('.workspace-header select').setValue('zh-CN')
+  await wrapper.get('.titlebar [aria-label="Settings"]').trigger('click'); await flushPromises()
+  await wrapper.get('[aria-label="Interface language"]').setValue('zh-CN')
   await flushPromises()
-  expect(wrapper.text()).toContain('本机知识库已打开')
+  expect(wrapper.text()).toContain('开始写作')
   expect(document.documentElement.lang).toBe('zh-CN')
   expect(localStorage.getItem('opennexus.mobile.language')).toBe('zh-CN')
   expect(host.mobileCapabilities).toHaveBeenCalledTimes(1)
