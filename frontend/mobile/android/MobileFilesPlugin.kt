@@ -27,6 +27,16 @@ class MobileFilesPlugin(private val owner: Activity) : Plugin(owner) {
     override fun onDestroy() { worker.shutdown() }
     private data class Ticket(val id: String, val file: File, val sha: String, val size: Long, val filename: String)
 
+    @Command
+    fun background(invoke: Invoke) {
+        owner.runOnUiThread {
+            try {
+                if (!owner.moveTaskToBack(true)) throw IOException("MOBILE_NAVIGATION_FAILED")
+                invoke.resolve(JSObject().apply { put("state","backgrounded") })
+            } catch (_: Exception) { invoke.reject("MOBILE_NAVIGATION_FAILED") }
+        }
+    }
+
     private fun root(): File {
         val privateRoot = File(owner.applicationInfo.dataDir).canonicalFile
         val root = File(privateRoot, "exports").canonicalFile

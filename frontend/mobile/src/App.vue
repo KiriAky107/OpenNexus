@@ -5,7 +5,7 @@ import MobileEditor from './MobileEditor.vue'
 import MobileCanvas from './MobileCanvas.vue'
 import MobilePreview from './MobilePreview.vue'
 import ExportPanel from './ExportPanel.vue'
-import { mobileCapabilities, mobileOpenExternal, mobileRequest, mobileVault } from './native'
+import { mobileBackground, mobileCapabilities, mobileOnBack, mobileOpenExternal, mobileRequest, mobileVault, type MobileBackListener } from './native'
 import { mobileVaultPath } from './mobileMarkdown'
 import { createNoteSession, errorCode } from './noteSession'
 import { createImageSession, type ImageSelection } from './imageSession'
@@ -26,6 +26,9 @@ const imageBlocked = computed(() => images.state.busy || Boolean(images.state.pe
 let imageSelection: { key: string; generation: number; selection: ImageSelection } | null = null
 const ready = ref(false), booting = ref(false), bootError = ref(''), version = ref('')
 const exportOpen = ref(false), exportAllowed = ref(false), externalAllowed = ref(false)
+const exportPanel = ref<InstanceType<typeof ExportPanel>>()
+const navigationBusy = ref(false)
+let backListener: MobileBackListener | undefined, backRegistration: Promise<void> | undefined
 const tab = ref<'notes' | 'drafts' | 'pending'>('notes'), query = ref(''), directory = ref(''), offset = ref(0)
 const notePage = ref<NotePage>({ items: [], total: 0, directories: [], unsearched_large_notes: 0 })
 const draftPage = ref<Page<DraftSummary>>({ items: [], total: 0 }), pendingPage = ref<Page<PendingOperation>>({ items: [], total: 0 })
@@ -34,7 +37,7 @@ let disposed = false, bootRevision = 0, listRevision = 0, inspectionRevision = 0
 const size = 20
 const dirty = computed(() => Boolean(session.state.view && (!session.state.view.draft.file_id || session.state.generation !== session.state.savedGeneration)))
 const status = computed(() => session.state.composing ? copy.value.input : session.state.saving ? copy.value.saving
-  : session.state.unknownSave ? copy.value.needsCheck : !dirty.value ? copy.value.saved
+  : canvasFieldsPending.value ? copy.value.unkept : session.state.unknownSave ? copy.value.needsCheck : !dirty.value ? copy.value.saved
   : session.state.persistedGeneration >= session.state.generation ? copy.value.draftKept : copy.value.unkept)
 const total = computed(() => tab.value === 'notes' ? notePage.value.total : tab.value === 'drafts' ? draftPage.value.total : pendingPage.value.total)
 const current = computed(() => session.state.view?.current ?? null)
@@ -74,6 +77,8 @@ async function boot() {
     if (!capabilities.notes) throw new Error('MOBILE_NOTES_UNAVAILABLE')
     await mobileVault()
     if (disposed || revision !== bootRevision) return
+    if (capabilities.navigation === true) await registerBack()
+    if (disposed || revision !== bootRevision) return
     version.value = capabilities.version; exportAllowed.value = capabilities.exports === true; externalAllowed.value = capabilities.external_links === true; ready.value = true; await load()
   } catch (error) { if (!disposed && revision === bootRevision) bootError.value = errorCode(error) }
   finally { if (!disposed && revision === bootRevision) booting.value = false }
@@ -83,7 +88,38 @@ function enterDirectory(path: string) { inspectionRevision++; directory.value = 
 function search() { inspectionRevision++; offset.value = 0; void load() }
 function turnPage(delta: number) { inspectionRevision++; offset.value = Math.max(0,offset.value+delta*size); void load() }
 async function runEditor(action: () => Promise<unknown>) { try { await action() } catch { /* The session owns and scopes its feedback. */ } }
-async function leave() { await runEditor(async () => { await session.close(); await load() }) }
+async function closeEditor() { await session.close(); if (!disposed) await load() }
+async function leave() {
+  if (navigationBusy.value || session.state.composing || canvasFieldsPending.value || imageBlocked.value) return
+  navigationBusy.value = true
+  try { await runEditor(closeEditor) } finally { navigationBusy.value = false }
+}
+async function registerBack() {
+  backRegistration ??= mobileOnBack(() => { void navigateBack() }).then(listener => {
+    if (disposed) void Promise.resolve(listener.unregister()).catch(() => undefined)
+    else backListener = listener
+  }).catch(() => { backRegistration = undefined; throw Error('MOBILE_NAVIGATION_UNAVAILABLE') })
+  await backRegistration
+}
+async function navigateBack() {
+  if (disposed || !ready.value || navigationBusy.value || session.state.composing || session.state.saving || actionBusy.value || imageBlocked.value) return
+  navigationBusy.value = true
+  try {
+    if (dialog.value) { await cancelDialog(); return }
+    if (exportOpen.value) { exportPanel.value?.handleBack(); return }
+    if (canvasFieldsPending.value) return
+    if (fileActions.value?.open) { fileActions.value.open = false; return }
+    if (preview.value) { preview.value = false; return }
+    if (isCanvas.value && canvas.value?.handleBack()) return
+    if (session.state.view) { await closeEditor(); return }
+    if (tab.value !== 'notes') { selectTab('notes'); return }
+    if (query.value) { query.value = ''; search(); return }
+    if (directory.value) { enterDirectory(parent(directory.value)); return }
+    await mobileBackground()
+  } catch (error) {
+    if (!disposed) { if (session.state.view) session.reportError(errorCode(error)); else listError.value = errorCode(error) }
+  } finally { navigationBusy.value = false }
+}
 async function save() { await runEditor(async () => { await session.save(); await load() }) }
 function undo() { if (isCanvas.value) canvas.value?.undo(); else editor.value?.undo() }
 function redo() { if (isCanvas.value) canvas.value?.redo(); else editor.value?.redo() }
@@ -259,14 +295,14 @@ async function discard() {
 }
 function pause() { if (document.visibilityState === 'hidden') void session.flush().catch(() => undefined) }
 onMounted(() => { void boot(); document.addEventListener('visibilitychange', pause) })
-onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspectionRevision++; document.removeEventListener('visibilitychange', pause); images.dispose(); session.dispose() })
+onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspectionRevision++; void Promise.resolve(backListener?.unregister()).catch(() => undefined); backListener = undefined; document.removeEventListener('visibilitychange', pause); images.dispose(); session.dispose() })
 </script>
 
 <template>
   <div class="mobile-workspace" :class="{ editing: session.state.view }">
     <header class="workspace-header">
       <template v-if="session.state.view">
-        <button class="quiet" :disabled="session.state.saving || session.state.composing || actionBusy || imageBlocked || canvasFieldsPending" @click="leave">{{ copy.back }}</button>
+        <button class="quiet" :disabled="navigationBusy || session.state.saving || session.state.composing || actionBusy || imageBlocked || canvasFieldsPending" @click="leave">{{ copy.back }}</button>
         <div class="document-title" :title="session.state.view.draft.path">{{ basename(session.state.view.draft.path) }}</div>
       </template>
       <div v-else class="brand"><img :src="logo" alt="" /><strong>OpenNexus</strong></div>
@@ -283,7 +319,7 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
 
     <main v-else-if="session.state.view" class="editor-page" :aria-busy="session.state.loading">
       <nav class="editor-toolbar" :aria-label="copy.more">
-        <button :disabled="!dirty || session.state.saving || session.state.composing || Boolean(session.state.pendingSave) || session.state.unknownSave || imageBlocked || canvasFieldsPending" @click="save">{{ session.state.saving ? copy.saving : copy.save }}</button>
+        <button :disabled="navigationBusy || !dirty || session.state.saving || session.state.composing || Boolean(session.state.pendingSave) || session.state.unknownSave || imageBlocked || canvasFieldsPending" @click="save">{{ session.state.saving ? copy.saving : copy.save }}</button>
         <button class="quiet" :disabled="preview || session.state.composing || Boolean(dialog) || imageBlocked" @click="undo">{{ copy.undo }}</button>
         <button class="quiet" :disabled="preview || session.state.composing || Boolean(dialog) || imageBlocked" @click="redo">{{ copy.redo }}</button>
         <input ref="imageInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/gif,image/webp" :aria-label="copy.addImage" @change="imageSelected" />
@@ -323,10 +359,10 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
       <details v-if="session.state.error === 'REVISION_CONFLICT' && current" class="feedback"><summary>{{ copy.currentVersion }}</summary><pre>{{ current.content }}</pre><button class="quiet" @click="openPath('copy')">{{ copy.copy }}</button></details>
       <p v-if="session.state.view.current_error" class="feedback">{{ copy.missing }}</p>
       <MobileCanvas v-if="isCanvas" :key="documentKey()" ref="canvas" :model-value="session.state.content" :language="language"
-        :read-only="Boolean(dialog) || exportOpen || actionBusy || imageBlocked" @update:model-value="session.edit" @composition-start="session.compositionStart"
+        :read-only="Boolean(dialog) || exportOpen || actionBusy || imageBlocked || navigationBusy" @update:model-value="session.edit" @composition-start="session.compositionStart"
         @composition-end="session.compositionEnd" @error="session.reportError" @image="selectImage" @validation="pending => canvasFieldsPending = pending" @link="href => dialog = { kind: 'link', href, busy: false, error: '' }" />
       <MobileEditor v-else v-show="!preview" :key="documentKey()" ref="editor" :model-value="session.state.content" :label="copy.body" :language="language"
-        :read-only="Boolean(dialog) || exportOpen || actionBusy || imageBlocked" @update:model-value="session.edit" @composition-start="session.compositionStart"
+        :read-only="Boolean(dialog) || exportOpen || actionBusy || imageBlocked || navigationBusy" @update:model-value="session.edit" @composition-start="session.compositionStart"
         @composition-end="session.compositionEnd" @error="session.reportError" />
       <MobilePreview v-if="preview" :content="session.state.content" :path="session.state.view.draft.path" :label="copy.preview"
         :image-unavailable="copy.imageUnavailable" :image-limit="copy.imageLimit" @link="href => dialog = { kind: 'link', href, busy: false, error: '' }" />
@@ -395,6 +431,6 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
         </template>
       </section>
     </div>
-    <ExportPanel v-if="exportOpen" :language="language" @language="value => language=value" @close="exportOpen=false" />
+    <ExportPanel v-if="exportOpen" ref="exportPanel" :language="language" @language="value => language=value" @close="exportOpen=false" />
   </div>
 </template>

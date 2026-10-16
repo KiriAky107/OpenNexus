@@ -145,3 +145,23 @@ it('reviews a Canvas file using its original Vault-relative path', async () => {
   expect(wrapper.emitted('link')!.at(-1)).toEqual(['Notes/original.md'])
   wrapper.unmount()
 })
+
+it('cancels a pending touch on Android Back and ignores its later pointer-up', async () => {
+  const wrapper = setup()
+  await pointer(wrapper, '[data-node="a"]', 'pointerdown', { pointerId: 1, button: 0, clientX: 25, clientY: 35 })
+  await pointer(wrapper, '.canvas-viewport', 'pointermove', { pointerId: 1, clientX: 100, clientY: 95 })
+  expect(wrapper.vm.handleBack()).toBe(true)
+  await pointer(wrapper, '.canvas-viewport', 'pointerup', { pointerId: 1 })
+  expect(wrapper.emitted('update:modelValue')).toBeUndefined(); expect(wrapper.vm.source()).toBe(original)
+  wrapper.unmount()
+})
+
+it('sends invalid JSON repair input to the recoverable draft boundary before leaving its panel', async () => {
+  const wrapper = mount(MobileCanvas, { props: { modelValue: '{broken original', language: 'en' } })
+  await button(wrapper, 'Review original JSON').trigger('click')
+  await wrapper.get('.repair textarea').setValue('{still invalid 中文')
+  expect(wrapper.emitted('update:modelValue')!.at(-1)).toEqual(['{still invalid 中文'])
+  expect(wrapper.vm.handleBack()).toBe(true)
+  await flushPromises(); expect(wrapper.find('.repair').exists()).toBe(false)
+  wrapper.unmount()
+})

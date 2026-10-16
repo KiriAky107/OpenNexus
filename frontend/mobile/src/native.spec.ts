@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mobileCapabilities, mobileVault, mobileRequest, mobileSaveExport, mobileExportDelivery, mobileOpenExternal } from './native'
+import { mobileCapabilities, mobileVault, mobileRequest, mobileSaveExport, mobileExportDelivery, mobileOpenExternal, mobileOnBack, mobileBackground } from './native'
 
-const host = vi.hoisted(() => ({ isTauri: vi.fn(), invoke: vi.fn() }))
+const host = vi.hoisted(() => ({ isTauri: vi.fn(), invoke: vi.fn(), back: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => host)
+vi.mock('@tauri-apps/api/app', () => ({ onBackButtonPress: host.back }))
 
 describe('mobile native boundary', () => {
   beforeEach(() => { vi.resetAllMocks() })
@@ -17,6 +18,9 @@ describe('mobile native boundary', () => {
       await expect(mobileSaveExport('original')).rejects.toThrow('MOBILE_HOST_REQUIRED')
       await expect(mobileExportDelivery('original')).rejects.toThrow('MOBILE_HOST_REQUIRED')
       await expect(mobileOpenExternal('https://example.com')).rejects.toThrow('MOBILE_HOST_REQUIRED')
+      await expect(mobileOnBack(() => undefined)).rejects.toThrow('MOBILE_HOST_REQUIRED')
+      await expect(mobileBackground()).rejects.toThrow('MOBILE_HOST_REQUIRED')
+      expect(host.back).not.toHaveBeenCalled()
       expect(host.invoke).not.toHaveBeenCalled()
       expect(fetch).not.toHaveBeenCalled()
     } finally { fetch.mockRestore() }
@@ -50,5 +54,12 @@ describe('mobile native boundary', () => {
       ['mobile_save_export',{ticket:'original-sealed-ticket'}],
       ['mobile_export_delivery',{ticket:'original-sealed-ticket',deliveryId:'original-attempt'}],
     ])
+  })
+  it('uses the Android app listener and the narrow own-task background command',async()=>{
+    host.isTauri.mockReturnValue(true);host.invoke.mockResolvedValue({state:'backgrounded'})
+    const listener={unregister:vi.fn()},handler=vi.fn();host.back.mockResolvedValue(listener)
+    expect(await mobileOnBack(handler)).toBe(listener)
+    host.back.mock.calls[0]![0]({canGoBack:false});expect(handler).toHaveBeenCalledTimes(1)
+    await mobileBackground();expect(host.invoke).toHaveBeenCalledExactlyOnceWith('mobile_background')
   })
 })

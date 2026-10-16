@@ -19,6 +19,7 @@ struct Capabilities {
     notes: bool,
     exports: bool,
     external_links: bool,
+    navigation: bool,
     core: bool,
     sync: bool,
     credentials: bool,
@@ -47,6 +48,7 @@ fn mobile_capabilities(window: tauri::WebviewWindow) -> Result<Capabilities, Str
         notes: true,
         exports: cfg!(target_os = "android"),
         external_links: cfg!(target_os = "android"),
+        navigation: cfg!(target_os = "android"),
         core: false,
         sync: false,
         credentials: false,
@@ -118,7 +120,8 @@ pub fn run() {
             mobile_request,
             mobile_files::mobile_save_export,
             mobile_files::mobile_export_delivery,
-            mobile_files::mobile_open_external
+            mobile_files::mobile_open_external,
+            mobile_files::mobile_background
         ])
         .run(tauri::generate_context!())
         .expect("Failed to start OpenNexus mobile");

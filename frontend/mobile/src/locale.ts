@@ -66,6 +66,8 @@ const zh: Record<keyof typeof en, string> = {
 }
 export const text = (language: Language) => language === 'zh-CN' ? zh : en
 const errors: Record<string, [string, string]> = {
+  MOBILE_NAVIGATION_UNAVAILABLE: ['无法初始化 Android 返回操作，请重试。', 'Android Back navigation could not initialize. Try again.'],
+  MOBILE_NAVIGATION_FAILED: ['无法返回系统桌面，当前内容已保留。', 'The app could not return to the Home screen. Current content was kept.'],
   MOBILE_HOST_REQUIRED: ['请在 OpenNexus Android 应用中打开。', 'Open this in the OpenNexus Android app.'],
   MOBILE_NOTES_UNAVAILABLE: ['此宿主尚不支持本机编辑，请使用对应的新版本。', 'This Host does not support local editing; use the corresponding updated app.'],
   MOBILE_HOST_INCOMPATIBLE: ['应用与宿主不兼容。', 'The app and native Host are incompatible.'],

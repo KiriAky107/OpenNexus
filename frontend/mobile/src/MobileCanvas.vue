@@ -119,6 +119,7 @@ function field(event: Event, key: string, edge = false, numeric = false) {
 }
 function startComposition() { composing.value = true; emit('compositionStart') }
 function finishComposition() { composing.value = false; emit('compositionEnd') }
+function repairInput() { if (!composing.value && !props.readOnly) emit('update:modelValue', repairValue.value) }
 function endComposition(event: CompositionEvent, key: string, edge = false) { composing.value = false; field(event, key, edge); emit('compositionEnd') }
 function remove() { guarded(() => { model!.remove(selected.value, edgeId.value || undefined); selected.value = []; edgeId.value = ''; panel.value = false }) }
 function duplicate() { guarded(() => { selected.value = model!.paste(model!.copy(selected.value)); edgeId.value = '' }) }
@@ -142,6 +143,16 @@ onMounted(() => {
 })
 onBeforeUnmount(() => { disposed = true; cancel(); imageCache.dispose(); resizeObserver?.disconnect(); document.removeEventListener('visibilitychange', visibility) })
 defineExpose({ undo, redo, cancel, source: () => model?.source ?? props.modelValue,
+  handleBack() {
+    if (composing.value || invalidFields.value.size) return true
+    if (gestures?.pointers.size) { cancel(); return true }
+    if (addType.value) { addType.value = null; return true }
+    if (toolsMenu.value?.open) { toolsMenu.value.open = false; return true }
+    if (repairOpen.value) { repairOpen.value = false; return true }
+    if (panel.value) { panel.value = false; return true }
+    if (connecting.value || multi.value) { connecting.value = false; multi.value = false; connectFrom.value = ''; return true }
+    return false
+  },
   imagePosition() { if (!gestures || composing.value || props.readOnly || invalidFields.value.size) return null; cancel(); const point = gestures.world({ x: dimensions.value.width / 2 - 100, y: dimensions.value.height / 2 - 80 }); return { x: Math.round(point.x), y: Math.round(point.y) } },
   acceptImage(before: string, after: string) { if (!model || disposed || composing.value || model.source !== before) return false; try { cancel(); model.acceptSource(after); notify(); return true } catch { return false } },
 })
@@ -151,7 +162,7 @@ defineExpose({ undo, redo, cancel, source: () => model?.source ?? props.modelVal
   <section class="canvas-editor" :aria-label="copy.canvas">
     <template v-if="invalid">
       <p role="alert">{{ copy.invalid }}</p><button class="quiet" @click="repairOpen = !repairOpen">{{ copy.repair }}</button>
-      <div v-if="repairOpen" class="repair"><textarea v-model="repairValue" :aria-label="copy.repairLabel" :disabled="readOnly" @compositionstart="startComposition" @compositionend="composing = false; emit('compositionEnd')" /><button :disabled="readOnly || composing" @click="applyRepair">{{ copy.repairApply }}</button></div>
+      <div v-if="repairOpen" class="repair"><textarea v-model="repairValue" :aria-label="copy.repairLabel" :disabled="readOnly" @input="repairInput" @compositionstart="startComposition" @compositionend="finishComposition(); repairInput()" /><button :disabled="readOnly || composing" @click="applyRepair">{{ copy.repairApply }}</button></div>
     </template>
     <template v-else>
       <nav class="canvas-toolbar" :aria-label="copy.canvas">

@@ -64,6 +64,7 @@ async function save() {
 async function turn(delta: number) { await perform(async () => { offset.value=Math.max(0,offset.value+20*delta);await load() }) }
 onMounted(() => { void perform(async () => { await load() }) })
 onBeforeUnmount(() => { disposed=true;revision++ })
+defineExpose({ handleBack() { if (!busy.value) emit('close'); return true } })
 </script>
 
 <template>

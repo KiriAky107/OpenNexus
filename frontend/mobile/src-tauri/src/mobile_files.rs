@@ -11,6 +11,7 @@ fn native_error(error: impl std::fmt::Display, fallback: &str) -> String {
         "MOBILE_EXPORT_RESULT_UNKNOWN",
         "MOBILE_LINK_UNSUPPORTED",
         "MOBILE_LINK_OPEN_FAILED",
+        "MOBILE_NAVIGATION_FAILED",
     ]
     .contains(&message.as_str())
     {
@@ -146,6 +147,27 @@ pub async fn mobile_open_external(
             .run_mobile_plugin_async("openExternal", LinkCall { href: &href })
             .await
             .map_err(|error| native_error(error, "MOBILE_LINK_OPEN_FAILED"))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("MOBILE_PLATFORM_UNSUPPORTED".into())
+    }
+}
+
+#[tauri::command]
+pub async fn mobile_background(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<super::MobileResponse, String> {
+    super::main_window(&window)?;
+    #[cfg(target_os = "android")]
+    {
+        let plugin = app.state::<FilesPlugin>().0.clone();
+        plugin
+            .run_mobile_plugin_async("background", serde_json::json!({}))
+            .await
+            .map_err(|error| native_error(error, "MOBILE_NAVIGATION_FAILED"))
     }
     #[cfg(not(target_os = "android"))]
     {

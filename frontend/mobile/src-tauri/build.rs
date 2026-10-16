@@ -7,6 +7,7 @@ fn main() {
             "mobile_save_export",
             "mobile_export_delivery",
             "mobile_open_external",
+            "mobile_background",
         ]),
     ))
     .expect("Invalid OpenNexus mobile configuration");

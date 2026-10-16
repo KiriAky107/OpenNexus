@@ -1,4 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
+import { onBackButtonPress } from '@tauri-apps/api/app'
 import type { ExportDelivery, MobileRequest } from './types'
 
 export interface MobileCapabilities {
@@ -9,6 +10,7 @@ export interface MobileCapabilities {
   notes: boolean
   exports?: boolean
   external_links?: boolean
+  navigation?: boolean
   core: boolean
   sync: boolean
   credentials: boolean
@@ -46,4 +48,13 @@ export async function mobileExportDelivery(ticket: string, deliveryId?: string):
 export async function mobileOpenExternal(href: string): Promise<{ state: string }> {
   if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
   return invoke('mobile_open_external', { href })
+}
+export interface MobileBackListener { unregister(): Promise<void> | void }
+export async function mobileOnBack(handler: () => void): Promise<MobileBackListener> {
+  if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
+  return onBackButtonPress(() => handler())
+}
+export async function mobileBackground(): Promise<{ state: 'backgrounded' }> {
+  if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
+  return invoke('mobile_background')
 }
