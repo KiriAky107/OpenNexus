@@ -122,6 +122,42 @@ it('uses drawers at tablet portrait width and desktop columns only when landscap
   } finally { wrapper.unmount(); Object.defineProperty(window, 'innerWidth', { configurable: true, value: width }) }
 })
 
+it('closes the file drawer only after its actual asynchronous note open succeeds', async () => {
+  const width=window.innerWidth
+  Object.defineProperty(window,'innerWidth',{configurable:true,value:390})
+  const entry={file_id:'owned-original',path:'notes/original.md',hash:'original-hash',revision:1,deleted:false,is_folder:false}
+  let acknowledge!: (value: unknown) => void
+  let reject!: (error: unknown) => void
+  host.mobileRequest.mockImplementation(async request => {
+    if (request.kind==='list_notes') return {items:[entry],total:1,directories:[],unsearched_large_notes:0}
+    if (request.kind==='open_note') return new Promise((resolve,fail)=>{acknowledge=resolve;reject=fail})
+    return {items:[],total:0}
+  })
+  const wrapper=mount(App)
+  try {
+    await flushPromises()
+    await wrapper.get('.titlebar [aria-label="Files"]').trigger('click')
+    await wrapper.get('.tree-node[aria-label="original.md"]').trigger('click');await flushPromises()
+    expect(wrapper.get('.app-shell').classes()).toContain('secondary-open')
+    expect(wrapper.find('.editor-page').exists()).toBe(false)
+    const content='**原文 😀 / original Markdown**\r\n'
+    acknowledge({draft:{id:'original-draft',file_id:entry.file_id,path:entry.path,base_hash:entry.hash,
+      generation:1,saved_generation:1,content,edit_session:'owned-lease'},current:{...entry,content},
+      current_error:null,pending_save:null,pending_mutation:null})
+    await flushPromises()
+    expect(wrapper.get('.app-shell').classes()).not.toContain('secondary-open')
+    expect(wrapper.get('.main-content').attributes('inert')).toBeUndefined()
+    expect(wrapper.getComponent({name:'MobileEditor'}).props('modelValue')).toBe(content)
+    expect(host.mobileRequest.mock.calls.filter(([r])=>r.kind==='open_note')).toHaveLength(1)
+    await wrapper.get('.titlebar [aria-label="Files"]').trigger('click')
+    await wrapper.get('.tree-node[aria-label="original.md"]').trigger('click');await flushPromises()
+    reject(Error('FILE_NOT_FOUND'));await flushPromises()
+    expect(wrapper.get('.app-shell').classes()).toContain('secondary-open')
+    expect(wrapper.getComponent({name:'MobileEditor'}).props('modelValue')).toBe(content)
+    expect(host.mobileRequest.mock.calls.some(([r])=>r.kind==='persist_draft'||r.kind==='prepare_save'||r.kind==='apply_save')).toBe(false)
+  } finally {wrapper.unmount();Object.defineProperty(window,'innerWidth',{configurable:true,value:width})}
+})
+
 it('consumes native Back to collapse formatting before leaving or persisting the document', async () => {
   const collapse = vi.fn().mockReturnValueOnce(true).mockReturnValue(false)
   const rich = defineComponent({ setup(_, { expose }) { expose({ handleBack: collapse }); return () => h('div', 'Shared rich editor') } })
