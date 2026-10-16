@@ -206,6 +206,8 @@ class Probe:
         tree = self.device('exec-out', 'cat', '/sdcard/opennexus-ci-window.xml', check=False).stdout
         if tree.startswith(b'<?xml'):
             (self.output / f'{phase}.xml').write_bytes(tree)
+        if phase.startswith('theme-'):
+            (self.output / f'{phase}-window.txt').write_bytes(self.shell('dumpsys', 'window', 'windows', check=False).stdout)
 
     def phase(self, phase):
         self.force_stop()
@@ -219,7 +221,7 @@ class Probe:
             f'Actual Android UI phase failed: {phase}; see preserved UI log and screenshot')
         self.phases.append({'phase': phase, 'duration_ms': round((time.monotonic() - start) * 1000), 'passed': True})
         self.force_stop()
-        if self.root is None:
+        if self.root is None and not phase.startswith('theme-'):
             paths = self.shell('run-as', APP, 'find', '.', '-name', 'mobile-drafts.sqlite3', '-type', 'f').stdout.decode().splitlines()
             require(len(paths) == 1, 'Native draft database origin is ambiguous')
             self.root = paths[0].removesuffix('mobile-drafts.sqlite3')
@@ -262,6 +264,8 @@ class Probe:
 
     def run(self):
         self.boot()
+        for theme in ('dark', 'light', 'sepia', 'system'):
+            self.phase('theme-' + theme)
         self.phase('markdown')
         require(self.original('runtime-note.md') == BODY.encode(), 'Saved Markdown bytes differ from actual UI text')
         self.phase('draft')
@@ -300,6 +304,7 @@ class Probe:
             'signer_certificate_sha256': self.binding['signer_certificate_sha256'],
             'device': {'kind': 'github-hosted-android-emulator', 'api': 36, 'abi': 'x86_64', 'serial': self.args.serial},
             'phases': self.phases, 'files_sha256': {name: digest(data) for name, data in originals.items()},
+            'theme_ui': 'Actual native selector choices and cold reloads; screenshots/window observations preserved',
             'system_destination': export, 'draft_database_integrity': 'ok',
             'input_method': 'Android accessibility ACTION_SET_TEXT with Unicode; not IME composition',
             'system_back': 'Actual Android Back key; durable draft recovery and own-task background; not predictive gesture animation proof',

@@ -42,6 +42,10 @@ public final class RuntimeProbe extends Instrumentation {
             ui.setServiceInfo(info);
             String phase = arguments.getString("phase", "");
             switch (phase) {
+                case "theme-dark": selectTheme("System", "Dark"); break;
+                case "theme-light": selectTheme("Dark", "Light"); break;
+                case "theme-sepia": selectTheme("Light", "Sepia"); break;
+                case "theme-system": selectTheme("Sepia", "System"); break;
                 case "markdown":
                     create("New note", NOTE);
                     setText(editable(null), BODY);
@@ -122,6 +126,13 @@ public final class RuntimeProbe extends Instrumentation {
         setText(waitNode(node -> node.isEditable() && node.isFocused(), "focused note path"), path);
         click("Create and edit", false);
         waitLabel("Back");
+    }
+
+    private void selectTheme(String current, String next) {
+        click(current, false);
+        click(next, false);
+        waitLabel(next);
+        waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "New note", false), "theme returned to the owned vault");
     }
 
     private void open(String path) { click(path, true); waitLabel("Back"); }

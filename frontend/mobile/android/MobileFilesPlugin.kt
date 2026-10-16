@@ -2,8 +2,12 @@ package cc.kronecker.opennexus.files
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.util.AtomicFile
+import android.view.View
+import android.view.WindowInsetsController
 import androidx.activity.result.ActivityResult
 import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.Command
@@ -26,6 +30,40 @@ class MobileFilesPlugin(private val owner: Activity) : Plugin(owner) {
     private var active: String? = null
     override fun onDestroy() { worker.shutdown() }
     private data class Ticket(val id: String, val file: File, val sha: String, val size: Long, val filename: String)
+
+    @Suppress("DEPRECATION")
+    @Command
+    fun appearance(invoke: Invoke) {
+        try {
+            val args = invoke.getArgs()
+            val theme = args.getString("theme")
+            val background = args.getString("background")
+            if (theme !in listOf("light", "dark", "sepia") || !background.matches(Regex("#[0-9a-fA-F]{6}"))) {
+                invoke.reject("MOBILE_APPEARANCE_INVALID"); return
+            }
+            val color = Color.parseColor(background)
+            owner.runOnUiThread {
+                try {
+                    val window = owner.window
+                    val dark = theme == "dark"
+                    window.decorView.setBackgroundColor(color)
+                    if (Build.VERSION.SDK_INT >= 30) {
+                        val mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                        window.insetsController?.setSystemBarsAppearance(if (dark) 0 else mask, mask)
+                    } else {
+                        val mask = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or (if (Build.VERSION.SDK_INT >= 26) View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR else 0)
+                        window.decorView.systemUiVisibility = (window.decorView.systemUiVisibility and mask.inv()) or (if (dark) 0 else mask)
+                    }
+                    if (Build.VERSION.SDK_INT < 35) {
+                        window.statusBarColor = color
+                        // API24–25 cannot show dark navigation icons on a light background.
+                        window.navigationBarColor = if (Build.VERSION.SDK_INT >= 26) color else Color.BLACK
+                    }
+                    invoke.resolve(JSObject().apply { put("state", "applied"); put("theme", theme) })
+                } catch (_: Exception) { invoke.reject("MOBILE_APPEARANCE_FAILED") }
+            }
+        } catch (_: Exception) { invoke.reject("MOBILE_APPEARANCE_INVALID") }
+    }
 
     @Command
     fun background(invoke: Invoke) {

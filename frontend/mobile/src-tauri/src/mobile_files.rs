@@ -127,6 +127,49 @@ struct LinkCall<'a> {
 #[derive(Serialize)]
 struct BackgroundCall {}
 
+#[cfg(target_os = "android")]
+#[derive(Serialize)]
+struct AppearanceCall<'a> {
+    theme: &'a str,
+    background: &'a str,
+}
+
+#[tauri::command]
+pub async fn mobile_appearance(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    theme: String,
+    background: String,
+) -> Result<super::MobileResponse, String> {
+    super::main_window(&window)?;
+    if !matches!(theme.as_str(), "light" | "dark" | "sepia")
+        || background.len() != 7
+        || !background.starts_with('#')
+        || !background.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+    {
+        return Err("MOBILE_APPEARANCE_INVALID".into());
+    }
+    #[cfg(target_os = "android")]
+    {
+        let plugin = app.state::<FilesPlugin>().0.clone();
+        plugin
+            .run_mobile_plugin_async(
+                "appearance",
+                AppearanceCall {
+                    theme: &theme,
+                    background: &background,
+                },
+            )
+            .await
+            .map_err(|error| native_error(error, "MOBILE_APPEARANCE_FAILED"))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("MOBILE_PLATFORM_UNSUPPORTED".into())
+    }
+}
+
 #[tauri::command]
 pub async fn mobile_open_external(
     window: tauri::WebviewWindow,

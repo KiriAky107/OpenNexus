@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { canvasColor as color } from './canvasColors'
 import { computed,ref,shallowRef,watch,onMounted,onBeforeUnmount,nextTick } from 'vue'
 import { useLayoutPreferencesStore } from '@/stores/layoutPreferences'
 import ControlIcon from '@/components/common/ControlIcon.vue'
@@ -151,7 +152,6 @@ async function open(node:CanvasNode){
     await navigateMarkdownHref(target.split('/').map(encodeURIComponent).join('/')+(typeof node.subpath==='string'?node.subpath:''))
   }catch(cause){error.value=String(cause)}
 }
-function color(value:unknown){if(typeof value!=='string')return'var(--color-border-default)';if(/^#[\da-f]{6}$/i.test(value))return value;return({'1':'var(--color-error)','2':'var(--color-warning)','3':'var(--color-accent-secondary)','4':'var(--color-success)','5':'var(--color-info)','6':'var(--color-accent-primary)'}as Record<string,string>)[value]??'var(--color-border-default)'}
 const imagePath=(node:CanvasNode)=>node.type==='group'?node.background:node.file
 function groupBackground(node:CanvasNode){
   const url=previews.value[node.background??'']?.url

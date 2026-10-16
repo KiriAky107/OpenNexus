@@ -11,6 +11,7 @@ export interface MobileCapabilities {
   exports?: boolean
   external_links?: boolean
   navigation?: boolean
+  appearance?: boolean
   core: boolean
   sync: boolean
   credentials: boolean
@@ -57,4 +58,9 @@ export async function mobileOnBack(handler: () => void): Promise<MobileBackListe
 export async function mobileBackground(): Promise<{ state: 'backgrounded' }> {
   if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
   return invoke('mobile_background')
+}
+export async function mobileAppearance(theme: 'light' | 'dark' | 'sepia', background: string): Promise<{ state: 'applied' }> {
+  if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
+  if (!['light', 'dark', 'sepia'].includes(theme) || !/^#[\da-f]{6}$/i.test(background)) throw new Error('MOBILE_APPEARANCE_INVALID')
+  return invoke('mobile_appearance', { theme, background })
 }

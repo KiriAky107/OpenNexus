@@ -5,6 +5,8 @@ export function savedLanguage(): Language {
   return navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en'
 }
 const en = {
+  theme: 'Theme', themeSystem: 'System', themeLight: 'Light', themeDark: 'Dark', themeSepia: 'Sepia',
+  themeNativeFailed: 'The page theme changed, but system bars could not be updated.',
   language: 'Interface language', ready: 'Local vault opened', checking: 'Opening the local vault…', retry: 'Try again',
   failed: 'Could not open the local vault', notes: 'Notes', drafts: 'Recover drafts', pending: 'Check operations', newNote: 'New note',
   search: 'Search names and text', find: 'Search', root: 'Vault', previous: 'Previous', next: 'Next',
@@ -35,6 +37,8 @@ const en = {
   exportNewCopy: 'Save original snapshot at a new location', chooseDestination: 'Choose save location', preparedExports: 'Prepared snapshots', noExports: 'No prepared snapshots',
 }
 const zh: Record<keyof typeof en, string> = {
+  theme: '主题', themeSystem: '跟随系统', themeLight: '浅色', themeDark: '深色', themeSepia: '护眼',
+  themeNativeFailed: '页面主题已切换，系统栏外观未能更新。',
   language: '界面语言', ready: '本机知识库已打开', checking: '正在打开本机知识库…', retry: '重试',
   failed: '无法打开本机知识库', notes: '笔记', drafts: '恢复草稿', pending: '核对操作', newNote: '新建笔记',
   search: '搜索名称与正文', find: '搜索', root: '知识库', previous: '上一页', next: '下一页',

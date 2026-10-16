@@ -11,10 +11,13 @@ import { createNoteSession, errorCode } from './noteSession'
 import { createImageSession, type ImageSelection } from './imageSession'
 import { errorText, languageKey, savedLanguage, text, type Language } from './locale'
 import { canvasText } from './canvasLocale'
+import { useMobileTheme } from './theme'
 import { resolveCanvasFile } from '../../src/services/workspaceDocuments'
 import type { DraftSummary, Entry, MutationIntent, NoteDocument, NotePage, Page, PendingOperation, SaveIntent } from './types'
 
 const language = ref<Language>(savedLanguage()), copy = computed(() => text(language.value))
+const appearanceEnabled = ref(false)
+const { choice: themeChoice, nativeError: themeError, retryNative: retryTheme } = useMobileTheme(appearanceEnabled)
 const session = createNoteSession(), editor = ref<InstanceType<typeof MobileEditor>>()
 const canvas = ref<InstanceType<typeof MobileCanvas>>()
 const canvasFieldsPending = ref(false)
@@ -78,6 +81,7 @@ async function boot() {
     await mobileVault()
     if (disposed || revision !== bootRevision) return
     if (capabilities.navigation === true) await registerBack()
+    appearanceEnabled.value = capabilities.appearance === true
     if (disposed || revision !== bootRevision) return
     version.value = capabilities.version; exportAllowed.value = capabilities.exports === true; externalAllowed.value = capabilities.external_links === true; ready.value = true; await load()
   } catch (error) { if (!disposed && revision === bootRevision) bootError.value = errorCode(error) }
@@ -306,10 +310,14 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
         <div class="document-title" :title="session.state.view.draft.path">{{ basename(session.state.view.draft.path) }}</div>
       </template>
       <div v-else class="brand"><img :src="logo" alt="" /><strong>OpenNexus</strong></div>
-      <label class="language"><span class="sr-only">{{ copy.language }}</span>
+      <div class="appearance-controls"><label class="language"><span class="sr-only">{{ copy.language }}</span>
         <select v-model="language" :aria-label="copy.language"><option value="zh-CN">中文</option><option value="en">English</option></select>
       </label>
+      <label class="language theme-choice"><span class="sr-only">{{ copy.theme }}</span>
+        <select v-model="themeChoice" :aria-label="copy.theme"><option value="system">{{ copy.themeSystem }}</option><option value="light">{{ copy.themeLight }}</option><option value="dark">{{ copy.themeDark }}</option><option value="sepia">{{ copy.themeSepia }}</option></select>
+      </label></div>
     </header>
+    <p v-if="themeError" class="theme-notice" role="status">{{ copy.themeNativeFailed }}<button class="quiet" @click="retryTheme">{{ copy.retry }}</button></p>
 
     <main v-if="!ready" class="startup-card" :aria-busy="booting">
       <h1>{{ booting ? copy.checking : copy.failed }}</h1>

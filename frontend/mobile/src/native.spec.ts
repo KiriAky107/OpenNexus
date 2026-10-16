@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mobileCapabilities, mobileVault, mobileRequest, mobileSaveExport, mobileExportDelivery, mobileOpenExternal, mobileOnBack, mobileBackground } from './native'
+import { mobileCapabilities, mobileVault, mobileRequest, mobileSaveExport, mobileExportDelivery, mobileOpenExternal, mobileOnBack, mobileBackground, mobileAppearance } from './native'
 
 const host = vi.hoisted(() => ({ isTauri: vi.fn(), invoke: vi.fn(), back: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => host)
@@ -20,6 +20,7 @@ describe('mobile native boundary', () => {
       await expect(mobileOpenExternal('https://example.com')).rejects.toThrow('MOBILE_HOST_REQUIRED')
       await expect(mobileOnBack(() => undefined)).rejects.toThrow('MOBILE_HOST_REQUIRED')
       await expect(mobileBackground()).rejects.toThrow('MOBILE_HOST_REQUIRED')
+      await expect(mobileAppearance('dark', '#0d1117')).rejects.toThrow('MOBILE_HOST_REQUIRED')
       expect(host.back).not.toHaveBeenCalled()
       expect(host.invoke).not.toHaveBeenCalled()
       expect(fetch).not.toHaveBeenCalled()
@@ -61,5 +62,14 @@ describe('mobile native boundary', () => {
     expect(await mobileOnBack(handler)).toBe(listener)
     host.back.mock.calls[0]![0]({canGoBack:false});expect(handler).toHaveBeenCalledTimes(1)
     await mobileBackground();expect(host.invoke).toHaveBeenCalledExactlyOnceWith('mobile_background')
+  })
+  it('accepts only bounded appearance values and never sends content or a storage path to the platform', async () => {
+    host.isTauri.mockReturnValue(true); host.invoke.mockResolvedValue({ state: 'applied' })
+    for (const background of ['', 'white', '#fff', '/data/owned', '#ffffff00', 'url(file:///private)']) {
+      await expect(mobileAppearance('light', background)).rejects.toThrow('MOBILE_APPEARANCE_INVALID')
+    }
+    expect(host.invoke).not.toHaveBeenCalled()
+    await mobileAppearance('dark', '#0d1117')
+    expect(host.invoke).toHaveBeenCalledExactlyOnceWith('mobile_appearance', { theme: 'dark', background: '#0d1117' })
   })
 })

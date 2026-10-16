@@ -44,7 +44,8 @@ const calloutTones = ['info', 'success', 'warning', 'danger', 'important', 'quot
 it.each(calloutThemes)('keeps callout headings readable against tinted surfaces in %s', themeId => {
   const doc = document.implementation.createHTMLDocument('theme contrast')
   const style = doc.createElement('style')
-  style.textContent = files['styles/tokens.css'] ?? files['styles\\tokens.css']!
+  style.textContent = files['styles/theme-tokens.css'] ?? files['styles\\theme-tokens.css']!
+  style.textContent += files['styles/tokens.css'] ?? files['styles\\tokens.css']!
   style.textContent += getCommunityThemePreviewCss(themeId)
   doc.head.append(style)
   const values = new Map<string, string>()

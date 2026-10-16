@@ -39,9 +39,10 @@ onMounted(() => {
       catch (error) { emit('error', error instanceof Error ? error.message : 'MOBILE_EDITOR_FORMAT_ERROR') }
     }),
     EditorView.theme({
-      '&': { height: '100%', fontSize: '16px' }, '.cm-scroller': { overflow: 'auto', fontFamily: 'ui-monospace, monospace', lineHeight: '1.7' },
+      '&': { height: '100%', fontSize: '16px', color: 'var(--color-text-primary)', backgroundColor: 'var(--color-surface-primary)' }, '.cm-scroller': { overflow: 'auto', fontFamily: 'var(--font-editor-mono)', lineHeight: '1.7' },
       '.cm-content': { padding: '18px 16px 90px', minHeight: '100%' }, '&.cm-focused': { outline: 'none' },
-      '.cm-line': { padding: '0' }, '.cm-cursor': { borderLeftColor: '#234d43' }, '.cm-selectionBackground': { background: '#d4e7dc !important' },
+      '.cm-line': { padding: '0' }, '.cm-cursor': { borderLeftColor: 'var(--color-accent-primary)' },
+      '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { background: 'var(--color-markdown-selection) !important' },
     }),
   ] }) })
 })

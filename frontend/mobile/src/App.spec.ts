@@ -32,6 +32,18 @@ it('changes interface language without rereading or changing the native vault', 
   wrapper.unmount()
 })
 
+it('switches themes without submitting a path review or changing its original input', async () => {
+  const wrapper = mount(App); await flushPromises()
+  await wrapper.findAll('button').find(item => item.text() === 'New note')!.trigger('click')
+  await wrapper.get('.mobile-dialog input').setValue('未提交 original.md')
+  const before = host.mobileRequest.mock.calls.length
+  await wrapper.get('.theme-choice select').setValue('dark'); await flushPromises()
+  expect(wrapper.get<HTMLInputElement>('.mobile-dialog input').element.value).toBe('未提交 original.md')
+  expect(host.mobileRequest).toHaveBeenCalledTimes(before)
+  expect(document.documentElement.dataset.theme).toBe('dark')
+  wrapper.unmount()
+})
+
 it('creates a Canvas through its own native format route and opens free editing instead of Markdown', async () => {
   const raw = '{\n  "nodes": [],\n  "edges": []\n}\n'
   host.mobileRequest.mockImplementation(async request => {
