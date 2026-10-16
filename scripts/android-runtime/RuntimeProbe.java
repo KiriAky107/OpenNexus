@@ -305,6 +305,19 @@ public final class RuntimeProbe extends Instrumentation {
         activate(waitNode(node -> label(node, text, false) && node.isEnabled() && node.isClickable(), "clickable menu: " + text));
     }
 
+    private boolean titleBarControl(AccessibilityNodeInfo node) {
+        AccessibilityNodeInfo parent = node.getParent();
+        return parent != null && APP.equals(string(parent.getPackageName()))
+            && descendantLabel(parent, "Main navigation") && descendantLabel(parent, "Settings");
+    }
+
+    private void clickTitleBar(String text) {
+        AccessibilityNodeInfo node = waitNode(value -> APP.equals(string(value.getPackageName()))
+            && label(value, text, false) && value.isEnabled() && value.isClickable()
+            && titleBarControl(value), "workspace title bar: " + text);
+        activate(node, this::titleBarControl);
+    }
+
     private void clickFormatting(String text) {
         final String scope = "Markdown formatting toolbar";
         // The editor's selection bubble exposes the same formatting labels.
@@ -331,7 +344,7 @@ public final class RuntimeProbe extends Instrumentation {
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Back", false), "return from original system picker");
     }
 
-    private void open(String path) { clickMenu("Files"); click(path, true); waitLabel("Back"); }
+    private void open(String path) { clickTitleBar("Files"); click(path, true); waitLabel("Back"); }
     private void save() { hideKeyboard(); click("Save", false); waitLabel("Saved"); }
     private void waitLabel(String text) { waitNode(node -> label(node, text, false), "label: " + text); }
     private void click(String text, boolean prefix) {
@@ -378,10 +391,14 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void activate(AccessibilityNodeInfo node) {
-        activate(node, null);
+        activate(node, (Predicate<AccessibilityNodeInfo>) null);
     }
 
     private void activate(AccessibilityNodeInfo node, String container) {
+        activate(node, container == null ? null : value -> within(value, container));
+    }
+
+    private void activate(AccessibilityNodeInfo node, Predicate<AccessibilityNodeInfo> scope) {
         // WebView accepting ACTION_CLICK does not prove that a user tap reached its handler.
         // Send exactly one real tap to the freshly observed target; never replay a write.
         settleUi();
@@ -402,7 +419,7 @@ public final class RuntimeProbe extends Instrumentation {
             && (namedEditable || expectedText.equals(string(value.getText())))
             && expectedDescription.equals(string(value.getContentDescription())) && expectedId.equals(string(value.getViewIdResourceName()))
             && (Build.VERSION.SDK_INT < 26 || expectedHint.equals(string(value.getHintText())))
-            && (container == null || within(value, container));
+            && (scope == null || scope.test(value));
         node = uniqueTarget(sameTarget);
         Rect bounds = new Rect(); node.getBoundsInScreen(bounds);
         Rect previous = new Rect(bounds);
