@@ -87,11 +87,16 @@ def stop_owned_emulator(adb, serial, avd):
     require_hosted_emulator(serial)
     def command(*args):
         return subprocess.run([str(adb), '-s', serial, *args], capture_output=True, timeout=20)
+    inventory = subprocess.run([str(adb), 'devices'], capture_output=True, timeout=20)
+    require(inventory.returncode == 0, 'Device inventory is unknown; no process was stopped')
+    states = [parts[1] for line in inventory.stdout.decode('utf-8', 'replace').splitlines()
+        if len(parts := line.split()) >= 2 and parts[0] == serial]
+    if not states:
+        # Absence from ADB is not a claim that an unresponsive process has exited.
+        return {'state': 'not_connected', 'stop_requested': False}
+    require(states == ['device'], 'Emulator state is unknown; no guessed process was stopped')
     observed = command('emu', 'avd', 'name')
-    if observed.returncode:
-        text = (observed.stdout + observed.stderr).decode('utf-8', 'replace').lower()
-        require('not found' in text or 'no emulator detected' in text, 'Emulator state is unknown; no guessed process was stopped')
-        return {'state': 'not_present', 'stop_requested': False}
+    require(observed.returncode == 0, 'Emulator identity is unknown; no guessed process was stopped')
     names = observed.stdout.decode('utf-8', 'replace').splitlines()
     require(names and names[0].strip() == avd, 'AVD ownership mismatch; no process was stopped')
     stopped = command('emu', 'kill')

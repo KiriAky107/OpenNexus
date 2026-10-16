@@ -174,14 +174,11 @@ jobs:
           fi
           test -c /dev/kvm
           sudo setfacl -m "u:$(id -un):rw" /dev/kvm
-          ldd "$ANDROID_HOME/emulator/qemu/linux-x86_64/qemu-system-x86_64" > .build/android-runtime/emulator-dependencies.txt
-          if grep -q 'not found' .build/android-runtime/emulator-dependencies.txt; then
-            cat .build/android-runtime/emulator-dependencies.txt
-            exit 1
-          fi
+          # Use the official launcher, which configures its bundled library paths.
+          # Running ldd directly on QEMU incorrectly reports bundled Qt/emu libraries missing.
+          "$ANDROID_HOME/emulator/emulator" -version > .build/android-runtime/emulator-version.txt 2>&1
           "$ANDROID_HOME/emulator/emulator" -accel-check
           printf 'no\n' | "$manager/avdmanager" create avd --name "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --package 'system-images;android-36;google_apis;x86_64' --device pixel_7
-          "$ANDROID_HOME/emulator/emulator" -version > .build/android-runtime/emulator-version.txt 2>&1
           "$ANDROID_HOME/emulator/emulator" -avd "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" -port 5562 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader -accel on -memory 2048 -cores 2 > .build/android-runtime/emulator.log 2>&1 &
           echo "$!" > .build/android-runtime/emulator.pid
       - name: Check real APK editing, force-stop recovery, Canvas touch and system export
@@ -204,5 +201,4 @@ jobs:
             .build/android-runtime/evidence/
             .build/android-runtime/emulator.log
             .build/android-runtime/emulator-version.txt
-            .build/android-runtime/emulator-dependencies.txt
           if-no-files-found: warn

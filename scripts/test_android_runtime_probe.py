@@ -41,23 +41,26 @@ class RuntimeBoundaries(unittest.TestCase):
             for path,data in before.items():self.assertEqual(path.read_bytes(),data,'A new observation replaced earlier evidence')
 
     def test_cleanup_does_not_fail_or_kill_when_no_emulator_ever_started(self):
-        absent = subprocess.CompletedProcess([], 1, b'', b"error: device 'emulator-5562' not found")
+        absent = subprocess.CompletedProcess([], 0, b'List of devices attached\n\n', b'')
         with patch('android_runtime_probe.require_hosted_emulator'), patch('android_runtime_probe.subprocess.run', return_value=absent) as run:
             result = stop_owned_emulator(Path('/owned/adb'), 'emulator-5562', 'owned-ci-avd')
-        self.assertEqual(result, {'state': 'not_present', 'stop_requested': False})
+        self.assertEqual(result, {'state': 'not_connected', 'stop_requested': False})
         self.assertEqual(run.call_count, 1)
-        self.assertEqual(run.call_args.args[0][-3:], ['emu', 'avd', 'name'])
+        self.assertEqual(run.call_args.args[0], [str(Path('/owned/adb')), 'devices'])
 
     def test_cleanup_rejects_other_avds_and_does_not_guess_an_offline_process(self):
-        for result in [subprocess.CompletedProcess([], 0, b'other-avd\nOK\n', b''),
-            subprocess.CompletedProcess([], 1, b'', b'error: device offline')]:
-            with patch('android_runtime_probe.require_hosted_emulator'), patch('android_runtime_probe.subprocess.run', return_value=result) as run:
+        inventories = [subprocess.CompletedProcess([], 0, b'List of devices attached\nemulator-5562\tdevice\n', b''),
+            subprocess.CompletedProcess([], 0, b'List of devices attached\nemulator-5562\toffline\n', b'')]
+        for index, inventory in enumerate(inventories):
+            replies = [inventory, subprocess.CompletedProcess([], 0, b'other-avd\nOK\n', b'')]
+            with patch('android_runtime_probe.require_hosted_emulator'), patch('android_runtime_probe.subprocess.run', side_effect=replies) as run:
                 with self.assertRaises(RuntimeError):
                     stop_owned_emulator(Path('/owned/adb'), 'emulator-5562', 'owned-ci-avd')
-            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_count, 2 if index == 0 else 1)
 
     def test_cleanup_sends_stop_only_after_matching_the_exact_owned_avd(self):
-        replies = [subprocess.CompletedProcess([], 0, b'owned-ci-avd\nOK\n', b''), subprocess.CompletedProcess([], 0, b'OK\n', b'')]
+        replies = [subprocess.CompletedProcess([], 0, b'List of devices attached\nemulator-5562\tdevice\n', b''),
+            subprocess.CompletedProcess([], 0, b'owned-ci-avd\nOK\n', b''), subprocess.CompletedProcess([], 0, b'OK\n', b'')]
         with patch('android_runtime_probe.require_hosted_emulator'), patch('android_runtime_probe.subprocess.run', side_effect=replies) as run:
             result = stop_owned_emulator(Path('/owned/adb'), 'emulator-5562', 'owned-ci-avd')
         self.assertTrue(result['stop_requested'])
