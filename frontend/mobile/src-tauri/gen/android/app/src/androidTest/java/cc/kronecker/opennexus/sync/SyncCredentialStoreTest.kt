@@ -61,7 +61,8 @@ class SyncCredentialStoreTest {
         assertArrayEquals(before,record(scope).readBytes())
         val read=store.read(scope)!!;try { assertArrayEquals(secret,read) } finally { read.fill(0) }
         val other=scope.replace("device-one","device-two");store.put(other,secret.copyOf());store.remove(scope)
-        assertNull(store.read(scope));assertNotNull(store.read(other)?.also { it.fill(0) })
+        assertNull(store.read(scope))
+        val retained=store.read(other)!!;try { assertArrayEquals(secret,retained) } finally { retained.fill(0) }
     }
 
     @Test fun refusesInvalidOrOversizedInputsAndClearsRejectedSecrets() {
@@ -73,5 +74,8 @@ class SyncCredentialStoreTest {
         val large=ByteArray(65537) { 1 }
         assertThrows(IllegalArgumentException::class.java) { store.put(scope,large) }
         assertTrue(large.all { it==0.toByte() });assertFalse(record(scope).exists())
+        record(scope).parentFile!!.mkdirs();record(scope).writeBytes(ByteArray(70*1024))
+        assertThrows(IllegalStateException::class.java) { store.read(scope) }.also { assertEquals("SYNC_SESSION_INVALID",it.message) }
+        assertEquals(70L*1024,record(scope).length()) // Bounded read rejection preserves the corrupt original.
     }
 }
