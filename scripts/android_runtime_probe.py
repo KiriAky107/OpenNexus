@@ -4,6 +4,7 @@ This is intentionally unavailable on developer machines and physical devices. Ac
 Unicode input is checked as text entry, not reported as Chinese IME composition acceptance.
 """
 import argparse
+from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
 import io
@@ -15,6 +16,7 @@ import shlex
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 
@@ -183,12 +185,13 @@ class Probe:
         return self.private(self.root + 'vault/' + name).stdout
 
     def draft_rows(self):
-        database = self.tools / 'mobile-drafts.sqlite3'
+        snapshot = Path(tempfile.mkdtemp(prefix='draft-snapshot-', dir=self.tools))
+        database = snapshot / 'mobile-drafts.sqlite3'
         for suffix in ('', '-wal', '-shm'):
             value = self.private(self.root + 'mobile-drafts.sqlite3' + suffix, check=False)
             if value.returncode == 0:
                 Path(str(database) + suffix).write_bytes(value.stdout)
-        with sqlite3.connect(database) as db:
+        with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:
             require(db.execute('PRAGMA integrity_check').fetchone() == ('ok',), 'Draft database integrity check failed')
             return db.execute('SELECT path,content,generation,saved_generation FROM drafts ORDER BY path').fetchall()
 

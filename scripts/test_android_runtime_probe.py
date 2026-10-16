@@ -1,15 +1,36 @@
 import json
+from contextlib import closing
 import os
 from pathlib import Path
 import tempfile
 import subprocess
+import sqlite3
 import unittest
 from unittest.mock import patch
 
-from android_runtime_probe import APP, digest, require_hosted_emulator, stop_owned_emulator, validate_binding
+from android_runtime_probe import APP, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_database_observations_remain_independent_when_a_later_snapshot_has_no_wal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source=root/'source.sqlite3'
+            with closing(sqlite3.connect(source)) as db:
+                db.execute('CREATE TABLE drafts(path TEXT,content TEXT,generation INTEGER,saved_generation INTEGER)')
+                db.execute("INSERT INTO drafts VALUES('owned.md','first original',2,1)")
+                db.commit()
+            probe=Probe.__new__(Probe);probe.tools=root/'tools';probe.tools.mkdir();probe.root='./'
+            def original(path, **_):
+                return subprocess.CompletedProcess([],0,source.read_bytes(),b'') if path.endswith('mobile-drafts.sqlite3') else subprocess.CompletedProcess([],1,b'',b'No such file')
+            probe.private=original
+            self.assertEqual(probe.draft_rows(),[('owned.md','first original',2,1)])
+            before={path:path.read_bytes() for path in probe.tools.rglob('mobile-drafts.sqlite3')}
+            self.assertEqual(len(before),1)
+            with closing(sqlite3.connect(source)) as db:
+                db.execute("UPDATE drafts SET content='later confirmed',generation=3,saved_generation=3");db.commit()
+            self.assertEqual(probe.draft_rows(),[('owned.md','later confirmed',3,3)])
+            for path,data in before.items():self.assertEqual(path.read_bytes(),data,'A new observation replaced earlier evidence')
+
     def test_cleanup_does_not_fail_or_kill_when_no_emulator_ever_started(self):
         absent = subprocess.CompletedProcess([], 1, b'', b"error: device 'emulator-5562' not found")
         with patch('android_runtime_probe.require_hosted_emulator'), patch('android_runtime_probe.subprocess.run', return_value=absent) as run:
