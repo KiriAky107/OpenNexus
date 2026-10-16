@@ -1,4 +1,5 @@
 import java.util.Properties
+import java.security.MessageDigest
 
 plugins {
     id("com.android.application")
@@ -14,6 +15,10 @@ val tauriProperties = Properties().apply {
 }
 
 val platformVerifierVersion = "0.2.0"
+val platformVerifierArtifacts = mapOf(
+    "aar" to "aa021794230fbc2f0be355999e2cf67398dd563de066a2e17001ffbd0b69101b",
+    "pom" to "78dcb69a1a20e91e72017de9a67104bba1874a7ecc8e6dcdfb2fe1a85de6b362"
+)
 val platformVerifierLock = file("../../../Cargo.lock").readLines()
     .dropWhile { it.trim() != "name = \"rustls-platform-verifier-android\"" }
     .drop(1).firstOrNull()?.trim()
@@ -81,7 +86,9 @@ rust {
 }
 
 dependencies {
-    implementation("org.rustls:rustls-platform-verifier:$platformVerifierVersion")
+    implementation("org.rustls:rustls-platform-verifier:$platformVerifierVersion") {
+        version { strictly(platformVerifierVersion) }
+    }
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")
@@ -91,5 +98,31 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")
 }
+
+val verifyPlatformVerifierOrigin = tasks.register("verifyPlatformVerifierOrigin") {
+    doLast {
+        val artifacts = platformVerifierArtifacts.map { (extension, expected) ->
+            val dependency = dependencies.create("org.rustls:rustls-platform-verifier:$platformVerifierVersion@$extension")
+            val configuration = configurations.detachedConfiguration(dependency).apply { isTransitive = false }
+            val artifact = configuration.singleFile
+            val sha256 = artifact.inputStream().use { input ->
+                val digest = MessageDigest.getInstance("SHA-256")
+                val buffer = ByteArray(8192)
+                while (true) { val count = input.read(buffer); if (count < 0) break; digest.update(buffer, 0, count) }
+                digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            }
+            check(sha256 == expected) { "Android TLS JVM artifact differs from its reviewed upstream Git bytes" }
+            mapOf("extension" to extension, "bytes" to artifact.length(), "sha256" to sha256)
+        }
+        val report = layout.buildDirectory.file("reports/platform-verifier/origin.json").get().asFile
+        report.parentFile.mkdirs()
+        report.writeText(groovy.json.JsonOutput.toJson(mapOf(
+            "coordinate" to "org.rustls:rustls-platform-verifier:$platformVerifierVersion",
+            "upstream_commit" to "1aa691352a5e0c215210dfc9a3c2f2078639dc91",
+            "artifacts" to artifacts
+        )) + "\n")
+    }
+}
+tasks.named("preBuild").configure { dependsOn(verifyPlatformVerifierOrigin) }
 
 apply(from = "tauri.build.gradle.kts")

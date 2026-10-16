@@ -9,12 +9,39 @@ import struct
 import unittest
 import zlib
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAGE_BYTES, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_native_tls_startup_observes_only_the_owned_process_and_requires_ready_without_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory);probe.binding={'native_tls':{'coordinate':'org.rustls:rustls-platform-verifier:0.2.0'}}
+            probe.args=SimpleNamespace(serial='emulator-5562');probe.tls_initializations=[]
+            with patch('android_runtime_probe.require_hosted_emulator'):
+                probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b'1234\n'),subprocess.CompletedProcess([],0,b'I/OpenNexusSync( 1234): SYNC_TLS_READY\n')])
+                probe.native_tls_startup('markdown')
+                self.assertEqual(probe.shell.call_args.args,('logcat','--pid=1234','-d','-v','brief','OpenNexusSync:I','*:S'))
+                self.assertEqual(probe.tls_initializations,[{'phase':'markdown','owned_pid':1234,'native_context_initialized':True,'network_tested':False}])
+                probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b'1234\n'),subprocess.CompletedProcess([],0,b'W/OpenNexusSync( 1234): SYNC_TLS_UNAVAILABLE\n')])
+                with self.assertRaisesRegex(Exception,'initialization failed'):probe.native_tls_startup('failed')
+                probe.shell=Mock(return_value=subprocess.CompletedProcess([],0,b'1234 4321\n'))
+                with self.assertRaisesRegex(Exception,'exact owned app process'):probe.native_tls_startup('wrong-process')
+                self.assertEqual(probe.shell.call_count,1)
+            probe.binding={};probe.shell=Mock(side_effect=AssertionError('No observation against an old APK'))
+            probe.native_tls_startup('legacy')
+
+    def test_native_startup_hook_does_not_skip_the_original_phase_receipt_stop_or_database_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory);probe.root=None;probe.phases=[]
+            probe.activity=APP+'/.MainActivity';probe.force_stop=Mock();probe.capture=Mock();probe.native_tls_startup=Mock()
+            probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b''),subprocess.CompletedProcess([],0,b'OPENNEXUS_RUNTIME_PHASE_OK markdown\n'),subprocess.CompletedProcess([],0,b'./owned/mobile-drafts.sqlite3\n')])
+            probe.phase('markdown')
+            self.assertEqual(probe.root,'./owned/');self.assertEqual(probe.phases[0]['phase'],'markdown')
+            self.assertTrue(probe.phases[0]['passed']);self.assertEqual(probe.force_stop.call_count,2)
+            probe.native_tls_startup.assert_called_once_with('markdown');probe.capture.assert_called_once_with('markdown')
+
     def test_private_read_keeps_binary_bytes_and_remote_errors_distinct(self):
         probe = Probe.__new__(Probe); probe.adb = Path('/owned/adb'); probe.args = SimpleNamespace(serial='emulator-5562')
         raw = b'\x00original\r\n\r\n\xff'

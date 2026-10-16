@@ -1,8 +1,10 @@
 import importlib.util
+import json
 from pathlib import Path
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 spec = importlib.util.spec_from_file_location('verify_android_package', Path(__file__).with_name('verify_android_package.py'))
@@ -11,6 +13,29 @@ spec.loader.exec_module(module)
 
 
 class AndroidPackageBindingTests(unittest.TestCase):
+    def test_tls_packaging_requires_pinned_maven_bytes_jvm_classes_and_the_callable_native_symbol(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); apk=root/'synthetic-dex.zip'; origin=root/'origin.json'
+            report={'coordinate':module.TLS_COORDINATE,'upstream_commit':module.TLS_UPSTREAM,
+                'artifacts':[{'extension':extension,'sha256':sha,'bytes':size} for extension,(sha,size) in module.TLS_ARTIFACTS.items()]}
+            origin.write_text(json.dumps(report),'utf-8')
+            def write_classes(descriptors):
+                with zipfile.ZipFile(apk,'w') as archive:archive.writestr('classes.dex','synthetic descriptor table '+''.join(descriptors))
+            write_classes(module.TLS_CLASSES)
+            with patch.object(module.subprocess,'check_output',return_value='00001234 T '+module.TLS_SYMBOL+'\n') as symbols:
+                proof=module.verify_platform_tls(apk,root,['x86_64'],root/'llvm-nm',origin)
+                self.assertFalse(proof['jvm_initialization_verified']);self.assertFalse(proof['HTTPS_verified'])
+                self.assertEqual(symbols.call_args.args[0][-1],str(root/'x86_64-linux-android/debug/libopennexus_mobile.so'))
+            # jni_mangle converts Rust snake_case to lowerCamelCase. The old
+            # Kotlin underscored method would not bind to this real exported name.
+            with patch.object(module.subprocess,'check_output',return_value='00001234 T Java_cc_kronecker_opennexus_MainActivity_initialize_1sync_1tls\n'):
+                with self.assertRaisesRegex(Exception,'ANDROID_TLS_JNI_SYMBOL_MISSING'):module.verify_platform_tls(apk,root,['x86_64'],root/'llvm-nm',origin)
+            write_classes(module.TLS_CLASSES[:-1])
+            with self.assertRaisesRegex(Exception,'ANDROID_TLS_JVM_CLASSES_MISSING'):module.verify_platform_tls(apk,root,['x86_64'],root/'llvm-nm',origin)
+            write_classes(module.TLS_CLASSES)
+            report['artifacts'][0]['sha256']='0'*64;origin.write_text(json.dumps(report),'utf-8')
+            with self.assertRaisesRegex(Exception,'ANDROID_TLS_MAVEN_BYTES_MISMATCH'):module.verify_platform_tls(apk,root,['x86_64'],root/'llvm-nm',origin)
+
     def test_generated_bridge_must_match_its_tracked_source_even_when_ignored_as_build_output(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)

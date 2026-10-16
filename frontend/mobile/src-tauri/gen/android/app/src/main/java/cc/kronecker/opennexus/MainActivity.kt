@@ -6,7 +6,7 @@ import android.util.Log
 import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
-  private external fun initialize_sync_tls(context: Context)
+  private external fun initializeSyncTls(context: Context)
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -15,7 +15,8 @@ class MainActivity : TauriActivity() {
       // Tauri has now loaded our Rust library. Keep only an application context
       // in the verifier, and check its matching JVM component before enabling it.
       Class.forName("org.rustls.platformverifier.CertificateVerifier", false, applicationContext.classLoader)
-      initialize_sync_tls(applicationContext)
+      initializeSyncTls(applicationContext)
+      Log.i("OpenNexusSync", "SYNC_TLS_READY")
     } catch (_: RuntimeException) {
       Log.w("OpenNexusSync", "SYNC_TLS_UNAVAILABLE")
     } catch (_: LinkageError) {

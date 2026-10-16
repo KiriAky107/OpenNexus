@@ -128,6 +128,7 @@ jobs:
             --output .build/android-package-proof/package-verification.json
           cp "${apks[0]}" .build/android-package-proof/OpenNexus-android-debug.apk
           cp ".build/source-provenance/$GITHUB_SHA.json" .build/android-package-proof/source-provenance.json
+          cp frontend/mobile/src-tauri/gen/android/app/build/reports/platform-verifier/origin.json .build/android-package-proof/platform-verifier-origin.json
       - uses: actions/upload-artifact@v7
         with:
           name: OpenNexus-android-debug-${{ github.sha }}

@@ -125,6 +125,7 @@ class Probe:
         self.phases = []
         self.original_ime = None
         self.original_hardware_ime = None
+        self.tls_initializations = []
 
     def command(self, command, *, timeout=90, input=None, check=True):
         result = subprocess.run([str(value) for value in command], input=input, capture_output=True, timeout=timeout)
@@ -322,6 +323,7 @@ class Probe:
         self.force_stop()
         start = time.monotonic()
         self.shell('am', 'start', '-W', '-n', self.activity)
+        self.native_tls_startup(phase)
         result = self.shell('am', 'instrument', '-w', '-e', 'phase', phase, f'{DRIVER}/.RuntimeProbe', timeout=180)
         text = result.stdout.decode('utf-8', 'replace')
         (self.output / f'{phase}.log').write_text(text, 'utf-8')
@@ -340,6 +342,23 @@ class Probe:
             require(len(paths) == 1, 'Native draft database origin is ambiguous')
             self.root = paths[0].removesuffix('mobile-drafts.sqlite3')
 
+    def native_tls_startup(self, phase):
+        if not self.binding.get('native_tls'):
+            return  # Existing immutable APKs did not contain this native bridge.
+        require_hosted_emulator(self.args.serial)
+        pid = self.shell('pidof', APP).stdout.decode().strip()
+        require(re.fullmatch(r'[1-9][0-9]{0,9}', pid), 'Native TLS startup requires the exact owned app process')
+        deadline = time.monotonic() + 5
+        while True:
+            logs = self.shell('logcat', '--pid=' + pid, '-d', '-v', 'brief', 'OpenNexusSync:I', '*:S').stdout
+            require(len(logs) <= 16384, 'Unexpected native TLS startup log size')
+            (self.output / (phase + '-native-tls.log')).write_bytes(logs)
+            require(b'SYNC_TLS_UNAVAILABLE' not in logs, 'Native platform TLS initialization failed; offline data preserved')
+            if any(line.rstrip().endswith(b': SYNC_TLS_READY') for line in logs.splitlines()):
+                self.tls_initializations.append({'phase':phase,'owned_pid':int(pid),'native_context_initialized':True,'network_tested':False})
+                return
+            require(time.monotonic() < deadline, 'Native TLS startup had no verified initialization result')
+            time.sleep(.2)
     def capture_failed_editor_state(self, phase):
         report = {'scope': 'Owned hosted fixture after failed phase and force-stop; no UI action or write replay',
             'originals': {}, 'phase': phase}
@@ -546,6 +565,7 @@ class Probe:
             'device': {'kind': 'github-hosted-android-emulator', 'api': 36, 'abi': 'x86_64', 'serial': self.args.serial},
             'phases': self.phases, 'files_sha256': {name: digest(data) for name, data in originals.items()},
             'scope': self.args.scope, 'theme_choices_verified': self.args.scope == 'all',
+            'native_tls_initializations': self.tls_initializations,
             'native_theme_contrast_verified': False,
             'theme_style_diagnostic': 'theme-diagnostic-dark-computed-styles.json' if self.args.scope == 'lifecycle' else None,
             'theme_ui': 'Actual shared desktop theme card choices and cold reloads; rendered card screenshots/window observations retained for appearance review' if self.args.scope == 'all' else 'Not repeated in lifecycle scope; theme acceptance requires independent same-APK evidence',

@@ -11,6 +11,40 @@ import zipfile
 from release_plan import atomic_json, build_source, digest, require
 
 MACHINES = {'arm64-v8a': (183, 'aarch64-linux-android'), 'x86_64': (62, 'x86_64-linux-android')}
+TLS_COORDINATE = 'org.rustls:rustls-platform-verifier:0.2.0'
+TLS_UPSTREAM = '1aa691352a5e0c215210dfc9a3c2f2078639dc91'
+TLS_ARTIFACTS = {
+    'aar': ('aa021794230fbc2f0be355999e2cf67398dd563de066a2e17001ffbd0b69101b', 10295),
+    'pom': ('78dcb69a1a20e91e72017de9a67104bba1874a7ecc8e6dcdfb2fe1a85de6b362', 555),
+}
+TLS_CLASSES = ['Lorg/rustls/platformverifier/' + name + ';' for name in ('CertificateVerifier', 'StatusCode', 'VerificationResult')]
+TLS_SYMBOL = 'Java_cc_kronecker_opennexus_MainActivity_initializeSyncTls'
+
+
+def verify_platform_tls(apk, native_dir, abis, symbol_tool, origin_file):
+    origin = json.loads(origin_file.read_text('utf-8'))
+    require(origin.get('coordinate') == TLS_COORDINATE and origin.get('upstream_commit') == TLS_UPSTREAM,
+        'ANDROID_TLS_MAVEN_ORIGIN_MISMATCH')
+    artifacts = origin.get('artifacts', [])
+    require(len(artifacts) == len(TLS_ARTIFACTS) and {item.get('extension') for item in artifacts} == set(TLS_ARTIFACTS),
+        'ANDROID_TLS_MAVEN_ARTIFACT_SET_MISMATCH')
+    for item in artifacts:
+        expected, size = TLS_ARTIFACTS[item['extension']]
+        require(item.get('sha256') == expected and item.get('bytes') == size, 'ANDROID_TLS_MAVEN_BYTES_MISMATCH')
+    with zipfile.ZipFile(apk) as archive:
+        dex = [archive.read(name) for name in archive.namelist() if re.fullmatch(r'classes(?:\d+)?\.dex', name)]
+        require(all(any(descriptor.encode() in contents for contents in dex) for descriptor in TLS_CLASSES),
+            'ANDROID_TLS_JVM_CLASSES_MISSING')
+    symbols = {}
+    for abi in abis:
+        require(abi in MACHINES, 'ANDROID_ABI_UNSUPPORTED')
+        library = native_dir / MACHINES[abi][1] / 'debug/libopennexus_mobile.so'
+        table = subprocess.check_output([str(symbol_tool), '--defined-only', '--dynamic', str(library)], text=True)
+        names = [line.split()[-1] for line in table.splitlines() if line.split()]
+        require(names.count(TLS_SYMBOL) == 1, 'ANDROID_TLS_JNI_SYMBOL_MISSING')
+        symbols[abi] = TLS_SYMBOL
+    return {'coordinate':TLS_COORDINATE, 'origin':origin, 'class_descriptors':TLS_CLASSES,
+        'native_symbols':symbols, 'jvm_initialization_verified':False, 'HTTPS_verified':False}
 
 
 def package_identity(badging, *, package, version, version_code):
@@ -100,6 +134,9 @@ def main():
     libraries = verify_libraries(apk, args.native_dir, args.abis)
     permissions = subprocess.check_output([str(tools / 'aapt2'), 'dump', 'permissions', str(apk)], text=True)
     files_plugin = verify_mobile_files(apk, permissions)
+    tls_origin = root / 'frontend/mobile/src-tauri/gen/android/app/build/reports/platform-verifier/origin.json'
+    native_tls = verify_platform_tls(apk, args.native_dir, args.abis,
+        args.sdk / 'ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm', tls_origin)
     kotlin_sha256 = verify_generated_mobile_files(root)
     proof = {'schema': 1, 'passed': True, 'kind': 'android-debug', 'source_commit': args.commit,
         'source_clean': True, 'source_proof': args.source_proof.name, 'package': package, 'version': config['version'],
@@ -108,6 +145,7 @@ def main():
         'signer_certificate_sha256': fingerprints[0].lower(), 'debug_signing': True,
         'actual_device_execution_verified': False, 'published': False,
         'files_plugin': {**files_plugin, 'source_sha256': kotlin_sha256},
+        'native_tls':native_tls,
         'rustc': subprocess.check_output(['rustc', '-Vv'], text=True).strip(),
         'java': subprocess.run(['java', '-version'], capture_output=True, text=True, check=True).stderr.strip()}
     require(not args.output.exists(), 'ANDROID_PACKAGE_PROOF_EXISTS')
