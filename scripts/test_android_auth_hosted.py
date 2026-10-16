@@ -11,6 +11,10 @@ import android_auth_hosted as module
 
 
 class HostedOriginBoundaries(unittest.TestCase):
+    def test_only_static_owned_failure_codes_can_reach_the_job_log(self):
+        self.assertEqual(module.public_failure(RuntimeError('OWNED_AUTH_ORIGIN_NOT_READY')),'OWNED_AUTH_ORIGIN_NOT_READY')
+        for message in ('postgresql+psycopg://private:password@production/database','private-token','OWNED_AUTH_STAGE_FAILED private-password'):
+            self.assertEqual(module.public_failure(RuntimeError(message)),'OWNED_AUTH_HOST_FAILED_RuntimeError')
     def test_readiness_calls_the_real_v1_handshake_and_retains_only_the_protocol_contract(self):
         contract={'protocol':1,'chunk_size':1048576,'max_object_size':104857600,'encryption':'transport-only'}
         endpoint='https://owned-unit-only.trycloudflare.com'

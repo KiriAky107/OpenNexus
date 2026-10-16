@@ -24,6 +24,19 @@ CLOUDFLARED_SHA256='3bfc539f45d2620c71debb7a86be0efa737ed5ccbad9eb85c787116900e5
 CLOUDFLARED_BYTES=40227032
 DOCS='https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/'
 HANDSHAKE_PATH='/sync/v1/handshake?protocol=1'
+HOST_CODES=frozenset({
+    'OWNED_AUTH_ALREADY_PREPARED','OWNED_AUTH_ASSET_EXISTS','OWNED_AUTH_ASSET_HASH_INVALID',
+    'OWNED_AUTH_ASSET_ORIGIN_INVALID','OWNED_AUTH_ASSET_SIZE_INVALID','OWNED_AUTH_CONTAINER_IMAGE_UNCONFIRMED',
+    'OWNED_AUTH_CONTAINER_OWNERSHIP_UNCERTAIN','OWNED_AUTH_CONTAINER_START_UNCONFIRMED',
+    'OWNED_AUTH_ORIGIN_INVALID','OWNED_AUTH_ORIGIN_NOT_READY','OWNED_AUTH_PROCESS_OWNERSHIP_UNCERTAIN',
+    'OWNED_AUTH_PROCESS_START_UNCONFIRMED','OWNED_AUTH_PROCESS_STOP_UNCONFIRMED','OWNED_AUTH_SOURCE_CHANGED',
+    'OWNED_AUTH_STAGE_FAILED','OWNED_AUTH_STAGE_OUTPUT_INVALID','OWNED_AUTH_TUNNEL_NOT_READY'})
+
+
+def public_failure(error):
+    from android_auth_fixture import SAFE_CODES
+    code=str(error)
+    return code if code in SAFE_CODES or code in HOST_CODES else 'OWNED_AUTH_HOST_FAILED_'+type(error).__name__
 
 
 def origin_handshake(endpoint):
@@ -259,8 +272,6 @@ def main():
 if __name__=='__main__':
     try:main()
     except Exception as error:
-        from android_auth_fixture import SAFE_CODES
-        code=str(error)
         # No raw DSN, provider stdout, body or unexpected exception value.
-        print(code if code in SAFE_CODES else 'OWNED_AUTH_HOST_FAILED_'+type(error).__name__,file=sys.stderr)
+        print(public_failure(error),file=sys.stderr)
         raise SystemExit(1)
