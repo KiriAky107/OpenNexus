@@ -53,6 +53,8 @@ public final class RuntimeProbe extends Instrumentation {
                 case "theme-light": selectTheme("Dark", "Light"); break;
                 case "theme-sepia": selectTheme("Light", "Sepia"); break;
                 case "theme-system": selectTheme("Sepia", "System"); break;
+                case "theme-diagnostic-dark": selectTheme("System", "Dark", false); break;
+                case "theme-diagnostic-reset": selectTheme("Dark", "System"); break;
                 case "markdown":
                     create("New note", NOTE);
                     inputText(editable(null), BODY);
@@ -236,6 +238,10 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void selectTheme(String current, String next) {
+        selectTheme(current, next, true);
+    }
+
+    private void selectTheme(String current, String next, boolean close) {
         clickMenu("Settings");
         waitNode(node -> themeCard(node, current) && descendantLabel(node, "Active"), "original active theme card: " + current);
         AccessibilityNodeInfo option = waitNode(node -> themeCard(node, next), "shared desktop theme card: " + next);
@@ -247,6 +253,7 @@ public final class RuntimeProbe extends Instrumentation {
         // The Active badge must belong to this exact card, not the previous selection.
         waitNode(node -> themeCard(node, next) && descendantLabel(node, "Active"), "selected theme card: " + next);
         retainThemeCards(next);
+        if (!close) return;
         click("Close", false);
         waitLabel("New note");
     }
@@ -358,13 +365,24 @@ public final class RuntimeProbe extends Instrumentation {
         // WebView accepting ACTION_CLICK does not prove that a user tap reached its handler.
         // Send exactly one real tap to the freshly observed target; never replay a write.
         settleUi();
-        require(node.refresh(), "Observed UI target was replaced before the tap");
+        // A WebView virtual ID can change when a read-only list finishes loading.
+        // Reacquire the exact unique semantic target before sending any input.
+        final String expectedPackage = string(node.getPackageName()), expectedClass = string(node.getClassName());
+        final String expectedText = string(node.getText()), expectedDescription = string(node.getContentDescription());
+        final String expectedHint = Build.VERSION.SDK_INT >= 26 ? string(node.getHintText()) : "";
+        final String expectedId = string(node.getViewIdResourceName());
+        require(!expectedText.isEmpty() || !expectedDescription.isEmpty() || !expectedHint.isEmpty() || !expectedId.isEmpty(), "Cannot reacquire an unnamed target");
+        Predicate<AccessibilityNodeInfo> sameTarget = value -> expectedPackage.equals(string(value.getPackageName()))
+            && expectedClass.equals(string(value.getClassName())) && expectedText.equals(string(value.getText()))
+            && expectedDescription.equals(string(value.getContentDescription())) && expectedId.equals(string(value.getViewIdResourceName()))
+            && (Build.VERSION.SDK_INT < 26 || expectedHint.equals(string(value.getHintText())));
+        node = uniqueTarget(sameTarget);
         Rect bounds = new Rect(); node.getBoundsInScreen(bounds);
         Rect previous = new Rect(bounds);
         int stable = 0;
         for (int frame = 0; frame < 12 && stable < 3; frame++) {
             SystemClock.sleep(32);
-            require(node.refresh(), "Observed UI target was replaced while settling");
+            node = uniqueTarget(sameTarget);
             node.getBoundsInScreen(bounds);
             stable = bounds.equals(previous) ? stable + 1 : 0;
             previous.set(bounds);
@@ -375,6 +393,14 @@ public final class RuntimeProbe extends Instrumentation {
         touch(time, time, MotionEvent.ACTION_DOWN, bounds.centerX(), bounds.centerY());
         SystemClock.sleep(60);
         touch(time, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, bounds.centerX(), bounds.centerY());
+    }
+
+    private AccessibilityNodeInfo uniqueTarget(Predicate<AccessibilityNodeInfo> sameTarget) {
+        List<AccessibilityNodeInfo> found = new ArrayList<>();
+        for (AccessibilityNodeInfo candidate : nodes())
+            if (candidate.isVisibleToUser() && candidate.isEnabled() && sameTarget.test(candidate)) found.add(candidate);
+        require(found.size() == 1, "Original semantic target is missing or ambiguous; no input sent");
+        return found.get(0);
     }
 
     private void settleUi() {

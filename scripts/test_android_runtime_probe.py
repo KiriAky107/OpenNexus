@@ -15,6 +15,35 @@ from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAG
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_style_observation_refuses_ambiguous_app_process_before_forwarding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562')
+            probe.wait_owned_connection=lambda:None
+            probe.shell=lambda *args:subprocess.CompletedProcess([],0,b'1234 5678\n',b'')
+            probe.device=lambda *args,**kwargs:self.fail('Ambiguous app must not be forwarded')
+            with patch('android_runtime_probe.require_hosted_emulator'):probe.read_native_styles('owned')
+            report=json.loads((probe.output/'owned-computed-styles.json').read_text())
+            self.assertFalse(report['available']);self.assertNotIn('styles',report)
+
+    def test_style_observation_rejects_foreign_websocket_and_removes_only_own_forward(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562')
+            probe.wait_owned_connection=lambda:None
+            probe.shell=lambda *args:subprocess.CompletedProcess([],0,b'1234\n',b'')
+            calls=[]
+            def device(*args,**kwargs):
+                calls.append(args)
+                return subprocess.CompletedProcess([],0,b'45678\n' if args[1]=='tcp:0' else b'',b'')
+            probe.device=device;probe.command=lambda *args,**kwargs:self.fail('Foreign endpoint must never reach Node')
+            pages=[{'type':'page','title':'OpenNexus','webSocketDebuggerUrl':'ws://unrelated.example:45678/devtools/page/owned'}]
+            response=SimpleNamespace(status=200,read=lambda limit:json.dumps(pages).encode())
+            connection=SimpleNamespace(request=lambda *args:None,getresponse=lambda:response,close=lambda:None)
+            with patch('android_runtime_probe.require_hosted_emulator'),patch('android_runtime_probe.http.client.HTTPConnection',return_value=connection):
+                probe.read_native_styles('owned')
+            report=json.loads((probe.output/'owned-computed-styles.json').read_text())
+            self.assertFalse(report['available']);self.assertTrue(report['own_forward_removed'])
+            self.assertEqual(calls,[('forward','tcp:0','localabstract:webview_devtools_remote_1234'),('forward','--remove','tcp:45678')])
+
     def test_original_observations_retain_each_exact_read_before_any_later_assertion(self):
         with tempfile.TemporaryDirectory() as directory:
             probe = Probe.__new__(Probe); probe.output = Path(directory); probe.root = './owned/'
