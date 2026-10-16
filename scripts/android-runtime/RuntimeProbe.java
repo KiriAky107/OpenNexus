@@ -396,11 +396,16 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private AccessibilityNodeInfo uniqueTarget(Predicate<AccessibilityNodeInfo> sameTarget) {
-        List<AccessibilityNodeInfo> found = new ArrayList<>();
-        for (AccessibilityNodeInfo candidate : nodes())
-            if (candidate.isVisibleToUser() && candidate.isEnabled() && sameTarget.test(candidate)) found.add(candidate);
-        require(found.size() == 1, "Original semantic target is missing or ambiguous; no input sent");
-        return found.get(0);
+        long until = SystemClock.uptimeMillis() + 2000;
+        do {
+            List<AccessibilityNodeInfo> found = new ArrayList<>();
+            for (AccessibilityNodeInfo candidate : nodes())
+                if (candidate.isVisibleToUser() && candidate.isEnabled() && sameTarget.test(candidate)) found.add(candidate);
+            require(found.size() <= 1, "Original semantic target is ambiguous; no input sent");
+            if (found.size() == 1) return found.get(0);
+            SystemClock.sleep(50);
+        } while (SystemClock.uptimeMillis() < until);
+        throw new IllegalStateException("Original semantic target is missing; no input sent");
     }
 
     private void settleUi() {

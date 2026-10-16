@@ -359,7 +359,7 @@ class Probe:
             observed = self.command(['node', script, 'ws://127.0.0.1:' + port + socket.path], timeout=20)
             report.update(available=True, styles=json.loads(observed.stdout))
         except Exception as error:
-            report.update(available=False, failure=type(error).__name__)
+            report.update(available=False, failure=type(error).__name__, reason=str(error)[:400])
         finally:
             if port and re.fullmatch(r'[0-9]{4,5}', port):
                 report['own_forward_removed'] = self.device('forward', '--remove', 'tcp:' + port, check=False).returncode == 0
