@@ -38,21 +38,22 @@ public final class AuthRuntimeProbe extends Instrumentation {
             openConnection();
             switch (phase) {
                 case "login-a": case "login-b-held":
+                    readCurrent();
                     signIn(phase.equals("login-a") ? 0 : 1);
                     if (phase.equals("login-a")) signedIn();
                     break;
                 case "current": click("Read current connection"); signedIn(); break;
                 case "refresh":
-                    signedIn(); click("Refresh session"); signedIn(); break;
+                    readCurrent(); signedIn(); click("Refresh session"); signedIn(); break;
                 case "refresh-unknown":
-                    signedIn(); click("Refresh session"); waitText("Check original operation");
+                    readCurrent(); signedIn(); click("Refresh session"); waitText("Check original operation");
                     click("Read original ID"); waitText("Refresh result needs checking"); break;
                 case "acknowledge-unknown":
                     waitText("Check original operation"); click("Keep original record and continue");
                     unusable(); break;
                 case "current-unusable": click("Read current connection"); unusable(); break;
                 case "logout":
-                    signedIn(); click("Sign out on server"); waitText("Review connection action");
+                    readCurrent(); signedIn(); click("Sign out on server"); waitText("Review connection action");
                     click("Confirm this action"); waitText("The service confirmed sign-out of the original device session.");
                     unusable(); break;
                 default: throw new IllegalStateException("Unknown owned auth phase");
@@ -104,6 +105,15 @@ public final class AuthRuntimeProbe extends Instrumentation {
     private void signedIn() {
         stage="current-signed-in";waitText("Session saved · Signed in");
         waitFor(node->label(node,"Refresh session") && node.isEnabled(),true);
+    }
+    private void readCurrent() {
+        // Finishing an instrumentation connection may clear the WebView's RAM
+        // view through visibility cancellation. Restore it with the same
+        // explicit read a person uses; never infer a usable native selection
+        // from the preceding instrumentation's view or re-submit a mutation.
+        stage="read-current-before-action";click("Read current connection");
+        waitText("Saved connections");
+        waitFor(node->label(node,"Read current connection") && node.isEnabled(),true);
     }
     private void unusable() {
         stage="current-not-usable";

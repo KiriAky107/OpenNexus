@@ -7,6 +7,29 @@ import android_auth_runtime as module
 
 
 class AuthRuntimeBoundaries(unittest.TestCase):
+    def test_auth_only_scope_requires_the_original_worker_binding_without_repeating_keystore_tests(self):
+        probe=object.__new__(module.AuthProbe);probe.binding={'native_tests':{'expected_tests':5}}
+        probe.shell=Mock();probe.device=Mock()
+        probe.native_keystore_tests()
+        probe.shell.assert_not_called();probe.device.assert_not_called()
+        probe.binding['native_tests']['expected_tests']=4
+        with self.assertRaises(RuntimeError):probe.native_keystore_tests()
+
+    def test_ui_failure_preserves_provider_and_native_outcomes_even_if_one_read_is_unavailable(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            probe=object.__new__(module.AuthProbe);probe.output=Path(directory)
+            probe.observe=Mock(side_effect=RuntimeError('not exported provider detail'))
+            probe.snapshot=Mock();probe.ciphertext_fingerprints=Mock(return_value={'opaque-native-name':'a'*64})
+            probe.failure_observations()
+            probe.snapshot.assert_called_once_with('failure')
+            self.assertEqual(json.loads((probe.output/'failure-provider-unavailable.json').read_text()),
+                {'error':'RuntimeError','no_mutation_retried':True})
+            self.assertNotIn('not exported', ''.join(f.read_text() for f in probe.output.iterdir()))
+            self.assertEqual(json.loads((probe.output/'failure-ciphertext-fingerprints.json').read_text()),
+                {'opaque-native-name':'a'*64})
+
     def test_current_recovery_may_mark_original_unknown_without_replacing_its_id_generation_device_or_selection(self):
         from copy import deepcopy
         before={'selection':{'operation_id':'original','revision':3},'intents':[

@@ -58,6 +58,26 @@ class AuthProbe(Probe):
         self.owner=owner
         self.observations=[]
 
+    def native_keystore_tests(self):
+        # The selected immutable b270 APK already has its five actual native
+        # cases preserved. This auth-only scope neither replays nor reports
+        # them as new acceptance; it exercises real app/Keystore paths via UI.
+        require(self.binding.get('native_tests',{}).get('expected_tests')==5,
+            'Auth-only scope requires the fixed native worker test binding')
+
+    def failure_observations(self):
+        # A timed-out UI wait is not evidence that its request was never sent.
+        # Preserve the original provider counts and native intent metadata for
+        # reconciliation without screenshots, raw logs or secret payloads.
+        for label,read in (('provider',lambda:self.observe('failure')),
+                ('native',lambda:self.snapshot('failure')),
+                ('ciphertext-fingerprints',lambda:atomic_json(self.output/'failure-ciphertext-fingerprints.json',
+                    self.ciphertext_fingerprints(),exclusive=True))):
+            try:read()
+            except Exception as error:
+                atomic_json(self.output/('failure-'+label+'-unavailable.json'),
+                    {'error':type(error).__name__,'no_mutation_retried':True},exclusive=True)
+
     def observe(self,label):
         # The fixed service implementation opens repeatable-read/read-only PG;
         # it selects only owned device metadata and session counts.
@@ -176,13 +196,13 @@ class AuthProbe(Probe):
         require(any(row['operation_id']==selected and row['kind']=='refresh' and row['phase']=='refresh_pending' for row in pending['intents']),
             'Lost refresh did not preserve its original unconfirmed native intent')
         require(self.ciphertext_fingerprints()==prior_rotation_ciphertext,'Lost refresh changed the retained original ciphertext')
-        self.auth_phase('acknowledge-unknown')
-        checked=self.observe('original-read');expect_requests(checked,2,2,1)
-        # Original-ID lookup is read-only. The subsequent explicit Current
-        # recovery classifies its retained mismatched rotation as unknown.
-        expect_original_recovery(pending,self.snapshot('original-read'))
+        # refresh-unknown already read the original ID in the same actual UI
+        # connection. Do not expect its RAM-only pending panel to survive an
+        # instrumentation disconnect. Keep the pending native original intact
+        # until the following cold, explicit Current read reconciles it.
         self.auth_phase('current-unusable',cold=True)
         expect_requests(self.observe('cold-unknown'),2,2,1)
+        expect_original_recovery(pending,self.snapshot('cold-unknown'))
         require(self.ciphertext_fingerprints()==prior_rotation_ciphertext,'Cold unknown rotation replaced or removed its original ciphertext')
         self.control('normal')
         self.auth_phase('login-a')
@@ -237,6 +257,9 @@ def main():
     args.build_origin=build_job_origin(args.build_run_id,args.commit)
     probe=AuthProbe(args,apk,binding,owner)
     try:probe.run()
+    except Exception:
+        probe.failure_observations()
+        raise
     finally:
         # Auth phases deliberately never invoke generic capture()/raw logcat.
         probe.shell('am','force-stop',APP,check=False)
