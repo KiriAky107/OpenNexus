@@ -117,6 +117,7 @@ defineExpose({
   undo: () => { const currentView = view(); return Boolean(currentView && !props.readOnly && !state.composing && undo(currentView.state, currentView.dispatch)) },
   redo: () => { const currentView = view(); return Boolean(currentView && !props.readOnly && !state.composing && redo(currentView.state, currentView.dispatch)) },
   blur: () => view()?.dom.blur(), focus: () => view()?.focus(),
+  handleBack: () => surface.value?.closeFormatting() ?? false,
 })
 </script>
 

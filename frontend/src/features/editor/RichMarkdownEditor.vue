@@ -3,7 +3,7 @@ import { beginSourceInsertion, liveSourcePlugin, liveSourceSchema } from './live
 import { htmlPreviewPlugin } from './htmlPreviewPlugin'
 import { remarkPreserveEmptyLinePlugin } from '@milkdown/kit/preset/commonmark'
 import DiagramInteractions from '@/components/common/DiagramInteractions.vue'
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { Crepe } from '@milkdown/crepe'
 import { codeBlockConfig } from '@milkdown/kit/component/code-block'
 import { basicSetup } from 'codemirror'
@@ -74,6 +74,33 @@ const isCurrentDocument = editorStore.captureDocument()
 const settingsStore = props.platform.settings
 const themeStore = props.platform.theme
 const layout = props.platform.layout
+const formattingOpen = ref(false)
+const formattingRoot = ref<HTMLElement>()
+const formattingToggle = ref<HTMLButtonElement>()
+const formattingId = useId()
+function closeFormatting() {
+  if (!props.touch || !formattingOpen.value) return false
+  formattingOpen.value = false
+  return true
+}
+function outsideFormatting(event: PointerEvent) {
+  if (event.target instanceof Node && !formattingRoot.value?.contains(event.target)) closeFormatting()
+}
+function escapeFormatting(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || !closeFormatting()) return
+  event.preventDefault(); event.stopPropagation()
+  formattingToggle.value?.focus({ preventScroll: true })
+}
+watch(() => props.readOnly || layout.focusMode, blocked => { if (blocked) closeFormatting() })
+onMounted(() => {
+  if (!props.touch) return
+  document.addEventListener('pointerdown', outsideFormatting, true)
+  document.addEventListener('keydown', escapeFormatting, true)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', outsideFormatting, true)
+  document.removeEventListener('keydown', escapeFormatting, true)
+})
 const composing = ref(false)
 let compositionTimer: ReturnType<typeof setTimeout> | undefined
 let compositionRevision = 0
@@ -93,6 +120,7 @@ async function toolbarCommand(id: EditorCommandId) {
   if (result.ok) editorRoot.value?.querySelector<HTMLElement>('.ProseMirror')?.focus()
 }
 function hideToolbar() {
+  if (props.touch) { closeFormatting(); formattingToggle.value?.focus({ preventScroll: true }); return }
   layout.editorToolbarVisible = false
   void nextTick(() => editorRoot.value?.closest('.workspace-view')?.querySelector<HTMLButtonElement>('.toolbar-toggle')?.focus())
 }
@@ -632,7 +660,7 @@ watch(() => editorStore.blockRequest, navigateBlock, { flush: 'post' })
 
 onBeforeUnmount(() => { disposed = true; compositionRevision++; if (compositionTimer) clearTimeout(compositionTimer); disposeCommands?.(); diagramPreviews.clear(); imageUrls.forEach(URL.revokeObjectURL); imageUrls.clear(); disposeLinkNavigation?.(); disposeCodeLabels?.(); disposeLanguagePicker?.(); void crepe?.destroy() })
 
-defineExpose({ acknowledgeDocument: () => { lastRenderedMarkdown = crepe?.editor.action(getMarkdown()) }, getEditor: () => crepe?.editor, insertMarkdown, focus: () => crepe?.editor.action(ctx=>ctx.get(editorViewCtx).focus()) })
+defineExpose({ closeFormatting, acknowledgeDocument: () => { lastRenderedMarkdown = crepe?.editor.action(getMarkdown()) }, getEditor: () => crepe?.editor, insertMarkdown, focus: () => crepe?.editor.action(ctx=>ctx.get(editorViewCtx).focus()) })
 </script>
 
 <template>
@@ -640,7 +668,11 @@ defineExpose({ acknowledgeDocument: () => { lastRenderedMarkdown = crepe?.editor
     <p v-if="imageError" class="image-error" role="alert">{{ imageError }}</p>
     <p v-if="commandError" class="image-error" role="alert">{{ commandError }}</p>
     <p v-if="linkError" class="image-error" role="alert">{{ linkError }}</p>
-    <fieldset :disabled="readOnly || composing" v-show="layout.editorToolbarVisible && !layout.focusMode" class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
+    <div ref="formattingRoot" class="formatting-tools" :class="{ 'floating-formatting': touch }">
+    <button v-if="touch && !layout.focusMode" ref="formattingToggle" class="formatting-toggle" type="button" :disabled="readOnly || composing || loading" :aria-expanded="formattingOpen" :aria-controls="formattingId" @pointerdown.prevent @click="formattingOpen = !formattingOpen">
+      <ControlIcon name="heading" /><span>{{ t('格式', 'Format') }}</span><ControlIcon :name="formattingOpen ? 'hide' : 'chevron'" :size="14" />
+    </button>
+    <fieldset :id="formattingId" :disabled="readOnly || composing" v-show="(touch ? formattingOpen : layout.editorToolbarVisible) && !layout.focusMode" class="markdown-toolbar" role="toolbar" :aria-label="t('Markdown 格式工具栏', 'Markdown formatting toolbar')">
       <div class="toolbar-group" role="group" :aria-label="t('编辑历史', 'Edit history')">
         <button type="button" :disabled="loading || !canUndo" :title="t('撤销 (Ctrl+Z)', 'Undo (Ctrl+Z)')" :aria-label="t('撤销', 'Undo')" @pointerdown.prevent="toolbarCommand('editor.undo')" @click="$event.detail === 0 && toolbarCommand('editor.undo')"><ControlIcon name="undo" /></button>
         <button type="button" :disabled="loading || !canRedo" :title="t('重做 (Ctrl+Y)', 'Redo (Ctrl+Y)')" :aria-label="t('重做', 'Redo')" @pointerdown.prevent="toolbarCommand('editor.redo')" @click="$event.detail === 0 && toolbarCommand('editor.redo')"><ControlIcon name="redo" /></button>
@@ -713,8 +745,9 @@ defineExpose({ acknowledgeDocument: () => { lastRenderedMarkdown = crepe?.editor
         <ControlIcon class="select-chevron" name="chevron" :size="12" />
       </label>
       </div>
-      <button class="hide-toolbar" type="button" :title="t('隐藏工具栏，可从视图菜单恢复', 'Hide toolbar; restore from the View menu')" :aria-label="t('隐藏工具栏', 'Hide toolbar')" @click="hideToolbar"><ControlIcon name="hide" /></button>
+      <button class="hide-toolbar" type="button" :title="touch ? t('收起格式工具', 'Collapse formatting tools') : t('隐藏工具栏，可从视图菜单恢复', 'Hide toolbar; restore from the View menu')" :aria-label="touch ? t('收起格式工具', 'Collapse formatting tools') : t('隐藏工具栏', 'Hide toolbar')" @click="hideToolbar"><ControlIcon name="hide" /></button>
     </fieldset>
+    </div>
     <div v-if="loading" class="editor-loading">{{ t('正在加载编辑器…', 'Loading editor…') }}</div>
     <div class="milkdown-host" :class="{ loading }">
       <section v-if="metadata" class="note-metadata" :aria-label="t('笔记属性', 'Note properties')">
@@ -733,6 +766,7 @@ defineExpose({ acknowledgeDocument: () => { lastRenderedMarkdown = crepe?.editor
 
 <style scoped>
 .visual-editor { display: flex; flex: 1; min-height: 0; flex-direction: column; background: var(--color-background-primary); }
+.formatting-tools { display: contents; }
 .image-error { margin: 0; padding: var(--space-sm) var(--space-lg); color: var(--color-error); background: var(--color-error-soft); }
 .hide-code-line-numbers :deep(.cm-lineNumbers) { display: none; }
 .markdown-toolbar { border: 0; min-inline-size: 0; margin: 0; display: flex; align-items: center; flex-wrap: wrap; flex-shrink: 0; gap: 6px; min-height: 44px; max-height: 35vh; overflow-y: auto; padding: 6px var(--space-md); border-bottom: 1px solid var(--color-border-subtle); background: var(--color-surface-primary); }
@@ -829,7 +863,13 @@ defineExpose({ acknowledgeDocument: () => { lastRenderedMarkdown = crepe?.editor
 :global([data-theme='dark'] .milkdown-host .milkdown) { color-scheme: dark; }
 @media (max-width: 680px) { .toolbar-select select { min-width: 46px; width: 46px; } }
 .touch-editor .markdown-toolbar button,.touch-editor .toolbar-select { min-height: 44px; min-width: 44px; }
-.touch-editor .markdown-toolbar { max-height: 28dvh; }
+.touch-editor { position: relative; min-width: 0; }
+.floating-formatting { position: absolute; inset: 8px 12px auto; z-index: 12; max-height: calc(100% - 16px); display: flex; flex-direction: column; align-items: flex-end; gap: 6px; pointer-events: none; }
+.formatting-toggle { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; gap: 6px; min-height: 44px; padding: 6px 12px; border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-surface-elevated); color: var(--color-text-primary); box-shadow: var(--shadow-sm); pointer-events: auto; }
+.formatting-toggle[aria-expanded='true'] { color: var(--color-accent-primary); border-color: var(--color-border-focus); }
+.formatting-toggle:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 2px; }
+.touch-editor .markdown-toolbar { width: min(100%, 640px); min-height: 0; max-height: min(44dvh, 360px); box-sizing: border-box; overscroll-behavior: contain; padding: 8px; border: 1px solid var(--color-border-default); border-radius: var(--radius-lg); background: var(--color-surface-elevated); box-shadow: var(--shadow-lg); pointer-events: auto; }
+.touch-editor .milkdown-host { padding-top: 52px; scroll-padding-top: 12px; }
 .touch-editor .toolbar-group { flex-wrap: wrap; max-width: 100%; min-width: 0; box-sizing: border-box; }
 .touch-editor .font-size-input { height: auto; min-height: 44px; }
 .touch-editor .font-size-input input { width: 64px; min-height: 40px; padding: 4px 6px; appearance: textfield; }

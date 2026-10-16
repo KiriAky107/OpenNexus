@@ -18,6 +18,7 @@ button:focus-visible, select:focus-visible { outline: 3px solid var(--color-bord
 select option, select optgroup { background: var(--color-surface-elevated); color: var(--color-text-primary); }
 select option:checked { background: var(--color-accent-soft); color: var(--color-text-primary); }
 .android-workspace .main-content { display: flex; flex-direction: column; min-height: 0; }
+.android-workspace { height: 100dvh; box-sizing: border-box; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
 .android-workspace .editor-page { flex: 1; min-height: 0; }
 .android-workspace .startup-card { width: min(560px, calc(100% - 32px)); margin: auto; }
 .mobile-files { width: var(--sidebar-secondary-width); display: flex; flex-direction: column; min-height: 0; flex-shrink: 0; background: var(--color-surface-secondary); border-right: 1px solid var(--color-border-default); }

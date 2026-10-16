@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, expect, it, vi } from 'vitest'
+import { defineComponent, h } from 'vue'
 import { installTestDialogApi } from './dialogTestSupport'
 import App from './App.vue'
 
@@ -101,6 +102,42 @@ it('closes the shared phone file drawer on Back without leaving or submitting th
   } finally {
     wrapper.unmount(); Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
   }
+})
+
+it('uses drawers at tablet portrait width and desktop columns only when landscape width is available', async () => {
+  const width = window.innerWidth
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 })
+  const wrapper = mount(App)
+  try {
+    await flushPromises()
+    expect(wrapper.get('.app-shell').classes()).toContain('compact')
+    const reads = host.mobileRequest.mock.calls.length
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 })
+    window.dispatchEvent(new Event('resize')); await wrapper.vm.$nextTick()
+    expect(wrapper.get('.app-shell').classes()).not.toContain('compact')
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 })
+    window.dispatchEvent(new Event('resize')); await wrapper.vm.$nextTick()
+    expect(wrapper.get('.app-shell').classes()).toContain('compact')
+    expect(host.mobileRequest).toHaveBeenCalledTimes(reads)
+  } finally { wrapper.unmount(); Object.defineProperty(window, 'innerWidth', { configurable: true, value: width }) }
+})
+
+it('consumes native Back to collapse formatting before leaving or persisting the document', async () => {
+  const collapse = vi.fn().mockReturnValueOnce(true).mockReturnValue(false)
+  const rich = defineComponent({ setup(_, { expose }) { expose({ handleBack: collapse }); return () => h('div', 'Shared rich editor') } })
+  const wrapper = mount(App, { global: { stubs: { RichEditor: rich } } })
+  try {
+    await flushPromises(); await create(wrapper)
+    await button(wrapper, 'Writing').trigger('click'); await flushPromises()
+    const writes = host.mobileRequest.mock.calls.filter(([r]) => r.kind === 'persist_draft').length
+    back(); await flushPromises()
+    expect(collapse).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('.editor-page').exists()).toBe(true)
+    expect(host.mobileRequest.mock.calls.filter(([r]) => r.kind === 'persist_draft')).toHaveLength(writes)
+    back(); await flushPromises()
+    expect(collapse).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('.editor-page').exists()).toBe(false)
+  } finally { wrapper.unmount() }
 })
 
 it('retains an unfinished Canvas property on Back and closes a valid property panel before leaving', async () => {

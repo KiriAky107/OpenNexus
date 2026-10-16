@@ -31,10 +31,10 @@ import type { DraftSummary, Entry, MutationIntent, NoteDocument, NotePage, Page,
 const language = ref<Language>(savedLanguage()), copy = computed(() => text(language.value))
 const appearanceEnabled = ref(false)
 const { choice: themeChoice, resolved: resolvedTheme, nativeError: themeError, retryNative: retryTheme } = useMobileTheme(appearanceEnabled)
-const compact = ref(window.innerWidth <= 760), primaryOpen = ref(false), secondaryOpen = ref(false)
+const compact = ref(window.innerWidth <= 1024), primaryOpen = ref(false), secondaryOpen = ref(false)
 const primaryExpanded = ref(false)
 const preferencesOpen = ref(false)
-function resizeWorkspace() { compact.value = window.innerWidth <= 760 }
+function resizeWorkspace() { compact.value = window.innerWidth <= 1024 }
 function closePanels() { primaryOpen.value = false; secondaryOpen.value = false }
 function togglePrimaryExpansion() { if (compact.value) primaryOpen.value = false; else primaryExpanded.value = !primaryExpanded.value }
 const session = createNoteSession(), editor = ref<InstanceType<typeof MobileEditor> | InstanceType<typeof MobileRichEditor>>()
@@ -165,6 +165,7 @@ async function navigateBack() {
     if (fileActions.value?.open) { fileActions.value.open = false; return }
     if (preview.value) { preview.value = false; return }
     if (isCanvas.value && canvas.value?.handleBack()) return
+    if (!isCanvas.value && editorMode.value === 'wysiwyg' && (editor.value as InstanceType<typeof MobileRichEditor> | undefined)?.handleBack?.()) return
     if (session.state.view) { await closeEditor(); return }
     if (tab.value !== 'notes') { selectTab('notes'); return }
     if (query.value) { query.value = ''; search(); return }
