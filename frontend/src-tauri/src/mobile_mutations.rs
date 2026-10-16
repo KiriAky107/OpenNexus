@@ -40,9 +40,10 @@ impl DraftStore {
         if !(1..=100).contains(&limit) || offset > i64::MAX as usize {
             return Err(HostError::new("MOBILE_PAGE_INVALID"));
         }
-        let total:i64=self.db.query_row("SELECT (SELECT COUNT(*) FROM save_intents WHERE state='prepared')+(SELECT COUNT(*) FROM mutation_intents WHERE state='prepared')",[],|r|r.get(0))?;
+        let total:i64=self.db.query_row("SELECT (SELECT COUNT(*) FROM save_intents WHERE state='prepared')+(SELECT COUNT(*) FROM mutation_intents WHERE state='prepared')+(SELECT COUNT(*) FROM image_intents WHERE state='prepared')",[],|r|r.get(0))?;
         let mut query=self.db.prepare("SELECT operation_id,'save' AS kind,draft_id,path,'' AS destination,state,error FROM save_intents WHERE state='prepared'
             UNION ALL SELECT operation_id,kind,NULL AS draft_id,path,destination,state,error FROM mutation_intents WHERE state='prepared'
+            UNION ALL SELECT operation_id,'image' AS kind,draft_id,path,asset_path AS destination,state,error FROM image_intents WHERE state='prepared'
             ORDER BY operation_id LIMIT ?1 OFFSET ?2")?;
         let items=query.query_map(params![limit as i64,offset as i64],|r|Ok(serde_json::json!({"operation_id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"draft_id":r.get::<_,Option<String>>(2)?,"path":r.get::<_,String>(3)?,"destination":r.get::<_,String>(4)?,"state":r.get::<_,String>(5)?,"error":r.get::<_,Option<String>>(6)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(serde_json::json!({"items":items,"total":total}))
@@ -74,7 +75,7 @@ impl DraftStore {
 
     fn require_clean_file(&self, file_id: &str) -> Result<()> {
         let busy:bool=self.db.query_row("SELECT EXISTS(SELECT 1 FROM drafts WHERE file_id=?1 AND
-            (generation<>saved_generation OR EXISTS(SELECT 1 FROM save_intents WHERE draft_id=drafts.id AND state='prepared')))",[file_id],|r|r.get(0))?;
+            (generation<>saved_generation OR EXISTS(SELECT 1 FROM save_intents WHERE draft_id=drafts.id AND state='prepared') OR EXISTS(SELECT 1 FROM image_intents WHERE draft_id=drafts.id AND state='prepared')))",[file_id],|r|r.get(0))?;
         if busy {
             return Err(HostError::new("DRAFT_REQUIRES_SAVE"));
         }

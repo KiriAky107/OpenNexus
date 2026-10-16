@@ -1,5 +1,7 @@
 //! Narrow mobile API over the native-owned Vault. No desktop RPC or caller-supplied root.
-use crate::mobile_drafts::{Draft, DraftStore, MutationIntent, SaveIntent, MAX_NOTE_BYTES};
+use crate::mobile_drafts::{
+    Draft, DraftStore, ImageIntent, MutationIntent, SaveIntent, MAX_NOTE_BYTES,
+};
 use crate::workspace::{Document, HostError, Result, Workspace};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -84,6 +86,26 @@ pub enum MobileRequest {
     CancelMutation {
         operation_id: String,
     },
+    PrepareImage {
+        draft_id: String,
+        edit_session: String,
+        generation: i64,
+        from: usize,
+        to: usize,
+        content_base64: String,
+    },
+    ObserveImage {
+        operation_id: String,
+    },
+    ApplyImage {
+        operation_id: String,
+    },
+    CancelImage {
+        operation_id: String,
+    },
+    ReadImage {
+        path: String,
+    },
 }
 
 #[derive(Serialize)]
@@ -93,6 +115,7 @@ pub struct DraftView {
     pub current_error: Option<String>,
     pub pending_save: Option<SaveIntent>,
     pub pending_mutation: Option<MutationIntent>,
+    pub pending_image: Option<ImageIntent>,
 }
 
 pub struct MobileWorkspace {
@@ -170,12 +193,14 @@ impl MobileWorkspace {
             None => (None, None),
         };
         let pending_save = self.drafts.pending(draft_id)?;
+        let pending_image = self.drafts.pending_image(draft_id)?;
         Ok(DraftView {
             draft,
             current,
             current_error,
             pending_save,
             pending_mutation,
+            pending_image,
         })
     }
 
@@ -334,6 +359,33 @@ impl MobileWorkspace {
                 self.drafts
                     .cancel_mutation(&self.workspace, &operation_id)?,
             ),
+            PrepareImage {
+                draft_id,
+                edit_session,
+                generation,
+                from,
+                to,
+                content_base64,
+            } => value(self.drafts.prepare_image(
+                &self.workspace,
+                &draft_id,
+                &edit_session,
+                generation,
+                from,
+                to,
+                &content_base64,
+            )?),
+            ObserveImage { operation_id } => value(self.drafts.observe_image(&operation_id)?),
+            ApplyImage { operation_id } => value(
+                self.drafts
+                    .apply_image(&mut self.workspace, &operation_id)?,
+            ),
+            CancelImage { operation_id } => value(self.drafts.cancel_image(&operation_id)?),
+            ReadImage { path } => {
+                let request = json!({"rpc":"workspace.assets.read","params":{"vault_id":self.workspace.vault_id,"path":path}});
+                crate::workspace_broker::dispatch(&mut self.workspace, &request)
+                    .map_err(|code| HostError::new(&code))
+            }
         }
     }
 }
@@ -341,6 +393,60 @@ impl MobileWorkspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_mobile_image_import_and_read_keep_original_bytes_and_deny_paths() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let temp = tempfile::tempdir().unwrap();
+        let mut engine = MobileWorkspace::open(temp.path()).unwrap();
+        let draft = engine
+            .drafts
+            .create_with_content(&engine.workspace, "notes/a.md", "before")
+            .unwrap();
+        let bytes = b"\x89PNG\r\n\x1a\noriginal-image-bytes";
+        let request = json!({"kind":"prepare_image","draft_id":draft.id,"edit_session":draft.edit_session,"generation":1,"from":6,"to":6,"content_base64":STANDARD.encode(bytes)});
+        let mut denied = request.clone();
+        denied["root"] = json!("/other");
+        assert!(serde_json::from_value::<MobileRequest>(denied).is_err());
+        let prepared = engine
+            .dispatch(serde_json::from_value(request).unwrap())
+            .unwrap();
+        let id = prepared["operation_id"].as_str().unwrap().to_owned();
+        assert!(engine
+            .dispatch(MobileRequest::DraftStatus {
+                draft_id: draft.id.clone()
+            })
+            .unwrap()["pending_image"]
+            .is_object());
+        engine
+            .dispatch(MobileRequest::ApplyImage {
+                operation_id: id.clone(),
+            })
+            .unwrap();
+        let path = prepared["asset_path"].as_str().unwrap().to_owned();
+        let actual = engine.dispatch(MobileRequest::ReadImage { path }).unwrap();
+        assert_eq!(actual["content_base64"], STANDARD.encode(bytes));
+        assert_eq!(
+            engine
+                .dispatch(MobileRequest::ReadImage {
+                    path: "../.ainote/host.sqlite3".into()
+                })
+                .unwrap_err()
+                .code,
+            "WORKSPACE_REQUEST_INVALID"
+        );
+        assert_eq!(
+            engine
+                .dispatch(MobileRequest::ObserveImage { operation_id: id })
+                .unwrap()["state"],
+            "committed"
+        );
+        assert_eq!(
+            engine.drafts.get(&draft.id).unwrap().content,
+            format!("before![]({})", prepared["reference"].as_str().unwrap())
+        );
+        assert!(!engine.workspace.resolve("notes/a.md").unwrap().exists());
+    }
 
     #[test]
     fn pending_recovery_pages_expose_original_ids_without_bodies_or_execution() {

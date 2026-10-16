@@ -8,6 +8,9 @@ use uuid::Uuid;
 #[path = "mobile_mutations.rs"]
 mod mutations;
 pub use mutations::MutationIntent;
+#[path = "mobile_images.rs"]
+mod images;
+pub use images::ImageIntent;
 
 pub const MAX_NOTE_BYTES: usize = 1024 * 1024;
 
@@ -87,7 +90,7 @@ const DRAFT_COLUMNS: &str =
     "id,file_id,path,base_hash,generation,saved_generation,content,edit_session";
 const INTENT_COLUMNS: &str =
     "operation_id,draft_id,generation,file_id,path,expected,content,state,error";
-const RECOVERABLE: &str = "file_id IS NULL OR generation<>saved_generation OR EXISTS(SELECT 1 FROM save_intents WHERE draft_id=drafts.id AND state='prepared')";
+const RECOVERABLE: &str = "file_id IS NULL OR generation<>saved_generation OR EXISTS(SELECT 1 FROM save_intents WHERE draft_id=drafts.id AND state='prepared') OR EXISTS(SELECT 1 FROM image_intents WHERE draft_id=drafts.id AND state='prepared')";
 
 impl DraftStore {
     /// The caller supplies the native app data directory, never an IPC-controlled path.
@@ -100,7 +103,7 @@ impl DraftStore {
         let db = Connection::open(path)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 2 {
+        if version > 3 {
             return Err(HostError::new("SCHEMA_INCOMPATIBLE"));
         }
         db.execute_batch(
@@ -122,8 +125,9 @@ impl DraftStore {
                 "ALTER TABLE drafts ADD COLUMN edit_session TEXT NOT NULL DEFAULT '';",
             )?;
         }
-        db.execute_batch("PRAGMA user_version=2; COMMIT;")?;
         mutations::initialize(&db)?;
+        images::initialize(&db)?;
+        db.execute_batch("PRAGMA user_version=3; COMMIT;")?;
         Ok(Self { db })
     }
 
@@ -190,6 +194,9 @@ impl DraftStore {
         }
         if let Some(pending) = self.pending(id)? {
             self.cancel_save(ws, &pending.operation_id)?;
+        }
+        if let Some(pending) = self.pending_image(id)? {
+            self.cancel_image(&pending.operation_id)?;
         }
         self.db.execute("DELETE FROM drafts WHERE id=?1", [id])?;
         Ok(())
@@ -350,6 +357,9 @@ impl DraftStore {
         edit_session: &str,
         generation: i64,
     ) -> Result<SaveIntent> {
+        if self.pending_image(draft_id)?.is_some() {
+            return Err(HostError::new("PENDING_IMAGE_REQUIRES_REVIEW"));
+        }
         if self.get(draft_id)?.edit_session != edit_session
             || Uuid::parse_str(edit_session).is_err()
         {
