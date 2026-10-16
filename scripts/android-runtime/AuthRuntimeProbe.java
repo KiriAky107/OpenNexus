@@ -71,8 +71,13 @@ public final class AuthRuntimeProbe extends Instrumentation {
 
     private void openConnection() {
         stage="open-connection";
-        if (hasText("Server connection and sign-in")) return;
-        click("Settings"); click("Sync account"); waitText("Server connection and sign-in");
+        if (!hasText("Server connection and sign-in")) {
+            click("Settings"); click("Sync account");
+        }
+        // A confirmed native profile makes this pane taller than the screen.
+        // The heading can exist above its restored scroll position; finding it
+        // is a navigation check, not permission to click another Settings tab.
+        waitText("Server connection and sign-in");
     }
 
     private JSONObject privateConfiguration() throws Exception {
@@ -162,11 +167,15 @@ public final class AuthRuntimeProbe extends Instrumentation {
     private AccessibilityNodeInfo waitFor(Predicate<AccessibilityNodeInfo> predicate,boolean scroll) {
         long until=SystemClock.uptimeMillis()+30000;long lastScroll=0;
         do {
+            boolean foundTarget=false;
             for (AccessibilityNodeInfo node:nodes()) if (predicate.test(node)) {
+                foundTarget=true;
                 if (node.isVisibleToUser()) return node;
-                if (scroll) node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId());
+                if (scroll && SystemClock.uptimeMillis()-lastScroll>500) {
+                    showTarget(node);lastScroll=SystemClock.uptimeMillis();
+                }
             }
-            if (scroll && SystemClock.uptimeMillis()-lastScroll>1000) {
+            if (!foundTarget && scroll && SystemClock.uptimeMillis()-lastScroll>1000) {
                 for (AccessibilityNodeInfo node:nodes()) if (node.isVisibleToUser() && node.isScrollable()) {
                     if (node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) break;
                 }
@@ -175,6 +184,22 @@ public final class AuthRuntimeProbe extends Instrumentation {
             SystemClock.sleep(150);
         } while (SystemClock.uptimeMillis()<until);
         throw new IllegalStateException("Owned UI state timed out");
+    }
+    private void showTarget(AccessibilityNodeInfo target) {
+        if (target.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId())) return;
+        // Scroll only the named target's owned ancestor, in the direction of
+        // its actual bounds. A target above a restored scroll offset must not
+        // trigger an endless forward-only search. No tap uses guessed bounds.
+        Rect bounds=new Rect();target.getBoundsInScreen(bounds);
+        for (AccessibilityNodeInfo parent=target.getParent();parent!=null;parent=parent.getParent()) {
+            if (!APP.equals(text(parent.getPackageName()))) return;
+            if (parent.isScrollable()) {
+                Rect viewport=new Rect();parent.getBoundsInScreen(viewport);
+                parent.performAction(bounds.top<viewport.top || bounds.isEmpty()
+                    ? AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD : AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+                return;
+            }
+        }
     }
     private boolean hasText(String value) { for (AccessibilityNodeInfo node:nodes()) if (label(node,value)) return true; return false; }
     private void waitText(String value) { waitFor(n->label(n,value),true); }
@@ -219,9 +244,12 @@ public final class AuthRuntimeProbe extends Instrumentation {
     }
     private String shape() {
         StringBuilder value=new StringBuilder("redacted-auth-ui-shape\n");
-        String[] labels={"Settings","Sync account","Server connection and sign-in","Server URL","Account","Password",
+        String[] labels={"Settings","Sync account","Server connection and sign-in","Read current connection","Saved connections","Server URL","Account","Password",
             "Device name","Sign in","Refresh session","Check original operation","Read original ID","Confirm this action"};
-        for (String label:labels) value.append(label).append(" present=").append(hasText(label)).append('\n');
+        for (String label:labels) {
+            boolean visible=false;for (AccessibilityNodeInfo node:nodes()) visible|=label(node,label) && node.isVisibleToUser();
+            value.append(label).append(" present=").append(hasText(label)).append(" visible=").append(visible).append('\n');
+        }
         if (ui!=null) for (AccessibilityNodeInfo node:nodes()) {
             value.append("editable=").append(node.isEditable()).append(" password=").append(node.isPassword())
                 .append(" visible=").append(node.isVisibleToUser()).append(" clickable=").append(node.isClickable())
