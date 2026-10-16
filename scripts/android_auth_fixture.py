@@ -178,10 +178,15 @@ class DeliveryProxy:
             messages.clear();raise RuntimeError('OWNED_AUTH_HOLD_NOT_RELEASED')
         # Only the original already-executed response is released. This is not
         # another service request and never claims the Android client applied it.
-        for message in messages:await send(message)
-        messages.clear()
-        atomic_json(self.root/'fault-events'/(control['operation_id']+'.released.json'),
-            {'operation_id':control['operation_id'],'original_response_send_attempted':True,'client_receipt_known':False},exclusive=True)
+        completed=False
+        try:
+            for message in messages:await send(message)
+            completed=True
+        finally:
+            messages.clear()
+            atomic_json(self.root/'fault-events'/(control['operation_id']+'.released.json'),
+                {'operation_id':control['operation_id'],'original_response_send_attempted':True,
+                 'ASGI_send_returned':completed,'client_receipt_known':False},exclusive=True)
 
 
 def fixed_service(root):

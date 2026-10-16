@@ -143,5 +143,22 @@ class OwnedAuthProxyTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError,'RESPONSE_TOO_LARGE'):await self.request(proxy)
             self.assertEqual(len(calls),1);self.assertFalse((root/'fault-events'/(op+'.json')).exists())
 
+    async def test_client_disconnect_during_original_release_preserves_send_attempt_without_claiming_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);module.initialize_control(root);op=operation();module.arm_control(root,op,'hold_login',0)
+            calls=[];proxy=module.DeliveryProxy(self.app(calls),root)
+            async def receive():return {'type':'http.request','body':b''}
+            async def disconnected(message):raise OSError('unit-only-disconnected-client')
+            task=asyncio.create_task(proxy({'type':'http','method':'POST','path':'/sync/v1/auth/sessions'},receive,disconnected))
+            for _ in range(100):
+                if (root/'fault-events'/(op+'.json')).exists():break
+                await asyncio.sleep(.001)
+            module.arm_control(root,operation(),'release',1)
+            with self.assertRaises(OSError):await asyncio.wait_for(task,2)
+            event=module.read_json(root/'fault-events'/(op+'.released.json'))
+            self.assertTrue(event['original_response_send_attempted']);self.assertFalse(event['ASGI_send_returned'])
+            self.assertFalse(event['client_receipt_known']);self.assertEqual(len(calls),1)
+            self.assertNotIn('private-token',json.dumps(event));self.assertNotIn('disconnected-client',json.dumps(event))
+
 
 if __name__=='__main__':unittest.main()
