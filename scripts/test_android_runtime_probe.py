@@ -8,10 +8,19 @@ import sqlite3
 import unittest
 from unittest.mock import patch
 
-from android_runtime_probe import APP, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding
+from android_runtime_probe import APP, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_runtime_reuse_requires_the_exact_successful_build_job_not_an_aggregate_green_run(self):
+        run={'id':42,'head_sha':'fixed-source','head_branch':'main','path':'.github/workflows/android.yml','conclusion':'failure'}
+        job={'id':99,'name':'debug-apk','status':'completed','conclusion':'success'}
+        # A subsequent runner failure does not invalidate an already verified APK.
+        self.assertEqual(validate_build_job(run,[job],'fixed-source')['job_id'],99)
+        with self.assertRaisesRegex(RuntimeError,'source mismatch'):validate_build_job(run,[job],'other-source')
+        with self.assertRaisesRegex(RuntimeError,'no successful terminal'):validate_build_job(run,[{**job,'conclusion':'failure'}],'fixed-source')
+        with self.assertRaisesRegex(RuntimeError,'no successful terminal'):validate_build_job(run,[job,job],'fixed-source')
+
     def test_database_observations_remain_independent_when_a_later_snapshot_has_no_wal(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);source=root/'source.sqlite3'

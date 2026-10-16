@@ -30,9 +30,19 @@ on:
       - 'frontend/src/services/vaultReferences.ts'
       - '.github/workflows/android.yml'
   workflow_dispatch:
+    inputs:
+      apk_run_id:
+        description: 'Optional existing Android run with a successful debug-apk job; no APK rebuild'
+        type: string
+        required: false
+      apk_commit:
+        description: 'Full immutable source SHA for apk_run_id; supply both reuse fields together'
+        type: string
+        required: false
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: android-${{ github.ref }}
@@ -40,6 +50,7 @@ concurrency:
 
 jobs:
   debug-apk:
+    if: github.event_name != 'workflow_dispatch' || inputs.apk_run_id == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -105,20 +116,42 @@ jobs:
 
   emulator-runtime:
     needs: debug-apk
+    if: ${{ always() && !cancelled() && (needs.debug-apk.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.apk_run_id != '')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
+      COMPILED_SHA: ${{ inputs.apk_commit || github.sha }}
+      APK_BUILD_RUN_ID: ${{ inputs.apk_run_id || github.run_id }}
       ANDROID_AVD_HOME: ${{ github.workspace }}/.build/android-runtime/avd
       ANDROID_EMULATOR_HOME: ${{ github.workspace }}/.build/android-runtime/emulator-home
     steps:
       - uses: actions/checkout@v7
+      - name: Validate the immutable reuse selection
+        env:
+          REUSE_RUN: ${{ inputs.apk_run_id }}
+          REUSE_COMMIT: ${{ inputs.apk_commit }}
+        run: |
+          python3 - <<'PY'
+          import os,re
+          run,commit=os.environ['REUSE_RUN'],os.environ['REUSE_COMMIT']
+          assert bool(run)==bool(commit), 'Supply both immutable APK reuse fields together'
+          if run:
+            assert re.fullmatch(r'[1-9][0-9]{0,17}',run) and re.fullmatch(r'[0-9a-f]{40}',commit), 'Invalid fixed APK selection'
+          PY
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.COMPILED_SHA }}
+          path: .build/android-runtime/compiled-source
+          persist-credentials: false
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
       - uses: actions/download-artifact@v8
         with:
-          name: OpenNexus-android-debug-${{ github.sha }}
+          name: OpenNexus-android-debug-${{ env.COMPILED_SHA }}
+          run-id: ${{ env.APK_BUILD_RUN_ID }}
+          github-token: ${{ github.token }}
           path: .build/android-runtime/package
       - name: Prepare an exclusive hosted emulator
         shell: bash
@@ -152,8 +185,12 @@ jobs:
           "$ANDROID_HOME/emulator/emulator" -avd "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" -port 5562 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader -accel on -memory 2048 -cores 2 > .build/android-runtime/emulator.log 2>&1 &
           echo "$!" > .build/android-runtime/emulator.pid
       - name: Check real APK editing, force-stop recovery, Canvas touch and system export
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: >-
-          python3 scripts/android_runtime_probe.py --commit "$GITHUB_SHA"
+          python3 scripts/android_runtime_probe.py --commit "$COMPILED_SHA"
+          --source-checkout .build/android-runtime/compiled-source --tools-commit "$GITHUB_SHA"
+          --build-run-id "$APK_BUILD_RUN_ID"
           --bundle .build/android-runtime/package --sdk "$ANDROID_HOME"
           --output .build/android-runtime/evidence
       - name: Stop only this job's emulator
@@ -162,7 +199,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: OpenNexus-android-runtime-${{ github.sha }}
+          name: OpenNexus-android-runtime-${{ env.COMPILED_SHA }}
           path: |
             .build/android-runtime/evidence/
             .build/android-runtime/emulator.log

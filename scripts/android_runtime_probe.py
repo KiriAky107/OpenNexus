@@ -7,6 +7,7 @@ import argparse
 from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -46,6 +47,34 @@ def validate_binding(bundle, commit):
     require(proof.get('package') == APP and proof.get('debug_signing') is True, 'Unexpected runtime package')
     require(apk.is_file() and not apk.is_symlink() and digest(apk.read_bytes()) == proof.get('sha256'), 'APK bytes changed')
     return apk, proof
+
+
+def validate_build_job(run, jobs, commit):
+    require(run.get('head_sha') == commit and run.get('path') == '.github/workflows/android.yml', 'APK build run source mismatch')
+    builds = [job for job in jobs if job.get('name') == 'debug-apk']
+    require(len(builds) == 1 and builds[0].get('status') == 'completed'
+        and builds[0].get('conclusion') == 'success', 'APK build job has no successful terminal result')
+    return {'run_id': run['id'], 'job_id': builds[0]['id'], 'head_sha': commit, 'head_branch': run['head_branch']}
+
+
+def build_job_origin(run_id, commit):
+    require(re.fullmatch(r'[1-9][0-9]{0,17}', run_id), 'Invalid APK build run id')
+    repository = os.environ['GITHUB_REPOSITORY']
+    require(re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository), 'Invalid CI repository')
+    def read(path):
+        connection = http.client.HTTPSConnection('api.github.com', timeout=30)
+        try:
+            connection.request('GET', path, headers={'Authorization': 'Bearer ' + os.environ['GITHUB_TOKEN'],
+                'Accept': 'application/vnd.github+json', 'User-Agent': 'OpenNexus-fixed-runtime-origin'})
+            response = connection.getresponse()
+            require(response.status == 200, 'Cannot verify the selected APK build run')
+            data = response.read(4 * 1024 * 1024 + 1)
+            require(len(data) <= 4 * 1024 * 1024, 'Oversized CI build metadata')
+            return json.loads(data)
+        finally:
+            connection.close()
+    base = f'/repos/{repository}/actions/runs/{run_id}'
+    return validate_build_job(read(base), read(base + '/jobs?per_page=100')['jobs'], commit)
 
 
 def require_hosted_emulator(serial):
@@ -252,7 +281,8 @@ class Probe:
         for name, data in originals.items():
             (self.output / name).write_bytes(data)
         proof = {'schema': 1, 'passed': True, 'at': datetime.now(timezone.utc).isoformat(),
-            'source_commit': self.args.commit, 'package': APP, 'apk_sha256': self.binding['sha256'],
+            'source_commit': self.args.commit, 'runtime_tools_commit': self.args.tools_commit,
+            'compiled_from': self.args.build_origin, 'package': APP, 'apk_sha256': self.binding['sha256'],
             'signer_certificate_sha256': self.binding['signer_certificate_sha256'],
             'device': {'kind': 'github-hosted-android-emulator', 'api': 36, 'abi': 'x86_64', 'serial': self.args.serial},
             'phases': self.phases, 'files_sha256': {name: digest(data) for name, data in originals.items()},
@@ -273,6 +303,9 @@ def main():
     parser.add_argument('--serial', default='emulator-5562')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--stop-owned', action='store_true')
+    parser.add_argument('--source-checkout', type=Path)
+    parser.add_argument('--tools-commit')
+    parser.add_argument('--build-run-id')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:
@@ -280,10 +313,17 @@ def main():
         print(json.dumps(stop_owned_emulator(args.sdk / 'platform-tools/adb', args.serial, expected)))
         return
     require(args.bundle and args.commit and args.output, 'Runtime needs a fixed bundle, commit and exclusive evidence output')
+    require(re.fullmatch(r'[0-9a-f]{40}', args.commit), 'A full immutable APK source commit is required')
     apk, binding = validate_binding(args.bundle, args.commit)
     from release_plan import build_source
+    tools_root = Path(__file__).resolve().parents[1]
+    args.tools_commit = args.tools_commit or args.commit
+    build_source(tools_root, args.tools_commit)
+    compiled_checkout = args.source_checkout.resolve() if args.source_checkout else tools_root
+    require(compiled_checkout.is_relative_to(Path(os.environ['GITHUB_WORKSPACE']).resolve()), 'Compiled checkout leaves the owned CI workspace')
     require(json.loads((args.bundle / 'source-provenance.json').read_text('utf-8'))
-        == build_source(Path(__file__).resolve().parents[1], args.commit), 'Runtime checkout differs from compiled APK inputs')
+        == build_source(compiled_checkout, args.commit), 'Runtime checkout differs from compiled APK inputs')
+    args.build_origin = build_job_origin(args.build_run_id or os.environ['GITHUB_RUN_ID'], args.commit)
     probe = Probe(args, apk, binding)
     try:
         probe.run()
