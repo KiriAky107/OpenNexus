@@ -15,6 +15,21 @@ from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAG
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_private_read_keeps_binary_bytes_and_remote_errors_distinct(self):
+        probe = Probe.__new__(Probe); probe.adb = Path('/owned/adb'); probe.args = SimpleNamespace(serial='emulator-5562')
+        raw = b'\x00original\r\n\r\n\xff'
+        replies = [subprocess.CompletedProcess([], 0, raw, b''),
+            subprocess.CompletedProcess([], 1, b'', b'No such file'),
+            subprocess.CompletedProcess([], 1, b'', b'No such file')]
+        with patch('android_runtime_probe.subprocess.run', side_effect=replies) as run:
+            self.assertEqual(probe.private('./owned/vault/original.png').stdout, raw)
+            self.assertEqual(probe.private('./owned/missing-wal', check=False).returncode, 1)
+            with self.assertRaisesRegex(RuntimeError, 'Command failed'):
+                probe.private('./owned/missing')
+        self.assertEqual(run.call_args_list[0].args[0],
+            [str(Path('/owned/adb')), '-s', 'emulator-5562', 'shell', '-T',
+                'run-as ' + APP + ' cat ./owned/vault/original.png'])
+
     def test_failed_editor_capture_keeps_empty_original_and_dirty_draft_without_replaying_input(self):
         with tempfile.TemporaryDirectory() as directory:
             probe = Probe.__new__(Probe); probe.output = Path(directory); probe.root = './owned/'

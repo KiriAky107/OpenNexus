@@ -140,7 +140,9 @@ class Probe:
 
     def private(self, path, *, check=True):
         require(path and '..' not in path.split('/') and not path.startswith('/'), 'Unsafe private test path')
-        return self.device('exec-out', 'run-as', APP, 'cat', path, check=check)
+        # Shell-v2 without a PTY preserves binary bytes and the remote exit code.
+        # exec-out can report success while mixing a failing cat's error into stdout.
+        return self.device('shell', '-T', shlex.join(('run-as', APP, 'cat', path)), check=check)
 
     def force_stop(self):
         self.shell('am', 'force-stop', APP)
