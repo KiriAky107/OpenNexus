@@ -112,6 +112,35 @@ pub struct Rejection {
     pub code: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Selection {
+    pub revision: i64,
+    pub endpoint: String,
+    pub account: String,
+    pub operation_id: String,
+    pub generation: i64,
+}
+#[derive(Serialize)]
+pub struct Profile {
+    pub intent: Intent,
+    pub rejected: Option<Rejection>,
+    pub selected: bool,
+}
+#[derive(Serialize)]
+pub struct Profiles {
+    pub items: Vec<Profile>,
+    pub total: u64,
+    pub offset: usize,
+    pub limit: usize,
+    pub selection: Option<Selection>,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct Choice {
+    pub operation_id: String,
+    pub expected_revision: Option<i64>,
+    pub selection: Selection,
+}
+
 /// Extracted from a successfully decrypted/read-back native broker payload, never IPC.
 #[derive(Clone)]
 pub struct StoredIdentity {
@@ -206,6 +235,28 @@ fn current(db: &Connection, scope: &Scope) -> Result<Option<Intent>> {
     id.map(|id| get(db, &id)?.ok_or_else(|| HostError::new("SYNC_AUTH_INDEX_INVALID")))
         .transpose()
 }
+fn choice(db: &Connection, id: &str) -> Result<Option<Choice>> {
+    operation_id(id)?;
+    let row:Option<(String,i64,Option<i64>,i64)>=db.query_row("SELECT target_operation,target_generation,expected_revision,result_revision FROM auth_profile_choices WHERE operation_id=?1",[id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional()?;
+    row.map(|(target, generation, expected_revision, revision)| {
+        let intent = get(db, &target)?.ok_or_else(|| HostError::new("SYNC_AUTH_INDEX_INVALID"))?;
+        if intent.generation != generation || revision <= 0 {
+            return Err(HostError::new("SYNC_AUTH_INDEX_INVALID"));
+        }
+        Ok(Choice {
+            operation_id: id.into(),
+            expected_revision,
+            selection: Selection {
+                revision,
+                endpoint: intent.endpoint,
+                account: intent.account,
+                operation_id: target,
+                generation,
+            },
+        })
+    })
+    .transpose()
+}
 fn require_current(db: &Connection, id: &str) -> Result<Intent> {
     operation_id(id)?;
     let intent = get(db, id)?.ok_or_else(|| HostError::new("SYNC_AUTH_INTENT_NOT_FOUND"))?;
@@ -214,6 +265,47 @@ fn require_current(db: &Connection, id: &str) -> Result<Intent> {
         return Err(HostError::new("SYNC_AUTH_IDENTITY_CHANGED"));
     }
     Ok(intent)
+}
+
+fn selection(db: &Connection) -> Result<Option<Selection>> {
+    let value=db.query_row("SELECT revision,endpoint,account,operation_id,generation FROM auth_selection WHERE singleton=1",[],|row| {
+        Ok(Selection{revision:row.get(0)?,endpoint:row.get(1)?,account:row.get(2)?,operation_id:row.get(3)?,generation:row.get(4)?})
+    }).optional()?;
+    if let Some(value) = &value {
+        let scope = Scope::new(&value.endpoint, &value.account)?;
+        operation_id(&value.operation_id)?;
+        if value.revision <= 0 || value.generation <= 0 || scope.endpoint() != value.endpoint {
+            return Err(HostError::new("SYNC_AUTH_INDEX_INVALID"));
+        }
+    }
+    Ok(value)
+}
+fn require_selected(db: &Connection, intent: &Intent) -> Result<()> {
+    if selection(db)?.is_none_or(|s| {
+        s.operation_id != intent.operation_id
+            || s.generation != intent.generation
+            || s.endpoint != intent.endpoint
+            || s.account != intent.account
+    }) {
+        return Err(HostError::new("SYNC_AUTH_SELECTION_CHANGED"));
+    }
+    Ok(())
+}
+fn select_current(db: &Connection, intent: &Intent) -> Result<Selection> {
+    let revision = selection(db)?.map_or(Ok(1), |s| {
+        s.revision
+            .checked_add(1)
+            .ok_or_else(|| HostError::new("SYNC_AUTH_INDEX_INVALID"))
+    })?;
+    db.execute("INSERT INTO auth_selection VALUES (1,?1,?2,?3,?4,?5) ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,endpoint=excluded.endpoint,account=excluded.account,operation_id=excluded.operation_id,generation=excluded.generation",
+        params![revision,intent.endpoint,intent.account,intent.operation_id,intent.generation])?;
+    Ok(Selection {
+        revision,
+        endpoint: intent.endpoint.clone(),
+        account: intent.account.clone(),
+        operation_id: intent.operation_id.clone(),
+        generation: intent.generation,
+    })
 }
 
 impl Journal {
@@ -245,6 +337,8 @@ impl Journal {
                 phase TEXT NOT NULL CHECK(phase IN ('login_pending','store_pending','active','refresh_pending','logout_pending','erase_pending','disconnected','unknown')),
                 device_id TEXT,generation INTEGER NOT NULL CHECK(generation>0),server_logout_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(server_logout_confirmed IN (0,1)),previous_operation TEXT);
             CREATE TABLE IF NOT EXISTS auth_rejections(operation_id TEXT PRIMARY KEY,status INTEGER NOT NULL CHECK(status BETWEEN 400 AND 499),code TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS auth_selection(singleton INTEGER PRIMARY KEY CHECK(singleton=1),revision INTEGER NOT NULL CHECK(revision>0),endpoint TEXT NOT NULL,account TEXT NOT NULL,operation_id TEXT NOT NULL,generation INTEGER NOT NULL CHECK(generation>0));
+            CREATE TABLE IF NOT EXISTS auth_profile_choices(operation_id TEXT PRIMARY KEY,target_operation TEXT NOT NULL,target_generation INTEGER NOT NULL CHECK(target_generation>0),expected_revision INTEGER,result_revision INTEGER NOT NULL CHECK(result_revision>0));
             PRAGMA user_version=1; COMMIT;")?;
         Ok(Self { db })
     }
@@ -254,6 +348,134 @@ impl Journal {
     }
     pub fn current(&self, scope: &Scope) -> Result<Option<Intent>> {
         current(&self.db, scope)
+    }
+    /// Nonsecret raw selection stamp. A legacy/stale stamp is not activation.
+    pub fn selection(&self) -> Result<Option<Selection>> {
+        selection(&self.db)
+    }
+    pub fn selected(&self) -> Result<Option<Intent>> {
+        let Some(selected) = selection(&self.db)? else {
+            return Ok(None);
+        };
+        let intent = require_current(&self.db, &selected.operation_id)?;
+        require_selected(&self.db, &intent)?;
+        Ok(Some(intent))
+    }
+    pub fn require_selected(&self, intent: &Intent) -> Result<()> {
+        require_selected(&self.db, intent)
+    }
+    /// Explicit local selection has no remote request or secret read. Both CAS
+    /// stamps are required so an old page or an A/B/A switch cannot win later.
+    pub fn choice(&self, id: &str) -> Result<Option<Choice>> {
+        choice(&self.db, id)
+    }
+    pub fn choose(
+        &mut self,
+        operation: &str,
+        id: &str,
+        generation: i64,
+        expected_revision: Option<i64>,
+    ) -> Result<Choice> {
+        operation_id(operation)?;
+        operation_id(id)?;
+        if generation <= 0 || expected_revision.is_some_and(|v| v <= 0) {
+            return Err(HostError::new("SYNC_AUTH_SELECTION_INVALID"));
+        }
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(saved) = choice(&tx, operation)? {
+            if saved.selection.operation_id != id
+                || saved.selection.generation != generation
+                || saved.expected_revision != expected_revision
+            {
+                return Err(HostError::new("SYNC_AUTH_INTENT_MISMATCH"));
+            }
+            return Ok(saved);
+        }
+        let before = selection(&tx)?;
+        if before.as_ref().map(|s| s.revision) != expected_revision {
+            return Err(HostError::new("SYNC_AUTH_SELECTION_CHANGED"));
+        }
+        let intent = require_current(&tx, id)?;
+        if intent.generation != generation {
+            return Err(HostError::new("SYNC_AUTH_IDENTITY_CHANGED"));
+        }
+        let selected = if let Some(before) = before.filter(|s| {
+            s.operation_id == id
+                && s.generation == generation
+                && s.endpoint == intent.endpoint
+                && s.account == intent.account
+        }) {
+            before
+        } else {
+            select_current(&tx, &intent)?
+        };
+        tx.execute(
+            "INSERT INTO auth_profile_choices VALUES (?1,?2,?3,?4,?5)",
+            params![
+                operation,
+                id,
+                generation,
+                expected_revision,
+                selected.revision
+            ],
+        )?;
+        tx.commit()?;
+        Ok(Choice {
+            operation_id: operation.into(),
+            expected_revision,
+            selection: selected,
+        })
+    }
+    pub fn profiles(&self, offset: usize, limit: usize) -> Result<Profiles> {
+        if offset > 10000 || !(1..=50).contains(&limit) {
+            return Err(HostError::new("SYNC_AUTH_PROFILE_PAGE_INVALID"));
+        }
+        let tx = self.db.unchecked_transaction()?;
+        let selected = selection(&tx)?;
+        let total = tx.query_row("SELECT COUNT(*) FROM auth_scopes", [], |row| row.get(0))?;
+        let ids = {
+            let mut statement=tx.prepare("SELECT current_operation FROM auth_scopes ORDER BY endpoint,account LIMIT ?1 OFFSET ?2")?;
+            let rows =
+                statement.query_map(params![limit, offset], |row| row.get::<_, String>(0))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        let mut items = Vec::with_capacity(ids.len());
+        for id in ids {
+            let intent = require_current(&tx, &id)?;
+            let rejected = tx
+                .query_row(
+                    "SELECT status,code FROM auth_rejections WHERE operation_id=?1",
+                    [&id],
+                    |row| {
+                        Ok(Rejection {
+                            status: row.get(0)?,
+                            code: row.get(1)?,
+                        })
+                    },
+                )
+                .optional()?;
+            let current = selected.as_ref().is_some_and(|s| {
+                s.operation_id == id
+                    && s.generation == intent.generation
+                    && s.endpoint == intent.endpoint
+                    && s.account == intent.account
+            });
+            items.push(Profile {
+                intent,
+                rejected,
+                selected: current,
+            });
+        }
+        tx.commit()?;
+        Ok(Profiles {
+            items,
+            total,
+            offset,
+            limit,
+            selection: selected,
+        })
     }
     pub fn rejection(&self, id: &str) -> Result<Option<Rejection>> {
         operation_id(id)?;
@@ -371,6 +593,7 @@ impl Journal {
         )?;
         tx.execute("INSERT INTO auth_scopes VALUES (?1,?2,?3) ON CONFLICT(endpoint,account) DO UPDATE SET current_operation=excluded.current_operation",params![scope.endpoint,scope.account,id])?;
         let intent = get(&tx, id)?.ok_or_else(|| HostError::new("SYNC_AUTH_INDEX_INVALID"))?;
+        select_current(&tx, &intent)?;
         tx.commit()?;
         Ok(Prepared {
             intent,
@@ -400,6 +623,9 @@ impl Journal {
             });
         }
         let previous = require_current(&tx, expected)?;
+        if selection(&tx)?.is_some() {
+            require_selected(&tx, &previous)?;
+        }
         if kind != "local_disconnect" && previous.phase != Phase::Active {
             return Err(HostError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"));
         }
@@ -432,6 +658,7 @@ impl Journal {
         )?;
         tx.execute("UPDATE auth_scopes SET current_operation=?1 WHERE endpoint=?2 AND account=?3 AND current_operation=?4",params![id,previous.endpoint,previous.account,expected])?;
         let intent = get(&tx, id)?.ok_or_else(|| HostError::new("SYNC_AUTH_INDEX_INVALID"))?;
+        select_current(&tx, &intent)?;
         tx.commit()?;
         Ok(Prepared {
             intent,
@@ -455,6 +682,7 @@ impl Journal {
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let intent = require_current(&tx, id)?;
+        require_selected(&tx, &intent)?;
         if !matches!(intent.phase, Phase::LoginPending | Phase::RefreshPending)
             || intent
                 .device_id
@@ -478,6 +706,7 @@ impl Journal {
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let intent = require_current(&tx, id)?;
+        require_selected(&tx, &intent)?;
         let phase = if intent.phase == Phase::Disconnected
             || (intent.phase == Phase::ErasePending && stored.is_none())
         {
@@ -513,6 +742,7 @@ impl Journal {
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let intent = require_current(&tx, id)?;
+        require_selected(&tx, &intent)?;
         if intent.kind != "logout" || intent.phase != Phase::LogoutPending {
             return Err(HostError::new("SYNC_AUTH_RESPONSE_MISMATCH"));
         }
@@ -526,6 +756,249 @@ impl Journal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_selection_recovers_pending_original_scope_after_cold_open_without_guessing_a_profile()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4().to_string();
+        let mut journal = Journal::open(root.path()).unwrap();
+        assert!(
+            journal
+                .prepare_login(&id, &scope(), "Owned phone")
+                .unwrap()
+                .first_send
+        );
+        let selected = journal.selection().unwrap().unwrap();
+        assert_eq!(selected.operation_id, id);
+        assert_eq!(selected.revision, 1);
+        assert!(
+            !journal
+                .prepare_login(&id, &scope(), "Owned phone")
+                .unwrap()
+                .first_send
+        );
+        assert_eq!(journal.selection().unwrap().unwrap(), selected);
+        drop(journal);
+        let reopened = Journal::open(root.path()).unwrap();
+        let pending = reopened.selected().unwrap().unwrap();
+        assert_eq!(pending.phase, Phase::LoginPending);
+        assert_eq!(pending.endpoint, scope().endpoint());
+        assert_eq!(pending.account, scope().account());
+        assert_eq!(pending.operation_id, id);
+        assert_eq!(reopened.selection().unwrap().unwrap(), selected);
+    }
+    #[test]
+    fn profile_pages_are_bounded_deterministic_readonly_metadata_with_one_current_selection() {
+        let root = tempfile::tempdir().unwrap();
+        let mut journal = Journal::open(root.path()).unwrap();
+        for n in 0..51 {
+            let scope = Scope::new("https://sync.example", &format!("reader-{n:02}")).unwrap();
+            journal
+                .prepare_login(&Uuid::new_v4().to_string(), &scope, "Owned phone")
+                .unwrap();
+        }
+        let changes = journal
+            .db
+            .query_row("SELECT total_changes()", [], |r| r.get::<_, i64>(0))
+            .unwrap();
+        let selected = journal.selection().unwrap();
+        let first = journal.profiles(0, 20).unwrap();
+        let second = journal.profiles(20, 20).unwrap();
+        let last = journal.profiles(40, 20).unwrap();
+        assert_eq!(
+            (
+                first.total,
+                first.items.len(),
+                second.items.len(),
+                last.items.len()
+            ),
+            (51, 20, 20, 11)
+        );
+        assert_eq!(first.items[0].intent.account, "reader-00");
+        assert_eq!(second.items[0].intent.account, "reader-20");
+        assert_eq!(
+            first
+                .items
+                .iter()
+                .chain(second.items.iter())
+                .chain(last.items.iter())
+                .filter(|x| x.selected)
+                .count(),
+            1
+        );
+        assert!(last.items.last().unwrap().selected);
+        assert!(journal.profiles(51, 20).unwrap().items.is_empty());
+        for (offset, limit) in [(10001, 20), (0, 0), (0, 51)] {
+            assert!(journal.profiles(offset, limit).is_err());
+        }
+        assert_eq!(journal.selection().unwrap(), selected);
+        assert_eq!(
+            journal
+                .db
+                .query_row("SELECT total_changes()", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            changes
+        );
+        let bytes = serde_json::to_string(&first).unwrap();
+        assert!(!bytes.contains("password") && !bytes.contains("token"));
+    }
+    #[test]
+    fn original_choice_receipt_survives_later_selection_and_stale_aba_confirmation_cannot_win() {
+        let root = tempfile::tempdir().unwrap();
+        let mut journal = Journal::open(root.path()).unwrap();
+        let a = Uuid::new_v4().to_string();
+        let b = Uuid::new_v4().to_string();
+        let choose_a = Uuid::new_v4().to_string();
+        journal.prepare_login(&a, &scope(), "A").unwrap();
+        journal
+            .prepare_login(
+                &b,
+                &Scope::new("https://other.example", "reader").unwrap(),
+                "B",
+            )
+            .unwrap();
+        let original = journal.choose(&choose_a, &a, 1, Some(2)).unwrap();
+        assert_eq!(original.selection.revision, 3);
+        journal
+            .choose(&Uuid::new_v4().to_string(), &b, 1, Some(3))
+            .unwrap();
+        let current = journal.selection().unwrap().unwrap();
+        assert_eq!(current.operation_id, b);
+        assert_eq!(current.revision, 4);
+        let replay = journal.choose(&choose_a, &a, 1, Some(2)).unwrap();
+        assert_eq!(
+            serde_json::to_value(&replay).unwrap(),
+            serde_json::to_value(&original).unwrap()
+        );
+        assert_eq!(journal.selection().unwrap().unwrap(), current);
+        assert!(journal.choose(&choose_a, &b, 1, Some(2)).is_err());
+        assert!(journal
+            .choose(&Uuid::new_v4().to_string(), &a, 1, Some(2))
+            .is_err());
+        journal
+            .choose(&Uuid::new_v4().to_string(), &a, 1, Some(4))
+            .unwrap();
+        assert!(journal
+            .choose(&Uuid::new_v4().to_string(), &b, 1, Some(3))
+            .is_err());
+        assert_eq!(journal.selected().unwrap().unwrap().operation_id, a);
+        drop(journal);
+        let reopened = Journal::open(root.path()).unwrap();
+        assert_eq!(
+            serde_json::to_value(reopened.choice(&choose_a).unwrap().unwrap()).unwrap(),
+            serde_json::to_value(original).unwrap()
+        );
+    }
+    #[test]
+    fn obsolete_profile_generation_and_wrong_cas_leave_no_choice_receipt_or_selection_change() {
+        let root = tempfile::tempdir().unwrap();
+        let mut journal = Journal::open(root.path()).unwrap();
+        let old = Uuid::new_v4().to_string();
+        let new = Uuid::new_v4().to_string();
+        journal.prepare_login(&old, &scope(), "Old").unwrap();
+        journal.reconcile(&old, None).unwrap();
+        journal.prepare_login(&new, &scope(), "New").unwrap();
+        let before = journal.selection().unwrap();
+        for (target, generation, revision) in
+            [(&old, 1, Some(2)), (&new, 1, Some(2)), (&new, 2, Some(1))]
+        {
+            let operation = Uuid::new_v4().to_string();
+            assert!(journal
+                .choose(&operation, target, generation, revision)
+                .is_err());
+            assert!(journal.choice(&operation).unwrap().is_none());
+            assert_eq!(journal.selection().unwrap(), before);
+        }
+    }
+    #[test]
+    fn legacy_auth_database_without_selection_requires_explicit_choice_and_preserves_original_rows()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let mut journal = Journal::open(root.path()).unwrap();
+        let id = Uuid::new_v4().to_string();
+        journal.prepare_login(&id, &scope(), "Original").unwrap();
+        let received = journal.received_session(&id, "device").unwrap();
+        journal.reconcile(&id, Some(&identity(&received))).unwrap();
+        let before = serde_json::to_value(journal.find(&id).unwrap().unwrap()).unwrap();
+        journal
+            .db
+            .execute_batch("DROP TABLE auth_selection; DROP TABLE auth_profile_choices;")
+            .unwrap();
+        drop(journal);
+        let mut reopened = Journal::open(root.path()).unwrap();
+        assert!(reopened.selected().unwrap().is_none());
+        assert_eq!(reopened.profiles(0, 20).unwrap().total, 1);
+        assert!(reopened.reconcile(&id, Some(&identity(&received))).is_err());
+        assert_eq!(
+            serde_json::to_value(reopened.find(&id).unwrap().unwrap()).unwrap(),
+            before
+        );
+        let chosen = reopened
+            .choose(&Uuid::new_v4().to_string(), &id, 1, None)
+            .unwrap();
+        assert_eq!(chosen.selection.revision, 1);
+        assert_eq!(
+            reopened
+                .reconcile(&id, Some(&identity(&received)))
+                .unwrap()
+                .phase,
+            Phase::Active
+        );
+        assert_eq!(
+            serde_json::to_value(reopened.find(&id).unwrap().unwrap()).unwrap(),
+            before
+        );
+    }
+    #[test]
+    fn nonselected_account_cannot_accept_session_metadata_reconcile_or_prepare_refresh() {
+        let root = tempfile::tempdir().unwrap();
+        let mut journal = Journal::open(root.path()).unwrap();
+        let a = Uuid::new_v4().to_string();
+        let b = Uuid::new_v4().to_string();
+        journal.prepare_login(&a, &scope(), "A").unwrap();
+        let received = journal.received_session(&a, "device-a").unwrap();
+        journal.reconcile(&a, Some(&identity(&received))).unwrap();
+        journal
+            .prepare_login(
+                &b,
+                &Scope::new("https://other.example", "reader").unwrap(),
+                "B",
+            )
+            .unwrap();
+        assert_eq!(
+            journal
+                .reconcile(&a, Some(&identity(&received)))
+                .err()
+                .unwrap()
+                .code,
+            "SYNC_AUTH_SELECTION_CHANGED"
+        );
+        let refresh = Uuid::new_v4().to_string();
+        assert!(journal.prepare_refresh(&refresh, &a).is_err());
+        assert!(journal.find(&refresh).unwrap().is_none());
+        assert_eq!(journal.selected().unwrap().unwrap().operation_id, b);
+    }
+    #[test]
+    fn selection_revision_exhaustion_rolls_back_the_entire_new_login_intent_before_send() {
+        let root = tempfile::tempdir().unwrap();
+        let mut journal = Journal::open(root.path()).unwrap();
+        let a = Uuid::new_v4().to_string();
+        journal.prepare_login(&a, &scope(), "A").unwrap();
+        journal
+            .db
+            .execute("UPDATE auth_selection SET revision=?1", [i64::MAX])
+            .unwrap();
+        let b = Uuid::new_v4().to_string();
+        let other = Scope::new("https://other.example", "reader").unwrap();
+        assert_eq!(
+            journal.prepare_login(&b, &other, "B").err().unwrap().code,
+            "SYNC_AUTH_INDEX_INVALID"
+        );
+        assert!(journal.find(&b).unwrap().is_none());
+        assert!(journal.current(&other).unwrap().is_none());
+        assert_eq!(journal.selection().unwrap().unwrap().revision, i64::MAX);
+        assert_eq!(journal.selected().unwrap().unwrap().operation_id, a);
+    }
     const DEVICE: &str = "owned-device-one";
     fn scope() -> Scope {
         Scope::new("https://SYNC.example:443", "reader").unwrap()

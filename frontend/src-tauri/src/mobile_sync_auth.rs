@@ -2,7 +2,9 @@
 //! Only State is serializable for IPC; decrypted records and sessions stay native.
 use crate::{
     mobile_sync_foreground::Lease,
-    mobile_sync_session::{Intent, Journal, Phase, Rejection, Scope, StoredIdentity},
+    mobile_sync_session::{
+        Choice, Intent, Journal, Phase, Profiles, Rejection, Scope, Selection, StoredIdentity,
+    },
     sync_client::{identifier, Session, SyncClient, SyncError},
 };
 use serde::{Deserialize, Serialize};
@@ -202,6 +204,40 @@ impl<S: SecretStore> Auth<S> {
             store,
         })
     }
+    pub fn profiles(&self, lease: &Lease, offset: usize, limit: usize) -> Result<Profiles> {
+        lease.with_current(|| Ok(self.journal.profiles(offset, limit)?))
+    }
+    pub fn selection(&self, lease: &Lease) -> Result<Option<Selection>> {
+        lease.with_current(|| Ok(self.journal.selection()?))
+    }
+    pub fn choice(&self, lease: &Lease, id: &str) -> Result<Option<Choice>> {
+        lease.with_current(|| Ok(self.journal.choice(id)?))
+    }
+    /// The Host invalidates old leases before waiting for the command gate.
+    /// Returning an old choice receipt never changes the current selection.
+    pub fn choose_profile(
+        &mut self,
+        lease: &Lease,
+        operation: &str,
+        target: &str,
+        generation: i64,
+        expected_revision: Option<i64>,
+    ) -> Result<Choice> {
+        lease.with_current(|| {
+            Ok(self
+                .journal
+                .choose(operation, target, generation, expected_revision)?)
+        })
+    }
+    pub fn recover_selected(&mut self, lease: &Lease, now: u64) -> Result<State> {
+        let selected = lease.with_current(|| Ok(self.journal.selected()?))?;
+        match selected {
+            Some(intent) => {
+                self.recover(lease, &Scope::new(&intent.endpoint, &intent.account)?, now)
+            }
+            None => self.status(None, None, now),
+        }
+    }
     fn status(&self, intent: Option<Intent>, record: Option<&Record>, now: u64) -> Result<State> {
         let rejected = intent
             .as_ref()
@@ -267,6 +303,7 @@ impl<S: SecretStore> Auth<S> {
             let Some(intent) = self.journal.current(scope)? else {
                 return self.status(None, None, now);
             };
+            self.journal.require_selected(&intent)?;
             let record = self.load(&intent)?;
             let identity = record.as_ref().map(Record::identity);
             let reconciled = self
@@ -297,6 +334,7 @@ impl<S: SecretStore> Auth<S> {
                     intent.operation_id == expected_operation && intent.phase == Phase::Active
                 })
                 .ok_or_else(|| SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"))?;
+            self.journal.require_selected(&intent)?;
             let record = self
                 .load(&intent)?
                 .ok_or_else(|| SyncError::new("SYNC_LOGIN_REQUIRED"))?;
@@ -661,6 +699,148 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    #[tokio::test]
+    async fn cold_start_before_association_recovers_native_selected_scope_without_another_login() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Err(SyncError::new("SYNC_NETWORK_ERROR")));
+        let (_owner, first) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        assert!(auth
+            .login(&first, login(&operation, &scope), &remote, 100)
+            .await
+            .is_err());
+        drop(auth);
+        let (_cold_owner, cold) = lease();
+        let mut reopened = Auth::open(root.path(), store).unwrap();
+        let recovered = reopened.recover_selected(&cold, 101).unwrap();
+        assert!(!recovered.authenticated);
+        let original = recovered.intent.unwrap();
+        assert_eq!(original.operation_id, operation);
+        assert_eq!(original.endpoint, scope.endpoint());
+        assert_eq!(original.account, scope.account());
+        assert_eq!(original.phase, Phase::Unknown);
+        assert_eq!(reopened.profiles(&cold, 0, 20).unwrap().total, 1);
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn profile_reads_never_decrypt_and_nonselected_scope_is_rejected_before_secret_access() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .extend([Ok(reply("device-a", "a")), Ok(reply("device-b", "b"))]);
+        let (owner, a_lease) = lease();
+        let a = scope();
+        let b = Scope::new("https://other.example", "reader").unwrap();
+        let a_id = id();
+        let b_id = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        auth.login(&a_lease, login(&a_id, &a), &remote, 100)
+            .await
+            .unwrap();
+        owner.invalidate_identity();
+        let b_lease = owner.lease().unwrap();
+        auth.login(&b_lease, login(&b_id, &b), &remote, 101)
+            .await
+            .unwrap();
+        store.fail_read.store(true, Ordering::SeqCst);
+        assert_eq!(auth.profiles(&b_lease, 0, 20).unwrap().total, 2);
+        auth.selection(&b_lease).unwrap();
+        assert_eq!(
+            auth.recover(&b_lease, &a, 102).err().unwrap().code,
+            "SYNC_AUTH_SELECTION_CHANGED"
+        );
+        assert_eq!(
+            auth.authorized(&b_lease, &a, &a_id, 102, |_| async { Ok(()) })
+                .await
+                .err()
+                .unwrap()
+                .code,
+            "SYNC_AUTH_SELECTION_CHANGED"
+        );
+        assert_eq!(
+            auth.recover_selected(&b_lease, 102).err().unwrap().code,
+            "SYNC_CREDENTIALS_UNAVAILABLE"
+        );
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn replayed_old_profile_choice_returns_original_receipt_without_reactivating_that_account(
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .extend([Ok(reply("device-a", "a")), Ok(reply("device-b", "b"))]);
+        let (owner, lease_a) = lease();
+        let a = scope();
+        let b = Scope::new("https://other.example", "reader").unwrap();
+        let a_id = id();
+        let b_id = id();
+        let mut auth = Auth::open(root.path(), store).unwrap();
+        auth.login(&lease_a, login(&a_id, &a), &remote, 100)
+            .await
+            .unwrap();
+        owner.invalidate_identity();
+        let active = owner.lease().unwrap();
+        auth.login(&active, login(&b_id, &b), &remote, 101)
+            .await
+            .unwrap();
+        owner.invalidate_identity();
+        let active = owner.lease().unwrap();
+        let choose_a = id();
+        let receipt = auth
+            .choose_profile(&active, &choose_a, &a_id, 1, Some(2))
+            .unwrap();
+        assert_eq!(receipt.selection.revision, 3);
+        assert_eq!(
+            auth.recover_selected(&active, 102)
+                .unwrap()
+                .intent
+                .unwrap()
+                .operation_id,
+            a_id
+        );
+        owner.invalidate_identity();
+        let active = owner.lease().unwrap();
+        auth.choose_profile(&active, &id(), &b_id, 1, Some(3))
+            .unwrap();
+        let old = auth
+            .choose_profile(&active, &choose_a, &a_id, 1, Some(2))
+            .unwrap();
+        assert_eq!(old.selection.revision, 3);
+        assert_eq!(
+            auth.choice(&active, &choose_a).unwrap().unwrap().selection,
+            receipt.selection
+        );
+        assert_eq!(
+            auth.recover_selected(&active, 103)
+                .unwrap()
+                .intent
+                .unwrap()
+                .operation_id,
+            b_id
+        );
+        assert_eq!(auth.selection(&active).unwrap().unwrap().revision, 4);
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
