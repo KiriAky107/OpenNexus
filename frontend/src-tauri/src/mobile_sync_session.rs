@@ -116,6 +116,9 @@ pub struct StoredIdentity {
     pub generation: i64,
 }
 impl StoredIdentity {
+    pub(crate) fn matches_intent(&self, intent: &Intent) -> bool {
+        self.matches(intent)
+    }
     fn matches(&self, intent: &Intent) -> bool {
         self.endpoint == intent.endpoint
             && self.account == intent.account

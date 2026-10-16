@@ -1,0 +1,999 @@
+//! Native authentication over the existing Sync v1 transport and durable intents.
+//! Only State is serializable for IPC; decrypted records and sessions stay native.
+use crate::{
+    mobile_sync_foreground::Lease,
+    mobile_sync_session::{Intent, Journal, Phase, Scope, StoredIdentity},
+    sync_client::{identifier, Session, SyncClient, SyncError},
+};
+use serde::{Deserialize, Serialize};
+use std::{future::Future, path::Path};
+use zeroize::Zeroizing;
+
+type Result<T> = std::result::Result<T, SyncError>;
+const MAX_RECORD: usize = 64 * 1024;
+
+/// Android implements this with its application-scoped Keystore/JNI broker.
+/// No implementation may return these bytes through a WebView command.
+pub trait SecretStore: Send + Sync {
+    fn read(
+        &self,
+        scope: &Scope,
+        device: &str,
+    ) -> crate::workspace::Result<Option<Zeroizing<Vec<u8>>>>;
+    fn put(
+        &self,
+        scope: &Scope,
+        device: &str,
+        value: Zeroizing<Vec<u8>>,
+    ) -> crate::workspace::Result<()>;
+    fn remove(&self, scope: &Scope, device: &str) -> crate::workspace::Result<()>;
+}
+
+pub struct Reply {
+    pub session: Session,
+    pub must_change_credentials: bool,
+}
+impl Reply {
+    fn parse(value: serde_json::Value) -> Result<Self> {
+        let must_change_credentials = value
+            .get("must_change_credentials")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| SyncError::new("SYNC_RESPONSE_INVALID"))?;
+        let session =
+            serde_json::from_value(value).map_err(|_| SyncError::new("SYNC_RESPONSE_INVALID"))?;
+        Ok(Self {
+            session,
+            must_change_credentials,
+        })
+    }
+}
+
+pub trait Transport: Send + Sync {
+    fn login(
+        &self,
+        scope: &Scope,
+        password: Zeroizing<String>,
+        device_name: &str,
+    ) -> impl Future<Output = Result<Reply>> + Send;
+    fn refresh(
+        &self,
+        scope: &Scope,
+        session: &Session,
+    ) -> impl Future<Output = Result<Reply>> + Send;
+    fn logout(&self, scope: &Scope, session: &Session) -> impl Future<Output = Result<()>> + Send;
+}
+
+/// The same HTTPS validation, bounded requests and no-redirect policy as desktop.
+/// Missing/invalid bootstrap state is refused rather than presented as ready.
+pub struct HttpsTransport;
+impl Transport for HttpsTransport {
+    async fn login(
+        &self,
+        scope: &Scope,
+        password: Zeroizing<String>,
+        device_name: &str,
+    ) -> Result<Reply> {
+        let client = SyncClient::new(scope.endpoint(), Zeroizing::new(String::new()), false)?;
+        client.handshake().await?;
+        Reply::parse(client.json(reqwest::Method::POST,"sync/v1/auth/sessions",
+            Some(serde_json::json!({"username":scope.account(),"password":password.as_str(),"device_name":device_name}))).await?)
+    }
+    async fn refresh(&self, scope: &Scope, session: &Session) -> Result<Reply> {
+        let client = SyncClient::new(scope.endpoint(), Zeroizing::new(String::new()), false)?;
+        Reply::parse(
+            client
+                .json(
+                    reqwest::Method::POST,
+                    "sync/v1/auth/refresh",
+                    Some(serde_json::json!({"refresh_token":session.refresh_token})),
+                )
+                .await?,
+        )
+    }
+    async fn logout(&self, scope: &Scope, session: &Session) -> Result<()> {
+        SyncClient::new(
+            scope.endpoint(),
+            Zeroizing::new(session.access_token.clone()),
+            false,
+        )?
+        .json(reqwest::Method::DELETE, "sync/v1/auth/sessions", None)
+        .await
+        .map(|_| ())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Record {
+    schema: u8,
+    endpoint: String,
+    account: String,
+    operation_id: String,
+    generation: i64,
+    expires_at: u64,
+    must_change_credentials: bool,
+    session: Session,
+}
+impl Record {
+    fn identity(&self) -> StoredIdentity {
+        StoredIdentity {
+            endpoint: self.endpoint.clone(),
+            account: self.account.clone(),
+            device_id: self.session.device_id.clone(),
+            operation_id: self.operation_id.clone(),
+            generation: self.generation,
+        }
+    }
+    fn validate(&self, scope: &Scope, device: &str) -> Result<()> {
+        let valid_token = |value: &str| {
+            !value.is_empty() && value.len() <= 4096 && value.bytes().all(|b| b.is_ascii_graphic())
+        };
+        if self.schema != 1
+            || self.endpoint != scope.endpoint()
+            || self.account != scope.account()
+            || self.session.device_id != device
+            || self.generation <= 0
+            || !uuid::Uuid::parse_str(&self.operation_id)
+                .is_ok_and(|id| id.to_string() == self.operation_id)
+            || !valid_token(&self.session.access_token)
+            || !valid_token(&self.session.refresh_token)
+            || !(1..=86400).contains(&self.session.expires_in)
+            || self.expires_at < self.session.expires_in
+            || self.expires_at > i64::MAX as u64
+        {
+            return Err(SyncError::new("SYNC_SESSION_INVALID"));
+        }
+        identifier(device)?;
+        Ok(())
+    }
+}
+
+#[derive(Serialize)]
+pub struct State {
+    pub intent: Option<Intent>,
+    pub authenticated: bool,
+    pub expired: bool,
+    pub credential_change_required: bool,
+    pub expires_at: Option<u64>,
+}
+fn state(intent: Option<Intent>, record: Option<&Record>, now: u64) -> State {
+    let active = intent.as_ref().is_some_and(|i| i.phase == Phase::Active);
+    let record = record.filter(|_| active);
+    let expired = record.is_some_and(|r| r.expires_at <= now);
+    State {
+        authenticated: active && record.is_some() && !expired,
+        expired,
+        credential_change_required: record.is_some_and(|r| r.must_change_credentials),
+        expires_at: record.map(|r| r.expires_at),
+        intent,
+    }
+}
+
+pub struct Login<'a> {
+    pub operation_id: &'a str,
+    pub scope: &'a Scope,
+    pub device_name: &'a str,
+    pub password: Zeroizing<String>,
+}
+pub struct Existing<'a> {
+    pub operation_id: &'a str,
+    pub previous_operation: &'a str,
+    pub scope: &'a Scope,
+}
+
+/// The Host owns one async command gate; methods are exclusive and do not
+/// retain a plaintext session between calls. Cancel identity before waiting
+/// for that gate on logout or account switch.
+pub struct Auth<S: SecretStore> {
+    journal: Journal,
+    store: S,
+}
+impl<S: SecretStore> Auth<S> {
+    pub fn open(private_root: &Path, store: S) -> Result<Self> {
+        Ok(Self {
+            journal: Journal::open(private_root)?,
+            store,
+        })
+    }
+    fn load(&self, intent: &Intent) -> Result<Option<Record>> {
+        let Some(device) = intent.device_id.as_deref() else {
+            return Ok(None);
+        };
+        let scope = Scope::new(&intent.endpoint, &intent.account)?;
+        let Some(bytes) = self.store.read(&scope, device)? else {
+            return Ok(None);
+        };
+        if bytes.len() > MAX_RECORD {
+            return Err(SyncError::new("SYNC_SESSION_INVALID"));
+        }
+        let record: Record =
+            serde_json::from_slice(&bytes).map_err(|_| SyncError::new("SYNC_SESSION_INVALID"))?;
+        record.validate(&scope, device)?;
+        Ok(Some(record))
+    }
+    fn expected(&self, scope: &Scope, id: &str) -> Result<Intent> {
+        let intent = self
+            .journal
+            .find(id)?
+            .ok_or_else(|| SyncError::new("SYNC_AUTH_INTENT_NOT_FOUND"))?;
+        if intent.endpoint != scope.endpoint() || intent.account != scope.account() {
+            return Err(SyncError::new("SYNC_AUTH_IDENTITY_CHANGED"));
+        }
+        Ok(intent)
+    }
+    fn recover_expected(
+        &mut self,
+        lease: &Lease,
+        scope: &Scope,
+        id: &str,
+        now: u64,
+    ) -> Result<State> {
+        let current = self.journal.current(scope)?;
+        if current.as_ref().is_none_or(|i| i.operation_id != id) {
+            return Err(SyncError::new("SYNC_AUTH_IDENTITY_CHANGED"));
+        }
+        self.recover(lease, scope, now)
+    }
+    pub fn recover(&mut self, lease: &Lease, scope: &Scope, now: u64) -> Result<State> {
+        lease.with_current(|| {
+            let Some(intent) = self.journal.current(scope)? else {
+                return Ok(state(None, None, now));
+            };
+            let record = self.load(&intent)?;
+            let identity = record.as_ref().map(Record::identity);
+            let reconciled = self
+                .journal
+                .reconcile(&intent.operation_id, identity.as_ref())?;
+            Ok(state(Some(reconciled), record.as_ref(), now))
+        })
+    }
+    fn accept(&mut self, lease: &Lease, id: &str, reply: Reply, now: u64) -> Result<State> {
+        lease.with_current(|| {
+            let intent = self
+                .journal
+                .find(id)?
+                .ok_or_else(|| SyncError::new("SYNC_AUTH_INTENT_NOT_FOUND"))?;
+            let scope = Scope::new(&intent.endpoint, &intent.account)?;
+            let record = Record {
+                schema: 1,
+                endpoint: intent.endpoint,
+                account: intent.account,
+                operation_id: id.into(),
+                generation: intent.generation,
+                expires_at: now
+                    .checked_add(reply.session.expires_in)
+                    .ok_or_else(|| SyncError::new("SYNC_TIME_INVALID"))?,
+                must_change_credentials: reply.must_change_credentials,
+                session: reply.session,
+            };
+            record.validate(&scope, &record.session.device_id)?;
+            self.journal
+                .received_session(id, &record.session.device_id)?;
+            let bytes = Zeroizing::new(
+                serde_json::to_vec(&record).map_err(|_| SyncError::new("SYNC_SESSION_INVALID"))?,
+            );
+            if bytes.len() > MAX_RECORD {
+                return Err(SyncError::new("SYNC_SESSION_INVALID"));
+            }
+            self.store
+                .put(&scope, &record.session.device_id, bytes.clone())?;
+            let readback = self
+                .store
+                .read(&scope, &record.session.device_id)?
+                .ok_or_else(|| SyncError::new("SYNC_CREDENTIALS_UNAVAILABLE"))?;
+            if *readback != *bytes {
+                return Err(SyncError::new("SYNC_CREDENTIALS_UNAVAILABLE"));
+            }
+            let ready = self.journal.reconcile(id, Some(&record.identity()))?;
+            if ready.phase != Phase::Active {
+                return Err(SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"));
+            }
+            Ok(state(Some(ready), Some(&record), now))
+        })
+    }
+    pub async fn login(
+        &mut self,
+        lease: &Lease,
+        request: Login<'_>,
+        transport: &impl Transport,
+        now: u64,
+    ) -> Result<State> {
+        if request.password.len() > 1024 || !(12..=256).contains(&request.password.chars().count())
+        {
+            return Err(SyncError::new("SYNC_LOGIN_INVALID"));
+        }
+        let prepared = lease.with_current(|| {
+            Ok(self.journal.prepare_login(
+                request.operation_id,
+                request.scope,
+                request.device_name,
+            )?)
+        })?;
+        if !prepared.first_send {
+            return self.recover_expected(lease, request.scope, request.operation_id, now);
+        }
+        let reply = lease
+            .guard(transport.login(request.scope, request.password, request.device_name))
+            .await?;
+        self.accept(lease, request.operation_id, reply, now)
+    }
+    pub async fn refresh(
+        &mut self,
+        lease: &Lease,
+        request: Existing<'_>,
+        transport: &impl Transport,
+        now: u64,
+    ) -> Result<State> {
+        let previous = self.expected(request.scope, request.previous_operation)?;
+        let prepared = lease.with_current(|| {
+            Ok(self
+                .journal
+                .prepare_refresh(request.operation_id, request.previous_operation)?)
+        })?;
+        if !prepared.first_send {
+            return self.recover_expected(lease, request.scope, request.operation_id, now);
+        }
+        let record = self
+            .load(&previous)?
+            .ok_or_else(|| SyncError::new("SYNC_LOGIN_REQUIRED"))?;
+        if !record.identity().matches_intent(&previous) {
+            return Err(SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"));
+        }
+        let reply = lease
+            .guard(transport.refresh(request.scope, &record.session))
+            .await?;
+        self.accept(lease, request.operation_id, reply, now)
+    }
+    pub async fn logout(
+        &mut self,
+        lease: &Lease,
+        request: Existing<'_>,
+        transport: &impl Transport,
+        now: u64,
+    ) -> Result<State> {
+        let previous = self.expected(request.scope, request.previous_operation)?;
+        let prepared = lease.with_current(|| {
+            Ok(self
+                .journal
+                .prepare_logout(request.operation_id, request.previous_operation)?)
+        })?;
+        if !prepared.first_send {
+            if prepared.intent.phase == Phase::ErasePending
+                && prepared.intent.server_logout_confirmed
+            {
+                return self.erase(lease, request.scope, request.operation_id, now);
+            }
+            return self.recover_expected(lease, request.scope, request.operation_id, now);
+        }
+        let record = self
+            .load(&previous)?
+            .ok_or_else(|| SyncError::new("SYNC_LOGIN_REQUIRED"))?;
+        if !record.identity().matches_intent(&previous) {
+            return Err(SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"));
+        }
+        lease
+            .guard(transport.logout(request.scope, &record.session))
+            .await?;
+        lease.with_current(|| {
+            self.journal.received_logout(request.operation_id)?;
+            Ok(())
+        })?;
+        self.erase(lease, request.scope, request.operation_id, now)
+    }
+    pub fn local_disconnect(
+        &mut self,
+        lease: &Lease,
+        request: Existing<'_>,
+        now: u64,
+    ) -> Result<State> {
+        self.expected(request.scope, request.previous_operation)?;
+        lease.with_current(|| {
+            self.journal
+                .prepare_local_disconnect(request.operation_id, request.previous_operation)?;
+            Ok(())
+        })?;
+        self.erase(lease, request.scope, request.operation_id, now)
+    }
+    fn erase(&mut self, lease: &Lease, scope: &Scope, id: &str, now: u64) -> Result<State> {
+        lease.with_current(|| {
+            let current = self
+                .journal
+                .current(scope)?
+                .ok_or_else(|| SyncError::new("SYNC_LOGIN_REQUIRED"))?;
+            if current.operation_id != id
+                || !matches!(current.phase, Phase::ErasePending | Phase::Disconnected)
+            {
+                return Err(SyncError::new("SYNC_AUTH_IDENTITY_CHANGED"));
+            }
+            if current.phase != Phase::Disconnected {
+                let device = current
+                    .device_id
+                    .as_deref()
+                    .ok_or_else(|| SyncError::new("SYNC_SESSION_INVALID"))?;
+                self.store.remove(scope, device)?;
+                if self.store.read(scope, device)?.is_some() {
+                    return Err(SyncError::new("SYNC_CREDENTIALS_UNAVAILABLE"));
+                }
+            }
+            let done = self.journal.reconcile(id, None)?;
+            Ok(state(Some(done), None, now))
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{mobile_sync_foreground::Foreground, workspace::HostError};
+    use std::{
+        collections::{BTreeMap, VecDeque},
+        sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc, Mutex,
+        },
+    };
+    fn scope() -> Scope {
+        Scope::new("https://sync.example", "owned-reader").unwrap()
+    }
+    fn id() -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+    fn lease() -> (Foreground, Lease) {
+        let foreground = Foreground::default();
+        foreground.on_start();
+        let lease = foreground.lease().unwrap();
+        (foreground, lease)
+    }
+    fn reply(device: &str, token: &str) -> Reply {
+        Reply {
+            session: Session {
+                access_token: format!("owned-access-{token}"),
+                refresh_token: format!("owned-refresh-{token}"),
+                expires_in: 900,
+                device_id: device.into(),
+            },
+            must_change_credentials: false,
+        }
+    }
+    fn login<'a>(id: &'a str, scope: &'a Scope) -> Login<'a> {
+        Login {
+            operation_id: id,
+            scope,
+            device_name: "Owned phone",
+            password: Zeroizing::new("owned-password-never-persist".into()),
+        }
+    }
+    fn existing<'a>(
+        operation_id: &'a str,
+        previous_operation: &'a str,
+        scope: &'a Scope,
+    ) -> Existing<'a> {
+        Existing {
+            operation_id,
+            previous_operation,
+            scope,
+        }
+    }
+    type Records = BTreeMap<(String, String, String), Zeroizing<Vec<u8>>>;
+    #[derive(Clone, Default)]
+    struct MemoryStore {
+        records: Arc<Mutex<Records>>,
+        puts: Arc<AtomicUsize>,
+        removes: Arc<AtomicUsize>,
+        fail_after_put: Arc<AtomicBool>,
+        fail_read: Arc<AtomicBool>,
+        fail_remove: Arc<AtomicBool>,
+    }
+    impl MemoryStore {
+        fn key(scope: &Scope, device: &str) -> (String, String, String) {
+            (
+                scope.endpoint().into(),
+                scope.account().into(),
+                device.into(),
+            )
+        }
+    }
+    impl SecretStore for MemoryStore {
+        fn read(
+            &self,
+            scope: &Scope,
+            device: &str,
+        ) -> crate::workspace::Result<Option<Zeroizing<Vec<u8>>>> {
+            if self.fail_read.swap(false, Ordering::SeqCst) {
+                return Err(HostError::new("SYNC_CREDENTIALS_UNAVAILABLE"));
+            }
+            Ok(self
+                .records
+                .lock()
+                .unwrap()
+                .get(&Self::key(scope, device))
+                .cloned())
+        }
+        fn put(
+            &self,
+            scope: &Scope,
+            device: &str,
+            value: Zeroizing<Vec<u8>>,
+        ) -> crate::workspace::Result<()> {
+            self.puts.fetch_add(1, Ordering::SeqCst);
+            self.records
+                .lock()
+                .unwrap()
+                .insert(Self::key(scope, device), value);
+            if self.fail_after_put.swap(false, Ordering::SeqCst) {
+                self.fail_read.store(true, Ordering::SeqCst);
+            }
+            Ok(())
+        }
+        fn remove(&self, scope: &Scope, device: &str) -> crate::workspace::Result<()> {
+            self.removes.fetch_add(1, Ordering::SeqCst);
+            if self.fail_remove.swap(false, Ordering::SeqCst) {
+                return Err(HostError::new("SYNC_CREDENTIALS_UNAVAILABLE"));
+            }
+            self.records
+                .lock()
+                .unwrap()
+                .remove(&Self::key(scope, device));
+            Ok(())
+        }
+    }
+    #[derive(Default)]
+    struct Remote {
+        replies: Mutex<VecDeque<Result<Reply>>>,
+        logins: AtomicUsize,
+        refreshes: AtomicUsize,
+        logouts: AtomicUsize,
+        fail_logout: AtomicBool,
+        stop_on_login: Mutex<Option<Foreground>>,
+    }
+    impl Remote {
+        fn next(&self) -> Result<Reply> {
+            self.replies
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| Err(SyncError::new("UNEXPECTED_SYNTHETIC_REQUEST")))
+        }
+    }
+    impl Transport for Remote {
+        async fn login(
+            &self,
+            _scope: &Scope,
+            _password: Zeroizing<String>,
+            _device_name: &str,
+        ) -> Result<Reply> {
+            self.logins.fetch_add(1, Ordering::SeqCst);
+            if let Some(foreground) = self.stop_on_login.lock().unwrap().take() {
+                foreground.on_stop();
+            }
+            self.next()
+        }
+        async fn refresh(&self, _scope: &Scope, _session: &Session) -> Result<Reply> {
+            self.refreshes.fetch_add(1, Ordering::SeqCst);
+            self.next()
+        }
+        async fn logout(&self, _scope: &Scope, _session: &Session) -> Result<()> {
+            self.logouts.fetch_add(1, Ordering::SeqCst);
+            if self.fail_logout.load(Ordering::SeqCst) {
+                Err(SyncError::new("SYNC_NETWORK_ERROR"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn login_readback_and_reopen_keep_original_intent_and_never_serialize_or_repost_secrets()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "first")));
+        let (_foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        let status = auth
+            .login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        assert!(status.authenticated);
+        assert_eq!(status.expires_at, Some(1000));
+        assert_eq!(status.intent.unwrap().operation_id, operation);
+        assert!(
+            auth.login(&lease, login(&operation, &scope), &remote, 101)
+                .await
+                .unwrap()
+                .authenticated
+        );
+        drop(auth);
+        let mut reopened = Auth::open(root.path(), store.clone()).unwrap();
+        let status = reopened.recover(&lease, &scope, 102).unwrap();
+        let output = serde_json::to_string(&status).unwrap();
+        for secret in [
+            "access_token",
+            "refresh_token",
+            "owned-access-first",
+            "owned-refresh-first",
+            "owned-password-never-persist",
+        ] {
+            assert!(!output.contains(secret));
+            for file in std::fs::read_dir(root.path()).unwrap() {
+                let bytes = std::fs::read(file.unwrap().path()).unwrap();
+                assert!(!bytes
+                    .windows(secret.len())
+                    .any(|part| part == secret.as_bytes()));
+            }
+        }
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 1);
+        assert_eq!(store.puts.load(Ordering::SeqCst), 1);
+        assert!(
+            !reopened
+                .recover(&lease, &scope, 1000)
+                .unwrap()
+                .authenticated
+        );
+    }
+
+    #[tokio::test]
+    async fn encrypted_write_then_interrupted_readback_recovers_without_another_login() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        store.fail_after_put.store(true, Ordering::SeqCst);
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "first")));
+        let (_foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        assert_eq!(
+            auth.login(&lease, login(&operation, &scope), &remote, 100)
+                .await
+                .err()
+                .unwrap()
+                .code,
+            "SYNC_CREDENTIALS_UNAVAILABLE"
+        );
+        assert_eq!(
+            auth.journal.find(&operation).unwrap().unwrap().phase,
+            Phase::StorePending
+        );
+        drop(auth);
+        let mut reopened = Auth::open(root.path(), store.clone()).unwrap();
+        let done = reopened.recover(&lease, &scope, 101).unwrap();
+        assert!(done.authenticated);
+        assert_eq!(done.intent.unwrap().operation_id, operation);
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 1);
+        assert_eq!(store.puts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn lost_login_response_requires_explicit_new_intent_and_does_not_automatically_create_devices(
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote.replies.lock().unwrap().extend([
+            Err(SyncError::new("SYNC_NETWORK_ERROR")),
+            Ok(reply("device-b", "new")),
+        ]);
+        let (_foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), store).unwrap();
+        assert!(auth
+            .login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .is_err());
+        assert_eq!(
+            auth.recover(&lease, &scope, 101)
+                .unwrap()
+                .intent
+                .unwrap()
+                .phase,
+            Phase::Unknown
+        );
+        assert!(
+            !auth
+                .login(&lease, login(&operation, &scope), &remote, 102)
+                .await
+                .unwrap()
+                .authenticated
+        );
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 1);
+        assert!(
+            auth.login(&lease, login(&id(), &scope), &remote, 103)
+                .await
+                .unwrap()
+                .authenticated
+        );
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn lost_one_use_refresh_retains_original_bytes_but_cannot_activate_or_repost_old_tokens()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote.replies.lock().unwrap().extend([
+            Ok(reply("device-a", "old")),
+            Err(SyncError::new("SYNC_NETWORK_ERROR")),
+        ]);
+        let (_foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let rotation = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let original = store.read(&scope, "device-a").unwrap().unwrap();
+        assert!(auth
+            .refresh(
+                &lease,
+                existing(&rotation, &operation, &scope),
+                &remote,
+                1001
+            )
+            .await
+            .is_err());
+        assert_eq!(
+            auth.recover(&lease, &scope, 1002)
+                .unwrap()
+                .intent
+                .unwrap()
+                .phase,
+            Phase::Unknown
+        );
+        assert!(
+            !auth
+                .refresh(
+                    &lease,
+                    existing(&rotation, &operation, &scope),
+                    &remote,
+                    1003
+                )
+                .await
+                .unwrap()
+                .authenticated
+        );
+        assert_eq!(remote.refreshes.load(Ordering::SeqCst), 1);
+        assert_eq!(*store.read(&scope, "device-a").unwrap().unwrap(), *original);
+    }
+
+    #[tokio::test]
+    async fn interrupted_refresh_save_recovers_only_the_new_original_rotation_and_same_device() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote.replies.lock().unwrap().extend([
+            Ok(reply("device-a", "old")),
+            Ok(reply("device-a", "rotated")),
+        ]);
+        let (_foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let rotation = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        store.fail_after_put.store(true, Ordering::SeqCst);
+        assert!(auth
+            .refresh(
+                &lease,
+                existing(&rotation, &operation, &scope),
+                &remote,
+                900
+            )
+            .await
+            .is_err());
+        drop(auth);
+        let mut recovered = Auth::open(root.path(), store.clone()).unwrap();
+        let done = recovered.recover(&lease, &scope, 901).unwrap();
+        assert!(done.authenticated);
+        assert_eq!(done.intent.unwrap().operation_id, rotation);
+        assert_eq!(done.expires_at, Some(1800));
+        assert_eq!(remote.refreshes.load(Ordering::SeqCst), 1);
+        assert_eq!(store.puts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn confirmed_logout_and_erase_failure_keep_the_receipt_and_only_retry_local_erasure() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "old")));
+        let (_foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let logout = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        store.fail_remove.store(true, Ordering::SeqCst);
+        assert!(auth
+            .logout(&lease, existing(&logout, &operation, &scope), &remote, 200)
+            .await
+            .is_err());
+        let pending = auth.journal.find(&logout).unwrap().unwrap();
+        assert!(pending.server_logout_confirmed);
+        assert_eq!(pending.phase, Phase::ErasePending);
+        let done = auth
+            .logout(&lease, existing(&logout, &operation, &scope), &remote, 201)
+            .await
+            .unwrap()
+            .intent
+            .unwrap();
+        assert!(done.server_logout_confirmed);
+        assert_eq!(done.phase, Phase::Disconnected);
+        auth.logout(&lease, existing(&logout, &operation, &scope), &remote, 202)
+            .await
+            .unwrap();
+        assert_eq!(remote.logouts.load(Ordering::SeqCst), 1);
+        assert_eq!(store.removes.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn lost_logout_response_and_local_disconnect_never_claim_server_revocation() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "old")));
+        remote.fail_logout.store(true, Ordering::SeqCst);
+        let (_foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let logout = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        assert!(auth
+            .logout(&lease, existing(&logout, &operation, &scope), &remote, 200)
+            .await
+            .is_err());
+        let unknown = auth.recover(&lease, &scope, 201).unwrap().intent.unwrap();
+        assert_eq!(unknown.phase, Phase::Unknown);
+        assert!(!unknown.server_logout_confirmed);
+        let done = auth
+            .local_disconnect(&lease, existing(&id(), &logout, &scope), 202)
+            .unwrap()
+            .intent
+            .unwrap();
+        assert!(!done.server_logout_confirmed);
+        assert_eq!(done.phase, Phase::Disconnected);
+        assert!(store.read(&scope, "device-a").unwrap().is_none());
+        assert_eq!(remote.logouts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn background_response_cannot_save_or_activate_a_session_and_stale_login_never_sends() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "late")));
+        let (foreground, lease) = lease();
+        *remote.stop_on_login.lock().unwrap() = Some(foreground.clone());
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        assert_eq!(
+            auth.login(&lease, login(&operation, &scope), &remote, 100)
+                .await
+                .err()
+                .unwrap()
+                .code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert_eq!(store.puts.load(Ordering::SeqCst), 0);
+        foreground.on_start();
+        let current = foreground.lease().unwrap();
+        assert!(!auth.recover(&current, &scope, 101).unwrap().authenticated);
+        let late = id();
+        assert!(auth
+            .login(&lease, login(&late, &scope), &remote, 102)
+            .await
+            .is_err());
+        assert!(auth.journal.find(&late).unwrap().is_none());
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn malformed_or_other_identity_payload_is_retained_and_never_used_as_a_fallback() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "old")));
+        let (_foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let key = MemoryStore::key(&scope, "device-a");
+        let mut record: serde_json::Value =
+            serde_json::from_slice(&store.read(&scope, "device-a").unwrap().unwrap()).unwrap();
+        record["account"] = serde_json::json!("other-owner");
+        let bad = Zeroizing::new(serde_json::to_vec(&record).unwrap());
+        store.records.lock().unwrap().insert(key, bad.clone());
+        assert_eq!(
+            auth.recover(&lease, &scope, 101).err().unwrap().code,
+            "SYNC_SESSION_INVALID"
+        );
+        assert_eq!(*store.read(&scope, "device-a").unwrap().unwrap(), *bad);
+        assert_eq!(store.removes.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_requirement_is_explicit_and_missing_flag_or_changed_refresh_device_is_refused(
+    ) {
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({"must_change_credentials":"false"}),
+        ] {
+            assert!(Reply::parse(value).is_err());
+        }
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        let mut bootstrap = reply("device-a", "bootstrap");
+        bootstrap.must_change_credentials = true;
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .extend([Ok(bootstrap), Ok(reply("different-device", "bad"))]);
+        let (_foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let rotation = id();
+        let mut auth = Auth::open(root.path(), store).unwrap();
+        let state = auth
+            .login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        assert!(state.credential_change_required);
+        assert_eq!(
+            auth.refresh(
+                &lease,
+                existing(&rotation, &operation, &scope),
+                &remote,
+                200
+            )
+            .await
+            .err()
+            .unwrap()
+            .code,
+            "SYNC_AUTH_RESPONSE_MISMATCH"
+        );
+        assert!(!auth.recover(&lease, &scope, 201).unwrap().authenticated);
+    }
+}
