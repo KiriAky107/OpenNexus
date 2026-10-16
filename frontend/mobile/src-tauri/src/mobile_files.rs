@@ -123,6 +123,10 @@ struct LinkCall<'a> {
     href: &'a str,
 }
 
+#[cfg(target_os = "android")]
+#[derive(Serialize)]
+struct BackgroundCall {}
+
 #[tauri::command]
 pub async fn mobile_open_external(
     window: tauri::WebviewWindow,
@@ -165,7 +169,7 @@ pub async fn mobile_background(
     {
         let plugin = app.state::<FilesPlugin>().0.clone();
         plugin
-            .run_mobile_plugin_async("background", serde_json::json!({}))
+            .run_mobile_plugin_async("background", BackgroundCall {})
             .await
             .map_err(|error| native_error(error, "MOBILE_NAVIGATION_FAILED"))
     }
