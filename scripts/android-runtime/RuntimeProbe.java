@@ -67,7 +67,7 @@ public final class RuntimeProbe extends Instrumentation {
                     inputText(rich, RICH_TEXT);
                     rich = richBody();
                     setSelection(rich, 0, RICH_TEXT.length());
-                    clickMenu("Bold");
+                    clickFormatting("Bold");
                     waitLabel("Draft kept on this device");
                     save();
                     break;
@@ -305,6 +305,22 @@ public final class RuntimeProbe extends Instrumentation {
         activate(waitNode(node -> label(node, text, false) && node.isEnabled() && node.isClickable(), "clickable menu: " + text));
     }
 
+    private void clickFormatting(String text) {
+        final String scope = "Markdown formatting toolbar";
+        // The editor's selection bubble exposes the same formatting labels.
+        // Address the shared fixed toolbar by its actual accessible container.
+        AccessibilityNodeInfo node = waitNode(value -> APP.equals(string(value.getPackageName()))
+            && label(value, text, false) && value.isEnabled() && value.isClickable()
+            && within(value, scope), "fixed formatting toolbar: " + text);
+        activate(node, scope);
+    }
+
+    private boolean within(AccessibilityNodeInfo node, String container) {
+        for (int depth = 0; node != null && depth < 32; depth++, node = node.getParent())
+            if (APP.equals(string(node.getPackageName())) && label(node, container, false)) return true;
+        return false;
+    }
+
     private void chooseOriginalImage() {
         // Wry uses FileChooserParams.createIntent(); select the owned original in
         // Android's real DocumentsUI instead of injecting a URI into the WebView.
@@ -362,6 +378,10 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void activate(AccessibilityNodeInfo node) {
+        activate(node, null);
+    }
+
+    private void activate(AccessibilityNodeInfo node, String container) {
         // WebView accepting ACTION_CLICK does not prove that a user tap reached its handler.
         // Send exactly one real tap to the freshly observed target; never replay a write.
         settleUi();
@@ -375,7 +395,8 @@ public final class RuntimeProbe extends Instrumentation {
         Predicate<AccessibilityNodeInfo> sameTarget = value -> expectedPackage.equals(string(value.getPackageName()))
             && expectedClass.equals(string(value.getClassName())) && expectedText.equals(string(value.getText()))
             && expectedDescription.equals(string(value.getContentDescription())) && expectedId.equals(string(value.getViewIdResourceName()))
-            && (Build.VERSION.SDK_INT < 26 || expectedHint.equals(string(value.getHintText())));
+            && (Build.VERSION.SDK_INT < 26 || expectedHint.equals(string(value.getHintText())))
+            && (container == null || within(value, container));
         node = uniqueTarget(sameTarget);
         Rect bounds = new Rect(); node.getBoundsInScreen(bounds);
         Rect previous = new Rect(bounds);
