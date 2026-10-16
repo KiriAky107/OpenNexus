@@ -16,5 +16,9 @@ tauri = { version = "=2.11.5", features = [] }
 serde = { version = "1", features = ["derive"] }
 notesagent_host = { package = "notesagent-desktop", path = "../../src-tauri", default-features = false }
 
+[target.'cfg(target_os = "android")'.dependencies]
+notesagent_host = { package = "notesagent-desktop", path = "../../src-tauri", default-features = false, features = ["sync-http"] }
+jni = { version = "=0.22.4", default-features = false }
+
 [build-dependencies]
 tauri-build = { version = "=2.6.3", features = [] }
