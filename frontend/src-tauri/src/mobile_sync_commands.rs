@@ -47,8 +47,8 @@ pub struct ExistingRequest {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
-    Current,
-    Cancel,
+    Current {},
+    Cancel {},
     Profiles {
         offset: usize,
         limit: usize,
@@ -83,7 +83,7 @@ impl Request {
     pub fn invalidates_identity(&self) -> bool {
         matches!(
             self,
-            Self::Cancel
+            Self::Cancel { .. }
                 | Self::Choose { .. }
                 | Self::Login(_)
                 | Self::Refresh(_)
@@ -158,8 +158,8 @@ pub async fn execute<S: SecretStore>(
         // Native Host invalidated before waiting for the gate. Cancelling a
         // view does not decrypt, change selected profiles or reconcile an
         // uncertain response. The next explicit Current reads that state.
-        Request::Cancel => Response::Cancelled,
-        Request::Current => {
+        Request::Cancel { .. } => Response::Cancelled,
+        Request::Current { .. } => {
             let state = auth.recover_selected(lease, now)?;
             Response::Current {
                 selection: auth.selection(lease)?,
@@ -328,6 +328,12 @@ mod tests {
         let password = "private-too-short";
         let invalid = serde_json::json!({"action":"current","password":password});
         assert!(serde_json::from_value::<Request>(invalid).is_err());
+        assert!(serde_json::from_value::<Request>(
+            serde_json::json!({"action":"cancel","password":password})
+        )
+        .is_err());
+        assert!(serde_json::from_value::<Request>(serde_json::json!({"action":"current"})).is_ok());
+        assert!(serde_json::from_value::<Request>(serde_json::json!({"action":"cancel"})).is_ok());
         let input = serde_json::json!({"action":"login","operation_id":uuid::Uuid::new_v4().to_string(),
             "endpoint":"https://sync.example","account":"reader","device_name":"Owned phone",
             "password":"sensitive","expected":null});

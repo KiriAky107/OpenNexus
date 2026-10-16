@@ -749,13 +749,13 @@ mod tests {
         let puts = store.puts.load(Ordering::SeqCst);
         let removes = store.removes.load(Ordering::SeqCst);
         store.fail_read.store(true, Ordering::SeqCst);
-        assert!(Request::Cancel.invalidates_identity());
+        assert!(Request::Cancel {}.invalidates_identity());
         // This is the ordering used by the native wrapper before its gate.
         owner.invalidate_identity();
         let cancelled = owner.lease().unwrap();
         assert!(active.check().is_err());
         assert!(matches!(
-            execute(&mut auth, &cancelled, Request::Cancel, &remote, 101)
+            execute(&mut auth, &cancelled, Request::Cancel {}, &remote, 101)
                 .await
                 .unwrap(),
             Response::Cancelled
