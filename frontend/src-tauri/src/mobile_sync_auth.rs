@@ -728,6 +728,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelling_native_auth_view_does_not_decrypt_or_mutate_profile_receipts() {
+        use crate::mobile_sync_commands::{execute, Request, Response};
+        let root = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "original")));
+        let (owner, active) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), store.clone()).unwrap();
+        auth.login(&active, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let selected = auth.selection(&active).unwrap();
+        let puts = store.puts.load(Ordering::SeqCst);
+        let removes = store.removes.load(Ordering::SeqCst);
+        store.fail_read.store(true, Ordering::SeqCst);
+        assert!(Request::Cancel.invalidates_identity());
+        // This is the ordering used by the native wrapper before its gate.
+        owner.invalidate_identity();
+        let cancelled = owner.lease().unwrap();
+        assert!(active.check().is_err());
+        assert!(matches!(
+            execute(&mut auth, &cancelled, Request::Cancel, &remote, 101)
+                .await
+                .unwrap(),
+            Response::Cancelled
+        ));
+        assert_eq!(auth.selection(&cancelled).unwrap(), selected);
+        assert_eq!(store.puts.load(Ordering::SeqCst), puts);
+        assert_eq!(store.removes.load(Ordering::SeqCst), removes);
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            auth.recover_selected(&cancelled, 102).err().unwrap().code,
+            "SYNC_CREDENTIALS_UNAVAILABLE"
+        );
+        assert!(
+            auth.recover_selected(&cancelled, 103)
+                .unwrap()
+                .authenticated
+        );
+    }
+
+    #[tokio::test]
     async fn native_command_frozen_selection_refuses_stale_login_and_replayed_receipt_never_switches_back(
     ) {
         use crate::mobile_sync_commands::{execute, Request, Response};

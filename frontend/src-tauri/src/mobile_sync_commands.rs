@@ -48,6 +48,7 @@ pub struct ExistingRequest {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     Current,
+    Cancel,
     Profiles {
         offset: usize,
         limit: usize,
@@ -82,7 +83,8 @@ impl Request {
     pub fn invalidates_identity(&self) -> bool {
         matches!(
             self,
-            Self::Choose { .. }
+            Self::Cancel
+                | Self::Choose { .. }
                 | Self::Login(_)
                 | Self::Refresh(_)
                 | Self::Logout(_)
@@ -95,6 +97,7 @@ impl Request {
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Response {
+    Cancelled,
     Current {
         selection: Option<Selection>,
         state: State,
@@ -152,6 +155,10 @@ pub async fn execute<S: SecretStore>(
 ) -> Result<Response> {
     lease.check()?;
     let reply = match request {
+        // Native Host invalidated before waiting for the gate. Cancelling a
+        // view does not decrypt, change selected profiles or reconcile an
+        // uncertain response. The next explicit Current reads that state.
+        Request::Cancel => Response::Cancelled,
         Request::Current => {
             let state = auth.recover_selected(lease, now)?;
             Response::Current {
