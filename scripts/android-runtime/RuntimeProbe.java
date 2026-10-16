@@ -57,7 +57,7 @@ public final class RuntimeProbe extends Instrumentation {
                 case "theme-diagnostic-reset": selectTheme("Dark", "System"); break;
                 case "markdown":
                     create("New note", NOTE);
-                    inputText(editable(null), BODY);
+                    inputText(noteBody(), BODY);
                     save();
                     break;
                 case "rich-markdown":
@@ -77,7 +77,7 @@ public final class RuntimeProbe extends Instrumentation {
                     break;
                 case "rich-reopen":
                     open("runtime-rich.md");
-                    require(string(editable(null).getText()).contains(RICH_TEXT), "Original rich Markdown missing after cold launch");
+                    require(string(noteBody().getText()).contains(RICH_TEXT), "Original rich Markdown missing after cold launch");
                     break;
                 case "rich-image":
                     create("New note", "runtime-rich-image.md");
@@ -93,24 +93,24 @@ public final class RuntimeProbe extends Instrumentation {
                     break;
                 case "rich-image-reopen":
                     open("runtime-rich-image.md");
-                    require(string(editable(null).getText()).contains("![](attachments/"), "Original rich image reference missing after cold launch");
+                    require(string(noteBody().getText()).contains("![](attachments/"), "Original rich image reference missing after cold launch");
                     break;
                 case "draft":
                     open(NOTE);
-                    require(string(editable(null).getText()).contains("离线正文"), "Original note text missing");
-                    inputText(editable(null), DRAFT);
+                    require(string(noteBody().getText()).contains("离线正文"), "Original note text missing");
+                    inputText(noteBody(), DRAFT);
                     waitLabel("Draft kept on this device");
                     break;
                 case "recover":
                     clickMenu("Main navigation");
                     click("Recover drafts", false);
                     click(NOTE, true);
-                    require(string(editable(null).getText()).contains("未保存的恢复草稿"), "Recovered draft text missing");
+                    require(string(noteBody().getText()).contains("未保存的恢复草稿"), "Recovered draft text missing");
                     save();
                     break;
                 case "ime-compose":
                     open(NOTE);
-                    activate(editable(null));
+                    activate(noteBody());
                     CompositionIme.awaitTarget(APP);
                     CompositionIme.selectEnd(APP, DRAFT.length());
                     progress.append("IME: original InputConnection, composing pinyin\n");
@@ -128,11 +128,11 @@ public final class RuntimeProbe extends Instrumentation {
                     break;
                 case "ime-recover":
                     open(NOTE);
-                    require(string(editable(null).getText()).contains(IME_TEXT), "Confirmed IME text did not survive process termination");
+                    require(string(noteBody().getText()).contains(IME_TEXT), "Confirmed IME text did not survive process termination");
                     break;
                 case "back-draft":
                     create("New note", "runtime-back.md");
-                    inputText(editable(null), BACK_DRAFT);
+                    inputText(noteBody(), BACK_DRAFT);
                     hideKeyboard();
                     pressBack();
                     waitLabel("New note");
@@ -141,7 +141,7 @@ public final class RuntimeProbe extends Instrumentation {
                     clickMenu("Main navigation");
                     click("Recover drafts", false);
                     click("runtime-back.md", true);
-                    require(string(editable(null).getText()).contains("系统返回键草稿"), "Back draft did not survive process termination");
+                    require(string(noteBody().getText()).contains("系统返回键草稿"), "Back draft did not survive process termination");
                     hideKeyboard();
                     pressBack();
                     waitLabel("New note");
@@ -167,7 +167,7 @@ public final class RuntimeProbe extends Instrumentation {
                     break;
                 case "markdown-image":
                     create("New note", "runtime-image.md");
-                    inputText(editable(null), "# Original picker image\n");
+                    inputText(noteBody(), "# Original picker image\n");
                     hideKeyboard();
                     clickMenu("More actions");
                     click("Add image", false);
@@ -178,7 +178,7 @@ public final class RuntimeProbe extends Instrumentation {
                     break;
                 case "markdown-image-reopen":
                     open("runtime-image.md");
-                    require(string(editable(null).getText()).contains("![](attachments/"), "System-selected original image reference missing after cold launch");
+                    require(string(noteBody().getText()).contains("![](attachments/"), "System-selected original image reference missing after cold launch");
                     hideKeyboard();
                     clickMenu("More actions");
                     click("Read preview", false);
@@ -365,8 +365,14 @@ public final class RuntimeProbe extends Instrumentation {
             || prefix && (actual.startsWith(text + " ") || description.startsWith(text + " "));
     }
 
+    private AccessibilityNodeInfo noteBody() {
+        return waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
+            && label(node, "Markdown note body", false), "visible owned Markdown body (not file search)");
+    }
+
     private AccessibilityNodeInfo editable(String original) {
-        return waitNode(node -> node.isEditable() && (original == null || string(node.getText()).equals(original)), "editable text");
+        return waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
+            && string(node.getText()).equals(original), "original Canvas property text");
     }
 
     private void setText(AccessibilityNodeInfo node, String value) {

@@ -94,7 +94,11 @@ async function navigateSection(name: string) {
 async function openTreeNode(node: FileNode) {
   if (node.type === 'folder') { enterDirectory(node.path); return }
   const entry = notePage.value.items.find(entry => entry.file_id === node.id)
-  if (entry) { await openNote(entry); if (session.state.view?.draft.file_id === entry.file_id) closePanels() }
+  if (entry) {
+    const opening = openNote(entry), revision = inspectionRevision
+    await opening
+    if (revision === inspectionRevision && !session.state.error && session.state.view?.draft.file_id === entry.file_id) closePanels()
+  }
 }
 const displayError = (code: string) => errorText(code, language.value)
 const number = (value: number) => new Intl.NumberFormat(language.value).format(value)
@@ -225,7 +229,7 @@ async function imageSelected(event: Event) {
   input.value = ''; imageSelection = null
   if (file && selected) await images.importFile(file, selected.selection, selected.key, selected.generation)
 }
-function openNote(entry: Entry) { inspectionRevision++; notice.value = ''; void runEditor(() => session.openNote(entry.file_id)) }
+function openNote(entry: Entry) { inspectionRevision++; notice.value = ''; return runEditor(() => session.openNote(entry.file_id)) }
 function openDraft(draft: DraftSummary) { inspectionRevision++; notice.value = ''; void runEditor(() => session.openDraft(draft.id)) }
 function openPath(action: 'create' | 'copy', format: 'markdown' | 'canvas' = isCanvas.value ? 'canvas' : 'markdown') {
   inspectionRevision++
