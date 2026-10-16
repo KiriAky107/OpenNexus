@@ -19,6 +19,37 @@ TLS_ARTIFACTS = {
 }
 TLS_CLASSES = ['Lorg/rustls/platformverifier/' + name + ';' for name in ('CertificateVerifier', 'StatusCode', 'VerificationResult')]
 TLS_SYMBOL = 'Java_cc_kronecker_opennexus_MainActivity_initializeSyncTls'
+TEST_PACKAGE = 'cc.kronecker.opennexus.dev.test'
+TEST_RUNNER = 'androidx.test.runner.AndroidJUnitRunner'
+
+
+def verify_test_manifest(badging, xml):
+    match = re.search(r"^package: name='([^']+)'", badging, re.M)
+    require(match is not None and match[1] == TEST_PACKAGE, 'ANDROID_TEST_PACKAGE_MISMATCH')
+    blocks = re.split(r'(?m)^\s*E: ', xml)
+    instruments = [block for block in blocks if block.startswith('instrumentation ')]
+    require(len(instruments) == 1, 'ANDROID_TEST_INSTRUMENTATION_MISMATCH')
+    def attribute(name):
+        return re.findall(r'android:' + name + r'\(0x[0-9a-fA-F]+\)="([^"\n]+)"', instruments[0])
+    require(attribute('name') == [TEST_RUNNER] and attribute('targetPackage') == ['cc.kronecker.opennexus.dev'],
+        'ANDROID_TEST_INSTRUMENTATION_MISMATCH')
+
+
+def verify_native_tests(apk, tools, signer):
+    require(apk.is_file() and not apk.is_symlink(), 'ANDROID_TEST_APK_MISSING')
+    badging = subprocess.check_output([str(tools/'aapt2'), 'dump', 'badging', str(apk)], text=True)
+    xml = subprocess.check_output([str(tools/'aapt2'), 'dump', 'xmltree', '--file', 'AndroidManifest.xml', str(apk)], text=True)
+    verify_test_manifest(badging, xml)
+    certificates = subprocess.check_output([str(tools/'apksigner'), 'verify', '--print-certs', str(apk)], text=True)
+    fingerprints = re.findall(r'^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]{64})$', certificates, re.M)
+    require([value.lower() for value in fingerprints] == [signer.lower()], 'ANDROID_TEST_SIGNER_MISMATCH')
+    with zipfile.ZipFile(apk) as archive:
+        require(any(b'Lcc/kronecker/opennexus/sync/SyncCredentialStoreTest;' in archive.read(name)
+            for name in archive.namelist() if re.fullmatch(r'classes(?:\d+)?\.dex', name)), 'ANDROID_KEYSTORE_TEST_CLASS_MISSING')
+    return {'apk':'OpenNexus-android-tests.apk', 'sha256':digest(apk), 'bytes':apk.stat().st_size,
+        'package':TEST_PACKAGE, 'runner':TEST_RUNNER, 'target_package':'cc.kronecker.opennexus.dev',
+        'signer_certificate_sha256':signer.lower(), 'test_class':'cc.kronecker.opennexus.sync.SyncCredentialStoreTest',
+        'expected_tests':4, 'actual_device_tests_passed':False}
 
 
 def verify_platform_tls(apk, native_dir, abis, symbol_tool, origin_file):
@@ -108,6 +139,7 @@ def main():
     parser.add_argument('--commit', required=True)
     parser.add_argument('--source-proof', type=Path, required=True)
     parser.add_argument('--apk', type=Path, required=True)
+    parser.add_argument('--instrumentation-apk', type=Path, required=True)
     parser.add_argument('--native-dir', type=Path, required=True)
     parser.add_argument('--sdk', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
@@ -137,6 +169,7 @@ def main():
     tls_origin = root / 'frontend/mobile/src-tauri/gen/android/app/build/reports/platform-verifier/origin.json'
     native_tls = verify_platform_tls(apk, args.native_dir, args.abis,
         args.sdk / 'ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm', tls_origin)
+    native_tests = verify_native_tests(args.instrumentation_apk.resolve(), tools, fingerprints[0])
     kotlin_sha256 = verify_generated_mobile_files(root)
     proof = {'schema': 1, 'passed': True, 'kind': 'android-debug', 'source_commit': args.commit,
         'source_clean': True, 'source_proof': args.source_proof.name, 'package': package, 'version': config['version'],
@@ -146,6 +179,7 @@ def main():
         'actual_device_execution_verified': False, 'published': False,
         'files_plugin': {**files_plugin, 'source_sha256': kotlin_sha256},
         'native_tls':native_tls,
+        'native_tests':native_tests,
         'rustc': subprocess.check_output(['rustc', '-Vv'], text=True).strip(),
         'java': subprocess.run(['java', '-version'], capture_output=True, text=True, check=True).stderr.strip()}
     require(not args.output.exists(), 'ANDROID_PACKAGE_PROOF_EXISTS')

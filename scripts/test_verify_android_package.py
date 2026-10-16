@@ -13,6 +13,20 @@ spec.loader.exec_module(module)
 
 
 class AndroidPackageBindingTests(unittest.TestCase):
+    def test_device_tests_must_target_only_the_owned_dev_app_with_one_exact_runner(self):
+        identity="package: name='cc.kronecker.opennexus.dev.test' versionCode='1' versionName='test'\n"
+        xml='''N: android=http://schemas.android.com/apk/res/android
+ E: manifest
+   E: instrumentation (line=11)
+     A: android:name(0x01010003)="androidx.test.runner.AndroidJUnitRunner"
+     A: android:targetPackage(0x01010021)="cc.kronecker.opennexus.dev"
+'''
+        module.verify_test_manifest(identity,xml)
+        for invalid in [xml.replace('cc.kronecker.opennexus.dev','some.other.app'),
+                xml.replace('AndroidJUnitRunner','AnotherRunner'),xml+' E: instrumentation (line=99)\n']:
+            with self.assertRaisesRegex(Exception,'ANDROID_TEST_INSTRUMENTATION_MISMATCH'):module.verify_test_manifest(identity,invalid)
+        with self.assertRaisesRegex(Exception,'ANDROID_TEST_PACKAGE_MISMATCH'):module.verify_test_manifest(identity.replace('.dev.test','.test'),xml)
+
     def test_tls_packaging_requires_pinned_maven_bytes_jvm_classes_and_the_callable_native_symbol(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory); apk=root/'synthetic-dex.zip'; origin=root/'origin.json'

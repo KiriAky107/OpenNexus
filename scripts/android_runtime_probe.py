@@ -54,6 +54,15 @@ def validate_binding(bundle, commit):
         and proof.get('source_commit') == source.get('source_commit') == commit, 'Fixed APK source mismatch')
     require(proof.get('package') == APP and proof.get('debug_signing') is True, 'Unexpected runtime package')
     require(apk.is_file() and not apk.is_symlink() and digest(apk.read_bytes()) == proof.get('sha256'), 'APK bytes changed')
+    if native_tests := proof.get('native_tests'):
+        test_apk = bundle / 'OpenNexus-android-tests.apk'
+        require(native_tests.get('apk') == test_apk.name and native_tests.get('package') == APP + '.test'
+            and native_tests.get('target_package') == APP and native_tests.get('runner') == 'androidx.test.runner.AndroidJUnitRunner'
+            and native_tests.get('test_class') == 'cc.kronecker.opennexus.sync.SyncCredentialStoreTest'
+            and native_tests.get('expected_tests') == 4
+            and native_tests.get('signer_certificate_sha256') == proof.get('signer_certificate_sha256'), 'Native test binding mismatch')
+        require(test_apk.is_file() and not test_apk.is_symlink() and test_apk.stat().st_size == native_tests.get('bytes')
+            and digest(test_apk.read_bytes()) == native_tests.get('sha256'), 'Native test APK bytes changed')
     return apk, proof
 
 
@@ -126,6 +135,7 @@ class Probe:
         self.original_ime = None
         self.original_hardware_ime = None
         self.tls_initializations = []
+        self.keystore_test_result = None
 
     def command(self, command, *, timeout=90, input=None, check=True):
         result = subprocess.run([str(value) for value in command], input=input, capture_output=True, timeout=timeout)
@@ -245,7 +255,29 @@ class Probe:
         self.activity = self.shell('cmd', 'package', 'resolve-activity', '--brief', '-a', 'android.intent.action.MAIN',
             '-c', 'android.intent.category.LAUNCHER', APP).stdout.decode().strip().splitlines()[-1]
         require(self.activity.startswith(APP + '/') and re.fullmatch(r'[a-zA-Z0-9_./]+', self.activity), 'Unbound target activity')
+        self.native_keystore_tests()
         self.build_driver()
+
+    def native_keystore_tests(self):
+        if not (binding := self.binding.get('native_tests')):
+            return
+        require_hosted_emulator(self.args.serial)
+        package = APP + '.test'
+        installed = self.shell('pm', 'list', 'packages', package).stdout.decode().splitlines()
+        require('package:' + package not in installed, 'Native test data already exists; refusing to replace it')
+        self.device('install', '-t', '--no-streaming', self.args.bundle / 'OpenNexus-android-tests.apk')
+        result = self.shell('am', 'instrument', '-w', '-r', '-e', 'class', binding['test_class'],
+            package + '/' + binding['runner'], timeout=180, check=False)
+        output = result.stdout
+        (self.output / 'keystore-device-tests.txt').write_bytes(output)
+        (self.output / 'keystore-device-tests.stderr.txt').write_bytes(result.stderr)
+        require(result.returncode == 0 and b'OK (4 tests)' in output and b'FAILURES!!!' not in output and b'INSTRUMENTATION_FAILED' not in output,
+            'Actual Android Keystore tests did not all pass; preserve the original instrument output')
+        self.keystore_test_result = {'passed':True,'tests':4,'package':package,'test_APK_sha256':binding['sha256'],
+            'scope':'Actual owned API36 AndroidKeyStore/AtomicFile tests; native session broker only, not login or remote Sync',
+            'hardware_backing_claimed':False,'physical_phone_verified':False}
+        (self.output / 'keystore-device-proof.json').write_text(json.dumps(self.keystore_test_result,indent=2)+'\n','utf-8')
+        self.force_stop()
 
     def build_driver(self):
         root = Path(__file__).resolve().parent / 'android-runtime'
@@ -566,6 +598,7 @@ class Probe:
             'phases': self.phases, 'files_sha256': {name: digest(data) for name, data in originals.items()},
             'scope': self.args.scope, 'theme_choices_verified': self.args.scope == 'all',
             'native_tls_initializations': self.tls_initializations,
+            'native_keystore_tests': self.keystore_test_result,
             'native_theme_contrast_verified': False,
             'theme_style_diagnostic': 'theme-diagnostic-dark-computed-styles.json' if self.args.scope == 'lifecycle' else None,
             'theme_ui': 'Actual shared desktop theme card choices and cold reloads; rendered card screenshots/window observations retained for appearance review' if self.args.scope == 'all' else 'Not repeated in lifecycle scope; theme acceptance requires independent same-APK evidence',

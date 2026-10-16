@@ -115,6 +115,12 @@ jobs:
       - name: Build both native Android ABIs
         working-directory: frontend
         run: pnpm android build --debug --target aarch64 x86_64 --features custom-protocol --apk --ci
+      - name: Compile device Keystore tests against the same built native application
+        working-directory: frontend/mobile/src-tauri/gen/android
+        run: >-
+          ./gradlew --no-daemon --max-workers=2 :app:assembleUniversalDebugAndroidTest
+          -x :app:rustBuildUniversalDebug
+          -PabiList=arm64-v8a,x86_64 -ParchList=arm64,x86_64 -PtargetList=aarch64,x86_64
       - name: Verify actual APK bytes, identity, signing and compiled libraries
         shell: bash
         run: |
@@ -122,11 +128,14 @@ jobs:
           shopt -s nullglob
           apks=(frontend/mobile/src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk)
           test "${#apks[@]}" -eq 1
+          test_apks=(frontend/mobile/src-tauri/gen/android/app/build/outputs/apk/androidTest/universal/debug/*.apk)
+          test "${#test_apks[@]}" -eq 1
           python3 scripts/verify_android_package.py --commit "$GITHUB_SHA" \
             --source-proof ".build/source-provenance/$GITHUB_SHA.json" \
-            --apk "${apks[0]}" --native-dir "$CARGO_TARGET_DIR" --sdk "$ANDROID_HOME" \
+            --apk "${apks[0]}" --instrumentation-apk "${test_apks[0]}" --native-dir "$CARGO_TARGET_DIR" --sdk "$ANDROID_HOME" \
             --output .build/android-package-proof/package-verification.json
           cp "${apks[0]}" .build/android-package-proof/OpenNexus-android-debug.apk
+          cp "${test_apks[0]}" .build/android-package-proof/OpenNexus-android-tests.apk
           cp ".build/source-provenance/$GITHUB_SHA.json" .build/android-package-proof/source-provenance.json
           cp frontend/mobile/src-tauri/gen/android/app/build/reports/platform-verifier/origin.json .build/android-package-proof/platform-verifier-origin.json
       - uses: actions/upload-artifact@v7

@@ -15,6 +15,25 @@ from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAG
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_real_keystore_runner_keeps_output_and_never_replaces_existing_test_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562',bundle=Path('/owned/bundle'))
+            probe.binding={'native_tests':{'test_class':'cc.kronecker.opennexus.sync.SyncCredentialStoreTest','runner':'androidx.test.runner.AndroidJUnitRunner','sha256':'1'*64}}
+            probe.device=Mock();probe.force_stop=Mock()
+            with patch('android_runtime_probe.require_hosted_emulator'):
+                probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b'',b''),subprocess.CompletedProcess([],0,b'OK (4 tests)\n',b'')])
+                probe.native_keystore_tests()
+                probe.device.assert_called_once_with('install','-t','--no-streaming',Path('/owned/bundle/OpenNexus-android-tests.apk'))
+                self.assertTrue(probe.keystore_test_result['passed']);self.assertFalse(probe.keystore_test_result['hardware_backing_claimed'])
+                probe.device.reset_mock()
+                probe.shell=Mock(return_value=subprocess.CompletedProcess([],0,('package:'+APP+'.test\n').encode(),b''))
+                with self.assertRaisesRegex(Exception,'refusing to replace'):probe.native_keystore_tests()
+                probe.device.assert_not_called()
+                probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b'',b''),subprocess.CompletedProcess([],0,b'FAILURES!!!\n',b'original stderr')])
+                with self.assertRaisesRegex(Exception,'did not all pass'):probe.native_keystore_tests()
+                self.assertEqual((probe.output/'keystore-device-tests.txt').read_bytes(),b'FAILURES!!!\n')
+                self.assertEqual((probe.output/'keystore-device-tests.stderr.txt').read_bytes(),b'original stderr')
+
     def test_native_tls_startup_observes_only_the_owned_process_and_requires_ready_without_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             probe=Probe.__new__(Probe);probe.output=Path(directory);probe.binding={'native_tls':{'coordinate':'org.rustls:rustls-platform-verifier:0.2.0'}}
@@ -342,6 +361,26 @@ class RuntimeBoundaries(unittest.TestCase):
                 'source_commit': 'fixed', 'package': APP, 'debug_signing': True, 'sha256': digest(b'original apk')}))
             with self.assertRaisesRegex(RuntimeError, 'APK bytes changed'):
                 validate_binding(root, 'fixed')
+
+    def test_native_test_apk_is_bound_to_exact_bytes_signer_and_owned_target_before_installation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);app=b'owned-original-app';test=b'owned-original-test'
+            (root/'OpenNexus-android-debug.apk').write_bytes(app)
+            target=root/'OpenNexus-android-tests.apk';target.write_bytes(test)
+            (root/'source-provenance.json').write_text(json.dumps({'source_commit':'fixed'}))
+            proof={'passed':True,'source_clean':True,'source_commit':'fixed','package':APP,'debug_signing':True,
+                'sha256':digest(app),'signer_certificate_sha256':'a'*64,
+                'native_tests':{'apk':target.name,'package':APP+'.test','target_package':APP,
+                    'runner':'androidx.test.runner.AndroidJUnitRunner','test_class':'cc.kronecker.opennexus.sync.SyncCredentialStoreTest',
+                    'expected_tests':4,'signer_certificate_sha256':'a'*64,'bytes':len(test),'sha256':digest(test)}}
+            metadata=root/'package-verification.json';metadata.write_text(json.dumps(proof))
+            validate_binding(root,'fixed')
+            target.write_bytes(b'changed-test')
+            with self.assertRaisesRegex(Exception,'Native test APK bytes changed'):validate_binding(root,'fixed')
+            target.write_bytes(test);proof['native_tests']['target_package']='some.other.app';metadata.write_text(json.dumps(proof))
+            with self.assertRaisesRegex(Exception,'Native test binding mismatch'):validate_binding(root,'fixed')
+            proof['native_tests']['target_package']=APP;proof['native_tests']['signer_certificate_sha256']='b'*64;metadata.write_text(json.dumps(proof))
+            with self.assertRaisesRegex(Exception,'Native test binding mismatch'):validate_binding(root,'fixed')
 
     def test_an_old_package_proof_cannot_be_used_for_a_new_checkout(self):
         with tempfile.TemporaryDirectory() as folder:
