@@ -184,8 +184,9 @@ public final class RuntimeProbe extends Instrumentation {
                     open("peer-note.md");
                     waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
                         && label(node,"Markdown note body",false)
-                        && string(node.getText()).equals("# 来自独立 HTTP 客户端 😀\n\n保持 Markdown 原文。\n"),
-                        "exact actual received original Markdown after cold launch");
+                        && OriginalMarkdownAccessibility.matches(string(node.getText()),
+                            "# 来自独立 HTTP 客户端 😀\n\n保持 Markdown 原文。\n"),
+                        "actual original Markdown source presentation (native bytes checked independently)");
                     break;
                 case "peer-media-reopen":
                     open("peer.canvas");

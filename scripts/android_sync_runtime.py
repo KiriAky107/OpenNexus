@@ -129,7 +129,8 @@ def validate_peer_applied(receipts,provider,native,device):
         deleted=receipt['operation']=='delete'
         require(head[0]['revision']==files[0]['sequence']==receipt['sequence']
             and head[0]['path']==receipt['path'] and files[0]['path_key']==receipt['path'].casefold()
-            and files[0]['deleted'] is deleted and head[0]['hash']==('' if deleted else receipt['hash'])
+            and type(files[0]['deleted']) is int and files[0]['deleted']==int(deleted)
+            and head[0]['hash']==('' if deleted else receipt['hash'])
             and (not deleted or receipt['hash'] is None and receipt['size']==0),
             'Actual native head or provider tombstone differs from original peer operation')
     progress={r['device_id']:r for r in provider['rows']['device_progress']}
@@ -290,6 +291,11 @@ class SyncProbe(AuthProbe):
         actual=read_original_object(setup.endpoint,prepared['vault']['vault_id'],receipt['hash'],setup.session()['access_token'])
         require(actual==PEER_NOTE,'Actual independent peer object bytes changed')
         self.sync_phase('close');self.phase('peer-reopen')
+        drafts=[r for r in self.draft_rows() if r[0]=='peer-note.md']
+        require(len(drafts)==1 and drafts[0][1].encode()==PEER_NOTE,'Cold source editor did not load exact original native bytes')
+        atomic_json(self.output/'incoming-reopen-original-draft.json',{'path':'peer-note.md',
+            'content_sha256':hashlib.sha256(drafts[0][1].encode()).hexdigest(),'UTF8_bytes':len(drafts[0][1].encode()),
+            'generation':drafts[0][2],'saved_generation':drafts[0][3]},exclusive=True)
         require(self.original('peer-note.md')==PEER_NOTE and self.host_snapshot('incoming-reopen')==native,
             'Cold reopen changed the original incoming file or native Sync records')
         (self.output/'incoming-original.md').write_bytes(PEER_NOTE)
@@ -298,6 +304,7 @@ class SyncProbe(AuthProbe):
             'source_commit':self.args.commit,'runtime_tools_commit':self.args.tools_commit,'APK_sha256':self.binding['sha256'],
             'phases':self.phases,'incoming_original_operation_id':receipt['operation_id'],'incoming_original_file_id':receipt['file_id'],
             'incoming_original_sha256':receipt['hash'],'client_apply_observed_from_owned_files_and_UI':True,
+            'cold_source_native_draft_original_bytes_equal':True,'AX_text_is_not_used_as_original_file_bytes':True,
             'server_offered_sequence_is_not_API_apply_ACK':True,'API_client_apply_ACK_available':False,
             'desktop_product_pair_verified':False,'Canvas_PNG_rename_delete_conflicts_offline_Stop_verified':False,
             'physical_phone_verified':False,'upgrade_signing_release_verified':False},exclusive=True)

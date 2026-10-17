@@ -163,7 +163,7 @@ class InitialSyncBoundaries(unittest.TestCase):
             'hash':None if delete else hashlib.sha256(PEER_NOTE).hexdigest(),'size':0 if delete else len(PEER_NOTE),
             'sequence':3,'fingerprint':'2'*64}
         provider={'vault':{'id':'1'*32,'sequence':3},'rows':{'revisions':[receipt.copy()],
-            'files':[{'file_id':receipt['file_id'],'sequence':3,'path_key':receipt['path'],'deleted':delete}],
+            'files':[{'file_id':receipt['file_id'],'sequence':3,'path_key':receipt['path'],'deleted':int(delete)}],
             'device_progress':[{'device_id':'android','offered_sequence':3},{'device_id':'peer','committed_sequence':3}]}}
         native={'binding':{'remote_vault':'1'*32,'cursor':3},'conflicts':[],
             'heads':[{'file_id':receipt['file_id'],'revision':3,'path':receipt['path'],'hash':'' if delete else receipt['hash']}],
