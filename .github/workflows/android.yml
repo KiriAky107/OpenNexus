@@ -99,6 +99,11 @@ on:
         type: boolean
         default: false
         required: false
+      sync_original_native_outcome:
+        description: 'On the fixed sync-conflicts scope only, verify real stale refusal and hold original native completion through owned stop/cold read'
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: read
@@ -201,6 +206,10 @@ jobs:
           REUSE_RUN: ${{ inputs.apk_run_id }}
           REUSE_COMMIT: ${{ inputs.apk_commit }}
           RUNTIME_SCOPE: ${{ inputs.runtime_scope || 'all' }}
+          ORIGINAL_NATIVE_OUTCOME: ${{ inputs.sync_original_native_outcome }}
+          COLD_ORIGINALS: ${{ inputs.sync_cold_originals }}
+          WEBVIEW_PREVIEW: ${{ inputs.sync_webview_preview }}
+          WEBVIEW_CYCLE: ${{ inputs.sync_webview_cycle }}
         run: |
           python3 - <<'PY'
           import os,re
@@ -211,6 +220,9 @@ jobs:
           assert bool(run)==bool(commit), 'Supply both immutable APK reuse fields together'
           if run:
             assert re.fullmatch(r'[1-9][0-9]{0,17}',run) and re.fullmatch(r'[0-9a-f]{40}',commit), 'Invalid fixed APK selection'
+          if os.environ.get('ORIGINAL_NATIVE_OUTCOME')=='true':
+            assert scope=='sync-conflicts' and run=='39064416419' and commit=='0756d1e079ac045255322759d944b7c01408b0bd'
+            assert all(os.environ.get(key)=='true' for key in ('COLD_ORIGINALS','WEBVIEW_PREVIEW','WEBVIEW_CYCLE'))
           PY
       - uses: actions/checkout@v7
         with:
@@ -310,10 +322,19 @@ jobs:
           --tools-commit "$GITHUB_SHA" --build-run-id "$APK_BUILD_RUN_ID"
           --bundle .build/android-runtime/package --sdk "$ANDROID_HOME"
           --output .build/android-auth-evidence --scope "$AUTH_PROBE_SCOPE"
+      - name: Install isolated tooling for the explicit original native outcome
+        if: inputs.runtime_scope == 'sync-conflicts' && inputs.sync_original_native_outcome
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .build/android-original-outcome-tool
+          python3 scripts/android_pair_crypto_requirements.py > .build/android-original-outcome-tool/crypto.requirements.txt
+          uv pip install --python .build/android-auth-source/.venv/bin/python --target .build/android-original-outcome-crypto --no-deps --require-hashes --only-binary :all: --requirement .build/android-original-outcome-tool/crypto.requirements.txt
       - name: Check actual Android UI association and original foreground Sync exchange
         if: inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange' || inputs.runtime_scope == 'sync-media' || inputs.runtime_scope == 'sync-stop' || inputs.runtime_scope == 'sync-recovery' || inputs.runtime_scope == 'sync-conflicts'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          PYTHONPATH: ${{ inputs.sync_original_native_outcome && format('{0}/.build/android-original-outcome-crypto', github.workspace) || '' }}
         run: >-
           .build/android-auth-source/.venv/bin/python scripts/android_sync_runtime.py
           --commit "$COMPILED_SHA" --source-checkout .build/android-runtime/compiled-source
@@ -325,6 +346,7 @@ jobs:
           ${{ inputs.sync_semantic_preview && '--semantic-preview' || '' }}
           ${{ inputs.sync_webview_preview && '--webview-preview' || '' }}
           ${{ inputs.sync_webview_cycle && '--webview-cycle' || '' }}
+          ${{ inputs.sync_original_native_outcome && '--original-native-outcome' || '' }}
       - name: Stop only this job's emulator
         if: always()
         run: python3 scripts/android_runtime_probe.py --sdk "$ANDROID_HOME" --stop-owned

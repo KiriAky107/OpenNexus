@@ -116,6 +116,13 @@ class ConflictMixin:
         local=validate_retained_conflict(first,conflicted,provider,receipt)
         require(self.original('runtime-note.md')==LOCAL and [r for r in self.draft_rows() if r[0]=='runtime-note.md']==rows,
             'Incoming conflict overwrote original saved local bytes or dirty draft')
+        if getattr(self.args,'original_native_outcome',False):
+            # This new explicit scope keeps its old/new freezes and final native
+            # interruption in one instrument invocation. Existing cases do not
+            # import its separate debugger/crypto tools or repeat old fixtures.
+            from android_original_outcome_parent import run_original_outcome
+            run_original_outcome(self,setup,prepared,device,conflicted,provider,receipt,rows,local,auth,sealed)
+            return
         self.sync_phase('conflict-copy')
         frozen=self.original_conflict_driver('frozen');confirmed=self.original_conflict_driver('confirmation')
         require(frozen==confirmed,'The canceled frozen review was replaced before the one original confirmation')

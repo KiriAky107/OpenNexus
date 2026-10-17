@@ -605,6 +605,14 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
             'offline_Stop_conflict_dirty_draft_recovery_verified':False,'API_client_apply_ACK_available':False},exclusive=True)
 
 
+def validate_original_outcome_args(args):
+    if not getattr(args,'original_native_outcome',False):return
+    require(args.conflicts and args.cold_originals and args.webview_preview and args.webview_cycle
+            and not args.semantic_preview
+            and args.commit=='0756d1e079ac045255322759d944b7c01408b0bd'
+            and args.build_run_id=='39064416419', 'Original native outcome requires its explicit fixed conflict scope')
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('bundle','sdk','output','source-checkout'):parser.add_argument('--'+name,type=Path,required=True)
@@ -615,12 +623,14 @@ def main():
     parser.add_argument('--semantic-preview',action='store_true')
     parser.add_argument('--webview-preview',action='store_true')
     parser.add_argument('--webview-cycle',action='store_true')
+    parser.add_argument('--original-native-outcome',action='store_true')
     args=parser.parse_args();args.scope='sync-conflicts' if args.conflicts else 'sync-recovery' if args.recovery else 'sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
     require(not args.cold_originals or args.conflicts,'Cold original-entry scope requires actual conflicts')
     require(not args.semantic_preview or args.conflicts,'Native accessibility preview requires the explicit conflict scope')
     require(not args.webview_preview or args.conflicts,'Owned WebView preview requires the explicit conflict scope')
     require(not args.webview_cycle or args.conflicts,'Owned WebView cycle requires the explicit conflict scope')
     require(not (args.semantic_preview and args.webview_preview),'Choose exactly one original preview input backend')
+    validate_original_outcome_args(args)
     require_hosted();require_hosted_emulator(args.serial);owner=owned_root()
     state=read_json(owner/'owner-state.json');require(state['result']=='ready' and state.get('fixture')=='sync','Owned Sync origin is not ready')
     apk,binding=validate_binding(args.bundle,args.commit)
@@ -630,7 +640,15 @@ def main():
     require(json.loads((args.bundle/'source-provenance.json').read_text('utf-8'))==build_source(args.source_checkout.resolve(),args.commit),'Compiled source differs from the actual APK')
     args.build_origin=build_job_origin(args.build_run_id,args.commit);probe=SyncProbe(args,apk,binding,owner)
     try:probe.run()
-    except Exception:
+    except Exception as failure:
+        if args.original_native_outcome:
+            from android_original_outcome_status import OUTCOME_STAGES
+            stage=getattr(probe,'original_outcome_stage',None)
+            stage=stage if type(stage) is str and stage in OUTCOME_STAGES else 'not-entered'
+            atomic_json(probe.output/'original-native-outcome-failure.json', {'stage':stage,
+                'error_class':type(failure).__name__ if type(failure).__name__ in
+                ('RuntimeError','HandoffError','TimeoutError','TimeoutExpired','OSError','ValueError') else 'OtherError',
+                'raw_error_or_traceback_or_credentials_exported':False,'UI_or_stop_replayed':False},exclusive=True)
         probe.failure_observations()
         try:probe.host_snapshot('failure')
         except Exception as error:atomic_json(probe.output/'failure-host-unavailable.json',
@@ -638,7 +656,10 @@ def main():
              'no_mutation_retried':True},exclusive=True)
         raise
     finally:
-        probe.restore_test_ime();probe.shell('am','force-stop',APP,check=False)
+        probe.restore_test_ime()
+        # Unknown original app/driver stop results must never be resent by the
+        # generic cleanup. The workflow still closes its identity-checked AVD.
+        if not args.original_native_outcome:probe.shell('am','force-stop',APP,check=False)
 
 
 if __name__=='__main__':

@@ -55,6 +55,7 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
             case "cycle-conflict": cycle("cycle-conflict"); return true;
             case "cycle-conflict-copy": cycle("cycle-conflict-copy"); return true;
             case "conflict-copy": resolveOriginalCopy(); return true;
+            case "conflict-stale-interrupt": new OriginalOutcomeReview(this).run(); return true;
             case "cold-original-decision": readColdOriginalCopy(); return true;
             case "cycle-offline": failedCycle("cycle-offline"); return true;
             case "cycle-dropped-upload": failedCycle("cycle-dropped-upload"); return true;
