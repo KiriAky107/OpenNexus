@@ -149,6 +149,48 @@ impl ScopedWorkspace {
             device: Some(device),
         }
     }
+
+    /// Call on a blocking worker, never the Activity/UI thread. File hashing is
+    /// read-only and checks the original lease between paths and chunks rather
+    /// than retaining its lifecycle read guard throughout filesystem I/O.
+    pub fn initial_preview(
+        &self,
+        vault_id: &str,
+        remote_vault: &str,
+        snapshot: &crate::sync_initial::Snapshot,
+    ) -> Result<crate::sync_initial::Preview> {
+        self.lease.check()?;
+        crate::sync_client::identifier(remote_vault)?;
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"))?;
+        let guard = self
+            .engine
+            .lock()
+            .map_err(|_| SyncError::new("HOST_BUSY"))?;
+        self.lease.check()?;
+        let workspace = &guard
+            .as_ref()
+            .ok_or_else(|| SyncError::new("MOBILE_STORAGE_UNAVAILABLE"))?
+            .workspace;
+        if workspace.vault_id != vault_id {
+            return Err(SyncError::new("VAULT_CHANGED"));
+        }
+        let preview = workspace.sync_preview_checked(
+            device.scope().endpoint(),
+            remote_vault,
+            device.scope().account(),
+            snapshot,
+            &|| {
+                self.lease
+                    .check()
+                    .map_err(|error| crate::workspace::HostError::new(&error.code))
+            },
+        )?;
+        self.lease.check()?;
+        Ok(preview)
+    }
 }
 impl WorkspaceAccess for ScopedWorkspace {
     fn access<T>(

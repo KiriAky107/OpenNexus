@@ -1779,6 +1779,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_initial_preview_uses_the_original_device_scope_and_refuses_other_vaults_or_stale_leases(
+    ) {
+        use crate::sync_client::WorkspaceAccess;
+        let root = tempfile::tempdir().unwrap();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "first")));
+        let (foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), MemoryStore::default()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let engine = Arc::new(Mutex::new(Some(
+            crate::mobile_workspace::MobileWorkspace::open(root.path()).unwrap(),
+        )));
+        let snapshot = crate::sync_initial::Snapshot {
+            boundary: 0,
+            items: vec![],
+        };
+        let (vault, fingerprint) = engine
+            .access(|ws| {
+                ws.write("original.md", "", b"original\r\n", "local")?;
+                Ok((
+                    ws.vault_id.clone(),
+                    ws.sync_preview(scope.endpoint(), "remote", scope.account(), &snapshot)?
+                        .fingerprint,
+                ))
+            })
+            .unwrap();
+        let owned = engine.clone();
+        let port = auth
+            .authorized_device(
+                &lease,
+                &scope,
+                &operation,
+                101,
+                move |_, device| async move { Ok(device.workspace(owned)) },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            port.initial_preview(&vault, "remote", &snapshot)
+                .unwrap()
+                .fingerprint,
+            fingerprint
+        );
+        assert_eq!(
+            port.initial_preview("different-vault", "remote", &snapshot)
+                .err()
+                .unwrap()
+                .code,
+            "VAULT_CHANGED"
+        );
+        assert_eq!(
+            lease
+                .workspace(engine.clone())
+                .initial_preview(&vault, "remote", &snapshot)
+                .err()
+                .unwrap()
+                .code,
+            "SYNC_AUTH_RECONCILIATION_REQUIRED"
+        );
+        foreground.on_stop();
+        assert_eq!(
+            port.initial_preview(&vault, "remote", &snapshot)
+                .err()
+                .unwrap()
+                .code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        engine
+            .access(|ws| {
+                assert!(ws.sync_binding()?.is_none());
+                assert_eq!(ws.read("original.md")?.content.as_bytes(), b"original\r\n");
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn authenticated_device_port_is_bound_to_its_original_native_lease_and_issuing_device() {
         use crate::sync_client::WorkspaceAccess;
         let root = tempfile::tempdir().unwrap();
