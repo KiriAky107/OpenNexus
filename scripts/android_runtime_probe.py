@@ -558,9 +558,11 @@ class Probe:
                 signal = 'no_backup/owned-'+phase+'-'+stage+'.proceed'
                 pending = signal+'.pending'
                 # The driver must never observe the final name while stdin is
-                # still being written. Link the complete owned marker exactly
+                # still being written. Publish the complete owned marker exactly
                 # once; an existing approval remains untouched and is refused.
-                publication = f'umask 077; test ! -e {signal} && test ! -e {pending} && cat > {pending} && test "$(wc -c < {pending})" -eq 8 && ln {pending} {signal} && rm {pending}'
+                # The owned Android runner rejects hard links. Its ordinary
+                # same-directory, nonreplacing rename needs no permission change.
+                publication = f'umask 077; test ! -e {signal} && test ! -e {pending} && cat > {pending} && test "$(wc -c < {pending})" -eq 8 && mv -n {pending} {signal} && test ! -e {pending}'
                 self.device('shell', '-T', 'run-as '+DRIVER+' sh -c '+shlex.quote(publication),input=b'proceed\n')
             output, error = process.communicate(timeout=40)
             finished = True
