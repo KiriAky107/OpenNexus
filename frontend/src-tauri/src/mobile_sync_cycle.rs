@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 type Result<T> = std::result::Result<T, SyncError>;
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Target {
     pub expected: Selection,

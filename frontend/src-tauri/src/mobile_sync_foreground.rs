@@ -96,6 +96,30 @@ impl Lease {
         self.with_current(|| Ok(()))
     }
 
+    /// Cancel only this original native admission. A delayed Stop must not
+    /// invalidate a newer account selection or foreground epoch. Call without
+    /// holding an activity/engine mutex: progress may acquire that mutex while
+    /// briefly holding the lifecycle read guard.
+    pub fn cancel_original(&self) -> Result<()> {
+        let mut cancelled = false;
+        self.owner.state.send_if_modified(|state| {
+            if !self.matches(state) {
+                return false;
+            }
+            cancelled = true;
+            match state.epoch.checked_add(1) {
+                Some(epoch) => state.epoch = epoch,
+                None => state.active = false,
+            }
+            true
+        });
+        if cancelled {
+            Ok(())
+        } else {
+            Err(SyncError::new("SYNC_FOREGROUND_CHANGED"))
+        }
+    }
+
     /// Dropping an interrupted push runs the existing Attempt guard, preserving
     /// its original outbox id. Cancellation never invents a server receipt.
     pub async fn guard<T>(&self, action: impl Future<Output = Result<T>>) -> Result<T> {
@@ -478,6 +502,75 @@ mod tests {
         time::Duration,
     };
     use tokio::sync::oneshot;
+
+    #[test]
+    fn native_sync_original_stop_cannot_cancel_a_new_identity_or_foreground() {
+        let foreground = Foreground::default();
+        foreground.on_start();
+        let first = foreground.lease().unwrap();
+        foreground.invalidate_identity();
+        let selected = foreground.lease().unwrap();
+        assert_eq!(
+            first.cancel_original().unwrap_err().code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        selected.check().unwrap();
+        selected.cancel_original().unwrap();
+        assert!(selected.check().is_err());
+        let next = foreground.lease().unwrap();
+        assert_eq!(
+            selected.cancel_original().unwrap_err().code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        next.check().unwrap();
+        foreground.on_stop();
+        assert_eq!(
+            next.cancel_original().unwrap_err().code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert_eq!(
+            foreground.lease().err().unwrap().code,
+            "SYNC_FOREGROUND_REQUIRED"
+        );
+        foreground.on_start();
+        let resumed = foreground.lease().unwrap();
+        assert!(first.cancel_original().is_err());
+        assert!(selected.cancel_original().is_err());
+        assert!(next.cancel_original().is_err());
+        resumed.check().unwrap();
+    }
+
+    #[tokio::test]
+    async fn native_sync_original_stop_cancels_pending_work_and_refuses_late_progress() {
+        let foreground = Foreground::default();
+        foreground.on_start();
+        let original = foreground.lease().unwrap();
+        let observed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = observed.clone();
+        let report = original.progress(Arc::new(move |_| {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        report(Event::Phase(crate::sync_progress::Phase::Pull));
+        let running = original.clone();
+        let (entered, ready) = oneshot::channel();
+        let worker = tokio::spawn(async move {
+            running
+                .guard(async {
+                    entered.send(()).unwrap();
+                    std::future::pending::<Result<()>>().await
+                })
+                .await
+        });
+        ready.await.unwrap();
+        original.cancel_original().unwrap();
+        assert_eq!(
+            worker.await.unwrap().unwrap_err().code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        report(Event::Phase(crate::sync_progress::Phase::Complete));
+        assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 1);
+        foreground.lease().unwrap().check().unwrap();
+    }
 
     #[test]
     fn native_sync_capture_preparation_yields_to_stop_between_payload_chunks() {
