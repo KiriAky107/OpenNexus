@@ -141,6 +141,8 @@ def validate_peer_applied(receipts,provider,native,device):
 
 
 def validate_stopped_original(before,native,provider_before,provider_held,device,held):
+    require(before['binding']['cursor']<provider_before['vault']['sequence'],
+        'An empty already-applied changes page cannot prove late-response isolation')
     require(native==before,'Stopped original changed durable native transfer/head/cursor records')
     require(provider_before['vault']==provider_held['vault']
         and all(provider_before['rows'][key]==provider_held['rows'][key]
@@ -161,6 +163,26 @@ def validate_stopped_original(before,native,provider_before,provider_held,device
         and all(current[device][k]==v for k,v in previous[device].items() if k not in ('offered_sequence','offered_at'))
         and current[device]['offered_sequence']==provider_held['vault']['sequence'],
         'Generated progress is not an apply ACK and cannot change confirmed commits')
+
+
+def validate_stop_resumed_original(before,native,provider_before,provider_after,device,receipt):
+    validate_peer_applied([receipt],provider_after,native,device)
+    require(native['binding']['id']==before['binding']['id']
+        and receipt['sequence']>before['binding']['cursor']
+        and all(native[key]==before[key] for key in ('jobs','attempts','issuers','association')),
+        'Explicit resume changed original acknowledged upload or identity')
+    heads={row['file_id']:row for row in native['heads']}
+    require(len(heads)==len(native['heads'])==len(before['heads'])+1
+        and all(heads.get(row['file_id'])==row for row in before['heads'])
+        and len(native['inbox'])==len(before['inbox'])+1
+        and all(row in native['inbox'] for row in before['inbox']),
+        'Explicit resume changed existing heads/inbox or applied extra revisions')
+    require(provider_after['vault']==provider_before['vault']
+        and all(provider_after['rows'][key]==provider_before['rows'][key]
+            for key in ('revisions','files','objects','uploads'))
+        and {k:v for k,v in provider_after['delivery']['counts'].items() if not k.startswith('changes:')}
+            =={k:v for k,v in provider_before['delivery']['counts'].items() if not k.startswith('changes:')},
+        'Explicit resume created another provider write')
 
 
 class SyncProbe(AuthProbe):
@@ -301,7 +323,7 @@ class SyncProbe(AuthProbe):
             'client_apply_ACK_available':False,'physical_phone_verified':False,'published':False},exclusive=True)
         if getattr(self.args,'exchange',False):self.exchange(setup,prepared,device)
         if getattr(self.args,'media',False):self.media(setup,prepared,device)
-        if getattr(self.args,'stop',False):self.stop_original(device)
+        if getattr(self.args,'stop',False):self.stop_original(setup,prepared,device)
 
     def exchange(self,setup,prepared,device):
         prior=self.original('runtime-note.md')
@@ -351,9 +373,15 @@ class SyncProbe(AuthProbe):
         atomic_json(self.output/('sync-control-'+mode+'-'+operation+'.json'),receipt,exclusive=True)
         return receipt
 
-    def stop_original(self,device):
+    def stop_original(self,setup,prepared,device):
         require_hosted_emulator(self.args.serial)
+        receipt=Peer(self.owner).publish('stop-pending-note','peer-note.md',PEER_NOTE)
+        atomic_json(self.output/'stop-pending-original-peer-receipt.json',receipt,exclusive=True)
         before=self.host_snapshot('stop-before');provider_before=self.observe('stop-before')
+        require(receipt['sequence']==provider_before['vault']['sequence']>before['binding']['cursor']
+            and not any(row['file_id']==receipt['file_id'] for row in before['heads']),
+            'Stop must protect a genuinely unapplied original peer revision')
+        self.absent_original('peer-note.md','stop-before-pending')
         auth_before=self.snapshot('stop-before');sealed=self.ciphertext_fingerprints();note=self.original('runtime-note.md')
         control=self.sync_control('hold_changes');held_id=control['operation_id']
         original={'driver_intent_id':str(uuid.uuid4()),'control_operation_id':held_id}
@@ -400,6 +428,7 @@ class SyncProbe(AuthProbe):
             validate_stopped_original(before,native,provider_before,provider,device,held)
             require(self.snapshot('stopped')==auth_before and self.ciphertext_fingerprints()==sealed
                 and self.original('runtime-note.md')==note,'Stop changed original auth/credentials/saved bytes')
+            self.absent_original('peer-note.md','stop-stopped-pending')
             release_attempted=True
             release=self.sync_control('release');released=True
             released_path=control_root(self.owner)/'fault-events'/(held_id+'.released.json');deadline=time.monotonic()+10
@@ -410,17 +439,16 @@ class SyncProbe(AuthProbe):
                 and delivered['client_receipt_known'] is False,'Original late response evidence differs')
             atomic_json(self.output/'original-stop-late-response-release.json',{'release_control':release,'original_response':delivered},exclusive=True)
             require(self.host_snapshot('stop-after-late-response')==before,'Late original response applied after Stop')
+            self.absent_original('peer-note.md','stop-late-pending')
             self.sync_phase('cycle-after-stop');resumed=self.host_snapshot('stop-resumed');after=self.observe('stop-resumed')
-            validate_upload(after,resumed,device)
-            require(resumed['binding']['id']==before['binding']['id'] and resumed['binding']['cursor']==after['vault']['sequence']
-                and resumed['jobs']==before['jobs'] and resumed['attempts']==before['attempts'] and not resumed['conflicts']
-                and all(after['rows'][key]==provider_before['rows'][key] for key in ('revisions','files','objects','uploads'))
-                and {k:v for k,v in after['delivery']['counts'].items() if not k.startswith('changes:')}
-                    =={k:v for k,v in provider_before['delivery']['counts'].items() if not k.startswith('changes:')}
-                and self.original('runtime-note.md')==note,'Explicit new cycle failed to resume original data without another revision')
+            validate_stop_resumed_original(before,resumed,provider_before,after,device,receipt)
+            require(self.original('runtime-note.md')==note and self.original('peer-note.md')==PEER_NOTE
+                ==read_original_object(setup.endpoint,prepared['vault']['vault_id'],receipt['hash'],setup.session()['access_token']),
+                'Explicit new cycle failed to resume original bytes without another revision')
             atomic_json(self.output/'sync-stop-proof.json',{'passed':True,'source_commit':self.args.commit,
                 'runtime_tools_commit':self.args.tools_commit,'APK_sha256':self.binding['sha256'],'phases':self.phases,
                 'original_driver_and_control':original,'native_invocation_id_observed':False,
+                'original_pending_peer_revision':receipt,
                 'actual_generated_response_held_before_one_UI_Stop':True,'native_durable_records_unchanged_while_stopped':True,
                 'late_original_response_cannot_apply':True,'explicit_new_cycle_original_cursor_resume_without_new_revision':True,
                 'API_generated_progress_is_not_client_apply_ACK':True,'desktop_phone_offline_conflict_release_verified':False},exclusive=True)

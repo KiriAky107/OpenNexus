@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock,patch
 from android_runtime_probe import DRAFT
-from android_sync_runtime import PEER_NOTE,PEER_CANVAS,IMAGE_PATH,SyncProbe,read_original_object,validate_upload,validate_incoming,validate_peer_applied,validate_stopped_original
+from android_sync_runtime import PEER_NOTE,PEER_CANVAS,IMAGE_PATH,SyncProbe,read_original_object,validate_upload,validate_incoming,validate_peer_applied,validate_stopped_original,validate_stop_resumed_original
 
 
 class InitialSyncBoundaries(unittest.TestCase):
@@ -202,12 +202,12 @@ class InitialSyncBoundaries(unittest.TestCase):
         self.assertEqual(canvas['vendor'],{'original':'保留原始属性与 CRLF'})
 
     def stopped(self):
-        before={'binding':{'id':'owned-binding','cursor':0},'heads':[{'revision':1,'hash':'original'}]}
-        provider={'vault':{'id':'owned-vault','sequence':1},'rows':{'revisions':[{'original':True}],
+        before={'binding':{'id':'owned-binding','cursor':1},'heads':[{'revision':1,'hash':'original'}]}
+        provider={'vault':{'id':'owned-vault','sequence':2},'rows':{'revisions':[{'original':True},{'pending_original':True}],
             'files':[{'original':True}],'objects':[{'original':True}],'uploads':[],
             'device_progress':[{'device_id':'android','committed_sequence':1,'committed_at':10,'offered_sequence':0,'offered_at':9}]},
             'delivery':{'counts':{'changes:200':3,'revision:200':1},'events':[]}}
-        current=deepcopy(provider);current['rows']['device_progress'][0].update(offered_sequence=1,offered_at=11)
+        current=deepcopy(provider);current['rows']['device_progress'][0].update(offered_sequence=2,offered_at=11)
         current['delivery']['counts']['changes:200']=4
         current['delivery']['events']=[{'action':'changes','service_status':200,'delivery_status':None,'fault_operation':'control-original'}]
         held={'operation_id':'control-original','revision':1,'mode':'hold_changes','action':'changes',
@@ -216,7 +216,7 @@ class InitialSyncBoundaries(unittest.TestCase):
 
     def test_generated_original_page_is_not_a_native_apply_or_new_write_after_Stop(self):
         before,provider,current,held=self.stopped();validate_stopped_original(before,deepcopy(before),provider,current,'android',held)
-        changed=deepcopy(before);changed['binding']['cursor']=1
+        changed=deepcopy(before);changed['binding']['cursor']=2
         with self.assertRaises(RuntimeError):validate_stopped_original(before,changed,provider,current,'android',held)
         for table in ('revisions','files','objects','uploads'):
             changed=deepcopy(current);changed['rows'][table].append({'unexpected_write':True})
@@ -235,6 +235,33 @@ class InitialSyncBoundaries(unittest.TestCase):
         for field,value in (('device_id','other'),('committed_sequence',2),('committed_at',11),('offered_sequence',0)):
             changed=deepcopy(current);changed['rows']['device_progress'][0][field]=value
             with self.subTest(progress=field),self.assertRaises(RuntimeError):validate_stopped_original(before,before,provider,changed,'android',held)
+
+    def test_Stop_requires_original_unapplied_content_not_an_already_current_empty_page(self):
+        before,provider,current,held=self.stopped()
+        before['binding']['cursor']=provider['vault']['sequence']
+        with self.assertRaises(RuntimeError):validate_stopped_original(before,before,provider,current,'android',held)
+
+    def test_explicit_Stop_resume_applies_only_pending_original_and_preserves_acked_records(self):
+        receipt,provider,native=self.media()
+        provider['rows'].update(objects=[{'hash':receipt['hash'],'size':receipt['size']}],uploads=[])
+        provider['delivery']={'counts':{'changes:200':2,'revision:200':2}}
+        native['binding']['id']='original-binding'
+        for key in ('jobs','attempts','issuers'):native[key]=[{'original':key}]
+        native['association']={'original':'frozen'}
+        old_head={'file_id':'old','revision':1,'path':'runtime-note.md','hash':'old'}
+        old_inbox={'sequence':1,'state':'applied','original':'inbox'}
+        before=deepcopy(native);before['binding']['cursor']=2;before['heads']=[old_head];before['inbox']=[old_inbox]
+        native['heads'].append(old_head);native['inbox'].append(old_inbox)
+        after=deepcopy(provider);after['delivery']['counts']['changes:200']=3
+        validate_stop_resumed_original(before,native,provider,after,'android',receipt)
+        for key in ('jobs','attempts','issuers','association','heads','inbox'):
+            changed=deepcopy(native);changed[key]=[]
+            with self.subTest(key=key),self.assertRaises(RuntimeError):
+                validate_stop_resumed_original(before,changed,provider,after,'android',receipt)
+        changed=deepcopy(after);changed['delivery']['counts']['revision:200']=3
+        with self.assertRaises(RuntimeError):validate_stop_resumed_original(before,native,provider,changed,'android',receipt)
+        changed=deepcopy(after);changed['rows']['revisions'].append(dict(receipt,operation_id='unexpected-write',sequence=4))
+        with self.assertRaises(RuntimeError):validate_stop_resumed_original(before,native,provider,changed,'android',receipt)
 
     def test_Stop_controller_cannot_arm_unrelated_faults_before_owner_access(self):
         probe=object.__new__(SyncProbe)
