@@ -11,6 +11,8 @@ use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
 #[path = "workspace_watch.rs"]
 mod watch;
+#[path = "workspace_writes.rs"]
+mod writes;
 pub(crate) use watch::SnapshotPlan;
 pub use watch::{ScanStats, WatchStatus, WorkspaceChange};
 
@@ -656,127 +658,16 @@ impl Workspace {
     ) -> Result<Entry> {
         let (identity, authorize) = authorization;
         authorize()?;
-        if Uuid::parse_str(operation_id).is_err() {
-            return Err(HostError::new("OPERATION_ID_INVALID"));
-        }
-        content.validate(self, path)?;
-        if origin != "local" && origin != "remote" {
-            return Err(HostError::new("INVALID_ORIGIN"));
-        }
-        let digest = content.digest();
-        let fingerprint = hash(
-            &serde_json::to_vec(&(path, expected, &digest, origin))
-                .map_err(|_| HostError::new("INVALID_OPERATION"))?,
-        );
-        let previous: Option<String> = self
-            .db
-            .query_row(
-                "SELECT fingerprint FROM operations WHERE operation_id=?1",
-                [operation_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if let Some(previous) = previous {
-            if previous != fingerprint {
-                return Err(HostError::new("OPERATION_PAYLOAD_CONFLICT"));
-            }
-            self.recover()?;
-            let receipt = self
-                .operation(operation_id)?
-                .ok_or_else(|| HostError::new("DATABASE_ERROR"))?;
-            if receipt["state"] != "committed" {
-                return Err(HostError::new("RECOVERY_CONFLICT"));
-            }
-            return serde_json::from_value(receipt["result"].clone())
-                .map_err(|_| HostError::new("DATABASE_ERROR"));
-        }
-        crate::experiment_import::check_new_write(
-            &self.db,
-            &self.vault_id,
-            operation_id,
+        self.prepare_write_checked(
             path,
             expected,
-            &digest,
-            (origin, identity),
-        )?;
-        let target = self.resolve(path)?;
-        let current = if target.exists() {
-            crate::payloads::hash_file(&target)?
-        } else {
-            String::new()
-        };
-        if current != expected {
-            return Err(HostError::new("REVISION_CONFLICT"));
-        }
-        let mut previous = self.entry(path)?;
-        if let Some(id) = identity {
-            // 墓碑元数据可以把旧路径让给新的远端身份。
-            if let Some(retired) = previous
-                .as_ref()
-                .filter(|entry| entry.deleted && entry.file_id != id)
-            {
-                self.db.execute(
-                    "UPDATE files SET path=?2 WHERE id=?1 AND deleted=1",
-                    params![
-                        retired.file_id,
-                        format!(".ainote/retired/{}", retired.file_id)
-                    ],
-                )?;
-                previous = None;
-            }
-            if previous.is_none() {
-                let retired: Option<(String, bool)> = self
-                    .db
-                    .query_row("SELECT path,deleted FROM files WHERE id=?1", [id], |r| {
-                        Ok((r.get(0)?, r.get(1)?))
-                    })
-                    .optional()?;
-                if let Some((_, deleted)) = retired {
-                    if !deleted {
-                        return Err(HostError::new("PATH_CONFLICT"));
-                    }
-                    self.db.execute(
-                        "UPDATE files SET path=?2 WHERE id=?1 AND deleted=1",
-                        params![id, path],
-                    )?;
-                    previous = self.entry(path)?;
-                }
-            }
-        }
-        if identity.is_some_and(|id| previous.as_ref().is_some_and(|entry| entry.file_id != id)) {
-            return Err(HostError::new("PATH_CONFLICT"));
-        }
-        let file_id = previous.map_or_else(
-            || {
-                identity
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| Uuid::new_v4().to_string())
-            },
-            |entry| entry.file_id,
-        );
-        content.store(self, operation_id)?;
-        let tx = self.db.transaction()?;
-        tx.execute(
-            "INSERT INTO operations VALUES (?1,?2,'pending',NULL)",
-            params![operation_id, fingerprint],
-        )?;
-        tx.execute(
-            "INSERT INTO journal VALUES (?1,?2,?3,?4,?5,?6,'pending')",
-            params![
-                operation_id,
-                file_id,
-                path,
-                expected,
-                b"".as_slice(),
-                origin
-            ],
-        )?;
-        // 拒绝会丢弃未提交事务：不会发布可恢复写入或 outbox 条目，也不会重放无引用载荷。
-        authorize()?;
-        tx.commit()?;
-        self.apply_stored_journal(operation_id, &file_id, path, expected, origin)?;
-        self.entry(path)?
-            .ok_or_else(|| HostError::new("FILE_NOT_FOUND"))
+            content,
+            origin,
+            operation_id,
+            (identity, &|| Ok(())),
+        )?
+        .accept_with(authorize)?
+        .complete()
     }
 
     fn apply_journal(

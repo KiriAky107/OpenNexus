@@ -137,13 +137,28 @@ impl WritePayload<'_> {
             Self::Stored { size, .. } => *size,
         }
     }
-    pub(crate) fn digest(&self) -> String {
+    pub(crate) fn digest_checked(&self, check: &dyn Fn() -> Result<()>) -> Result<String> {
+        check()?;
         match self {
-            Self::Inline(bytes) => hash(bytes),
-            Self::Stored { digest, .. } => (*digest).to_owned(),
+            Self::Inline(bytes) => {
+                let mut hasher = Sha256::new();
+                for chunk in bytes.chunks(VERIFY_BUFFER_BYTES) {
+                    check()?;
+                    hasher.update(chunk);
+                    check()?;
+                }
+                Ok(format!("{:x}", hasher.finalize()))
+            }
+            Self::Stored { digest, .. } => Ok((*digest).to_owned()),
         }
     }
-    pub(crate) fn validate(&self, ws: &Workspace, path: &str) -> Result<()> {
+    pub(crate) fn validate_checked(
+        &self,
+        ws: &Workspace,
+        path: &str,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<()> {
+        check()?;
         if crate::canvas_contract::is_canvas(path)
             && self.size() > crate::canvas_contract::MAX_CANVAS_BYTES as u64
         {
@@ -165,43 +180,102 @@ impl WritePayload<'_> {
                 }
             }
             Self::Stored { digest, size } => {
-                let mut file = open_verified(&ws.sync_spool(digest)?, digest, *size)?;
-                validate_record(&mut file, path, *size)?;
+                let mut file =
+                    open_verified_checked(&ws.sync_spool(digest)?, digest, *size, check)?;
+                validate_record_checked(&mut file, path, *size, check)?;
             }
         }
+        check()?;
         Ok(())
     }
-    pub(crate) fn store(&self, ws: &Workspace, operation: &str) -> Result<()> {
+    /// Prepare only private immutable bytes. The original operation reference
+    /// becomes visible together with its journal in the acceptance transaction.
+    pub(crate) fn stage_checked(
+        &self,
+        ws: &Workspace,
+        expected: &str,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<u64> {
+        check()?;
+        let target = ws.sync_spool(expected)?;
         match self {
-            Self::Inline(bytes) => ws.store_payload(operation, bytes),
+            Self::Inline(bytes) => {
+                if target.exists() {
+                    open_verified_checked(&target, expected, self.size(), check)?;
+                } else {
+                    let parent = target
+                        .parent()
+                        .ok_or_else(|| HostError::new("UNSAFE_PATH"))?;
+                    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+                    let mut source = *bytes;
+                    copy_verified_checked(&mut source, &mut temp, expected, self.size(), check)?;
+                    temp.as_file().sync_all()?;
+                    check()?;
+                    temp.persist_noclobber(&target)
+                        .map_err(|_| HostError::new("SYNC_SPOOL_FAILED"))?;
+                    #[cfg(unix)]
+                    fs::File::open(parent)?.sync_all()?;
+                }
+            }
             Self::Stored { digest, size } => {
-                verify(&ws.sync_spool(digest)?, digest, *size)?;
-                ws.register_payload(operation, digest, *size)
+                if *digest != expected {
+                    return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
+                }
+                open_verified_checked(&target, digest, *size, check)?;
             }
         }
+        check()?;
+        Ok(self.size())
     }
 }
 pub(crate) fn validate_record(file: &mut fs::File, path: &str, size: u64) -> Result<()> {
+    validate_record_checked(file, path, size, &|| Ok(()))
+}
+fn validate_record_checked(
+    file: &mut fs::File,
+    path: &str,
+    size: u64,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<()> {
+    check()?;
     if crate::canvas_contract::is_canvas(path) {
         if size > crate::canvas_contract::MAX_CANVAS_BYTES as u64 {
             return Err(HostError::new("CANVAS_TOO_LARGE"));
         }
-        let mut bytes = Vec::new();
-        file.take(crate::canvas_contract::MAX_CANVAS_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)?;
+        let bytes = read_record_checked(file, crate::canvas_contract::MAX_CANVAS_BYTES, check)?;
         crate::canvas_contract::validate(&bytes)?;
+        check()?;
         file.seek(SeekFrom::Start(0))?;
     }
     if crate::records::is_record(path) {
         if size > 1024 * 1024 {
             return Err(HostError::new("RECORD_TOO_LARGE"));
         }
-        let mut bytes = Vec::new();
-        file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        let bytes = read_record_checked(file, 1024 * 1024, check)?;
         crate::records::validate(path, &bytes)?;
+        check()?;
         file.seek(SeekFrom::Start(0))?;
     }
     Ok(())
+}
+fn read_record_checked(
+    file: &mut fs::File,
+    limit: usize,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<Vec<u8>> {
+    let mut reader = file.take(limit as u64 + 1);
+    let mut bytes = Vec::new();
+    let mut buffer = vec![0; VERIFY_BUFFER_BYTES];
+    loop {
+        check()?;
+        let count = reader.read(&mut buffer)?;
+        check()?;
+        if count == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..count]);
+    }
+    Ok(bytes)
 }
 pub(crate) fn hash_file(path: &Path) -> Result<String> {
     hash_file_info(path).map(|(digest, _)| digest)
