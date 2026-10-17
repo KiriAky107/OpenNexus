@@ -78,6 +78,14 @@ def validate_image_save_result(before, after):
         and save['state'] == 'committed' and not save['error'], 'Original Save is not durably committed; no success claim')
 
 
+def rich_image_editor_ready(rendered):
+    attributes = rendered.get('styles', {}).get('editorAttributes', [])
+    return rendered.get('available') is True and rendered.get('styles', {}).get('imageSave', {}).get('richReady') is True \
+        and len(attributes) == 1 and attributes[0].get('contentEditable') == 'true' \
+        and attributes[0].get('visible') is True and attributes[0].get('readOnly') is False \
+        and attributes[0].get('disabled') is False
+
+
 def validate_tablet_layout(report, portrait):
     require(report.get('available') is True, 'Actual tablet WebView geometry was not observed')
     layout = report.get('styles', {}).get('layout', {})
@@ -513,29 +521,43 @@ class Probe:
         output = error = b''
         finished = False
         try:
-            deadline = time.monotonic()+95
-            while True:
-                if process.poll() is not None:
-                    output, error = process.communicate(timeout=5)
-                    finished = True
-                    return subprocess.CompletedProcess(command, process.returncode, output, error)
-                ready = self.shell('run-as', DRIVER, 'cat', 'no_backup/owned-'+phase+'-save.ready', check=False)
-                if ready.returncode == 0 and ready.stdout == b'ready\n':
-                    break
-                require(time.monotonic() < deadline, 'Original image checkpoint unavailable; no Save replay')
-                time.sleep(.2)
-            # Do not release a Save while an asynchronous import is still
-            # publishing its original draft. Two matching observations plus
-            # the actual loaded image and uncovered enabled action are required.
-            before = self.image_save_rows(phase, 'before-save')
-            rendered = self.read_native_styles(phase+'-before-save')
-            stable = self.image_save_rows(phase, 'stable-before-save')
-            require(before == stable, 'Original import changed during observation; no Save sent')
-            validate_image_save_observation(stable, rendered, phase)
-            require(process.poll() is None, 'Original image driver ended before Save approval')
-            self.device('shell', '-T', 'run-as '+DRIVER+' sh -c '+
-                "'umask 077; test ! -e no_backup/owned-"+phase+"-save.proceed && cat > no_backup/owned-"+phase+"-save.proceed'",
-                input=b'proceed\n')
+            stages = ('editor', 'save') if phase == 'rich-image' else ('save',)
+            for stage in stages:
+                deadline = time.monotonic()+95
+                while True:
+                    if process.poll() is not None:
+                        output, error = process.communicate(timeout=5)
+                        finished = True
+                        return subprocess.CompletedProcess(command, process.returncode, output, error)
+                    ready = self.shell('run-as', DRIVER, 'cat', 'no_backup/owned-'+phase+'-'+stage+'.ready', check=False)
+                    if ready.returncode == 0 and ready.stdout == b'ready\n':
+                        break
+                    require(time.monotonic() < deadline, 'Original image checkpoint unavailable; no input replay')
+                    time.sleep(.2)
+                if stage == 'editor':
+                    # A named AX editor can appear before Milkdown finishes
+                    # hydration. Observe actual readiness before one focus/tap;
+                    # never repeatedly focus or send content to a stale node.
+                    deadline = time.monotonic()+20
+                    for observation in range(15):
+                        rendered = self.read_native_styles(phase+'-editor-'+str(observation))
+                        if rich_image_editor_ready(rendered):
+                            break
+                        require(time.monotonic() < deadline, 'Original rich editor stayed unready; no text sent')
+                        time.sleep(.2)
+                    require(rich_image_editor_ready(rendered), 'Original rich editor never became ready; no text sent')
+                else:
+                    # Two matching original native observations plus the loaded
+                    # image and uncovered action precede the single Save.
+                    before = self.image_save_rows(phase, 'before-save')
+                    rendered = self.read_native_styles(phase+'-before-save')
+                    stable = self.image_save_rows(phase, 'stable-before-save')
+                    require(before == stable, 'Original import changed during observation; no Save sent')
+                    validate_image_save_observation(stable, rendered, phase)
+                require(process.poll() is None, 'Original image driver ended before input approval')
+                self.device('shell', '-T', 'run-as '+DRIVER+' sh -c '+
+                    "'umask 077; test ! -e no_backup/owned-"+phase+'-'+stage+".proceed && cat > no_backup/owned-"+phase+'-'+stage+".proceed'",
+                    input=b'proceed\n')
             output, error = process.communicate(timeout=40)
             finished = True
             return subprocess.CompletedProcess(command, process.returncode, output, error)

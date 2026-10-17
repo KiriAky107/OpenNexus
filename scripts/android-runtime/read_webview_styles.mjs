@@ -31,6 +31,8 @@ const expression = `JSON.stringify((()=>{
   // Only readiness/geometry in this owned synthetic image fixture. No source
   // URLs, note values, credentials, event injection or DOM mutation.
   imageSave:{
+    richReady:document.querySelector('.visual-editor .milkdown-host:not(.loading) .ProseMirror[contenteditable="true"]')!==null
+      && document.querySelector('.visual-editor .editor-loading')===null,
     richImages:Array.from(document.querySelectorAll('.visual-editor .milkdown-host img')).slice(0,4).map(e=>({
       complete:e.complete,width:e.naturalWidth,height:e.naturalHeight,error:e.dataset.workspaceAssetError==='true'
     })),

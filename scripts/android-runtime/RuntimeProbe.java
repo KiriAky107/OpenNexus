@@ -117,6 +117,8 @@ public final class RuntimeProbe extends Instrumentation {
                 case "rich-image":
                     create("New note", "runtime-rich-image.md");
                     click("Writing", false);
+                    if ("yes".equals(arguments.getString("image_checkpoint")))
+                        awaitImageObservation("rich-image", "editor");
                     inputText(richBody(), RICH_IMAGE_TEXT);
                     setSelection(richBody(), RICH_IMAGE_TEXT.length(), RICH_IMAGE_TEXT.length());
                     hideKeyboard();
@@ -506,22 +508,28 @@ public final class RuntimeProbe extends Instrumentation {
         require(phase.equals("rich-image") || phase.equals("canvas-image"), "Unexpected image checkpoint");
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node,"Save",false)
             && node.isEnabled() && node.isClickable(), "enabled Save after original image import");
+        awaitImageObservation(phase, "save");
+    }
+
+    private void awaitImageObservation(String phase, String stage) throws java.io.IOException {
+        require((phase.equals("rich-image") || phase.equals("canvas-image"))
+            && (stage.equals("save") || phase.equals("rich-image") && stage.equals("editor")), "Unexpected image observation");
         // Keep this same instrumentation alive while the runner reads the
         // original native receipt and actual rendered image. The generic dirty
         // label predates image insertion and cannot establish import readiness.
         File root=getContext().getNoBackupFilesDir();
-        File ready=new File(root,"owned-"+phase+"-save.ready");
+        File ready=new File(root,"owned-"+phase+"-"+stage+".ready");
         require(ready.createNewFile(),"Original image checkpoint already exists");
         try (FileOutputStream out=new FileOutputStream(ready)) {
             out.write("ready\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));out.getFD().sync();
         }
-        File proceed=new File(root,"owned-"+phase+"-save.proceed");
-        waitingFor="read-only original image/save readiness: "+phase;
+        File proceed=new File(root,"owned-"+phase+"-"+stage+".proceed");
+        waitingFor="read-only original image readiness: "+phase+" "+stage;
         long until=SystemClock.uptimeMillis()+45000;
         while (!proceed.isFile() && SystemClock.uptimeMillis()<until) SystemClock.sleep(100);
         require(proceed.isFile() && java.util.Arrays.equals(java.nio.file.Files.readAllBytes(proceed.toPath()),
             "proceed\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)),"Original image/save observation missing; no Save sent");
-        progress.append("original image/native receipt readiness observed before one Save\n");
+        progress.append("original image readiness observed: ").append(stage).append('\n');
     }
     private void waitNotesLanding() {
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Start writing", false),

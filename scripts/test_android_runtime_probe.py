@@ -11,7 +11,7 @@ import zlib
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAGE_BYTES, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job, validate_tablet_layout, validate_image_save_observation, validate_image_save_result
+from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAGE_BYTES, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job, validate_tablet_layout, validate_image_save_observation, validate_image_save_result, rich_image_editor_ready
 
 
 class RuntimeBoundaries(unittest.TestCase):
@@ -21,7 +21,8 @@ class RuntimeBoundaries(unittest.TestCase):
         report={'drafts':[{'id':'original-draft','path':'runtime-rich-image.md','content':content,'generation':3,'saved_generation':0}],
             'saves':[], 'images':[{'operation_id':'original-image','draft_id':'original-draft','generation':2,
                 'asset_path':asset,'hash':digest(IMAGE_BYTES),'size':len(IMAGE_BYTES),'state':'committed','content_after':content}]}
-        rendered={'available':True,'styles':{'imageSave':{'richImages':[{'complete':True,'width':2,'height':2}],
+        rendered={'available':True,'styles':{'editorAttributes':[{'contentEditable':'true','visible':True,'readOnly':False,'disabled':False}],
+            'imageSave':{'richReady':True,'richImages':[{'complete':True,'width':2,'height':2}],
             'save':[{'enabled':True,'visible':True,'hit':True}],'busy':False}}}
         return report,rendered
 
@@ -88,10 +89,12 @@ class RuntimeBoundaries(unittest.TestCase):
                 with patch('android_runtime_probe.require_hosted_emulator'),patch('android_runtime_probe.subprocess.Popen',return_value=process):
                     if changed:
                         with self.assertRaisesRegex(RuntimeError,'changed during observation'):probe.image_save_instrumentation('rich-image')
-                        probe.device.assert_not_called();process.terminate.assert_called_once();probe.capture_failed_editor_state.assert_called_once_with('rich-image')
+                        self.assertEqual(probe.device.call_count,1)
+                        self.assertIn('owned-rich-image-editor.proceed',probe.device.call_args.args[2])
+                        process.terminate.assert_called_once();probe.capture_failed_editor_state.assert_called_once_with('rich-image')
                     else:
                         result=probe.image_save_instrumentation('rich-image')
-                        self.assertEqual(result.returncode,0);probe.device.assert_called_once()
+                        self.assertEqual(result.returncode,0);self.assertEqual(probe.device.call_count,2)
                         self.assertEqual(probe.device.call_args.kwargs['input'],b'proceed\n')
                         self.assertIn('test ! -e no_backup/owned-rich-image-save.proceed',probe.device.call_args.args[2])
                         process.terminate.assert_not_called();probe.capture_failed_editor_state.assert_not_called()
@@ -99,6 +102,28 @@ class RuntimeBoundaries(unittest.TestCase):
         with patch('android_runtime_probe.require_hosted_emulator',side_effect=RuntimeError('Not owned')),patch('android_runtime_probe.subprocess.Popen') as launch:
             with self.assertRaises(RuntimeError):probe.image_save_instrumentation('rich-image')
             launch.assert_not_called()
+
+    def test_rich_image_input_requires_actual_loaded_editable_not_only_an_ax_name(self):
+        _,rendered=self.image_save_fixture()
+        self.assertTrue(rich_image_editor_ready(rendered))
+        for attributes in ([],rendered['styles']['editorAttributes']*2,[{'contentEditable':'false','visible':True}],
+                [dict(rendered['styles']['editorAttributes'][0],readOnly=True)],
+                [dict(rendered['styles']['editorAttributes'][0],visible=False)]):
+            self.assertFalse(rich_image_editor_ready({'available':True,'styles':dict(rendered['styles'],editorAttributes=attributes)}))
+        self.assertFalse(rich_image_editor_ready({'available':False}))
+        self.assertFalse(rich_image_editor_ready({'available':True,'styles':dict(rendered['styles'],imageSave={})}))
+
+    def test_unhydrated_image_editor_stops_without_text_or_save_approval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562');probe.adb=Path('/owned/adb')
+            probe.wait_owned_connection=Mock();probe.capture=Mock();probe.capture_failed_editor_state=Mock()
+            probe.image_save_rows=Mock();probe.read_native_styles=Mock(return_value={'available':False})
+            probe.shell=Mock(return_value=subprocess.CompletedProcess([],0,b'ready\n'));probe.device=Mock()
+            process=Mock();process.poll.return_value=None;process.communicate.return_value=(b'original stopped before input',b'')
+            with patch('android_runtime_probe.require_hosted_emulator'),patch('android_runtime_probe.subprocess.Popen',return_value=process),\
+                    patch('android_runtime_probe.time.monotonic',side_effect=[0,0,21]):
+                with self.assertRaisesRegex(RuntimeError,'no text sent'):probe.image_save_instrumentation('rich-image')
+            probe.device.assert_not_called();probe.image_save_rows.assert_not_called();process.terminate.assert_called_once()
 
     def test_attachment_scope_does_not_repeat_the_fixed_apks_keystore_cases(self):
         for scope in ('attachments','attachments-remaining'):
