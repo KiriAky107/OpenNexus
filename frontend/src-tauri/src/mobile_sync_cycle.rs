@@ -43,6 +43,11 @@ pub enum Request {
         target: Target,
         sequence: i64,
     },
+    Originals {
+        target: Target,
+        before: Option<i64>,
+        limit: usize,
+    },
     Resolve {
         target: Target,
         sequence: i64,
@@ -59,6 +64,7 @@ impl Request {
             | Self::Now { target }
             | Self::Review { target, .. }
             | Self::Decision { target, .. }
+            | Self::Originals { target, .. }
             | Self::Resolve { target, .. } => target,
         }
     }
@@ -81,6 +87,11 @@ impl Request {
         }
         match self {
             Self::Status { after, limit, .. } if *after < 0 || !(1..=20).contains(limit) => {
+                Err(SyncError::new("SYNC_PAGE_INVALID"))
+            }
+            Self::Originals { before, limit, .. }
+                if before.is_some_and(|value| value <= 0) || !(1..=20).contains(limit) =>
+            {
                 Err(SyncError::new("SYNC_PAGE_INVALID"))
             }
             Self::Review { sequence, .. }
@@ -153,11 +164,21 @@ pub struct Decision {
     pub state: String,
 }
 #[derive(Serialize)]
+pub struct OriginalDecisionPage {
+    pub vault_id: String,
+    pub binding_id: String,
+    pub before: Option<i64>,
+    pub limit: usize,
+    pub items: Vec<Decision>,
+    pub next_before: Option<i64>,
+}
+#[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Response {
     Status { status: Status },
     Review { review: Box<ConflictReview> },
     Decision { decision: Option<Decision> },
+    Originals { page: OriginalDecisionPage },
 }
 
 /// A bounded machine code only. Provider response bodies, local paths and
@@ -216,6 +237,55 @@ fn decision(
             copy_id: row.get(6)?, retire_id: row.get(7)?, restore_id: row.get(8)?, state: row.get(9)?,
         }),
     ).optional()?)
+}
+fn originals(
+    ws: &Workspace,
+    target: &Target,
+    before: Option<i64>,
+    limit: usize,
+) -> crate::workspace::Result<OriginalDecisionPage> {
+    bound(ws, target)?;
+    if before.is_some_and(|value| value <= 0) || !(1..=20).contains(&limit) {
+        return Err(crate::workspace::HostError::new("SYNC_PAGE_INVALID"));
+    }
+    let mut sequences = Vec::with_capacity(limit + 1);
+    if let Some(before) = before {
+        let mut query = ws.db.prepare("SELECT sequence FROM sync_resolutions WHERE binding=?1 AND sequence<?2 ORDER BY sequence DESC LIMIT ?3")?;
+        for row in query.query_map(
+            params![target.binding_id, before, (limit + 1) as i64],
+            |row| row.get::<_, i64>(0),
+        )? {
+            sequences.push(row?);
+        }
+    } else {
+        let mut query = ws.db.prepare("SELECT sequence FROM sync_resolutions WHERE binding=?1 ORDER BY sequence DESC LIMIT ?2")?;
+        for row in query.query_map(params![target.binding_id, (limit + 1) as i64], |row| {
+            row.get::<_, i64>(0)
+        })? {
+            sequences.push(row?);
+        }
+    }
+    let next_before = if sequences.len() > limit {
+        sequences.truncate(limit);
+        sequences.last().copied()
+    } else {
+        None
+    };
+    let mut items = Vec::with_capacity(sequences.len());
+    for sequence in sequences {
+        items.push(
+            decision(ws, target, sequence)?
+                .ok_or_else(|| crate::workspace::HostError::new("SYNC_BINDING_CHANGED"))?,
+        );
+    }
+    Ok(OriginalDecisionPage {
+        vault_id: target.vault_id.clone(),
+        binding_id: target.binding_id.clone(),
+        before,
+        limit,
+        items,
+        next_before,
+    })
 }
 fn status(
     ws: &Workspace,
@@ -386,6 +456,17 @@ pub async fn execute<S: SecretStore>(
                         })
                         .await?;
                     Ok(Response::Decision { decision: original })
+                }
+                Request::Originals { before, limit, .. } => {
+                    let binding = target.binding_id.clone();
+                    let page = port
+                        .work(&binding, move |ws, lease, _| {
+                            let value = originals(ws, &target, before, limit)?;
+                            lease.check()?;
+                            Ok(value)
+                        })
+                        .await?;
+                    Ok(Response::Originals { page })
                 }
                 Request::Resolve {
                     sequence,
@@ -608,5 +689,130 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn native_sync_cycle_originals_are_readonly_bounded_descending_pages_of_retained_ids() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let binding = ws
+            .sync_bind_download("https://sync.example/", "owned", "reader")
+            .unwrap();
+        let owner = target(&ws, &binding);
+        for sequence in 1..=21_i64 {
+            let ids = (0..5)
+                .map(|_| uuid::Uuid::new_v4().to_string())
+                .collect::<Vec<_>>();
+            let destination = format!("copy-{sequence}.md");
+            ws.db.execute("INSERT INTO sync_resolutions VALUES (?1,?2,'copy',?3,?4,?5,?6,?7,'completed',?8,?9)",
+                params![binding.id,sequence,destination,hash(b"local"),ids[0],ids[1],ids[2],ids[3],ids[4]]).unwrap();
+            ws.db
+                .execute(
+                    "INSERT INTO sync_review_receipts VALUES (?1,?2,?3,?4,'copy',?5,'[]')",
+                    params![
+                        binding.id,
+                        sequence,
+                        hash(format!("review-{sequence}").as_bytes()),
+                        hash(b"local"),
+                        destination
+                    ],
+                )
+                .unwrap();
+        }
+        let changes = ws.db.total_changes();
+        let first = originals(&ws, &owner, None, 20).unwrap();
+        assert_eq!(
+            first
+                .items
+                .iter()
+                .map(|item| item.sequence)
+                .collect::<Vec<_>>(),
+            (2_i64..=21_i64).rev().collect::<Vec<_>>()
+        );
+        assert_eq!(first.next_before, Some(2));
+        assert_eq!(
+            serde_json::to_value(&first.items[0]).unwrap(),
+            serde_json::to_value(decision(&ws, &owner, 21).unwrap().unwrap()).unwrap()
+        );
+        let last = originals(&ws, &owner, first.next_before, 20).unwrap();
+        assert_eq!(last.items.len(), 1);
+        assert_eq!(last.items[0].sequence, 1);
+        assert_eq!(last.next_before, None);
+        assert_eq!(
+            originals(&ws, &owner, Some(21), 20).unwrap().items[0].sequence,
+            20
+        );
+        assert!(originals(&ws, &owner, Some(1), 20)
+            .unwrap()
+            .items
+            .is_empty());
+        assert_eq!(ws.db.total_changes(), changes);
+        assert!(!root.path().join("copy-21.md").exists());
+    }
+
+    #[test]
+    fn native_sync_cycle_originals_keep_legacy_five_ids_and_refuse_other_targets_without_writes() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let binding = ws
+            .sync_bind_download("https://sync.example/", "owned", "reader")
+            .unwrap();
+        let owner = target(&ws, &binding);
+        let ids = (0..5)
+            .map(|_| uuid::Uuid::new_v4().to_string())
+            .collect::<Vec<_>>();
+        ws.db.execute("INSERT INTO sync_resolutions VALUES (?1,2,'copy','legacy.md',?2,?3,?4,?5,'pending',?6,?7)",
+            params![binding.id,hash(b"local"),ids[0],ids[1],ids[2],ids[3],ids[4]]).unwrap();
+        let before = ws.db.total_changes();
+        let page = originals(&ws, &owner, None, 20).unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert!(page.items[0].fingerprint.is_none());
+        assert_eq!(page.items[0].copy_id, ids[2]);
+        assert_eq!(page.items[0].state, "pending");
+        let mut other = owner.clone();
+        other.vault_id = uuid::Uuid::new_v4().to_string();
+        assert!(originals(&ws, &other, None, 20).is_err());
+        other = owner.clone();
+        other.expected.account = "other-reader".into();
+        assert!(originals(&ws, &other, None, 20).is_err());
+        other = owner.clone();
+        other.binding_id = uuid::Uuid::new_v4().to_string();
+        assert!(originals(&ws, &other, None, 20).is_err());
+        assert_eq!(ws.db.total_changes(), before);
+        assert!(!root.path().join("legacy.md").exists());
+    }
+
+    #[test]
+    fn native_sync_cycle_originals_request_rejects_invalid_pages_and_transport_hooks() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let binding = ws
+            .sync_bind_download("https://sync.example/", "owned", "reader")
+            .unwrap();
+        let owner = target(&ws, &binding);
+        for (before, limit) in [(Some(0), 20), (Some(-1), 20), (None, 0), (None, 21)] {
+            assert!(Request::Originals {
+                target: owner.clone(),
+                before,
+                limit
+            }
+            .validate()
+            .is_err());
+            assert!(originals(&ws, &owner, before, limit).is_err());
+        }
+        Request::Originals {
+            target: owner.clone(),
+            before: None,
+            limit: 20,
+        }
+        .validate()
+        .unwrap();
+        let frozen = serde_json::to_value(&owner).unwrap();
+        for field in ["url", "method", "headers", "token"] {
+            let mut value =
+                serde_json::json!({"action":"originals","target":frozen,"before":null,"limit":20});
+            value[field] = serde_json::json!("untrusted");
+            assert!(serde_json::from_value::<Request>(value).is_err());
+        }
     }
 }

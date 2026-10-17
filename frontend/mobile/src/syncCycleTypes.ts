@@ -27,15 +27,21 @@ export interface SyncDecision {
 export interface Resolution {
   target: SyncTarget; sequence: number; choice: 'local' | 'remote' | 'copy'; destination: string; expected_hash: string; fingerprint: string
 }
+export interface OriginalDecisionPage {
+  vault_id: string; binding_id: string; before: number | null; limit: number
+  items: SyncDecision[]; next_before: number | null
+}
 export type CycleRequest =
   | { action: 'status'; target: SyncTarget; after: number; limit: number }
   | { action: 'now'; target: SyncTarget }
   | { action: 'review' | 'decision'; target: SyncTarget; sequence: number }
+  | { action: 'originals'; target: SyncTarget; before: number | null; limit: number }
   | ({ action: 'resolve' } & Resolution)
 export type CycleResult =
   | { kind: 'status'; status: CycleStatus }
   | { kind: 'review'; review: SyncConflictReview }
   | { kind: 'decision'; decision: SyncDecision | null }
+  | { kind: 'originals'; page: OriginalDecisionPage }
 export interface CycleObservation {
   target: SyncTarget; invocation_id: string; generation: number; activity: SyncActivity; error: string | null
 }

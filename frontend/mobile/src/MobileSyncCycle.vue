@@ -72,6 +72,7 @@ defineExpose({ handleBack: close })
     <p v-if="listenerError" role="status">{{ t('进度通知暂不可用，可读取本轮状态。', 'Progress notifications are unavailable. You can read this cycle’s status.') }}</p>
     <div class="actions">
       <button class="button-secondary" :disabled="blocked" @click="session.readStatus()">{{ t('只读查询队列与原记录', 'Read queue and original records') }}</button>
+      <button class="button-secondary" :disabled="blocked || !!state.original && !state.originalChecked" @click="session.readOriginals()">{{ t('读取原决策记录', 'Read original decisions') }}</button>
       <button class="button-primary" :disabled="blocked || !state.cycleChecked || state.status?.paused || !!state.original && !state.originalChecked" @click="session.now">{{ t('立即同步一轮', 'Sync one cycle now') }}</button>
       <button v-if="state.invocationId" class="button-secondary" :disabled="state.stopping" @click="session.readActivity">{{ t('只读查询本轮状态', 'Read this cycle’s status') }}</button>
       <button v-if="state.cycling" class="button-secondary" :disabled="state.stopping" @click="session.stop">{{ t('停止本轮', 'Stop this cycle') }}</button>
@@ -92,6 +93,16 @@ defineExpose({ handleBack: close })
         <button v-if="state.status.next_after !== null" class="button-secondary" :disabled="blocked" @click="session.readStatus(state.status.next_after!)">{{ t('下一页冲突', 'Next conflict page') }}</button>
       </section>
     </template>
+    <section v-if="state.originals" class="records" :aria-label="t('原决策记录', 'Original decisions')">
+      <p>{{ t('只读取本知识库已保留的原决策，不会重新执行。', 'Read retained original decisions for this vault without executing them again.') }}</p>
+      <p v-if="!state.originals.items.length">{{ t('没有原决策记录。', 'There are no original decisions.') }}</p>
+      <article v-for="item in state.originals.items" :key="item.sequence">
+        <p>{{ t('远端序号', 'Remote sequence') }} {{ item.sequence }} · {{ choiceLabel(item.choice) }}</p>
+        <p>{{ item.destination || '—' }} · {{ item.state === 'completed' ? t('本机已完成', 'Completed locally') : t('保留原尝试，待核对', 'Original attempt retained; needs checking') }}</p>
+        <button class="button-secondary" :disabled="blocked || !!state.original && state.original.sequence !== item.sequence" @click="session.readDecision(item.sequence)">{{ t('读取此原决策', 'Read this original decision') }}</button>
+      </article>
+      <button v-if="state.originals.next_before !== null" class="button-secondary" :disabled="blocked" @click="session.readOriginals(state.originals.next_before!)">{{ t('更早的原决策', 'Earlier original decisions') }}</button>
+    </section>
     <section v-if="state.review" class="review">
       <h4>{{ state.review.local_path }}</h4><SyncConflictContent :review="state.review" />
       <p>{{ t('应用前会重新核对正文和摘要。草稿不会作为已保存内容上传，也不会因同步被丢弃。', 'Content and hashes are checked again before applying. Drafts are neither uploaded as saved content nor discarded by sync.') }}</p>

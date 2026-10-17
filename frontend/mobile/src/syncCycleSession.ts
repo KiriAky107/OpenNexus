@@ -1,6 +1,6 @@
 import { reactive } from 'vue'
 import type { SyncActivity, SyncConflictReview, SyncContent } from '../../src/contracts/sync'
-import type { CycleCommand, CycleObservation, CycleReply, CycleSnapshot, CycleStatus, NativeCycle, Resolution, SyncDecision, SyncTarget } from './syncCycleTypes'
+import type { CycleCommand, CycleObservation, CycleReply, CycleSnapshot, CycleStatus, NativeCycle, OriginalDecisionPage, Resolution, SyncDecision, SyncTarget } from './syncCycleTypes'
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 const integer = (value: number, minimum = 0) => Number.isSafeInteger(value) && value >= minimum
@@ -90,6 +90,17 @@ function decision(value: SyncDecision | null, sequence: number): SyncDecision | 
     || !['pending', 'completed'].includes(value.state) || !ids.every(uuid) || new Set(ids).size !== 5) return invalid()
   return copy(value)
 }
+function originalPage(value: OriginalDecisionPage, expected: SyncTarget, before: number | null): OriginalDecisionPage {
+  if (value.vault_id !== expected.vault_id || value.binding_id !== expected.binding_id || value.before !== before
+    || value.limit !== 20 || !Array.isArray(value.items) || value.items.length > 20
+    || value.next_before !== null && (!integer(value.next_before, 1) || value.items.length !== 20 || value.next_before !== value.items.at(-1)?.sequence)) return invalid()
+  const items = value.items.map((item, index) => {
+    if (!item || !integer(item.sequence, 1) || before !== null && item.sequence >= before
+      || index > 0 && item.sequence >= value.items[index - 1]!.sequence) return invalid()
+    return decision(item, item.sequence)!
+  })
+  return { ...copy(value), items }
+}
 function activity(value: SyncActivity): SyncActivity {
   if (typeof value.running !== 'boolean' || !['idle', 'handshake', 'discover', 'pull', 'push', 'complete', 'failed', 'cancelled'].includes(value.phase)
     || !integer(value.uploaded_revisions) || !integer(value.received_revisions)
@@ -107,7 +118,7 @@ const sameResolution = (a: Resolution, b: Resolution) => sameTarget(a.target, b.
 const blank = () => ({ busy: false, cycling: false, stopping: false, error: '', status: null as CycleStatus | null,
   activity: null as SyncActivity | null, invocationId: '', nativeGeneration: 0, cycleUnknown: false, cycleChecked: false,
   review: null as SyncConflictReview | null, decision: null as SyncDecision | null, original: null as Resolution | null,
-  originalChecked: false, originalMissing: false })
+  originalChecked: false, originalMissing: false, originals: null as OriginalDecisionPage | null })
 
 export function createCycleSession(native: NativeCycle, newId: () => string = () => crypto.randomUUID()) {
   const state = reactive(blank())
@@ -133,6 +144,16 @@ export function createCycleSession(native: NativeCycle, newId: () => string = ()
     return read({ action: 'run', request: { action: 'status', target: expected, after, limit: 20 } }, reply => {
       if (reply.kind !== 'result' || reply.response.kind !== 'status') return invalid()
       state.status = status(reply.response.status, expected, after); state.cycleChecked = true
+      return true
+    })
+  }
+  function readOriginals(before: number | null = null) {
+    if (!owner || disposed || state.busy || state.cycling || state.stopping || before !== null && !integer(before, 1)
+      || state.original && !state.originalChecked) return Promise.resolve(false)
+    const expected = copy(owner)
+    return read({ action: 'run', request: { action: 'originals', target: expected, before, limit: 20 } }, reply => {
+      if (reply.kind !== 'result' || reply.response.kind !== 'originals') return invalid()
+      state.originals = originalPage(reply.response.page, expected, before)
       return true
     })
   }
@@ -264,5 +285,5 @@ export function createCycleSession(native: NativeCycle, newId: () => string = ()
   }
   function clear() { epoch++; activityRead++; stoppedInvocation = ''; Object.assign(state, blank()) }
   function dispose() { clear(); disposed = true; owner = null }
-  return { state, context, readStatus, now, stop, readActivity, event, readReview, readDecision, freeze, confirm, resume, keepOriginal, clear, dispose }
+  return { state, context, readStatus, readOriginals, now, stop, readActivity, event, readReview, readDecision, freeze, confirm, resume, keepOriginal, clear, dispose }
 }
