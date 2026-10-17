@@ -292,7 +292,13 @@ public final class AuthRuntimeProbe extends Instrumentation {
         return value.toString();
     }
     private void touch(long start,long now,int action,float x,float y) {
-        MotionEvent event=MotionEvent.obtain(start,now,action,x,y,0);event.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+        MotionEvent.PointerProperties pointer=new MotionEvent.PointerProperties();
+        pointer.id=0;pointer.toolType=MotionEvent.TOOL_TYPE_FINGER;
+        MotionEvent.PointerCoords point=new MotionEvent.PointerCoords();
+        point.x=x;point.y=y;point.pressure=action==MotionEvent.ACTION_UP || action==MotionEvent.ACTION_CANCEL ? 0 : 1;point.size=1;
+        MotionEvent event=MotionEvent.obtain(start,now,action,1,new MotionEvent.PointerProperties[]{pointer},
+            new MotionEvent.PointerCoords[]{point},0,0,1,1,0,0,InputDevice.SOURCE_TOUCHSCREEN,0);
+        require(event.getToolType(0)==MotionEvent.TOOL_TYPE_FINGER,"Owned touch has no finger identity");
         try { require(ui.injectInputEvent(event,true),"Owned touch rejected"); } finally { event.recycle(); }
     }
     private static String text(CharSequence value) { return value==null ? "" : value.toString(); }

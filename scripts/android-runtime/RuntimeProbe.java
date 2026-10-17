@@ -661,8 +661,16 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void touch(long start, long when, int action, float x, float y) {
-        MotionEvent event = MotionEvent.obtain(start, when, action, x, y, 0);
-        event.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+        // A touchscreen source alone leaves the short obtain() overload's
+        // tool type unknown. DocumentsUI's selection router distinguishes
+        // finger input: use the actual finger pointer properties as well.
+        MotionEvent.PointerProperties pointer=new MotionEvent.PointerProperties();
+        pointer.id=0;pointer.toolType=MotionEvent.TOOL_TYPE_FINGER;
+        MotionEvent.PointerCoords point=new MotionEvent.PointerCoords();
+        point.x=x;point.y=y;point.pressure=action==MotionEvent.ACTION_UP || action==MotionEvent.ACTION_CANCEL ? 0 : 1;point.size=1;
+        MotionEvent event=MotionEvent.obtain(start,when,action,1,new MotionEvent.PointerProperties[]{pointer},
+            new MotionEvent.PointerCoords[]{point},0,0,1,1,0,0,InputDevice.SOURCE_TOUCHSCREEN,0);
+        require(event.getToolType(0)==MotionEvent.TOOL_TYPE_FINGER,"Owned touch has no finger identity");
         try { require(ui.injectInputEvent(event, true), "Touch injection rejected"); } finally { event.recycle(); }
     }
 
