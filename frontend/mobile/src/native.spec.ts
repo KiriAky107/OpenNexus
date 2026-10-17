@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mobileCapabilities, mobileVault, mobileRequest, mobileSaveExport, mobileExportDelivery, mobileOpenExternal, mobileOnBack, mobileBackground, mobileAppearance } from './native'
+import { mobileCapabilities, mobileVault, mobileRequest, mobileSaveExport, mobileExportDelivery, mobileOpenExternal, mobileOnBack, mobileBackground, mobileAppearance, mobileSyncCycle, mobileOnSyncActivity } from './native'
+import type { CycleCommand, CycleSnapshot } from './syncCycleTypes'
 
-const host = vi.hoisted(() => ({ isTauri: vi.fn(), invoke: vi.fn(), back: vi.fn() }))
+const host = vi.hoisted(() => ({ isTauri: vi.fn(), invoke: vi.fn(), back: vi.fn(), listen: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => host)
 vi.mock('@tauri-apps/api/app', () => ({ onBackButtonPress: host.back }))
+vi.mock('@tauri-apps/api/webviewWindow', () => ({ getCurrentWebviewWindow: () => ({ listen: host.listen }) }))
 
 describe('mobile native boundary', () => {
   beforeEach(() => { vi.resetAllMocks() })
@@ -21,10 +23,25 @@ describe('mobile native boundary', () => {
       await expect(mobileOnBack(() => undefined)).rejects.toThrow('MOBILE_HOST_REQUIRED')
       await expect(mobileBackground()).rejects.toThrow('MOBILE_HOST_REQUIRED')
       await expect(mobileAppearance('dark', '#0d1117')).rejects.toThrow('MOBILE_HOST_REQUIRED')
+      await expect(mobileSyncCycle({ action: 'run', request: { action: 'now', target: {} }, invocation_id: 'original' } as CycleCommand)).rejects.toThrow('MOBILE_HOST_REQUIRED')
+      await expect(mobileOnSyncActivity(() => undefined)).rejects.toThrow('MOBILE_HOST_REQUIRED')
+      expect(host.listen).not.toHaveBeenCalled()
       expect(host.back).not.toHaveBeenCalled()
       expect(host.invoke).not.toHaveBeenCalled()
       expect(fetch).not.toHaveBeenCalled()
     } finally { fetch.mockRestore() }
+  })
+  it('uses only the typed cycle command and listens to the owning WebView without general HTTP or secrets', async () => {
+    host.isTauri.mockReturnValue(true); host.invoke.mockResolvedValue({ kind: 'stopped', state: 'inactive' })
+    const release = vi.fn(), receive = vi.fn(); host.listen.mockResolvedValue(release)
+    const request = { action: 'stop', target: { vault_id: 'original', binding_id: 'original', expected: {} }, invocation_id: 'original' } as CycleCommand
+    await mobileSyncCycle(request)
+    expect(host.invoke).toHaveBeenCalledExactlyOnceWith('mobile_sync_cycle', { request })
+    expect(await mobileOnSyncActivity(receive)).toBe(release)
+    const payload: CycleSnapshot = { state: 'inactive' }
+    host.listen.mock.calls[0]![1]({ payload })
+    expect(host.listen.mock.calls[0]![0]).toBe('mobile-sync-activity')
+    expect(receive).toHaveBeenCalledExactlyOnceWith(payload)
   })
 
   it('rejects an incompatible native platform instead of treating every Tauri Host as Android', async () => {

@@ -114,6 +114,31 @@ def verify_native_auth_gateway(root, native_dir, abis):
         'actual_HTTPS_or_login_verified':False,'token_read_IPC':False}
 
 
+def verify_native_cycle_gateway(root, native_dir, abis):
+    capability=json.loads((root/'frontend/mobile/src-tauri/capabilities/mobile.json').read_text('utf-8'))
+    require(capability.get('windows')==['main'] and capability.get('local',True)
+        and not capability.get('remote') and not capability.get('webviews')
+        and 'allow-mobile-sync-cycle' in capability.get('permissions',[]), 'ANDROID_CYCLE_WINDOW_SCOPE_INVALID')
+    markers=(b'mobile_sync_cycle', b'SYNC_ACTIVITY_BUSY', b'SYNC_ACTIVITY_RECONCILIATION_REQUIRED',
+        b'sync_cycle_success', b'sync_review_receipts')
+    libraries={}
+    for abi in abis:
+        require(abi in MACHINES, 'ANDROID_ABI_UNSUPPORTED')
+        library=native_dir/MACHINES[abi][1]/'debug/libopennexus_mobile.so'
+        found=set();tail=b''
+        with library.open('rb') as stream:
+            while block:=stream.read(1024*1024):
+                chunk=tail+block
+                found.update(marker for marker in markers if marker in chunk)
+                if len(found)==len(markers):break
+                tail=chunk[-max(map(len,markers))+1:]
+        require(len(found)==len(markers), 'ANDROID_NATIVE_CYCLE_GATEWAY_MISSING')
+        libraries[abi]=True
+    return {'present':True,'compiled_command_activity_and_original_receipt_markers':libraries,
+        'local_main_permission_source_verified':True,'actual_UI_or_sync_cycle_verified':False,
+        'physical_phone_verified':False,'token_or_general_HTTP_IPC':False}
+
+
 def verify_platform_tls(apk, native_dir, abis, symbol_tool, origin_file):
     origin = json.loads(origin_file.read_text('utf-8'))
     require(origin.get('coordinate') == TLS_COORDINATE and origin.get('upstream_commit') == TLS_UPSTREAM,
@@ -237,6 +262,7 @@ def main():
     native_foreground = verify_native_foreground(apk, args.native_dir, args.abis,
         args.sdk / 'ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm')
     native_auth_gateway = verify_native_auth_gateway(root, args.native_dir, args.abis)
+    native_cycle_gateway = verify_native_cycle_gateway(root, args.native_dir, args.abis)
     kotlin_sha256 = verify_generated_mobile_files(root)
     proof = {'schema': 1, 'passed': True, 'kind': 'android-debug', 'source_commit': args.commit,
         'source_clean': True, 'source_proof': args.source_proof.name, 'package': package, 'version': config['version'],
@@ -250,6 +276,7 @@ def main():
         'native_secret_broker':native_secret_broker,
         'native_foreground':native_foreground,
         'native_auth_gateway':native_auth_gateway,
+        'native_cycle_gateway':native_cycle_gateway,
         'rustc': subprocess.check_output(['rustc', '-Vv'], text=True).strip(),
         'java': subprocess.run(['java', '-version'], capture_output=True, text=True, check=True).stderr.strip()}
     require(not args.output.exists(), 'ANDROID_PACKAGE_PROOF_EXISTS')

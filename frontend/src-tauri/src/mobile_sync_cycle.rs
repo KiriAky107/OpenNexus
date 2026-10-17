@@ -172,6 +172,7 @@ pub fn public_error(error: SyncError) -> String {
         | "SYNC_BINDING_CHANGED"
         | "SYNC_RESOLUTION_INVALID"
         | "SYNC_RESOLUTION_CHANGED"
+        | "SYNC_CONFLICT_CHANGED"
         | "SYNC_REVIEW_UNSAFE_FILE"
         | "SYNC_REVIEW_CHANGED"
         | "SYNC_REVIEW_REQUIRED"

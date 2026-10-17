@@ -10,6 +10,7 @@ import { mobileSyncAuth } from './native'
 import { createSyncAuthSession } from './syncAuthSession'
 import type { AuthProfile, AuthSelection } from './syncAuthTypes'
 
+defineProps<{ syncEnabled?: boolean }>()
 const session = createSyncAuthSession(mobileSyncAuth), state = session.state
 const endpoint = ref('https://'), account = ref(''), password = ref(''), device = ref('OpenNexus Android')
 const selectedVault = ref('')
@@ -117,7 +118,7 @@ defineExpose({ handleBack })
         <nav v-if="state.vaults.total > 20" class="inline-actions" :aria-label="t('远端库分页', 'Remote vault pages')"><button class="button-secondary" :disabled="state.busy || !state.vaults.offset" @click="session.vaults(state.vaults.offset - 20)">{{ t('上一页', 'Previous') }}</button><span>{{ state.vaults.offset + 1 }}–{{ Math.min(state.vaults.offset + 20,state.vaults.total) }} / {{ state.vaults.total }}</span><button class="button-secondary" :disabled="state.busy || state.vaults.offset + 20 >= state.vaults.total" @click="session.vaults(state.vaults.offset + 20)">{{ t('下一页', 'Next') }}</button></nav>
       </template>
     </section>
-    <MobileSyncAssociation v-if="state.selection && !state.pending" ref="association" :selection="state.selection" :authenticated="!!state.current?.authenticated" :remote-vault="remoteVault" @busy="associationBusy = $event" />
+    <MobileSyncAssociation v-if="state.selection && !state.pending" ref="association" :selection="state.selection" :authenticated="!!state.current?.authenticated" :remote-vault="remoteVault" :sync-enabled="syncEnabled" @busy="associationBusy = $event" />
     <section v-if="state.profiles" :aria-label="t('已保存的连接', 'Saved connections')"><h4>{{ t('已保存的连接', 'Saved connections') }}</h4>
       <p v-if="!state.profiles.total">{{ t('尚无本机连接记录。', 'No device connection records yet.') }}</p>
       <article v-for="profile in state.profiles.items" :key="profile.intent.operation_id" class="profile-row"><div><strong>{{ profile.intent.account }}</strong><p>{{ profile.intent.endpoint }}</p><span>{{ phase(profile.intent.phase) }} · {{ profile.intent.device_name }}</span><p v-if="profile.selected">{{ t('当前选中', 'Currently selected') }}</p></div><button class="button-secondary" :disabled="state.busy || !!state.pending || profile.selected" @click="reviewProfile(profile)">{{ t('审核并选择', 'Review and select') }}</button></article>

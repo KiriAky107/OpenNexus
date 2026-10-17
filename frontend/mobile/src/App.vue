@@ -35,7 +35,7 @@ const { choice: themeChoice, resolved: resolvedTheme, nativeError: themeError, r
 const compact = ref(window.innerWidth <= 1024), primaryOpen = ref(false), secondaryOpen = ref(false)
 const primaryExpanded = ref(false)
 const preferencesOpen = ref(false)
-const preferencesTab = ref<'appearance' | 'sync'>('appearance'), credentialsEnabled = ref(false)
+const preferencesTab = ref<'appearance' | 'sync'>('appearance'), credentialsEnabled = ref(false), syncEnabled = ref(false)
 const authPanel = ref<{ handleBack(): boolean }>()
 function resizeWorkspace() { compact.value = window.innerWidth <= 1024 }
 function closePanels() { primaryOpen.value = false; secondaryOpen.value = false }
@@ -138,6 +138,7 @@ async function boot() {
     if (capabilities.navigation === true) await registerBack()
     appearanceEnabled.value = capabilities.appearance === true
     credentialsEnabled.value = capabilities.credentials === true
+    syncEnabled.value = capabilities.sync === true
     if (disposed || revision !== bootRevision) return
     version.value = capabilities.version; exportAllowed.value = capabilities.exports === true; externalAllowed.value = capabilities.external_links === true; ready.value = true; await load()
   } catch (error) { if (!disposed && revision === bootRevision) bootError.value = errorCode(error) }
@@ -520,7 +521,7 @@ onBeforeUnmount(() => { disposed = true; bootRevision++; listRevision++; inspect
     <AppDialog v-if="preferencesOpen" :label="t('设置', 'Settings')" @close="preferencesOpen = false"><section class="mobile-dialog modal-card"><header class="preferences-title"><h2>{{ t('设置', 'Settings') }}</h2><button type="button" class="button-secondary" @click="preferencesOpen = false">{{ copy.close }}</button></header>
       <nav class="preferences-sections" :aria-label="t('设置分类', 'Settings sections')"><button class="button-secondary" :aria-pressed="preferencesTab === 'appearance'" @click="preferencesTab = 'appearance'">{{ t('外观与语言', 'Appearance and language') }}</button><button v-if="credentialsEnabled" class="button-secondary" :aria-pressed="preferencesTab === 'sync'" @click="preferencesTab = 'sync'">{{ t('同步账户', 'Sync account') }}</button></nav>
       <template v-if="preferencesTab === 'appearance' || !credentialsEnabled"><label>{{ copy.language }}<select v-model="language" :aria-label="copy.language"><option value="zh-CN">中文</option><option value="en">English</option></select></label><ThemeChoices v-model="themeChoice" :resolved="resolvedTheme" :label="copy.theme" /></template>
-      <NativeSyncConnection v-else ref="authPanel" />
+      <NativeSyncConnection v-else ref="authPanel" :sync-enabled="syncEnabled" />
     </section></AppDialog>
   </WorkspaceFrame>
 </template>

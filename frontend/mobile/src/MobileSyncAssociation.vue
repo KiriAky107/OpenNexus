@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../../src/i18n'
 import AppDialog from '../../src/components/common/AppDialog.vue'
 import SyncInitialPreview from '../../src/features/settings/SyncInitialPreview.vue'
+import MobileSyncCycle from './MobileSyncCycle.vue'
 import { syncError } from '../../src/features/settings/syncPresentation'
 import type { SyncRemoteVault } from '../../src/features/settings/syncVaults'
 import { mobileSyncAssociation } from './native'
@@ -10,9 +11,13 @@ import { createAssociationSession } from './syncAssociationSession'
 import type { AuthSelection } from './syncAuthTypes'
 import type { BindingIntent, BindingRequest } from './syncAssociationTypes'
 
-const props = defineProps<{ selection: AuthSelection; authenticated: boolean; remoteVault?: SyncRemoteVault }>()
+const props = defineProps<{ selection: AuthSelection; authenticated: boolean; remoteVault?: SyncRemoteVault; syncEnabled?: boolean }>()
 const emit = defineEmits<{ busy: [value: boolean] }>()
 const session = createAssociationSession(mobileSyncAssociation), state = session.state
+const cycleBusy = ref(false), cycle = ref<{ handleBack(): boolean }>()
+const cycleTarget = computed(() => state.status?.binding && props.syncEnabled && props.authenticated ? {
+  expected: props.selection, vault_id: state.status.vault_id, binding_id: state.status.binding.id,
+} : null)
 const frozen = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 const confirmation = ref<{ kind: 'bind' | 'retry'; request: BindingRequest } | { kind: 'resume'; receipt: BindingIntent } | null>(null)
 const reviewed = computed(() => confirmation.value?.kind === 'resume' ? confirmation.value.receipt.request : confirmation.value?.request)
@@ -22,12 +27,13 @@ const mayResume = computed(() => {
     && original.operation_id === current.operation_id && original.generation === current.generation
     && original.endpoint === current.endpoint && original.account === current.account
 })
-watch(() => state.busy, value => emit('busy', value), { flush: 'sync' })
+watch(() => state.busy || cycleBusy.value, value => emit('busy', value), { flush: 'sync' })
 watch(() => [props.selection.revision, props.selection.operation_id, props.selection.generation,
   props.selection.endpoint, props.selection.account, props.remoteVault?.id] as const, () => {
   confirmation.value = null; session.context(props.selection, props.remoteVault?.id ?? ''); void session.status()
 }, { immediate: true })
 function close() { if (!confirmation.value) return false; confirmation.value = null; return true }
+function handleBack() { return close() || cycle.value?.handleBack() || false }
 function review() { const request = session.freeze(); if (request) confirmation.value = { kind: 'bind', request } }
 async function confirm() {
   const action = confirmation.value; if (!action || state.busy) return
@@ -44,7 +50,7 @@ function feedback(code: string) {
 function hidden() { if (document.hidden) { confirmation.value = null; session.clear() } }
 onMounted(() => document.addEventListener('visibilitychange', hidden))
 onBeforeUnmount(() => { document.removeEventListener('visibilitychange', hidden); session.dispose(); emit('busy', false) })
-defineExpose({ handleBack: close })
+defineExpose({ handleBack })
 </script>
 
 <template>
@@ -79,6 +85,7 @@ defineExpose({ handleBack: close })
           <button class="button-secondary" :disabled="state.busy || !state.originalChecked" @click="session.keepOriginal">{{ t('保留原记录并继续', 'Keep original record and continue') }}</button></div>
       </section>
     </template>
+    <MobileSyncCycle v-if="cycleTarget" ref="cycle" :target="cycleTarget" @busy="cycleBusy = $event" />
     <AppDialog v-if="confirmation && reviewed" :label="t('审核知识库关联', 'Review vault association')" @close="close"><section class="modal-card review">
       <h3>{{ t('审核知识库关联', 'Review vault association') }}</h3>
       <p>{{ t('相同路径采用远端文件身份，内容不同的文件保留为冲突。本次确认只建立关联，笔记传输由单独的同步操作启动。', 'Matching paths adopt remote file identities, while differing contents remain conflicts. This confirmation establishes an association; a separate sync action starts note transfer.') }}</p>

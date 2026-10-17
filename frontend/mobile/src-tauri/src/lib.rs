@@ -60,7 +60,7 @@ fn mobile_capabilities(window: tauri::WebviewWindow) -> Result<Capabilities, Str
         navigation: cfg!(target_os = "android"),
         appearance: cfg!(target_os = "android"),
         core: false,
-        sync: false,
+        sync: cfg!(target_os = "android"),
         credentials: cfg!(target_os = "android"),
         experiments: false,
     })

@@ -6,7 +6,7 @@ import { useEditorStore } from '@/stores/editor'
 import ActionDialog from '@/components/common/ActionDialog.vue'
 import { useActionDialog } from '@/composables/useActionDialog'
 import { t } from '@/i18n'
-import SyncTextDiff from './SyncTextDiff.vue'
+import SyncConflictContent from './SyncConflictContent.vue'
 const props = defineProps<{ vaultId: string; bindingId: string; conflict: SyncConflict; disabled: boolean }>()
 const emit = defineEmits<{ resolved: [] }>()
 const editor = useEditorStore(), { actionDialog, resolveAction, askConfirm } = useActionDialog()
@@ -47,12 +47,7 @@ async function resolve(choice: 'local' | 'remote' | 'copy') {
     if (version === generation) { review.value = undefined; error.value = cause instanceof Error ? cause.message : String(cause) }
   } finally { if (version === generation) busy.value = false }
 }
-const sides = computed(() => review.value ? [
-  { name: t('当前本地', 'Current local'), value: review.value.local },
-  { name: t('远端版本', 'Remote revision'), value: review.value.incoming },
-  ...(review.value.base ? [{ name: t('共同基线', 'Common base'), value: review.value.base }] : []),
-  ...review.value.related.map(item => ({ name: t(`其他受影响路径：${item.path}`, `Other affected path: ${item.path}`), value: item.content })),
-] : [])
+
 </script>
 <template>
   <div class="sync-conflict-review">
@@ -61,17 +56,7 @@ const sides = computed(() => review.value ? [
     <button :disabled="blocked" @click="load">{{ t('读取正文与差异', 'Read content and changes') }}</button>
     <p v-if="busy" role="status">{{ t('正在核对冲突…', 'Checking conflict…') }}</p><p v-if="error" class="error-banner" role="alert">{{ error }}</p>
     <template v-if="review">
-      <p>{{ review.base ? t('三方比较：共同基线已按文件身份、修订和完整摘要核对。', 'Three-way comparison: the common base is verified by file identity, revision and full hash.') : t('两方比较：可信共同基线缓存不可用。', 'Two-way comparison: a trusted common base is not available in the cache.') }}</p>
-      <p v-if="review.related.some(item => item.content.exists)">{{ t('重命名会同时处理以下其他本地路径，请一并审核；采用远端或保留本地的选择会影响这些文件。', 'The rename also affects the other local paths below. Review them together; the choice affects those files as well.') }}</p>
-      <div class="content-sides"><section v-for="side in sides" :key="side.name"><h4>{{ side.name }}</h4><p>{{ side.value.byte_size }} bytes · {{ side.value.exists ? t('文件存在', 'File exists') : t('文件不存在／已删除', 'File absent/deleted') }}</p>
-        <details><summary>{{ t('内容预览与校验值', 'Content preview and hash') }}</summary><code>{{ side.value.hash || '∅' }}</code><pre v-if="side.value.text !== null">{{ side.value.text }}</pre><p v-else>{{ t('二进制或非 UTF-8 文件，没有正文预览。', 'Binary or non-UTF-8 file; no text preview.') }}</p></details>
-        <p v-if="side.value.truncated" role="status">{{ t('只显示 UTF-8 前缀', 'UTF-8 prefix only') }} {{ side.value.preview_bytes }} / {{ side.value.byte_size }} bytes · {{ t('不是全文；摘要覆盖整个文件。', 'Not the full file; the hash covers all bytes.') }}</p>
-      </section></div>
-      <template v-if="review.local.text !== null && review.incoming.text !== null">
-        <template v-if="review.base?.text != null"><SyncTextDiff :before="review.base.text" :after="review.local.text" :label="t('基线 → 本地', 'Base → local')" /><SyncTextDiff :before="review.base.text" :after="review.incoming.text" :label="t('基线 → 远端', 'Base → remote')" /></template>
-        <SyncTextDiff v-else :before="review.local.text" :after="review.incoming.text" :label="t('本地 → 远端', 'Local → remote')" />
-      </template>
-      <template v-for="item in review.related" :key="item.path"><SyncTextDiff v-if="item.content.exists && item.content.text !== null && review.incoming.text !== null" :before="item.content.text" :after="review.incoming.text" :label="t(`${item.path} → 远端`, `${item.path} → remote`)" /></template>
+      <SyncConflictContent :review="review" />
       <p>{{ t('应用时会重新核对正文、远端修订与当前知识库。审核后文件变化，需要重新读取。', 'Applying rechecks the content, remote revision and current vault. Changes after review require reading it again.') }}</p>
       <div class="inline-actions"><button :disabled="blocked" @click="resolve('local')">{{ t('保留本地', 'Keep local') }}</button><button :disabled="blocked" @click="resolve('remote')">{{ t('采用远端', 'Use remote') }}</button></div>
       <p v-if="conflict.local_path.startsWith('opennexus-records/')">{{ t('设置副本保存为 attachments 下的文本文件，供查看和恢复，不会自动应用。', 'Save a settings copy as a text file under attachments for inspection and recovery; it is not applied automatically.') }}</p>
@@ -87,9 +72,5 @@ button { cursor: pointer; justify-self: start; }
 button:hover:not(:disabled) { background: var(--color-background-hover); }
 button:disabled { cursor: default; opacity: .55; }
 input { min-width: 0; width: 100%; box-sizing: border-box; }
-.content-sides { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,220px),1fr)); gap: var(--space-md); }
-.content-sides section { min-width: 0; }
-code { overflow-wrap: anywhere; }
-pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--font-size-xs)/1.6 var(--font-ui-mono); }
 label { display: grid; gap: var(--space-xs); }
 </style>

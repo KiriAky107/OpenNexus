@@ -1,8 +1,10 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { onBackButtonPress } from '@tauri-apps/api/app'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import type { ExportDelivery, MobileRequest } from './types'
 import type { AuthRequest, AuthResponse } from './syncAuthTypes'
 import type { AssociationRequest, AssociationResponse } from './syncAssociationTypes'
+import type { CycleCommand, CycleReply, CycleSnapshot } from './syncCycleTypes'
 
 export interface MobileCapabilities {
   protocol: number
@@ -47,6 +49,14 @@ export async function mobileSyncAuth(request: AuthRequest): Promise<AuthResponse
 export async function mobileSyncAssociation(request: AssociationRequest): Promise<AssociationResponse> {
   if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
   return invoke<AssociationResponse>('mobile_sync_association', { request })
+}
+export async function mobileSyncCycle(request: CycleCommand): Promise<CycleReply> {
+  if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
+  return invoke<CycleReply>('mobile_sync_cycle', { request })
+}
+export async function mobileOnSyncActivity(handler: (snapshot: CycleSnapshot) => void): Promise<() => void> {
+  if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
+  return getCurrentWebviewWindow().listen<CycleSnapshot>('mobile-sync-activity', event => handler(event.payload))
 }
 export async function mobileSaveExport(ticket: string): Promise<ExportDelivery> {
   if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')

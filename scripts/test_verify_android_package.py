@@ -14,6 +14,29 @@ spec.loader.exec_module(module)
 
 
 class AndroidPackageBindingTests(unittest.TestCase):
+    def test_cycle_gateway_requires_every_original_activity_and_receipt_marker_in_each_compiled_abi(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);cap=root/'frontend/mobile/src-tauri/capabilities/mobile.json';cap.parent.mkdir(parents=True)
+            cap.write_text(json.dumps({'windows':['main'],'permissions':['allow-mobile-sync-cycle']}))
+            markers=b'mobile_sync_cycle\x00SYNC_ACTIVITY_BUSY\x00SYNC_ACTIVITY_RECONCILIATION_REQUIRED\x00sync_cycle_success\x00sync_review_receipts'
+            for abi in ('arm64-v8a','x86_64'):
+                binary=root/module.MACHINES[abi][1]/'debug/libopennexus_mobile.so';binary.parent.mkdir(parents=True)
+                binary.write_bytes(b'x'*(1024*1024-4)+markers)
+            proof=module.verify_native_cycle_gateway(root,root,['arm64-v8a','x86_64'])
+            self.assertTrue(proof['present']);self.assertFalse(proof['actual_UI_or_sync_cycle_verified'])
+            self.assertFalse(proof['physical_phone_verified']);self.assertFalse(proof['token_or_general_HTTP_IPC'])
+            binary.write_bytes(markers.replace(b'sync_review_receipts',b'unrelated'))
+            with self.assertRaisesRegex(Exception,'NATIVE_CYCLE_GATEWAY_MISSING'):
+                module.verify_native_cycle_gateway(root,root,['arm64-v8a','x86_64'])
+
+    def test_cycle_gateway_refuses_remote_or_non_main_scopes_before_reading_any_native_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);cap=root/'frontend/mobile/src-tauri/capabilities/mobile.json';cap.parent.mkdir(parents=True)
+            for patch in [{'windows':['other']},{'remote':{'urls':['https://example.test']}},{'webviews':['other']},{'local':False},{'permissions':[]}]:
+                cap.write_text(json.dumps({'windows':['main'],'permissions':['allow-mobile-sync-cycle'],**patch}))
+                with self.assertRaisesRegex(Exception,'CYCLE_WINDOW_SCOPE_INVALID'):
+                    module.verify_native_cycle_gateway(root,root,['x86_64'])
+
     def test_all_native_commands_have_their_exact_generated_permission_inputs_before_compile(self):
         root=Path(__file__).resolve().parents[1]/'frontend/mobile/src-tauri'
         commands=re.findall(r'"(mobile_[a-z_]+)"',(root/'build.rs').read_text('utf-8'))
