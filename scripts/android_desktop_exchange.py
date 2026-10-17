@@ -53,6 +53,26 @@ def exchange_bytes(context, stage, body):
     return canonical({'schema': 1, 'context': context, 'stage': stage, 'body': body})
 
 
+def verify_artifact_origin(context, stage, run, artifact):
+    """Check immutable original metadata before waiting for its upload step."""
+    name = artifact_name(context, stage)
+    require(run['id'] == context['run_id'] and run['head_sha'] == context['tools_commit']
+            and run['head_branch'] == 'feat/android-sync-foreground'
+            and run['path'] == '.github/workflows/android.yml'
+            and run['event'] == 'workflow_dispatch' and run['run_attempt'] == 1
+            and run['repository']['full_name'] == 'KiriAky107/OpenNexus', 'PAIR_EXCHANGE_RUN_INVALID')
+    origin = artifact['workflow_run']
+    require(origin['id'] == run['id'] and origin['head_sha'] == context['tools_commit']
+            and origin['head_branch'] == run['head_branch']
+            and origin['repository_id'] == origin['head_repository_id'] == run['repository']['id']
+            and artifact['name'] == name and artifact['expired'] is False
+            and type(artifact['id']) is int and artifact['id'] > 0
+            and type(artifact['size_in_bytes']) is int and 0 < artifact['size_in_bytes'] <= 256 * 1024
+            and type(artifact['digest']) is str and re.fullmatch(r'sha256:[0-9a-f]{64}', artifact['digest']),
+            'PAIR_EXCHANGE_ARTIFACT_INVALID')
+    return name
+
+
 def verify_origin(context, stage, run, jobs, artifact):
     """Bind immutable artifacts to this workflow/source AND the named upload step.
 
@@ -61,12 +81,7 @@ def verify_origin(context, stage, run, jobs, artifact):
     part of the reviewed tools source. Do not claim a cryptographic sender
     signature from this API correlation.
     """
-    name = artifact_name(context, stage)
-    require(run['id'] == context['run_id'] and run['head_sha'] == context['tools_commit']
-            and run['head_branch'] == 'feat/android-sync-foreground'
-            and run['path'] == '.github/workflows/android.yml'
-            and run['event'] == 'workflow_dispatch' and run['run_attempt'] == 1
-            and run['repository']['full_name'] == 'KiriAky107/OpenNexus', 'PAIR_EXCHANGE_RUN_INVALID')
+    name = verify_artifact_origin(context, stage, run, artifact)
     job_name, step_name = PRODUCERS[stage]
     own_jobs = [job for job in jobs if job['name'] == job_name]
     require(len(own_jobs) == 1 and own_jobs[0]['run_id'] == run['id'], 'PAIR_EXCHANGE_JOB_INVALID')
@@ -79,15 +94,6 @@ def verify_origin(context, stage, run, jobs, artifact):
     started = datetime.fromisoformat(step['started_at'].replace('Z', '+00:00'))
     completed = datetime.fromisoformat(step['completed_at'].replace('Z', '+00:00'))
     require(started <= created <= completed + timedelta(seconds=2), 'PAIR_EXCHANGE_UPLOAD_TIME_INVALID')
-    origin = artifact['workflow_run']
-    require(origin['id'] == run['id'] and origin['head_sha'] == context['tools_commit']
-            and origin['head_branch'] == run['head_branch']
-            and origin['repository_id'] == origin['head_repository_id'] == run['repository']['id']
-            and artifact['name'] == name and artifact['expired'] is False
-            and type(artifact['id']) is int and artifact['id'] > 0
-            and type(artifact['size_in_bytes']) is int and 0 < artifact['size_in_bytes'] <= 256 * 1024
-            and type(artifact['digest']) is str and re.fullmatch(r'sha256:[0-9a-f]{64}', artifact['digest']),
-            'PAIR_EXCHANGE_ARTIFACT_INVALID')
     return {'artifact_id': artifact['id'], 'artifact_name': name, 'archive_digest': artifact['digest'],
             'original_run_id': run['id'], 'original_job_id': job['id'], 'original_upload_step': step_name,
             'tools_commit': context['tools_commit'], 'artifact_has_producer_job_id': False,
