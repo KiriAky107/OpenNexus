@@ -15,6 +15,28 @@ from android_runtime_probe import APP, DRIVER, TEST_IME, TEST_IME_COMPONENT, DRA
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def test_window_insets_device_suite_keeps_output_and_requires_its_exact_three_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory)
+            probe.args=SimpleNamespace(serial='emulator-5562')
+            probe.binding={'native_tests':{'sha256':'1'*64},'native_window_insets':{
+                'test_class':'cc.kronecker.opennexus.MobileWindowInsetsTest','expected_tests':3,
+                'actual_device_tests_passed':False,'actual_keyboard_visibility_verified':False}}
+            with patch('android_runtime_probe.require_hosted_emulator'):
+                for output in (b'OK (2 tests)\n',b'OK (3 tests)\nFAILURES!!!\n',b'INSTRUMENTATION_FAILED\n'):
+                    probe.shell=Mock(return_value=subprocess.CompletedProcess([],0,output,b'owned diagnostic'))
+                    with self.assertRaisesRegex(Exception,'Window inset tests did not all pass'):
+                        probe.native_window_insets_tests()
+                    self.assertEqual((probe.output/'window-insets-device-tests.txt').read_bytes(),output)
+                    self.assertFalse((probe.output/'window-insets-device-proof.json').exists())
+                probe.shell=Mock(return_value=subprocess.CompletedProcess([],0,b'OK (3 tests)\n',b''))
+                probe.native_window_insets_tests()
+                proof=json.loads((probe.output/'window-insets-device-proof.json').read_text())
+                self.assertEqual(proof['tests'],3)
+                self.assertTrue(proof['passed'])
+                self.assertFalse(proof['actual_keyboard_visibility_verified'])
+                self.assertEqual(proof['test_APK_sha256'],'1'*64)
+
     def image_save_fixture(self):
         asset=f'attachments/{digest(IMAGE_BYTES)[:2]}/{digest(IMAGE_BYTES)}.png'
         content=RICH_IMAGE_TEXT+'![]('+asset+')\n'

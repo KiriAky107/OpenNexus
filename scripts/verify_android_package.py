@@ -54,6 +54,16 @@ def verify_native_tests(apk, tools, signer):
         'expected_tests':5, 'actual_device_tests_passed':False}
 
 
+def verify_window_insets_tests(apk, tests):
+    for path, descriptor in ((apk,b'Lcc/kronecker/opennexus/MobileWindowInsets;'),
+            (tests,b'Lcc/kronecker/opennexus/MobileWindowInsetsTest;')):
+        with zipfile.ZipFile(path) as archive:
+            require(any(descriptor in archive.read(name) for name in archive.namelist()
+                if re.fullmatch(r'classes(?:\d+)?\.dex',name)), 'ANDROID_WINDOW_INSETS_CLASS_MISSING')
+    return {'test_class':'cc.kronecker.opennexus.MobileWindowInsetsTest','expected_tests':3,
+        'actual_device_tests_passed':False,'actual_keyboard_visibility_verified':False}
+
+
 def verify_native_broker(apk, native_dir, abis, symbol_tool):
     classes = ['Lcc/kronecker/opennexus/sync/SyncCredentialStore;', 'Lcc/kronecker/opennexus/sync/NativeCredentialProbe;']
     with zipfile.ZipFile(apk) as archive:
@@ -257,6 +267,7 @@ def main():
     native_tls = verify_platform_tls(apk, args.native_dir, args.abis,
         args.sdk / 'ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm', tls_origin)
     native_tests = verify_native_tests(args.instrumentation_apk.resolve(), tools, fingerprints[0])
+    native_window_insets = verify_window_insets_tests(apk,args.instrumentation_apk.resolve())
     native_secret_broker = verify_native_broker(apk, args.native_dir, args.abis,
         args.sdk / 'ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm')
     native_foreground = verify_native_foreground(apk, args.native_dir, args.abis,
@@ -273,6 +284,7 @@ def main():
         'files_plugin': {**files_plugin, 'source_sha256': kotlin_sha256},
         'native_tls':native_tls,
         'native_tests':native_tests,
+        'native_window_insets':native_window_insets,
         'native_secret_broker':native_secret_broker,
         'native_foreground':native_foreground,
         'native_auth_gateway':native_auth_gateway,

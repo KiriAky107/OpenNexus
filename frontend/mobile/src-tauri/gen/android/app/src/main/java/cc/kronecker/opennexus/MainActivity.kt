@@ -33,6 +33,7 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    MobileWindowInsets.install(findViewById(android.R.id.content))
     try {
       // Tauri has now loaded our Rust library. Keep only an application context
       // in the verifier, and check its matching JVM component before enabling it.

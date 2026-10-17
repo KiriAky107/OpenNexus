@@ -177,6 +177,11 @@ def validate_binding(bundle, commit):
             expected = 'Java_cc_kronecker_opennexus_sync_NativeCredentialProbe_roundTrip'
             require(broker.get('debug_test_entry_only') is True and broker.get('WebView_read_command') is False
                 and broker.get('native_symbols') == {'arm64-v8a':expected,'x86_64':expected}, 'Native Rust worker binding mismatch')
+    if window_tests := proof.get('native_window_insets'):
+        require(native_tests and window_tests.get('test_class') == 'cc.kronecker.opennexus.MobileWindowInsetsTest'
+            and window_tests.get('expected_tests') == 3
+            and window_tests.get('actual_device_tests_passed') is False
+            and window_tests.get('actual_keyboard_visibility_verified') is False, 'Window inset test binding mismatch')
     return apk, proof
 
 
@@ -397,7 +402,27 @@ class Probe:
             'Rust_worker_verified':count == 5,
             'hardware_backing_claimed':False,'physical_phone_verified':False}
         (self.output / 'keystore-device-proof.json').write_text(json.dumps(self.keystore_test_result,indent=2)+'\n','utf-8')
+        self.native_window_insets_tests()
         self.force_stop()
+
+    def native_window_insets_tests(self):
+        if not (binding := self.binding.get('native_window_insets')):
+            return  # Older immutable packages have no such suite; never infer a pass.
+        require_hosted_emulator(self.args.serial)
+        require(binding.get('test_class') == 'cc.kronecker.opennexus.MobileWindowInsetsTest'
+            and binding.get('expected_tests') == 3, 'Window inset test binding mismatch')
+        result = self.shell('am','instrument','-w','-r','-e','class',binding['test_class'],
+            APP+'.test/androidx.test.runner.AndroidJUnitRunner',timeout=90,check=False)
+        (self.output/'window-insets-device-tests.txt').write_bytes(result.stdout)
+        (self.output/'window-insets-device-tests.stderr.txt').write_bytes(result.stderr)
+        require(result.returncode == 0 and b'OK (3 tests)' in result.stdout
+            and b'FAILURES!!!' not in result.stdout and b'INSTRUMENTATION_FAILED' not in result.stdout,
+            'Window inset tests did not all pass; preserve the original instrument output')
+        proof = {'passed':True,'tests':3,'test_class':binding['test_class'],
+            'test_APK_sha256':self.binding['native_tests']['sha256'],
+            'scope':'Owned API36 native View/WindowInsets synthetic delivery, not actual keyboard visibility',
+            'actual_keyboard_visibility_verified':False,'physical_phone_verified':False}
+        (self.output/'window-insets-device-proof.json').write_text(json.dumps(proof,indent=2)+'\n','utf-8')
 
     def build_driver(self):
         root = Path(__file__).resolve().parent / 'android-runtime'

@@ -14,6 +14,23 @@ spec.loader.exec_module(module)
 
 
 class AndroidPackageBindingTests(unittest.TestCase):
+    def test_window_insets_suite_requires_both_real_apk_class_descriptors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);app=root/'app.apk';tests=root/'tests.apk'
+            def apk(path, descriptor):
+                with zipfile.ZipFile(path,'w') as archive:archive.writestr('classes.dex',descriptor)
+            apk(app,b'Lcc/kronecker/opennexus/MobileWindowInsets;')
+            apk(tests,b'Lcc/kronecker/opennexus/MobileWindowInsetsTest;')
+            result=module.verify_window_insets_tests(app,tests)
+            self.assertEqual(result['expected_tests'],3)
+            self.assertFalse(result['actual_device_tests_passed'])
+            self.assertFalse(result['actual_keyboard_visibility_verified'])
+            for path in (app,tests):
+                original=path.read_bytes();apk(path,b'unrelated')
+                with self.assertRaisesRegex(Exception,'ANDROID_WINDOW_INSETS_CLASS_MISSING'):
+                    module.verify_window_insets_tests(app,tests)
+                path.write_bytes(original)
+
     def test_cycle_gateway_requires_every_original_activity_and_receipt_marker_in_each_compiled_abi(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);cap=root/'frontend/mobile/src-tauri/capabilities/mobile.json';cap.parent.mkdir(parents=True)
