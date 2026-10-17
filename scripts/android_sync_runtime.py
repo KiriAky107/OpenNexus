@@ -26,6 +26,7 @@ from android_runtime_probe import APP, DRIVER, DRAFT, IMAGE_BYTES, build_job_ori
 from android_sync_fixture import arm_control,control_root,observe_provider
 from android_sync_setup import Setup
 from android_sync_peer import IMAGE_PATH,PATHS,Peer
+from android_sync_recovery import RecoveryMixin
 
 PEER_NOTE='# 来自独立 HTTP 客户端 😀\n\n保持 Markdown 原文。\n'.encode()
 PEER_CANVAS=(json.dumps({'nodes':[
@@ -185,7 +186,7 @@ def validate_stop_resumed_original(before,native,provider_before,provider_after,
         'Explicit resume created another provider write')
 
 
-class SyncProbe(AuthProbe):
+class SyncProbe(RecoveryMixin,AuthProbe):
     def observe(self,label):
         value=observe_provider(self.owner)
         atomic_json(self.output/(label+'-provider.json'),value,exclusive=True)
@@ -193,7 +194,8 @@ class SyncProbe(AuthProbe):
 
     def sync_phase(self,phase):
         require(phase in ('associate','cycle','cycle-incoming','cycle-media','cycle-rename','cycle-delete',
-            'cycle-after-stop','status','association-original','close'),'Unexpected Sync UI phase')
+            'cycle-after-stop','cycle-offline','cycle-dropped-upload','cycle-reconcile-original',
+            'status','association-original','close'),'Unexpected Sync UI phase')
         number=len(self.phases)+1
         # The actual association ID/digest is separately frozen in the driver
         # before its confirmation tap. This dispatch ID is not a server nonce.
@@ -227,7 +229,7 @@ class SyncProbe(AuthProbe):
         atomic_json(self.output/'original-association-intent.json',value,exclusive=True)
         return value
 
-    def host_snapshot(self,label):
+    def host_snapshot(self,label,*,include_outbox=False):
         self.host_observation_stage='origin'
         paths=self.shell('run-as',APP,'find','.','-name','host.sqlite3','-type','f').stdout.decode().splitlines()
         require(len(paths)==1 and re.fullmatch(r'\./(?:[A-Za-z0-9_.-]+/)*host\.sqlite3',paths[0]),'Native host metadata origin ambiguous')
@@ -282,6 +284,11 @@ class SyncProbe(AuthProbe):
                 'original_binding_bytes_sha256':hashlib.sha256(original[5].encode()).hexdigest(),
                 'preview_fingerprint':request['preview_fingerprint'],'remote_vault':request['remote_vault'],
                 'auth_operation_id':request['selection']['operation_id'],'state':original[3],'attempt_revision':original[4]}
+            if include_outbox:
+                self.host_observation_stage='owned-original-outbox'
+                originals=db.execute("SELECT operation_id,file_id,revision,path,hash,operation,state,length(content) FROM outbox WHERE path='runtime-note.md' ORDER BY rowid LIMIT 17").fetchall()
+                require(0<len(originals)<=16,'Owned original outbox is missing or exceeds bound')
+                rows['outbox']=[dict(zip(('operation_id','file_id','revision','path','hash','operation','state','payload_size'),row)) for row in originals]
         value={'binding':dict(zip(('id','remote_vault','state','cursor'),bindings[0])),**rows,
             'integrity':'ok','credentials_selected':False,'original_database_uploaded':False}
         atomic_json(self.output/(label+'-host.json'),value,exclusive=True)
@@ -307,6 +314,9 @@ class SyncProbe(AuthProbe):
             and all(bound['association'][key]==original[key] for key in original)
             and bound['association']['auth_operation_id']==selected['operation_id'],'Actual original association differs from the frozen UI or identity')
         require(not self.observe('associated')['rows']['revisions'],'Association unexpectedly transferred note revisions')
+        if getattr(self.args,'recovery',False):
+            self.recover_original(setup,prepared,device)
+            return
         self.sync_phase('cycle');native=self.host_snapshot('first-cycle');provider=self.observe('first-cycle')
         latest=validate_upload(provider,native,device)
         body=read_original_object(setup.endpoint,prepared['vault']['vault_id'],latest['hash'],setup.session()['access_token'])
@@ -513,8 +523,8 @@ def main():
     for name in ('bundle','sdk','output','source-checkout'):parser.add_argument('--'+name,type=Path,required=True)
     for name in ('commit','tools-commit','build-run-id'):parser.add_argument('--'+name,required=True)
     parser.add_argument('--serial',default='emulator-5562')
-    scope=parser.add_mutually_exclusive_group();scope.add_argument('--exchange',action='store_true');scope.add_argument('--media',action='store_true');scope.add_argument('--stop',action='store_true')
-    args=parser.parse_args();args.scope='sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
+    scope=parser.add_mutually_exclusive_group();scope.add_argument('--exchange',action='store_true');scope.add_argument('--media',action='store_true');scope.add_argument('--stop',action='store_true');scope.add_argument('--recovery',action='store_true')
+    args=parser.parse_args();args.scope='sync-recovery' if args.recovery else 'sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
     require_hosted();require_hosted_emulator(args.serial);owner=owned_root()
     state=read_json(owner/'owner-state.json');require(state['result']=='ready' and state.get('fixture')=='sync','Owned Sync origin is not ready')
     apk,binding=validate_binding(args.bundle,args.commit)

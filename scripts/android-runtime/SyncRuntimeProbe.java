@@ -31,6 +31,9 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
             case "cycle-rename": cycle("cycle-rename"); return true;
             case "cycle-delete": cycle("cycle-delete"); return true;
             case "cycle-after-stop": cycle("cycle-after-stop"); return true;
+            case "cycle-reconcile-original": cycle("cycle-reconcile-original"); return true;
+            case "cycle-offline": failedCycle("cycle-offline"); return true;
+            case "cycle-dropped-upload": failedCycle("cycle-dropped-upload"); return true;
             case "cycle-stop": stopOriginal(); return true;
             case "close": click("Close"); return true;
             default: return false;
@@ -74,6 +77,17 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
         persistOnce("cycle-stop-confirmation",original);
         click("Stop this cycle");
         waitPresent(node->label(node,"Cycle stopped"));
+    }
+
+    private void failedCycle(String original) throws Exception {
+        readCurrent(); signedIn(); click("Read queue and original records");
+        waitFor(node->label(node,"Sync one cycle now") && node.isEnabled(),true);
+        persistOnce(original,new JSONObject().put("driver_intent_id",UUID.randomUUID().toString())
+            .put("native_invocation_id_observed",false).put("action","Sync one cycle now"));
+        click("Sync one cycle now");
+        waitPresent(node->label(node,"Cycle did not complete"));
+        waitPresent(node->text(node.getText()).startsWith("The previous outcome is not fully confirmed."));
+        waitFor(node->label(node,"Sync one cycle now") && !node.isEnabled(),true);
     }
 
     private static boolean canonical(String value) {

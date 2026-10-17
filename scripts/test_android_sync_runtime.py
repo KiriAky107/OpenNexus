@@ -94,10 +94,13 @@ class InitialSyncBoundaries(unittest.TestCase):
                     CREATE TABLE sync_inbox(binding,sequence,revision,operation_id,rename_id,state);
                     CREATE TABLE sync_conflicts(binding,sequence,file_id,local_path,local_hash,state);
                     CREATE TABLE mobile_sync_binding_intents(operation_id,request_hash,request,state,attempt_revision,binding);
+                    CREATE TABLE outbox(operation_id,file_id,revision,path,hash,operation,state,content);
                     CREATE TABLE unrelated_private_values(secret);
                     INSERT INTO unrelated_private_values VALUES('must-never-be-selected-or-uploaded');''')
                 db.execute('INSERT INTO sync_bindings VALUES(?,?,?,?,?,?)',('binding',endpoint,'1'*32,'owned-author','active',0))
                 db.execute('INSERT INTO mobile_sync_binding_intents VALUES(?,?,?,?,?,?)',('binding-original','digest',request,'bound',1,receipt))
+                db.execute('INSERT INTO outbox VALUES(?,?,?,?,?,?,?,?)',('owned-op','owned-file',1,'runtime-note.md',hashlib.sha256(DRAFT.encode()).hexdigest(),'put','pending',b''))
+                db.execute('INSERT INTO outbox VALUES(?,?,?,?,?,?,?,?)',('private-op','private-file',1,'private.md','private-hash','put','pending',b'must-never-be-selected-or-uploaded'))
                 db.commit()
             original=source.read_bytes();probe=SyncProbe.__new__(SyncProbe)
             probe.tools=root/'tools';probe.tools.mkdir();probe.output=root/'evidence';probe.output.mkdir()
@@ -108,6 +111,12 @@ class InitialSyncBoundaries(unittest.TestCase):
             self.assertEqual(observed['association']['operation_id'],'binding-original')
             self.assertEqual(observed['association']['original_binding_bytes_sha256'],hashlib.sha256(receipt.encode()).hexdigest())
             self.assertEqual(observed['issuers'],[]);self.assertEqual(source.read_bytes(),original)
+            owned=probe.host_snapshot('owned',include_outbox=True)
+            self.assertEqual(owned['outbox'],[{'operation_id':'owned-op','file_id':'owned-file','revision':1,
+                'path':'runtime-note.md','hash':hashlib.sha256(DRAFT.encode()).hexdigest(),'operation':'put','state':'pending','payload_size':0}])
+            self.assertEqual(source.read_bytes(),original)
+            self.assertNotIn('private-file',(probe.output/'owned-host.json').read_text())
+            self.assertNotIn('must-never-be-selected-or-uploaded',(probe.output/'owned-host.json').read_text())
             self.assertFalse(observed['credentials_selected']);self.assertFalse(observed['original_database_uploaded'])
             self.assertNotIn('must-never-be-selected-or-uploaded',(probe.output/'bound-host.json').read_text())
             for call in probe.private.call_args_list:self.assertRegex(call.args[0],r'host\.sqlite3(?:-wal|-shm)?$')
