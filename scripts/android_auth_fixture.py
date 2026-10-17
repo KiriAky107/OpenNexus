@@ -21,7 +21,7 @@ SAFE_CODES = {'OWNED_AUTH_HOST_REQUIRED','OWNED_AUTH_RUN_INVALID','OWNED_AUTH_RO
     'OWNED_AUTH_CONTROL_INVALID','OWNED_AUTH_CONTROL_MISMATCH','OWNED_AUTH_CONTROL_CHANGED','OWNED_AUTH_CONTROL_UNCERTAIN',
     'OWNED_AUTH_CONTROL_RETRY_REQUIRES_EXPLICIT_INTENT','OWNED_AUTH_RESPONSE_TOO_LARGE','OWNED_AUTH_HOLD_NOT_RELEASED',
     'OWNED_AUTH_SOURCE_MISSING','OWNED_AUTH_SOURCE_CHANGED','OWNED_AUTH_PROVIDER_POINTER_INVALID','OWNED_AUTH_ENV_INVALID',
-    'OWNED_AUTH_NOT_PREPARED'}
+    'OWNED_AUTH_NOT_PREPARED','OWNED_AUTH_PROXY_INVALID'}
 ROUTES = {('POST', '/sync/v1/auth/sessions'): 'login', ('POST', '/sync/v1/auth/refresh'): 'refresh',
           ('DELETE', '/sync/v1/auth/sessions'): 'logout'}
 
@@ -92,8 +92,9 @@ def initialize_control(root):
     atomic_json(root/'control.json', {'revision':0,'operation_id':None,'mode':'normal'}, exclusive=True)
 
 
-def arm_control(root, operation, mode, expected_revision, *, retry=False):
-    require(str(uuid.UUID(operation)) == operation and mode in MODES, 'OWNED_AUTH_CONTROL_INVALID')
+def arm_control(root, operation, mode, expected_revision, *, retry=False, allowed_modes=None):
+    allowed=MODES if allowed_modes is None else allowed_modes
+    require(str(uuid.UUID(operation)) == operation and mode in allowed, 'OWNED_AUTH_CONTROL_INVALID')
     require(type(expected_revision) is int and 0 <= expected_revision < 10000, 'OWNED_AUTH_CONTROL_INVALID')
     body={'operation_id':operation,'mode':mode,'expected_revision':expected_revision,'result_revision':expected_revision+1}
     intent=root/'control-intents'/ (operation+'.json');receipt=root/'control-receipts'/ (operation+'.json')
@@ -117,8 +118,16 @@ def arm_control(root, operation, mode, expected_revision, *, retry=False):
 
 
 class DeliveryProxy:
-    def __init__(self, app, root):
+    def __init__(self, app, root, *, routes=None, response_limit=64*1024):
+        selected=ROUTES if routes is None else routes
+        require(isinstance(selected,dict) and 1<=len(selected)<=8
+            and all(isinstance(route,tuple) and len(route)==2 and route[0] in ('GET','POST','PUT','DELETE')
+                and isinstance(route[1],str) and route[1].startswith('/sync/v1/') and len(route[1])<=256
+                and isinstance(action,str) and re.fullmatch(r'[a-z_]{1,24}',action) for route,action in selected.items())
+            and type(response_limit) is int and 64*1024<=response_limit<=2*1024*1024,'OWNED_AUTH_PROXY_INVALID')
         self.app,self.root=app,root
+        self.routes=dict(selected)
+        self.response_limit=response_limit
         self.lock=asyncio.Lock()
 
     async def record(self, action, status, delivered_status, fault=None):
@@ -132,7 +141,7 @@ class DeliveryProxy:
             atomic_json(path,data)
 
     async def __call__(self, scope, receive, send):
-        action=ROUTES.get((scope.get('method'),scope.get('path')))
+        action=self.routes.get((scope.get('method'),scope.get('path')))
         if scope.get('type') != 'http' or action is None:
             await self.app(scope,receive,send);return
         control=read_json(self.root/'control.json')
@@ -148,7 +157,7 @@ class DeliveryProxy:
             nonlocal status,size
             if message['type']=='http.response.start':status=message['status']
             size+=len(message.get('body',b''))
-            require(size <= 64*1024,'OWNED_AUTH_RESPONSE_TOO_LARGE')
+            require(size <= self.response_limit,'OWNED_AUTH_RESPONSE_TOO_LARGE')
             messages.append(message)
         await self.app(scope,receive,capture if fault else forward)
         if not fault:
