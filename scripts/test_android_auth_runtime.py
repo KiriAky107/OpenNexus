@@ -7,6 +7,26 @@ import android_auth_runtime as module
 
 
 class AuthRuntimeBoundaries(unittest.TestCase):
+    def test_live_background_driver_cannot_start_on_a_developer_host_or_with_a_nonoriginal_control_id(self):
+        probe=object.__new__(module.AuthProbe);probe.args=Namespace(serial='emulator-5562')
+        probe.start_app=Mock();probe.shell=Mock();probe.control=Mock()
+        with patch.object(module.subprocess,'Popen') as spawn:
+            with patch.object(module,'require_hosted_emulator',side_effect=RuntimeError('owned hosted emulator required')):
+                with self.assertRaises(RuntimeError):probe.held_background('not-an-original-id',{})
+            with patch.object(module,'require_hosted_emulator'):
+                with self.assertRaises(ValueError):probe.held_background('not-an-original-id',{})
+            spawn.assert_not_called()
+        probe.start_app.assert_not_called();probe.shell.assert_not_called();probe.control.assert_not_called()
+
+    def test_resumed_activity_observation_selects_only_own_static_identity_without_persisting_the_dump(self):
+        from subprocess import CompletedProcess
+        probe=object.__new__(module.AuthProbe)
+        probe.shell=Mock(return_value=CompletedProcess([],0,('topResumedActivity=ActivityRecord{owned u0 '+module.APP+
+            '/cc.kronecker.opennexus.MainActivity}\nprivate-activity-detail-not-an-artifact').encode()))
+        self.assertTrue(probe.app_is_resumed())
+        probe.shell.return_value=CompletedProcess([],0,b'topResumedActivity=ActivityRecord{u0 system.launcher/.Home}\n')
+        self.assertFalse(probe.app_is_resumed())
+
     def test_auth_only_scope_requires_the_original_worker_binding_without_repeating_keystore_tests(self):
         probe=object.__new__(module.AuthProbe);probe.binding={'native_tests':{'expected_tests':5}}
         probe.shell=Mock();probe.device=Mock()

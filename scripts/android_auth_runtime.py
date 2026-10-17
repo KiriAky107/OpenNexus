@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import shlex
+import subprocess
 import tempfile
 import time
 import uuid
@@ -94,13 +96,73 @@ class AuthProbe(Probe):
         self.start_app()
         started=time.monotonic()
         result=self.shell('am','instrument','-w','-e','phase',name,DRIVER+'/.AuthRuntimeProbe',timeout=180,check=False)
+        self.record_auth_phase(name,started,result.returncode,result.stdout)
+
+    def record_auth_phase(self,name,started,returncode,output):
         # This instrumentation emits static stages/roles only, even on failure.
-        text=result.stdout.decode('utf-8','replace')
+        require(len(output)<=1024*1024,'Owned static phase output exceeds its bound')
+        text=output.decode('utf-8','replace')
         atomic_json(self.output/('phase-'+str(len(self.phases)+1)+'-'+name+'.json'),
             {'phase':name,'instrument_output':text},exclusive=True)
-        require(result.returncode==0 and 'OPENNEXUS_AUTH_PHASE_OK '+name in text and 'OPENNEXUS_AUTH_PHASE_FAILED' not in text,
+        require(returncode==0 and 'OPENNEXUS_AUTH_PHASE_OK '+name in text and 'OPENNEXUS_AUTH_PHASE_FAILED' not in text,
             'Actual owned auth UI phase failed; no mutation will be repeated')
         self.phases.append({'phase':name,'duration_ms':round((time.monotonic()-started)*1000),'passed':True})
+
+    def app_is_resumed(self):
+        # Never persist the raw Activity dump. It is not an auth/UI artifact.
+        value=self.shell('dumpsys','activity','activities').stdout.decode('utf-8','replace')
+        return any(APP+'/' in line and ('topResumedActivity' in line or 'mResumedActivity' in line)
+            for line in value.splitlines())
+
+    def held_background(self,held_id,original_sealed):
+        require_hosted_emulator(self.args.serial)
+        require(str(uuid.UUID(held_id))==held_id,'Original held control ID is invalid')
+        self.start_app();started=time.monotonic()
+        command=('am','instrument','-w','-e','phase','login-b-held',DRIVER+'/.AuthRuntimeProbe')
+        process=subprocess.Popen([str(self.adb),'-s',self.args.serial,'shell',shlex.join(command)],
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        output=b'';completed=False
+        try:
+            deadline=time.monotonic()+35
+            while True:
+                require(process.poll() is None,'Owned held UI driver ended before actual background')
+                ready=self.shell('run-as',DRIVER,'cat','no_backup/owned-auth-held.ready',check=False)
+                if ready.returncode==0 and ready.stdout==b'ready\n' and (self.owner/'fault-events'/(held_id+'.json')).is_file():break
+                require(time.monotonic()<deadline,'Original held service/driver checkpoint was not observed');time.sleep(.2)
+            expect_requests(self.observe('held-before-home'),4,2,1)
+            native=self.snapshot('held-before-home')
+            selected=native['selection']['operation_id']
+            pending=[row for row in native['intents'] if row['operation_id']==selected]
+            require(len(pending)==1 and pending[0]['kind']=='login' and pending[0]['phase']=='login_pending'
+                and pending[0]['device_id'] is None,'Held native login was already classified or activated')
+            require(self.ciphertext_fingerprints()==original_sealed,'Held response changed prior ciphertext before background')
+            before=self.shell('pidof',APP).stdout.strip()
+            require(re.fullmatch(rb'[1-9][0-9]{0,9}',before) and self.app_is_resumed(),
+                'Original app was not actually foreground while the held UI driver remained alive')
+            self.shell('input','keyevent','KEYCODE_HOME')
+            time.sleep(1)
+            require(self.shell('pidof',APP).stdout.strip()==before and not self.app_is_resumed()
+                and process.poll() is None,'Actual Home transition changed the process or ended instrumentation early')
+            self.control('release');deadline=time.monotonic()+10
+            while not (self.owner/'fault-events'/(held_id+'.released.json')).is_file():
+                require(time.monotonic()<deadline,'Original held release was not observed');time.sleep(.1)
+            self.device('shell','-T','run-as '+DRIVER+' sh -c '+
+                "'umask 077; test ! -e no_backup/owned-auth-held.finish && cat > no_backup/owned-auth-held.finish'",
+                input=b'finish\n')
+            output,_=process.communicate(timeout=30);completed=True
+            atomic_json(self.output/'held-background-transition.json',{'same_original_app_process':True,
+                'actual_foreground_before_Home':True,'actual_background_after_Home':True,
+                'same_UI_instrumentation_alive_until_after_original_release':True,
+                'original_native_login_pending_before_Home':True,'original_control_id':held_id,
+                'raw_activity_dump_or_credentials_saved':False},exclusive=True)
+        finally:
+            if not completed:
+                if process.poll() is None:process.terminate()
+                try:output,_=process.communicate(timeout=10)
+                except subprocess.TimeoutExpired:process.kill();output,_=process.communicate(timeout=10)
+            if not completed:
+                atomic_json(self.output/'held-phase-unfinished.json',{'passed':False,'original_not_retried':True},exclusive=True)
+            if output:self.record_auth_phase('login-b-held',started,process.returncode,output)
 
     def snapshot(self,label):
         paths=self.shell('run-as',APP,'find','.','-name','mobile-sync-auth.sqlite3','-type','f').stdout.decode().splitlines()
@@ -210,19 +272,7 @@ class AuthProbe(Probe):
         require(len(provider_account(third,0)['devices'])==3,'New explicit recovery login did not create one distinct device')
         original_sealed=self.ciphertext_fingerprints()
         held_id=self.control('hold_login')
-        self.auth_phase('login-b-held')
-        deadline=time.monotonic()+35
-        while not (self.owner/'fault-events'/(held_id+'.json')).exists():
-            require(time.monotonic()<deadline,'Original held login did not reach the fixed service');time.sleep(.1)
-        before_pid=self.shell('pidof',APP).stdout.strip();require(re.fullmatch(rb'[1-9][0-9]{0,9}',before_pid),'Owned app PID is unknown')
-        self.shell('input','keyevent','KEYCODE_HOME')
-        # This is a real Activity transition; no force-stop, reinstall or app
-        # data change is used to manufacture a rejected late response.
-        time.sleep(1);require(self.shell('pidof',APP).stdout.strip()==before_pid,'Activity background changed the owned process')
-        self.control('release')
-        deadline=time.monotonic()+10
-        while not (self.owner/'fault-events'/(held_id+'.released.json')).exists():
-            require(time.monotonic()<deadline,'Original held response release was not observed');time.sleep(.1)
+        self.held_background(held_id,original_sealed)
         self.auth_phase('current-unusable')
         final=self.observe('late-background');expect_requests(final,4,2,1)
         require(len(provider_account(final,1)['devices'])==1,'Held login did not commit exactly once on the independent service')

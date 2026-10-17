@@ -41,6 +41,7 @@ public final class AuthRuntimeProbe extends Instrumentation {
                     readCurrent();
                     signIn(phase.equals("login-a") ? 0 : 1);
                     if (phase.equals("login-a")) signedIn();
+                    else waitForOriginalBackground();
                     break;
                 case "current": click("Read current connection"); signedIn(); break;
                 case "refresh":
@@ -141,6 +142,25 @@ public final class AuthRuntimeProbe extends Instrumentation {
             node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,empty);
         } } catch (Throwable ignored) { /* No raw UI is captured on this path. */ }
     }
+    private void waitForOriginalBackground() throws Exception {
+        // Keep this same UI connection alive until the host has observed the
+        // original committed/held response and actually backgrounded the app.
+        // Finishing instrumentation earlier could itself cancel the view and
+        // make a later Home/late-response assertion vacuous.
+        stage="await-owned-background";
+        File root=getContext().getNoBackupFilesDir();
+        File ready=new File(root,"owned-auth-held.ready");
+        require(ready.createNewFile(),"Original ready marker already exists");
+        try (java.io.FileOutputStream out=new java.io.FileOutputStream(ready)) {
+            out.write("ready\n".getBytes(StandardCharsets.UTF_8));out.getFD().sync();
+        }
+        File finish=new File(root,"owned-auth-held.finish");
+        long until=SystemClock.uptimeMillis()+90000;
+        while (!finish.isFile() && SystemClock.uptimeMillis()<until) SystemClock.sleep(100);
+        require(finish.isFile() && finish.length()==7,"Original background signal missing");
+        byte[] signal=java.nio.file.Files.readAllBytes(finish.toPath());
+        require(java.util.Arrays.equals(signal,"finish\n".getBytes(StandardCharsets.UTF_8)),"Original background signal changed");
+    }
     private void click(String name) {
         AccessibilityNodeInfo initial=waitFor(n->label(n,name) && n.isEnabled(),true);
         Predicate<AccessibilityNodeInfo> target=n->label(n,name) && n.isEnabled() && n.isClickable();
@@ -158,6 +178,8 @@ public final class AuthRuntimeProbe extends Instrumentation {
         }
         long start=SystemClock.uptimeMillis();touch(start,start,MotionEvent.ACTION_DOWN,before.centerX(),before.centerY());
         SystemClock.sleep(50);touch(start,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,before.centerX(),before.centerY());
+        try { ui.waitForIdle(150,5000); }
+        catch (java.util.concurrent.TimeoutException error) { throw new IllegalStateException("Owned tap did not settle"); }
     }
     private AccessibilityNodeInfo unique(Predicate<AccessibilityNodeInfo> predicate) {
         List<AccessibilityNodeInfo> found=new ArrayList<>();
