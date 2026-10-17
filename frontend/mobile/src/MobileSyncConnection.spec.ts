@@ -8,6 +8,8 @@ import { mobileSyncAuth } from './native'
 import type { AuthIntent, AuthRequest, AuthResponse, AuthSelection } from './syncAuthTypes'
 
 vi.mock('./native', () => ({ mobileSyncAuth: vi.fn() }))
+// Association has its own native/session and component checks below this layer.
+vi.mock('./MobileSyncAssociation.vue', () => ({ default: { template: '<div />' } }))
 installTestDialogApi()
 const first = '00000000-0000-4000-8000-000000000001'
 const selection: AuthSelection = { revision: 1, endpoint: 'https://sync.example/', account: 'reader-a', operation_id: first, generation: 1 }

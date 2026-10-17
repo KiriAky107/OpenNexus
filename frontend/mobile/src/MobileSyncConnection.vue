@@ -4,6 +4,7 @@ import { t } from '../../src/i18n'
 import AppDialog from '../../src/components/common/AppDialog.vue'
 import SyncConnectionForm from '../../src/features/settings/SyncConnectionForm.vue'
 import SyncVaultSelector from '../../src/features/settings/SyncVaultSelector.vue'
+import MobileSyncAssociation from './MobileSyncAssociation.vue'
 import { syncBytes, syncError, syncTime } from '../../src/features/settings/syncPresentation'
 import { mobileSyncAuth } from './native'
 import { createSyncAuthSession } from './syncAuthSession'
@@ -12,6 +13,7 @@ import type { AuthProfile, AuthSelection } from './syncAuthTypes'
 const session = createSyncAuthSession(mobileSyncAuth), state = session.state
 const endpoint = ref('https://'), account = ref(''), password = ref(''), device = ref('OpenNexus Android')
 const selectedVault = ref('')
+const associationBusy = ref(false), association = ref<{ handleBack(): boolean }>()
 const remoteVault = computed(() => state.vaults?.items.find(vault => vault.id === selectedVault.value))
 watch(() => state.vaults, () => { selectedVault.value = '' })
 type Confirmation = { kind: 'choose'; profile: AuthProfile; frozen: ReturnType<typeof session.freezeProfile> }
@@ -70,7 +72,7 @@ async function confirm() {
   else await session.existing(action.kind, action.selection)
 }
 async function acknowledge() { if (session.acknowledgeOriginal()) await session.reload() }
-function handleBack() { if (!confirmation.value) return false; confirmation.value = null; password.value = ''; return true }
+function handleBack() { if (association.value?.handleBack()) return true; if (!confirmation.value) return false; confirmation.value = null; password.value = ''; return true }
 function hidden() { if (document.hidden) { password.value = ''; confirmation.value = null; void session.cancel() } }
 watch([endpoint, account, device], () => { password.value = ''; confirmation.value = null }, { flush: 'sync' })
 onMounted(async () => {
@@ -107,14 +109,15 @@ defineExpose({ handleBack })
       <div class="inline-actions"><button class="button-secondary" :disabled="state.busy" @click="session.checkOriginal">{{ t('只读查询原编号', 'Read original ID') }}</button><button class="button-secondary" :disabled="state.busy || !(state.receipt || state.choice || state.originalMissing)" @click="acknowledge">{{ t('保留原记录并继续', 'Keep original record and continue') }}</button></div>
     </section>
     <section v-if="state.current?.authenticated && !state.pending" class="remote-vaults" :aria-label="t('远端库', 'Remote vaults')">
-      <button class="button-secondary" :disabled="state.busy" @click="session.vaults(0)">{{ t('读取远端库', 'Read remote vaults') }}</button>
+      <button class="button-secondary" :disabled="state.busy || associationBusy" @click="session.vaults(0)">{{ t('读取远端库', 'Read remote vaults') }}</button>
       <template v-if="state.vaults">
         <p v-if="!state.vaults.total">{{ t('此账户尚无远端知识库。', 'This account has no remote vaults yet.') }}</p>
-        <SyncVaultSelector v-else v-model="selectedVault" :items="state.vaults.items" :disabled="state.busy" />
+        <SyncVaultSelector v-else v-model="selectedVault" :items="state.vaults.items" :disabled="state.busy || associationBusy" />
         <p v-if="remoteVault">{{ remoteVault.name }} · {{ syncBytes(remoteVault.used) }} / {{ syncBytes(remoteVault.quota) }}</p>
         <nav v-if="state.vaults.total > 20" class="inline-actions" :aria-label="t('远端库分页', 'Remote vault pages')"><button class="button-secondary" :disabled="state.busy || !state.vaults.offset" @click="session.vaults(state.vaults.offset - 20)">{{ t('上一页', 'Previous') }}</button><span>{{ state.vaults.offset + 1 }}–{{ Math.min(state.vaults.offset + 20,state.vaults.total) }} / {{ state.vaults.total }}</span><button class="button-secondary" :disabled="state.busy || state.vaults.offset + 20 >= state.vaults.total" @click="session.vaults(state.vaults.offset + 20)">{{ t('下一页', 'Next') }}</button></nav>
       </template>
     </section>
+    <MobileSyncAssociation v-if="state.selection && !state.pending" ref="association" :selection="state.selection" :authenticated="!!state.current?.authenticated" :remote-vault="remoteVault" @busy="associationBusy = $event" />
     <section v-if="state.profiles" :aria-label="t('已保存的连接', 'Saved connections')"><h4>{{ t('已保存的连接', 'Saved connections') }}</h4>
       <p v-if="!state.profiles.total">{{ t('尚无本机连接记录。', 'No device connection records yet.') }}</p>
       <article v-for="profile in state.profiles.items" :key="profile.intent.operation_id" class="profile-row"><div><strong>{{ profile.intent.account }}</strong><p>{{ profile.intent.endpoint }}</p><span>{{ phase(profile.intent.phase) }} · {{ profile.intent.device_name }}</span><p v-if="profile.selected">{{ t('当前选中', 'Currently selected') }}</p></div><button class="button-secondary" :disabled="state.busy || !!state.pending || profile.selected" @click="reviewProfile(profile)">{{ t('审核并选择', 'Review and select') }}</button></article>

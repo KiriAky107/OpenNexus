@@ -2,6 +2,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core'
 import { onBackButtonPress } from '@tauri-apps/api/app'
 import type { ExportDelivery, MobileRequest } from './types'
 import type { AuthRequest, AuthResponse } from './syncAuthTypes'
+import type { AssociationRequest, AssociationResponse } from './syncAssociationTypes'
 
 export interface MobileCapabilities {
   protocol: number
@@ -42,6 +43,10 @@ export async function mobileRequest<T>(request: MobileRequest): Promise<T> {
 export async function mobileSyncAuth(request: AuthRequest): Promise<AuthResponse> {
   if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
   return invoke<AuthResponse>('mobile_sync_auth', { request })
+}
+export async function mobileSyncAssociation(request: AssociationRequest): Promise<AssociationResponse> {
+  if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
+  return invoke<AssociationResponse>('mobile_sync_association', { request })
 }
 export async function mobileSaveExport(ticket: string): Promise<ExportDelivery> {
   if (!isTauri()) throw new Error('MOBILE_HOST_REQUIRED')
