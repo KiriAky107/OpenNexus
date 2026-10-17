@@ -5,6 +5,7 @@ fn main() {
             "mobile_vault",
             "mobile_request",
             "mobile_sync_auth",
+            "mobile_sync_association",
             "mobile_save_export",
             "mobile_export_delivery",
             "mobile_open_external",
