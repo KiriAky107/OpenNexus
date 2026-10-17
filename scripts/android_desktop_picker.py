@@ -22,7 +22,7 @@ def choose_controls(api, dialog, pid, path):
     edit, button = edits[0], buttons[0]
     require(all(api.owner(h) == pid and api.child_of(dialog, h) for h in (edit, button))
             and api.owner(dialog) == pid, 'DESKTOP_PAIR_PICKER_TARGET_INVALID')
-    require(api.set_text(edit, path) and api.text(edit) == path, 'DESKTOP_PAIR_PICKER_INPUT_REFUSED')
+    require(api.set_text(edit, path, dialog, pid) and api.text(edit) == path, 'DESKTOP_PAIR_PICKER_INPUT_REFUSED')
     # The input was set once. Any changed owner or control is a refusal, never
     # a reason to retype, click a different window, or retry a folder choice.
     require(api.owner(dialog) == pid and api.owner(button) == pid and api.child_of(dialog, button),
@@ -118,10 +118,30 @@ class WindowsDialog:
             require(len(result) <= 1, 'DESKTOP_PAIR_PICKER_TARGET_INVALID')
         return result
 
-    def set_text(self, handle, value):
-        text = self.ctypes.create_unicode_buffer(value)
-        pointer = self.ctypes.cast(text, self.ctypes.c_void_p).value
-        return bool(self.api.SendMessageW(handle, 0x000C, 0, pointer))  # WM_SETTEXT
+    def set_text(self, handle, value, dialog, pid):
+        require(type(value) is str and 0 < len(value) <= 1024 and not any(ord(c) < 32 for c in value),
+                'DESKTOP_PAIR_PICKER_INPUT_REFUSED')
+        encoded = value.encode('utf-16-le')
+        def original_target():
+            require(self.owner(dialog) == self.owner(handle) == pid and self.child_of(dialog, handle)
+                    and self.kind(handle) == 'Edit' and self.control_id(handle) == 1152
+                    and self.kind(dialog) == '#32770' and self.title(dialog) == TITLE,
+                    'DESKTOP_PAIR_PICKER_TARGET_INVALID')
+        original_target()
+        # Enter one original path through the edit control's character handler,
+        # including its native change notifications. WM_SETTEXT readback alone
+        # did not establish the folder dialog's selected shell item.
+        self.api.SendMessageW(handle, 0x00B1, 0, -1)  # EM_SETSEL, replace the initial label once.
+        until = time.monotonic() + 10
+        for offset in range(0, len(encoded), 2):
+            original_target()
+            remaining = until - time.monotonic()
+            require(remaining > 0, 'DESKTOP_PAIR_PICKER_INPUT_REFUSED')
+            result = self.ctypes.c_size_t()
+            if not self.api.SendMessageTimeoutW(handle, 0x0102,
+                    int.from_bytes(encoded[offset:offset+2], 'little'), 1, 2, min(1000, max(1, int(remaining*1000))), self.ctypes.byref(result)):
+                return False  # Unknown partial delivery: never replay or confirm it.
+        return True
 
     def text(self, handle):
         value = self.ctypes.create_unicode_buffer(4096)
@@ -173,10 +193,16 @@ def choose_owned_vault(page, context, process, vault, attempt):
     result = read_original_choice(page, acknowledged, attempt)
     require(type(result.get('ok')) is bool, 'DESKTOP_PAIR_PICKER_OUTCOME_UNKNOWN')
     matches = bool(result['ok'] and windows_drive_path(result['actualPath']) == windows_drive_path(vault))
+    actual = windows_drive_path(result['actualPath']) if result['ok'] else None
+    location = 'native-refused'
+    if actual is not None:
+        location = next((name for name, path in [('expected-vault', vault), ('owned-run-root', root), ('owned-data-root', root/'data')]
+            if actual == windows_drive_path(path)),
+            'other-owned-directory' if actual.startswith(windows_drive_path(root)+'\\') else 'outside-owned-root')
     with (attempt / 'picker-native-result.json').open('xb') as output:
         output.write(canonical({'original_choice_settled': True, 'native_ok': result['ok'],
             'selected_path_matches_owned_vault': matches, 'native_vault_id_present': bool(result.get('vaultId')),
-            'raw_path_or_error_returned': False}))
+            'selected_path_location': location, 'raw_path_or_error_returned': False}))
         output.flush(); os.fsync(output.fileno())
     require(result['ok'], 'DESKTOP_PAIR_PICKER_NATIVE_REFUSED')
     require(matches and bool(result.get('vaultId')), 'DESKTOP_PAIR_PICKER_TARGET_MISMATCH')

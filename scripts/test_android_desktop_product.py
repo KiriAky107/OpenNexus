@@ -111,6 +111,9 @@ class ProductIsolation(unittest.TestCase):
     def test_only_known_static_bootstrap_codes_are_retained_without_exception_text(self):
         code = 'DESKTOP_PAIR_STORAGE_MISMATCH'
         self.assertEqual(safe_failure(HandoffError(code))['checkpoint_code'], code)
+        for suffix in ('DELIVERY_INVALID', 'OUTCOME_UNKNOWN', 'NATIVE_REFUSED', 'TARGET_MISMATCH'):
+            known = 'DESKTOP_PAIR_PICKER_' + suffix
+            self.assertEqual(safe_failure(HandoffError(known))['checkpoint_code'], known)
         secret = 'OWNED_PASSWORD_MUST_NOT_APPEAR'
         for error in [HandoffError(secret), RuntimeError(code + secret), TimeoutError(secret)]:
             value = safe_failure(error)
