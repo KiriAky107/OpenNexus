@@ -1,4 +1,5 @@
 //! Conflict text comes from verified local handles and immutable cached revisions.
+use crate::workspace_commit::{CommitGuard, UnscopedCommit};
 use crate::{
     sync_inbox::RemoteRevision,
     workspace::{hash, Entry, HostError, Result, Workspace},
@@ -85,10 +86,18 @@ fn unsafe_file() -> HostError {
     HostError::new("SYNC_REVIEW_UNSAFE_FILE")
 }
 
-fn read(root: &Path, relative: &str, text: bool, missing_ok: bool) -> Result<Content> {
+fn read_checked(
+    root: &Path,
+    relative: &str,
+    text: bool,
+    missing_ok: bool,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<Content> {
+    check()?;
     let mut parent = crate::experiment_input::open_root(root).map_err(|_| unsafe_file())?;
     let mut parts = relative.split('/').peekable();
     while let Some(part) = parts.next() {
+        check()?;
         if part.is_empty() || part == "." || part == ".." {
             return Err(unsafe_file());
         }
@@ -152,7 +161,9 @@ fn read(root: &Path, relative: &str, text: bool, missing_ok: bool) -> Result<Con
         let mut digest = Sha256::new();
         let mut size = 0u64;
         loop {
+            check()?;
             let count = file.read(&mut buffer)?;
+            check()?;
             if count == 0 {
                 break;
             }
@@ -166,6 +177,7 @@ fn read(root: &Path, relative: &str, text: bool, missing_ok: bool) -> Result<Con
                 prefix.extend_from_slice(&buffer[..take]);
             }
         }
+        check()?;
         let after = file.metadata()?;
         if size != before.len()
             || after.len() != before.len()
@@ -218,13 +230,21 @@ impl Workspace {
             .filter(|entry| !entry.deleted && !entry.is_folder)
             .map(|entry| entry.file_id))
     }
-    fn sync_review_cached(&self, digest: &str, size: u64, path: &str) -> Result<Content> {
+    fn sync_review_cached(
+        &self,
+        digest: &str,
+        size: u64,
+        path: &str,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Content> {
+        check()?;
         self.sync_review_spool(digest)?;
-        let value = read(
+        let value = read_checked(
             &self.root,
             &format!(".ainote/sync-spool/{digest}"),
             textual(path),
             false,
+            check,
         )?;
         if value.hash != digest || value.byte_size != size {
             return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
@@ -235,7 +255,9 @@ impl Workspace {
         &self,
         binding: &str,
         revision: &RemoteRevision,
+        check: &dyn Fn() -> Result<()>,
     ) -> Result<Option<Content>> {
+        check()?;
         if revision.base_revision == 0 {
             return Ok(None);
         }
@@ -273,9 +295,20 @@ impl Workspace {
         if !self.sync_review_spool(&digest)?.try_exists()? {
             return Ok(None);
         }
-        self.sync_review_cached(&digest, size, &path).map(Some)
+        self.sync_review_cached(&digest, size, &path, check)
+            .map(Some)
     }
     pub fn sync_conflict_review(&self, binding: &str, sequence: i64) -> Result<ConflictReview> {
+        self.sync_conflict_review_checked(binding, sequence, &UnscopedCommit)
+    }
+    pub(crate) fn sync_conflict_review_checked(
+        &self,
+        binding: &str,
+        sequence: i64,
+        guard: &impl CommitGuard,
+    ) -> Result<ConflictReview> {
+        let check = || guard.check();
+        check()?;
         self.check_binding(binding)?;
         let row: Option<(String,String)> = self.db.query_row(
             "SELECT local_path,remote FROM sync_conflicts WHERE binding=?1 AND sequence=?2 AND state='open'",
@@ -299,7 +332,7 @@ impl Workspace {
             return Err(HostError::new("SYNC_CONFLICT_CHANGED"));
         }
         self.resolve(&local_path)?;
-        let local = read(&self.root, &local_path, textual(&local_path), true)?;
+        let local = read_checked(&self.root, &local_path, textual(&local_path), true, &check)?;
         let local_file_id = self.sync_review_file_id(&local_path)?;
         let mut related = Vec::new();
         for path in [
@@ -322,12 +355,12 @@ impl Workspace {
             }
             related.push(RelatedContent {
                 file_id: self.sync_review_file_id(&path)?,
-                content: read(&self.root, &path, textual(&path), true)?,
+                content: read_checked(&self.root, &path, textual(&path), true, &check)?,
                 path,
             });
         }
         let incoming = if let Some(digest) = &remote.hash {
-            self.sync_review_cached(digest, remote.size as u64, &remote.path)?
+            self.sync_review_cached(digest, remote.size as u64, &remote.path, &check)?
         } else {
             Content::absent()
         };
@@ -335,7 +368,7 @@ impl Workspace {
             .entry(&local_path)?
             .is_some_and(|entry| entry.file_id == remote.file_id && !entry.is_folder);
         let base = if same_identity {
-            self.sync_review_base(binding, &remote)?
+            self.sync_review_base(binding, &remote, &check)?
         } else {
             None
         };
@@ -356,6 +389,7 @@ impl Workspace {
         review.fingerprint = hash(
             &serde_json::to_vec(&review).map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?,
         );
+        check()?;
         Ok(review)
     }
     pub fn sync_resolve_reviewed(
@@ -367,6 +401,22 @@ impl Workspace {
         expected: &str,
         fingerprint: &str,
     ) -> Result<()> {
+        self.sync_resolve_reviewed_checked(
+            binding,
+            sequence,
+            (choice, destination, expected, fingerprint),
+            &UnscopedCommit,
+        )
+    }
+    pub(crate) fn sync_resolve_reviewed_checked(
+        &mut self,
+        binding: &str,
+        sequence: i64,
+        decision: (&str, &str, &str, &str),
+        guard: &impl CommitGuard,
+    ) -> Result<()> {
+        let (choice, destination, expected, fingerprint) = decision;
+        guard.check()?;
         self.check_binding(binding)?;
         let frozen: bool = self.db.query_row(
             "SELECT EXISTS(SELECT 1 FROM sync_resolutions WHERE binding=?1 AND sequence=?2)",
@@ -388,7 +438,7 @@ impl Workspace {
                 return Err(HostError::new("SYNC_RESOLUTION_CHANGED"));
             }
         } else {
-            let review = self.sync_conflict_review(binding, sequence)?;
+            let review = self.sync_conflict_review_checked(binding, sequence, guard)?;
             if review.fingerprint != fingerprint || review.local.hash != expected {
                 return Err(HostError::new("SYNC_CONFLICT_CHANGED"));
             }
@@ -408,21 +458,26 @@ impl Workspace {
             .collect();
             let guards = serde_json::to_string(&guards)
                 .map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?;
-            self.db.execute("INSERT INTO sync_review_receipts VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(binding,sequence) DO UPDATE SET fingerprint=excluded.fingerprint,expected=excluded.expected,choice=excluded.choice,destination=excluded.destination,guards=excluded.guards",
+            guard.check()?;
+            let tx = self.db.transaction()?;
+            tx.execute("INSERT INTO sync_review_receipts VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(binding,sequence) DO UPDATE SET fingerprint=excluded.fingerprint,expected=excluded.expected,choice=excluded.choice,destination=excluded.destination,guards=excluded.guards",
                 params![binding,sequence,fingerprint,expected,choice,destination,guards])?;
+            guard.commit(tx)?;
         }
-        self.sync_resolve(binding, sequence, choice, destination, expected)
+        self.sync_resolve_checked(binding, sequence, choice, destination, expected, guard)
     }
 
     /// Only this decision's committed journal phases may change the reviewed
     /// paths. A partial retry must still protect every later human edit.
-    pub(crate) fn sync_check_review_paths(
+    pub(crate) fn sync_check_review_paths_checked(
         &self,
         binding: &str,
         sequence: i64,
         retire: &str,
         rename: &str,
+        check: &dyn Fn() -> Result<()>,
     ) -> Result<Option<Vec<ReviewGuard>>> {
+        check()?;
         let encoded: Option<String> = self
             .db
             .query_row(
@@ -464,8 +519,9 @@ impl Workspace {
             }
         }
         for guard in &guards {
+            check()?;
             self.resolve(&guard.path)?;
-            let current = read(&self.root, &guard.path, false, true)?;
+            let current = read_checked(&self.root, &guard.path, false, true, check)?;
             let actual_id = self.sync_review_file_id(&guard.path)?;
             let same_id = actual_id == guard.file_id
                 || (actual_id.is_none()
@@ -478,6 +534,7 @@ impl Workspace {
                 return Err(HostError::new("SYNC_CONFLICT_CHANGED"));
             }
         }
+        check()?;
         Ok(Some(guards))
     }
 }

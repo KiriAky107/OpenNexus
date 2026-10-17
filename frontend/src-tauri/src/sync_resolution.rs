@@ -1,5 +1,6 @@
 //! 用户决策在更改文件之前是持久的；日志 ID 使重新启动重放变得安全。
 use crate::workspace::hash;
+use crate::workspace_commit::{CommitGuard, UnscopedCommit};
 use crate::{
     sync_inbox::RemoteRevision,
     workspace::{Entry, HostError, Result, Workspace},
@@ -32,6 +33,26 @@ impl Workspace {
         destination: &str,
         expected: &str,
     ) -> Result<()> {
+        self.sync_resolve_checked(
+            binding,
+            sequence,
+            choice,
+            destination,
+            expected,
+            &UnscopedCommit,
+        )
+    }
+    pub(crate) fn sync_resolve_checked(
+        &mut self,
+        binding: &str,
+        sequence: i64,
+        choice: &str,
+        destination: &str,
+        expected: &str,
+        guard: &impl CommitGuard,
+    ) -> Result<()> {
+        let check = || guard.check();
+        check()?;
         self.check_binding(binding)?;
         let scope_path: Option<String> = self
             .db
@@ -65,7 +86,9 @@ impl Workspace {
             let path = stored_path;
             let source = self.resolve(&path)?;
             let current = if source.is_file() {
-                self.sync_store_file(&source)?
+                let digest = crate::payloads::hash_file_checked(&source, &check)?;
+                self.snapshot_file_checked(&source, &digest, &check)?;
+                digest
             } else {
                 String::new()
             };
@@ -83,13 +106,18 @@ impl Workspace {
                 if crate::records::is_record(destination) {
                     let spool = self.sync_spool(&current)?;
                     let size = fs::metadata(&spool)?.len();
-                    let mut file = crate::payloads::open_verified(&spool, &current, size)?;
-                    crate::payloads::validate_record(&mut file, destination, size)?;
+                    crate::payloads::WritePayload::Stored {
+                        digest: &current,
+                        size,
+                    }
+                    .validate_checked(self, destination, &check)?;
                 }
             } else if !destination.is_empty() {
                 return Err(HostError::new("SYNC_RESOLUTION_INVALID"));
             }
-            self.db.execute(
+            check()?;
+            let tx = self.db.transaction()?;
+            tx.execute(
                 "INSERT INTO sync_resolutions (binding,sequence,choice,destination,expected,operation_id,rename_id,copy_id,state,retire_id,restore_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'pending',?9,?10)",
                 params![
                     binding,
@@ -104,10 +132,19 @@ impl Workspace {
                     Uuid::new_v4().to_string()
                 ],
             )?;
+            guard.commit(tx)?;
         }
-        self.sync_apply_resolution(binding, sequence)
+        self.sync_apply_resolution_checked(binding, sequence, guard)
     }
     pub fn sync_resume_resolutions(&mut self, binding: &str) -> Result<()> {
+        self.sync_resume_resolutions_checked(binding, &UnscopedCommit)
+    }
+    pub(crate) fn sync_resume_resolutions_checked(
+        &mut self,
+        binding: &str,
+        guard: &impl CommitGuard,
+    ) -> Result<()> {
+        guard.check()?;
         self.check_binding(binding)?;
         let pending = {
             let mut statement=self.db.prepare("SELECT sequence FROM sync_resolutions WHERE binding=?1 AND state='pending' ORDER BY sequence")?;
@@ -117,20 +154,30 @@ impl Workspace {
             values
         };
         for sequence in pending {
-            self.sync_apply_resolution(binding, sequence)?;
+            self.sync_apply_resolution_checked(binding, sequence, guard)?;
         }
         Ok(())
     }
-    fn sync_apply_resolution(&mut self, binding: &str, sequence: i64) -> Result<()> {
+    fn sync_apply_resolution_checked(
+        &mut self,
+        binding: &str,
+        sequence: i64,
+        guard: &impl CommitGuard,
+    ) -> Result<()> {
+        let check = || guard.check();
+        check()?;
         self.check_binding(binding)?;
         let (choice,destination,expected,operation,rename,copy,state,mut retire,mut restore): (String,String,String,String,String,String,String,String,String) = self.db.query_row("SELECT choice,destination,expected,operation_id,rename_id,copy_id,state,retire_id,restore_id FROM sync_resolutions WHERE binding=?1 AND sequence=?2",params![binding,sequence],|r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?)))?;
         if retire.is_empty() || restore.is_empty() {
             retire = Uuid::new_v4().to_string();
             restore = Uuid::new_v4().to_string();
-            self.db.execute(
+            check()?;
+            let tx = self.db.transaction()?;
+            tx.execute(
                 "UPDATE sync_resolutions SET retire_id=CASE WHEN retire_id='' THEN ?3 ELSE retire_id END,restore_id=CASE WHEN restore_id='' THEN ?4 ELSE restore_id END WHERE binding=?1 AND sequence=?2",
                 params![binding, sequence, retire, restore],
             )?;
+            guard.commit(tx)?;
             let ids: (String, String) = self.db.query_row(
                 "SELECT retire_id,restore_id FROM sync_resolutions WHERE binding=?1 AND sequence=?2",
                 params![binding, sequence],
@@ -168,7 +215,7 @@ impl Workspace {
         {
             let conflict_source = self.resolve(&path)?;
             let mut current = if conflict_source.is_file() {
-                crate::payloads::hash_file(&conflict_source)?
+                crate::payloads::hash_file_checked(&conflict_source, &check)?
             } else {
                 String::new()
             };
@@ -179,7 +226,7 @@ impl Workspace {
                 .operation(&rename)?
                 .is_some_and(|value| value["state"] == "committed");
             if let Some(guards) =
-                self.sync_check_review_paths(binding, sequence, &retire, &rename)?
+                self.sync_check_review_paths_checked(binding, sequence, &retire, &rename, &check)?
             {
                 current = guards
                     .iter()
@@ -193,13 +240,12 @@ impl Workspace {
             }
             if choice == "copy" {
                 let size = fs::metadata(self.sync_spool(&expected)?)?.len();
-                self.write_spooled_with_identity(
+                self.sync_resolution_write(
                     &destination,
                     "",
                     (&expected, size),
-                    "local",
-                    &copy,
-                    None,
+                    ("local", &copy, None),
+                    guard,
                 )?;
             }
             let target_collision = target_retired
@@ -208,14 +254,21 @@ impl Workspace {
                         .entry(&path)?
                         .is_some_and(|entry| !entry.deleted && entry.file_id != revision.file_id));
             if target_collision && !target_retired {
-                self.mutate_with_origin("delete", &path, "", &current, &retire, "remote")?;
+                self.sync_resolution_mutate(
+                    "delete",
+                    &path,
+                    "",
+                    &current,
+                    (&retire, "remote"),
+                    guard,
+                )?;
             }
             let source_path = self
                 .path_for_id(&revision.file_id)
                 .unwrap_or_else(|_| revision.path.clone());
             let source = self.resolve(&source_path)?;
             let mut source_hash = if let Some(guards) =
-                self.sync_check_review_paths(binding, sequence, &retire, &rename)?
+                self.sync_check_review_paths_checked(binding, sequence, &retire, &rename, &check)?
             {
                 guards
                     .iter()
@@ -224,7 +277,7 @@ impl Workspace {
                     .hash
                     .clone()
             } else if source.is_file() {
-                crate::payloads::hash_file(&source)?
+                crate::payloads::hash_file_checked(&source, &check)?
             } else {
                 String::new()
             };
@@ -235,19 +288,19 @@ impl Workspace {
             {
                 // 被删除的目标仍占用其唯一数据库路径，直到最后一次感知身份的写入撤销该逻辑删除记录。
                 // 先在旧路径停用传入标识，再用冻结的远程内容或用户选择的本地内容在目标路径恢复它。
-                self.mutate_with_origin(
+                self.sync_resolution_mutate(
                     "delete",
                     &source_path,
                     "",
                     &source_hash,
-                    &rename,
-                    "remote",
+                    (&rename, "remote"),
+                    guard,
                 )?;
                 source_hash.clear();
             }
             if choice == "local" {
                 if expected.is_empty() {
-                    self.sync_delete_intent(&revision, &operation)?;
+                    self.sync_delete_intent_checked(&revision, &operation, guard)?;
                 } else {
                     let destination = if target_collision {
                         revision.path.as_str()
@@ -260,24 +313,23 @@ impl Workspace {
                         current.as_str()
                     };
                     let size = fs::metadata(self.sync_spool(&expected)?)?.len();
-                    self.write_spooled_with_identity(
+                    self.sync_resolution_write(
                         destination,
                         destination_hash,
                         (&expected, size),
-                        "local",
-                        &operation,
-                        Some(&revision.file_id),
+                        ("local", &operation, Some(&revision.file_id)),
+                        guard,
                     )?;
                 }
             } else if revision.operation == "delete" {
                 if !source_hash.is_empty() {
-                    self.mutate_with_origin(
+                    self.sync_resolution_mutate(
                         "delete",
                         &source_path,
                         "",
                         &source_hash,
-                        &operation,
-                        "remote",
+                        (&operation, "remote"),
+                        guard,
                     )?;
                 }
             } else {
@@ -286,17 +338,17 @@ impl Workspace {
                     && !source_hash.is_empty()
                     && !source_renamed
                 {
-                    self.mutate_with_origin(
+                    self.sync_resolution_mutate(
                         "rename",
                         &source_path,
                         &revision.path,
                         &source_hash,
-                        &rename,
-                        "remote",
+                        (&rename, "remote"),
+                        guard,
                     )?;
-                    source_hash = if let Some(guards) =
-                        self.sync_check_review_paths(binding, sequence, &retire, &rename)?
-                    {
+                    source_hash = if let Some(guards) = self.sync_check_review_paths_checked(
+                        binding, sequence, &retire, &rename, &check,
+                    )? {
                         guards
                             .iter()
                             .find(|guard| guard.path == revision.path)
@@ -304,20 +356,19 @@ impl Workspace {
                             .hash
                             .clone()
                     } else {
-                        crate::payloads::hash_file(&self.resolve(&revision.path)?)?
+                        crate::payloads::hash_file_checked(&self.resolve(&revision.path)?, &check)?
                     };
                 }
                 let digest = revision
                     .hash
                     .as_deref()
                     .ok_or_else(|| HostError::new("SYNC_RESPONSE_INVALID"))?;
-                self.write_spooled_with_identity(
+                self.sync_resolution_write(
                     &revision.path,
                     &source_hash,
                     (digest, revision.size as u64),
-                    "remote",
-                    &operation,
-                    Some(&revision.file_id),
+                    ("remote", &operation, Some(&revision.file_id)),
+                    guard,
                 )?;
             }
         }
@@ -347,18 +398,18 @@ impl Workspace {
                         return Err(HostError::new("REVISION_CONFLICT"));
                     }
                     let size = fs::metadata(self.sync_spool(&head_hash)?)?.len();
-                    self.write_spooled_with_identity(
+                    self.sync_resolution_write(
                         &head_path,
                         "",
                         (&head_hash, size),
-                        "remote",
-                        &restore,
-                        Some(retired_id),
+                        ("remote", &restore, Some(retired_id)),
+                        guard,
                     )?;
                 }
                 restored_retired = true;
             }
         }
+        check()?;
         let tx = self.db.transaction()?;
         if let Some(retired) = retired.filter(|id| id != &revision.file_id) {
             if !restored_retired {
@@ -384,10 +435,55 @@ impl Workspace {
             "UPDATE sync_resolutions SET state='completed' WHERE binding=?1 AND sequence=?2",
             params![binding, sequence],
         )?;
-        tx.commit()?;
+        guard.commit(tx)?;
         Ok(())
     }
-    fn sync_delete_intent(&mut self, revision: &RemoteRevision, operation: &str) -> Result<()> {
+    fn sync_resolution_write(
+        &mut self,
+        path: &str,
+        expected: &str,
+        payload: (&str, u64),
+        original: (&str, &str, Option<&str>),
+        guard: &impl CommitGuard,
+    ) -> Result<()> {
+        let (origin, operation, identity) = original;
+        let prepared = self.prepare_write_checked(
+            path,
+            expected,
+            crate::payloads::WritePayload::Stored {
+                digest: payload.0,
+                size: payload.1,
+            },
+            origin,
+            operation,
+            (identity, &|| guard.check()),
+        )?;
+        prepared.accept_guarded(guard)?.complete()?;
+        Ok(())
+    }
+    fn sync_resolution_mutate(
+        &mut self,
+        kind: &str,
+        path: &str,
+        destination: &str,
+        expected: &str,
+        original: (&str, &str),
+        guard: &impl CommitGuard,
+    ) -> Result<()> {
+        let prepared =
+            self.prepare_mutation_checked(kind, path, destination, expected, original, &|| {
+                guard.check()
+            })?;
+        prepared.accept_guarded(guard)?.complete()?;
+        Ok(())
+    }
+    fn sync_delete_intent_checked(
+        &mut self,
+        revision: &RemoteRevision,
+        operation: &str,
+        guard: &impl CommitGuard,
+    ) -> Result<()> {
+        guard.check()?;
         let tx = self.db.transaction()?;
         tx.execute(
             "UPDATE files SET deleted=1,revision=revision+1 WHERE id=?1",
@@ -426,7 +522,7 @@ impl Workspace {
                 encoded
             ],
         )?;
-        tx.commit()?;
+        guard.commit(tx)?;
         Ok(())
     }
 }

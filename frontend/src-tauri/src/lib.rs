@@ -73,6 +73,8 @@ pub mod sync_inbox;
 pub mod sync_initial;
 pub mod sync_progress;
 pub mod sync_resolution;
+#[cfg(test)]
+mod sync_resolution_checked_tests;
 pub mod sync_review;
 #[cfg(test)]
 mod sync_review_tests;
