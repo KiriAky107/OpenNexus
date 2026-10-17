@@ -9,6 +9,71 @@ struct Previous {
     identity: Option<String>,
 }
 
+/// A metadata-only publication plan. Preparation may inspect disk identities;
+/// applying the plan only touches the caller's existing SQLite transaction.
+/// It does not own a Workspace, file handle or callback that can do file I/O.
+pub(super) struct IdentityChanges {
+    moved: Vec<String>,
+    updates: Vec<IdentityUpdate>,
+    retired: Vec<String>,
+}
+struct IdentityUpdate {
+    entry: Entry,
+    retire_occupant: bool,
+    write_file: bool,
+    identity: Option<Option<String>>,
+}
+impl IdentityChanges {
+    pub(super) fn apply(&self, tx: &rusqlite::Transaction<'_>) -> Result<()> {
+        for file_id in &self.moved {
+            tx.execute(
+                "UPDATE files SET path=?2 WHERE id=?1",
+                params![file_id, format!(".ainote/reconcile/{file_id}")],
+            )?;
+        }
+        for update in &self.updates {
+            let entry = &update.entry;
+            if update.retire_occupant {
+                tx.execute(
+                    "UPDATE files SET path='.ainote/retired/' || id,
+                    revision=revision+(deleted=0),deleted=1 WHERE path=?1 AND id<>?2",
+                    params![entry.path, entry.file_id],
+                )?;
+            }
+            if update.write_file {
+                tx.execute(
+                    "INSERT INTO files VALUES (?1,?2,?3,?4,0) ON CONFLICT(id) DO UPDATE
+                 SET path=excluded.path,hash=excluded.hash,revision=excluded.revision,deleted=0
+                 WHERE files.path<>excluded.path OR files.hash<>excluded.hash
+                    OR files.revision<>excluded.revision OR files.deleted<>0",
+                    params![entry.file_id, entry.path, entry.hash, entry.revision],
+                )?;
+            }
+            if let Some(identity) = &update.identity {
+                if let Some(identity) = identity {
+                    tx.execute(
+                        "INSERT INTO file_disk_identity VALUES (?1,?2) ON CONFLICT(file_id)
+                     DO UPDATE SET identity=excluded.identity WHERE identity<>excluded.identity",
+                        params![entry.file_id, identity],
+                    )?;
+                } else {
+                    tx.execute(
+                        "DELETE FROM file_disk_identity WHERE file_id=?1",
+                        [&entry.file_id],
+                    )?;
+                }
+            }
+        }
+        for file_id in &self.retired {
+            tx.execute(
+                "UPDATE files SET deleted=1,revision=revision+1 WHERE id=?1 AND deleted=0",
+                [file_id],
+            )?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(windows)]
 fn windows_identity_parts(identity: &str) -> Option<(&str, &str)> {
     let boundary = identity.match_indices(':').nth(2)?.0;
@@ -144,6 +209,20 @@ impl Workspace {
         next: &mut BTreeMap<String, CachedEntry>,
         enumerated: bool,
     ) -> Result<()> {
+        let changes = self.prepare_file_identities(next, enumerated, &|| Ok(()))?;
+        let tx = self.db.transaction()?;
+        changes.apply(&tx)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(super) fn prepare_file_identities(
+        &self,
+        next: &mut BTreeMap<String, CachedEntry>,
+        enumerated: bool,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<IdentityChanges> {
+        check()?;
         let previous = {
             let mut statement = self.db.prepare(
                 "SELECT f.id,f.path,f.hash,f.revision,f.deleted,i.identity FROM files f
@@ -175,6 +254,7 @@ impl Workspace {
             .collect();
         let mut old_identities: BTreeMap<&str, Vec<&Previous>> = BTreeMap::new();
         for old in previous.values().filter(|old| !old.entry.deleted) {
+            check()?;
             if let Some(identity) = old.identity.as_deref() {
                 old_identities.entry(identity).or_default().push(old);
             }
@@ -184,6 +264,7 @@ impl Workspace {
         let mut current_identities: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut matched_identities = BTreeMap::new();
         for (path, item) in next.iter() {
+            check()?;
             if let Some(identity) = item.stamp.as_ref().and_then(|s| s.identity.as_ref()) {
                 #[cfg(windows)]
                 let identity = if old_identities.contains_key(identity.as_str()) {
@@ -191,6 +272,7 @@ impl Workspace {
                 } else {
                     windows_identities
                         .tunneled_identity(identity, path, |path| {
+                            check()?;
                             let target = self.resolve(path)?;
                             if target.exists() {
                                 Ok(Some(target.canonicalize()?))
@@ -209,6 +291,7 @@ impl Workspace {
         }
         let mut assigned = BTreeSet::new();
         for (path, item) in next.iter_mut().filter(|(_, item)| !item.entry.is_folder) {
+            check()?;
             let same_path = previous.get(path).filter(|old| !old.entry.deleted);
             let identity = matched_identities.get(path).map(String::as_str);
             let locations = identity.and_then(|id| current_identities.get(id));
@@ -271,78 +354,54 @@ impl Workspace {
             }
         }
 
-        // Reserve all moved paths first, then retire overwritten tombstones and
-        // install the new mapping. A DB error rolls back the entire snapshot.
+        // Freeze every decision before taking the publication transaction.
+        // Native callers can cancel this read-only preparation between paths.
         // Historical outbox/observed paths deliberately remain untouched: sync
-        // still needs to send the old deletion before a new occupant's put.
-        let tx = self.db.transaction()?;
+        // still needs the old deletion before a replacement occupant's put.
+        let mut changes = IdentityChanges {
+            moved: Vec::new(),
+            updates: Vec::new(),
+            retired: Vec::new(),
+        };
         for item in next.values().filter(|item| !item.entry.is_folder) {
+            check()?;
             if previous_by_id
                 .get(item.entry.file_id.as_str())
                 .is_some_and(|old| old.entry.path != item.entry.path)
             {
-                tx.execute(
-                    "UPDATE files SET path=?2 WHERE id=?1",
-                    params![
-                        item.entry.file_id,
-                        format!(".ainote/reconcile/{}", item.entry.file_id),
-                    ],
-                )?;
+                changes.moved.push(item.entry.file_id.clone());
             }
         }
         for item in next.values().filter(|item| !item.entry.is_folder) {
+            check()?;
             let entry = &item.entry;
             let old = previous_by_id.get(entry.file_id.as_str());
-            if previous
+            let retire_occupant = previous
                 .get(&entry.path)
-                .is_some_and(|occupant| occupant.entry.file_id != entry.file_id)
-            {
-                tx.execute(
-                    "UPDATE files SET path='.ainote/retired/' || id,
-                    revision=revision+(deleted=0),deleted=1 WHERE path=?1 AND id<>?2",
-                    params![entry.path, entry.file_id],
-                )?;
-            }
-            if old.is_none_or(|old| {
+                .is_some_and(|occupant| occupant.entry.file_id != entry.file_id);
+            let write_file = old.is_none_or(|old| {
                 old.entry.path != entry.path || old.entry.hash != entry.hash || old.entry.deleted
-            }) {
-                tx.execute(
-                    "INSERT INTO files VALUES (?1,?2,?3,?4,0) ON CONFLICT(id) DO UPDATE
-                 SET path=excluded.path,hash=excluded.hash,revision=excluded.revision,deleted=0
-                 WHERE files.path<>excluded.path OR files.hash<>excluded.hash
-                    OR files.revision<>excluded.revision OR files.deleted<>0",
-                    params![entry.file_id, entry.path, entry.hash, entry.revision],
-                )?;
-            }
+            });
             let identity = item.stamp.as_ref().and_then(|s| s.identity.as_ref());
-            if old.and_then(|old| old.identity.as_ref()) != identity {
-                if let Some(identity) = identity {
-                    tx.execute(
-                        "INSERT INTO file_disk_identity VALUES (?1,?2) ON CONFLICT(file_id)
-                     DO UPDATE SET identity=excluded.identity WHERE identity<>excluded.identity",
-                        params![entry.file_id, identity],
-                    )?;
-                } else {
-                    tx.execute(
-                        "DELETE FROM file_disk_identity WHERE file_id=?1",
-                        [&entry.file_id],
-                    )?;
-                }
-            }
+            changes.updates.push(IdentityUpdate {
+                entry: entry.clone(),
+                retire_occupant,
+                write_file,
+                identity: (old.and_then(|old| old.identity.as_ref()) != identity)
+                    .then(|| identity.cloned()),
+            });
         }
         for (path, old) in &previous {
+            check()?;
             if !old.entry.deleted
                 && !assigned.contains(&old.entry.file_id)
                 && ((enumerated && supported(path)) || self.cache.entries.contains_key(path))
             {
-                tx.execute(
-                    "UPDATE files SET deleted=1,revision=revision+1 WHERE id=?1 AND deleted=0",
-                    [&old.entry.file_id],
-                )?;
+                changes.retired.push(old.entry.file_id.clone());
             }
         }
-        tx.commit()?;
-        Ok(())
+        check()?;
+        Ok(changes)
     }
 }
 

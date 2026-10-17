@@ -3,6 +3,140 @@ use crate::sync_inbox::RemoteRevision;
 use crate::sync_state::Binding;
 use rusqlite::params;
 
+fn identity_plan_rows(db: &rusqlite::Connection) -> Vec<(String, String, String, i64, bool)> {
+    db.prepare("SELECT id,path,hash,revision,deleted FROM files ORDER BY id")
+        .unwrap()
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap()
+}
+
+fn identity_plan_disk(ws: &Workspace, paths: &[&str]) -> BTreeMap<String, CachedEntry> {
+    paths
+        .iter()
+        .map(|path| {
+            let target = ws.root.join(path);
+            (
+                (*path).to_owned(),
+                CachedEntry {
+                    stamp: Some(Stamp::read(&target).unwrap()),
+                    entry: Entry {
+                        file_id: String::new(),
+                        path: (*path).to_owned(),
+                        hash: crate::payloads::hash_file(&target).unwrap(),
+                        revision: 0,
+                        deleted: false,
+                        is_folder: false,
+                        updated_at: None,
+                    },
+                },
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn sync_identity_preparation_cancellation_never_opens_a_publication_transaction() {
+    let root = tempfile::tempdir().unwrap();
+    let mut ws = Workspace::open(root.path()).unwrap();
+    ws.write("a.md", "", b"original bytes", "local").unwrap();
+    files(&mut ws);
+    fs::rename(root.path().join("a.md"), root.path().join("b.md")).unwrap();
+    let before = identity_plan_rows(&ws.db);
+    let count = ws.pending_count().unwrap();
+    let checks = std::cell::Cell::new(0);
+    let mut next = identity_plan_disk(&ws, &["b.md"]);
+    let result = ws.prepare_file_identities(&mut next, true, &|| {
+        assert!(ws.db.is_autocommit());
+        checks.set(checks.get() + 1);
+        if checks.get() == 3 {
+            return Err(HostError::new("SYNC_FOREGROUND_CHANGED"));
+        }
+        Ok(())
+    });
+    assert!(matches!(result, Err(error) if error.code == "SYNC_FOREGROUND_CHANGED"));
+    assert_eq!(identity_plan_rows(&ws.db), before);
+    assert_eq!(ws.pending_count().unwrap(), count);
+    assert_eq!(
+        fs::read(root.path().join("b.md")).unwrap(),
+        b"original bytes"
+    );
+}
+
+#[test]
+fn sync_identity_staged_swap_preserves_ids_and_rolls_back_as_one_transaction() {
+    let root = tempfile::tempdir().unwrap();
+    let mut ws = Workspace::open(root.path()).unwrap();
+    ws.write("a.md", "", b"original A", "local").unwrap();
+    ws.write("b.md", "", b"original B", "local").unwrap();
+    files(&mut ws);
+    let a = ws.entry("a.md").unwrap().unwrap().file_id;
+    let b = ws.entry("b.md").unwrap().unwrap().file_id;
+    let before = identity_plan_rows(&ws.db);
+    let count = ws.pending_count().unwrap();
+    fs::rename(root.path().join("a.md"), root.path().join("swap.md")).unwrap();
+    fs::rename(root.path().join("b.md"), root.path().join("a.md")).unwrap();
+    fs::rename(root.path().join("swap.md"), root.path().join("b.md")).unwrap();
+    let mut next = identity_plan_disk(&ws, &["a.md", "b.md"]);
+    let changes = ws
+        .prepare_file_identities(&mut next, true, &|| Ok(()))
+        .unwrap();
+    assert_eq!(next["a.md"].entry.file_id, b);
+    assert_eq!(next["b.md"].entry.file_id, a);
+    assert_eq!(identity_plan_rows(&ws.db), before);
+    {
+        let tx = ws.db.transaction().unwrap();
+        changes.apply(&tx).unwrap();
+        assert_eq!(
+            tx.query_row("SELECT path FROM files WHERE id=?1", [&a], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            "b.md"
+        );
+        // Dropping the caller's transaction cannot leak an intermediate swap.
+    }
+    assert_eq!(identity_plan_rows(&ws.db), before);
+    let tx = ws.db.transaction().unwrap();
+    changes.apply(&tx).unwrap();
+    tx.commit().unwrap();
+    assert_eq!(ws.path_for_id(&a).unwrap(), "b.md");
+    assert_eq!(ws.path_for_id(&b).unwrap(), "a.md");
+    assert_eq!(ws.pending_count().unwrap(), count);
+    assert_eq!(fs::read(root.path().join("a.md")).unwrap(), b"original B");
+    assert_eq!(fs::read(root.path().join("b.md")).unwrap(), b"original A");
+}
+
+#[test]
+fn sync_identity_prepared_replacement_keeps_the_moved_original_separate() {
+    let root = tempfile::tempdir().unwrap();
+    let mut ws = Workspace::open(root.path()).unwrap();
+    ws.write("a.md", "", b"moved original", "local").unwrap();
+    files(&mut ws);
+    let original = ws.entry("a.md").unwrap().unwrap().file_id;
+    let before = identity_plan_rows(&ws.db);
+    fs::rename(root.path().join("a.md"), root.path().join("b.md")).unwrap();
+    fs::write(root.path().join("a.md"), b"new occupant").unwrap();
+    let mut next = identity_plan_disk(&ws, &["a.md", "b.md"]);
+    let changes = ws
+        .prepare_file_identities(&mut next, true, &|| Ok(()))
+        .unwrap();
+    assert_eq!(identity_plan_rows(&ws.db), before);
+    assert_eq!(next["b.md"].entry.file_id, original);
+    assert_ne!(next["a.md"].entry.file_id, original);
+    let tx = ws.db.transaction().unwrap();
+    changes.apply(&tx).unwrap();
+    tx.commit().unwrap();
+    assert_eq!(ws.path_for_id(&original).unwrap(), "b.md");
+    assert_eq!(
+        ws.entry("a.md").unwrap().unwrap().file_id,
+        next["a.md"].entry.file_id
+    );
+    assert_eq!(fs::read(root.path().join("a.md")).unwrap(), b"new occupant");
+}
+
 fn files(ws: &mut Workspace) -> Vec<Entry> {
     ws.tree()
         .unwrap()
