@@ -10,12 +10,13 @@ import json
 import ntpath
 import os
 from pathlib import Path
+import re
 import socket
 import stat
 import subprocess
 import time
 
-from android_desktop_handoff import canonical, context_bytes, require
+from android_desktop_handoff import HandoffError, canonical, context_bytes, require
 
 DESKTOP_SOURCE = '931b96d6c4dab7a6c8f1d9ac4548dd0e51297c30'
 INSTALLER_SHA256 = '1f51065722b93627fcc72ac605fb5930e5f995ab2d7dad9b310de88a0251c411'
@@ -77,12 +78,30 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def windows_drive_path(value, *, extended=False):
+    """Match the installed Host's canonical drive form for this owned path.
+
+    FreshProfile supplies the test pointer directly. The product's normal
+    storage picker canonicalizes before writing that pointer; preserve the
+    Windows extended prefix here too, rather than borrowing a user profile or
+    accepting a pending restart. UNC/device/relative paths are not test roots.
+    """
+    raw = str(value).replace('/', '\\')
+    if raw.startswith('\\\\?\\'):
+        raw = raw[4:]
+    require(re.match(r'^[A-Za-z]:\\', raw) is not None
+            and not any(part in ('.', '..') for part in raw[3:].split('\\'))
+            and not any(char in raw[2:] for char in '\x00:*?"<>|'), 'DESKTOP_PAIR_STORAGE_MISMATCH')
+    normalized = ntpath.normpath(raw)
+    return '\\\\?\\' + normalized if extended else ntpath.normcase(normalized)
+
+
 def verify_storage(value, data):
     require(type(value) is dict and set(value) == {
         'active_path', 'default_path', 'configured_path', 'custom', 'restart_required'}, 'DESKTOP_PAIR_STORAGE_MISMATCH')
-    expected = ntpath.normcase(ntpath.normpath(str(data)))
+    expected = windows_drive_path(data)
     require(value['custom'] is True and value['restart_required'] is False
-            and all(type(value[key]) is str and ntpath.normcase(ntpath.normpath(value[key])) == expected
+            and all(type(value[key]) is str and windows_drive_path(value[key]) == expected
                     for key in ('active_path', 'configured_path')), 'DESKTOP_PAIR_STORAGE_MISMATCH')
 
 
@@ -90,9 +109,14 @@ def safe_failure(error):
     # Playwright exception text can include the last fill argument. Never
     # publish that text, its repr or a chained exception after sign-in begins.
     name = type(error).__name__
-    return {'code': 'DESKTOP_PAIR_UI_FAILED', 'error_class': name if name in {
+    result = {'code': 'DESKTOP_PAIR_UI_FAILED', 'error_class': name if name in {
         'TimeoutError', 'Error', 'RuntimeError', 'HandoffError', 'OSError', 'AssertionError'} else 'OtherError',
         'original_exception_text_returned': False}
+    if isinstance(error, HandoffError) and str(error) in {
+            'DESKTOP_PAIR_STORAGE_MISMATCH', 'DESKTOP_PAIR_CORE_VERSION_MISMATCH',
+            'DESKTOP_PAIR_CORE_NOT_READY', 'DESKTOP_PAIR_INITIAL_STATE_INVALID'}:
+        result['checkpoint_code'] = str(error)
+    return result
 
 
 def extract_installer(context, installer):
@@ -146,7 +170,7 @@ def start_product(context, stage):
         stream.write(canonical({'context': context, 'stage': stage, 'payload': receipt,
                                 'own_data_identity': directory_identity(data), 'own_vault_identity': directory_identity(vault)}))
         stream.flush(); os.fsync(stream.fileno())
-    profile = FreshProfile(Path(os.environ['APPDATA']), IDENTIFIER, data)
+    profile = FreshProfile(Path(os.environ['APPDATA']), IDENTIFIER, Path(windows_drive_path(data, extended=True)))
     process = None
     try:
         with socket.socket() as sock:

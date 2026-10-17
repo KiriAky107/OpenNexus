@@ -91,6 +91,32 @@ class ProductIsolation(unittest.TestCase):
         self.assertEqual(value, {'code': 'DESKTOP_PAIR_UI_FAILED', 'error_class': 'TimeoutError',
                                  'original_exception_text_returned': False})
 
+    def test_canonical_owned_windows_paths_match_without_bypassing_restart_or_foreign_path_checks(self):
+        target = r'D:\owned\data'
+        value = {'active_path': '\\\\?\\' + target, 'configured_path': '\\\\?\\' + target,
+                 'default_path': r'D:\default', 'custom': True, 'restart_required': False}
+        verify_storage(value, Path(target))
+        for changed in [dict(value, active_path=r'\\?\D:\owned\data-foreign'),
+                        dict(value, configured_path=r'\\?\D:\user\production'),
+                        dict(value, restart_required=True)]:
+            with self.assertRaises(HandoffError): verify_storage(changed, Path(target))
+
+    def test_only_absolute_drive_paths_can_supply_the_new_owned_profile_pointer(self):
+        from android_desktop_product import windows_drive_path
+        self.assertEqual(windows_drive_path(Path(r'D:\owned\data'), extended=True), r'\\?\D:\owned\data')
+        self.assertEqual(windows_drive_path(r'\\?\D:\owned\data', extended=True), r'\\?\D:\owned\data')
+        for path in [r'relative\data', r'\\server\share', r'\\.\C:', r'C:relative', r'D:\owned\..\user']:
+            with self.subTest(path=path), self.assertRaises(HandoffError): windows_drive_path(path, extended=True)
+
+    def test_only_known_static_bootstrap_codes_are_retained_without_exception_text(self):
+        code = 'DESKTOP_PAIR_STORAGE_MISMATCH'
+        self.assertEqual(safe_failure(HandoffError(code))['checkpoint_code'], code)
+        secret = 'OWNED_PASSWORD_MUST_NOT_APPEAR'
+        for error in [HandoffError(secret), RuntimeError(code + secret), TimeoutError(secret)]:
+            value = safe_failure(error)
+            self.assertNotIn(secret, json.dumps(value))
+            self.assertNotIn('checkpoint_code', value)
+
 
 if __name__ == '__main__':
     unittest.main()
