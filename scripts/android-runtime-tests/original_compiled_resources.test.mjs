@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { compiledMarkers, resourceExpression, validateResources, observeCompiledResources } from '../android-runtime/original_compiled_resources.mjs'
+import { compiledMarkers, resourceExpression, validateResources, observeCompiledResources, resourceDiagnostic } from '../android-runtime/original_compiled_resources.mjs'
 
 const config={mode:'complete',nonce:'00000000-0000-4000-8000-000000000001',original_pid:321,sequence:2,choice:'copy',destination:'runtime-conflict-copy.md',fingerprint:'a'.repeat(64),expected_hash:'b'.repeat(64)}
 const context={run_id:1234,tools_commit:'a'.repeat(40),socket_url:'ws://127.0.0.1:12345/devtools/page/owned'}
@@ -43,4 +43,49 @@ test('local host or another origin is rejected before a resource connection and 
   const dependencies={readJson:async()=>{reads++;return [{type:'page',title:'OpenNexus',url:'https://external.invalid/',webSocketDebuggerUrl:context.socket_url}]},socketFactory:async()=>{connections++}}
   await assert.rejects(observeCompiledResources(config,context,{},dependencies));assert.equal(reads,0)
   await assert.rejects(observeCompiledResources(config,context,env,dependencies));assert.equal(reads,1);assert.equal(connections,0)
+})
+
+test('CDP notifications do not replace the original resource evaluation reply',async()=>{
+  const listeners={};let sends=0,closed=0
+  const socket={addEventListener:(name,fn)=>{listeners[name]=fn},send:()=>{
+    sends++
+    listeners.message({data:JSON.stringify({method:'Runtime.executionContextCreated',params:{context:{id:1}}})})
+    listeners.message({data:JSON.stringify({id:1,result:{result:{type:'object',value:original()}}})})
+  },close:()=>{closed++}}
+  const result=await observeCompiledResources(config,context,env,{readJson:async()=>[{type:'page',title:'OpenNexus',
+    url:'http://tauri.localhost/',webSocketDebuggerUrl:context.socket_url}],socketFactory:async()=>socket})
+  assert.equal(result.declared_safe_code_list,true);assert.equal(sends,1);assert.equal(closed,1)
+})
+
+test('failure diagnostics expose only a fixed stage and reason without raw page errors',async()=>{
+  for(const [description,reason]of [['Error: OWNED_RESOURCE_CRYPTO_UNAVAILABLE\nSECRET_PAGE_OR_RESOURCE','crypto-unavailable'],
+    ['TypeError: SECRET_PAGE_OR_RESOURCE','page-exception']]){
+    const listeners={};let sends=0,closed=0
+    const socket={addEventListener:(name,fn)=>{listeners[name]=fn},send:()=>{
+      sends++;listeners.message({data:JSON.stringify({id:1,result:{exceptionDetails:{exception:{description}}}})})
+    },close:()=>{closed++}}
+    try{
+      await observeCompiledResources(config,context,env,{readJson:async()=>[{type:'page',title:'OpenNexus',
+        url:'http://tauri.localhost/',webSocketDebuggerUrl:context.socket_url}],socketFactory:async()=>socket})
+      assert.fail('An original evaluation exception is not a completed read')
+    }catch(error){
+      const diagnostic=resourceDiagnostic(error)
+      assert.deepEqual(diagnostic,{error:'OWNED_COMPILED_RESOURCE_UNCONFIRMED',stage:'evaluation-exception',reason})
+      assert.equal(JSON.stringify(diagnostic).includes('SECRET'),false)
+    }
+    assert.equal(sends,1);assert.equal(closed,1)
+  }
+  assert.deepEqual(resourceDiagnostic(Object.assign(Error('SECRET'),{stage:'SECRET',reason:'SECRET'})),
+    {error:'OWNED_COMPILED_RESOURCE_UNCONFIRMED',stage:'admission',reason:'unconfirmed'})
+})
+
+test('unrelated notifications remain bounded and never trigger another evaluation',async()=>{
+  const listeners={};let sends=0,closed=0
+  const socket={addEventListener:(name,fn)=>{listeners[name]=fn},send:()=>{
+    sends++;for(let n=0;n<33;n++)listeners.message({data:JSON.stringify({method:'Runtime.notification',params:{id:n}})})
+    listeners.message({data:JSON.stringify({id:1,result:{result:{type:'object',value:original()}}})})
+  },close:()=>{closed++}}
+  await assert.rejects(observeCompiledResources(config,context,env,{readJson:async()=>[{type:'page',title:'OpenNexus',
+    url:'http://tauri.localhost/',webSocketDebuggerUrl:context.socket_url}],socketFactory:async()=>socket}))
+  assert.equal(sends,1);assert.equal(closed,1)
 })

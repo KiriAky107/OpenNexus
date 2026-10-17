@@ -4,6 +4,26 @@ import { pathToFileURL } from 'node:url'
 import { boundedJson, hostedTarget } from './original_outcome_transport.mjs'
 
 const need=ok=>{if(!ok)throw Error('OWNED_COMPILED_RESOURCE_REFUSED')}
+const stages=new Set(['admission','page-list','socket-open','evaluation-send','evaluation-reply','evaluation-exception','resource-summary'])
+const reasons=new Set(['unconfirmed','timeout','send-unconfirmed','connection-unconfirmed','reply-refused','summary-refused',
+  'origin','bound','resource-unavailable','crypto-unavailable','page-exception'])
+class ResourceReadFailure extends Error{
+  constructor(stage,reason){super('OWNED_COMPILED_RESOURCE_UNCONFIRMED');this.stage=stage;this.reason=reason}
+}
+export function resourceDiagnostic(error){
+  return {error:'OWNED_COMPILED_RESOURCE_UNCONFIRMED',
+    stage:error instanceof ResourceReadFailure&&stages.has(error.stage)?error.stage:'admission',
+    reason:error instanceof ResourceReadFailure&&reasons.has(error.reason)?error.reason:'unconfirmed'}
+}
+function pageExceptionReason(value){
+  const description=value?.exception?.description
+  if(typeof description==='string')for(const [code,reason]of [['ORIGIN','origin'],['BOUND','bound'],
+    ['UNAVAILABLE','resource-unavailable'],['CRYPTO_UNAVAILABLE','crypto-unavailable']]){
+    const prefix='Error: OWNED_RESOURCE_'+code
+    if(description===prefix||description.startsWith(prefix+'\n'))return reason
+  }
+  return 'page-exception'
+}
 export function compiledMarkers(text){
   const lists=[...text.matchAll(/new\s+Set\s*\(\s*\[([^\]]{1,18000})\]\s*\)/g)]
   return {
@@ -34,6 +54,7 @@ export const resourceExpression=`(async()=>{
     finally{await reader.cancel();}
     const bytes=new Uint8Array(size);let offset=0;for(const part of parts){bytes.set(part,offset);offset+=part.byteLength;}
     const text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+    if(!globalThis.crypto?.subtle)throw Error('OWNED_RESOURCE_CRYPTO_UNAVAILABLE');
     const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(b=>b.toString(16).padStart(2,'0')).join('');
     assets.push({path:new URL(value).pathname,bytes:size,sha256:hash,...markers(text)});
   }
@@ -58,35 +79,52 @@ export function validateResources(value){
 }
 
 export async function observeCompiledResources(config,context,env,dependencies={}){
-  const target=hostedTarget(config,context,env),read=dependencies.readJson??boundedJson
-  const pages=await read(target.http+'/json/list');need(Array.isArray(pages))
-  const own=pages.filter(p=>p.type==='page');need(own.length===1&&own[0].title==='OpenNexus'
-    &&own[0].webSocketDebuggerUrl===target.url&&new URL(own[0].url).origin==='http://tauri.localhost')
-  const socket=dependencies.socketFactory?await dependencies.socketFactory(target.url):new WebSocket(target.url)
-  let timer
+  let stage='admission',socket,timer
   try{
+    const target=hostedTarget(config,context,env),read=dependencies.readJson??boundedJson
+    stage='page-list'
+    const pages=await read(target.http+'/json/list');need(Array.isArray(pages))
+    const own=pages.filter(p=>p.type==='page');need(own.length===1&&own[0].title==='OpenNexus'
+      &&own[0].webSocketDebuggerUrl===target.url&&new URL(own[0].url).origin==='http://tauri.localhost')
+    stage='socket-open'
+    socket=dependencies.socketFactory?await dependencies.socketFactory(target.url):new WebSocket(target.url)
     const result=await new Promise((resolve,reject)=>{
-      const fail=()=>reject(Error('OWNED_COMPILED_RESOURCE_UNCONFIRMED'))
-      timer=setTimeout(fail,15000)
-      const send=()=>socket.send(JSON.stringify({id:1,method:'Runtime.evaluate',params:{expression:resourceExpression,returnByValue:true,awaitPromise:true}}))
+      let messages=0,total=0
+      const fail=reason=>reject(new ResourceReadFailure(stage,reasons.has(reason)?reason:'unconfirmed'))
+      timer=setTimeout(()=>fail('timeout'),15000)
+      const send=()=>{
+        stage='evaluation-reply'
+        try{socket.send(JSON.stringify({id:1,method:'Runtime.evaluate',params:{expression:resourceExpression,returnByValue:true,awaitPromise:true}}))}
+        catch{stage='evaluation-send';fail('send-unconfirmed')}
+      }
       socket.addEventListener('message',event=>{
         try{
           need(typeof event.data==='string'&&Buffer.byteLength(event.data)<=65536)
-          const value=JSON.parse(event.data);need(value.id===1&&!value.error&&!value.result?.exceptionDetails
-            &&value.result?.result?.type==='object')
+          messages++;total+=Buffer.byteLength(event.data);need(messages<=32&&total<=256*1024)
+          const value=JSON.parse(event.data)
+          // CDP can send notifications independently of this sole request.
+          // They are bounded and discarded, never exported or executed.
+          if(value.id!==1)return
+          stage='evaluation-reply'
+          need(!value.error)
+          if(value.result?.exceptionDetails){stage='evaluation-exception';fail(pageExceptionReason(value.result.exceptionDetails));return}
+          need(value.result?.result?.type==='object')
+          stage='resource-summary'
           resolve(validateResources(value.result.result.value))
-        }catch{fail()}
+        }catch{fail(stage==='resource-summary'?'summary-refused':'reply-refused')}
       })
-      socket.addEventListener('error',fail);socket.addEventListener('close',fail)
+      socket.addEventListener('error',()=>fail('connection-unconfirmed'));socket.addEventListener('close',()=>fail('connection-unconfirmed'))
       if(dependencies.socketFactory)send();else socket.addEventListener('open',send,{once:true})
     })
     return {nonce:config.nonce,original_pid:config.original_pid,...result,
       application_or_native_IPC_sent:false,Debugger_enabled:false,raw_resource_bytes_exported:false,
       current_native_SYNC_REVIEW_CHANGED_bug_or_execution_claimed:false}
+  }catch(error){
+    throw error instanceof ResourceReadFailure?error:new ResourceReadFailure(stage,'unconfirmed')
   }finally{
     clearTimeout(timer)
     // This connection never enables the debugger or pauses a callback.
-    socket.close()
+    try{socket?.close()}catch{}
   }
 }
 
@@ -96,5 +134,5 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
     const value=JSON.parse(process.argv[2]);need(value&&Object.keys(value).length===2&&value.configuration&&value.context)
     return observeCompiledResources(value.configuration,value.context,process.env)
   }).then(value=>process.stdout.write(JSON.stringify(value)+'\n'))
-    .catch(()=>{process.stdout.write('{"error":"OWNED_COMPILED_RESOURCE_UNCONFIRMED"}\n');process.exitCode=1})
+    .catch(error=>{process.stdout.write(JSON.stringify(resourceDiagnostic(error))+'\n');process.exitCode=1})
 }

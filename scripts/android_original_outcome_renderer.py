@@ -17,6 +17,22 @@ def read_original_renderer(probe, context, manifest, value):
         'application_or_native_IPC': False, 'automatic_retry': False}, exclusive=True)
     script=Path(__file__).parent/'android-runtime/original_compiled_resources.mjs'
     result=probe.command(['node','--max-old-space-size=128',script,json.dumps(value,separators=(',',':'))], timeout=25,check=False)
+    if result.returncode!=0 or result.stderr.strip() or not 0<len(result.stdout)<=65536:
+        diagnostic={'stage':'admission','reason':'unconfirmed'}
+        if 0<len(result.stdout)<=65536:
+            try:
+                child=json.loads(result.stdout)
+                if (type(child) is dict and set(child)=={'error','stage','reason'}
+                    and child['error']=='OWNED_COMPILED_RESOURCE_UNCONFIRMED'
+                    and child['stage'] in ('admission','page-list','socket-open','evaluation-send','evaluation-reply','evaluation-exception','resource-summary')
+                    and child['reason'] in ('unconfirmed','timeout','send-unconfirmed','connection-unconfirmed','reply-refused','summary-refused',
+                        'origin','bound','resource-unavailable','crypto-unavailable','page-exception')):
+                    diagnostic={'stage':child['stage'],'reason':child['reason']}
+            except (ValueError,TypeError):pass
+        atomic_json(probe.output/'original-renderer-resource-diagnostic.json',
+            {'nonce':manifest['nonce'],'original_pid':manifest['original_pid'],**diagnostic,
+             'child_returncode':result.returncode,'stderr_bytes_discarded':len(result.stderr),
+             'raw_error_resource_or_credentials_exported':False,'automatic_retry':False},exclusive=True)
     require(result.returncode==0 and not result.stderr.strip() and 0<len(result.stdout)<=65536, 'OUTCOME_RENDERER_READ_UNCONFIRMED')
     proof=json.loads(result.stdout)
     require(type(proof) is dict and proof.get('nonce')==manifest['nonce'] and proof.get('original_pid')==manifest['original_pid']

@@ -41,5 +41,25 @@ class RendererLink(unittest.TestCase):
             renderer.read_original_renderer(self.probe,self.context,self.manifest,self.value)
         self.probe.command.assert_not_called();self.assertEqual(list(self.probe.output.iterdir()),[])
 
+    def test_failed_child_keeps_only_allowlisted_diagnostic_and_never_retries(self):
+        self.probe.command=Mock(return_value=SimpleNamespace(returncode=1,stderr=b'PRIVATE STDERR',
+            stdout=json.dumps({'error':'OWNED_COMPILED_RESOURCE_UNCONFIRMED','stage':'evaluation-exception','reason':'crypto-unavailable'}).encode()))
+        with self.assertRaisesRegex(HandoffError,'READ_UNCONFIRMED'):
+            renderer.read_original_renderer(self.probe,self.context,self.manifest,self.value)
+        path=self.probe.output/'original-renderer-resource-diagnostic.json';value=json.loads(path.read_text('utf-8'))
+        self.assertEqual(value['stage'],'evaluation-exception');self.assertEqual(value['reason'],'crypto-unavailable')
+        self.assertEqual(value['stderr_bytes_discarded'],len(b'PRIVATE STDERR'))
+        self.assertNotIn('PRIVATE',path.read_text('utf-8'));self.probe.command.assert_called_once()
+        self.assertFalse((self.probe.output/'original-renderer-resource-proof.json').exists())
+
+    def test_arbitrary_child_json_or_error_fields_are_not_exported(self):
+        self.probe.command=Mock(return_value=SimpleNamespace(returncode=1,stderr=b'',
+            stdout=b'{"error":"PRIVATE","stage":"PRIVATE","reason":"PRIVATE","body":"PRIVATE"}'))
+        with self.assertRaisesRegex(HandoffError,'READ_UNCONFIRMED'):
+            renderer.read_original_renderer(self.probe,self.context,self.manifest,self.value)
+        path=self.probe.output/'original-renderer-resource-diagnostic.json';value=json.loads(path.read_text('utf-8'))
+        self.assertEqual(value['stage'],'admission');self.assertEqual(value['reason'],'unconfirmed')
+        self.assertNotIn('PRIVATE',path.read_text('utf-8'));self.probe.command.assert_called_once()
+
 
 if __name__=='__main__':unittest.main()
