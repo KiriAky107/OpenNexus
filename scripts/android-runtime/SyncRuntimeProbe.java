@@ -1,6 +1,7 @@
 package cc.kronecker.opennexus.testdriver;
 
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.os.SystemClock;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -29,6 +30,8 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
             case "cycle-media": cycle("cycle-media"); return true;
             case "cycle-rename": cycle("cycle-rename"); return true;
             case "cycle-delete": cycle("cycle-delete"); return true;
+            case "cycle-after-stop": cycle("cycle-after-stop"); return true;
+            case "cycle-stop": stopOriginal(); return true;
             case "close": click("Close"); return true;
             default: return false;
         }
@@ -43,6 +46,39 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
             .put("native_invocation_id_observed",false).put("action","Sync one cycle now"));
         click("Sync one cycle now");
         waitPresent(node->label(node,"Cycle completed"));
+    }
+
+    private void stopOriginal() throws Exception {
+        File root=getContext().getNoBackupFilesDir();
+        File input=new File(root,"owned-sync-stop-input.json");
+        require(input.isFile() && input.length()>0 && input.length()<=1024,"Original Stop input unavailable");
+        JSONObject original=new JSONObject(new String(Files.readAllBytes(input.toPath()),StandardCharsets.UTF_8));
+        require(original.length()==2 && canonical(original.getString("driver_intent_id"))
+            && canonical(original.getString("control_operation_id")),"Original Stop input changed");
+        readCurrent(); signedIn(); click("Read queue and original records");
+        waitFor(node->label(node,"Sync one cycle now") && node.isEnabled(),true);
+        persistOnce("cycle-stop",original); // Driver/control IDs are not a native invocation ID.
+        click("Sync one cycle now");
+        waitFor(node->label(node,"Stop this cycle") && node.isEnabled(),true);
+        persistOnce("cycle-stop-ready",original);
+        File permission=new File(root,"owned-sync-stop-authorize.json");
+        stage="wait-original-held-response-before-Stop";
+        long deadline=SystemClock.elapsedRealtime()+30000;
+        while (!permission.isFile() && SystemClock.elapsedRealtime()<deadline) Thread.sleep(50);
+        require(permission.isFile() && permission.length()>0 && permission.length()<=1024,"Original Stop not authorized; no Stop tap sent");
+        JSONObject approved=new JSONObject(new String(Files.readAllBytes(permission.toPath()),StandardCharsets.UTF_8));
+        require(approved.length()==2
+            && original.getString("driver_intent_id").equals(approved.optString("driver_intent_id"))
+            && original.getString("control_operation_id").equals(approved.optString("control_operation_id")),
+            "Another Stop checkpoint; no Stop tap sent");
+        persistOnce("cycle-stop-confirmation",original);
+        click("Stop this cycle");
+        waitPresent(node->label(node,"Cycle stopped"));
+    }
+
+    private static boolean canonical(String value) {
+        try { return UUID.fromString(value).toString().equals(value); }
+        catch (IllegalArgumentException error) { return false; }
     }
 
     private JSONObject configuration() throws Exception {

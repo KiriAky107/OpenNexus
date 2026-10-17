@@ -1,8 +1,8 @@
-"""First actual fixed-APK foreground Sync exchange on exclusive hosted providers.
+"""Original fixed-APK foreground Sync scopes on exclusive hosted providers.
 
-This scope proves neither a desktop product pair nor the remaining cancellation,
-conflict, recovery, physical-phone or upgrade cases. Original intents and failures
-are retained; no failed UI mutation is automatically repeated.
+Each named scope records only its actual case; none alone proves a desktop
+product pair, all recovery cases, a physical phone or an upgrade. Original intents
+and failures are retained; no failed UI mutation is automatically repeated.
 """
 import argparse
 from contextlib import closing
@@ -15,6 +15,7 @@ import re
 import shlex
 import sqlite3
 import ssl
+import subprocess
 import tempfile
 import time
 import uuid
@@ -22,7 +23,7 @@ from urllib.parse import urlsplit
 from android_auth_fixture import atomic_json, owned_root, read_json, require_hosted
 from android_auth_runtime import AuthProbe, active_intent
 from android_runtime_probe import APP, DRIVER, DRAFT, IMAGE_BYTES, build_job_origin, require, require_hosted_emulator, validate_binding
-from android_sync_fixture import observe_provider
+from android_sync_fixture import arm_control,control_root,observe_provider
 from android_sync_setup import Setup
 from android_sync_peer import IMAGE_PATH,PATHS,Peer
 
@@ -139,6 +140,29 @@ def validate_peer_applied(receipts,provider,native,device):
             for r in receipts),'Actual offered/committed observations differ; no API apply ACK is inferred')
 
 
+def validate_stopped_original(before,native,provider_before,provider_held,device,held):
+    require(native==before,'Stopped original changed durable native transfer/head/cursor records')
+    require(provider_before['vault']==provider_held['vault']
+        and all(provider_before['rows'][key]==provider_held['rows'][key]
+            for key in ('revisions','files','objects','uploads')),'Stopped original wrote provider content')
+    require({k:v for k,v in provider_before['delivery']['counts'].items() if not k.startswith('changes:')}
+        =={k:v for k,v in provider_held['delivery']['counts'].items() if not k.startswith('changes:')},
+        'Stopped original issued another revision request')
+    require(held['mode']=='hold_changes' and held['action']=='changes' and held['service_status']==200
+        and held['service_response_complete'] is True and held['raw_body_recorded'] is False,
+        'The original actual generated changes response was not held')
+    events=[r for r in provider_held['delivery']['events'] if r['fault_operation']==held['operation_id']]
+    require(len(events)==1 and events[0]=={'action':'changes','service_status':200,'delivery_status':None,
+        'fault_operation':held['operation_id']},'The original held response was missing or repeated')
+    previous={r['device_id']:r for r in provider_before['rows']['device_progress']}
+    current={r['device_id']:r for r in provider_held['rows']['device_progress']}
+    require(set(previous)==set(current) and device in current
+        and all(previous[k]==current[k] for k in previous if k!=device)
+        and all(current[device][k]==v for k,v in previous[device].items() if k not in ('offered_sequence','offered_at'))
+        and current[device]['offered_sequence']==provider_held['vault']['sequence'],
+        'Generated progress is not an apply ACK and cannot change confirmed commits')
+
+
 class SyncProbe(AuthProbe):
     def observe(self,label):
         value=observe_provider(self.owner)
@@ -147,7 +171,7 @@ class SyncProbe(AuthProbe):
 
     def sync_phase(self,phase):
         require(phase in ('associate','cycle','cycle-incoming','cycle-media','cycle-rename','cycle-delete',
-            'status','association-original','close'),'Unexpected Sync UI phase')
+            'cycle-after-stop','status','association-original','close'),'Unexpected Sync UI phase')
         number=len(self.phases)+1
         # The actual association ID/digest is separately frozen in the driver
         # before its confirmation tap. This dispatch ID is not a server nonce.
@@ -277,6 +301,7 @@ class SyncProbe(AuthProbe):
             'client_apply_ACK_available':False,'physical_phone_verified':False,'published':False},exclusive=True)
         if getattr(self.args,'exchange',False):self.exchange(setup,prepared,device)
         if getattr(self.args,'media',False):self.media(setup,prepared,device)
+        if getattr(self.args,'stop',False):self.stop_original(device)
 
     def exchange(self,setup,prepared,device):
         prior=self.original('runtime-note.md')
@@ -316,6 +341,104 @@ class SyncProbe(AuthProbe):
         require(result.returncode==0 and not result.stdout,'Original peer path is not confirmed absent')
         atomic_json(self.output/(label+'-absent.json'),{'path':name,'absent':True,'original_directory_verified':True,
             'read_only':True,'mutation_retried':False},exclusive=True)
+
+    def sync_control(self,mode):
+        require(mode in ('hold_changes','release'),'Unrelated original Sync control refused')
+        current=read_json(control_root(self.owner)/'control.json');operation=str(uuid.uuid4())
+        atomic_json(self.output/('sync-control-original-'+operation+'.json'),{'operation_id':operation,
+            'mode':mode,'expected_revision':current['revision'],'native_or_server_operation_id':False},exclusive=True)
+        receipt=arm_control(self.owner,operation,mode,current['revision'])
+        atomic_json(self.output/('sync-control-'+mode+'-'+operation+'.json'),receipt,exclusive=True)
+        return receipt
+
+    def stop_original(self,device):
+        require_hosted_emulator(self.args.serial)
+        before=self.host_snapshot('stop-before');provider_before=self.observe('stop-before')
+        auth_before=self.snapshot('stop-before');sealed=self.ciphertext_fingerprints();note=self.original('runtime-note.md')
+        control=self.sync_control('hold_changes');held_id=control['operation_id']
+        original={'driver_intent_id':str(uuid.uuid4()),'control_operation_id':held_id}
+        atomic_json(self.output/'original-stop-driver-control-intent.json',dict(original,native_invocation_id_observed=False),exclusive=True)
+        self.device('shell','-T','run-as '+DRIVER+' sh -c '+shlex.quote(
+            'umask 077; test ! -e no_backup/owned-sync-stop-input.json && cat > no_backup/owned-sync-stop-input.json'),input=json.dumps(original).encode())
+        self.start_app();started=time.monotonic();number=len(self.phases)+1
+        atomic_json(self.output/('sync-dispatch-'+str(number)+'.json'),{'phase':'cycle-stop',
+            **original,'native_invocation_id_observed':False,'automatic_retry':False},exclusive=True)
+        process=subprocess.Popen([str(self.adb),'-s',self.args.serial,'shell',shlex.join(
+            ('am','instrument','-w','-e','phase','cycle-stop',DRIVER+'/.SyncRuntimeProbe'))],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        completed=False;released=False;release_attempted=False
+        try:
+            deadline=time.monotonic()+30;held_path=control_root(self.owner)/'fault-events'/(held_id+'.json')
+            while True:
+                require(process.poll() is None,'Original Stop driver ended before held-response admission')
+                ready=self.shell('run-as',DRIVER,'cat','no_backup/owned-sync-cycle-stop-ready-intent.json',check=False)
+                if ready.returncode==0 and ready.stdout and held_path.is_file():
+                    require(len(ready.stdout)<=1024,'Original Stop checkpoint exceeds bound')
+                    try:value=json.loads(ready.stdout)
+                    except json.JSONDecodeError:value=None # Read only while the one producer finishes its original record.
+                    if value is not None:
+                        require(value==original,'Another original Stop driver is present');break
+                require(time.monotonic()<deadline,'Original held changes/Stop-ready checkpoint unavailable');time.sleep(.2)
+            held=read_json(held_path)
+            require(held['operation_id']==held_id and held['revision']==control['result_revision'],
+                'Original held control changed')
+            atomic_json(self.output/'original-stop-held-response.json',held,exclusive=True)
+            validate_stopped_original(before,self.host_snapshot('stop-held'),provider_before,self.observe('stop-held'),device,held)
+            # Publish a complete file by the same proven same-directory mv-n
+            # protocol; the Android reader must never see a partially written grant.
+            self.device('shell','-T','run-as '+DRIVER+' sh -c '+shlex.quote(
+                'umask 077; test ! -e no_backup/owned-sync-stop-authorize.json && test ! -e no_backup/owned-sync-stop-authorize.pending '
+                '&& cat > no_backup/owned-sync-stop-authorize.pending && mv -n no_backup/owned-sync-stop-authorize.pending no_backup/owned-sync-stop-authorize.json '
+                '&& test ! -e no_backup/owned-sync-stop-authorize.pending'),input=json.dumps(original).encode())
+            output,error=process.communicate(timeout=35)
+            require(len(output)<=1024*1024 and len(error)<=65536,'Original Stop result exceeds bound')
+            text=output.decode('utf-8','replace')
+            atomic_json(self.output/('sync-phase-'+str(number)+'.json'),{'phase':'cycle-stop','instrument_output':text},exclusive=True)
+            require(process.returncode==0 and 'OPENNEXUS_SYNC_PHASE_OK cycle-stop' in text
+                and 'OPENNEXUS_SYNC_PHASE_FAILED' not in text,'Original actual UI Stop was not confirmed; no new cycle started')
+            self.phases.append({'phase':'cycle-stop','duration_ms':round((time.monotonic()-started)*1000),'passed':True})
+            native=self.host_snapshot('stopped');provider=self.observe('stopped')
+            validate_stopped_original(before,native,provider_before,provider,device,held)
+            require(self.snapshot('stopped')==auth_before and self.ciphertext_fingerprints()==sealed
+                and self.original('runtime-note.md')==note,'Stop changed original auth/credentials/saved bytes')
+            release_attempted=True
+            release=self.sync_control('release');released=True
+            released_path=control_root(self.owner)/'fault-events'/(held_id+'.released.json');deadline=time.monotonic()+10
+            while not released_path.is_file():
+                require(time.monotonic()<deadline,'Original held response release was not observed');time.sleep(.1)
+            delivered=read_json(released_path)
+            require(delivered['operation_id']==held_id and delivered['original_response_send_attempted'] is True
+                and delivered['client_receipt_known'] is False,'Original late response evidence differs')
+            atomic_json(self.output/'original-stop-late-response-release.json',{'release_control':release,'original_response':delivered},exclusive=True)
+            require(self.host_snapshot('stop-after-late-response')==before,'Late original response applied after Stop')
+            self.sync_phase('cycle-after-stop');resumed=self.host_snapshot('stop-resumed');after=self.observe('stop-resumed')
+            validate_upload(after,resumed,device)
+            require(resumed['binding']['id']==before['binding']['id'] and resumed['binding']['cursor']==after['vault']['sequence']
+                and resumed['jobs']==before['jobs'] and resumed['attempts']==before['attempts'] and not resumed['conflicts']
+                and all(after['rows'][key]==provider_before['rows'][key] for key in ('revisions','files','objects','uploads'))
+                and {k:v for k,v in after['delivery']['counts'].items() if not k.startswith('changes:')}
+                    =={k:v for k,v in provider_before['delivery']['counts'].items() if not k.startswith('changes:')}
+                and self.original('runtime-note.md')==note,'Explicit new cycle failed to resume original data without another revision')
+            atomic_json(self.output/'sync-stop-proof.json',{'passed':True,'source_commit':self.args.commit,
+                'runtime_tools_commit':self.args.tools_commit,'APK_sha256':self.binding['sha256'],'phases':self.phases,
+                'original_driver_and_control':original,'native_invocation_id_observed':False,
+                'actual_generated_response_held_before_one_UI_Stop':True,'native_durable_records_unchanged_while_stopped':True,
+                'late_original_response_cannot_apply':True,'explicit_new_cycle_original_cursor_resume_without_new_revision':True,
+                'API_generated_progress_is_not_client_apply_ACK':True,'desktop_phone_offline_conflict_release_verified':False},exclusive=True)
+            completed=True
+        finally:
+            try:
+                # An unknown release result must be reconciled from its original
+                # control intent/receipt; never generate another release action.
+                if not release_attempted:
+                    release_attempted=True;self.sync_control('release')
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    try:output,error=process.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:process.kill();output,error=process.communicate(timeout=5)
+                    atomic_json(self.output/'original-stop-unfinished-driver.json',{'phase':'cycle-stop','completed':completed,
+                        'original_driver_and_control':original,'instrument_output':output[:65536].decode('utf-8','replace'),
+                        'no_mutation_retried':True},exclusive=True)
 
     def media(self,setup,prepared,device):
         before=self.original('runtime-note.md');peer=Peer(self.owner)
@@ -362,8 +485,8 @@ def main():
     for name in ('bundle','sdk','output','source-checkout'):parser.add_argument('--'+name,type=Path,required=True)
     for name in ('commit','tools-commit','build-run-id'):parser.add_argument('--'+name,required=True)
     parser.add_argument('--serial',default='emulator-5562')
-    scope=parser.add_mutually_exclusive_group();scope.add_argument('--exchange',action='store_true');scope.add_argument('--media',action='store_true')
-    args=parser.parse_args();args.scope='sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
+    scope=parser.add_mutually_exclusive_group();scope.add_argument('--exchange',action='store_true');scope.add_argument('--media',action='store_true');scope.add_argument('--stop',action='store_true')
+    args=parser.parse_args();args.scope='sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
     require_hosted();require_hosted_emulator(args.serial);owner=owned_root()
     state=read_json(owner/'owner-state.json');require(state['result']=='ready' and state.get('fixture')=='sync','Owned Sync origin is not ready')
     apk,binding=validate_binding(args.bundle,args.commit)

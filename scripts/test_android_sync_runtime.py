@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock,patch
 from android_runtime_probe import DRAFT
-from android_sync_runtime import PEER_NOTE,PEER_CANVAS,IMAGE_PATH,SyncProbe,read_original_object,validate_upload,validate_incoming,validate_peer_applied
+from android_sync_runtime import PEER_NOTE,PEER_CANVAS,IMAGE_PATH,SyncProbe,read_original_object,validate_upload,validate_incoming,validate_peer_applied,validate_stopped_original
 
 
 class InitialSyncBoundaries(unittest.TestCase):
@@ -200,6 +200,48 @@ class InitialSyncBoundaries(unittest.TestCase):
         self.assertEqual(canvas['nodes'][1]['file'],IMAGE_PATH)
         self.assertEqual(IMAGE_PATH,'attachments/'+hashlib.sha256(IMAGE_BYTES).hexdigest()[:2]+'/'+hashlib.sha256(IMAGE_BYTES).hexdigest()+'.png')
         self.assertEqual(canvas['vendor'],{'original':'保留原始属性与 CRLF'})
+
+    def stopped(self):
+        before={'binding':{'id':'owned-binding','cursor':0},'heads':[{'revision':1,'hash':'original'}]}
+        provider={'vault':{'id':'owned-vault','sequence':1},'rows':{'revisions':[{'original':True}],
+            'files':[{'original':True}],'objects':[{'original':True}],'uploads':[],
+            'device_progress':[{'device_id':'android','committed_sequence':1,'committed_at':10,'offered_sequence':0,'offered_at':9}]},
+            'delivery':{'counts':{'changes:200':3,'revision:200':1},'events':[]}}
+        current=deepcopy(provider);current['rows']['device_progress'][0].update(offered_sequence=1,offered_at=11)
+        current['delivery']['counts']['changes:200']=4
+        current['delivery']['events']=[{'action':'changes','service_status':200,'delivery_status':None,'fault_operation':'control-original'}]
+        held={'operation_id':'control-original','revision':1,'mode':'hold_changes','action':'changes',
+            'service_status':200,'service_response_complete':True,'raw_body_recorded':False}
+        return before,provider,current,held
+
+    def test_generated_original_page_is_not_a_native_apply_or_new_write_after_Stop(self):
+        before,provider,current,held=self.stopped();validate_stopped_original(before,deepcopy(before),provider,current,'android',held)
+        changed=deepcopy(before);changed['binding']['cursor']=1
+        with self.assertRaises(RuntimeError):validate_stopped_original(before,changed,provider,current,'android',held)
+        for table in ('revisions','files','objects','uploads'):
+            changed=deepcopy(current);changed['rows'][table].append({'unexpected_write':True})
+            with self.subTest(table=table),self.assertRaises(RuntimeError):validate_stopped_original(before,before,provider,changed,'android',held)
+        changed=deepcopy(current);changed['delivery']['counts']['revision:200']=2
+        with self.assertRaises(RuntimeError):validate_stopped_original(before,before,provider,changed,'android',held)
+
+    def test_Stop_requires_one_original_held_success_and_preserves_commit_identity(self):
+        before,provider,current,held=self.stopped()
+        for field,value in (('mode','normal'),('action','revision'),('service_status',503),
+                ('service_response_complete',False),('raw_body_recorded',True)):
+            with self.subTest(field=field),self.assertRaises(RuntimeError):
+                validate_stopped_original(before,before,provider,current,'android',dict(held,**{field:value}))
+        changed=deepcopy(current);changed['delivery']['events']*=2
+        with self.assertRaises(RuntimeError):validate_stopped_original(before,before,provider,changed,'android',held)
+        for field,value in (('device_id','other'),('committed_sequence',2),('committed_at',11),('offered_sequence',0)):
+            changed=deepcopy(current);changed['rows']['device_progress'][0][field]=value
+            with self.subTest(progress=field),self.assertRaises(RuntimeError):validate_stopped_original(before,before,provider,changed,'android',held)
+
+    def test_Stop_controller_cannot_arm_unrelated_faults_before_owner_access(self):
+        probe=object.__new__(SyncProbe)
+        with patch('android_sync_runtime.control_root') as root:
+            for mode in ('normal','drop_revision','../release','hold_login'):
+                with self.assertRaises(RuntimeError):probe.sync_control(mode)
+            root.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()
