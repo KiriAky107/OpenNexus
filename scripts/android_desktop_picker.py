@@ -12,6 +12,43 @@ from android_desktop_handoff import canonical, require
 TITLE = '选择本地 Vault'
 
 
+def native_input_types():
+    """Fixed Win32 ABI layouts; constructing these performs no OS interaction."""
+    import ctypes as c
+    class Keyboard(c.Structure):
+        _fields_ = [('vk', c.c_uint16), ('scan', c.c_uint16), ('flags', c.c_uint32),
+                    ('time', c.c_uint32), ('extra', c.c_size_t)]
+    class Mouse(c.Structure):
+        _fields_ = [('x', c.c_int32), ('y', c.c_int32), ('data', c.c_uint32),
+                    ('flags', c.c_uint32), ('time', c.c_uint32), ('extra', c.c_size_t)]
+    class Hardware(c.Structure):
+        _fields_ = [('message', c.c_uint32), ('low', c.c_uint16), ('high', c.c_uint16)]
+    class Payload(c.Union):
+        _fields_ = [('keyboard', Keyboard), ('mouse', Mouse), ('hardware', Hardware)]
+    class Input(c.Structure):
+        _fields_ = [('type', c.c_uint32), ('payload', Payload)]
+    class Rect(c.Structure):
+        _fields_ = [('left', c.c_int32), ('top', c.c_int32), ('right', c.c_int32), ('bottom', c.c_int32)]
+    class Gui(c.Structure):
+        _fields_ = [('size', c.c_uint32), ('flags', c.c_uint32)] + [
+            (name, c.c_void_p) for name in ('active', 'focus', 'capture', 'menu', 'move', 'caret')] + [('rect', Rect)]
+    return Input, Gui
+
+
+def unicode_input(value, Input):
+    require(type(value) is str and 0 < len(value) <= 1024 and not any(ord(c) < 32 for c in value),
+            'DESKTOP_PAIR_PICKER_INPUT_REFUSED')
+    encoded = value.encode('utf-16-le')
+    units = [int.from_bytes(encoded[i:i+2], 'little') for i in range(0, len(encoded), 2)]
+    events = (Input * (len(units)*2))()
+    for i, unit in enumerate(units):
+        for index, flags in ((i*2, 4), (i*2+1, 6)):
+            events[index].type = 1
+            events[index].payload.keyboard.scan = unit
+            events[index].payload.keyboard.flags = flags
+    return events
+
+
 def choose_controls(api, dialog, pid, path):
     require(api.owner(dialog) == pid and api.title(dialog) == TITLE
             and api.kind(dialog) == '#32770', 'DESKTOP_PAIR_PICKER_TARGET_INVALID')
@@ -75,6 +112,16 @@ class WindowsDialog:
         self.api.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM,
             w.UINT, w.UINT, ctypes.POINTER(ctypes.c_size_t)]
         self.api.SendMessageTimeoutW.restype = w.LPARAM
+        self.Input, self.Gui = native_input_types()
+        self.api.GetForegroundWindow.restype = w.HWND
+        self.api.SetForegroundWindow.argtypes = [w.HWND]
+        self.api.SetForegroundWindow.restype = w.BOOL
+        self.api.GetGUIThreadInfo.argtypes = [w.DWORD, ctypes.POINTER(self.Gui)]
+        self.api.GetGUIThreadInfo.restype = w.BOOL
+        self.api.GetAsyncKeyState.argtypes = [ctypes.c_int]
+        self.api.GetAsyncKeyState.restype = ctypes.c_short
+        self.api.SendInput.argtypes = [w.UINT, ctypes.POINTER(self.Input), ctypes.c_int]
+        self.api.SendInput.restype = w.UINT
 
     def owner(self, handle):
         value = self.w.DWORD()
@@ -118,30 +165,51 @@ class WindowsDialog:
             require(len(result) <= 1, 'DESKTOP_PAIR_PICKER_TARGET_INVALID')
         return result
 
+    def input_target(self, handle, dialog, pid):
+        require(self.owner(dialog) == self.owner(handle) == pid and self.child_of(dialog, handle)
+                and self.kind(handle) == 'Edit' and self.control_id(handle) == 1152
+                and self.kind(dialog) == '#32770' and self.title(dialog) == TITLE,
+                'DESKTOP_PAIR_PICKER_TARGET_INVALID')
+
+    def input_focused(self, handle, dialog, pid):
+        self.input_target(handle, dialog, pid)
+        require(self.api.GetForegroundWindow() == dialog, 'DESKTOP_PAIR_PICKER_INPUT_REFUSED')
+        info = self.Gui(); info.size = self.ctypes.sizeof(info)
+        return bool(self.api.GetGUIThreadInfo(0, self.ctypes.byref(info)) and info.active == dialog and info.focus == handle)
+
+    def focus_input(self, handle, dialog, pid):
+        self.input_target(handle, dialog, pid)
+        self.api.SetForegroundWindow(dialog)  # Exactly one original owned activation, never another window.
+        require(self.api.GetForegroundWindow() == dialog, 'DESKTOP_PAIR_PICKER_INPUT_REFUSED')
+        result = self.ctypes.c_size_t()
+        require(self.api.SendMessageTimeoutW(dialog, 0x0028, handle, 1, 2, 1000, self.ctypes.byref(result)),
+                'DESKTOP_PAIR_PICKER_INPUT_REFUSED')  # WM_NEXTDLGCTL focuses this exact Edit.
+        until = time.monotonic() + 2
+        while not self.input_focused(handle, dialog, pid):
+            require(time.monotonic() < until, 'DESKTOP_PAIR_PICKER_INPUT_REFUSED')
+            time.sleep(.05)  # Read the same focus result, never send another activation.
+
     def set_text(self, handle, value, dialog, pid):
-        require(type(value) is str and 0 < len(value) <= 1024 and not any(ord(c) < 32 for c in value),
+        events = unicode_input(value, self.Input)
+        self.input_result = {'method': 'owned-native-unicode-keyboard', 'expected_events': len(events),
+            'inserted_events': 0, 'original_focus_verified': False, 'readback_matches': False, 'automatic_retry': False}
+        self.focus_input(handle, dialog, pid)
+        require(not any(self.api.GetAsyncKeyState(key) & 0x8000 for key in (0x10,0x11,0x12,0x5B,0x5C)),
                 'DESKTOP_PAIR_PICKER_INPUT_REFUSED')
-        encoded = value.encode('utf-16-le')
-        def original_target():
-            require(self.owner(dialog) == self.owner(handle) == pid and self.child_of(dialog, handle)
-                    and self.kind(handle) == 'Edit' and self.control_id(handle) == 1152
-                    and self.kind(dialog) == '#32770' and self.title(dialog) == TITLE,
-                    'DESKTOP_PAIR_PICKER_TARGET_INVALID')
-        original_target()
-        # Enter one original path through the edit control's character handler,
-        # including its native change notifications. WM_SETTEXT readback alone
-        # did not establish the folder dialog's selected shell item.
-        self.api.SendMessageW(handle, 0x00B1, 0, -1)  # EM_SETSEL, replace the initial label once.
-        until = time.monotonic() + 10
-        for offset in range(0, len(encoded), 2):
-            original_target()
-            remaining = until - time.monotonic()
-            require(remaining > 0, 'DESKTOP_PAIR_PICKER_INPUT_REFUSED')
-            result = self.ctypes.c_size_t()
-            if not self.api.SendMessageTimeoutW(handle, 0x0102,
-                    int.from_bytes(encoded[offset:offset+2], 'little'), 1, 2, min(1000, max(1, int(remaining*1000))), self.ctypes.byref(result)):
-                return False  # Unknown partial delivery: never replay or confirm it.
-        return True
+        self.input_result['original_focus_verified'] = True
+        self.api.SendMessageW(handle, 0x00B1, 0, -1)  # Select the initial label once, no clipboard.
+        require(self.input_focused(handle, dialog, pid), 'DESKTOP_PAIR_PICKER_INPUT_REFUSED')
+        inserted = self.api.SendInput(len(events), events, self.ctypes.sizeof(self.Input))
+        self.input_result['inserted_events'] = inserted
+        if inserted != len(events): return False  # Unknown partial stream; no remaining-key retry or confirm.
+        until = time.monotonic() + 3
+        while True:
+            require(self.input_focused(handle, dialog, pid), 'DESKTOP_PAIR_PICKER_INPUT_REFUSED')
+            if self.text(handle) == value:
+                self.input_result['readback_matches'] = True
+                return True
+            if time.monotonic() >= until: return False
+            time.sleep(.05)
 
     def text(self, handle):
         value = self.ctypes.create_unicode_buffer(4096)
@@ -189,7 +257,12 @@ def choose_owned_vault(page, context, process, vault, attempt):
              for h in api.children(dialogs[0])]
     with (attempt / 'picker-shape.json').open('xb') as output:
         output.write(canonical({'controls': shape, 'raw_labels_or_values_returned': False})); output.flush(); os.fsync(output.fileno())
-    acknowledged = choose_controls(api, dialogs[0], process.pid, str(vault))
+    try:
+        acknowledged = choose_controls(api, dialogs[0], process.pid, str(vault))
+    finally:
+        with (attempt / 'picker-input.json').open('xb') as output:
+            output.write(canonical(getattr(api, 'input_result', {'input_not_started': True})))
+            output.flush(); os.fsync(output.fileno())
     result = read_original_choice(page, acknowledged, attempt)
     require(type(result.get('ok')) is bool, 'DESKTOP_PAIR_PICKER_OUTCOME_UNKNOWN')
     matches = bool(result['ok'] and windows_drive_path(result['actualPath']) == windows_drive_path(vault))

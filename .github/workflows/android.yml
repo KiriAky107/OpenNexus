@@ -381,6 +381,7 @@ jobs:
             .build/android-desktop-pair/*/stage-1/start-intent.json
             .build/android-desktop-pair/*/stage-1/choose-vault-intent.json
             .build/android-desktop-pair/*/stage-1/picker-shape.json
+            .build/android-desktop-pair/*/stage-1/picker-input.json
             .build/android-desktop-pair/*/stage-1/picker-click-delivery.json
             .build/android-desktop-pair/*/stage-1/picker-native-result.json
             .build/android-desktop-pair/*/stage-1/startup.json

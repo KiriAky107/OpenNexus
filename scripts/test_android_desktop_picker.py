@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from android_desktop_handoff import HandoffError
-from android_desktop_picker import TITLE, WindowsDialog, choose_controls, choose_owned_vault, read_original_choice
+from android_desktop_picker import TITLE, WindowsDialog, choose_controls, choose_owned_vault, read_original_choice, native_input_types, unicode_input
 from android_desktop_product import DESKTOP_SOURCE
 
 
@@ -35,39 +35,54 @@ class Controls:
 
 
 class OwnedPicker(unittest.TestCase):
-    def character_api(self):
+    def keyboard_api(self):
         import ctypes
         api = WindowsDialog.__new__(WindowsDialog); api.ctypes = ctypes; api.api = Mock()
+        api.Input, api.Gui = native_input_types()
         api.owner = lambda _: 42; api.child_of = lambda parent, child: parent == 10 and child == 11
         api.kind = lambda handle: '#32770' if handle == 10 else 'Edit'
         api.control_id = lambda _: 1152; api.title = lambda _: TITLE
-        api.api.SendMessageTimeoutW.return_value = 1
+        api.focus_input = Mock(); api.input_focused = Mock(return_value=True)
+        api.api.GetAsyncKeyState.return_value = 0
+        api.api.SendInput.side_effect = lambda count, events, size: count
+        api.text = Mock(return_value=r'D:\owned')
         return api
 
-    def test_path_character_input_preserves_utf16_units_and_uses_only_original_control(self):
-        api = self.character_api(); value = 'D:\\owned\\中文😀'
-        self.assertTrue(api.set_text(11, value, 10, 42))
+    def test_keyboard_batch_has_exact_win32_abi_and_original_utf16_down_up_pairs(self):
+        import ctypes
+        Input, Gui = native_input_types(); value = 'D:\\owned\\' + chr(0x4E2D) + chr(0x1F600)
+        self.assertEqual(ctypes.sizeof(Input), 40 if ctypes.sizeof(ctypes.c_void_p)==8 else 28)
+        self.assertEqual(ctypes.sizeof(Gui), 72 if ctypes.sizeof(ctypes.c_void_p)==8 else 48)
+        events = unicode_input(value, Input); raw = value.encode('utf-16-le')
+        self.assertEqual(len(events), len(raw))
+        for index, event in enumerate(events):
+            self.assertEqual(event.type, 1); self.assertEqual(event.payload.keyboard.vk, 0)
+            self.assertEqual(event.payload.keyboard.scan, int.from_bytes(raw[(index//2)*2:(index//2)*2+2], 'little'))
+            self.assertEqual(event.payload.keyboard.flags, 6 if index%2 else 4)
+        with self.assertRaises(HandoffError): unicode_input('private\nvalue', Input)
+
+    def test_complete_original_keyboard_stream_is_sent_once_and_readback_has_no_raw_values(self):
+        api = self.keyboard_api()
+        self.assertTrue(api.set_text(11, r'D:\owned', 10, 42))
+        api.focus_input.assert_called_once_with(11, 10, 42); api.api.SendInput.assert_called_once()
+        self.assertEqual(api.input_result['inserted_events'], api.input_result['expected_events'])
+        self.assertTrue(api.input_result['original_focus_verified']); self.assertTrue(api.input_result['readback_matches'])
+        self.assertNotIn('D:', json.dumps(api.input_result)); self.assertFalse(api.input_result['automatic_retry'])
         api.api.SendMessageW.assert_called_once_with(11, 0x00B1, 0, -1)
-        raw = value.encode('utf-16-le')
-        self.assertEqual([call.args[:5] for call in api.api.SendMessageTimeoutW.call_args_list],
-            [(11, 0x0102, int.from_bytes(raw[i:i+2], 'little'), 1, 2) for i in range(0,len(raw),2)])
-        self.assertTrue(all(1 <= call.args[5] <= 1000 for call in api.api.SendMessageTimeoutW.call_args_list))
 
-    def test_partial_character_delivery_is_not_replayed_or_confirmed(self):
-        api = self.character_api(); api.api.SendMessageTimeoutW.side_effect = [1, 0]
-        self.assertFalse(api.set_text(11, 'D:\\owned', 10, 42))
-        self.assertEqual(api.api.SendMessageTimeoutW.call_count, 2)
-        self.assertFalse(any(call.args[1] == 0x00F5 for call in api.api.SendMessageTimeoutW.call_args_list))
+    def test_partial_keyboard_delivery_is_never_replayed_or_confirmed(self):
+        api = self.keyboard_api(); api.api.SendInput.side_effect = lambda count, events, size: count-1
+        self.assertFalse(api.set_text(11, r'D:\owned', 10, 42))
+        api.api.SendInput.assert_called_once(); api.text.assert_not_called()
+        self.assertFalse(api.input_result['readback_matches']); self.assertFalse(api.input_result['automatic_retry'])
 
-    def test_changed_original_owner_stops_remaining_characters_without_global_input(self):
-        api = self.character_api()
-        def changed(*args):
-            api.owner = lambda _: 77
-            return 1
-        api.api.SendMessageTimeoutW.side_effect = changed
-        with self.assertRaisesRegex(HandoffError, '^DESKTOP_PAIR_PICKER_TARGET_INVALID$'):
-            api.set_text(11, 'D:\\owned', 10, 42)
-        api.api.SendMessageTimeoutW.assert_called_once()
+    def test_foreign_foreground_is_refused_before_any_global_keyboard_input(self):
+        api = self.keyboard_api(); api.focus_input = WindowsDialog.focus_input.__get__(api)
+        api.api.GetForegroundWindow.return_value = 77
+        with self.assertRaisesRegex(HandoffError, '^DESKTOP_PAIR_PICKER_INPUT_REFUSED$'):
+            api.set_text(11, r'D:\owned', 10, 42)
+        api.api.SetForegroundWindow.assert_called_once_with(10)
+        api.api.SendInput.assert_not_called(); api.api.SendMessageTimeoutW.assert_not_called()
 
     def test_native_message_timeout_is_unknown_delivery_not_a_selection_rejection(self):
         import ctypes
