@@ -50,6 +50,8 @@ public final class RuntimeProbe extends Instrumentation {
             CompositionIme.attach(getContext());
             String phase = arguments.getString("phase", "");
             switch (phase) {
+                case "performance-create": longNote(false); break;
+                case "performance-reopen": longNote(true); break;
                 case "theme-dark": selectTheme("System", "Dark"); break;
                 case "theme-light": selectTheme("Dark", "Light"); break;
                 case "theme-sepia": selectTheme("Light", "Sepia"); break;
@@ -456,6 +458,47 @@ public final class RuntimeProbe extends Instrumentation {
 
     private boolean documentsUi(AccessibilityNodeInfo node) {
         return string(node.getPackageName()).endsWith(".documentsui");
+    }
+
+    private void longNote(boolean reopen) throws Exception {
+        org.json.JSONObject report=new org.json.JSONObject();
+        report.put("phase",reopen?"performance-reopen":"performance-create");
+        report.put("physical_or_commercial_IME",false);
+        report.put("input_backend","owned real InputConnection; ordered broadcast acknowledgement");
+        long started=SystemClock.elapsedRealtimeNanos();
+        if(reopen)open(OriginalLongNoteScenario.PATH);
+        else create("New note",OriginalLongNoteScenario.PATH);
+        AccessibilityNodeInfo body=noteBody();
+        report.put("open_or_create_to_editable_ms",(SystemClock.elapsedRealtimeNanos()-started)/1_000_000.0);
+        activateNoteBody(body);
+        CompositionIme.awaitTarget(APP);
+        if(reopen) {
+            // Normal editor navigation, never replacing the whole long note.
+            long now=SystemClock.uptimeMillis();
+            for(int action:new int[]{KeyEvent.ACTION_DOWN,KeyEvent.ACTION_UP})
+                require(ui.injectInputEvent(new KeyEvent(now,SystemClock.uptimeMillis(),action,
+                    KeyEvent.KEYCODE_MOVE_END,0,KeyEvent.META_CTRL_ON),true),"Original long-note end navigation rejected");
+        }
+        org.json.JSONArray durations=new org.json.JSONArray();
+        List<String> chunks=reopen?java.util.Collections.singletonList(OriginalLongNoteScenario.MARKER)
+            :OriginalLongNoteScenario.chunks(OriginalLongNoteScenario.content());
+        for(String chunk:chunks) {
+            started=SystemClock.elapsedRealtimeNanos();
+            CompositionIme.commit(APP,chunk); // Each original input exactly once; unknown is not retried.
+            durations.put((SystemClock.elapsedRealtimeNanos()-started)/1_000_000.0);
+        }
+        report.put("original_commit_ack_ms",durations);
+        started=SystemClock.elapsedRealtimeNanos();
+        waitLabel("Draft kept on this device");
+        report.put("after_input_to_draft_kept_label_ms",(SystemClock.elapsedRealtimeNanos()-started)/1_000_000.0);
+        started=SystemClock.elapsedRealtimeNanos();save();
+        report.put("save_to_saved_label_ms",(SystemClock.elapsedRealtimeNanos()-started)/1_000_000.0);
+        report.put("timing_scope","UI readiness and original IME acknowledgements, not frame-paint or physical keystroke latency");
+        File target=new File(getContext().getFilesDir(),report.getString("phase")+"-metrics.json");
+        require(!target.exists(),"Original performance metrics already exist");
+        try(FileOutputStream out=new FileOutputStream(target)) {
+            out.write(report.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));out.flush();out.getFD().sync();
+        }
     }
 
     private void originalProductPairPhase(String phase) throws Exception {

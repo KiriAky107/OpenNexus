@@ -562,7 +562,10 @@ class Probe:
             self.force_stop()
         start = time.monotonic()
         if not continue_process:
-            self.shell('am', 'start', '-W', '-n', self.activity)
+            launch = self.shell('am', 'start', '-W', '-n', self.activity)
+            if getattr(getattr(self,'args',None),'scope',None) == 'performance':
+                from android_performance_probe import parse_launch
+                (self.output/(phase+'-launch.json')).write_text(json.dumps(parse_launch(launch.stdout))+'\n','utf-8')
         else:
             require_hosted_emulator(self.args.serial)
             self.wait_owned_connection()
@@ -771,8 +774,11 @@ class Probe:
                 self.discover_private_root()
             # These are exclusively the probe's own synthetic targets. Do not
             # enumerate arbitrary files or read native credential/config stores.
-            for name in ('runtime-note.md', 'runtime-rich.md', 'runtime.canvas',
-                    'runtime-back.md', 'runtime-image.md', 'runtime-rich-image.md', 'runtime-image.canvas'):
+            owned_names = ('runtime-note.md', 'runtime-rich.md', 'runtime.canvas',
+                    'runtime-back.md', 'runtime-image.md', 'runtime-rich-image.md', 'runtime-image.canvas')
+            if getattr(getattr(self,'args',None),'scope',None) == 'performance':
+                owned_names = ('runtime-long.md',)
+            for name in owned_names:
                 try:
                     value = self.original(name)
                     report['originals'][name] = {'size': len(value), 'sha256': digest(value)}
@@ -1084,6 +1090,10 @@ class Probe:
 
     def run(self):
         self.boot()
+        if self.args.scope == 'performance':
+            from android_performance_probe import run_performance
+            run_performance(self)
+            return
         if self.args.scope == 'canvas-tablet':
             self.run_canvas_tablet()
             return
@@ -1206,7 +1216,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:
