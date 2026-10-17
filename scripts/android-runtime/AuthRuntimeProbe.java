@@ -80,6 +80,9 @@ public class AuthRuntimeProbe extends Instrumentation {
     protected String[] diagnosticCodes() { return new String[0]; }
     protected boolean viewportAdmission() { return false; }
 
+    protected final String originalCycleInputMode() { return args.getString("cycle_input","touch"); }
+    protected final String originalCycleDispatchId() { return args.getString("cycle_dispatch_id",""); }
+
     protected void previewMerge() {
         String mode=args.getString("association_preview","touch");
         require(mode.equals("touch") || mode.equals("native-accessibility") || mode.equals("webview-touch"),"Unknown original preview input mode");

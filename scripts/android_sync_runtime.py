@@ -28,7 +28,7 @@ from android_sync_setup import Setup
 from android_sync_peer import IMAGE_PATH,PATHS,Peer
 from android_sync_recovery import RecoveryMixin
 from android_sync_conflict import ConflictMixin
-from android_sync_webview_input import instrument_original_preview
+from android_sync_webview_input import instrument_original_preview, instrument_original_cycle
 
 PEER_NOTE='# 来自独立 HTTP 客户端 😀\n\n保持 Markdown 原文。\n'.encode()
 PEER_CANVAS=(json.dumps({'nodes':[
@@ -256,14 +256,18 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
         args=getattr(self,'args',None)
         webview=phase=='associate' and getattr(args,'webview_preview',False)
         semantic=phase=='associate' and getattr(args,'semantic_preview',False)
+        browser_cycle=getattr(args,'webview_cycle',False) and phase in ('cycle-conflict','cycle-conflict-copy','cycle-incoming','cycle-media')
         require(not (webview and semantic),'Choose exactly one original preview input backend')
         atomic_json(self.output/('sync-dispatch-'+str(number)+'.json'),{'phase':phase,
             'driver_dispatch_id':dispatch_id,'server_or_native_operation_id':False,'automatic_retry':False,
-            'association_preview_input':('webview-touch' if webview else 'native-accessibility' if semantic else 'touch') if phase=='associate' else None},exclusive=True)
+            'association_preview_input':('webview-touch' if webview else 'native-accessibility' if semantic else 'touch') if phase=='associate' else None,
+            'cycle_input':'webview-touch' if browser_cycle else None},exclusive=True)
         self.start_app();started=time.monotonic()
         if phase=='associate':self.association_observer('install',dispatch_id)
         preview_args=['-e','association_preview','native-accessibility'] if semantic else []
-        result=instrument_original_preview(self,dispatch_id) if webview else self.shell('am','instrument','-w','-e','phase',phase,*preview_args,DRIVER+'/.SyncRuntimeProbe',timeout=180,check=False)
+        if webview:result=instrument_original_preview(self,dispatch_id)
+        elif browser_cycle:result=instrument_original_cycle(self,dispatch_id,phase)
+        else:result=self.shell('am','instrument','-w','-e','phase',phase,*preview_args,DRIVER+'/.SyncRuntimeProbe',timeout=180,check=False)
         require(len(result.stdout)<=1024*1024,'Owned static Sync result exceeds bound')
         text=result.stdout.decode('utf-8','replace')
         atomic_json(self.output/('sync-phase-'+str(number)+'.json'),{'phase':phase,'instrument_output':text},exclusive=True)
@@ -609,10 +613,12 @@ def main():
     parser.add_argument('--cold-originals',action='store_true')
     parser.add_argument('--semantic-preview',action='store_true')
     parser.add_argument('--webview-preview',action='store_true')
+    parser.add_argument('--webview-cycle',action='store_true')
     args=parser.parse_args();args.scope='sync-conflicts' if args.conflicts else 'sync-recovery' if args.recovery else 'sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
     require(not args.cold_originals or args.conflicts,'Cold original-entry scope requires actual conflicts')
     require(not args.semantic_preview or args.conflicts,'Native accessibility preview requires the explicit conflict scope')
     require(not args.webview_preview or args.conflicts,'Owned WebView preview requires the explicit conflict scope')
+    require(not args.webview_cycle or args.conflicts,'Owned WebView cycle requires the explicit conflict scope')
     require(not (args.semantic_preview and args.webview_preview),'Choose exactly one original preview input backend')
     require_hosted();require_hosted_emulator(args.serial);owner=owned_root()
     state=read_json(owner/'owner-state.json');require(state['result']=='ready' and state.get('fixture')=='sync','Owned Sync origin is not ready')

@@ -19,6 +19,52 @@ export function previewExpression(nonce) {
   })()`
 }
 
+export function installCycleObserverExpression(nonce) {
+  requireValue(validNonce(nonce))
+  return `(()=>{
+    const nonce=${JSON.stringify(nonce)},roots=document.querySelectorAll('.mobile-sync-cycle');
+    if(roots.length!==1)throw Error('OWNED_CYCLE_INPUT_REFUSED');
+    if(!window.__onxOwnedCycleObservers)Object.defineProperty(window,'__onxOwnedCycleObservers',{value:Object.create(null)});
+    const all=window.__onxOwnedCycleObservers;
+    if(Object.hasOwn(all,nonce)||Object.keys(all).length>=8)throw Error('OWNED_CYCLE_INPUT_REFUSED');
+    const original={nonce,events:[],overflow:false};all[nonce]=original;
+    for(const kind of ['touchstart','touchend','click'])roots[0].addEventListener(kind,event=>{
+      const button=event.target instanceof Element?event.target.closest('button'):null;
+      if(!button||!roots[0].contains(button)||button.textContent?.trim()!=='Sync one cycle now')return;
+      if(original.events.length>=8){original.overflow=true;return;}
+      original.events.push({kind,trusted:event.isTrusted===true});
+    },true);
+    return {installed:true,nonce};
+  })()`
+}
+
+export function cycleExpression(nonce) {
+  requireValue(validNonce(nonce))
+  return `(()=>{
+    const roots=document.querySelectorAll('.mobile-sync-cycle'),root=roots.length===1?roots[0]:null;
+    const buttons=root?Array.from(root.querySelectorAll('button')).filter(e=>e.textContent?.trim()==='Sync one cycle now'):[];
+    const targets=buttons.map(e=>{const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2),style=getComputedStyle(e);
+      return {left:r.left,top:r.top,width:r.width,height:r.height,enabled:!e.disabled,
+        visible:style.display!=='none'&&style.visibility!=='hidden',hit:hit===e||e.contains(hit)}});
+    const original=window.__onxOwnedCycleObservers?.[${JSON.stringify(nonce)}];
+    return {observer:original?.nonce===${JSON.stringify(nonce)}&&!original.overflow&&original.events.length===0,
+      focused:document.hasFocus(),visible:document.visibilityState==='visible',busy:!root,
+      width:innerWidth,height:innerHeight,targets};
+  })()`
+}
+
+export function cycleResultExpression(nonce) {
+  requireValue(validNonce(nonce))
+  return `(()=>{const value=window.__onxOwnedCycleObservers?.[${JSON.stringify(nonce)}];
+    return value?{nonce:value.nonce,overflow:value.overflow,events:value.events.slice(0,8)}:null})()`
+}
+
+export function admitCycleResult(value, nonce) {
+  requireValue(value?.nonce === nonce && value.overflow === false && Array.isArray(value.events) && value.events.length === 3)
+  requireValue(['touchstart', 'touchend', 'click'].every((kind, index) => value.events[index]?.kind === kind && value.events[index].trusted === true))
+  return value
+}
+
 export function admitPreview(value) {
   requireValue(value?.observer === true && value.focused === true && value.visible === true && value.busy === false)
   requireValue(Number.isFinite(value.width) && Number.isFinite(value.height) && value.width >= 320 && value.width <= 2048
@@ -37,7 +83,7 @@ export async function touchPreview(cdp, nonce, trace, options = {}) {
   const deadline = now() + 5000
   let previous = null, since = null, box
   while (true) {
-    const reply = await cdp('Runtime.evaluate', { expression: previewExpression(nonce), returnByValue: true })
+    const reply = await cdp('Runtime.evaluate', { expression: options.cycle === true ? cycleExpression(nonce) : previewExpression(nonce), returnByValue: true })
     requireValue(!reply.exceptionDetails)
     try { box = admitPreview(reply.result?.value) }
     catch {
@@ -74,7 +120,8 @@ async function main() {
     JS_click_or_direct_IPC: false, automatic_retry: false, touchStart: 'not_sent', touchEnd: 'not_sent' }
   let socket
   try {
-    const target = new URL(process.argv[2]), nonce = process.argv[3]
+    const target = new URL(process.argv[2]), nonce = process.argv[3], mode = process.argv[4] ?? 'preview'
+    requireValue(mode === 'preview' || mode === 'cycle')
     requireValue(target.protocol === 'ws:' && target.hostname === '127.0.0.1' && /^\d+$/.test(target.port)
       && /^\/devtools\/page\/[A-Za-z0-9_-]+$/.test(target.pathname) && !target.search && !target.hash && validNonce(nonce))
     socket = new WebSocket(target)
@@ -97,7 +144,24 @@ async function main() {
       socket.addEventListener('message', receive)
       socket.send(JSON.stringify({ id: original, method, params }))
     })
-    await touchPreview(cdp, nonce, trace)
+    if (mode === 'cycle') {
+      const ready = await cdp('Runtime.evaluate', { expression: installCycleObserverExpression(nonce), returnByValue: true })
+      requireValue(!ready.exceptionDetails && ready.result?.value?.installed === true && ready.result.value.nonce === nonce)
+    }
+    await touchPreview(cdp, nonce, trace, { cycle: mode === 'cycle' })
+    if (mode === 'cycle') {
+      // Read the original event result only. A missed/unknown click receives
+      // no second input and is never turned into a product invocation.
+      const deadline = performance.now() + 2000
+      while (true) {
+        const result = await cdp('Runtime.evaluate', { expression: cycleResultExpression(nonce), returnByValue: true })
+        requireValue(!result.exceptionDetails)
+        trace.original_UI_events = result.result?.value
+        try { admitCycleResult(trace.original_UI_events, nonce); break }
+        catch { requireValue(performance.now() < deadline); await new Promise(resolve => setTimeout(resolve, 80)) }
+      }
+      trace.one_trusted_UI_click_observed = true
+    }
   } catch {
     trace.failed = true; trace.raw_error_returned = false; process.exitCode = 1
   } finally {

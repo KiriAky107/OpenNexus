@@ -71,7 +71,14 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
         // These are not substituted for native invocation or file-operation IDs.
         persistOnce(original,new JSONObject().put("driver_intent_id",UUID.randomUUID().toString())
             .put("native_invocation_id_observed",false).put("action","Sync one cycle now"));
-        click("Sync one cycle now");
+        String mode=originalCycleInputMode();
+        require(mode.equals("touch")||mode.equals("webview-touch"),"Unknown original cycle input mode");
+        if(mode.equals("webview-touch")) {
+            String nonce=originalCycleDispatchId();
+            require(nonce.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"),"Original cycle dispatch is missing");
+            stage="owned-webview-cycle-ready-"+original;
+            Bundle ready=new Bundle();ready.putString("owned_cycle_ready",nonce);sendStatus(1,ready);
+        } else click("Sync one cycle now");
         stage="wait-original-cycle-completion-"+original;
         waitPresent(node->label(node,"Cycle completed"));
     }

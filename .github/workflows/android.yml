@@ -94,6 +94,11 @@ on:
         type: boolean
         default: false
         required: false
+      sync_webview_cycle:
+        description: 'On sync-conflicts only, admit one actual software WebView touch for each original cycle; no input retry'
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: read
@@ -319,6 +324,7 @@ jobs:
           ${{ inputs.sync_cold_originals && '--cold-originals' || '' }}
           ${{ inputs.sync_semantic_preview && '--semantic-preview' || '' }}
           ${{ inputs.sync_webview_preview && '--webview-preview' || '' }}
+          ${{ inputs.sync_webview_cycle && '--webview-cycle' || '' }}
       - name: Stop only this job's emulator
         if: always()
         run: python3 scripts/android_runtime_probe.py --sdk "$ANDROID_HOME" --stop-owned
