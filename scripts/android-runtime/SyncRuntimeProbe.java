@@ -16,12 +16,15 @@ import org.json.JSONObject;
 /** Actual Sync UI commands, never an HTTP/native/file-operation bridge to the product. */
 public final class SyncRuntimeProbe extends AuthRuntimeProbe {
     @Override protected String namespace() { return "SYNC"; }
-    @Override protected boolean semanticClicks() { return true; }
     @Override protected String[] diagnosticLabels() {
         return new String[]{"Read remote vaults","Choose a vault","Read local association","Preview merge",
             "Initial merge preview","Confirm merge and bind","Confirm this association","No remote vault is associated yet.",
             "Read queue and original records","Sync one cycle now","Stop this cycle","Cycle completed","Cycle stopped",
-            "Cycle did not complete","Last recorded sync error"};
+            "Cycle did not complete","Last recorded sync error",
+            "Sync did not complete. Check service status and retry. (SYNC_CONNECTION_FAILED)",
+            "Sync did not complete. Check service status and retry. (SYNC_RESPONSE_INVALID)",
+            "Cannot reach the service. Check the network and service address. (SYNC_NETWORK_ERROR)",
+            "Local files or the remote snapshot changed. Review a new preview."};
     }
 
     @Override protected boolean additionalPhase(String phase) throws Exception {

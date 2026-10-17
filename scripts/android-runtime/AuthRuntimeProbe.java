@@ -72,7 +72,6 @@ public class AuthRuntimeProbe extends Instrumentation {
 
     protected String namespace() { return "AUTH"; }
     protected boolean additionalPhase(String phase) throws Exception { return false; }
-    protected boolean semanticClicks() { return false; }
     protected String[] diagnosticLabels() { return new String[0]; }
 
     private void openConnection() {
@@ -203,16 +202,6 @@ public class AuthRuntimeProbe extends Instrumentation {
             SystemClock.sleep(80);
         } while (SystemClock.uptimeMillis()<until);
         require(stable,"Named button did not settle before the bounded deadline; no input sent");
-        if (semanticClicks()) {
-            // One standard accessibility click on the current named button,
-            // not coordinates that may race WebView's scrolling. A rejected
-            // or unknown action is never followed by a touch fallback.
-            AccessibilityNodeInfo node=unique(target);Rect current=new Rect();node.getBoundsInScreen(current);
-            require(before.equals(current),"Named target moved before its original action; no input sent");
-            stage="single-semantic-click-"+name.replace(' ','-');
-            require(node.performAction(AccessibilityNodeInfo.ACTION_CLICK),"Original semantic action not accepted; no fallback");
-            return;
-        }
         stage="single-tap-"+name.replace(' ','-');
         long start=SystemClock.uptimeMillis();touch(start,start,MotionEvent.ACTION_DOWN,before.centerX(),before.centerY());
         SystemClock.sleep(50);touch(start,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,before.centerX(),before.centerY());
