@@ -1,4 +1,5 @@
 import os
+import ast
 from pathlib import Path
 import tempfile
 import unittest
@@ -8,6 +9,21 @@ import yaml
 
 from android_desktop_handoff import HandoffError
 import android_desktop_runtime as runtime
+
+
+def admitted(expression, scope, *, reuse='', event='workflow_dispatch', build='success'):
+    """Evaluate only the literal boolean subset used by these three job gates."""
+    value = expression.removeprefix('${{').removesuffix('}}').strip()
+    for field, replacement in [('github.event_name', repr(event)), ('inputs.runtime_scope', repr(scope)),
+                               ('inputs.apk_run_id', repr(reuse)), ('needs.debug-apk.result', repr(build)),
+                               ('!cancelled()', 'True'), ('always()', 'True')]:
+        value = value.replace(field, replacement)
+    value = value.replace('&&', ' and ').replace('||', ' or ')
+    tree = ast.parse(value, mode='eval')
+    if not all(isinstance(node, (ast.Expression, ast.BoolOp, ast.Compare, ast.Constant,
+                                 ast.And, ast.Or, ast.Eq, ast.NotEq)) for node in ast.walk(tree)):
+        raise ValueError('Unsupported job condition')
+    return eval(compile(tree, 'fixed-workflow-job-gate', 'eval'), {'__builtins__': {}})
 
 
 class DesktopWorkflow(unittest.TestCase):
@@ -63,6 +79,23 @@ class DesktopWorkflow(unittest.TestCase):
             with self.assertRaisesRegex(HandoffError, '^DESKTOP_PAIR_ANDROID_CONTEXT_INVALID$'):
                 runtime.main()
             claim.assert_not_called()
+
+    def test_build_only_produces_the_new_apk_without_launching_either_client(self):
+        self.assertIn('build-only', self.workflow['on']['workflow_dispatch']['inputs']['runtime_scope']['options'])
+        jobs = self.workflow['jobs']
+        self.assertTrue(admitted(jobs['debug-apk']['if'], 'build-only'))
+        self.assertFalse(admitted(jobs['emulator-runtime']['if'], 'build-only'))
+        self.assertFalse(admitted(jobs['desktop-startup']['if'], 'build-only'))
+
+    def test_existing_reuse_and_desktop_scopes_keep_their_actual_job_boundaries(self):
+        jobs = self.workflow['jobs']
+        for scope, reuse, expected in [('sync-conflicts', '39006953890', (False, True, False)),
+                                       ('all', '', (True, True, False)),
+                                       ('desktop-startup', '39006953890', (False, False, True))]:
+            with self.subTest(scope=scope):
+                actual = tuple(admitted(jobs[name]['if'], scope, reuse=reuse)
+                               for name in ['debug-apk', 'emulator-runtime', 'desktop-startup'])
+                self.assertEqual(actual, expected)
 
 
 if __name__ == '__main__':
