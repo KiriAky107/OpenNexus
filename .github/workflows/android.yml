@@ -76,7 +76,7 @@ on:
       runtime_scope:
         description: 'all checks, or a named remaining scope on an existing fixed APK without rebuilding'
         type: choice
-        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, sync-initial]
+        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, sync-initial, sync-exchange]
         default: all
         required: false
 
@@ -90,7 +90,7 @@ concurrency:
 
 jobs:
   debug-apk:
-    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'sync-initial')
+    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -186,7 +186,7 @@ jobs:
           import os,re
           run,commit=os.environ['REUSE_RUN'],os.environ['REUSE_COMMIT']
           scope=os.environ['RUNTIME_SCOPE']
-          assert scope in ('all','lifecycle','tablet','auth','auth-recovery','auth-background','attachments','attachments-remaining','canvas-remaining','editing-remaining','sync-initial')
+          assert scope in ('all','lifecycle','tablet','auth','auth-recovery','auth-background','attachments','attachments-remaining','canvas-remaining','editing-remaining','sync-initial','sync-exchange')
           assert scope=='all' or bool(run), 'Partial scope requires a fixed existing APK; it is not full acceptance'
           assert bool(run)==bool(commit), 'Supply both immutable APK reuse fields together'
           if run:
@@ -211,18 +211,18 @@ jobs:
         with:
           node-version: '22'
       - uses: actions/checkout@v7
-        if: inputs.runtime_scope == 'auth' || inputs.runtime_scope == 'auth-recovery' || inputs.runtime_scope == 'auth-background' || inputs.runtime_scope == 'sync-initial'
+        if: inputs.runtime_scope == 'auth' || inputs.runtime_scope == 'auth-recovery' || inputs.runtime_scope == 'auth-background' || inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange'
         with:
           repository: KiriAky107/Sync-for-OpenNexus
           ref: 29e2e6d373ea752352981bdad05d34a7a0d9c3d9
           path: .build/android-auth-source
           persist-credentials: false
       - uses: actions/setup-python@v7
-        if: inputs.runtime_scope == 'auth' || inputs.runtime_scope == 'auth-recovery' || inputs.runtime_scope == 'auth-background' || inputs.runtime_scope == 'sync-initial'
+        if: inputs.runtime_scope == 'auth' || inputs.runtime_scope == 'auth-recovery' || inputs.runtime_scope == 'auth-background' || inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange'
         with:
           python-version: '3.13'
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
-        if: inputs.runtime_scope == 'auth' || inputs.runtime_scope == 'auth-recovery' || inputs.runtime_scope == 'auth-background' || inputs.runtime_scope == 'sync-initial'
+        if: inputs.runtime_scope == 'auth' || inputs.runtime_scope == 'auth-recovery' || inputs.runtime_scope == 'auth-background' || inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange'
       - name: Prepare only the fixed owned HTTPS service
         if: inputs.runtime_scope == 'auth' || inputs.runtime_scope == 'auth-recovery' || inputs.runtime_scope == 'auth-background'
         shell: bash
@@ -233,7 +233,7 @@ jobs:
           mkdir -p .build/android-auth-origin-proof
           .build/android-auth-source/.venv/bin/python scripts/android_auth_hosted.py prepare > .build/android-auth-origin-proof/origin.json
       - name: Prepare the independent fixed Sync interoperability origin
-        if: inputs.runtime_scope == 'sync-initial'
+        if: inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange'
         shell: bash
         run: |
           set -euo pipefail
@@ -269,7 +269,7 @@ jobs:
           "$ANDROID_HOME/emulator/emulator" -avd "opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" -port 5562 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader -accel on -memory 2048 -cores 2 > .build/android-runtime/emulator.log 2>&1 &
           echo "$!" > .build/android-runtime/emulator.pid
       - name: Check real APK editing, force-stop recovery, Canvas touch and system export
-        if: inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'sync-initial'
+        if: inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
@@ -290,8 +290,8 @@ jobs:
           --tools-commit "$GITHUB_SHA" --build-run-id "$APK_BUILD_RUN_ID"
           --bundle .build/android-runtime/package --sdk "$ANDROID_HOME"
           --output .build/android-auth-evidence --scope "$AUTH_PROBE_SCOPE"
-      - name: Check actual Android UI association and first foreground Sync upload
-        if: inputs.runtime_scope == 'sync-initial'
+      - name: Check actual Android UI association and original foreground Sync exchange
+        if: inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
@@ -300,6 +300,7 @@ jobs:
           --tools-commit "$GITHUB_SHA" --build-run-id "$APK_BUILD_RUN_ID"
           --bundle .build/android-runtime/package --sdk "$ANDROID_HOME"
           --output .build/android-sync-evidence
+          ${{ inputs.runtime_scope == 'sync-exchange' && '--exchange' || '' }}
       - name: Stop only this job's emulator
         if: always()
         run: python3 scripts/android_runtime_probe.py --sdk "$ANDROID_HOME" --stop-owned
@@ -310,13 +311,13 @@ jobs:
           mkdir -p .build/android-auth-origin-proof
           python3 scripts/android_auth_hosted.py stop > .build/android-auth-origin-proof/cleanup.json
       - name: Stop only this job's original Sync interoperability origin and providers
-        if: always() && inputs.runtime_scope == 'sync-initial'
+        if: always() && (inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange')
         shell: bash
         run: |
           mkdir -p .build/android-sync-origin-proof
           python3 scripts/android_auth_hosted.py stop --fixture sync > .build/android-sync-origin-proof/cleanup.json
       - uses: actions/upload-artifact@v7
-        if: always() && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'sync-initial'
+        if: always() && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange'
         with:
           name: OpenNexus-android-runtime-${{ env.COMPILED_SHA }}
           path: |
@@ -325,9 +326,9 @@ jobs:
             .build/android-runtime/emulator-version.txt
           if-no-files-found: warn
       - uses: actions/upload-artifact@v7
-        if: always() && inputs.runtime_scope == 'sync-initial'
+        if: always() && (inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange')
         with:
-          name: OpenNexus-android-sync-initial-${{ env.COMPILED_SHA }}
+          name: OpenNexus-android-${{ inputs.runtime_scope }}-${{ env.COMPILED_SHA }}
           # No private owner/input/session, copied databases, driver key, raw
           # logcat or authentication screenshots are part of this evidence.
           path: |

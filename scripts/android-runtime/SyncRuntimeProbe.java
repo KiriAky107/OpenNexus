@@ -24,16 +24,22 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
             case "association-original":
                 readCurrent(); signedIn(); click("Read this association’s original receipt");
                 waitPresent(node->text(node.getText()).startsWith("Original association committed")); return true;
-            case "cycle":
-                readCurrent(); signedIn(); click("Read queue and original records");
-                waitFor(node->label(node,"Sync one cycle now") && node.isEnabled(),true);
-                // This is a driver intent, explicitly not the UI-generated native cycle nonce.
-                persistOnce("cycle",new JSONObject().put("driver_intent_id",UUID.randomUUID().toString())
-                    .put("native_invocation_id_observed",false).put("action","Sync one cycle now"));
-                click("Sync one cycle now");
-                waitPresent(node->label(node,"Cycle completed")); return true;
+            case "cycle": cycle("cycle"); return true;
+            case "cycle-incoming": cycle("cycle-incoming"); return true;
+            case "close": click("Close"); return true;
             default: return false;
         }
+    }
+
+    private void cycle(String original) throws Exception {
+        readCurrent(); signedIn(); click("Read queue and original records");
+        waitFor(node->label(node,"Sync one cycle now") && node.isEnabled(),true);
+        // Distinct explicit cycles have separate once-only driver intents.
+        // These are not substituted for native invocation or file-operation IDs.
+        persistOnce(original,new JSONObject().put("driver_intent_id",UUID.randomUUID().toString())
+            .put("native_invocation_id_observed",false).put("action","Sync one cycle now"));
+        click("Sync one cycle now");
+        waitPresent(node->label(node,"Cycle completed"));
     }
 
     private JSONObject configuration() throws Exception {

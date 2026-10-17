@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock,patch
 from android_runtime_probe import DRAFT
-from android_sync_runtime import SyncProbe,read_original_object,validate_upload
+from android_sync_runtime import PEER_NOTE,SyncProbe,read_original_object,validate_upload,validate_incoming
 
 
 class InitialSyncBoundaries(unittest.TestCase):
@@ -106,6 +106,30 @@ class InitialSyncBoundaries(unittest.TestCase):
             self.assertFalse(observed['credentials_selected']);self.assertFalse(observed['original_database_uploaded'])
             self.assertNotIn('must-never-be-selected-or-uploaded',(probe.output/'bound-host.json').read_text())
             for call in probe.private.call_args_list:self.assertRegex(call.args[0],r'host\.sqlite3(?:-wal|-shm)?$')
+
+    def incoming(self):
+        receipt={'vault_id':'1'*32,'operation_id':'peer-original','device_id':'peer-device','file_id':'peer-file',
+            'path':'peer-note.md','operation':'put','hash':hashlib.sha256(PEER_NOTE).hexdigest(),'size':len(PEER_NOTE),'sequence':2}
+        provider={'vault':{'id':'1'*32,'sequence':2},'rows':{'revisions':[receipt.copy()],
+            'device_progress':[{'device_id':'android','offered_sequence':2,'committed_sequence':1},
+                {'device_id':'peer-device','offered_sequence':1,'committed_sequence':2}]}}
+        native={'heads':[{'file_id':'peer-file','hash':receipt['hash'],'revision':2,'path':'peer-note.md'}],
+            'conflicts':[],'binding':{'remote_vault':'1'*32,'cursor':2}}
+        return receipt,provider,native
+
+    def test_generated_changes_do_not_replace_original_native_head_and_cursor_evidence(self):
+        receipt,provider,native=self.incoming();validate_incoming(receipt,provider,native,'android')
+        for changed in ({'heads':[]},{'conflicts':[{'state':'open'}]}, {'binding':{'remote_vault':'1'*32,'cursor':1}}):
+            with self.subTest(changed=changed),self.assertRaises(RuntimeError):validate_incoming(receipt,provider,dict(native,**changed),'android')
+        changed=deepcopy(native);changed['heads'][0]['hash']='0'*64
+        with self.assertRaises(RuntimeError):validate_incoming(receipt,provider,changed,'android')
+
+    def test_incoming_peer_must_preserve_vault_scope_and_actual_distinct_device_progress(self):
+        receipt,provider,native=self.incoming()
+        changed=deepcopy(provider);changed['rows']['device_progress'][0]['offered_sequence']=1
+        with self.assertRaises(RuntimeError):validate_incoming(receipt,changed,native,'android')
+        with self.assertRaises(RuntimeError):validate_incoming(dict(receipt,vault_id='other'),provider,native,'android')
+        with self.assertRaises(RuntimeError):validate_incoming(dict(receipt,device_id='android'),provider,native,'android')
 
 
 if __name__=='__main__':unittest.main()

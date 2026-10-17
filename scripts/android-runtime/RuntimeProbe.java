@@ -180,6 +180,13 @@ public final class RuntimeProbe extends Instrumentation {
                     open(NOTE);
                     require(string(noteBody().getText()).contains(IME_TEXT), "Confirmed IME text did not survive process termination");
                     break;
+                case "peer-reopen":
+                    open("peer-note.md");
+                    waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
+                        && label(node,"Markdown note body",false)
+                        && string(node.getText()).equals("# 来自独立 HTTP 客户端 😀\n\n保持 Markdown 原文。\n"),
+                        "exact actual received original Markdown after cold launch");
+                    break;
                 case "back-draft":
                     create("New note", "runtime-back.md");
                     inputText(noteBody(), BACK_DRAFT);

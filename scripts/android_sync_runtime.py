@@ -24,6 +24,9 @@ from android_auth_runtime import AuthProbe, active_intent
 from android_runtime_probe import APP, DRIVER, DRAFT, build_job_origin, require, require_hosted_emulator, validate_binding
 from android_sync_fixture import observe_provider
 from android_sync_setup import Setup
+from android_sync_peer import Peer
+
+PEER_NOTE='# 来自独立 HTTP 客户端 😀\n\n保持 Markdown 原文。\n'.encode()
 
 
 def validate_upload(provider, native, device_id):
@@ -75,6 +78,25 @@ def read_original_object(endpoint, vault, content_hash, token):
     finally:connection.close()
 
 
+def validate_incoming(receipt,provider,native,device):
+    require(receipt['vault_id']==provider['vault']['id']==native['binding']['remote_vault']
+        and receipt['path']=='peer-note.md' and receipt['operation']=='put'
+        and receipt['hash']==hashlib.sha256(PEER_NOTE).hexdigest() and receipt['size']==len(PEER_NOTE),
+        'Original independent-peer content differs')
+    revisions=[row for row in provider['rows']['revisions'] if row['operation_id']==receipt['operation_id']]
+    require(len(revisions)==1 and all(revisions[0][key]==receipt[key] for key in
+        ('sequence','device_id','file_id','hash','size','path')),'Actual peer receipt does not match provider revision')
+    heads=[row for row in native['heads'] if row['file_id']==receipt['file_id']]
+    require(len(heads)==1 and heads[0]['hash']==receipt['hash'] and heads[0]['revision']==receipt['sequence']
+        and heads[0]['path']==receipt['path'] and not native['conflicts']
+        and native['binding']['cursor']==provider['vault']['sequence'],'Native incoming head/cursor is not confirmed')
+    progress={row['device_id']:row for row in provider['rows']['device_progress']}
+    require(device in progress and progress[device]['offered_sequence']==provider['vault']['sequence']
+        and receipt['device_id']!=device and receipt['device_id'] in progress
+        and progress[receipt['device_id']]['committed_sequence']==receipt['sequence'],
+        'Actual generated changes/peer commit observations differ; no API apply ACK is inferred')
+
+
 class SyncProbe(AuthProbe):
     def observe(self,label):
         value=observe_provider(self.owner)
@@ -82,7 +104,7 @@ class SyncProbe(AuthProbe):
         return value
 
     def sync_phase(self,phase):
-        require(phase in ('associate','cycle','status','association-original'),'Unexpected Sync UI phase')
+        require(phase in ('associate','cycle','cycle-incoming','status','association-original','close'),'Unexpected Sync UI phase')
         number=len(self.phases)+1
         # The actual association ID/digest is separately frozen in the driver
         # before its confirmation tap. This dispatch ID is not a server nonce.
@@ -193,13 +215,40 @@ class SyncProbe(AuthProbe):
             'provider':'Owned fixed Sync0.8/PostgreSQL/S3','actual_Android_UI_auth_binding_cycle':True,
             'desktop_product_pair_verified':False,'bidirectional_conflict_recovery_verified':False,
             'client_apply_ACK_available':False,'physical_phone_verified':False,'published':False},exclusive=True)
+        if getattr(self.args,'exchange',False):self.exchange(setup,prepared,device)
+
+    def exchange(self,setup,prepared,device):
+        prior=self.original('runtime-note.md')
+        peer=Peer(self.owner)
+        receipt=peer.publish('incoming-markdown','peer-note.md',PEER_NOTE)
+        atomic_json(self.output/'independent-peer-revision.json',receipt,exclusive=True)
+        self.sync_phase('cycle-incoming')
+        native=self.host_snapshot('incoming');provider=self.observe('incoming')
+        validate_incoming(receipt,provider,native,device)
+        require(self.original('peer-note.md')==PEER_NOTE and self.original('runtime-note.md')==prior,
+            'Incoming Markdown bytes or original saved Android note changed unexpectedly')
+        actual=read_original_object(setup.endpoint,prepared['vault']['vault_id'],receipt['hash'],setup.session()['access_token'])
+        require(actual==PEER_NOTE,'Actual independent peer object bytes changed')
+        self.sync_phase('close');self.phase('peer-reopen')
+        require(self.original('peer-note.md')==PEER_NOTE and self.host_snapshot('incoming-reopen')==native,
+            'Cold reopen changed the original incoming file or native Sync records')
+        (self.output/'incoming-original.md').write_bytes(PEER_NOTE)
+        atomic_json(self.output/'sync-exchange-proof.json',{'passed':True,
+            'scope':'Real actual Android saved-note upload plus independent HTTP peer original-note download/cold rendered reopen',
+            'source_commit':self.args.commit,'runtime_tools_commit':self.args.tools_commit,'APK_sha256':self.binding['sha256'],
+            'phases':self.phases,'incoming_original_operation_id':receipt['operation_id'],'incoming_original_file_id':receipt['file_id'],
+            'incoming_original_sha256':receipt['hash'],'client_apply_observed_from_owned_files_and_UI':True,
+            'server_offered_sequence_is_not_API_apply_ACK':True,'API_client_apply_ACK_available':False,
+            'desktop_product_pair_verified':False,'Canvas_PNG_rename_delete_conflicts_offline_Stop_verified':False,
+            'physical_phone_verified':False,'upgrade_signing_release_verified':False},exclusive=True)
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('bundle','sdk','output','source-checkout'):parser.add_argument('--'+name,type=Path,required=True)
     for name in ('commit','tools-commit','build-run-id'):parser.add_argument('--'+name,required=True)
-    parser.add_argument('--serial',default='emulator-5562');args=parser.parse_args();args.scope='sync-initial'
+    parser.add_argument('--serial',default='emulator-5562');parser.add_argument('--exchange',action='store_true')
+    args=parser.parse_args();args.scope='sync-exchange' if args.exchange else 'sync-initial'
     require_hosted();require_hosted_emulator(args.serial);owner=owned_root()
     state=read_json(owner/'owner-state.json');require(state['result']=='ready' and state.get('fixture')=='sync','Owned Sync origin is not ready')
     apk,binding=validate_binding(args.bundle,args.commit)
