@@ -11,6 +11,7 @@ import SyncActivity from './SyncActivity.vue'
 import SyncAccount from './SyncAccount.vue'
 import SyncConnectionForm from './SyncConnectionForm.vue'
 import SyncVaultSelector from './SyncVaultSelector.vue'
+import SyncInitialPreview from './SyncInitialPreview.vue'
 import type { SyncRemoteVault } from './syncVaults'
 import { syncError } from './syncPresentation'
 const { actionDialog, resolveAction, askConfirm } = useActionDialog()
@@ -123,11 +124,7 @@ onUnmounted(() => { mounted = false; clearInterval(timer); password.value = '' }
       <div class="inline-actions"><input v-model="newName" :placeholder="t('新远端库名称', 'New vault name')" /><button :disabled="busy || !newName.trim()" @click="createVault">{{ t('创建远端库', 'Create vault') }}</button></div>
       <div class="inline-actions"><button :disabled="busy || !selected || !status" @click="bind('upload')">{{ t('上传到空远端', 'Upload to empty remote') }}</button><button :disabled="busy || !selected || !status" @click="bind('download')">{{ t('下载到空本地', 'Download into empty local') }}</button></div>
       <button :disabled="busy || !selected || !status" @click="previewMerge">{{ t('预览合并', 'Preview merge') }}</button>
-      <div v-if="preview" class="sync-preview">
-        <p>{{ t('预览文件数', 'Files in preview') }} {{ preview.items.length }}</p>
-        <ul><li v-for="item in previewItems" :key="item.path">{{ item.path }} · {{ item.action }}</li></ul>
-        <div class="inline-actions"><button :disabled="previewPage === 0" @click="previewPage--">{{ t('上一页', 'Previous') }}</button><button :disabled="(previewPage + 1) * 100 >= preview.items.length" @click="previewPage++">{{ t('下一页', 'Next') }}</button><button :disabled="busy" @click="merge">{{ t('确认合并并绑定', 'Confirm merge and bind') }}</button></div>
-      </div>
+      <SyncInitialPreview v-if="preview" :items="previewItems" :total="preview.items.length" :offset="previewPage * 100" :limit="100" :busy="busy" @page="previewPage = $event / 100" @confirm="merge" />
     </div>
     <details v-if="status" class="ui-disclosure"><summary>{{ t('同步范围', 'Sync scope') }}</summary><fieldset :disabled="busy || !!status.binding" class="sync-scope">
       <legend>{{ t('可选同步内容', 'Optional sync content') }}</legend>
