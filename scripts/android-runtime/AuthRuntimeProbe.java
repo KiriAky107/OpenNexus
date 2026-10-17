@@ -20,11 +20,11 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Actual installed-app UI only. No password arguments, raw UI dump or screenshot. */
-public final class AuthRuntimeProbe extends Instrumentation {
+public class AuthRuntimeProbe extends Instrumentation {
     private static final String APP = "cc.kronecker.opennexus.dev";
     private Bundle args;
     private UiAutomation ui;
-    private String stage = "initialization";
+    protected String stage = "initialization";
 
     @Override public void onCreate(Bundle value) { super.onCreate(value); args=value; start(); }
     @Override public void onStart() {
@@ -57,18 +57,21 @@ public final class AuthRuntimeProbe extends Instrumentation {
                     readCurrent(); signedIn(); click("Sign out on server"); waitText("Review connection action");
                     click("Confirm this action"); waitText("The service confirmed sign-out of the original device session.");
                     unusable(); break;
-                default: throw new IllegalStateException("Unknown owned auth phase");
+                default: require(additionalPhase(phase), "Unknown owned auth phase");
             }
             clearPassword();
-            result.putString("stream","OPENNEXUS_AUTH_PHASE_OK "+phase+"\n");finish(0,result);
+            result.putString("stream","OPENNEXUS_"+namespace()+"_PHASE_OK "+phase+"\n");finish(0,result);
         } catch (Throwable error) {
             // Even the failure path never serializes AX values, exception
             // messages, passwords, usernames, endpoints or native replies.
             clearPassword();
-            result.putString("stream","OPENNEXUS_AUTH_PHASE_FAILED stage="+stage+" class="+error.getClass().getSimpleName()+"\n"+shape());
+            result.putString("stream","OPENNEXUS_"+namespace()+"_PHASE_FAILED stage="+stage+" class="+error.getClass().getSimpleName()+"\n"+shape());
             finish(1,result);
         }
     }
+
+    protected String namespace() { return "AUTH"; }
+    protected boolean additionalPhase(String phase) throws Exception { return false; }
 
     private void openConnection() {
         stage="open-connection";
@@ -118,11 +121,11 @@ public final class AuthRuntimeProbe extends Instrumentation {
         waitFor(node->node.isEditable() && node.isPassword() && text(node.getText()).isEmpty(),false);
     }
 
-    private void signedIn() {
+    protected void signedIn() {
         stage="current-signed-in";waitPresent(node->label(node,"Session saved · Signed in"));
         waitFor(node->label(node,"Refresh session") && node.isEnabled(),true);
     }
-    private void readCurrent() {
+    protected void readCurrent() {
         // Finishing an instrumentation connection may clear the WebView's RAM
         // view through visibility cancellation. Restore it with the same
         // explicit read a person uses; never infer a usable native selection
@@ -173,7 +176,7 @@ public final class AuthRuntimeProbe extends Instrumentation {
         byte[] signal=java.nio.file.Files.readAllBytes(finish.toPath());
         require(java.util.Arrays.equals(signal,"finish\n".getBytes(StandardCharsets.UTF_8)),"Original background signal changed");
     }
-    private void click(String name) {
+    protected void click(String name) {
         stage="tap-"+name.replace(' ','-');
         AccessibilityNodeInfo initial=waitFor(n->actionable(n,name),true);
         Predicate<AccessibilityNodeInfo> target=n->label(n,name) && n.isEnabled() && n.isClickable();
@@ -212,7 +215,7 @@ public final class AuthRuntimeProbe extends Instrumentation {
         for (AccessibilityNodeInfo node:nodes()) if (node.isVisibleToUser() && predicate.test(node)) found.add(node);
         require(found.size()==1,"Named target is missing or ambiguous; no input replayed");return found.get(0);
     }
-    private AccessibilityNodeInfo waitFor(Predicate<AccessibilityNodeInfo> predicate,boolean scroll) {
+    protected AccessibilityNodeInfo waitFor(Predicate<AccessibilityNodeInfo> predicate,boolean scroll) {
         long until=SystemClock.uptimeMillis()+30000;long lastScroll=0;
         do {
             boolean foundTarget=false;
@@ -233,7 +236,7 @@ public final class AuthRuntimeProbe extends Instrumentation {
         } while (SystemClock.uptimeMillis()<until);
         throw new IllegalStateException("Owned UI state timed out");
     }
-    private void waitPresent(Predicate<AccessibilityNodeInfo> predicate) {
+    protected void waitPresent(Predicate<AccessibilityNodeInfo> predicate) {
         // State/heading assertions do not require the text to fit the viewport.
         // Actual inputs and actions still use visible, enabled, uniquely named
         // targets and stable touch bounds. Never scroll away from a visible
@@ -262,12 +265,12 @@ public final class AuthRuntimeProbe extends Instrumentation {
         }
     }
     private boolean hasText(String value) { for (AccessibilityNodeInfo node:nodes()) if (label(node,value)) return true; return false; }
-    private void waitText(String value) { waitFor(n->label(n,value),true); }
-    private static boolean label(AccessibilityNodeInfo node,String value) {
+    protected void waitText(String value) { waitFor(n->label(n,value),true); }
+    protected static boolean label(AccessibilityNodeInfo node,String value) {
         return value.equals(text(node.getText())) || value.equals(text(node.getContentDescription()))
             || (Build.VERSION.SDK_INT>=26 && value.equals(text(node.getHintText())));
     }
-    private static boolean descendantLabel(AccessibilityNodeInfo node,String value,int depth) {
+    protected static boolean descendantLabel(AccessibilityNodeInfo node,String value,int depth) {
         if (label(node,value)) return true;if (depth>=4) return false;
         for (int i=0;i<node.getChildCount();i++) { AccessibilityNodeInfo child=node.getChild(i);if (child!=null && descendantLabel(child,value,depth+1)) return true; }
         return false;
@@ -292,7 +295,7 @@ public final class AuthRuntimeProbe extends Instrumentation {
         }
         return false;
     }
-    private List<AccessibilityNodeInfo> nodes() {
+    protected List<AccessibilityNodeInfo> nodes() {
         if (Build.VERSION.SDK_INT>=34) ui.clearCache();List<AccessibilityNodeInfo> result=new ArrayList<>();
         AccessibilityNodeInfo root=ui.getRootInActiveWindow();
         if (root!=null && APP.equals(text(root.getPackageName()))) result.add(root);
@@ -327,6 +330,6 @@ public final class AuthRuntimeProbe extends Instrumentation {
         require(event.getToolType(0)==MotionEvent.TOOL_TYPE_FINGER,"Owned touch has no finger identity");
         try { require(ui.injectInputEvent(event,true),"Owned touch rejected"); } finally { event.recycle(); }
     }
-    private static String text(CharSequence value) { return value==null ? "" : value.toString(); }
-    private static void require(boolean value,String message) { if (!value) throw new IllegalStateException(message); }
+    protected static String text(CharSequence value) { return value==null ? "" : value.toString(); }
+    protected static void require(boolean value,String message) { if (!value) throw new IllegalStateException(message); }
 }

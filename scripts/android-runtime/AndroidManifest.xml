@@ -9,4 +9,5 @@
     </application>
     <instrumentation android:name="cc.kronecker.opennexus.testdriver.RuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
     <instrumentation android:name="cc.kronecker.opennexus.testdriver.AuthRuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
+    <instrumentation android:name="cc.kronecker.opennexus.testdriver.SyncRuntimeProbe" android:targetPackage="cc.kronecker.opennexus.testdriver" android:functionalTest="false" />
 </manifest>
