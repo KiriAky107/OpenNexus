@@ -368,7 +368,26 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void clickMenu(String text) {
+        if (text.equals("More canvas actions")) showCanvasTools();
         activate(waitNode(node -> label(node, text, false) && node.isEnabled() && node.isClickable(), "clickable menu: " + text));
+    }
+
+    private void showCanvasTools() {
+        List<AccessibilityNodeInfo> triggers = new ArrayList<>();
+        for (AccessibilityNodeInfo node : nodes()) {
+            if (APP.equals(string(node.getPackageName())) && node.isVisibleToUser()
+                    && node.isClickable() && label(node, "Canvas tools", false)) triggers.add(node);
+            if (APP.equals(string(node.getPackageName())) && node.isVisibleToUser()
+                    && label(node, "Canvas operations", false)) return;
+        }
+        // An older fixed APK or a wide tablet renders the original inline
+        // toolbar. No input is sent unless its exact narrow trigger is seen.
+        require(triggers.size() <= 1, "Ambiguous canvas tools trigger; no input sent");
+        if (triggers.isEmpty()) return;
+        require(triggers.get(0).isEnabled(), "Canvas tools are unavailable during composition");
+        activate(triggers.get(0));
+        waitNode(node -> APP.equals(string(node.getPackageName())) && node.isVisibleToUser()
+            && label(node, "Canvas operations", false), "expanded shared Canvas operations");
     }
 
     private boolean titleBarControl(AccessibilityNodeInfo node) {
@@ -550,6 +569,7 @@ public final class RuntimeProbe extends Instrumentation {
     }
     private void waitLabel(String text) { waitNode(node -> label(node, text, false), "label: " + text); }
     private void click(String text, boolean prefix) {
+        if (!prefix && (text.equals("Text") || text.equals("Properties"))) showCanvasTools();
         AccessibilityNodeInfo node = waitNode(value -> label(value, text, prefix) && value.isEnabled(), "enabled action: " + text);
         progress.append("tap: ").append(text).append('\n');
         activate(node);

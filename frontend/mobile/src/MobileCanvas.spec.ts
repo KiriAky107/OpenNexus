@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { flushPromises, mount } from '@vue/test-utils'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import MobileCanvas from './MobileCanvas.vue'
 import { nextTick } from 'vue'
 
@@ -22,6 +22,60 @@ it('keeps exact source and plain node text while language changes without docume
   await wrapper.setProps({ language: 'zh-CN' })
   expect(wrapper.get('.canvas-toolbar').text()).toContain('文字')
   expect(wrapper.emitted('update:modelValue')).toBeUndefined(); expect(wrapper.vm.source()).toBe(original)
+  wrapper.unmount()
+})
+it('starts narrow canvas tools collapsed without hiding the canvas or changing original JSON', async () => {
+  const wrapper = mount(MobileCanvas, { props: { modelValue: original, language: 'en' }, attachTo: document.body })
+  expect(wrapper.get('.canvas-toolbar').isVisible()).toBe(false)
+  expect(wrapper.get('.canvas-viewport').isVisible()).toBe(true)
+  const trigger = wrapper.get('button[aria-label="Canvas tools"]')
+  expect(trigger.attributes('aria-expanded')).toBe('false')
+  await trigger.trigger('click')
+  expect(wrapper.get('.canvas-toolbar').isVisible()).toBe(true)
+  expect(trigger.attributes('aria-expanded')).toBe('true')
+  expect(wrapper.vm.handleBack()).toBe(true)
+  await nextTick()
+  expect(wrapper.get('.canvas-toolbar').isVisible()).toBe(false)
+  expect(wrapper.vm.source()).toBe(original)
+  expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  wrapper.unmount()
+})
+it('shows tools inline at tablet width and returns to a collapsed phone panel without editing the document', async () => {
+  let resize!: ResizeObserverCallback
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(callback: ResizeObserverCallback) { resize = callback }
+    observe() {} disconnect() {}
+  })
+  const wrapper = mount(MobileCanvas, { props: { modelValue: original, language: 'en' }, attachTo: document.body })
+  const width = async (value: number) => {
+    resize([{ contentRect: { width: value, height: 600 } } as ResizeObserverEntry], {} as ResizeObserver)
+    await nextTick()
+  }
+  try {
+    await wrapper.get('button[aria-label="Canvas tools"]').trigger('click')
+    await width(800)
+    expect(wrapper.find('button[aria-label="Canvas tools"]').exists()).toBe(false)
+    expect(wrapper.get('.canvas-toolbar').isVisible()).toBe(true)
+    expect(wrapper.find('.floating-canvas-tools').exists()).toBe(false)
+    await width(390)
+    expect(wrapper.get('button[aria-label="Canvas tools"]').attributes('aria-expanded')).toBe('false')
+    expect(wrapper.get('.canvas-toolbar').isVisible()).toBe(false)
+    expect(wrapper.vm.source()).toBe(original)
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  } finally { wrapper.unmount(); vi.unstubAllGlobals() }
+})
+it('dismisses narrow tools on an outside press or Escape and closes after one actual add', async () => {
+  const wrapper = mount(MobileCanvas, { props: { modelValue: original, language: 'en' }, attachTo: document.body })
+  const trigger = wrapper.get('button[aria-label="Canvas tools"]')
+  await trigger.trigger('click')
+  document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })); await nextTick()
+  expect(wrapper.get('.canvas-toolbar').isVisible()).toBe(false)
+  await trigger.trigger('click'); await wrapper.get('.canvas-tools-area').trigger('keydown', { key: 'Escape' })
+  expect(wrapper.get('.canvas-toolbar').isVisible()).toBe(false)
+  expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  await trigger.trigger('click'); await button(wrapper, 'Text').trigger('click')
+  expect(wrapper.get('.canvas-toolbar').isVisible()).toBe(false)
+  expect(wrapper.emitted('update:modelValue')).toHaveLength(1)
   wrapper.unmount()
 })
 it('previews a drag, then emits one document update only when the finger finishes', async () => {
