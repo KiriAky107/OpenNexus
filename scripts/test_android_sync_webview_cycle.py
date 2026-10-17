@@ -16,17 +16,21 @@ NONCE='a326b9cd-165c-4444-b1c2-5b05b48f1994'
 
 
 class OriginalCycleInput(unittest.TestCase):
-    def test_only_an_explicit_product_pair_initial_cycle_uses_its_original_ready_stream(self):
-        for scope,flag,expected in [('product-pair',True,True),('product-pair',False,False),('sync-initial',True,False)]:
-            with self.subTest(scope=scope,flag=flag),tempfile.TemporaryDirectory() as folder:
+    def test_only_explicit_pair_or_native_outcome_initial_cycles_use_their_original_ready_stream(self):
+        cases=[('product-pair',True,False,True),('product-pair',False,False,False),
+            ('sync-initial',True,False,False),('sync-conflicts',True,False,False),
+            ('sync-conflicts',True,True,True),('sync-conflicts',False,True,False)]
+        for scope,flag,outcome,expected in cases:
+            with self.subTest(scope=scope,flag=flag,outcome=outcome),tempfile.TemporaryDirectory() as folder:
                 probe=runtime.SyncProbe.__new__(runtime.SyncProbe)
-                probe.args=SimpleNamespace(scope=scope,webview_cycle=flag)
+                probe.args=SimpleNamespace(scope=scope,webview_cycle=flag,original_native_outcome=outcome)
                 probe.output=Path(folder);probe.phases=[];probe.start_app=Mock()
                 result=subprocess.CompletedProcess([],0,b'OPENNEXUS_SYNC_PHASE_OK cycle')
                 probe.shell=Mock(return_value=result)
                 with patch.object(runtime,'instrument_original_cycle',return_value=result) as instrument:
                     probe.sync_phase('cycle')
                 self.assertEqual(instrument.call_count,int(expected));self.assertEqual(probe.shell.call_count,int(not expected))
+                probe.start_app.assert_called_once()
                 intent=json.loads((probe.output/'sync-dispatch-1.json').read_text('utf-8'))
                 self.assertEqual(intent['cycle_input'],'webview-touch' if expected else None)
 

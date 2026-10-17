@@ -257,7 +257,7 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
         webview=phase=='associate' and getattr(args,'webview_preview',False)
         semantic=phase=='associate' and getattr(args,'semantic_preview',False)
         browser_cycle=getattr(args,'webview_cycle',False) and (phase in ('cycle-conflict','cycle-conflict-copy','cycle-incoming','cycle-media')
-            or phase=='cycle' and getattr(args,'scope','')=='product-pair')
+            or phase=='cycle' and (getattr(args,'scope','')=='product-pair' or getattr(args,'original_native_outcome',False)))
         require(not (webview and semantic),'Choose exactly one original preview input backend')
         atomic_json(self.output/('sync-dispatch-'+str(number)+'.json'),{'phase':phase,
             'driver_dispatch_id':dispatch_id,'server_or_native_operation_id':False,'automatic_retry':False,
