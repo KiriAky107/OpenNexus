@@ -222,7 +222,7 @@ class AuthProbe(Probe):
             input=json.dumps(configuration).encode())
 
     def run(self):
-        require(self.args.scope in ('all','recovery'),'Invalid owned auth scope')
+        require(self.args.scope in ('all','recovery','background'),'Invalid owned auth scope')
         self.boot()
         require(self.binding.get('native_auth_gateway',{}).get('present') is True,'Fixed APK has no native auth gateway')
         configuration=read_json(self.owner/'device-private.json')
@@ -235,6 +235,29 @@ class AuthProbe(Probe):
         user=provider_account(login,0);require(len(user['devices'])==1 and user['session_counts'][0]['sessions']==1,'Actual server login did not create one session')
         device=user['devices'][0]['id'];first=self.snapshot('login');active_intent(first,'login',device)
         sealed=self.ciphertext_fingerprints();require(bool(sealed),'Native login did not leave secure ciphertext')
+        if self.args.scope=='background':
+            # Normal authentication and dropped-refresh/cold-unknown recovery
+            # already have original b270 component evidence. This fresh login
+            # only supplies the prior ciphertext for the unfinished live case.
+            held_id=self.control('hold_login')
+            self.held_background(held_id,sealed,(2,0,0))
+            self.auth_phase('current-unusable')
+            final=self.observe('late-background');expect_requests(final,2,0,0)
+            require(len(provider_account(final,0)['devices'])==1 and len(provider_account(final,1)['devices'])==1,
+                'Held-only check created an additional device')
+            late=self.snapshot('late-background')
+            b=[row for row in late['intents'] if row['account']==configuration['accounts'][1]['username']]
+            require(len(b)==1 and b[0]['phase']=='unknown' and b[0]['device_id'] is None,
+                'Backgrounded original login activated or replaced its native intent')
+            require(self.ciphertext_fingerprints()==sealed,'Late login changed the prior native ciphertext')
+            atomic_json(self.output/'auth-runtime-proof.json',{'passed':True,'scope':'background','source_commit':self.args.commit,
+                'tools_commit':self.args.tools_commit,'apk_sha256':self.binding['sha256'],'build_origin':self.args.build_origin,
+                'normal_component_not_retested':True,'dropped_refresh_component_not_retested':True,
+                'same_process_background_late_response_no_activation_or_store_change':True,'phases':self.phases,
+                'actual_platform_TLS_and_production_service_login':True,'physical_phone':False,
+                'bidirectional_vault_transfer':False,'server_device_revocation':False,'invalid_certificate_classification':False,
+                'passwords_tokens_screenshots_or_raw_UI_artifact':False},exclusive=True)
+            return
         normal=self.args.scope=='all'
         if normal:
             self.auth_phase('current',cold=True)
@@ -302,7 +325,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('bundle','sdk','output','source-checkout'):parser.add_argument('--'+name,type=Path,required=True)
     for name in ('commit','tools-commit','build-run-id'):parser.add_argument('--'+name,required=True)
-    parser.add_argument('--scope',choices=('all','recovery'),default='all')
+    parser.add_argument('--scope',choices=('all','recovery','background'),default='all')
     parser.add_argument('--serial',default='emulator-5562');args=parser.parse_args()
     require_hosted();require_hosted_emulator(args.serial);owner=owned_root()
     require(read_json(owner/'owner-state.json')['result']=='ready','Owned HTTPS origin is not ready')

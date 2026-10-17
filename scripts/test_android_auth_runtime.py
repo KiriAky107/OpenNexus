@@ -7,6 +7,22 @@ import android_auth_runtime as module
 
 
 class AuthRuntimeBoundaries(unittest.TestCase):
+    def test_background_scope_does_not_repeat_normal_or_dropped_refresh_checks(self):
+        from pathlib import Path
+        probe=object.__new__(module.AuthProbe);probe.args=Namespace(scope='background');probe.owner=Path('owned-unit-only')
+        probe.boot=Mock();probe.binding={'native_auth_gateway':{'present':True}};probe.stage_owned_input=Mock();probe.auth_phase=Mock()
+        initial={'users':[{'devices':[]},{'devices':[]}],'requests':{'counts':{}}}
+        logged={'users':[{'devices':[{'id':'device-a'}],'session_counts':[{'sessions':1}]},{}],
+            'requests':{'counts':{'login:200':1}}}
+        probe.observe=Mock(side_effect=[initial,logged]);probe.snapshot=Mock(return_value={'selection':{'operation_id':'original'},'intents':[
+            {'operation_id':'original','kind':'login','phase':'active','device_id':'device-a'}]})
+        probe.ciphertext_fingerprints=Mock(return_value={'opaque-ciphertext':'a'*64})
+        probe.control=Mock(side_effect=RuntimeError('unit stops before held login'))
+        with patch.object(module,'read_json',return_value=self.configuration()):
+            with self.assertRaisesRegex(RuntimeError,'unit stops before held login'):probe.run()
+        probe.auth_phase.assert_called_once_with('login-a',cold=True)
+        probe.control.assert_called_once_with('hold_login')
+
     def test_recovery_scope_only_bootstraps_a_new_identity_before_the_unfinished_fault_checks(self):
         from pathlib import Path
         probe=object.__new__(module.AuthProbe);probe.args=Namespace(scope='recovery');probe.owner=Path('owned-unit-only')

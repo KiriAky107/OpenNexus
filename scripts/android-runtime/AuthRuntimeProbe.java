@@ -72,9 +72,19 @@ public final class AuthRuntimeProbe extends Instrumentation {
 
     private void openConnection() {
         stage="open-connection";
-        if (!hasText("Server connection and sign-in")) {
-            click("Settings"); click("Sync account");
-        }
+        // The Settings dialog and its title can already be rendered when a
+        // new instrumentation connection attaches. Prefer its existing tab;
+        // a non-action title must never become the Settings button candidate.
+        long until=SystemClock.uptimeMillis()+30000;
+        do {
+            if (hasText("Server connection and sign-in")) return;
+            if (hasText("Sync account")) { click("Sync account"); break; }
+            boolean settings=false;
+            for (AccessibilityNodeInfo node:nodes())
+                if (node.isVisibleToUser() && actionable(node,"Settings")) settings=true;
+            if (settings) { click("Settings"); click("Sync account"); break; }
+            SystemClock.sleep(150);
+        } while (SystemClock.uptimeMillis()<until);
         // A confirmed native profile makes this pane taller than the screen.
         // The heading can exist above its restored scroll position; finding it
         // is a navigation check, not permission to click another Settings tab.
@@ -165,7 +175,7 @@ public final class AuthRuntimeProbe extends Instrumentation {
     }
     private void click(String name) {
         stage="tap-"+name.replace(' ','-');
-        AccessibilityNodeInfo initial=waitFor(n->label(n,name) && n.isEnabled(),true);
+        AccessibilityNodeInfo initial=waitFor(n->actionable(n,name),true);
         Predicate<AccessibilityNodeInfo> target=n->label(n,name) && n.isEnabled() && n.isClickable();
         // A label may be a child of the actual clickable button.
         if (!initial.isClickable()) {
@@ -174,11 +184,14 @@ public final class AuthRuntimeProbe extends Instrumentation {
             final String role=text(parent.getClassName());
             target=n->n.isClickable() && role.equals(text(n.getClassName())) && descendantLabel(n,name,0);
         }
+        stage="unique-"+name.replace(' ','-');
         AccessibilityNodeInfo node=unique(target);Rect before=new Rect();node.getBoundsInScreen(before);
+        stage="stable-"+name.replace(' ','-');
         for (int i=0;i<3;i++) {
             SystemClock.sleep(50);node=unique(target);Rect now=new Rect();node.getBoundsInScreen(now);
             require(before.equals(now) && !now.isEmpty(),"Button moved before the single tap");
         }
+        stage="single-tap-"+name.replace(' ','-');
         long start=SystemClock.uptimeMillis();touch(start,start,MotionEvent.ACTION_DOWN,before.centerX(),before.centerY());
         SystemClock.sleep(50);touch(start,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,before.centerX(),before.centerY());
         try { ui.waitForIdle(150,5000); }
@@ -187,6 +200,12 @@ public final class AuthRuntimeProbe extends Instrumentation {
             // tap is already sent; only the following semantic state and
             // original native/provider outcomes can confirm it. Never re-tap.
         }
+    }
+    private boolean actionable(AccessibilityNodeInfo node,String name) {
+        if (!label(node,name) || !node.isEnabled()) return false;
+        if (node.isClickable()) return true;
+        AccessibilityNodeInfo parent=node.getParent();
+        return parent!=null && APP.equals(text(parent.getPackageName())) && parent.isEnabled() && parent.isClickable();
     }
     private AccessibilityNodeInfo unique(Predicate<AccessibilityNodeInfo> predicate) {
         List<AccessibilityNodeInfo> found=new ArrayList<>();
