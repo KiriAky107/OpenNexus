@@ -61,8 +61,18 @@ pub fn allowed(path: &str) -> bool {
 }
 impl Workspace {
     pub(crate) fn sync_paths(&self) -> Result<Vec<String>> {
-        fn walk(ws: &Workspace, directory: &Path, paths: &mut Vec<String>) -> Result<()> {
+        self.sync_paths_checked(&|| Ok(()))
+    }
+    pub(crate) fn sync_paths_checked(&self, check: &dyn Fn() -> Result<()>) -> Result<Vec<String>> {
+        fn walk(
+            ws: &Workspace,
+            directory: &Path,
+            paths: &mut Vec<String>,
+            check: &dyn Fn() -> Result<()>,
+        ) -> Result<()> {
+            check()?;
             for item in fs::read_dir(directory)? {
+                check()?;
                 let item = item?;
                 let name = item.file_name().to_string_lossy().into_owned();
                 if name.starts_with('.')
@@ -81,7 +91,7 @@ impl Workspace {
                     .replace('\\', "/");
                 let resolved = ws.resolve(&path)?;
                 if item.file_type()?.is_dir() {
-                    walk(ws, &resolved, paths)?;
+                    walk(ws, &resolved, paths, check)?;
                 } else if ws.sync_path_enabled(&path)? && item.file_type()?.is_file() {
                     paths.push(path);
                 }
@@ -89,8 +99,9 @@ impl Workspace {
             Ok(())
         }
         let mut paths = Vec::new();
-        walk(self, &self.root, &mut paths)?;
+        walk(self, &self.root, &mut paths, check)?;
         paths.sort();
+        check()?;
         Ok(paths)
     }
     pub fn sync_discover(&mut self, binding: &str) -> Result<usize> {

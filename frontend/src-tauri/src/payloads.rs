@@ -186,6 +186,14 @@ pub(crate) fn hash_file(path: &Path) -> Result<String> {
     hash_file_info(path).map(|(digest, _)| digest)
 }
 pub(crate) fn sync_file_info(source: &Path, path: &str) -> Result<(String, u64)> {
+    sync_file_info_checked(source, path, &|| Ok(()))
+}
+pub(crate) fn sync_file_info_checked(
+    source: &Path,
+    path: &str,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<(String, u64)> {
+    check()?;
     if crate::records::is_record(path) || crate::canvas_contract::is_canvas(path) {
         let mut bytes = Vec::new();
         let limit = if crate::canvas_contract::is_canvas(path) {
@@ -193,9 +201,17 @@ pub(crate) fn sync_file_info(source: &Path, path: &str) -> Result<(String, u64)>
         } else {
             1024 * 1024
         };
-        fs::File::open(source)?
-            .take(limit as u64 + 1)
-            .read_to_end(&mut bytes)?;
+        let mut reader = fs::File::open(source)?.take(limit as u64 + 1);
+        let mut buffer = vec![0; VERIFY_BUFFER_BYTES];
+        loop {
+            check()?;
+            let count = reader.read(&mut buffer)?;
+            check()?;
+            if count == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+        }
         if crate::canvas_contract::is_canvas(path) {
             crate::canvas_contract::validate(&bytes)?;
         } else {
@@ -203,16 +219,22 @@ pub(crate) fn sync_file_info(source: &Path, path: &str) -> Result<(String, u64)>
         }
         Ok((hash(&bytes), bytes.len() as u64))
     } else {
-        hash_file_info(source)
+        hash_file_info_checked(source, check)
     }
 }
 fn hash_file_info(path: &Path) -> Result<(String, u64)> {
+    hash_file_info_checked(path, &|| Ok(()))
+}
+fn hash_file_info_checked(path: &Path, check: &dyn Fn() -> Result<()>) -> Result<(String, u64)> {
+    check()?;
     let mut file = fs::File::open(path)?;
     let mut buffer = vec![0u8; VERIFY_BUFFER_BYTES];
     let mut hasher = Sha256::new();
     let mut total = 0u64;
     loop {
+        check()?;
         let count = file.read(&mut buffer)?;
+        check()?;
         if count == 0 {
             break;
         }
@@ -288,6 +310,41 @@ pub(crate) fn copy_verified(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sync_file_hash_checks_cancellation_between_chunks_and_keeps_original_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("original.md");
+        let bytes = vec![b'x'; VERIFY_BUFFER_BYTES * 4];
+        fs::write(&path, &bytes).unwrap();
+        let calls = std::cell::Cell::new(0);
+        let error = sync_file_info_checked(&path, "original.md", &|| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 6 {
+                Err(HostError::new("SYNC_FOREGROUND_CHANGED"))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error.code, "SYNC_FOREGROUND_CHANGED");
+        assert_eq!(calls.get(), 6);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+    #[test]
+    fn sync_checked_canvas_keeps_the_same_validated_original_digest_and_size() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("original.canvas");
+        let bytes = br#"{"nodes":[],"edges":[]}"#;
+        fs::write(&path, bytes).unwrap();
+        let original = sync_file_info(&path, "original.canvas").unwrap();
+        assert_eq!(
+            sync_file_info_checked(&path, "original.canvas", &|| Ok(())).unwrap(),
+            original
+        );
+        assert_eq!(original, (hash(bytes), bytes.len() as u64));
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
     struct Generated {
         remaining: u64,
         consumed: u64,

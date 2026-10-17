@@ -34,11 +34,14 @@ struct Local {
 }
 impl Workspace {
     fn initial_local(&self) -> Result<Vec<Local>> {
-        self.sync_paths()?
+        self.initial_local_checked(&|| Ok(()))
+    }
+    fn initial_local_checked(&self, check: &dyn Fn() -> Result<()>) -> Result<Vec<Local>> {
+        self.sync_paths_checked(check)?
             .into_iter()
             .map(|path| {
                 let source = self.resolve(&path)?;
-                let (hash, size) = crate::payloads::sync_file_info(&source, &path)?;
+                let (hash, size) = crate::payloads::sync_file_info_checked(&source, &path, check)?;
                 Ok(Local {
                     path,
                     hash,
@@ -54,10 +57,24 @@ impl Workspace {
         account: &str,
         snapshot: &Snapshot,
     ) -> Result<Preview> {
+        self.sync_preview_checked(endpoint, remote, account, snapshot, &|| Ok(()))
+    }
+    /// Read-only file preparation. A native caller can check its original lease
+    /// between paths/chunks without holding a lifecycle read guard over I/O.
+    /// This does not authorize or apply a binding or any outgoing operation.
+    pub(crate) fn sync_preview_checked(
+        &self,
+        endpoint: &str,
+        remote: &str,
+        account: &str,
+        snapshot: &Snapshot,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Preview> {
+        check()?;
         if self.sync_binding()?.is_some() {
             return Err(HostError::new("SYNC_ALREADY_BOUND"));
         }
-        let local = self.initial_local()?;
+        let local = self.initial_local_checked(check)?;
         let binding = Binding {
             id: String::new(),
             endpoint: endpoint.into(),
@@ -67,6 +84,7 @@ impl Workspace {
         };
         let mut paths = BTreeMap::new();
         for item in &snapshot.items {
+            check()?;
             item.validate(&binding)?;
             self.resolve(&item.path)?;
             if item.sequence > snapshot.boundary {
@@ -77,6 +95,7 @@ impl Workspace {
             }
         }
         for item in &local {
+            check()?;
             let remote = snapshot
                 .items
                 .iter()
@@ -104,6 +123,7 @@ impl Workspace {
             ))
             .map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?,
         );
+        check()?;
         Ok(Preview {
             fingerprint,
             boundary: snapshot.boundary,
@@ -264,6 +284,76 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn checked_initial_preview_has_the_same_fingerprint_and_cancellation_has_no_binding_or_outbox_effect(
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        ws.write("original.md", "", b"original\r\n", "local")
+            .unwrap();
+        let snapshot = Snapshot {
+            boundary: 0,
+            items: vec![],
+        };
+        let original = ws
+            .sync_preview("https://sync.example/", "remote", "reader", &snapshot)
+            .unwrap();
+        let checked = ws
+            .sync_preview_checked(
+                "https://sync.example/",
+                "remote",
+                "reader",
+                &snapshot,
+                &|| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&checked).unwrap(),
+            serde_json::to_value(&original).unwrap()
+        );
+        let outbox: i64 = ws
+            .db
+            .query_row("SELECT COUNT(*) FROM outbox", [], |row| row.get(0))
+            .unwrap();
+        let calls = std::cell::Cell::new(0);
+        let error = ws
+            .sync_preview_checked(
+                "https://sync.example/",
+                "remote",
+                "reader",
+                &snapshot,
+                &|| {
+                    calls.set(calls.get() + 1);
+                    if calls.get() == 4 {
+                        Err(HostError::new("SYNC_FOREGROUND_CHANGED"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "SYNC_FOREGROUND_CHANGED");
+        assert_eq!(calls.get(), 4);
+        assert!(ws.sync_binding().unwrap().is_none());
+        assert_eq!(
+            ws.db
+                .query_row("SELECT COUNT(*) FROM outbox", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            outbox
+        );
+        assert_eq!(
+            fs::read(root.path().join("original.md")).unwrap(),
+            b"original\r\n"
+        );
+        assert_eq!(
+            ws.sync_preview("https://sync.example/", "remote", "reader", &snapshot)
+                .unwrap()
+                .fingerprint,
+            original.fingerprint
+        );
+    }
     fn revision(sequence: i64, path: &str, content: &[u8]) -> RemoteRevision {
         RemoteRevision {
             vault_id: "remote".into(),
