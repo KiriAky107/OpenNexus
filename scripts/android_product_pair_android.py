@@ -107,8 +107,11 @@ def observe_packages(probe):
         lines=probe.shell('pm','path',package).stdout.decode('ascii').splitlines()
         require(len(lines)==1 and lines[0].startswith('package:'), 'PAIR_ANDROID_PACKAGE_INVALID')
         path=lines[0].removeprefix('package:')
-        require(re.fullmatch(r'/data/app/[A-Za-z0-9_+=./-]+/base\.apk',path)
-                and '..' not in path.split('/'), 'PAIR_ANDROID_PACKAGE_INVALID')
+        # Android16 PackageManagerServiceUtils.getNextCodePath uses a ~~random
+        # parent. Bind its leaf to this exact package, not an arbitrary path
+        # which happens to end in base.apk. Older single-level paths also work.
+        require(re.fullmatch(r'/data/app/(?:~~[A-Za-z0-9_=-]+/)?'+re.escape(package)
+                             +r'-[A-Za-z0-9_=-]+/base\.apk',path), 'PAIR_ANDROID_PACKAGE_INVALID')
         fields=probe.shell('sha256sum',path).stdout.decode('ascii').split()
         require(len(fields)==2 and fields[1]==path and re.fullmatch(r'[0-9a-f]{64}',fields[0]),
                 'PAIR_ANDROID_PACKAGE_INVALID')

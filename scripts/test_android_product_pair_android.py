@@ -10,7 +10,7 @@ from unittest.mock import Mock,patch
 
 from android_auth_fixture import SERVICE_SHA
 from android_desktop_handoff import HandoffError
-from android_product_pair_android import auth_identity,native_identity,original_pair_ui_phase,read_frozen_fixture,resume_probe
+from android_product_pair_android import PACKAGES,auth_identity,native_identity,observe_packages,original_pair_ui_phase,read_frozen_fixture,resume_probe
 
 
 LOGIN='11111111-1111-4111-8111-111111111111'
@@ -31,6 +31,40 @@ class AndroidOriginalResume(unittest.TestCase):
                      'binding':{'id':'33333333-3333-4333-8333-333333333333','state':'active','cursor':1,'remote_vault':'e'*32},
                      'association':{'state':'bound','remote_vault':'e'*32,'auth_operation_id':LOGIN,
                                     'operation_id':'44444444-4444-4444-8444-444444444444','request_hash':'f'*64}}
+
+    def package_probe(self,paths):
+        def shell(*args):
+            if args[:2]==('pm','path'):value='package:'+paths[args[2]]+'\n'
+            elif args[0]=='sha256sum':value='c'*64+'  '+args[1]+'\n'
+            elif args[:4]==('pm','list','packages','-U'):
+                value='package:'+args[4]+' uid:'+str(10200+PACKAGES.index(args[4]))+'\n'
+            else:raise AssertionError('Unexpected command; no local ADB is used')
+            return SimpleNamespace(stdout=value.encode('ascii'))
+        return SimpleNamespace(shell=Mock(side_effect=shell))
+
+    def test_original_installed_packages_accept_android_randomized_and_legacy_code_paths(self):
+        # Android16 getNextCodePath produces /data/app/~~random/package-random.
+        for prefix in ('/data/app/~~abc_123-==/','/data/app/'):
+            paths={p:prefix+p+'-xyz_456-==/base.apk' for p in PACKAGES}
+            probe=self.package_probe(paths);value=observe_packages(probe)
+            self.assertEqual([r['installed_path'] for r in value],list(paths.values()))
+            self.assertEqual([r['uid'] for r in value],[10200,10201,10202])
+            self.assertEqual(probe.shell.call_count,9)
+
+    def test_unowned_or_ambiguous_code_paths_refuse_before_reading_apk_bytes(self):
+        first=PACKAGES[0]
+        for path in ('/data/app/~~owned/cc.unrelated.app-random/base.apk',
+                     '/data/app/~~owned/../'+first+'-random/base.apk',
+                     '/data/app/~~owned/./'+first+'-random/base.apk',
+                     '/data/app/~~owned//'+first+'-random/base.apk',
+                     '/data/app/~~owned/'+first+'-random/split.apk',
+                     '/data/app/~~owned/'+first+'-random/base.apk\npackage:/other',
+                     '/data/user/0/'+first+'/base.apk'):
+            paths={p:'/data/app/~~owned/'+p+'-random/base.apk' for p in PACKAGES};paths[first]=path
+            probe=self.package_probe(paths)
+            with self.subTest(path=path),self.assertRaisesRegex(HandoffError,'PACKAGE_INVALID'):
+                observe_packages(probe)
+            self.assertEqual(probe.shell.call_args_list,[((('pm','path',first)),)])
 
     def refreshed(self):
         value=deepcopy(self.auth);row=dict(value['intents'][0],operation_id=REFRESH,
