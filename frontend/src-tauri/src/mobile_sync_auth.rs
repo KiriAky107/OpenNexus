@@ -203,6 +203,7 @@ pub struct Auth<S: SecretStore> {
 pub struct AuthenticatedDevice {
     scope: Scope,
     device: String,
+    selection: Selection,
     lease: Lease,
 }
 impl AuthenticatedDevice {
@@ -211,6 +212,9 @@ impl AuthenticatedDevice {
     }
     pub(crate) fn device(&self) -> &str {
         &self.device
+    }
+    pub(crate) fn selection(&self) -> &Selection {
+        &self.selection
     }
     pub fn workspace(
         self,
@@ -382,6 +386,10 @@ impl<S: SecretStore> Auth<S> {
                 })
                 .ok_or_else(|| SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"))?;
             self.journal.require_selected(&intent)?;
+            let selection = self
+                .journal
+                .selection()?
+                .ok_or_else(|| SyncError::new("SYNC_AUTH_SELECTION_CHANGED"))?;
             let record = self
                 .load(&intent)?
                 .ok_or_else(|| SyncError::new("SYNC_LOGIN_REQUIRED"))?;
@@ -404,6 +412,7 @@ impl<S: SecretStore> Auth<S> {
                 AuthenticatedDevice {
                     scope: scope.clone(),
                     device: record.session.device_id.clone(),
+                    selection,
                     lease: lease.clone(),
                 },
             ))
@@ -1861,6 +1870,168 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn native_initial_binding_refuses_stale_selection_and_resumes_its_original_after_background(
+    ) {
+        use crate::{mobile_sync_binding::Request, sync_client::WorkspaceAccess};
+        let root = tempfile::tempdir().unwrap();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "first")));
+        let (foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), MemoryStore::default()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let engine = Arc::new(Mutex::new(Some(
+            crate::mobile_workspace::MobileWorkspace::open(root.path()).unwrap(),
+        )));
+        let snapshot = crate::sync_initial::Snapshot {
+            boundary: 0,
+            items: vec![],
+        };
+        let (vault, fingerprint) = engine
+            .access(|ws| {
+                ws.write("original.md", "", b"original\r\n", "local")?;
+                Ok((
+                    ws.vault_id.clone(),
+                    ws.sync_preview(scope.endpoint(), "remote", scope.account(), &snapshot)?
+                        .fingerprint,
+                ))
+            })
+            .unwrap();
+        let request = Request {
+            operation_id: id(),
+            local_vault: vault,
+            remote_vault: "remote".into(),
+            selection: auth.selection(&lease).unwrap().unwrap(),
+            preview_fingerprint: fingerprint,
+        };
+        let owned = engine.clone();
+        let port = auth
+            .authorized_device(
+                &lease,
+                &scope,
+                &operation,
+                101,
+                move |_, device| async move { Ok(device.workspace(owned)) },
+            )
+            .await
+            .unwrap();
+        let mut wrong = request.clone();
+        wrong.selection.revision += 1;
+        assert_eq!(
+            port.begin_initial_binding(&wrong).err().unwrap().code,
+            "SYNC_AUTH_SELECTION_CHANGED"
+        );
+        assert!(port
+            .initial_binding_operation(&request.operation_id)
+            .unwrap()
+            .is_none());
+        let ticket = port
+            .begin_initial_binding(&request)
+            .unwrap()
+            .ticket
+            .unwrap();
+        auth.store.fail_read.store(true, Ordering::SeqCst);
+        assert_eq!(
+            crate::mobile_sync_binding::operation(
+                &auth,
+                &lease,
+                &request.selection,
+                &engine,
+                &request.operation_id
+            )
+            .unwrap()
+            .unwrap()
+            .attempt_revision,
+            1
+        );
+        assert_eq!(
+            crate::mobile_sync_binding::pending(
+                &auth,
+                &lease,
+                &request.selection,
+                &engine,
+                None,
+                20
+            )
+            .unwrap()
+            .items
+            .len(),
+            1
+        );
+        assert!(
+            auth.store.fail_read.swap(false, Ordering::SeqCst),
+            "Metadata recovery decrypted credentials"
+        );
+        foreground.on_stop();
+        assert_eq!(
+            port.commit_initial_binding(ticket, &snapshot)
+                .err()
+                .unwrap()
+                .code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert!(engine.access(|ws| ws.sync_binding()).unwrap().is_none());
+        foreground.on_start();
+        let current = foreground.lease().unwrap();
+        let owned = engine.clone();
+        let port = auth
+            .authorized_device(
+                &current,
+                &scope,
+                &operation,
+                102,
+                move |_, device| async move { Ok(device.workspace(owned)) },
+            )
+            .await
+            .unwrap();
+        let original = port
+            .initial_binding_operation(&request.operation_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(original.attempt_revision, 1);
+        assert_eq!(
+            port.pending_initial_bindings(None, 20).unwrap().items.len(),
+            1
+        );
+        let resumed = port
+            .resume_initial_binding(&request, original.attempt_revision)
+            .unwrap()
+            .ticket
+            .unwrap();
+        let binding = port.commit_initial_binding(resumed, &snapshot).unwrap();
+        assert_eq!(
+            port.initial_binding_operation(&request.operation_id)
+                .unwrap()
+                .unwrap()
+                .binding
+                .unwrap()
+                .id,
+            binding.id
+        );
+        assert!(port
+            .begin_initial_binding(&request)
+            .unwrap()
+            .ticket
+            .is_none());
+        assert_eq!(
+            engine
+                .access(|ws| ws.read("original.md"))
+                .unwrap()
+                .content
+                .as_bytes(),
+            b"original\r\n"
+        );
         assert_eq!(remote.logins.load(Ordering::SeqCst), 1);
     }
 

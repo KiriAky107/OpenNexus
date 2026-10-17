@@ -150,6 +150,98 @@ impl ScopedWorkspace {
         }
     }
 
+    fn binding_request(&self, request: &crate::mobile_sync_binding::Request) -> Result<()> {
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"))?;
+        if device.selection() != &request.selection {
+            return Err(SyncError::new("SYNC_AUTH_SELECTION_CHANGED"));
+        }
+        self.lease.check()
+    }
+
+    /// Persist the original confirmation before any remote snapshot/preparation.
+    /// A repeated confirmation returns metadata and never another work ticket.
+    pub fn begin_initial_binding(
+        &self,
+        request: &crate::mobile_sync_binding::Request,
+    ) -> Result<crate::mobile_sync_binding::Prepared> {
+        self.binding_request(request)?;
+        self.access(|ws| ws.mobile_binding_begin(request))
+    }
+    /// Only an explicit confirmation of a previously read attempt revision can
+    /// issue a replacement ticket; the old worker can no longer commit it.
+    pub fn resume_initial_binding(
+        &self,
+        request: &crate::mobile_sync_binding::Request,
+        observed_revision: i64,
+    ) -> Result<crate::mobile_sync_binding::Prepared> {
+        self.binding_request(request)?;
+        self.access(|ws| ws.mobile_binding_resume(request, observed_revision))
+    }
+    pub fn initial_binding_operation(
+        &self,
+        operation: &str,
+    ) -> Result<Option<crate::mobile_sync_binding::Intent>> {
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"))?;
+        self.access(|ws| ws.mobile_binding_read(device.scope(), operation))
+    }
+    pub fn pending_initial_bindings(
+        &self,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<crate::mobile_sync_binding::Page> {
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"))?;
+        self.access(|ws| ws.mobile_binding_pending(device.scope(), after, limit))
+    }
+
+    /// Blocking worker only. Hash/spool with cancellation checks, then consume
+    /// the ticket and publish its receipt within the same short SQL commit.
+    pub fn commit_initial_binding(
+        &self,
+        ticket: crate::mobile_sync_binding::Ticket,
+        snapshot: &crate::sync_initial::Snapshot,
+    ) -> Result<crate::sync_state::Binding> {
+        let request = ticket.request().clone();
+        self.binding_request(&request)?;
+        let mut guard = self
+            .engine
+            .lock()
+            .map_err(|_| SyncError::new("HOST_BUSY"))?;
+        self.lease.check()?;
+        let ws = &mut guard
+            .as_mut()
+            .ok_or_else(|| SyncError::new("MOBILE_STORAGE_UNAVAILABLE"))?
+            .workspace;
+        if ws.vault_id != request.local_vault {
+            return Err(SyncError::new("VAULT_CHANGED"));
+        }
+        let prepared = ws.sync_prepare_initial(
+            &request.selection.endpoint,
+            &request.remote_vault,
+            &request.selection.account,
+            snapshot,
+            &request.preview_fingerprint,
+            &|| {
+                self.lease
+                    .check()
+                    .map_err(|error| crate::workspace::HostError::new(&error.code))
+            },
+        )?;
+        self.lease.with_current(|| {
+            prepared
+                .commit_with(move |tx, binding| ticket.record(tx, binding))
+                .map_err(Into::into)
+        })
+    }
+
     /// Call on a blocking worker, never the Activity/UI thread. File hashing is
     /// read-only and checks the original lease between paths and chunks rather
     /// than retaining its lifecycle read guard throughout filesystem I/O.
