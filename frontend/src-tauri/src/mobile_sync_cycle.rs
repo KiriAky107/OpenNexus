@@ -146,7 +146,7 @@ pub struct Decision {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Response {
     Status { status: Status },
-    Review { review: ConflictReview },
+    Review { review: Box<ConflictReview> },
     Decision { decision: Option<Decision> },
 }
 

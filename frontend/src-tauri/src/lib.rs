@@ -40,9 +40,9 @@ pub mod mobile_sync_binding;
 #[cfg(feature = "sync-http")]
 pub mod mobile_sync_commands;
 #[cfg(feature = "sync-http")]
-pub mod mobile_sync_foreground;
-#[cfg(feature = "sync-http")]
 pub mod mobile_sync_cycle;
+#[cfg(feature = "sync-http")]
+pub mod mobile_sync_foreground;
 #[cfg(feature = "sync-http")]
 pub mod mobile_sync_session;
 #[cfg(feature = "sync-http")]
