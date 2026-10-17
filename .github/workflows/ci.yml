@@ -295,6 +295,11 @@ jobs:
       - run: cargo fmt --check
       - name: Test the standalone transport, account metadata and durable Sync state
         run: cargo test --lib --no-default-features --features sync-http --locked sync_ -- --nocapture
+      - name: Check affected snapshot and identity invariants in the scoped native run
+        if: github.event_name == 'workflow_dispatch' && inputs.check_scope == 'sync-http'
+        run: |
+          cargo test --lib --no-default-features --features sync-http --locked workspace::watch::identity_tests:: -- --skip sync_ --nocapture
+          cargo test --lib --no-default-features --features sync-http --locked workspace::watch::tests:: -- --skip sync_ --nocapture
       - name: Check the transport without the desktop feature
         run: cargo clippy --lib --no-default-features --features sync-http --locked -- -D warnings
 
