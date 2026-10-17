@@ -299,6 +299,49 @@ impl ScopedWorkspace {
     }
 }
 impl WorkspaceAccess for ScopedWorkspace {
+    fn discover<'a>(&'a self, binding: &'a str) -> impl Future<Output = Result<usize>> + Send + 'a {
+        let engine = self.engine.clone();
+        let lease = self.lease.clone();
+        let scope = self.device.as_ref().map(|device| {
+            (
+                device.scope().endpoint().to_owned(),
+                device.scope().account().to_owned(),
+            )
+        });
+        let binding = binding.to_owned();
+        async move {
+            let (endpoint, account) =
+                scope.ok_or_else(|| SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"))?;
+            tokio::task::spawn_blocking(move || {
+                lease.check()?;
+                // No lifecycle guard while waiting for the editor workspace,
+                // enumerating paths or hashing/spooling original file chunks.
+                let mut guard = engine.lock().map_err(|_| SyncError::new("HOST_BUSY"))?;
+                lease.check()?;
+                let ws = &mut guard
+                    .as_mut()
+                    .ok_or_else(|| SyncError::new("MOBILE_STORAGE_UNAVAILABLE"))?
+                    .workspace;
+                let current = ws
+                    .sync_binding()?
+                    .ok_or_else(|| SyncError::new("SYNC_NOT_BOUND"))?;
+                if current.id != binding
+                    || current.endpoint != endpoint
+                    || current.account != account
+                {
+                    return Err(SyncError::new("SYNC_AUTH_IDENTITY_CHANGED"));
+                }
+                let prepared = ws.sync_prepare_discovery(&binding, &|| {
+                    lease
+                        .check()
+                        .map_err(|error| crate::workspace::HostError::new(&error.code))
+                })?;
+                lease.with_current(|| prepared.commit().map_err(Into::into))
+            })
+            .await
+            .map_err(|_| SyncError::new("SYNC_WORKER_INTERRUPTED"))?
+        }
+    }
     fn access<T>(
         &self,
         action: impl FnOnce(&mut crate::workspace::Workspace) -> crate::workspace::Result<T>,

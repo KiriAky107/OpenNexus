@@ -2121,6 +2121,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_sync_discovery_uses_the_issuing_device_and_refuses_a_backgrounded_original() {
+        use crate::sync_client::WorkspaceAccess;
+        let root = tempfile::tempdir().unwrap();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "first")));
+        let (foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), MemoryStore::default()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let engine = Arc::new(Mutex::new(Some(
+            crate::mobile_workspace::MobileWorkspace::open(root.path()).unwrap(),
+        )));
+        let binding = engine
+            .access(|ws| ws.sync_bind_empty(scope.endpoint(), "owned-vault", scope.account()))
+            .unwrap();
+        let owned = engine.clone();
+        let port = auth
+            .authorized_device(
+                &lease,
+                &scope,
+                &operation,
+                101,
+                move |_, device| async move { Ok(device.workspace(owned)) },
+            )
+            .await
+            .unwrap();
+        // The new file bypasses local save/index callbacks, like an external
+        // edit. Discovery must prepare and publish its actual original bytes.
+        let vault_root = engine
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .workspace
+            .root
+            .clone();
+        std::fs::write(vault_root.join("original.md"), b"owned original\r\n").unwrap();
+        assert_eq!(port.discover(&binding.id).await.unwrap(), 1);
+        let changes = engine.access(|ws| Ok(ws.db.total_changes())).unwrap();
+        foreground.on_stop();
+        assert_eq!(
+            port.discover(&binding.id).await.unwrap_err().code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert_eq!(
+            engine.access(|ws| Ok(ws.db.total_changes())).unwrap(),
+            changes
+        );
+        assert_eq!(
+            std::fs::read(vault_root.join("original.md")).unwrap(),
+            b"owned original\r\n"
+        );
+    }
+
+    #[tokio::test]
     async fn explicit_auth_rejection_survives_reopen_and_original_operation_query_without_reposting(
     ) {
         let root = tempfile::tempdir().unwrap();

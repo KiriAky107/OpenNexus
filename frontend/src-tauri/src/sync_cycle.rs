@@ -19,7 +19,7 @@ pub async fn run(
     let client = client.with_progress(report.clone());
     client.handshake().await?;
     report(Event::Phase(Phase::Discover));
-    workspace.access(|ws| ws.sync_discover(&binding.id))?;
+    workspace.discover(&binding.id).await?;
     report(Event::Phase(Phase::Pull));
     for _ in 0..10 {
         if client.pull_page(workspace, binding).await? == 0 {

@@ -52,6 +52,12 @@ pub trait WorkspaceAccess: Send + Sync {
         &self,
         action: impl FnOnce(&mut Workspace) -> crate::workspace::Result<T>,
     ) -> Result<T>;
+    fn discover<'a>(
+        &'a self,
+        binding: &'a str,
+    ) -> impl std::future::Future<Output = Result<usize>> + Send + 'a {
+        async move { self.access(|ws| ws.sync_discover(binding)) }
+    }
     fn start_attempt(&self, job: &Job) -> Result<()> {
         self.access(|ws| ws.sync_attempt_start(job))
     }
