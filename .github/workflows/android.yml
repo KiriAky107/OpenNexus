@@ -707,6 +707,8 @@ jobs:
 
           .build/android-desktop-pair/${{ github.run_id }}/stage-1/actual-edit-actions.json
 
+          .build/android-desktop-pair/${{ github.run_id }}/stage-1/source-save-observation.json
+
           .build/android-desktop-pair/${{ github.run_id }}/stage-2/actual-cold-read-actions.json
 
           '

@@ -91,6 +91,17 @@ class ProductIsolation(unittest.TestCase):
         self.assertEqual(value, {'code': 'DESKTOP_PAIR_UI_FAILED', 'error_class': 'TimeoutError',
                                  'original_exception_text_returned': False})
 
+    def test_filesystem_failure_keeps_only_its_known_kind_and_numeric_codes(self):
+        error=PermissionError(13,'PRIVATE READ DETAIL','C:/PRIVATE/PATH')
+        error.winerror=32
+        value=safe_failure(error)
+        self.assertEqual(value['error_class'],'PermissionError')
+        self.assertEqual(value['filesystem_errno'],13);self.assertEqual(value['filesystem_winerror'],32)
+        self.assertNotIn('PRIVATE',json.dumps(value))
+        error.errno=True;error.winerror='PRIVATE'
+        value=safe_failure(error)
+        self.assertNotIn('filesystem_errno',value);self.assertNotIn('filesystem_winerror',value)
+
     def test_owned_client_failure_keeps_only_its_source_method_and_line_without_locator_or_input(self):
         import android_desktop_product as product
         namespace={};path=Path(product.__file__).with_name('android_desktop_pair_ui.py')

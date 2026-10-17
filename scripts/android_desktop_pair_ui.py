@@ -158,12 +158,36 @@ class OwnedDesktopUI:
         editor=self.page.get_by_label(names('Markdown source editor','Markdown \u6e90\u7801\u7f16\u8f91\u5668'))
         editor.fill(after.decode('utf-8'))
         self.page.locator('.editor-header .save-button').click()
-        deadline=time.monotonic()+60
-        while note.read_bytes()!=after:
-            require(time.monotonic()<deadline, 'DESKTOP_PAIR_ORIGINAL_SAVE_UNKNOWN')
-            time.sleep(.2)
+        self.wait_original_note_save(note,after)
         return {'path':'runtime-note.md','sha256':hashlib.sha256(after).hexdigest(),'bytes':len(after),
                 'actual_source_editor_and_Save':True,'filesystem_write_by_driver':False}
+
+    def wait_original_note_save(self, note, after):
+        require(note==self.vault/'runtime-note.md','DESKTOP_PAIR_ORIGINAL_NOTE_CHANGED')
+        observed={'read_attempts':0,'transient_read_failures':{},'matched_requested_bytes':False,
+                  'last_read_bytes':None,'last_read_sha256':None,'Save_or_edit_replayed':False}
+        deadline=time.monotonic()+60
+        try:
+            while True:
+                require(not note.is_symlink(),'DESKTOP_PAIR_ORIGINAL_NOTE_CHANGED')
+                observed['read_attempts']+=1
+                try:
+                    body=note.read_bytes()
+                except (FileNotFoundError,PermissionError) as error:
+                    # A file can be briefly unavailable during native atomic
+                    # replacement. Reconcile only this original read; Save is
+                    # already dispatched and must never be sent again here.
+                    name=type(error).__name__
+                    observed['transient_read_failures'][name]=observed['transient_read_failures'].get(name,0)+1
+                else:
+                    observed.update(last_read_bytes=len(body),last_read_sha256=hashlib.sha256(body).hexdigest())
+                    if body==after:
+                        observed['matched_requested_bytes']=True
+                        return
+                require(time.monotonic()<deadline and observed['read_attempts']<=320,'DESKTOP_PAIR_ORIGINAL_SAVE_UNKNOWN')
+                time.sleep(.2)
+        finally:
+            write_new(self.attempt/'source-save-observation.json',canonical(observed))
 
     def set_paused(self, paused):
         require(self.stage==1 and type(paused) is bool, 'DESKTOP_PAIR_PAUSE_SCOPE_INVALID')

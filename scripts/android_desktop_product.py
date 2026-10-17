@@ -110,7 +110,7 @@ STARTUP_CHECKPOINTS = frozenset({'native-launch', 'webview-attach', 'frontend-bo
 
 SOURCE_METHODS = {'android_desktop_pair_ui.py': frozenset({
     '__init__', 'intent', 'status', 'panel', 'login_and_merge', 'wait_status', 'account_identity',
-    'edit_original_note', 'set_paused', 'edit_original_canvas', 'finish_actual_cycle', 'read_cold_originals'})}
+    'edit_original_note', 'wait_original_note_save', 'set_paused', 'edit_original_canvas', 'finish_actual_cycle', 'read_cold_originals'})}
 
 
 def safe_source_frame(error):
@@ -131,15 +131,21 @@ def safe_failure(error, checkpoint=None):
     # publish that text, its repr or a chained exception after sign-in begins.
     name = type(error).__name__
     result = {'code': 'DESKTOP_PAIR_UI_FAILED', 'error_class': name if name in {
-        'TimeoutError', 'Error', 'RuntimeError', 'HandoffError', 'OSError', 'AssertionError'} else 'OtherError',
+        'TimeoutError', 'Error', 'RuntimeError', 'HandoffError', 'OSError', 'AssertionError',
+        'FileNotFoundError', 'PermissionError', 'IsADirectoryError', 'NotADirectoryError'} else 'OtherError',
         'original_exception_text_returned': False}
+    if isinstance(error,OSError):
+        for name in ('errno','winerror'):
+            number=getattr(error,name,None)
+            if type(number) is int and 0<=number<=65535:result['filesystem_'+name]=number
     if isinstance(error, HandoffError) and str(error) in {
             'DESKTOP_PAIR_STORAGE_MISMATCH', 'DESKTOP_PAIR_CORE_VERSION_MISMATCH',
             'DESKTOP_PAIR_CORE_NOT_READY', 'DESKTOP_PAIR_INITIAL_STATE_INVALID',
             'DESKTOP_PAIR_PICKER_UNAVAILABLE', 'DESKTOP_PAIR_PICKER_TARGET_INVALID',
             'DESKTOP_PAIR_PICKER_INPUT_REFUSED', 'DESKTOP_PAIR_PICKER_SELECTION_FAILED',
             'DESKTOP_PAIR_PICKER_DELIVERY_INVALID', 'DESKTOP_PAIR_PICKER_OUTCOME_UNKNOWN',
-            'DESKTOP_PAIR_PICKER_NATIVE_REFUSED', 'DESKTOP_PAIR_PICKER_TARGET_MISMATCH'}:
+            'DESKTOP_PAIR_PICKER_NATIVE_REFUSED', 'DESKTOP_PAIR_PICKER_TARGET_MISMATCH',
+            'DESKTOP_PAIR_ORIGINAL_SAVE_UNKNOWN', 'DESKTOP_PAIR_ORIGINAL_NOTE_CHANGED'}:
         result['checkpoint_code'] = str(error)
     if checkpoint is not None:
         result['failed_checkpoint'] = checkpoint if checkpoint in STARTUP_CHECKPOINTS else 'unknown'

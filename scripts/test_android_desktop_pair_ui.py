@@ -68,6 +68,55 @@ class PairUIBoundaries(unittest.TestCase):
                 with self.assertRaises(FileExistsError):ui.edit_original_note(b'original',b'new exact source\n')
                 page.evaluate.assert_called_once();self.assertEqual(note.read_bytes(),b'original')
 
+    def test_saved_original_note_survives_a_transient_read_without_replaying_save(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);(root/'vault').mkdir();(root/'stage-1').mkdir()
+            note=root/'vault/runtime-note.md';note.write_bytes(b'original');after=b'new exact source\n'
+            page=Mock();save=Mock();page.locator.side_effect=lambda selector:save if selector=='.editor-header .save-button' else Mock()
+            state={'saved':False,'blocked':False}
+            def saved():note.write_bytes(after);state['saved']=True
+            save.click.side_effect=saved;original_read=Path.read_bytes
+            def read(path):
+                if path==note and state['saved'] and not state['blocked']:
+                    state['blocked']=True;raise PermissionError('private Windows read sharing detail')
+                return original_read(path)
+            with patch('android_desktop_pair_ui.owned_root',return_value=root),patch('android_desktop_pair_ui.original_marker'),\
+                 patch.object(Path,'read_bytes',autospec=True,side_effect=read),patch('android_desktop_pair_ui.time.sleep'):
+                ui=OwnedDesktopUI(self.context,page,root/'vault',root/'stage-1',1)
+                result=ui.edit_original_note(b'original',after)
+            self.assertEqual(result['bytes'],len(after));self.assertEqual(note.read_bytes(),after)
+            save.click.assert_called_once();page.get_by_label.return_value.fill.assert_called_once()
+
+    def test_persistently_unavailable_original_read_keeps_an_unconfirmed_observation_without_UI_input(self):
+        import json
+        for failure in (PermissionError,FileNotFoundError):
+            with self.subTest(failure=failure.__name__),tempfile.TemporaryDirectory() as folder:
+                root=Path(folder);(root/'vault').mkdir();(root/'stage-1').mkdir()
+                ui=object.__new__(OwnedDesktopUI);ui.vault=root/'vault';ui.attempt=root/'stage-1';ui.page=Mock()
+                note=ui.vault/'runtime-note.md';note.write_bytes(b'original')
+                with patch.object(Path,'read_bytes',side_effect=failure('PRIVATE READ DETAIL')),\
+                     patch('android_desktop_pair_ui.time.monotonic',side_effect=[0,61]):
+                    with self.assertRaisesRegex(HandoffError,'DESKTOP_PAIR_ORIGINAL_SAVE_UNKNOWN'):
+                        ui.wait_original_note_save(note,b'unconfirmed desired bytes')
+                path=ui.attempt/'source-save-observation.json';value=json.loads(path.read_text('utf-8'))
+                self.assertEqual(value['read_attempts'],1);self.assertEqual(value['transient_read_failures'],{failure.__name__:1})
+                self.assertFalse(value['matched_requested_bytes']);self.assertFalse(value['Save_or_edit_replayed'])
+                self.assertNotIn('PRIVATE',path.read_text('utf-8'));self.assertEqual(ui.page.mock_calls,[])
+                self.assertEqual(note.read_bytes(),b'original')
+
+    def test_readable_but_different_original_content_is_not_a_save_acknowledgement(self):
+        import json
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);(root/'vault').mkdir();(root/'stage-1').mkdir()
+            ui=object.__new__(OwnedDesktopUI);ui.vault=root/'vault';ui.attempt=root/'stage-1';ui.page=Mock()
+            note=ui.vault/'runtime-note.md';note.write_bytes(b'original')
+            with patch('android_desktop_pair_ui.time.monotonic',side_effect=[0,61]):
+                with self.assertRaisesRegex(HandoffError,'DESKTOP_PAIR_ORIGINAL_SAVE_UNKNOWN'):
+                    ui.wait_original_note_save(note,b'new exact source')
+            value=json.loads((ui.attempt/'source-save-observation.json').read_text('utf-8'))
+            self.assertFalse(value['matched_requested_bytes']);self.assertEqual(value['transient_read_failures'],{})
+            self.assertEqual(value['last_read_bytes'],len(b'original'));self.assertEqual(ui.page.mock_calls,[])
+
     def test_unknown_Canvas_input_keeps_original_bytes_and_does_not_repeat_any_input(self):
         import json
         original=json.dumps({'nodes':[{'id':'owned-text','type':'text','x':0,'y':0,'width':300,'height':180,'text':'original','unknown':{'keep':True}}],
