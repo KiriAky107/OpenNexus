@@ -246,7 +246,7 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
     def sync_phase(self,phase):
         require(phase in ('associate','cycle','cycle-incoming','cycle-media','cycle-rename','cycle-delete',
             'cycle-after-stop','cycle-offline','cycle-dropped-upload','cycle-reconcile-original',
-            'cycle-conflict','cycle-conflict-copy','conflict-copy',
+            'cycle-conflict','cycle-conflict-copy','conflict-copy','cold-original-decision',
             'status','association-original','close'),'Unexpected Sync UI phase')
         number=len(self.phases)+1
         # The actual association ID/digest is separately frozen in the driver
@@ -594,7 +594,9 @@ def main():
     for name in ('commit','tools-commit','build-run-id'):parser.add_argument('--'+name,required=True)
     parser.add_argument('--serial',default='emulator-5562')
     scope=parser.add_mutually_exclusive_group();scope.add_argument('--exchange',action='store_true');scope.add_argument('--media',action='store_true');scope.add_argument('--stop',action='store_true');scope.add_argument('--recovery',action='store_true');scope.add_argument('--conflicts',action='store_true')
+    parser.add_argument('--cold-originals',action='store_true')
     args=parser.parse_args();args.scope='sync-conflicts' if args.conflicts else 'sync-recovery' if args.recovery else 'sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
+    require(not args.cold_originals or args.conflicts,'Cold original-entry scope requires actual conflicts')
     require_hosted();require_hosted_emulator(args.serial);owner=owned_root()
     state=read_json(owner/'owner-state.json');require(state['result']=='ready' and state.get('fixture')=='sync','Owned Sync origin is not ready')
     apk,binding=validate_binding(args.bundle,args.commit)

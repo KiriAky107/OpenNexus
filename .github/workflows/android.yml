@@ -79,6 +79,11 @@ on:
         options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, desktop-startup, build-only]
         default: all
         required: false
+      sync_cold_originals:
+        description: 'On sync-conflicts only, verify the new native cold original-decision UI on the selected APK'
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: read
@@ -301,6 +306,7 @@ jobs:
           --bundle .build/android-runtime/package --sdk "$ANDROID_HOME"
           --output .build/android-sync-evidence
           ${{ inputs.runtime_scope == 'sync-conflicts' && '--conflicts' || inputs.runtime_scope == 'sync-recovery' && '--recovery' || inputs.runtime_scope == 'sync-stop' && '--stop' || inputs.runtime_scope == 'sync-media' && '--media' || inputs.runtime_scope == 'sync-exchange' && '--exchange' || '' }}
+          ${{ inputs.sync_cold_originals && '--cold-originals' || '' }}
       - name: Stop only this job's emulator
         if: always()
         run: python3 scripts/android_runtime_probe.py --sdk "$ANDROID_HOME" --stop-owned

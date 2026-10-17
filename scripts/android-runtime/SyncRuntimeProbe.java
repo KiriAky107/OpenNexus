@@ -55,6 +55,7 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
             case "cycle-conflict": cycle("cycle-conflict"); return true;
             case "cycle-conflict-copy": cycle("cycle-conflict-copy"); return true;
             case "conflict-copy": resolveOriginalCopy(); return true;
+            case "cold-original-decision": readColdOriginalCopy(); return true;
             case "cycle-offline": failedCycle("cycle-offline"); return true;
             case "cycle-dropped-upload": failedCycle("cycle-dropped-upload"); return true;
             case "cycle-stop": stopOriginal(); return true;
@@ -186,6 +187,32 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
         require(value.length()==2 && value.getString("vault_id").matches("[0-9a-f]{32}")
             && value.getString("vault_name").matches("Owned Android Sync [0-9a-f]{32}"),"Owned Sync input changed");
         return value;
+    }
+
+    private void readColdOriginalCopy() throws Exception {
+        readCurrent();signedIn();click("Read queue and original records");
+        waitFor(node->label(node,"Read original decisions") && node.isEnabled(),true);
+        for(AccessibilityNodeInfo node:nodes())
+            require(!label(node,"Original conflict decision"),"Cold original unexpectedly already displayed");
+        click("Read original decisions");
+        waitPresent(node->text(node.getText()).startsWith("Remote sequence 2"));
+        waitPresent(node->text(node.getText()).contains("Completed locally"));
+        click("Read this original decision");
+        waitPresent(node->text(node.getText()).startsWith("The original local decision completed."));
+        AccessibilityNodeInfo query=waitFor(node->label(node,"Read original decision") && node.isEnabled(),true);
+        AccessibilityNodeInfo section=query;
+        while(section!=null && !descendantLabel(section,"Original conflict decision",0))section=section.getParent();
+        require(section!=null && !matchingValues(section,"(?s).*"+java.util.regex.Pattern.quote(OriginalConflictScenario.COPY)+".*").isEmpty(),
+            "Cold original target differs");
+        LinkedHashSet<String> ids=matchingValues(section,"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+        require(ids.size()==5,"Cold original does not retain five distinct IDs");
+        for(AccessibilityNodeInfo node:nodes())
+            require(!label(node,"Review and continue original decision"),"Completed original exposed a replay action");
+        org.json.JSONArray originals=new org.json.JSONArray();for(String id:ids)originals.put(id);
+        persistOnce("conflict-copy-cold-receipt",new JSONObject().put("sequence",2)
+            .put("original_native_ids",originals).put("read_only_original_query",true)
+            .put("cold_original_list_entry",true).put("review_digest_displayed_in_original_panel",false)
+            .put("native_operations_created_by_driver",false));
     }
 
     private void associate() throws Exception {

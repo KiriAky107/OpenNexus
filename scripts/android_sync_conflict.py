@@ -1,7 +1,7 @@
 """Actual saved conflict, explicit original copy decision and retained dirty draft."""
 import hashlib,json,re,uuid
 from android_auth_fixture import atomic_json
-from android_runtime_probe import DRIVER,require,require_hosted_emulator
+from android_runtime_probe import APP,DRIVER,require,require_hosted_emulator
 from android_sync_peer import Peer
 
 LOCAL='# Android 本机并发修改 😀\n\n已确认保存的本地版本。\n'.encode()
@@ -60,6 +60,15 @@ def validate_original_copy(native,frozen,receipt):
     return decision
 
 
+def validate_cold_original_read(before,after,decision,seen):
+    require(after==before,'Cold original reading changed durable native records')
+    require(decision in after['decisions'] and decision['state']=='completed'
+        and seen['sequence']==decision['sequence'] and seen['read_only_original_query'] is True
+        and seen['cold_original_list_entry'] is True and seen['native_operations_created_by_driver'] is False
+        and len(seen['original_native_ids'])==5 and set(seen['original_native_ids'])=={decision[key] for key in IDS},
+        'Cold readonly UI original differs from the completed native decision')
+
+
 class ConflictMixin:
     def conflict_edit_phase(self,phase):
         require(phase in ('conflict-local-save','conflict-dirty-draft'),'Unexpected conflict editing phase')
@@ -74,7 +83,7 @@ class ConflictMixin:
             self.restore_test_ime()
 
     def original_conflict_driver(self,kind):
-        require(kind in ('frozen','confirmation','receipt'),'Unrelated original conflict driver record')
+        require(kind in ('frozen','confirmation','receipt','cold-receipt'),'Unrelated original conflict driver record')
         result=self.shell('run-as',DRIVER,'cat','no_backup/owned-sync-conflict-copy-'+kind+'-intent.json')
         require(0<len(result.stdout)<=4096,'Original conflict driver record exceeds bound')
         value=json.loads(result.stdout)
@@ -132,6 +141,29 @@ class ConflictMixin:
         require(any(r['operation_id']==local['operation_id'] and r['state']=='archived' for r in pushed['jobs'])
             and not any(r['hash']==hashlib.sha256(DIRTY).hexdigest() for r in after['rows']['revisions']),
             'An unresolved local job or unsaved draft was uploaded instead of the reviewed copy')
+        if getattr(self.args,'cold_originals',False):
+            original_pid=self.shell('pidof',APP).stdout.decode().strip()
+            require(re.fullmatch(r'[1-9][0-9]{0,9}',original_pid),'Original owned process is ambiguous')
+            atomic_json(self.output/'conflict-cold-original-entry-intent.json',{'original_pid':int(original_pid),
+                'sequence':decision['sequence'],'original_native_ids':{key:decision[key] for key in IDS},
+                'read_only_UI_list_and_receipt_only':True},exclusive=True)
+            self.shell('am','force-stop',APP)
+            stopped=self.shell('pidof',APP,check=False)
+            require(stopped.returncode!=0 and not stopped.stdout.strip(),'Original app did not stop before cold original reading')
+            self.sync_phase('cold-original-decision')
+            new_pid=self.shell('pidof',APP).stdout.decode().strip()
+            require(re.fullmatch(r'[1-9][0-9]{0,9}',new_pid) and new_pid!=original_pid,'Cold original did not use a new owned process')
+            seen_cold=self.original_conflict_driver('cold-receipt');after_cold=self.host_snapshot('conflict-cold-original-entry')
+            validate_cold_original_read(pushed,after_cold,decision,seen_cold)
+            cold_provider=self.observe('conflict-cold-original-entry')
+            require(all(cold_provider[key]==after[key] for key in ('vault','rows','delivery'))
+                and self.original('runtime-note.md')==REMOTE and self.original(COPY)==LOCAL
+                and [r for r in self.draft_rows() if r[0]=='runtime-note.md']==rows,
+                'Cold original UI changed provider originals or saved/draft/copy bytes')
+            atomic_json(self.output/'conflict-cold-original-entry-proof.json',{'passed':True,
+                'original_pid_exited':True,'new_original_owned_pid':int(new_pid),
+                'actual_UI_original_list_and_five_IDs':True,'native_metadata_unchanged':True,
+                'no_resolution_or_transfer_replayed':True,'UI_review_digest_display_not_claimed':True},exclusive=True)
         self.phase('conflict-draft-reopen')
         cold=self.host_snapshot('conflict-cold');require(cold==pushed,'Cold draft presentation changed Sync originals')
         require([r for r in self.draft_rows() if r[0]=='runtime-note.md']==rows and self.original('runtime-note.md')==REMOTE
@@ -148,5 +180,5 @@ class ConflictMixin:
             'actual_UI_readonly_five_original_IDs':True,'actual_dirty_draft_cold_bytes_retained_not_uploaded':True,
             'actual_S3_original_saved_and_copy_bytes_equal':True,
             'unknown_decision_reply_or_stale_review_rejection_verified':False,
-            'actual_cold_completed_decision_UI_entry_verified':False,
+            'actual_cold_completed_decision_UI_entry_verified':bool(getattr(self.args,'cold_originals',False)),
             'desktop_phone_upgrade_signing_release_verified':False},exclusive=True)
