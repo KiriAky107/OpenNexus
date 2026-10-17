@@ -17,6 +17,14 @@ import org.json.JSONObject;
 public final class SyncRuntimeProbe extends AuthRuntimeProbe {
     @Override protected String namespace() { return "SYNC"; }
     @Override protected boolean viewportAdmission() { return true; }
+    @Override protected String[] diagnosticCodes() {
+        return new String[]{"SYNC_RESPONSE_INVALID","SYNC_NETWORK_ERROR","SYNC_CONNECTION_FAILED","SYNC_AUTH_SELECTION_CHANGED",
+            "SYNC_AUTH_IDENTITY_CHANGED","SYNC_AUTH_RECONCILIATION_REQUIRED","SYNC_SESSION_EXPIRED","SYNC_LOGIN_REQUIRED",
+            "SYNC_FOREGROUND_CHANGED","SYNC_FOREGROUND_REQUIRED","SYNC_ALREADY_BOUND","SYNC_PREVIEW_CHANGED","SYNC_PREVIEW_PAGE_INVALID",
+            "SYNC_BINDING_REQUEST_INVALID","SYNC_BINDING_PAGE_INVALID","SYNC_BINDING_INTENT_INVALID","SYNC_BINDING_INTENT_NOT_FOUND",
+            "SYNC_BINDING_INTENT_CHANGED","SYNC_OPERATION_MISMATCH","SYNC_WORKER_INTERRUPTED","VAULT_CHANGED","HOST_BUSY",
+            "MOBILE_STORAGE_UNAVAILABLE","MOBILE_HOST_REQUIRED","SYNC_PLATFORM_UNSUPPORTED","QUOTA_EXCEEDED","FILESYSTEM_ERROR","DATABASE_ERROR"};
+    }
     @Override protected String[] diagnosticLabels() {
         return new String[]{"Read remote vaults","Choose a vault","Read local association","Preview merge",
             "Initial merge preview","Confirm merge and bind","Confirm this association","No remote vault is associated yet.",

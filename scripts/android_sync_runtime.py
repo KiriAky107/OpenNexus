@@ -188,6 +188,15 @@ def validate_stop_resumed_original(before,native,provider_before,provider_after,
 
 
 class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
+    def failure_observations(self):
+        super().failure_observations()
+        # Read-only debug WebView geometry/public error enums only; no DOM
+        # input values, raw error text, screenshots or mutation replays.
+        try:self.read_native_styles('sync-failure')
+        except Exception as error:
+            atomic_json(self.output/'sync-failure-renderer-unavailable.json',
+                {'error':type(error).__name__,'no_mutation_retried':True},exclusive=True)
+
     def observe(self,label):
         value=observe_provider(self.owner)
         atomic_json(self.output/(label+'-provider.json'),value,exclusive=True)

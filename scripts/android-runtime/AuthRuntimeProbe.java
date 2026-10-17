@@ -27,6 +27,8 @@ public class AuthRuntimeProbe extends Instrumentation {
     private UiAutomation ui;
     protected String stage = "initialization";
     private String inputTrace="none";
+    private String inputTarget="none";
+    private final List<String> inputHistory=new ArrayList<>();
 
     @Override public void onCreate(Bundle value) { super.onCreate(value); args=value; start(); }
     @Override public void onStart() {
@@ -75,6 +77,7 @@ public class AuthRuntimeProbe extends Instrumentation {
     protected String namespace() { return "AUTH"; }
     protected boolean additionalPhase(String phase) throws Exception { return false; }
     protected String[] diagnosticLabels() { return new String[0]; }
+    protected String[] diagnosticCodes() { return new String[0]; }
     protected boolean viewportAdmission() { return false; }
 
     private void openConnection() {
@@ -181,6 +184,11 @@ public class AuthRuntimeProbe extends Instrumentation {
         require(java.util.Arrays.equals(signal,"finish\n".getBytes(StandardCharsets.UTF_8)),"Original background signal changed");
     }
     protected void click(String name) {
+        if(!"none".equals(inputTarget)) {
+            inputHistory.add(inputTarget+" "+inputTrace);
+            if(inputHistory.size()>12)inputHistory.remove(0);
+        }
+        inputTarget=name;
         stage="tap-"+name.replace(' ','-');
         inputTrace="admission=not_completed down=not_sent up=not_sent";
         AccessibilityNodeInfo initial=waitFor(n->actionable(n,name),true);
@@ -365,6 +373,7 @@ public class AuthRuntimeProbe extends Instrumentation {
     private String shape() {
         StringBuilder value=new StringBuilder("redacted-auth-ui-shape\n");
         value.append("original_input ").append(inputTrace).append('\n');
+        for(String previous:inputHistory)value.append("previous_original_input ").append(previous).append('\n');
         String[] labels={"Settings","Sync account","Server connection and sign-in","Read current connection","Saved connections","Server URL","Account","Password",
             "Device name","Sign in","Refresh session","Check original operation","Read original ID","Confirm this action"};
         for (String label:labels) {
@@ -378,6 +387,12 @@ public class AuthRuntimeProbe extends Instrumentation {
             }
             value.append(label).append(" present=").append(present).append(" visible=").append(visible)
                 .append(" enabled=").append(enabled).append(" clickable=").append(clickable).append('\n');
+        }
+        for(String code:diagnosticCodes()) {
+            boolean present=false;
+            for(AccessibilityNodeInfo node:nodes()) if(!node.isPassword() && !node.isEditable()
+                && text(node.getText()).endsWith("("+code+")"))present=true;
+            if(present)value.append("public_error_code=").append(code).append('\n');
         }
         if (ui!=null) for (AccessibilityNodeInfo node:nodes()) {
             value.append("editable=").append(node.isEditable()).append(" password=").append(node.isPassword())

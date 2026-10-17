@@ -1,4 +1,5 @@
 // Read-only diagnostics on the one forwarded, owned debug WebView. No DOM changes.
+import { syncStateExpression } from './sync_state_expression.mjs'
 const target = new URL(process.argv[2])
 if (target.protocol !== 'ws:' || target.hostname !== '127.0.0.1' || !/^\d+$/.test(target.port)
     || !/^\/devtools\/page\/[A-Za-z0-9_-]+$/.test(target.pathname) || target.search || target.hash) {
@@ -13,6 +14,7 @@ const expression = `JSON.stringify((()=>{
     const r=e.getBoundingClientRect();return {visible:getComputedStyle(e).display!=='none'&&r.width>0&&r.height>0,width:r.width,height:r.height}
   }).filter(e=>e.visible)
   return {
+  syncState:${syncStateExpression},
   theme:document.documentElement.dataset.theme,
   root:{primary:getComputedStyle(document.documentElement).getPropertyValue('--color-text-primary'),scheme:getComputedStyle(document.documentElement).colorScheme},
   elements:Array.from(document.querySelectorAll('.app-dialog,.mobile-dialog,.preferences-title h2,.preferences-title button,.theme-select,.theme-info strong,.language select,.badge.success')).slice(0,40).map(e=>({

@@ -14,6 +14,25 @@ from android_sync_runtime import PEER_NOTE,PEER_CANVAS,IMAGE_PATH,SyncProbe,read
 
 
 class InitialSyncBoundaries(unittest.TestCase):
+    def test_failed_sync_keeps_original_observation_when_safe_renderer_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=SyncProbe.__new__(SyncProbe);probe.output=Path(directory)
+            probe.read_native_styles=Mock(side_effect=RuntimeError('untrusted-private-error-must-not-be-written'))
+            with patch('android_auth_runtime.AuthProbe.failure_observations') as original:
+                probe.failure_observations()
+                original.assert_called_once_with()
+            probe.read_native_styles.assert_called_once_with('sync-failure')
+            value=(probe.output/'sync-failure-renderer-unavailable.json').read_text('utf-8')
+            self.assertNotIn('untrusted-private',value)
+            self.assertEqual(json.loads(value),{'error':'RuntimeError','no_mutation_retried':True})
+
+    def test_failed_sync_only_adds_readonly_renderer_observation_after_original_records(self):
+        order=[];probe=SyncProbe.__new__(SyncProbe)
+        probe.read_native_styles=Mock(side_effect=lambda phase:order.append(phase))
+        with patch('android_auth_runtime.AuthProbe.failure_observations',side_effect=lambda:order.append('original-records')):
+            probe.failure_observations()
+        self.assertEqual(order,['original-records','sync-failure'])
+
     def exchange(self):
         content=DRAFT.encode();digest=hashlib.sha256(content).hexdigest()
         job={'operation_id':'original-op','file_id':'original-file','path':'runtime-note.md',
