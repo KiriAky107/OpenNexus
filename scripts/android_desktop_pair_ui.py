@@ -98,7 +98,9 @@ class OwnedDesktopUI:
         panel.get_by_role('button',name=names('Sign in','\u767b\u5f55')).click()
         panel.get_by_role('button',name=names('Refresh vaults','\u5237\u65b0\u8fdc\u7aef\u5e93')).wait_for()
         require(panel.get_by_label(names('Password','\u5bc6\u7801')).input_value() == '', 'DESKTOP_PAIR_PASSWORD_NOT_CLEARED')
-        panel.get_by_label(names('Remote vault','\u8fdc\u7aef\u5e93')).select_option(payload['vault_id'])
+        # In the published UI this wrapping label also includes every option's
+        # text. Scope the original combobox to its authenticated connection panel.
+        panel.locator('.sync-connect').get_by_role('combobox').select_option(payload['vault_id'])
         panel.get_by_role('button',name=names('Preview merge','\u9884\u89c8\u5408\u5e76')).click()
         preview=panel.locator('.sync-preview')
         preview.get_by_role('button',name=names('Confirm merge and bind','\u786e\u8ba4\u5408\u5e76\u5e76\u7ed1\u5b9a')).wait_for()
