@@ -77,7 +77,7 @@ public final class AuthRuntimeProbe extends Instrumentation {
         // A confirmed native profile makes this pane taller than the screen.
         // The heading can exist above its restored scroll position; finding it
         // is a navigation check, not permission to click another Settings tab.
-        waitText("Server connection and sign-in");
+        waitPresent(node->label(node,"Server connection and sign-in"));
     }
 
     private JSONObject privateConfiguration() throws Exception {
@@ -108,7 +108,7 @@ public final class AuthRuntimeProbe extends Instrumentation {
     }
 
     private void signedIn() {
-        stage="current-signed-in";waitText("Session saved · Signed in");
+        stage="current-signed-in";waitPresent(node->label(node,"Session saved · Signed in"));
         waitFor(node->label(node,"Refresh session") && node.isEnabled(),true);
     }
     private void readCurrent() {
@@ -117,14 +117,14 @@ public final class AuthRuntimeProbe extends Instrumentation {
         // explicit read a person uses; never infer a usable native selection
         // from the preceding instrumentation's view or re-submit a mutation.
         stage="read-current-before-action";click("Read current connection");
-        waitText("Saved connections");
+        waitPresent(node->label(node,"Saved connections"));
         waitFor(node->label(node,"Read current connection") && node.isEnabled(),true);
     }
     private void unusable() {
         stage="current-not-usable";
-        waitFor(node->text(node.getText()).contains("No confirmed usable session"),true);
+        waitPresent(node->text(node.getText()).contains("No confirmed usable session"));
         for (AccessibilityNodeInfo node:nodes())
-            require(!(node.isVisibleToUser() && label(node,"Refresh session") && node.isEnabled()),"Unconfirmed session enabled refresh");
+            require(!(label(node,"Refresh session") && node.isEnabled()),"Unconfirmed session enabled refresh");
     }
     private void set(String name,String value,boolean secret) {
         stage="input-"+name.replace(' ','-');
@@ -184,6 +184,18 @@ public final class AuthRuntimeProbe extends Instrumentation {
             SystemClock.sleep(150);
         } while (SystemClock.uptimeMillis()<until);
         throw new IllegalStateException("Owned UI state timed out");
+    }
+    private void waitPresent(Predicate<AccessibilityNodeInfo> predicate) {
+        // State/heading assertions do not require the text to fit the viewport.
+        // Actual inputs and actions still use visible, enabled, uniquely named
+        // targets and stable touch bounds. Never scroll away from a visible
+        // action solely to show a non-action heading above a tall saved profile.
+        long until=SystemClock.uptimeMillis()+30000;
+        do {
+            for (AccessibilityNodeInfo node:nodes()) if (predicate.test(node)) return;
+            SystemClock.sleep(150);
+        } while (SystemClock.uptimeMillis()<until);
+        throw new IllegalStateException("Owned rendered state timed out");
     }
     private void showTarget(AccessibilityNodeInfo target) {
         if (target.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId())) return;
