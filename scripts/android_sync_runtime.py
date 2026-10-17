@@ -27,6 +27,7 @@ from android_sync_fixture import arm_control,control_root,observe_provider
 from android_sync_setup import Setup
 from android_sync_peer import IMAGE_PATH,PATHS,Peer
 from android_sync_recovery import RecoveryMixin
+from android_sync_conflict import ConflictMixin
 
 PEER_NOTE='# 来自独立 HTTP 客户端 😀\n\n保持 Markdown 原文。\n'.encode()
 PEER_CANVAS=(json.dumps({'nodes':[
@@ -186,7 +187,7 @@ def validate_stop_resumed_original(before,native,provider_before,provider_after,
         'Explicit resume created another provider write')
 
 
-class SyncProbe(RecoveryMixin,AuthProbe):
+class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
     def observe(self,label):
         value=observe_provider(self.owner)
         atomic_json(self.output/(label+'-provider.json'),value,exclusive=True)
@@ -195,6 +196,7 @@ class SyncProbe(RecoveryMixin,AuthProbe):
     def sync_phase(self,phase):
         require(phase in ('associate','cycle','cycle-incoming','cycle-media','cycle-rename','cycle-delete',
             'cycle-after-stop','cycle-offline','cycle-dropped-upload','cycle-reconcile-original',
+            'cycle-conflict','cycle-conflict-copy','conflict-copy',
             'status','association-original','close'),'Unexpected Sync UI phase')
         number=len(self.phases)+1
         # The actual association ID/digest is separately frozen in the driver
@@ -289,6 +291,18 @@ class SyncProbe(RecoveryMixin,AuthProbe):
                 originals=db.execute("SELECT operation_id,file_id,revision,path,hash,operation,state,length(content) FROM outbox WHERE path='runtime-note.md' ORDER BY rowid LIMIT 17").fetchall()
                 require(0<len(originals)<=16,'Owned original outbox is missing or exceeds bound')
                 rows['outbox']=[dict(zip(('operation_id','file_id','revision','path','hash','operation','state','payload_size'),row)) for row in originals]
+            if getattr(getattr(self,'args',None),'conflicts',False):
+                self.host_observation_stage='original-conflict-decisions'
+                has_review=db.execute("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_review_receipts')").fetchone()[0]
+                if has_review:
+                    decisions=db.execute('SELECT r.sequence,r.choice,r.destination,r.expected,v.fingerprint,r.operation_id,r.rename_id,r.copy_id,r.retire_id,r.restore_id,r.state FROM sync_resolutions r LEFT JOIN sync_review_receipts v ON v.binding=r.binding AND v.sequence=r.sequence WHERE r.binding=? ORDER BY r.sequence LIMIT 17',(binding,)).fetchall()
+                    require(len(decisions)<=16,'Original conflict decisions exceed bound')
+                    keys=('sequence','choice','destination','expected_hash','fingerprint','operation_id','rename_id','copy_id','retire_id','restore_id','state')
+                    rows['decisions']=[dict(zip(keys,row)) for row in decisions]
+                else:
+                    require(db.execute('SELECT COUNT(*) FROM sync_resolutions WHERE binding=?',(binding,)).fetchone()[0]==0,
+                        'Legacy original decisions lack frozen review metadata')
+                    rows['decisions']=[]
         value={'binding':dict(zip(('id','remote_vault','state','cursor'),bindings[0])),**rows,
             'integrity':'ok','credentials_selected':False,'original_database_uploaded':False}
         atomic_json(self.output/(label+'-host.json'),value,exclusive=True)
@@ -334,6 +348,7 @@ class SyncProbe(RecoveryMixin,AuthProbe):
         if getattr(self.args,'exchange',False):self.exchange(setup,prepared,device)
         if getattr(self.args,'media',False):self.media(setup,prepared,device)
         if getattr(self.args,'stop',False):self.stop_original(setup,prepared,device)
+        if getattr(self.args,'conflicts',False):self.conflict_copy(setup,prepared,device)
 
     def exchange(self,setup,prepared,device):
         prior=self.original('runtime-note.md')
@@ -523,8 +538,8 @@ def main():
     for name in ('bundle','sdk','output','source-checkout'):parser.add_argument('--'+name,type=Path,required=True)
     for name in ('commit','tools-commit','build-run-id'):parser.add_argument('--'+name,required=True)
     parser.add_argument('--serial',default='emulator-5562')
-    scope=parser.add_mutually_exclusive_group();scope.add_argument('--exchange',action='store_true');scope.add_argument('--media',action='store_true');scope.add_argument('--stop',action='store_true');scope.add_argument('--recovery',action='store_true')
-    args=parser.parse_args();args.scope='sync-recovery' if args.recovery else 'sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
+    scope=parser.add_mutually_exclusive_group();scope.add_argument('--exchange',action='store_true');scope.add_argument('--media',action='store_true');scope.add_argument('--stop',action='store_true');scope.add_argument('--recovery',action='store_true');scope.add_argument('--conflicts',action='store_true')
+    args=parser.parse_args();args.scope='sync-conflicts' if args.conflicts else 'sync-recovery' if args.recovery else 'sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
     require_hosted();require_hosted_emulator(args.serial);owner=owned_root()
     state=read_json(owner/'owner-state.json');require(state['result']=='ready' and state.get('fixture')=='sync','Owned Sync origin is not ready')
     apk,binding=validate_binding(args.bundle,args.commit)

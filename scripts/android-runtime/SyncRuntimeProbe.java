@@ -2,6 +2,7 @@ package cc.kronecker.opennexus.testdriver;
 
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.os.SystemClock;
+import android.os.Bundle;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -39,6 +40,9 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
             case "cycle-delete": cycle("cycle-delete"); return true;
             case "cycle-after-stop": cycle("cycle-after-stop"); return true;
             case "cycle-reconcile-original": cycle("cycle-reconcile-original"); return true;
+            case "cycle-conflict": cycle("cycle-conflict"); return true;
+            case "cycle-conflict-copy": cycle("cycle-conflict-copy"); return true;
+            case "conflict-copy": resolveOriginalCopy(); return true;
             case "cycle-offline": failedCycle("cycle-offline"); return true;
             case "cycle-dropped-upload": failedCycle("cycle-dropped-upload"); return true;
             case "cycle-stop": stopOriginal(); return true;
@@ -100,6 +104,66 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
     private static boolean canonical(String value) {
         try { return UUID.fromString(value).toString().equals(value); }
         catch (IllegalArgumentException error) { return false; }
+    }
+
+    private AccessibilityNodeInfo originalCopyDialog() {
+        AccessibilityNodeInfo button=waitFor(node->label(node,"Confirm this original content") && node.isEnabled(),true);
+        for (AccessibilityNodeInfo parent=button;parent!=null;parent=parent.getParent())
+            if (descendantLabel(parent,"Review digest",0) && descendantLabel(parent,"Remote sequence",0)) return parent;
+        throw new IllegalStateException("Frozen conflict review is not observable; no confirmation sent");
+    }
+    private LinkedHashSet<String> matchingValues(AccessibilityNodeInfo root,String pattern) {
+        LinkedHashSet<String> result=new LinkedHashSet<>();List<AccessibilityNodeInfo> pending=new ArrayList<>();pending.add(root);
+        for(int i=0;i<pending.size() && pending.size()<256;i++) {
+            AccessibilityNodeInfo node=pending.get(i);
+            require("cc.kronecker.opennexus.dev".equals(text(node.getPackageName())) && !node.isPassword(),"Foreign conflict review");
+            String value=text(node.getText());if(value.matches(pattern))result.add(value);
+            for(int j=0;j<node.getChildCount();j++){AccessibilityNodeInfo child=node.getChild(j);if(child!=null)pending.add(child);}
+        }
+        require(pending.size()<256,"Conflict review exceeds bound");return result;
+    }
+    private void resolveOriginalCopy() throws Exception {
+        readCurrent();signedIn();click("Read queue and original records");
+        click("Read original decision and content changes");
+        waitPresent(node->label(node,"Current local"));waitPresent(node->label(node,"Remote revision"));
+        waitPresent(node->text(node.getText()).contains("Android 本机并发修改 😀"));
+        waitPresent(node->text(node.getText()).contains("独立客户端并发修改 😀"));
+        stage="original-conflict-copy-path";
+        AccessibilityNodeInfo input=waitFor(node->{
+            if(!node.isEditable() || !node.isEnabled() || node.isPassword())return false;
+            AccessibilityNodeInfo parent=node.getParent();
+            return parent!=null && descendantLabel(parent,"Relative copy path",0);
+        },true);
+        Bundle value=new Bundle();value.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,OriginalConflictScenario.COPY);
+        require(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,value),"Original copy path not accepted");
+        click("Save local copy and use remote");
+        AccessibilityNodeInfo dialog=originalCopyDialog();
+        LinkedHashSet<String> digests=matchingValues(dialog,"[0-9a-f]{64}");
+        require(digests.size()==1 && descendantLabel(dialog,"2",0) && descendantLabel(dialog,OriginalConflictScenario.COPY,0),
+            "Frozen conflict scope differs; no confirmation sent");
+        JSONObject frozen=new JSONObject().put("driver_intent_id",UUID.randomUUID().toString()).put("sequence",2)
+            .put("choice","copy").put("destination",OriginalConflictScenario.COPY).put("fingerprint",digests.iterator().next())
+            .put("native_operation_ids_not_yet_assigned",true);
+        persistOnce("conflict-copy-frozen",frozen);
+        click("Cancel");
+        click("Save local copy and use remote");
+        dialog=originalCopyDialog();
+        require(matchingValues(dialog,"[0-9a-f]{64}").equals(digests) && descendantLabel(dialog,"2",0)
+            && descendantLabel(dialog,OriginalConflictScenario.COPY,0),"Canceled original review was replaced; no confirmation sent");
+        persistOnce("conflict-copy-confirmation",frozen);
+        click("Confirm this original content");
+        waitPresent(node->text(node.getText()).startsWith("The original local decision completed."));
+        click("Read original decision");
+        waitPresent(node->text(node.getText()).startsWith("The original local decision completed."));
+        AccessibilityNodeInfo query=waitFor(node->label(node,"Read original decision") && node.isEnabled(),true);
+        AccessibilityNodeInfo section=query;
+        while(section!=null && !descendantLabel(section,"Original conflict decision",0))section=section.getParent();
+        require(section!=null,"Original conflict receipt section unavailable");
+        LinkedHashSet<String> ids=matchingValues(section,"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+        require(ids.size()==5,"Original conflict receipt does not contain five distinct IDs");
+        org.json.JSONArray originals=new org.json.JSONArray();for(String id:ids)originals.put(id);
+        persistOnce("conflict-copy-receipt",new JSONObject().put("sequence",2).put("fingerprint",frozen.getString("fingerprint"))
+            .put("original_native_ids",originals).put("read_only_original_query",true));
     }
 
     private JSONObject configuration() throws Exception {

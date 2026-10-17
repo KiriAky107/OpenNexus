@@ -196,6 +196,24 @@ public final class RuntimeProbe extends Instrumentation {
                         "actual incoming original Canvas text after cold launch");
                     waitOriginalImageNode();
                     break;
+                case "conflict-local-save":
+                    open(NOTE);
+                    require(OriginalMarkdownAccessibility.matches(string(noteBody().getText()),DRAFT),"Original uploaded source changed before local edit");
+                    inputText(noteBody(),OriginalConflictScenario.LOCAL);
+                    save();
+                    break;
+                case "conflict-dirty-draft":
+                    open(NOTE);
+                    require(OriginalMarkdownAccessibility.matches(string(noteBody().getText()),OriginalConflictScenario.LOCAL),"Saved local conflict source changed");
+                    inputText(noteBody(),OriginalConflictScenario.DIRTY);
+                    waitLabel("Draft kept on this device");hideKeyboard();pressBack();waitNotesLanding();
+                    break;
+                case "conflict-draft-reopen":
+                    open(NOTE);
+                    waitNode(node->node.isEditable() && label(node,"Markdown note body",false)
+                        && OriginalMarkdownAccessibility.matches(string(node.getText()),OriginalConflictScenario.DIRTY),
+                        "original dirty draft after reviewed incoming conflict and cold launch");
+                    break;
                 case "back-draft":
                     create("New note", "runtime-back.md");
                     inputText(noteBody(), BACK_DRAFT);
