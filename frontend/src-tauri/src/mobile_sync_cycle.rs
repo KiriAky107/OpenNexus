@@ -53,7 +53,7 @@ pub enum Request {
     },
 }
 impl Request {
-    fn target(&self) -> &Target {
+    pub fn target(&self) -> &Target {
         match self {
             Self::Status { target, .. }
             | Self::Now { target }
@@ -62,7 +62,7 @@ impl Request {
             | Self::Resolve { target, .. } => target,
         }
     }
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         let target = self.target();
         for id in [&target.vault_id, &target.binding_id] {
             if !uuid::Uuid::parse_str(id).is_ok_and(|value| value.to_string() == *id) {
@@ -335,7 +335,9 @@ pub async fn execute<S: SecretStore>(
                                 .map_err(Into::into)
                         })
                         .await?;
-                    Ok(Response::Review { review })
+                    Ok(Response::Review {
+                        review: Box::new(review),
+                    })
                 }
                 Request::Decision { sequence, .. } => {
                     let binding = target.binding_id.clone();
