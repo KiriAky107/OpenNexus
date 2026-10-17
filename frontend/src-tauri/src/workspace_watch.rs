@@ -191,6 +191,59 @@ pub(super) struct Cache {
     stats: ScanStats,
     last_error: Option<String>,
 }
+
+/// Prepared directory hashes and stable identities. Dropping an unpublished
+/// plan restores a full watch hint; no consumed notification is lost on cancel.
+pub(crate) struct SnapshotPlan {
+    entries: BTreeMap<String, CachedEntry>,
+    identities: identity::IdentityChanges,
+    changed: Vec<String>,
+    full: bool,
+    enumerate: bool,
+    vault_id: String,
+    revision: u64,
+    database_changes: u64,
+    hints: Arc<Mutex<Hints>>,
+    published: bool,
+}
+impl SnapshotPlan {
+    fn publish(mut self, workspace: &mut Workspace) -> Result<()> {
+        if self.vault_id != workspace.vault_id
+            || self.revision != workspace.cache.revision
+            || self.database_changes != workspace.db.total_changes()
+        {
+            return Err(HostError::new("REVISION_CONFLICT"));
+        }
+        let tx = workspace.db.transaction()?;
+        self.identities.apply(&tx)?;
+        tx.commit()?;
+        if !self.changed.is_empty() || workspace.cache.revision == 0 {
+            workspace.cache.revision += 1;
+            workspace
+                .cache
+                .changed
+                .extend(std::mem::take(&mut self.changed));
+        }
+        workspace.cache.entries = std::mem::take(&mut self.entries);
+        if self.enumerate {
+            workspace.cache.last_metadata = Instant::now();
+        }
+        if self.full {
+            workspace.cache.last_verified = Instant::now();
+        }
+        self.published = true;
+        Ok(())
+    }
+}
+impl Drop for SnapshotPlan {
+    fn drop(&mut self) {
+        if !self.published {
+            if let Ok(mut hints) = self.hints.lock() {
+                hints.full = true;
+            }
+        }
+    }
+}
 impl Cache {
     pub(super) fn new(root: &Path) -> Self {
         let hints = Arc::new(Mutex::new(Hints::default()));
@@ -280,6 +333,20 @@ impl Workspace {
     }
 
     pub(crate) fn refresh_snapshot(&mut self, explicit: bool) -> Result<()> {
+        if let Some(plan) = self.prepare_snapshot_checked(explicit, &|| Ok(()))? {
+            plan.publish(self)?;
+        }
+        Ok(())
+    }
+
+    /// Filesystem preparation checks its original lease between directories,
+    /// files and hash chunks. It opens no identity/publication transaction.
+    pub(crate) fn prepare_snapshot_checked(
+        &mut self,
+        explicit: bool,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Option<SnapshotPlan>> {
+        check()?;
         let started = Instant::now();
         let (dirty, lost, fallback) = {
             let mut hints = self
@@ -310,9 +377,9 @@ impl Workspace {
                     METADATA_INTERVAL
                 };
         if !enumerate && dirty.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
-        let result = self.update_snapshot(&dirty, full, enumerate);
+        let result = self.prepare_snapshot_update(&dirty, full, enumerate, check);
         self.cache.stats.last_scan_micros = started.elapsed().as_micros() as u64;
         self.cache.last_error = result.as_ref().err().map(|error| error.code.clone());
         if result.is_err() {
@@ -321,19 +388,20 @@ impl Workspace {
                 hints.full = true;
             }
         }
-        result
+        result.map(Some)
     }
 
-    fn update_snapshot(
+    fn prepare_snapshot_update(
         &mut self,
         dirty: &BTreeSet<String>,
         full: bool,
         enumerate: bool,
-    ) -> Result<()> {
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<SnapshotPlan> {
         // Structural hints need a metadata enumeration: the old-name event can
         // arrive alone, and Windows still resolves an obsolete case spelling.
         // Content edits keep the incremental path and idle polls remain free.
-        let enumerate = enumerate || self.identity_rescan_needed(dirty)?;
+        let enumerate = enumerate || self.identity_rescan_needed_checked(dirty, check)?;
         if full {
             self.cache.sync_digests.clear();
             self.cache.stats.full_scans += 1;
@@ -350,7 +418,7 @@ impl Workspace {
         let mut paths = Vec::new();
         let mut removals = BTreeSet::new();
         if enumerate {
-            self.scan_dir(&self.root, &mut paths, true)?;
+            self.scan_dir_checked(&self.root, &mut paths, true, check)?;
             let present: BTreeSet<_> = paths.iter().cloned().collect();
             removals.extend(
                 self.cache
@@ -371,6 +439,7 @@ impl Workspace {
                 .cloned()
                 .collect();
             for parent in parents {
+                check()?;
                 if parent
                     .split('/')
                     .any(|part| part.eq_ignore_ascii_case("opennexus-records"))
@@ -390,7 +459,7 @@ impl Workspace {
                 }
                 if target.is_dir() {
                     paths.push(parent);
-                    self.scan_dir(&target, &mut paths, true)?;
+                    self.scan_dir_checked(&target, &mut paths, true, check)?;
                 } else if supported(&parent) {
                     paths.push(parent);
                 }
@@ -403,6 +472,7 @@ impl Workspace {
             next.remove(path);
         }
         for path in paths {
+            check()?;
             let target = self.resolve(&path)?;
             let metadata = fs::metadata(&target)?;
             let modified = metadata
@@ -439,7 +509,7 @@ impl Workspace {
                 next.insert(path, cached.unwrap().clone());
                 continue;
             }
-            let digest = crate::payloads::hash_file(&target)?;
+            let digest = crate::payloads::hash_file_checked(&target, check)?;
             self.cache.stats.hashed_files += 1;
             self.cache.stats.hashed_bytes += stamp.size;
             let entry = Entry {
@@ -459,7 +529,7 @@ impl Workspace {
                 },
             );
         }
-        self.reconcile_file_identities(&mut next, enumerate)?;
+        let identities = self.prepare_file_identities(&mut next, enumerate, check)?;
         let all: BTreeSet<_> = self
             .cache
             .entries
@@ -474,18 +544,19 @@ impl Workspace {
                     != next.get(path).map(|item| &item.entry)
             })
             .collect();
-        if !changed.is_empty() || self.cache.revision == 0 {
-            self.cache.revision += 1;
-            self.cache.changed.extend(changed);
-        }
-        self.cache.entries = next;
-        if enumerate {
-            self.cache.last_metadata = Instant::now();
-        }
-        if full {
-            self.cache.last_verified = Instant::now();
-        }
-        Ok(())
+        check()?;
+        Ok(SnapshotPlan {
+            entries: next,
+            identities,
+            changed,
+            full,
+            enumerate,
+            vault_id: self.vault_id.clone(),
+            revision: self.cache.revision,
+            database_changes: self.db.total_changes(),
+            hints: self.cache.hints.clone(),
+            published: false,
+        })
     }
 
     pub(crate) fn cached_sync_file_info(
@@ -513,6 +584,83 @@ impl Workspace {
 mod tests {
     use super::*;
     use notify::event::Flag;
+
+    #[test]
+    fn sync_snapshot_preparation_can_be_dropped_without_committing_identities_or_losing_hints() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        ws.write("old.md", "", b"original bytes", "local").unwrap();
+        ws.tree().unwrap();
+        let id = ws.entry("old.md").unwrap().unwrap().file_id;
+        fs::rename(root.path().join("old.md"), root.path().join("renamed.md")).unwrap();
+        let changes = ws.db.total_changes();
+        let revision = ws.cache.revision;
+        let plan = ws
+            .prepare_snapshot_checked(true, &|| Ok(()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(plan.entries["renamed.md"].entry.file_id, id);
+        assert_eq!(ws.path_for_id(&id).unwrap(), "old.md");
+        assert_eq!(ws.db.total_changes(), changes);
+        assert_eq!(ws.cache.revision, revision);
+        drop(plan);
+        assert!(ws.cache.hints.lock().unwrap().full);
+        ws.refresh_snapshot(false).unwrap();
+        assert_eq!(ws.path_for_id(&id).unwrap(), "renamed.md");
+        assert_eq!(
+            fs::read(root.path().join("renamed.md")).unwrap(),
+            b"original bytes"
+        );
+    }
+
+    #[test]
+    fn sync_snapshot_cancellation_keeps_original_index_and_requeues_the_consumed_hint() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        ws.write("original.md", "", b"saved original", "local")
+            .unwrap();
+        ws.tree().unwrap();
+        let old = ws.cache.entries["original.md"].entry.clone();
+        fs::write(root.path().join("original.md"), vec![b'x'; 512 * 1024]).unwrap();
+        hint(&ws, &["original.md"]);
+        let changes = ws.db.total_changes();
+        let checks = std::cell::Cell::new(0);
+        let result = ws.prepare_snapshot_checked(true, &|| {
+            checks.set(checks.get() + 1);
+            if checks.get() == 12 {
+                return Err(HostError::new("SYNC_FOREGROUND_CHANGED"));
+            }
+            Ok(())
+        });
+        assert!(matches!(result,Err(error) if error.code=="SYNC_FOREGROUND_CHANGED"));
+        assert!(ws.db.is_autocommit());
+        assert_eq!(ws.db.total_changes(), changes);
+        assert_eq!(ws.cache.entries["original.md"].entry.hash, old.hash);
+        assert!(ws.cache.hints.lock().unwrap().full);
+        assert_eq!(
+            fs::metadata(root.path().join("original.md")).unwrap().len(),
+            512 * 1024
+        );
+    }
+
+    #[test]
+    fn sync_snapshot_refuses_publication_after_intervening_workspace_write() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        ws.write("original.md", "", b"first original", "local")
+            .unwrap();
+        ws.tree().unwrap();
+        let plan = ws
+            .prepare_snapshot_checked(true, &|| Ok(()))
+            .unwrap()
+            .unwrap();
+        let old = ws.entry("original.md").unwrap().unwrap();
+        ws.write("original.md", &old.hash, b"newer saved text", "local")
+            .unwrap();
+        assert_eq!(plan.publish(&mut ws).unwrap_err().code, "REVISION_CONFLICT");
+        assert!(ws.cache.hints.lock().unwrap().full);
+        assert_eq!(ws.read("original.md").unwrap().content, "newer saved text");
+    }
 
     fn hint(ws: &Workspace, paths: &[&str]) {
         let event = Event::new(EventKind::Any);

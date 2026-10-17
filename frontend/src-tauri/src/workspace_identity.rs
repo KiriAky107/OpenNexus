@@ -176,7 +176,15 @@ impl Workspace {
     }
 
     pub(super) fn identity_rescan_needed(&self, dirty: &BTreeSet<String>) -> Result<bool> {
+        self.identity_rescan_needed_checked(dirty, &|| Ok(()))
+    }
+    pub(super) fn identity_rescan_needed_checked(
+        &self,
+        dirty: &BTreeSet<String>,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<bool> {
         for path in dirty {
+            check()?;
             if !supported(path) && !self.root.join(path).is_dir() {
                 // A removed directory can contain tracked files.
                 if self.cache.entries.contains_key(path) {
@@ -202,18 +210,6 @@ impl Workspace {
             }
         }
         Ok(false)
-    }
-
-    pub(super) fn reconcile_file_identities(
-        &mut self,
-        next: &mut BTreeMap<String, CachedEntry>,
-        enumerated: bool,
-    ) -> Result<()> {
-        let changes = self.prepare_file_identities(next, enumerated, &|| Ok(()))?;
-        let tx = self.db.transaction()?;
-        changes.apply(&tx)?;
-        tx.commit()?;
-        Ok(())
     }
 
     pub(super) fn prepare_file_identities(

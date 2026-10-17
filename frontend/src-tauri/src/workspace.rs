@@ -415,8 +415,16 @@ impl Workspace {
             .optional()?)
     }
 
-    fn scan_dir(&self, dir: &Path, paths: &mut Vec<String>, images: bool) -> Result<()> {
+    fn scan_dir_checked(
+        &self,
+        dir: &Path,
+        paths: &mut Vec<String>,
+        images: bool,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<()> {
+        check()?;
         for item in fs::read_dir(dir)? {
+            check()?;
             let path = item?.path();
             let relative = path
                 .strip_prefix(&self.root)
@@ -433,7 +441,7 @@ impl Workspace {
             }
             if path.is_dir() {
                 paths.push(relative);
-                self.scan_dir(&path, paths, images)?;
+                self.scan_dir_checked(&path, paths, images, check)?;
             } else if path.extension().is_some_and(|e| {
                 e.eq_ignore_ascii_case("md")
                     || e.eq_ignore_ascii_case("canvas")
@@ -446,7 +454,7 @@ impl Workspace {
                 paths.push(relative);
             }
         }
-        Ok(())
+        check()
     }
 
     pub fn scan(&mut self) -> Result<Vec<Entry>> {

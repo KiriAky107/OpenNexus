@@ -206,6 +206,9 @@ pub(crate) fn validate_record(file: &mut fs::File, path: &str, size: u64) -> Res
 pub(crate) fn hash_file(path: &Path) -> Result<String> {
     hash_file_info(path).map(|(digest, _)| digest)
 }
+pub(crate) fn hash_file_checked(path: &Path, check: &dyn Fn() -> Result<()>) -> Result<String> {
+    hash_file_info_checked(path, check).map(|(digest, _)| digest)
+}
 pub(crate) fn sync_file_info(source: &Path, path: &str) -> Result<(String, u64)> {
     sync_file_info_checked(source, path, &|| Ok(()))
 }
