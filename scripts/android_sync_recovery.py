@@ -23,7 +23,7 @@ def validate_offline_original(before,native,provider_before,provider_after):
     require(provider_after['vault']==provider_before['vault']
         and provider_after['rows']==provider_before['rows']
         and provider_after['delivery']==provider_before['delivery'],
-        'An offline attempt reached the service or changed original provider data')
+        'An offline attempt reached a tracked transfer route or changed original provider data')
     require(before['binding']['cursor']==0 and not any(before[key] for key in ('jobs','attempts','issuers','heads','inbox','conflicts')),
         'Offline first-upload case already has an earlier transfer')
     pending=[r for r in before['outbox'] if r['state']=='pending']
@@ -186,7 +186,7 @@ class RecoveryMixin:
         atomic_json(self.output/'sync-recovery-proof.json',{'passed':True,'source_commit':self.args.commit,
             'runtime_tools_commit':self.args.tools_commit,'APK_sha256':self.binding['sha256'],'phases':self.phases,
             'original_offline_outbox':original,'original_confirmed_revision':receipt,'original_drop_control':control,
-            'actual_hosted_emulator_offline_no_service_request':True,'original_network_restored':True,
+            'actual_hosted_emulator_offline_no_revision_or_changes_request':True,'original_network_restored':True,
             'actual_force_stop_preserved_pending_and_unknown_originals':True,'original_POST_once_reconciled_by_changes_read':True,
             'failed_original_attempt_retained_not_relabelled_success':True,'actual_S3_native_original_bytes_equal':True,
             'desktop_phone_conflict_upgrade_signing_release_verified':False},exclusive=True)

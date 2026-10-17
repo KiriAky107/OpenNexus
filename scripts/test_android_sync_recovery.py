@@ -45,7 +45,7 @@ class RecoveryOriginals(unittest.TestCase):
         for key in settings:
             with self.subTest(key=key),self.assertRaises(RuntimeError):network_observation(dict(settings,**{key:'null'}),'Active default network: none')
 
-    def test_offline_observation_never_accepts_a_reached_service_or_changed_original(self):
+    def test_offline_observation_never_accepts_a_reached_transfer_route_or_changed_original(self):
         native,provider=self.offline()
         self.assertEqual(validate_offline_original(native,deepcopy(native),provider,deepcopy(provider)),self.original())
         changed=deepcopy(provider);changed['delivery']['counts']['changes:200']=1

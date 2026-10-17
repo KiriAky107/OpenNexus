@@ -72,6 +72,8 @@ public class AuthRuntimeProbe extends Instrumentation {
 
     protected String namespace() { return "AUTH"; }
     protected boolean additionalPhase(String phase) throws Exception { return false; }
+    protected boolean semanticClicks() { return false; }
+    protected String[] diagnosticLabels() { return new String[0]; }
 
     private void openConnection() {
         stage="open-connection";
@@ -201,6 +203,16 @@ public class AuthRuntimeProbe extends Instrumentation {
             SystemClock.sleep(80);
         } while (SystemClock.uptimeMillis()<until);
         require(stable,"Named button did not settle before the bounded deadline; no input sent");
+        if (semanticClicks()) {
+            // One standard accessibility click on the current named button,
+            // not coordinates that may race WebView's scrolling. A rejected
+            // or unknown action is never followed by a touch fallback.
+            AccessibilityNodeInfo node=unique(target);Rect current=new Rect();node.getBoundsInScreen(current);
+            require(before.equals(current),"Named target moved before its original action; no input sent");
+            stage="single-semantic-click-"+name.replace(' ','-');
+            require(node.performAction(AccessibilityNodeInfo.ACTION_CLICK),"Original semantic action not accepted; no fallback");
+            return;
+        }
         stage="single-tap-"+name.replace(' ','-');
         long start=SystemClock.uptimeMillis();touch(start,start,MotionEvent.ACTION_DOWN,before.centerX(),before.centerY());
         SystemClock.sleep(50);touch(start,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,before.centerX(),before.centerY());
@@ -319,6 +331,14 @@ public class AuthRuntimeProbe extends Instrumentation {
         for (String label:labels) {
             boolean visible=false;for (AccessibilityNodeInfo node:nodes()) visible|=label(node,label) && node.isVisibleToUser();
             value.append(label).append(" present=").append(hasText(label)).append(" visible=").append(visible).append('\n');
+        }
+        for (String label:diagnosticLabels()) {
+            int present=0,visible=0,enabled=0,clickable=0;
+            for (AccessibilityNodeInfo node:nodes()) if (!node.isPassword() && label(node,label)) {
+                present++;if(node.isVisibleToUser())visible++;if(node.isEnabled())enabled++;if(node.isClickable())clickable++;
+            }
+            value.append(label).append(" present=").append(present).append(" visible=").append(visible)
+                .append(" enabled=").append(enabled).append(" clickable=").append(clickable).append('\n');
         }
         if (ui!=null) for (AccessibilityNodeInfo node:nodes()) {
             value.append("editable=").append(node.isEditable()).append(" password=").append(node.isPassword())
