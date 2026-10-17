@@ -81,10 +81,13 @@ class InitialSyncBoundaries(unittest.TestCase):
     def test_native_snapshot_reads_only_bounded_original_metadata_and_preserves_database(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);source=root/'original.sqlite3'
-            request=json.dumps({'selection':{'operation_id':'auth-original'},'remote_vault':'1'*32,'preview_fingerprint':'2'*64})
+            endpoint='https://owned-origin.trycloudflare.com/'
+            request=json.dumps({'selection':{'operation_id':'auth-original','endpoint':endpoint,'account':'owned-author'},
+                'remote_vault':'1'*32,'preview_fingerprint':'2'*64})
+            # Ticket::record stores the original serialized Binding, not its ID.
+            receipt=json.dumps({'id':'binding','endpoint':endpoint,'remote_vault':'1'*32,'account':'owned-author','cursor':0})
             with closing(sqlite3.connect(source)) as db:
-                db.executescript('''CREATE TABLE sync_bindings(id,remote_vault,state,cursor);
-                    INSERT INTO sync_bindings VALUES('binding','11111111111111111111111111111111','active',0);
+                db.executescript('''CREATE TABLE sync_bindings(id,endpoint,remote_vault,account,state,cursor);
                     CREATE TABLE sync_jobs(binding,operation_id,file_id,path,hash,size,state,remote_revision,error);
                     CREATE TABLE sync_attempts(binding,operation_id,attempts,outcome,error);
                     CREATE TABLE sync_heads(binding,file_id,revision,path,hash);
@@ -93,7 +96,8 @@ class InitialSyncBoundaries(unittest.TestCase):
                     CREATE TABLE mobile_sync_binding_intents(operation_id,request_hash,request,state,attempt_revision,binding);
                     CREATE TABLE unrelated_private_values(secret);
                     INSERT INTO unrelated_private_values VALUES('must-never-be-selected-or-uploaded');''')
-                db.execute('INSERT INTO mobile_sync_binding_intents VALUES(?,?,?,?,?,?)',('binding-original','digest',request,'bound',1,'binding'))
+                db.execute('INSERT INTO sync_bindings VALUES(?,?,?,?,?,?)',('binding',endpoint,'1'*32,'owned-author','active',0))
+                db.execute('INSERT INTO mobile_sync_binding_intents VALUES(?,?,?,?,?,?)',('binding-original','digest',request,'bound',1,receipt))
                 db.commit()
             original=source.read_bytes();probe=SyncProbe.__new__(SyncProbe)
             probe.tools=root/'tools';probe.tools.mkdir();probe.output=root/'evidence';probe.output.mkdir()
@@ -102,10 +106,32 @@ class InitialSyncBoundaries(unittest.TestCase):
                 if path.endswith('host.sqlite3') else subprocess.CompletedProcess([],1,b''))
             observed=probe.host_snapshot('bound')
             self.assertEqual(observed['association']['operation_id'],'binding-original')
+            self.assertEqual(observed['association']['original_binding_bytes_sha256'],hashlib.sha256(receipt.encode()).hexdigest())
             self.assertEqual(observed['issuers'],[]);self.assertEqual(source.read_bytes(),original)
             self.assertFalse(observed['credentials_selected']);self.assertFalse(observed['original_database_uploaded'])
             self.assertNotIn('must-never-be-selected-or-uploaded',(probe.output/'bound-host.json').read_text())
             for call in probe.private.call_args_list:self.assertRegex(call.args[0],r'host\.sqlite3(?:-wal|-shm)?$')
+            # A receipt belonging to another scope is never accepted merely
+            # because its ID matches. Original bytes/cursor stay independently bound.
+            for key,value in (('id','other'),('remote_vault','3'*32),('endpoint','https://other.example/'),
+                    ('account','other'),('cursor',-1),('cursor',1),('cursor',False)):
+                changed=dict(json.loads(receipt),**{key:value})
+                with closing(sqlite3.connect(source)) as db:
+                    db.execute('UPDATE mobile_sync_binding_intents SET binding=?',(json.dumps(changed),));db.commit()
+                invalid=source.read_bytes()
+                probe.private=Mock(side_effect=lambda path,**_:subprocess.CompletedProcess([],0,invalid)
+                    if path.endswith('host.sqlite3') else subprocess.CompletedProcess([],1,b''))
+                with self.subTest(key=key,value=value),self.assertRaises(RuntimeError):probe.host_snapshot('invalid')
+                self.assertEqual(source.read_bytes(),invalid)
+                self.assertEqual(probe.host_observation_stage,'association')
+            with closing(sqlite3.connect(source)) as db:
+                db.execute('UPDATE mobile_sync_binding_intents SET binding=?',(receipt,))
+                db.execute('UPDATE sync_bindings SET cursor=2');db.commit()
+            progressed=source.read_bytes()
+            probe.private=Mock(side_effect=lambda path,**_:subprocess.CompletedProcess([],0,progressed)
+                if path.endswith('host.sqlite3') else subprocess.CompletedProcess([],1,b''))
+            self.assertEqual(probe.host_snapshot('progressed')['binding']['cursor'],2)
+            self.assertEqual(source.read_bytes(),progressed)
 
     def incoming(self):
         receipt={'vault_id':'1'*32,'operation_id':'peer-original','device_id':'peer-device','file_id':'peer-file',

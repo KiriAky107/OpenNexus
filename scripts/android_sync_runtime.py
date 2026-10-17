@@ -139,17 +139,22 @@ class SyncProbe(AuthProbe):
         return value
 
     def host_snapshot(self,label):
+        self.host_observation_stage='origin'
         paths=self.shell('run-as',APP,'find','.','-name','host.sqlite3','-type','f').stdout.decode().splitlines()
         require(len(paths)==1 and re.fullmatch(r'\./(?:[A-Za-z0-9_.-]+/)*host\.sqlite3',paths[0]),'Native host metadata origin ambiguous')
+        self.host_observation_stage='copy'
         folder=Path(tempfile.mkdtemp(prefix='sync-metadata-',dir=self.tools));database=folder/'host.sqlite3'
         for suffix in ('','-wal','-shm'):
             response=self.private(paths[0]+suffix,check=False)
             if response.returncode==0:Path(str(database)+suffix).write_bytes(response.stdout)
         with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True)) as db:
+            self.host_observation_stage='integrity'
             require(db.execute('PRAGMA integrity_check').fetchone()==('ok',),'Original native metadata integrity failed')
-            bindings=db.execute('SELECT id,remote_vault,state,cursor FROM sync_bindings').fetchall()
+            self.host_observation_stage='binding'
+            bindings=db.execute('SELECT id,remote_vault,state,cursor,endpoint,account FROM sync_bindings').fetchall()
             require(len(bindings)==1 and bindings[0][2]=='active','Original native binding is not unique/active')
             binding=bindings[0][0]
+            self.host_observation_stage='transfers'
             projections={'jobs':('sync_jobs','operation_id,file_id,path,hash,size,state,remote_revision,error'),
                 'attempts':('sync_attempts','operation_id,attempts,outcome,error'),
                 'heads':('sync_heads','file_id,revision,path,hash'),
@@ -170,16 +175,28 @@ class SyncProbe(AuthProbe):
                 rows['issuers']=[dict(zip(('operation_id','device_id'),row)) for row in db.execute(
                     'SELECT operation_id,device_id FROM mobile_sync_attempt_devices WHERE binding=? ORDER BY rowid LIMIT 512',(binding,))]
                 require(len(rows['issuers'])==count,'Native issuing-device observation changed')
+            self.host_observation_stage='association'
             intents=db.execute('SELECT operation_id,request_hash,request,state,attempt_revision,binding FROM mobile_sync_binding_intents').fetchall()
-            require(len(intents)==1 and intents[0][3]=='bound' and intents[0][5]==binding,'Original binding receipt is not uniquely bound')
+            require(len(intents)==1 and intents[0][3]=='bound','Original binding receipt is not uniquely bound')
             original=intents[0];request=json.loads(original[2])
+            # Ticket::record persists the immutable original Binding JSON. Its
+            # cursor may precede live progress; it is not just the binding ID.
+            receipt=json.loads(original[5])
+            require(isinstance(receipt,dict) and set(receipt)=={'id','endpoint','remote_vault','account','cursor'}
+                and receipt['id']==binding and receipt['remote_vault']==bindings[0][1]==request['remote_vault']
+                and receipt['endpoint']==bindings[0][4]==request['selection']['endpoint']
+                and receipt['account']==bindings[0][5]==request['selection']['account']
+                and type(receipt['cursor']) is int and 0<=receipt['cursor']<=bindings[0][3]<=9007199254740991,
+                'Original serialized binding receipt differs from native scope')
             rows['association']={'operation_id':original[0],'request_hash':original[1],
                 'original_request_bytes_sha256':hashlib.sha256(original[2].encode()).hexdigest(),
+                'original_binding_bytes_sha256':hashlib.sha256(original[5].encode()).hexdigest(),
                 'preview_fingerprint':request['preview_fingerprint'],'remote_vault':request['remote_vault'],
                 'auth_operation_id':request['selection']['operation_id'],'state':original[3],'attempt_revision':original[4]}
         value={'binding':dict(zip(('id','remote_vault','state','cursor'),bindings[0])),**rows,
             'integrity':'ok','credentials_selected':False,'original_database_uploaded':False}
         atomic_json(self.output/(label+'-host.json'),value,exclusive=True)
+        self.host_observation_stage='complete'
         return value
 
     def run(self):
@@ -261,7 +278,9 @@ def main():
     except Exception:
         probe.failure_observations()
         try:probe.host_snapshot('failure')
-        except Exception as error:atomic_json(probe.output/'failure-host-unavailable.json',{'error':type(error).__name__,'no_mutation_retried':True},exclusive=True)
+        except Exception as error:atomic_json(probe.output/'failure-host-unavailable.json',
+            {'error':type(error).__name__,'stage':getattr(probe,'host_observation_stage','not_started'),
+             'no_mutation_retried':True},exclusive=True)
         raise
     finally:
         probe.restore_test_ime();probe.shell('am','force-stop',APP,check=False)
