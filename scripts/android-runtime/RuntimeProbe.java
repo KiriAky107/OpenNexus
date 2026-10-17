@@ -250,6 +250,54 @@ public final class RuntimeProbe extends Instrumentation {
                     click("Collapse right sidebar", false);
                     save();
                     break;
+                case "canvas-tools-seed":
+                    create("New canvas", CANVAS);
+                    click("Text", false);
+                    setText(editable("New text"), NODE);
+                    click("Collapse right sidebar", false);
+                    save();
+                    break;
+                case "canvas-tools-phone-open":
+                    open(CANVAS);
+                    canvasToolsState(true, false);
+                    showCanvasTools();
+                    break;
+                case "canvas-tools-phone-menu":
+                    clickMenu("More canvas actions");
+                    waitLabel("Copy");
+                    break;
+                case "canvas-tools-phone-back-menu":
+                    pressBack();
+                    canvasToolsState(true, true);
+                    require(!visibleLabel("Copy"), "Back did not close only the nested Canvas menu");
+                    break;
+                case "canvas-tools-phone-back-panel":
+                    pressBack();
+                    canvasToolsState(true, false);
+                    waitLabel("Free canvas");
+                    break;
+                case "canvas-tools-dark":
+                    pressBack();
+                    waitNotesLanding();
+                    selectTheme("System", "Dark");
+                    open(CANVAS);
+                    showCanvasTools();
+                    break;
+                case "canvas-tools-light":
+                    pressBack();
+                    canvasToolsState(true, false);
+                    pressBack();
+                    waitNotesLanding();
+                    selectTheme("Dark", "Light");
+                    open(CANVAS);
+                    showCanvasTools();
+                    break;
+                case "canvas-tools-tablet-800":
+                case "canvas-tools-tablet-1280":
+                    canvasToolsState(false, true);
+                    waitLabel("Free canvas");
+                    settleUi();
+                    break;
                 case "canvas-drag":
                 case "canvas-cancel":
                     open(CANVAS);
@@ -422,6 +470,20 @@ public final class RuntimeProbe extends Instrumentation {
         activate(triggers.get(0));
         waitNode(node -> APP.equals(string(node.getPackageName())) && node.isVisibleToUser()
             && label(node, "Canvas operations", false), "expanded shared Canvas operations");
+    }
+
+    private boolean visibleLabel(String text) {
+        for (AccessibilityNodeInfo node : nodes()) {
+            if (APP.equals(string(node.getPackageName())) && node.isVisibleToUser() && label(node, text, false)) return true;
+        }
+        return false;
+    }
+
+    private void canvasToolsState(boolean trigger, boolean toolbar) {
+        waitNode(node -> APP.equals(string(node.getPackageName())) && node.isVisibleToUser()
+            && label(node, trigger ? "Canvas tools" : "Canvas operations", false)
+            && visibleLabel("Canvas tools") == trigger && visibleLabel("Canvas operations") == toolbar,
+            "responsive owned Canvas tools at the original width");
     }
 
     private boolean titleBarControl(AccessibilityNodeInfo node) {

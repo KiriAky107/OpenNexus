@@ -129,6 +129,32 @@ def validate_tablet_layout(report, portrait):
     return layout
 
 
+def validate_canvas_tools(report, *, width=None, expanded=True, menu=False):
+    require(report.get('available') is True, 'Actual Canvas WebView geometry was not observed')
+    view = report.get('styles', {}).get('canvasTools', {})
+    actual = view.get('width', 0)
+    require(isinstance(actual, (int, float)) and (320 <= actual <= 640 if width is None else abs(actual-width) <= 2),
+        'Actual Canvas viewport does not match the owned display')
+    require(0 < view.get('rootScrollWidth', 0) <= view.get('rootWidth', 0) + 1, 'Canvas root overflows horizontally')
+    host, trigger, area, popup = [view.get(name) or {} for name in ('host', 'trigger', 'area', 'menu')]
+    require(host.get('visible') is True, 'Actual Canvas scene is missing')
+    require(trigger.get('visible', False) is (width is None), 'Phone trigger or tablet inline mode is incorrect')
+    require(area.get('visible', False) is expanded and popup.get('visible', False) is menu,
+        'Canvas outer and nested menu states differ from the original UI action')
+    if expanded:
+        require((area.get('position') == 'absolute') is (width is None), 'Canvas floating/inline position is incorrect')
+    for item in (trigger, area if expanded else {}, popup if menu else {}):
+        if not item.get('visible'): continue
+        require(0 <= item.get('left', -1) and item.get('right', actual+2) <= actual+1
+            and 0 <= item.get('top', -1) and item.get('bottom', view.get('height', 0)+2) <= view.get('height', 0)+1,
+            'Visible Canvas controls leave the actual screen')
+    targets = view.get('targets')
+    require(isinstance(targets, list) and 1 <= len(targets) <= 50 and all(
+        item.get('visible') is True and item.get('width', 0) >= 44 and item.get('height', 0) >= 44 for item in targets),
+        'Actual Canvas control touch targets are missing or smaller than 44 CSS pixels')
+    return view
+
+
 def validate_binding(bundle, commit):
     proof = json.loads((bundle / 'package-verification.json').read_text('utf-8'))
     source = json.loads((bundle / 'source-provenance.json').read_text('utf-8'))
@@ -348,7 +374,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining'):
+        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -529,7 +555,7 @@ class Probe:
         require(passed,
             f'Actual Android UI phase failed: {phase}; see preserved UI log and screenshot')
         self.phases.append({'phase': phase, 'duration_ms': round((time.monotonic() - start) * 1000), 'passed': True})
-        if phase == 'theme-diagnostic-dark' or phase.startswith('tablet-'):
+        if phase == 'theme-diagnostic-dark' or phase.startswith(('tablet-', 'canvas-tools-')):
             self.read_native_styles(phase)
         if not keep_running:
             self.force_stop()
@@ -752,7 +778,7 @@ class Probe:
                 and re.fullmatch(r'/devtools/page/[A-Za-z0-9_-]+', socket.path) and not socket.query and not socket.fragment,
                 'Refusing an unrelated page endpoint')
             script = Path(__file__).resolve().parent/'android-runtime/read_webview_styles.mjs'
-            observed = self.command(['node', script, 'ws://127.0.0.1:' + port + socket.path], timeout=20)
+            observed = self.command(['node', '--max-old-space-size=128', script, 'ws://127.0.0.1:' + port + socket.path], timeout=20)
             report.update(available=True, styles=json.loads(observed.stdout))
         except Exception as error:
             report.update(available=False, failure=type(error).__name__, reason=str(error)[:400])
@@ -951,8 +977,48 @@ class Probe:
             'keystore_tests_repeated':False,'physical_phone_verified':False,'Android_HTTPS_or_sync_verified':False}
         (self.output/'attachments-proof.json').write_text(json.dumps(proof,indent=2)+'\n','utf-8')
 
+    def run_canvas_tools(self):
+        self.enable_test_ime()
+        self.phase('canvas-tools-seed')
+        original = self.original('runtime.canvas')
+        nodes = json.loads(original)['nodes']
+        require(len(nodes) == 1 and nodes[0]['text'] == NODE, 'Original Canvas layout fixture differs from actual input')
+        rows = self.draft_rows(); views = {}
+        self.phase('canvas-tools-phone-open', keep_running=True)
+        pid = self.shell('pidof', APP).stdout.strip()
+        for phase, expanded, menu in [('canvas-tools-phone-open', True, False), ('canvas-tools-phone-menu', True, True),
+                ('canvas-tools-phone-back-menu', True, False), ('canvas-tools-phone-back-panel', False, False),
+                ('canvas-tools-dark', True, False), ('canvas-tools-light', True, False)]:
+            if phase != 'canvas-tools-phone-open': self.phase(phase, continue_process=True, keep_running=True)
+            views[phase] = validate_canvas_tools(json.loads((self.output/(phase+'-computed-styles.json')).read_text('utf-8')),
+                expanded=expanded, menu=menu)
+        require(views['canvas-tools-dark']['colors'] != views['canvas-tools-light']['colors'],
+            'Actual Canvas theme colors did not change')
+        try:
+            for width, size in [(800, (1600,2400)), (1280, (2560,1600))]:
+                self.tablet_display(*size)
+                phase = 'canvas-tools-tablet-'+str(width)
+                self.phase(phase, continue_process=True, keep_running=True)
+                require(self.shell('pidof', APP).stdout.strip() == pid, 'Owned Canvas display change restarted the app')
+                report = self.output/(phase+'-computed-styles.json')
+                views[str(width)] = validate_canvas_tools(json.loads(report.read_text('utf-8')), width=width)
+        finally:
+            self.restore_tablet_display()
+        self.force_stop()
+        require(self.original('runtime.canvas') == original and self.draft_rows() == rows,
+            'Read-only Canvas tools, Back, theme or display observation changed original content or drafts')
+        proof = {'passed':True,'source_commit':self.args.commit,'runtime_tools_commit':self.args.tools_commit,
+            'compiled_from':self.args.build_origin,'apk_sha256':self.binding['sha256'],'layouts':views,
+            'original_canvas_sha256':digest(original),'original_canvas_bytes':len(original),'original_draft_rows_unchanged':True,
+            'synthetic_seed_saved_once':True,'read_only_after_seed':True,'owned_display_restored':True,
+            'physical_phone_or_tablet_verified':False,'sync_or_desktop_pair_retested':False,'keystore_tests_repeated':False}
+        (self.output/'canvas-tools-proof.json').write_text(json.dumps(proof,ensure_ascii=False,indent=2)+'\n','utf-8')
+
     def run(self):
         self.boot()
+        if self.args.scope == 'canvas-tools':
+            self.run_canvas_tools()
+            return
         if self.args.scope == 'editing-remaining':
             self.enable_test_ime()
             self.phase('ime-seed')  # One fresh UI fixture, not old theme/Markdown/recovery acceptance.
@@ -1069,7 +1135,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:

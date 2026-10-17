@@ -25,6 +25,12 @@ const expression = `JSON.stringify((()=>{
     compact:document.querySelector('.app-shell')?.classList.contains('compact'),editor:box('.visual-editor'),toolbar:box('.markdown-toolbar'),
     floating:box('.floating-formatting'),main:box('.main-content'),files:box('.secondary-sidebar'),
     fileTargets:{rows:targets('.mobile-files .tree-node'),header:targets('.mobile-files .sidebar-header button'),search:targets('.mobile-files .file-search input,.mobile-files .file-search button')}},
+  canvasTools:{width:innerWidth,height:innerHeight,rootWidth:document.documentElement.clientWidth,rootScrollWidth:document.documentElement.scrollWidth,
+    host:box('.canvas-visual .canvas-viewport'),trigger:box('.canvas-tools-toggle button'),area:box('.canvas-tools-area'),menu:box('.canvas-tools-popover'),
+    targets:targets('.canvas-tools-toggle button,.canvas-tools-area button'),
+    colors:Array.from(document.querySelectorAll('.canvas-tools-area,.canvas-tools-popover,.canvas-tools-toggle button')).slice(0,3).map(e=>({
+      color:getComputedStyle(e).color,background:getComputedStyle(e).backgroundColor,
+      primary:getComputedStyle(e).getPropertyValue('--color-text-primary'),surface:getComputedStyle(e).getPropertyValue('--color-surface-elevated')}))},
   // Only the known synthetic note editor's attributes, never values/content or credential controls.
   editorAttributes:Array.from(document.querySelectorAll('[aria-label="Markdown note body"]')).slice(0,4).map(e=>({
     tag:e.tagName,id:e.id,role:e.getAttribute('role'),ariaLabel:e.getAttribute('aria-label'),contentEditable:e.contentEditable,
