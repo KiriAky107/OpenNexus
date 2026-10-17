@@ -65,5 +65,5 @@ defineExpose({closeMenu:()=>{if(!toolsOpen.value)return false;toolsOpen.value=fa
 .canvas-menu-divider{ height: 1px; background: var(--color-border-subtle); margin: 5px; }
 
 @media(max-width:640px){.canvas-toolbar{max-height:none;overflow:visible;gap:6px}.inspector-toggle > span{display:none}.canvas-view-tools{gap:4px}}
-.touch-toolbar .button-secondary{min-height:44px;min-width:44px;height:auto}.touch-toolbar .canvas-tool-group{flex-wrap:wrap}.touch-toolbar .canvas-history-tools{padding-left:0;border-left:0}
+.touch-toolbar .button-secondary,.touch-toolbar :deep(.canvas-tools-popover button){min-height:44px;min-width:44px;height:auto}.touch-toolbar .canvas-tool-group{flex-wrap:wrap}.touch-toolbar .canvas-history-tools{padding-left:0;border-left:0}
 </style>
