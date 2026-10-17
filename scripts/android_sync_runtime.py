@@ -253,10 +253,12 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
         # before its confirmation tap. This dispatch ID is not a server nonce.
         dispatch_id=str(uuid.uuid4())
         atomic_json(self.output/('sync-dispatch-'+str(number)+'.json'),{'phase':phase,
-            'driver_dispatch_id':dispatch_id,'server_or_native_operation_id':False,'automatic_retry':False},exclusive=True)
+            'driver_dispatch_id':dispatch_id,'server_or_native_operation_id':False,'automatic_retry':False,
+            'association_preview_input':('native-accessibility' if getattr(self.args,'semantic_preview',False) else 'touch') if phase=='associate' else None},exclusive=True)
         self.start_app();started=time.monotonic()
         if phase=='associate':self.association_observer('install',dispatch_id)
-        result=self.shell('am','instrument','-w','-e','phase',phase,DRIVER+'/.SyncRuntimeProbe',timeout=180,check=False)
+        preview_args=['-e','association_preview','native-accessibility'] if phase=='associate' and getattr(self.args,'semantic_preview',False) else []
+        result=self.shell('am','instrument','-w','-e','phase',phase,*preview_args,DRIVER+'/.SyncRuntimeProbe',timeout=180,check=False)
         require(len(result.stdout)<=1024*1024,'Owned static Sync result exceeds bound')
         text=result.stdout.decode('utf-8','replace')
         atomic_json(self.output/('sync-phase-'+str(number)+'.json'),{'phase':phase,'instrument_output':text},exclusive=True)
@@ -595,8 +597,10 @@ def main():
     parser.add_argument('--serial',default='emulator-5562')
     scope=parser.add_mutually_exclusive_group();scope.add_argument('--exchange',action='store_true');scope.add_argument('--media',action='store_true');scope.add_argument('--stop',action='store_true');scope.add_argument('--recovery',action='store_true');scope.add_argument('--conflicts',action='store_true')
     parser.add_argument('--cold-originals',action='store_true')
+    parser.add_argument('--semantic-preview',action='store_true')
     args=parser.parse_args();args.scope='sync-conflicts' if args.conflicts else 'sync-recovery' if args.recovery else 'sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
     require(not args.cold_originals or args.conflicts,'Cold original-entry scope requires actual conflicts')
+    require(not args.semantic_preview or args.conflicts,'Native accessibility preview requires the explicit conflict scope')
     require_hosted();require_hosted_emulator(args.serial);owner=owned_root()
     state=read_json(owner/'owner-state.json');require(state['result']=='ready' and state.get('fixture')=='sync','Owned Sync origin is not ready')
     apk,binding=validate_binding(args.bundle,args.commit)

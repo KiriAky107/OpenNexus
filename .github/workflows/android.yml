@@ -84,6 +84,11 @@ on:
         type: boolean
         default: false
         required: false
+      sync_semantic_preview:
+        description: 'On sync-conflicts only, one native Android accessibility activation for Preview merge; not physical touch proof'
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: read
@@ -307,6 +312,7 @@ jobs:
           --output .build/android-sync-evidence
           ${{ inputs.runtime_scope == 'sync-conflicts' && '--conflicts' || inputs.runtime_scope == 'sync-recovery' && '--recovery' || inputs.runtime_scope == 'sync-stop' && '--stop' || inputs.runtime_scope == 'sync-media' && '--media' || inputs.runtime_scope == 'sync-exchange' && '--exchange' || '' }}
           ${{ inputs.sync_cold_originals && '--cold-originals' || '' }}
+          ${{ inputs.sync_semantic_preview && '--semantic-preview' || '' }}
       - name: Stop only this job's emulator
         if: always()
         run: python3 scripts/android_runtime_probe.py --sdk "$ANDROID_HOME" --stop-owned

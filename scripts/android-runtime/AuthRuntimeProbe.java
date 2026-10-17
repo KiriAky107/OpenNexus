@@ -80,6 +80,32 @@ public class AuthRuntimeProbe extends Instrumentation {
     protected String[] diagnosticCodes() { return new String[0]; }
     protected boolean viewportAdmission() { return false; }
 
+    protected void previewMerge() {
+        String mode=args.getString("association_preview","touch");
+        require(mode.equals("touch") || mode.equals("native-accessibility"),"Unknown original preview input mode");
+        if(mode.equals("touch")) { click("Preview merge"); return; }
+        if(!"none".equals(inputTarget)) {
+            inputHistory.add(inputTarget+" "+inputTrace);
+            if(inputHistory.size()>12)inputHistory.remove(0);
+        }
+        inputTarget="Preview merge";
+        inputTrace="native_accessibility=not_sent physical_touch=not_sent automatic_retry=false";
+        stage="native-accessibility-preview-admission";
+        Predicate<AccessibilityNodeInfo> target=node->APP.equals(text(node.getPackageName()))
+            && label(node,"Preview merge") && node.isEnabled() && node.isClickable();
+        waitFor(target,true);
+        AccessibilityNodeInfo original=unique(target);
+        stage="single-native-accessibility-preview";
+        inputTrace="native_accessibility=attempted physical_touch=not_sent automatic_retry=false";
+        boolean accepted=original.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+        inputTrace="native_accessibility="+(accepted?"accepted":"refused")+" physical_touch=not_sent automatic_retry=false";
+        require(accepted,"Original native accessibility action was refused; no touch fallback sent");
+        try { ui.waitForIdle(150,5000); }
+        catch(java.util.concurrent.TimeoutException ignored) {
+            // Read the following original UI/native result; never send another action.
+        }
+    }
+
     private void openConnection() {
         stage="open-connection";
         // The Settings dialog and its title can already be rendered when a

@@ -221,7 +221,7 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
         click("Choose a vault");
         try { click(config.getString("vault_name")+" · 0"); }
         catch (Throwable error) { stage="choose-owned-vault"; throw error; }
-        click("Preview merge"); click("Confirm merge and bind");
+        previewMerge(); click("Confirm merge and bind");
         stage="review-original-association";
         waitPresent(node->label(node,config.optString("vault_id")));
         AccessibilityNodeInfo button=waitFor(node->label(node,"Confirm this association") && node.isEnabled(),true);
