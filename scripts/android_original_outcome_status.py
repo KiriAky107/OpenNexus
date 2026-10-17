@@ -6,7 +6,7 @@ import uuid
 STAGES = ('old-frozen', 'stale-confirm-intent', 'known-stale-rejection',
           'new-frozen', 'interrupt-confirm-intent')
 OUTCOME_STAGES = ('start','input','old-frozen','concurrent-write','stale-confirm','known-rejection',
-                  'native-absence','new-frozen','debugger-armed','interrupt-confirm','original-paused',
+                  'native-absence','new-frozen','compiled-renderer','debugger-armed','interrupt-confirm','original-paused',
                   'completed-native','stop-original-app','close-original-debugger','stop-original-driver',
                   'cold-original','copy-cycle','cold-draft','s3-originals','complete')
 

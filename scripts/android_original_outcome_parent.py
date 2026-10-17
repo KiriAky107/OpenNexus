@@ -137,6 +137,7 @@ def run_original_outcome(probe, setup, prepared, device, conflicted, provider, r
     baseline = {'binding_id': conflicted['binding']['id'], 'remote_sha256': sha(REMOTE), 'draft_sha256': sha(DIRTY),
                 'draft_generation': rows[0][2], 'draft_saved_generation': rows[0][3],
                 'provider_metadata_sha256': sha(canonical(provider_original(provider)))}
+    checkpoint(probe, 'compiled-renderer')
     debugger = OriginalCompletionBridge(probe, context, manifest, sha(CONCURRENT), baseline)
     checkpoint(probe, 'debugger-armed')
     debugger.expect('armed')
@@ -217,6 +218,7 @@ def run_original_outcome(probe, setup, prepared, device, conflicted, provider, r
         'new_fingerprint': fingerprint, 'original_native_decision': decision, 'original_copy_revision': revision,
         'actual_original_known_stale_rejection': 'SYNC_CONFLICT_CHANGED',
         'actual_completed_native_reply_held_before_application_callback': True,
+        'actual_original_compiled_renderer_resource_hashes_and_declared_code_presence': True,
         'original_app_and_driver_exit_before_cold_UI': True, 'original_five_IDs_and_native_fingerprint_retained': True,
         'cold_UI_review_digest_display_not_claimed': True, 'one_original_copy_upload_and_S3_bytes': True,
         'dirty_draft_bytes_not_uploaded': True, 'fake_native_error_or_callback_rewrite': False,

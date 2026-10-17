@@ -13,6 +13,7 @@ from android_desktop_handoff import require
 from android_runtime_probe import APP
 import android_original_outcome_process as original
 from android_original_outcome_driver_stop import original_app_exited
+from android_original_outcome_renderer import read_original_renderer
 
 
 def original_pages(port):
@@ -27,7 +28,7 @@ def original_pages(port):
 
 
 class OriginalCompletionBridge:
-    def __init__(self, probe, context, manifest, expected_hash, baseline, *, factory=None, metadata=None):
+    def __init__(self, probe, context, manifest, expected_hash, baseline, *, factory=None, metadata=None, compiled_reader=None):
         original.scope(probe, context, manifest)
         require(type(expected_hash) is str and re.fullmatch(r'[0-9a-f]{64}', expected_hash), 'OUTCOME_ORIGINAL_HASH_REFUSED')
         original.same_original(probe, manifest)
@@ -64,6 +65,8 @@ class OriginalCompletionBridge:
                  'fingerprint': manifest['fingerprint'], 'expected_hash': expected_hash},
                  'context': {'run_id': context['run_id'], 'tools_commit': context['tools_commit'],
                              'socket_url': 'ws://127.0.0.1:'+port+socket.path}, 'baseline': baseline}
+        (compiled_reader or read_original_renderer)(probe,context,manifest,
+            {key:value[key] for key in ('configuration','context')})
         command = ['node', '--max-old-space-size=128', str(Path(__file__).parent / 'android-runtime/original_outcome_bridge.mjs')]
         self.process = (factory or subprocess.Popen)(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.reader = threading.Thread(target=self._read, daemon=True); self.errors = threading.Thread(target=self._stderr, daemon=True)

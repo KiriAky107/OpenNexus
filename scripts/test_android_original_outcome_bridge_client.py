@@ -28,12 +28,14 @@ class BridgeParent(unittest.TestCase):
                        dict(common,event='owned-stop-authorized',fingerprint='d'*64),
                        dict(common,event='original-exited',original_callback_consumed=False,callback_bindings_rewritten=False,frozen_fingerprint='d'*64)]
         self.factory = Mock()
+        self.compiled_reader = Mock()
 
     def start(self):
         self.handle = SimpleNamespace(stdin=io.BytesIO(),stdout=io.BytesIO(b''.join(json.dumps(x).encode()+b'\n' for x in self.events)),
                                       stderr=io.BytesIO(b''),wait=Mock(return_value=0))
         self.factory.return_value = self.handle
-        return client.OriginalCompletionBridge(self.probe,self.context,self.manifest,'e'*64,{},factory=self.factory,metadata=self.metadata)
+        return client.OriginalCompletionBridge(self.probe,self.context,self.manifest,'e'*64,{},factory=self.factory,
+            metadata=self.metadata,compiled_reader=self.compiled_reader)
 
     def exit(self):
         return {'original_pid':321,'original_pid_before_stop':321,'force_stop_returncode':0,'original_pidof_returncode':1,
@@ -51,6 +53,7 @@ class BridgeParent(unittest.TestCase):
         self.owner.stopped = True
         value.close_after_original_exit(self.exit()); self.assertTrue(value.closed)
         self.factory.assert_called_once()
+        self.compiled_reader.assert_called_once()
         self.assertTrue(any(c.args[:2]==('forward','--remove') for c in self.probe.device.call_args_list))
 
     def test_foreign_page_origin_does_not_start_bridge_or_send_UI_or_native_input(self):
