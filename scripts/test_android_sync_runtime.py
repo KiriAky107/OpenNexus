@@ -1,9 +1,11 @@
 from copy import deepcopy
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 import hashlib
 import json
 import subprocess
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import Mock,patch
@@ -15,9 +17,11 @@ class InitialSyncBoundaries(unittest.TestCase):
     def exchange(self):
         content=DRAFT.encode();digest=hashlib.sha256(content).hexdigest()
         job={'operation_id':'original-op','file_id':'original-file','path':'runtime-note.md',
-            'hash':digest,'size':len(content),'remote_revision':1}
+            'hash':digest,'size':len(content),'remote_revision':1,'state':'acked','error':None}
         remote={**{k:job[k] for k in ('operation_id','file_id','path','hash','size')},'device_id':'actual-android','sequence':1}
-        native={'jobs':[job],'heads':[{'file_id':'original-file','revision':1,'hash':digest}]}
+        native={'jobs':[job],'heads':[{'file_id':'original-file','revision':1,'hash':digest}],
+            'attempts':[{'operation_id':'original-op','attempts':1,'outcome':'succeeded','error':None}],
+            'issuers':[{'operation_id':'original-op','device_id':'actual-android'}]}
         provider={'rows':{'revisions':[remote]},'vault':{'sequence':1}}
         return provider,native
 
@@ -32,6 +36,18 @@ class InitialSyncBoundaries(unittest.TestCase):
         provider,native=self.exchange()
         provider['rows']['revisions']*=2;native['jobs']*=2
         with self.assertRaises(RuntimeError):validate_upload(provider,native,'actual-android')
+
+    def test_provider_commit_cannot_hide_unknown_native_acknowledgement_or_changed_issuer(self):
+        provider,native=self.exchange()
+        for key,value in (('state','committing'),('error','SYNC_NETWORK_ERROR')):
+            changed=deepcopy(native);changed['jobs'][0][key]=value
+            with self.subTest(key=key),self.assertRaises(RuntimeError):validate_upload(provider,changed,'actual-android')
+        for key,value in (('attempts',2),('outcome','interrupted'),('error','SYNC_NETWORK_ERROR')):
+            changed=deepcopy(native);changed['attempts'][0][key]=value
+            with self.subTest(key=key),self.assertRaises(RuntimeError):validate_upload(provider,changed,'actual-android')
+        for table,change in (('attempts',[]),('issuers',[]),('issuers',[{'operation_id':'original-op','device_id':'setup-actor'}])):
+            changed=deepcopy(native);changed[table]=change
+            with self.subTest(table=table),self.assertRaises(RuntimeError):validate_upload(provider,changed,'actual-android')
         provider,native=self.exchange();native['heads'][0]['revision']=0
         with self.assertRaises(RuntimeError):validate_upload(provider,native,'actual-android')
 
@@ -61,6 +77,35 @@ class InitialSyncBoundaries(unittest.TestCase):
             probe.shell.assert_called_once();self.assertEqual(probe.phases,[])
             intent=json.loads((probe.output/'sync-dispatch-1.json').read_text())
             self.assertFalse(intent['server_or_native_operation_id']);self.assertFalse(intent['automatic_retry'])
+
+    def test_native_snapshot_reads_only_bounded_original_metadata_and_preserves_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source=root/'original.sqlite3'
+            request=json.dumps({'selection':{'operation_id':'auth-original'},'remote_vault':'1'*32,'preview_fingerprint':'2'*64})
+            with closing(sqlite3.connect(source)) as db:
+                db.executescript('''CREATE TABLE sync_bindings(id,remote_vault,state,cursor);
+                    INSERT INTO sync_bindings VALUES('binding','11111111111111111111111111111111','active',0);
+                    CREATE TABLE sync_jobs(binding,operation_id,file_id,path,hash,size,state,remote_revision,error);
+                    CREATE TABLE sync_attempts(binding,operation_id,attempts,outcome,error);
+                    CREATE TABLE sync_heads(binding,file_id,revision,path,hash);
+                    CREATE TABLE sync_inbox(binding,sequence,operation_id,rename_id,state);
+                    CREATE TABLE sync_conflicts(binding,sequence,file_id,local_path,local_hash,state);
+                    CREATE TABLE mobile_sync_binding_intents(operation_id,request_hash,request,state,attempt_revision,binding);
+                    CREATE TABLE unrelated_private_values(secret);
+                    INSERT INTO unrelated_private_values VALUES('must-never-be-selected-or-uploaded');''')
+                db.execute('INSERT INTO mobile_sync_binding_intents VALUES(?,?,?,?,?,?)',('binding-original','digest',request,'bound',1,'binding'))
+                db.commit()
+            original=source.read_bytes();probe=SyncProbe.__new__(SyncProbe)
+            probe.tools=root/'tools';probe.tools.mkdir();probe.output=root/'evidence';probe.output.mkdir()
+            probe.shell=Mock(return_value=subprocess.CompletedProcess([],0,b'./files/owned/vault/.opennexus/host.sqlite3\n'))
+            probe.private=Mock(side_effect=lambda path,**_:subprocess.CompletedProcess([],0,original)
+                if path.endswith('host.sqlite3') else subprocess.CompletedProcess([],1,b''))
+            observed=probe.host_snapshot('bound')
+            self.assertEqual(observed['association']['operation_id'],'binding-original')
+            self.assertEqual(observed['issuers'],[]);self.assertEqual(source.read_bytes(),original)
+            self.assertFalse(observed['credentials_selected']);self.assertFalse(observed['original_database_uploaded'])
+            self.assertNotIn('must-never-be-selected-or-uploaded',(probe.output/'bound-host.json').read_text())
+            for call in probe.private.call_args_list:self.assertRegex(call.args[0],r'host\.sqlite3(?:-wal|-shm)?$')
 
 
 if __name__=='__main__':unittest.main()

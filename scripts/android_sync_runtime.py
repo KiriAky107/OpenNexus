@@ -34,6 +34,15 @@ def validate_upload(provider, native, device_id):
     require(len({item['operation_id'] for item in revisions})==len(revisions),'A revision operation was duplicated')
     by_id={row['operation_id']:row for row in jobs}
     require(len(by_id)==len(jobs),'Native operation IDs were duplicated')
+    require(all(row['state']=='acked' and row['error'] is None for row in jobs),
+        'Provider revisions alone do not prove original native acknowledgement')
+    attempts={row['operation_id']:row for row in native['attempts']}
+    issuers={row['operation_id']:row['device_id'] for row in native['issuers']}
+    require(len(attempts)==len(native['attempts'])==len(jobs) and set(attempts)==set(by_id)
+        and len(issuers)==len(native['issuers'])==len(jobs) and set(issuers)==set(by_id),
+        'Original native attempt/issuing-device records do not match the uploaded jobs')
+    require(all(row['attempts']==1 and row['outcome']=='succeeded' and row['error'] is None for row in attempts.values())
+        and all(issuer==device_id for issuer in issuers.values()),'Original native attempt repeated, failed or changed device')
     for remote in revisions:
         job=by_id.get(remote['operation_id'])
         require(job is not None and remote['device_id']==device_id
@@ -120,6 +129,7 @@ class SyncProbe(AuthProbe):
             require(len(bindings)==1 and bindings[0][2]=='active','Original native binding is not unique/active')
             binding=bindings[0][0]
             projections={'jobs':('sync_jobs','operation_id,file_id,path,hash,size,state,remote_revision,error'),
+                'attempts':('sync_attempts','operation_id,attempts,outcome,error'),
                 'heads':('sync_heads','file_id,revision,path,hash'),
                 'inbox':('sync_inbox','sequence,operation_id,rename_id,state'),
                 'conflicts':('sync_conflicts','sequence,file_id,local_path,local_hash,state')}
@@ -130,6 +140,14 @@ class SyncProbe(AuthProbe):
                 rows[name]=[dict(zip(columns.split(','),row)) for row in db.execute(
                     'SELECT '+columns+' FROM '+table+' WHERE binding=? ORDER BY rowid LIMIT 512',(binding,))]
                 require(len(rows[name])==count,'Native metadata observation changed')
+            has_issuers=db.execute("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='mobile_sync_attempt_devices')").fetchone()[0]
+            rows['issuers']=[]
+            if has_issuers:
+                count=db.execute('SELECT COUNT(*) FROM mobile_sync_attempt_devices WHERE binding=?',(binding,)).fetchone()[0]
+                require(0<=count<=512,'Native issuing-device observation limit exceeded')
+                rows['issuers']=[dict(zip(('operation_id','device_id'),row)) for row in db.execute(
+                    'SELECT operation_id,device_id FROM mobile_sync_attempt_devices WHERE binding=? ORDER BY rowid LIMIT 512',(binding,))]
+                require(len(rows['issuers'])==count,'Native issuing-device observation changed')
             intents=db.execute('SELECT operation_id,request_hash,request,state,attempt_revision,binding FROM mobile_sync_binding_intents').fetchall()
             require(len(intents)==1 and intents[0][3]=='bound' and intents[0][5]==binding,'Original binding receipt is not uniquely bound')
             original=intents[0];request=json.loads(original[2])
