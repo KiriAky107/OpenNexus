@@ -490,11 +490,38 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void pairProperty(String name, String before, String after) {
-        AccessibilityNodeInfo field=waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
-            && label(node,name,false) && string(node.getText()).equals(before), "original named Canvas property");
+        AccessibilityNodeInfo field=waitPairProperty(name,before);
         setText(field,after);
-        waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
-            && label(node,name,false) && string(node.getText()).equals(after), "actual original Canvas input readback");
+        waitPairProperty(name,after);
+    }
+
+    private AccessibilityNodeInfo waitPairProperty(String name, String expected) {
+        waitingFor="original named Canvas property";
+        progress.append("wait: ").append(waitingFor).append('\n');
+        long until=SystemClock.uptimeMillis()+25_000;
+        boolean shown=false;
+        do {
+            List<AccessibilityNodeInfo> matches=new ArrayList<>();
+            for(AccessibilityNodeInfo node:nodes()) {
+                if(APP.equals(string(node.getPackageName())) && node.isEditable() && node.isEnabled()
+                    && within(node,"Canvas nodes and connections")
+                    && OriginalCanvasProperty.matches(name,expected,string(node.getText()),label(node,name,false))) matches.add(node);
+            }
+            require(matches.size()<=1,"Ambiguous original Canvas property; no input sent");
+            if(matches.size()==1) {
+                AccessibilityNodeInfo field=matches.get(0);
+                if(field.isVisibleToUser())return field;
+                if(!shown) {
+                    // Scroll only the exact existing property, then reacquire
+                    // its fresh node/value. Never repeat the value mutation.
+                    shown=true;
+                    require(field.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId()),
+                        "Original Canvas property could not be shown; no input sent");
+                }
+            }
+            SystemClock.sleep(200);
+        } while(SystemClock.uptimeMillis()<until);
+        throw new IllegalStateException("Original Canvas property not visible with its original value");
     }
 
     private void waitOriginalImageNode() {

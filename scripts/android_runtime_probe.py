@@ -427,6 +427,13 @@ class Probe:
                     'cc.kronecker.opennexus.testdriver.TargetStabilityCheck']).stdout
                 (self.output / 'driver-target-stability.txt').write_bytes(observed)
                 require(observed.startswith(b'TARGET_STABILITY_OK '), 'Actual driver target-stability check failed')
+                if getattr(self.args, 'scope', '') == 'product-pair':
+                    self.command(['javac', '-J-Xmx256m', '-encoding', 'UTF-8', '-classpath', classes,
+                        '-d', checks, root.parent / 'android-runtime-tests/OriginalCanvasPropertyCheck.java'])
+                    observed = self.command(['java', '-Xmx64m', '-cp', str(classes) + os.pathsep + str(checks),
+                        'cc.kronecker.opennexus.testdriver.OriginalCanvasPropertyCheck']).stdout
+                    (self.output / 'driver-original-canvas-property.txt').write_bytes(observed)
+                    require(observed.startswith(b'ORIGINAL_CANVAS_PROPERTY_OK '), 'Original Canvas property admission failed')
             self.command([sdk_tools / 'd8', '--lib', platform, '--min-api', '24', '--output', dex,
                 *sorted(classes.rglob('*.class'))])
             unsigned, aligned, signed = [build / part for part in ('unsigned.apk', 'aligned.apk', name + '.apk')]
