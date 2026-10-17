@@ -407,7 +407,11 @@ public final class RuntimeProbe extends Instrumentation {
         // a URI, index user media, or grant broad media/storage permissions.
         waitNode(this::documentsUi, "system document picker");
         activate(waitNode(node -> documentsUi(node) && label(node, "Show roots", false), "system picker roots"));
-        activate(waitNode(node -> documentsUi(node) && label(node, "Downloads", false), "owned Downloads location"));
+        // A reopened picker can still expose the current Downloads breadcrumb
+        // while its drawer animates. Select only the named sidebar root.
+        activate(waitNode(node -> documentsUi(node) && label(node, "Downloads", false) && withinDocumentRoots(node),
+            "owned Downloads sidebar root"));
+        waitForDocumentRootsClosed();
         activate(waitNode(this::originalImageRow, "owned original PNG document row"));
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Back", false), "return from original system picker");
     }
@@ -416,6 +420,27 @@ public final class RuntimeProbe extends Instrumentation {
         String name=string(node.getPackageName());
         return "com.google.android.photopicker".equals(name)
             || "com.google.android.providers.media.module".equals(name);
+    }
+    private boolean withinDocumentRoots(AccessibilityNodeInfo node) {
+        for (int depth=0;node!=null && depth<32;depth++,node=node.getParent()) {
+            if (!documentsUi(node)) return false;
+            if (string(node.getViewIdResourceName()).endsWith(":id/roots_list")) return true;
+        }
+        return false;
+    }
+    private void waitForDocumentRootsClosed() {
+        waitingFor="system picker sidebar closed";
+        progress.append("wait: ").append(waitingFor).append('\n');
+        long until=SystemClock.uptimeMillis()+25000;
+        do {
+            boolean open=false;
+            for (AccessibilityNodeInfo node:nodes())
+                if (documentsUi(node) && node.isVisibleToUser()
+                    && string(node.getViewIdResourceName()).endsWith(":id/roots_list")) open=true;
+            if (!open) return;
+            SystemClock.sleep(150);
+        } while (SystemClock.uptimeMillis()<until);
+        throw new IllegalStateException("System picker sidebar stayed open; no file tapped");
     }
     private boolean originalImageRow(AccessibilityNodeInfo node) {
         if (!documentsUi(node)) return false;

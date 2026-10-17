@@ -16,10 +16,25 @@ from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAG
 
 class RuntimeBoundaries(unittest.TestCase):
     def test_attachment_scope_does_not_repeat_the_fixed_apks_keystore_cases(self):
-        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope='attachments')
-        probe.binding={'native_tests':{'expected_tests':5}};probe.device=Mock();probe.shell=Mock()
-        probe.native_keystore_tests()
-        probe.device.assert_not_called();probe.shell.assert_not_called()
+        for scope in ('attachments','attachments-remaining'):
+            probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope=scope)
+            probe.binding={'native_tests':{'expected_tests':5}};probe.device=Mock();probe.shell=Mock()
+            probe.native_keystore_tests()
+            probe.device.assert_not_called();probe.shell.assert_not_called()
+
+    def test_remaining_image_scope_requires_only_its_two_original_targets_and_exact_receipts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory)
+            asset=f'attachments/{digest(IMAGE_BYTES)[:2]}/{digest(IMAGE_BYTES)}.png'
+            reference=('![]('+asset+')').encode()
+            originals={asset:IMAGE_BYTES,'runtime-rich-image.md':(RICH_IMAGE_TEXT+'\n').encode()+reference,
+                'runtime-image.canvas':json.dumps({'nodes':[{'type':'file','file':asset}]}).encode()}
+            rows=[(str(i),path,asset,digest(IMAGE_BYTES),len(IMAGE_BYTES),'committed')
+                for i,path in enumerate(('runtime-rich-image.md','runtime-image.canvas'))]
+            probe.original=originals.__getitem__;probe.database_rows=lambda _:rows
+            self.assertEqual(probe.verify_original_images(include_markdown=False),originals)
+            probe.database_rows=lambda _:rows+rows[:1]
+            with self.assertRaises(RuntimeError):probe.verify_original_images(include_markdown=False)
 
     def test_auth_read_acceptance_requires_the_original_empty_index_and_cannot_claim_https(self):
         for rows in (0,1):
