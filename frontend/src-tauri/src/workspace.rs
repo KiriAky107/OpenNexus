@@ -9,6 +9,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
+#[path = "workspace_file_ops.rs"]
+mod file_ops;
 #[path = "workspace_watch.rs"]
 mod watch;
 #[path = "workspace_writes.rs"]
@@ -1163,19 +1165,16 @@ impl Workspace {
         operation_id: &str,
         origin: &str,
     ) -> Result<serde_json::Value> {
-        let id =
-            self.prepare_file_op_with_id(kind, path, destination, expected, operation_id, origin)?;
-        if self
-            .operation(&id)?
-            .is_some_and(|v| v["state"] == "committed")
-        {
-            return self
-                .operation(&id)?
-                .ok_or_else(|| HostError::new("DATABASE_ERROR"));
-        }
-        self.apply_file_op(&id)?;
-        self.operation(&id)?
-            .ok_or_else(|| HostError::new("DATABASE_ERROR"))
+        self.prepare_mutation_checked(
+            kind,
+            path,
+            destination,
+            expected,
+            (operation_id, origin),
+            &|| Ok(()),
+        )?
+        .accept_with(|| Ok(()))?
+        .complete()
     }
 
     fn prepare_file_op_with_id(
@@ -1187,72 +1186,9 @@ impl Workspace {
         id: &str,
         origin: &str,
     ) -> Result<String> {
-        if !matches!(origin, "local" | "remote")
-            || !matches!(kind, "rename" | "delete")
-            || Uuid::parse_str(id).is_err()
-        {
-            return Err(HostError::new("INVALID_OPERATION"));
-        }
-        let fingerprint = hash(
-            &serde_json::to_vec(&(kind, path, destination, expected, origin))
-                .map_err(|_| HostError::new("INVALID_OPERATION"))?,
-        );
-        let previous: Option<String> = self
-            .db
-            .query_row(
-                "SELECT fingerprint FROM operations WHERE operation_id=?1",
-                [id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if let Some(previous) = previous {
-            if previous != fingerprint {
-                return Err(HostError::new("OPERATION_PAYLOAD_CONFLICT"));
-            }
-            self.recover()?;
-            if self
-                .operation(id)?
-                .is_some_and(|v| v["state"] == "conflict")
-            {
-                return Err(HostError::new("RECOVERY_CONFLICT"));
-            }
-            return Ok(id.to_owned());
-        }
-        if kind == "rename"
-            && self.resolve(destination)?.exists()
-            && (path == destination || !self.paths_alias(path, destination)?)
-        {
-            return Err(HostError::new("PATH_CONFLICT"));
-        }
-        let source = self.resolve(path)?;
-        if !source.is_file() {
-            return Err(HostError::new("FILE_NOT_FOUND"));
-        }
-        if crate::payloads::hash_file(&source)? != expected {
-            return Err(HostError::new("REVISION_CONFLICT"));
-        }
-        self.entry(path)?
-            .ok_or_else(|| HostError::new("FILE_NOT_FOUND"))?;
-        self.store_payload_file(id, &source, expected)?;
-        let tx = self.db.transaction()?;
-        tx.execute(
-            "INSERT INTO operations VALUES (?1,?2,'pending',NULL)",
-            params![id, fingerprint],
-        )?;
-        tx.execute(
-            "INSERT INTO file_ops VALUES (?1,?2,?3,?4,?5,?6,'pending',?7)",
-            params![
-                id,
-                kind,
-                path,
-                destination,
-                expected,
-                b"".as_slice(),
-                origin
-            ],
-        )?;
-        tx.commit()?;
-        Ok(id.to_owned())
+        self.prepare_mutation_checked(kind, path, destination, expected, (id, origin), &|| Ok(()))?
+            .accept_with(|| Ok(()))?
+            .original_id()
     }
 
     fn apply_file_op(&mut self, id: &str) -> Result<()> {
