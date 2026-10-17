@@ -1,91 +1,96 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { compiledMarkers, resourceExpression, validateResources, observeCompiledResources, resourceDiagnostic } from '../android-runtime/original_compiled_resources.mjs'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { compiledMarkers, decodedResource, resourceCandidates, validateResources, observeCompiledResources, resourceDiagnostic } from '../android-runtime/original_compiled_resources.mjs'
 
 const config={mode:'complete',nonce:'00000000-0000-4000-8000-000000000001',original_pid:321,sequence:2,choice:'copy',destination:'runtime-conflict-copy.md',fingerprint:'a'.repeat(64),expected_hash:'b'.repeat(64)}
 const context={run_id:1234,tools_commit:'a'.repeat(40),socket_url:'ws://127.0.0.1:12345/devtools/page/owned'}
 const env={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',RUNNER_OS:'Linux',GITHUB_REPOSITORY:'KiriAky107/OpenNexus',GITHUB_RUN_ID:'1234',GITHUB_SHA:'a'.repeat(40)}
-const original=()=>({original_origin:'http://tauri.localhost',resource_read_only:true,declared_safe_code_list:true,declared_presentation_case:true,
-  assets:[{path:'/assets/MobileSyncConnection-original.js',bytes:123,sha256:'c'.repeat(64),declared_safe_code_list:true,declared_presentation_case:true}]})
+const url='http://tauri.localhost/assets/index-original.js'
+const source='const privateBodyMustNotEscape="NO_RAW_CODE_EXPORT";const s=new Set(["SYNC_CONNECTION_FAILED","SYNC_RESPONSE_INVALID","SYNC_REVIEW_CHANGED"]);function m(x){switch(x){case"SYNC_REVIEW_CHANGED":return "review"}}'
+const pages=()=>[{type:'page',title:'OpenNexus',url:'http://tauri.localhost/#/connection',webSocketDebuggerUrl:context.socket_url}]
+const tree=()=>({frameTree:{frame:{id:'owned-frame',url:'http://tauri.localhost/#/connection'},resources:[{type:'Script',url}]}})
+const summary=()=>({original_origin:'http://tauri.localhost',resource_read_only:true,declared_safe_code_list:true,declared_presentation_case:true,
+  assets:[{path:'/assets/index-original.js',bytes:123,sha256:'c'.repeat(64),declared_safe_code_list:true,declared_presentation_case:true}]})
+function fixture({respond,notifications=1}={}){
+  const listeners={},calls=[];let closed=0
+  const socket={addEventListener:(name,fn)=>{listeners[name]=fn},send:raw=>{
+    const call=JSON.parse(raw);calls.push(call)
+    for(let n=0;n<notifications;n++)listeners.message({data:JSON.stringify({method:'Page.notification',params:{n}})})
+    const value=respond?respond(call):{result:call.method==='Page.getResourceTree'?tree():{content:source,base64Encoded:false}}
+    listeners.message({data:JSON.stringify({id:call.id,...value})})
+  },close:()=>{closed++}}
+  return {calls,closed:()=>closed,dependencies:{readJson:async()=>pages(),socketFactory:async()=>socket}}
+}
 
-test('compiled code presence needs the actual safe list and switch shape, not a bare native error literal',()=>{
-  const text='const s=new Set(["SYNC_CONNECTION_FAILED","SYNC_RESPONSE_INVALID","SYNC_REVIEW_CHANGED"]);function m(x){switch(x){case"SYNC_REVIEW_CHANGED":return "review"}}'
-  assert.deepEqual(compiledMarkers(text),{declared_safe_code_list:true,declared_presentation_case:true})
+test('compiled markers require the safe list and switch shape rather than one bare error literal',()=>{
+  assert.deepEqual(compiledMarkers(source),{declared_safe_code_list:true,declared_presentation_case:true})
   assert.deepEqual(compiledMarkers('"SYNC_REVIEW_CHANGED"'),{declared_safe_code_list:false,declared_presentation_case:false})
-  new Function('return '+resourceExpression)
-  for(const disallowed of ['__TAURI_INTERNALS__','.invoke(','.click(','.innerHTML','document.cookie','localStorage','Debugger.enable'])
-    assert.equal(resourceExpression.includes(disallowed),false)
 })
 
-test('resource summaries reject foreign paths, duplicates, missing markers, raw body and unbounded content',()=>{
-  validateResources(original())
-  for(const change of [v=>v.assets[0].path='https://external.invalid/a.js',v=>v.assets[0].path='/assets/a.js?token=x',
-    v=>v.assets.push({...v.assets[0]}),v=>v.assets[0].bytes=9*1024**2,v=>v.assets[0].sha256='bad',
-    v=>v.assets[0].body='DO_NOT_EXPORT',v=>v.declared_safe_code_list=false,v=>v.assets[0].declared_presentation_case=false]){
-    const v=original();change(v);assert.throws(()=>validateResources(v))
+test('only already listed same-origin root-frame JS resources are admitted',()=>{
+  const value=tree();value.frameTree.resources.push({type:'XHR',url:'http://tauri.localhost/private'},
+    {type:'Script',url:'https://foreign.invalid/a.js'},{type:'Script',url:url+'?private=query'},{type:'Script',url})
+  value.frameTree.childFrames=[{frame:{id:'foreign',url:'https://foreign.invalid/'},resources:[{type:'Script',url}]}]
+  assert.deepEqual(resourceCandidates(value),{frameId:'owned-frame',urls:[url]})
+  for(const change of [v=>v.frameTree.frame.url='https://foreign.invalid/',v=>v.frameTree.frame.id='invalid id',
+    v=>v.frameTree.resources=[],v=>v.frameTree.resources=Array.from({length:25},(_,n)=>({type:'Script',url:'http://tauri.localhost/assets/'+n+'.js'}))]){
+    const v=tree();change(v);assert.throws(()=>resourceCandidates(v))
   }
 })
 
-test('hosted read-only connection evaluates one fixed expression and never enables debugger, invokes native or exports resource bytes',async()=>{
-  const calls=[];let closed=0;const listeners={}
-  const socket={addEventListener:(name,fn)=>{listeners[name]=fn},send:raw=>{
-    const value=JSON.parse(raw);calls.push(value)
-    listeners.message({data:JSON.stringify({id:1,result:{result:{type:'object',value:original()}}})})
-  },close:()=>{closed++}}
-  const result=await observeCompiledResources(config,context,env,{readJson:async()=>[{type:'page',title:'OpenNexus',url:'http://tauri.localhost/#/connection',webSocketDebuggerUrl:context.socket_url}],socketFactory:async()=>socket})
-  assert.equal(calls.length,1);assert.equal(calls[0].method,'Runtime.evaluate');assert.equal(calls[0].params.expression,resourceExpression)
-  assert.equal(closed,1);assert.equal(result.nonce,config.nonce);assert.equal(result.Debugger_enabled,false)
-  assert.equal(result.application_or_native_IPC_sent,false);assert.equal(result.raw_resource_bytes_exported,false)
+test('decoded CDP content preserves UTF-8 and canonical base64 without accepting hidden fields',()=>{
+  const body=Buffer.from('原始编译内容 😀\n')
+  assert.deepEqual(decodedResource({content:body.toString('utf8'),base64Encoded:false}).bytes,body)
+  assert.deepEqual(decodedResource({content:body.toString('base64'),base64Encoded:true}).bytes,body)
+  for(const v of [{content:'',base64Encoded:false},{content:'not base64!',base64Encoded:true},
+    {content:'//8=',base64Encoded:true},{content:source,base64Encoded:false,body:'NO_EXPORT'}])assert.throws(()=>decodedResource(v))
 })
 
-test('local host or another origin is rejected before a resource connection and without an external fallback',async()=>{
+test('resource summaries refuse foreign paths, duplicate hashes, missing markers and raw bodies',()=>{
+  validateResources(summary())
+  for(const change of [v=>v.assets[0].path='https://foreign.invalid/a.js',v=>v.assets.push({...v.assets[0]}),
+    v=>v.assets[0].bytes=9*1024**2,v=>v.assets[0].body='NO_EXPORT',v=>v.declared_safe_code_list=false,
+    v=>v.assets[0].declared_presentation_case=false]){
+    const v=summary();change(v);assert.throws(()=>validateResources(v))
+  }
+})
+
+test('fixed IPC-only CSP needs no page fetch, evaluation, debugger or policy change to read cached code',async()=>{
+  const policy=JSON.parse(readFileSync(new URL('../../frontend/mobile/src-tauri/tauri.conf.json',import.meta.url),'utf8')).app.security.csp
+  assert.equal(policy.split(';').map(x=>x.trim()).find(x=>x.startsWith('connect-src ')), 'connect-src ipc: http://ipc.localhost')
+  const f=fixture();const result=await observeCompiledResources(config,context,env,f.dependencies)
+  assert.deepEqual(f.calls.map(x=>x.method),['Page.getResourceTree','Page.getResourceContent'])
+  assert.deepEqual(f.calls[1].params,{frameId:'owned-frame',url})
+  assert.equal(result.assets[0].sha256,createHash('sha256').update(source).digest('hex'))
+  assert.equal(result.assets[0].bytes,Buffer.byteLength(source));assert.equal(f.closed(),1)
+  assert.equal(result.Debugger_enabled,false);assert.equal(result.page_fetch_or_CSP_change_sent,false)
+  assert.equal(result.resource_bytes_transferred_to_owned_reader,true);assert.equal(result.resource_bytes_written_to_artifacts,false)
+  assert.equal(result.resource_read_transport,'Page.getResourceContent');assert.equal(JSON.stringify(result).includes('NO_RAW_CODE_EXPORT'),false)
+})
+
+test('original CDP resource failure keeps a safe stage and never retries or exports raw protocol text',async()=>{
+  const f=fixture({respond:call=>call.method==='Page.getResourceTree'?{result:tree()}:{error:{message:'PRIVATE_PROTOCOL_BODY'}}})
+  await assert.rejects(observeCompiledResources(config,context,env,f.dependencies),error=>{
+    assert.deepEqual(resourceDiagnostic(error),{error:'OWNED_COMPILED_RESOURCE_UNCONFIRMED',stage:'resource-content',reason:'reply-refused'})
+    assert.equal(JSON.stringify(resourceDiagnostic(error)).includes('PRIVATE'),false);return true
+  })
+  assert.equal(f.calls.length,2);assert.equal(f.closed(),1)
+  assert.deepEqual(resourceDiagnostic(Object.assign(Error('PRIVATE'),{stage:'PRIVATE',reason:'PRIVATE'})),
+    {error:'OWNED_COMPILED_RESOURCE_UNCONFIRMED',stage:'admission',reason:'unconfirmed'})
+})
+
+test('local or foreign page is refused before a resource socket is opened',async()=>{
   let reads=0,connections=0
-  const dependencies={readJson:async()=>{reads++;return [{type:'page',title:'OpenNexus',url:'https://external.invalid/',webSocketDebuggerUrl:context.socket_url}]},socketFactory:async()=>{connections++}}
+  const dependencies={readJson:async()=>{reads++;return [{type:'page',title:'OpenNexus',url:'https://foreign.invalid/',webSocketDebuggerUrl:context.socket_url}]},
+    socketFactory:async()=>{connections++}}
   await assert.rejects(observeCompiledResources(config,context,{},dependencies));assert.equal(reads,0)
   await assert.rejects(observeCompiledResources(config,context,env,dependencies));assert.equal(reads,1);assert.equal(connections,0)
 })
 
-test('CDP notifications do not replace the original resource evaluation reply',async()=>{
-  const listeners={};let sends=0,closed=0
-  const socket={addEventListener:(name,fn)=>{listeners[name]=fn},send:()=>{
-    sends++
-    listeners.message({data:JSON.stringify({method:'Runtime.executionContextCreated',params:{context:{id:1}}})})
-    listeners.message({data:JSON.stringify({id:1,result:{result:{type:'object',value:original()}}})})
-  },close:()=>{closed++}}
-  const result=await observeCompiledResources(config,context,env,{readJson:async()=>[{type:'page',title:'OpenNexus',
-    url:'http://tauri.localhost/',webSocketDebuggerUrl:context.socket_url}],socketFactory:async()=>socket})
-  assert.equal(result.declared_safe_code_list,true);assert.equal(sends,1);assert.equal(closed,1)
-})
-
-test('failure diagnostics expose only a fixed stage and reason without raw page errors',async()=>{
-  for(const [description,reason]of [['Error: OWNED_RESOURCE_CRYPTO_UNAVAILABLE\nSECRET_PAGE_OR_RESOURCE','crypto-unavailable'],
-    ['TypeError: SECRET_PAGE_OR_RESOURCE','page-exception']]){
-    const listeners={};let sends=0,closed=0
-    const socket={addEventListener:(name,fn)=>{listeners[name]=fn},send:()=>{
-      sends++;listeners.message({data:JSON.stringify({id:1,result:{exceptionDetails:{exception:{description}}}})})
-    },close:()=>{closed++}}
-    try{
-      await observeCompiledResources(config,context,env,{readJson:async()=>[{type:'page',title:'OpenNexus',
-        url:'http://tauri.localhost/',webSocketDebuggerUrl:context.socket_url}],socketFactory:async()=>socket})
-      assert.fail('An original evaluation exception is not a completed read')
-    }catch(error){
-      const diagnostic=resourceDiagnostic(error)
-      assert.deepEqual(diagnostic,{error:'OWNED_COMPILED_RESOURCE_UNCONFIRMED',stage:'evaluation-exception',reason})
-      assert.equal(JSON.stringify(diagnostic).includes('SECRET'),false)
-    }
-    assert.equal(sends,1);assert.equal(closed,1)
-  }
-  assert.deepEqual(resourceDiagnostic(Object.assign(Error('SECRET'),{stage:'SECRET',reason:'SECRET'})),
-    {error:'OWNED_COMPILED_RESOURCE_UNCONFIRMED',stage:'admission',reason:'unconfirmed'})
-})
-
-test('unrelated notifications remain bounded and never trigger another evaluation',async()=>{
-  const listeners={};let sends=0,closed=0
-  const socket={addEventListener:(name,fn)=>{listeners[name]=fn},send:()=>{
-    sends++;for(let n=0;n<33;n++)listeners.message({data:JSON.stringify({method:'Runtime.notification',params:{id:n}})})
-    listeners.message({data:JSON.stringify({id:1,result:{result:{type:'object',value:original()}}})})
-  },close:()=>{closed++}}
-  await assert.rejects(observeCompiledResources(config,context,env,{readJson:async()=>[{type:'page',title:'OpenNexus',
-    url:'http://tauri.localhost/',webSocketDebuggerUrl:context.socket_url}],socketFactory:async()=>socket}))
-  assert.equal(sends,1);assert.equal(closed,1)
+test('notification flood stays bounded and cannot replace the original resource reply',async()=>{
+  const f=fixture({notifications:513})
+  await assert.rejects(observeCompiledResources(config,context,env,f.dependencies))
+  assert.equal(f.calls.length,1);assert.equal(f.closed(),1)
 })

@@ -1,12 +1,13 @@
 // Read already loaded, same-origin compiled modules. No application invocation,
 // callback interception, DOM mutation, credentials or resource execution.
 import { pathToFileURL } from 'node:url'
+import { createHash } from 'node:crypto'
 import { boundedJson, hostedTarget } from './original_outcome_transport.mjs'
 
 const need=ok=>{if(!ok)throw Error('OWNED_COMPILED_RESOURCE_REFUSED')}
-const stages=new Set(['admission','page-list','socket-open','evaluation-send','evaluation-reply','evaluation-exception','resource-summary'])
+const stages=new Set(['admission','page-list','socket-open','resource-tree','resource-content','resource-summary'])
 const reasons=new Set(['unconfirmed','timeout','send-unconfirmed','connection-unconfirmed','reply-refused','summary-refused',
-  'origin','bound','resource-unavailable','crypto-unavailable','page-exception'])
+  'origin','bound','resource-unavailable','no-owned-script'])
 class ResourceReadFailure extends Error{
   constructor(stage,reason){super('OWNED_COMPILED_RESOURCE_UNCONFIRMED');this.stage=stage;this.reason=reason}
 }
@@ -14,15 +15,6 @@ export function resourceDiagnostic(error){
   return {error:'OWNED_COMPILED_RESOURCE_UNCONFIRMED',
     stage:error instanceof ResourceReadFailure&&stages.has(error.stage)?error.stage:'admission',
     reason:error instanceof ResourceReadFailure&&reasons.has(error.reason)?error.reason:'unconfirmed'}
-}
-function pageExceptionReason(value){
-  const description=value?.exception?.description
-  if(typeof description==='string')for(const [code,reason]of [['ORIGIN','origin'],['BOUND','bound'],
-    ['UNAVAILABLE','resource-unavailable'],['CRYPTO_UNAVAILABLE','crypto-unavailable']]){
-    const prefix='Error: OWNED_RESOURCE_'+code
-    if(description===prefix||description.startsWith(prefix+'\n'))return reason
-  }
-  return 'page-exception'
 }
 export function compiledMarkers(text){
   const lists=[...text.matchAll(/new\s+Set\s*\(\s*\[([^\]]{1,18000})\]\s*\)/g)]
@@ -33,34 +25,32 @@ export function compiledMarkers(text){
   }
 }
 
-export const resourceExpression=`(async()=>{
-  if(location.origin!=='http://tauri.localhost')throw Error('OWNED_RESOURCE_ORIGIN');
-  const markers=${compiledMarkers.toString()};
-  const urls=new Set();
-  const admit=value=>{
-    const url=new URL(value,location.href);
-    if(url.origin==='http://tauri.localhost'&&!url.username&&!url.password&&!url.search&&!url.hash&&/^\\/assets\\/[A-Za-z0-9_.-]+\\.js$/.test(url.pathname))urls.add(url.href);
-  };
-  for(const script of document.querySelectorAll('script[type="module"][src]'))admit(script.src);
-  for(const value of performance.getEntriesByType('resource'))admit(value.name);
-  if(urls.size<1||urls.size>24)throw Error('OWNED_RESOURCE_BOUND');
-  const assets=[];let total=0;
-  for(const value of [...urls].sort()){
-    const response=await fetch(value,{redirect:'error',credentials:'omit',cache:'force-cache'});
-    if(response.status!==200||!response.body)throw Error('OWNED_RESOURCE_UNAVAILABLE');
-    const reader=response.body.getReader(),parts=[];let size=0;
-    try{while(true){const item=await reader.read();if(item.done)break;size+=item.value.byteLength;total+=item.value.byteLength;
-      if(size>8*1024**2||total>16*1024**2)throw Error('OWNED_RESOURCE_BOUND');parts.push(item.value);}}
-    finally{await reader.cancel();}
-    const bytes=new Uint8Array(size);let offset=0;for(const part of parts){bytes.set(part,offset);offset+=part.byteLength;}
-    const text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
-    if(!globalThis.crypto?.subtle)throw Error('OWNED_RESOURCE_CRYPTO_UNAVAILABLE');
-    const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(b=>b.toString(16).padStart(2,'0')).join('');
-    assets.push({path:new URL(value).pathname,bytes:size,sha256:hash,...markers(text)});
+export function resourceCandidates(result){
+  const tree=result?.frameTree,frame=tree?.frame
+  const origin=frame&&new URL(frame.url)
+  need(frame&&typeof frame.id==='string'&&/^[A-Za-z0-9_.:-]{1,128}$/.test(frame.id)
+    &&origin.origin==='http://tauri.localhost'&&!origin.username&&!origin.password
+    &&Array.isArray(tree.resources)&&tree.resources.length<=512)
+  const urls=new Set()
+  for(const item of tree.resources){
+    if(item.type!=='Script'||typeof item.url!=='string')continue
+    const url=new URL(item.url)
+    if(url.origin==='http://tauri.localhost'&&!url.username&&!url.password&&!url.search&&!url.hash
+      &&/^\/assets\/[A-Za-z0-9_.-]+\.js$/.test(url.pathname))urls.add(url.href)
   }
-  return {original_origin:location.origin,resource_read_only:true,assets,
-    declared_safe_code_list:assets.some(a=>a.declared_safe_code_list),declared_presentation_case:assets.some(a=>a.declared_presentation_case)};
-})()`
+  need(urls.size>0&&urls.size<=24)
+  return {frameId:frame.id,urls:[...urls].sort()}
+}
+
+export function decodedResource(value){
+  need(value&&Object.keys(value).length===2&&typeof value.content==='string'&&typeof value.base64Encoded==='boolean')
+  need(value.content.length<=12*1024**2)
+  const bytes=Buffer.from(value.content,value.base64Encoded?'base64':'utf8')
+  need(bytes.length>0&&bytes.length<=8*1024**2)
+  if(value.base64Encoded)need(bytes.toString('base64')===value.content)
+  const text=new TextDecoder('utf-8',{fatal:true}).decode(bytes)
+  return {bytes,text}
+}
 
 export function validateResources(value){
   need(value&&Object.keys(value).length===5&&value.original_origin==='http://tauri.localhost'&&value.resource_read_only===true
@@ -79,7 +69,14 @@ export function validateResources(value){
 }
 
 export async function observeCompiledResources(config,context,env,dependencies={}){
-  let stage='admission',socket,timer
+  let stage='admission',socket,timer,openReject
+  const pending=new Map();let next=0,failed=false,received=0,messages=0
+  const fault=reason=>{
+    failed=true;const error=new ResourceReadFailure(stage,reasons.has(reason)?reason:'unconfirmed')
+    openReject?.(error)
+    for(const value of pending.values())value.reject(error)
+    pending.clear()
+  }
   try{
     const target=hostedTarget(config,context,env),read=dependencies.readJson??boundedJson
     stage='page-list'
@@ -88,36 +85,50 @@ export async function observeCompiledResources(config,context,env,dependencies={
       &&own[0].webSocketDebuggerUrl===target.url&&new URL(own[0].url).origin==='http://tauri.localhost')
     stage='socket-open'
     socket=dependencies.socketFactory?await dependencies.socketFactory(target.url):new WebSocket(target.url)
-    const result=await new Promise((resolve,reject)=>{
-      let messages=0,total=0
-      const fail=reason=>reject(new ResourceReadFailure(stage,reasons.has(reason)?reason:'unconfirmed'))
-      timer=setTimeout(()=>fail('timeout'),15000)
-      const send=()=>{
-        stage='evaluation-reply'
-        try{socket.send(JSON.stringify({id:1,method:'Runtime.evaluate',params:{expression:resourceExpression,returnByValue:true,awaitPromise:true}}))}
-        catch{stage='evaluation-send';fail('send-unconfirmed')}
-      }
-      socket.addEventListener('message',event=>{
-        try{
-          need(typeof event.data==='string'&&Buffer.byteLength(event.data)<=65536)
-          messages++;total+=Buffer.byteLength(event.data);need(messages<=32&&total<=256*1024)
-          const value=JSON.parse(event.data)
-          // CDP can send notifications independently of this sole request.
-          // They are bounded and discarded, never exported or executed.
-          if(value.id!==1)return
-          stage='evaluation-reply'
-          need(!value.error)
-          if(value.result?.exceptionDetails){stage='evaluation-exception';fail(pageExceptionReason(value.result.exceptionDetails));return}
-          need(value.result?.result?.type==='object')
-          stage='resource-summary'
-          resolve(validateResources(value.result.result.value))
-        }catch{fail(stage==='resource-summary'?'summary-refused':'reply-refused')}
-      })
-      socket.addEventListener('error',()=>fail('connection-unconfirmed'));socket.addEventListener('close',()=>fail('connection-unconfirmed'))
-      if(dependencies.socketFactory)send();else socket.addEventListener('open',send,{once:true})
+    const opened=dependencies.socketFactory?Promise.resolve():new Promise((resolve,reject)=>{
+      openReject=reject;socket.addEventListener('open',resolve,{once:true})
     })
+    socket.addEventListener('message',event=>{
+      try{
+        need(typeof event.data==='string'&&Buffer.byteLength(event.data)<=20*1024**2)
+        received+=Buffer.byteLength(event.data);messages++;need(received<=40*1024**2&&messages<=512)
+        const value=JSON.parse(event.data),reply=pending.get(value?.id)
+        if(!reply)return // Unrelated bounded notifications never replace a reply.
+        pending.delete(value.id)
+        if(value.error)reply.reject(new ResourceReadFailure(stage,'reply-refused'))
+        else reply.resolve(value.result)
+      }catch{fault('reply-refused')}
+    })
+    socket.addEventListener('error',()=>fault('connection-unconfirmed'));socket.addEventListener('close',()=>fault('connection-unconfirmed'))
+    timer=setTimeout(()=>fault('timeout'),15000)
+    await opened
+    let candidate
+    const call=(method,params)=>{
+      need(!failed&&next<25&&pending.size===0)
+      need(method==='Page.getResourceTree'&&next===0&&Object.keys(params).length===0
+        ||method==='Page.getResourceContent'&&candidate&&Object.keys(params).length===2
+          &&params.frameId===candidate.frameId&&candidate.urls.includes(params.url))
+      const id=++next
+      return new Promise((resolve,reject)=>{
+        pending.set(id,{resolve,reject})
+        try{socket.send(JSON.stringify({id,method,params}))}catch{fault('send-unconfirmed')}
+      })
+    }
+    stage='resource-tree';candidate=resourceCandidates(await call('Page.getResourceTree',{}))
+    const assets=[];let total=0
+    for(const url of candidate.urls){
+      stage='resource-content'
+      const {bytes,text}=decodedResource(await call('Page.getResourceContent',{frameId:candidate.frameId,url}))
+      total+=bytes.length;need(total<=16*1024**2)
+      assets.push({path:new URL(url).pathname,bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex'),...compiledMarkers(text)})
+    }
+    stage='resource-summary'
+    const result=validateResources({original_origin:'http://tauri.localhost',resource_read_only:true,assets,
+      declared_safe_code_list:assets.some(a=>a.declared_safe_code_list),declared_presentation_case:assets.some(a=>a.declared_presentation_case)})
     return {nonce:config.nonce,original_pid:config.original_pid,...result,
-      application_or_native_IPC_sent:false,Debugger_enabled:false,raw_resource_bytes_exported:false,
+      application_or_native_IPC_sent:false,Debugger_enabled:false,page_fetch_or_CSP_change_sent:false,
+      resource_read_transport:'Page.getResourceContent',resource_bytes_transferred_to_owned_reader:true,
+      resource_bytes_written_to_artifacts:false,digest_scope:'Decoded CDP resource content bytes, not HTTP wire encoding',
       current_native_SYNC_REVIEW_CHANGED_bug_or_execution_claimed:false}
   }catch(error){
     throw error instanceof ResourceReadFailure?error:new ResourceReadFailure(stage,'unconfirmed')

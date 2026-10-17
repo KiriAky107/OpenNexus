@@ -16,7 +16,8 @@ class RendererLink(unittest.TestCase):
         self.probe,self.context,self.manifest=self.owner.probe,self.owner.context,self.owner.manifest
         self.value={'configuration':{'nonce':self.manifest['nonce'],'original_pid':321},'context':{}}
         self.result={'nonce':self.manifest['nonce'],'original_pid':321,'declared_safe_code_list':True,'declared_presentation_case':True,
-            'application_or_native_IPC_sent':False,'Debugger_enabled':False,'raw_resource_bytes_exported':False}
+            'application_or_native_IPC_sent':False,'Debugger_enabled':False,'page_fetch_or_CSP_change_sent':False,
+            'resource_read_transport':'Page.getResourceContent','resource_bytes_transferred_to_owned_reader':True,'resource_bytes_written_to_artifacts':False}
         self.probe.command=Mock(side_effect=lambda *a,**k:SimpleNamespace(returncode=0,stdout=json.dumps(self.result).encode(),stderr=b''))
 
     def test_original_package_PID_and_resource_metadata_are_bound_without_native_bug_claim(self):
@@ -43,11 +44,11 @@ class RendererLink(unittest.TestCase):
 
     def test_failed_child_keeps_only_allowlisted_diagnostic_and_never_retries(self):
         self.probe.command=Mock(return_value=SimpleNamespace(returncode=1,stderr=b'PRIVATE STDERR',
-            stdout=json.dumps({'error':'OWNED_COMPILED_RESOURCE_UNCONFIRMED','stage':'evaluation-exception','reason':'crypto-unavailable'}).encode()))
+            stdout=json.dumps({'error':'OWNED_COMPILED_RESOURCE_UNCONFIRMED','stage':'resource-content','reason':'reply-refused'}).encode()))
         with self.assertRaisesRegex(HandoffError,'READ_UNCONFIRMED'):
             renderer.read_original_renderer(self.probe,self.context,self.manifest,self.value)
         path=self.probe.output/'original-renderer-resource-diagnostic.json';value=json.loads(path.read_text('utf-8'))
-        self.assertEqual(value['stage'],'evaluation-exception');self.assertEqual(value['reason'],'crypto-unavailable')
+        self.assertEqual(value['stage'],'resource-content');self.assertEqual(value['reason'],'reply-refused')
         self.assertEqual(value['stderr_bytes_discarded'],len(b'PRIVATE STDERR'))
         self.assertNotIn('PRIVATE',path.read_text('utf-8'));self.probe.command.assert_called_once()
         self.assertFalse((self.probe.output/'original-renderer-resource-proof.json').exists())

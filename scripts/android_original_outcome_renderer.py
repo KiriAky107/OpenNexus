@@ -24,9 +24,9 @@ def read_original_renderer(probe, context, manifest, value):
                 child=json.loads(result.stdout)
                 if (type(child) is dict and set(child)=={'error','stage','reason'}
                     and child['error']=='OWNED_COMPILED_RESOURCE_UNCONFIRMED'
-                    and child['stage'] in ('admission','page-list','socket-open','evaluation-send','evaluation-reply','evaluation-exception','resource-summary')
+                    and child['stage'] in ('admission','page-list','socket-open','evaluation-send','evaluation-reply','evaluation-exception','resource-summary','resource-tree','resource-content')
                     and child['reason'] in ('unconfirmed','timeout','send-unconfirmed','connection-unconfirmed','reply-refused','summary-refused',
-                        'origin','bound','resource-unavailable','crypto-unavailable','page-exception')):
+                        'origin','bound','resource-unavailable','crypto-unavailable','page-exception','no-owned-script')):
                     diagnostic={'stage':child['stage'],'reason':child['reason']}
             except (ValueError,TypeError):pass
         atomic_json(probe.output/'original-renderer-resource-diagnostic.json',
@@ -38,7 +38,10 @@ def read_original_renderer(probe, context, manifest, value):
     require(type(proof) is dict and proof.get('nonce')==manifest['nonce'] and proof.get('original_pid')==manifest['original_pid']
             and proof.get('declared_safe_code_list') is True and proof.get('declared_presentation_case') is True
             and proof.get('application_or_native_IPC_sent') is False and proof.get('Debugger_enabled') is False
-            and proof.get('raw_resource_bytes_exported') is False, 'OUTCOME_RENDERER_READ_UNCONFIRMED')
+            and proof.get('resource_read_transport')=='Page.getResourceContent'
+            and proof.get('page_fetch_or_CSP_change_sent') is False
+            and proof.get('resource_bytes_transferred_to_owned_reader') is True
+            and proof.get('resource_bytes_written_to_artifacts') is False, 'OUTCOME_RENDERER_READ_UNCONFIRMED')
     original.same_original(probe, manifest)
     pid=probe.shell('pidof',APP,check=False)
     require(pid.returncode==0 and not pid.stderr.strip() and pid.stdout.strip()==str(manifest['original_pid']).encode('ascii'),
