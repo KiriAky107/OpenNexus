@@ -490,8 +490,18 @@ public final class RuntimeProbe extends Instrumentation {
     private void canvasToolsState(boolean trigger, boolean toolbar) {
         waitNode(node -> APP.equals(string(node.getPackageName())) && node.isVisibleToUser()
             && label(node, trigger ? "Canvas tools" : "Canvas operations", false)
-            && visibleLabel("Canvas tools") == trigger && visibleLabel("Canvas operations") == toolbar,
+            && visibleCanvasTrigger() == trigger && visibleLabel("Canvas operations") == toolbar,
             "responsive owned Canvas tools at the original width");
+    }
+
+    private boolean visibleCanvasTrigger() {
+        // The wide inline area's accessible group name is also Canvas tools.
+        // Only the actual clickable phone button establishes trigger mode.
+        for (AccessibilityNodeInfo node : nodes()) {
+            if (APP.equals(string(node.getPackageName())) && node.isVisibleToUser() && node.isClickable()
+                && "android.widget.Button".equals(string(node.getClassName())) && label(node,"Canvas tools",false)) return true;
+        }
+        return false;
     }
 
     private boolean titleBarControl(AccessibilityNodeInfo node) {
