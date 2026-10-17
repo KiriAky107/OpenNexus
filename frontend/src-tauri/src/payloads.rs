@@ -345,7 +345,15 @@ fn hash_file_info_checked(path: &Path, check: &dyn Fn() -> Result<()>) -> Result
     Ok((format!("{:x}", hasher.finalize()), total))
 }
 pub(crate) fn verify(path: &Path, digest: &str, size: u64) -> Result<()> {
-    open_verified(path, digest, size).map(drop)
+    verify_checked(path, digest, size, &|| Ok(()))
+}
+pub(crate) fn verify_checked(
+    path: &Path,
+    digest: &str,
+    size: u64,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<()> {
+    open_verified_checked(path, digest, size, check).map(drop)
 }
 /// 返回已经验证并回绕到起始位置的句柄，供流式调用方使用。
 /// 路径约束由调用方负责；此函数并不负责建立沙箱。

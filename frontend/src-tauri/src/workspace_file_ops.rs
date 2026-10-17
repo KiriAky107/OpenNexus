@@ -97,6 +97,22 @@ impl<'a> PreparedMutation<'a> {
         self,
         authorize: impl FnOnce() -> Result<()>,
     ) -> Result<AcceptedMutation<'a>> {
+        self.accept_via(|transaction| {
+            authorize()?;
+            transaction.commit()?;
+            Ok(())
+        })
+    }
+    pub(crate) fn accept_guarded(
+        self,
+        guard: &impl crate::workspace_commit::CommitGuard,
+    ) -> Result<AcceptedMutation<'a>> {
+        self.accept_via(|transaction| guard.commit(transaction))
+    }
+    fn accept_via(
+        self,
+        commit: impl FnOnce(rusqlite::Transaction<'_>) -> Result<()>,
+    ) -> Result<AcceptedMutation<'a>> {
         let Self {
             workspace,
             operation,
@@ -137,8 +153,7 @@ impl<'a> PreparedMutation<'a> {
                     origin
                 ],
             )?;
-            authorize()?;
-            tx.commit()?;
+            commit(tx)?;
         }
         Ok(AcceptedMutation {
             workspace,

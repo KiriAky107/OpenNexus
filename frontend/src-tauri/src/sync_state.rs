@@ -204,10 +204,21 @@ impl Workspace {
         Ok(())
     }
     pub fn sync_commit_payload(&self, job: &Job) -> Result<serde_json::Value> {
+        self.sync_commit_payload_checked(job, &crate::workspace_commit::UnscopedCommit)
+    }
+    pub(crate) fn sync_commit_payload_checked(
+        &self,
+        job: &Job,
+        guard: &impl crate::workspace_commit::CommitGuard,
+    ) -> Result<serde_json::Value> {
+        guard.check()?;
         self.check_job(job)?;
         // 基准快照只冻结一次；响应丢失后复用字节完全相同的负载。
-        self.db.execute("UPDATE sync_jobs SET state='committing',base_revision=COALESCE((SELECT revision FROM sync_heads WHERE binding=?1 AND file_id=?3),0) WHERE binding=?1 AND operation_id=?2 AND base_revision IS NULL",
+        let tx = self.db.unchecked_transaction()?;
+        tx.execute("UPDATE sync_jobs SET state='committing',base_revision=COALESCE((SELECT revision FROM sync_heads WHERE binding=?1 AND file_id=?3),0) WHERE binding=?1 AND operation_id=?2 AND base_revision IS NULL",
             params![job.binding,job.operation_id,job.file_id])?;
+        guard.commit(tx)?;
+        guard.check()?;
         let base: i64 = self.db.query_row(
             "SELECT base_revision FROM sync_jobs WHERE binding=?1 AND operation_id=?2",
             params![job.binding, job.operation_id],
@@ -219,8 +230,17 @@ impl Workspace {
         )
     }
     pub fn sync_ack(&mut self, job: &Job, revision: &serde_json::Value) -> Result<()> {
+        self.sync_ack_checked(job, revision, &crate::workspace_commit::UnscopedCommit)
+    }
+    pub(crate) fn sync_ack_checked(
+        &mut self,
+        job: &Job,
+        revision: &serde_json::Value,
+        guard: &impl crate::workspace_commit::CommitGuard,
+    ) -> Result<()> {
+        guard.check()?;
         self.check_binding(&job.binding)?;
-        let payload = self.sync_commit_payload(job)?;
+        let payload = self.sync_commit_payload_checked(job, guard)?;
         for field in [
             "operation_id",
             "file_id",
@@ -253,8 +273,7 @@ impl Workspace {
             "UPDATE outbox SET state='acked' WHERE operation_id=?1",
             [&job.operation_id],
         )?;
-        tx.commit()?;
-        Ok(())
+        guard.commit(tx)
     }
 }
 

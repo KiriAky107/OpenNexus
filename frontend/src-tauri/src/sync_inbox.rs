@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::Write;
 use uuid::Uuid;
+#[cfg(test)]
+#[path = "sync_inbox_checked_tests.rs"]
+mod checked_tests;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RemoteRevision {
@@ -126,6 +129,15 @@ impl Workspace {
         Ok(digest)
     }
     pub fn sync_stage(&self, binding: &str, revision: &RemoteRevision) -> Result<()> {
+        self.sync_stage_checked(binding, revision, &crate::workspace_commit::UnscopedCommit)
+    }
+    pub(crate) fn sync_stage_checked(
+        &self,
+        binding: &str,
+        revision: &RemoteRevision,
+        guard: &impl crate::workspace_commit::CommitGuard,
+    ) -> Result<()> {
+        guard.check()?;
         self.check_binding(binding)?;
         let active = self
             .sync_binding()?
@@ -147,7 +159,12 @@ impl Workspace {
         }
         if self.sync_path_enabled(&revision.path)? {
             if let Some(digest) = &revision.hash {
-                crate::payloads::verify(&self.sync_spool(digest)?, digest, revision.size as u64)?;
+                crate::payloads::verify_checked(
+                    &self.sync_spool(digest)?,
+                    digest,
+                    revision.size as u64,
+                    &|| guard.check(),
+                )?;
             }
         }
         let encoded =
@@ -163,7 +180,8 @@ impl Workspace {
         if existing.is_some_and(|value| value != encoded) {
             return Err(HostError::new("SYNC_REVISION_CHANGED"));
         }
-        self.db.execute(
+        let tx = self.db.unchecked_transaction()?;
+        tx.execute(
             "INSERT OR IGNORE INTO sync_inbox VALUES (?1,?2,?3,?4,?5,'pending')",
             params![
                 binding,
@@ -173,9 +191,16 @@ impl Workspace {
                 Uuid::new_v4().to_string()
             ],
         )?;
-        Ok(())
+        guard.commit(tx)
     }
-    fn sync_finish(&mut self, binding: &str, revision: &RemoteRevision, state: &str) -> Result<()> {
+    fn sync_finish_checked(
+        &mut self,
+        binding: &str,
+        revision: &RemoteRevision,
+        state: &str,
+        guard: &impl crate::workspace_commit::CommitGuard,
+    ) -> Result<()> {
+        guard.check()?;
         self.check_binding(binding)?;
         let tx = self.db.transaction()?;
         let initial: Option<i64> = tx
@@ -214,18 +239,21 @@ impl Workspace {
             "DELETE FROM sync_windows WHERE binding=?1 AND boundary=?2",
             params![binding, revision.sequence],
         )?;
-        tx.commit()?;
-        Ok(())
+        guard.commit(tx)
     }
-    fn sync_preserve_conflict(
+    fn sync_preserve_conflict_checked(
         &mut self,
         binding: &str,
         revision: &RemoteRevision,
         local_path: &str,
+        guard: &impl crate::workspace_commit::CommitGuard,
     ) -> Result<()> {
+        guard.check()?;
         let path = self.resolve(local_path)?;
         let digest = if path.is_file() {
-            self.sync_store_file(&path)?
+            let digest = crate::payloads::hash_file_checked(&path, &|| guard.check())?;
+            self.snapshot_file_checked(&path, &digest, &|| guard.check())?;
+            digest
         } else {
             String::new()
         };
@@ -245,10 +273,18 @@ impl Workspace {
             ],
         )?;
         tx.execute("UPDATE sync_jobs SET state='conflict' WHERE binding=?1 AND (file_id=?2 OR path=?3) AND state NOT IN ('acked','archived')", params![binding,revision.file_id,local_path])?;
-        tx.commit()?;
-        self.sync_finish(binding, revision, "conflict")
+        guard.commit(tx)?;
+        self.sync_finish_checked(binding, revision, "conflict", guard)
     }
     pub fn sync_apply_pending(&mut self, binding: &str) -> Result<bool> {
+        self.sync_apply_pending_checked(binding, &crate::workspace_commit::UnscopedCommit)
+    }
+    pub(crate) fn sync_apply_pending_checked(
+        &mut self,
+        binding: &str,
+        guard: &impl crate::workspace_commit::CommitGuard,
+    ) -> Result<bool> {
+        guard.check()?;
         self.check_binding(binding)?;
         let pending: Option<(String,String,String)> = self.db.query_row("SELECT revision,operation_id,rename_id FROM sync_inbox WHERE binding=?1 AND state='pending' ORDER BY sequence LIMIT 1", [binding], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
         let Some((encoded, operation_id, rename_id)) = pending else {
@@ -257,7 +293,7 @@ impl Workspace {
         let revision: RemoteRevision =
             serde_json::from_str(&encoded).map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?;
         if !self.sync_path_enabled(&revision.path)? {
-            self.sync_finish(binding, &revision, "excluded")?;
+            self.sync_finish_checked(binding, &revision, "excluded", guard)?;
             return Ok(true);
         }
         let own: Option<Job> = self.db.query_row("SELECT binding,operation_id,file_id,path,hash,size,operation,state,base_revision,upload_id FROM sync_jobs WHERE binding=?1 AND operation_id=?2", params![binding,revision.operation_id], |r| {
@@ -265,19 +301,20 @@ impl Workspace {
         }).optional()?;
         if let Some(job) = own.filter(|job| !matches!(job.state.as_str(), "archived" | "conflict"))
         {
-            self.sync_ack(
+            self.sync_ack_checked(
                 &job,
                 &serde_json::to_value(&revision)
                     .map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))?,
+                guard,
             )?;
-            self.sync_finish(binding, &revision, "applied")?;
+            self.sync_finish_checked(binding, &revision, "applied", guard)?;
             return Ok(true);
         }
         if self
             .operation(&operation_id)?
             .is_some_and(|value| value["state"] == "committed")
         {
-            self.sync_finish(binding, &revision, "applied")?;
+            self.sync_finish_checked(binding, &revision, "applied", guard)?;
             return Ok(true);
         }
         let known: Option<i64> = self
@@ -289,7 +326,7 @@ impl Workspace {
             )
             .optional()?;
         if known.is_some_and(|head| head >= revision.sequence) {
-            self.sync_finish(binding, &revision, "applied")?;
+            self.sync_finish_checked(binding, &revision, "applied", guard)?;
             return Ok(true);
         }
         let local_path = self.path_for_id(&revision.file_id).ok();
@@ -297,7 +334,7 @@ impl Workspace {
         let path = conflict_path.as_str();
         let local = self.resolve(path)?;
         let current = if local.is_file() {
-            crate::payloads::hash_file(&local)?
+            crate::payloads::hash_file_checked(&local, &|| guard.check())?
         } else {
             String::new()
         };
@@ -320,41 +357,57 @@ impl Workspace {
             || (local_path.is_some() && head.as_deref() != Some(current.as_str()))
             || target_collision;
         if conflict {
-            self.sync_preserve_conflict(binding, &revision, path)?;
+            self.sync_preserve_conflict_checked(binding, &revision, path, guard)?;
             return Ok(true);
         }
         if revision.operation == "delete" {
             if local_path.is_some() && local.exists() {
-                self.mutate_with_origin("delete", path, "", &current, &operation_id, "remote")?;
+                self.prepare_mutation_checked(
+                    "delete",
+                    path,
+                    "",
+                    &current,
+                    (&operation_id, "remote"),
+                    &|| guard.check(),
+                )?
+                .accept_guarded(guard)?
+                .complete()?;
             }
         } else {
             if let Some(previous) = local_path
                 .as_deref()
                 .filter(|previous| *previous != revision.path)
             {
-                self.mutate_with_origin(
+                self.prepare_mutation_checked(
                     "rename",
                     previous,
                     &revision.path,
                     &current,
-                    &rename_id,
-                    "remote",
-                )?;
+                    (&rename_id, "remote"),
+                    &|| guard.check(),
+                )?
+                .accept_guarded(guard)?
+                .complete()?;
             }
             let digest = revision
                 .hash
                 .as_deref()
                 .ok_or_else(|| HostError::new("SYNC_RESPONSE_INVALID"))?;
-            self.write_spooled_with_identity(
+            self.prepare_write_checked(
                 &revision.path,
                 &current,
-                (digest, revision.size as u64),
+                crate::payloads::WritePayload::Stored {
+                    digest,
+                    size: revision.size as u64,
+                },
                 "remote",
                 &operation_id,
-                Some(&revision.file_id),
-            )?;
+                (Some(&revision.file_id), &|| guard.check()),
+            )?
+            .accept_guarded(guard)?
+            .complete()?;
         }
-        self.sync_finish(binding, &revision, "applied")?;
+        self.sync_finish_checked(binding, &revision, "applied", guard)?;
         Ok(true)
     }
     pub fn sync_conflicts(&self, binding: &str) -> Result<Vec<Value>> {
