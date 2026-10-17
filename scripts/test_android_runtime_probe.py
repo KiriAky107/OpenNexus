@@ -121,6 +121,66 @@ class RuntimeBoundaries(unittest.TestCase):
         self.assertFalse(rich_image_editor_ready({'available':False}))
         self.assertFalse(rich_image_editor_ready({'available':True,'styles':dict(rendered['styles'],imageSave={})}))
 
+    def test_original_import_can_finish_between_readonly_observations_before_one_approval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory)
+            complete,rendered=self.image_save_fixture()
+            pending=dict(complete,images=[],drafts=[dict(complete['drafts'][0],generation=2,content=RICH_IMAGE_TEXT+'\n')])
+            probe.image_save_rows=Mock(side_effect=[pending,complete,complete,complete])
+            probe.read_native_styles=Mock(side_effect=[{'available':False},rendered])
+            probe.device=Mock(side_effect=AssertionError('Read-only observation must not send input'))
+            process=Mock();process.poll.return_value=None
+            with patch('android_runtime_probe.time.sleep') as pause:
+                observed=probe.wait_original_image_save_observation('rich-image',process)
+            self.assertEqual(observed,complete)
+            self.assertEqual(probe.image_save_rows.call_count,4)
+            self.assertEqual(probe.image_save_rows.call_args_list[0].args[1],'observe-0-before')
+            self.assertEqual(probe.image_save_rows.call_args_list[3].args[1],'observe-1-stable')
+            pause.assert_called_once_with(.2);probe.device.assert_not_called()
+            self.assertEqual(json.loads((probe.output/'rich-image-stable-before-save-receipts.json').read_text()),complete)
+
+    def test_original_import_observation_refuses_unknown_save_or_replaced_intent_without_replay(self):
+        complete,rendered=self.image_save_fixture()
+        for replacement in (dict(complete,saves=[{'state':'prepared'}]),
+                dict(complete,images=[dict(complete['images'][0],operation_id='replacement')]),
+                dict(complete,drafts=[dict(complete['drafts'][0],id='replacement')]),
+                dict(complete,drafts=[dict(complete['drafts'][0],generation=4,content='later edit')])):
+            with self.subTest(replacement=replacement),tempfile.TemporaryDirectory() as directory:
+                probe=Probe.__new__(Probe);probe.output=Path(directory)
+                probe.image_save_rows=Mock(side_effect=[complete,replacement]);probe.read_native_styles=Mock(return_value=rendered)
+                probe.device=Mock(side_effect=AssertionError('Unknown original must never be replayed'))
+                process=Mock();process.poll.return_value=None
+                with patch('android_runtime_probe.time.sleep') as pause,self.assertRaises(RuntimeError):
+                    probe.wait_original_image_save_observation('rich-image',process)
+                pause.assert_not_called();probe.device.assert_not_called()
+                self.assertFalse((probe.output/'rich-image-stable-before-save-receipts.json').exists())
+
+    def test_original_import_readonly_wait_is_bounded_when_actual_renderer_stays_busy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory)
+            complete,_=self.image_save_fixture()
+            probe.image_save_rows=Mock(return_value=complete)
+            probe.read_native_styles=Mock(return_value={'available':False})
+            probe.device=Mock(side_effect=AssertionError('Unready renderer must never receive input'))
+            process=Mock();process.poll.return_value=None
+            with patch('android_runtime_probe.time.sleep'),patch('android_runtime_probe.time.monotonic',return_value=1),self.assertRaises(RuntimeError):
+                probe.wait_original_image_save_observation('rich-image',process)
+            self.assertEqual(probe.image_save_rows.call_count,16)
+            self.assertEqual(probe.read_native_styles.call_count,8)
+            probe.device.assert_not_called()
+            self.assertFalse((probe.output/'rich-image-stable-before-save-receipts.json').exists())
+
+    def test_original_import_readonly_wait_obeys_deadline_before_any_save_approval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory)
+            complete,_=self.image_save_fixture()
+            probe.image_save_rows=Mock(return_value=complete);probe.read_native_styles=Mock(return_value={'available':False})
+            process=Mock();process.poll.return_value=None
+            with patch('android_runtime_probe.time.sleep') as pause,patch('android_runtime_probe.time.monotonic',side_effect=[1,22]),self.assertRaises(RuntimeError):
+                probe.wait_original_image_save_observation('rich-image',process)
+            self.assertEqual(probe.image_save_rows.call_count,2)
+            pause.assert_not_called()
+
     def test_unhydrated_image_editor_stops_without_text_or_save_approval(self):
         with tempfile.TemporaryDirectory() as directory:
             probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562');probe.adb=Path('/owned/adb')

@@ -493,7 +493,7 @@ class Probe:
 
     def image_save_rows(self, phase, label):
         require_hosted_emulator(self.args.serial)
-        require(phase in ('rich-image', 'canvas-image') and label in ('before-save', 'stable-before-save', 'after-save', 'failed'),
+        require(phase in ('rich-image', 'canvas-image') and (label in ('before-save', 'stable-before-save', 'after-save', 'failed') or re.fullmatch(r'observe-[0-7]-(?:before|stable)',label)),
             'Refusing an unrelated image/save metadata observation')
         self.wait_owned_connection()
         if self.root is None:
@@ -510,6 +510,63 @@ class Probe:
             report[key] = [dict(zip(columns[key], row)) for row in rows]
         (self.output/(phase+'-'+label+'-receipts.json')).write_text(json.dumps(report, ensure_ascii=False, indent=2)+'\n', 'utf-8')
         return report
+
+    def wait_original_image_save_observation(self, phase, process):
+        # The original Android picker can return before its one import commits.
+        # Observe only that same draft/intent; never re-pick, edit or tap Save.
+        deadline = time.monotonic()+20
+        identity = initial = original_image = None
+        last_generation = last_image_state = -1
+        last_error = 'Original image import did not become ready; no Save sent'
+        for observation in range(8):
+            require(process.poll() is None, 'Original image driver ended before observation')
+            before = self.image_save_rows(phase, f'observe-{observation}-before')
+            rendered = self.read_native_styles(f'{phase}-save-observation-{observation}')
+            stable = self.image_save_rows(phase, f'observe-{observation}-stable')
+            for report in (before, stable):
+                require(len(report['drafts']) == 1 and not report['saves'] and len(report['images']) <= 1,
+                    'Unknown Save, duplicate draft or image; no Save sent')
+                draft = report['drafts'][0]
+                current = (report.get('path'),draft['id'],draft['path'])
+                if identity is None:
+                    identity, initial = current, (draft['generation'],draft['content'])
+                require(current == identity, 'Original import identity changed during observation; no Save sent')
+                require(draft['saved_generation'] == 0 and draft['generation'] >= last_generation,
+                    'Original draft was saved or regressed during observation; no Save sent')
+                last_generation = draft['generation']
+                if not report['images']:
+                    require(original_image is None and (draft['generation'],draft['content']) == initial,
+                        'Original import disappeared or draft changed; no Save sent')
+                    continue
+                image = report['images'][0]
+                frozen = {key:value for key,value in image.items() if key not in ('state','error')}
+                if original_image is None:
+                    original_image = frozen
+                require(frozen == original_image and image['state'] in ('prepared','committed') and not image.get('error'),
+                    'Original image intent changed or failed; no Save sent')
+                image_state = int(image['state'] == 'committed')
+                require(image_state >= last_image_state, 'Original image intent regressed; no Save sent')
+                last_image_state = image_state
+                require(image['draft_id'] == draft['id'] and image['hash'] == digest(IMAGE_BYTES)
+                    and image['size'] == len(IMAGE_BYTES)
+                    and draft['generation'] in (image['generation'],image['generation']+1),
+                    'Original image identity, bytes or generation changed; no Save sent')
+                if draft['generation'] == image['generation']+1:
+                    require(draft['content'] == image['content_after'], 'Original image content changed; no Save sent')
+            if before == stable:
+                try:
+                    validate_image_save_observation(stable, rendered, phase)
+                except RuntimeError as error:
+                    last_error = str(error)
+                else:
+                    # Keep the canonical exact before/after comparison consumed
+                    # by phase(), alongside every bounded original observation.
+                    for label,value in (('before-save',before),('stable-before-save',stable)):
+                        (self.output/(phase+'-'+label+'-receipts.json')).write_text(json.dumps(value,indent=2)+'\n','utf-8')
+                    return stable
+            require(time.monotonic() < deadline, last_error)
+            time.sleep(.2)
+        raise RuntimeError(last_error)
 
     def image_save_instrumentation(self, phase):
         require_hosted_emulator(self.args.serial)
@@ -547,13 +604,7 @@ class Probe:
                         time.sleep(.2)
                     require(rich_image_editor_ready(rendered), 'Original rich editor never became ready; no text sent')
                 else:
-                    # Two matching original native observations plus the loaded
-                    # image and uncovered action precede the single Save.
-                    before = self.image_save_rows(phase, 'before-save')
-                    rendered = self.read_native_styles(phase+'-before-save')
-                    stable = self.image_save_rows(phase, 'stable-before-save')
-                    require(before == stable, 'Original import changed during observation; no Save sent')
-                    validate_image_save_observation(stable, rendered, phase)
+                    self.wait_original_image_save_observation(phase, process)
                 require(process.poll() is None, 'Original image driver ended before input approval')
                 signal = 'no_backup/owned-'+phase+'-'+stage+'.proceed'
                 pending = signal+'.pending'
