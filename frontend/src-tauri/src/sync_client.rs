@@ -7,9 +7,9 @@ use crate::{
 use reqwest::{Client, Method, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::io::Read;
 use std::{
-    io::{Read, Seek, SeekFrom},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -18,6 +18,9 @@ use zeroize::Zeroizing;
 #[cfg(test)]
 #[path = "mobile_sync_access_tests.rs"]
 mod mobile_sync_access_tests;
+#[cfg(test)]
+#[path = "sync_transport_foreground_tests.rs"]
+mod transport_foreground_tests;
 
 #[derive(Debug)]
 pub struct SyncError {
@@ -170,6 +173,7 @@ pub struct SyncClient {
     client: Client,
     token: Zeroizing<String>,
     progress: Option<Arc<dyn Fn(Event) + Send + Sync>>,
+    foreground: Option<crate::mobile_sync_foreground::Lease>,
 }
 
 pub(crate) fn canonical_endpoint(endpoint: &str, allow_test_http: bool) -> Result<Url> {
@@ -202,7 +206,53 @@ impl SyncClient {
             client,
             token,
             progress: None,
+            foreground: None,
         })
+    }
+    // Native-only, nonserde and set by the authenticated issuing-device gate.
+    // The original lease remains attached even if a native caller retains this
+    // client beyond its action; no WebView URL/method/token hook is added.
+    pub(crate) fn with_foreground(mut self, lease: crate::mobile_sync_foreground::Lease) -> Self {
+        self.foreground = Some(lease);
+        self
+    }
+    fn check_foreground(&self) -> Result<()> {
+        if let Some(lease) = &self.foreground {
+            lease.check()?;
+        }
+        Ok(())
+    }
+    async fn guard_transport<T>(
+        &self,
+        action: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<T> {
+        if let Some(lease) = &self.foreground {
+            lease.guard(action).await
+        } else {
+            action.await
+        }
+    }
+    async fn io<T: Send + 'static>(
+        &self,
+        action: impl FnOnce(&dyn Fn() -> crate::workspace::Result<()>) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let foreground = self.foreground.clone();
+        tokio::task::spawn_blocking(move || {
+            let check = || {
+                if let Some(lease) = &foreground {
+                    lease
+                        .check()
+                        .map_err(|e| crate::workspace::HostError::new(&e.code))?;
+                }
+                Ok(())
+            };
+            check()?;
+            let value = action(&check)?;
+            check()?;
+            Ok(value)
+        })
+        .await
+        .map_err(|_| SyncError::new("SYNC_WORKER_INTERRUPTED"))?
     }
     pub fn with_progress(mut self, progress: Arc<dyn Fn(Event) + Send + Sync>) -> Self {
         self.progress = Some(progress);
@@ -224,6 +274,7 @@ impl SyncClient {
         body: Option<Vec<u8>>,
         is_json: bool,
     ) -> Result<Value> {
+        self.check_foreground()?;
         if !path.starts_with("sync/v1/") || path.contains(['\\', '#']) || path.contains("..") {
             return Err(SyncError::new("SYNC_PATH_INVALID"));
         }
@@ -247,10 +298,15 @@ impl SyncClient {
                 )
                 .body(body);
         }
-        let mut response = request
-            .send()
-            .await
-            .map_err(|_| SyncError::new("SYNC_NETWORK_ERROR"))?;
+        self.check_foreground()?;
+        let mut response = self
+            .guard_transport(async {
+                request
+                    .send()
+                    .await
+                    .map_err(|_| SyncError::new("SYNC_NETWORK_ERROR"))
+            })
+            .await?;
         let status = response.status().as_u16();
         let retry_after = response
             .headers()
@@ -258,16 +314,21 @@ impl SyncClient {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse().ok());
         let mut body = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| SyncError::new("SYNC_NETWORK_ERROR"))?
+        while let Some(chunk) = self
+            .guard_transport(async {
+                response
+                    .chunk()
+                    .await
+                    .map_err(|_| SyncError::new("SYNC_NETWORK_ERROR"))
+            })
+            .await?
         {
             if body.len() + chunk.len() > 4 * 1024 * 1024 {
                 return Err(SyncError::new("SYNC_RESPONSE_TOO_LARGE"));
             }
             body.extend_from_slice(&chunk);
         }
+        self.check_foreground()?;
         let value: Value = if body.is_empty() {
             Value::Null
         } else {
@@ -547,14 +608,20 @@ impl SyncClient {
             TransferPhase::Receiving,
         );
         self.report(Event::Transfer(transfer.clone()));
-        if target.exists() {
-            crate::payloads::verify(&target, digest, revision.size as u64)?;
-            workspace.access(|ws| ws.check_binding(&binding.id))?;
+        let expected = digest.to_owned();
+        let size = revision.size as u64;
+        let spool = self
+            .io(move |check| {
+                crate::sync_transfer_io::Download::prepare(target, expected, size, check)
+            })
+            .await?;
+        workspace.access(|ws| ws.check_binding(&binding.id))?;
+        let Some(mut spool) = spool else {
             transfer.bytes_done = transfer.total_bytes;
             transfer.phase = TransferPhase::Cached;
             self.report(Event::Transfer(transfer));
             return Ok(());
-        }
+        };
         let url = self
             .endpoint
             .join(&format!(
@@ -562,13 +629,17 @@ impl SyncClient {
                 binding.remote_vault
             ))
             .map_err(|_| SyncError::new("SYNC_PATH_INVALID"))?;
+        self.check_foreground()?;
         let mut response = self
-            .client
-            .get(url)
-            .bearer_auth(self.token.as_str())
-            .send()
-            .await
-            .map_err(|_| SyncError::new("SYNC_NETWORK_ERROR"))?;
+            .guard_transport(async {
+                self.client
+                    .get(url)
+                    .bearer_auth(self.token.as_str())
+                    .send()
+                    .await
+                    .map_err(|_| SyncError::new("SYNC_NETWORK_ERROR"))
+            })
+            .await?;
         if !response.status().is_success() {
             return Err(SyncError {
                 code: "SYNC_DOWNLOAD_FAILED".into(),
@@ -576,35 +647,23 @@ impl SyncClient {
                 retry_after: None,
             });
         }
-        let mut file = tempfile::NamedTempFile::new_in(
-            target
-                .parent()
-                .ok_or_else(|| SyncError::new("SYNC_SPOOL_FAILED"))?,
-        )?;
-        let mut hasher = Sha256::new();
-        let mut length = 0u64;
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| SyncError::new("SYNC_NETWORK_ERROR"))?
+        while let Some(chunk) = self
+            .guard_transport(async {
+                response
+                    .chunk()
+                    .await
+                    .map_err(|_| SyncError::new("SYNC_NETWORK_ERROR"))
+            })
+            .await?
         {
-            length += chunk.len() as u64;
-            if length > revision.size as u64 {
-                return Err(SyncError::new("SYNC_OBJECT_CORRUPT"));
-            }
             workspace.access(|ws| ws.check_binding(&binding.id))?;
-            std::io::Write::write_all(&mut file, &chunk)?;
-            hasher.update(&chunk);
-            transfer.bytes_done = length;
-            transfer.transferred_bytes = length;
+            spool = self.io(move |check| spool.append(&chunk, check)).await?;
+            transfer.bytes_done = spool.length();
+            transfer.transferred_bytes = spool.length();
             self.report(Event::Transfer(transfer.clone()));
         }
-        if length != revision.size as u64 || format!("{:x}", hasher.finalize()) != digest {
-            return Err(SyncError::new("SYNC_OBJECT_CORRUPT"));
-        }
-        file.as_file().sync_all()?;
-        file.persist_noclobber(target)
-            .map_err(|_| SyncError::new("SYNC_SPOOL_FAILED"))?;
+        self.io(move |check| spool.finish(check)).await?;
+        workspace.access(|ws| ws.check_binding(&binding.id))?;
         transfer.phase = TransferPhase::Verified;
         self.report(Event::Transfer(transfer));
         Ok(())
@@ -616,9 +675,12 @@ impl SyncClient {
         job: &Job,
     ) -> Result<()> {
         let path = workspace.access(|ws| ws.sync_spool(&job.hash))?;
-        let mut file = crate::payloads::open_verified(&path, &job.hash, job.size as u64)?;
+        let expected = job.hash.clone();
+        let size = job.size as u64;
+        let mut file = self
+            .io(move |check| crate::sync_transfer_io::Upload::open(path, &expected, size, check))
+            .await?;
         workspace.access(|ws| ws.check_binding(&binding.id))?;
-        let mut buffer = vec![0u8; 1048576];
         let base = format!("sync/v1/vaults/{}/uploads", binding.remote_vault);
         let mut upload_id = job.upload_id.clone();
         let mut offset = 0;
@@ -678,18 +740,16 @@ impl SyncClient {
         transfer.bytes_done = resumed;
         transfer.resumed_bytes = resumed;
         self.report(Event::Transfer(transfer.clone()));
-        file.seek(SeekFrom::Start(offset))?;
         while offset < job.size as u64 {
             workspace.access(|ws| ws.check_binding(&binding.id))?;
-            let count = file.read(&mut buffer)?;
-            if count == 0 {
-                return Err(SyncError::new("SYNC_SPOOL_CORRUPT"));
-            }
+            let (original, buffer) = self.io(move |check| file.read_part(offset, check)).await?;
+            file = original;
+            let count = buffer.len();
             let value = self
                 .send(
                     Method::PUT,
                     &format!("{base}/{id}?offset={offset}"),
-                    Some(buffer[..count].to_vec()),
+                    Some(buffer),
                     false,
                 )
                 .await?;
@@ -701,6 +761,8 @@ impl SyncClient {
             transfer.transferred_bytes = offset - resumed;
             self.report(Event::Transfer(transfer.clone()));
         }
+        workspace.access(|ws| ws.check_binding(&binding.id))?;
+        self.check_foreground()?;
         let value = self
             .json(Method::POST, &format!("{base}/{id}/complete"), None)
             .await?;

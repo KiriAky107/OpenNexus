@@ -360,7 +360,7 @@ pub(crate) fn verify_checked(
 pub(crate) fn open_verified(path: &Path, digest: &str, size: u64) -> Result<fs::File> {
     open_verified_checked(path, digest, size, &|| Ok(()))
 }
-fn open_verified_checked(
+pub(crate) fn open_verified_checked(
     path: &Path,
     digest: &str,
     size: u64,

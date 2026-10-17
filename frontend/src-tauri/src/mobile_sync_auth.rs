@@ -406,7 +406,8 @@ impl<S: SecretStore> Auth<S> {
                 scope.endpoint(),
                 Zeroizing::new(record.session.access_token.clone()),
                 false,
-            )?;
+            )?
+            .with_foreground(lease.clone());
             Ok((
                 client,
                 AuthenticatedDevice {
@@ -2647,6 +2648,43 @@ mod tests {
             assert!(ws.sync_conflicts(&binding.id)?.is_empty());
             Ok(())
         }).unwrap();
+    }
+
+    #[tokio::test]
+    async fn native_sync_authenticated_client_retains_issuing_epoch_after_action_returns() {
+        let root = tempfile::tempdir().unwrap();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "first")));
+        let (foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), MemoryStore::default()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let client = auth
+            .authorized_device(&lease, &scope, &operation, 101, |client, _| async move {
+                Ok(client)
+            })
+            .await
+            .unwrap();
+        foreground.on_stop();
+        foreground.on_start();
+        assert_eq!(
+            client
+                .json(reqwest::Method::GET, "sync/v1/handshake?protocol=1", None)
+                .await
+                .unwrap_err()
+                .code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 1);
+        assert_eq!(remote.refreshes.load(Ordering::SeqCst), 0);
+        assert_eq!(remote.logouts.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
