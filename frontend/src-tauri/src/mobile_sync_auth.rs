@@ -1944,12 +1944,13 @@ mod tests {
         auth.store.fail_read.store(true, Ordering::SeqCst);
         assert_eq!(
             crate::mobile_sync_binding::operation(
-                &auth,
+                &mut auth,
                 &lease,
                 &request.selection,
                 &engine,
                 &request.operation_id
             )
+            .await
             .unwrap()
             .unwrap()
             .attempt_revision,
@@ -1957,13 +1958,14 @@ mod tests {
         );
         assert_eq!(
             crate::mobile_sync_binding::pending(
-                &auth,
+                &mut auth,
                 &lease,
                 &request.selection,
                 &engine,
                 None,
                 20
             )
+            .await
             .unwrap()
             .items
             .len(),

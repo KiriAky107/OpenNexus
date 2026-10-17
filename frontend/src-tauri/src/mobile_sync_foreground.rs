@@ -160,6 +160,20 @@ impl ScopedWorkspace {
         }
         self.lease.check()
     }
+    pub fn check_initial_target(&self, vault_id: &str) -> Result<()> {
+        if self.device.is_none() {
+            return Err(SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"));
+        }
+        self.access(|ws| {
+            if ws.vault_id != vault_id {
+                return Err(crate::workspace::HostError::new("VAULT_CHANGED"));
+            }
+            if ws.sync_binding()?.is_some() {
+                return Err(crate::workspace::HostError::new("SYNC_ALREADY_BOUND"));
+            }
+            Ok(())
+        })
+    }
 
     /// Persist the original confirmation before any remote snapshot/preparation.
     /// A repeated confirmation returns metadata and never another work ticket.

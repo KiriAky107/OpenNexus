@@ -12,49 +12,84 @@ use uuid::Uuid;
 
 /// Recover original local metadata under the selected native identity without
 /// opening its credential payload, starting HTTP, or retrying a confirmation.
-pub fn operation<S: crate::mobile_sync_auth::SecretStore>(
-    auth: &crate::mobile_sync_auth::Auth<S>,
+pub async fn operation<S: crate::mobile_sync_auth::SecretStore>(
+    auth: &mut crate::mobile_sync_auth::Auth<S>,
     lease: &crate::mobile_sync_foreground::Lease,
     expected: &Selection,
     engine: &std::sync::Arc<std::sync::Mutex<Option<crate::mobile_workspace::MobileWorkspace>>>,
     operation: &str,
 ) -> std::result::Result<Option<Intent>, crate::sync_client::SyncError> {
-    selected_read(auth, lease, expected, engine, |ws, scope| {
-        ws.mobile_binding_read(scope, operation)
+    let operation = operation.to_owned();
+    selected_read(auth, lease, expected, engine, move |ws, scope| {
+        ws.mobile_binding_read(scope, &operation)
     })
+    .await
 }
-pub fn pending<S: crate::mobile_sync_auth::SecretStore>(
-    auth: &crate::mobile_sync_auth::Auth<S>,
+pub async fn pending<S: crate::mobile_sync_auth::SecretStore>(
+    auth: &mut crate::mobile_sync_auth::Auth<S>,
     lease: &crate::mobile_sync_foreground::Lease,
     expected: &Selection,
     engine: &std::sync::Arc<std::sync::Mutex<Option<crate::mobile_workspace::MobileWorkspace>>>,
     after: Option<&str>,
     limit: usize,
 ) -> std::result::Result<Page, crate::sync_client::SyncError> {
-    selected_read(auth, lease, expected, engine, |ws, scope| {
-        ws.mobile_binding_pending(scope, after, limit)
+    let after = after.map(str::to_owned);
+    selected_read(auth, lease, expected, engine, move |ws, scope| {
+        ws.mobile_binding_pending(scope, after.as_deref(), limit)
     })
+    .await
 }
-fn selected_read<S: crate::mobile_sync_auth::SecretStore, T>(
-    auth: &crate::mobile_sync_auth::Auth<S>,
+#[derive(Serialize)]
+pub struct Status {
+    pub vault_id: String,
+    pub binding: Option<Binding>,
+    pub another_connection: bool,
+}
+pub async fn status<S: crate::mobile_sync_auth::SecretStore>(
+    auth: &mut crate::mobile_sync_auth::Auth<S>,
     lease: &crate::mobile_sync_foreground::Lease,
     expected: &Selection,
     engine: &std::sync::Arc<std::sync::Mutex<Option<crate::mobile_workspace::MobileWorkspace>>>,
-    action: impl FnOnce(&Workspace, &Scope) -> Result<T>,
+) -> std::result::Result<Status, crate::sync_client::SyncError> {
+    selected_read(auth, lease, expected, engine, |ws, scope| {
+        let current = ws.sync_binding()?;
+        let another_connection = current.as_ref().is_some_and(|binding| {
+            binding.endpoint != scope.endpoint() || binding.account != scope.account()
+        });
+        Ok(Status {
+            vault_id: ws.vault_id.clone(),
+            binding: current.filter(|_| !another_connection),
+            another_connection,
+        })
+    })
+    .await
+}
+async fn selected_read<S: crate::mobile_sync_auth::SecretStore, T: Send + 'static>(
+    auth: &mut crate::mobile_sync_auth::Auth<S>,
+    lease: &crate::mobile_sync_foreground::Lease,
+    expected: &Selection,
+    engine: &std::sync::Arc<std::sync::Mutex<Option<crate::mobile_workspace::MobileWorkspace>>>,
+    action: impl FnOnce(&Workspace, &Scope) -> Result<T> + Send + 'static,
 ) -> std::result::Result<T, crate::sync_client::SyncError> {
     use crate::sync_client::SyncError;
     if auth.selection(lease)?.as_ref() != Some(expected) {
         return Err(SyncError::new("SYNC_AUTH_SELECTION_CHANGED"));
     }
     let scope = Scope::new(&expected.endpoint, &expected.account)?;
-    let guard = engine.lock().map_err(|_| SyncError::new("HOST_BUSY"))?;
-    lease.with_current(|| {
-        let ws = &guard
-            .as_ref()
-            .ok_or_else(|| SyncError::new("MOBILE_STORAGE_UNAVAILABLE"))?
-            .workspace;
-        action(ws, &scope).map_err(Into::into)
+    let engine = engine.clone();
+    let lease = lease.clone();
+    tokio::task::spawn_blocking(move || {
+        let guard = engine.lock().map_err(|_| SyncError::new("HOST_BUSY"))?;
+        lease.with_current(|| {
+            let ws = &guard
+                .as_ref()
+                .ok_or_else(|| SyncError::new("MOBILE_STORAGE_UNAVAILABLE"))?
+                .workspace;
+            action(ws, &scope).map_err(Into::into)
+        })
     })
+    .await
+    .map_err(|_| SyncError::new("SYNC_WORKER_INTERRUPTED"))?
 }
 
 const MAX_RECORD: usize = 4096;
