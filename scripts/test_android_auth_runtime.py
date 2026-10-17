@@ -7,6 +7,29 @@ import android_auth_runtime as module
 
 
 class AuthRuntimeBoundaries(unittest.TestCase):
+    def test_recovery_scope_only_bootstraps_a_new_identity_before_the_unfinished_fault_checks(self):
+        from pathlib import Path
+        probe=object.__new__(module.AuthProbe);probe.args=Namespace(scope='recovery');probe.owner=Path('owned-unit-only')
+        probe.boot=Mock();probe.binding={'native_auth_gateway':{'present':True}};probe.stage_owned_input=Mock();probe.auth_phase=Mock()
+        initial={'users':[{'devices':[]},{'devices':[]}],'requests':{'counts':{}}}
+        logged={'users':[{'devices':[{'id':'device-a'}],'session_counts':[{'sessions':1}]},{}],
+            'requests':{'counts':{'login:200':1}}}
+        probe.observe=Mock(side_effect=[initial,logged])
+        probe.snapshot=Mock(return_value={'selection':{'operation_id':'original'},'intents':[
+            {'operation_id':'original','kind':'login','phase':'active','device_id':'device-a'}]})
+        probe.ciphertext_fingerprints=Mock(return_value={'opaque-ciphertext':'a'*64})
+        probe.control=Mock(side_effect=RuntimeError('unit stops before first fault'))
+        with patch.object(module,'read_json',return_value=self.configuration()):
+            with self.assertRaisesRegex(RuntimeError,'unit stops before first fault'):probe.run()
+        probe.auth_phase.assert_called_once_with('login-a',cold=True)
+        probe.control.assert_called_once_with('drop_refresh')
+        self.assertEqual([call.args[0] for call in probe.observe.call_args_list],['initial','login'])
+
+    def test_an_unknown_auth_scope_is_rejected_before_device_boot_or_private_input(self):
+        probe=object.__new__(module.AuthProbe);probe.args=Namespace(scope='unrecognized');probe.boot=Mock()
+        with self.assertRaises(RuntimeError):probe.run()
+        probe.boot.assert_not_called()
+
     def test_live_background_driver_cannot_start_on_a_developer_host_or_with_a_nonoriginal_control_id(self):
         probe=object.__new__(module.AuthProbe);probe.args=Namespace(serial='emulator-5562')
         probe.start_app=Mock();probe.shell=Mock();probe.control=Mock()

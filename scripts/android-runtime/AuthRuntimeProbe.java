@@ -118,7 +118,9 @@ public final class AuthRuntimeProbe extends Instrumentation {
         // explicit read a person uses; never infer a usable native selection
         // from the preceding instrumentation's view or re-submit a mutation.
         stage="read-current-before-action";click("Read current connection");
+        stage="read-current-rendered-list";
         waitPresent(node->label(node,"Saved connections"));
+        stage="read-current-idle-action";
         waitFor(node->label(node,"Read current connection") && node.isEnabled(),true);
     }
     private void unusable() {
@@ -162,6 +164,7 @@ public final class AuthRuntimeProbe extends Instrumentation {
         require(java.util.Arrays.equals(signal,"finish\n".getBytes(StandardCharsets.UTF_8)),"Original background signal changed");
     }
     private void click(String name) {
+        stage="tap-"+name.replace(' ','-');
         AccessibilityNodeInfo initial=waitFor(n->label(n,name) && n.isEnabled(),true);
         Predicate<AccessibilityNodeInfo> target=n->label(n,name) && n.isEnabled() && n.isClickable();
         // A label may be a child of the actual clickable button.
@@ -179,7 +182,11 @@ public final class AuthRuntimeProbe extends Instrumentation {
         long start=SystemClock.uptimeMillis();touch(start,start,MotionEvent.ACTION_DOWN,before.centerX(),before.centerY());
         SystemClock.sleep(50);touch(start,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,before.centerX(),before.centerY());
         try { ui.waitForIdle(150,5000); }
-        catch (java.util.concurrent.TimeoutException error) { throw new IllegalStateException("Owned tap did not settle"); }
+        catch (java.util.concurrent.TimeoutException error) {
+            // Accessibility may keep reporting caret/timer events. The single
+            // tap is already sent; only the following semantic state and
+            // original native/provider outcomes can confirm it. Never re-tap.
+        }
     }
     private AccessibilityNodeInfo unique(Predicate<AccessibilityNodeInfo> predicate) {
         List<AccessibilityNodeInfo> found=new ArrayList<>();

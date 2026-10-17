@@ -114,7 +114,7 @@ class AuthProbe(Probe):
         return any(APP+'/' in line and ('topResumedActivity' in line or 'mResumedActivity' in line)
             for line in value.splitlines())
 
-    def held_background(self,held_id,original_sealed):
+    def held_background(self,held_id,original_sealed,counts=(4,2,1)):
         require_hosted_emulator(self.args.serial)
         require(str(uuid.UUID(held_id))==held_id,'Original held control ID is invalid')
         self.start_app();started=time.monotonic()
@@ -129,7 +129,7 @@ class AuthProbe(Probe):
                 ready=self.shell('run-as',DRIVER,'cat','no_backup/owned-auth-held.ready',check=False)
                 if ready.returncode==0 and ready.stdout==b'ready\n' and (self.owner/'fault-events'/(held_id+'.json')).is_file():break
                 require(time.monotonic()<deadline,'Original held service/driver checkpoint was not observed');time.sleep(.2)
-            expect_requests(self.observe('held-before-home'),4,2,1)
+            expect_requests(self.observe('held-before-home'),*counts)
             native=self.snapshot('held-before-home')
             selected=native['selection']['operation_id']
             pending=[row for row in native['intents'] if row['operation_id']==selected]
@@ -222,6 +222,7 @@ class AuthProbe(Probe):
             input=json.dumps(configuration).encode())
 
     def run(self):
+        require(self.args.scope in ('all','recovery'),'Invalid owned auth scope')
         self.boot()
         require(self.binding.get('native_auth_gateway',{}).get('present') is True,'Fixed APK has no native auth gateway')
         configuration=read_json(self.owner/'device-private.json')
@@ -234,26 +235,31 @@ class AuthProbe(Probe):
         user=provider_account(login,0);require(len(user['devices'])==1 and user['session_counts'][0]['sessions']==1,'Actual server login did not create one session')
         device=user['devices'][0]['id'];first=self.snapshot('login');active_intent(first,'login',device)
         sealed=self.ciphertext_fingerprints();require(bool(sealed),'Native login did not leave secure ciphertext')
-        self.auth_phase('current',cold=True)
-        cold=self.observe('cold');expect_requests(cold,1,0,0)
-        require(self.snapshot('cold')==first and self.ciphertext_fingerprints()==sealed,'Cold native current read changed original credentials or intents')
-        self.auth_phase('refresh')
-        refreshed=self.observe('refresh');expect_requests(refreshed,1,1,0)
-        require(provider_account(refreshed,0)['devices']==user['devices'],'Refresh created a new device')
-        active_intent(self.snapshot('refresh'),'refresh',device)
-        self.auth_phase('logout')
-        logged_out=self.observe('logout');expect_requests(logged_out,1,1,1)
-        require(provider_account(logged_out,0)['session_counts']==[{'device_id':device,'sessions':0}],
-            'Actual server DELETE did not remove the original session')
-        require(not self.ciphertext_fingerprints(),'Confirmed logout did not erase original native credentials')
-        self.snapshot('logout')
-        self.auth_phase('login-a',cold=True)
-        second=self.observe('second-login');expect_requests(second,2,1,1)
-        require(len(provider_account(second,0)['devices'])==2,'Explicit new login did not create a distinct device')
+        normal=self.args.scope=='all'
+        if normal:
+            self.auth_phase('current',cold=True)
+            cold=self.observe('cold');expect_requests(cold,1,0,0)
+            require(self.snapshot('cold')==first and self.ciphertext_fingerprints()==sealed,'Cold native current read changed original credentials or intents')
+            self.auth_phase('refresh')
+            refreshed=self.observe('refresh');expect_requests(refreshed,1,1,0)
+            require(provider_account(refreshed,0)['devices']==user['devices'],'Refresh created a new device')
+            active_intent(self.snapshot('refresh'),'refresh',device)
+            self.auth_phase('logout')
+            logged_out=self.observe('logout');expect_requests(logged_out,1,1,1)
+            require(provider_account(logged_out,0)['session_counts']==[{'device_id':device,'sessions':0}],
+                'Actual server DELETE did not remove the original session')
+            require(not self.ciphertext_fingerprints(),'Confirmed logout did not erase original native credentials')
+            self.snapshot('logout')
+            self.auth_phase('login-a',cold=True)
+            second=self.observe('second-login');expect_requests(second,2,1,1)
+            require(len(provider_account(second,0)['devices'])==2,'Explicit new login did not create a distinct device')
+        # A recovery-only run uses one necessary fresh bootstrap login. It does
+        # not repeat or claim the same immutable APK's proven normal component.
+        logins,refreshes,logouts=(2,1,1) if normal else (1,0,0)
         prior_rotation_ciphertext=self.ciphertext_fingerprints()
         self.control('drop_refresh')
         self.auth_phase('refresh-unknown')
-        unknown=self.observe('lost-refresh');expect_requests(unknown,2,2,1)
+        unknown=self.observe('lost-refresh');expect_requests(unknown,logins,refreshes+1,logouts)
         pending=self.snapshot('lost-refresh');selected=pending['selection']['operation_id']
         require(any(row['operation_id']==selected and row['kind']=='refresh' and row['phase']=='refresh_pending' for row in pending['intents']),
             'Lost refresh did not preserve its original unconfirmed native intent')
@@ -263,28 +269,29 @@ class AuthProbe(Probe):
         # instrumentation disconnect. Keep the pending native original intact
         # until the following cold, explicit Current read reconciles it.
         self.auth_phase('current-unusable',cold=True)
-        expect_requests(self.observe('cold-unknown'),2,2,1)
+        expect_requests(self.observe('cold-unknown'),logins,refreshes+1,logouts)
         expect_original_recovery(pending,self.snapshot('cold-unknown'))
         require(self.ciphertext_fingerprints()==prior_rotation_ciphertext,'Cold unknown rotation replaced or removed its original ciphertext')
         self.control('normal')
         self.auth_phase('login-a')
-        third=self.observe('third-login');expect_requests(third,3,2,1)
-        require(len(provider_account(third,0)['devices'])==3,'New explicit recovery login did not create one distinct device')
+        third=self.observe('third-login');expect_requests(third,logins+1,refreshes+1,logouts)
+        require(len(provider_account(third,0)['devices'])==logins+1,'New explicit recovery login did not create one distinct device')
         original_sealed=self.ciphertext_fingerprints()
         held_id=self.control('hold_login')
-        self.held_background(held_id,original_sealed)
+        self.held_background(held_id,original_sealed,(logins+2,refreshes+1,logouts))
         self.auth_phase('current-unusable')
-        final=self.observe('late-background');expect_requests(final,4,2,1)
+        final=self.observe('late-background');expect_requests(final,logins+2,refreshes+1,logouts)
         require(len(provider_account(final,1)['devices'])==1,'Held login did not commit exactly once on the independent service')
         late=self.snapshot('late-background')
         b=[row for row in late['intents'] if row['account']==configuration['accounts'][1]['username']]
         require(len(b)==1 and b[0]['phase']=='unknown' and b[0]['device_id'] is None,
             'Backgrounded original login activated or lost its original unconfirmed intent')
         require(self.ciphertext_fingerprints()==original_sealed,'Late login changed the prior native ciphertext')
-        atomic_json(self.output/'auth-runtime-proof.json',{'passed':True,'source_commit':self.args.commit,
+        atomic_json(self.output/'auth-runtime-proof.json',{'passed':True,'scope':self.args.scope,'source_commit':self.args.commit,
             'tools_commit':self.args.tools_commit,'apk_sha256':self.binding['sha256'],'build_origin':self.args.build_origin,
-            'actual_platform_TLS_and_production_service_login':True,'actual_cold_native_secure_resume':True,
-            'actual_refresh_same_device':True,'actual_session_DELETE_and_local_erasure':True,
+            'actual_platform_TLS_and_production_service_login':True,'actual_cold_native_secure_resume':normal,
+            'actual_refresh_same_device':normal,'actual_session_DELETE_and_local_erasure':normal,
+            'normal_component_not_retested':not normal,'actual_cold_unknown_rotation_recovery':True,
             'lost_refresh_original_read_no_repost_or_old_credential_activation':True,
             'same_process_background_late_response_no_activation_or_store_change':True,'phases':self.phases,
             'physical_phone':False,'bidirectional_vault_transfer':False,'server_device_revocation':False,
@@ -295,6 +302,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('bundle','sdk','output','source-checkout'):parser.add_argument('--'+name,type=Path,required=True)
     for name in ('commit','tools-commit','build-run-id'):parser.add_argument('--'+name,required=True)
+    parser.add_argument('--scope',choices=('all','recovery'),default='all')
     parser.add_argument('--serial',default='emulator-5562');args=parser.parse_args()
     require_hosted();require_hosted_emulator(args.serial);owner=owned_root()
     require(read_json(owner/'owner-state.json')['result']=='ready','Owned HTTPS origin is not ready')
