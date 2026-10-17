@@ -22,7 +22,8 @@ class RuntimeBoundaries(unittest.TestCase):
             'saves':[], 'images':[{'operation_id':'original-image','draft_id':'original-draft','generation':2,
                 'asset_path':asset,'hash':digest(IMAGE_BYTES),'size':len(IMAGE_BYTES),'state':'committed','content_after':content}]}
         rendered={'available':True,'styles':{'editorAttributes':[{'contentEditable':'true','visible':True,'readOnly':False,'disabled':False}],
-            'imageSave':{'richReady':True,'richImages':[{'complete':True,'width':2,'height':2}],
+            'imageSave':{'richReady':True,'richImages':[{'complete':True,'width':2,'height':2,
+                'editorSeparator':False,'hasSource':True,'workspaceAsset':True,'visible':True}],
             'save':[{'enabled':True,'visible':True,'hit':True}],'busy':False}}}
         return report,rendered
 
@@ -46,6 +47,40 @@ class RuntimeBoundaries(unittest.TestCase):
             with self.subTest(changed=changed),self.assertRaises(RuntimeError):
                 validate_image_save_observation(report,{'available':True,'styles':{'imageSave':dict(original,**changed)}},'rich-image')
         with self.assertRaises(RuntimeError):validate_image_save_observation(report,{'available':False},'rich-image')
+
+    def test_original_image_readiness_classifies_only_an_observed_sourceless_editor_separator(self):
+        report,rendered=self.image_save_fixture()
+        state=rendered['styles']['imageSave']
+        separator={'editorSeparator':True,'hasSource':False,'workspaceAsset':False,
+            'complete':True,'width':0,'height':0,'error':False,'visible':False}
+        state['richImages'].append(separator)
+        validate_image_save_observation(report,rendered,'rich-image')
+        for changed in ({'hasSource':True},{'workspaceAsset':True},{'width':2},{'height':2},
+                {'error':True},{'editorSeparator':False}):
+            with self.subTest(changed=changed),self.assertRaises(RuntimeError):
+                validate_image_save_observation(report,{'available':True,'styles':{'imageSave':dict(state,
+                    richImages=[state['richImages'][0],dict(separator,**changed)])}},'rich-image')
+        with self.assertRaises(RuntimeError):
+            validate_image_save_observation(report,{'available':True,'styles':{'imageSave':dict(state,
+                richImages=state['richImages']+[separator])}},'rich-image')
+
+    def test_original_image_readiness_refuses_hidden_or_unattributed_content_even_when_decoded(self):
+        report,rendered=self.image_save_fixture();state=rendered['styles']['imageSave']
+        for changed in ({'hasSource':False},{'workspaceAsset':False},{'visible':False},
+                {'editorSeparator':True}):
+            with self.subTest(changed=changed),self.assertRaises(RuntimeError):
+                validate_image_save_observation(report,{'available':True,'styles':{'imageSave':dict(state,
+                    richImages=[dict(state['richImages'][0],**changed)])}},'rich-image')
+
+    def test_canvas_image_readiness_still_requires_exact_single_visible_original_image(self):
+        report,rendered=self.image_save_fixture();state=rendered['styles']['imageSave']
+        original={'complete':True,'width':2,'height':2,'visible':True}
+        state['canvasImages']=[original]
+        validate_image_save_observation(report,rendered,'canvas-image')
+        for images in ([],[original,original],[dict(original,visible=False)],[dict(original,complete=False)]):
+            with self.subTest(images=images),self.assertRaises(RuntimeError):
+                validate_image_save_observation(report,{'available':True,'styles':{'imageSave':dict(state,
+                    canvasImages=images)}},'canvas-image')
 
     def test_saved_ui_requires_one_same_generation_committed_receipt_and_original_image(self):
         before,_=self.image_save_fixture()

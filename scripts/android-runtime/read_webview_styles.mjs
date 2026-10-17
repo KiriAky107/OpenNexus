@@ -34,10 +34,16 @@ const expression = `JSON.stringify((()=>{
     richReady:document.querySelector('.visual-editor .milkdown-host:not(.loading) .ProseMirror[contenteditable="true"]')!==null
       && document.querySelector('.visual-editor .editor-loading')===null,
     richImages:Array.from(document.querySelectorAll('.visual-editor .milkdown-host img')).slice(0,4).map(e=>({
-      complete:e.complete,width:e.naturalWidth,height:e.naturalHeight,error:e.dataset.workspaceAssetError==='true'
+      complete:e.complete,width:e.naturalWidth,height:e.naturalHeight,error:e.dataset.workspaceAssetError==='true',
+      editorSeparator:e.classList.contains('ProseMirror-separator'),hasSource:!!e.getAttribute('src'),
+      workspaceAsset:e.hasAttribute('data-workspace-asset'),
+      visible:getComputedStyle(e).display!=='none'&&getComputedStyle(e).visibility!=='hidden'
+        &&e.getBoundingClientRect().width>0&&e.getBoundingClientRect().height>0
     })),
     canvasImages:Array.from(document.querySelectorAll('.canvas-visual img')).slice(0,4).map(e=>({
-      complete:e.complete,width:e.naturalWidth,height:e.naturalHeight
+      complete:e.complete,width:e.naturalWidth,height:e.naturalHeight,
+      visible:getComputedStyle(e).display!=='none'&&getComputedStyle(e).visibility!=='hidden'
+        &&e.getBoundingClientRect().width>0&&e.getBoundingClientRect().height>0
     })),
     busy:document.querySelector('.feedback[aria-busy="true"]')!==null,
     save:Array.from(document.querySelectorAll('.editor-header .save-button')).slice(0,2).map(e=>{

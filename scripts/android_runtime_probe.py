@@ -60,8 +60,21 @@ def validate_image_save_observation(report, rendered, phase):
     require(rendered.get('available') is True, 'Actual image/save rendering was not observed; no Save sent')
     state = rendered.get('styles', {}).get('imageSave', {})
     images = state.get('richImages' if phase == 'rich-image' else 'canvasImages', [])
+    if phase == 'rich-image':
+        # ProseMirror adds a source-less IMG cursor separator after an inline
+        # leaf. Classify it from actual observed attributes; never ignore an
+        # extra asset, a sourced separator or an unclassified zero-size image.
+        separators = [image for image in images if image.get('editorSeparator') is True]
+        require(len(separators) <= 1 and all(image.get('hasSource') is False
+            and image.get('workspaceAsset') is False and image.get('width') == 0
+            and image.get('height') == 0 and not image.get('error') for image in separators),
+            'Editor separator contains a source or unexpected image; no Save sent')
+        images = [image for image in images if image.get('editorSeparator') is not True]
+        require(len(images) == 1 and images[0].get('hasSource') is True and images[0].get('workspaceAsset') is True,
+            'Original native workspace image is missing or ambiguous; no Save sent')
     require(len(images) == 1 and images[0].get('complete') is True and images[0].get('width') == 2
-        and images[0].get('height') == 2 and not images[0].get('error') and state.get('busy') is False,
+        and images[0].get('height') == 2 and images[0].get('visible') is True
+        and not images[0].get('error') and state.get('busy') is False,
         'Original 2x2 image has not finished loading/importing; no Save sent')
     saves = state.get('save', [])
     require(len(saves) == 1 and all(saves[0].get(key) is True for key in ('enabled', 'visible', 'hit')),
