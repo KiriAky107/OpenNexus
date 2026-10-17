@@ -577,13 +577,6 @@ impl Workspace {
         })
     }
 
-    pub(crate) fn cached_sync_file_info(
-        &mut self,
-        source: &Path,
-        path: &str,
-    ) -> Result<(String, u64)> {
-        self.cached_sync_file_info_checked(source, path, &|| Ok(()))
-    }
     pub(crate) fn cached_sync_file_info_checked(
         &mut self,
         source: &Path,
