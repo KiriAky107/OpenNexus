@@ -91,6 +91,25 @@ class ProductIsolation(unittest.TestCase):
         self.assertEqual(value, {'code': 'DESKTOP_PAIR_UI_FAILED', 'error_class': 'TimeoutError',
                                  'original_exception_text_returned': False})
 
+    def test_owned_client_failure_keeps_only_its_source_method_and_line_without_locator_or_input(self):
+        import android_desktop_product as product
+        namespace={};path=Path(product.__file__).with_name('android_desktop_pair_ui.py')
+        exec(compile('def login_and_merge():\n raise TimeoutError("PRIVATE_PASSWORD_AND_LOCATOR")\n',str(path),'exec'),namespace)
+        try:namespace['login_and_merge']()
+        except TimeoutError as error:value=safe_failure(error,'client-action')
+        self.assertEqual(value['source_frame'],{'module':'android_desktop_pair_ui.py','method':'login_and_merge','line':2})
+        self.assertNotIn('PRIVATE_PASSWORD',json.dumps(value))
+        self.assertNotIn(str(path.parent),json.dumps(value))
+
+    def test_foreign_paths_and_unreviewed_method_names_never_become_source_diagnostics(self):
+        import android_desktop_product as product
+        for path,name in [(self.workspace/'android_desktop_pair_ui.py','login_and_merge'),
+                          (Path(product.__file__).with_name('android_desktop_pair_ui.py'),'PRIVATE_SECRET_METHOD')]:
+            namespace={};exec(compile('def '+name+'():\n raise TimeoutError("PRIVATE_PASSWORD")\n',str(path),'exec'),namespace)
+            try:namespace[name]()
+            except TimeoutError as error:value=safe_failure(error,'client-action')
+            self.assertNotIn('source_frame',value);self.assertNotIn('PRIVATE_SECRET',json.dumps(value))
+
     def test_canonical_owned_windows_paths_match_without_bypassing_restart_or_foreign_path_checks(self):
         target = r'D:\owned\data'
         value = {'active_path': '\\\\?\\' + target, 'configured_path': '\\\\?\\' + target,

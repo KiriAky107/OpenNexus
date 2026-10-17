@@ -108,6 +108,23 @@ def verify_storage(value, data):
 STARTUP_CHECKPOINTS = frozenset({'native-launch', 'webview-attach', 'frontend-bootstrap', 'core-ready',
     'storage-scope', 'core-version', 'workspace-readiness', 'owned-vault-open', 'startup-receipt', 'client-action'})
 
+SOURCE_METHODS = {'android_desktop_pair_ui.py': frozenset({
+    '__init__', 'intent', 'status', 'panel', 'login_and_merge', 'wait_status', 'account_identity',
+    'edit_original_note', 'set_paused', 'edit_original_canvas', 'finish_actual_cycle', 'read_cold_originals'})}
+
+
+def safe_source_frame(error):
+    """Location only: never format traceback text or inspect arguments/locals."""
+    trace = error.__traceback__; result = None; count = 0
+    while trace is not None and count < 64:
+        code = trace.tb_frame.f_code; path = Path(code.co_filename); name = path.name
+        if name in SOURCE_METHODS and code.co_name in SOURCE_METHODS[name] and 0 < trace.tb_lineno <= 10000:
+            try: own = path.resolve() == Path(__file__).with_name(name).resolve()
+            except (OSError, RuntimeError): own = False
+            if own: result = {'module': name, 'method': code.co_name, 'line': trace.tb_lineno}
+        trace = trace.tb_next; count += 1
+    return result
+
 
 def safe_failure(error, checkpoint=None):
     # Playwright exception text can include the last fill argument. Never
@@ -126,6 +143,8 @@ def safe_failure(error, checkpoint=None):
         result['checkpoint_code'] = str(error)
     if checkpoint is not None:
         result['failed_checkpoint'] = checkpoint if checkpoint in STARTUP_CHECKPOINTS else 'unknown'
+    frame = safe_source_frame(error)
+    if frame is not None: result['source_frame'] = frame
     return result
 
 
