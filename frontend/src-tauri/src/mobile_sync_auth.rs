@@ -2688,6 +2688,387 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_sync_cycle_status_requires_full_selection_and_does_not_modify_original_queue() {
+        use crate::mobile_sync_cycle::{execute, Request, Response};
+        use crate::sync_client::WorkspaceAccess;
+        let root = tempfile::tempdir().unwrap();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "first")));
+        let (foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), MemoryStore::default()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let engine = Arc::new(Mutex::new(Some(
+            crate::mobile_workspace::MobileWorkspace::open(root.path()).unwrap(),
+        )));
+        let binding = engine
+            .access(|ws| ws.sync_bind_download(scope.endpoint(), "owned-vault", scope.account()))
+            .unwrap();
+        let target = crate::mobile_sync_cycle::Target {
+            expected: auth.selection(&lease).unwrap().unwrap(),
+            vault_id: engine.access(|ws| Ok(ws.vault_id.clone())).unwrap(),
+            binding_id: binding.id.clone(),
+        };
+        engine
+            .access(|ws| ws.write("original.md", "", b"original local", "local"))
+            .unwrap();
+        let before = engine.access(|ws| Ok(ws.db.total_changes())).unwrap();
+        let reply = execute(
+            &mut auth,
+            &lease,
+            engine.clone(),
+            Request::Status {
+                target: target.clone(),
+                after: 0,
+                limit: 20,
+            },
+            101,
+            Arc::new(|_| panic!("Metadata status started a cycle")),
+        )
+        .await
+        .unwrap();
+        let Response::Status { status } = reply else {
+            panic!("Expected status")
+        };
+        assert_eq!(status.pending_outbox, 1);
+        assert_eq!(status.binding.id, binding.id);
+        assert_eq!(status.binding.cursor, 0);
+        let metadata = serde_json::to_string(&status).unwrap();
+        for secret in ["access_token", "refresh_token", "owned-original-password"] {
+            assert!(!metadata.contains(secret));
+        }
+        let mut stale = target.clone();
+        stale.expected.revision += 1;
+        assert_eq!(
+            execute(
+                &mut auth,
+                &lease,
+                engine.clone(),
+                Request::Status {
+                    target: stale,
+                    after: 0,
+                    limit: 20
+                },
+                101,
+                Arc::new(|_| panic!("Stale selection started work"))
+            )
+            .await
+            .err()
+            .unwrap()
+            .code,
+            "SYNC_AUTH_SELECTION_CHANGED"
+        );
+        assert_eq!(
+            engine.access(|ws| Ok(ws.db.total_changes())).unwrap(),
+            before
+        );
+        assert_eq!(
+            engine.access(|ws| ws.read("original.md")).unwrap().content,
+            "original local"
+        );
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 1);
+        assert_eq!(remote.refreshes.load(Ordering::SeqCst), 0);
+        foreground.on_stop();
+        assert_eq!(
+            execute(
+                &mut auth,
+                &lease,
+                engine.clone(),
+                Request::Status {
+                    target,
+                    after: 0,
+                    limit: 20
+                },
+                101,
+                Arc::new(|_| panic!("Stopped request started work"))
+            )
+            .await
+            .err()
+            .unwrap()
+            .code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert_eq!(
+            engine.access(|ws| Ok(ws.db.total_changes())).unwrap(),
+            before
+        );
+    }
+
+    #[tokio::test]
+    async fn native_sync_cycle_review_resolve_and_original_query_preserve_dirty_draft_and_receipts()
+    {
+        use crate::mobile_sync_cycle::{execute, Request, Response};
+        use crate::sync_client::WorkspaceAccess;
+        let root = tempfile::tempdir().unwrap();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "first")));
+        let (foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), MemoryStore::default()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let engine = Arc::new(Mutex::new(Some(
+            crate::mobile_workspace::MobileWorkspace::open(root.path()).unwrap(),
+        )));
+        let binding = engine
+            .access(|ws| ws.sync_bind_download(scope.endpoint(), "owned-vault", scope.account()))
+            .unwrap();
+        let target = crate::mobile_sync_cycle::Target {
+            expected: auth.selection(&lease).unwrap().unwrap(),
+            vault_id: engine.access(|ws| Ok(ws.vault_id.clone())).unwrap(),
+            binding_id: binding.id.clone(),
+        };
+        let file = id();
+        engine
+            .access(|ws| {
+                let mut revision = crate::sync_inbox::RemoteRevision {
+                    vault_id: "owned-vault".into(),
+                    sequence: 1,
+                    base_revision: 0,
+                    file_id: file.clone(),
+                    path: "original.md".into(),
+                    operation: "put".into(),
+                    hash: Some(ws.sync_store_bytes(b"base")?),
+                    size: 4,
+                    operation_id: id(),
+                };
+                ws.sync_set_boundary(&binding.id, 1)?;
+                ws.sync_stage(&binding.id, &revision)?;
+                ws.sync_apply_pending(&binding.id)?;
+                ws.write(
+                    "original.md",
+                    revision.hash.as_ref().unwrap(),
+                    b"local",
+                    "local",
+                )?;
+                revision.sequence = 2;
+                revision.base_revision = 1;
+                revision.operation_id = id();
+                revision.hash = Some(ws.sync_store_bytes(b"incoming")?);
+                revision.size = 8;
+                ws.sync_set_boundary(&binding.id, 2)?;
+                ws.sync_stage(&binding.id, &revision)?;
+                ws.sync_apply_pending(&binding.id)?;
+                Ok(())
+            })
+            .unwrap();
+        let draft = {
+            let mut guard = engine.lock().unwrap();
+            let mobile = guard.as_mut().unwrap();
+            let draft = mobile
+                .drafts
+                .open_note(&mut mobile.workspace, &file)
+                .unwrap();
+            mobile
+                .drafts
+                .persist(&draft.id, &draft.edit_session, 1, "unsaved original draft")
+                .unwrap();
+            draft
+        };
+        let reply = execute(
+            &mut auth,
+            &lease,
+            engine.clone(),
+            Request::Review {
+                target: target.clone(),
+                sequence: 2,
+            },
+            101,
+            Arc::new(|_| panic!("Review started HTTP")),
+        )
+        .await
+        .unwrap();
+        let Response::Review { review } = reply else {
+            panic!("Expected review")
+        };
+        assert_eq!(review.local.text.as_deref(), Some("local"));
+        assert_eq!(review.incoming.text.as_deref(), Some("incoming"));
+        let original_request = || Request::Resolve {
+            target: target.clone(),
+            sequence: 2,
+            choice: "copy".into(),
+            destination: "copy.md".into(),
+            expected_hash: review.local.hash.clone(),
+            fingerprint: review.fingerprint.clone(),
+        };
+        let reply = execute(
+            &mut auth,
+            &lease,
+            engine.clone(),
+            original_request(),
+            101,
+            Arc::new(|_| panic!("Resolve started HTTP")),
+        )
+        .await
+        .unwrap();
+        let Response::Decision {
+            decision: Some(original),
+        } = reply
+        else {
+            panic!("Expected decision")
+        };
+        assert_eq!(original.state, "completed");
+        let frozen = serde_json::to_value(original).unwrap();
+        let after = engine.access(|ws| Ok(ws.db.total_changes())).unwrap();
+        for request in [
+            Request::Decision {
+                target: target.clone(),
+                sequence: 2,
+            },
+            original_request(),
+        ] {
+            let reply = execute(
+                &mut auth,
+                &lease,
+                engine.clone(),
+                request,
+                101,
+                Arc::new(|_| panic!("Original query/replay started HTTP")),
+            )
+            .await
+            .unwrap();
+            let Response::Decision {
+                decision: Some(original),
+            } = reply
+            else {
+                panic!("Expected original decision")
+            };
+            assert_eq!(serde_json::to_value(original).unwrap(), frozen);
+        }
+        assert_eq!(
+            engine.access(|ws| Ok(ws.db.total_changes())).unwrap(),
+            after
+        );
+        assert_eq!(
+            engine.access(|ws| ws.read("original.md")).unwrap().content,
+            "incoming"
+        );
+        assert_eq!(
+            engine.access(|ws| ws.read("copy.md")).unwrap().content,
+            "local"
+        );
+        assert_eq!(
+            engine
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .drafts
+                .get(&draft.id)
+                .unwrap()
+                .content,
+            "unsaved original draft"
+        );
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 1);
+        foreground.on_stop();
+    }
+
+    #[tokio::test]
+    async fn native_sync_cycle_now_refuses_wrong_vault_paused_state_and_old_foreground_before_http()
+    {
+        use crate::mobile_sync_cycle::{execute, Request};
+        use crate::sync_client::WorkspaceAccess;
+        let root = tempfile::tempdir().unwrap();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "first")));
+        let (foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), MemoryStore::default()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let engine = Arc::new(Mutex::new(Some(
+            crate::mobile_workspace::MobileWorkspace::open(root.path()).unwrap(),
+        )));
+        let binding = engine
+            .access(|ws| ws.sync_bind_download(scope.endpoint(), "owned-vault", scope.account()))
+            .unwrap();
+        let target = crate::mobile_sync_cycle::Target {
+            expected: auth.selection(&lease).unwrap().unwrap(),
+            vault_id: engine.access(|ws| Ok(ws.vault_id.clone())).unwrap(),
+            binding_id: binding.id.clone(),
+        };
+        engine
+            .access(|ws| ws.sync_pause(&binding.id, true))
+            .unwrap();
+        let before = engine.access(|ws| Ok(ws.db.total_changes())).unwrap();
+        let mut stale = target.clone();
+        stale.vault_id = id();
+        assert_eq!(
+            execute(
+                &mut auth,
+                &lease,
+                engine.clone(),
+                Request::Now { target: stale },
+                101,
+                Arc::new(|_| panic!("Wrong Vault started HTTP"))
+            )
+            .await
+            .err()
+            .unwrap()
+            .code,
+            "VAULT_CHANGED"
+        );
+        assert_eq!(
+            execute(
+                &mut auth,
+                &lease,
+                engine.clone(),
+                Request::Now {
+                    target: target.clone()
+                },
+                101,
+                Arc::new(|_| panic!("Paused cycle started HTTP"))
+            )
+            .await
+            .err()
+            .unwrap()
+            .code,
+            "SYNC_PAUSED"
+        );
+        foreground.on_stop();
+        foreground.on_start();
+        assert_eq!(
+            execute(
+                &mut auth,
+                &lease,
+                engine.clone(),
+                Request::Now { target },
+                101,
+                Arc::new(|_| panic!("Old foreground started HTTP"))
+            )
+            .await
+            .err()
+            .unwrap()
+            .code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert_eq!(
+            engine.access(|ws| Ok(ws.db.total_changes())).unwrap(),
+            before
+        );
+        assert_eq!(remote.logins.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn explicit_auth_rejection_survives_reopen_and_original_operation_query_without_reposting(
     ) {
         let root = tempfile::tempdir().unwrap();

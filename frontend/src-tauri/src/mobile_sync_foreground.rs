@@ -166,7 +166,7 @@ impl ScopedWorkspace {
         }
     }
 
-    fn work<'a, T: Send + 'static>(
+    pub(crate) fn work<'a, T: Send + 'static>(
         &'a self,
         binding: &'a str,
         action: impl FnOnce(&mut crate::workspace::Workspace, &Lease, &str) -> Result<T>
