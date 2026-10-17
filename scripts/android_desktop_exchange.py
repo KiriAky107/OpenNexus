@@ -2,7 +2,7 @@
 
 No network or extraction is performed here. The future paired driver supplies
 the original GitHub API metadata and archive bytes; public-key and sealed
-envelopes are the only accepted payloads. Plaintext test credentials are never
+envelopes and bounded public stage receipts are accepted payloads. Plaintext test credentials are never
 an exchange artifact, and encryption alone does not establish job provenance.
 """
 from datetime import datetime, timedelta
@@ -14,8 +14,10 @@ import stat
 import zipfile
 
 from android_desktop_handoff import canonical, context_bytes, decode, require, unique_pairs
+from android_product_pair_stages import STAGES, validate_stage
 
 PRODUCERS = {
+    **STAGES,
     'recipient': ('desktop-pair', 'Publish owned desktop receiving key'),
     'sealed': ('android-desktop-pair', 'Publish sealed owned fixture'),
 }
@@ -41,6 +43,8 @@ def validate_body(context, stage, body):
         decode(body['ephemeral_public_key'], 32)
         decode(body['nonce'], 12)
         require(16 < len(decode(body['ciphertext'])) <= 4096, 'PAIR_EXCHANGE_BODY_INVALID')
+    elif stage in STAGES:
+        validate_stage(context,stage,body)
     else:
         require(False, 'PAIR_EXCHANGE_STAGE_INVALID')
     return body

@@ -76,7 +76,7 @@ on:
       runtime_scope:
         description: 'all checks, or a named remaining scope on an existing fixed APK without rebuilding'
         type: choice
-        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, canvas-tools, canvas-tablet, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, desktop-startup, build-only]
+        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, canvas-tools, canvas-tablet, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, desktop-startup, desktop-pair, build-only]
         default: all
         required: false
       sync_cold_originals:
@@ -110,7 +110,7 @@ concurrency:
 
 jobs:
   debug-apk:
-    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'canvas-tools' && inputs.runtime_scope != 'canvas-tablet' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'desktop-startup')
+    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'canvas-tools' && inputs.runtime_scope != 'canvas-tablet' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'desktop-pair')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -186,7 +186,7 @@ jobs:
 
   emulator-runtime:
     needs: debug-apk
-    if: ${{ always() && !cancelled() && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'build-only' && (needs.debug-apk.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.apk_run_id != '')) }}
+    if: ${{ always() && !cancelled() && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'desktop-pair' && inputs.runtime_scope != 'build-only' && (needs.debug-apk.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.apk_run_id != '')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -407,3 +407,279 @@ jobs:
             .build/android-desktop-pair/*/stage-1/failure.json
             .build/android-desktop-pair/*/stage-1/cleanup.json
           if-no-files-found: warn
+
+  android-desktop-pair:
+    if: github.event_name == 'workflow_dispatch' && inputs.runtime_scope == 'desktop-pair'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      COMPILED_SHA: ${{ inputs.apk_commit || github.sha }}
+      APK_BUILD_RUN_ID: ${{ inputs.apk_run_id || github.run_id }}
+      ANDROID_AVD_HOME: ${{ github.workspace }}/.build/android-runtime/avd
+      ANDROID_EMULATOR_HOME: ${{ github.workspace }}/.build/android-runtime/emulator-home
+    steps:
+    - uses: actions/checkout@v7
+    - name: Validate the immutable reuse selection
+      env:
+        REUSE_RUN: ${{ inputs.apk_run_id }}
+        REUSE_COMMIT: ${{ inputs.apk_commit }}
+        RUNTIME_SCOPE: ${{ inputs.runtime_scope || 'all' }}
+      run: 'python3 - <<''PY''
+
+        import os
+
+        assert os.environ[''REUSE_RUN'']==''39054475515''
+
+        assert os.environ[''REUSE_COMMIT'']==''18b6abbbf8bc8dae249469f7bcd9e5139cb39fee''
+
+        assert os.environ[''RUNTIME_SCOPE'']==''desktop-pair''
+
+        assert os.environ[''GITHUB_RUN_ATTEMPT'']==''1''
+
+        PY
+
+        echo "PAIR_TOOLS_SHORT=${GITHUB_SHA:0:12}" >> "$GITHUB_ENV"
+
+        '
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ env.COMPILED_SHA }}
+        path: .build/android-runtime/compiled-source
+        persist-credentials: 'false'
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '21'
+    - uses: actions/download-artifact@v8
+      with:
+        name: OpenNexus-android-debug-${{ env.COMPILED_SHA }}
+        run-id: ${{ env.APK_BUILD_RUN_ID }}
+        github-token: ${{ github.token }}
+        path: .build/android-runtime/package
+    - uses: actions/setup-node@v7
+      with:
+        node-version: '22'
+    - uses: actions/checkout@v7
+      with:
+        repository: KiriAky107/Sync-for-OpenNexus
+        ref: 29e2e6d373ea752352981bdad05d34a7a0d9c3d9
+        path: .build/android-auth-source
+        persist-credentials: 'false'
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.13'
+    - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+    - name: Prepare the independent fixed Sync interoperability origin
+      shell: bash
+      run: 'set -euo pipefail
+
+        uv sync --frozen --project .build/android-auth-source
+
+        mkdir -p .build/android-sync-origin-proof
+
+        .build/android-auth-source/.venv/bin/python scripts/android_auth_hosted.py prepare --fixture sync > .build/android-sync-origin-proof/origin.json
+
+        '
+    - name: Prepare an exclusive hosted emulator
+      shell: bash
+      run: "set -euo pipefail\ntest \"$GITHUB_ACTIONS\" = true\ntest \"$RUNNER_ENVIRONMENT\" = github-hosted\ntest \"$RUNNER_OS\" = Linux\nmkdir\
+        \ -p \"$ANDROID_AVD_HOME\" \"$ANDROID_EMULATOR_HOME\"\n# The headless QEMU binary still links libpulse.so.0 on the hosted image.\nsudo apt-get\
+        \ update -qq\nsudo apt-get install -y --no-install-recommends libpulse0\nmanager=\"$ANDROID_HOME/cmdline-tools/latest/bin\"\nif [[ -x \"\
+        $manager/android\" ]]; then\n  for package in platforms/android-36 build-tools/36.0.0 platform-tools emulator system-images/android-36/google_apis/x86_64;\
+        \ do\n    \"$manager/android\" --no-metrics --sdk=\"$ANDROID_HOME\" sdk --ignore-outdated-xmls install \"$package\"\n  done\nelse\n  \"\
+        $manager/sdkmanager\" --sdk_root=\"$ANDROID_HOME\" --install 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools' 'emulator' 'system-images;android-36;google_apis;x86_64'\
+        \ </dev/null\nfi\ntest -c /dev/kvm\nsudo setfacl -m \"u:$(id -un):rw\" /dev/kvm\n# Use the official launcher, which configures its bundled\
+        \ library paths.\n# Running ldd directly on QEMU incorrectly reports bundled Qt/emu libraries missing.\n\"$ANDROID_HOME/emulator/emulator\"\
+        \ -version > .build/android-runtime/emulator-version.txt 2>&1\n\"$ANDROID_HOME/emulator/emulator\" -accel-check\nprintf 'no\\n' | \"$manager/avdmanager\"\
+        \ create avd --name \"opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT\" --package 'system-images;android-36;google_apis;x86_64' --device\
+        \ pixel_7\n\"$ANDROID_HOME/emulator/emulator\" -avd \"opennexus-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT\" -port 5562 -no-window -no-audio\
+        \ -no-snapshot -no-boot-anim -gpu swiftshader -accel on -memory 2048 -cores 2 > .build/android-runtime/emulator.log 2>&1 &\necho \"$!\"\
+        \ > .build/android-runtime/emulator.pid\n"
+    - name: Install an isolated tool overlay from existing frozen backend wheels
+      shell: bash
+      run: 'set -euo pipefail
+
+        mkdir -p .build/android-product-pair
+
+        python3 scripts/android_pair_crypto_requirements.py > .build/android-product-pair/crypto.requirements.txt
+
+        uv pip install --python .build/android-auth-source/.venv/bin/python --target .build/android-pair-crypto --no-deps --require-hashes --only-binary
+        :all: --requirement .build/android-product-pair/crypto.requirements.txt
+
+        '
+    - name: Run the actual original Android first stage
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        PYTHONPATH: ${{ github.workspace }}/.build/android-pair-crypto
+      run: .build/android-auth-source/.venv/bin/python scripts/android_product_pair_linux.py first --commit "$COMPILED_SHA" --tools-commit "$GITHUB_SHA"
+        --build-run-id "$APK_BUILD_RUN_ID" --source-checkout .build/android-runtime/compiled-source --bundle .build/android-runtime/package --sdk
+        "$ANDROID_HOME" --output .build/android-product-pair/first/evidence
+    - name: Publish sealed owned fixture
+      uses: actions/upload-artifact@v7
+      with:
+        name: onx-pair-sealed-${{ github.run_id }}-${{ env.PAIR_TOOLS_SHORT }}
+        path: .build/android-runtime/owned-auth-${{ github.run_id }}-${{ github.run_attempt }}/pair-sealed/exchange.json
+        if-no-files-found: error
+        retention-days: 14
+    - name: Run the same original Android incoming and return stage
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        PYTHONPATH: ${{ github.workspace }}/.build/android-pair-crypto
+      run: .build/android-auth-source/.venv/bin/python scripts/android_product_pair_linux.py returned --commit "$COMPILED_SHA" --tools-commit "$GITHUB_SHA"
+        --build-run-id "$APK_BUILD_RUN_ID" --source-checkout .build/android-runtime/compiled-source --bundle .build/android-runtime/package --sdk
+        "$ANDROID_HOME" --output .build/android-product-pair/returned/evidence
+    - name: Publish original Android return
+      uses: actions/upload-artifact@v7
+      with:
+        name: onx-pair-android-return-${{ github.run_id }}-${{ env.PAIR_TOOLS_SHORT }}
+        path: .build/android-runtime/owned-auth-${{ github.run_id }}-${{ github.run_attempt }}/pair-android-return/exchange.json
+        if-no-files-found: error
+        retention-days: 14
+    - name: Verify the actual original Desktop cold receipt and PG/S3 bytes
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        PYTHONPATH: ${{ github.workspace }}/.build/android-pair-crypto
+      run: .build/android-auth-source/.venv/bin/python scripts/android_product_pair_linux.py final --commit "$COMPILED_SHA" --tools-commit "$GITHUB_SHA"
+        --build-run-id "$APK_BUILD_RUN_ID" --source-checkout .build/android-runtime/compiled-source --bundle .build/android-runtime/package --sdk
+        "$ANDROID_HOME" --output .build/android-product-pair/final/evidence
+    - name: Stop only the original paired emulator
+      if: always()
+      run: python3 scripts/android_runtime_probe.py --sdk "$ANDROID_HOME" --stop-owned
+    - name: Stop only the original paired HTTPS origin and providers
+      if: always()
+      shell: bash
+      run: 'mkdir -p .build/android-sync-origin-proof
+
+        python3 scripts/android_auth_hosted.py stop --fixture sync > .build/android-sync-origin-proof/cleanup.json
+
+        '
+    - name: Preserve bounded Android pair evidence without private tools or databases
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: OpenNexus-android-product-pair-${{ env.COMPILED_SHA }}
+        path: '.build/android-product-pair/*/evidence/
+
+          .build/android-sync-origin-proof/
+
+          '
+        if-no-files-found: warn
+        retention-days: 14
+  desktop-pair:
+    if: github.event_name == 'workflow_dispatch' && inputs.runtime_scope == 'desktop-pair'
+    runs-on: windows-2022
+    timeout-minutes: 75
+    env:
+      ANDROID_COMPILED_SOURCE: ${{ inputs.apk_commit }}
+      ANDROID_BUILD_RUN_ID: ${{ inputs.apk_run_id }}
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.13'
+    - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+    - name: Install only the existing frozen Python environment
+      run: uv sync --frozen --directory backend
+    - name: Validate original pair inputs and names
+      shell: pwsh
+      run: 'if ($env:ANDROID_COMPILED_SOURCE -ne ''18b6abbbf8bc8dae249469f7bcd9e5139cb39fee'' -or $env:ANDROID_BUILD_RUN_ID -ne ''39054475515''
+        -or $env:GITHUB_RUN_ATTEMPT -ne ''1'') { throw ''PAIR_FROZEN_INPUT_REFUSED'' }
+
+        "PAIR_TOOLS_SHORT=$($env:GITHUB_SHA.Substring(0,12))" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+        '
+    - name: Prepare the original receiving key and fixed published installer
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: uv run --frozen --directory backend python ../scripts/android_product_pair_desktop.py prepare
+    - name: Publish owned desktop receiving key
+      uses: actions/upload-artifact@v7
+      with:
+        name: onx-pair-recipient-${{ github.run_id }}-${{ env.PAIR_TOOLS_SHORT }}
+        path: .build/android-desktop-pair/${{ github.run_id }}/recipient/exchange.json
+        if-no-files-found: error
+        retention-days: 14
+    - name: Run actual Desktop full merge, Markdown and Canvas edit and original upload
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: uv run --frozen --directory backend python ../scripts/android_product_pair_desktop.py first
+    - name: Publish original desktop outbound
+      uses: actions/upload-artifact@v7
+      with:
+        name: onx-pair-desktop-first-${{ github.run_id }}-${{ env.PAIR_TOOLS_SHORT }}
+        path: .build/android-desktop-pair/${{ github.run_id }}/desktop-first/exchange.json
+        if-no-files-found: error
+        retention-days: 14
+    - name: Cold reopen the same Desktop device and read original Android return
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: uv run --frozen --directory backend python ../scripts/android_product_pair_desktop.py final
+    - name: Publish original desktop cold receipt
+      uses: actions/upload-artifact@v7
+      with:
+        name: onx-pair-desktop-final-${{ github.run_id }}-${{ env.PAIR_TOOLS_SHORT }}
+        path: .build/android-desktop-pair/${{ github.run_id }}/desktop-final/exchange.json
+        if-no-files-found: error
+        retention-days: 14
+    - name: Preserve bounded Desktop pair receipts without private key, data or raw logs
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: OpenNexus-desktop-product-pair-${{ github.sha }}
+        path: '.build/android-desktop-pair/${{ github.run_id }}/owner.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/receiving-proof.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/extraction.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/first-native-before.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/first-native.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/first-identity.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/final-native.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/sealed-origin.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/android-return-origin.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-1/start-intent.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-1/startup.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-1/failure.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-1/cleanup.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-1/*-original-intent.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-2/start-intent.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-2/startup.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-2/failure.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-2/cleanup.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-2/*-original-intent.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-1/choose-vault-intent.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-1/picker-shape.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-1/picker-input.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-1/picker-click-delivery.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-1/picker-native-result.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-1/media-input-intent.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-1/actual-edit-actions.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-2/actual-cold-read-actions.json
+
+          '
+        if-no-files-found: warn
+        retention-days: 14

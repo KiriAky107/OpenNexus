@@ -67,6 +67,12 @@ public final class RuntimeProbe extends Instrumentation {
                     click("Close", false);
                     waitLabel("Start writing");
                     break;
+                case "pair-note-reopen":
+                case "pair-note-return":
+                case "pair-canvas-reopen":
+                case "pair-canvas-return":
+                    originalProductPairPhase(phase);
+                    break;
                 case "markdown":
                     create("New note", NOTE);
                     inputText(noteBody(), BODY);
@@ -450,6 +456,45 @@ public final class RuntimeProbe extends Instrumentation {
 
     private boolean documentsUi(AccessibilityNodeInfo node) {
         return string(node.getPackageName()).endsWith(".documentsui");
+    }
+
+    private void originalProductPairPhase(String phase) throws Exception {
+        if (phase.startsWith("pair-note-")) {
+            open(NOTE);
+            require(OriginalMarkdownAccessibility.matches(string(noteBody().getText()), OriginalProductPairScenario.DESKTOP_NOTE),
+                "Actual original Desktop Markdown is not open; no edit sent");
+            if (phase.equals("pair-note-return")) {
+                inputText(noteBody(), OriginalProductPairScenario.ANDROID_NOTE);
+                save();
+            }
+            return;
+        }
+        open("peer.canvas");
+        AccessibilityNodeInfo text = waitNode(node -> APP.equals(string(node.getPackageName()))
+            && !node.isEditable() && string(node.getText()).equals(OriginalProductPairScenario.DESKTOP_CANVAS_TEXT),
+            "original Desktop Canvas text, not a protocol-peer fixture");
+        waitNode(node -> APP.equals(string(node.getPackageName()))
+            && label(node, OriginalProductPairScenario.IMAGE_PATH, false), "original Desktop Canvas image reference");
+        if (phase.equals("pair-canvas-return")) {
+            // One actual touch selects the existing node, without moving it.
+            activate(text);
+            click("Properties", false);
+            pairProperty("x", OriginalProductPairScenario.DESKTOP_X, OriginalProductPairScenario.ANDROID_X);
+            pairProperty("y", OriginalProductPairScenario.DESKTOP_Y, OriginalProductPairScenario.ANDROID_Y);
+            pairProperty("Node content", OriginalProductPairScenario.DESKTOP_CANVAS_TEXT, OriginalProductPairScenario.ANDROID_CANVAS_TEXT);
+            // The mobile inspector applies input immediately; the separate
+            // Save is the actual durable file operation. No fake Apply click.
+            click("Collapse right sidebar", false);
+            save();
+        }
+    }
+
+    private void pairProperty(String name, String before, String after) {
+        AccessibilityNodeInfo field=waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
+            && label(node,name,false) && string(node.getText()).equals(before), "original named Canvas property");
+        setText(field,after);
+        waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
+            && label(node,name,false) && string(node.getText()).equals(after), "actual original Canvas input readback");
     }
 
     private void waitOriginalImageNode() {
