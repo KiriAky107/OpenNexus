@@ -71,6 +71,10 @@ fn sync_legacy_binding_reads_do_not_create_metadata_or_mutate_schema() {
         .unwrap();
     assert!(page.items.is_empty());
     assert!(page.next_after.is_none());
+    assert!(ws
+        .mobile_binding_original(&scope(&request), &Uuid::new_v4().to_string())
+        .unwrap()
+        .is_none());
     assert!(!exists(&ws.db).unwrap());
     assert_eq!(ws.db.total_changes(), changes);
     assert_eq!(
@@ -160,6 +164,11 @@ fn sync_explicit_resume_invalidates_old_binding_ticket_and_rolls_back_every_publ
         2
     );
     let binding = commit(&mut ws, &request, &snapshot, replacement).unwrap();
+    assert_eq!(
+        ws.mobile_binding_original(&scope(&request), &binding.id)
+            .unwrap(),
+        Some(request.operation_id.clone())
+    );
     let receipt = ws
         .mobile_binding_read(&scope(&request), &request.operation_id)
         .unwrap()
@@ -242,4 +251,41 @@ fn sync_binding_request_and_corrupt_receipt_fail_without_replacing_the_original(
         "SYNC_BINDING_INTENT_INVALID"
     );
     assert!(ws.sync_binding().unwrap().is_none());
+}
+
+#[test]
+fn sync_cold_binding_receipt_discovery_uses_the_actual_binding_not_intent_creation_order() {
+    let (root, mut ws, request, snapshot) = setup();
+    let older = ws.mobile_binding_begin(&request).unwrap().ticket.unwrap();
+    let newer_request = Request {
+        operation_id: Uuid::new_v4().to_string(),
+        ..request.clone()
+    };
+    let newer = ws
+        .mobile_binding_begin(&newer_request)
+        .unwrap()
+        .ticket
+        .unwrap();
+    let previous = commit(&mut ws, &newer_request, &snapshot, newer).unwrap();
+    ws.sync_unbind(&previous.id).unwrap();
+    let current = commit(&mut ws, &request, &snapshot, older).unwrap();
+    drop(ws);
+    let ws = Workspace::open(root.path()).unwrap();
+    let changes = ws.db.total_changes();
+    assert_eq!(
+        ws.mobile_binding_original(&scope(&request), &current.id)
+            .unwrap(),
+        Some(request.operation_id.clone())
+    );
+    assert_eq!(
+        ws.mobile_binding_original(&scope(&request), &previous.id)
+            .unwrap(),
+        Some(newer_request.operation_id)
+    );
+    let other = Scope::new(&request.selection.endpoint, "other-account").unwrap();
+    assert!(ws
+        .mobile_binding_original(&other, &current.id)
+        .unwrap()
+        .is_none());
+    assert_eq!(ws.db.total_changes(), changes);
 }

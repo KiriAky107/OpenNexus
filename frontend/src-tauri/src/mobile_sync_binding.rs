@@ -43,6 +43,7 @@ pub async fn pending<S: crate::mobile_sync_auth::SecretStore>(
 pub struct Status {
     pub vault_id: String,
     pub binding: Option<Binding>,
+    pub original_operation_id: Option<String>,
     pub another_connection: bool,
 }
 pub async fn status<S: crate::mobile_sync_auth::SecretStore>(
@@ -56,9 +57,14 @@ pub async fn status<S: crate::mobile_sync_auth::SecretStore>(
         let another_connection = current.as_ref().is_some_and(|binding| {
             binding.endpoint != scope.endpoint() || binding.account != scope.account()
         });
+        let original_operation_id = match current.as_ref().filter(|_| !another_connection) {
+            Some(binding) => ws.mobile_binding_original(scope, &binding.id)?,
+            None => None,
+        };
         Ok(Status {
             vault_id: ws.vault_id.clone(),
             binding: current.filter(|_| !another_connection),
+            original_operation_id,
             another_connection,
         })
     })
@@ -287,6 +293,37 @@ fn prepared(intent: Intent, first: bool) -> Result<Prepared> {
 }
 
 impl Workspace {
+    fn mobile_binding_original(&self, scope: &Scope, binding: &str) -> Result<Option<String>> {
+        if !exists(&self.db)? {
+            return Ok(None);
+        }
+        // Cold WebView recovery must also find a confirmation that committed
+        // before its result arrived. Match its actual binding id, never the
+        // newest-created intent (an older prepared intent may finish later).
+        let mut statement=self.db.prepare(
+            "SELECT operation_id FROM mobile_sync_binding_intents WHERE endpoint=?1 AND account=?2 AND state='bound'
+            AND CASE WHEN length(CAST(binding AS BLOB)) BETWEEN 1 AND 4096 AND json_valid(binding)
+            THEN json_extract(binding,'$.id') END=?3 LIMIT 2")?;
+        let ids = statement
+            .query_map(params![scope.endpoint(), scope.account(), binding], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if ids.len() > 1 {
+            return Err(invalid());
+        }
+        if let Some(id) = ids.first() {
+            let original = load(&self.db, id, &self.vault_id)?.ok_or_else(invalid)?;
+            if original
+                .binding
+                .as_ref()
+                .is_none_or(|value| value.id != binding)
+            {
+                return Err(invalid());
+            }
+        }
+        Ok(ids.into_iter().next())
+    }
     pub(crate) fn mobile_binding_read(
         &self,
         scope: &Scope,
