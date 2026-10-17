@@ -188,6 +188,47 @@ def validate_stop_resumed_original(before,native,provider_before,provider_after,
 
 
 class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
+    def association_observer(self,mode,observer_id):
+        require(mode in ('install','read') and str(uuid.UUID(observer_id))==observer_id,
+            'Unrelated association observer scope')
+        require_hosted_emulator(self.args.serial)
+        self.wait_owned_connection()
+        port=None;report={'observer_id':observer_id,'observer_id_is_native_operation':False,
+            'scope':'Bounded public UI events and pass-through association IPC phases; no input values or raw errors'}
+        error=None
+        try:
+            process=self.shell('pidof',APP).stdout.decode().strip()
+            require(re.fullmatch(r'[1-9][0-9]{0,9}',process),'Owned app process is ambiguous')
+            port=self.device('forward','tcp:0','localabstract:webview_devtools_remote_'+process).stdout.decode().strip()
+            require(re.fullmatch(r'[0-9]{4,5}',port) and 1024<=int(port)<=65535,'Unexpected owned forwarding port')
+            connection=http.client.HTTPConnection('127.0.0.1',int(port),timeout=10)
+            try:
+                connection.request('GET','/json/list');response=connection.getresponse();body=response.read(1024*1024+1)
+                require(response.status==200 and len(body)<=1024*1024,'Owned WebView metadata unavailable')
+                pages=[item for item in json.loads(body) if item.get('type')=='page' and item.get('title')=='OpenNexus']
+            finally:connection.close()
+            require(len(pages)==1,'Owned WebView page is ambiguous')
+            socket=urlsplit(pages[0]['webSocketDebuggerUrl'])
+            require(socket.scheme=='ws' and socket.hostname in ('127.0.0.1','localhost') and socket.port==int(port)
+                and re.fullmatch(r'/devtools/page/[A-Za-z0-9_-]+',socket.path) and not socket.query and not socket.fragment,
+                'Refusing an unrelated association observer endpoint')
+            script=Path(__file__).resolve().parent/'android-runtime/observe_sync_association.mjs'
+            result=self.command(['node','--max-old-space-size=128',script,'ws://127.0.0.1:'+port+socket.path,mode,observer_id],timeout=20)
+            require(0<len(result.stdout)<=65536,'Owned observer result exceeds bound')
+            value=json.loads(result.stdout)
+            require(value.get('observerId')==observer_id,'Another original observer result')
+            if mode=='install':require(value.get('installed') is True,'Original association observer not installed')
+            report.update(available=True,observation=value)
+        except Exception as failure:
+            error=failure;report.update(available=False,error_class=type(failure).__name__,original_exception_text_returned=False)
+        finally:
+            if port and re.fullmatch(r'[0-9]{4,5}',port):
+                try:report['own_forward_removed']=self.device('forward','--remove','tcp:'+port,check=False).returncode==0
+                except Exception as failure:report.update(own_forward_removed=False,forward_cleanup_error_class=type(failure).__name__)
+            atomic_json(self.output/('association-observer-'+mode+'.json'),report,exclusive=True)
+        if error is not None:raise RuntimeError('OWNED_ASSOCIATION_OBSERVER_UNAVAILABLE') from None
+        return report
+
     def failure_observations(self):
         super().failure_observations()
         # Read-only debug WebView geometry/public error enums only; no DOM
@@ -210,13 +251,18 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
         number=len(self.phases)+1
         # The actual association ID/digest is separately frozen in the driver
         # before its confirmation tap. This dispatch ID is not a server nonce.
+        dispatch_id=str(uuid.uuid4())
         atomic_json(self.output/('sync-dispatch-'+str(number)+'.json'),{'phase':phase,
-            'driver_dispatch_id':str(uuid.uuid4()),'server_or_native_operation_id':False,'automatic_retry':False},exclusive=True)
+            'driver_dispatch_id':dispatch_id,'server_or_native_operation_id':False,'automatic_retry':False},exclusive=True)
         self.start_app();started=time.monotonic()
+        if phase=='associate':self.association_observer('install',dispatch_id)
         result=self.shell('am','instrument','-w','-e','phase',phase,DRIVER+'/.SyncRuntimeProbe',timeout=180,check=False)
         require(len(result.stdout)<=1024*1024,'Owned static Sync result exceeds bound')
         text=result.stdout.decode('utf-8','replace')
         atomic_json(self.output/('sync-phase-'+str(number)+'.json'),{'phase':phase,'instrument_output':text},exclusive=True)
+        if phase=='associate':
+            try:self.association_observer('read',dispatch_id)
+            except Exception:pass  # Its bounded record is retained; never replace/retry the original UI result.
         require(result.returncode==0 and 'OPENNEXUS_SYNC_PHASE_OK '+phase in text and 'OPENNEXUS_SYNC_PHASE_FAILED' not in text,
             'Actual owned Sync UI failed; original result must be checked before any further mutation')
         self.phases.append({'phase':phase,'duration_ms':round((time.monotonic()-started)*1000),'passed':True})
