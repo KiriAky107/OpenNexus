@@ -89,6 +89,11 @@ on:
         type: boolean
         default: false
         required: false
+      sync_webview_preview:
+        description: 'On sync-conflicts only, one admitted software Chromium touch for Preview merge; no JS click or direct IPC'
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: read
@@ -313,6 +318,7 @@ jobs:
           ${{ inputs.runtime_scope == 'sync-conflicts' && '--conflicts' || inputs.runtime_scope == 'sync-recovery' && '--recovery' || inputs.runtime_scope == 'sync-stop' && '--stop' || inputs.runtime_scope == 'sync-media' && '--media' || inputs.runtime_scope == 'sync-exchange' && '--exchange' || '' }}
           ${{ inputs.sync_cold_originals && '--cold-originals' || '' }}
           ${{ inputs.sync_semantic_preview && '--semantic-preview' || '' }}
+          ${{ inputs.sync_webview_preview && '--webview-preview' || '' }}
       - name: Stop only this job's emulator
         if: always()
         run: python3 scripts/android_runtime_probe.py --sdk "$ANDROID_HOME" --stop-owned

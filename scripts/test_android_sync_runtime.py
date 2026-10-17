@@ -92,6 +92,7 @@ class InitialSyncBoundaries(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             probe=SyncProbe.__new__(SyncProbe);probe.output=Path(directory);probe.phases=[]
             probe.start_app=Mock();probe.shell=Mock(return_value=subprocess.CompletedProcess([],0,b'OPENNEXUS_SYNC_PHASE_FAILED stage=static\n'))
+            probe.association_observer=Mock()
             with self.assertRaises(RuntimeError):probe.sync_phase('associate')
             probe.shell.assert_called_once();self.assertEqual(probe.phases,[])
             intent=json.loads((probe.output/'sync-dispatch-1.json').read_text())

@@ -28,6 +28,7 @@ from android_sync_setup import Setup
 from android_sync_peer import IMAGE_PATH,PATHS,Peer
 from android_sync_recovery import RecoveryMixin
 from android_sync_conflict import ConflictMixin
+from android_sync_webview_input import instrument_original_preview
 
 PEER_NOTE='# 来自独立 HTTP 客户端 😀\n\n保持 Markdown 原文。\n'.encode()
 PEER_CANVAS=(json.dumps({'nodes':[
@@ -252,19 +253,28 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
         # The actual association ID/digest is separately frozen in the driver
         # before its confirmation tap. This dispatch ID is not a server nonce.
         dispatch_id=str(uuid.uuid4())
+        args=getattr(self,'args',None)
+        webview=phase=='associate' and getattr(args,'webview_preview',False)
+        semantic=phase=='associate' and getattr(args,'semantic_preview',False)
+        require(not (webview and semantic),'Choose exactly one original preview input backend')
         atomic_json(self.output/('sync-dispatch-'+str(number)+'.json'),{'phase':phase,
             'driver_dispatch_id':dispatch_id,'server_or_native_operation_id':False,'automatic_retry':False,
-            'association_preview_input':('native-accessibility' if getattr(self.args,'semantic_preview',False) else 'touch') if phase=='associate' else None},exclusive=True)
+            'association_preview_input':('webview-touch' if webview else 'native-accessibility' if semantic else 'touch') if phase=='associate' else None},exclusive=True)
         self.start_app();started=time.monotonic()
         if phase=='associate':self.association_observer('install',dispatch_id)
-        preview_args=['-e','association_preview','native-accessibility'] if phase=='associate' and getattr(self.args,'semantic_preview',False) else []
-        result=self.shell('am','instrument','-w','-e','phase',phase,*preview_args,DRIVER+'/.SyncRuntimeProbe',timeout=180,check=False)
+        preview_args=['-e','association_preview','native-accessibility'] if semantic else []
+        result=instrument_original_preview(self,dispatch_id) if webview else self.shell('am','instrument','-w','-e','phase',phase,*preview_args,DRIVER+'/.SyncRuntimeProbe',timeout=180,check=False)
         require(len(result.stdout)<=1024*1024,'Owned static Sync result exceeds bound')
         text=result.stdout.decode('utf-8','replace')
         atomic_json(self.output/('sync-phase-'+str(number)+'.json'),{'phase':phase,'instrument_output':text},exclusive=True)
+        observation=None
         if phase=='associate':
-            try:self.association_observer('read',dispatch_id)
+            try:observation=self.association_observer('read',dispatch_id)
             except Exception:pass  # Its bounded record is retained; never replace/retry the original UI result.
+        if webview:
+            events=observation.get('observation',{}).get('events',[]) if isinstance(observation,dict) else []
+            clicks=[e for e in events if e.get('name')=='Preview merge' and e.get('kind')=='click']
+            require(len(clicks)==1 and clicks[0].get('trusted') is True,'Original browser input did not produce one actual Preview UI click')
         require(result.returncode==0 and 'OPENNEXUS_SYNC_PHASE_OK '+phase in text and 'OPENNEXUS_SYNC_PHASE_FAILED' not in text,
             'Actual owned Sync UI failed; original result must be checked before any further mutation')
         self.phases.append({'phase':phase,'duration_ms':round((time.monotonic()-started)*1000),'passed':True})
@@ -598,9 +608,12 @@ def main():
     scope=parser.add_mutually_exclusive_group();scope.add_argument('--exchange',action='store_true');scope.add_argument('--media',action='store_true');scope.add_argument('--stop',action='store_true');scope.add_argument('--recovery',action='store_true');scope.add_argument('--conflicts',action='store_true')
     parser.add_argument('--cold-originals',action='store_true')
     parser.add_argument('--semantic-preview',action='store_true')
+    parser.add_argument('--webview-preview',action='store_true')
     args=parser.parse_args();args.scope='sync-conflicts' if args.conflicts else 'sync-recovery' if args.recovery else 'sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
     require(not args.cold_originals or args.conflicts,'Cold original-entry scope requires actual conflicts')
     require(not args.semantic_preview or args.conflicts,'Native accessibility preview requires the explicit conflict scope')
+    require(not args.webview_preview or args.conflicts,'Owned WebView preview requires the explicit conflict scope')
+    require(not (args.semantic_preview and args.webview_preview),'Choose exactly one original preview input backend')
     require_hosted();require_hosted_emulator(args.serial);owner=owned_root()
     state=read_json(owner/'owner-state.json');require(state['result']=='ready' and state.get('fixture')=='sync','Owned Sync origin is not ready')
     apk,binding=validate_binding(args.bundle,args.commit)

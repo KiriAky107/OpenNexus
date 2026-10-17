@@ -82,7 +82,7 @@ public class AuthRuntimeProbe extends Instrumentation {
 
     protected void previewMerge() {
         String mode=args.getString("association_preview","touch");
-        require(mode.equals("touch") || mode.equals("native-accessibility"),"Unknown original preview input mode");
+        require(mode.equals("touch") || mode.equals("native-accessibility") || mode.equals("webview-touch"),"Unknown original preview input mode");
         if(mode.equals("touch")) { click("Preview merge"); return; }
         if(!"none".equals(inputTarget)) {
             inputHistory.add(inputTarget+" "+inputTrace);
@@ -95,6 +95,18 @@ public class AuthRuntimeProbe extends Instrumentation {
             && label(node,"Preview merge") && node.isEnabled() && node.isClickable();
         waitFor(target,true);
         AccessibilityNodeInfo original=unique(target);
+        if(mode.equals("webview-touch")) {
+            String nonce=args.getString("preview_dispatch_id","");
+            require(nonce.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"),
+                "Original owned WebView input dispatch is missing");
+            // One readiness signal on this original instrumentation stream.
+            // The parent sends software browser input; this branch sends no
+            // native touch/accessibility action or application IPC request.
+            stage="owned-webview-preview-ready";
+            inputTrace="owned_webview_touch=requested native_accessibility=not_sent physical_touch=not_sent automatic_retry=false";
+            Bundle ready=new Bundle();ready.putString("owned_preview_ready",nonce);sendStatus(1,ready);
+            return;
+        }
         stage="single-native-accessibility-preview";
         inputTrace="native_accessibility=attempted physical_touch=not_sent automatic_retry=false";
         boolean accepted=original.performAction(AccessibilityNodeInfo.ACTION_CLICK);
