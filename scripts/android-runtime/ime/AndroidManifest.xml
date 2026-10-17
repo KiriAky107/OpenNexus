@@ -1,0 +1,14 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="cc.kronecker.opennexus.testime">
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="36" />
+    <permission android:name="cc.kronecker.opennexus.testime.permission.CONTROL" android:protectionLevel="signature" />
+    <uses-permission android:name="cc.kronecker.opennexus.testime.permission.CONTROL" />
+    <application android:label="OpenNexus CI input method" android:allowBackup="false">
+        <service android:name=".CompositionInputMethod" android:label="OpenNexus CI Chinese composition"
+            android:permission="android.permission.BIND_INPUT_METHOD" android:exported="true">
+            <intent-filter><action android:name="android.view.InputMethod" /></intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/ci_input_method" />
+        </service>
+        <receiver android:name=".ImeControlReceiver" android:exported="true"
+            android:permission="cc.kronecker.opennexus.testime.permission.CONTROL" />
+    </application>
+</manifest>

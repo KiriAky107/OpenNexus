@@ -25,6 +25,8 @@ from urllib.parse import urlsplit
 
 APP = 'cc.kronecker.opennexus.dev'
 DRIVER = 'cc.kronecker.opennexus.testdriver'
+TEST_IME = 'cc.kronecker.opennexus.testime'
+TEST_IME_COMPONENT = TEST_IME + '/.CompositionInputMethod'
 BODY = '# 原始 Markdown 😀\n\n离线正文 / original content\n'
 DRAFT = BODY + '未保存的恢复草稿 / recovered draft\n'
 NODE = '中文画布节点 😀 / original canvas text'
@@ -346,7 +348,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining'):
+        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -375,30 +377,53 @@ class Probe:
         root = Path(__file__).resolve().parent / 'android-runtime'
         sdk_tools = self.args.sdk / 'build-tools/36.0.0'
         platform = self.args.sdk / 'platforms/android-36/android.jar'
-        classes, dex = self.tools / 'classes', self.tools / 'dex'
-        classes.mkdir(); dex.mkdir()
-        self.command(['javac', '-encoding', 'UTF-8', '-source', '8', '-target', '8', '-classpath', platform,
-            '-d', classes, *sorted(root.glob('*.java'))])
-        self.command([sdk_tools / 'd8', '--lib', platform, '--min-api', '24', '--output', dex,
-            *sorted(classes.rglob('*.class'))])
-        unsigned, aligned, signed = [self.tools / name for name in ('unsigned.apk', 'aligned.apk', 'driver.apk')]
-        resources = self.tools / 'resources.zip'
-        self.command([sdk_tools / 'aapt2', 'compile', '--dir', root / 'res', '-o', resources])
-        self.command([sdk_tools / 'aapt2', 'link', '-I', platform, '--manifest', root / 'AndroidManifest.xml',
-            '-R', resources, '--version-code', '1', '--version-name', 'ci', '-o', unsigned])
-        with zipfile.ZipFile(unsigned, 'a') as archive:
-            archive.write(dex / 'classes.dex', 'classes.dex')
-        self.command([sdk_tools / 'zipalign', '-f', '4', unsigned, aligned])
         key = self.tools / 'ephemeral-test-driver.p12'
         self.command(['keytool', '-genkeypair', '-keystore', key, '-storepass', 'android', '-keypass', 'android',
             '-alias', 'ci-driver', '-keyalg', 'RSA', '-keysize', '2048', '-validity', '30', '-dname', 'CN=OpenNexus CI test driver'])
-        self.command([sdk_tools / 'apksigner', 'sign', '--ks', key, '--ks-pass', 'pass:android',
-            '--key-pass', 'pass:android', '--out', signed, aligned])
-        self.device('install', '--no-streaming', signed)
+        identities = []
+        for name, package, source in (('ime', TEST_IME, root / 'ime'), ('driver', DRIVER, root)):
+            installed = self.shell('pm', 'list', 'packages', package).stdout.decode().splitlines()
+            require('package:' + package not in installed, 'Owned tool package already exists; refusing to replace it')
+            build = self.tools / name
+            build.mkdir()
+            classes, dex = build / 'classes', build / 'dex'
+            classes.mkdir(); dex.mkdir()
+            self.command(['javac', '-J-Xmx256m', '-encoding', 'UTF-8', '-source', '8', '-target', '8',
+                '-classpath', platform, '-d', classes, *sorted(source.glob('*.java'))])
+            self.command([sdk_tools / 'd8', '--lib', platform, '--min-api', '24', '--output', dex,
+                *sorted(classes.rglob('*.class'))])
+            unsigned, aligned, signed = [build / part for part in ('unsigned.apk', 'aligned.apk', name + '.apk')]
+            arguments = [sdk_tools / 'aapt2', 'link', '-I', platform, '--manifest', source / 'AndroidManifest.xml',
+                '--version-code', '1', '--version-name', 'ci', '-o', unsigned]
+            if name == 'ime':
+                resources = build / 'resources.zip'
+                self.command([sdk_tools / 'aapt2', 'compile', '--dir', root / 'res', '-o', resources])
+                arguments.extend(['-R', resources])
+            self.command(arguments)
+            with zipfile.ZipFile(unsigned, 'a') as archive:
+                archive.write(dex / 'classes.dex', 'classes.dex')
+            self.command([sdk_tools / 'zipalign', '-f', '4', unsigned, aligned])
+            self.command([sdk_tools / 'apksigner', 'sign', '--ks', key, '--ks-pass', 'pass:android',
+                '--key-pass', 'pass:android', '--out', signed, aligned])
+            verification = self.command([sdk_tools / 'apksigner', 'verify', '--verbose', '--print-certs', signed]).stdout.decode()
+            certificate = re.findall(r'Signer #1 certificate SHA-256 digest: ([0-9a-f]{64})', verification)
+            require(len(certificate) == 1, 'The original tool signer was not observed')
+            identities.append({'package': package, 'sha256': digest(signed.read_bytes()), 'signer_sha256': certificate[0]})
+            self.device('install', '--no-streaming', signed)
+            observed = self.shell('pm', 'list', 'packages', '-U', package).stdout.decode().splitlines()
+            uids = [int(match.group(1)) for line in observed
+                if (match := re.fullmatch(re.escape('package:' + package) + r' uid:([0-9]+)', line))]
+            require(len(uids) == 1 and uids[0] >= 10000, 'The separate tool UID was not observed')
+            identities[-1]['uid'] = uids[0]
+        require(identities[0]['signer_sha256'] == identities[1]['signer_sha256'], 'Signature-only tool permission is not shared')
+        require(identities[0]['uid'] != identities[1]['uid'], 'Instrumentation and test IME share a UID')
+        (self.output / 'test-ime-packages.json').write_text(json.dumps({'packages': identities,
+            'separate_UIDs': True, 'permission': TEST_IME + '.permission.CONTROL', 'product_permissions_changed': False,
+            'reason': 'Starting instrumentation force-stops only the driver package, not the separate real InputMethodService'}, indent=2)+'\n', 'utf-8')
 
     def wait_test_ime(self):
         require_hosted_emulator(self.args.serial)
-        expected = DRIVER + '/.CompositionIme'
+        expected = TEST_IME_COMPONENT
         deadline = time.monotonic() + 15
         observations = []
         while True:
@@ -419,14 +444,14 @@ class Probe:
         require_hosted_emulator(self.args.serial)
         original = self.shell('settings', 'get', 'secure', 'default_input_method').stdout.decode().strip()
         require(re.fullmatch(r'[A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+', original), 'Original hosted-emulator IME cannot be identified')
-        require(original != DRIVER + '/.CompositionIme', 'Test IME already selected before this owned run')
+        require(original != TEST_IME_COMPONENT, 'Test IME already selected before this owned run')
         hardware = self.shell('settings', 'get', 'secure', 'show_ime_with_hard_keyboard').stdout.decode().strip()
         require(hardware in ('0', '1', 'null'), 'Original hosted-emulator hardware-keyboard preference is unknown')
         self.wait_test_ime()
         self.original_ime = original
         self.original_hardware_ime = hardware
-        self.shell('ime', 'enable', DRIVER + '/.CompositionIme')
-        self.shell('ime', 'set', DRIVER + '/.CompositionIme')
+        self.shell('ime', 'enable', TEST_IME_COMPONENT)
+        self.shell('ime', 'set', TEST_IME_COMPONENT)
         self.shell('settings', 'put', 'secure', 'show_ime_with_hard_keyboard', '1')
 
     def restore_test_ime(self):
@@ -434,9 +459,9 @@ class Probe:
             return
         require_hosted_emulator(self.args.serial)
         observed = self.shell('settings', 'get', 'secure', 'default_input_method', check=False).stdout.decode().strip()
-        if observed == DRIVER + '/.CompositionIme':
+        if observed == TEST_IME_COMPONENT:
             self.shell('ime', 'set', self.original_ime)
-            self.shell('ime', 'disable', DRIVER + '/.CompositionIme')
+            self.shell('ime', 'disable', TEST_IME_COMPONENT)
             if self.original_hardware_ime == 'null':
                 self.shell('settings', 'delete', 'secure', 'show_ime_with_hard_keyboard')
             elif self.original_hardware_ime in ('0', '1'):
@@ -475,7 +500,7 @@ class Probe:
             require(re.fullmatch(rb'[1-9][0-9]{0,9}', self.shell('pidof', APP).stdout.strip()),
                 'Tablet rotation requires the same single owned app process')
         self.native_tls_startup(phase)
-        if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining'):
+        if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining','editing-remaining'):
             result = self.image_save_instrumentation(phase)
         else:
             result = self.shell('am', 'instrument', '-w', '-e', 'phase', phase, f'{DRIVER}/.RuntimeProbe', timeout=180)
@@ -499,7 +524,7 @@ class Probe:
             self.force_stop()
         if self.root is None and not phase.startswith('theme-'):
             self.discover_private_root()
-        if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining'):
+        if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining','editing-remaining'):
             after = self.image_save_rows(phase, 'after-save')
             before = json.loads((self.output/(phase+'-stable-before-save-receipts.json')).read_text('utf-8'))
             validate_image_save_result(before, after)
@@ -917,6 +942,12 @@ class Probe:
 
     def run(self):
         self.boot()
+        if self.args.scope == 'editing-remaining':
+            self.enable_test_ime()
+            self.phase('ime-seed')  # One fresh UI fixture, not old theme/Markdown/recovery acceptance.
+            require(self.original('runtime-note.md') == DRAFT.encode(), 'New owned IME fixture differs from its original bytes')
+            self.finish_editing(rich=None)
+            return
         if self.args.scope in ('attachments','attachments-remaining','canvas-remaining'):
             self.run_attachments()
             return
@@ -946,6 +977,10 @@ class Probe:
         require(any(path == 'runtime-note.md' and content == DRAFT and generation > saved for path, content, generation, saved in rows), 'Confirmed local draft missing after force-stop')
         self.phase('recover')
         require(self.original('runtime-note.md') == DRAFT.encode(), 'Recovered and saved Markdown bytes mismatch')
+        self.finish_editing(rich=rich)
+
+    def finish_editing(self, *, rich):
+        # Also used by the narrow remaining scope; no replay of passed initial components.
         self.phase('ime-compose')
         require(self.original('runtime-note.md') == (DRAFT + IME_TEXT).encode(), 'Confirmed Chinese IME input changed original Markdown bytes')
         self.phase('ime-recover')
@@ -978,7 +1013,9 @@ class Probe:
         self.phase('canvas-image-reopen')
         images = self.verify_original_images()
         self.phase('export')
-        originals = {'runtime-rich.md': rich, 'runtime-note.md': (DRAFT + IME_TEXT).encode(), 'runtime.canvas': after, **images}
+        originals = {'runtime-note.md': (DRAFT + IME_TEXT).encode(), 'runtime.canvas': after, **images}
+        if rich is not None:
+            originals['runtime-rich.md'] = rich
         export = self.verify_export(originals)
         for name, data in originals.items():
             path = self.output / name
@@ -994,6 +1031,8 @@ class Probe:
             'native_tls_initializations': self.tls_initializations,
             'native_keystore_tests': self.keystore_test_result,
             'native_auth_gateway_read': self.native_auth_read_result,
+            'previous_components_not_retested': self.args.scope == 'editing-remaining',
+            'remaining_scope_seed': 'One new note through the real UI, solely to bind actual Chinese composition' if self.args.scope == 'editing-remaining' else None,
             'native_theme_contrast_verified': False,
             'theme_style_diagnostic': 'theme-diagnostic-dark-computed-styles.json' if self.args.scope == 'lifecycle' else None,
             'theme_ui': 'Actual shared desktop theme card choices and cold reloads; rendered card screenshots/window observations retained for appearance review' if self.args.scope == 'all' else 'Not repeated in lifecycle scope; theme acceptance requires independent same-APK evidence',
@@ -1001,7 +1040,7 @@ class Probe:
             'input_method': 'Real Android InputMethodService/InputConnection for source/rich body text, pinyin, Chinese composing text and candidate confirmation; accessibility only for ordinary path/property fields. Test-only IME, not Gboard/Sogou or physical-device proof.',
             'system_back': 'Actual Android Back key; durable draft recovery and own-task background; not predictive gesture animation proof',
             'physical_phone_verified': False, 'Chinese_IME_verified': True, 'commercial_Chinese_IME_verified': False, 'sync_verified': False,
-            'disk_full_verified': False, 'shared_rich_writing_verified': True, 'image_picker_verified': True,
+            'disk_full_verified': False, 'shared_rich_writing_verified': rich is not None, 'image_picker_verified': True,
             'image_picker_scope': 'Real system document picker selects an owned synthetic PNG; original bytes, three native receipts for source/rich Markdown and Canvas, cold reopen and exported bytes verified. Not camera or user-gallery acceptance.',
             'published': False}
         (self.output / 'runtime-proof.json').write_text(json.dumps(proof, ensure_ascii=False, indent=2) + '\n', 'utf-8')
@@ -1019,7 +1058,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:

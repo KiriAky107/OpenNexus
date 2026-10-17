@@ -47,6 +47,7 @@ public final class RuntimeProbe extends Instrumentation {
             info.flags |= AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
                 | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
             ui.setServiceInfo(info);
+            CompositionIme.attach(getContext());
             String phase = arguments.getString("phase", "");
             switch (phase) {
                 case "theme-dark": selectTheme("System", "Dark"); break;
@@ -144,6 +145,12 @@ public final class RuntimeProbe extends Instrumentation {
                     click("Recover drafts", false);
                     click(NOTE, true);
                     require(string(noteBody().getText()).contains("未保存的恢复草稿"), "Recovered draft text missing");
+                    save();
+                    break;
+                case "ime-seed":
+                    // Fresh narrow-scope fixture, not previous recovery acceptance.
+                    create("New note", NOTE);
+                    inputText(noteBody(), DRAFT);
                     save();
                     break;
                 case "ime-compose":

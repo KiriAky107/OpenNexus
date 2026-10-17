@@ -1,73 +1,70 @@
 package cc.kronecker.opennexus.testdriver;
 
-import android.inputmethodservice.InputMethodService;
+import android.content.BroadcastReceiver;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
 import android.os.Handler;
-import android.os.Looper;
+import android.os.HandlerThread;
 import android.os.SystemClock;
-import android.view.View;
-import android.view.inputmethod.EditorInfo;
-import android.view.inputmethod.InputConnection;
-import android.widget.TextView;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 
-/** Test-only real Android IME; never packaged in the OpenNexus product APK. */
-public final class CompositionIme extends InputMethodService {
-    private static volatile CompositionIme active;
-    private interface Edit { boolean apply(InputConnection connection); }
+/** CI-only client for the separate test IME; never part of the product APK. */
+final class CompositionIme {
+    private static final String PACKAGE = "cc.kronecker.opennexus.testime";
+    private static final String PERMISSION = PACKAGE + ".permission.CONTROL";
+    private static Context context;
+    private static Handler replies;
 
-    @Override public void onCreate() { super.onCreate(); active = this; }
-    @Override public void onDestroy() { if (active == this) active = null; super.onDestroy(); }
-    @Override public boolean onEvaluateInputViewShown() { return true; }
-    @Override public View onCreateInputView() {
-        TextView view = new TextView(this);
-        view.setText("OpenNexus CI Chinese composition");
-        view.setTextSize(16);
-        view.setPadding(20, 20, 20, 20);
-        view.setMinimumHeight((int) (100 * getResources().getDisplayMetrics().density));
-        return view;
+    static void attach(Context source) {
+        context = source;
+        HandlerThread thread = new HandlerThread("owned-ime-replies");
+        thread.start();
+        replies = new Handler(thread.getLooper());
     }
 
     static void awaitTarget(String packageName) throws Exception {
         long until = SystemClock.uptimeMillis() + 10_000;
         while (SystemClock.uptimeMillis() < until) {
-            try { edit(packageName, connection -> true); return; }
-            catch (IllegalStateException unavailable) { SystemClock.sleep(100); }
+            if (send(packageName, "check", null, -1) == 1) return;
+            SystemClock.sleep(100); // Only the read-only binding check may repeat.
         }
-        throw new IllegalStateException("The test IME was not bound to the owned app editor");
+        throw new IllegalStateException("The separate test IME was not bound to the owned app editor");
     }
 
-    static void selectEnd(String packageName, int end) throws Exception {
-        edit(packageName, connection -> connection.setSelection(end, end));
-    }
-    static void commit(String packageName, String text) throws Exception {
-        edit(packageName, connection -> connection.commitText(text, 1));
-    }
-    static void compose(String packageName, String text) throws Exception {
-        edit(packageName, connection -> connection.setComposingText(text, 1));
-    }
-    static void confirm(String packageName) throws Exception {
-        edit(packageName, InputConnection::finishComposingText);
+    static void selectEnd(String packageName, int end) throws Exception { edit(packageName, "select", null, end); }
+    static void commit(String packageName, String text) throws Exception { edit(packageName, "commit", text, -1); }
+    static void compose(String packageName, String text) throws Exception { edit(packageName, "compose", text, -1); }
+    static void confirm(String packageName) throws Exception { edit(packageName, "finish", null, -1); }
+
+    private static void edit(String packageName, String operation, String text, int end) throws Exception {
+        // A timed-out mutation has an unknown result. Never send it again here.
+        if (send(packageName, operation, text, end) != 1)
+            throw new IllegalStateException("Separate test IME rejected the original operation; no retry");
     }
 
-    private static void edit(String packageName, Edit operation) throws Exception {
-        CompositionIme ime = active;
-        if (ime == null) throw new IllegalStateException("Test IME has not started");
-        AtomicReference<Throwable> failure = new AtomicReference<>();
+    private static int send(String packageName, String operation, String text, int end) throws Exception {
+        if (context == null || !"cc.kronecker.opennexus.dev".equals(packageName))
+            throw new IllegalStateException("Refusing an unrelated test IME target");
+        String id = UUID.randomUUID().toString();
+        Intent intent = new Intent(PACKAGE + ".CONTROL")
+            .setComponent(new ComponentName(PACKAGE, PACKAGE + ".ImeControlReceiver"))
+            .putExtra("id", id).putExtra("target", packageName).putExtra("operation", operation).putExtra("end", end);
+        if (text != null) intent.putExtra("text", text);
         CountDownLatch completed = new CountDownLatch(1);
-        new Handler(Looper.getMainLooper()).post(() -> {
-            try {
-                EditorInfo editor = ime.getCurrentInputEditorInfo();
-                InputConnection connection = ime.getCurrentInputConnection();
-                if (active != ime || editor == null || !packageName.equals(editor.packageName) || connection == null) {
-                    throw new IllegalStateException("Refusing an IME operation on an unrelated or missing editor");
-                }
-                if (!operation.apply(connection)) throw new IllegalStateException("InputConnection rejected the IME operation");
-            } catch (Throwable error) { failure.set(error); }
-            finally { completed.countDown(); }
-        });
-        if (!completed.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Test IME acknowledgement timed out");
-        if (failure.get() != null) throw new IllegalStateException("Test IME operation failed", failure.get());
+        AtomicInteger code = new AtomicInteger(-1);
+        context.sendOrderedBroadcast(intent, PERMISSION, new BroadcastReceiver() {
+            @Override public void onReceive(Context ignored, Intent original) {
+                if (("owned-ime:" + id).equals(getResultData())) code.set(getResultCode());
+                completed.countDown();
+            }
+        }, replies, -1, null, null);
+        if (!completed.await(5, TimeUnit.SECONDS))
+            throw new IllegalStateException("Separate test IME acknowledgement timed out; original result unknown, no retry");
+        if (code.get() < 0) throw new IllegalStateException("Separate test IME reply was not bound to the original request");
+        return code.get();
     }
 }

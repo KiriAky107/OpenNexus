@@ -11,7 +11,7 @@ import zlib
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAGE_BYTES, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job, validate_tablet_layout, validate_image_save_observation, validate_image_save_result, rich_image_editor_ready
+from android_runtime_probe import APP, DRIVER, TEST_IME, TEST_IME_COMPONENT, DRAFT, IMAGE_BODY, RICH_IMAGE_TEXT, IMAGE_BYTES, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job, validate_tablet_layout, validate_image_save_observation, validate_image_save_result, rich_image_editor_ready
 
 
 class RuntimeBoundaries(unittest.TestCase):
@@ -229,7 +229,7 @@ class RuntimeBoundaries(unittest.TestCase):
             probe.device.assert_not_called();probe.image_save_rows.assert_not_called();process.terminate.assert_called_once()
 
     def test_attachment_scope_does_not_repeat_the_fixed_apks_keystore_cases(self):
-        for scope in ('attachments','attachments-remaining','canvas-remaining'):
+        for scope in ('attachments','attachments-remaining','canvas-remaining','editing-remaining'):
             probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope=scope)
             probe.binding={'native_tests':{'expected_tests':5}};probe.device=Mock();probe.shell=Mock()
             probe.native_keystore_tests()
@@ -304,7 +304,7 @@ class RuntimeBoundaries(unittest.TestCase):
     def test_ime_wait_observes_exact_registration_before_any_mutating_command(self):
         with tempfile.TemporaryDirectory() as directory:
             probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562')
-            expected=DRIVER+'/.CompositionIme'
+            expected=TEST_IME_COMPONENT
             probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b''),
                 subprocess.CompletedProcess([],0,(expected+'Other\n').encode()),subprocess.CompletedProcess([],0,(expected+'\n').encode())])
             with patch('android_runtime_probe.require_hosted_emulator'),patch('android_runtime_probe.time.sleep'):
@@ -660,7 +660,7 @@ class RuntimeBoundaries(unittest.TestCase):
     def test_test_ime_rejects_unknown_original_selection_before_any_setting_change(self):
         probe=Probe.__new__(Probe);probe.args=SimpleNamespace(serial='emulator-5562')
         probe.original_ime=None;probe.original_hardware_ime=None
-        for original in (b'null\n', b'not a component\n', (DRIVER+'/.CompositionIme\n').encode()):
+        for original in (b'null\n', b'not a component\n', (TEST_IME_COMPONENT+'\n').encode()):
             calls=[]
             probe.shell=lambda *args,**kwargs:(calls.append(args) or subprocess.CompletedProcess([],0,original,b''))
             with patch('android_runtime_probe.require_hosted_emulator'):
@@ -668,17 +668,60 @@ class RuntimeBoundaries(unittest.TestCase):
             self.assertEqual(len(calls),1);self.assertIsNone(probe.original_ime)
 
     def test_test_ime_restoration_changes_only_the_exact_owned_selection(self):
-        for current in (DRIVER+'/.CompositionIme','another.ime/.Editor'):
+        for current in (TEST_IME_COMPONENT,'another.ime/.Editor'):
             probe=Probe.__new__(Probe);probe.args=SimpleNamespace(serial='emulator-5562')
             probe.original_ime='original.ime/.Keyboard';probe.original_hardware_ime='null'
             calls=[]
             probe.shell=lambda *args,**kwargs:(calls.append(args) or subprocess.CompletedProcess([],0,(current+'\n').encode(),b''))
             with patch('android_runtime_probe.require_hosted_emulator'):probe.restore_test_ime()
             expected=[('settings','get','secure','default_input_method')]
-            if current==DRIVER+'/.CompositionIme':expected.extend([
-                ('ime','set','original.ime/.Keyboard'),('ime','disable',DRIVER+'/.CompositionIme'),
+            if current==TEST_IME_COMPONENT:expected.extend([
+                ('ime','set','original.ime/.Keyboard'),('ime','disable',TEST_IME_COMPONENT),
                 ('settings','delete','secure','show_ime_with_hard_keyboard')])
             self.assertEqual(calls,expected);self.assertIsNone(probe.original_ime)
+
+    def test_remaining_editing_bootstraps_once_without_replaying_passed_initial_components(self):
+        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope='editing-remaining')
+        probe.boot=Mock();probe.enable_test_ime=Mock();probe.phase=Mock()
+        probe.original=Mock(return_value=DRAFT.encode());probe.finish_editing=Mock()
+        probe.run()
+        probe.boot.assert_called_once();probe.enable_test_ime.assert_called_once()
+        probe.phase.assert_called_once_with('ime-seed')
+        probe.finish_editing.assert_called_once_with(rich=None)
+        probe.original.return_value=b'an unrelated existing note'
+        with self.assertRaisesRegex(RuntimeError,'New owned IME fixture'):probe.run()
+
+    def test_tool_packages_compile_separately_and_share_only_the_ephemeral_signature(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);probe=Probe.__new__(Probe)
+            probe.tools=root/'tools';probe.tools.mkdir();probe.output=root/'evidence';probe.output.mkdir()
+            probe.args=SimpleNamespace(sdk=root/'sdk');commands=[];installed=[]
+            def shell(*args,**_):
+                package=args[-1]
+                value=('package:'+package+' uid:'+str(10080 if package==TEST_IME else 10081)+'\n').encode() if '-U' in args else b''
+                return subprocess.CompletedProcess([],0,value,b'')
+            def command(values,**_):
+                commands.append(values);tool=Path(values[0]).name
+                if tool=='d8':
+                    (values[values.index('--output')+1]/'classes.dex').write_bytes(b'original tool dex')
+                elif tool=='aapt2' and values[1]=='link':
+                    with __import__('zipfile').ZipFile(values[values.index('-o')+1],'w'):pass
+                elif tool=='apksigner' and values[1]=='sign':
+                    values[values.index('--out')+1].write_bytes(b'signed '+str(values[-1]).encode())
+                output=('Signer #1 certificate SHA-256 digest: '+'a'*64+'\n').encode()
+                return subprocess.CompletedProcess([],0,output,b'')
+            probe.shell=shell;probe.command=command;probe.device=lambda *args:installed.append(args)
+            probe.build_driver()
+            self.assertEqual(sum(Path(args[0]).name=='keytool' for args in commands),1)
+            compiles=[args for args in commands if Path(args[0]).name=='javac']
+            self.assertEqual(len(compiles),2)
+            self.assertIn('-J-Xmx256m',compiles[0]);self.assertIn('-J-Xmx256m',compiles[1])
+            self.assertTrue(all(path.parent.name=='ime' for path in compiles[0] if isinstance(path,Path) and path.suffix=='.java'))
+            self.assertTrue(all(path.parent.name=='android-runtime' for path in compiles[1] if isinstance(path,Path) and path.suffix=='.java'))
+            self.assertEqual([args[-1].name for args in installed],['ime.apk','driver.apk'])
+            proof=json.loads((probe.output/'test-ime-packages.json').read_text())
+            self.assertEqual([p['package'] for p in proof['packages']],[TEST_IME,DRIVER])
+            self.assertNotEqual(proof['packages'][0]['uid'],proof['packages'][1]['uid'])
 
     def test_runtime_reuse_requires_the_exact_successful_build_job_not_an_aggregate_green_run(self):
         run={'id':42,'head_sha':'fixed-source','head_branch':'main','path':'.github/workflows/android.yml','conclusion':'failure'}
