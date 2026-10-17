@@ -2,7 +2,7 @@
 use crate::{
     sync_inbox::RemoteRevision,
     sync_state::Binding,
-    workspace::{hash, HostError, Result, Workspace},
+    workspace::{hash, Entry, HostError, Result, Workspace},
 };
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -32,10 +32,26 @@ struct Local {
     hash: String,
     size: usize,
 }
+struct PreparedInitialFile<'a> {
+    local: Local,
+    operation: String,
+    old: Option<Entry>,
+    file_id: String,
+    remote: Option<&'a RemoteRevision>,
+}
+
+/// Only created by verified preparation. Its exclusive workspace borrow keeps
+/// edits/association changes out until this one-use commit is consumed/dropped.
+/// No file contents, credentials, clone or WebView deserialization are exposed.
+pub(crate) struct InitialCommit<'workspace, 'source> {
+    workspace: &'workspace mut Workspace,
+    endpoint: &'source str,
+    remote: &'source str,
+    account: &'source str,
+    snapshot: &'source Snapshot,
+    files: Vec<PreparedInitialFile<'source>>,
+}
 impl Workspace {
-    fn initial_local(&self) -> Result<Vec<Local>> {
-        self.initial_local_checked(&|| Ok(()))
-    }
     fn initial_local_checked(&self, check: &dyn Fn() -> Result<()>) -> Result<Vec<Local>> {
         self.sync_paths_checked(check)?
             .into_iter()
@@ -75,6 +91,17 @@ impl Workspace {
             return Err(HostError::new("SYNC_ALREADY_BOUND"));
         }
         let local = self.initial_local_checked(check)?;
+        self.initial_preview_from_local(endpoint, remote, account, snapshot, &local, check)
+    }
+    fn initial_preview_from_local(
+        &self,
+        endpoint: &str,
+        remote: &str,
+        account: &str,
+        snapshot: &Snapshot,
+        local: &[Local],
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Preview> {
         let binding = Binding {
             id: String::new(),
             endpoint: endpoint.into(),
@@ -94,7 +121,7 @@ impl Workspace {
                 paths.insert(item.path.clone(), "download");
             }
         }
-        for item in &local {
+        for item in local {
             check()?;
             let remote = snapshot
                 .items
@@ -144,25 +171,50 @@ impl Workspace {
         snapshot: &Snapshot,
         expected: &str,
     ) -> Result<Binding> {
+        self.sync_prepare_initial(endpoint, remote, account, snapshot, expected, &|| Ok(()))?
+            .commit()
+    }
+    /// All hashing/spooling happens before a caller takes its short lifecycle
+    /// commit guard. Only private immutable payload cache references are staged;
+    /// no binding, alias, cursor or outgoing operation is published here.
+    pub(crate) fn sync_prepare_initial<'workspace, 'source>(
+        &'workspace mut self,
+        endpoint: &'source str,
+        remote: &'source str,
+        account: &'source str,
+        snapshot: &'source Snapshot,
+        expected: &str,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<InitialCommit<'workspace, 'source>> {
+        check()?;
+        if self.sync_binding()?.is_some() {
+            return Err(HostError::new("SYNC_ALREADY_BOUND"));
+        }
+        let local = self.initial_local_checked(check)?;
         if self
-            .sync_preview(endpoint, remote, account, snapshot)?
+            .initial_preview_from_local(endpoint, remote, account, snapshot, &local, check)?
             .fingerprint
             != expected
         {
             return Err(HostError::new("SYNC_PREVIEW_CHANGED"));
         }
-        let local = self.initial_local()?;
-        let mut prepared = Vec::new();
+        let mut files = Vec::new();
         for item in local {
+            check()?;
             let operation = Uuid::new_v4().to_string();
-            self.store_payload_file(&operation, &self.resolve(&item.path)?, &item.hash)
-                .map_err(|error| {
-                    if error.code == "REVISION_CONFLICT" {
-                        HostError::new("SYNC_PREVIEW_CHANGED")
-                    } else {
-                        error
-                    }
-                })?;
+            self.store_payload_file_checked(
+                &operation,
+                &self.resolve(&item.path)?,
+                &item.hash,
+                check,
+            )
+            .map_err(|error| {
+                if error.code == "REVISION_CONFLICT" {
+                    HostError::new("SYNC_PREVIEW_CHANGED")
+                } else {
+                    error
+                }
+            })?;
             let old = self.entry(&item.path)?;
             let remote = snapshot
                 .items
@@ -172,10 +224,74 @@ impl Workspace {
                 .map(|r| r.file_id.clone())
                 .or_else(|| old.as_ref().map(|v| v.file_id.clone()))
                 .unwrap_or_else(|| Uuid::new_v4().to_string());
-            prepared.push((item, operation, old, file_id, remote));
+            files.push(PreparedInitialFile {
+                local: item,
+                operation,
+                old,
+                file_id,
+                remote,
+            });
+        }
+        check()?;
+        Ok(InitialCommit {
+            workspace: self,
+            endpoint,
+            remote,
+            account,
+            snapshot,
+            files,
+        })
+    }
+    pub fn sync_initial_pending(&self, binding: &str) -> Result<Option<Vec<RemoteRevision>>> {
+        self.check_binding(binding)?;
+        let active: bool = self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sync_initial WHERE binding=?1)",
+            [binding],
+            |r| r.get(0),
+        )?;
+        if !active {
+            return Ok(None);
+        }
+        let mut statement=self.db.prepare("SELECT i.revision FROM sync_initial_items i WHERE binding=?1 AND NOT EXISTS(SELECT 1 FROM sync_inbox n WHERE n.binding=i.binding AND n.sequence=i.sequence AND n.state!='pending') ORDER BY sequence")?;
+        let rows = statement
+            .query_map([binding], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(Some(
+            rows.iter()
+                .map(|v| {
+                    serde_json::from_str(v).map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))
+                })
+                .collect::<Result<_>>()?,
+        ))
+    }
+    pub(crate) fn initial_revision(&self, binding: &str, sequence: i64) -> Result<Option<String>> {
+        Ok(self.db.query_row("SELECT revision FROM sync_initial_items WHERE binding=?1 AND sequence=?2 AND EXISTS(SELECT 1 FROM sync_initial WHERE binding=?1)",params![binding,sequence],|r|r.get(0)).optional()?)
+    }
+}
+
+impl InitialCommit<'_, '_> {
+    pub(crate) fn commit(self) -> Result<Binding> {
+        self.commit_with(|_, _| Ok(()))
+    }
+    /// The native receipt callback joins the very same transaction as binding,
+    /// file identities and outbox publication. A failure rolls all of them back.
+    pub(crate) fn commit_with(
+        self,
+        receipt: impl FnOnce(&rusqlite::Transaction<'_>, &Binding) -> Result<()>,
+    ) -> Result<Binding> {
+        let Self {
+            workspace,
+            endpoint,
+            remote,
+            account,
+            snapshot,
+            files,
+        } = self;
+        if workspace.sync_binding()?.is_some() {
+            return Err(HostError::new("SYNC_ALREADY_BOUND"));
         }
         let id = Uuid::new_v4().to_string();
-        let tx = self.db.transaction()?;
+        let tx = workspace.db.transaction()?;
         tx.execute(
             "UPDATE outbox SET state='archived' WHERE state IN ('pending','queued')",
             [],
@@ -206,7 +322,14 @@ impl Workspace {
                 )?;
             }
         }
-        for (item, operation, old, file_id, remote) in prepared {
+        for PreparedInitialFile {
+            local: item,
+            operation,
+            old,
+            file_id,
+            remote,
+        } in files
+        {
             if let Some(old) = old {
                 if old.file_id != file_id {
                     let occupied: bool = tx.query_row(
@@ -250,40 +373,221 @@ impl Workspace {
             )?;
             tx.execute("DELETE FROM sync_initial WHERE binding=?1", [&id])?;
         }
+        let binding = Binding {
+            id: id.clone(),
+            endpoint: endpoint.into(),
+            remote_vault: remote.into(),
+            account: account.into(),
+            cursor: if snapshot.items.iter().all(|item| item.operation == "delete") {
+                snapshot.boundary
+            } else {
+                0
+            },
+        };
+        receipt(&tx, &binding)?;
         tx.commit()?;
-        self.sync_binding()?
+        workspace
+            .sync_binding()?
             .ok_or_else(|| HostError::new("DATABASE_ERROR"))
-    }
-    pub fn sync_initial_pending(&self, binding: &str) -> Result<Option<Vec<RemoteRevision>>> {
-        self.check_binding(binding)?;
-        let active: bool = self.db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sync_initial WHERE binding=?1)",
-            [binding],
-            |r| r.get(0),
-        )?;
-        if !active {
-            return Ok(None);
-        }
-        let mut statement=self.db.prepare("SELECT i.revision FROM sync_initial_items i WHERE binding=?1 AND NOT EXISTS(SELECT 1 FROM sync_inbox n WHERE n.binding=i.binding AND n.sequence=i.sequence AND n.state!='pending') ORDER BY sequence")?;
-        let rows = statement
-            .query_map([binding], |r| r.get::<_, String>(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(Some(
-            rows.iter()
-                .map(|v| {
-                    serde_json::from_str(v).map_err(|_| HostError::new("SYNC_RESPONSE_INVALID"))
-                })
-                .collect::<Result<_>>()?,
-        ))
-    }
-    pub(crate) fn initial_revision(&self, binding: &str, sequence: i64) -> Result<Option<String>> {
-        Ok(self.db.query_row("SELECT revision FROM sync_initial_items WHERE binding=?1 AND sequence=?2 AND EXISTS(SELECT 1 FROM sync_initial WHERE binding=?1)",params![binding,sequence],|r|r.get(0)).optional()?)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn staged_initial_binding_publishes_its_receipt_and_outbox_in_one_transaction() {
+        for reject in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let mut ws = Workspace::open(root.path()).unwrap();
+            let old = ws
+                .write("original.md", "", b"original\r\n", "local")
+                .unwrap();
+            ws.db.execute_batch("CREATE TABLE owned_binding_receipt(original_id TEXT PRIMARY KEY,binding_id TEXT NOT NULL);").unwrap();
+            let snapshot = Snapshot {
+                boundary: 1,
+                items: vec![revision(1, "original.md", b"remote-original")],
+            };
+            let fingerprint = ws
+                .sync_preview("https://sync.example/", "remote", "reader", &snapshot)
+                .unwrap()
+                .fingerprint;
+            let count: i64 = ws
+                .db
+                .query_row(
+                    "SELECT COUNT(*) FROM outbox WHERE state='pending'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let staged = ws
+                .sync_prepare_initial(
+                    "https://sync.example/",
+                    "remote",
+                    "reader",
+                    &snapshot,
+                    &fingerprint,
+                    &|| Ok(()),
+                )
+                .unwrap();
+            assert!(staged.workspace.sync_binding().unwrap().is_none());
+            assert_eq!(
+                staged
+                    .workspace
+                    .db
+                    .query_row(
+                        "SELECT COUNT(*) FROM outbox WHERE state='pending'",
+                        [],
+                        |row| row.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                count
+            );
+            let result = staged.commit_with(|tx, binding| {
+                tx.execute(
+                    "INSERT INTO owned_binding_receipt VALUES ('original-bind',?1)",
+                    [&binding.id],
+                )?;
+                if reject {
+                    Err(HostError::new("OWNED_RECEIPT_REFUSED"))
+                } else {
+                    Ok(())
+                }
+            });
+            if reject {
+                assert_eq!(result.err().unwrap().code, "OWNED_RECEIPT_REFUSED");
+                assert!(ws.sync_binding().unwrap().is_none());
+                assert_eq!(
+                    ws.entry("original.md").unwrap().unwrap().file_id,
+                    old.file_id
+                );
+                assert_eq!(
+                    ws.db
+                        .query_row("SELECT COUNT(*) FROM owned_binding_receipt", [], |row| row
+                            .get::<_, i64>(
+                            0
+                        ))
+                        .unwrap(),
+                    0
+                );
+                assert_eq!(
+                    ws.db
+                        .query_row(
+                            "SELECT COUNT(*) FROM outbox WHERE state='pending'",
+                            [],
+                            |row| row.get::<_, i64>(0)
+                        )
+                        .unwrap(),
+                    count
+                );
+            } else {
+                let binding = result.unwrap();
+                assert_eq!(ws.db.query_row("SELECT binding_id FROM owned_binding_receipt WHERE original_id='original-bind'",[],|row|row.get::<_,String>(0)).unwrap(),binding.id);
+                assert_eq!(ws.sync_binding().unwrap().unwrap().id, binding.id);
+                assert_eq!(
+                    ws.entry("original.md").unwrap().unwrap().file_id,
+                    snapshot.items[0].file_id
+                );
+                assert_eq!(
+                    ws.sync_initial_pending(&binding.id).unwrap().unwrap().len(),
+                    1
+                );
+            }
+            assert_eq!(
+                fs::read(root.path().join("original.md")).unwrap(),
+                b"original\r\n"
+            );
+        }
+    }
+    #[cfg(feature = "sync-http")]
+    #[test]
+    fn native_stop_after_preparation_refuses_the_one_use_commit_without_a_binding_or_receipt() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        ws.write("original.md", "", b"original\r\n", "local")
+            .unwrap();
+        let snapshot = Snapshot {
+            boundary: 0,
+            items: vec![],
+        };
+        let fingerprint = ws
+            .sync_preview("https://sync.example/", "remote", "reader", &snapshot)
+            .unwrap()
+            .fingerprint;
+        let foreground = crate::mobile_sync_foreground::Foreground::default();
+        foreground.on_start();
+        let lease = foreground.lease().unwrap();
+        let staged = ws
+            .sync_prepare_initial(
+                "https://sync.example/",
+                "remote",
+                "reader",
+                &snapshot,
+                &fingerprint,
+                &|| lease.check().map_err(|error| HostError::new(&error.code)),
+            )
+            .unwrap();
+        foreground.on_stop();
+        let result = lease.with_current(|| staged.commit().map_err(Into::into));
+        assert_eq!(result.err().unwrap().code, "SYNC_FOREGROUND_CHANGED");
+        assert!(ws.sync_binding().unwrap().is_none());
+        assert_eq!(
+            fs::read(root.path().join("original.md")).unwrap(),
+            b"original\r\n"
+        );
+    }
+    #[test]
+    fn a_file_change_after_frozen_scan_is_not_recaptured_as_an_approved_binding() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        ws.write("original.md", "", b"approved-original", "local")
+            .unwrap();
+        let snapshot = Snapshot {
+            boundary: 0,
+            items: vec![],
+        };
+        let scans = std::cell::Cell::new(0);
+        let fingerprint = ws
+            .sync_preview_checked(
+                "https://sync.example/",
+                "remote",
+                "reader",
+                &snapshot,
+                &|| {
+                    scans.set(scans.get() + 1);
+                    Ok(())
+                },
+            )
+            .unwrap()
+            .fingerprint;
+        let calls = std::cell::Cell::new(0);
+        let changed = std::cell::Cell::new(false);
+        let failure = ws.sync_prepare_initial(
+            "https://sync.example/",
+            "remote",
+            "reader",
+            &snapshot,
+            &fingerprint,
+            &|| {
+                calls.set(calls.get() + 1);
+                // Change after the checked preview's frozen scan/plan sequence:
+                // the first spool's loop and payload-entry checks follow it.
+                // The file must still match the already approved original digest.
+                if calls.get() == scans.get() + 2 {
+                    fs::write(root.path().join("original.md"), b"new-independent-edit")?;
+                    changed.set(true);
+                }
+                Ok(())
+            },
+        );
+        assert!(changed.get());
+        assert_eq!(failure.err().unwrap().code, "SYNC_PREVIEW_CHANGED");
+        assert!(ws.sync_binding().unwrap().is_none());
+        assert_eq!(
+            fs::read(root.path().join("original.md")).unwrap(),
+            b"new-independent-edit"
+        );
+    }
     #[test]
     fn checked_initial_preview_has_the_same_fingerprint_and_cancellation_has_no_binding_or_outbox_effect(
     ) {

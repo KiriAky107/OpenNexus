@@ -30,7 +30,17 @@ impl Workspace {
         source: &Path,
         expected: &str,
     ) -> Result<()> {
-        let size = self.snapshot_file(source, expected)?;
+        self.store_payload_file_checked(operation, source, expected, &|| Ok(()))
+    }
+    pub(crate) fn store_payload_file_checked(
+        &self,
+        operation: &str,
+        source: &Path,
+        expected: &str,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<()> {
+        let size = self.snapshot_file_checked(source, expected, check)?;
+        check()?;
         self.register_payload(operation, expected, size)
     }
     pub(crate) fn sync_store_file(&self, source: &Path) -> Result<String> {
@@ -39,11 +49,20 @@ impl Workspace {
         Ok(digest)
     }
     fn snapshot_file(&self, source: &Path, expected: &str) -> Result<u64> {
+        self.snapshot_file_checked(source, expected, &|| Ok(()))
+    }
+    fn snapshot_file_checked(
+        &self,
+        source: &Path,
+        expected: &str,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<u64> {
+        check()?;
         let size = fs::metadata(source)?.len();
         if size > 100 * 1024 * 1024 {
             return Err(HostError::new("FILE_TOO_LARGE"));
         }
-        let mut input = open_verified(source, expected, size).map_err(|error| {
+        let mut input = open_verified_checked(source, expected, size, check).map_err(|error| {
             if error.code == "SYNC_SPOOL_CORRUPT" {
                 HostError::new("REVISION_CONFLICT")
             } else {
@@ -52,19 +71,21 @@ impl Workspace {
         })?;
         let target = self.sync_spool(expected)?;
         if target.exists() {
-            verify(&target, expected, size)?;
+            open_verified_checked(&target, expected, size, check)?;
         } else {
             let parent = target
                 .parent()
                 .ok_or_else(|| HostError::new("UNSAFE_PATH"))?;
             let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-            copy_verified(&mut input, &mut temp, expected, size)?;
+            copy_verified_checked(&mut input, &mut temp, expected, size, check)?;
             temp.as_file().sync_all()?;
+            check()?;
             temp.persist_noclobber(&target)
                 .map_err(|_| HostError::new("SYNC_SPOOL_FAILED"))?;
             #[cfg(unix)]
             fs::File::open(parent)?.sync_all()?;
         }
+        check()?;
         Ok(size)
     }
     fn register_payload(&self, operation: &str, digest: &str, size: u64) -> Result<()> {
@@ -252,6 +273,15 @@ pub(crate) fn verify(path: &Path, digest: &str, size: u64) -> Result<()> {
 /// 返回已经验证并回绕到起始位置的句柄，供流式调用方使用。
 /// 路径约束由调用方负责；此函数并不负责建立沙箱。
 pub(crate) fn open_verified(path: &Path, digest: &str, size: u64) -> Result<fs::File> {
+    open_verified_checked(path, digest, size, &|| Ok(()))
+}
+fn open_verified_checked(
+    path: &Path,
+    digest: &str,
+    size: u64,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<fs::File> {
+    check()?;
     let meta = fs::symlink_metadata(path)?;
     if meta.file_type().is_symlink() || !meta.is_file() || meta.len() != size {
         return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
@@ -267,11 +297,13 @@ pub(crate) fn open_verified(path: &Path, digest: &str, size: u64) -> Result<fs::
     if stream.metadata()?.len() != size {
         return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
     }
-    verify_reader(&mut stream, digest, size)?;
+    copy_verified_checked(&mut stream, &mut std::io::sink(), digest, size, check)?;
     stream.seek(SeekFrom::Start(0))?;
+    check()?;
     Ok(stream)
 }
 const VERIFY_BUFFER_BYTES: usize = 64 * 1024;
+#[cfg(test)]
 fn verify_reader(stream: &mut impl Read, digest: &str, size: u64) -> Result<()> {
     copy_verified(stream, &mut std::io::sink(), digest, size)
 }
@@ -281,16 +313,27 @@ pub(crate) fn copy_verified(
     digest: &str,
     size: u64,
 ) -> Result<()> {
+    copy_verified_checked(stream, target, digest, size, &|| Ok(()))
+}
+fn copy_verified_checked(
+    stream: &mut impl Read,
+    target: &mut impl Write,
+    digest: &str,
+    size: u64,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<()> {
     let mut hasher = Sha256::new();
     let mut buffer = vec![0; VERIFY_BUFFER_BYTES];
     let mut length = 0u64;
     loop {
+        check()?;
         // 即使文件在元数据检查后增长，最多消耗声明的有效负载加上一个字节，而不是无限变化的流。
         let limit = size
             .saturating_sub(length)
             .saturating_add(1)
             .min(buffer.len() as u64) as usize;
         let count = stream.read(&mut buffer[..limit])?;
+        check()?;
         if count == 0 {
             break;
         }
@@ -301,6 +344,7 @@ pub(crate) fn copy_verified(
         hasher.update(&buffer[..count]);
         target.write_all(&buffer[..count])?;
     }
+    check()?;
     if length != size || format!("{:x}", hasher.finalize()) != digest {
         return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
     }
@@ -310,6 +354,47 @@ pub(crate) fn copy_verified(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sync_canceled_payload_copy_stops_at_a_chunk_without_publishing_unverified_bytes() {
+        struct Observed<'a> {
+            bytes: Vec<u8>,
+            written: &'a std::cell::Cell<usize>,
+        }
+        impl Write for Observed<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.bytes.extend_from_slice(bytes);
+                self.written.set(self.bytes.len());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let original = vec![7u8; VERIFY_BUFFER_BYTES * 4];
+        let mut input = &original[..];
+        let written = std::cell::Cell::new(0);
+        let mut target = Observed {
+            bytes: vec![],
+            written: &written,
+        };
+        let error = copy_verified_checked(
+            &mut input,
+            &mut target,
+            &hash(&original),
+            original.len() as u64,
+            &|| {
+                if written.get() >= VERIFY_BUFFER_BYTES {
+                    Err(HostError::new("SYNC_FOREGROUND_CHANGED"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "SYNC_FOREGROUND_CHANGED");
+        assert_eq!(target.bytes, &original[..VERIFY_BUFFER_BYTES]);
+        assert_eq!(input.len(), original.len() - VERIFY_BUFFER_BYTES);
+    }
     #[test]
     fn sync_file_hash_checks_cancellation_between_chunks_and_keeps_original_bytes() {
         let root = tempfile::tempdir().unwrap();
