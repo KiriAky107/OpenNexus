@@ -390,13 +390,43 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void chooseOriginalImage() {
-        // Wry uses FileChooserParams.createIntent(); select the owned original in
-        // Android's real DocumentsUI instead of injecting a URI into the WebView.
+        // API36 routes image GET_CONTENT through the real Photo Picker first.
+        // Owned screenshots/AX trees identify both the standalone photopicker
+        // and providers.media.module variants and their More action. Android
+        // CTS also uses overflow -> Browse to reach
+        // DocumentsUI: platform/cts commit afa92427, PhotoPickerUiUtils.java.
+        AccessibilityNodeInfo picker=waitNode(node -> documentsUi(node) || photoPicker(node), "system image or document picker");
+        if (photoPicker(picker)) {
+            activate(waitNode(node -> photoPicker(node) && (label(node,"More",false) || label(node,"More options",false)),
+                "observed Photo Picker overflow"));
+            activate(waitNode(node -> photoPicker(node)
+                && (label(node,"Browse",false) || label(node,"Browse…",false)),
+                "observed Photo Picker Browse… documents action"));
+        }
+        // Select the owned original through the actual provider, never inject
+        // a URI, index user media, or grant broad media/storage permissions.
         waitNode(this::documentsUi, "system document picker");
         activate(waitNode(node -> documentsUi(node) && label(node, "Show roots", false), "system picker roots"));
         activate(waitNode(node -> documentsUi(node) && label(node, "Downloads", false), "owned Downloads location"));
-        activate(waitNode(node -> documentsUi(node) && label(node, "opennexus-ci-original.png", false), "owned original PNG"));
+        activate(waitNode(this::originalImageRow, "owned original PNG document row"));
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Back", false), "return from original system picker");
+    }
+
+    private boolean photoPicker(AccessibilityNodeInfo node) {
+        String name=string(node.getPackageName());
+        return "com.google.android.photopicker".equals(name)
+            || "com.google.android.providers.media.module".equals(name);
+    }
+    private boolean originalImageRow(AccessibilityNodeInfo node) {
+        if (!documentsUi(node)) return false;
+        if (label(node,"opennexus-ci-original.png",false)) return true;
+        // The observed provider grid exposes the exact filename followed by
+        // comma-delimited size/date metadata on its directory row. Its separate
+        // "Preview the file ..." action is not a selection target.
+        AccessibilityNodeInfo parent=node.getParent();
+        return string(node.getContentDescription()).startsWith("opennexus-ci-original.png, ")
+            && parent!=null && string(parent.getPackageName()).equals(string(node.getPackageName()))
+            && string(parent.getViewIdResourceName()).endsWith(":id/dir_list");
     }
 
     private boolean fileDrawerRow(AccessibilityNodeInfo node) {
@@ -631,8 +661,16 @@ public final class RuntimeProbe extends Instrumentation {
     }
 
     private void touch(long start, long when, int action, float x, float y) {
-        MotionEvent event = MotionEvent.obtain(start, when, action, x, y, 0);
-        event.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+        // A touchscreen source alone leaves the short obtain() overload's
+        // tool type unknown. DocumentsUI's selection router distinguishes
+        // finger input: use the actual finger pointer properties as well.
+        MotionEvent.PointerProperties pointer=new MotionEvent.PointerProperties();
+        pointer.id=0;pointer.toolType=MotionEvent.TOOL_TYPE_FINGER;
+        MotionEvent.PointerCoords point=new MotionEvent.PointerCoords();
+        point.x=x;point.y=y;point.pressure=action==MotionEvent.ACTION_UP || action==MotionEvent.ACTION_CANCEL ? 0 : 1;point.size=1;
+        MotionEvent event=MotionEvent.obtain(start,when,action,1,new MotionEvent.PointerProperties[]{pointer},
+            new MotionEvent.PointerCoords[]{point},0,0,1,1,0,0,InputDevice.SOURCE_TOUCHSCREEN,0);
+        require(event.getToolType(0)==MotionEvent.TOOL_TYPE_FINGER,"Owned touch has no finger identity");
         try { require(ui.injectInputEvent(event, true), "Touch injection rejected"); } finally { event.recycle(); }
     }
 

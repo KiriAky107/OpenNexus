@@ -293,6 +293,8 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
+        if getattr(self.args,'scope',None)=='attachments':
+            return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
         require_hosted_emulator(self.args.serial)
@@ -681,8 +683,31 @@ class Probe:
         (self.output/'tablet-layout-proof.json').write_text(json.dumps(proof,ensure_ascii=False,indent=2)+'\n','utf-8')
         print(json.dumps(proof,ensure_ascii=False,indent=2))
 
+    def run_attachments(self):
+        self.enable_test_ime()
+        self.stage_original_image()
+        for phase in ('markdown-image','markdown-image-reopen','rich-image','rich-image-reopen','canvas-image','canvas-image-reopen'):
+            self.phase(phase)
+        originals=self.verify_original_images()
+        self.phase('export')
+        exported=self.verify_export(originals)
+        for name,value in originals.items():
+            path=self.output/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(value)
+        proof={'passed':True,'scope':'attachments','source_commit':self.args.commit,'runtime_tools_commit':self.args.tools_commit,
+            'compiled_from':self.args.build_origin,'apk_sha256':self.binding['sha256'],
+            'signer_certificate_sha256':self.binding['signer_certificate_sha256'],
+            'phases':self.phases,'actual_original_image_import_and_cold_reopen':True,
+            'native_committed_image_receipts':3,'actual_system_saved_content':exported,
+            'originals':{name:{'size':len(value),'sha256':digest(value)} for name,value in originals.items()},
+            'full_editor_lifecycle_or_back_draft_export_exclusion_retested':False,
+            'keystore_tests_repeated':False,'physical_phone_verified':False,'Android_HTTPS_or_sync_verified':False}
+        (self.output/'attachments-proof.json').write_text(json.dumps(proof,indent=2)+'\n','utf-8')
+
     def run(self):
         self.boot()
+        if self.args.scope == 'attachments':
+            self.run_attachments()
+            return
         if self.args.scope == 'tablet':
             self.run_tablet()
             return
@@ -782,7 +807,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:
