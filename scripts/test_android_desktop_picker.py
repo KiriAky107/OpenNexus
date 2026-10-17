@@ -1,11 +1,13 @@
 """Pure ownership/input checks; fake controls do not prove a native selection."""
 import os
+import json
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
 from android_desktop_handoff import HandoffError
-from android_desktop_picker import TITLE, choose_controls, choose_owned_vault
+from android_desktop_picker import TITLE, WindowsDialog, choose_controls, choose_owned_vault, read_original_choice
 from android_desktop_product import DESKTOP_SOURCE
 
 
@@ -29,10 +31,50 @@ class Controls:
         if self.change_owner: self.pids[12] = 77
         return not self.refuse
     def text(self, h): return self.value
-    def click(self, h): self.clicks.append(h)
+    def click(self, h): self.clicks.append(h); return True
 
 
 class OwnedPicker(unittest.TestCase):
+    def test_native_message_timeout_is_unknown_delivery_not_a_selection_rejection(self):
+        import ctypes
+        api = WindowsDialog.__new__(WindowsDialog)
+        api.ctypes = ctypes
+        api.api = Mock()
+        api.api.SendMessageTimeoutW.return_value = 0
+        self.assertIs(api.click(12), False)
+        api.api.SendMessageTimeoutW.assert_called_once()
+
+    def test_unknown_click_reads_the_original_native_outcome_without_another_action(self):
+        api = Controls()
+        def unknown_click(handle):
+            api.clicks.append(handle)
+            return False
+        api.click = unknown_click
+        page = Mock()
+        original = {'ok': True, 'actualPath': r'D:\owned\vault', 'vaultId': 'original-vault'}
+        page.evaluate.return_value = original
+        with tempfile.TemporaryDirectory() as work:
+            acknowledged = choose_controls(api, 10, 42, r'D:\owned\vault')
+            self.assertIs(acknowledged, False)
+            self.assertIs(read_original_choice(page, acknowledged, Path(work)), original)
+            receipt = json.loads((Path(work) / 'picker-click-delivery.json').read_text('utf-8'))
+        self.assertEqual(api.writes, [(11, r'D:\owned\vault')]); self.assertEqual(api.clicks, [12])
+        self.assertEqual(receipt['delivery'], 'unknown')
+        self.assertFalse(receipt['selection_inferred_from_acknowledgement'])
+        page.wait_for_function.assert_called_once_with('()=>window.ownedVaultChoiceResult!==null')
+        page.evaluate.assert_called_once()
+        self.assertNotIn('openVault(', page.evaluate.call_args.args[0])
+        self.assertNotIn('D:', json.dumps(receipt)); self.assertNotIn('vaultId', receipt)
+
+    def test_unsettled_original_remains_unknown_without_replacing_the_original_request(self):
+        page = Mock(); page.wait_for_function.side_effect = TimeoutError('private callback argument')
+        with tempfile.TemporaryDirectory() as work:
+            with self.assertRaisesRegex(HandoffError, '^DESKTOP_PAIR_PICKER_OUTCOME_UNKNOWN$'):
+                read_original_choice(page, False, Path(work))
+            receipt = (Path(work) / 'picker-click-delivery.json').read_text('utf-8')
+        self.assertNotIn('private', receipt)
+        page.wait_for_function.assert_called_once(); page.evaluate.assert_not_called()
+
     def test_exact_original_dialog_gets_one_path_input_and_one_confirm(self):
         api = Controls()
         choose_controls(api, 10, 42, r'D:\owned\vault')

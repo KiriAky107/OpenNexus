@@ -27,7 +27,26 @@ def choose_controls(api, dialog, pid, path):
     # a reason to retype, click a different window, or retry a folder choice.
     require(api.owner(dialog) == pid and api.owner(button) == pid and api.child_of(dialog, button),
             'DESKTOP_PAIR_PICKER_TARGET_INVALID')
-    api.click(button)
+    return api.click(button)
+
+
+def read_original_choice(page, delivery_acknowledged, attempt):
+    """Read the one existing native result even when Windows did not acknowledge."""
+    require(type(delivery_acknowledged) is bool, 'DESKTOP_PAIR_PICKER_DELIVERY_INVALID')
+    with (attempt / 'picker-click-delivery.json').open('xb') as output:
+        output.write(canonical({'message_acknowledged': delivery_acknowledged,
+            'delivery': 'acknowledged' if delivery_acknowledged else 'unknown',
+            'original_click_sent_once': True, 'selection_inferred_from_acknowledgement': False}))
+        output.flush(); os.fsync(output.fileno())
+    try:
+        page.wait_for_function('()=>window.ownedVaultChoiceResult!==null')
+        return page.evaluate('''() => ({...window.ownedVaultChoiceResult,
+            actualPath:pairPinia._s.get('workspace').vaultPath,
+            vaultId:pairPinia._s.get('workspace').vaultId})''')
+    except Exception:
+        # The original promise may still be running. No new native choice,
+        # click, input, or authorization is created to turn it into success.
+        require(False, 'DESKTOP_PAIR_PICKER_OUTCOME_UNKNOWN')
 
 
 class WindowsDialog:
@@ -112,8 +131,7 @@ class WindowsDialog:
     def click(self, handle):
         result = self.ctypes.c_size_t()
         # Timeout means unknown delivery, so the original click is never sent again.
-        require(self.api.SendMessageTimeoutW(handle, 0x00F5, 0, 0, 2, 10000, self.ctypes.byref(result)),
-                'DESKTOP_PAIR_PICKER_SELECTION_FAILED')
+        return bool(self.api.SendMessageTimeoutW(handle, 0x00F5, 0, 0, 2, 10000, self.ctypes.byref(result)))
 
 
 def choose_owned_vault(page, context, process, vault, attempt):
@@ -151,13 +169,17 @@ def choose_owned_vault(page, context, process, vault, attempt):
              for h in api.children(dialogs[0])]
     with (attempt / 'picker-shape.json').open('xb') as output:
         output.write(canonical({'controls': shape, 'raw_labels_or_values_returned': False})); output.flush(); os.fsync(output.fileno())
-    choose_controls(api, dialogs[0], process.pid, str(vault))
-    page.wait_for_function('()=>window.ownedVaultChoiceResult!==null')
-    result = page.evaluate('''() => ({...window.ownedVaultChoiceResult,
-        actualPath:pairPinia._s.get('workspace').vaultPath,
-        vaultId:pairPinia._s.get('workspace').vaultId})''')
-    require(result['ok'] and windows_drive_path(result['actualPath']) == windows_drive_path(vault),
-            'DESKTOP_PAIR_PICKER_SELECTION_FAILED')
+    acknowledged = choose_controls(api, dialogs[0], process.pid, str(vault))
+    result = read_original_choice(page, acknowledged, attempt)
+    require(type(result.get('ok')) is bool, 'DESKTOP_PAIR_PICKER_OUTCOME_UNKNOWN')
+    matches = bool(result['ok'] and windows_drive_path(result['actualPath']) == windows_drive_path(vault))
+    with (attempt / 'picker-native-result.json').open('xb') as output:
+        output.write(canonical({'original_choice_settled': True, 'native_ok': result['ok'],
+            'selected_path_matches_owned_vault': matches, 'native_vault_id_present': bool(result.get('vaultId')),
+            'raw_path_or_error_returned': False}))
+        output.flush(); os.fsync(output.fileno())
+    require(result['ok'], 'DESKTOP_PAIR_PICKER_NATIVE_REFUSED')
+    require(matches and bool(result.get('vaultId')), 'DESKTOP_PAIR_PICKER_TARGET_MISMATCH')
     return {'actual_native_folder_picker': True, 'native_vault_id': result['vaultId'],
             'original_owned_directory_selected': True, 'recent_grant_database_not_seeded': True,
             'only_original_process_controls_used': True, 'clipboard_or_other_windows_used': False}
