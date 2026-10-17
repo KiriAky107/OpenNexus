@@ -19,6 +19,13 @@ public final class TargetStabilityCheck {
         require(!moving.observe(10,31,50,71,700));
         require(!moving.observe(10,31,50,71,780));
         require(moving.observe(10,31,50,71,860));
-        System.out.println("TARGET_STABILITY_OK moving/empty/backward-clock/repeated-time/final-original-bounds");
+        int[] clipped=TouchViewport.intersect(new int[]{10,90,90,130},new int[]{0,0,100,100});
+        require(java.util.Arrays.equals(clipped,new int[]{10,90,90,100}));
+        require(TouchViewport.intersect(new int[]{10,110,90,130},new int[]{0,0,100,100})==null);
+        require(TouchViewport.intersect(null,new int[]{0,0,100,100})==null);
+        require(java.util.Arrays.equals(TouchViewport.avoid(new int[]{10,50,90,100},new int[]{0,80,100,150}),new int[]{10,50,90,80}));
+        require(TouchViewport.avoid(new int[]{10,50,90,100},new int[]{0,0,100,150})==null);
+        require(java.util.Arrays.equals(TouchViewport.avoid(new int[]{10,50,90,100},new int[]{10,50,30,100}),new int[]{30,50,90,100}));
+        System.out.println("TARGET_STABILITY_OK moving/empty/backward-clock/repeated-time/final-original-bounds/clipped/covered/keyboard");
     }
 }

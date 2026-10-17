@@ -10,6 +10,7 @@ import android.os.SystemClock;
 import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 import java.io.File;
 import java.io.FileInputStream;
 import java.nio.charset.StandardCharsets;
@@ -25,6 +26,7 @@ public class AuthRuntimeProbe extends Instrumentation {
     private Bundle args;
     private UiAutomation ui;
     protected String stage = "initialization";
+    private String inputTrace="none";
 
     @Override public void onCreate(Bundle value) { super.onCreate(value); args=value; start(); }
     @Override public void onStart() {
@@ -73,6 +75,7 @@ public class AuthRuntimeProbe extends Instrumentation {
     protected String namespace() { return "AUTH"; }
     protected boolean additionalPhase(String phase) throws Exception { return false; }
     protected String[] diagnosticLabels() { return new String[0]; }
+    protected boolean viewportAdmission() { return false; }
 
     private void openConnection() {
         stage="open-connection";
@@ -179,6 +182,7 @@ public class AuthRuntimeProbe extends Instrumentation {
     }
     protected void click(String name) {
         stage="tap-"+name.replace(' ','-');
+        inputTrace="admission=not_completed down=not_sent up=not_sent";
         AccessibilityNodeInfo initial=waitFor(n->actionable(n,name),true);
         Predicate<AccessibilityNodeInfo> target=n->label(n,name) && n.isEnabled() && n.isClickable();
         // A label may be a child of the actual clickable button.
@@ -189,28 +193,73 @@ public class AuthRuntimeProbe extends Instrumentation {
             target=n->n.isClickable() && role.equals(text(n.getClassName())) && descendantLabel(n,name,0);
         }
         stage="unique-"+name.replace(' ','-');
+        if(viewportAdmission()) {
+            AccessibilityNodeInfo current=unique(target);Rect full=new Rect();current.getBoundsInScreen(full);
+            Rect visible=visibleTouch(current);
+            if(visible==null || !visible.equals(full))showTarget(current);
+            stage="idle-before-input-"+name.replace(' ','-');
+            try { ui.waitForIdle(100,3000); }
+            catch(java.util.concurrent.TimeoutException error) { throw new IllegalStateException("Original UI stayed busy before input; no action sent"); }
+        }
         stage="stable-"+name.replace(' ','-');
         // Selecting a remote vault triggers a read-only association status and
         // an accessibility scroll. Observe those layout changes before input;
         // do not abort on the first moved frame or ever re-tap after dispatch.
-        TargetStability stability=new TargetStability();
-        long until=SystemClock.uptimeMillis()+5000;Rect before=new Rect();boolean stable=false;
+        TargetStability stability=new TargetStability(),visibleStability=new TargetStability();
+        long until=SystemClock.uptimeMillis()+5000;Rect before=new Rect(),hit=new Rect();boolean stable=false;
         do {
             AccessibilityNodeInfo node=unique(target);node.getBoundsInScreen(before);
-            stable=stability.observe(before.left,before.top,before.right,before.bottom,SystemClock.uptimeMillis());
+            Rect visible=viewportAdmission() ? visibleTouch(node) : new Rect(before);
+            if(visible==null)visible=new Rect();hit.set(visible);
+            inputTrace="original_bounds="+before.toShortString()+" visible_hit="+hit.toShortString()+" down=not_sent up=not_sent";
+            long observed=SystemClock.uptimeMillis();
+            boolean originalStable=stability.observe(before.left,before.top,before.right,before.bottom,observed);
+            boolean hitStable=visibleStability.observe(hit.left,hit.top,hit.right,hit.bottom,observed);
+            stable=originalStable && hitStable;
             if (stable) break;
             SystemClock.sleep(80);
         } while (SystemClock.uptimeMillis()<until);
         require(stable,"Named button did not settle before the bounded deadline; no input sent");
-        stage="single-tap-"+name.replace(' ','-');
-        long start=SystemClock.uptimeMillis();touch(start,start,MotionEvent.ACTION_DOWN,before.centerX(),before.centerY());
-        SystemClock.sleep(50);touch(start,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,before.centerX(),before.centerY());
+        inputTrace="original_bounds="+before.toShortString()+" visible_hit="+hit.toShortString()+" down=not_sent up=not_sent";
+        stage="single-touch-down-"+name.replace(' ','-');
+        inputTrace="original_bounds="+before.toShortString()+" visible_hit="+hit.toShortString()+" down=attempted_without_confirmation up=not_sent";
+        long start=SystemClock.uptimeMillis();touch(start,start,MotionEvent.ACTION_DOWN,hit.centerX(),hit.centerY());
+        inputTrace="original_bounds="+before.toShortString()+" visible_hit="+hit.toShortString()+" down=accepted up=not_sent";
+        stage="single-touch-up-"+name.replace(' ','-');
+        inputTrace="original_bounds="+before.toShortString()+" visible_hit="+hit.toShortString()+" down=accepted up=attempted_without_confirmation";
+        SystemClock.sleep(50);touch(start,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,hit.centerX(),hit.centerY());
+        inputTrace="original_bounds="+before.toShortString()+" visible_hit="+hit.toShortString()+" down=accepted up=accepted";
+        stage="wait-idle-after-single-touch-"+name.replace(' ','-');
         try { ui.waitForIdle(150,5000); }
         catch (java.util.concurrent.TimeoutException error) {
             // Accessibility may keep reporting caret/timer events. The single
             // tap is already sent; only the following semantic state and
             // original native/provider outcomes can confirm it. Never re-tap.
         }
+    }
+    private static int[] rectangle(Rect value) { return new int[]{value.left,value.top,value.right,value.bottom}; }
+    private Rect visibleTouch(AccessibilityNodeInfo node) {
+        if(!node.isEnabled() || !node.isVisibleToUser())return null;
+        Rect value=new Rect();node.getBoundsInScreen(value);int[] visible=rectangle(value);
+        boolean ownWindow=false;
+        List<AccessibilityWindowInfo> windows=ui.getWindows();
+        for(AccessibilityWindowInfo window:windows) if(window.getId()==node.getWindowId()
+            && window.getType()==AccessibilityWindowInfo.TYPE_APPLICATION && window.isActive()) {
+            window.getBoundsInScreen(value);visible=TouchViewport.intersect(visible,rectangle(value));ownWindow=true;break;
+        }
+        if(!ownWindow)return null;
+        int depth=0;
+        for(AccessibilityNodeInfo parent=node.getParent();parent!=null && depth++<32;parent=parent.getParent()) {
+            if(!APP.equals(text(parent.getPackageName())))return null;
+            if(parent.isScrollable() || "android.webkit.WebView".equals(text(parent.getClassName()))) {
+                parent.getBoundsInScreen(value);visible=TouchViewport.intersect(visible,rectangle(value));
+            }
+        }
+        if(depth>=32)return null;
+        for(AccessibilityWindowInfo window:windows) if(window.getType()==AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+            window.getBoundsInScreen(value);visible=TouchViewport.avoid(visible,rectangle(value));
+        }
+        return visible==null ? null : new Rect(visible[0],visible[1],visible[2],visible[3]);
     }
     private boolean actionable(AccessibilityNodeInfo node,String name) {
         if (!label(node,name) || !node.isEnabled()) return false;
@@ -315,6 +364,7 @@ public class AuthRuntimeProbe extends Instrumentation {
     }
     private String shape() {
         StringBuilder value=new StringBuilder("redacted-auth-ui-shape\n");
+        value.append("original_input ").append(inputTrace).append('\n');
         String[] labels={"Settings","Sync account","Server connection and sign-in","Read current connection","Saved connections","Server URL","Account","Password",
             "Device name","Sign in","Refresh session","Check original operation","Read original ID","Confirm this action"};
         for (String label:labels) {

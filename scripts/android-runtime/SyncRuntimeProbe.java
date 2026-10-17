@@ -16,6 +16,7 @@ import org.json.JSONObject;
 /** Actual Sync UI commands, never an HTTP/native/file-operation bridge to the product. */
 public final class SyncRuntimeProbe extends AuthRuntimeProbe {
     @Override protected String namespace() { return "SYNC"; }
+    @Override protected boolean viewportAdmission() { return true; }
     @Override protected String[] diagnosticLabels() {
         return new String[]{"Read remote vaults","Choose a vault","Read local association","Preview merge",
             "Initial merge preview","Confirm merge and bind","Confirm this association","No remote vault is associated yet.",
@@ -62,6 +63,7 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
         persistOnce(original,new JSONObject().put("driver_intent_id",UUID.randomUUID().toString())
             .put("native_invocation_id_observed",false).put("action","Sync one cycle now"));
         click("Sync one cycle now");
+        stage="wait-original-cycle-completion-"+original;
         waitPresent(node->label(node,"Cycle completed"));
     }
 
