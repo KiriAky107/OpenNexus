@@ -118,7 +118,9 @@ def safe_failure(error, checkpoint=None):
         'original_exception_text_returned': False}
     if isinstance(error, HandoffError) and str(error) in {
             'DESKTOP_PAIR_STORAGE_MISMATCH', 'DESKTOP_PAIR_CORE_VERSION_MISMATCH',
-            'DESKTOP_PAIR_CORE_NOT_READY', 'DESKTOP_PAIR_INITIAL_STATE_INVALID'}:
+            'DESKTOP_PAIR_CORE_NOT_READY', 'DESKTOP_PAIR_INITIAL_STATE_INVALID',
+            'DESKTOP_PAIR_PICKER_UNAVAILABLE', 'DESKTOP_PAIR_PICKER_TARGET_INVALID',
+            'DESKTOP_PAIR_PICKER_INPUT_REFUSED', 'DESKTOP_PAIR_PICKER_SELECTION_FAILED'}:
         result['checkpoint_code'] = str(error)
     if checkpoint is not None:
         result['failed_checkpoint'] = checkpoint if checkpoint in STARTUP_CHECKPOINTS else 'unknown'
@@ -224,12 +226,19 @@ def start_product(context, stage):
                 page.wait_for_function("()=>Boolean(window.pairPinia?._s.get('workspace')?.openVault && window.pairRouter)")
                 profile.remove_pointer()
                 checkpoint = 'owned-vault-open'
-                page.evaluate("async path=>{await pairPinia._s.get('workspace').openVault(path);await pairRouter.push('/workspace')}", str(vault))
+                if stage == 1:
+                    from android_desktop_picker import choose_owned_vault
+                    folder_choice = choose_owned_vault(page, context, process, vault, attempt)
+                else:
+                    page.evaluate("async path=>pairPinia._s.get('workspace').openVault(path)", str(vault))
+                    folder_choice = {'reopened_original_native_grant': True, 'recent_grant_database_not_seeded': True}
+                page.evaluate("()=>pairRouter.push('/workspace')")
                 checkpoint = 'startup-receipt'
                 with (attempt / 'startup.json').open('xb') as stream:
                     stream.write(canonical({'source_commit': DESKTOP_SOURCE, 'installer_sha256': INSTALLER_SHA256,
                                             'actual_core_version': core_version, 'private_storage_verified': True,
-                                            'native_process_id': process.pid, 'identifier': IDENTIFIER, 'stage': stage}))
+                                            'native_process_id': process.pid, 'identifier': IDENTIFIER, 'stage': stage,
+                                            'owned_folder_choice': folder_choice}))
                     stream.flush(); os.fsync(stream.fileno())
                 checkpoint = 'client-action'
                 yield page, vault, attempt

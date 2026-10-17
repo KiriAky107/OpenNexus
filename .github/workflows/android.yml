@@ -373,6 +373,8 @@ jobs:
             .build/android-desktop-pair/*/owner.json
             .build/android-desktop-pair/*/extraction.json
             .build/android-desktop-pair/*/stage-1/start-intent.json
+            .build/android-desktop-pair/*/stage-1/choose-vault-intent.json
+            .build/android-desktop-pair/*/stage-1/picker-shape.json
             .build/android-desktop-pair/*/stage-1/startup.json
             .build/android-desktop-pair/*/stage-1/unbound-Sync.json
             .build/android-desktop-pair/*/stage-1/failure.json
