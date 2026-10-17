@@ -18,6 +18,32 @@ from android_desktop_handoff import HandoffError, canonical, context_bytes, requ
 
 BASE = '/repos/KiriAky107/OpenNexus/actions'
 
+# Only these reviewed constants may accompany the exception class in CI output.
+# Never print arbitrary exception messages: they can contain signed URLs, a
+# response body or a decrypted test account. Other failures keep the class only.
+SAFE_FAILURE_CODES = frozenset({
+    'PAIR_API_HOST_REFUSED', 'PAIR_API_TOKEN_UNAVAILABLE', 'PAIR_API_PATH_REFUSED',
+    'PAIR_API_ORIGINAL_RUN_INVALID', 'PAIR_API_ARCHIVE_ORIGIN_INVALID',
+    'PAIR_API_ARCHIVE_REDIRECT_INVALID', 'PAIR_API_READ_FAILED', 'PAIR_API_JSON_TOO_LARGE',
+    'PAIR_API_JSON_INVALID', 'PAIR_API_READ_UNAVAILABLE', 'PAIR_API_ORIGINAL_DOWNLOAD_ALREADY_EXISTS',
+    'PAIR_API_ARCHIVE_READ_FAILED', 'PAIR_API_ARCHIVE_TOO_LARGE', 'PAIR_API_ARCHIVE_DIGEST_INVALID',
+    'PAIR_API_ORIGINAL_ARCHIVE_UNCONFIRMED', 'PAIR_API_WAIT_BOUND_INVALID', 'PAIR_API_CACHE_OWNER_INVALID',
+    'PAIR_API_PARTIAL_REQUIRES_RECONCILIATION', 'PAIR_API_ARTIFACT_PAGE_UNCONFIRMED',
+    'PAIR_API_ARTIFACT_AMBIGUOUS', 'PAIR_API_JOB_PAGE_UNCONFIRMED', 'PAIR_API_ORIGINAL_ARTIFACT_CHANGED',
+    'PAIR_API_PRODUCER_AMBIGUOUS', 'PAIR_API_ORIGINAL_PRODUCER_FAILED', 'PAIR_API_ORIGINAL_STAGE_UNAVAILABLE',
+    'PAIR_EXCHANGE_RUN_INVALID', 'PAIR_EXCHANGE_ARTIFACT_INVALID', 'PAIR_EXCHANGE_JOB_INVALID',
+    'PAIR_EXCHANGE_UPLOAD_INCOMPLETE', 'PAIR_EXCHANGE_UPLOAD_TIME_INVALID', 'PAIR_EXCHANGE_ARCHIVE_INVALID',
+    'PAIR_EXCHANGE_ENTRIES_INVALID', 'PAIR_EXCHANGE_ENVELOPE_INVALID', 'PAIR_EXCHANGE_BODY_INVALID',
+    'HANDOFF_CONTEXT_INVALID', 'HANDOFF_ENVELOPE_INVALID', 'HANDOFF_PAYLOAD_INVALID',
+})
+
+
+def failure_label(error):
+    label = type(error).__name__
+    if type(error) in (HandoffError, RuntimeError) and str(error) in SAFE_FAILURE_CODES:
+        return label + '_' + str(error)
+    return label
+
 
 def original_context(context, run):
     context_bytes(context)
@@ -50,7 +76,10 @@ class OriginalRunAPI:
                 and env.get('GITHUB_RUN_ID') == str(context['run_id']) and env.get('GITHUB_SHA') == context['tools_commit'],
                 'PAIR_API_HOST_REFUSED')
         token = env.get('GH_TOKEN') or env.get('GITHUB_TOKEN') or ''
-        require(type(token) is str and re.fullmatch(r'[A-Za-z0-9_]{20,512}', token), 'PAIR_API_TOKEN_UNAVAILABLE')
+        # GitHub tokens are opaque, including the longer stateless installation
+        # token format. Check header safety only; no prefix, JWT or length rule.
+        require(type(token) is str and bool(token) and all(33 <= ord(c) <= 126 for c in token),
+                'PAIR_API_TOKEN_UNAVAILABLE')
         self.context, self.token = dict(context), token
 
     def request(self, path, *, redirect=False):

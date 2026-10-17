@@ -15,7 +15,7 @@ import urllib.request
 from urllib.parse import urlsplit
 
 from android_desktop_exchange import exchange_bytes
-from android_desktop_exchange_api import OriginalRunAPI,wait_original_exchange
+from android_desktop_exchange_api import OriginalRunAPI,wait_original_exchange,failure_label
 from android_desktop_handoff import canonical,context_bytes,require
 from android_desktop_pair_metadata import owned_native_metadata
 from android_desktop_pair_ui import OwnedDesktopUI
@@ -179,5 +179,5 @@ def main():
 if __name__=='__main__':
     try:main()
     except Exception as error:
-        print('OWNED_DESKTOP_PAIR_STAGE_FAILED_'+type(error).__name__)
+        print('OWNED_DESKTOP_PAIR_STAGE_FAILED_'+failure_label(error))
         raise SystemExit(1)

@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from android_desktop_exchange import artifact_name, exchange_bytes
-from android_desktop_exchange_api import OriginalRunAPI, signed_archive_target, wait_original_exchange
+from android_desktop_exchange_api import OriginalRunAPI, signed_archive_target, wait_original_exchange, failure_label
 from android_desktop_handoff import HandoffError, canonical, encode
 import test_android_desktop_exchange as fixtures
 
@@ -18,6 +18,36 @@ class ExchangeReader(unittest.TestCase):
         self.fixture=fixtures.Exchange();self.fixture.setUp();self.context=self.fixture.context
         self.env={'GITHUB_ACTIONS':'true','RUNNER_ENVIRONMENT':'github-hosted','RUNNER_OS':'Linux',
             'GITHUB_REPOSITORY':'KiriAky107/OpenNexus','GITHUB_RUN_ID':'1234','GITHUB_SHA':'a'*40,'GH_TOKEN':'PRIVATE_TEST_TOKEN_123456789'}
+
+    def test_opaque_short_long_and_stateless_tokens_reach_only_the_original_API_unchanged(self):
+        # Invented data only. GitHub installation tokens are opaque: the reader
+        # must not parse a JWT, assume a prefix/length, or reject dots/hyphens.
+        for token in ('opaque', 'ghs_'+'a'*36, 'ghs_12345_'+'.'.join(['a-_b'*80]*3)):
+            with self.subTest(length=len(token)),patch('http.client.HTTPSConnection') as connect:
+                reply=connect.return_value.getresponse.return_value
+                reply.status=200;reply.read.return_value=b'{"id":1234}'
+                api=OriginalRunAPI(self.context,dict(self.env,GH_TOKEN=token))
+                self.assertEqual(api.request('/repos/KiriAky107/OpenNexus/actions/runs/1234'),{'id':1234})
+                self.assertEqual(connect.call_args.args[0],'api.github.com')
+                self.assertEqual(connect.return_value.request.call_args.kwargs['headers']['Authorization'],'Bearer '+token)
+
+    def test_unsafe_or_missing_header_values_refuse_without_network_or_secret_in_error(self):
+        for token in ('',None,12,'secret value','secret\r\nInjected: value','secret\0value','secret\x7fvalue','secret\u2028value'):
+            with self.subTest(value_type=type(token).__name__),patch('http.client.HTTPSConnection') as connect:
+                with self.assertRaisesRegex(HandoffError,'^PAIR_API_TOKEN_UNAVAILABLE$'):
+                    OriginalRunAPI(self.context,dict(self.env,GH_TOKEN=token,GITHUB_TOKEN=''))
+                connect.assert_not_called()
+
+    def test_failure_labels_only_include_reviewed_static_codes_never_payloads(self):
+        self.assertEqual(failure_label(HandoffError('PAIR_API_TOKEN_UNAVAILABLE')),
+                         'HandoffError_PAIR_API_TOKEN_UNAVAILABLE')
+        self.assertEqual(failure_label(RuntimeError('PAIR_API_ORIGINAL_ARCHIVE_UNCONFIRMED')),
+                         'RuntimeError_PAIR_API_ORIGINAL_ARCHIVE_UNCONFIRMED')
+        for value in ('https://owned.example/?sig=secret','PRIVATE_TEST_TOKEN_123456789',
+                      'PAIR_API_UNKNOWN_SECRET','PAIR_API_READ_FAILED\npassword=secret'):
+            self.assertEqual(failure_label(HandoffError(value)),'HandoffError')
+            self.assertEqual(failure_label(RuntimeError(value)),'RuntimeError')
+        self.assertEqual(failure_label(ValueError('PAIR_API_READ_FAILED')),'ValueError')
 
     def test_foreign_host_context_and_archive_destinations_refuse_before_network(self):
         for change in ({'GITHUB_SHA':'b'*40},{'RUNNER_ENVIRONMENT':'self-hosted'},{'GITHUB_RUN_ID':'1235'}):

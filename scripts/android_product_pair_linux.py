@@ -16,7 +16,7 @@ import tempfile
 
 from android_auth_fixture import atomic_json,fixed_service,owned_root,read_json,require_hosted
 from android_desktop_exchange import exchange_bytes
-from android_desktop_exchange_api import OriginalRunAPI,wait_original_exchange
+from android_desktop_exchange_api import OriginalRunAPI,wait_original_exchange,failure_label
 from android_desktop_handoff import canonical,context_bytes,decode,require,seal
 from android_desktop_product import DESKTOP_SOURCE
 from android_desktop_recipient import write_new
@@ -241,5 +241,5 @@ def main():
 if __name__=='__main__':
     try:main()
     except Exception as error:
-        print('OWNED_ANDROID_PRODUCT_PAIR_FAILED_'+type(error).__name__)
+        print('OWNED_ANDROID_PRODUCT_PAIR_FAILED_'+failure_label(error))
         raise SystemExit(1)
