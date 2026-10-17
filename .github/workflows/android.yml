@@ -76,7 +76,7 @@ on:
       runtime_scope:
         description: 'all checks, or a named remaining scope on an existing fixed APK without rebuilding'
         type: choice
-        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts]
+        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, desktop-startup]
         default: all
         required: false
 
@@ -90,7 +90,7 @@ concurrency:
 
 jobs:
   debug-apk:
-    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts')
+    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'desktop-startup')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -166,7 +166,7 @@ jobs:
 
   emulator-runtime:
     needs: debug-apk
-    if: ${{ always() && !cancelled() && (needs.debug-apk.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.apk_run_id != '')) }}
+    if: ${{ always() && !cancelled() && inputs.runtime_scope != 'desktop-startup' && (needs.debug-apk.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.apk_run_id != '')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -344,4 +344,37 @@ jobs:
           path: |
             .build/android-auth-evidence/
             .build/android-auth-origin-proof/
+          if-no-files-found: warn
+
+  desktop-startup:
+    if: github.event_name == 'workflow_dispatch' && inputs.runtime_scope == 'desktop-startup'
+    runs-on: windows-2022
+    timeout-minutes: 25
+    env:
+      ANDROID_COMPILED_SOURCE: ${{ inputs.apk_commit }}
+      ANDROID_BUILD_RUN_ID: ${{ inputs.apk_run_id }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+      - name: Install only the existing frozen Python environment
+        run: uv sync --frozen --directory backend
+      - name: Start the fixed packaged Desktop in a new owned hosted profile
+        run: uv run --frozen --directory backend python ../scripts/android_desktop_runtime.py
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: OpenNexus-android-desktop-startup-${{ github.sha }}
+          # No installer, app data, credentials, private handoff key or raw UI logs.
+          path: |
+            .build/android-desktop-pair/*/desktop-startup-proof.json
+            .build/android-desktop-pair/*/owner.json
+            .build/android-desktop-pair/*/extraction.json
+            .build/android-desktop-pair/*/stage-1/start-intent.json
+            .build/android-desktop-pair/*/stage-1/startup.json
+            .build/android-desktop-pair/*/stage-1/unbound-Sync.json
+            .build/android-desktop-pair/*/stage-1/failure.json
+            .build/android-desktop-pair/*/stage-1/cleanup.json
           if-no-files-found: warn
