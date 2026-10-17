@@ -11,6 +11,27 @@ import android_auth_hosted as module
 
 
 class HostedOriginBoundaries(unittest.TestCase):
+    def test_fixture_selection_is_only_the_two_trusted_scripts_and_defaults_to_original_auth(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            self.assertEqual(module.HostedOrigin(root).fixture,'auth')
+            self.assertEqual(module.HostedOrigin(root,fixture='sync').fixture,'sync')
+            for kind in ('auth','sync'):
+                selected=module.HostedOrigin(root,fixture=kind).fixture_script()
+                self.assertEqual(selected,Path(module.__file__).with_name('android_'+kind+'_fixture.py').resolve())
+            for value in ('../outside','https://production.example','android_sync_fixture.py',''):
+                with patch.object(module,'read_json') as read,patch.object(module.subprocess,'Popen') as start:
+                    with self.assertRaisesRegex(RuntimeError,'FIXTURE_INVALID'):module.HostedOrigin(root,fixture=value)
+                    read.assert_not_called();start.assert_not_called()
+
+    def test_sync_prepare_repeat_cannot_stop_or_replace_an_existing_instance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            origin=Mock()
+            with patch.object(module,'owned_root',return_value=Path(directory)),patch.object(module,'HostedOrigin',return_value=origin) as factory,patch.object(module.sys,'argv',['owned-test','prepare','--fixture','sync']):
+                with self.assertRaisesRegex(RuntimeError,'ALREADY_PREPARED'):module.main()
+                factory.assert_called_once_with(Path(directory),fixture='sync')
+                origin.prepare.assert_not_called();origin.stop.assert_not_called()
+
     def test_only_static_owned_failure_codes_can_reach_the_job_log(self):
         self.assertEqual(module.public_failure(RuntimeError('OWNED_AUTH_ORIGIN_NOT_READY')),'OWNED_AUTH_ORIGIN_NOT_READY')
         for message in ('postgresql+psycopg://private:password@production/database','private-token','OWNED_AUTH_STAGE_FAILED private-password'):

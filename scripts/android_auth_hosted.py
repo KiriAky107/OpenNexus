@@ -30,7 +30,7 @@ HOST_CODES=frozenset({
     'OWNED_AUTH_CONTAINER_OWNERSHIP_UNCERTAIN','OWNED_AUTH_CONTAINER_START_UNCONFIRMED',
     'OWNED_AUTH_ORIGIN_INVALID','OWNED_AUTH_ORIGIN_NOT_READY','OWNED_AUTH_PROCESS_OWNERSHIP_UNCERTAIN',
     'OWNED_AUTH_PROCESS_START_UNCONFIRMED','OWNED_AUTH_PROCESS_STOP_UNCONFIRMED','OWNED_AUTH_SOURCE_CHANGED',
-    'OWNED_AUTH_STAGE_FAILED','OWNED_AUTH_STAGE_OUTPUT_INVALID','OWNED_AUTH_TUNNEL_NOT_READY'})
+    'OWNED_AUTH_STAGE_FAILED','OWNED_AUTH_STAGE_OUTPUT_INVALID','OWNED_AUTH_TUNNEL_NOT_READY','OWNED_AUTH_FIXTURE_INVALID'})
 
 
 def public_failure(error):
@@ -98,11 +98,20 @@ def download_cloudflared(root):
 
 
 class HostedOrigin:
-    def __init__(self,root):
+    def __init__(self,root,*,fixture='auth'):
+        require(fixture in ('auth','sync'),'OWNED_AUTH_FIXTURE_INVALID')
+        self.fixture=fixture
         self.root=root
         self.path=root/'owner-state.json'
         self.state=read_json(self.path) if self.path.exists() else None
         self.processes=[]
+
+    def fixture_script(self):
+        names={'auth':'android_auth_fixture.py','sync':'android_sync_fixture.py'}
+        require(self.fixture in names,'OWNED_AUTH_FIXTURE_INVALID')
+        path=Path(__file__).with_name(names[self.fixture])
+        require(path.is_file() and not path.is_symlink(),'OWNED_AUTH_FIXTURE_INVALID')
+        return path.resolve()
 
     def save(self):atomic_json(self.path,self.state)
 
@@ -145,14 +154,19 @@ class HostedOrigin:
 
     def prepare(self):
         require_hosted();require(not self.root.exists(),'OWNED_AUTH_ALREADY_PREPARED')
+        fixture=self.fixture_script()
         self.root.mkdir(mode=0o700);(self.root/'home').mkdir(mode=0o700);(self.root/'staging').mkdir(mode=0o700)
         source=Path(os.environ['GITHUB_WORKSPACE']).resolve()/'.build/android-auth-source'
         require(subprocess.check_output(['git','rev-parse','HEAD'],cwd=source,text=True).strip()==SERVICE_SHA,'OWNED_AUTH_SOURCE_CHANGED')
         require(not subprocess.check_output(['git','status','--porcelain'],cwd=source),'OWNED_AUTH_SOURCE_CHANGED')
         suffix=os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']
         self.state={'schema':1,'source':SERVICE_SHA,'owner':suffix+'-'+secrets.token_hex(12),
-            'result':'preparing','process_intents':{},'containers':[]};self.save()
+            'result':'preparing','fixture':self.fixture,'fixture_script_sha256':hashlib.sha256(fixture.read_bytes()).hexdigest(),
+            'process_intents':{},'containers':[]};self.save()
         initialize_control(self.root)
+        if self.fixture=='sync':
+            from android_sync_fixture import initialize_control as initialize_sync_control
+            initialize_sync_control(self.root)
         password=secrets.token_urlsafe(40);access='android-own-'+secrets.token_hex(4);secret=secrets.token_urlsafe(40)
         bucket='onx-android-auth-'+suffix
         accounts=[{'username':'android-owned-'+kind+'-'+secrets.token_hex(6),'password':secrets.token_urlsafe(32),
@@ -174,7 +188,6 @@ class HostedOrigin:
         runtime_env=minimal_environment(self.root);runtime_env.update(environment)
         python=source/'.venv/bin/python'
         self.command([python,'-m','sync_server','initialize','--workers','1'],'initialize-service',env=runtime_env,cwd=source,timeout=150)
-        fixture=Path(__file__).with_name('android_auth_fixture.py').resolve()
         self.command([python,fixture,'seed'],'seed-owned-users',env=runtime_env,cwd=source)
         self.spawn('service',[python,fixture,'serve','--owner-run',suffix],runtime_env)
         deadline=time.monotonic()+45
@@ -204,7 +217,8 @@ class HostedOrigin:
                 require(time.monotonic()<deadline,'OWNED_AUTH_TUNNEL_NOT_READY');time.sleep(.5)
         atomic_json(self.root/'device-private.json',{'endpoint':endpoint,'accounts':accounts},exclusive=True)
         self.state.update(result='ready',endpoint=endpoint,cloudflared=asset,bucket=bucket);self.save()
-        return {'source':SERVICE_SHA,'endpoint':endpoint,'providers':'Owned PostgreSQL17.6/S3 and actual production initialize/create-user CLI',
+        return {'source':SERVICE_SHA,'fixture':self.fixture,'fixture_script_sha256':self.state['fixture_script_sha256'],
+            'endpoint':endpoint,'providers':'Owned PostgreSQL17.6/S3 and actual production initialize/create-user CLI',
             'images':[{'requested':item['image'],'resolved_id':item['image_id']} for item in self.state['containers']],
             'handshake':handshake,'cloudflared':asset,'Android_TLS_or_auth_verified':False,'secrets_in_artifacts':False}
 
@@ -258,8 +272,9 @@ class HostedOrigin:
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('action',choices=('prepare','stop'));args=parser.parse_args()
-    root=owned_root();origin=HostedOrigin(root)
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('action',choices=('prepare','stop'))
+    parser.add_argument('--fixture',choices=('auth','sync'),default='auth');args=parser.parse_args()
+    root=owned_root();origin=HostedOrigin(root,fixture=args.fixture)
     if args.action=='stop':result=origin.stop()
     else:
         require(not root.exists(),'OWNED_AUTH_ALREADY_PREPARED')
