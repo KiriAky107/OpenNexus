@@ -43,13 +43,11 @@ impl Workspace {
         check()?;
         self.register_payload(operation, expected, size)
     }
+    #[cfg(test)]
     pub(crate) fn sync_store_file(&self, source: &Path) -> Result<String> {
         let digest = hash_file(source)?;
-        self.snapshot_file(source, &digest)?;
+        self.snapshot_file_checked(source, &digest, &|| Ok(()))?;
         Ok(digest)
-    }
-    fn snapshot_file(&self, source: &Path, expected: &str) -> Result<u64> {
-        self.snapshot_file_checked(source, expected, &|| Ok(()))
     }
     pub(crate) fn snapshot_file_checked(
         &self,
