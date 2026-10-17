@@ -93,11 +93,32 @@ public class AuthRuntimeProbe extends Instrumentation {
         }
         inputTarget="Preview merge";
         inputTrace="native_accessibility=not_sent physical_touch=not_sent automatic_retry=false";
-        stage="native-accessibility-preview-admission";
+        stage="original-preview-wait-before-input";
         Predicate<AccessibilityNodeInfo> target=node->APP.equals(text(node.getPackageName()))
             && label(node,"Preview merge") && node.isEnabled() && node.isClickable();
-        waitFor(target,true);
-        AccessibilityNodeInfo original=unique(target);
+        long admissionStarted=SystemClock.uptimeMillis();
+        AccessibilityNodeInfo original;
+        try {
+            waitFor(target,true);
+            stage="original-preview-fresh-unique-before-input";
+            original=unique(target);
+        } catch (RuntimeException error) {
+            int named=0,visible=0,enabled=0;
+            for(AccessibilityNodeInfo node:nodes()) {
+                if(APP.equals(text(node.getPackageName())) && label(node,"Preview merge") && node.isClickable()) {
+                    named++;
+                    if(node.isVisibleToUser())visible++;
+                    if(node.isEnabled())enabled++;
+                }
+            }
+            // Counts and elapsed time distinguish a pending native read from
+            // a changed fresh AX target. Do not export field values/reasons,
+            // change the deadline, or send an input after either failure.
+            inputTrace="admission_elapsed_ms="+(SystemClock.uptimeMillis()-admissionStarted)
+                +" named="+named+" visible="+visible+" enabled="+enabled
+                +" native_accessibility=not_sent physical_touch=not_sent automatic_retry=false";
+            throw error;
+        }
         if(mode.equals("webview-touch")) {
             String nonce=args.getString("preview_dispatch_id","");
             require(nonce.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"),
