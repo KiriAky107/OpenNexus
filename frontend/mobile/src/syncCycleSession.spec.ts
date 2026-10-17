@@ -170,6 +170,43 @@ describe('native foreground cycle view session', () => {
     await session.resume(frozen); expect(writes).toBe(2)
   })
 
+  it('preserves a known stale review rejection and requires a read and new explicit review for changed content', async () => {
+    let changed = false, writes = 0
+    const base = driver(), native = driver(async command => {
+      if (command.action === 'run' && command.request.action === 'resolve') {
+        writes++
+        if (writes === 1) throw new Error('SYNC_REVIEW_CHANGED')
+        return decisionReply({ ...originalDecision(command.request), state: 'completed' })
+      }
+      if (changed && command.action === 'run' && command.request.action === 'review') {
+        const value = originalReview()
+        value.local = { ...content('Concurrent source'), hash: 'c'.repeat(64) }; value.fingerprint = 'd'.repeat(64)
+        return { kind: 'result', response: { kind: 'review', review: value } }
+      }
+      return base(command)
+    })
+    const { session } = await ready(native); await session.readReview(3)
+    const frozen = session.freeze('copy', 'notes/copy.md')!
+    expect(await session.confirm(frozen)).toBe(false)
+    expect(session.state.error).toBe('SYNC_REVIEW_CHANGED')
+    expect(session.state.original).toEqual(frozen); expect(session.state.decision).toBeNull()
+    expect(session.keepOriginal()).toBe(false); expect(await session.confirm(frozen)).toBe(false)
+    expect(await session.readReview(3)).toBe(false); expect(writes).toBe(1)
+    await session.readDecision(); expect(session.state.originalMissing).toBe(true)
+    expect(session.keepOriginal()).toBe(true); changed = true
+    expect(await session.readReview(3)).toBe(true)
+    const current = session.freeze('copy', frozen.destination)!
+    expect(current.expected_hash).toBe('c'.repeat(64)); expect(current.fingerprint).toBe('d'.repeat(64))
+    expect(frozen.expected_hash).toBe('a'.repeat(64)); expect(frozen.fingerprint).toBe('b'.repeat(64))
+    expect(await session.confirm(frozen)).toBe(false); expect(writes).toBe(1)
+    expect(await session.confirm(current)).toBe(true); expect(writes).toBe(2)
+    expect(native.mock.calls.filter(([command]) => command.action === 'run' && command.request.action === 'resolve')
+      .map(([command]) => command)).toEqual([
+      { action: 'run', request: { action: 'resolve', ...frozen } },
+      { action: 'run', request: { action: 'resolve', ...current } },
+    ])
+  })
+
   it('finds an existing pending decision on cold inspection and never replaces a legacy missing fingerprint', async () => {
     const frozen: Resolution = { target: owner, sequence: 3, choice: 'remote', destination: '', expected_hash: 'a'.repeat(64), fingerprint: 'b'.repeat(64) }
     const original = { ...originalDecision(frozen), fingerprint: null }

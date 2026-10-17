@@ -89,6 +89,24 @@ it('closes a frozen review on identity change and releases exactly the owning ev
   receive?.({ state: 'inactive' })
 })
 
+it('shows a stale review as a content change in both languages without replaying the frozen confirmation', async () => {
+  const original = vi.mocked(mobileSyncCycle).getMockImplementation()!
+  vi.mocked(mobileSyncCycle).mockImplementation(async command => {
+    if (command.action === 'run' && command.request.action === 'resolve') throw 'SYNC_REVIEW_CHANGED'
+    return original(command)
+  })
+  wrapper = mount(MobileSyncCycle, { props: { target } }); await flushPromises()
+  await button('读取原决策与正文差异'); await button('采用远端'); await button('确认此原内容')
+  expect(wrapper.text()).toContain('文件修订已变化，请刷新并审核冲突。 (SYNC_REVIEW_CHANGED)')
+  const calls = vi.mocked(mobileSyncCycle).mock.calls.length
+  appLocale.value = 'en'; await flushPromises()
+  expect(wrapper.text()).toContain('The file revision changed. Refresh and review the conflict. (SYNC_REVIEW_CHANGED)')
+  expect(vi.mocked(mobileSyncCycle).mock.calls).toHaveLength(calls)
+  expect(vi.mocked(mobileSyncCycle).mock.calls.filter(([command]) => command.action === 'run' && command.request.action === 'resolve')).toEqual([
+    [{ action: 'run', request: { action: 'resolve', target, sequence: 3, choice: 'remote', destination: '', expected_hash: 'a'.repeat(64), fingerprint: 'b'.repeat(64) } }],
+  ])
+})
+
 it('keeps original Stop available during a pending cycle and refuses its late completion or progress', async () => {
   let complete!: (reply: CycleReply) => void
   const original = vi.mocked(mobileSyncCycle).getMockImplementation()!
