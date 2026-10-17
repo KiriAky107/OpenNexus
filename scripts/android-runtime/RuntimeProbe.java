@@ -292,6 +292,14 @@ public final class RuntimeProbe extends Instrumentation {
                     open(CANVAS);
                     showCanvasTools();
                     break;
+                case "canvas-tools-tablet-open-800":
+                    // Establish the original document after the initial owned
+                    // density configuration and a deliberate cold launch.
+                    open(CANVAS);
+                    canvasToolsState(false, true);
+                    waitLabel("Free canvas");
+                    settleUi();
+                    break;
                 case "canvas-tools-tablet-800":
                 case "canvas-tools-tablet-1280":
                     canvasToolsState(false, true);

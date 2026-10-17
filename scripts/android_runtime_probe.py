@@ -374,7 +374,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools'):
+        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -1014,8 +1014,47 @@ class Probe:
             'physical_phone_or_tablet_verified':False,'sync_or_desktop_pair_retested':False,'keystore_tests_repeated':False}
         (self.output/'canvas-tools-proof.json').write_text(json.dumps(proof,ensure_ascii=False,indent=2)+'\n','utf-8')
 
+    def run_canvas_tablet(self):
+        # The first density configuration may recreate an Android activity.
+        # Open the saved original explicitly at 800px; only the later width
+        # change is the same-process, already-open-editor continuity check.
+        self.enable_test_ime()
+        self.phase('canvas-tools-seed')
+        original = self.original('runtime.canvas')
+        nodes = json.loads(original)['nodes']
+        require(len(nodes) == 1 and nodes[0]['text'] == NODE, 'Original tablet Canvas fixture differs from actual input')
+        rows = self.draft_rows(); views = {}
+        try:
+            self.tablet_display(1600, 2400)
+            self.phase('canvas-tools-tablet-open-800', keep_running=True)
+            pid = self.shell('pidof', APP).stdout.strip()
+            require(re.fullmatch(rb'[1-9][0-9]{0,9}', pid), 'Tablet Canvas requires one original app PID')
+            report = self.output/'canvas-tools-tablet-open-800-computed-styles.json'
+            views['800'] = validate_canvas_tools(json.loads(report.read_text('utf-8')), width=800)
+            self.tablet_display(2560, 1600)
+            self.phase('canvas-tools-tablet-1280', continue_process=True, keep_running=True)
+            require(self.shell('pidof', APP).stdout.strip() == pid, 'Owned Canvas tablet width change restarted the app')
+            report = self.output/'canvas-tools-tablet-1280-computed-styles.json'
+            views['1280'] = validate_canvas_tools(json.loads(report.read_text('utf-8')), width=1280)
+        finally:
+            self.restore_tablet_display()
+        self.force_stop()
+        require(self.original('runtime.canvas') == original and self.draft_rows() == rows,
+            'Read-only tablet Canvas observation changed original content or drafts')
+        proof = {'passed':True,'source_commit':self.args.commit,'runtime_tools_commit':self.args.tools_commit,
+            'compiled_from':self.args.build_origin,'apk_sha256':self.binding['sha256'],'layouts':views,
+            'original_canvas_sha256':digest(original),'original_canvas_bytes':len(original),
+            'original_draft_rows_unchanged':True,'synthetic_seed_saved_once':True,'read_only_after_seed':True,
+            'initial_800px_cold_open_explicit':True,'same_PID_800_to_1280':int(pid),'owned_display_restored':True,
+            'phone_Back_menu_theme_cases_replayed':False,'physical_phone_or_tablet_verified':False,
+            'sync_or_desktop_pair_retested':False,'keystore_tests_repeated':False}
+        (self.output/'canvas-tablet-proof.json').write_text(json.dumps(proof,ensure_ascii=False,indent=2)+'\n','utf-8')
+
     def run(self):
         self.boot()
+        if self.args.scope == 'canvas-tablet':
+            self.run_canvas_tablet()
+            return
         if self.args.scope == 'canvas-tools':
             self.run_canvas_tools()
             return
@@ -1135,7 +1174,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:

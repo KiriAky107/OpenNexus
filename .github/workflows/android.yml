@@ -76,7 +76,7 @@ on:
       runtime_scope:
         description: 'all checks, or a named remaining scope on an existing fixed APK without rebuilding'
         type: choice
-        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, canvas-tools, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, desktop-startup, build-only]
+        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, canvas-tools, canvas-tablet, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, desktop-startup, build-only]
         default: all
         required: false
       sync_cold_originals:
@@ -100,7 +100,7 @@ concurrency:
 
 jobs:
   debug-apk:
-    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'canvas-tools' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'desktop-startup')
+    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'canvas-tools' && inputs.runtime_scope != 'canvas-tablet' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'desktop-startup')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -196,7 +196,7 @@ jobs:
           import os,re
           run,commit=os.environ['REUSE_RUN'],os.environ['REUSE_COMMIT']
           scope=os.environ['RUNTIME_SCOPE']
-          assert scope in ('all','lifecycle','tablet','auth','auth-recovery','auth-background','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','sync-initial','sync-exchange','sync-media','sync-stop','sync-recovery','sync-conflicts')
+          assert scope in ('all','lifecycle','tablet','auth','auth-recovery','auth-background','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','sync-initial','sync-exchange','sync-media','sync-stop','sync-recovery','sync-conflicts')
           assert scope=='all' or bool(run), 'Partial scope requires a fixed existing APK; it is not full acceptance'
           assert bool(run)==bool(commit), 'Supply both immutable APK reuse fields together'
           if run:
