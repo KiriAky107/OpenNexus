@@ -74,7 +74,7 @@ pub(crate) async fn cycle(
     state: tauri::State<'_, MobileState>,
     request: Command,
 ) -> Result<Reply, String> {
-    use notesagent_host::{mobile_sync_cycle, sync_client::SyncError};
+    use notesagent_host::mobile_sync_cycle;
     main_window(&window)?;
     request
         .validate()
@@ -151,27 +151,25 @@ pub(crate) async fn cycle(
     let result = async {
         let mut guard = lease
             .guard(async { Ok(state.sync.gate.lock().await) })
-            .await?;
-        let auth =
-            auth(&mut guard, &lease, &state.private_root).map_err(|code| SyncError::new(&code))?;
+            .await
+            .map_err(mobile_sync_cycle::public_error)?;
+        let auth = auth(&mut guard, &lease, &state.private_root)?;
         lease
             .guard(mobile_sync_cycle::execute(
                 auth,
                 &lease,
                 state.engine.clone(),
                 request,
-                now().map_err(|code| SyncError::new(&code))?,
+                now()?,
                 report,
             ))
             .await
+            .map_err(mobile_sync_cycle::public_error)
     }
     .await;
     if let Some(ticket) = ticket.as_mut() {
         let snapshot = ticket
-            .finish(
-                cycle_time()?,
-                result.as_ref().err().map(|error| error.code.as_str()),
-            )
+            .finish(cycle_time()?, result.as_ref().err().map(String::as_str))
             .map_err(mobile_sync_cycle::public_error)?;
         // Final metadata uses the same original lifecycle guard as progress.
         // Stop/background/identity changes return Inactive and emit nothing.
@@ -182,11 +180,9 @@ pub(crate) async fn cycle(
             });
         }
     }
-    result
-        .map(|response| Reply::Result {
-            response: Box::new(response),
-        })
-        .map_err(mobile_sync_cycle::public_error)
+    result.map(|response| Reply::Result {
+        response: Box::new(response),
+    })
 }
 
 fn cycle_time() -> Result<i64, String> {
