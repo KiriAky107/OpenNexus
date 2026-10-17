@@ -27,7 +27,23 @@ const expression = `JSON.stringify((()=>{
   editorAttributes:Array.from(document.querySelectorAll('[aria-label="Markdown note body"]')).slice(0,4).map(e=>({
     tag:e.tagName,id:e.id,role:e.getAttribute('role'),ariaLabel:e.getAttribute('aria-label'),contentEditable:e.contentEditable,
     disabled:e.disabled===true,readOnly:e.readOnly===true,display:getComputedStyle(e).display,visible:e.getBoundingClientRect().height>0
-  }))
+  })),
+  // Only readiness/geometry in this owned synthetic image fixture. No source
+  // URLs, note values, credentials, event injection or DOM mutation.
+  imageSave:{
+    richImages:Array.from(document.querySelectorAll('.visual-editor .milkdown-host img')).slice(0,4).map(e=>({
+      complete:e.complete,width:e.naturalWidth,height:e.naturalHeight,error:e.dataset.workspaceAssetError==='true'
+    })),
+    canvasImages:Array.from(document.querySelectorAll('.canvas-visual img')).slice(0,4).map(e=>({
+      complete:e.complete,width:e.naturalWidth,height:e.naturalHeight
+    })),
+    busy:document.querySelector('.feedback[aria-busy="true"]')!==null,
+    save:Array.from(document.querySelectorAll('.editor-header .save-button')).slice(0,2).map(e=>{
+      const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)
+      return {enabled:!e.disabled,visible:r.width>0&&r.height>0,hit:hit===e||e.contains(hit),
+        left:r.left,top:r.top,width:r.width,height:r.height}
+    })
+  }
   }
 })())`
 const result = await new Promise((resolve, reject) => {

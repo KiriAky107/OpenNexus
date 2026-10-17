@@ -46,6 +46,38 @@ def digest(value):
     return hashlib.sha256(value).hexdigest()
 
 
+def validate_image_save_observation(report, rendered, phase):
+    require(phase in ('rich-image', 'canvas-image'), 'Unexpected image/save observation phase')
+    require(len(report['drafts']) == 1 and not report['saves'] and len(report['images']) == 1,
+        'Original image/save rows are missing, duplicated or already have an unknown Save; no input sent')
+    draft, image = report['drafts'][0], report['images'][0]
+    asset = f'attachments/{digest(IMAGE_BYTES)[:2]}/{digest(IMAGE_BYTES)}.png'
+    require(image['state'] == 'committed' and image['asset_path'] == asset
+        and image['hash'] == digest(IMAGE_BYTES) and image['size'] == len(IMAGE_BYTES)
+        and image['draft_id'] == draft['id'] and not image.get('error')
+        and draft['generation'] == image['generation'] + 1 and draft['saved_generation'] == 0
+        and draft['content'] == image['content_after'], 'Original import is not durably acknowledged; no Save sent')
+    require(rendered.get('available') is True, 'Actual image/save rendering was not observed; no Save sent')
+    state = rendered.get('styles', {}).get('imageSave', {})
+    images = state.get('richImages' if phase == 'rich-image' else 'canvasImages', [])
+    require(len(images) == 1 and images[0].get('complete') is True and images[0].get('width') == 2
+        and images[0].get('height') == 2 and not images[0].get('error') and state.get('busy') is False,
+        'Original 2x2 image has not finished loading/importing; no Save sent')
+    saves = state.get('save', [])
+    require(len(saves) == 1 and all(saves[0].get(key) is True for key in ('enabled', 'visible', 'hit')),
+        'Original Save action is disabled, hidden, covered or ambiguous; no input sent')
+
+
+def validate_image_save_result(before, after):
+    require(len(after['drafts']) == 1 and len(after['saves']) == 1 and after['images'] == before['images'],
+        'Save did not preserve the original image receipt or produced no unique original save result')
+    draft, save, original = after['drafts'][0], after['saves'][0], before['drafts'][0]
+    require(draft['id'] == original['id'] and draft['content'] == original['content']
+        and draft['generation'] == original['generation'] == draft['saved_generation']
+        and save['draft_id'] == draft['id'] and save['generation'] == draft['generation']
+        and save['state'] == 'committed' and not save['error'], 'Original Save is not durably committed; no success claim')
+
+
 def validate_tablet_layout(report, portrait):
     require(report.get('available') is True, 'Actual tablet WebView geometry was not observed')
     layout = report.get('styles', {}).get('layout', {})
@@ -422,7 +454,10 @@ class Probe:
             require(re.fullmatch(rb'[1-9][0-9]{0,9}', self.shell('pidof', APP).stdout.strip()),
                 'Tablet rotation requires the same single owned app process')
         self.native_tls_startup(phase)
-        result = self.shell('am', 'instrument', '-w', '-e', 'phase', phase, f'{DRIVER}/.RuntimeProbe', timeout=180)
+        if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') == 'attachments-remaining':
+            result = self.image_save_instrumentation(phase)
+        else:
+            result = self.shell('am', 'instrument', '-w', '-e', 'phase', phase, f'{DRIVER}/.RuntimeProbe', timeout=180)
         text = result.stdout.decode('utf-8', 'replace')
         (self.output / f'{phase}.log').write_text(text, 'utf-8')
         self.capture(phase)
@@ -443,6 +478,78 @@ class Probe:
             self.force_stop()
         if self.root is None and not phase.startswith('theme-'):
             self.discover_private_root()
+        if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') == 'attachments-remaining':
+            after = self.image_save_rows(phase, 'after-save')
+            before = json.loads((self.output/(phase+'-stable-before-save-receipts.json')).read_text('utf-8'))
+            validate_image_save_result(before, after)
+
+    def image_save_rows(self, phase, label):
+        require_hosted_emulator(self.args.serial)
+        require(phase in ('rich-image', 'canvas-image') and label in ('before-save', 'stable-before-save', 'after-save', 'failed'),
+            'Refusing an unrelated image/save metadata observation')
+        self.wait_owned_connection()
+        if self.root is None:
+            self.discover_private_root()
+        path = 'runtime-rich-image.md' if phase == 'rich-image' else 'runtime-image.canvas'
+        columns = {
+            'drafts': ('id', 'path', 'generation', 'saved_generation', 'content'),
+            'saves': ('operation_id', 'draft_id', 'generation', 'state', 'error'),
+            'images': ('operation_id', 'draft_id', 'generation', 'asset_path', 'hash', 'size', 'state', 'content_after', 'error'),
+        }
+        report = {'path': path, 'scope': 'Only exact owned synthetic target; read-only copied draft database'}
+        for key, table in (('drafts', 'drafts'), ('saves', 'save_intents'), ('images', 'image_intents')):
+            rows = self.database_rows('SELECT '+','.join(columns[key])+' FROM '+table+' WHERE path=? ORDER BY rowid LIMIT 3', (path,))
+            report[key] = [dict(zip(columns[key], row)) for row in rows]
+        (self.output/(phase+'-'+label+'-receipts.json')).write_text(json.dumps(report, ensure_ascii=False, indent=2)+'\n', 'utf-8')
+        return report
+
+    def image_save_instrumentation(self, phase):
+        require_hosted_emulator(self.args.serial)
+        require(phase in ('rich-image', 'canvas-image'), 'Refusing unrelated interactive image phase')
+        self.wait_owned_connection()
+        command = ('am', 'instrument', '-w', '-e', 'phase', phase, '-e', 'image_checkpoint', 'yes', f'{DRIVER}/.RuntimeProbe')
+        process = subprocess.Popen([str(self.adb), '-s', self.args.serial, 'shell', shlex.join(command)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        output = error = b''
+        finished = False
+        try:
+            deadline = time.monotonic()+95
+            while True:
+                if process.poll() is not None:
+                    output, error = process.communicate(timeout=5)
+                    finished = True
+                    return subprocess.CompletedProcess(command, process.returncode, output, error)
+                ready = self.shell('run-as', DRIVER, 'cat', 'no_backup/owned-'+phase+'-save.ready', check=False)
+                if ready.returncode == 0 and ready.stdout == b'ready\n':
+                    break
+                require(time.monotonic() < deadline, 'Original image checkpoint unavailable; no Save replay')
+                time.sleep(.2)
+            # Do not release a Save while an asynchronous import is still
+            # publishing its original draft. Two matching observations plus
+            # the actual loaded image and uncovered enabled action are required.
+            before = self.image_save_rows(phase, 'before-save')
+            rendered = self.read_native_styles(phase+'-before-save')
+            stable = self.image_save_rows(phase, 'stable-before-save')
+            require(before == stable, 'Original import changed during observation; no Save sent')
+            validate_image_save_observation(stable, rendered, phase)
+            require(process.poll() is None, 'Original image driver ended before Save approval')
+            self.device('shell', '-T', 'run-as '+DRIVER+' sh -c '+
+                "'umask 077; test ! -e no_backup/owned-"+phase+"-save.proceed && cat > no_backup/owned-"+phase+"-save.proceed'",
+                input=b'proceed\n')
+            output, error = process.communicate(timeout=40)
+            finished = True
+            return subprocess.CompletedProcess(command, process.returncode, output, error)
+        finally:
+            if not finished:
+                if process.poll() is None:
+                    process.terminate()
+                try:
+                    output, error = process.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill(); output, error = process.communicate(timeout=10)
+                (self.output/(phase+'-instrumentation-unfinished.log')).write_bytes(output)
+                self.capture(phase+'-unfinished')
+                self.capture_failed_editor_state(phase)
 
     def discover_private_root(self):
         paths = self.shell('run-as', APP, 'find', '.', '-name', 'mobile-drafts.sqlite3', '-type', 'f').stdout.decode().splitlines()
@@ -486,6 +593,8 @@ class Probe:
                 except Exception as error:
                     report['originals'][name] = {'unavailable': type(error).__name__}
             report['draft_rows'] = self.draft_rows()
+            if phase in ('rich-image', 'canvas-image'):
+                report['image_save_metadata'] = self.image_save_rows(phase, 'failed')
         except Exception as error:
             report['observation_error'] = type(error).__name__
         (self.output / f'{phase}-failed-native-state.json').write_text(
@@ -523,6 +632,7 @@ class Probe:
             if port and re.fullmatch(r'[0-9]{4,5}', port):
                 report['own_forward_removed'] = self.device('forward', '--remove', 'tcp:' + port, check=False).returncode == 0
             (self.output/(phase+'-computed-styles.json')).write_text(json.dumps(report,indent=2)+'\n','utf-8')
+        return report
 
     def original(self, name):
         require(name and not name.startswith('/') and '\\' not in name and ':' not in name
@@ -537,7 +647,7 @@ class Probe:
         self.original_observations = ordinal
         return value
 
-    def database_rows(self, query):
+    def database_rows(self, query, parameters=()):
         snapshot = Path(tempfile.mkdtemp(prefix='draft-snapshot-', dir=self.tools))
         database = snapshot / 'mobile-drafts.sqlite3'
         for suffix in ('', '-wal', '-shm'):
@@ -546,7 +656,7 @@ class Probe:
                 Path(str(database) + suffix).write_bytes(value.stdout)
         with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:
             require(db.execute('PRAGMA integrity_check').fetchone() == ('ok',), 'Draft database integrity check failed')
-            return db.execute(query).fetchall()
+            return db.execute(query, parameters).fetchall()
 
     def draft_rows(self):
         return self.database_rows('SELECT path,content,generation,saved_generation FROM drafts ORDER BY path')

@@ -124,6 +124,7 @@ public final class RuntimeProbe extends Instrumentation {
                     click("Add image", false);
                     chooseOriginalImage();
                     waitLabel("Draft kept on this device");
+                    beforeImageSave("rich-image");
                     save();
                     break;
                 case "rich-image-reopen":
@@ -241,6 +242,7 @@ public final class RuntimeProbe extends Instrumentation {
                     chooseOriginalImage();
                     waitOriginalImageNode();
                     waitLabel("Draft kept on this device");
+                    beforeImageSave("canvas-image");
                     save();
                     break;
                 case "canvas-image-reopen":
@@ -498,6 +500,29 @@ public final class RuntimeProbe extends Instrumentation {
         click("Save", false);
         waitLabel("Saved");
     }
+
+    private void beforeImageSave(String phase) throws java.io.IOException {
+        if (!"yes".equals(arguments.getString("image_checkpoint"))) return;
+        require(phase.equals("rich-image") || phase.equals("canvas-image"), "Unexpected image checkpoint");
+        waitNode(node -> APP.equals(string(node.getPackageName())) && label(node,"Save",false)
+            && node.isEnabled() && node.isClickable(), "enabled Save after original image import");
+        // Keep this same instrumentation alive while the runner reads the
+        // original native receipt and actual rendered image. The generic dirty
+        // label predates image insertion and cannot establish import readiness.
+        File root=getContext().getNoBackupFilesDir();
+        File ready=new File(root,"owned-"+phase+"-save.ready");
+        require(ready.createNewFile(),"Original image checkpoint already exists");
+        try (FileOutputStream out=new FileOutputStream(ready)) {
+            out.write("ready\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));out.getFD().sync();
+        }
+        File proceed=new File(root,"owned-"+phase+"-save.proceed");
+        waitingFor="read-only original image/save readiness: "+phase;
+        long until=SystemClock.uptimeMillis()+45000;
+        while (!proceed.isFile() && SystemClock.uptimeMillis()<until) SystemClock.sleep(100);
+        require(proceed.isFile() && java.util.Arrays.equals(java.nio.file.Files.readAllBytes(proceed.toPath()),
+            "proceed\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)),"Original image/save observation missing; no Save sent");
+        progress.append("original image/native receipt readiness observed before one Save\n");
+    }
     private void waitNotesLanding() {
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Start writing", false),
             "owned notes landing heading (not the drafts tab New note action)");
@@ -648,6 +673,7 @@ public final class RuntimeProbe extends Instrumentation {
         }
         require(stable >= 3, "Observed UI target did not reach stable screen bounds");
         require(node.isVisibleToUser() && node.isEnabled() && !bounds.isEmpty(), "UI target has no visible enabled bounds");
+        progress.append("single touch bounds: ").append(bounds.toShortString()).append('\n');
         long time = SystemClock.uptimeMillis();
         touch(time, time, MotionEvent.ACTION_DOWN, bounds.centerX(), bounds.centerY());
         SystemClock.sleep(60);

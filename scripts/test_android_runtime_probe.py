@@ -11,10 +11,95 @@ import zlib
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAGE_BYTES, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job, validate_tablet_layout
+from android_runtime_probe import APP, DRIVER, IMAGE_BODY, RICH_IMAGE_TEXT, IMAGE_BYTES, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job, validate_tablet_layout, validate_image_save_observation, validate_image_save_result
 
 
 class RuntimeBoundaries(unittest.TestCase):
+    def image_save_fixture(self):
+        asset=f'attachments/{digest(IMAGE_BYTES)[:2]}/{digest(IMAGE_BYTES)}.png'
+        content=RICH_IMAGE_TEXT+'![]('+asset+')\n'
+        report={'drafts':[{'id':'original-draft','path':'runtime-rich-image.md','content':content,'generation':3,'saved_generation':0}],
+            'saves':[], 'images':[{'operation_id':'original-image','draft_id':'original-draft','generation':2,
+                'asset_path':asset,'hash':digest(IMAGE_BYTES),'size':len(IMAGE_BYTES),'state':'committed','content_after':content}]}
+        rendered={'available':True,'styles':{'imageSave':{'richImages':[{'complete':True,'width':2,'height':2}],
+            'save':[{'enabled':True,'visible':True,'hit':True}],'busy':False}}}
+        return report,rendered
+
+    def test_original_image_save_readiness_refuses_unknown_save_or_unacknowledged_import(self):
+        report,rendered=self.image_save_fixture()
+        validate_image_save_observation(report,rendered,'rich-image')
+        for changed in ({'saves':[{'state':'prepared'}]}, {'images':[]}, {'images':report['images']*2},
+                {'drafts':[dict(report['drafts'][0],generation=4)]},
+                {'images':[dict(report['images'][0],state='prepared')]},
+                {'images':[dict(report['images'][0],content_after='unrelated content')]}):
+            with self.subTest(changed=changed),self.assertRaises(RuntimeError):
+                validate_image_save_observation(dict(report,**changed),rendered,'rich-image')
+
+    def test_original_image_save_readiness_requires_loaded_2px_image_and_uncovered_action(self):
+        report,rendered=self.image_save_fixture();original=rendered['styles']['imageSave']
+        variants=[{'busy':True},{'richImages':[]},{'richImages':[{'complete':False,'width':2,'height':2}]},
+            {'richImages':[{'complete':True,'width':0,'height':0}]},{'richImages':[{'complete':True,'width':2,'height':2,'error':True}]},
+            {'save':[]},{'save':original['save']*2}]
+        variants += [{'save':[dict(original['save'][0],**{key:False})]} for key in ('enabled','visible','hit')]
+        for changed in variants:
+            with self.subTest(changed=changed),self.assertRaises(RuntimeError):
+                validate_image_save_observation(report,{'available':True,'styles':{'imageSave':dict(original,**changed)}},'rich-image')
+        with self.assertRaises(RuntimeError):validate_image_save_observation(report,{'available':False},'rich-image')
+
+    def test_saved_ui_requires_one_same_generation_committed_receipt_and_original_image(self):
+        before,_=self.image_save_fixture()
+        after=dict(before,drafts=[dict(before['drafts'][0],saved_generation=3)],
+            saves=[{'operation_id':'original-save','draft_id':'original-draft','generation':3,'state':'committed','error':None}])
+        validate_image_save_result(before,after)
+        for changed in ({'saves':[]},{'saves':after['saves']*2},{'images':[]},
+                {'saves':[dict(after['saves'][0],state='prepared')]},
+                {'drafts':[dict(after['drafts'][0],content='later text')]},
+                {'drafts':[dict(after['drafts'][0],saved_generation=0)]}):
+            with self.subTest(changed=changed),self.assertRaises(RuntimeError):
+                validate_image_save_result(before,dict(after,**changed))
+
+    def test_image_save_snapshot_filters_exact_owned_path_and_never_stops_or_writes_app(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory);probe.root='./owned/';probe.args=SimpleNamespace(serial='emulator-5562')
+            probe.wait_owned_connection=Mock();probe.force_stop=Mock(side_effect=AssertionError('Read-only observation must not stop the live driver'))
+            calls=[]
+            def rows(query,parameters):
+                calls.append((query,parameters));return []
+            probe.database_rows=rows
+            with patch('android_runtime_probe.require_hosted_emulator'):
+                report=probe.image_save_rows('rich-image','before-save')
+                self.assertEqual(len(calls),3)
+                self.assertTrue(all(parameters==('runtime-rich-image.md',) and 'WHERE path=? ORDER BY rowid LIMIT 3' in query for query,parameters in calls))
+                self.assertEqual(report['saves'],[])
+                with self.assertRaises(RuntimeError):probe.image_save_rows('user-file','before-save')
+            self.assertEqual(len(calls),3)
+
+    def test_image_save_handshake_releases_one_save_only_after_same_receipt_and_rendered_readiness(self):
+        for changed in (False,True):
+            with self.subTest(changed=changed),tempfile.TemporaryDirectory() as directory:
+                probe=Probe.__new__(Probe);probe.output=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562');probe.adb=Path('/owned/adb')
+                report,rendered=self.image_save_fixture()
+                probe.wait_owned_connection=Mock();probe.capture=Mock();probe.capture_failed_editor_state=Mock()
+                probe.image_save_rows=Mock(side_effect=[report,dict(report,path='changed') if changed else report])
+                probe.read_native_styles=Mock(return_value=rendered)
+                probe.shell=Mock(return_value=subprocess.CompletedProcess([],0,b'ready\n'))
+                probe.device=Mock();process=Mock();process.poll.return_value=None
+                process.communicate.return_value=(b'OPENNEXUS_RUNTIME_PHASE_OK rich-image\n',b'');process.returncode=0
+                with patch('android_runtime_probe.require_hosted_emulator'),patch('android_runtime_probe.subprocess.Popen',return_value=process):
+                    if changed:
+                        with self.assertRaisesRegex(RuntimeError,'changed during observation'):probe.image_save_instrumentation('rich-image')
+                        probe.device.assert_not_called();process.terminate.assert_called_once();probe.capture_failed_editor_state.assert_called_once_with('rich-image')
+                    else:
+                        result=probe.image_save_instrumentation('rich-image')
+                        self.assertEqual(result.returncode,0);probe.device.assert_called_once()
+                        self.assertEqual(probe.device.call_args.kwargs['input'],b'proceed\n')
+                        self.assertIn('test ! -e no_backup/owned-rich-image-save.proceed',probe.device.call_args.args[2])
+                        process.terminate.assert_not_called();probe.capture_failed_editor_state.assert_not_called()
+        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(serial='foreign-phone')
+        with patch('android_runtime_probe.require_hosted_emulator',side_effect=RuntimeError('Not owned')),patch('android_runtime_probe.subprocess.Popen') as launch:
+            with self.assertRaises(RuntimeError):probe.image_save_instrumentation('rich-image')
+            launch.assert_not_called()
+
     def test_attachment_scope_does_not_repeat_the_fixed_apks_keystore_cases(self):
         for scope in ('attachments','attachments-remaining'):
             probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope=scope)
