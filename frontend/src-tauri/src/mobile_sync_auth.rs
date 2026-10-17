@@ -2277,6 +2277,379 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_sync_incoming_workers_use_original_binding_and_refuse_stopped_epochs() {
+        use crate::sync_client::WorkspaceAccess;
+        let root = tempfile::tempdir().unwrap();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "first")));
+        let (foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), MemoryStore::default()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let engine = Arc::new(Mutex::new(Some(
+            crate::mobile_workspace::MobileWorkspace::open(root.path()).unwrap(),
+        )));
+        let binding = engine
+            .access(|ws| ws.sync_bind_download(scope.endpoint(), "owned-vault", scope.account()))
+            .unwrap();
+        let owned = engine.clone();
+        let port = auth
+            .authorized_device(
+                &lease,
+                &scope,
+                &operation,
+                101,
+                move |_, device| async move { Ok(device.workspace(owned)) },
+            )
+            .await
+            .unwrap();
+        let mut revision = crate::sync_inbox::RemoteRevision {
+            vault_id: "owned-vault".into(),
+            sequence: 1,
+            base_revision: 0,
+            file_id: id(),
+            path: "incoming.md".into(),
+            operation: "put".into(),
+            hash: Some(
+                engine
+                    .access(|ws| ws.sync_store_bytes(b"first original"))
+                    .unwrap(),
+            ),
+            size: 14,
+            operation_id: id(),
+        };
+        engine
+            .access(|ws| ws.sync_set_boundary(&binding.id, 1))
+            .unwrap();
+        let before = engine.access(|ws| Ok(ws.db.total_changes())).unwrap();
+        assert_eq!(
+            port.stage_revision("another-binding", &revision)
+                .await
+                .unwrap_err()
+                .code,
+            "SYNC_AUTH_IDENTITY_CHANGED"
+        );
+        assert_eq!(
+            engine.access(|ws| Ok(ws.db.total_changes())).unwrap(),
+            before
+        );
+        port.stage_revision(&binding.id, &revision).await.unwrap();
+        assert!(port.apply_pending(&binding.id).await.unwrap());
+        revision.sequence = 2;
+        revision.base_revision = 1;
+        revision.operation_id = id();
+        revision.hash = Some(
+            engine
+                .access(|ws| ws.sync_store_bytes(b"next original"))
+                .unwrap(),
+        );
+        revision.size = 13;
+        engine
+            .access(|ws| ws.sync_set_boundary(&binding.id, 2))
+            .unwrap();
+        port.stage_revision(&binding.id, &revision).await.unwrap();
+        let before = engine.access(|ws| Ok(ws.db.total_changes())).unwrap();
+        foreground.on_stop();
+        assert_eq!(
+            port.apply_pending(&binding.id).await.unwrap_err().code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert_eq!(
+            port.stage_revision(&binding.id, &revision)
+                .await
+                .unwrap_err()
+                .code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert_eq!(
+            port.resume_resolutions(&binding.id).await.unwrap_err().code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert_eq!(
+            engine.access(|ws| Ok(ws.db.total_changes())).unwrap(),
+            before
+        );
+        foreground.on_start();
+        assert_eq!(
+            port.apply_pending(&binding.id).await.unwrap_err().code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        let owned = engine.clone();
+        let current = auth
+            .authorized_device(
+                &foreground.lease().unwrap(),
+                &scope,
+                &operation,
+                102,
+                move |_, device| async move { Ok(device.workspace(owned)) },
+            )
+            .await
+            .unwrap();
+        assert!(current.apply_pending(&binding.id).await.unwrap());
+        engine
+            .access(|ws| {
+                assert_eq!(ws.sync_binding()?.unwrap().cursor, 2);
+                assert_eq!(ws.read("incoming.md")?.content, "next original");
+                assert_eq!(ws.entry("incoming.md")?.unwrap().file_id, revision.file_id);
+                assert_eq!(
+                    ws.db
+                        .query_row("SELECT COUNT(*) FROM sync_inbox", [], |r| r
+                            .get::<_, i64>(0))?,
+                    2
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn native_sync_original_commit_body_and_ack_require_the_issuing_foreground() {
+        use crate::sync_client::WorkspaceAccess;
+        let root = tempfile::tempdir().unwrap();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "first")));
+        let (foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), MemoryStore::default()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let engine = Arc::new(Mutex::new(Some(
+            crate::mobile_workspace::MobileWorkspace::open(root.path()).unwrap(),
+        )));
+        let binding = engine
+            .access(|ws| ws.sync_bind_download(scope.endpoint(), "owned-vault", scope.account()))
+            .unwrap();
+        let owned = engine.clone();
+        let port = auth
+            .authorized_device(
+                &lease,
+                &scope,
+                &operation,
+                101,
+                move |_, device| async move { Ok(device.workspace(owned)) },
+            )
+            .await
+            .unwrap();
+        let save = id();
+        engine
+            .access(|ws| ws.write_operation("original.md", "", b"original bytes", "local", &save))
+            .unwrap();
+        port.capture(&binding.id).await.unwrap();
+        let job = engine
+            .access(|ws| ws.sync_next(&binding.id))
+            .unwrap()
+            .unwrap();
+        let body = port.commit_payload(&job).await.unwrap();
+        assert_eq!(body["operation_id"], save);
+        let mut response = body.clone();
+        response["hash"] = body["content_hash"].clone();
+        response["vault_id"] = serde_json::json!(binding.remote_vault);
+        response["sequence"] = serde_json::json!(1);
+        let before = engine.access(|ws| Ok(ws.db.total_changes())).unwrap();
+        foreground.on_stop();
+        assert_eq!(
+            port.commit_payload(&job).await.unwrap_err().code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert_eq!(
+            port.acknowledge(&job, &response).await.unwrap_err().code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert_eq!(
+            engine.access(|ws| Ok(ws.db.total_changes())).unwrap(),
+            before
+        );
+        foreground.on_start();
+        let owned = engine.clone();
+        let current = auth
+            .authorized_device(
+                &foreground.lease().unwrap(),
+                &scope,
+                &operation,
+                102,
+                move |_, device| async move { Ok(device.workspace(owned)) },
+            )
+            .await
+            .unwrap();
+        assert_eq!(current.commit_payload(&job).await.unwrap(), body);
+        current.acknowledge(&job, &response).await.unwrap();
+        engine
+            .access(|ws| {
+                assert!(ws.sync_next(&binding.id)?.is_none());
+                assert_eq!(ws.read("original.md")?.content, "original bytes");
+                assert_eq!(ws.sync_binding()?.unwrap().cursor, 0);
+                let state: String = ws.db.query_row(
+                    "SELECT state FROM sync_jobs WHERE operation_id=?1",
+                    [&save],
+                    |r| r.get(0),
+                )?;
+                assert_eq!(state, "acked");
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn native_sync_resume_keeps_frozen_choice_digest_and_original_ids() {
+        use crate::sync_client::WorkspaceAccess;
+        let root = tempfile::tempdir().unwrap();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "first")));
+        let (foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), MemoryStore::default()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let engine = Arc::new(Mutex::new(Some(
+            crate::mobile_workspace::MobileWorkspace::open(root.path()).unwrap(),
+        )));
+        let binding = engine
+            .access(|ws| ws.sync_bind_download(scope.endpoint(), "owned-vault", scope.account()))
+            .unwrap();
+        let owned = engine.clone();
+        let port = auth
+            .authorized_device(
+                &lease,
+                &scope,
+                &operation,
+                101,
+                move |_, device| async move { Ok(device.workspace(owned)) },
+            )
+            .await
+            .unwrap();
+        use crate::workspace_commit::CommitGuard;
+        struct Freeze(std::cell::Cell<bool>);
+        impl CommitGuard for Freeze {
+            fn check(&self) -> crate::workspace::Result<()> {
+                if self.0.get() {
+                    Err(crate::workspace::HostError::new("SYNC_FOREGROUND_CHANGED"))
+                } else {
+                    Ok(())
+                }
+            }
+            fn commit(&self, tx: rusqlite::Transaction<'_>) -> crate::workspace::Result<()> {
+                self.check()?;
+                tx.commit()?;
+                self.0.set(true);
+                Ok(())
+            }
+        }
+        let mut revision = crate::sync_inbox::RemoteRevision {
+            vault_id: "owned-vault".into(),
+            sequence: 1,
+            base_revision: 0,
+            file_id: id(),
+            path: "original.md".into(),
+            operation: "put".into(),
+            hash: Some(engine.access(|ws| ws.sync_store_bytes(b"base")).unwrap()),
+            size: 4,
+            operation_id: id(),
+        };
+        engine
+            .access(|ws| ws.sync_set_boundary(&binding.id, 1))
+            .unwrap();
+        port.stage_revision(&binding.id, &revision).await.unwrap();
+        port.apply_pending(&binding.id).await.unwrap();
+        engine
+            .access(|ws| {
+                ws.write(
+                    "original.md",
+                    revision.hash.as_ref().unwrap(),
+                    b"local",
+                    "local",
+                )
+            })
+            .unwrap();
+        revision.sequence = 2;
+        revision.base_revision = 1;
+        revision.operation_id = id();
+        revision.hash = Some(
+            engine
+                .access(|ws| ws.sync_store_bytes(b"incoming"))
+                .unwrap(),
+        );
+        revision.size = 8;
+        engine
+            .access(|ws| ws.sync_set_boundary(&binding.id, 2))
+            .unwrap();
+        port.stage_revision(&binding.id, &revision).await.unwrap();
+        port.apply_pending(&binding.id).await.unwrap();
+        engine
+            .access(|ws| {
+                assert_eq!(
+                    ws.sync_resolve_checked(
+                        &binding.id,
+                        2,
+                        "copy",
+                        "copy.md",
+                        &crate::workspace::hash(b"local"),
+                        &Freeze(std::cell::Cell::new(false))
+                    )
+                    .unwrap_err()
+                    .code,
+                    "SYNC_FOREGROUND_CHANGED"
+                );
+                Ok(())
+            })
+            .unwrap();
+        let original: Vec<String> = engine.access(|ws| {
+            Ok(ws.db.query_row("SELECT operation_id,rename_id,copy_id,retire_id,restore_id FROM sync_resolutions", [],
+                |r| (0..5).map(|i| r.get(i)).collect())?)
+        }).unwrap();
+        let before = engine.access(|ws| Ok(ws.db.total_changes())).unwrap();
+        foreground.on_stop();
+        assert_eq!(
+            port.resume_resolutions(&binding.id).await.unwrap_err().code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert_eq!(
+            engine.access(|ws| Ok(ws.db.total_changes())).unwrap(),
+            before
+        );
+        foreground.on_start();
+        let owned = engine.clone();
+        let current = auth
+            .authorized_device(
+                &foreground.lease().unwrap(),
+                &scope,
+                &operation,
+                102,
+                move |_, device| async move { Ok(device.workspace(owned)) },
+            )
+            .await
+            .unwrap();
+        current.resume_resolutions(&binding.id).await.unwrap();
+        engine.access(|ws| {
+            let after: Vec<String> = ws.db.query_row("SELECT operation_id,rename_id,copy_id,retire_id,restore_id FROM sync_resolutions", [],
+                |r| (0..5).map(|i| r.get(i)).collect())?;
+            assert_eq!(after, original);
+            assert_eq!(ws.read("original.md")?.content, "incoming");
+            assert_eq!(ws.read("copy.md")?.content, "local");
+            assert!(ws.sync_conflicts(&binding.id)?.is_empty());
+            Ok(())
+        }).unwrap();
+    }
+
+    #[tokio::test]
     async fn explicit_auth_rejection_survives_reopen_and_original_operation_query_without_reposting(
     ) {
         let root = tempfile::tempdir().unwrap();

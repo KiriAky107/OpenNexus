@@ -64,6 +64,38 @@ pub trait WorkspaceAccess: Send + Sync {
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         async move { self.access(|ws| ws.sync_capture(binding)) }
     }
+    fn resume_resolutions<'a>(
+        &'a self,
+        binding: &'a str,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        async move { self.access(|ws| ws.sync_resume_resolutions(binding)) }
+    }
+    fn stage_revision<'a>(
+        &'a self,
+        binding: &'a str,
+        revision: &'a crate::sync_inbox::RemoteRevision,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        async move { self.access(|ws| ws.sync_stage(binding, revision)) }
+    }
+    fn apply_pending<'a>(
+        &'a self,
+        binding: &'a str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send + 'a {
+        async move { self.access(|ws| ws.sync_apply_pending(binding)) }
+    }
+    fn commit_payload<'a>(
+        &'a self,
+        job: &'a Job,
+    ) -> impl std::future::Future<Output = Result<Value>> + Send + 'a {
+        async move { self.access(|ws| ws.sync_commit_payload(job)) }
+    }
+    fn acknowledge<'a>(
+        &'a self,
+        job: &'a Job,
+        revision: &'a Value,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        async move { self.access(|ws| ws.sync_ack(job, revision)) }
+    }
     fn start_attempt(&self, job: &Job) -> Result<()> {
         self.access(|ws| ws.sync_attempt_start(job))
     }
@@ -362,7 +394,7 @@ impl SyncClient {
         {
             return Ok(false);
         }
-        workspace.access(|ws| ws.sync_resume_resolutions(&binding.id))?;
+        workspace.resume_resolutions(&binding.id).await?;
         workspace.capture(&binding.id).await?;
         let job = workspace.access(|ws| ws.sync_next(&binding.id))?;
         let Some(job) = job else {
@@ -395,7 +427,7 @@ impl SyncClient {
             if job.operation == "put" && job.base_revision.is_none() {
                 self.upload(workspace, binding, &job).await?;
             }
-            let payload = workspace.access(|ws| ws.sync_commit_payload(&job))?;
+            let payload = workspace.commit_payload(&job).await?;
             let revision = self
                 .json(
                     Method::POST,
@@ -403,7 +435,7 @@ impl SyncClient {
                     Some(payload),
                 )
                 .await?;
-            workspace.access(|ws| ws.sync_ack(&job, &revision))?;
+            workspace.acknowledge(&job, &revision).await?;
             self.report(Event::Processed(Direction::Upload));
             Ok(true)
         }
@@ -429,11 +461,8 @@ impl SyncClient {
             return Err(SyncError::new("SYNC_BINDING_CHANGED"));
         }
         identifier(&binding.remote_vault)?;
-        workspace.access(|ws| {
-            ws.sync_resume_resolutions(&binding.id)?;
-            while ws.sync_apply_pending(&binding.id)? {}
-            Ok(())
-        })?;
+        workspace.resume_resolutions(&binding.id).await?;
+        while workspace.apply_pending(&binding.id).await? {}
         if let Some(initial) = workspace.access(|ws| ws.sync_initial_pending(&binding.id))? {
             let count = initial.len().min(100);
             for revision in initial.iter().take(count) {
@@ -442,11 +471,8 @@ impl SyncClient {
                 {
                     self.download(workspace, binding, revision).await?;
                 }
-                workspace.access(|ws| {
-                    ws.sync_stage(&binding.id, revision)?;
-                    ws.sync_apply_pending(&binding.id)?;
-                    Ok(())
-                })?;
+                workspace.stage_revision(&binding.id, revision).await?;
+                workspace.apply_pending(&binding.id).await?;
                 self.report(Event::Processed(Direction::Download));
             }
             return Ok(count);
@@ -494,11 +520,8 @@ impl SyncClient {
             {
                 self.download(workspace, binding, &revision).await?;
             }
-            workspace.access(|ws| {
-                ws.sync_stage(&binding.id, &revision)?;
-                ws.sync_apply_pending(&binding.id)?;
-                Ok(())
-            })?;
+            workspace.stage_revision(&binding.id, &revision).await?;
+            workspace.apply_pending(&binding.id).await?;
             self.report(Event::Processed(Direction::Download));
         }
         Ok(items.len())

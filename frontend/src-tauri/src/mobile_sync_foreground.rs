@@ -375,6 +375,57 @@ impl WorkspaceAccess for ScopedWorkspace {
             ws.sync_capture_checked(binding, lease).map_err(Into::into)
         })
     }
+    fn resume_resolutions<'a>(
+        &'a self,
+        binding: &'a str,
+    ) -> impl Future<Output = Result<()>> + Send + 'a {
+        self.work(binding, |ws, lease, binding| {
+            ws.sync_resume_resolutions_checked(binding, lease)
+                .map_err(Into::into)
+        })
+    }
+    fn stage_revision<'a>(
+        &'a self,
+        binding: &'a str,
+        revision: &'a crate::sync_inbox::RemoteRevision,
+    ) -> impl Future<Output = Result<()>> + Send + 'a {
+        let revision = revision.clone();
+        self.work(binding, move |ws, lease, binding| {
+            ws.sync_stage_checked(binding, &revision, lease)
+                .map_err(Into::into)
+        })
+    }
+    fn apply_pending<'a>(
+        &'a self,
+        binding: &'a str,
+    ) -> impl Future<Output = Result<bool>> + Send + 'a {
+        self.work(binding, |ws, lease, binding| {
+            ws.sync_apply_pending_checked(binding, lease)
+                .map_err(Into::into)
+        })
+    }
+    fn commit_payload<'a>(
+        &'a self,
+        job: &'a crate::sync_state::Job,
+    ) -> impl Future<Output = Result<serde_json::Value>> + Send + 'a {
+        let original = job.clone();
+        self.work(&job.binding, move |ws, lease, _| {
+            ws.sync_commit_payload_checked(&original, lease)
+                .map_err(Into::into)
+        })
+    }
+    fn acknowledge<'a>(
+        &'a self,
+        job: &'a crate::sync_state::Job,
+        revision: &'a serde_json::Value,
+    ) -> impl Future<Output = Result<()>> + Send + 'a {
+        let original = job.clone();
+        let revision = revision.clone();
+        self.work(&job.binding, move |ws, lease, _| {
+            ws.sync_ack_checked(&original, &revision, lease)
+                .map_err(Into::into)
+        })
+    }
     fn access<T>(
         &self,
         action: impl FnOnce(&mut crate::workspace::Workspace) -> crate::workspace::Result<T>,
