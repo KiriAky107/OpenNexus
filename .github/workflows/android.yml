@@ -60,7 +60,7 @@ on:
       runtime_scope:
         description: 'all checks, or lifecycle/tablet/auth/attachments on an existing fixed APK without rebuilding'
         type: choice
-        options: [all, lifecycle, tablet, auth, attachments]
+        options: [all, lifecycle, tablet, auth, attachments, attachments-remaining]
         default: all
         required: false
 
@@ -74,7 +74,7 @@ concurrency:
 
 jobs:
   debug-apk:
-    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'attachments')
+    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -170,7 +170,7 @@ jobs:
           import os,re
           run,commit=os.environ['REUSE_RUN'],os.environ['REUSE_COMMIT']
           scope=os.environ['RUNTIME_SCOPE']
-          assert scope in ('all','lifecycle','tablet','auth','attachments')
+          assert scope in ('all','lifecycle','tablet','auth','attachments','attachments-remaining')
           assert scope=='all' or bool(run), 'Partial scope requires a fixed existing APK; it is not full acceptance'
           assert bool(run)==bool(commit), 'Supply both immutable APK reuse fields together'
           if run:
