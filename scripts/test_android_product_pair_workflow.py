@@ -5,6 +5,7 @@ import unittest
 import yaml
 
 from android_product_pair_stages import STAGES
+from android_product_pair_clients import CLIENTS
 from test_android_desktop_workflow import admitted
 
 
@@ -13,6 +14,18 @@ class ProductPairWorkflow(unittest.TestCase):
     def setUpClass(cls):
         path=Path(os.environ.get('ANDROID_PAIR_WORKFLOW',Path(__file__).resolve().parents[1]/'.github/workflows/android.yml'))
         cls.workflow=yaml.load(path.read_text(encoding='utf-8'),Loader=yaml.BaseLoader)
+
+    def test_both_jobs_use_the_same_explicit_source_run_admission_without_a_client_rebuild(self):
+        jobs=self.workflow['jobs']
+        linux=next(s['run'] for s in jobs['android-desktop-pair']['steps'] if s.get('name')=='Validate the immutable reuse selection')
+        windows=next(s['run'] for s in jobs['desktop-pair']['steps'] if s.get('name')=='Validate original pair inputs and names')
+        self.assertIn('fixed_android_client(os.environ[\'REUSE_COMMIT\'],os.environ[\'REUSE_RUN\'])',linux)
+        self.assertIn('android_product_pair_clients.py "$env:ANDROID_COMPILED_SOURCE" "$env:ANDROID_BUILD_RUN_ID"',windows)
+        for client in CLIENTS:
+            for name in ('desktop-pair','android-desktop-pair'):
+                self.assertTrue(admitted(jobs[name]['if'],'desktop-pair',reuse=client.build_run))
+            for name in ('debug-apk','emulator-runtime','desktop-startup'):
+                self.assertFalse(admitted(jobs[name]['if'],'desktop-pair',reuse=client.build_run))
 
     def test_pair_uses_two_exclusive_jobs_without_rebuilding_or_running_old_scopes(self):
         jobs=self.workflow['jobs']

@@ -428,9 +428,13 @@ jobs:
 
         import os
 
-        assert os.environ[''REUSE_RUN'']==''39054475515''
+        import sys
 
-        assert os.environ[''REUSE_COMMIT'']==''18b6abbbf8bc8dae249469f7bcd9e5139cb39fee''
+        sys.path.insert(0,''scripts'')
+
+        from android_product_pair_clients import fixed_android_client
+
+        fixed_android_client(os.environ[''REUSE_COMMIT''],os.environ[''REUSE_RUN''])
 
         assert os.environ[''RUNTIME_SCOPE'']==''desktop-pair''
 
@@ -582,8 +586,11 @@ jobs:
       run: uv sync --frozen --directory backend
     - name: Validate original pair inputs and names
       shell: pwsh
-      run: 'if ($env:ANDROID_COMPILED_SOURCE -ne ''18b6abbbf8bc8dae249469f7bcd9e5139cb39fee'' -or $env:ANDROID_BUILD_RUN_ID -ne ''39054475515''
-        -or $env:GITHUB_RUN_ATTEMPT -ne ''1'') { throw ''PAIR_FROZEN_INPUT_REFUSED'' }
+      run: 'if ($env:GITHUB_RUN_ATTEMPT -ne ''1'') { throw ''PAIR_FROZEN_INPUT_REFUSED'' }
+
+        python scripts/android_product_pair_clients.py "$env:ANDROID_COMPILED_SOURCE" "$env:ANDROID_BUILD_RUN_ID"
+
+        if ($LASTEXITCODE -ne 0) { throw ''PAIR_FROZEN_INPUT_REFUSED'' }
 
         "PAIR_TOOLS_SHORT=$($env:GITHUB_SHA.Substring(0,12))" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 

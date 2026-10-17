@@ -6,13 +6,15 @@ import uuid
 
 from android_desktop_exchange import exchange_bytes,read_exchange
 from android_desktop_handoff import HandoffError
-from android_product_pair_stages import ACTIONS,ANDROID_APK_SHA256,DESKTOP_INSTALLER,IMAGE_PATH,PATHS,STAGES,validate_stage,validate_return,validate_final
+from android_product_pair_stages import ACTIONS,DESKTOP_INSTALLER,IMAGE_PATH,PATHS,STAGES,validate_stage,validate_return,validate_final
+from android_product_pair_clients import CLIENTS,fixed_android_client
 import test_android_desktop_exchange as fixtures
 
 
 class PairStages(unittest.TestCase):
     def setUp(self):
         self.fixture=fixtures.Exchange();self.fixture.setUp();self.context=self.fixture.context
+        self.context['android_commit']=CLIENTS[0].source
         self.desktop=self.body('desktop-first')
         self.android=self.body('android-return')
         self.android['files']=deepcopy(self.desktop['files'])
@@ -25,7 +27,7 @@ class PairStages(unittest.TestCase):
     def body(self,stage):
         android=stage=='android-return';device=('0' if android else '1')*32
         return {'passed':True,'client_source':self.context['android_commit' if android else 'desktop_commit'],
-                'client_artifact_sha256':ANDROID_APK_SHA256 if android else DESKTOP_INSTALLER,'native_metadata_sha256':'b'*64,
+                'client_artifact_sha256':fixed_android_client(self.context['android_commit']).apk_sha256 if android else DESKTOP_INSTALLER,'native_metadata_sha256':'b'*64,
                 'identity':{'local_vault_id':str(uuid.uuid4()),'binding_id':str(uuid.uuid4()),
                             'remote_vault_id':'f'*32,'current_device_id':device},
                 'files':[{'path':path,'file_id':str(uuid.uuid4()),'operation_id':str(uuid.uuid4()),'device_id':device,
@@ -79,6 +81,18 @@ class PairStages(unittest.TestCase):
             changed=deepcopy(self.android);changed['client_artifact_sha256']=candidate
             with self.subTest(candidate=candidate),self.assertRaisesRegex(HandoffError,'PAIR_STAGE_CLIENT_INVALID'):
                 validate_stage(self.context,'android-return',changed)
+
+    def test_each_compiled_client_requires_its_own_actual_APK_in_return_receipt(self):
+        for client in CLIENTS:
+            self.context['android_commit']=client.source
+            original=deepcopy(self.android)
+            original.update(client_source=client.source,client_artifact_sha256=client.apk_sha256)
+            validate_stage(self.context,'android-return',original)
+            for other in CLIENTS:
+                if other==client:continue
+                changed=dict(original,client_artifact_sha256=other.apk_sha256)
+                with self.assertRaisesRegex(HandoffError,'PAIR_STAGE_CLIENT_INVALID'):
+                    validate_stage(self.context,'android-return',changed)
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

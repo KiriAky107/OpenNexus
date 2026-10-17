@@ -24,20 +24,18 @@ from android_desktop_recipient import prepare_receiving_key,read_receiving_key,r
 from android_product_pair_data import ANDROID_NOTE,ANDROID_CANVAS_TEXT,ANDROID_POSITION,CANVAS_SEED,DESKTOP_NOTE,DESKTOP_CANVAS_TEXT,DESKTOP_POSITION,DRAFT,IMAGE_BYTES,IMAGE_PATH,TEXT_NODE
 from android_product_pair_evidence import desktop_cold_files,desktop_outbound_files,sha,validate_canvas_edit
 from android_product_pair_stages import ACTIONS,PATHS,validate_final,validate_stage
+from android_product_pair_clients import fixed_android_client
 
 
 INSTALLER_URL='https://github.com/KiriAky107/OpenNexus/releases/download/v0.6.0-beta6/OpenNexus_0.6.0-beta6_x64-setup.exe'
-ANDROID_SOURCE='18b6abbbf8bc8dae249469f7bcd9e5139cb39fee'
-ANDROID_BUILD='39054475515'
 
 
 def original_context(env):
     raw=env.get('GITHUB_RUN_ID','')
-    require(re.fullmatch(r'[1-9][0-9]{0,15}',raw) is not None
-            and env.get('ANDROID_COMPILED_SOURCE')==ANDROID_SOURCE
-            and env.get('ANDROID_BUILD_RUN_ID')==ANDROID_BUILD, 'PAIR_DESKTOP_ANDROID_CONTEXT_INVALID')
+    require(re.fullmatch(r'[1-9][0-9]{0,15}',raw) is not None, 'PAIR_DESKTOP_ANDROID_CONTEXT_INVALID')
+    client=fixed_android_client(env.get('ANDROID_COMPILED_SOURCE'),env.get('ANDROID_BUILD_RUN_ID'))
     context={'run_id':int(raw),'tools_commit':env.get('GITHUB_SHA',''),
-             'android_commit':ANDROID_SOURCE,'desktop_commit':DESKTOP_SOURCE}
+             'android_commit':client.source,'desktop_commit':DESKTOP_SOURCE}
     context_bytes(context)
     owned_root(env,context)  # Before downloads, file reads or process/profile access.
     return context

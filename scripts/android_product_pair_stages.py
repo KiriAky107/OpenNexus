@@ -9,10 +9,10 @@ import uuid
 
 from android_desktop_handoff import context_bytes,require
 from android_desktop_product import INSTALLER_SHA256 as DESKTOP_INSTALLER
+from android_product_pair_clients import fixed_android_client
 
 
 IMAGE_PATH='attachments/14/14be779d5555c7061cacf2f4979b63fb54737c221c723540b6b4dd9e8d13bd29.png'
-ANDROID_APK_SHA256='5cc30c6a8c89f404fed9d8b0ac33306a734a6a8035379268d9718f6cb7a28755'
 PATHS=frozenset(('runtime-note.md','peer.canvas',IMAGE_PATH))
 STAGES={
     'desktop-first':('desktop-pair','Publish original desktop outbound'),
@@ -49,7 +49,7 @@ def validate_stage(context, stage, body):
             and digest(body['client_artifact_sha256']) and digest(body['native_metadata_sha256']), 'PAIR_STAGE_BODY_INVALID')
     android=stage=='android-return'
     require(body['client_source']==context['android_commit' if android else 'desktop_commit']
-            and body['client_artifact_sha256']==(ANDROID_APK_SHA256 if android else DESKTOP_INSTALLER), 'PAIR_STAGE_CLIENT_INVALID')
+            and body['client_artifact_sha256']==(fixed_android_client(context['android_commit']).apk_sha256 if android else DESKTOP_INSTALLER), 'PAIR_STAGE_CLIENT_INVALID')
     identity=body['identity']
     require(type(identity) is dict and set(identity)=={'local_vault_id','binding_id','remote_vault_id','current_device_id'}
             and uid(identity['local_vault_id']) and uid(identity['binding_id'])

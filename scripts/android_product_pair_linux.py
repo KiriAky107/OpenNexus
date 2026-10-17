@@ -23,21 +23,18 @@ from android_desktop_recipient import write_new
 from android_product_pair_android import auth_identity,capture_anchor,hosted_scope,native_identity,original_pair_ui_phase,read_frozen_fixture,resume_probe
 from android_product_pair_data import ANDROID_NOTE,ANDROID_CANVAS_TEXT,ANDROID_POSITION,CANVAS_SEED,DESKTOP_NOTE,DESKTOP_CANVAS_TEXT,DESKTOP_POSITION,DRAFT,IMAGE_BYTES,IMAGE_PATH
 from android_product_pair_evidence import match_provider_files,sha,validate_canvas_edit
-from android_product_pair_stages import ACTIONS,ANDROID_APK_SHA256,PATHS,validate_final,validate_return,validate_stage
+from android_product_pair_stages import ACTIONS,PATHS,validate_final,validate_return,validate_stage
+from android_product_pair_clients import fixed_android_client
 from android_runtime_probe import APP,build_job_origin,require_hosted_emulator,validate_binding
 from android_sync_fixture import observe_provider
 from android_sync_runtime import SyncProbe
 
 
-ANDROID_SOURCE='18b6abbbf8bc8dae249469f7bcd9e5139cb39fee'
-ANDROID_BUILD='39054475515'
-
-
 def context_and_scope(args):
     require_hosted();require_hosted_emulator(args.serial)
+    fixed_android_client(args.commit,args.build_run_id)
     raw=os.environ.get('GITHUB_RUN_ID','')
     require(re.fullmatch(r'[1-9][0-9]{0,15}',raw) is not None
-            and args.commit==ANDROID_SOURCE and args.build_run_id==ANDROID_BUILD
             and args.tools_commit==os.environ.get('GITHUB_SHA'), 'PAIR_LINUX_FROZEN_SOURCE_INVALID')
     context={'run_id':int(raw),'tools_commit':args.tools_commit,'android_commit':args.commit,'desktop_commit':DESKTOP_SOURCE}
     context_bytes(context);owner=owned_root();hosted_scope(context,args.serial,owner)
@@ -231,7 +228,7 @@ def main():
     require(read_json(args.bundle/'source-provenance.json')==build_source(args.source_checkout.resolve(),args.commit),
             'PAIR_LINUX_COMPILED_SOURCE_CHANGED')
     apk,binding=validate_binding(args.bundle,args.commit)
-    require(binding['sha256']==ANDROID_APK_SHA256,'PAIR_LINUX_ORIGINAL_APK_REPLACED')
+    require(binding['sha256']==fixed_android_client(args.commit,args.build_run_id).apk_sha256,'PAIR_LINUX_ORIGINAL_APK_REPLACED')
     args.build_origin=build_job_origin(args.build_run_id,args.commit)
     args.scope='product-pair';args.conflicts=False;args.media=False;args.stop=False;args.recovery=False;args.exchange=False
     args.semantic_preview=False;args.webview_preview=True;args.webview_cycle=True
