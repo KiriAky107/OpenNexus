@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock,patch
 from android_runtime_probe import DRAFT
-from android_sync_runtime import PEER_NOTE,SyncProbe,read_original_object,validate_upload,validate_incoming
+from android_sync_runtime import PEER_NOTE,PEER_CANVAS,IMAGE_PATH,SyncProbe,read_original_object,validate_upload,validate_incoming,validate_peer_applied
 
 
 class InitialSyncBoundaries(unittest.TestCase):
@@ -91,7 +91,7 @@ class InitialSyncBoundaries(unittest.TestCase):
                     CREATE TABLE sync_jobs(binding,operation_id,file_id,path,hash,size,state,remote_revision,error);
                     CREATE TABLE sync_attempts(binding,operation_id,attempts,outcome,error);
                     CREATE TABLE sync_heads(binding,file_id,revision,path,hash);
-                    CREATE TABLE sync_inbox(binding,sequence,operation_id,rename_id,state);
+                    CREATE TABLE sync_inbox(binding,sequence,revision,operation_id,rename_id,state);
                     CREATE TABLE sync_conflicts(binding,sequence,file_id,local_path,local_hash,state);
                     CREATE TABLE mobile_sync_binding_intents(operation_id,request_hash,request,state,attempt_revision,binding);
                     CREATE TABLE unrelated_private_values(secret);
@@ -156,6 +156,50 @@ class InitialSyncBoundaries(unittest.TestCase):
         with self.assertRaises(RuntimeError):validate_incoming(receipt,changed,native,'android')
         with self.assertRaises(RuntimeError):validate_incoming(dict(receipt,vault_id='other'),provider,native,'android')
         with self.assertRaises(RuntimeError):validate_incoming(dict(receipt,device_id='android'),provider,native,'android')
+
+    def media(self,delete=False):
+        receipt={'vault_id':'1'*32,'operation_id':'original-peer-op','device_id':'peer','file_id':'original-peer-file',
+            'base_revision':2,'path':'peer-renamed.md','operation':'delete' if delete else 'put',
+            'hash':None if delete else hashlib.sha256(PEER_NOTE).hexdigest(),'size':0 if delete else len(PEER_NOTE),
+            'sequence':3,'fingerprint':'2'*64}
+        provider={'vault':{'id':'1'*32,'sequence':3},'rows':{'revisions':[receipt.copy()],
+            'files':[{'file_id':receipt['file_id'],'sequence':3,'path_key':receipt['path'],'deleted':delete}],
+            'device_progress':[{'device_id':'android','offered_sequence':3},{'device_id':'peer','committed_sequence':3}]}}
+        native={'binding':{'remote_vault':'1'*32,'cursor':3},'conflicts':[],
+            'heads':[{'file_id':receipt['file_id'],'revision':3,'path':receipt['path'],'hash':'' if delete else receipt['hash']}],
+            'inbox':[{'sequence':3,'revision':json.dumps({k:v for k,v in receipt.items() if k not in ('device_id','fingerprint')}),
+                'operation_id':'distinct-local-apply-id','state':'applied'}]}
+        return receipt,provider,native
+
+    def test_peer_generated_pages_cannot_substitute_for_original_native_inbox_apply(self):
+        receipt,provider,native=self.media();validate_peer_applied([receipt],provider,native,'android')
+        for field,value in (('operation_id','other'),('device_id','android'),('file_id','other'),('path','other.md'),
+                ('hash','3'*64),('fingerprint','3'*64),('base_revision',0)):
+            changed=deepcopy(native);row=json.loads(changed['inbox'][0]['revision']);row[field]=value
+            changed['inbox'][0]['revision']=json.dumps(row)
+            with self.subTest(field=field),self.assertRaises(RuntimeError):validate_peer_applied([receipt],provider,changed,'android')
+        changed=deepcopy(native);changed['inbox'][0]['state']='pending'
+        with self.assertRaises(RuntimeError):validate_peer_applied([receipt],provider,changed,'android')
+        for field in ('device_id','fingerprint'):
+            changed=deepcopy(provider);changed['rows']['revisions'][0][field]='other'
+            with self.subTest(provider=field),self.assertRaises(RuntimeError):validate_peer_applied([receipt],changed,native,'android')
+        with self.assertRaises(RuntimeError):validate_peer_applied([receipt,receipt],provider,native,'android')
+
+    def test_original_delete_requires_actual_tombstone_and_native_empty_hash_head(self):
+        receipt,provider,native=self.media(delete=True);validate_peer_applied([receipt],provider,native,'android')
+        for table,field,value in (('files','deleted',False),('files','sequence',2),('files','path_key','peer-note.md')):
+            changed=deepcopy(provider);changed['rows'][table][0][field]=value
+            with self.subTest(field=field),self.assertRaises(RuntimeError):validate_peer_applied([receipt],changed,native,'android')
+        changed=deepcopy(native);changed['heads'][0]['hash']='stale-hash'
+        with self.assertRaises(RuntimeError):validate_peer_applied([receipt],provider,changed,'android')
+
+    def test_received_canvas_keeps_original_CRLF_and_canonical_original_image_reference(self):
+        from android_runtime_probe import IMAGE_BYTES
+        canvas=json.loads(PEER_CANVAS)
+        self.assertTrue(PEER_CANVAS.endswith(b'\r\n'));self.assertNotIn(b'\n',PEER_CANVAS.replace(b'\r\n',b''))
+        self.assertEqual(canvas['nodes'][1]['file'],IMAGE_PATH)
+        self.assertEqual(IMAGE_PATH,'attachments/'+hashlib.sha256(IMAGE_BYTES).hexdigest()[:2]+'/'+hashlib.sha256(IMAGE_BYTES).hexdigest()+'.png')
+        self.assertEqual(canvas['vendor'],{'original':'保留原始属性与 CRLF'})
 
 
 if __name__=='__main__':unittest.main()

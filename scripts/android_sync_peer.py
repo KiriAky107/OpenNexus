@@ -16,7 +16,8 @@ import android_auth_fixture as original
 from android_sync_fixture import selected_target
 from android_sync_setup import Setup,encoded
 
-PATHS=frozenset(('runtime-note.md','peer-note.md','peer-renamed.md','peer.canvas','attachments/peer-original.png'))
+IMAGE_PATH='attachments/14/14be779d5555c7061cacf2f4979b63fb54737c221c723540b6b4dd9e8d13bd29.png'
+PATHS=frozenset(('runtime-note.md','peer-note.md','peer-renamed.md','peer.canvas',IMAGE_PATH))
 
 
 def revision_matches(value,body,device,vault):

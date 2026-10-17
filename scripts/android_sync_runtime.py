@@ -21,12 +21,16 @@ import uuid
 from urllib.parse import urlsplit
 from android_auth_fixture import atomic_json, owned_root, read_json, require_hosted
 from android_auth_runtime import AuthProbe, active_intent
-from android_runtime_probe import APP, DRIVER, DRAFT, build_job_origin, require, require_hosted_emulator, validate_binding
+from android_runtime_probe import APP, DRIVER, DRAFT, IMAGE_BYTES, build_job_origin, require, require_hosted_emulator, validate_binding
 from android_sync_fixture import observe_provider
 from android_sync_setup import Setup
-from android_sync_peer import Peer
+from android_sync_peer import IMAGE_PATH,PATHS,Peer
 
 PEER_NOTE='# 来自独立 HTTP 客户端 😀\n\n保持 Markdown 原文。\n'.encode()
+PEER_CANVAS=(json.dumps({'nodes':[
+    {'id':'original-peer-text','type':'text','x':0,'y':0,'width':300,'height':180,'text':'从独立客户端同步的画布 😀'},
+    {'id':'original-peer-image','type':'file','x':0,'y':220,'width':320,'height':240,'file':IMAGE_PATH}],
+    'edges':[],'vendor':{'original':'保留原始属性与 CRLF'}},ensure_ascii=False,indent=2).replace('\n','\r\n')+'\r\n').encode()
 
 
 def validate_upload(provider, native, device_id):
@@ -97,6 +101,43 @@ def validate_incoming(receipt,provider,native,device):
         'Actual generated changes/peer commit observations differ; no API apply ACK is inferred')
 
 
+def validate_peer_applied(receipts,provider,native,device):
+    """Prove original peer operations reached native apply, not just changes pages."""
+    require(0<len(receipts)<=4 and len({r['operation_id'] for r in receipts})==len(receipts)
+        and len({r['file_id'] for r in receipts})==len(receipts),'Peer observation originals are ambiguous')
+    require(provider['vault']['id']==native['binding']['remote_vault'] and not native['conflicts']
+        and native['binding']['cursor']==provider['vault']['sequence'],'Native incoming boundary is not fully confirmed')
+    for receipt in receipts:
+        require(receipt['vault_id']==provider['vault']['id'] and receipt['device_id']!=device
+            and receipt['path'] in PATHS and receipt['operation'] in ('put','delete'),'Peer original scope differs')
+        remote=[r for r in provider['rows']['revisions'] if r['operation_id']==receipt['operation_id']]
+        inbox=[r for r in native['inbox'] if r['sequence']==receipt['sequence']]
+        head=[r for r in native['heads'] if r['file_id']==receipt['file_id']]
+        files=[r for r in provider['rows']['files'] if r['file_id']==receipt['file_id']]
+        require(len(remote)==len(inbox)==len(head)==len(files)==1 and inbox[0]['state']=='applied',
+            'Peer original lacks a unique actual provider/native applied record')
+        original=json.loads(inbox[0]['revision'])
+        # RemoteRevision serializes the content/CAS operation fields. Issuer
+        # and fingerprint are verified against the independent PG receipt;
+        # the native type does not persist either field.
+        keys=('operation_id','file_id','base_revision','path','operation','hash','size','sequence')
+        require(set(original)==set(keys)|{'vault_id'}
+            and all(remote[0][key]==original[key]==receipt[key] for key in keys)
+            and original['vault_id']==receipt['vault_id']
+            and all(remote[0][key]==receipt[key] for key in ('device_id','fingerprint')),
+            'Native inbox original revision or actual provider issuer differs')
+        deleted=receipt['operation']=='delete'
+        require(head[0]['revision']==files[0]['sequence']==receipt['sequence']
+            and head[0]['path']==receipt['path'] and files[0]['path_key']==receipt['path'].casefold()
+            and files[0]['deleted'] is deleted and head[0]['hash']==('' if deleted else receipt['hash'])
+            and (not deleted or receipt['hash'] is None and receipt['size']==0),
+            'Actual native head or provider tombstone differs from original peer operation')
+    progress={r['device_id']:r for r in provider['rows']['device_progress']}
+    require(device in progress and progress[device]['offered_sequence']==provider['vault']['sequence']
+        and all(r['device_id'] in progress and progress[r['device_id']]['committed_sequence']>=r['sequence']
+            for r in receipts),'Actual offered/committed observations differ; no API apply ACK is inferred')
+
+
 class SyncProbe(AuthProbe):
     def observe(self,label):
         value=observe_provider(self.owner)
@@ -104,7 +145,8 @@ class SyncProbe(AuthProbe):
         return value
 
     def sync_phase(self,phase):
-        require(phase in ('associate','cycle','cycle-incoming','status','association-original','close'),'Unexpected Sync UI phase')
+        require(phase in ('associate','cycle','cycle-incoming','cycle-media','cycle-rename','cycle-delete',
+            'status','association-original','close'),'Unexpected Sync UI phase')
         number=len(self.phases)+1
         # The actual association ID/digest is separately frozen in the driver
         # before its confirmation tap. This dispatch ID is not a server nonce.
@@ -158,7 +200,7 @@ class SyncProbe(AuthProbe):
             projections={'jobs':('sync_jobs','operation_id,file_id,path,hash,size,state,remote_revision,error'),
                 'attempts':('sync_attempts','operation_id,attempts,outcome,error'),
                 'heads':('sync_heads','file_id,revision,path,hash'),
-                'inbox':('sync_inbox','sequence,operation_id,rename_id,state'),
+                'inbox':('sync_inbox','sequence,revision,operation_id,rename_id,state'),
                 'conflicts':('sync_conflicts','sequence,file_id,local_path,local_hash,state')}
             rows={}
             for name,(table,columns) in projections.items():
@@ -233,6 +275,7 @@ class SyncProbe(AuthProbe):
             'desktop_product_pair_verified':False,'bidirectional_conflict_recovery_verified':False,
             'client_apply_ACK_available':False,'physical_phone_verified':False,'published':False},exclusive=True)
         if getattr(self.args,'exchange',False):self.exchange(setup,prepared,device)
+        if getattr(self.args,'media',False):self.media(setup,prepared,device)
 
     def exchange(self,setup,prepared,device):
         prior=self.original('runtime-note.md')
@@ -259,13 +302,61 @@ class SyncProbe(AuthProbe):
             'desktop_product_pair_verified':False,'Canvas_PNG_rename_delete_conflicts_offline_Stop_verified':False,
             'physical_phone_verified':False,'upgrade_signing_release_verified':False},exclusive=True)
 
+    def absent_original(self,name,label):
+        require(name in ('peer-note.md','peer-renamed.md'),'Unrelated file absence observation refused')
+        root=self.root+'vault/'
+        result=self.shell('run-as',APP,'sh','-c','test -d '+shlex.quote(root)+' && test ! -e '+shlex.quote(root+name),check=False)
+        require(result.returncode==0 and not result.stdout,'Original peer path is not confirmed absent')
+        atomic_json(self.output/(label+'-absent.json'),{'path':name,'absent':True,'original_directory_verified':True,
+            'read_only':True,'mutation_retried':False},exclusive=True)
+
+    def media(self,setup,prepared,device):
+        before=self.original('runtime-note.md');peer=Peer(self.owner)
+        originals=[peer.publish('media-png',IMAGE_PATH,IMAGE_BYTES),peer.publish('media-canvas','peer.canvas',PEER_CANVAS),
+            peer.publish('media-note','peer-note.md',PEER_NOTE)]
+        atomic_json(self.output/'peer-media-original-receipts.json',originals,exclusive=True)
+        self.sync_phase('cycle-media');native=self.host_snapshot('media');provider=self.observe('media')
+        validate_peer_applied(originals,provider,native,device)
+        for receipt,content in zip(originals,(IMAGE_BYTES,PEER_CANVAS,PEER_NOTE)):
+            require(self.original(receipt['path'])==content==read_original_object(setup.endpoint,
+                prepared['vault']['vault_id'],receipt['hash'],setup.session()['access_token']),
+                'Original peer Canvas/PNG/Markdown bytes differ between Android and actual S3-backed HTTP')
+        self.sync_phase('close');self.phase('peer-media-reopen')
+        require(self.original('peer.canvas')==PEER_CANVAS and self.original(IMAGE_PATH)==IMAGE_BYTES
+            and self.host_snapshot('media-reopen')==native,'Cold Canvas reopen changed original content or Sync records')
+        note=originals[-1]
+        renamed=peer.publish('media-rename','peer-renamed.md',PEER_NOTE,file_id=note['file_id'],base_revision=note['sequence'])
+        atomic_json(self.output/'peer-rename-original-receipt.json',renamed,exclusive=True)
+        require(renamed['file_id']==note['file_id'] and renamed['base_revision']==note['sequence'],'Original rename identity changed')
+        self.sync_phase('cycle-rename');native=self.host_snapshot('renamed');provider=self.observe('renamed')
+        validate_peer_applied([renamed],provider,native,device)
+        self.absent_original('peer-note.md','renamed-old-path')
+        require(self.original('peer-renamed.md')==PEER_NOTE,'Original renamed Markdown bytes changed')
+        deleted=peer.publish('media-delete','peer-renamed.md',b'',file_id=renamed['file_id'],
+            base_revision=renamed['sequence'],operation='delete')
+        atomic_json(self.output/'peer-delete-original-receipt.json',deleted,exclusive=True)
+        require(deleted['file_id']==note['file_id'] and deleted['base_revision']==renamed['sequence'],'Original delete identity changed')
+        self.sync_phase('cycle-delete');native=self.host_snapshot('deleted');provider=self.observe('deleted')
+        validate_peer_applied([deleted],provider,native,device)
+        self.absent_original('peer-renamed.md','deleted-original-path')
+        require(self.original('runtime-note.md')==before and self.original('peer.canvas')==PEER_CANVAS
+            and self.original(IMAGE_PATH)==IMAGE_BYTES,'Unrelated original saved bytes changed during rename/delete')
+        atomic_json(self.output/'sync-media-proof.json',{'passed':True,'scope':'Actual original peer Canvas/PNG/Markdown incoming plus original-file rename and delete',
+            'source_commit':self.args.commit,'runtime_tools_commit':self.args.tools_commit,'APK_sha256':self.binding['sha256'],
+            'original_receipts':originals+[renamed,deleted],'phases':self.phases,'original_S3_Android_bytes_equal':True,
+            'actual_Canvas_UI_text_and_image_reference_observed':True,'actual_image_pixels_verified':False,
+            'native_applied_original_revision_head_cursor_verified':True,'unrelated_saved_bytes_preserved':True,
+            'desktop_product_pair_verified':False,'phone_upgrade_signing_release_verified':False,
+            'offline_Stop_conflict_dirty_draft_recovery_verified':False,'API_client_apply_ACK_available':False},exclusive=True)
+
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('bundle','sdk','output','source-checkout'):parser.add_argument('--'+name,type=Path,required=True)
     for name in ('commit','tools-commit','build-run-id'):parser.add_argument('--'+name,required=True)
-    parser.add_argument('--serial',default='emulator-5562');parser.add_argument('--exchange',action='store_true')
-    args=parser.parse_args();args.scope='sync-exchange' if args.exchange else 'sync-initial'
+    parser.add_argument('--serial',default='emulator-5562')
+    scope=parser.add_mutually_exclusive_group();scope.add_argument('--exchange',action='store_true');scope.add_argument('--media',action='store_true')
+    args=parser.parse_args();args.scope='sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
     require_hosted();require_hosted_emulator(args.serial);owner=owned_root()
     state=read_json(owner/'owner-state.json');require(state['result']=='ready' and state.get('fixture')=='sync','Owned Sync origin is not ready')
     apk,binding=validate_binding(args.bundle,args.commit)

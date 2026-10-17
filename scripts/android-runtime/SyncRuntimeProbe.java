@@ -26,6 +26,9 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
                 waitPresent(node->text(node.getText()).startsWith("Original association committed")); return true;
             case "cycle": cycle("cycle"); return true;
             case "cycle-incoming": cycle("cycle-incoming"); return true;
+            case "cycle-media": cycle("cycle-media"); return true;
+            case "cycle-rename": cycle("cycle-rename"); return true;
+            case "cycle-delete": cycle("cycle-delete"); return true;
             case "close": click("Close"); return true;
             default: return false;
         }

@@ -187,6 +187,14 @@ public final class RuntimeProbe extends Instrumentation {
                         && string(node.getText()).equals("# 来自独立 HTTP 客户端 😀\n\n保持 Markdown 原文。\n"),
                         "exact actual received original Markdown after cold launch");
                     break;
+                case "peer-media-reopen":
+                    open("peer.canvas");
+                    waitNode(node -> APP.equals(string(node.getPackageName()))
+                        && (string(node.getText()).contains("从独立客户端同步的画布 😀")
+                            || string(node.getContentDescription()).contains("从独立客户端同步的画布 😀")),
+                        "actual incoming original Canvas text after cold launch");
+                    waitOriginalImageNode();
+                    break;
                 case "back-draft":
                     create("New note", "runtime-back.md");
                     inputText(noteBody(), BACK_DRAFT);
