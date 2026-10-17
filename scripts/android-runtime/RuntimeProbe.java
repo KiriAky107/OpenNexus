@@ -408,7 +408,7 @@ public final class RuntimeProbe extends Instrumentation {
         waitNode(this::documentsUi, "system document picker");
         activate(waitNode(node -> documentsUi(node) && label(node, "Show roots", false), "system picker roots"));
         activate(waitNode(node -> documentsUi(node) && label(node, "Downloads", false), "owned Downloads location"));
-        activate(waitNode(node -> documentsUi(node) && label(node, "opennexus-ci-original.png", false), "owned original PNG"));
+        activate(waitNode(this::originalImageRow, "owned original PNG document row"));
         waitNode(node -> APP.equals(string(node.getPackageName())) && label(node, "Back", false), "return from original system picker");
     }
 
@@ -416,6 +416,17 @@ public final class RuntimeProbe extends Instrumentation {
         String name=string(node.getPackageName());
         return "com.google.android.photopicker".equals(name)
             || "com.google.android.providers.media.module".equals(name);
+    }
+    private boolean originalImageRow(AccessibilityNodeInfo node) {
+        if (!documentsUi(node)) return false;
+        if (label(node,"opennexus-ci-original.png",false)) return true;
+        // The observed provider grid exposes the exact filename followed by
+        // comma-delimited size/date metadata on its directory row. Its separate
+        // "Preview the file ..." action is not a selection target.
+        AccessibilityNodeInfo parent=node.getParent();
+        return string(node.getContentDescription()).startsWith("opennexus-ci-original.png, ")
+            && parent!=null && string(parent.getPackageName()).equals(string(node.getPackageName()))
+            && string(parent.getViewIdResourceName()).endsWith(":id/dir_list");
     }
 
     private boolean fileDrawerRow(AccessibilityNodeInfo node) {
