@@ -1,5 +1,6 @@
 from copy import deepcopy
 import hashlib,json,unittest,uuid
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from android_sync_conflict import LOCAL,DIRTY,REMOTE,COPY,IDS,ConflictMixin,validate_retained_conflict,validate_original_copy
@@ -71,6 +72,51 @@ class ConflictOriginals(unittest.TestCase):
         with patch.object(ConflictMixin,'shell',create=True) as shell:
             with self.assertRaises(RuntimeError):probe.original_conflict_driver('unrelated-private-input')
             shell.assert_not_called()
+
+    def editing_probe(self):
+        probe=ConflictMixin();events=[];active={'ime':False}
+        probe.args=SimpleNamespace(serial='emulator-5562');probe.owner=Path('owned-unit');probe.output=Path('owned-unit')
+        probe.host_snapshot=lambda label:self.conflict()[0]
+        probe.snapshot=lambda label:{'own':'auth'}
+        probe.ciphertext_fingerprints=lambda:{'own':'ciphertext'}
+        def enable():events.append('enable');active['ime']=True
+        def restore():events.append('restore');active['ime']=False
+        def phase(label):
+            self.assertTrue(active['ime'],'Separate test IME must be selected before actual conflict editing')
+            events.append(label)
+        probe.enable_test_ime=enable;probe.restore_test_ime=restore;probe.phase=phase
+        probe.original=lambda name:LOCAL
+        probe.draft_rows=lambda:[['runtime-note.md',DIRTY.decode(),2,1]]
+        return probe,events
+
+    def test_each_conflict_editor_phase_selects_and_restores_its_own_IME(self):
+        probe,events=self.editing_probe()
+        class ReachedPeer(Exception):pass
+        with patch('android_sync_conflict.require_hosted_emulator'),patch('android_sync_conflict.atomic_json'),\
+             patch('android_sync_conflict.Peer',side_effect=ReachedPeer):
+            with self.assertRaises(ReachedPeer):probe.conflict_copy(None,None,None)
+        self.assertEqual(events,['enable','conflict-local-save','restore','enable','conflict-dirty-draft','restore'])
+
+    def test_IME_enable_or_editor_failure_restores_once_without_retry_or_peer_write(self):
+        for failure in ('enable','phase'):
+            probe,events=self.editing_probe()
+            def fail(*args):
+                events.append('original-failure');raise RuntimeError('original controlled editor failure')
+            if failure=='enable':probe.enable_test_ime=fail
+            else:probe.phase=fail
+            with self.subTest(failure=failure),patch('android_sync_conflict.require_hosted_emulator'),\
+                 patch('android_sync_conflict.atomic_json'),patch('android_sync_conflict.Peer') as peer:
+                with self.assertRaisesRegex(RuntimeError,'^original controlled editor failure$'):
+                    probe.conflict_copy(None,None,None)
+                peer.assert_not_called()
+            self.assertEqual(events,['original-failure','restore'] if failure=='enable' else ['enable','original-failure','restore'])
+
+    def test_conflict_edit_helper_refuses_unowned_devices_and_unrelated_phases_before_IME(self):
+        probe=ConflictMixin();probe.args=SimpleNamespace(serial='physical-phone')
+        with patch.object(probe,'enable_test_ime',create=True) as enable:
+            with self.assertRaises(RuntimeError):probe.conflict_edit_phase('conflict-local-save')
+            with self.assertRaises(RuntimeError):probe.conflict_edit_phase('unrelated')
+            enable.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()

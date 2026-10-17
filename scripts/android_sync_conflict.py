@@ -61,6 +61,18 @@ def validate_original_copy(native,frozen,receipt):
 
 
 class ConflictMixin:
+    def conflict_edit_phase(self,phase):
+        require(phase in ('conflict-local-save','conflict-dirty-draft'),'Unexpected conflict editing phase')
+        require_hosted_emulator(self.args.serial)
+        # The initial seed restores the emulator's original keyboard. Each
+        # later real editor phase must explicitly select the separate test IME
+        # again, then restore even if selection/input/Save fails. No retry.
+        try:
+            self.enable_test_ime()
+            self.phase(phase)
+        finally:
+            self.restore_test_ime()
+
     def original_conflict_driver(self,kind):
         require(kind in ('frozen','confirmation','receipt'),'Unrelated original conflict driver record')
         result=self.shell('run-as',DRIVER,'cat','no_backup/owned-sync-conflict-copy-'+kind+'-intent.json')
@@ -77,9 +89,9 @@ class ConflictMixin:
             'original_uploaded_operation_id':uploaded['operation_id'],'file_id':uploaded['file_id'],
             'saved_sha256':hashlib.sha256(LOCAL).hexdigest(),'dirty_sha256':hashlib.sha256(DIRTY).hexdigest(),
             'native_or_server_new_operation_id':False},exclusive=True)
-        self.phase('conflict-local-save')
+        self.conflict_edit_phase('conflict-local-save')
         require(self.original('runtime-note.md')==LOCAL,'Actual local Save differs from original edit')
-        self.phase('conflict-dirty-draft')
+        self.conflict_edit_phase('conflict-dirty-draft')
         rows=[r for r in self.draft_rows() if r[0]=='runtime-note.md']
         require(len(rows)==1 and rows[0][1].encode()==DIRTY and rows[0][2]>rows[0][3],
             'Actual unsaved original draft is not durably retained')
