@@ -51,7 +51,7 @@ impl Workspace {
     fn snapshot_file(&self, source: &Path, expected: &str) -> Result<u64> {
         self.snapshot_file_checked(source, expected, &|| Ok(()))
     }
-    fn snapshot_file_checked(
+    pub(crate) fn snapshot_file_checked(
         &self,
         source: &Path,
         expected: &str,

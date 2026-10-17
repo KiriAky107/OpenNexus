@@ -207,16 +207,35 @@ pub(crate) struct SnapshotPlan {
     published: bool,
 }
 impl SnapshotPlan {
-    fn publish(mut self, workspace: &mut Workspace) -> Result<()> {
+    pub(crate) fn entry(&self, workspace: &Workspace, path: &str) -> Result<Option<Entry>> {
+        if let Some(item) = self.entries.get(path).filter(|item| !item.entry.is_folder) {
+            return Ok(Some(item.entry.clone()));
+        }
+        Ok(workspace
+            .entry(path)?
+            .and_then(|old| self.identities.project_previous(old)))
+    }
+    pub(crate) fn validate(&self, workspace: &Workspace) -> Result<()> {
         if self.vault_id != workspace.vault_id
             || self.revision != workspace.cache.revision
             || self.database_changes != workspace.db.total_changes()
         {
             return Err(HostError::new("REVISION_CONFLICT"));
         }
+        Ok(())
+    }
+    pub(crate) fn apply(&self, tx: &rusqlite::Transaction<'_>) -> Result<()> {
+        self.identities.apply(tx)
+    }
+    fn publish(self, workspace: &mut Workspace) -> Result<()> {
+        self.validate(workspace)?;
         let tx = workspace.db.transaction()?;
-        self.identities.apply(&tx)?;
+        self.apply(&tx)?;
         tx.commit()?;
+        self.finish(workspace);
+        Ok(())
+    }
+    pub(crate) fn finish(mut self, workspace: &mut Workspace) {
         if !self.changed.is_empty() || workspace.cache.revision == 0 {
             workspace.cache.revision += 1;
             workspace
@@ -232,7 +251,6 @@ impl SnapshotPlan {
             workspace.cache.last_verified = Instant::now();
         }
         self.published = true;
-        Ok(())
     }
 }
 impl Drop for SnapshotPlan {
@@ -564,13 +582,22 @@ impl Workspace {
         source: &Path,
         path: &str,
     ) -> Result<(String, u64)> {
+        self.cached_sync_file_info_checked(source, path, &|| Ok(()))
+    }
+    pub(crate) fn cached_sync_file_info_checked(
+        &mut self,
+        source: &Path,
+        path: &str,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<(String, u64)> {
+        check()?;
         let stamp = Stamp::read(source)?;
         if let Some((previous, digest, checked)) = self.cache.sync_digests.get(path) {
             if previous == &stamp && checked.elapsed() < VERIFY_INTERVAL {
                 return Ok((digest.clone(), stamp.size));
             }
         }
-        let (digest, size) = crate::payloads::sync_file_info(source, path)?;
+        let (digest, size) = crate::payloads::sync_file_info_checked(source, path, check)?;
         self.cache.stats.hashed_files += 1;
         self.cache.stats.hashed_bytes += size;
         self.cache

@@ -13,9 +13,9 @@ struct Previous {
 /// applying the plan only touches the caller's existing SQLite transaction.
 /// It does not own a Workspace, file handle or callback that can do file I/O.
 pub(super) struct IdentityChanges {
-    moved: Vec<String>,
+    moved: BTreeSet<String>,
     updates: Vec<IdentityUpdate>,
-    retired: Vec<String>,
+    retired: BTreeSet<String>,
 }
 struct IdentityUpdate {
     entry: Entry,
@@ -24,6 +24,15 @@ struct IdentityUpdate {
     identity: Option<Option<String>>,
 }
 impl IdentityChanges {
+    pub(super) fn project_previous(&self, mut entry: Entry) -> Option<Entry> {
+        if self.moved.contains(&entry.file_id) {
+            return None;
+        }
+        if self.retired.contains(&entry.file_id) {
+            entry.deleted = true;
+        }
+        Some(entry)
+    }
     pub(super) fn apply(&self, tx: &rusqlite::Transaction<'_>) -> Result<()> {
         for file_id in &self.moved {
             tx.execute(
@@ -355,9 +364,9 @@ impl Workspace {
         // Historical outbox/observed paths deliberately remain untouched: sync
         // still needs the old deletion before a replacement occupant's put.
         let mut changes = IdentityChanges {
-            moved: Vec::new(),
+            moved: BTreeSet::new(),
             updates: Vec::new(),
-            retired: Vec::new(),
+            retired: BTreeSet::new(),
         };
         for item in next.values().filter(|item| !item.entry.is_folder) {
             check()?;
@@ -365,7 +374,7 @@ impl Workspace {
                 .get(item.entry.file_id.as_str())
                 .is_some_and(|old| old.entry.path != item.entry.path)
             {
-                changes.moved.push(item.entry.file_id.clone());
+                changes.moved.insert(item.entry.file_id.clone());
             }
         }
         for item in next.values().filter(|item| !item.entry.is_folder) {
@@ -393,7 +402,7 @@ impl Workspace {
                 && !assigned.contains(&old.entry.file_id)
                 && ((enumerated && supported(path)) || self.cache.entries.contains_key(path))
             {
-                changes.retired.push(old.entry.file_id.clone());
+                changes.retired.insert(old.entry.file_id.clone());
             }
         }
         check()?;

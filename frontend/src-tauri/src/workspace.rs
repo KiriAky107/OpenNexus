@@ -11,6 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
 #[path = "workspace_watch.rs"]
 mod watch;
+pub(crate) use watch::SnapshotPlan;
 pub use watch::{ScanStats, WatchStatus, WorkspaceChange};
 
 #[derive(Debug, Serialize)]
