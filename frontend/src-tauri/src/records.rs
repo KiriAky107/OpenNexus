@@ -219,32 +219,45 @@ pub fn validate(path_value: &str, content: &[u8]) -> Result<Record> {
     Ok(record)
 }
 impl Workspace {
-    pub(crate) fn normalize_record_links(&mut self) -> Result<()> {
+    pub(crate) fn normalize_record_links_checked(
+        &mut self,
+        guard: &impl crate::workspace_commit::CommitGuard,
+    ) -> Result<()> {
         for path in self
-            .sync_paths()?
+            .sync_paths_checked(&|| guard.check())?
             .into_iter()
             .filter(|v| v.starts_with("opennexus-records/v1/tasks/") && allowed(v))
         {
-            let bytes = std::fs::read(self.resolve(&path)?)?;
+            guard.check()?;
+            let mut file = std::fs::File::open(self.resolve(&path)?)?;
+            let bytes =
+                crate::payloads::read_record_checked(&mut file, 1024 * 1024, &|| guard.check())?;
             let original = validate(&path, &bytes)?;
+            guard.check()?;
             if let Some(note_id) = original.data["note_id"].as_str() {
                 if let Ok(note_path) = self.path_for_id(note_id) {
                     if let Some(entry) = self.entry(&note_path)? {
                         if entry.file_id != note_id {
                             let mut record = original;
                             record.data["note_id"] = json!(entry.file_id);
-                            self.write(
+                            let normalized = serde_json::to_vec(&record)
+                                .map_err(|_| HostError::new("RECORD_SCHEMA_INVALID"))?;
+                            self.prepare_write_checked(
                                 &path,
                                 &crate::workspace::hash(&bytes),
-                                &serde_json::to_vec(&record)
-                                    .map_err(|_| HostError::new("RECORD_SCHEMA_INVALID"))?,
+                                crate::payloads::WritePayload::Inline(&normalized),
                                 "local",
-                            )?;
+                                &uuid::Uuid::new_v4().to_string(),
+                                (None, &|| guard.check()),
+                            )?
+                            .accept_guarded(guard)?
+                            .complete()?;
                         }
                     }
                 }
             }
         }
+        guard.check()?;
         Ok(())
     }
     pub fn record_get(&mut self, id: &str) -> Result<Option<Value>> {
@@ -355,6 +368,71 @@ mod tests {
     use super::*;
     fn fixture() -> Value {
         json!({"schema":1,"kind":"task","id":"task_00000000000000000000000000000001","data":{"title":"Task","description":"","status":"todo","note_id":null,"due_at_ms":null,"created_at_ms":0,"updated_at_ms":0}})
+    }
+    #[test]
+    fn sync_record_normalization_refusal_keeps_original_link_and_acceptance_uses_one_new_journal() {
+        use crate::workspace_commit::{CommitGuard, UnscopedCommit};
+        struct Reject;
+        impl CommitGuard for Reject {
+            fn check(&self) -> Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _transaction: rusqlite::Transaction<'_>) -> Result<()> {
+                Err(HostError::new("SYNC_FOREGROUND_CHANGED"))
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = Workspace::open(root.path()).unwrap();
+        let note = ws
+            .write("original.md", "", b"note original", "local")
+            .unwrap();
+        ws.db
+            .execute(
+                "INSERT INTO file_aliases VALUES ('former_note',?1)",
+                [&note.file_id],
+            )
+            .unwrap();
+        let mut record = fixture();
+        record["data"]["note_id"] = json!("former_note");
+        let path = path(record["id"].as_str().unwrap()).unwrap();
+        let bytes = serde_json::to_vec(&record).unwrap();
+        let original = ws.write(&path, "", &bytes, "local").unwrap();
+        let pending = ws.pending_count().unwrap();
+        let operations: i64 = ws
+            .db
+            .query_row("SELECT COUNT(*) FROM operations", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            ws.normalize_record_links_checked(&Reject).unwrap_err().code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert_eq!(std::fs::read(root.path().join(&path)).unwrap(), bytes);
+        assert_eq!(ws.entry(&path).unwrap(), Some(original.clone()));
+        assert_eq!(ws.pending_count().unwrap(), pending);
+        let after: i64 = ws
+            .db
+            .query_row("SELECT COUNT(*) FROM operations", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(after, operations);
+        ws.recover().unwrap();
+        assert_eq!(std::fs::read(root.path().join(&path)).unwrap(), bytes);
+        ws.normalize_record_links_checked(&UnscopedCommit).unwrap();
+        let normalized: Value =
+            serde_json::from_slice(&std::fs::read(root.path().join(&path)).unwrap()).unwrap();
+        record["data"]["note_id"] = json!(note.file_id);
+        assert_eq!(normalized, record);
+        let current = ws.entry(&path).unwrap().unwrap();
+        assert_eq!(current.file_id, original.file_id);
+        assert_eq!(current.revision, original.revision + 1);
+        assert_eq!(ws.pending_count().unwrap(), pending + 1);
+        let changes = ws.db.total_changes();
+        ws.normalize_record_links_checked(&UnscopedCommit).unwrap();
+        assert_eq!(ws.db.total_changes(), changes);
+        assert_eq!(ws.pending_count().unwrap(), pending + 1);
+        assert_eq!(
+            std::fs::read(root.path().join("original.md")).unwrap(),
+            b"note original"
+        );
     }
     #[test]
     fn task_agent_schedule_accepts_once_and_cron_but_rejects_unknown_nested_fields() {

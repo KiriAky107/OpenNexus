@@ -137,6 +137,22 @@ pub struct ScopedWorkspace {
     lease: Lease,
     device: Option<AuthenticatedDevice>,
 }
+
+impl crate::workspace_commit::CommitGuard for Lease {
+    fn check(&self) -> crate::workspace::Result<()> {
+        Lease::check(self).map_err(|error| crate::workspace::HostError::new(&error.code))
+    }
+    fn commit(&self, transaction: rusqlite::Transaction<'_>) -> crate::workspace::Result<()> {
+        self.with_current(|| {
+            transaction
+                .commit()
+                .map_err(crate::workspace::HostError::from)?;
+            Ok(())
+        })
+        .map_err(|error| crate::workspace::HostError::new(&error.code))
+    }
+}
+
 impl ScopedWorkspace {
     pub(crate) fn authenticated(
         engine: Arc<Mutex<Option<MobileWorkspace>>>,
@@ -147,6 +163,51 @@ impl ScopedWorkspace {
             engine,
             lease,
             device: Some(device),
+        }
+    }
+
+    fn work<'a, T: Send + 'static>(
+        &'a self,
+        binding: &'a str,
+        action: impl FnOnce(&mut crate::workspace::Workspace, &Lease, &str) -> Result<T>
+            + Send
+            + 'static,
+    ) -> impl Future<Output = Result<T>> + Send + 'a {
+        let engine = self.engine.clone();
+        let lease = self.lease.clone();
+        let scope = self.device.as_ref().map(|device| {
+            (
+                device.scope().endpoint().to_owned(),
+                device.scope().account().to_owned(),
+            )
+        });
+        let binding = binding.to_owned();
+        async move {
+            let (endpoint, account) =
+                scope.ok_or_else(|| SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"))?;
+            tokio::task::spawn_blocking(move || {
+                lease.check()?;
+                // The original epoch is checked around the owned editor lock,
+                // never held while waiting for it or doing checked file IO.
+                let mut guard = engine.lock().map_err(|_| SyncError::new("HOST_BUSY"))?;
+                lease.check()?;
+                let ws = &mut guard
+                    .as_mut()
+                    .ok_or_else(|| SyncError::new("MOBILE_STORAGE_UNAVAILABLE"))?
+                    .workspace;
+                let current = ws
+                    .sync_binding()?
+                    .ok_or_else(|| SyncError::new("SYNC_NOT_BOUND"))?;
+                if current.id != binding
+                    || current.endpoint != endpoint
+                    || current.account != account
+                {
+                    return Err(SyncError::new("SYNC_AUTH_IDENTITY_CHANGED"));
+                }
+                action(ws, &lease, &binding)
+            })
+            .await
+            .map_err(|_| SyncError::new("SYNC_WORKER_INTERRUPTED"))?
         }
     }
 
@@ -300,47 +361,19 @@ impl ScopedWorkspace {
 }
 impl WorkspaceAccess for ScopedWorkspace {
     fn discover<'a>(&'a self, binding: &'a str) -> impl Future<Output = Result<usize>> + Send + 'a {
-        let engine = self.engine.clone();
-        let lease = self.lease.clone();
-        let scope = self.device.as_ref().map(|device| {
-            (
-                device.scope().endpoint().to_owned(),
-                device.scope().account().to_owned(),
-            )
-        });
-        let binding = binding.to_owned();
-        async move {
-            let (endpoint, account) =
-                scope.ok_or_else(|| SyncError::new("SYNC_AUTH_RECONCILIATION_REQUIRED"))?;
-            tokio::task::spawn_blocking(move || {
-                lease.check()?;
-                // No lifecycle guard while waiting for the editor workspace,
-                // enumerating paths or hashing/spooling original file chunks.
-                let mut guard = engine.lock().map_err(|_| SyncError::new("HOST_BUSY"))?;
-                lease.check()?;
-                let ws = &mut guard
-                    .as_mut()
-                    .ok_or_else(|| SyncError::new("MOBILE_STORAGE_UNAVAILABLE"))?
-                    .workspace;
-                let current = ws
-                    .sync_binding()?
-                    .ok_or_else(|| SyncError::new("SYNC_NOT_BOUND"))?;
-                if current.id != binding
-                    || current.endpoint != endpoint
-                    || current.account != account
-                {
-                    return Err(SyncError::new("SYNC_AUTH_IDENTITY_CHANGED"));
-                }
-                let prepared = ws.sync_prepare_discovery(&binding, &|| {
-                    lease
-                        .check()
-                        .map_err(|error| crate::workspace::HostError::new(&error.code))
-                })?;
-                lease.with_current(|| prepared.commit().map_err(Into::into))
-            })
-            .await
-            .map_err(|_| SyncError::new("SYNC_WORKER_INTERRUPTED"))?
-        }
+        self.work(binding, |ws, lease, binding| {
+            let prepared = ws.sync_prepare_discovery(binding, &|| {
+                lease
+                    .check()
+                    .map_err(|error| crate::workspace::HostError::new(&error.code))
+            })?;
+            lease.with_current(|| prepared.commit().map_err(Into::into))
+        })
+    }
+    fn capture<'a>(&'a self, binding: &'a str) -> impl Future<Output = Result<()>> + Send + 'a {
+        self.work(binding, |ws, lease, binding| {
+            ws.sync_capture_checked(binding, lease).map_err(Into::into)
+        })
     }
     fn access<T>(
         &self,
@@ -394,6 +427,95 @@ mod tests {
         time::Duration,
     };
     use tokio::sync::oneshot;
+
+    #[test]
+    fn native_sync_capture_preparation_yields_to_stop_between_payload_chunks() {
+        use crate::workspace_commit::CommitGuard;
+        struct Observed {
+            lease: Lease,
+            calls: std::cell::Cell<usize>,
+            entered: std::sync::mpsc::Sender<()>,
+            release: Arc<std::sync::Barrier>,
+        }
+        impl CommitGuard for Observed {
+            fn check(&self) -> crate::workspace::Result<()> {
+                self.calls.set(self.calls.get() + 1);
+                if self.calls.get() == 6 {
+                    self.entered.send(()).unwrap();
+                    self.release.wait();
+                }
+                CommitGuard::check(&self.lease)
+            }
+            fn commit(
+                &self,
+                transaction: rusqlite::Transaction<'_>,
+            ) -> crate::workspace::Result<()> {
+                CommitGuard::commit(&self.lease, transaction)
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut ws = crate::workspace::Workspace::open(root.path()).unwrap();
+        let binding = ws
+            .sync_bind_download("https://sync.example/", "remote", "account")
+            .unwrap();
+        let operation = uuid::Uuid::new_v4().to_string();
+        let bytes = vec![7; 256 * 1024];
+        ws.write_operation("original.md", "", &bytes, "local", &operation)
+            .unwrap();
+        let changes = ws.db.total_changes();
+        let foreground = Foreground::default();
+        foreground.on_start();
+        let (entered, ready) = std::sync::mpsc::channel();
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let observed = Observed {
+            lease: foreground.lease().unwrap(),
+            calls: std::cell::Cell::new(0),
+            entered,
+            release: release.clone(),
+        };
+        let worker = std::thread::spawn(move || {
+            let error = ws
+                .sync_prepare_capture(&binding.id, &|| observed.check())
+                .err()
+                .unwrap();
+            (ws, error)
+        });
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        let native = foreground.clone();
+        let (stopped, notice) = std::sync::mpsc::channel();
+        let activity = std::thread::spawn(move || {
+            native.on_stop();
+            stopped.send(()).unwrap();
+        });
+        let returned = notice.recv_timeout(Duration::from_secs(2)).is_ok();
+        release.wait();
+        activity.join().unwrap();
+        let (ws, error) = worker.join().unwrap();
+        assert!(
+            returned,
+            "Payload preparation retained a lifecycle guard and blocked onStop"
+        );
+        assert_eq!(error.code, "SYNC_FOREGROUND_CHANGED");
+        assert_eq!(ws.db.total_changes(), changes);
+        let state: String = ws
+            .db
+            .query_row(
+                "SELECT state FROM outbox WHERE operation_id=?1",
+                [&operation],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "pending");
+        assert_eq!(
+            std::fs::read(root.path().join("original.md")).unwrap(),
+            bytes
+        );
+        let jobs: i64 = ws
+            .db
+            .query_row("SELECT COUNT(*) FROM sync_jobs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(jobs, 0);
+    }
 
     #[test]
     fn busy_editor_workspace_does_not_block_native_stop_and_stale_access_is_refused() {

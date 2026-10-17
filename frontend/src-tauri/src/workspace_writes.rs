@@ -163,6 +163,24 @@ impl<'a> PreparedWrite<'a> {
         self,
         authorize: impl FnOnce() -> Result<()>,
     ) -> Result<AcceptedWrite<'a>> {
+        self.accept_via(|transaction| {
+            authorize()?;
+            transaction.commit()?;
+            Ok(())
+        })
+    }
+
+    pub(crate) fn accept_guarded(
+        self,
+        guard: &impl crate::workspace_commit::CommitGuard,
+    ) -> Result<AcceptedWrite<'a>> {
+        self.accept_via(|transaction| guard.commit(transaction))
+    }
+
+    fn accept_via(
+        self,
+        commit: impl FnOnce(rusqlite::Transaction<'_>) -> Result<()>,
+    ) -> Result<AcceptedWrite<'a>> {
         let Self {
             workspace,
             operation,
@@ -205,8 +223,7 @@ impl<'a> PreparedWrite<'a> {
                     origin
                 ],
             )?;
-            authorize()?;
-            tx.commit()?;
+            commit(tx)?;
             Some(new.file_id)
         } else {
             None

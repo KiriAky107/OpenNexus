@@ -4,6 +4,8 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
 use uuid::Uuid;
+#[path = "sync_capture.rs"]
+mod capture;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Binding {
@@ -154,50 +156,7 @@ impl Workspace {
         Ok(root.join(digest))
     }
     pub fn sync_capture(&mut self, binding: &str) -> Result<()> {
-        self.check_binding(binding)?;
-        self.normalize_record_links()?;
-        loop {
-            let pending = self.db.query_row("SELECT operation_id,file_id,path,hash,operation,content FROM outbox WHERE state='pending' ORDER BY rowid LIMIT 1", [], |r| {
-                Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Vec<u8>>(5)?))
-            }).optional()?;
-            let Some((operation_id, file_id, path, digest, operation, content)) = pending else {
-                break;
-            };
-            if !self.sync_path_enabled(&path)? {
-                self.db.execute(
-                    "UPDATE outbox SET state='excluded' WHERE operation_id=?1",
-                    [&operation_id],
-                )?;
-                continue;
-            }
-            let size = if operation == "put" {
-                if self.payload_ref(&operation_id)?.is_none() {
-                    self.store_payload(&operation_id, &content)?;
-                }
-                let (stored, size) = self
-                    .payload_ref(&operation_id)?
-                    .ok_or_else(|| HostError::new("SYNC_SPOOL_CORRUPT"))?;
-                if stored != digest {
-                    return Err(HostError::new("SYNC_SPOOL_CORRUPT"));
-                }
-                crate::payloads::verify(&self.sync_spool(&digest)?, &digest, size as u64)?;
-                if crate::records::is_record(&path) {
-                    crate::records::validate(&path, &self.payload(&operation_id, &content)?)?;
-                }
-                size
-            } else {
-                0
-            };
-            let tx = self.db.transaction()?;
-            tx.execute("INSERT OR IGNORE INTO sync_jobs VALUES (?1,?2,?3,?4,?5,?6,?7,'pending',NULL,NULL,NULL,NULL)",
-                params![binding,operation_id,file_id,path,digest,size,operation])?;
-            tx.execute(
-                "UPDATE outbox SET state='queued',content=X'' WHERE operation_id=?1",
-                [&operation_id],
-            )?;
-            tx.commit()?;
-        }
-        Ok(())
+        self.sync_capture_checked(binding, &crate::workspace_commit::UnscopedCommit)
     }
     pub fn sync_next(&self, binding: &str) -> Result<Option<Job>> {
         self.check_binding(binding)?;

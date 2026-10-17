@@ -2183,6 +2183,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_sync_capture_preserves_original_queue_and_refuses_background_or_wrong_binding()
+    {
+        use crate::sync_client::WorkspaceAccess;
+        let root = tempfile::tempdir().unwrap();
+        let remote = Remote::default();
+        remote
+            .replies
+            .lock()
+            .unwrap()
+            .push_back(Ok(reply("device-a", "first")));
+        let (foreground, lease) = lease();
+        let scope = scope();
+        let operation = id();
+        let mut auth = Auth::open(root.path(), MemoryStore::default()).unwrap();
+        auth.login(&lease, login(&operation, &scope), &remote, 100)
+            .await
+            .unwrap();
+        let engine = Arc::new(Mutex::new(Some(
+            crate::mobile_workspace::MobileWorkspace::open(root.path()).unwrap(),
+        )));
+        let binding = engine
+            .access(|ws| ws.sync_bind_download(scope.endpoint(), "owned-vault", scope.account()))
+            .unwrap();
+        let owned = engine.clone();
+        let port = auth
+            .authorized_device(
+                &lease,
+                &scope,
+                &operation,
+                101,
+                move |_, device| async move { Ok(device.workspace(owned)) },
+            )
+            .await
+            .unwrap();
+        let save = id();
+        engine
+            .access(|ws| {
+                ws.write_operation("original.md", "", b"owned original\r\n", "local", &save)
+            })
+            .unwrap();
+        let before = engine.access(|ws| Ok(ws.db.total_changes())).unwrap();
+        assert_eq!(
+            port.capture("different-original-binding")
+                .await
+                .unwrap_err()
+                .code,
+            "SYNC_AUTH_IDENTITY_CHANGED"
+        );
+        assert_eq!(
+            engine.access(|ws| Ok(ws.db.total_changes())).unwrap(),
+            before
+        );
+        port.capture(&binding.id).await.unwrap();
+        let job = engine
+            .access(|ws| ws.sync_next(&binding.id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(job.operation_id, save);
+        assert!(job.base_revision.is_none());
+        assert!(engine
+            .access(|ws| ws.sync_attempts(&binding.id))
+            .unwrap()
+            .is_empty());
+        let later = id();
+        engine
+            .access(|ws| ws.write_operation("later.md", "", b"retained pending", "local", &later))
+            .unwrap();
+        let before = engine.access(|ws| Ok(ws.db.total_changes())).unwrap();
+        foreground.on_stop();
+        assert_eq!(
+            port.capture(&binding.id).await.unwrap_err().code,
+            "SYNC_FOREGROUND_CHANGED"
+        );
+        assert_eq!(
+            engine.access(|ws| Ok(ws.db.total_changes())).unwrap(),
+            before
+        );
+        engine
+            .access(|ws| {
+                let state: String = ws.db.query_row(
+                    "SELECT state FROM outbox WHERE operation_id=?1",
+                    [&later],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(state, "pending");
+                assert_eq!(ws.sync_binding()?.unwrap().cursor, 0);
+                assert_eq!(ws.read("original.md")?.content, "owned original\r\n");
+                assert_eq!(ws.read("later.md")?.content, "retained pending");
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn explicit_auth_rejection_survives_reopen_and_original_operation_query_without_reposting(
     ) {
         let root = tempfile::tempdir().unwrap();

@@ -258,7 +258,7 @@ fn validate_record_checked(
     }
     Ok(())
 }
-fn read_record_checked(
+pub(crate) fn read_record_checked(
     file: &mut fs::File,
     limit: usize,
     check: &dyn Fn() -> Result<()>,

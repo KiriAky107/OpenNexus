@@ -58,6 +58,12 @@ pub trait WorkspaceAccess: Send + Sync {
     ) -> impl std::future::Future<Output = Result<usize>> + Send + 'a {
         async move { self.access(|ws| ws.sync_discover(binding)) }
     }
+    fn capture<'a>(
+        &'a self,
+        binding: &'a str,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        async move { self.access(|ws| ws.sync_capture(binding)) }
+    }
     fn start_attempt(&self, job: &Job) -> Result<()> {
         self.access(|ws| ws.sync_attempt_start(job))
     }
@@ -356,11 +362,9 @@ impl SyncClient {
         {
             return Ok(false);
         }
-        let job = workspace.access(|ws| {
-            ws.sync_resume_resolutions(&binding.id)?;
-            ws.sync_capture(&binding.id)?;
-            ws.sync_next(&binding.id)
-        })?;
+        workspace.access(|ws| ws.sync_resume_resolutions(&binding.id))?;
+        workspace.capture(&binding.id).await?;
+        let job = workspace.access(|ws| ws.sync_next(&binding.id))?;
         let Some(job) = job else {
             return Ok(false);
         };

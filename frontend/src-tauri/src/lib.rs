@@ -81,6 +81,7 @@ pub mod sync_state;
 pub mod sync_tls;
 pub mod workspace;
 pub mod workspace_broker;
+mod workspace_commit;
 
 pub mod sync_retry;
 
