@@ -302,7 +302,8 @@ jobs:
           cargo test --lib --no-default-features --features sync-http --locked workspace::watch::tests:: -- --skip sync_ --nocapture
       - name: Check original write authorization and durable workspace recovery
         if: github.event_name == 'workflow_dispatch' && inputs.check_scope == 'sync-http'
-        run: cargo test --lib --no-default-features --features sync-http --locked workspace::tests:: -- --skip sync_ --nocapture
+        run: |
+          cargo test --lib --no-default-features --features sync-http --locked workspace::tests:: -- --skip sync_ --nocapture
       - name: Check the transport without the desktop feature
         run: cargo clippy --lib --no-default-features --features sync-http --locked -- -D warnings
 
