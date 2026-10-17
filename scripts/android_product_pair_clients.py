@@ -2,7 +2,14 @@
 from dataclasses import dataclass
 import sys
 
-from android_desktop_handoff import require
+
+class FixedClientError(ValueError):
+    pass
+
+
+def require(value, code):
+    if not value:
+        raise FixedClientError(code)
 
 
 @dataclass(frozen=True)
