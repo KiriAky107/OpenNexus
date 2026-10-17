@@ -708,16 +708,20 @@ class RuntimeBoundaries(unittest.TestCase):
                     with __import__('zipfile').ZipFile(values[values.index('-o')+1],'w'):pass
                 elif tool=='apksigner' and values[1]=='sign':
                     values[values.index('--out')+1].write_bytes(b'signed '+str(values[-1]).encode())
+                elif tool=='java':
+                    return subprocess.CompletedProcess([],0,b'TARGET_STABILITY_OK bounded original geometry\n',b'')
                 output=('Signer #1 certificate SHA-256 digest: '+'a'*64+'\n').encode()
                 return subprocess.CompletedProcess([],0,output,b'')
             probe.shell=shell;probe.command=command;probe.device=lambda *args:installed.append(args)
             probe.build_driver()
             self.assertEqual(sum(Path(args[0]).name=='keytool' for args in commands),1)
             compiles=[args for args in commands if Path(args[0]).name=='javac']
-            self.assertEqual(len(compiles),2)
+            self.assertEqual(len(compiles),3)
             self.assertIn('-J-Xmx256m',compiles[0]);self.assertIn('-J-Xmx256m',compiles[1])
             self.assertTrue(all(path.parent.name=='ime' for path in compiles[0] if isinstance(path,Path) and path.suffix=='.java'))
             self.assertTrue(all(path.parent.name=='android-runtime' for path in compiles[1] if isinstance(path,Path) and path.suffix=='.java'))
+            self.assertEqual(compiles[2][-1].parent.name,'android-runtime-tests')
+            self.assertTrue((probe.output/'driver-target-stability.txt').read_bytes().startswith(b'TARGET_STABILITY_OK '))
             self.assertEqual([args[-1].name for args in installed],['ime.apk','driver.apk'])
             proof=json.loads((probe.output/'test-ime-packages.json').read_text())
             self.assertEqual([p['package'] for p in proof['packages']],[TEST_IME,DRIVER])

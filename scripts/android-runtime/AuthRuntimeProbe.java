@@ -188,12 +188,19 @@ public class AuthRuntimeProbe extends Instrumentation {
             target=n->n.isClickable() && role.equals(text(n.getClassName())) && descendantLabel(n,name,0);
         }
         stage="unique-"+name.replace(' ','-');
-        AccessibilityNodeInfo node=unique(target);Rect before=new Rect();node.getBoundsInScreen(before);
         stage="stable-"+name.replace(' ','-');
-        for (int i=0;i<3;i++) {
-            SystemClock.sleep(50);node=unique(target);Rect now=new Rect();node.getBoundsInScreen(now);
-            require(before.equals(now) && !now.isEmpty(),"Button moved before the single tap");
-        }
+        // Selecting a remote vault triggers a read-only association status and
+        // an accessibility scroll. Observe those layout changes before input;
+        // do not abort on the first moved frame or ever re-tap after dispatch.
+        TargetStability stability=new TargetStability();
+        long until=SystemClock.uptimeMillis()+5000;Rect before=new Rect();boolean stable=false;
+        do {
+            AccessibilityNodeInfo node=unique(target);node.getBoundsInScreen(before);
+            stable=stability.observe(before.left,before.top,before.right,before.bottom,SystemClock.uptimeMillis());
+            if (stable) break;
+            SystemClock.sleep(80);
+        } while (SystemClock.uptimeMillis()<until);
+        require(stable,"Named button did not settle before the bounded deadline; no input sent");
         stage="single-tap-"+name.replace(' ','-');
         long start=SystemClock.uptimeMillis();touch(start,start,MotionEvent.ACTION_DOWN,before.centerX(),before.centerY());
         SystemClock.sleep(50);touch(start,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,before.centerX(),before.centerY());

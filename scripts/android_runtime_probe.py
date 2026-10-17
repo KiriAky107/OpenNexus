@@ -390,6 +390,17 @@ class Probe:
             classes.mkdir(); dex.mkdir()
             self.command(['javac', '-J-Xmx256m', '-encoding', 'UTF-8', '-source', '8', '-target', '8',
                 '-classpath', platform, '-d', classes, *sorted(source.glob('*.java'))])
+            if name == 'driver':
+                # This pure JVM admission check is not part of either APK.
+                # It guards the actual one-tap driver used below on the device.
+                checks = build / 'stability-checks'
+                checks.mkdir()
+                self.command(['javac', '-J-Xmx256m', '-encoding', 'UTF-8', '-classpath', classes,
+                    '-d', checks, root.parent / 'android-runtime-tests/TargetStabilityCheck.java'])
+                observed = self.command(['java', '-Xmx64m', '-cp', str(classes) + os.pathsep + str(checks),
+                    'cc.kronecker.opennexus.testdriver.TargetStabilityCheck']).stdout
+                (self.output / 'driver-target-stability.txt').write_bytes(observed)
+                require(observed.startswith(b'TARGET_STABILITY_OK '), 'Actual driver target-stability check failed')
             self.command([sdk_tools / 'd8', '--lib', platform, '--min-api', '24', '--output', dex,
                 *sorted(classes.rglob('*.class'))])
             unsigned, aligned, signed = [build / part for part in ('unsigned.apk', 'aligned.apk', name + '.apk')]
