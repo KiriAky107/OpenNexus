@@ -555,9 +555,13 @@ class Probe:
                     require(before == stable, 'Original import changed during observation; no Save sent')
                     validate_image_save_observation(stable, rendered, phase)
                 require(process.poll() is None, 'Original image driver ended before input approval')
-                self.device('shell', '-T', 'run-as '+DRIVER+' sh -c '+
-                    "'umask 077; test ! -e no_backup/owned-"+phase+'-'+stage+".proceed && cat > no_backup/owned-"+phase+'-'+stage+".proceed'",
-                    input=b'proceed\n')
+                signal = 'no_backup/owned-'+phase+'-'+stage+'.proceed'
+                pending = signal+'.pending'
+                # The driver must never observe the final name while stdin is
+                # still being written. Link the complete owned marker exactly
+                # once; an existing approval remains untouched and is refused.
+                publication = f'umask 077; test ! -e {signal} && test ! -e {pending} && cat > {pending} && test "$(wc -c < {pending})" -eq 8 && ln {pending} {signal} && rm {pending}'
+                self.device('shell', '-T', 'run-as '+DRIVER+' sh -c '+shlex.quote(publication),input=b'proceed\n')
             output, error = process.communicate(timeout=40)
             finished = True
             return subprocess.CompletedProcess(command, process.returncode, output, error)

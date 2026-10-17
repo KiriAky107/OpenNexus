@@ -527,7 +527,11 @@ public final class RuntimeProbe extends Instrumentation {
         waitingFor="read-only original image readiness: "+phase+" "+stage;
         long until=SystemClock.uptimeMillis()+45000;
         while (!proceed.isFile() && SystemClock.uptimeMillis()<until) SystemClock.sleep(100);
-        require(proceed.isFile() && java.util.Arrays.equals(java.nio.file.Files.readAllBytes(proceed.toPath()),
+        byte[] originalSignal=proceed.isFile() && proceed.length()==8 ? java.nio.file.Files.readAllBytes(proceed.toPath()) : new byte[0];
+        progress.append("original image marker: ").append(stage).append(" length=")
+            .append(proceed.isFile()?proceed.length():-1).append(" bytes=")
+            .append(java.util.Arrays.toString(originalSignal)).append('\n');
+        require(proceed.isFile() && java.util.Arrays.equals(originalSignal,
             "proceed\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)),"Original image/save observation missing; no Save sent");
         progress.append("original image readiness observed: ").append(stage).append('\n');
     }

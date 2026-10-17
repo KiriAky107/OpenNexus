@@ -97,6 +97,12 @@ class RuntimeBoundaries(unittest.TestCase):
                         self.assertEqual(result.returncode,0);self.assertEqual(probe.device.call_count,2)
                         self.assertEqual(probe.device.call_args.kwargs['input'],b'proceed\n')
                         self.assertIn('test ! -e no_backup/owned-rich-image-save.proceed',probe.device.call_args.args[2])
+                        for call in probe.device.call_args_list:
+                            command=call.args[2]
+                            self.assertIn('.proceed.pending && test "$(wc -c < ',command)
+                            self.assertIn(' -eq 8 && ln ',command)
+                            self.assertIn('.proceed.pending no_backup/owned-',command)
+                            self.assertNotIn('.proceed && cat > no_backup/owned-rich-image-save.proceed\'',command)
                         process.terminate.assert_not_called();probe.capture_failed_editor_state.assert_not_called()
         probe=Probe.__new__(Probe);probe.args=SimpleNamespace(serial='foreign-phone')
         with patch('android_runtime_probe.require_hosted_emulator',side_effect=RuntimeError('Not owned')),patch('android_runtime_probe.subprocess.Popen') as launch:
