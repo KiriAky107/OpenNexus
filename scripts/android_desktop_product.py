@@ -105,7 +105,11 @@ def verify_storage(value, data):
                     for key in ('active_path', 'configured_path')), 'DESKTOP_PAIR_STORAGE_MISMATCH')
 
 
-def safe_failure(error):
+STARTUP_CHECKPOINTS = frozenset({'native-launch', 'webview-attach', 'frontend-bootstrap', 'core-ready',
+    'storage-scope', 'core-version', 'workspace-readiness', 'owned-vault-open', 'startup-receipt', 'client-action'})
+
+
+def safe_failure(error, checkpoint=None):
     # Playwright exception text can include the last fill argument. Never
     # publish that text, its repr or a chained exception after sign-in begins.
     name = type(error).__name__
@@ -116,6 +120,8 @@ def safe_failure(error):
             'DESKTOP_PAIR_STORAGE_MISMATCH', 'DESKTOP_PAIR_CORE_VERSION_MISMATCH',
             'DESKTOP_PAIR_CORE_NOT_READY', 'DESKTOP_PAIR_INITIAL_STATE_INVALID'}:
         result['checkpoint_code'] = str(error)
+    if checkpoint is not None:
+        result['failed_checkpoint'] = checkpoint if checkpoint in STARTUP_CHECKPOINTS else 'unknown'
     return result
 
 
@@ -172,6 +178,7 @@ def start_product(context, stage):
         stream.flush(); os.fsync(stream.fileno())
     profile = FreshProfile(Path(os.environ['APPDATA']), IDENTIFIER, Path(windows_drive_path(data, extended=True)))
     process = None
+    checkpoint = 'native-launch'
     try:
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0)); port = sock.getsockname()[1]
@@ -183,10 +190,12 @@ def start_product(context, stage):
         with (attempt / 'native-host.log').open('xb') as log:
             process = subprocess.Popen([str(payload / 'OpenNexus.exe')], cwd=payload, env=env,
                                        stdout=log, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
+            checkpoint = 'webview-attach'
             wait_debug('http://127.0.0.1:' + str(port) + '/json/version', process)
             with sync_playwright() as playwright:
                 browser = playwright.chromium.connect_over_cdp('http://127.0.0.1:' + str(port))
                 page = browser.contexts[0].pages[0]; page.set_default_timeout(60000)
+                checkpoint = 'frontend-bootstrap'
                 page.wait_for_function('()=>Boolean(window.__TAURI_INTERNALS__ && document.querySelector("#app")?.__vue_app__)')
                 page.evaluate('''() => {
                     window.pairInvoke=(name,args={})=>window.__TAURI_INTERNALS__.invoke(name,args);
@@ -194,11 +203,14 @@ def start_product(context, stage):
                     window.pairPinia=app.config.globalProperties.$pinia;
                     window.pairRouter=app.config.globalProperties.$router;
                 }''')
+                checkpoint = 'core-ready'
                 until = time.monotonic() + 180
                 while not page.evaluate("async()=>Boolean((await pairInvoke('host_capabilities')).core)"):
                     require(time.monotonic() < until, 'DESKTOP_PAIR_CORE_NOT_READY'); time.sleep(.2)
+                checkpoint = 'storage-scope'
                 storage = page.evaluate("()=>pairInvoke('storage_info')")
                 verify_storage(storage, data)
+                checkpoint = 'core-version'
                 core_version = page.evaluate('''async () => {
                     const requestId=await pairInvoke('core_request_prepare',{timeoutMs:60000});
                     try {
@@ -208,17 +220,22 @@ def start_product(context, stage):
                     } finally { await pairInvoke('core_request_cancel',{requestId}).catch(()=>{}); }
                 }''')
                 require(core_version == VERSION, 'DESKTOP_PAIR_CORE_VERSION_MISMATCH')
+                checkpoint = 'workspace-readiness'
+                page.wait_for_function("()=>Boolean(window.pairPinia?._s.get('workspace')?.openVault && window.pairRouter)")
                 profile.remove_pointer()
+                checkpoint = 'owned-vault-open'
                 page.evaluate("async path=>{await pairPinia._s.get('workspace').openVault(path);await pairRouter.push('/workspace')}", str(vault))
+                checkpoint = 'startup-receipt'
                 with (attempt / 'startup.json').open('xb') as stream:
                     stream.write(canonical({'source_commit': DESKTOP_SOURCE, 'installer_sha256': INSTALLER_SHA256,
                                             'actual_core_version': core_version, 'private_storage_verified': True,
                                             'native_process_id': process.pid, 'identifier': IDENTIFIER, 'stage': stage}))
                     stream.flush(); os.fsync(stream.fileno())
+                checkpoint = 'client-action'
                 yield page, vault, attempt
     except Exception as error:
         with (attempt / 'failure.json').open('xb') as stream:
-            stream.write(canonical(safe_failure(error))); stream.flush(); os.fsync(stream.fileno())
+            stream.write(canonical(safe_failure(error, checkpoint))); stream.flush(); os.fsync(stream.fileno())
         raise RuntimeError('DESKTOP_PAIR_UI_FAILED') from None
     finally:
         stop(process)

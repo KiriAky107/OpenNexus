@@ -117,6 +117,14 @@ class ProductIsolation(unittest.TestCase):
             self.assertNotIn(secret, json.dumps(value))
             self.assertNotIn('checkpoint_code', value)
 
+    def test_startup_checkpoint_diagnostics_preserve_only_known_literal_stages(self):
+        secret = 'OWNED_PASSWORD_MUST_NOT_APPEAR'
+        for checkpoint in ['core-version', 'workspace-readiness', 'owned-vault-open', secret]:
+            value = safe_failure(RuntimeError(secret), checkpoint)
+            self.assertEqual(value['failed_checkpoint'], checkpoint if checkpoint != secret else 'unknown')
+            self.assertNotIn(secret, json.dumps(value))
+            self.assertFalse(value['original_exception_text_returned'])
+
 
 if __name__ == '__main__':
     unittest.main()
