@@ -229,7 +229,7 @@ class RuntimeBoundaries(unittest.TestCase):
             probe.device.assert_not_called();probe.image_save_rows.assert_not_called();process.terminate.assert_called_once()
 
     def test_attachment_scope_does_not_repeat_the_fixed_apks_keystore_cases(self):
-        for scope in ('attachments','attachments-remaining'):
+        for scope in ('attachments','attachments-remaining','canvas-remaining'):
             probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope=scope)
             probe.binding={'native_tests':{'expected_tests':5}};probe.device=Mock();probe.shell=Mock()
             probe.native_keystore_tests()
@@ -248,6 +248,34 @@ class RuntimeBoundaries(unittest.TestCase):
             self.assertEqual(probe.verify_original_images(include_markdown=False),originals)
             probe.database_rows=lambda _:rows+rows[:1]
             with self.assertRaises(RuntimeError):probe.verify_original_images(include_markdown=False)
+
+    def test_remaining_canvas_scope_reads_only_its_original_canvas_and_png_with_one_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory)
+            asset=f'attachments/{digest(IMAGE_BYTES)[:2]}/{digest(IMAGE_BYTES)}.png'
+            originals={asset:IMAGE_BYTES,'runtime-image.canvas':json.dumps({'nodes':[{'type':'file','file':asset}]}).encode()}
+            rows=[('original-canvas-import','runtime-image.canvas',asset,digest(IMAGE_BYTES),len(IMAGE_BYTES),'committed')]
+            probe.original=Mock(side_effect=originals.__getitem__);probe.database_rows=Mock(return_value=rows)
+            self.assertEqual(probe.verify_original_images(include_markdown=False,include_rich=False),originals)
+            self.assertEqual({call.args[0] for call in probe.original.call_args_list},set(originals))
+            probe.database_rows.return_value=rows+[('unrelated-rich','runtime-rich-image.md',asset,digest(IMAGE_BYTES),len(IMAGE_BYTES),'committed')]
+            with self.assertRaises(RuntimeError):probe.verify_original_images(include_markdown=False,include_rich=False)
+
+    def test_remaining_canvas_runs_only_new_canvas_original_and_export_without_replaying_passed_rich(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory)
+            probe.args=SimpleNamespace(scope='canvas-remaining',commit='fixed-product',tools_commit='fixed-tools',build_origin={})
+            probe.binding={'sha256':'a'*64,'signer_certificate_sha256':'b'*64}
+            probe.phases=[];probe.enable_test_ime=Mock();probe.stage_original_image=Mock();probe.phase=Mock()
+            originals={'runtime-image.canvas':b'original canvas','attachments/original.png':IMAGE_BYTES}
+            probe.verify_original_images=Mock(return_value=originals);probe.verify_export=Mock(return_value={'state':'saved'})
+            probe.run_attachments()
+            self.assertEqual([call.args[0] for call in probe.phase.call_args_list],['canvas-image','canvas-image-reopen','export'])
+            probe.verify_original_images.assert_called_once_with(include_markdown=False,include_rich=False)
+            proof=json.loads((probe.output/'attachments-proof.json').read_text())
+            self.assertEqual(proof['native_committed_image_receipts'],1)
+            self.assertTrue(proof['previous_markdown_component_not_retested'])
+            self.assertTrue(proof['previous_rich_component_not_retested'])
 
     def test_auth_read_acceptance_requires_the_original_empty_index_and_cannot_claim_https(self):
         for rows in (0,1):

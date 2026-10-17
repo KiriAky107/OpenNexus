@@ -40,7 +40,7 @@ const expression = `JSON.stringify((()=>{
       visible:getComputedStyle(e).display!=='none'&&getComputedStyle(e).visibility!=='hidden'
         &&e.getBoundingClientRect().width>0&&e.getBoundingClientRect().height>0
     })),
-    canvasImages:Array.from(document.querySelectorAll('.canvas-visual img')).slice(0,4).map(e=>({
+    canvasImages:Array.from(document.querySelectorAll('.canvas-editor .canvas-viewport .canvas-node img,.canvas-visual .canvas-viewport .canvas-node img')).slice(0,4).map(e=>({
       complete:e.complete,width:e.naturalWidth,height:e.naturalHeight,
       visible:getComputedStyle(e).display!=='none'&&getComputedStyle(e).visibility!=='hidden'
         &&e.getBoundingClientRect().width>0&&e.getBoundingClientRect().height>0

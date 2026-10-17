@@ -346,7 +346,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining'):
+        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -475,7 +475,7 @@ class Probe:
             require(re.fullmatch(rb'[1-9][0-9]{0,9}', self.shell('pidof', APP).stdout.strip()),
                 'Tablet rotation requires the same single owned app process')
         self.native_tls_startup(phase)
-        if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') == 'attachments-remaining':
+        if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining'):
             result = self.image_save_instrumentation(phase)
         else:
             result = self.shell('am', 'instrument', '-w', '-e', 'phase', phase, f'{DRIVER}/.RuntimeProbe', timeout=180)
@@ -499,7 +499,7 @@ class Probe:
             self.force_stop()
         if self.root is None and not phase.startswith('theme-'):
             self.discover_private_root()
-        if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') == 'attachments-remaining':
+        if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining'):
             after = self.image_save_rows(phase, 'after-save')
             before = json.loads((self.output/(phase+'-stable-before-save-receipts.json')).read_text('utf-8'))
             validate_image_save_result(before, after)
@@ -788,7 +788,7 @@ class Probe:
         (self.output / 'picker-original.json').write_text(json.dumps({'origin': 'synthetic owned RGBA fixture in this exclusive hosted emulator',
             'path': destination, 'sha256': digest(IMAGE_BYTES), 'size': len(IMAGE_BYTES), 'permissions_added': []}, indent=2) + '\n', 'utf-8')
 
-    def verify_original_images(self, include_markdown=True):
+    def verify_original_images(self, include_markdown=True, include_rich=True):
         asset = f'attachments/{digest(IMAGE_BYTES)[:2]}/{digest(IMAGE_BYTES)}.png'
         require(self.original(asset) == IMAGE_BYTES, 'System-selected image was re-encoded or replaced')
         reference = ('![](' + asset + ')').encode()
@@ -797,20 +797,22 @@ class Probe:
             markdown = self.original('runtime-image.md')
             require(markdown.count(reference) == 1 and markdown.replace(reference, b'') == IMAGE_BODY.encode(), 'Image insertion changed the original Markdown or duplicated its reference')
             originals['runtime-image.md']=markdown
-        rich = self.original('runtime-rich-image.md')
-        require(rich.count(reference) == 1 and rich.replace(reference,b'') == (RICH_IMAGE_TEXT + '\n').encode(), 'Rich image changed original text or duplicated its reference')
+        if include_rich:
+            rich = self.original('runtime-rich-image.md')
+            require(rich.count(reference) == 1 and rich.replace(reference,b'') == (RICH_IMAGE_TEXT + '\n').encode(), 'Rich image changed original text or duplicated its reference')
+            originals['runtime-rich-image.md']=rich
         canvas = self.original('runtime-image.canvas')
         nodes = json.loads(canvas)['nodes']
         require(len(nodes) == 1 and nodes[0]['type'] == 'file' and nodes[0]['file'] == asset, 'Canvas image node differs from the chosen original')
         rows = self.database_rows('SELECT operation_id,path,asset_path,hash,size,state FROM image_intents ORDER BY path')
-        expected={'runtime-rich-image.md','runtime-image.canvas'} | ({'runtime-image.md'} if include_markdown else set())
+        expected={'runtime-image.canvas'} | ({'runtime-rich-image.md'} if include_rich else set()) | ({'runtime-image.md'} if include_markdown else set())
         require(len(rows) == len(expected) and len({row[0] for row in rows}) == len(expected)
             and {row[1] for row in rows} == expected
             and all(row[2:] == (asset, digest(IMAGE_BYTES), len(IMAGE_BYTES), 'committed') for row in rows),
             'Exactly one committed original image receipt per target is required')
         receipts = [dict(zip(('operation_id', 'path', 'asset_path', 'sha256', 'size', 'state'), row)) for row in rows]
         (self.output / 'image-import-receipts.json').write_text(json.dumps(receipts, indent=2) + '\n', 'utf-8')
-        return {**originals, 'runtime-rich-image.md': rich, 'runtime-image.canvas': canvas, asset: IMAGE_BYTES}
+        return {**originals, 'runtime-image.canvas': canvas, asset: IMAGE_BYTES}
 
     def verify_export(self, originals):
         paths = self.shell('run-as', APP, 'find', self.root + 'exports', '-name', '*.delivery.json', '-type', 'f').stdout.decode().splitlines()
@@ -892,11 +894,12 @@ class Probe:
     def run_attachments(self):
         self.enable_test_ime()
         self.stage_original_image()
-        remaining=self.args.scope=='attachments-remaining'
-        phases=(() if remaining else ('markdown-image','markdown-image-reopen'))+('rich-image','rich-image-reopen','canvas-image','canvas-image-reopen')
+        remaining=self.args.scope in ('attachments-remaining','canvas-remaining')
+        canvas_only=self.args.scope=='canvas-remaining'
+        phases=(() if remaining else ('markdown-image','markdown-image-reopen'))+(() if canvas_only else ('rich-image','rich-image-reopen'))+('canvas-image','canvas-image-reopen')
         for phase in phases:
             self.phase(phase)
-        originals=self.verify_original_images(include_markdown=not remaining)
+        originals=self.verify_original_images(include_markdown=not remaining,include_rich=not canvas_only)
         self.phase('export')
         exported=self.verify_export(originals)
         for name,value in originals.items():
@@ -905,8 +908,8 @@ class Probe:
             'compiled_from':self.args.build_origin,'apk_sha256':self.binding['sha256'],
             'signer_certificate_sha256':self.binding['signer_certificate_sha256'],
             'phases':self.phases,'actual_original_image_import_and_cold_reopen':True,
-            'native_committed_image_receipts':2 if remaining else 3,'actual_system_saved_content':exported,
-            'previous_markdown_component_not_retested':remaining,
+            'native_committed_image_receipts':1 if canvas_only else 2 if remaining else 3,'actual_system_saved_content':exported,
+            'previous_markdown_component_not_retested':remaining,'previous_rich_component_not_retested':canvas_only,
             'originals':{name:{'size':len(value),'sha256':digest(value)} for name,value in originals.items()},
             'full_editor_lifecycle_or_back_draft_export_exclusion_retested':False,
             'keystore_tests_repeated':False,'physical_phone_verified':False,'Android_HTTPS_or_sync_verified':False}
@@ -914,7 +917,7 @@ class Probe:
 
     def run(self):
         self.boot()
-        if self.args.scope in ('attachments','attachments-remaining'):
+        if self.args.scope in ('attachments','attachments-remaining','canvas-remaining'):
             self.run_attachments()
             return
         if self.args.scope == 'tablet':
@@ -1016,7 +1019,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:
