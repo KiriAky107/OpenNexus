@@ -154,6 +154,26 @@ fn mobile_sync_association(
     Err("SYNC_PLATFORM_UNSUPPORTED".into())
 }
 
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn mobile_sync_cycle(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, MobileState>,
+    request: notesagent_host::mobile_sync_activity::Command,
+) -> Result<notesagent_host::mobile_sync_activity::Reply, String> {
+    mobile_sync_commands::cycle(window, state, request).await
+}
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn mobile_sync_cycle(
+    window: tauri::WebviewWindow,
+    request: serde::de::IgnoredAny,
+) -> Result<(), String> {
+    main_window(&window)?;
+    let _ = request;
+    Err("SYNC_PLATFORM_UNSUPPORTED".into())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -173,6 +193,7 @@ pub fn run() {
             mobile_request,
             mobile_sync_auth,
             mobile_sync_association,
+            mobile_sync_cycle,
             mobile_files::mobile_save_export,
             mobile_files::mobile_export_delivery,
             mobile_files::mobile_open_external,

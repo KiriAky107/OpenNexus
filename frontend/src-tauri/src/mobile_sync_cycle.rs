@@ -69,6 +69,16 @@ impl Request {
                 return Err(SyncError::new("SYNC_TARGET_INVALID"));
             }
         }
+        let selection = &target.expected;
+        let scope = Scope::new(&selection.endpoint, &selection.account)?;
+        if scope.endpoint() != selection.endpoint
+            || selection.revision <= 0
+            || selection.generation <= 0
+            || !uuid::Uuid::parse_str(&selection.operation_id)
+                .is_ok_and(|value| value.to_string() == selection.operation_id)
+        {
+            return Err(SyncError::new("SYNC_AUTH_SELECTION_INVALID"));
+        }
         match self {
             Self::Status { after, limit, .. } if *after < 0 || !(1..=20).contains(limit) => {
                 Err(SyncError::new("SYNC_PAGE_INVALID"))
@@ -148,6 +158,32 @@ pub enum Response {
     Status { status: Status },
     Review { review: Box<ConflictReview> },
     Decision { decision: Option<Decision> },
+}
+
+/// A bounded machine code only. Provider response bodies, local paths and
+/// credentials never become command errors or activity error metadata.
+pub fn public_error(error: SyncError) -> String {
+    match error.code.as_str() {
+        "SYNC_TARGET_INVALID"
+        | "SYNC_PAGE_INVALID"
+        | "SYNC_NOT_BOUND"
+        | "SYNC_PAUSED"
+        | "SYNC_CANCELLED"
+        | "SYNC_BINDING_CHANGED"
+        | "SYNC_RESOLUTION_INVALID"
+        | "SYNC_RESOLUTION_CHANGED"
+        | "SYNC_REVIEW_UNSAFE_FILE"
+        | "SYNC_REVIEW_CHANGED"
+        | "SYNC_REVIEW_REQUIRED"
+        | "SYNC_ACTIVITY_ID_INVALID"
+        | "SYNC_ACTIVITY_OWNER_CHANGED"
+        | "SYNC_ACTIVITY_RECONCILIATION_REQUIRED"
+        | "SYNC_ACTIVITY_BUSY"
+        | "SYNC_ACTIVITY_LIMIT"
+        | "SYNC_ACTIVITY_UNAVAILABLE"
+        | "SYNC_ACTIVITY_REQUEST_INVALID" => error.code,
+        _ => crate::mobile_sync_association::public_error(error),
+    }
 }
 
 fn bound(ws: &Workspace, target: &Target) -> crate::workspace::Result<Binding> {
