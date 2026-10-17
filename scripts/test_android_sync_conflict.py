@@ -39,6 +39,20 @@ class ConflictOriginals(unittest.TestCase):
         changed=deepcopy(native);changed['jobs'][1]['hash']=hashlib.sha256(DIRTY).hexdigest()
         with self.assertRaises(RuntimeError):validate_retained_conflict(first,changed,provider,receipt)
 
+    def test_local_capture_after_inbox_can_remain_pending_but_requires_the_exact_open_conflict(self):
+        first,native,provider,receipt=self.conflict()
+        native['jobs'][1].update(state='pending',remote_revision=None)
+        self.assertEqual(validate_retained_conflict(first,native,provider,receipt),native['jobs'][1])
+        for change in ({'conflicts':[]},{'inbox':[]},{'heads':first['heads']}):
+            with self.subTest(change=change),self.assertRaises(RuntimeError):
+                validate_retained_conflict(first,dict(native,**change),provider,receipt)
+        for state in ('uploading','committing','acked','archived'):
+            changed=deepcopy(native);changed['jobs'][1]['state']=state
+            with self.subTest(state=state),self.assertRaises(RuntimeError):
+                validate_retained_conflict(first,changed,provider,receipt)
+        changed=deepcopy(native);changed['jobs'][1]['remote_revision']=2
+        with self.assertRaises(RuntimeError):validate_retained_conflict(first,changed,provider,receipt)
+
     def resolved(self):
         first,native,provider,receipt=self.conflict()
         frozen={'sequence':2,'choice':'copy','destination':COPY,'fingerprint':'4'*64}

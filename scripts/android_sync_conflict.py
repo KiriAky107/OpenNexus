@@ -29,7 +29,10 @@ def validate_retained_conflict(first,native,provider,receipt):
     local=native['jobs'][1];conflicts=native['conflicts']
     require(local['file_id']==original['file_id'] and local['path']=='runtime-note.md'
         and local['hash']==hashlib.sha256(LOCAL).hexdigest() and local['size']==len(LOCAL)
-        and local['state']=='conflict' and local['operation_id']!=original['operation_id']
+        # Incoming conflict may be recorded before this saved outbox item is
+        # captured. sync_next also excludes jobs matched by an open conflict.
+        and local['state'] in ('pending','conflict') and local.get('remote_revision') is None
+        and local['operation_id']!=original['operation_id']
         and len(conflicts)==1 and conflicts[0]=={'sequence':2,'file_id':original['file_id'],
             'local_path':'runtime-note.md','local_hash':local['hash'],'state':'open'},
         'Actual local saved version or unresolved conflict was not retained')
