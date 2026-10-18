@@ -115,6 +115,22 @@ public final class RuntimeProbe extends Instrumentation {
                 case "properties-seed": case "properties-open": case "properties-text": case "properties-group":
                 case "properties-link": case "properties-file": case "properties-edge": case "properties-cold":
                     remainingCanvasProperties(phase); break;
+                case "reference-md-target-seed":
+                case "reference-canvas-target-seed":
+                case "reference-md-source-seed":
+                case "reference-canvas-source-seed":
+                case "reference-baseline":
+                case "reference-md-draft":
+                case "reference-md-cancel":
+                case "reference-md-note":
+                case "reference-md-return":
+                case "reference-md-canvas":
+                case "reference-canvas-note":
+                case "reference-canvas-canvas":
+                case "reference-missing":
+                case "reference-unsupported":
+                case "reference-cold":
+                    originalLocalReference(phase); break;
                 case "candidate-language-en": case "candidate-language-zh":
                 case "candidate-language-return": case "candidate-language-cold":
                     candidateLanguageRead(phase); break;
@@ -605,6 +621,110 @@ public final class RuntimeProbe extends Instrumentation {
             SystemClock.sleep(150);
         }while(SystemClock.uptimeMillis()<until);
         throw new IllegalStateException("Owned readonly connection status is not visible; no credential input sent");
+    }
+
+    private JSONObject originalReferenceForm() throws Exception {
+        File file=new File(getContext().getFilesDir(),"owned-reference-form.json");
+        require(file.isFile()&&file.length()>0&&file.length()<=8192,"Bounded original reference form missing");
+        byte[] raw=java.nio.file.Files.readAllBytes(file.toPath());JSONObject form=new JSONObject(new String(raw,java.nio.charset.StandardCharsets.UTF_8));
+        require(form.length()==12&&form.getInt("schema")==1&&form.getString("scope").equals("local-references"),"Unreviewed reference form");
+        require(form.getString("source_md").equals("reference-source.md")&&form.getString("source_canvas").equals("reference-source.canvas")
+            &&form.getString("target_md").equals("reference-target-中文.md")&&form.getString("target_canvas").equals("reference-target-中文.canvas")
+            &&form.getString("missing").equals("reference-missing.md")&&form.getString("unsafe").equals("javascript:owned_reference_must_stay_inert"),"Foreign reference path");
+        for(String name:new String[]{"target_body","target_canvas_text","source_body","draft_body"})require(form.getString(name).length()>0&&form.getString(name).length()<=4096,"Unbounded reference text");
+        StringBuilder hash=new StringBuilder();for(byte value:java.security.MessageDigest.getInstance("SHA-256").digest(raw))hash.append(String.format(java.util.Locale.ROOT,"%02x",value&255));
+        progress.append("ORIGINAL_REFERENCE_FORM_SHA256 ").append(hash).append('\n');return form;
+    }
+
+    private void referenceTitle(String path) {
+        waitNode(node->APP.equals(string(node.getPackageName()))&&!node.isClickable()
+            &&label(node,path,false)&&titleBarControl(node),"original local reference destination title: "+path);
+    }
+
+    private void referenceSource(JSONObject form) throws Exception {
+        String path=form.getString("source_md"),body=form.getString("draft_body");open(path);
+        waitNode(node->editorContainsOriginalMarkdown(node,body),"unconfirmed original reference draft");
+    }
+
+    private boolean editorContainsOriginalMarkdown(AccessibilityNodeInfo node,String expected) {
+        return APP.equals(string(node.getPackageName()))&&node.isEditable()&&node.isVisibleToUser()
+            &&label(node,"Markdown note body",false)&&OriginalMarkdownAccessibility.matches(string(node.getText()),expected);
+    }
+
+    private void referencePreviewLink(String labelText) {
+        // The article and toolbar share the accessible name. Tap only the button.
+        hideKeyboard();clickMenu("More actions");
+        Predicate<AccessibilityNodeInfo> toggle=node->APP.equals(string(node.getPackageName()))&&node.isEnabled()
+            &&node.isClickable()&&label(node,"Read preview",false);
+        activate(waitNode(toggle,"original preview toolbar action"),toggle);
+        Predicate<AccessibilityNodeInfo> link=node->APP.equals(string(node.getPackageName()))&&node.isEnabled()
+            &&node.isClickable()&&label(node,labelText,false)&&within(node,"Read preview");
+        activate(waitNode(link,"review original preview link: "+labelText),link);
+    }
+
+    private void referenceReview(String href,boolean enabled) {
+        waitNode(node->APP.equals(string(node.getPackageName()))&&label(node,href,false)
+            &&within(node,"Original link address"),"exact original reviewed address");
+        waitNode(node->APP.equals(string(node.getPackageName()))&&label(node,"Open",false)
+            &&node.isClickable()&&node.isEnabled()==enabled&&within(node,"Original link address"),"original link open availability");
+    }
+
+    private void referenceDialogAction(String name) {
+        Predicate<AccessibilityNodeInfo> action=node->APP.equals(string(node.getPackageName()))&&node.isEnabled()
+            &&node.isClickable()&&label(node,name,false)&&within(node,"Original link address");
+        activate(waitNode(action,"owned original link dialog action: "+name),action);
+    }
+
+    private void referenceDestination(JSONObject form,boolean canvas) throws Exception {
+        referenceTitle(form.getString(canvas?"target_canvas":"target_md"));
+        if(canvas){waitLabel("Free canvas");graphAction("Show all");graphNode("text: "+form.getString("target_canvas_text"));}
+        else {String body=form.getString("target_body");waitNode(node->editorContainsOriginalMarkdown(node,body),"actual original target Markdown body");}
+    }
+
+    private void originalLocalReference(String phase) throws Exception {
+        JSONObject form=originalReferenceForm();String source=form.getString("source_md"),sourceBody=form.getString("source_body");
+        switch(phase) {
+            case "reference-md-target-seed":create("New note",form.getString("target_md"));inputText(noteBody(),form.getString("target_body"));save();break;
+            case "reference-canvas-target-seed":create("New canvas",form.getString("target_canvas"));save();break;
+            case "reference-md-source-seed":create("New note",source);inputText(noteBody(),form.getString("source_body"));save();break;
+            case "reference-canvas-source-seed":create("New canvas",form.getString("source_canvas"));save();break;
+            case "reference-baseline":
+                open(form.getString("target_canvas"));waitLabel("Free canvas");open(form.getString("source_canvas"));waitLabel("Free canvas");
+                open(source);waitNode(node->editorContainsOriginalMarkdown(node,sourceBody),"original saved source links");break;
+            case "reference-md-draft":inputText(noteBody(),form.getString("draft_body"));waitLabel("Draft kept on this device");break;
+            case "reference-md-cancel":referencePreviewLink("Owned note target");referenceReview(form.getString("target_md"),true);referenceDialogAction("Close");referenceTitle(source);break;
+            case "reference-md-note":
+                // Cancel leaves the preview visible. Only the link is tapped here.
+                Predicate<AccessibilityNodeInfo> link=node->APP.equals(string(node.getPackageName()))&&node.isEnabled()&&node.isClickable()
+                    &&label(node,"Owned note target",false)&&within(node,"Read preview");
+                activate(waitNode(link,"original preview link after cancel"),link);referenceReview(form.getString("target_md"),true);
+                referenceDialogAction("Open");referenceDestination(form,false);break;
+            case "reference-md-return":referenceSource(form);break;
+            case "reference-md-canvas":referencePreviewLink("Owned canvas target");referenceReview(form.getString("target_canvas"),true);referenceDialogAction("Open");referenceDestination(form,true);break;
+            case "reference-canvas-note":case "reference-canvas-canvas":
+                boolean canvas=phase.equals("reference-canvas-canvas");String path=form.getString(canvas?"target_canvas":"target_md");
+                open(form.getString("source_canvas"));waitLabel("Free canvas");graphAction("Show all");graphNode("file: "+path);graphAction("Properties");
+                require(propertyValue(propertyControl("Node content"),"Node content",path),"Original Canvas reference path changed");
+                AccessibilityNodeInfo review=propertyControl("Review file or link");
+                activate(review,node->propertyVisible(node,"Canvas nodes and connections")&&within(node,"Canvas nodes and connections"));
+                referenceReview(path,true);referenceDialogAction("Open");referenceDestination(form,canvas);break;
+            case "reference-missing":
+                referenceSource(form);referencePreviewLink("Missing owned target");referenceReview(form.getString("missing"),true);referenceDialogAction("Open");
+                waitNode(node->APP.equals(string(node.getPackageName()))&&label(node,"The original note is no longer available.",false)
+                    &&within(node,"Original link address"),"missing original target feedback without leaving the review");
+                referenceReview(form.getString("missing"),true);referenceDialogAction("Close");referenceTitle(source);break;
+            case "reference-unsupported":
+                // The source preview survives Close; no Source/editor mutation.
+                Predicate<AccessibilityNodeInfo> unsafe=node->APP.equals(string(node.getPackageName()))&&node.isEnabled()&&node.isClickable()
+                    &&label(node,"Unsupported original scheme",false)&&within(node,"Read preview");
+                activate(waitNode(unsafe,"unsupported original review link"),unsafe);referenceReview(form.getString("unsafe"),false);
+                referenceDialogAction("Close");referenceTitle(source);break;
+            case "reference-cold":
+                open(form.getString("target_md"));referenceDestination(form,false);
+                open(form.getString("target_canvas"));referenceDestination(form,true);referenceSource(form);break;
+            default:throw new IllegalStateException("Unreviewed local reference phase");
+        }
+        progress.append("ORIGINAL_LOCAL_REFERENCE ").append(phase).append(" save=").append(phase.endsWith("-seed")?1:0).append('\n');
     }
 
     private void candidateLanguageRead(String phase) throws Exception {

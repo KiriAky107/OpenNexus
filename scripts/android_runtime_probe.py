@@ -435,7 +435,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('lifecycle-remaining','lifecycle-editor-remaining','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','canvas-properties-remaining','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'):
+        if getattr(self.args,'scope',None) in ('lifecycle-remaining','lifecycle-editor-remaining','local-references','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','canvas-properties-remaining','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -934,6 +934,9 @@ class Probe:
             # enumerate arbitrary files or read native credential/config stores.
             owned_names = ('runtime-note.md', 'runtime-rich.md', 'runtime.canvas',
                     'runtime-back.md', 'runtime-image.md', 'runtime-rich-image.md', 'runtime-image.canvas')
+            if getattr(getattr(self,'args',None),'scope',None) == 'local-references':
+                from android_reference_contract import PATHS
+                owned_names = PATHS
             if getattr(getattr(self,'args',None),'scope',None) == 'performance':
                 owned_names = ('runtime-long.md',)
             if getattr(getattr(self,'args',None),'scope',None) == 'storage-recovery':
@@ -1272,6 +1275,10 @@ class Probe:
 
     def run(self):
         self.boot()
+        if self.args.scope=='local-references':
+            from android_reference_probe import run_references
+            run_references(self)
+            return
         if self.args.scope in ('canvas-view','canvas-view-remaining','canvas-view-cold'):
             from android_canvas_view_probe import run_canvas_view
             run_canvas_view(self)
@@ -1438,7 +1445,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'lifecycle-remaining','lifecycle-editor-remaining', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','canvas-properties-remaining','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'lifecycle-remaining','lifecycle-editor-remaining','local-references', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','canvas-properties-remaining','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:
