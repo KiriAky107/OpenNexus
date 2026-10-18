@@ -65,9 +65,10 @@ def inside(box, x, y, margin=0):
     return box[0] + margin <= x < box[2] - margin and box[1] + margin <= y < box[3] - margin
 
 
-def touch_result(intent, result, phase):
-    require(phase in TOUCH and intent['schema'] == result['schema'] == 1
-        and intent['scope'] == 'canvas-motion' and intent['phase'] == result['phase'] == phase
+def actual_input_result(intent, result, phase):
+    view=phase in ('view-pan','view-pinch','view-cancel','view-takeover','view-background')
+    require((view or phase in TOUCH) and intent['schema'] == result['schema'] == 1
+        and intent['scope'] == ('canvas-view' if view else 'canvas-motion') and intent['phase'] == result['phase'] == phase
         and intent['owner'] == result['owner'] == APP, 'MOTION_ORIGINAL_INPUT_SCOPE')
     clip = rectangle(intent['clip']); node = rectangle(intent['node_bounds'])
     controls = intent['controls']; obstacles = intent['obstacles']; plan = intent['plan']
@@ -78,7 +79,7 @@ def touch_result(intent, result, phase):
     require(type(plan) is list and len(plan) == 4 and all(type(n) in (int, float) and math.isfinite(n) for n in plan),
         'MOTION_INPUT_PLAN_REFUSED')
     for x, y in zip(plan[::2], plan[1::2]): require(inside(clip, x, y, 12), 'MOTION_INPUT_OUTSIDE_OWN_VIEWPORT')
-    step = phase.removeprefix('motion-')
+    step = phase.removeprefix('view-' if view else 'motion-')
     def clear(x, y):
         return inside(clip,x,y,16) and not any(inside([b[0]-12,b[1]-12,b[2]+12,b[3]+12],x,y) for b in obstacles)
     if step in ('pan','pinch'):
@@ -142,12 +143,20 @@ def touch_result(intent, result, phase):
             [a+(b-a)*index/8 for a,b in zip(second,end_second)]])
         points(events[-3],[end_first,end_second]);points(events[-2],[[end_first[0]+8,end_first[1]+8]])
         points(events[-1],[[end_first[0]+8,end_first[1]+8]])
-    after = rectangle(result['after_node_bounds'])
+    rectangle(result['after_node_bounds'])
     require(result['before_node_bounds'] == node and result['owned_root_after'], 'MOTION_RENDERED_ORIGINAL_CHANGED')
     if step == 'background':
         require(result['background_seen'] and result['resumed_owned']
             and re.fullmatch(re.escape(APP)+r'/[A-Za-z0-9_.]+',intent['resume_activity']), 'MOTION_NOT_ACTUAL_OWN_BACKGROUND')
     else: require(not result['background_seen'] and not result['resumed_owned'], 'MOTION_FALSE_BACKGROUND_CLAIM')
+    return {'phase':phase,'events':len(events),'actual_background':step=='background'}
+
+
+def touch_result(intent, result, phase):
+    require(phase in TOUCH,'MOTION_ORIGINAL_INPUT_SCOPE')
+    observed=actual_input_result(intent,result,phase)
+    step=phase.removeprefix('motion-');node=rectangle(intent['node_bounds'])
+    clip=rectangle(intent['clip']);plan=intent['plan'];after=rectangle(result['after_node_bounds'])
     if step in ('cancel','background'):
         require(all(abs(a-b) <= 1 for a,b in zip(node,after)), 'MOTION_CANCEL_LEFT_NODE_PREVIEW')
     if step == 'pan':
@@ -156,16 +165,20 @@ def touch_result(intent, result, phase):
         require(inside(clip, after[0], after[1], 1) and inside(clip, after[2]-1, after[3]-1, 1)
             and abs((after[2]-after[0])-1.1*(node[2]-node[0])) <= 3
             and abs((after[3]-after[1])-1.1*(node[3]-node[1])) <= 3, 'MOTION_ACTUAL_PINCH_NOT_OBSERVED')
-    return {'phase':phase,'events':len(events),'actual_background':step=='background'}
+    return observed
 
 
 def snapshot(probe, phase):
-    require(probe.args.scope == 'canvas-motion' and phase.removesuffix('-failure') in STEPS, 'MOTION_SNAPSHOT_SCOPE')
+    path=PATH
+    if probe.args.scope=='canvas-view':
+        from android_canvas_view_probe import PATH as view_path,STEPS as view_steps
+        require(phase.removesuffix('-failure') in view_steps,'MOTION_SNAPSHOT_SCOPE');path=view_path
+    else:require(probe.args.scope == 'canvas-motion' and phase.removesuffix('-failure') in STEPS, 'MOTION_SNAPSHOT_SCOPE')
     value={}
     for key,table,columns in [('drafts','drafts','id,file_id,path,base_hash,generation,saved_generation,content,edit_session'),
             ('saves','save_intents','operation_id,draft_id,generation,file_id,path,expected,content,state,error')]:
         value[key]=[dict(zip(columns.split(','),row)) for row in probe.database_rows(
-            'SELECT '+columns+' FROM '+table+' WHERE path=? ORDER BY rowid',(PATH,))]
+            'SELECT '+columns+' FROM '+table+' WHERE path=? ORDER BY rowid',(path,))]
     folder=Path(tempfile.mkdtemp(prefix='owned-canvas-motion-',dir=probe.tools)); database=folder/'host.sqlite3'
     for suffix in ('','-wal','-shm'):
         data=probe.private(probe.root+'vault/.ainote/host.sqlite3'+suffix,check=False)
@@ -173,7 +186,7 @@ def snapshot(probe, phase):
     with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True)) as db:
         require(db.execute('PRAGMA integrity_check').fetchone()==('ok',),'MOTION_NATIVE_INTEGRITY')
         for key,columns in [('files','id,path,hash,revision,deleted'),('journal','operation_id,file_id,path,expected,state')]:
-            value[key]=[dict(zip(columns.split(','),row)) for row in db.execute('SELECT '+columns+' FROM '+key+' WHERE path=? ORDER BY rowid',(PATH,))]
+            value[key]=[dict(zip(columns.split(','),row)) for row in db.execute('SELECT '+columns+' FROM '+key+' WHERE path=? ORDER BY rowid',(path,))]
         require(len(value['files'])==1,'MOTION_SINGLE_OWN_FILE')
         columns='operation_id,file_id,revision,path,hash,operation,state'
         value['outbox']=[dict(zip(columns.split(','),row)) for row in db.execute('SELECT '+columns+' FROM outbox WHERE file_id=? ORDER BY operation_id',(value['files'][0]['id'],))]

@@ -417,7 +417,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion'):
+        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -663,7 +663,10 @@ class Probe:
             require(re.fullmatch(rb'[1-9][0-9]{0,9}', self.shell('pidof', APP).stdout.strip()),
                 'Tablet rotation requires the same single owned app process')
         self.native_tls_startup(phase)
-        if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining','editing-remaining'):
+        if getattr(getattr(self,'args',None),'scope','')=='canvas-view' and phase in ('view-pan','view-pinch','view-cancel','view-takeover','view-background'):
+            from android_canvas_view_input import instrument_original_view
+            result=instrument_original_view(self,phase)
+        elif phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining','editing-remaining'):
             result = self.image_save_instrumentation(phase)
         elif getattr(getattr(self,'args',None),'scope','')=='canvas-motion' and phase=='motion-background':
             require(re.fullmatch(re.escape(APP)+r'/[A-Za-z0-9_.]+',self.activity),'Original motion resume activity refused')
@@ -911,6 +914,9 @@ class Probe:
                 owned_names = (PATH,)
             if getattr(getattr(self,'args',None),'scope',None) == 'canvas-motion':
                 from android_canvas_motion_probe import PATH
+                owned_names = (PATH,)
+            if getattr(getattr(self,'args',None),'scope',None) == 'canvas-view':
+                from android_canvas_view_probe import PATH
                 owned_names = (PATH,)
             if getattr(getattr(self,'args',None),'scope',None) in ('document-limits','document-export'):
                 from android_document_limits_probe import SEED_PATH, CASES
@@ -1232,6 +1238,10 @@ class Probe:
 
     def run(self):
         self.boot()
+        if self.args.scope=='canvas-view':
+            from android_canvas_view_probe import run_canvas_view
+            run_canvas_view(self)
+            return
         if self.args.scope=='canvas-motion':
             from android_canvas_motion_probe import run_canvas_motion
             run_canvas_motion(self)
@@ -1386,7 +1396,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 import yaml
-from android_canvas_motion_probe import A, B, E, APP, FIXTURE, PATH, STEPS, graph, encoded, changed_node, readonly, touch_result, run_canvas_motion
+from android_canvas_motion_probe import A, B, E, APP, FIXTURE, PATH, STEPS, graph, encoded, changed_node, readonly, touch_result, actual_input_result, run_canvas_motion
 from android_runtime_probe import Probe
 from android_canvas_graph_probe import saved_original
 from test_android_desktop_workflow import admitted
@@ -124,6 +124,14 @@ class OriginalMotion(unittest.TestCase):
         with self.assertRaises(RuntimeError):touch_result(i,r,phase)
         i,r,phase=self.trace('pan');i['obstacles'].append([390,790,450,850])
         with self.assertRaises(RuntimeError):touch_result(i,r,phase)
+
+    def test_actual_input_check_does_not_relax_the_original_strict_effect_comparator(self):
+        intent,result,phase=self.trace('pan');result['after_node_bounds']=[128,124,452,404]
+        self.assertEqual(actual_input_result(intent,result,phase)['events'],10)
+        with self.assertRaisesRegex(RuntimeError,'MOTION_ACTUAL_PAN_NOT_OBSERVED'):touch_result(intent,result,phase)
+        intent['scope']='canvas-view';intent['phase']=result['phase']='view-pan'
+        self.assertEqual(actual_input_result(intent,result,'view-pan')['events'],10)
+        with self.assertRaises(RuntimeError):touch_result(intent,result,'view-pan')
 
     def test_scope_runs_only_pending_motion_and_reuses_fixed_APK_without_replaying_other_scenes(self):
         self.assertEqual(len(STEPS),11)

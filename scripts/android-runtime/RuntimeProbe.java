@@ -58,6 +58,9 @@ public final class RuntimeProbe extends Instrumentation {
                 case "motion-pan": case "motion-pinch": case "motion-cancel": case "motion-takeover":
                 case "motion-background": case "motion-cold": case "motion-inspector":
                     originalCanvasMotion(phase); break;
+                case "view-seed": case "view-open": case "view-pan": case "view-pinch":
+                case "view-cancel": case "view-takeover": case "view-background": case "view-cold": case "view-inspector":
+                    originalCanvasMotion(phase); break;
                 case "files-md-seed":
                 case "files-md-seed-renamed":
                 case "files-md-rename-old":
@@ -1153,12 +1156,56 @@ public final class RuntimeProbe extends Instrumentation {
         JSONArray result=new JSONArray();for(int[] value:values)result.put(new JSONArray(value));return result;
     }
     private void motionRecord(String phase,String kind,JSONObject value)throws Exception {
-        require(OriginalCanvasMotion.phase(phase)&&(kind.equals("intent")||kind.equals("result")),"Original motion record scope refused");
+        require((OriginalCanvasMotion.phase(phase)||viewPhase(phase))&&(kind.equals("intent")||kind.equals("result")),"Original motion record scope refused");
         File file=new File(getContext().getFilesDir(),phase+"-touch-"+kind+".json");
         require(file.createNewFile(),"Original motion record already exists; no action replayed");
         byte[] raw=(value.toString()+"\n").getBytes("UTF-8");require(raw.length<=16384,"Original motion record bound exceeded");
         try(FileOutputStream output=new FileOutputStream(file)){output.write(raw);output.getFD().sync();}
         progress.append("ORIGINAL_CANVAS_MOTION_RECORD ").append(phase).append(' ').append(kind).append('\n');
+    }
+    private boolean viewPhase(String phase) {
+        for(String step:new String[]{"seed","open","pan","pinch","cancel","takeover","background","cold","inspector"})
+            if(("view-"+step).equals(phase))return true;
+        return false;
+    }
+    private String viewDigest(byte[] bytes)throws Exception {
+        StringBuilder result=new StringBuilder();
+        for(byte value:java.security.MessageDigest.getInstance("SHA-256").digest(bytes))result.append(String.format(java.util.Locale.ROOT,"%02x",value&255));
+        return result.toString();
+    }
+    private void viewCheckpoint(String phase,String stage,String nonce,int[][] expected)throws Exception {
+        require(viewPhase(phase)&&(stage.equals("before")||stage.equals("after"))&&nonce.equals(java.util.UUID.fromString(nonce).toString()),"Original view checkpoint scope refused");
+        require(java.util.Arrays.deepEquals(motionObservation(),expected),"Original view geometry changed before its observation");
+        AccessibilityNodeInfo node=uniqueTarget(motionTarget()),webview=node;
+        for(int depth=0;depth<64&&!"android.webkit.WebView".equals(string(webview.getClassName()));depth++) {
+            webview=webview.getParent();require(webview!=null,"Owned original Canvas WebView ancestor missing");
+        }
+        require(APP.equals(string(webview.getPackageName()))&&webview.isVisibleToUser()
+            &&"android.webkit.WebView".equals(string(webview.getClassName())),"Original view WebView is not owned and visible");
+        AccessibilityNodeInfo active=ui.getRootInActiveWindow();
+        require(active!=null&&APP.equals(string(active.getPackageName())),"Original view window changed before observation");
+        Rect frame=new Rect();webview.getBoundsInScreen(frame);require(!frame.isEmpty(),"Original WebView frame is empty");
+        JSONObject value=new JSONObject().put("schema",1).put("scope","canvas-view").put("dispatch_id",nonce)
+            .put("phase",phase).put("stage",stage).put("owner",APP).put("webview",new JSONArray(new int[]{frame.left,frame.top,frame.right,frame.bottom}))
+            .put("clip",new JSONArray(expected[1])).put("node",new JSONArray(expected[0])).put("recorded_ms",SystemClock.uptimeMillis());
+        byte[] raw=(value.toString()+"\n").getBytes("UTF-8");require(raw.length<=2048,"Original view metadata exceeds bound");
+        File file=new File(getContext().getFilesDir(),phase+"-"+stage+"-native-view.json");
+        require(file.createNewFile(),"Original view observation exists; no replay admitted");
+        try(FileOutputStream output=new FileOutputStream(file)){output.write(raw);output.getFD().sync();}
+        Bundle signal=new Bundle();signal.putString("owned_canvas_view_ready",nonce+":"+phase+":"+stage);sendStatus(0,signal);
+        File acknowledgement=new File(getContext().getFilesDir(),phase+"-"+stage+"-view-ack.json");long until=SystemClock.uptimeMillis()+30000;
+        while(!acknowledgement.exists()&&SystemClock.uptimeMillis()<until)SystemClock.sleep(25);
+        require(acknowledgement.isFile()&&acknowledgement.length()>0&&acknowledgement.length()<=2048,"Original view observation was not acknowledged; no input retry");
+        byte[] body=new byte[(int)acknowledgement.length()];int offset=0;
+        try(java.io.FileInputStream input=new java.io.FileInputStream(acknowledgement)){
+            while(offset<body.length){int count=input.read(body,offset,body.length-offset);require(count>0,"Original view acknowledgement incomplete");offset+=count;}
+            require(input.read()==-1,"Original view acknowledgement changed");
+        }
+        JSONObject ack=new JSONObject(new String(body,"UTF-8"));
+        require(ack.length()==6&&ack.getBoolean("passed")&&nonce.equals(ack.getString("dispatch_id"))&&phase.equals(ack.getString("phase"))
+            &&stage.equals(ack.getString("stage"))&&viewDigest(raw).equals(ack.getString("native_sha256"))
+            &&ack.getString("renderer_sha256").matches("[0-9a-f]{64}"),"Original view acknowledgement does not match this observation");
+        require(java.util.Arrays.deepEquals(motionObservation(),expected),"Original view changed during read-only observation; no gesture retry");
     }
     private void motionInput(long start,int action,float[][] points,int[] clip,JSONArray events)throws Exception {
         require(points.length>=1&&points.length<=2,"Original motion pointer bound refused");
@@ -1205,9 +1252,10 @@ public final class RuntimeProbe extends Instrumentation {
         return background;
     }
     private void originalCanvasMotion(String phase)throws Exception {
-        require(OriginalCanvasMotion.phase(phase),"Original motion phase refused");String step=phase.substring(7);
-        if(step.equals("seed")){create("New canvas",OriginalCanvasMotion.PATH);save();return;}
-        if(step.equals("open")||step.equals("cold")){open(OriginalCanvasMotion.PATH);waitLabel("Free canvas");waitNode(motionTarget(),"original declared motion node");return;}
+        boolean view=viewPhase(phase);require(view||OriginalCanvasMotion.phase(phase),"Original motion phase refused");String step=phase.substring(view?5:7);
+        String path=view?"view-original.canvas":OriginalCanvasMotion.PATH;
+        if(step.equals("seed")){create("New canvas",path);save();return;}
+        if(step.equals("open")||step.equals("cold")){open(path);waitLabel("Free canvas");waitNode(motionTarget(),"original declared motion node");return;}
         graphClosePanel();graphAction("Show all");graphNode("text: "+OriginalCanvasMotion.NODE);settleUi();
         if(step.equals("inspector")){graphAction("Properties");waitNode(node->within(node,"Canvas nodes and connections")&&label(node,"Node properties",true),"original node inspector, read only");return;}
         int[][] observation=motionObservation();int[] bounds=observation[0],clip=observation[1];int[][] controls=java.util.Arrays.copyOfRange(observation,2,observation.length);
@@ -1220,7 +1268,7 @@ public final class RuntimeProbe extends Instrumentation {
         if(step.equals("pan"))plan=OriginalCanvasMotion.pan(clip,obstacles);
         else if(step.equals("pinch"))plan=OriginalCanvasMotion.emptyPair(clip,obstacles);
         else plan=OriginalCanvasMotion.drag(bounds,clip,controls,resize);
-        JSONObject intent=new JSONObject().put("schema",1).put("scope","canvas-motion").put("phase",phase).put("owner",APP)
+        JSONObject intent=new JSONObject().put("schema",1).put("scope",view?"canvas-view":"canvas-motion").put("phase",phase).put("owner",APP)
             .put("node_bounds",new JSONArray(bounds)).put("clip",new JSONArray(clip)).put("controls",motionRows(controls))
             .put("obstacles",motionRows(obstacles)).put("plan",new JSONArray(plan)).put("recorded_ms",SystemClock.uptimeMillis());
         if(resize!=null)intent.put("resize_control",new JSONArray(resize));
@@ -1237,6 +1285,8 @@ public final class RuntimeProbe extends Instrumentation {
             String activity=arguments.getString("motion_activity","");resume=ComponentName.unflattenFromString(activity);
             require(activity.length()<=300&&resume!=null&&APP.equals(resume.getPackageName()),"Original resume activity is not the owned installed app");intent.put("resume_activity",activity);
         }
+        String viewNonce=view?arguments.getString("view_dispatch_id",""):"";
+        if(view){intent.put("dispatch_id",viewNonce);viewCheckpoint(phase,"before",viewNonce,observation);}
         motionRecord(phase,"intent",intent);JSONArray events=new JSONArray();long start=SystemClock.uptimeMillis();
         motionInput(start,MotionEvent.ACTION_DOWN,new float[][]{{plan[0],plan[1]}},clip,events);
         boolean background=false,resumed=false;
@@ -1254,12 +1304,15 @@ public final class RuntimeProbe extends Instrumentation {
             if(step.equals("background")){background=motionHomeAndResume(resume);resumed=true;}
             else motionInput(start,step.equals("cancel")?MotionEvent.ACTION_CANCEL:MotionEvent.ACTION_UP,new float[][]{{plan[2],plan[3]}},clip,events);
         }
-        settleUi();int[] after=motionObservation()[0];AccessibilityNodeInfo active=ui.getRootInActiveWindow();
-        motionRecord(phase,"result",new JSONObject().put("schema",1).put("phase",phase).put("owner",APP)
+        settleUi();int[][] afterObservation=motionObservation();int[] after=afterObservation[0];AccessibilityNodeInfo active=ui.getRootInActiveWindow();
+        JSONObject result=new JSONObject().put("schema",1).put("phase",phase).put("owner",APP)
             .put("before_node_bounds",new JSONArray(bounds)).put("after_node_bounds",new JSONArray(after)).put("events",events)
-            .put("background_seen",background).put("resumed_owned",resumed).put("owned_root_after",active!=null&&APP.equals(string(active.getPackageName()))));
+            .put("background_seen",background).put("resumed_owned",resumed).put("owned_root_after",active!=null&&APP.equals(string(active.getPackageName())));
+        if(view)result.put("dispatch_id",viewNonce);
+        motionRecord(phase,"result",result);
         if(step.equals("move")||step.equals("resize"))save();
         else waitNode(node->APP.equals(string(node.getPackageName()))&&label(node,"Save",false)&&!node.isEnabled(),"view-only/interrupted gesture keeps Save disabled");
+        if(view)viewCheckpoint(phase,"after",viewNonce,afterObservation);
     }
 
     private void pairProperty(String name, String before, String after) {
