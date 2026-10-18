@@ -46,7 +46,8 @@ export class CanvasModel {
   }
   change(update:(document:CanvasDocument)=>void,batch?:string){
     const document=clone(this.document);update(document)
-    const source=JSON.stringify(document,null,2)+'\n';validateCanvasContent(source)
+    const lineEnding=this.source.match(/\r\n|\n|\r/)?.[0]??'\n'
+    const source=(JSON.stringify(document,null,2)+'\n').replace(/\n/g,lineEnding);validateCanvasContent(source)
     if(JSON.stringify(document)===JSON.stringify(this.document))return false
     if(!batch||batch!==this.batch)this.past.push(this.source)
     this.batch=batch;let size=this.past.reduce((total,item)=>total+item.length*2,0)
