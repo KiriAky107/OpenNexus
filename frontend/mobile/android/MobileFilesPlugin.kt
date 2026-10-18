@@ -22,6 +22,13 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.Executors
 
+/** Normalize only the scheme required by Android intent matching, never stored/reviewed text. */
+internal fun externalLinkUri(original: String): Uri {
+    val uri = Uri.parse(original).normalizeScheme()
+    if (original.length > 4096 || original.any { it.isWhitespace() } || uri.scheme !in listOf("http", "https") || uri.host.isNullOrBlank() || !uri.userInfo.isNullOrEmpty()) throw IOException("MOBILE_LINK_UNSUPPORTED")
+    return uri
+}
+
 /** Only native-issued sealed tickets and explicitly chosen SAF documents are accessible. */
 @TauriPlugin
 class MobileFilesPlugin(private val owner: Activity) : Plugin(owner) {
@@ -237,8 +244,7 @@ class MobileFilesPlugin(private val owner: Activity) : Plugin(owner) {
     fun openExternal(invoke: Invoke) {
         try {
             val original = invoke.getArgs().getString("href")
-            val uri = Uri.parse(original)
-            if (original.length > 4096 || original.any { it.isWhitespace() } || uri.scheme !in listOf("http","https") || uri.host.isNullOrBlank() || !uri.userInfo.isNullOrEmpty()) throw IOException("MOBILE_LINK_UNSUPPORTED")
+            val uri = externalLinkUri(original)
             owner.startActivity(Intent(Intent.ACTION_VIEW,uri).addCategory(Intent.CATEGORY_BROWSABLE))
             invoke.resolve(JSObject().apply { put("state","opened") })
         } catch (_: Exception) { invoke.reject("MOBILE_LINK_OPEN_FAILED") }

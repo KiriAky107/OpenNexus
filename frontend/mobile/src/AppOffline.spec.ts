@@ -77,6 +77,20 @@ it('opens a reviewed original external link only after the explicit confirmation
   expect(doc.content).toBe('original\r\n中文 😀')
 })
 
+it('keeps an uppercase-scheme address exact in review and the native request without changing the document',async()=>{
+  const original='HTTPS://example.invalid/original?literal=%252F_%25&utf8=%F0%9F%98%80#original'
+  const before=clone(doc)
+  host.mobileCapabilities.mockResolvedValue({protocol:1,platform:'android',workspace:true,notes:true,external_links:true,version:'0.1.0-dev1'})
+  host.mobileOpenExternal.mockResolvedValue({state:'opened'})
+  await start();await open();await wrapper!.get('.file-actions summary').trigger('click');await button('Read preview').trigger('click');await flushPromises()
+  wrapper!.getComponent(MobilePreview).vm.$emit('link',original);await flushPromises()
+  expect(wrapper!.get('.mobile-dialog').text()).toContain(original)
+  expect(host.mobileOpenExternal).not.toHaveBeenCalled()
+  await button('Open').trigger('click');await flushPromises()
+  expect(host.mobileOpenExternal).toHaveBeenCalledExactlyOnceWith(original)
+  expect(doc).toEqual(before)
+})
+
 it('resolves a reviewed local link through a bounded native path read before switching the editor',async()=>{
   host.mobileRequest.mockImplementation(async (request:MobileRequest)=>{
     if(request.kind==='read_path')return {...doc,file_id:'linked-file',path:'dir/中文.md',content:'linked original'}
