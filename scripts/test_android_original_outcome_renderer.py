@@ -16,8 +16,9 @@ class RendererLink(unittest.TestCase):
         self.probe,self.context,self.manifest=self.owner.probe,self.owner.context,self.owner.manifest
         self.value={'configuration':{'nonce':self.manifest['nonce'],'original_pid':321},'context':{}}
         self.result={'nonce':self.manifest['nonce'],'original_pid':321,'declared_safe_code_list':True,'declared_presentation_case':True,
-            'application_or_native_IPC_sent':False,'Debugger_enabled':False,'page_fetch_or_CSP_change_sent':False,
-            'resource_read_transport':'Page.getResourceContent','resource_bytes_transferred_to_owned_reader':True,'resource_bytes_written_to_artifacts':False}
+            'application_or_native_IPC_sent':False,'Debugger_enabled':True,'Debugger_pause_breakpoint_or_evaluation_sent':False,
+            'page_fetch_or_CSP_change_sent':False,'digest_scope':'UTF-8 bytes of decoded V8 script source, not HTTP wire encoding',
+            'resource_read_transport':'Debugger.getScriptSource','resource_bytes_transferred_to_owned_reader':True,'resource_bytes_written_to_artifacts':False}
         self.probe.command=Mock(side_effect=lambda *a,**k:SimpleNamespace(returncode=0,stdout=json.dumps(self.result).encode(),stderr=b''))
 
     def test_original_package_PID_and_resource_metadata_are_bound_without_native_bug_claim(self):
@@ -26,6 +27,10 @@ class RendererLink(unittest.TestCase):
         proof=json.loads((self.probe.output/'original-renderer-resource-proof.json').read_text('utf-8'))
         self.assertEqual(proof['APK_sha256'],self.probe.binding['sha256'])
         self.assertTrue(proof['code_presence_not_a_real_native_declared_code_failure'])
+        self.assertTrue(proof['original_renderer']['Debugger_enabled'])
+        call=self.probe.command.call_args
+        self.assertEqual(call.args[0][2].name,'original_compiled_scripts.mjs')
+        self.assertEqual(call.kwargs['timeout'],30)
         with self.assertRaises(FileExistsError):renderer.read_original_renderer(self.probe,self.context,self.manifest,self.value)
         self.probe.command.assert_called_once()
 
@@ -84,6 +89,41 @@ class RendererLink(unittest.TestCase):
                        lambda v:v.update(resource_count_bounded=0)):
             value=deepcopy(summary);change(value)
             with self.assertRaises(HandoffError):renderer.safe_tree_summary(value)
+
+    def test_parsed_script_diagnostics_keep_bounded_flags_without_IDs_URLs_or_source(self):
+        summary={'parsed_notifications':13,'owned_candidates':2,'protocol_admitted':True,
+                 'Debugger_enable_reply_seen':True,'unexpected_pause_observed':False}
+        self.probe.command=Mock(return_value=SimpleNamespace(returncode=1,stderr=b'',
+            stdout=json.dumps({'error':'OWNED_COMPILED_RESOURCE_UNCONFIRMED','stage':'script-content',
+                               'reason':'reply-refused','script_summary':summary}).encode()))
+        with self.assertRaisesRegex(HandoffError,'READ_UNCONFIRMED'):
+            renderer.read_original_renderer(self.probe,self.context,self.manifest,self.value)
+        value=json.loads((self.probe.output/'original-renderer-resource-diagnostic.json').read_text('utf-8'))
+        self.assertEqual(value['script_summary'],summary);self.probe.command.assert_called_once()
+
+    def test_parsed_summary_refuses_extra_source_and_unbounded_or_inconsistent_flags(self):
+        from copy import deepcopy
+        summary={'parsed_notifications':13,'owned_candidates':2,'protocol_admitted':True,
+                 'Debugger_enable_reply_seen':True,'unexpected_pause_observed':False}
+        for change in (lambda v:v.update(scriptSource='PRIVATE'),lambda v:v.update(parsed_notifications=True),
+                       lambda v:v.update(owned_candidates=26),lambda v:v.update(parsed_notifications=1),
+                       lambda v:v.update(protocol_admitted=False),lambda v:v.update(unexpected_pause_observed='yes')):
+            value=deepcopy(summary);change(value)
+            with self.assertRaises(HandoffError):renderer.safe_script_summary(value)
+
+    def test_old_cache_read_or_a_paused_evaluated_reader_is_not_a_parsed_source_proof(self):
+        self.result.update(Debugger_enabled=False,resource_read_transport='Page.getResourceContent')
+        with self.assertRaisesRegex(HandoffError,'READ_UNCONFIRMED'):
+            renderer.read_original_renderer(self.probe,self.context,self.manifest,self.value)
+        self.probe.command.assert_called_once()
+        self.assertFalse((self.probe.output/'original-renderer-resource-proof.json').exists())
+
+    def test_a_reader_claiming_pause_or_evaluation_cannot_advance_original_native_input(self):
+        self.result['Debugger_pause_breakpoint_or_evaluation_sent']=True
+        with self.assertRaisesRegex(HandoffError,'READ_UNCONFIRMED'):
+            renderer.read_original_renderer(self.probe,self.context,self.manifest,self.value)
+        self.probe.command.assert_called_once()
+        self.assertFalse((self.probe.output/'original-renderer-resource-proof.json').exists())
 
 
 if __name__=='__main__':unittest.main()

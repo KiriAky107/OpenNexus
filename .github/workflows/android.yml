@@ -336,6 +336,9 @@ jobs:
           --tools-commit "$GITHUB_SHA" --build-run-id "$APK_BUILD_RUN_ID"
           --bundle .build/android-runtime/package --sdk "$ANDROID_HOME"
           --output .build/android-auth-evidence --scope "$AUTH_PROBE_SCOPE"
+      - name: Check original loaded-script observation without invoking a client
+        if: inputs.runtime_scope == 'sync-conflicts' && inputs.sync_original_native_outcome
+        run: node --max-old-space-size=128 --test scripts/android-runtime-tests/original_compiled_scripts.test.mjs
       - name: Install isolated tooling for the explicit original native outcome
         if: inputs.runtime_scope == 'sync-conflicts' && inputs.sync_original_native_outcome
         shell: bash
