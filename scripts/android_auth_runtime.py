@@ -231,7 +231,11 @@ class AuthProbe(Probe):
             input=json.dumps(configuration).encode())
 
     def run(self):
-        require(self.args.scope in ('all','recovery','background'),'Invalid owned auth scope')
+        require(self.args.scope in ('all','recovery','background','certificate'),'Invalid owned auth scope')
+        if self.args.scope=='certificate':
+            from android_certificate_probe import run_certificate
+            run_certificate(self)
+            return
         self.boot()
         require(self.binding.get('native_auth_gateway',{}).get('present') is True,'Fixed APK has no native auth gateway')
         configuration=read_json(self.owner/'device-private.json')
@@ -334,7 +338,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('bundle','sdk','output','source-checkout'):parser.add_argument('--'+name,type=Path,required=True)
     for name in ('commit','tools-commit','build-run-id'):parser.add_argument('--'+name,required=True)
-    parser.add_argument('--scope',choices=('all','recovery','background'),default='all')
+    parser.add_argument('--scope',choices=('all','recovery','background','certificate'),default='all')
     parser.add_argument('--serial',default='emulator-5562');args=parser.parse_args()
     require_hosted();require_hosted_emulator(args.serial);owner=owned_root()
     require(read_json(owner/'owner-state.json')['result']=='ready','Owned HTTPS origin is not ready')

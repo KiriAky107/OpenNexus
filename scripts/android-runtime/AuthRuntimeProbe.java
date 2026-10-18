@@ -57,6 +57,13 @@ public class AuthRuntimeProbe extends Instrumentation {
                     waitText("Check original operation"); click("Keep original record and continue");
                     unusable(); break;
                 case "current-unusable": click("Read current connection"); unusable(); break;
+                case "invalid-certificate":
+                    readCurrent(); signInUntrustedCertificate();
+                    waitPresent(node->text(node.getText()).endsWith("(SYNC_NETWORK_ERROR)")
+                        ||text(node.getText()).endsWith("(SYNC_CONNECTION_FAILED)"));
+                    waitText("Check original operation");click("Read original ID");
+                    waitPresent(node->label(node,"Sign-in result needs checking")||label(node,"Original result is unconfirmed"));
+                    break;
                 case "logout":
                     readCurrent(); signedIn(); click("Sign out on server"); waitText("Review connection action");
                     click("Confirm this action"); waitText("The service confirmed sign-out of the original device session.");
@@ -193,6 +200,19 @@ public class AuthRuntimeProbe extends Instrumentation {
     protected void signedIn() {
         stage="current-signed-in";waitPresent(node->label(node,"Session saved · Signed in"));
         waitFor(node->label(node,"Refresh session") && node.isEnabled(),true);
+    }
+    private void signInUntrustedCertificate() throws Exception {
+        JSONObject config=privateConfiguration();String endpoint=config.getString("endpoint");
+        require(endpoint.equals("https://10.0.2.2:19074")&&config.getString("scope").equals("owned-untrusted-certificate")
+            &&config.getString("certificate_sha256").matches("[0-9a-f]{64}"),"Untrusted test origin changed");
+        JSONArray accounts=config.getJSONArray("accounts");require(accounts.length()==2,"Owned accounts changed");
+        JSONObject account=accounts.getJSONObject(0);
+        stage="untrusted-certificate-fill-owned-identity";
+        set("Server URL",endpoint,false);set("Account",account.getString("username"),false);
+        set("Device name",account.getString("device_name"),false);
+        stage="untrusted-certificate-fill-password";set("Password",account.getString("password"),true);
+        stage="untrusted-certificate-submit-once";click("Sign in");
+        waitFor(node->node.isEditable()&&node.isPassword()&&text(node.getText()).isEmpty(),false);
     }
     protected void readCurrent() {
         // Finishing an instrumentation connection may clear the WebView's RAM
