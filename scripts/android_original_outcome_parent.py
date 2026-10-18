@@ -7,7 +7,7 @@ import uuid
 from android_auth_fixture import atomic_json
 from android_desktop_handoff import canonical, require
 from android_product_pair_android import canonical_uuid, hosted_scope, observe_device, observe_packages
-from android_product_pair_clients import fixed_android_client
+from android_product_pair_clients import original_outcome_client
 from android_runtime_probe import APP
 from android_sync_conflict import COPY, DIRTY, IDS, LOCAL, REMOTE, validate_cold_original_read
 from android_original_outcome_bridge_client import OriginalCompletionBridge
@@ -85,9 +85,8 @@ def run_original_outcome(probe, setup, prepared, device, conflicted, provider, r
                'android_commit': probe.args.commit, 'desktop_commit': '931b96d6c4dab7a6c8f1d9ac4548dd0e51297c30'}
     hosted_scope(context, probe.args.serial, probe.owner)
     checkpoint(probe, 'start')
-    client = fixed_android_client(probe.args.commit, probe.args.build_run_id)
-    require(client.source == '0756d1e079ac045255322759d944b7c01408b0bd'
-            and probe.binding['sha256'] == client.apk_sha256
+    client = original_outcome_client(probe.args.commit, probe.args.build_run_id)
+    require(probe.binding['sha256'] == client.apk_sha256
             and len(rows) == 1 and rows[0][1].encode() == DIRTY and rows[0][2] > rows[0][3],
             'OUTCOME_ACTUAL_FIXED_CLIENT_OR_DRAFT_REFUSED')
     pid = probe.shell('pidof', APP, check=False)

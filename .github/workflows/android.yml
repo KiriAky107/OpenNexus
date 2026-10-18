@@ -221,8 +221,13 @@ jobs:
           if run:
             assert re.fullmatch(r'[1-9][0-9]{0,17}',run) and re.fullmatch(r'[0-9a-f]{40}',commit), 'Invalid fixed APK selection'
           if os.environ.get('ORIGINAL_NATIVE_OUTCOME')=='true':
-            assert scope=='sync-conflicts' and run=='39064416419' and commit=='0756d1e079ac045255322759d944b7c01408b0bd'
+            assert scope=='sync-conflicts'
             assert all(os.environ.get(key)=='true' for key in ('COLD_ORIGINALS','WEBVIEW_PREVIEW','WEBVIEW_CYCLE'))
+            import sys
+            sys.path.insert(0,'scripts')
+            from android_product_pair_clients import FixedClientError,original_outcome_client
+            try:original_outcome_client(commit,run)
+            except FixedClientError:assert False,'Original native outcome requires an admitted immutable client'
           PY
       - uses: actions/checkout@v7
         with:

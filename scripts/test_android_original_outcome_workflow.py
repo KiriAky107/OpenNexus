@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 
 import yaml
 import android_sync_runtime as runtime
+from android_product_pair_clients import CLIENTS
 
 
 class OriginalOutcomeWorkflow(unittest.TestCase):
@@ -30,6 +31,13 @@ class OriginalOutcomeWorkflow(unittest.TestCase):
                           ('webview_cycle',False),('semantic_preview',True),('commit','a'*40),('build_run_id','39054475515')]:
             args=self.args();setattr(args,key,value)
             with self.subTest(key=key),self.assertRaises(RuntimeError):runtime.validate_original_outcome_args(args)
+
+    def test_new_fixed_client_uses_the_same_original_scope_without_admitting_the_old_unqualified_client(self):
+        for client in CLIENTS:
+            args=self.args();args.commit=client.source;args.build_run_id=client.build_run
+            if client.original_outcome:runtime.validate_original_outcome_args(args)
+            else:
+                with self.assertRaises(RuntimeError):runtime.validate_original_outcome_args(args)
 
     def test_workflow_refuses_foreign_or_incomplete_outcome_scope_before_package_download(self):
         job=self.workflow()['jobs']['emulator-runtime'];step=next(s for s in job['steps'] if s.get('name')=='Validate the immutable reuse selection')

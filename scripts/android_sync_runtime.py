@@ -608,9 +608,10 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
 def validate_original_outcome_args(args):
     if not getattr(args,'original_native_outcome',False):return
     require(args.conflicts and args.cold_originals and args.webview_preview and args.webview_cycle
-            and not args.semantic_preview
-            and args.commit=='0756d1e079ac045255322759d944b7c01408b0bd'
-            and args.build_run_id=='39064416419', 'Original native outcome requires its explicit fixed conflict scope')
+            and not args.semantic_preview, 'Original native outcome requires its explicit fixed conflict scope')
+    from android_product_pair_clients import FixedClientError, original_outcome_client
+    try:original_outcome_client(args.commit,args.build_run_id)
+    except FixedClientError:require(False, 'Original native outcome requires its explicit fixed conflict scope')
 
 
 def main():

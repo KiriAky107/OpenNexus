@@ -5,7 +5,7 @@ import subprocess
 import sys
 from unittest.mock import patch
 
-from android_product_pair_clients import CLIENTS, FixedClientError, fixed_android_client
+from android_product_pair_clients import CLIENTS, FixedClientError, fixed_android_client, original_outcome_client
 from android_product_pair_desktop import original_context
 
 
@@ -17,10 +17,10 @@ class FixedClients(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stderr.decode('utf-8','replace'))
 
     def test_original_and_new_compiled_clients_keep_separate_run_and_hash(self):
-        self.assertEqual(len(CLIENTS), 2)
-        self.assertEqual(len({c.source for c in CLIENTS}), 2)
-        self.assertEqual(len({c.build_run for c in CLIENTS}), 2)
-        self.assertEqual(len({c.apk_sha256 for c in CLIENTS}), 2)
+        self.assertEqual(len(CLIENTS), 3)
+        self.assertEqual(len({c.source for c in CLIENTS}), 3)
+        self.assertEqual(len({c.build_run for c in CLIENTS}), 3)
+        self.assertEqual(len({c.apk_sha256 for c in CLIENTS}), 3)
         for client in CLIENTS:
             self.assertIs(fixed_android_client(client.source, client.build_run), client)
             self.assertIs(fixed_android_client(client.source), client)
@@ -36,6 +36,16 @@ class FixedClients(unittest.TestCase):
                     ('a'*40, client.build_run), (True, client.build_run)]:
                 with self.subTest(source=source, run=run), self.assertRaisesRegex(FixedClientError, 'FIXED_ANDROID_CLIENT_REFUSED'):
                     fixed_android_client(source, run)
+
+    def test_original_outcome_mode_keeps_the_older_client_excluded_without_admitting_an_arbitrary_package(self):
+        script=Path(__file__).with_name('android_product_pair_clients.py')
+        for client in CLIENTS:
+            if client.original_outcome:self.assertIs(original_outcome_client(client.source,client.build_run),client)
+            else:
+                with self.assertRaisesRegex(FixedClientError,'ORIGINAL_OUTCOME_CLIENT_REFUSED'):
+                    original_outcome_client(client.source,client.build_run)
+            result=subprocess.run([sys.executable,'-S',str(script),client.source,client.build_run,'--original-native-outcome'],capture_output=True)
+            self.assertEqual(result.returncode==0,client.original_outcome)
 
 
 if __name__ == '__main__':
