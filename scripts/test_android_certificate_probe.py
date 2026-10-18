@@ -31,7 +31,7 @@ class CertificateBoundaries(unittest.TestCase):
             else:after['raw_request_recorded']=True
             with self.subTest(change=change),self.assertRaises(RuntimeError):subject.validate_rejected_handshake(before,after)
 
-    def test_unknown_original_login_requires_its_same_native_selection_and_never_an_active_session(self):
+    def test_pending_original_login_requires_its_same_native_selection_and_never_an_active_session(self):
         value=native();op=subject.validate_certificate_intent(value,'owned-unit');self.assertEqual(op,value['intents'][0]['operation_id'])
         for change in ('active','unknown','device','account','selection','server_error','generation'):
             wrong=deepcopy(value)
@@ -43,6 +43,24 @@ class CertificateBoundaries(unittest.TestCase):
             elif change=='server_error':wrong['rejections']=[dict(status=401,code='LOGIN_FAILED')]
             else:wrong['intents'][0]['generation']=2
             with self.subTest(change=change),self.assertRaises(RuntimeError):subject.validate_certificate_intent(wrong,'owned-unit')
+
+    def test_cold_recovery_marks_only_the_original_pending_login_unknown_without_resending(self):
+        before=native();cold=deepcopy(before);cold['intents'][0]['phase']='unknown'
+        self.assertEqual(subject.validate_cold_certificate_intent(before,cold),before['intents'][0]['operation_id'])
+        self.assertEqual(before['intents'][0]['phase'],'login_pending')
+
+    def test_cold_active_replaced_selection_rejection_or_new_intent_cannot_be_a_pass(self):
+        before=native();cold=deepcopy(before);cold['intents'][0]['phase']='unknown'
+        for change in ('unchanged','active','operation','selection','generation','new','rejection'):
+            wrong=deepcopy(cold)
+            if change=='unchanged':wrong=deepcopy(before)
+            elif change=='active':wrong['intents'][0]['phase']='active'
+            elif change=='operation':wrong['intents'][0]['operation_id']=str(uuid.uuid4())
+            elif change=='selection':wrong['selection']['revision']=2
+            elif change=='generation':wrong['intents'][0]['generation']=2
+            elif change=='new':wrong['intents'].append(deepcopy(wrong['intents'][0]))
+            else:wrong['rejections']=[dict(status=401,code='LOGIN_FAILED')]
+            with self.subTest(change=change),self.assertRaises(RuntimeError):subject.validate_cold_certificate_intent(before,wrong)
 
     def test_foreign_owner_or_existing_origin_refuses_before_listener_or_key_generation(self):
         with tempfile.TemporaryDirectory() as d:

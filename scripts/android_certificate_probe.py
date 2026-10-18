@@ -1,5 +1,6 @@
 """A new owned untrusted TLS endpoint; no trust-store change or HTTP error stub."""
 from contextlib import closing
+from copy import deepcopy
 from pathlib import Path
 import hashlib,json,os,re,shlex,socket,sqlite3,ssl,subprocess,tempfile,threading,time,uuid
 from android_auth_fixture import atomic_json,read_json,require
@@ -99,6 +100,15 @@ def validate_certificate_intent(native,account):
     return operation
 
 
+def validate_cold_certificate_intent(before,after):
+    require(type(before) is dict and len(before.get('intents',[]))==1
+        and before['intents'][0].get('phase')=='login_pending','Original certificate pending boundary missing')
+    expected=deepcopy(before)
+    expected['intents'][0]['phase']='unknown'
+    require(after==expected,'Cold certificate recovery replaced an original identity or activated a session')
+    return expected['intents'][0]['operation_id']
+
+
 def local_snapshot(probe,label):
     path='runtime-note.md';value={}
     for key,table,columns in [('drafts','drafts','id,file_id,path,base_hash,generation,saved_generation,content'),
@@ -156,10 +166,18 @@ def run_certificate(probe):
             and local_snapshot(probe,'certificate-after-login')==local and probe.original('runtime-note.md')==DRAFT.encode(),
             'Rejected TLS changed provider, credentials or original local data')
         probe.auth_phase('current-unusable',cold=True)
-        require(probe.snapshot('certificate-cold',include_rejections=True)==native and local_snapshot(probe,'certificate-cold')==local
-            and probe.original('runtime-note.md')==DRAFT.encode() and probe.observe('certificate-cold')==provider
-            and probe.ciphertext_fingerprints()==sealed and server.snapshot()==after
-            and probe.private(probe.root+'vault/.ainote/sync-spool/'+digest).stdout==spool,
+        cold_native=probe.snapshot('certificate-cold',include_rejections=True)
+        cold_local=local_snapshot(probe,'certificate-cold')
+        cold_raw=probe.original('runtime-note.md')
+        cold_provider=probe.observe('certificate-cold')
+        cold_sealed=probe.ciphertext_fingerprints();cold_origin=server.snapshot()
+        cold_spool=probe.private(probe.root+'vault/.ainote/sync-spool/'+digest).stdout
+        atomic_json(probe.output/'certificate-cold-ciphertext-fingerprints.json',cold_sealed,exclusive=True)
+        atomic_json(probe.output/'certificate-cold-origin.json',cold_origin,exclusive=True)
+        (probe.output/'certificate-cold-original-spool.md').write_bytes(cold_spool)
+        validate_cold_certificate_intent(native,cold_native)
+        require(cold_local==local and cold_raw==DRAFT.encode() and cold_provider==provider
+            and cold_sealed==sealed and cold_origin==after and cold_spool==spool,
             'Cold unusable read retried the original login or changed original data')
         (probe.output/'certificate-original-note.md').write_bytes(DRAFT.encode())
         atomic_json(probe.output/'certificate-runtime-proof.json',dict(passed=True,run_id=os.environ['GITHUB_RUN_ID'],
@@ -169,6 +187,7 @@ def run_certificate(probe):
             actual_platform_untrusted_certificate_rejection=True,zero_HTTP_application_bytes_at_untrusted_server=True,
             no_service_sessions_or_credentials_activated=True,original_local_note_and_Native_records_preserved=True,
             original_spool_bytes_preserved=True,
+            cold_original_pending_transition='login_pending_to_unknown_same_original_identity',
             declared_fresh_self_signed_SAN_valid_certificate=True,trust_store_or_validation_changed=False,
             fresh_rejected_login_is_setup_for_remaining_local_cold=True,
             raw_request_or_secrets_exported=False,physical_or_whole_A4_or_release_complete=False),exclusive=True)
