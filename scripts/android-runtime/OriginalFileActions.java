@@ -54,6 +54,13 @@ final class OriginalFileActions {
         return owned && ("Rename".equals(wanted) || "Delete".equals(wanted))
             && "android.widget.Button".equals(role) && (wanted.equals(text) || wanted.equals(description));
     }
+    /** Read again while an expanded menu's AX descendants are still arriving. */
+    static int menuDecision(int actions,int expanded,int stableAbsent) {
+        if(actions<0||actions>1||expanded< -1||expanded>1||stableAbsent<0||stableAbsent>32)
+            throw new IllegalArgumentException("OWNED_MENU_OBSERVATION_REFUSED");
+        if(actions==1)return 2;
+        return expanded!=1&&stableAbsent>=3?1:0;
+    }
 
     static String unique(String text, String regex) {
         if (text == null || text.length() > 32768) throw new IllegalArgumentException("OWNED_FILE_FREEZE_REFUSED");

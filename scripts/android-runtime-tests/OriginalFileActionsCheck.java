@@ -65,6 +65,14 @@ public final class OriginalFileActionsCheck {
         need(!OriginalFileActions.documentAction(false,"android.widget.Button","Delete","","Delete"));
         need(!OriginalFileActions.documentAction(true,"android.widget.Button","Delete","","Copy"));
         need(!OriginalFileActions.documentAction(true,"android.widget.Button",null,null,null));
+        need(OriginalFileActions.menuDecision(1,-1,0)==2);
+        need(OriginalFileActions.menuDecision(0,-1,0)==0);
+        need(OriginalFileActions.menuDecision(0,-1,2)==0);
+        need(OriginalFileActions.menuDecision(0,-1,3)==1);
+        need(OriginalFileActions.menuDecision(0,0,3)==1);
+        need(OriginalFileActions.menuDecision(0,1,0)==0);
+        need(OriginalFileActions.menuDecision(0,1,3)==0);
+        need(OriginalFileActions.menuDecision(1,1,0)==2);
         System.out.println("ORIGINAL_FILE_ACTIONS_DATA_OK "+count);
         System.out.println(hash(OriginalFileActions.BODY)+" "+hash(OriginalFileActions.UPDATED)+" "+hash(OriginalFileActions.NODE));
     }

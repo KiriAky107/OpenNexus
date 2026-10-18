@@ -22,6 +22,20 @@ public final class OriginalNoteSearchCheck {
         need(!OriginalNoteSearch.searchButton(true,"android.widget.Button","Search","",true,false));
         need(!OriginalNoteSearch.searchButton(true,"android.widget.Button","Search names and text","",true,true));
         need(!OriginalNoteSearch.searchButton(true,"android.widget.Button",null,null,true,true));
+        int fields=OriginalNoteSearch.landingField(true,"android.widget.TextView","Start writing","",false,true,false)
+            |OriginalNoteSearch.landingField(true,"android.widget.TextView","Select a note from the file tree or create a new one","",false,true,false)
+            |OriginalNoteSearch.landingField(true,"android.widget.Button","New note","",false,true,true)
+            |OriginalNoteSearch.landingField(true,"android.widget.Button","New canvas","",false,true,true);
+        need(OriginalNoteSearch.landingReady(fields));
+        for(int missing:new int[]{1,2,4,8})need(!OriginalNoteSearch.landingReady(fields&~missing));
+        need(OriginalNoteSearch.landingField(true,"android.widget.TextView","Notes in this vault","",false,true,false)==0);
+        need(OriginalNoteSearch.landingField(false,"android.widget.TextView","Start writing","",false,true,false)==0);
+        need(OriginalNoteSearch.landingField(true,"android.widget.EditText","Start writing","",true,true,false)==0);
+        need(OriginalNoteSearch.landingField(true,"android.widget.Button","New note","",false,true,false)==0);
+        need(OriginalNoteSearch.landingField(true,"android.widget.Button","New canvas","",false,false,true)==0);
+        need(OriginalNoteSearch.landingField(true,"android.view.View","New note","",false,true,true)==0);
+        need(OriginalNoteSearch.landingField(true,"android.widget.TextView","Start writing draft","",false,true,false)==0);
+        need(OriginalNoteSearch.landingField(true,"android.widget.TextView",null,null,false,true,false)==0);
         System.out.println("ORIGINAL_NOTE_SEARCH_DATA_OK "+count);
         System.out.println(hash(OriginalNoteSearch.SEED)+" "+hash(OriginalNoteSearch.ORIGINAL)+" "+hash(OriginalNoteSearch.CONTROL));
     }

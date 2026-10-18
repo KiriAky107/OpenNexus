@@ -22,4 +22,17 @@ final class OriginalNoteSearch {
         return owned&&enabled&&clickable&&"android.widget.Button".equals(role)
             &&("Search".equals(text)||"Search".equals(description));
     }
+    static int landingField(boolean owned,String role,String text,String description,boolean editable,boolean enabled,boolean clickable) {
+        if(!owned||editable||!enabled)return 0;
+        boolean readable="android.widget.TextView".equals(role)||"android.view.View".equals(role);
+        if(readable&&("Start writing".equals(text)||"Start writing".equals(description)))return 1;
+        if(readable&&("Select a note from the file tree or create a new one".equals(text)
+            ||"Select a note from the file tree or create a new one".equals(description)))return 2;
+        if("android.widget.Button".equals(role)&&clickable) {
+            if("New note".equals(text)||"New note".equals(description))return 4;
+            if("New canvas".equals(text)||"New canvas".equals(description))return 8;
+        }
+        return 0;
+    }
+    static boolean landingReady(int fields){return fields==15;}
 }

@@ -599,7 +599,7 @@ public final class RuntimeProbe extends Instrumentation {
             inputText(noteBody(),original?OriginalNoteSearch.SEED:OriginalNoteSearch.CONTROL);save();return;
         }
         if(phase.equals("search-browse")) {
-            waitNotesLanding();clickTitleBar("Files");
+            waitSearchLanding();clickTitleBar("Files");
             AccessibilityNodeInfo folder=waitNode(n->label(n,OriginalNoteSearch.DIRECTORY,false)&&n.isEnabled()&&fileDrawerRow(n),"original Chinese directory, not a recent-note card");
             activate(folder,this::fileDrawerRow);
             searchResult(OriginalNoteSearch.NAME,OriginalNoteSearch.CONTROL_NAME,true);
@@ -620,6 +620,20 @@ public final class RuntimeProbe extends Instrumentation {
         String expected=OriginalNoteSearch.expected(index),other=index==5?OriginalNoteSearch.NAME:OriginalNoteSearch.CONTROL_NAME;
         searchResult(expected,other,false);
         progress.append("ORIGINAL_NOTE_SEARCH_RESULT ").append(index).append(" negative=0 positive=1\n");
+    }
+    private void waitSearchLanding() {
+        long until=SystemClock.uptimeMillis()+25_000;
+        do {
+            int fields=0;
+            for(AccessibilityNodeInfo node:nodes())if(node.isVisibleToUser())fields|=OriginalNoteSearch.landingField(
+                APP.equals(string(node.getPackageName())),string(node.getClassName()),string(node.getText()),
+                string(node.getContentDescription()),node.isEditable(),node.isEnabled(),node.isClickable());
+            if(OriginalNoteSearch.landingReady(fields)) {
+                progress.append("ORIGINAL_SEARCH_LANDING fields=15 optional_note_shortcuts_not_required\n");return;
+            }
+            SystemClock.sleep(150);
+        }while(SystemClock.uptimeMillis()<until);
+        throw new IllegalStateException("Original owned workspace landing was not observed");
     }
     private void searchOnce(String query) {
         AccessibilityNodeInfo input=waitNode(n->APP.equals(string(n.getPackageName()))&&n.isEditable()&&label(n,"Search names and text",false),"owned exact file-search input");
@@ -711,14 +725,30 @@ public final class RuntimeProbe extends Instrumentation {
     private void localDocumentAction(String wanted) {
         Predicate<AccessibilityNodeInfo> named = n -> OriginalFileActions.documentAction(
             APP.equals(string(n.getPackageName())),string(n.getClassName()),string(n.getText()),string(n.getContentDescription()),wanted);
-        List<AccessibilityNodeInfo> visible=new ArrayList<>();
-        for(AccessibilityNodeInfo node:nodes())if(node.isVisibleToUser()&&named.test(node))visible.add(node);
-        require(visible.size()<=1,"Ambiguous original document action; no input sent");
-        if(visible.isEmpty())clickMenu("More actions");
-        else require(visible.get(0).isEnabled()&&visible.get(0).isClickable(),"Original document action is disabled; no toggle or action sent");
-        // Cancelling the review can leave this actual document menu open.
-        // Observe its original action before deciding whether one opening tap is needed.
         Predicate<AccessibilityNodeInfo> ready = n -> named.test(n)&&n.isEnabled()&&n.isClickable();
+        settleUi();long until=SystemClock.uptimeMillis()+3000;int absent=0;boolean observed=false;
+        do {
+            List<AccessibilityNodeInfo> visible=new ArrayList<>(),summaries=new ArrayList<>();
+            for(AccessibilityNodeInfo node:nodes())if(node.isVisibleToUser()) {
+                if(named.test(node))visible.add(node);
+                if(APP.equals(string(node.getPackageName()))&&node.isClickable()&&label(node,"More actions",false))summaries.add(node);
+            }
+            require(visible.size()<=1&&summaries.size()<=1,"Ambiguous original document menu; no input sent");
+            int expanded=-1;
+            if(summaries.size()==1&&Build.VERSION.SDK_INT>=36) {
+                int state=summaries.get(0).getExpandedState();
+                if(state==AccessibilityNodeInfo.EXPANDED_STATE_FULL||state==AccessibilityNodeInfo.EXPANDED_STATE_PARTIAL)expanded=1;
+                else if(state==AccessibilityNodeInfo.EXPANDED_STATE_COLLAPSED)expanded=0;
+            }
+            if(!visible.isEmpty())require(visible.get(0).isEnabled()&&visible.get(0).isClickable(),"Original document action is disabled; no toggle sent");
+            absent=visible.isEmpty()&&summaries.size()==1&&expanded!=1?absent+1:0;
+            int decision=OriginalFileActions.menuDecision(visible.size(),expanded,absent);
+            progress.append("ORIGINAL_DOCUMENT_MENU actions=").append(visible.size()).append(" expanded=").append(expanded).append(" stable_absent=").append(absent).append('\n');
+            if(decision==2){observed=true;break;}
+            if(decision==1){clickMenu("More actions");observed=true;break;}
+            SystemClock.sleep(150);
+        }while(SystemClock.uptimeMillis()<until);
+        require(observed,"Original menu state not stable; no toggle or action replayed");
         AccessibilityNodeInfo original=waitNode(ready,"owned document action: "+wanted);activate(original,ready);
     }
 
