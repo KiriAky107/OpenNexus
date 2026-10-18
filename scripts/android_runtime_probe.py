@@ -509,12 +509,14 @@ class Probe:
                 (self.output / 'driver-target-stability.txt').write_bytes(observed)
                 require(observed.startswith(b'TARGET_STABILITY_OK '), 'Actual driver target-stability check failed')
                 if getattr(self.args,'scope','')=='external-links':
-                    self.command(['javac','-J-Xmx128m','-encoding','UTF-8','-classpath',classes,
+                    self.command(['javac','-J-Xmx128m','-encoding','UTF-8','-classpath',str(classes)+os.pathsep+str(platform),
                         '-d',checks,root.parent/'android-runtime-tests/OriginalExternalUriCheck.java'])
                     observed=self.command(['java','-Xmx64m','-cp',str(classes)+os.pathsep+str(checks),
                         'cc.kronecker.opennexus.testdriver.OriginalExternalUriCheck']).stdout
                     (self.output/'driver-original-external-uri.txt').write_bytes(observed)
-                    require(observed.decode('ascii').splitlines()==['OWNED_EXTERNAL_URI_CONTRACT_OK 20 no_OS_dispatch_or_network_claim=1'],
+                    from android_external_routing import DOMAIN_NONE,DOMAIN_SELECTED,DOMAIN_VERIFIED
+                    require(observed.decode('ascii').splitlines()==['OWNED_EXTERNAL_URI_CONTRACT_OK 20 no_OS_dispatch_or_network_claim=1',
+                        'ANDROID_DOMAIN_STATES '+str(DOMAIN_NONE)+' '+str(DOMAIN_SELECTED)+' '+str(DOMAIN_VERIFIED)],
                         'External original URI admission contract differs')
                 if getattr(self.args, 'scope', '') == 'product-pair':
                     self.command(['javac', '-J-Xmx256m', '-encoding', 'UTF-8', '-classpath', classes,

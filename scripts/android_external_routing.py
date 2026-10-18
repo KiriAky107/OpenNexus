@@ -4,6 +4,9 @@ from android_runtime_probe import DRIVER,require,require_hosted_emulator
 from android_external_contract import HOST,MD,decode
 
 STAGES=('before','after','cleanup-before','cleanup-after')
+DOMAIN_NONE=0
+DOMAIN_SELECTED=1
+DOMAIN_VERIFIED=2
 
 
 def selected(value,stage):
@@ -14,8 +17,8 @@ def selected(value,stage):
     require(value['package']==DRIVER and type(value['user_id']) is int and value['user_id']==0,'EXTERNAL_DOMAIN_OWN_PACKAGE_OR_USER')
     require(value['link_handling_allowed'] is True and value['internet_verification_claimed'] is False,'EXTERNAL_DOMAIN_HANDLING_OR_CLAIM')
     states=value['host_states'];require(type(states) is dict and set(states)=={HOST} and type(states[HOST]) is int
-        and states[HOST] in (0,2),'EXTERNAL_DOMAIN_OWN_SINGLE_UNVERIFIED_HOST')
-    return states[HOST]==2
+        and states[HOST] in (DOMAIN_NONE,DOMAIN_SELECTED),'EXTERNAL_DOMAIN_OWN_SINGLE_UNVERIFIED_HOST')
+    return states[HOST]==DOMAIN_SELECTED
 
 
 def observe(probe,stage):
@@ -26,6 +29,10 @@ def observe(probe,stage):
     require(('OPENNEXUS_RUNTIME_PHASE_OK '+phase).encode() in result.stdout and b'OPENNEXUS_RUNTIME_FAILED' not in result.stdout,
         'EXTERNAL_DOMAIN_STRUCTURED_API_FAILED')
     raw=probe.shell('run-as',DRIVER,'cat','files/owned-'+phase+'.json').stdout
+    require(len(raw)<=8192,'EXTERNAL_DOMAIN_RAW_BOUND')
+    with (probe.output/(phase+'-raw.json')).open('xb') as output:
+        import os
+        output.write(raw);output.flush();os.fsync(output.fileno())
     value=decode(raw);selected(value,stage);atomic_json(probe.output/(phase+'.json'),value,exclusive=True);return value
 
 

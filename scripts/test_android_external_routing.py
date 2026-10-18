@@ -8,15 +8,15 @@ from android_external_contract import HOST,DRIVER
 
 def state(stage='before',selected=False):
     return dict(schema=1,scope='external-links',stage=stage,package=DRIVER,user_id=0,
-        link_handling_allowed=True,host_states={HOST:2 if selected else 0},internet_verification_claimed=False)
+        link_handling_allowed=True,host_states={HOST:1 if selected else 0},internet_verification_claimed=False)
 
 
 class OwnedRouting(unittest.TestCase):
     def test_only_exact_own_unverified_domain_state_is_admitted(self):
         self.assertFalse(subject.selected(state(),'before'));self.assertTrue(subject.selected(state(selected=True),'before'))
         for key,value in [('schema',True),('scope','other'),('stage','other'),('package','other.app'),('user_id',True),('user_id',10),
-            ('link_handling_allowed',False),('host_states',{}),('host_states',{HOST:True}),('host_states',{HOST:1}),
-            ('host_states',{HOST:2,'other.invalid':0}),('internet_verification_claimed',True)]:
+            ('link_handling_allowed',False),('host_states',{}),('host_states',{HOST:True}),('host_states',{HOST:2}),
+            ('host_states',{HOST:1,'other.invalid':0}),('internet_verification_claimed',True)]:
             bad=dict(state(),**{key:value})
             with self.subTest(key=key,value=value),self.assertRaises(RuntimeError):subject.selected(bad,'before')
         with self.assertRaises(RuntimeError):subject.selected(dict(state(),extra=True),'before')
@@ -71,5 +71,14 @@ class OwnedRouting(unittest.TestCase):
             self.assertEqual(json.loads((probe.output/'external-domain-before.json').read_bytes()),state())
             probe.phase.assert_not_called();probe.device.assert_not_called()
             probe.shell.assert_any_call('am','instrument','-w','-e','phase','external-domain-before',DRIVER+'/.RuntimeProbe',timeout=60)
+
+    def test_rejected_native_state_raw_bytes_are_retained_before_admission(self):
+        with tempfile.TemporaryDirectory() as folder,patch.object(subject,'require_hosted_emulator'):
+            probe=Mock();probe.output=Path(folder);probe.args=SimpleNamespace(serial='emulator-5562',scope='external-links')
+            value=state('after',True);value['host_states'][HOST]=subject.DOMAIN_VERIFIED;raw=json.dumps(value).encode()
+            probe.shell.side_effect=[subprocess.CompletedProcess([],0,b'OPENNEXUS_RUNTIME_PHASE_OK external-domain-after\n',b''),subprocess.CompletedProcess([],0,raw,b'')]
+            with self.assertRaisesRegex(RuntimeError,'SINGLE_UNVERIFIED_HOST'):subject.observe(probe,'after')
+            self.assertEqual((probe.output/'external-domain-after-raw.json').read_bytes(),raw)
+            self.assertFalse((probe.output/'external-domain-after.json').exists());probe.device.assert_not_called();probe.phase.assert_not_called()
 
 if __name__=='__main__':unittest.main()

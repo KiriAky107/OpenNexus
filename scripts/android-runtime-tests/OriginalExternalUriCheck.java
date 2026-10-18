@@ -21,5 +21,8 @@ public final class OriginalExternalUriCheck {
         refused("android.intent.action.VIEW",OriginalExternalUri.MD,false);
         try{OriginalExternalUri.original("other");throw new AssertionError();}catch(IllegalArgumentException expected){count++;}
         System.out.println("OWNED_EXTERNAL_URI_CONTRACT_OK "+count+" no_OS_dispatch_or_network_claim=1");
+        System.out.println("ANDROID_DOMAIN_STATES "+android.content.pm.verify.domain.DomainVerificationUserState.DOMAIN_STATE_NONE
+            +" "+android.content.pm.verify.domain.DomainVerificationUserState.DOMAIN_STATE_SELECTED
+            +" "+android.content.pm.verify.domain.DomainVerificationUserState.DOMAIN_STATE_VERIFIED);
     }
 }
