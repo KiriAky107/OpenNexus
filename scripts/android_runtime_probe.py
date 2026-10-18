@@ -435,7 +435,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','canvas-properties-remaining','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'):
+        if getattr(self.args,'scope',None) in ('lifecycle-remaining','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','canvas-properties-remaining','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -695,7 +695,7 @@ class Probe:
         elif getattr(getattr(self,'args',None),'scope','')=='canvas-view-cold' and phase=='view-cold':
             result=self.shell('am','instrument','-w','-e','phase',phase,'-e','view_cold_window_guard','yes',
                 f'{DRIVER}/.RuntimeProbe',timeout=180)
-        elif phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining','editing-remaining','lifecycle'):
+        elif phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining','editing-remaining','lifecycle','lifecycle-remaining'):
             result = self.image_save_instrumentation(phase)
         elif getattr(getattr(self,'args',None),'scope','')=='canvas-motion' and phase=='motion-background':
             require(re.fullmatch(re.escape(APP)+r'/[A-Za-z0-9_.]+',self.activity),'Original motion resume activity refused')
@@ -723,7 +723,7 @@ class Probe:
             self.force_stop()
         if self.root is None and not phase.startswith('theme-'):
             self.discover_private_root()
-        if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining','editing-remaining','lifecycle'):
+        if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining','editing-remaining','lifecycle','lifecycle-remaining'):
             after = self.image_save_rows(phase, 'after-save')
             before = json.loads((self.output/(phase+'-stable-before-save-receipts.json')).read_text('utf-8'))
             validate_image_save_result(before, after)
@@ -1333,7 +1333,7 @@ class Probe:
         if self.args.scope == 'all':
             for theme in ('dark', 'light', 'sepia', 'system'):
                 self.phase('theme-' + theme)
-        else:
+        elif self.args.scope!='lifecycle-remaining':
             self.phase('theme-diagnostic-dark')
             self.phase('theme-diagnostic-reset')
         if self.binding.get('native_auth_gateway',{}).get('present') is True:
@@ -1354,7 +1354,7 @@ class Probe:
         self.phase('recover')
         require(self.original('runtime-note.md') == DRAFT.encode(), 'Recovered and saved Markdown bytes mismatch')
         self.finish_editing(rich=rich)
-        if self.args.scope=='lifecycle':
+        if self.args.scope in ('lifecycle','lifecycle-remaining'):
             from android_candidate_readiness_probe import verify_candidate
             verify_candidate(self)
 
@@ -1409,8 +1409,9 @@ class Probe:
             'scope': self.args.scope, 'theme_choices_verified': self.args.scope == 'all',
             'native_tls_initializations': self.tls_initializations,
             'native_keystore_tests': self.keystore_test_result,
+            'native_suites_executed_here': self.keystore_test_result is not None,
             'native_auth_gateway_read': self.native_auth_read_result,
-            'previous_components_not_retested': self.args.scope == 'editing-remaining',
+            'previous_components_not_retested': self.args.scope in ('editing-remaining','lifecycle-remaining'),
             'remaining_scope_seed': 'One new note through the real UI, solely to bind actual Chinese composition' if self.args.scope == 'editing-remaining' else None,
             'native_theme_contrast_verified': False,
             'theme_style_diagnostic': 'theme-diagnostic-dark-computed-styles.json' if self.args.scope == 'lifecycle' else None,
@@ -1437,7 +1438,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','canvas-properties-remaining','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'lifecycle-remaining', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','canvas-properties-remaining','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:

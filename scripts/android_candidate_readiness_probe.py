@@ -9,7 +9,7 @@ PATH='runtime.canvas'
 STEPS=('candidate-language-en','candidate-language-zh','candidate-language-return','candidate-language-cold')
 
 def snapshot(probe,label):
-    require(probe.args.scope=='lifecycle' and label.removesuffix('-failure') in ('candidate-before',*STEPS),
+    require(probe.args.scope in ('lifecycle','lifecycle-remaining') and label.removesuffix('-failure') in ('candidate-before',*STEPS),
         'CANDIDATE_LOCALE_SNAPSHOT_SCOPE')
     value={}
     for key,table,columns in [('drafts','drafts','id,file_id,path,base_hash,generation,saved_generation,content'),
@@ -36,15 +36,21 @@ def snapshot(probe,label):
     atomic_json(probe.output/(label+'-native.json'),value,exclusive=True);return value
 
 def verify_candidate(probe):
-    require_hosted_emulator(probe.args.serial);require(probe.args.scope=='lifecycle','CANDIDATE_LIFECYCLE_ONLY')
-    require(probe.keystore_test_result and probe.keystore_test_result.get('tests')==5
-        and probe.keystore_test_result.get('Rust_worker_verified') is True,'CANDIDATE_FIVE_NATIVE_TESTS')
-    insets=json.loads((probe.output/'window-insets-device-proof.json').read_bytes())
-    require(insets.get('passed') is True and insets.get('tests')==3
-        and insets.get('actual_keyboard_visibility_verified') is False,'CANDIDATE_THREE_NATIVE_INSET_TESTS')
-    report=dict(passed=False,scope='Necessary fixed-candidate lifecycle Native suite and readonly bilingual properties',
+    require_hosted_emulator(probe.args.serial);require(probe.args.scope in ('lifecycle','lifecycle-remaining'),'CANDIDATE_LIFECYCLE_ONLY')
+    remaining=probe.args.scope=='lifecycle-remaining';insets=None
+    if remaining:
+        require(probe.keystore_test_result is None and not (probe.output/'window-insets-device-proof.json').exists(),
+            'CANDIDATE_REMAINING_MUST_NOT_REPLAY_NATIVE_SUITES')
+    else:
+        require(probe.keystore_test_result and probe.keystore_test_result.get('tests')==5
+            and probe.keystore_test_result.get('Rust_worker_verified') is True,'CANDIDATE_FIVE_NATIVE_TESTS')
+        insets=json.loads((probe.output/'window-insets-device-proof.json').read_bytes())
+        require(insets.get('passed') is True and insets.get('tests')==3
+            and insets.get('actual_keyboard_visibility_verified') is False,'CANDIDATE_THREE_NATIVE_INSET_TESTS')
+    report=dict(passed=False,scope='Remaining fixed-candidate lifecycle and readonly bilingual properties' if remaining else 'Necessary fixed-candidate lifecycle Native suite and readonly bilingual properties',
         tools_source=probe.args.tools_commit,compiled_source=probe.args.commit,APK_sha256=probe.binding['sha256'],
-        executed_steps=[],content_input=0,Save_actions=0,physical_phone_verified=False)
+        executed_steps=[],content_input=0,Save_actions=0,physical_phone_verified=False,
+        native_suites_executed_here=not remaining,prior_native_suites_not_impersonated=remaining)
     current='candidate-before'
     try:
         raw=probe.original(PATH);document=json.loads(raw)

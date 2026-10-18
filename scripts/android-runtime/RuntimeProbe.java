@@ -142,11 +142,11 @@ public final class RuntimeProbe extends Instrumentation {
                     clickTitleBar("Settings");
                     click("Sync account", false);
                     waitLabel("Server connection and sign-in");
-                    waitLabel("No device connection records yet.");
                     waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
                         && node.isPassword() && string(node.getText()).isEmpty(), "empty password in the shared connection form");
+                    readonlyAuthStatus();
                     progress.append("auth: native current/profile read, no sign-in or credentials entered\n");
-                    click("Close", false);
+                    pressBack();
                     waitLabel("Start writing");
                     break;
                 case "pair-note-reopen":
@@ -579,6 +579,27 @@ public final class RuntimeProbe extends Instrumentation {
         try(FileOutputStream out=new FileOutputStream(target)) {
             out.write(report.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));out.flush();out.getFD().sync();
         }
+    }
+
+    private void readonlyAuthStatus() {
+        boolean shown=false;long until=SystemClock.uptimeMillis()+25_000;
+        do {
+            List<AccessibilityNodeInfo> matches=new ArrayList<>();
+            for(AccessibilityNodeInfo node:nodes())if(APP.equals(string(node.getPackageName()))&&!node.isEditable()
+                &&label(node,"No device connection records yet.",false)&&within(node,"Settings")&&within(node,"Saved connections"))matches.add(node);
+            require(matches.size()<=1,"Ambiguous owned readonly connection status; no input sent");
+            if(matches.size()==1) {
+                AccessibilityNodeInfo node=matches.get(0),root=ui.getRootInActiveWindow();Rect bounds=new Rect(),window=new Rect();
+                node.getBoundsInScreen(bounds);if(root!=null)root.getBoundsInScreen(window);
+                if(root!=null&&APP.equals(string(root.getPackageName()))&&node.isVisibleToUser()&&bounds.width()>0&&bounds.height()>0
+                    &&window.contains(bounds.centerX(),bounds.centerY())) {
+                    progress.append("READONLY_AUTH_STATUS_VISIBLE action_show=").append(shown?1:0).append(" credential_input=0\n");return;
+                }
+                if(!shown){shown=true;require(node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId()),"Owned readonly status could not be shown");}
+            }
+            SystemClock.sleep(150);
+        }while(SystemClock.uptimeMillis()<until);
+        throw new IllegalStateException("Owned readonly connection status is not visible; no credential input sent");
     }
 
     private void candidateLanguageRead(String phase) throws Exception {

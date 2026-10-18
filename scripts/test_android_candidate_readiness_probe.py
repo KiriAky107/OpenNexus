@@ -2,14 +2,71 @@
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock,patch
-import hashlib,json,tempfile,unittest
+import hashlib,json,tempfile,unittest,yaml
 import android_candidate_readiness_probe as candidate
-from android_runtime_probe import Probe
+from android_runtime_probe import Probe,BODY,DRAFT,RICH_TEXT
+from android_workflow_gate import admitted
 
 class CandidateReadinessBoundaries(unittest.TestCase):
-    def test_lifecycle_waits_for_original_image_receipt_and_checks_after_the_single_save(self):
+    def test_remaining_mode_does_not_run_the_already_accepted_native_suites(self):
+        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope='lifecycle-remaining')
+        probe.device=Mock();probe.shell=Mock()
+        probe.native_keystore_tests();probe.device.assert_not_called();probe.shell.assert_not_called()
+
+    def test_remaining_workflow_can_only_reuse_a_fixed_apk(self):
+        root=Path(__file__).resolve().parents[1];flow=yaml.load((root/'.github/workflows/android.yml').read_text('utf-8'),Loader=yaml.BaseLoader)
+        for reuse in ('','39148381613'):
+            for job in ('debug-apk','desktop-startup','desktop-pair','android-desktop-pair'):
+                self.assertFalse(admitted(flow['jobs'][job]['if'],'lifecycle-remaining',reuse=reuse,build='skipped'))
+        self.assertTrue(admitted(flow['jobs']['emulator-runtime']['if'],'lifecycle-remaining',reuse='39148381613',build='skipped'))
+
+    def test_remaining_ui_routes_past_old_theme_diagnostics_and_keeps_auth_index_read(self):
+        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope='lifecycle-remaining')
+        probe.binding={'native_auth_gateway':{'present':True}};probe.boot=Mock();probe.check_empty_native_auth_index=Mock()
+        probe.enable_test_ime=Mock();probe.finish_editing=Mock();current={'note':BODY.encode()}
+        def phase(name,**kwargs):
+            if name=='recover':current['note']=DRAFT.encode()
+        probe.phase=Mock(side_effect=phase)
+        probe.original=Mock(side_effect=lambda path:current['note'] if path=='runtime-note.md' else ('**'+RICH_TEXT+'**\n').encode())
+        probe.draft_rows=Mock(return_value=[('runtime-note.md',DRAFT,2,1)])
+        with patch.object(candidate,'verify_candidate') as verify:probe.run()
+        self.assertEqual([c.args[0] for c in probe.phase.call_args_list],['auth-read','markdown','rich-markdown','rich-reopen','draft','recover'])
+        probe.check_empty_native_auth_index.assert_called_once();probe.finish_editing.assert_called_once();verify.assert_called_once_with(probe)
+
+    @patch.object(candidate,'require_hosted_emulator')
+    def test_remaining_bilingual_report_does_not_impersonate_the_original_native_suites(self,_):
         with tempfile.TemporaryDirectory() as root:
-            probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope='lifecycle');probe.output=Path(root)
+            probe=self.probe(root);probe.args.scope='lifecycle-remaining';probe.keystore_test_result=None
+            (probe.output/'window-insets-device-proof.json').unlink()
+            with patch.object(candidate,'snapshot',side_effect=self.state):candidate.verify_candidate(probe)
+            proof=json.loads((probe.output/'candidate-readiness-proof.json').read_bytes())
+            self.assertTrue(proof['passed']);self.assertFalse(proof['native_suites_executed_here'])
+            self.assertTrue(proof['prior_native_suites_not_impersonated']);self.assertIsNone(proof['Native_tests']);self.assertIsNone(proof['native_insets'])
+
+    @patch.object(candidate,'require_hosted_emulator')
+    def test_remaining_mode_refuses_a_current_native_suite_result(self,_):
+        with tempfile.TemporaryDirectory() as root:
+            probe=self.probe(root);probe.args.scope='lifecycle-remaining'
+            with self.assertRaises(RuntimeError):candidate.verify_candidate(probe)
+            probe.phase.assert_not_called()
+
+    def test_readonly_auth_scroll_is_owned_bounded_and_never_sends_credentials(self):
+        root=Path(__file__).resolve().parents[1];java=(root/'scripts/android-runtime/RuntimeProbe.java').read_text('utf-8')
+        method=java.split('private void readonlyAuthStatus()',1)[1].split('private void candidateLanguageRead',1)[0]
+        for required in ('within(node,"Settings")','within(node,"Saved connections")','matches.size()<=1','if(!shown)','ACTION_SHOW_ON_SCREEN','bounds.height()>0','window.contains','credential_input=0'):
+            self.assertIn(required,method)
+        for forbidden in ('setText(', 'inputText(', 'activate(', 'save();', 'Sign in'):
+            self.assertNotIn(forbidden,method)
+        auth=java.split('case "auth-read":',1)[1].split('case "pair-note-reopen":',1)[0]
+        self.assertLess(auth.index('empty password'),auth.index('readonlyAuthStatus()'));self.assertIn('pressBack();',auth)
+
+    def test_lifecycle_waits_for_original_image_receipt_and_checks_after_the_single_save(self):
+        for scope in ('lifecycle','lifecycle-remaining'):
+            with self.subTest(scope=scope):self._original_image_scope(scope)
+
+    def _original_image_scope(self,scope):
+        with tempfile.TemporaryDirectory() as root:
+            probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope=scope);probe.output=Path(root)
             probe.root='owned/';probe.activity='owned/Activity';probe.phases=[]
             probe.force_stop=Mock();probe.native_tls_startup=Mock();probe.capture=Mock()
             probe.read_native_styles=Mock();probe.capture_failed_editor_state=Mock()
