@@ -676,14 +676,14 @@ class RuntimeBoundaries(unittest.TestCase):
         probe.output=root/'evidence';probe.output.mkdir();probe.tools=root/'private-read-copies';probe.tools.mkdir()
         probe.apk=root/'original.apk';probe.apk.write_bytes(b'original immutable APK bytes')
         probe.binding={'sha256':digest(probe.apk.read_bytes())};probe.args=SimpleNamespace(serial='emulator-5562')
-        installed='/data/app/owned/base.apk';calls=[];copies=iter(copied);hashes=iter(hashes) if hashes else None
+        installed='/data/app/'+APP+'-owned/base.apk';calls=[];copies=iter(copied);hashes=iter(hashes) if hashes else None
         states=iter(states) if states else None
         def device(*args,**kwargs):
             calls.append(args)
             if args==('get-state',):return subprocess.CompletedProcess([],0,next(states) if states else b'device\n',b'')
             if args==('emu','avd','name'):return subprocess.CompletedProcess([],0,(avd+'\nOK\n').encode(),b'')
-            if args[0]=='pull':
-                Path(args[2]).write_bytes(next(copies));return subprocess.CompletedProcess([],0,b'one file pulled',b'')
+            if args[:2]==('shell','-T'):
+                kwargs['stdout_sink'].write(next(copies));return subprocess.CompletedProcess([],0,None,b'')
             raise AssertionError('Unexpected device action: '+str(args))
         def shell(*args,**kwargs):
             calls.append(('shell',*args))
@@ -694,6 +694,46 @@ class RuntimeBoundaries(unittest.TestCase):
             raise AssertionError('Unexpected shell write: '+str(args))
         probe.device=device;probe.shell=shell
         return probe,installed,calls
+
+    def test_default_command_keeps_original_stdin_and_captured_stdout_without_a_stream_sink(self):
+        probe=Probe.__new__(Probe);payload=b'synthetic private stdin'
+        reply=subprocess.CompletedProcess([],0,b'original result',b'')
+        with patch('android_runtime_probe.subprocess.run',return_value=reply) as run:
+            self.assertIs(probe.command(['owned-tool','original'],input=payload),reply)
+        self.assertEqual(run.call_args.args[0],['owned-tool','original'])
+        self.assertEqual(run.call_args.kwargs,dict(input=payload,timeout=90,capture_output=True))
+
+    def test_installed_binary_copy_streams_to_the_original_exclusive_file_without_buffering_stdout(self):
+        import shlex
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.tools=Path(directory);probe.args=SimpleNamespace(serial='emulator-5562');probe.adb=Path('/unused/adb')
+            path='/data/app/~~owned/'+APP+'-original/base.apk';target=probe.tools/'installed-observation-1.apk';raw=b'original APK\x00\xff bytes'
+            def read(command,**options):
+                self.assertEqual(command[:-1],[str(probe.adb),'-s','emulator-5562','shell','-T'])
+                self.assertEqual(shlex.split(command[-1]),['cat',path])
+                self.assertEqual(options['timeout'],60);self.assertEqual(options['stderr'],subprocess.PIPE)
+                self.assertNotIn('capture_output',options);self.assertFalse(isinstance(options['stdout'],int))
+                options['stdout'].write(raw);return subprocess.CompletedProcess(command,0,None,b'')
+            with patch('android_runtime_probe.require_hosted_emulator'),patch('android_runtime_probe.subprocess.run',side_effect=read) as command:
+                result=probe.copy_installed(path,target)
+            self.assertEqual(result.returncode,0);self.assertEqual(target.read_bytes(),raw);self.assertEqual(command.call_count,1)
+
+    def test_binary_copy_rejects_foreign_paths_destinations_and_existing_originals_before_process_access(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.tools=Path(directory)/'private';probe.tools.mkdir();probe.args=SimpleNamespace(serial='emulator-5562')
+            path='/data/app/'+APP+'-original/base.apk';target=probe.tools/'installed-observation-1.apk'
+            with patch('android_runtime_probe.require_hosted_emulator'),patch('android_runtime_probe.subprocess.run') as process:
+                for source,destination in [('/data/app/other/base.apk',target),(path,probe.tools.parent/'installed-observation-1.apk'),(path,probe.tools/'other.apk')]:
+                    with self.subTest(source=source,destination=str(destination)),self.assertRaises(RuntimeError):probe.copy_installed(source,destination)
+                target.write_bytes(b'original observation')
+                with self.assertRaises(RuntimeError):probe.copy_installed(path,target)
+                self.assertEqual(target.read_bytes(),b'original observation');process.assert_not_called()
+
+    def test_installed_binary_copy_has_no_physical_or_local_device_path(self):
+        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(serial='physical-phone')
+        with patch.dict(os.environ,{},clear=True),patch('android_runtime_probe.subprocess.run') as process,self.assertRaises(RuntimeError):
+            probe.copy_installed('/data/app/'+APP+'-original/base.apk',Path('installed-observation-1.apk'))
+        process.assert_not_called()
 
     def test_installed_byte_reads_preserve_a_partial_original_and_confirm_only_a_full_copy(self):
         original=b'original immutable APK bytes'
@@ -706,14 +746,14 @@ class RuntimeBoundaries(unittest.TestCase):
             self.assertEqual((probe.tools/'installed-observation-1.apk').read_bytes(),b'partial')
             self.assertEqual((probe.tools/'installed-observation-2.apk').read_bytes(),original)
             self.assertEqual(probe.apk.read_bytes(),original)
-            self.assertEqual(sum(call[0]=='pull' for call in calls),2)
+            self.assertEqual(sum(call[:2]==('shell','-T') for call in calls),2)
 
     def test_device_hash_disagreement_rejects_before_copy_or_reinstall(self):
         with tempfile.TemporaryDirectory() as directory:
             probe,path,calls=self.installed_probe(directory,[],hashes=[digest(b'changed installed APK')])
             with patch('android_runtime_probe.require_hosted_emulator'),patch.dict(os.environ,{'GITHUB_RUN_ID':'73','GITHUB_RUN_ATTEMPT':'1'}):
                 with self.assertRaisesRegex(RuntimeError,'device APK hash differs'):probe.verify_installed(path)
-            self.assertFalse(any(call[0] in ('pull','install') for call in calls))
+            self.assertFalse(any(call[:2]==('shell','-T') or call[0]=='install' for call in calls))
 
     def test_failed_installed_pull_retains_each_original_output_without_weakening_the_gate(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -721,7 +761,7 @@ class RuntimeBoundaries(unittest.TestCase):
             original=probe.device;count=0
             def device(*args,**kwargs):
                 nonlocal count
-                if args[0]!='pull':return original(*args,**kwargs)
+                if args[:2]!=('shell','-T'):return original(*args,**kwargs)
                 count+=1;calls.append(args)
                 return subprocess.CompletedProcess([],1,b'partial read '+str(count).encode(),b'adb: read failed\xff\n')
             probe.device=device
@@ -744,7 +784,7 @@ class RuntimeBoundaries(unittest.TestCase):
             probe,path,calls=self.installed_probe(directory,[original]);prior=probe.device;count=0
             def device(*args,**kwargs):
                 nonlocal count
-                if args[0]=='pull':
+                if args[:2]==('shell','-T'):
                     count+=1
                     if count==1:raise subprocess.TimeoutExpired('owned adb pull',60,output=b'partial\xff',stderr=b'transport pending\n')
                 return prior(*args,**kwargs)
@@ -762,7 +802,7 @@ class RuntimeBoundaries(unittest.TestCase):
             probe,path,calls=self.installed_probe(directory,[]);prior=probe.device
             raw=b'x'*(64*1024)+b'original tail'
             def device(*args,**kwargs):
-                if args[0]=='pull':return subprocess.CompletedProcess([],1,b'',raw)
+                if args[:2]==('shell','-T'):return subprocess.CompletedProcess([],1,b'',raw)
                 return prior(*args,**kwargs)
             probe.device=device
             with patch('android_runtime_probe.require_hosted_emulator'),patch.dict(os.environ,{'GITHUB_RUN_ID':'73','GITHUB_RUN_ATTEMPT':'1'}):

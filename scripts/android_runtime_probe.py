@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -278,8 +279,9 @@ class Probe:
         self.keystore_test_result = None
         self.native_auth_read_result = None
 
-    def command(self, command, *, timeout=90, input=None, check=True):
-        result = subprocess.run([str(value) for value in command], input=input, capture_output=True, timeout=timeout)
+    def command(self, command, *, timeout=90, input=None, check=True, stdout_sink=None):
+        capture = {'capture_output': True} if stdout_sink is None else {'stdout': stdout_sink, 'stderr': subprocess.PIPE}
+        result = subprocess.run([str(value) for value in command], input=input, timeout=timeout, **capture)
         if check and result.returncode:
             raise RuntimeError(f'Command failed ({result.returncode}): {command[:5]}\n{result.stderr.decode("utf-8", "replace")}')
         return result
@@ -317,6 +319,20 @@ class Probe:
             time.sleep(1)
         raise RuntimeError('Original owned emulator did not reconnect; no restart was attempted')
 
+    def copy_installed(self, installed_path, target, *, timeout=60):
+        require_hosted_emulator(self.args.serial)
+        require(re.fullmatch(r'/data/app/(?:[A-Za-z0-9_~+=.-]+/)?'+re.escape(APP)+r'-[A-Za-z0-9_+=.-]+/base\.apk', installed_path)
+            and '..' not in installed_path.split('/'), 'Installed source is not the owned package APK')
+        require(target.parent==self.tools and re.fullmatch(r'installed-observation-[1-3]\.apk',target.name)
+            and not target.exists() and not target.is_symlink(), 'Original installed-byte target would be replaced')
+        # Shell-v2 preserves binary stdout and the remote exit status. Stream
+        # directly to the original exclusive file rather than buffering an APK
+        # or depending on the separate adb pull transfer protocol.
+        with target.open('xb') as output:
+            result=self.device('shell','-T',shlex.join(('cat',installed_path)),stdout_sink=output,timeout=timeout,check=False)
+            output.flush();os.fsync(output.fileno())
+        return result
+
     def verify_installed(self, installed_path):
         expected = self.binding['sha256']
         observations = {'expected_sha256': expected, 'expected_size': self.apk.stat().st_size, 'attempts': []}
@@ -344,7 +360,8 @@ class Probe:
         preserve()
         for attempt in range(1, 4):
             self.wait_owned_connection()
-            entry = {'attempt': attempt, 'verified': False}
+            entry = {'attempt': attempt, 'verified': False, 'read_backend': 'adb-shell-v2-cat',
+                     'host_available_bytes_before': shutil.disk_usage(self.tools).free}
             observations['attempts'].append(entry); preserve()
             try:
                 path = self.shell('pm', 'path', APP, check=False, timeout=10)
@@ -361,7 +378,7 @@ class Probe:
             copy = self.tools / f'installed-observation-{attempt}.apk'
             require(not copy.exists(), 'An earlier installed-byte observation would be replaced')
             try:
-                result = self.device('pull', installed_path, copy, check=False, timeout=60)
+                result = self.copy_installed(installed_path, copy, timeout=60)
                 entry['pull_returncode'] = result.returncode
                 stdout, stderr = result.stdout, result.stderr
             except subprocess.TimeoutExpired as error:
@@ -375,6 +392,7 @@ class Probe:
                 with copy.open('rb') as file:
                     entry['read_sha256'] = hashlib.file_digest(file, 'sha256').hexdigest()
             entry['device_sha256_after'] = device_hash()
+            entry['host_available_bytes_after'] = shutil.disk_usage(self.tools).free
             entry['verified'] = (entry['pull_returncode'] == 0 and entry.get('read_size') == observations['expected_size']
                 and entry.get('read_sha256') == entry['device_sha256_after'] == expected)
             preserve()
