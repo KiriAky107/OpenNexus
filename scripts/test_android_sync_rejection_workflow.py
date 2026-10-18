@@ -1,6 +1,6 @@
 from pathlib import Path
 import ast,unittest,yaml
-from test_android_desktop_workflow import admitted
+from android_workflow_gate import admitted
 
 class RevocationWorkflow(unittest.TestCase):
     @classmethod

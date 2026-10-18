@@ -1,5 +1,4 @@
 import os
-import ast
 from pathlib import Path
 import tempfile
 import unittest
@@ -9,21 +8,7 @@ import yaml
 
 from android_desktop_handoff import HandoffError
 import android_desktop_runtime as runtime
-
-
-def admitted(expression, scope, *, reuse='', event='workflow_dispatch', build='success'):
-    """Evaluate only the literal boolean subset used by these three job gates."""
-    value = expression.removeprefix('${{').removesuffix('}}').strip()
-    for field, replacement in [('github.event_name', repr(event)), ('inputs.runtime_scope', repr(scope)),
-                               ('inputs.apk_run_id', repr(reuse)), ('needs.debug-apk.result', repr(build)),
-                               ('!cancelled()', 'True'), ('always()', 'True')]:
-        value = value.replace(field, replacement)
-    value = value.replace('&&', ' and ').replace('||', ' or ')
-    tree = ast.parse(value, mode='eval')
-    if not all(isinstance(node, (ast.Expression, ast.BoolOp, ast.Compare, ast.Constant,
-                                 ast.And, ast.Or, ast.Eq, ast.NotEq)) for node in ast.walk(tree)):
-        raise ValueError('Unsupported job condition')
-    return eval(compile(tree, 'fixed-workflow-job-gate', 'eval'), {'__builtins__': {}})
+from android_workflow_gate import admitted
 
 
 class DesktopWorkflow(unittest.TestCase):
