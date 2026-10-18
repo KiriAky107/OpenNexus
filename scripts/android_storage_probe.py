@@ -30,7 +30,9 @@ def action_intent(probe, phase, **details):
 
 def storage_paths(home, relative, run_id):
     require(type(home) is str and home in ('/data/user/0/' + APP, '/data/data/' + APP), 'Storage app home is not the owned user0 app')
-    require(type(relative) is str and re.fullmatch(r'\./(?:[A-Za-z0-9_.-]+/)+', relative)
+    # The original root finder also admits ./mobile-drafts.sqlite3. Its ./
+    # parent is still the verified app home; the mount stays in vault/full-area.
+    require(type(relative) is str and re.fullmatch(r'\./(?:[A-Za-z0-9_.-]+/)*', relative)
             and all(p not in ('.', '..') for p in relative[2:].split('/')[:-1]), 'Unsafe original private storage root')
     require(type(run_id) is str and re.fullmatch(r'[1-9][0-9]{0,17}', run_id), 'Storage requires its original run ID')
     parent = home + '/' + relative[2:] + 'vault'

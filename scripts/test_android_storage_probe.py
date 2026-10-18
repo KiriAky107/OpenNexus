@@ -5,10 +5,25 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
+from android_runtime_probe import Probe
 from android_storage_probe import APP, CAPACITY, ORIGINAL, UPDATED, OwnedFilesystem, file_identity, mount_identity, original_pending, space, storage_paths
 
 
 class StorageBoundaries(unittest.TestCase):
+    def test_discovered_app_home_database_keeps_the_mount_inside_its_vault_child(self):
+        probe = Mock()
+        probe.shell.return_value.stdout = b'./mobile-drafts.sqlite3\n'
+        Probe.discover_private_root(probe)
+        self.assertEqual(probe.root, './')
+        for home in ('/data/user/0/' + APP, '/data/data/' + APP):
+            parent, target, filler = storage_paths(home, probe.root, '39092719278')
+            self.assertEqual(parent, home + '/vault')
+            self.assertEqual(target, home + '/vault/full-area')
+            self.assertEqual(filler, '.owned-enospc-39092719278')
+        for root in ('.', '', '../', './..', './files//', './files/../', '/'):
+            with self.subTest(root=root), self.assertRaises(RuntimeError):
+                storage_paths('/data/user/0/' + APP, root, '39092719278')
+
     def test_local_or_physical_host_refuses_before_ADB_or_private_storage_access(self):
         p = Mock(); p.args.serial = 'emulator-5562'
         with patch.dict(os.environ, {}, clear=True), self.assertRaises(RuntimeError):
