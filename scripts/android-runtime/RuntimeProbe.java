@@ -590,23 +590,23 @@ public final class RuntimeProbe extends Instrumentation {
             setText(waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
                 && label(node,"Note path",false), "original reviewed rename path"),OriginalFileActions.destination(kind));
             hideKeyboard();
-            click("Review action",false);
+            localFileButton("Review action");
             waitLabel("Awaiting confirmation");
             recordLocalFileFreeze();
         } else if (step.equals("reject-old")) {
             waitLabel("Awaiting confirmation");
-            click("Apply reviewed action",false); // One old frozen action only.
+            localFileButton("Apply reviewed action"); // One old frozen action only.
             waitLabel("REVISION_CONFLICT");
-            click("Check original result",false); // Read, never execute again.
+            localFileButton("Check original result"); // Read, never execute again.
             waitLabel("Requires a new review");
             recordLocalFileFreeze();
         } else if (step.equals("cancel-old") || step.equals("delete-cancel")) {
-            click("Cancel",false);
+            localFileButton("Cancel");
             waitLabel("Back");
             waitNode(node -> label(node,"Save",false) && !node.isEnabled(), "original clean editor after cancellation");
         } else if (step.equals("rename-apply") || step.equals("delete-apply")) {
             waitLabel("Awaiting confirmation");
-            click("Apply reviewed action",false);
+            localFileButton("Apply reviewed action");
             waitLabel("Completed");
         } else if (step.equals("delete-cancel-preview") || step.equals("delete-preview")) {
             clickMenu(canvas?"More canvas actions":"More actions");
@@ -637,6 +637,14 @@ public final class RuntimeProbe extends Instrumentation {
             require(!visibleLabel(OriginalFileActions.original(kind)) && !visibleLabel("资料😀."+kind),
                 "Deleted own file is still in the fresh root listing");
         }
+    }
+
+    private void localFileButton(String wanted) {
+        Predicate<AccessibilityNodeInfo> button = node -> OriginalFileActions.reviewedButton(
+            APP.equals(string(node.getPackageName())), string(node.getClassName()), string(node.getText()),
+            string(node.getContentDescription()), node.isEnabled(), node.isClickable(), wanted);
+        AccessibilityNodeInfo original = waitNode(button, "owned original file action button: " + wanted);
+        activate(original, button);
     }
 
     private void recordLocalFileFreeze() {

@@ -32,6 +32,17 @@ public final class OriginalFileActionsCheck {
         refuses(() -> OriginalFileActions.expected(digest+"\n"+new String(new char[64]).replace('\0','a')));
         refuses(() -> OriginalFileActions.expected("missing"));
         need(!OriginalFileActions.UPDATED.replace("\r\n","").contains("\n"));
+        for(String action:new String[]{"Review action","Apply reviewed action","Check original result","Cancel"})
+            need(OriginalFileActions.reviewedButton(true,"android.widget.Button",action,"",true,true,action));
+        need(OriginalFileActions.reviewedButton(true,"android.widget.Button","","Review action",true,true,"Review action"));
+        need(!OriginalFileActions.reviewedButton(true,"android.app.Dialog","Review action","",true,true,"Review action"));
+        need(!OriginalFileActions.reviewedButton(true,"android.view.View","Review action","",true,true,"Review action"));
+        need(!OriginalFileActions.reviewedButton(false,"android.widget.Button","Review action","",true,true,"Review action"));
+        need(!OriginalFileActions.reviewedButton(true,"android.widget.Button","Review action","",false,true,"Review action"));
+        need(!OriginalFileActions.reviewedButton(true,"android.widget.Button","Review action","",true,false,"Review action"));
+        need(!OriginalFileActions.reviewedButton(true,"android.widget.Button","Review action extra","",true,true,"Review action"));
+        need(!OriginalFileActions.reviewedButton(true,"android.widget.Button","Sign in","",true,true,"Sign in"));
+        need(!OriginalFileActions.reviewedButton(true,"android.widget.Button",null,null,true,true,null));
         System.out.println("ORIGINAL_FILE_ACTIONS_DATA_OK "+count);
         System.out.println(hash(OriginalFileActions.BODY)+" "+hash(OriginalFileActions.UPDATED)+" "+hash(OriginalFileActions.NODE));
     }

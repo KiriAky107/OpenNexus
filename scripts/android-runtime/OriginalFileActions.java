@@ -32,6 +32,14 @@ final class OriginalFileActions {
     }
     static String destination(String kind) { original(kind); return DIRECTORY + "/资料😀." + kind; }
 
+    static boolean reviewedButton(boolean owned, String role, String text, String description,
+                                  boolean enabled, boolean clickable, String wanted) {
+        boolean allowed = "Review action".equals(wanted) || "Apply reviewed action".equals(wanted)
+            || "Check original result".equals(wanted) || "Cancel".equals(wanted);
+        return owned && allowed && enabled && clickable && "android.widget.Button".equals(role)
+            && (wanted.equals(text) || wanted.equals(description));
+    }
+
     static String unique(String text, String regex) {
         if (text == null || text.length() > 32768) throw new IllegalArgumentException("OWNED_FILE_FREEZE_REFUSED");
         Matcher match = Pattern.compile(regex).matcher(text);
