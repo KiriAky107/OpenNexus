@@ -1,0 +1,103 @@
+name: Android release inputs
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: 'Full fixed source SHA; must be this checkout. Produces release inputs, never publishes or uploads a key.'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release-input-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-inputs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      CARGO_BUILD_JOBS: '3'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.build/android-release-target
+    steps:
+      - uses: actions/checkout@v7
+      - name: Admit only this fixed original source
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          python3 - <<'PY'
+          import os,re,subprocess
+          sha=os.environ['EXPECTED_COMMIT']
+          assert re.fullmatch(r'[0-9a-f]{40}',sha)
+          assert sha==os.environ['GITHUB_SHA']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert not subprocess.check_output(['git','status','--porcelain']).strip()
+          PY
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: corepack enable
+      - run: corepack prepare pnpm@10.28.0 --activate
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - name: Install the fixed Android SDK and NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          manager="$ANDROID_HOME/cmdline-tools/latest/bin"
+          if [[ -x "$manager/android" ]]; then
+            for package in platforms/android-36 build-tools/36.0.0 ndk/30.0.16248370; do
+              "$manager/android" --no-metrics --sdk="$ANDROID_HOME" sdk --ignore-outdated-xmls install "$package"
+            done
+          else
+            "$manager/sdkmanager" --sdk_root="$ANDROID_HOME" --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;30.0.16248370' </dev/null
+          fi
+          test -f "$ANDROID_HOME/ndk/30.0.16248370/source.properties"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
+      - run: pnpm --dir frontend install --frozen-lockfile
+      - name: Verify release-only package observation boundaries
+        run: |
+          python3 -m unittest discover -s scripts -p test_android_release_native.py -v
+          python3 -m unittest discover -s scripts -p test_verify_android_release_package.py -v
+      - name: Freeze source before real release compilation
+        run: python3 scripts/record-build-source.py --commit "$GITHUB_SHA"
+      - name: Build stable identifier release APKs for both ABIs
+        working-directory: frontend
+        run: pnpm android build --target aarch64 x86_64 --split-per-abi --features custom-protocol --apk --ci
+      - name: Bind each split original to source, R8 and compiled runtime sections
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os,shutil,subprocess,zipfile
+          root=Path.cwd();out=root/'.build/android-release-inputs';out.mkdir()
+          apks=list((root/'frontend/mobile/src-tauri/gen/android/app/build/outputs/apk').rglob('*.apk'))
+          assert len(apks)==2,'Expected two actual split release APKs'
+          seen=set();sha=os.environ['GITHUB_SHA']
+          for apk in apks:
+              with zipfile.ZipFile(apk) as z:
+                  libs=[name for name in z.namelist() if name.startswith('lib/') and not name.endswith('/')]
+              assert len(libs)==1 and libs[0] in ('lib/arm64-v8a/libopennexus_mobile.so','lib/x86_64/libopennexus_mobile.so')
+              abi=libs[0].split('/')[1];assert abi not in seen;seen.add(abi)
+              subprocess.run(['python3','scripts/verify_android_release_package.py','--commit',sha,
+                  '--source-proof',str(root/'.build/source-provenance'/f'{sha}.json'),'--apk',str(apk),
+                  '--native-dir',os.environ['CARGO_TARGET_DIR'],'--sdk',os.environ['ANDROID_HOME'],
+                  '--abi',abi,'--output',str(out/f'{abi}-release-input.json')],check=True)
+              shutil.copyfile(apk,out/f'OpenNexus-android-{abi}-release-input.apk')
+          assert seen=={'arm64-v8a','x86_64'}
+          shutil.copyfile(root/'.build/source-provenance'/f'{sha}.json',out/'source-provenance.json')
+          shutil.copyfile(root/'frontend/mobile/src-tauri/gen/android/app/build/reports/platform-verifier/origin.json',out/'platform-verifier-origin.json')
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: OpenNexus-android-release-input-${{ github.sha }}
+          path: .build/android-release-inputs/
+          if-no-files-found: error
