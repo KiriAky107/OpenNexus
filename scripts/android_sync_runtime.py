@@ -640,7 +640,7 @@ def main():
     args=parser.parse_args();args.scope='sync-revocation' if args.revocation else 'sync-conflicts' if args.conflicts else 'sync-recovery' if args.recovery else 'sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
     require(not args.cold_originals or args.conflicts,'Cold original-entry scope requires actual conflicts')
     require(not args.semantic_preview or args.conflicts,'Native accessibility preview requires the explicit conflict scope')
-    require(not args.webview_preview or args.conflicts,'Owned WebView preview requires the explicit conflict scope')
+    require(not args.webview_preview or args.conflicts or args.revocation,'Owned WebView preview requires an explicit conflict or revocation scope')
     require(not args.webview_cycle or args.conflicts,'Owned WebView cycle requires the explicit conflict scope')
     require(not (args.semantic_preview and args.webview_preview),'Choose exactly one original preview input backend')
     validate_original_outcome_args(args)

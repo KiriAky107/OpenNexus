@@ -42,6 +42,20 @@ class WebViewPreview(unittest.TestCase):
                 with self.assertRaises(RuntimeError): runtime.main()
                 host.assert_not_called()
 
+    def test_revocation_admits_explicit_preview_only_without_acquiring_an_owner(self):
+        base = ['probe','--bundle','unused','--sdk','unused','--output','unused','--source-checkout','unused',
+                '--commit','a'*40,'--tools-commit','b'*40,'--build-run-id','39112675356','--revocation']
+        class HostedBoundary(Exception): pass
+        for flags in (['--webview-preview'], ['--webview-preview','--webview-cycle'],
+                      ['--semantic-preview'], ['--webview-preview','--semantic-preview']):
+            admitted = flags == ['--webview-preview']
+            with self.subTest(flags=flags), patch.object(sys,'argv',base+flags), \
+                 patch.object(runtime,'require_hosted',side_effect=HostedBoundary) as host, \
+                 patch.object(runtime,'owned_root') as owner:
+                with self.assertRaises(HostedBoundary if admitted else RuntimeError): runtime.main()
+                self.assertEqual(host.call_count, int(admitted))
+                owner.assert_not_called()
+
     def test_original_stream_accepts_one_nonce_and_never_relaunches_after_unknown_input(self):
         for mode in ('normal','wrong_nonce','duplicate','ended','unknown'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as work:

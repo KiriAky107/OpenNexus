@@ -1,5 +1,6 @@
 from pathlib import Path
-import ast,unittest,yaml
+from unittest.mock import patch
+import ast,os,unittest,yaml
 from android_workflow_gate import admitted
 
 class RevocationWorkflow(unittest.TestCase):
@@ -47,5 +48,21 @@ class RevocationWorkflow(unittest.TestCase):
         self.assertIn('run_revocation(self,setup,prepared,device)',branch);self.assertIn('return',branch)
         self.assertIn("scope.add_argument('--revocation',action='store_true')",source)
         self.assertIn('include_payloads=False',source)
+
+    def test_explicit_webview_preview_admission_is_checked_before_download(self):
+        steps=self.workflow['jobs']['emulator-runtime']['steps']
+        step=next(s for s in steps if s.get('name')=='Validate the immutable reuse selection')
+        self.assertEqual(step['env']['WEBVIEW_PREVIEW'],'${{ inputs.sync_webview_preview }}')
+        self.assertEqual(step['env'].get('SEMANTIC_PREVIEW'),'${{ inputs.sync_semantic_preview }}')
+        code=step['run'].split("python3 - <<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+        base={'REUSE_RUN':'39112675356','REUSE_COMMIT':'20af3d2cad9da2350f0e775f0e5605630f834443',
+              'RUNTIME_SCOPE':'sync-revocation','WEBVIEW_PREVIEW':'true'}
+        for changes,allowed in (({},True),({'RUNTIME_SCOPE':'sync-conflicts'},True),
+                ({'WEBVIEW_PREVIEW':'false'},True),({'RUNTIME_SCOPE':'sync-initial'},False),
+                ({'SEMANTIC_PREVIEW':'true'},False),({'WEBVIEW_CYCLE':'true'},False)):
+            with self.subTest(changes=changes),patch.dict(os.environ,dict(base,**changes),clear=True):
+                if allowed:exec(compile(code,'workflow-preview-admission','exec'),{})
+                else:
+                    with self.assertRaises(AssertionError):exec(compile(code,'workflow-preview-admission','exec'),{})
 
 if __name__=='__main__':unittest.main()

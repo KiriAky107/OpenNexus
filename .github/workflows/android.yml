@@ -90,7 +90,7 @@ on:
         default: false
         required: false
       sync_webview_preview:
-        description: 'On sync-conflicts only, one admitted software Chromium touch for Preview merge; no JS click or direct IPC'
+        description: 'On sync-conflicts or sync-revocation, one admitted software Chromium touch for Preview merge; no JS click or direct IPC'
         type: boolean
         default: false
         required: false
@@ -217,6 +217,7 @@ jobs:
           RUNTIME_SCOPE: ${{ env.OWNED_RUNTIME_SCOPE }}
           ORIGINAL_NATIVE_OUTCOME: ${{ inputs.sync_original_native_outcome }}
           COLD_ORIGINALS: ${{ inputs.sync_cold_originals }}
+          SEMANTIC_PREVIEW: ${{ inputs.sync_semantic_preview }}
           WEBVIEW_PREVIEW: ${{ inputs.sync_webview_preview }}
           WEBVIEW_CYCLE: ${{ inputs.sync_webview_cycle }}
         run: |
@@ -229,6 +230,12 @@ jobs:
           assert bool(run)==bool(commit), 'Supply both immutable APK reuse fields together'
           if run:
             assert re.fullmatch(r'[1-9][0-9]{0,17}',run) and re.fullmatch(r'[0-9a-f]{40}',commit), 'Invalid fixed APK selection'
+          if os.environ.get('SEMANTIC_PREVIEW')=='true':
+            assert scope=='sync-conflicts' and os.environ.get('WEBVIEW_PREVIEW')!='true'
+          if os.environ.get('WEBVIEW_PREVIEW')=='true':
+            assert scope in ('sync-conflicts','sync-revocation')
+          if os.environ.get('WEBVIEW_CYCLE')=='true':
+            assert scope=='sync-conflicts'
           if os.environ.get('ORIGINAL_NATIVE_OUTCOME')=='true':
             assert scope=='sync-conflicts'
             assert all(os.environ.get(key)=='true' for key in ('COLD_ORIGINALS','WEBVIEW_PREVIEW','WEBVIEW_CYCLE'))
