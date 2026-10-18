@@ -89,7 +89,7 @@ def validate_rejected_handshake(before,after):
 def validate_certificate_intent(native,account):
     require(len(native['intents'])==1 and not native['rejections'],'TLS failure was fabricated as a server HTTP rejection')
     intent=native['intents'][0];operation=intent['operation_id'];selection=native['selection']
-    require(str(uuid.UUID(operation))==operation and intent['kind']=='login' and intent['phase']=='unknown'
+    require(str(uuid.UUID(operation))==operation and intent['kind']=='login' and intent['phase']=='login_pending'
         and intent['device_id'] is None and intent['previous_operation'] is None and intent['generation']==1
         and intent['endpoint'].rstrip('/')==ENDPOINT and intent['account']==account,
         'Original untrusted login activated or replaced an identity')
@@ -145,7 +145,8 @@ def run_certificate(probe):
         probe.shell('run-as',DRIVER,'mkdir','-p','no_backup')
         probe.device('shell','-T','run-as '+DRIVER+' sh -c '+shlex.quote('umask 077; test ! -e no_backup/owned-auth.json && cat > no_backup/owned-auth.json'),input=json.dumps(value).encode())
         atomic_json(probe.output/'certificate-login-original-intent.json',dict(driver_dispatch_id=str(uuid.uuid4()),
-            native_operation_id_assigned_by_driver=False,certificate_sha256=origin['certificate_sha256'],automatic_retry=False),exclusive=True)
+            native_operation_id_assigned_by_driver=False,certificate_sha256=origin['certificate_sha256'],automatic_retry=False,
+            fresh_rejected_login_is_setup_for_remaining_local_cold=True),exclusive=True)
         probe.auth_phase('invalid-certificate')
         after=server.snapshot();validate_rejected_handshake(origin['baseline'],after)
         atomic_json(probe.output/'certificate-after-login.json',after,exclusive=True)
@@ -169,6 +170,7 @@ def run_certificate(probe):
             no_service_sessions_or_credentials_activated=True,original_local_note_and_Native_records_preserved=True,
             original_spool_bytes_preserved=True,
             declared_fresh_self_signed_SAN_valid_certificate=True,trust_store_or_validation_changed=False,
+            fresh_rejected_login_is_setup_for_remaining_local_cold=True,
             raw_request_or_secrets_exported=False,physical_or_whole_A4_or_release_complete=False),exclusive=True)
     finally:
         server.close();atomic_json(probe.output/'certificate-server-cleanup.json',dict(stopped=True,final=server.snapshot(),owned_listener_only=True),exclusive=True)

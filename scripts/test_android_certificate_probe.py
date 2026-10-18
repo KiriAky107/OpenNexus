@@ -13,7 +13,7 @@ def transport():
 
 def native():
     op='90bd27c8-0fe5-4c7f-a726-44486a352d91';account='owned-unit'
-    return dict(intents=[dict(operation_id=op,kind='login',phase='unknown',device_id=None,previous_operation=None,generation=1,endpoint=subject.ENDPOINT,account=account)],
+    return dict(intents=[dict(operation_id=op,kind='login',phase='login_pending',device_id=None,previous_operation=None,generation=1,endpoint=subject.ENDPOINT,account=account)],
         rejections=[],selection=dict(operation_id=op,generation=1,revision=1,endpoint=subject.ENDPOINT,account=account))
 
 class CertificateBoundaries(unittest.TestCase):
@@ -33,9 +33,10 @@ class CertificateBoundaries(unittest.TestCase):
 
     def test_unknown_original_login_requires_its_same_native_selection_and_never_an_active_session(self):
         value=native();op=subject.validate_certificate_intent(value,'owned-unit');self.assertEqual(op,value['intents'][0]['operation_id'])
-        for change in ('active','device','account','selection','server_error','generation'):
+        for change in ('active','unknown','device','account','selection','server_error','generation'):
             wrong=deepcopy(value)
             if change=='active':wrong['intents'][0]['phase']='active'
+            elif change=='unknown':wrong['intents'][0]['phase']='unknown'
             elif change=='device':wrong['intents'][0]['device_id']='a'*32
             elif change=='account':wrong['intents'][0]['account']='other'
             elif change=='selection':wrong['selection']['operation_id']=str(uuid.uuid4())
