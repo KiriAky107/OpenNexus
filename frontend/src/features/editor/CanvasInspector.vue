@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed,ref,watch } from 'vue'
 import ControlIcon from '@/components/common/ControlIcon.vue'
-import { nodeLabel,type CanvasNode,type CanvasEdge } from './canvasModel'
+import { connectionLabel,nodeLabel,type CanvasNode,type CanvasEdge } from './canvasModel'
 import { t as translate } from '@/i18n'
 const props=defineProps<{nodes:CanvasNode[];edges:CanvasEdge[];selected:string[];blocked?:boolean;touch?:boolean;language?:string}>()
 defineEmits<{close:[];locate:[id:string];selectEdge:[id:string]}>()
@@ -19,7 +19,7 @@ watch(filter,()=>count.value=100)
     <slot />
     <h3>{{ t('节点列表','Node list') }} · {{ nodes.length }}</h3><input v-model="filter" class="input" :aria-label="t('筛选画布节点','Filter canvas nodes')" />
     <div class="canvas-node-list"><button v-for="node in filtered.slice(0,count)" :key="node.id" class="button-secondary" :disabled="blocked" :aria-pressed="selected.includes(node.id)" :data-list-node-id="node.id" :title="String(node.text??node.file??node.url??node.label??'')" @click="$emit('locate',node.id)"><span class="node-kind">{{ node.type }} · </span><span class="node-label">{{ nodeLabel(node) }}</span></button><button v-if="count<filtered.length" class="button-secondary" @click="count+=100">{{ t('更多节点','More nodes') }}</button></div>
-    <h3>{{ t('连接列表','Connection list') }} · {{ edges.length }}</h3><div class="canvas-node-list"><button v-for="edge in edges.filter(value=>!selected.length||selected.includes(value.fromNode)||selected.includes(value.toNode)).slice(0,100)" :key="edge.id" class="button-secondary" :disabled="blocked" @click="$emit('selectEdge',edge.id)">{{ edge.label??`${nodeLabel(graph.get(edge.fromNode)!)} → ${nodeLabel(graph.get(edge.toNode)!)}` }}</button></div>
+    <h3>{{ t('连接列表','Connection list') }} · {{ edges.length }}</h3><div class="canvas-node-list"><button v-for="edge in edges.filter(value=>!selected.length||selected.includes(value.fromNode)||selected.includes(value.toNode)).slice(0,100)" :key="edge.id" class="button-secondary" :disabled="blocked" @click="$emit('selectEdge',edge.id)">{{ connectionLabel(edge,graph) }}</button></div>
   </aside>
 </template>
 

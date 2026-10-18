@@ -83,6 +83,7 @@ const scenePreviews = computed(() => Object.fromEntries(nodes.value.flatMap(node
 function imageError(path: string) { const key = canvasImagePath(path); if (key) imageCache.failed(key) }
 function requestOpen(node: CanvasNode) { if (composing.value || invalidFields.value.size) return; if (node.type === 'link') emit('link',node.url!); else if (node.type === 'file' && resolveCanvasFile(node.file)) emit('link',node.file!) }
 const sceneOrder = computed(() => new Map(nodes.value.map((node,index) => [node.id,index])))
+const sceneNodeLookup = computed(() => { revision.value; return geometry?.nodes })
 function selectEdge(id: string) { if (composing.value || invalidFields.value.size || props.readOnly) return; edgeId.value = id; selected.value = [] }
 const edges = computed(() => { revision.value; return geometry?.project(gestures?.preview ?? new Map()).filter(item => item.geometry && intersects(item.geometry.bounds, bounds.value)) ?? [] })
 const hasSelection = computed(() => Boolean(selected.value.length || activeEdge.value))
@@ -216,7 +217,7 @@ defineExpose({ undo, redo, cancel, source: () => model?.source ?? props.modelVal
       </div>
       <p class="canvas-hint" role="status">{{ connecting ? copy.connectHelp : copy.hint }} <span v-if="hasSelection">{{ copy.selected }}: {{ selected.length || 1 }}</span></p>
       <p v-if="feedback" role="alert">{{ feedback }} <button v-if="invalidFields.size" class="quiet" @click="discardFields">{{ copy.discardFields }}</button></p>
-      <CanvasScene ref="scene" :nodes="visibleNodes" :node-count="nodes.length" :edges="edges" :order="sceneOrder" :pan="{x:view.x,y:view.y}" :zoom="view.zoom" :selected="selected" :selected-edge="edgeId" :previews="scenePreviews" :read-only="Boolean(readOnly)" :label="copy.canvas" :empty-label="copy.empty" touch
+      <CanvasScene ref="scene" :nodes="visibleNodes" :node-lookup="sceneNodeLookup" :node-count="nodes.length" :edges="edges" :order="sceneOrder" :pan="{x:view.x,y:view.y}" :zoom="view.zoom" :selected="selected" :selected-edge="edgeId" :previews="scenePreviews" :read-only="Boolean(readOnly)" :label="copy.canvas" :empty-label="copy.empty" touch
         @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="cancel" @lostpointercapture="lost" @node-pointer="down" @resize-pointer="down" @edge-pointer="down" @locate="keyboardSelect" @open="requestOpen" @select-edge="selectEdge" @image-error="imageError" />
       <CanvasInspector v-if="panel" class="canvas-properties" :nodes="nodes" :edges="model?.document.edges ?? []" :selected="selected" :blocked="composing || Boolean(invalidFields.size)" :language="language" touch @close="panel=false" @locate="locateNode" @select-edge="selectEdge">
         <template #hint>{{ copy.hint }}</template>

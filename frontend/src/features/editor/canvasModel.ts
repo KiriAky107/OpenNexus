@@ -10,6 +10,11 @@ export function nodeLabel(node:CanvasNode){
   if(node.type==='link'){try{return new URL(node.url!).hostname}catch{return String(node.url??'网址').slice(0,120)}}
   return (String(node.text??node.label??'分组').split(/\r?\n/).find(line=>line.trim())??'').replace(/^\s*#{1,6}\s+/,'').trim().slice(0,120)
 }
+export function connectionLabel(edge:CanvasEdge,nodes:ReadonlyMap<string,CanvasNode>){
+  if(edge.label?.trim())return edge.label
+  const endpoint=(id:string)=>{const node=nodes.get(id);return node?nodeLabel(node)||id:id}
+  return `${endpoint(edge.fromNode)} → ${endpoint(edge.toNode)}`
+}
 export function nodeBounds(nodes:CanvasNode[]){
   if(!nodes.length)return{x:0,y:0,width:640,height:480}
   const x=Math.min(...nodes.map(node=>node.x)),y=Math.min(...nodes.map(node=>node.y))

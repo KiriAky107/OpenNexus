@@ -1,18 +1,20 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { canvasColor as color } from './canvasColors'
-import { nodeLabel, type CanvasNode } from './canvasModel'
+import { connectionLabel, nodeLabel, type CanvasNode } from './canvasModel'
 import type { GeometryItem } from './canvasGeometry'
 import { workspaceDocumentType } from '@/services/workspaceDocuments'
 import { t } from '@/i18n'
 const props = defineProps<{
   nodes: CanvasNode[]; nodeCount: number; edges: GeometryItem[]; order: ReadonlyMap<string, number>;
   pan: { x: number; y: number }; zoom: number; selected: string[]; selectedEdge: string;
-  previews: Record<string, { text?: string; url?: string }>; readOnly: boolean; label: string; emptyLabel: string; touch?: boolean
+  previews: Record<string, { text?: string; url?: string }>; readOnly: boolean; label: string; emptyLabel: string; touch?: boolean;
+  nodeLookup?: ReadonlyMap<string,CanvasNode>
 }>()
 const emit = defineEmits<{ nodePointer: [event: PointerEvent, node: CanvasNode]; resizePointer: [event: PointerEvent, node: CanvasNode]; edgePointer: [event: PointerEvent]; locate: [id: string]; open: [node: CanvasNode]; selectEdge: [id: string]; imageError: [path: string] }>()
 const element = ref<HTMLElement>()
 const selectedSet = computed(() => new Set(props.selected))
+const nodeIndex = computed(() => props.nodeLookup ?? new Map(props.nodes.map(node => [node.id,node])))
 const imagePath = (node: CanvasNode) => node.type === 'group' ? node.background : node.file
 function groupBackground(node: CanvasNode) {
   const url = props.previews[node.background ?? '']?.url
@@ -25,7 +27,7 @@ defineExpose({ get element() { return element.value } })
 <div ref="element" class="canvas-viewport" :class="{ 'touch-canvas': touch }" tabindex="0" role="region" :aria-label="label">
         <div class="canvas-world" :style="{transform:`translate(${pan.x}px,${pan.y}px) scale(${zoom})`}">
           <svg class="canvas-edges" width="1" height="1" :style="{zIndex:nodeCount+1}" aria-label="节点连接"><defs><marker id="canvas-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse" markerUnits="strokeWidth"><path d="M 0 0 L 8 4 L 0 8 z" fill="context-stroke" /></marker></defs>
-            <g v-for="{edge:line,geometry} in edges" :key="line.id" v-memo="[line,geometry,selectedEdge===line.id,t('连接','Connection')]" class="canvas-edge" :class="{'edge-selected':selectedEdge===line.id}" role="button" tabindex="0" :aria-label="`${t('连接','Connection')}: ${line.label??line.fromNode+' → '+line.toNode}`" :data-edge="line.id" @pointerdown.stop="emit('edgePointer', $event)" @click="emit('selectEdge', line.id)" @keydown.enter.stop="emit('selectEdge', line.id)">
+            <g v-for="{edge:line,geometry} in edges" :key="line.id" v-memo="[line,geometry,selectedEdge===line.id,t('连接','Connection'),connectionLabel(line,nodeIndex)]" class="canvas-edge" :class="{'edge-selected':selectedEdge===line.id}" role="button" tabindex="0" :aria-label="`${t('连接','Connection')}: ${connectionLabel(line,nodeIndex)}`" :data-edge="line.id" @pointerdown.stop="emit('edgePointer', $event)" @click="emit('selectEdge', line.id)" @keydown.enter.stop="emit('selectEdge', line.id)">
               <path :d="geometry!.path" fill="none" :stroke="line.color?color(line.color):'var(--color-text-tertiary)'" :stroke-width="selectedEdge===line.id?4:2" :marker-start="line.fromEnd==='arrow'?'url(#canvas-arrow)':undefined" :marker-end="line.toEnd==='none'?undefined:'url(#canvas-arrow)'"/><path :d="geometry!.path" fill="none" stroke="transparent" stroke-width="16" />
               <text v-if="line.label" :x="geometry!.x" :y="geometry!.y-8" text-anchor="middle">{{ line.label.slice(0,120) }}</text>
             </g>
