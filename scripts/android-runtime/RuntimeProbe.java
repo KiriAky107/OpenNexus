@@ -757,16 +757,17 @@ public final class RuntimeProbe extends Instrumentation {
         }
         String region=chinese?"画布节点与连接":"Canvas nodes and connections";
         waitLabel(chinese?"自由画布":"Free canvas");
-        String[] names=chinese?new String[]{"节点内容","标签","节点颜色","横坐标","纵坐标","宽度","高度"}
-            :new String[]{"Node content","Label","Node color","x","y","width","height"};
+        String[] names=chinese?new String[]{"节点内容","标签","横坐标","纵坐标","宽度","高度","节点颜色"}
+            :new String[]{"Node content","Label","x","y","width","height","Node color"};
         for(int index=0;index<names.length;index++) {
             String name=names[index];boolean shown=false;AccessibilityNodeInfo found=null;
             long until=SystemClock.uptimeMillis()+25_000;
             do {
                 List<AccessibilityNodeInfo> matches=new ArrayList<>();
                 for(AccessibilityNodeInfo node:nodes())if(APP.equals(string(node.getPackageName()))&&node.isEnabled()
-                    &&(node.isEditable()||node.isClickable()||"android.widget.Spinner".equals(string(node.getClassName())))
-                    &&label(node,name,false)&&within(node,region))matches.add(node);
+                    &&within(node,region)&&OriginalCanvasProperty.localizedControl(name,string(node.getText()),
+                        Build.VERSION.SDK_INT>=26?string(node.getHintText()):"",string(node.getContentDescription()),
+                        node.isEditable(),node.isClickable(),"android.widget.Spinner".equals(string(node.getClassName()))))matches.add(node);
                 require(matches.size()<=1,"Ambiguous localized property; no content input sent");
                 if(matches.size()==1) {
                     AccessibilityNodeInfo node=matches.get(0);

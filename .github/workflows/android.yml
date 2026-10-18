@@ -348,7 +348,9 @@ jobs:
           echo "$!" > .build/android-runtime/emulator.pid
       - name: Check standalone readonly candidate language boundaries
         if: env.OWNED_RUNTIME_SCOPE == 'candidate-languages'
-        run: python3 -m unittest discover -s scripts -p test_android_candidate_readiness_probe.py -v
+        run: |
+          python3 -m unittest discover -s scripts -p test_android_locale_fields.py -v
+          python3 -m unittest discover -s scripts -p test_android_candidate_readiness_probe.py -v
       - name: Check original local reference observation boundaries
         if: env.OWNED_RUNTIME_SCOPE == 'local-references'
         run: |
