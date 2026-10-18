@@ -322,6 +322,18 @@ class Probe:
         observations = {'expected_sha256': expected, 'expected_size': self.apk.stat().st_size, 'attempts': []}
         def preserve():
             (self.output / 'installed-apk.json').write_text(json.dumps(observations, indent=2) + '\n', 'utf-8')
+        def preserve_read_output(attempt, channel, raw):
+            # Retain the actual read error before another observation. APK pull
+            # output concerns only this fresh owned installation, never secrets.
+            raw = b'' if raw is None else raw
+            require(isinstance(raw, bytes), 'Installed-byte read output is not raw bytes')
+            target = self.output / f'installed-apk-pull-{attempt}-{channel}.txt'
+            require(not target.exists() and not target.is_symlink(), 'Original installed-read output would be replaced')
+            prefix = raw[:64 * 1024]
+            with target.open('xb') as stream:
+                stream.write(prefix); stream.flush(); os.fsync(stream.fileno())
+            return {'file': target.name, 'bytes': len(raw), 'sha256': digest(raw),
+                'stored_bytes': len(prefix), 'truncated': len(prefix) != len(raw)}
         def device_hash():
             try:
                 result = self.shell('sha256sum', installed_path, check=False, timeout=10)
@@ -351,8 +363,13 @@ class Probe:
             try:
                 result = self.device('pull', installed_path, copy, check=False, timeout=60)
                 entry['pull_returncode'] = result.returncode
-            except subprocess.TimeoutExpired:
+                stdout, stderr = result.stdout, result.stderr
+            except subprocess.TimeoutExpired as error:
                 entry['pull_returncode'] = 'observation_timeout'
+                stdout, stderr = error.stdout, error.stderr
+            entry['pull_output'] = {channel: preserve_read_output(attempt, channel, raw)
+                for channel, raw in (('stdout', stdout), ('stderr', stderr))}
+            preserve()
             if copy.is_file() and not copy.is_symlink():
                 entry['read_size'] = copy.stat().st_size
                 with copy.open('rb') as file:

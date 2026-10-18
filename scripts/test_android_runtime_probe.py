@@ -715,6 +715,65 @@ class RuntimeBoundaries(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'device APK hash differs'):probe.verify_installed(path)
             self.assertFalse(any(call[0] in ('pull','install') for call in calls))
 
+    def test_failed_installed_pull_retains_each_original_output_without_weakening_the_gate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe,path,calls=self.installed_probe(directory,[])
+            original=probe.device;count=0
+            def device(*args,**kwargs):
+                nonlocal count
+                if args[0]!='pull':return original(*args,**kwargs)
+                count+=1;calls.append(args)
+                return subprocess.CompletedProcess([],1,b'partial read '+str(count).encode(),b'adb: read failed\xff\n')
+            probe.device=device
+            with patch('android_runtime_probe.require_hosted_emulator'),patch.dict(os.environ,{'GITHUB_RUN_ID':'73','GITHUB_RUN_ATTEMPT':'1'}):
+                with self.assertRaisesRegex(RuntimeError,'Installed APK bytes could not be confirmed'):probe.verify_installed(path)
+            proof=json.loads((probe.output/'installed-apk.json').read_text('utf-8'))
+            self.assertEqual(len(proof['attempts']),3)
+            for number,entry in enumerate(proof['attempts'],1):
+                self.assertFalse(entry['verified']);self.assertEqual(entry['pull_returncode'],1)
+                for channel,raw in [('stdout',b'partial read '+str(number).encode()),('stderr',b'adb: read failed\xff\n')]:
+                    observed=entry['pull_output'][channel]
+                    self.assertEqual((probe.output/observed['file']).read_bytes(),raw)
+                    self.assertEqual(observed['sha256'],digest(raw));self.assertEqual(observed['bytes'],len(raw))
+                    self.assertEqual(observed['stored_bytes'],len(raw));self.assertFalse(observed['truncated'])
+            self.assertFalse(any(call[0] in ('install','reboot','kill-server','start-server') for call in calls))
+
+    def test_installed_read_timeout_preserves_partial_output_before_a_later_full_read(self):
+        original=b'original immutable APK bytes'
+        with tempfile.TemporaryDirectory() as directory:
+            probe,path,calls=self.installed_probe(directory,[original]);prior=probe.device;count=0
+            def device(*args,**kwargs):
+                nonlocal count
+                if args[0]=='pull':
+                    count+=1
+                    if count==1:raise subprocess.TimeoutExpired('owned adb pull',60,output=b'partial\xff',stderr=b'transport pending\n')
+                return prior(*args,**kwargs)
+            probe.device=device
+            with patch('android_runtime_probe.require_hosted_emulator'),patch.dict(os.environ,{'GITHUB_RUN_ID':'73','GITHUB_RUN_ATTEMPT':'1'}):probe.verify_installed(path)
+            proof=json.loads((probe.output/'installed-apk.json').read_text('utf-8'))
+            self.assertEqual([v['verified'] for v in proof['attempts']],[False,True])
+            first=proof['attempts'][0];self.assertEqual(first['pull_returncode'],'observation_timeout')
+            self.assertEqual((probe.output/first['pull_output']['stdout']['file']).read_bytes(),b'partial\xff')
+            self.assertEqual((probe.output/first['pull_output']['stderr']['file']).read_bytes(),b'transport pending\n')
+            self.assertEqual((probe.tools/'installed-observation-2.apk').read_bytes(),original)
+
+    def test_installed_read_output_has_a_bounded_prefix_and_full_original_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe,path,calls=self.installed_probe(directory,[]);prior=probe.device
+            raw=b'x'*(64*1024)+b'original tail'
+            def device(*args,**kwargs):
+                if args[0]=='pull':return subprocess.CompletedProcess([],1,b'',raw)
+                return prior(*args,**kwargs)
+            probe.device=device
+            with patch('android_runtime_probe.require_hosted_emulator'),patch.dict(os.environ,{'GITHUB_RUN_ID':'73','GITHUB_RUN_ATTEMPT':'1'}):
+                with self.assertRaisesRegex(RuntimeError,'Installed APK bytes could not be confirmed'):probe.verify_installed(path)
+            proof=json.loads((probe.output/'installed-apk.json').read_text('utf-8'))
+            for entry in proof['attempts']:
+                observed=entry['pull_output']['stderr'];self.assertTrue(observed['truncated'])
+                self.assertEqual(observed['bytes'],len(raw));self.assertEqual(observed['sha256'],digest(raw))
+                self.assertEqual(observed['stored_bytes'],64*1024)
+                self.assertEqual((probe.output/observed['file']).read_bytes(),raw[:64*1024])
+
     def test_offline_read_reobserves_the_same_avd_without_restarting_or_reinstalling(self):
         original=b'original immutable APK bytes';sha=digest(original)
         with tempfile.TemporaryDirectory() as directory:
