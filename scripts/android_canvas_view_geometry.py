@@ -85,6 +85,32 @@ def calibrate(value,native,phase):
     require(all(abs(a-b)<=rounding for a,b in zip(mapped,clip)),'VIEW_NATIVE_VIEWPORT_CALIBRATION')
     return ratio
 
+def frame_check(value,native):
+    require(type(value) is dict and set(value)=={'schema','scope','dispatch_id','phase','stage','owner','native_sha256',
+        'webview','before_read','after_read','input_target_exact_guard'},'VIEW_FRAME_KEYS')
+    require(type(value['schema']) is int and value['schema']==1 and value['scope']=='canvas-view-frame-check'
+        and all(value[key]==native[key] for key in ('dispatch_id','phase','stage','owner','webview')),'VIEW_FRAME_SCOPE')
+    require(native['scope']=='canvas-view' and native['phase'] in PHASES and native['stage'] in ('before','after')
+        and native['owner']=='cc.kronecker.opennexus.dev' and str(uuid.UUID(native['dispatch_id']))==native['dispatch_id'],
+        'VIEW_FRAME_NATIVE_ORIGIN')
+    window=native_rect(value['webview'])
+    require(type(value['native_sha256']) is str and len(value['native_sha256'])==64
+        and all(letter in '0123456789abcdef' for letter in value['native_sha256']),'VIEW_FRAME_HASH')
+    before,after=value['before_read'],value['after_read']
+    require(all(type(rows) is list and 2<=len(rows)<=34 for rows in (before,after)),'VIEW_FRAME_ROWS')
+    for rows in (before,after):
+        for row in rows:native_rect(row)
+        node,clip=rows[:2]
+        require(clip[0]<=node[0]<node[2]<=clip[2] and clip[1]<=node[1]<node[3]<=clip[3],'VIEW_FRAME_NODE_OUTSIDE')
+    require(before[0]==native['node'] and before[1]==native['clip']==after[1],'VIEW_FRAME_VIEWPORT_CHANGED')
+    require(window[0]<=before[1][0]<before[1][2]<=window[2] and window[1]<=before[1][1]<before[1][3]<=window[3],
+        'VIEW_FRAME_VIEWPORT_OUTSIDE')
+    exact=native['stage']=='before'
+    require(type(value['input_target_exact_guard']) is bool and value['input_target_exact_guard']==exact
+        and (not exact or before==after),'VIEW_INPUT_TARGET_CHANGED_BEFORE_INPUT')
+    return dict(stage=native['stage'],input_target_exact_guard=exact,
+        native_AX_node_geometry_updated_after_read=before[0]!=after[0])
+
 def effect(before,after,native_before,native_after,phase,plan,secondary=None):
     dispatch=before['dispatch_id'];geometry(before,dispatch,'before');geometry(after,dispatch,'after')
     ratio=calibrate(before,native_before,phase);require(calibrate(after,native_after,phase)==ratio,'VIEW_PIXEL_RATIO_CHANGED')

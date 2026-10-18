@@ -9,10 +9,11 @@ from android_runtime_probe import APP,DRIVER,require,require_hosted_emulator
 from android_canvas_graph_contract import graph,encoded
 from android_canvas_graph_probe import saved_original
 from android_canvas_motion_probe import FIXTURE as SOURCE_FIXTURE,readonly,snapshot,actual_input_result
-from android_canvas_view_geometry import PHASES,effect
+from android_canvas_view_geometry import PHASES,effect,frame_check
 
 PATH='view-original.canvas'
 STEPS=tuple('view-'+name for name in ('seed','open','pan','pinch','cancel','takeover','background','cold','inspector'))
+REMAINING_STEPS=tuple('view-'+name for name in ('seed','open','background','cold','inspector'))
 value=graph(SOURCE_FIXTURE);value['nodes'][0].update(x=80,y=75,width=200,height=175)
 FIXTURE=encoded(value).replace(b'\n',b'\r\n');del value
 def digest(raw):return hashlib.sha256(raw).hexdigest()
@@ -38,21 +39,25 @@ def original_touch_records(probe,phase,check=True):
     def read(stage,kind):return json.loads((probe.output/(phase+'-'+stage+'-'+kind+'-view.json')).read_bytes())
     measured=effect(read('before','renderer'),read('after','renderer'),read('before','native'),read('after','native'),
         phase,intent['plan'],intent.get('secondary'))
-    return dict(actual_native_input=native_input,original_readonly_geometry=measured)
+    frames=[frame_check(json.loads((probe.output/(phase+'-'+stage+'-native-frame-check.json')).read_bytes()),read(stage,'native'))
+        for stage in ('before','after')]
+    return dict(actual_native_input=native_input,original_readonly_geometry=measured,actual_native_frame_checks=frames)
 
 
 def run_canvas_view(probe):
-    require_hosted_emulator(probe.args.serial);require(probe.args.scope=='canvas-view','VIEW_EXPLICIT_SCOPE')
+    require_hosted_emulator(probe.args.serial);require(probe.args.scope in ('canvas-view','canvas-view-remaining'),'VIEW_EXPLICIT_SCOPE')
+    steps=REMAINING_STEPS if probe.args.scope=='canvas-view-remaining' else STEPS
     report=dict(passed=False,run_id=os.environ['GITHUB_RUN_ID'],tools_source=probe.args.tools_commit,
         compiled_source=probe.args.commit,APK_sha256=probe.binding['sha256'],executed_steps=[],touches=[],saves=[],
         synthetic_original_fixture_not_GUI_additions=True,completed_move_resize_or_other_graph_Saves_replayed=False,
         geometry_alone_does_not_prove_input_or_raw_preservation=True,
-        physical_properties_upgrade_or_whole_A3C_complete=False)
+        physical_properties_upgrade_or_whole_A3C_complete=False,scope=probe.args.scope,
+        accepted_four_view_gestures_replayed=probe.args.scope=='canvas-view')
     current=None
     def phase(name):
         nonlocal current
-        require(name==STEPS[len(report['executed_steps'])],'VIEW_ORIGINAL_PHASE_ORDER');current=name
-        atomic_json(probe.output/(name+'-original-intent.json'),dict(scope='canvas-view',phase=name,path=PATH,
+        require(name==steps[len(report['executed_steps'])],'VIEW_ORIGINAL_PHASE_ORDER');current=name
+        atomic_json(probe.output/(name+'-original-intent.json'),dict(scope=probe.args.scope,phase=name,path=PATH,
             tools_source=probe.args.tools_commit,compiled_source=probe.args.commit,
             previous_observed_sha256=report.get('last_observed_sha256'),automatic_retry=False),exclusive=True)
         old=probe.shell('pidof',APP,check=False).stdout.strip()
@@ -78,7 +83,7 @@ def run_canvas_view(probe):
         before,raw,opened_pid=phase('view-open');require(raw==FIXTURE,'VIEW_OPEN_CHANGED_ORIGINAL')
         with (probe.output/'view-original.canvas').open('xb') as stream:stream.write(raw);stream.flush();os.fsync(stream.fileno())
         cold_pid=None
-        for name in STEPS[2:]:
+        for name in steps[2:]:
             after,new,pid=phase(name);readonly(before,after,raw,new,cold=name=='view-cold');before=after
             if name=='view-cold':cold_pid=pid
         report.update(passed=True,original_file_id=before['files'][0]['id'],fixture_open_PID=int(opened_pid),cold_PID=int(cold_pid),

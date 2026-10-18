@@ -417,7 +417,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view'):
+        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -517,6 +517,14 @@ class Probe:
                     from android_atomic_probe import NOTE,ORIGINAL,UPDATED
                     require(observed.decode('ascii').splitlines()==['ORIGINAL_ATOMIC_WRITE_DATA_OK',digest(NOTE.encode()),digest(ORIGINAL),digest(UPDATED)],
                         'Original atomic write driver bytes differ')
+                if getattr(self.args,'scope','')=='canvas-view-remaining':
+                    self.command(['javac','-J-Xmx128m','-encoding','UTF-8','-classpath',classes,
+                        '-d',checks,root.parent/'android-runtime-tests/OriginalCanvasViewFrameCheck.java'])
+                    observed=self.command(['java','-Xmx64m','-cp',str(classes)+os.pathsep+str(checks),
+                        'cc.kronecker.opennexus.testdriver.OriginalCanvasViewFrameCheck']).stdout
+                    (self.output/'driver-original-canvas-view-frame.txt').write_bytes(observed)
+                    require(observed.decode('ascii').splitlines()==['ORIGINAL_CANVAS_VIEW_FRAME_OK 12'],
+                        'Original remaining-view frame contract differs')
                 if getattr(self.args,'scope','')=='canvas-motion':
                     self.command(['javac','-J-Xmx256m','-encoding','UTF-8','-classpath',classes,
                         '-d',checks,root.parent/'android-runtime-tests/OriginalCanvasMotionCheck.java'])
@@ -663,7 +671,7 @@ class Probe:
             require(re.fullmatch(rb'[1-9][0-9]{0,9}', self.shell('pidof', APP).stdout.strip()),
                 'Tablet rotation requires the same single owned app process')
         self.native_tls_startup(phase)
-        if getattr(getattr(self,'args',None),'scope','')=='canvas-view' and phase in ('view-pan','view-pinch','view-cancel','view-takeover','view-background'):
+        if getattr(getattr(self,'args',None),'scope','') in ('canvas-view','canvas-view-remaining') and phase in ('view-pan','view-pinch','view-cancel','view-takeover','view-background'):
             from android_canvas_view_input import instrument_original_view
             result=instrument_original_view(self,phase)
         elif phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining','editing-remaining'):
@@ -915,7 +923,7 @@ class Probe:
             if getattr(getattr(self,'args',None),'scope',None) == 'canvas-motion':
                 from android_canvas_motion_probe import PATH
                 owned_names = (PATH,)
-            if getattr(getattr(self,'args',None),'scope',None) == 'canvas-view':
+            if getattr(getattr(self,'args',None),'scope',None) in ('canvas-view','canvas-view-remaining'):
                 from android_canvas_view_probe import PATH
                 owned_names = (PATH,)
             if getattr(getattr(self,'args',None),'scope',None) in ('document-limits','document-export'):
@@ -1238,7 +1246,7 @@ class Probe:
 
     def run(self):
         self.boot()
-        if self.args.scope=='canvas-view':
+        if self.args.scope in ('canvas-view','canvas-view-remaining'):
             from android_canvas_view_probe import run_canvas_view
             run_canvas_view(self)
             return
@@ -1396,7 +1404,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:

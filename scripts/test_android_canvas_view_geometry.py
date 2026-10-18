@@ -1,6 +1,6 @@
 from copy import deepcopy
 import unittest
-from android_canvas_view_geometry import A,B,E,MODEL,geometry,calibrate,effect
+from android_canvas_view_geometry import A,B,E,MODEL,geometry,calibrate,effect,frame_check
 
 DISPATCH='278eccde-7cda-42a4-8a3b-132c7bbba901'
 def box(left,top,width,height):return dict(left=left,top=top,right=left+width,bottom=top+height,width=width,height=height)
@@ -17,6 +17,24 @@ def native(stage='before',phase='view-pan'):
         webview=[0,100,1500,2800],clip=[0,850,1500,2800],node=[300,1180,900,1705],recorded_ms=1000)
 
 class ViewGeometry(unittest.TestCase):
+    def test_before_input_target_is_exact_and_after_input_AX_refresh_is_retained_with_same_owned_viewport(self):
+        for stage in ('before','after'):
+            origin=native(stage,phase='view-background')
+            value=dict(schema=1,scope='canvas-view-frame-check',dispatch_id=DISPATCH,phase='view-background',stage=stage,
+                owner=origin['owner'],native_sha256='a'*64,webview=origin['webview'],
+                before_read=[origin['node'],origin['clip']],after_read=[[320,1200,920,1725],origin['clip']],input_target_exact_guard=stage=='before')
+            if stage=='before':
+                with self.assertRaises(ValueError):frame_check(value,origin)
+            else:
+                self.assertTrue(frame_check(value,origin)['native_AX_node_geometry_updated_after_read'])
+                changed=deepcopy(value);changed['after_read'][1][0]=1
+                with self.assertRaises(ValueError):frame_check(changed,origin)
+                changed=deepcopy(value);changed['after_read'][0][0]=-1
+                with self.assertRaises(ValueError):frame_check(changed,origin)
+            value['after_read']=deepcopy(value['before_read'])
+            self.assertFalse(frame_check(value,origin)['native_AX_node_geometry_updated_after_read'])
+            wrong=deepcopy(value);wrong_native=deepcopy(origin);wrong['owner']=wrong_native['owner']='other.app'
+            with self.assertRaises(ValueError):frame_check(wrong,wrong_native)
     def test_declared_metadata_calibrates_without_accessing_content_or_executing_input(self):
         before=observed();original=deepcopy(before)
         self.assertIs(geometry(before,DISPATCH,'before'),before)

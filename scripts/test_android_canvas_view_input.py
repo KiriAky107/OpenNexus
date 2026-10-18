@@ -11,19 +11,21 @@ IDENTITY=dict(pid=321,start_ticks=450,uid=10216,package=APP)
 
 class ViewOriginalInput(unittest.TestCase):
     def test_one_original_driver_accepts_two_ordered_read_only_checkpoints_without_touch_or_product_commands(self):
-        for mode in ('normal','wrong_nonce','reversed','duplicate','unknown_read','ended'):
+        for mode in ('normal','wrong_nonce','reversed','duplicate','unknown_read','ended','native_failed'):
             with self.subTest(mode=mode),tempfile.TemporaryDirectory() as folder:
                 probe=SimpleNamespace(args=SimpleNamespace(scope='canvas-view',serial='emulator-5562',commit='a'*40,tools_commit='b'*40),
                     output=Path(folder),adb=Path('owned-adb'),activity=APP+'/.MainActivity',shell=Mock(),device=Mock())
                 stages=('after','before') if mode=='reversed' else ('before','before') if mode=='duplicate' else ('before','after')
                 nonce='a'*36 if mode=='wrong_nonce' else NONCE
                 stream=b''.join(('INSTRUMENTATION_STATUS: owned_canvas_view_ready='+nonce+':view-pan:'+stage+'\n').encode() for stage in stages)
+                stream+=b'OPENNEXUS_RUNTIME_FAILED\n' if mode=='native_failed' else b'OPENNEXUS_RUNTIME_PHASE_OK view-pan\n'
                 process=Mock();process.stdout=io.BytesIO(stream);process.returncode=None;process.poll.return_value=0 if mode=='ended' else None
                 def wait(timeout):process.returncode=0;return 0
                 process.wait.side_effect=wait
                 with patch.object(original,'require_hosted_emulator'),patch.object(original.uuid,'uuid4',return_value=NONCE), \
                     patch.object(original,'original_identity',return_value=IDENTITY),patch.object(original.subprocess,'Popen',return_value=process) as launch, \
-                    patch.object(original,'read_original_geometry',side_effect=RuntimeError('private error') if mode=='unknown_read' else None) as read:
+                    patch.object(original,'read_original_geometry',side_effect=RuntimeError('private error') if mode=='unknown_read' else None) as read, \
+                    patch.object(original,'read_original_frame_check',return_value={'stage':'unit-only'}):
                     result=original.instrument_original_view(probe,'view-pan')
                 launch.assert_called_once();probe.shell.assert_not_called();probe.device.assert_not_called()
                 self.assertLessEqual(read.call_count,2)
@@ -34,6 +36,14 @@ class ViewOriginalInput(unittest.TestCase):
                 report=json.loads((Path(folder)/'view-pan-observation-stream.json').read_bytes())
                 self.assertNotIn('private error',json.dumps(report));self.assertFalse(report['automatic_retry'])
                 process.terminate.assert_not_called();process.kill.assert_not_called()
+
+    def test_remaining_scope_refuses_accepted_gestures_before_any_process_or_device_read(self):
+        probe=SimpleNamespace(args=SimpleNamespace(scope='canvas-view-remaining',serial='emulator-5562'))
+        with patch.object(original,'require_hosted_emulator'),patch.object(original,'original_identity') as identity, \
+            patch.object(original.subprocess,'Popen') as launch:
+            for phase in ('view-pan','view-pinch','view-cancel','view-takeover'):
+                with self.assertRaises(RuntimeError):original.instrument_original_view(probe,phase)
+        identity.assert_not_called();launch.assert_not_called()
 
     def test_changed_process_refuses_before_forward_ack_or_renderer_read(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -76,7 +76,7 @@ on:
       runtime_scope:
         description: 'all checks, or a named remaining scope on an existing fixed APK without rebuilding'
         type: choice
-        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, canvas-tools, canvas-tablet, performance, document-limits, document-export, storage-recovery, write-interruption, file-actions, file-actions-remaining, canvas-file-delete, note-search, canvas-graph, canvas-graph-remaining, canvas-motion, canvas-view, offline-pending, offline-pending-final, offline-limits, content-transfer, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, sync-revocation, desktop-startup, desktop-pair, build-only]
+        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, canvas-tools, canvas-tablet, performance, document-limits, document-export, storage-recovery, write-interruption, file-actions, file-actions-remaining, canvas-file-delete, note-search, canvas-graph, canvas-graph-remaining, canvas-motion, canvas-view, canvas-view-remaining, offline-pending, offline-pending-final, offline-limits, content-transfer, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, sync-revocation, desktop-startup, desktop-pair, build-only]
         default: all
         required: false
       sync_cold_originals:
@@ -115,7 +115,7 @@ concurrency:
 
 jobs:
   debug-apk:
-    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'canvas-tools' && inputs.runtime_scope != 'canvas-tablet' && inputs.runtime_scope != 'document-limits' && inputs.runtime_scope != 'document-export' && inputs.runtime_scope != 'write-interruption' && inputs.runtime_scope != 'file-actions' && inputs.runtime_scope != 'file-actions-remaining' && inputs.runtime_scope != 'canvas-file-delete' && inputs.runtime_scope != 'note-search' && inputs.runtime_scope != 'canvas-graph' && inputs.runtime_scope != 'canvas-graph-remaining' && inputs.runtime_scope != 'canvas-motion' && inputs.runtime_scope != 'canvas-view' && inputs.runtime_scope != 'offline-pending' && inputs.runtime_scope != 'offline-pending-final' && inputs.runtime_scope != 'offline-limits' && inputs.runtime_scope != 'content-transfer' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'sync-revocation' && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'desktop-pair')
+    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'canvas-tools' && inputs.runtime_scope != 'canvas-tablet' && inputs.runtime_scope != 'document-limits' && inputs.runtime_scope != 'document-export' && inputs.runtime_scope != 'write-interruption' && inputs.runtime_scope != 'file-actions' && inputs.runtime_scope != 'file-actions-remaining' && inputs.runtime_scope != 'canvas-file-delete' && inputs.runtime_scope != 'note-search' && inputs.runtime_scope != 'canvas-graph' && inputs.runtime_scope != 'canvas-graph-remaining' && inputs.runtime_scope != 'canvas-motion' && inputs.runtime_scope != 'canvas-view' && inputs.runtime_scope != 'canvas-view-remaining' && inputs.runtime_scope != 'offline-pending' && inputs.runtime_scope != 'offline-pending-final' && inputs.runtime_scope != 'offline-limits' && inputs.runtime_scope != 'content-transfer' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'sync-revocation' && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'desktop-pair')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -225,7 +225,7 @@ jobs:
           import os,re
           run,commit=os.environ['REUSE_RUN'],os.environ['REUSE_COMMIT']
           scope=os.environ['RUNTIME_SCOPE']
-          assert scope in ('all','lifecycle','tablet','auth','auth-recovery','auth-background','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','sync-initial','sync-exchange','sync-media','sync-stop','sync-recovery','sync-conflicts','sync-revocation')
+          assert scope in ('all','lifecycle','tablet','auth','auth-recovery','auth-background','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','sync-initial','sync-exchange','sync-media','sync-stop','sync-recovery','sync-conflicts','sync-revocation')
           assert scope=='all' or bool(run), 'Partial scope requires a fixed existing APK; it is not full acceptance'
           assert bool(run)==bool(commit), 'Supply both immutable APK reuse fields together'
           if run:
@@ -246,7 +246,7 @@ jobs:
             except FixedClientError:assert False,'Original native outcome requires an admitted immutable client'
           PY
       - name: Check remaining Canvas view contracts without executing input
-        if: inputs.runtime_scope == 'canvas-view'
+        if: inputs.runtime_scope == 'canvas-view' || inputs.runtime_scope == 'canvas-view-remaining'
         run: |
           python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
           python3 -m unittest discover -s scripts -p 'test_android_canvas_view_*.py' -v

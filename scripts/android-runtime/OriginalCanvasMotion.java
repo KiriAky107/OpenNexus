@@ -68,4 +68,21 @@ final class OriginalCanvasMotion {
             return new float[]{x,y,x+dx,y+dy};
         throw new IllegalArgumentException("MOTION_NO_OWNED_EMPTY_PAN");
     }
+    static boolean viewObservationStable(int[][] expected,int[][] current,boolean beforeInput) {
+        if(expected==null||current==null||expected.length<2||current.length<2||expected.length>34||current.length>34)return false;
+        try {
+            for(int[] value:expected)rect(value);
+            for(int[] value:current)rect(value);
+        }catch(IllegalArgumentException refused){return false;}
+        if(!java.util.Arrays.equals(expected[1],current[1]))return false;
+        if(beforeInput)return java.util.Arrays.deepEquals(expected,current);
+        // Native AX may publish a pre-cancellation node rectangle after Home.
+        // After input, retain its new rectangle but require the same owned clip.
+        // Actual graph/view effects are independently read from the renderer.
+        for(int[][] sample:new int[][][]{expected,current}) {
+            int[] node=sample[0],clip=sample[1];
+            if(!contains(clip,node[0],node[1],0)||!contains(clip,node[2]-1,node[3]-1,0))return false;
+        }
+        return true;
+    }
 }

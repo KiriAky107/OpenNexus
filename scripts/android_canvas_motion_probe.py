@@ -170,8 +170,9 @@ def touch_result(intent, result, phase):
 
 def snapshot(probe, phase):
     path=PATH
-    if probe.args.scope=='canvas-view':
-        from android_canvas_view_probe import PATH as view_path,STEPS as view_steps
+    if probe.args.scope in ('canvas-view','canvas-view-remaining'):
+        from android_canvas_view_probe import PATH as view_path,STEPS as all_view_steps,REMAINING_STEPS
+        view_steps=REMAINING_STEPS if probe.args.scope=='canvas-view-remaining' else all_view_steps
         require(phase.removesuffix('-failure') in view_steps,'MOTION_SNAPSHOT_SCOPE');path=view_path
     else:require(probe.args.scope == 'canvas-motion' and phase.removesuffix('-failure') in STEPS, 'MOTION_SNAPSHOT_SCOPE')
     value={}

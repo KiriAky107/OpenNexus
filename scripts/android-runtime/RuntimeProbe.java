@@ -1173,9 +1173,7 @@ public final class RuntimeProbe extends Instrumentation {
         for(byte value:java.security.MessageDigest.getInstance("SHA-256").digest(bytes))result.append(String.format(java.util.Locale.ROOT,"%02x",value&255));
         return result.toString();
     }
-    private void viewCheckpoint(String phase,String stage,String nonce,int[][] expected)throws Exception {
-        require(viewPhase(phase)&&(stage.equals("before")||stage.equals("after"))&&nonce.equals(java.util.UUID.fromString(nonce).toString()),"Original view checkpoint scope refused");
-        require(java.util.Arrays.deepEquals(motionObservation(),expected),"Original view geometry changed before its observation");
+    private Rect viewWebViewFrame() {
         AccessibilityNodeInfo node=uniqueTarget(motionTarget()),webview=node;
         for(int depth=0;depth<64&&!"android.webkit.WebView".equals(string(webview.getClassName()));depth++) {
             webview=webview.getParent();require(webview!=null,"Owned original Canvas WebView ancestor missing");
@@ -1184,7 +1182,13 @@ public final class RuntimeProbe extends Instrumentation {
             &&"android.webkit.WebView".equals(string(webview.getClassName())),"Original view WebView is not owned and visible");
         AccessibilityNodeInfo active=ui.getRootInActiveWindow();
         require(active!=null&&APP.equals(string(active.getPackageName())),"Original view window changed before observation");
-        Rect frame=new Rect();webview.getBoundsInScreen(frame);require(!frame.isEmpty(),"Original WebView frame is empty");
+        Rect frame=new Rect();webview.getBoundsInScreen(frame);require(!frame.isEmpty(),"Original WebView frame is empty");return frame;
+    }
+    private void viewCheckpoint(String phase,String stage,String nonce,int[][] expected)throws Exception {
+        require(viewPhase(phase)&&(stage.equals("before")||stage.equals("after"))&&nonce.equals(java.util.UUID.fromString(nonce).toString()),"Original view checkpoint scope refused");
+        boolean before=stage.equals("before");int[][] sampled=motionObservation();
+        require(OriginalCanvasMotion.viewObservationStable(expected,sampled,before),"Original view input target or owned viewport changed before observation");
+        expected=sampled;Rect frame=viewWebViewFrame();
         JSONObject value=new JSONObject().put("schema",1).put("scope","canvas-view").put("dispatch_id",nonce)
             .put("phase",phase).put("stage",stage).put("owner",APP).put("webview",new JSONArray(new int[]{frame.left,frame.top,frame.right,frame.bottom}))
             .put("clip",new JSONArray(expected[1])).put("node",new JSONArray(expected[0])).put("recorded_ms",SystemClock.uptimeMillis());
@@ -1205,7 +1209,17 @@ public final class RuntimeProbe extends Instrumentation {
         require(ack.length()==6&&ack.getBoolean("passed")&&nonce.equals(ack.getString("dispatch_id"))&&phase.equals(ack.getString("phase"))
             &&stage.equals(ack.getString("stage"))&&viewDigest(raw).equals(ack.getString("native_sha256"))
             &&ack.getString("renderer_sha256").matches("[0-9a-f]{64}"),"Original view acknowledgement does not match this observation");
-        require(java.util.Arrays.deepEquals(motionObservation(),expected),"Original view changed during read-only observation; no gesture retry");
+        int[][] fresh=motionObservation();
+        require(frame.equals(viewWebViewFrame())&&OriginalCanvasMotion.viewObservationStable(expected,fresh,before),
+            "Original view input target or owned frame changed during observation; no gesture retry");
+        JSONObject checked=new JSONObject().put("schema",1).put("scope","canvas-view-frame-check").put("dispatch_id",nonce)
+            .put("phase",phase).put("stage",stage).put("owner",APP).put("native_sha256",viewDigest(raw))
+            .put("webview",new JSONArray(new int[]{frame.left,frame.top,frame.right,frame.bottom}))
+            .put("before_read",motionRows(expected)).put("after_read",motionRows(fresh)).put("input_target_exact_guard",before);
+        byte[] checkedRaw=(checked.toString()+"\n").getBytes("UTF-8");require(checkedRaw.length<=8192,"Original view frame record bound exceeded");
+        File checkedFile=new File(getContext().getFilesDir(),phase+"-"+stage+"-native-frame-check.json");
+        require(checkedFile.createNewFile(),"Original view frame record exists; no input replay");
+        try(FileOutputStream output=new FileOutputStream(checkedFile)){output.write(checkedRaw);output.getFD().sync();}
     }
     private void motionInput(long start,int action,float[][] points,int[] clip,JSONArray events)throws Exception {
         require(points.length>=1&&points.length<=2,"Original motion pointer bound refused");

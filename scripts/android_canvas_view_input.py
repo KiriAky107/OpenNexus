@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from android_auth_fixture import atomic_json
 from android_runtime_probe import APP,DRIVER,require,require_hosted_emulator
-from android_canvas_view_geometry import PHASES,geometry,calibrate
+from android_canvas_view_geometry import PHASES,geometry,calibrate,frame_check
 
 
 def original_identity(probe):
@@ -80,10 +80,11 @@ def read_original_geometry(probe,nonce,phase,stage,identity):
 
 def instrument_original_view(probe,phase):
     require_hosted_emulator(probe.args.serial)
-    require(probe.args.scope=='canvas-view' and phase in PHASES,'VIEW_INSTRUMENT_SCOPE')
+    require(probe.args.scope in ('canvas-view','canvas-view-remaining') and phase in
+        (('view-background',) if probe.args.scope=='canvas-view-remaining' else PHASES),'VIEW_INSTRUMENT_SCOPE')
     require(re.fullmatch(re.escape(APP)+r'/[A-Za-z0-9_.]+',probe.activity),'VIEW_RESUME_ACTIVITY_SCOPE')
     nonce=str(uuid.uuid4());identity=original_identity(probe)
-    intent=dict(dispatch_id=nonce,phase=phase,scope='canvas-view',original_process=identity,
+    intent=dict(dispatch_id=nonce,phase=phase,scope=probe.args.scope,original_process=identity,
         compiled_source=probe.args.commit,tools_source=probe.args.tools_commit,
         real_native_pointer_stream=True,CDP_geometry_read_only=True,automatic_retry=False)
     atomic_json(probe.output/(phase+'-observation-intent.json'),intent,exclusive=True)
@@ -119,6 +120,9 @@ def instrument_original_view(probe,phase):
         process.wait(timeout=max(.1,deadline-time.monotonic()));reader.join(timeout=3)
         require(done.is_set() and not state['overflow'] and state['signals']==2 and signals.empty()
             and original_identity(probe)==identity,'VIEW_ORIGINAL_STREAM_OR_IDENTITY_CHANGED')
+        text=b''.join(chunks)
+        require(b'OPENNEXUS_RUNTIME_PHASE_OK '+phase.encode() in text and b'OPENNEXUS_RUNTIME_FAILED' not in text,
+            'VIEW_ORIGINAL_NATIVE_PHASE_FAILED')
     except Exception as error:failure=type(error).__name__
     finally:
         if process.poll() is None:
@@ -128,8 +132,28 @@ def instrument_original_view(probe,phase):
                 try:process.wait(timeout=4)
                 except subprocess.TimeoutExpired:process.kill();process.wait(timeout=4)
         reader.join(timeout=3)
+        frame_observations=[]
+        for stage in ('before','after'):
+            try:
+                frame_observations.append(read_original_frame_check(probe,nonce,phase,stage))
+            except Exception as error:
+                frame_observations.append(dict(stage=stage,available=False,error_class=type(error).__name__))
+                if failure is None:failure='OriginalFrameCheckUnavailable'
         atomic_json(probe.output/(phase+'-observation-stream.json'),dict(intent,stages=stages,
             readiness_signals=state['signals'],bounded_stream_complete=done.is_set() and not state['overflow'],
             original_process_returncode=process.returncode,passed=failure is None,error_class=failure,
-            raw_error_returned=False,driver_acknowledgement_is_not_a_product_mutation=True),exclusive=True)
+            raw_error_returned=False,driver_acknowledgement_is_not_a_product_mutation=True,frame_checks=frame_observations),exclusive=True)
     return subprocess.CompletedProcess(command,process.returncode if failure is None else 1,b''.join(chunks),b'')
+
+
+def read_original_frame_check(probe,nonce,phase,stage):
+    require(phase in PHASES and stage in ('before','after'),'VIEW_FRAME_READ_SCOPE')
+    name=phase+'-'+stage+'-native-frame-check.json'
+    raw=probe.device('exec-out','run-as',DRIVER,'cat','files/'+name).stdout
+    require(0<len(raw)<=8192,'VIEW_FRAME_READ_BOUND')
+    native_raw=(probe.output/(phase+'-'+stage+'-native-view.json')).read_bytes();native=json.loads(native_raw)
+    value=json.loads(raw);require(native['dispatch_id']==nonce and value['native_sha256']==hashlib.sha256(native_raw).hexdigest(),'VIEW_FRAME_NATIVE_HASH_MISMATCH')
+    summary=frame_check(value,native)
+    target=probe.output/name
+    with target.open('xb') as stream:stream.write(raw);stream.flush();os.fsync(stream.fileno())
+    return summary
