@@ -51,6 +51,7 @@ def verify_candidate(probe):
         require(len(document['nodes'])==1 and document['nodes'][0].get('text')==NODE,'CANDIDATE_ORIGINAL_CANVAS_TEXT')
         before=snapshot(probe,current);report['original_file_id']=before['files'][0]['id']
         report['original_raw_sha256']=hashlib.sha256(raw).hexdigest()
+        require(before['files'][0]['hash']==report['original_raw_sha256'],'CANDIDATE_NATIVE_HASH_NOT_ORIGINAL_BYTES')
         for step in STEPS:
             current=step;before_pid=probe.shell('pidof',APP).stdout.strip()
             probe.phase(step,continue_process=step not in (STEPS[0],STEPS[-1]),keep_running=True)

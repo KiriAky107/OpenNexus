@@ -2,10 +2,28 @@
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock,patch
-import json,tempfile,unittest
+import hashlib,json,tempfile,unittest
 import android_candidate_readiness_probe as candidate
+from android_runtime_probe import Probe
 
 class CandidateReadinessBoundaries(unittest.TestCase):
+    def test_lifecycle_waits_for_original_image_receipt_and_checks_after_the_single_save(self):
+        with tempfile.TemporaryDirectory() as root:
+            probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope='lifecycle');probe.output=Path(root)
+            probe.root='owned/';probe.activity='owned/Activity';probe.phases=[]
+            probe.force_stop=Mock();probe.native_tls_startup=Mock();probe.capture=Mock()
+            probe.read_native_styles=Mock();probe.capture_failed_editor_state=Mock()
+            result=SimpleNamespace(stdout=b'OPENNEXUS_RUNTIME_PHASE_OK rich-image\n')
+            probe.shell=Mock(return_value=result);probe.image_save_instrumentation=Mock(return_value=result)
+            probe.image_save_rows=Mock(return_value={'after':'one original Save'})
+            (probe.output/'rich-image-stable-before-save-receipts.json').write_text('{"before":"original import"}','utf-8')
+            with patch('android_runtime_probe.validate_image_save_result') as validate:
+                probe.phase('rich-image')
+                probe.image_save_instrumentation.assert_called_once_with('rich-image')
+                probe.image_save_rows.assert_called_once_with('rich-image','after-save')
+                validate.assert_called_once_with({'before':'original import'},{'after':'one original Save'})
+            self.assertFalse(any('instrument' in call.args for call in probe.shell.call_args_list))
+
     def probe(self,root,*,change=None):
         probe=Mock();probe.args=SimpleNamespace(scope='lifecycle',serial='emulator-5562',tools_commit='tools',commit='compiled')
         probe.output=Path(root);probe.binding={'sha256':'fixed APK'}
@@ -25,7 +43,15 @@ class CandidateReadinessBoundaries(unittest.TestCase):
         return probe
 
     def state(self,probe,name):
-        return {'files':[{'id':'own-file'}],'drafts':[],'saves':[],'outbox':[],'operations':[]}
+        raw=json.dumps({'nodes':[{'id':'own-node','text':candidate.NODE}],'edges':[]},ensure_ascii=False).encode()
+        return {'files':[{'id':'own-file','hash':hashlib.sha256(raw).hexdigest()}],'drafts':[],'saves':[],'outbox':[],'operations':[]}
+
+    @patch.object(candidate,'require_hosted_emulator')
+    def test_stale_native_hash_cannot_verify_the_read_original(self,_):
+        with tempfile.TemporaryDirectory() as root:
+            probe=self.probe(root);state=self.state(probe,'candidate-before');state['files'][0]['hash']='stale'
+            with patch.object(candidate,'snapshot',return_value=state),self.assertRaises(RuntimeError):candidate.verify_candidate(probe)
+            probe.phase.assert_not_called()
 
     def test_foreign_snapshot_label_or_scope_is_refused_before_private_reads(self):
         probe=Mock();probe.args.scope='lifecycle'

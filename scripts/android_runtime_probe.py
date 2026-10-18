@@ -695,7 +695,7 @@ class Probe:
         elif getattr(getattr(self,'args',None),'scope','')=='canvas-view-cold' and phase=='view-cold':
             result=self.shell('am','instrument','-w','-e','phase',phase,'-e','view_cold_window_guard','yes',
                 f'{DRIVER}/.RuntimeProbe',timeout=180)
-        elif phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining','editing-remaining'):
+        elif phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining','editing-remaining','lifecycle'):
             result = self.image_save_instrumentation(phase)
         elif getattr(getattr(self,'args',None),'scope','')=='canvas-motion' and phase=='motion-background':
             require(re.fullmatch(re.escape(APP)+r'/[A-Za-z0-9_.]+',self.activity),'Original motion resume activity refused')
@@ -723,7 +723,7 @@ class Probe:
             self.force_stop()
         if self.root is None and not phase.startswith('theme-'):
             self.discover_private_root()
-        if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining','editing-remaining'):
+        if phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining','editing-remaining','lifecycle'):
             after = self.image_save_rows(phase, 'after-save')
             before = json.loads((self.output/(phase+'-stable-before-save-receipts.json')).read_text('utf-8'))
             validate_image_save_result(before, after)
