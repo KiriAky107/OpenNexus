@@ -23,7 +23,7 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
             "SYNC_FOREGROUND_CHANGED","SYNC_FOREGROUND_REQUIRED","SYNC_ALREADY_BOUND","SYNC_PREVIEW_CHANGED","SYNC_PREVIEW_PAGE_INVALID",
             "SYNC_BINDING_REQUEST_INVALID","SYNC_BINDING_PAGE_INVALID","SYNC_BINDING_INTENT_INVALID","SYNC_BINDING_INTENT_NOT_FOUND",
             "SYNC_BINDING_INTENT_CHANGED","SYNC_OPERATION_MISMATCH","SYNC_WORKER_INTERRUPTED","VAULT_CHANGED","HOST_BUSY",
-            "MOBILE_STORAGE_UNAVAILABLE","MOBILE_HOST_REQUIRED","SYNC_PLATFORM_UNSUPPORTED","QUOTA_EXCEEDED","FILESYSTEM_ERROR","DATABASE_ERROR"};
+            "MOBILE_STORAGE_UNAVAILABLE","MOBILE_HOST_REQUIRED","SYNC_PLATFORM_UNSUPPORTED","QUOTA_EXCEEDED","SESSION_EXPIRED","FILESYSTEM_ERROR","DATABASE_ERROR"};
     }
     @Override protected String[] diagnosticLabels() {
         return new String[]{"Read remote vaults","Choose a vault","Read local association","Preview merge",
@@ -59,6 +59,8 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
             case "cold-original-decision": readColdOriginalCopy(); return true;
             case "cycle-offline": failedCycle("cycle-offline"); return true;
             case "cycle-dropped-upload": failedCycle("cycle-dropped-upload"); return true;
+            case "cycle-revoked": revokedCycle(); return true;
+            case "refresh-revoked": revokedRefresh(); return true;
             case "cycle-stop": stopOriginal(); return true;
             case "close": click("Close"); return true;
             default: return false;
@@ -121,6 +123,31 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
         waitPresent(node->label(node,"Cycle did not complete"));
         waitPresent(node->text(node.getText()).startsWith("The previous outcome is not fully confirmed."));
         waitFor(node->label(node,"Sync one cycle now") && !node.isEnabled(),true);
+    }
+
+    private static final String REVOKED_MESSAGE="Sign-in or device authorization expired. Sign in again. (SESSION_EXPIRED)";
+    private void revokedCycle() throws Exception {
+        readCurrent(); signedIn(); click("Read queue and original records");
+        waitFor(node->label(node,"Sync one cycle now") && node.isEnabled(),true);
+        persistOnce("cycle-revoked",new JSONObject().put("driver_intent_id",UUID.randomUUID().toString())
+            .put("native_invocation_id_observed",false).put("action","Sync one cycle now"));
+        click("Sync one cycle now");
+        waitPresent(node->label(node,"Cycle did not complete"));
+        waitPresent(node->text(node.getText()).endsWith(REVOKED_MESSAGE));
+    }
+    private void revokedRefresh() throws Exception {
+        readCurrent(); signedIn();
+        persistOnce("refresh-revoked",new JSONObject().put("driver_intent_id",UUID.randomUUID().toString())
+            .put("native_operation_id_observed",false).put("action","Refresh session"));
+        click("Refresh session");
+        waitPresent(node->label(node,REVOKED_MESSAGE));
+        waitPresent(node->label(node,"Check original operation"));
+        click("Read original ID");
+        waitPresent(node->label(node,"Original result is unconfirmed"));
+        // The mutation clears current RAM state, so the unusable action may
+        // be absent rather than rendered disabled. Neither permits a retry.
+        for(AccessibilityNodeInfo node:nodes())
+            require(!(label(node,"Refresh session")&&node.isEnabled()),"Rejected original left an enabled refresh action");
     }
 
     private static boolean canonical(String value) {

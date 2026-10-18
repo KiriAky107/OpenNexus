@@ -7,6 +7,35 @@ import android_auth_runtime as module
 
 
 class AuthRuntimeBoundaries(unittest.TestCase):
+    def test_optional_native_rejection_observation_never_selects_secret_payloads_or_unrelated_rows(self):
+        import sqlite3,tempfile
+        from contextlib import closing
+        from pathlib import Path
+        from subprocess import CompletedProcess
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source=root/'owned.sqlite3';operation='c4427c0c-463a-4217-b31a-4b96edbca903'
+            with closing(sqlite3.connect(source)) as db:
+                db.executescript('''CREATE TABLE auth_intents(operation_id,endpoint,account,device_name,kind,phase,device_id,generation,server_logout_confirmed,previous_operation);
+                    CREATE TABLE auth_selection(revision,endpoint,account,operation_id,generation);
+                    CREATE TABLE auth_rejections(operation_id,status,code);
+                    CREATE TABLE private_credentials(secret);INSERT INTO private_credentials VALUES('never-select-this-secret');''')
+                db.execute('INSERT INTO auth_intents VALUES(?,?,?,?,?,?,?,?,?,?)',(operation,'owned endpoint','owned account','owned phone','refresh','unknown','a'*32,2,0,'previous original'))
+                db.execute('INSERT INTO auth_selection VALUES(?,?,?,?,?)',(2,'owned endpoint','owned account',operation,2))
+                db.execute('INSERT INTO auth_rejections VALUES(?,?,?)',(operation,401,'SESSION_EXPIRED'))
+                db.commit()
+            raw=source.read_bytes();probe=object.__new__(module.AuthProbe)
+            probe.tools=root/'tools';probe.tools.mkdir();probe.output=root/'evidence';probe.output.mkdir()
+            probe.shell=Mock(return_value=CompletedProcess([],0,b'./files/owned/mobile-sync-auth.sqlite3\n',b''))
+            probe.private=Mock(side_effect=lambda path,**_:CompletedProcess([],0,raw,b'') if path.endswith('.sqlite3') else CompletedProcess([],1,b'',b''))
+            observed=probe.snapshot('rejected',include_rejections=True)
+            self.assertEqual(observed['rejections'],[dict(operation_id=operation,status=401,code='SESSION_EXPIRED')])
+            self.assertNotIn('never-select-this-secret',(probe.output/'rejected-native.json').read_text())
+            self.assertEqual(source.read_bytes(),raw)
+            plain=probe.snapshot('plain');self.assertNotIn('rejections',plain)
+            with closing(sqlite3.connect(source)) as db:db.execute('UPDATE auth_rejections SET status=200');db.commit()
+            raw=source.read_bytes()
+            with self.assertRaisesRegex(RuntimeError,'rejection metadata differs'):probe.snapshot('invalid',include_rejections=True)
+
     def test_background_scope_does_not_repeat_normal_or_dropped_refresh_checks(self):
         from pathlib import Path
         probe=object.__new__(module.AuthProbe);probe.args=Namespace(scope='background');probe.owner=Path('owned-unit-only')

@@ -232,6 +232,9 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
 
     def failure_observations(self):
         super().failure_observations()
+        if getattr(getattr(self,'args',None),'revocation',False):
+            from android_sync_rejection import failure_observations
+            failure_observations(self)
         # Read-only debug WebView geometry/public error enums only; no DOM
         # input values, raw error text, screenshots or mutation replays.
         try:self.read_native_styles('sync-failure')
@@ -248,7 +251,7 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
         require(phase in ('associate','cycle','cycle-incoming','cycle-media','cycle-rename','cycle-delete',
             'cycle-after-stop','cycle-offline','cycle-dropped-upload','cycle-reconcile-original',
             'cycle-conflict','cycle-conflict-copy','conflict-copy','cold-original-decision',
-            'status','association-original','close'),'Unexpected Sync UI phase')
+            'cycle-revoked','refresh-revoked','status','association-original','close'),'Unexpected Sync UI phase')
         number=len(self.phases)+1
         # The actual association ID/digest is separately frozen in the driver
         # before its confirmation tap. This dispatch ID is not a server nonce.
@@ -303,7 +306,7 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
         atomic_json(self.output/'original-association-intent.json',value,exclusive=True)
         return value
 
-    def host_snapshot(self,label,*,include_outbox=False):
+    def host_snapshot(self,label,*,include_outbox=False,include_payloads=False):
         self.host_observation_stage='origin'
         paths=self.shell('run-as',APP,'find','.','-name','host.sqlite3','-type','f').stdout.decode().splitlines()
         require(len(paths)==1 and re.fullmatch(r'\./(?:[A-Za-z0-9_.-]+/)*host\.sqlite3',paths[0]),'Native host metadata origin ambiguous')
@@ -363,6 +366,11 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
                 originals=db.execute("SELECT operation_id,file_id,revision,path,hash,operation,state,length(content) FROM outbox WHERE path='runtime-note.md' ORDER BY rowid LIMIT 17").fetchall()
                 require(0<len(originals)<=16,'Owned original outbox is missing or exceeds bound')
                 rows['outbox']=[dict(zip(('operation_id','file_id','revision','path','hash','operation','state','payload_size'),row)) for row in originals]
+            if include_payloads:
+                require(include_outbox,'Payload observation needs its original owned outbox')
+                payloads=db.execute("SELECT p.operation_id,p.hash,p.size FROM payloads p JOIN outbox o ON o.operation_id=p.operation_id WHERE o.path='runtime-note.md' ORDER BY o.rowid LIMIT 17").fetchall()
+                require(len(payloads)<=16,'Owned original payload metadata exceeds bound')
+                rows['payloads']=[dict(zip(('operation_id','hash','size'),row)) for row in payloads]
             if getattr(getattr(self,'args',None),'conflicts',False):
                 self.host_observation_stage='original-conflict-decisions'
                 has_review=db.execute("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_review_receipts')").fetchone()[0]
@@ -400,6 +408,10 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
             and all(bound['association'][key]==original[key] for key in original)
             and bound['association']['auth_operation_id']==selected['operation_id'],'Actual original association differs from the frozen UI or identity')
         require(not self.observe('associated')['rows']['revisions'],'Association unexpectedly transferred note revisions')
+        if getattr(self.args,'revocation',False):
+            from android_sync_rejection import run_revocation
+            run_revocation(self,setup,prepared,device)
+            return
         if getattr(self.args,'recovery',False):
             self.recover_original(setup,prepared,device)
             return
@@ -619,13 +631,13 @@ def main():
     for name in ('bundle','sdk','output','source-checkout'):parser.add_argument('--'+name,type=Path,required=True)
     for name in ('commit','tools-commit','build-run-id'):parser.add_argument('--'+name,required=True)
     parser.add_argument('--serial',default='emulator-5562')
-    scope=parser.add_mutually_exclusive_group();scope.add_argument('--exchange',action='store_true');scope.add_argument('--media',action='store_true');scope.add_argument('--stop',action='store_true');scope.add_argument('--recovery',action='store_true');scope.add_argument('--conflicts',action='store_true')
+    scope=parser.add_mutually_exclusive_group();scope.add_argument('--exchange',action='store_true');scope.add_argument('--media',action='store_true');scope.add_argument('--stop',action='store_true');scope.add_argument('--recovery',action='store_true');scope.add_argument('--conflicts',action='store_true');scope.add_argument('--revocation',action='store_true')
     parser.add_argument('--cold-originals',action='store_true')
     parser.add_argument('--semantic-preview',action='store_true')
     parser.add_argument('--webview-preview',action='store_true')
     parser.add_argument('--webview-cycle',action='store_true')
     parser.add_argument('--original-native-outcome',action='store_true')
-    args=parser.parse_args();args.scope='sync-conflicts' if args.conflicts else 'sync-recovery' if args.recovery else 'sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
+    args=parser.parse_args();args.scope='sync-revocation' if args.revocation else 'sync-conflicts' if args.conflicts else 'sync-recovery' if args.recovery else 'sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
     require(not args.cold_originals or args.conflicts,'Cold original-entry scope requires actual conflicts')
     require(not args.semantic_preview or args.conflicts,'Native accessibility preview requires the explicit conflict scope')
     require(not args.webview_preview or args.conflicts,'Owned WebView preview requires the explicit conflict scope')

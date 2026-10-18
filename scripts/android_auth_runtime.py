@@ -164,7 +164,7 @@ class AuthProbe(Probe):
                 atomic_json(self.output/'held-phase-unfinished.json',{'passed':False,'original_not_retried':True},exclusive=True)
             if output:self.record_auth_phase('login-b-held',started,process.returncode,output)
 
-    def snapshot(self,label):
+    def snapshot(self,label,*,include_rejections=False):
         paths=self.shell('run-as',APP,'find','.','-name','mobile-sync-auth.sqlite3','-type','f').stdout.decode().splitlines()
         require(len(paths)==1 and re.fullmatch(r'\./(?:[A-Za-z0-9_.-]+/)*mobile-sync-auth\.sqlite3',paths[0]),
             'Native auth database origin is ambiguous')
@@ -180,7 +180,16 @@ class AuthProbe(Probe):
             rows=db.execute('SELECT revision,endpoint,account,operation_id,generation FROM auth_selection').fetchall()
             require(len(rows)<=1,'Native selection is ambiguous')
             selection=dict(zip(('revision','endpoint','account','operation_id','generation'),rows[0])) if rows else None
+            rejections=[]
+            if include_rejections:
+                rejections=[dict(zip(('operation_id','status','code'),row)) for row in db.execute(
+                    'SELECT operation_id,status,code FROM auth_rejections ORDER BY rowid LIMIT 17')]
+                require(len(rejections)<=16 and len({row['operation_id'] for row in rejections})==len(rejections)
+                    and all(row['operation_id'] in {intent['operation_id'] for intent in intents}
+                        and (row['status'],row['code']) in ((401,'SESSION_EXPIRED'),(401,'LOGIN_FAILED'),(422,'INVALID_REQUEST'),(429,'RATE_LIMITED'))
+                        for row in rejections),'Original Native rejection metadata differs')
         value={'intents':intents,'selection':selection,'integrity':'ok','secret_payload_selected':False}
+        if include_rejections:value['rejections']=rejections
         atomic_json(self.output/(label+'-native.json'),value,exclusive=True);return value
 
     def ciphertext_fingerprints(self):

@@ -115,6 +115,7 @@ class InitialSyncBoundaries(unittest.TestCase):
                     CREATE TABLE sync_conflicts(binding,sequence,file_id,local_path,local_hash,state);
                     CREATE TABLE mobile_sync_binding_intents(operation_id,request_hash,request,state,attempt_revision,binding);
                     CREATE TABLE outbox(operation_id,file_id,revision,path,hash,operation,state,content);
+                    CREATE TABLE payloads(operation_id,hash,size);
                     CREATE TABLE sync_resolutions(binding,sequence,choice,destination,expected,operation_id,rename_id,copy_id,state,retire_id,restore_id);
                     CREATE TABLE sync_review_receipts(binding,sequence,fingerprint,expected,choice,destination,guards);
                     CREATE TABLE unrelated_private_values(secret);
@@ -123,6 +124,8 @@ class InitialSyncBoundaries(unittest.TestCase):
                 db.execute('INSERT INTO mobile_sync_binding_intents VALUES(?,?,?,?,?,?)',('binding-original','digest',request,'bound',1,receipt))
                 db.execute('INSERT INTO outbox VALUES(?,?,?,?,?,?,?,?)',('owned-op','owned-file',1,'runtime-note.md',hashlib.sha256(DRAFT.encode()).hexdigest(),'put','pending',b''))
                 db.execute('INSERT INTO outbox VALUES(?,?,?,?,?,?,?,?)',('private-op','private-file',1,'private.md','private-hash','put','pending',b'must-never-be-selected-or-uploaded'))
+                db.execute('INSERT INTO payloads VALUES(?,?,?)',('owned-op',hashlib.sha256(DRAFT.encode()).hexdigest(),len(DRAFT.encode())))
+                db.execute('INSERT INTO payloads VALUES(?,?,?)',('private-op','must-never-be-selected-or-uploaded',99))
                 db.execute('INSERT INTO sync_resolutions VALUES(?,?,?,?,?,?,?,?,?,?,?)',('binding',2,'copy','copy.md','local-hash','original-write','original-rename','original-copy','completed','original-retire','original-restore'))
                 db.execute('INSERT INTO sync_review_receipts VALUES(?,?,?,?,?,?,?)',('binding',2,'original-review','local-hash','copy','copy.md','[]'))
                 db.commit()
@@ -141,6 +144,10 @@ class InitialSyncBoundaries(unittest.TestCase):
             self.assertEqual(source.read_bytes(),original)
             self.assertNotIn('private-file',(probe.output/'owned-host.json').read_text())
             self.assertNotIn('must-never-be-selected-or-uploaded',(probe.output/'owned-host.json').read_text())
+            payloads=probe.host_snapshot('payloads',include_outbox=True,include_payloads=True)
+            self.assertEqual(payloads['payloads'],[dict(operation_id='owned-op',hash=hashlib.sha256(DRAFT.encode()).hexdigest(),size=len(DRAFT.encode()))])
+            self.assertNotIn('must-never-be-selected-or-uploaded',(probe.output/'payloads-host.json').read_text())
+            self.assertEqual(source.read_bytes(),original)
             probe.args=SimpleNamespace(conflicts=True)
             decisions=probe.host_snapshot('decisions')['decisions']
             self.assertEqual(decisions,[{'sequence':2,'choice':'copy','destination':'copy.md','expected_hash':'local-hash',

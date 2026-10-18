@@ -76,7 +76,7 @@ on:
       runtime_scope:
         description: 'all checks, or a named remaining scope on an existing fixed APK without rebuilding'
         type: choice
-        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, canvas-tools, canvas-tablet, performance, document-limits, document-export, storage-recovery, write-interruption, file-actions, file-actions-remaining, canvas-file-delete, note-search, canvas-graph, canvas-graph-remaining, canvas-motion, offline-pending, offline-pending-final, offline-limits, content-transfer, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, desktop-startup, desktop-pair, build-only]
+        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, canvas-tools, canvas-tablet, performance, document-limits, document-export, storage-recovery, write-interruption, file-actions, file-actions-remaining, canvas-file-delete, note-search, canvas-graph, canvas-graph-remaining, canvas-motion, offline-pending, offline-pending-final, offline-limits, content-transfer, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, sync-revocation, desktop-startup, desktop-pair, build-only]
         default: all
         required: false
       sync_cold_originals:
@@ -115,7 +115,7 @@ concurrency:
 
 jobs:
   debug-apk:
-    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'canvas-tools' && inputs.runtime_scope != 'canvas-tablet' && inputs.runtime_scope != 'document-limits' && inputs.runtime_scope != 'document-export' && inputs.runtime_scope != 'write-interruption' && inputs.runtime_scope != 'file-actions' && inputs.runtime_scope != 'file-actions-remaining' && inputs.runtime_scope != 'canvas-file-delete' && inputs.runtime_scope != 'note-search' && inputs.runtime_scope != 'canvas-graph' && inputs.runtime_scope != 'canvas-graph-remaining' && inputs.runtime_scope != 'canvas-motion' && inputs.runtime_scope != 'offline-pending' && inputs.runtime_scope != 'offline-pending-final' && inputs.runtime_scope != 'offline-limits' && inputs.runtime_scope != 'content-transfer' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'desktop-pair')
+    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'canvas-tools' && inputs.runtime_scope != 'canvas-tablet' && inputs.runtime_scope != 'document-limits' && inputs.runtime_scope != 'document-export' && inputs.runtime_scope != 'write-interruption' && inputs.runtime_scope != 'file-actions' && inputs.runtime_scope != 'file-actions-remaining' && inputs.runtime_scope != 'canvas-file-delete' && inputs.runtime_scope != 'note-search' && inputs.runtime_scope != 'canvas-graph' && inputs.runtime_scope != 'canvas-graph-remaining' && inputs.runtime_scope != 'canvas-motion' && inputs.runtime_scope != 'offline-pending' && inputs.runtime_scope != 'offline-pending-final' && inputs.runtime_scope != 'offline-limits' && inputs.runtime_scope != 'content-transfer' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'sync-revocation' && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'desktop-pair')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -224,7 +224,7 @@ jobs:
           import os,re
           run,commit=os.environ['REUSE_RUN'],os.environ['REUSE_COMMIT']
           scope=os.environ['RUNTIME_SCOPE']
-          assert scope in ('all','lifecycle','tablet','auth','auth-recovery','auth-background','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','sync-initial','sync-exchange','sync-media','sync-stop','sync-recovery','sync-conflicts')
+          assert scope in ('all','lifecycle','tablet','auth','auth-recovery','auth-background','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','sync-initial','sync-exchange','sync-media','sync-stop','sync-recovery','sync-conflicts','sync-revocation')
           assert scope=='all' or bool(run), 'Partial scope requires a fixed existing APK; it is not full acceptance'
           assert bool(run)==bool(commit), 'Supply both immutable APK reuse fields together'
           if run:
@@ -257,18 +257,18 @@ jobs:
         with:
           node-version: '22'
       - uses: actions/checkout@v7
-        if: inputs.runtime_scope == 'auth' || inputs.runtime_scope == 'auth-recovery' || inputs.runtime_scope == 'auth-background' || inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange' || inputs.runtime_scope == 'sync-media' || inputs.runtime_scope == 'sync-stop' || inputs.runtime_scope == 'sync-recovery' || inputs.runtime_scope == 'sync-conflicts'
+        if: inputs.runtime_scope == 'auth' || inputs.runtime_scope == 'auth-recovery' || inputs.runtime_scope == 'auth-background' || inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange' || inputs.runtime_scope == 'sync-media' || inputs.runtime_scope == 'sync-stop' || inputs.runtime_scope == 'sync-recovery' || inputs.runtime_scope == 'sync-conflicts' || inputs.runtime_scope == 'sync-revocation'
         with:
           repository: KiriAky107/Sync-for-OpenNexus
           ref: 29e2e6d373ea752352981bdad05d34a7a0d9c3d9
           path: .build/android-auth-source
           persist-credentials: false
       - uses: actions/setup-python@v7
-        if: inputs.runtime_scope == 'auth' || inputs.runtime_scope == 'auth-recovery' || inputs.runtime_scope == 'auth-background' || inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange' || inputs.runtime_scope == 'sync-media' || inputs.runtime_scope == 'sync-stop' || inputs.runtime_scope == 'sync-recovery' || inputs.runtime_scope == 'sync-conflicts'
+        if: inputs.runtime_scope == 'auth' || inputs.runtime_scope == 'auth-recovery' || inputs.runtime_scope == 'auth-background' || inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange' || inputs.runtime_scope == 'sync-media' || inputs.runtime_scope == 'sync-stop' || inputs.runtime_scope == 'sync-recovery' || inputs.runtime_scope == 'sync-conflicts' || inputs.runtime_scope == 'sync-revocation'
         with:
           python-version: '3.13'
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
-        if: inputs.runtime_scope == 'auth' || inputs.runtime_scope == 'auth-recovery' || inputs.runtime_scope == 'auth-background' || inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange' || inputs.runtime_scope == 'sync-media' || inputs.runtime_scope == 'sync-stop' || inputs.runtime_scope == 'sync-recovery' || inputs.runtime_scope == 'sync-conflicts'
+        if: inputs.runtime_scope == 'auth' || inputs.runtime_scope == 'auth-recovery' || inputs.runtime_scope == 'auth-background' || inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange' || inputs.runtime_scope == 'sync-media' || inputs.runtime_scope == 'sync-stop' || inputs.runtime_scope == 'sync-recovery' || inputs.runtime_scope == 'sync-conflicts' || inputs.runtime_scope == 'sync-revocation'
       - name: Prepare only the fixed owned HTTPS service
         if: inputs.runtime_scope == 'auth' || inputs.runtime_scope == 'auth-recovery' || inputs.runtime_scope == 'auth-background'
         shell: bash
@@ -279,12 +279,15 @@ jobs:
           mkdir -p .build/android-auth-origin-proof
           .build/android-auth-source/.venv/bin/python scripts/android_auth_hosted.py prepare > .build/android-auth-origin-proof/origin.json
       - name: Prepare the independent fixed Sync interoperability origin
-        if: inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange' || inputs.runtime_scope == 'sync-media' || inputs.runtime_scope == 'sync-stop' || inputs.runtime_scope == 'sync-recovery' || inputs.runtime_scope == 'sync-conflicts'
+        if: inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange' || inputs.runtime_scope == 'sync-media' || inputs.runtime_scope == 'sync-stop' || inputs.runtime_scope == 'sync-recovery' || inputs.runtime_scope == 'sync-conflicts' || inputs.runtime_scope == 'sync-revocation'
         shell: bash
         run: |
           set -euo pipefail
           uv sync --frozen --project .build/android-auth-source
           mkdir -p .build/android-sync-origin-proof
+          if [ "$OWNED_RUNTIME_SCOPE" = "sync-revocation" ]; then
+            python3 -m unittest discover -s scripts -p 'test_android_sync_rejection*.py' -v
+          fi
           .build/android-auth-source/.venv/bin/python scripts/android_auth_hosted.py prepare --fixture sync > .build/android-sync-origin-proof/origin.json
       - name: Prepare an exclusive hosted emulator
         shell: bash
@@ -356,7 +359,7 @@ jobs:
         if: env.OWNED_RUNTIME_SCOPE == 'file-actions' || env.OWNED_RUNTIME_SCOPE == 'file-actions-remaining' || env.OWNED_RUNTIME_SCOPE == 'canvas-file-delete'
         run: python3 -m unittest discover -s scripts -p test_android_file_actions_probe.py -v
       - name: Check real APK editing, force-stop recovery, Canvas touch and system export
-        if: inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts'
+        if: inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'sync-revocation'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
@@ -397,7 +400,7 @@ jobs:
           python3 scripts/android_pair_crypto_requirements.py > .build/android-original-outcome-tool/crypto.requirements.txt
           uv pip install --python .build/android-auth-source/.venv/bin/python --target .build/android-original-outcome-crypto --no-deps --require-hashes --only-binary :all: --requirement .build/android-original-outcome-tool/crypto.requirements.txt
       - name: Check actual Android UI association and original foreground Sync exchange
-        if: inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange' || inputs.runtime_scope == 'sync-media' || inputs.runtime_scope == 'sync-stop' || inputs.runtime_scope == 'sync-recovery' || inputs.runtime_scope == 'sync-conflicts'
+        if: inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange' || inputs.runtime_scope == 'sync-media' || inputs.runtime_scope == 'sync-stop' || inputs.runtime_scope == 'sync-recovery' || inputs.runtime_scope == 'sync-conflicts' || inputs.runtime_scope == 'sync-revocation'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PYTHONPATH: ${{ inputs.sync_original_native_outcome && format('{0}/.build/android-original-outcome-crypto', github.workspace) || '' }}
@@ -407,7 +410,7 @@ jobs:
           --tools-commit "$GITHUB_SHA" --build-run-id "$APK_BUILD_RUN_ID"
           --bundle .build/android-runtime/package --sdk "$ANDROID_HOME"
           --output .build/android-sync-evidence
-          ${{ inputs.runtime_scope == 'sync-conflicts' && '--conflicts' || inputs.runtime_scope == 'sync-recovery' && '--recovery' || inputs.runtime_scope == 'sync-stop' && '--stop' || inputs.runtime_scope == 'sync-media' && '--media' || inputs.runtime_scope == 'sync-exchange' && '--exchange' || '' }}
+          ${{ inputs.runtime_scope == 'sync-revocation' && '--revocation' || inputs.runtime_scope == 'sync-conflicts' && '--conflicts' || inputs.runtime_scope == 'sync-recovery' && '--recovery' || inputs.runtime_scope == 'sync-stop' && '--stop' || inputs.runtime_scope == 'sync-media' && '--media' || inputs.runtime_scope == 'sync-exchange' && '--exchange' || '' }}
           ${{ inputs.sync_cold_originals && '--cold-originals' || '' }}
           ${{ inputs.sync_semantic_preview && '--semantic-preview' || '' }}
           ${{ inputs.sync_webview_preview && '--webview-preview' || '' }}
@@ -423,13 +426,13 @@ jobs:
           mkdir -p .build/android-auth-origin-proof
           python3 scripts/android_auth_hosted.py stop > .build/android-auth-origin-proof/cleanup.json
       - name: Stop only this job's original Sync interoperability origin and providers
-        if: always() && (inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange' || inputs.runtime_scope == 'sync-media' || inputs.runtime_scope == 'sync-stop' || inputs.runtime_scope == 'sync-recovery' || inputs.runtime_scope == 'sync-conflicts')
+        if: always() && (inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange' || inputs.runtime_scope == 'sync-media' || inputs.runtime_scope == 'sync-stop' || inputs.runtime_scope == 'sync-recovery' || inputs.runtime_scope == 'sync-conflicts' || inputs.runtime_scope == 'sync-revocation')
         shell: bash
         run: |
           mkdir -p .build/android-sync-origin-proof
           python3 scripts/android_auth_hosted.py stop --fixture sync > .build/android-sync-origin-proof/cleanup.json
       - uses: actions/upload-artifact@v7
-        if: always() && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts'
+        if: always() && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'sync-revocation'
         with:
           name: ${{ matrix.scene && format('OpenNexus-android-runtime-{0}-{1}', matrix.scene, env.COMPILED_SHA) || format('OpenNexus-android-runtime-{0}', env.COMPILED_SHA) }}
           path: |
@@ -438,7 +441,7 @@ jobs:
             .build/android-runtime/emulator-version.txt
           if-no-files-found: warn
       - uses: actions/upload-artifact@v7
-        if: always() && (inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange' || inputs.runtime_scope == 'sync-media' || inputs.runtime_scope == 'sync-stop' || inputs.runtime_scope == 'sync-recovery' || inputs.runtime_scope == 'sync-conflicts')
+        if: always() && (inputs.runtime_scope == 'sync-initial' || inputs.runtime_scope == 'sync-exchange' || inputs.runtime_scope == 'sync-media' || inputs.runtime_scope == 'sync-stop' || inputs.runtime_scope == 'sync-recovery' || inputs.runtime_scope == 'sync-conflicts' || inputs.runtime_scope == 'sync-revocation')
         with:
           name: OpenNexus-android-${{ inputs.runtime_scope }}-${{ env.COMPILED_SHA }}
           # No private owner/input/session, copied databases, driver key, raw
