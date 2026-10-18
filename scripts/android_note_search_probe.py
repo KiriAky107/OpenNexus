@@ -115,6 +115,8 @@ def run_note_search(probe):
     try:
         probe.enable_test_ime()
         first=phase('search-seed-original');seed_bindings(first,{PATH:SEED})
+        from android_protocol_observation import observe_owned_protocol
+        observe_owned_protocol(probe)  # Read-only typed diagnostics; never changes this scene's acceptance criteria.
         second=phase('search-seed-control');bindings=seed_bindings(second,{PATH:SEED,CONTROL_PATH:CONTROL})
         require(probe.original(PATH)==SEED and probe.original(CONTROL_PATH)==CONTROL,'SEARCH_ACTUAL_GUI_SEED_BYTES')
         current='external-owned-CRLF';proof['phase']=current
