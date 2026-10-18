@@ -50,6 +50,13 @@ public final class RuntimeProbe extends Instrumentation {
             CompositionIme.attach(getContext());
             String phase = arguments.getString("phase", "");
             switch (phase) {
+                case "storage-init": waitLabel("Start writing"); break;
+                case "storage-seed":
+                case "storage-fail":
+                case "storage-check":
+                case "storage-retry":
+                case "storage-cold":
+                    storageRecovery(phase); break;
                 case "performance-create": longNote(false); break;
                 case "performance-reopen": longNote(true); break;
                 case "theme-dark": selectTheme("System", "Dark"); break;
@@ -498,6 +505,43 @@ public final class RuntimeProbe extends Instrumentation {
         require(!target.exists(),"Original performance metrics already exist");
         try(FileOutputStream out=new FileOutputStream(target)) {
             out.write(report.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));out.flush();out.getFD().sync();
+        }
+    }
+
+    private void storageRecovery(String phase) throws Exception {
+        if (phase.equals("storage-seed")) {
+            create("New note", OriginalStorageScenario.PATH);
+            inputText(noteBody(), OriginalStorageScenario.ORIGINAL);
+            save();
+        } else if (phase.equals("storage-fail")) {
+            require(OriginalMarkdownAccessibility.matches(string(noteBody().getText()), OriginalStorageScenario.ORIGINAL),
+                "Original storage seed is not open; no input sent");
+            inputText(noteBody(), OriginalStorageScenario.UPDATED);
+            waitLabel("Draft kept on this device");
+            click("Save", false); // Exactly one original Save, never retried here.
+            waitLabel("FILESYSTEM_ERROR");
+            waitLabel("Completion is not yet confirmed.");
+        } else if (phase.equals("storage-check")) {
+            waitLabel("Completion is not yet confirmed.");
+            click("Check original result", false);
+            waitLabel("Completion is not yet confirmed.");
+        } else if (phase.equals("storage-retry")) {
+            waitLabel("Completion is not yet confirmed.");
+            click("Retry original content", false);
+            waitLabel("Saved");
+        } else {
+            require(phase.equals("storage-cold"), "Unknown storage phase");
+            clickTitleBar("Files");
+            AccessibilityNodeInfo folder=waitNode(node -> label(node,"full-area",false)
+                && node.isEnabled() && fileDrawerRow(node), "original owned full-area directory");
+            activate(folder, this::fileDrawerRow);
+            AccessibilityNodeInfo file=waitNode(node -> label(node,"original.md",false)
+                && node.isEnabled() && fileDrawerRow(node), "original recovered note in its directory");
+            activate(file, this::fileDrawerRow);
+            waitNode(node -> APP.equals(string(node.getPackageName())) && !node.isClickable()
+                && label(node,"original.md",false) && titleBarControl(node), "opened original recovered document");
+            require(OriginalMarkdownAccessibility.matches(string(noteBody().getText()), OriginalStorageScenario.UPDATED),
+                "Actual cold original storage note differs");
         }
     }
 

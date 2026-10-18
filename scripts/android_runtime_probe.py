@@ -379,7 +379,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet'):
+        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','storage-recovery'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -778,6 +778,8 @@ class Probe:
                     'runtime-back.md', 'runtime-image.md', 'runtime-rich-image.md', 'runtime-image.canvas')
             if getattr(getattr(self,'args',None),'scope',None) == 'performance':
                 owned_names = ('runtime-long.md',)
+            if getattr(getattr(self,'args',None),'scope',None) == 'storage-recovery':
+                owned_names = ('full-area/original.md',)
             for name in owned_names:
                 try:
                     value = self.original(name)
@@ -1090,6 +1092,10 @@ class Probe:
 
     def run(self):
         self.boot()
+        if self.args.scope == 'storage-recovery':
+            from android_storage_probe import run_storage_recovery
+            run_storage_recovery(self)
+            return
         if self.args.scope == 'performance':
             from android_performance_probe import run_performance
             run_performance(self)
@@ -1216,7 +1222,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','storage-recovery'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:
