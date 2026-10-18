@@ -99,7 +99,7 @@ def download_cloudflared(root):
 
 class HostedOrigin:
     def __init__(self,root,*,fixture='auth'):
-        require(fixture in ('auth','sync','sync-expiration'),'OWNED_AUTH_FIXTURE_INVALID')
+        require(fixture in ('auth','sync','sync-expiration','sync-quota'),'OWNED_AUTH_FIXTURE_INVALID')
         self.fixture=fixture
         self.root=root
         self.path=root/'owner-state.json'
@@ -107,7 +107,7 @@ class HostedOrigin:
         self.processes=[]
 
     def fixture_script(self):
-        names={'auth':'android_auth_fixture.py','sync':'android_sync_fixture.py','sync-expiration':'android_sync_expiration.py'}
+        names={'auth':'android_auth_fixture.py','sync':'android_sync_fixture.py','sync-expiration':'android_sync_expiration.py','sync-quota':'android_sync_quota.py'}
         require(self.fixture in names,'OWNED_AUTH_FIXTURE_INVALID')
         path=Path(__file__).with_name(names[self.fixture])
         require(path.is_file() and not path.is_symlink(),'OWNED_AUTH_FIXTURE_INVALID')
@@ -164,7 +164,7 @@ class HostedOrigin:
             'result':'preparing','fixture':self.fixture,'fixture_script_sha256':hashlib.sha256(fixture.read_bytes()).hexdigest(),
             'process_intents':{},'containers':[]};self.save()
         initialize_control(self.root)
-        if self.fixture in ('sync','sync-expiration'):
+        if self.fixture in ('sync','sync-expiration','sync-quota'):
             from android_sync_fixture import initialize_control as initialize_sync_control
             initialize_sync_control(self.root)
         if self.fixture=='sync-expiration':
@@ -276,7 +276,7 @@ class HostedOrigin:
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('action',choices=('prepare','stop'))
-    parser.add_argument('--fixture',choices=('auth','sync','sync-expiration'),default='auth');args=parser.parse_args()
+    parser.add_argument('--fixture',choices=('auth','sync','sync-expiration','sync-quota'),default='auth');args=parser.parse_args()
     root=owned_root();origin=HostedOrigin(root,fixture=args.fixture)
     if args.action=='stop':result=origin.stop()
     else:

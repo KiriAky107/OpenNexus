@@ -22,11 +22,14 @@ from android_auth_fixture import (
 MODES=frozenset(('normal','drop_revision','hold_revision','hold_changes','release'))
 
 
-def routes(remote_vault):
+def routes(remote_vault,*,uploads=False):
     require(isinstance(remote_vault,str) and re.fullmatch(r'[A-Za-z0-9-]{1,80}',remote_vault),
         'OWNED_SYNC_TARGET_INVALID')
+    require(type(uploads) is bool,'OWNED_SYNC_TARGET_INVALID')
     prefix='/sync/v1/vaults/'+remote_vault
-    return {('POST',prefix+'/revisions'):'revision',('GET',prefix+'/changes'):'changes'}
+    selected={('POST',prefix+'/revisions'):'revision',('GET',prefix+'/changes'):'changes'}
+    if uploads:selected[('POST',prefix+'/uploads')]='upload'
+    return selected
 
 
 def initialize_control(owner):
@@ -50,8 +53,8 @@ def arm_control(owner, operation, mode, expected_revision, *, retry=False):
 
 
 class DeliveryProxy(OriginalDeliveryProxy):
-    def __init__(self, app, owner: Path, remote_vault):
-        super().__init__(app,control_root(owner),routes=routes(remote_vault),response_limit=2*1024*1024)
+    def __init__(self, app, owner: Path, remote_vault,*,uploads=False):
+        super().__init__(app,control_root(owner),routes=routes(remote_vault,uploads=uploads),response_limit=2*1024*1024)
 
 
 def selected_target(owner):
@@ -84,8 +87,10 @@ class TargetedDeliveryProxy:
     Selection is a private CLI action, never a public fault-control HTTP route.
     Even a subsequently replaced target file cannot redirect existing controls.
     """
-    def __init__(self, app, owner):
+    def __init__(self, app, owner,*,uploads=False):
+        require(type(uploads) is bool,'OWNED_SYNC_TARGET_INVALID')
         self.app,self.owner=app,owner
+        self.uploads=uploads
         self.target=None
         self.proxy=None
 
@@ -95,7 +100,7 @@ class TargetedDeliveryProxy:
             require(target==self.target,'OWNED_SYNC_TARGET_CHANGED')
         elif target is not None:
             self.target=target
-            self.proxy=DeliveryProxy(self.app,self.owner,target)
+            self.proxy=DeliveryProxy(self.app,self.owner,target,uploads=self.uploads)
         if self.proxy is None:await self.app(scope,receive,send)
         else:await self.proxy(scope,receive,send)
 

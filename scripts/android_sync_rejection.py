@@ -197,25 +197,25 @@ def validate_rejected_refresh(before,after,device):
 
 def original_driver_intent(probe,phase):
     from android_runtime_probe import DRIVER
-    require(phase in ('cycle-revoked','refresh-revoked'),'Unexpected rejection UI intent')
+    require(phase in ('cycle-revoked','refresh-revoked','cycle-quota'),'Unexpected rejection UI intent')
     result=probe.shell('run-as',DRIVER,'cat','no_backup/owned-sync-'+phase+'-intent.json',check=False)
     require(result.returncode==0 and 0<len(result.stdout)<=2048,'Original rejection UI intent unavailable')
-    value=json.loads(result.stdout);field='native_invocation_id_observed' if phase=='cycle-revoked' else 'native_operation_id_observed'
+    value=json.loads(result.stdout);field='native_invocation_id_observed' if phase.startswith('cycle-') else 'native_operation_id_observed'
     require(set(value)=={'driver_intent_id',field,'action'}
         and str(uuid.UUID(value['driver_intent_id']))==value['driver_intent_id'] and value[field] is False
-        and value['action']==('Sync one cycle now' if phase=='cycle-revoked' else 'Refresh session'),
+        and value['action']==('Sync one cycle now' if phase.startswith('cycle-') else 'Refresh session'),
         'Original rejection UI intent changed or contains private fields')
     return value
 
 
 def failure_observations(probe,*,prefix='revocation'):
     from android_auth_fixture import observe_provider as observe_auth_provider
-    require(prefix in ('revocation','expiration'),'Unknown rejection diagnostic scope')
+    require(prefix in ('revocation','expiration','quota'),'Unknown rejection diagnostic scope')
     for label,read in (
         ('auth-provider',lambda:observe_auth_provider(probe.owner)),
         ('auth-native',lambda:probe.snapshot(prefix+'-failure',include_rejections=True)),
         ('host-native',lambda:probe.host_snapshot(prefix+'-failure',include_outbox=True,include_payloads=True)),
-        ('cycle-intent',lambda:original_driver_intent(probe,'cycle-revoked')),
+        ('cycle-intent',lambda:original_driver_intent(probe,'cycle-quota' if prefix=='quota' else 'cycle-revoked')),
         ('refresh-intent',lambda:original_driver_intent(probe,'refresh-revoked'))):
         try:
             value=read()

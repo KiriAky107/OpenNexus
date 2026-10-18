@@ -30,7 +30,7 @@ class Setup:
         device=original.read_json(owner/'device-private.json')
         endpoint=state.get('endpoint','')
         original.require(state.get('source')==original.SERVICE_SHA and state.get('result')=='ready'
-            and state.get('fixture') in ('sync','sync-expiration') and re.fullmatch(r'https://[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com',endpoint)
+            and state.get('fixture') in ('sync','sync-expiration','sync-quota') and re.fullmatch(r'https://[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com',endpoint)
             and device=={'endpoint':endpoint,'accounts':config['accounts']},'OWNED_SYNC_SETUP_SCOPE_INVALID')
         self.owner,self.endpoint=owner,endpoint
         self.account=config['accounts'][0]

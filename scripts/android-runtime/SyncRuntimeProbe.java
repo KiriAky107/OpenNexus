@@ -60,6 +60,10 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
             case "cycle-offline": failedCycle("cycle-offline"); return true;
             case "cycle-dropped-upload": failedCycle("cycle-dropped-upload"); return true;
             case "cycle-revoked": revokedCycle(); return true;
+            case "cycle-quota": quotaCycle(); return true;
+            case "quota-status":
+                readCurrent(); signedIn(); click("Read queue and original records");
+                waitPresent(node->text(node.getText()).endsWith(QUOTA_MESSAGE)); return true;
             case "refresh-revoked": revokedRefresh(); return true;
             case "cycle-stop": stopOriginal(); return true;
             case "close": click("Close"); return true;
@@ -129,6 +133,16 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
     }
 
     private static final String REVOKED_MESSAGE="Sign-in or device authorization expired. Sign in again. (SESSION_EXPIRED)";
+    private static final String QUOTA_MESSAGE="Remote storage quota is insufficient. Adjust it or clean up remote history, then retry. (QUOTA_EXCEEDED)";
+    private void quotaCycle() throws Exception {
+        readCurrent(); signedIn(); click("Read queue and original records");
+        waitFor(node->label(node,"Sync one cycle now") && node.isEnabled(),true);
+        persistOnce("cycle-quota",new JSONObject().put("driver_intent_id",UUID.randomUUID().toString())
+            .put("native_invocation_id_observed",false).put("action","Sync one cycle now"));
+        startOriginalCycleTouch("cycle-quota");
+        waitPresent(node->label(node,"Cycle did not complete"));
+        waitPresent(node->text(node.getText()).endsWith(QUOTA_MESSAGE));
+    }
     private void revokedCycle() throws Exception {
         readCurrent(); signedIn(); click("Read queue and original records");
         waitFor(node->label(node,"Sync one cycle now") && node.isEnabled(),true);
