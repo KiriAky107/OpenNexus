@@ -1354,6 +1354,9 @@ class Probe:
         self.phase('recover')
         require(self.original('runtime-note.md') == DRAFT.encode(), 'Recovered and saved Markdown bytes mismatch')
         self.finish_editing(rich=rich)
+        if self.args.scope=='lifecycle':
+            from android_candidate_readiness_probe import verify_candidate
+            verify_candidate(self)
 
     def finish_editing(self, *, rich):
         # Also used by the narrow remaining scope; no replay of passed initial components.

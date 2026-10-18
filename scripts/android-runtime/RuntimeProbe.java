@@ -115,6 +115,9 @@ public final class RuntimeProbe extends Instrumentation {
                 case "properties-seed": case "properties-open": case "properties-text": case "properties-group":
                 case "properties-link": case "properties-file": case "properties-edge": case "properties-cold":
                     remainingCanvasProperties(phase); break;
+                case "candidate-language-en": case "candidate-language-zh":
+                case "candidate-language-return": case "candidate-language-cold":
+                    candidateLanguageRead(phase); break;
                 case "canvas-storage-init": waitLabel("Start writing"); break;
                 case "canvas-storage-seed": case "canvas-storage-edit": case "canvas-storage-fail":
                 case "canvas-storage-check": case "canvas-storage-retry": case "canvas-storage-cold":
@@ -576,6 +579,61 @@ public final class RuntimeProbe extends Instrumentation {
         try(FileOutputStream out=new FileOutputStream(target)) {
             out.write(report.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));out.flush();out.getFD().sync();
         }
+    }
+
+    private void candidateLanguageRead(String phase) throws Exception {
+        boolean chinese=phase.equals("candidate-language-zh");
+        if(phase.equals("candidate-language-en")||phase.equals("candidate-language-cold")) {
+            open(CANVAS);graphAction("Show all");graphNode("text: "+NODE);graphAction("Properties");
+        } else {
+            boolean beforeChinese=phase.equals("candidate-language-return");
+            String settings=beforeChinese?"设置":"Settings",navigation=beforeChinese?"主导航":"Main navigation";
+            Predicate<AccessibilityNodeInfo> title=value->{
+                AccessibilityNodeInfo parent=value.getParent();
+                return parent!=null&&APP.equals(string(parent.getPackageName()))
+                    &&descendantLabel(parent,navigation)&&descendantLabel(parent,settings);
+            };
+            AccessibilityNodeInfo button=waitNode(value->APP.equals(string(value.getPackageName()))
+                &&value.isEnabled()&&value.isClickable()&&label(value,settings,false)&&title.test(value),"owned localized settings title control");
+            activate(button,title);
+            String language=beforeChinese?"界面语言":"Interface language";
+            Predicate<AccessibilityNodeInfo> select=value->APP.equals(string(value.getPackageName()))&&value.isEnabled()
+                &&value.isClickable()&&label(value,language,false)&&within(value,settings);
+            AccessibilityNodeInfo control=waitNode(select,"owned interface-language selector");activate(control,select);
+            String choice=chinese?"中文":"English";
+            Predicate<AccessibilityNodeInfo> option=value->APP.equals(string(value.getPackageName()))&&value.isEnabled()
+                &&value.isVisibleToUser()&&"android.widget.CheckedTextView".equals(string(value.getClassName()))&&label(value,choice,false);
+            activate(waitNode(option,"owned Native interface-language option"),option);
+            waitLabel(chinese?"外观与语言":"Appearance and language");
+            click(chinese?"关闭":"Close",false);
+        }
+        String region=chinese?"画布节点与连接":"Canvas nodes and connections";
+        waitLabel(chinese?"自由画布":"Free canvas");
+        String[] names=chinese?new String[]{"节点内容","标签","节点颜色","横坐标","纵坐标","宽度","高度"}
+            :new String[]{"Node content","Label","Node color","x","y","width","height"};
+        for(int index=0;index<names.length;index++) {
+            String name=names[index];boolean shown=false;AccessibilityNodeInfo found=null;
+            long until=SystemClock.uptimeMillis()+25_000;
+            do {
+                List<AccessibilityNodeInfo> matches=new ArrayList<>();
+                for(AccessibilityNodeInfo node:nodes())if(APP.equals(string(node.getPackageName()))&&node.isEnabled()
+                    &&(node.isEditable()||node.isClickable()||"android.widget.Spinner".equals(string(node.getClassName())))
+                    &&label(node,name,false)&&within(node,region))matches.add(node);
+                require(matches.size()<=1,"Ambiguous localized property; no content input sent");
+                if(matches.size()==1) {
+                    AccessibilityNodeInfo node=matches.get(0);
+                    if(node.isVisibleToUser()){found=node;break;}
+                    if(!shown){shown=true;require(node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId()),"Localized property could not be shown");}
+                }
+                SystemClock.sleep(150);
+            }while(SystemClock.uptimeMillis()<until);
+            require(found!=null,"Localized property not visible");
+            if(index==0)require(propertyValue(found,name,NODE),"Language preference changed the original Canvas text");
+            progress.append("CANDIDATE_LOCALE_READ ").append(phase).append(' ').append(name).append(" content_input=0\n");
+        }
+        waitNode(value->APP.equals(string(value.getPackageName()))&&label(value,chinese?"保存":"Save",false)
+            &&!value.isEnabled(),"language preference must not enable Save");
+        progress.append("CANDIDATE_LOCALE_OK ").append(phase).append(" content_input=0 save=0\n");
     }
 
     private AccessibilityNodeInfo propertyControl(String name) {
