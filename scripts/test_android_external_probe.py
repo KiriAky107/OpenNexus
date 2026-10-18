@@ -90,4 +90,13 @@ class ExternalObservationBoundaries(unittest.TestCase):
         form=subject.driver_form();self.assertEqual(len(form),8);self.assertLess(len(json.dumps(form,ensure_ascii=False).encode()),8192)
         self.assertEqual(form['canvas_uri'],subject.CANVAS);self.assertTrue(form['canvas_uri'].startswith('HTTPS:'))
 
+    def test_domain_setup_failure_precedes_all_product_gui_seeds_and_saves(self):
+        with tempfile.TemporaryDirectory() as folder,patch.object(subject,'require_hosted_emulator'),patch.dict('os.environ',{'GITHUB_RUN_ID':'2'}),\
+                patch.object(subject,'setup_routing',side_effect=RuntimeError('typed domain read refused')):
+            probe=Mock();probe.output=Path(folder);probe.root=None;probe.binding={'sha256':'fixed'};probe.keystore_test_result=None
+            probe.args=SimpleNamespace(scope='external-links',serial='emulator-5562',tools_commit='tools',commit='compiled')
+            with self.assertRaisesRegex(RuntimeError,'typed domain read refused'):subject.run_external(probe)
+            proof=json.loads((probe.output/'external-link-proof.json').read_bytes());self.assertEqual(proof['executed_steps'],[])
+            self.assertEqual(proof['setup_saves'],[]);self.assertFalse(proof['passed']);probe.phase.assert_not_called()
+
 if __name__=='__main__':unittest.main()

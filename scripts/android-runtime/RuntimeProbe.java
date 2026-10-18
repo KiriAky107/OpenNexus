@@ -135,6 +135,9 @@ public final class RuntimeProbe extends Instrumentation {
                 case "external-draft": case "external-cancel": case "external-md-open":
                 case "external-canvas-open": case "external-cold":
                     originalExternalReference(phase);break;
+                case "external-domain-before": case "external-domain-after":
+                case "external-domain-cleanup-before": case "external-domain-cleanup-after":
+                    originalExternalDomain(phase.substring("external-domain-".length()));break;
                 case "candidate-locale-seed": create("New canvas",CANVAS);save();break;
                 case "candidate-locale-open": open(CANVAS);waitLabel("Free canvas");break;
                 case "candidate-language-en": case "candidate-language-zh":
@@ -731,6 +734,28 @@ public final class RuntimeProbe extends Instrumentation {
             default:throw new IllegalStateException("Unreviewed local reference phase");
         }
         progress.append("ORIGINAL_LOCAL_REFERENCE ").append(phase).append(" save=").append(phase.endsWith("-seed")?1:0).append('\n');
+    }
+
+    private void originalExternalDomain(String stage) throws Exception {
+        require(Build.VERSION.SDK_INT==36&&(stage.equals("before")||stage.equals("after")||stage.equals("cleanup-before")||stage.equals("cleanup-after")),"Unreviewed own domain observation");
+        android.content.pm.verify.domain.DomainVerificationManager manager=getContext().getSystemService(android.content.pm.verify.domain.DomainVerificationManager.class);
+        require(manager!=null,"Domain verification manager unavailable");
+        android.content.pm.verify.domain.DomainVerificationUserState state=manager.getDomainVerificationUserState(getContext().getPackageName());
+        require(state!=null&&state.getPackageName().equals(getContext().getPackageName())
+            &&state.getUser().equals(android.os.Process.myUserHandle())
+            &&state.getUser().equals(android.os.UserHandle.getUserHandleForUid(0)),"Own system-user domain state unavailable");
+        java.util.Map<String,Integer> states=state.getHostToStateMap();
+        require(states.size()==1&&states.containsKey(OriginalExternalUri.HOST),"Unexpected test-package domains");
+        JSONObject value=new JSONObject().put("schema",1).put("scope","external-links").put("stage",stage)
+            .put("package",state.getPackageName()).put("user_id",0)
+            .put("link_handling_allowed",state.isLinkHandlingAllowed()).put("host_states",new JSONObject(states))
+            .put("internet_verification_claimed",false);
+        File file=new File(getContext().getFilesDir(),"owned-external-domain-"+stage+".json");
+        require(file.createNewFile(),"Original own domain observation already exists");
+        try(FileOutputStream output=new FileOutputStream(file)){
+            output.write((value.toString()+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));output.flush();output.getFD().sync();
+        }
+        progress.append("ORIGINAL_EXTERNAL_DOMAIN_READ ").append(stage).append(" product_action=0\n");
     }
 
     private JSONObject originalExternalForm() throws Exception {

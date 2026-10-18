@@ -137,6 +137,7 @@ def run_external(probe):
         require(probe.keystore_test_result is None,'EXTERNAL_MUST_NOT_REPLAY_NATIVE_SUITES');probe.enable_test_ime()
         atomic_json(probe.output/'external-reviewed-form.json',driver_form(),exclusive=True)
         transfer(probe,'owned-external-form.json',payload)
+        setup_routing(probe)  # Validate before any new product GUI seed or Save.
         for step,path in zip(STEPS[:2],PATHS):
             state=phase(step,cold=True);raw=probe.original(path)
             require(raw==expected[path] if path==MD_PATH else json.loads(raw)==dict(nodes=[],edges=[]),'EXTERNAL_GUI_SEED_BYTES')
@@ -148,7 +149,7 @@ def run_external(probe):
             declared_fixture_only_not_GUI_creation=True),exclusive=True)
         probe.device('shell','-T',shlex.join(('run-as',APP,'sh','-c','cat > '+shlex.quote(probe.root+'vault/'+CANVAS_PATH))),input=expected[CANVAS_PATH])
         require(probe.original(CANVAS_PATH)==expected[CANVAS_PATH],'EXTERNAL_SYNTHETIC_ORIGINAL_BYTES')
-        setup_routing(probe);before=phase('external-baseline',cold=True);no_records(probe)
+        before=phase('external-baseline',cold=True);no_records(probe)
         baseline=phase('external-draft');validate_draft(before,baseline)
         state=phase('external-cancel');no_records(probe)
         validate_frozen(expected,baseline,state,{p:probe.original(p) for p in PATHS})
