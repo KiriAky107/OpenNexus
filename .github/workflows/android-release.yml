@@ -3,12 +3,22 @@ name: Android release inputs
 on:
   workflow_call:
     inputs:
+      product_commit:
+        description: 'Optional genuine predecessor source SHA; empty builds caller source.'
+        type: string
+        required: false
+        default: ''
       expected_commit:
         description: 'Caller checkout SHA from the same repository commit, without APK reuse.'
         type: string
         required: true
   workflow_dispatch:
     inputs:
+      product_commit:
+        description: 'Optional full product source SHA, for an unpublished genuine upgrade predecessor.'
+        type: string
+        required: false
+        default: ''
       expected_commit:
         description: 'Full fixed source SHA; must be this checkout. Produces release inputs, never publishes or uploads a key.'
         type: string
@@ -26,10 +36,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 55
     env:
+      COMPILED_SHA: ${{ inputs.product_commit || github.sha }}
       CARGO_BUILD_JOBS: '3'
       CARGO_TARGET_DIR: ${{ github.workspace }}/.build/android-release-target
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Admit only this fixed original source
         env:
           EXPECTED_COMMIT: ${{ inputs.expected_commit }}
@@ -39,6 +52,35 @@ jobs:
           sha=os.environ['EXPECTED_COMMIT']
           assert re.fullmatch(r'[0-9a-f]{40}',sha)
           assert sha==os.environ['GITHUB_SHA']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert not subprocess.check_output(['git','status','--porcelain']).strip()
+          assert re.fullmatch(r'[0-9a-f]{40}',os.environ['COMPILED_SHA'])
+          PY
+      - name: Preserve exact verifier tools outside the product checkout
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json,os,subprocess
+          root=Path(os.environ['RUNNER_TEMP'])/'opennexus-release-tools';root.mkdir()
+          names=['release_plan.py','android_release_contract.py','verify_android_package.py','android_release_native.py',
+              'check_android_release_manifest.py','verify_android_release_package.py','record-build-source.py',
+              'test_android_release_native.py','test_verify_android_release_package.py']
+          items={}
+          for name in names:
+              raw=subprocess.check_output(['git','show',os.environ['GITHUB_SHA']+':scripts/'+name])
+              with (root/name).open('xb') as output:output.write(raw)
+              items[name]=hashlib.sha256(raw).hexdigest()
+          (root/'tools-source.json').write_text(json.dumps({'schema':1,'tools_commit':os.environ['GITHUB_SHA'],
+              'compiled_commit':os.environ['COMPILED_SHA'],'files_sha256':items}),encoding='utf-8')
+          PY
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.product_commit || github.sha }}
+          persist-credentials: false
+      - name: Verify the actual product checkout before dependency installation
+        run: |
+          python3 - <<'PY'
+          import os,subprocess
+          assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==os.environ['COMPILED_SHA']
           assert not subprocess.check_output(['git','status','--porcelain']).strip()
           PY
       - uses: actions/setup-node@v7
@@ -70,10 +112,10 @@ jobs:
       - run: pnpm --dir frontend install --frozen-lockfile
       - name: Verify release-only package observation boundaries
         run: |
-          python3 -m unittest discover -s scripts -p test_android_release_native.py -v
-          python3 -m unittest discover -s scripts -p test_verify_android_release_package.py -v
+          python3 -m unittest discover -s "$RUNNER_TEMP/opennexus-release-tools" -p test_android_release_native.py -v
+          python3 -m unittest discover -s "$RUNNER_TEMP/opennexus-release-tools" -p test_verify_android_release_package.py -v
       - name: Freeze source before real release compilation
-        run: python3 scripts/record-build-source.py --commit "$GITHUB_SHA"
+        run: python3 "$RUNNER_TEMP/opennexus-release-tools/record-build-source.py" --repository-dir "$GITHUB_WORKSPACE" --commit "$COMPILED_SHA"
       - name: Build stable identifier release APKs for both ABIs
         working-directory: frontend
         run: pnpm android build --target aarch64 x86_64 --split-per-abi --features custom-protocol --apk --ci
@@ -83,27 +125,32 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import os,shutil,subprocess,zipfile
+          import hashlib,json,os,shutil,subprocess,zipfile
           root=Path.cwd();out=root/'.build/android-release-inputs';out.mkdir()
+          tools=Path(os.environ['RUNNER_TEMP'])/'opennexus-release-tools'
+          selection=json.loads((tools/'tools-source.json').read_text('utf-8'))
+          assert selection['tools_commit']==os.environ['GITHUB_SHA'] and selection['compiled_commit']==os.environ['COMPILED_SHA']
+          for name,value in selection['files_sha256'].items():assert hashlib.sha256((tools/name).read_bytes()).hexdigest()==value
           apks=list((root/'frontend/mobile/src-tauri/gen/android/app/build/outputs/apk').rglob('*.apk'))
           assert len(apks)==2,'Expected two actual split release APKs'
-          seen=set();sha=os.environ['GITHUB_SHA']
+          seen=set();sha=os.environ['COMPILED_SHA']
           for apk in apks:
               with zipfile.ZipFile(apk) as z:
                   libs=[name for name in z.namelist() if name.startswith('lib/') and not name.endswith('/')]
               assert len(libs)==1 and libs[0] in ('lib/arm64-v8a/libopennexus_mobile.so','lib/x86_64/libopennexus_mobile.so')
               abi=libs[0].split('/')[1];assert abi not in seen;seen.add(abi)
-              subprocess.run(['python3','scripts/verify_android_release_package.py','--commit',sha,
+              subprocess.run(['python3',str(tools/'verify_android_release_package.py'),'--repository-dir',str(root),'--commit',sha,
                   '--source-proof',str(root/'.build/source-provenance'/f'{sha}.json'),'--apk',str(apk),
                   '--native-dir',os.environ['CARGO_TARGET_DIR'],'--sdk',os.environ['ANDROID_HOME'],
                   '--abi',abi,'--output',str(out/f'{abi}-release-input.json')],check=True)
               shutil.copyfile(apk,out/f'OpenNexus-android-{abi}-release-input.apk')
           assert seen=={'arm64-v8a','x86_64'}
           shutil.copyfile(root/'.build/source-provenance'/f'{sha}.json',out/'source-provenance.json')
+          shutil.copyfile(tools/'tools-source.json',out/'tools-source.json')
           shutil.copyfile(root/'frontend/mobile/src-tauri/gen/android/app/build/reports/platform-verifier/origin.json',out/'platform-verifier-origin.json')
           PY
       - uses: actions/upload-artifact@v7
         with:
-          name: OpenNexus-android-release-input-${{ github.sha }}
+          name: OpenNexus-android-release-input-${{ github.sha }}-${{ inputs.product_commit || github.sha }}
           path: .build/android-release-inputs/
           if-no-files-found: error

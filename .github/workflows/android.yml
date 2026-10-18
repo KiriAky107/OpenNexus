@@ -65,6 +65,10 @@ on:
       - '.github/workflows/android.yml'
   workflow_dispatch:
     inputs:
+      release_product_commit:
+        description: 'Release-inputs only: optional immutable genuine predecessor product SHA; no manifest rewriting.'
+        type: string
+        required: false
       apk_run_id:
         description: 'Optional existing Android run with a successful debug-apk job; no APK rebuild'
         type: string
@@ -126,6 +130,7 @@ jobs:
     uses: ./.github/workflows/android-release.yml
     with:
       expected_commit: ${{ inputs.apk_run_id == '' && inputs.apk_commit == '' && github.sha || '' }}
+      product_commit: ${{ inputs.release_product_commit }}
 
   debug-apk:
     if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'lifecycle-remaining' && inputs.runtime_scope != 'lifecycle-editor-remaining' && inputs.runtime_scope != 'local-references' && inputs.runtime_scope != 'external-links' && inputs.runtime_scope != 'candidate-languages' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'auth-certificate' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'canvas-tools' && inputs.runtime_scope != 'canvas-tablet' && inputs.runtime_scope != 'document-limits' && inputs.runtime_scope != 'document-export' && inputs.runtime_scope != 'write-interruption' && inputs.runtime_scope != 'file-actions' && inputs.runtime_scope != 'file-actions-remaining' && inputs.runtime_scope != 'canvas-file-delete' && inputs.runtime_scope != 'note-search' && inputs.runtime_scope != 'canvas-properties' && inputs.runtime_scope != 'canvas-properties-remaining' && inputs.runtime_scope != 'canvas-graph' && inputs.runtime_scope != 'canvas-graph-remaining' && inputs.runtime_scope != 'canvas-motion' && inputs.runtime_scope != 'canvas-view' && inputs.runtime_scope != 'canvas-view-remaining' && inputs.runtime_scope != 'canvas-view-cold' && inputs.runtime_scope != 'offline-pending' && inputs.runtime_scope != 'offline-pending-final' && inputs.runtime_scope != 'offline-limits' && inputs.runtime_scope != 'content-transfer' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'sync-revocation' && inputs.runtime_scope != 'sync-expiration' && inputs.runtime_scope != 'sync-quota' && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'desktop-pair' && inputs.runtime_scope != 'release-inputs')

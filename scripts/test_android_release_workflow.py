@@ -1,6 +1,6 @@
 from pathlib import Path
 from unittest.mock import patch
-import os,shlex,unittest,yaml
+import hashlib,json,os,shlex,tempfile,unittest,yaml
 
 
 class ReleaseWorkflowBoundaries(unittest.TestCase):
@@ -37,5 +37,37 @@ class ReleaseWorkflowBoundaries(unittest.TestCase):
         self.assertEqual(called['uses'],'./.github/workflows/android-release.yml');self.assertNotIn('secrets',called)
         self.assertEqual(called['permissions'],{'contents':'read'})
         self.assertEqual(called['with']['expected_commit'],"${{ inputs.apk_run_id == '' && inputs.apk_commit == '' && github.sha || '' }}")
+        self.assertEqual(called['with']['product_commit'],"${{ inputs.release_product_commit }}")
+
+    def test_product_source_is_a_full_fixed_sha_and_not_a_version_or_manifest_override(self):
+        steps=self.workflow()['jobs']['release-inputs']['steps']
+        gate=next(s['run'] for s in steps if s.get('name')=='Admit only this fixed original source')
+        code=gate.split("python3 - <<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+        for compiled in ('main','a'*39,'a'*40+' ', ''):
+            with self.subTest(compiled=compiled),patch.dict(os.environ,EXPECTED_COMMIT='a'*40,GITHUB_SHA='a'*40,COMPILED_SHA=compiled),\
+                    patch('subprocess.check_output',side_effect=['a'*40,b'']):
+                with self.assertRaises(AssertionError):exec(compile(code,'real-product-gate','exec'),{})
+        with patch.dict(os.environ,EXPECTED_COMMIT='a'*40,GITHUB_SHA='a'*40,COMPILED_SHA='b'*40),\
+                patch('subprocess.check_output',side_effect=['a'*40,b'']):exec(compile(code,'real-product-gate','exec'),{})
+        checkouts=[s for s in steps if s.get('uses')=='actions/checkout@v7']
+        self.assertEqual(checkouts[1]['with']['ref'],"${{ inputs.product_commit || github.sha }}")
+        self.assertTrue(all(s['with']['persist-credentials']=='false' for s in checkouts))
+
+    def test_tools_are_raw_caller_blobs_outside_the_genuine_product_checkout(self):
+        steps=self.workflow()['jobs']['release-inputs']['steps']
+        body=next(s['run'] for s in steps if s.get('name')=='Preserve exact verifier tools outside the product checkout')
+        code=body.split("python3 - <<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+        with tempfile.TemporaryDirectory() as folder,patch.dict(os.environ,RUNNER_TEMP=folder,GITHUB_SHA='a'*40,COMPILED_SHA='b'*40):
+            seen=[]
+            def git(args):
+                self.assertEqual(args[:2],['git','show']);self.assertTrue(args[2].startswith('a'*40+':scripts/'));seen.append(args[2])
+                return ('owned-tool-blob:'+args[2]).encode()
+            with patch('subprocess.check_output',side_effect=git):exec(compile(code,'real-tool-snapshot','exec'),{})
+            root=Path(folder)/'opennexus-release-tools';value=json.loads((root/'tools-source.json').read_bytes())
+            self.assertEqual(value['tools_commit'],'a'*40);self.assertEqual(value['compiled_commit'],'b'*40);self.assertEqual(len(seen),9)
+            for name,digest in value['files_sha256'].items():self.assertEqual(hashlib.sha256((root/name).read_bytes()).hexdigest(),digest)
+        freeze=next(s['run'] for s in steps if s.get('name')=='Freeze source before real release compilation')
+        self.assertIn('--commit "$COMPILED_SHA"',freeze);self.assertIn('--repository-dir "$GITHUB_WORKSPACE"',freeze)
+        self.assertNotIn('--debug',next(s['run'] for s in steps if s.get('name')=='Build stable identifier release APKs for both ABIs'))
 
 if __name__=='__main__':unittest.main()
