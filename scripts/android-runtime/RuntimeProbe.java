@@ -622,7 +622,7 @@ public final class RuntimeProbe extends Instrumentation {
                 require(matches.size()<=1,"Ambiguous localized property; no content input sent");
                 if(matches.size()==1) {
                     AccessibilityNodeInfo node=matches.get(0);
-                    if(node.isVisibleToUser()){found=node;break;}
+                    if(propertyVisible(node,region)){found=node;break;}
                     if(!shown){shown=true;require(node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId()),"Localized property could not be shown");}
                 }
                 SystemClock.sleep(150);
@@ -636,6 +636,32 @@ public final class RuntimeProbe extends Instrumentation {
         progress.append("CANDIDATE_LOCALE_OK ").append(phase).append(" content_input=0 save=0\n");
     }
 
+    private boolean propertyVisible(AccessibilityNodeInfo node,String region) {
+        if(!APP.equals(string(node.getPackageName()))||!node.isVisibleToUser())return false;
+        AccessibilityNodeInfo panel=node;
+        for(int depth=0;panel!=null&&depth<32&&!label(panel,region,false);depth++)panel=panel.getParent();
+        if(panel==null||!label(panel,region,false)||!APP.equals(string(panel.getPackageName())))return false;
+        AccessibilityNodeInfo root=ui.getRootInActiveWindow();
+        if(root==null||!APP.equals(string(root.getPackageName())))return false;
+        Rect clip=new Rect(),window=new Rect(),control=new Rect(),heading=new Rect();
+        panel.getBoundsInScreen(clip);root.getBoundsInScreen(window);node.getBoundsInScreen(control);
+        if(!clip.intersect(window))return false;
+        List<AccessibilityNodeInfo> children=new ArrayList<>();children.add(panel);int headings=0;
+        for(int index=0;index<children.size()&&index<600;index++) {
+            AccessibilityNodeInfo child=children.get(index);
+            if(APP.equals(string(child.getPackageName()))&&child.isVisibleToUser()&&child.isClickable()
+                &&(label(child,"Collapse right sidebar",false)||label(child,"收起右侧栏",false))) {
+                child.getBoundsInScreen(heading);headings++;
+            }
+            for(int j=0;j<child.getChildCount();j++){AccessibilityNodeInfo value=child.getChild(j);if(value!=null)children.add(value);}
+        }
+        boolean visible=OriginalCanvasProperty.visible(new int[]{control.left,control.top,control.right,control.bottom},
+            new int[]{clip.left,clip.top,clip.right,clip.bottom},new int[]{heading.left,heading.top,heading.right,heading.bottom},headings==1,true);
+        if(!visible)progress.append("PROPERTY_CLIP_REFUSED control=").append(control.toShortString())
+            .append(" panel=").append(clip.toShortString()).append(" heading=").append(heading.toShortString()).append(" headings=").append(headings).append('\n');
+        return visible;
+    }
+
     private AccessibilityNodeInfo propertyControl(String name) {
         long until=SystemClock.uptimeMillis()+25_000;boolean shown=false;
         do {
@@ -646,7 +672,7 @@ public final class RuntimeProbe extends Instrumentation {
             require(found.size()<=1,"Ambiguous original property control; no input sent");
             if(found.size()==1) {
                 AccessibilityNodeInfo node=found.get(0);
-                if(node.isVisibleToUser())return node;
+                if(propertyVisible(node,"Canvas nodes and connections"))return node;
                 if(!shown) { shown=true;require(node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId()),"Original property control could not be shown"); }
             }
             SystemClock.sleep(150);
@@ -681,7 +707,7 @@ public final class RuntimeProbe extends Instrumentation {
             if(kind.equals("input")) { require(control.isEditable(),"Original property input is not editable");setText(control,after);hideKeyboard(); }
             else {
                 require(kind.equals("select"),"Unknown original property control kind");
-                activate(control,node->label(node,name,false)&&within(node,"Canvas nodes and connections"));
+                activate(control,node->label(node,name,false)&&within(node,"Canvas nodes and connections")&&propertyVisible(node,"Canvas nodes and connections"));
                 AccessibilityNodeInfo option=waitNode(node->APP.equals(string(node.getPackageName()))&&node.isVisibleToUser()&&node.isEnabled()
                     &&"android.widget.CheckedTextView".equals(string(node.getClassName()))&&label(node,after,false),"original Native property option");
                 activate(option,node->"android.widget.CheckedTextView".equals(string(node.getClassName()))&&label(node,after,false));

@@ -1,5 +1,6 @@
 """Declared remaining property transactions; pure data, not UI acceptance."""
 from copy import deepcopy
+import json
 from urllib.parse import urlsplit
 from android_canvas_graph_contract import graph,encoded,edited_node,edited_edge,require
 
@@ -33,6 +34,17 @@ def before_transaction(phase):
         target=next(v for v in value['nodes' if item['kind']=='node' else 'edges'] if v['id']==item['identity'])
         target.update(item['fields'])
     raise RuntimeError('PROPERTY_ORIGINAL_PHASE_REFUSED')
+
+def selected_transactions(remaining):
+    require(type(remaining) is bool,'PROPERTY_EXPLICIT_REMAINING_MODE')
+    return TRANSACTIONS[-1:] if remaining else TRANSACTIONS
+
+def property_steps(remaining):
+    return ('properties-seed','properties-open',*(v['phase'] for v in selected_transactions(remaining)),'properties-cold')
+
+def initial_property_fixture(remaining):
+    require(type(remaining) is bool,'PROPERTY_EXPLICIT_REMAINING_MODE')
+    return (json.dumps(before_transaction('properties-edge')[0],ensure_ascii=False,indent=2)+'\n').replace('\n','\r\n').encode() if remaining else FIXTURE
 
 
 def validate_transaction(before_raw,after_raw,phase):

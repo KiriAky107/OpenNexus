@@ -435,7 +435,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'):
+        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','canvas-properties-remaining','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -940,7 +940,7 @@ class Probe:
                 owned_names = ('full-area/original.md',)
             if getattr(getattr(self,'args',None),'scope',None) == 'canvas-storage-recovery':
                 owned_names = ('full-area/original.canvas',)
-            if getattr(getattr(self,'args',None),'scope',None) == 'canvas-properties':
+            if getattr(getattr(self,'args',None),'scope',None) in ('canvas-properties','canvas-properties-remaining'):
                 from android_canvas_properties import PATH
                 owned_names = (PATH,)
             if getattr(getattr(self,'args',None),'scope',None) in ('canvas-graph','canvas-graph-remaining'):
@@ -1300,7 +1300,7 @@ class Probe:
             from android_file_actions_probe import run_file_actions
             run_file_actions(self)
             return
-        if self.args.scope == 'canvas-properties':
+        if self.args.scope in ('canvas-properties','canvas-properties-remaining'):
             from android_canvas_properties_probe import run_properties
             run_properties(self)
             return
@@ -1437,7 +1437,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','canvas-storage-recovery','canvas-properties','canvas-properties-remaining','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:

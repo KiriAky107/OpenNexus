@@ -36,6 +36,12 @@ class PropertyProbeBoundaries(unittest.TestCase):
         with self.assertRaises(RuntimeError):snapshot(probe,'graph-open',path=PATH)
         probe.database_rows.assert_not_called();probe.private.assert_not_called()
 
+    def test_remaining_snapshot_refuses_the_four_previously_completed_forms(self):
+        probe=Mock();probe.args.scope='canvas-properties-remaining'
+        for phase in ('properties-text','properties-group','properties-link','properties-file'):
+            with self.subTest(phase=phase),self.assertRaises(RuntimeError):snapshot(probe,phase,path=PATH)
+        probe.database_rows.assert_not_called();probe.private.assert_not_called()
+
     def test_one_immutable_bounded_form_document_contains_exactly_the_five_original_phases(self):
         forms={v['phase']:driver_form(v['phase']) for v in TRANSACTIONS}
         self.assertEqual(tuple(forms),STEPS[2:-1]);self.assertEqual(sum(len(v['fields']) for v in forms.values()),14)
@@ -44,10 +50,20 @@ class PropertyProbeBoundaries(unittest.TestCase):
 
     def test_only_the_reused_original_runtime_runs_without_new_apk_or_other_clients(self):
         root=Path(__file__).resolve().parents[1];flow=yaml.load((root/'.github/workflows/android.yml').read_text('utf-8'),Loader=yaml.BaseLoader)
-        for reuse in ('','39148381613'):
-            for job in ('debug-apk','desktop-startup','desktop-pair','android-desktop-pair'):
-                self.assertFalse(admitted(flow['jobs'][job]['if'],'canvas-properties',reuse=reuse,build='skipped'))
-        self.assertTrue(admitted(flow['jobs']['emulator-runtime']['if'],'canvas-properties',reuse='39148381613',build='skipped'))
+        for scope in ('canvas-properties','canvas-properties-remaining'):
+            for reuse in ('','39148381613'):
+                for job in ('debug-apk','desktop-startup','desktop-pair','android-desktop-pair'):
+                    self.assertFalse(admitted(flow['jobs'][job]['if'],scope,reuse=reuse,build='skipped'))
+            self.assertTrue(admitted(flow['jobs']['emulator-runtime']['if'],scope,reuse='39148381613',build='skipped'))
+
+    def test_owned_clip_is_required_for_both_readonly_and_pre_input_refresh(self):
+        root=Path(__file__).resolve().parents[1];java=(root/'scripts/android-runtime/RuntimeProbe.java').read_text('utf-8')
+        self.assertIn('if(propertyVisible(node,region)){found=node;break;}',java)
+        self.assertIn('if(propertyVisible(node,"Canvas nodes and connections"))return node;',java)
+        self.assertIn('within(node,"Canvas nodes and connections")&&propertyVisible(node,"Canvas nodes and connections")',java)
+        clip=java.split('private boolean propertyVisible(',1)[1].split('private AccessibilityNodeInfo propertyControl',1)[0]
+        for required in ('clip.intersect(window)','headings==1','OriginalCanvasProperty.visible','APP.equals','Collapse right sidebar','收起右侧栏'):
+            self.assertIn(required,clip)
 
     def test_native_input_reads_the_original_form_and_never_assigns_a_model_or_save_id(self):
         root=Path(__file__).resolve().parents[1];java=(root/'scripts/android-runtime/RuntimeProbe.java').read_text('utf-8')

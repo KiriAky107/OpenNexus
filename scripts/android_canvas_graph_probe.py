@@ -50,9 +50,9 @@ def initial_fixture(remaining):
 def digest(raw):return hashlib.sha256(raw).hexdigest()
 
 def snapshot(probe,label,*,path=PATH):
-    if probe.args.scope=='canvas-properties':
-        from android_canvas_properties import PATH as property_path,STEPS as property_steps
-        require(path==property_path and label.removesuffix('-failure') in property_steps,'PROPERTY_SNAPSHOT_SCOPE')
+    if probe.args.scope in ('canvas-properties','canvas-properties-remaining'):
+        from android_canvas_properties import PATH as property_path,property_steps
+        require(path==property_path and label.removesuffix('-failure') in property_steps(probe.args.scope=='canvas-properties-remaining'),'PROPERTY_SNAPSHOT_SCOPE')
     else:
         require(path==PATH and probe.args.scope in ('canvas-graph','canvas-graph-remaining')
             and label.removesuffix('-failure') in graph_steps(probe.args.scope=='canvas-graph-remaining'),'GRAPH_SNAPSHOT_SCOPE')

@@ -7,6 +7,22 @@ import android_canvas_properties as subject
 def crlf(value):return encoded(value).replace(b'\n',b'\r\n')
 
 class RemainingPropertyContract(unittest.TestCase):
+    def test_remaining_scope_declares_only_the_unaccepted_edge_and_cold(self):
+        self.assertEqual(subject.property_steps(True),('properties-seed','properties-open','properties-edge','properties-cold'))
+        self.assertEqual(subject.selected_transactions(True),subject.TRANSACTIONS[-1:])
+        self.assertEqual(sum(len(v['fields']) for v in subject.selected_transactions(True)),7)
+        self.assertEqual(subject.property_steps(False),subject.STEPS)
+        self.assertEqual(subject.initial_property_fixture(False),subject.FIXTURE)
+
+    def test_remaining_fixture_is_explicit_prior_updates_without_replaying_their_forms(self):
+        raw=subject.initial_property_fixture(True);expected,_=subject.before_transaction('properties-edge')
+        self.assertEqual(graph(raw),expected)
+        self.assertIn(b'\r\n',raw);self.assertNotIn(b'\n',raw.replace(b'\r\n',b''))
+        updated=deepcopy(expected);updated['edges'][0].update(subject.TRANSACTIONS[-1]['fields'])
+        self.assertEqual(subject.validate_transaction(raw,crlf(updated),'properties-edge'),subject.TRANSACTIONS[-1])
+        for bad in ('remaining',1,None):
+            with self.subTest(bad=bad),self.assertRaises(RuntimeError):subject.initial_property_fixture(bad)
+
     def test_declared_fixture_and_scope_exclude_accepted_actions_and_retain_extensions(self):
         value=graph(subject.FIXTURE)
         self.assertEqual({v['type'] for v in value['nodes']},{'text','file','link','group'})
