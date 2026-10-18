@@ -48,6 +48,26 @@ def digest(value):
     return hashlib.sha256(value).hexdigest()
 
 
+def native_process_lifetime(pid, stat, cmdline, uid, status):
+    require(type(pid) is int and 0 < pid < 2**31 and type(stat) is bytes and len(stat) < 4096,
+        'Native TLS process identity is invalid')
+    prefix = APP.encode() + b'\0'
+    require(stat.startswith(str(pid).encode() + b' (') and b') ' in stat
+        and type(cmdline) is bytes and len(prefix) <= len(cmdline) < 16384
+        and cmdline.startswith(prefix) and not cmdline[len(prefix):].strip(b'\0')
+        and type(uid) is bytes and re.fullmatch(rb'[1-9][0-9]{4}\n?', uid),
+        'Native TLS process identity is not the owned application')
+    require(type(status) is bytes and len(status) < 16384, 'Native TLS process status is invalid')
+    tgids = [line.split()[1:] for line in status.splitlines() if line.startswith(b'Tgid:')]
+    uids = [line.split()[1:] for line in status.splitlines() if line.startswith(b'Uid:')]
+    require(tgids == [[str(pid).encode()]] and uids == [[uid.strip()] * 4],
+        'Native TLS process owner or thread group changed')
+    fields = stat.rsplit(b') ', 1)[1].split()
+    require(len(fields) >= 20 and fields[19].isdigit() and 0 < int(fields[19]) < 2**64,
+        'Native TLS process start time is invalid')
+    return {'pid': pid, 'start_ticks': int(fields[19]), 'uid': int(uid), 'package': APP}
+
+
 def validate_image_save_observation(report, rendered, phase):
     require(phase in ('rich-image', 'canvas-image'), 'Unexpected image/save observation phase')
     require(len(report['drafts']) == 1 and not report['saves'] and len(report['images']) == 1,
@@ -254,6 +274,7 @@ class Probe:
         self.original_ime = None
         self.original_hardware_ime = None
         self.tls_initializations = []
+        self.tls_process_origins = {}
         self.keystore_test_result = None
         self.native_auth_read_result = None
 
@@ -788,20 +809,51 @@ class Probe:
             and '..' not in paths[0].split('/'), 'Native draft database origin is ambiguous')
         self.root = paths[0].removesuffix('mobile-drafts.sqlite3')
 
+    def native_process_identity(self, pid):
+        require_hosted_emulator(self.args.serial)
+        require(type(pid) is int and 0 < pid < 2**31, 'Native TLS process ID is invalid')
+        prefix = '/proc/' + str(pid)
+        return native_process_lifetime(pid,
+            self.shell('run-as', APP, 'cat', prefix + '/stat').stdout,
+            self.shell('run-as', APP, 'cat', prefix + '/cmdline').stdout,
+            self.shell('run-as', APP, 'id', '-u').stdout,
+            self.shell('run-as', APP, 'cat', prefix + '/status').stdout)
+
     def native_tls_startup(self, phase):
         if not self.binding.get('native_tls'):
             return  # Existing immutable APKs did not contain this native bridge.
         require_hosted_emulator(self.args.serial)
         pid = self.shell('pidof', APP).stdout.decode().strip()
         require(re.fullmatch(r'[1-9][0-9]{0,9}', pid), 'Native TLS startup requires the exact owned app process')
+        identity = self.native_process_identity(int(pid))
+        key = (identity['pid'], identity['start_ticks'], identity['uid'])
+        origins = getattr(self, 'tls_process_origins', None)
+        if origins is None:
+            origins = self.tls_process_origins = {}
+        ready = re.compile(rb'[VDIWEAF]/OpenNexusSync\(\s*' + pid.encode() + rb'\): SYNC_TLS_READY')
         deadline = time.monotonic() + 5
         while True:
             logs = self.shell('logcat', '--pid=' + pid, '-d', '-v', 'brief', 'OpenNexusSync:I', '*:S').stdout
             require(len(logs) <= 16384, 'Unexpected native TLS startup log size')
             (self.output / (phase + '-native-tls.log')).write_bytes(logs)
             require(b'SYNC_TLS_UNAVAILABLE' not in logs, 'Native platform TLS initialization failed; offline data preserved')
-            if any(line.rstrip().endswith(b': SYNC_TLS_READY') for line in logs.splitlines()):
-                self.tls_initializations.append({'phase':phase,'owned_pid':int(pid),'native_context_initialized':True,'network_tested':False})
+            require(self.native_process_identity(int(pid)) == identity,
+                'Native TLS process changed during original observation')
+            seen = [line.rstrip() for line in logs.splitlines() if line.rstrip().endswith(b': SYNC_TLS_READY')]
+            require(all(ready.fullmatch(line) for line in seen), 'Native TLS ready event belongs to another process')
+            if seen and key not in origins:
+                origins[key] = {'identity': identity, 'phase': phase, 'log_sha256': digest(logs)}
+            if seen or key in origins:
+                origin = origins[key]
+                original = (self.output / (origin['phase'] + '-native-tls.log')).read_bytes()
+                require(origin['identity'] == identity and digest(original) == origin['log_sha256']
+                    and any(ready.fullmatch(line.rstrip()) for line in original.splitlines())
+                    and b'SYNC_TLS_UNAVAILABLE' not in original, 'Original Native TLS proof changed')
+                record = {'phase':phase,'owned_pid':int(pid),'native_context_initialized':True,'network_tested':False,
+                    'identity':identity,'source':'fresh_log' if seen else 'retained_original_log',
+                    'origin_phase':origin['phase'],'origin_log_sha256':origin['log_sha256']}
+                (self.output / (phase + '-native-tls.json')).write_text(json.dumps(record, indent=2) + '\n', 'utf-8')
+                self.tls_initializations.append(record)
                 return
             require(time.monotonic() < deadline, 'Native TLS startup had no verified initialization result')
             time.sleep(.2)

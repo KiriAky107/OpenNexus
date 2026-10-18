@@ -11,7 +11,7 @@ import zlib
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from android_runtime_probe import APP, DRIVER, TEST_IME, TEST_IME_COMPONENT, DRAFT, IMAGE_BODY, RICH_IMAGE_TEXT, IMAGE_BYTES, Probe, digest, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job, validate_tablet_layout, validate_image_save_observation, validate_image_save_result, rich_image_editor_ready
+from android_runtime_probe import APP, DRIVER, TEST_IME, TEST_IME_COMPONENT, DRAFT, IMAGE_BODY, RICH_IMAGE_TEXT, IMAGE_BYTES, Probe, digest, native_process_lifetime, require_hosted_emulator, stop_owned_emulator, validate_binding, validate_build_job, validate_tablet_layout, validate_image_save_observation, validate_image_save_result, rich_image_editor_ready
 
 
 class RuntimeBoundaries(unittest.TestCase):
@@ -447,15 +447,39 @@ class RuntimeBoundaries(unittest.TestCase):
                 self.assertEqual((probe.output/'keystore-device-tests.txt').read_bytes(),b'FAILURES!!!\n')
                 self.assertEqual((probe.output/'keystore-device-tests.stderr.txt').read_bytes(),b'original stderr')
 
+    def test_native_tls_startup_retains_original_ready_only_for_same_live_process_when_log_rotates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe=Probe.__new__(Probe);probe.output=Path(directory);probe.binding={'native_tls':{'present':True}}
+            probe.args=SimpleNamespace(serial='emulator-5562');probe.tls_initializations=[];probe.tls_process_origins={}
+            identity={'pid':1234,'start_ticks':900,'uid':10216,'package':APP}
+            probe.native_process_identity=Mock(return_value=identity)
+            ready=b'I/OpenNexusSync( 1234): SYNC_TLS_READY\n'
+            probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b'1234\n'),subprocess.CompletedProcess([],0,ready),
+                subprocess.CompletedProcess([],0,b'1234\n'),subprocess.CompletedProcess([],0,b'')])
+            with patch('android_runtime_probe.require_hosted_emulator'),patch('android_runtime_probe.time.monotonic',side_effect=[0,0,6]):
+                probe.native_tls_startup('original')
+                probe.native_tls_startup('retained')
+            self.assertEqual(probe.tls_initializations[-1]['source'],'retained_original_log')
+            self.assertEqual(probe.tls_initializations[-1]['origin_phase'],'original')
+            self.assertEqual(probe.tls_initializations[-1]['identity'],identity)
+            self.assertFalse(probe.tls_initializations[-1]['network_tested'])
+            self.assertEqual((probe.output/'original-native-tls.log').read_bytes(),ready)
+            self.assertEqual((probe.output/'retained-native-tls.log').read_bytes(),b'')
+
     def test_native_tls_startup_observes_only_the_owned_process_and_requires_ready_without_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             probe=Probe.__new__(Probe);probe.output=Path(directory);probe.binding={'native_tls':{'coordinate':'org.rustls:rustls-platform-verifier:0.2.0'}}
             probe.args=SimpleNamespace(serial='emulator-5562');probe.tls_initializations=[]
+            identity={'pid':1234,'start_ticks':900,'uid':10216,'package':APP}
+            probe.native_process_identity=Mock(return_value=identity)
             with patch('android_runtime_probe.require_hosted_emulator'):
                 probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b'1234\n'),subprocess.CompletedProcess([],0,b'I/OpenNexusSync( 1234): SYNC_TLS_READY\n')])
                 probe.native_tls_startup('markdown')
                 self.assertEqual(probe.shell.call_args.args,('logcat','--pid=1234','-d','-v','brief','OpenNexusSync:I','*:S'))
-                self.assertEqual(probe.tls_initializations,[{'phase':'markdown','owned_pid':1234,'native_context_initialized':True,'network_tested':False}])
+                self.assertEqual(len(probe.tls_initializations),1)
+                self.assertEqual(probe.tls_initializations[0]['identity'],identity)
+                self.assertEqual(probe.tls_initializations[0]['source'],'fresh_log')
+                self.assertFalse(probe.tls_initializations[0]['network_tested'])
                 probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b'1234\n'),subprocess.CompletedProcess([],0,b'W/OpenNexusSync( 1234): SYNC_TLS_UNAVAILABLE\n')])
                 with self.assertRaisesRegex(Exception,'initialization failed'):probe.native_tls_startup('failed')
                 probe.shell=Mock(return_value=subprocess.CompletedProcess([],0,b'1234 4321\n'))
@@ -463,6 +487,52 @@ class RuntimeBoundaries(unittest.TestCase):
                 self.assertEqual(probe.shell.call_count,1)
             probe.binding={};probe.shell=Mock(side_effect=AssertionError('No observation against an old APK'))
             probe.native_tls_startup('legacy')
+
+    def test_native_tls_retained_proof_rejects_new_lifetimes_failure_foreign_event_or_tampered_origin(self):
+        for scenario in ('new-start','new-uid','failure','foreign-ready','tampered-origin','changes-during-read'):
+            with self.subTest(scenario=scenario),tempfile.TemporaryDirectory() as directory:
+                probe=Probe.__new__(Probe);probe.output=Path(directory);probe.binding={'native_tls':{'present':True}}
+                probe.args=SimpleNamespace(serial='emulator-5562');probe.tls_initializations=[];probe.tls_process_origins={}
+                identity={'pid':1234,'start_ticks':900,'uid':10216,'package':APP}
+                probe.native_process_identity=Mock(return_value=identity)
+                ready=b'I/OpenNexusSync( 1234): SYNC_TLS_READY\n'
+                probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b'1234\n'),subprocess.CompletedProcess([],0,ready)])
+                with patch('android_runtime_probe.require_hosted_emulator'),patch('android_runtime_probe.time.monotonic',side_effect=[0,0,6]):
+                    probe.native_tls_startup('origin')
+                    logs=b''
+                    if scenario=='new-start':probe.native_process_identity.return_value=dict(identity,start_ticks=901)
+                    if scenario=='new-uid':probe.native_process_identity.return_value=dict(identity,uid=10217)
+                    if scenario=='failure':logs=b'W/OpenNexusSync( 1234): SYNC_TLS_UNAVAILABLE\n'
+                    if scenario=='foreign-ready':logs=b'I/OpenNexusSync( 5678): SYNC_TLS_READY\n'
+                    if scenario=='tampered-origin':(probe.output/'origin-native-tls.log').write_bytes(ready+b'foreign\n')
+                    if scenario=='changes-during-read':probe.native_process_identity.side_effect=[identity,dict(identity,start_ticks=901)]
+                    probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,b'1234\n'),subprocess.CompletedProcess([],0,logs)])
+                    with self.assertRaises(RuntimeError):probe.native_tls_startup('later')
+                self.assertEqual(len(probe.tls_initializations),1)
+                self.assertFalse((probe.output/'later-native-tls.json').exists())
+
+    def test_native_process_lifetime_admits_only_original_app_pid_uid_cmdline_and_kernel_start(self):
+        stat=b'1234 (owned ) process) '+b' '.join([b'S']+[b'0']*18+[b'900'])
+        uid=b'10216\n';cmdline=APP.encode()+b'\0'
+        status=b'Tgid:\t1234\nUid:\t10216\t10216\t10216\t10216\n'
+        self.assertEqual(native_process_lifetime(1234,stat,cmdline,uid,status),{'pid':1234,'start_ticks':900,'uid':10216,'package':APP})
+        self.assertEqual(native_process_lifetime(1234,stat,cmdline+b'\0'*80,uid,status)['pid'],1234)
+        for pid,raw,cmd,user in [(1235,stat,cmdline,uid),(True,stat,cmdline,uid),(1234,stat,cmdline+b'extra',uid),
+                (1234,stat,b'other\0',uid),(1234,stat,cmdline,b'0\n'),(1234,stat,cmdline,b'100000\n'),
+                (1234,stat[:-3]+b'0',cmdline,uid),(1234,b'x'*4096,cmdline,uid)]:
+            with self.subTest(pid=pid,uid=user),self.assertRaises(RuntimeError):native_process_lifetime(pid,raw,cmd,user,status)
+        for wrong in (status.replace(b'1234',b'1235'),status.replace(b'10216',b'10217'),status+b'Uid:\t10216\t10216\t10216\t10216\n'):
+            with self.assertRaises(RuntimeError):native_process_lifetime(1234,stat,cmdline,uid,wrong)
+
+    def test_native_process_identity_reads_only_the_admitted_own_app_process_and_user(self):
+        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(serial='emulator-5562')
+        stat=b'1234 (owned) '+b' '.join([b'S']+[b'0']*18+[b'900'])
+        status=b'Tgid:\t1234\nUid:\t10216\t10216\t10216\t10216\n'
+        probe.shell=Mock(side_effect=[subprocess.CompletedProcess([],0,v) for v in [stat,APP.encode()+b'\0',b'10216\n',status]])
+        with patch('android_runtime_probe.require_hosted_emulator'):
+            self.assertEqual(probe.native_process_identity(1234)['start_ticks'],900)
+        self.assertEqual([c.args for c in probe.shell.call_args_list],[('run-as',APP,'cat','/proc/1234/stat'),
+            ('run-as',APP,'cat','/proc/1234/cmdline'),('run-as',APP,'id','-u'),('run-as',APP,'cat','/proc/1234/status')])
 
     def test_native_startup_hook_does_not_skip_the_original_phase_receipt_stop_or_database_binding(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -31,7 +31,7 @@ UUID=r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
 def graph_steps(remaining):
     require(type(remaining) is bool,'GRAPH_EXPLICIT_SELECTION')
-    return tuple(x for x in STEPS if not remaining or x not in ('graph-add-text','graph-add-file','graph-add-link','graph-add-group','graph-connect'))
+    return tuple(x for x in STEPS if not remaining or x not in ('graph-add-text','graph-add-file','graph-add-link','graph-add-group','graph-connect','graph-edge-label'))
 
 def initial_fixture(remaining):
     require(type(remaining) is bool,'GRAPH_EXPLICIT_FIXTURE_SELECTION')
@@ -44,7 +44,7 @@ def initial_fixture(remaining):
     ids['group']='f58f7b80-8bf1-42da-a619-f1e08c70c307'
     value['nodes'].insert(0,dict(id=ids['group'],type='group',x=350,y=0,width=120,height=100,label=GROUP,
         vendor={'synthetic_fixture_only':True}))
-    value['edges'].append(dict(id=SEED_CONNECTION,fromNode=ids['link'],toNode=ids['file'],label='',vendor={'synthetic_fixture_only':True}))
+    value['edges'].append(dict(id=SEED_CONNECTION,fromNode=ids['link'],toNode=ids['file'],label=EDGE,vendor={'synthetic_fixture_only':True}))
     return encoded(value),ids
 
 def digest(raw):return hashlib.sha256(raw).hexdigest()
@@ -114,6 +114,7 @@ def run_canvas_graph(probe):
         'compiled_source':probe.args.commit,'APK_sha256':probe.binding['sha256'],'scope':probe.args.scope,
         'four_type_GUI_additions_and_composition_not_replayed':remaining,'synthetic_fixture_four_type_ids':fixture_ids,
         'connection_GUI_not_replayed':remaining,'synthetic_connection_edge_ID':SEED_CONNECTION if remaining else None,
+        'connection_label_GUI_not_replayed':remaining,'copy_phase_only_fresh_app_local_clipboard_setup':remaining,
         'physical_phone_touch_geometry_midwrite_or_whole_A3C_complete':False,'executed_steps':[],'saves':[]}
     current=None
     def phase(name):
@@ -153,12 +154,14 @@ def run_canvas_graph(probe):
         if remaining:
             edge=SEED_CONNECTION
             seeded=next(e for e in graph(raw)['edges'] if e['id']==edge)
-            require(seeded['fromNode']==ids['link'] and seeded['toNode']==ids['file'] and seeded['label']=='','GRAPH_EXPLICIT_SYNTHETIC_CONNECTION')
+            require(seeded['fromNode']==ids['link'] and seeded['toNode']==ids['file'] and seeded['label']==EDGE,'GRAPH_EXPLICIT_SYNTHETIC_CONNECTION')
         else:
             after,new=phase('graph-connect');edge=added_edge(raw,new,ids['link'],ids['file'])
             report['saves'].append(saved_original(before,after,new));before,raw=after,new
-        after,new=phase('graph-edge-label');edited_edge(raw,new,edge,{'label':EDGE})
-        report['saves'].append(saved_original(before,after,new));before,raw=after,new
+            after,new=phase('graph-edge-label');edited_edge(raw,new,edge,{'label':EDGE})
+            report['saves'].append(saved_original(before,after,new));before,raw=after,new
+        # Copy was already verified on the previous original scene. A fresh
+        # app-local clipboard is still required before the unpassed paste path.
         copy_state,copy_raw=phase('graph-copy');identical_original_bytes(raw,copy_raw)
         require(projection(copy_state)==projection(before),'GRAPH_COPY_WROTE_NATIVE')
         after,duplicate=phase('graph-duplicate');duplicate_map=pasted_selection(raw,duplicate,[A,B])

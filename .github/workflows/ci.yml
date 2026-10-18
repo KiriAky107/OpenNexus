@@ -356,11 +356,12 @@ jobs:
           result = subprocess.run(['cargo', 'test', '--lib', '--locked', 'records::tests::',
               '--', '--nocapture'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
           (evidence / 'fixed-records.log').write_bytes(result.stdout)
-          print(result.stdout.decode('utf-8', errors='replace'))
           (evidence / 'fixed-records.json').write_text(json.dumps({
               'checkout_sha': os.environ['GITHUB_SHA'],
               'exit_code': result.returncode,
               'passed': result.returncode == 0}), encoding='utf-8')
+          sys.stdout.buffer.write(result.stdout)
+          sys.stdout.buffer.flush()
           sys.exit(result.returncode)
       - uses: actions/upload-artifact@v7
         if: always()
