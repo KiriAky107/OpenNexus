@@ -585,7 +585,7 @@ public final class RuntimeProbe extends Instrumentation {
             save();
         } else if (step.equals("rename-old") || step.equals("rename-new")) {
             hideKeyboard();
-            clickMenu(canvas?"More canvas actions":"More actions");
+            clickMenu("More actions"); // Shared document menu, not selected Canvas-node actions.
             click("Rename",false);
             setText(waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
                 && label(node,"Note path",false), "original reviewed rename path"),OriginalFileActions.destination(kind));
@@ -611,7 +611,7 @@ public final class RuntimeProbe extends Instrumentation {
             localFileButton("Apply reviewed action");
             waitLabel("Completed");
         } else if (step.equals("delete-cancel-preview") || step.equals("delete-preview")) {
-            clickMenu(canvas?"More canvas actions":"More actions");
+            clickMenu("More actions"); // Shared document menu, not selected Canvas-node actions.
             click("Delete",false);
             waitLabel("Awaiting confirmation");
             recordLocalFileFreeze();
