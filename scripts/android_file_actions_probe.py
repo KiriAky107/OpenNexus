@@ -100,7 +100,11 @@ def snapshot(probe, kind, label, file_id=None):
                'mutation_intents': 'operation_id,kind,file_id,path,destination,expected,state,error'}
     value = {}
     for table, fields in columns.items():
-        where, params = ('file_id=?', (file_id,)) if file_id else ('path IN (?,?)', (original, renamed))
+        # Creation intents keep their original NULL file_id; the native commit
+        # allocates the file ID in its result. Never rewrite or lose that intent
+        # when later observing the same file, including after draft deletion.
+        where, params = (('file_id=?', (file_id,)) if file_id and table != 'save_intents'
+                         else ('path IN (?,?)', (original, renamed)))
         name = {'save_intents': 'saves', 'mutation_intents': 'mutations'}.get(table, table)
         value[name] = [dict(zip(fields.split(','), row)) for row in probe.database_rows(
             'SELECT ' + fields + ' FROM ' + table + ' WHERE ' + where + ' ORDER BY rowid', params)]
@@ -128,6 +132,13 @@ def snapshot(probe, kind, label, file_id=None):
         fields = 'operation_id,fingerprint,state,result'
         value['operations'] = [dict(zip(fields.split(','), row)) for row in db.execute(
             'SELECT ' + fields + ' FROM operations WHERE operation_id IN (' + ','.join('?' for _ in ids) + ') ORDER BY rowid', ids)]
+    seed = value['saves'][0]
+    receipts = [row for row in value['operations'] if row['operation_id'] == seed['operation_id']]
+    require(seed['state'] == 'committed' and seed['file_id'] in (None, file_id)
+            and (seed['file_id'] is not None or seed['expected'] == '')
+            and len(receipts) == 1 and receipts[0]['state'] == 'committed'
+            and json.loads(receipts[0]['result'])['file_id'] == file_id,
+            'Original seed intent does not bind its native committed file result')
     (probe.output / (label + '-native.json')).write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n', 'utf-8')
     return value
 

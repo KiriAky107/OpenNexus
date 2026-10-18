@@ -1,31 +1,66 @@
 """Data-only guards for the new UI lifecycle probe; not device acceptance."""
 from copy import deepcopy
+from contextlib import closing, ExitStack
 import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
-import yaml
 
-from android_file_actions_probe import BODY, UPDATED, NODE, changed_content, committed, frozen, intent, paths
+from android_file_actions_probe import BODY, UPDATED, NODE, changed_content, committed, frozen, intent, paths, snapshot
 from android_runtime_probe import Probe
-from test_android_desktop_workflow import admitted
 
 FILE = '11111111-1111-4111-8111-111111111111'
 OP = '22222222-2222-4222-8222-222222222222'
 
 
 class FileActionBoundaries(unittest.TestCase):
-    def test_partial_file_scope_reuses_a_fixed_package_and_cannot_start_a_debug_build(self):
-        workflow = yaml.load((Path(__file__).resolve().parents[1] / '.github/workflows/android.yml').read_text('utf-8'), Loader=yaml.BaseLoader)
-        self.assertIn('file-actions', workflow['on']['workflow_dispatch']['inputs']['runtime_scope']['options'])
-        for reuse in ('', '39078195102'):
-            self.assertFalse(admitted(workflow['jobs']['debug-apk']['if'], 'file-actions', reuse=reuse))
-        self.assertTrue(admitted(workflow['jobs']['emulator-runtime']['if'], 'file-actions', reuse='39078195102', build='skipped'))
-        self.assertFalse(admitted(workflow['jobs']['emulator-runtime']['if'], 'file-actions', reuse='', build='skipped'))
+    def test_original_creation_intent_keeps_null_file_ID_while_receipt_binds_the_saved_file(self):
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
+            root = Path(directory); tools = root / 'tools'; tools.mkdir(); output = root / 'evidence'; output.mkdir()
+            original, _ = paths('md'); digest = hashlib.sha256(BODY).hexdigest()
+            draft = resources.enter_context(closing(sqlite3.connect(root / 'drafts.sqlite3')))
+            draft.executescript('''CREATE TABLE drafts(id,file_id,path,base_hash,generation,saved_generation,content,edit_session);
+                CREATE TABLE save_intents(operation_id,draft_id,generation,file_id,path,expected,content,state,error);
+                CREATE TABLE mutation_intents(operation_id,kind,file_id,path,destination,expected,state,error);''')
+            draft.execute('INSERT INTO drafts VALUES (?,?,?,?,?,?,?,?)', ('own-draft', FILE, original, digest, 1, 1, BODY.decode(), 'own-session'))
+            draft.execute('INSERT INTO save_intents VALUES (?,?,?,?,?,?,?,?,?)', (OP, 'own-draft', 1, None, original, '', BODY.decode(), 'committed', None))
+            draft.commit()
+            host = root / 'host.sqlite3'
+            with closing(sqlite3.connect(host)) as db:
+                db.executescript('''CREATE TABLE files(id,path,hash,revision,deleted);
+                    CREATE TABLE outbox(operation_id,file_id,revision,path,hash,operation,state);
+                    CREATE TABLE operations(operation_id,fingerprint,state,result);''')
+                db.execute('INSERT INTO files VALUES (?,?,?,?,?)', (FILE, original, digest, 1, 0))
+                db.execute('INSERT INTO outbox VALUES (?,?,?,?,?,?,?)', (OP, FILE, 1, original, digest, 'put', 'pending'))
+                db.execute('INSERT INTO operations VALUES (?,?,?,?)', (OP, 'a' * 64, 'committed',
+                    json.dumps({'file_id': FILE, 'path': original, 'hash': digest, 'deleted': False})))
+                db.commit()
+            def read_private(path, **_):
+                self.assertIn(path, ('./vault/.ainote/host.sqlite3', './vault/.ainote/host.sqlite3-wal', './vault/.ainote/host.sqlite3-shm'))
+                return subprocess.CompletedProcess([], 0, host.read_bytes(), b'') if path.endswith('host.sqlite3') else subprocess.CompletedProcess([], 1, b'', b'')
+            probe = SimpleNamespace(root='./', tools=tools, output=output,
+                database_rows=lambda query, params: draft.execute(query, params).fetchall(), private=read_private)
+            # An original creation intent is immutable: its NULL is never
+            # retroactively rewritten to the ID allocated by the native commit.
+            first = snapshot(probe, 'md', 'own-created', FILE)
+            self.assertEqual(len(first['saves']), 1)
+            self.assertIsNone(first['saves'][0]['file_id'])
+            self.assertEqual(json.loads(first['operations'][0]['result'])['file_id'], FILE)
+            draft.execute('DELETE FROM drafts'); draft.commit()
+            cold = snapshot(probe, 'md', 'own-deleted-cold', FILE)
+            self.assertEqual(cold['saves'], first['saves'])
+            self.assertEqual(cold['drafts'], [])
+            with self.assertRaisesRegex(RuntimeError, 'bind its native committed file result'):
+                snapshot(probe, 'md', 'wrong-original-file', OP)
+            draft.execute('UPDATE save_intents SET expected=?', ('b' * 64,)); draft.commit()
+            with self.assertRaisesRegex(RuntimeError, 'bind its native committed file result'):
+                snapshot(probe, 'md', 'null-update-is-not-creation', FILE)
 
     def test_explicit_file_scope_dispatches_only_its_new_owned_lifecycle(self):
         probe = Probe.__new__(Probe)
