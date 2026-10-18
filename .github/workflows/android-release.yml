@@ -1,6 +1,12 @@
 name: Android release inputs
 
 on:
+  workflow_call:
+    inputs:
+      expected_commit:
+        description: 'Caller checkout SHA from the same repository commit, without APK reuse.'
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
       expected_commit:
