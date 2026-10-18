@@ -95,7 +95,7 @@ on:
         default: false
         required: false
       sync_webview_cycle:
-        description: 'On sync-conflicts only, admit one actual software WebView touch for each original cycle; no input retry'
+        description: 'On sync-conflicts or sync-revocation with WebView preview, one actual software WebView touch per original cycle; no input retry'
         type: boolean
         default: false
         required: false
@@ -235,7 +235,7 @@ jobs:
           if os.environ.get('WEBVIEW_PREVIEW')=='true':
             assert scope in ('sync-conflicts','sync-revocation')
           if os.environ.get('WEBVIEW_CYCLE')=='true':
-            assert scope=='sync-conflicts'
+            assert scope=='sync-conflicts' or scope=='sync-revocation' and os.environ.get('WEBVIEW_PREVIEW')=='true'
           if os.environ.get('ORIGINAL_NATIVE_OUTCOME')=='true':
             assert scope=='sync-conflicts'
             assert all(os.environ.get(key)=='true' for key in ('COLD_ORIGINALS','WEBVIEW_PREVIEW','WEBVIEW_CYCLE'))

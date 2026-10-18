@@ -106,20 +106,35 @@ def validate_rejected_sync(before,after,provider,remote,original,observed):
     require(isinstance(original,bytes) and original==observed and 0<len(original)<=1024*1024,
         'Rejected original local bytes changed')
     digest=hashlib.sha256(original).hexdigest();outbox=before['outbox']
-    require(len(outbox)==1 and outbox[0]['path']=='runtime-note.md' and outbox[0]['operation']=='put'
-        and outbox[0]['hash']==digest,'Original saved-note outbox differs')
-    saved=outbox[0]
+    require(isinstance(outbox,list) and 1<=len(outbox)<=2,'Original saved-note outbox differs')
+    pending=[row for row in outbox if row['state'] in ('pending','queued')]
+    require(len(pending)==1,'Original saved-note pending identity differs');saved=pending[0]
+    require(saved['path']=='runtime-note.md' and saved['operation']=='put' and saved['hash']==digest,'Original saved-note outbox differs')
     payload=dict(operation_id=saved['operation_id'],hash=digest,size=len(original))
     require(str(uuid.UUID(saved['operation_id']))==saved['operation_id'] and str(uuid.UUID(saved['file_id']))==saved['file_id']
         and type(saved['revision']) is int and saved['revision']>0,'Original saved-note identity differs')
-    require(saved['state'] in ('pending','queued') and (saved['payload_size']==len(original) and saved['state']=='pending'
-        or saved['payload_size']==0 and before['payloads']==[payload]),'Original saved-note outbox payload state differs')
+    archived=[row for row in outbox if row is not saved]
+    require(all(row['state']=='archived' and row['payload_size']==0
+        and all(row[key]==saved[key] for key in ('file_id','revision','path','hash','operation'))
+        and str(uuid.UUID(row['operation_id']))==row['operation_id'] for row in archived),
+        'Original association archive identity differs')
+    ids=[row['operation_id'] for row in outbox];require(len(set(ids))==len(ids),'Original outbox identities duplicated')
+    payloads=before['payloads']
+    require(isinstance(payloads,list) and len(payloads)<=len(outbox)
+        and all(value==dict(operation_id=value['operation_id'],hash=digest,size=len(original))
+            and value['operation_id'] in ids for value in payloads)
+        and len({value['operation_id'] for value in payloads})==len(payloads),'Original payload identities differ')
+    require(all(dict(operation_id=row['operation_id'],hash=digest,size=len(original)) in payloads for row in archived),
+        'Original archived payload is missing')
+    require(saved['payload_size']==len(original) and saved['state']=='pending'
+        or saved['payload_size']==0 and payload in payloads,'Original saved-note outbox payload state differs')
     job={key:saved[key] for key in ('operation_id','file_id','path','hash')}
     job.update(size=len(original),state='pending',remote_revision=None,error=None)
-    require(before['jobs'] in ([],[job]) and before['payloads'] in ([],[payload])
+    require(before['jobs'] in ([],[job])
         and not before['attempts'] and not before['issuers'],'Unexpected original transfer attempt already exists')
-    expected=deepcopy(before);expected['jobs']=[job];expected['payloads']=[payload]
-    expected['outbox'][0].update(state='queued',payload_size=0)
+    expected=deepcopy(before);expected['jobs']=[job]
+    if payload not in expected['payloads']:expected['payloads'].append(payload)
+    expected['outbox'][outbox.index(saved)].update(state='queued',payload_size=0)
     require(after==expected,'Rejection changed original IDs/cursor/head or acknowledged/lost the queued payload')
     require(provider['vault']['id']==before['binding']['remote_vault']
         and provider['vault']['sequence']==before['binding']['cursor']==0,
@@ -131,6 +146,7 @@ def validate_rejected_sync(before,after,provider,remote,original,observed):
     require(len(provider['delivery']['events'])<64 and remote['delivery']==dict(counts=counts,events=provider['delivery']['events']+[event]),
         'One actual service401 is absent or was substituted/delivered/repeated')
     return dict(operation_id=saved['operation_id'],file_id=saved['file_id'],sha256=digest,size=len(original),
+        preserved_archived_operation_ids=[row['operation_id'] for row in archived],
         cursor=before['binding']['cursor'],original_pending_job_and_payload_retained=True,
         actual_401_without_delivery_fault=True,no_provider_content_write=True)
 

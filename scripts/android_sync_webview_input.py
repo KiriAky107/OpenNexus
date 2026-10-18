@@ -79,7 +79,7 @@ def touch_original_cycle(probe, nonce, original_pid):
 def instrument_original_button(probe, nonce, *, phase, kind):
     """Own one original adb process/stream. A ready marker never creates a retry."""
     require(kind=='preview' and phase=='associate' or kind=='cycle' and phase in
-            ('cycle','cycle-conflict','cycle-conflict-copy','cycle-incoming','cycle-media'), 'Original button phase is invalid')
+            ('cycle','cycle-conflict','cycle-conflict-copy','cycle-incoming','cycle-media','cycle-revoked'), 'Original button phase is invalid')
     require(str(uuid.UUID(nonce)) == nonce, 'Original preview dispatch is invalid')
     require_hosted_emulator(probe.args.serial)
     probe.wait_owned_connection()

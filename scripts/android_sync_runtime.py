@@ -260,7 +260,8 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
         webview=phase=='associate' and getattr(args,'webview_preview',False)
         semantic=phase=='associate' and getattr(args,'semantic_preview',False)
         browser_cycle=getattr(args,'webview_cycle',False) and (phase in ('cycle-conflict','cycle-conflict-copy','cycle-incoming','cycle-media')
-            or phase=='cycle' and (getattr(args,'scope','')=='product-pair' or getattr(args,'original_native_outcome',False)))
+            or phase=='cycle' and (getattr(args,'scope','')=='product-pair' or getattr(args,'original_native_outcome',False))
+            or phase=='cycle-revoked' and getattr(args,'revocation',False))
         require(not (webview and semantic),'Choose exactly one original preview input backend')
         atomic_json(self.output/('sync-dispatch-'+str(number)+'.json'),{'phase':phase,
             'driver_dispatch_id':dispatch_id,'server_or_native_operation_id':False,'automatic_retry':False,
@@ -641,7 +642,8 @@ def main():
     require(not args.cold_originals or args.conflicts,'Cold original-entry scope requires actual conflicts')
     require(not args.semantic_preview or args.conflicts,'Native accessibility preview requires the explicit conflict scope')
     require(not args.webview_preview or args.conflicts or args.revocation,'Owned WebView preview requires an explicit conflict or revocation scope')
-    require(not args.webview_cycle or args.conflicts,'Owned WebView cycle requires the explicit conflict scope')
+    require(not args.webview_cycle or args.conflicts or args.revocation and args.webview_preview,
+        'Owned WebView cycle requires the explicit conflict scope or revocation with WebView preview')
     require(not (args.semantic_preview and args.webview_preview),'Choose exactly one original preview input backend')
     validate_original_outcome_args(args)
     require_hosted();require_hosted_emulator(args.serial);owner=owned_root()

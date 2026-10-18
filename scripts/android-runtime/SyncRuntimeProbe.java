@@ -74,6 +74,11 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
         // These are not substituted for native invocation or file-operation IDs.
         persistOnce(original,new JSONObject().put("driver_intent_id",UUID.randomUUID().toString())
             .put("native_invocation_id_observed",false).put("action","Sync one cycle now"));
+        startOriginalCycleTouch(original);
+        stage="wait-original-cycle-completion-"+original;
+        waitPresent(node->label(node,"Cycle completed"));
+    }
+    private void startOriginalCycleTouch(String original) throws Exception {
         String mode=originalCycleInputMode();
         require(mode.equals("touch")||mode.equals("webview-touch"),"Unknown original cycle input mode");
         if(mode.equals("webview-touch")) {
@@ -82,8 +87,6 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
             stage="owned-webview-cycle-ready-"+original;
             Bundle ready=new Bundle();ready.putString("owned_cycle_ready",nonce);sendStatus(1,ready);
         } else click("Sync one cycle now");
-        stage="wait-original-cycle-completion-"+original;
-        waitPresent(node->label(node,"Cycle completed"));
     }
 
     private void stopOriginal() throws Exception {
@@ -131,7 +134,7 @@ public final class SyncRuntimeProbe extends AuthRuntimeProbe {
         waitFor(node->label(node,"Sync one cycle now") && node.isEnabled(),true);
         persistOnce("cycle-revoked",new JSONObject().put("driver_intent_id",UUID.randomUUID().toString())
             .put("native_invocation_id_observed",false).put("action","Sync one cycle now"));
-        click("Sync one cycle now");
+        startOriginalCycleTouch("cycle-revoked");
         waitPresent(node->label(node,"Cycle did not complete"));
         waitPresent(node->text(node.getText()).endsWith(REVOKED_MESSAGE));
     }

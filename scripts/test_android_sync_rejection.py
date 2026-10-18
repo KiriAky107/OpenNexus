@@ -103,6 +103,26 @@ class RejectionBoundaries(unittest.TestCase):
         before['payloads']=deepcopy(after['payloads'])
         self.assertEqual(validate_rejected_sync(before,after,provider,remote,raw,raw)['operation_id'],OP)
 
+    def test_association_archived_original_and_its_payload_are_preserved_beside_the_one_pending_operation(self):
+        before,after,provider,remote,raw=self.original();archived='c4427c0c-463a-4217-b31a-4b96edbca904'
+        before['outbox'][0]['payload_size']=0
+        before['payloads']=deepcopy(after['payloads'])
+        row=dict(before['outbox'][0],operation_id=archived,state='archived',payload_size=0)
+        payload=dict(before['payloads'][0],operation_id=archived)
+        for value in (before,after):
+            value['outbox'].insert(0,deepcopy(row));value['payloads'].insert(0,deepcopy(payload))
+        proof=validate_rejected_sync(before,after,provider,remote,raw,raw)
+        self.assertEqual(proof['operation_id'],OP);self.assertEqual(proof['preserved_archived_operation_ids'],[archived])
+        for change in ('archive_id','archive_state','archive_hash','lost_archive_payload','extra_archive','foreign_file'):
+            left=deepcopy(before);right=deepcopy(after)
+            if change=='archive_id':right['outbox'][0]['operation_id']='replaced'
+            elif change=='archive_state':right['outbox'][0]['state']='acked'
+            elif change=='archive_hash':left['outbox'][0]['hash']='f'*64
+            elif change=='lost_archive_payload':right['payloads'].pop(0)
+            elif change=='extra_archive':left['outbox'].append(deepcopy(row))
+            else:left['outbox'][0]['file_id']='c4427c0c-463a-4217-b31a-4b96edbca905'
+            with self.subTest(change=change),self.assertRaises(RuntimeError):validate_rejected_sync(left,right,provider,remote,raw,raw)
+
     def test_known_refresh_rejection_retains_exact_original_lineage_and_requires_native_401(self):
         login=dict(operation_id=OP,endpoint='owned endpoint',account='owned account',device_name='owned phone',kind='login',
             phase='active',device_id=TARGET,generation=1,server_logout_confirmed=0,previous_operation=None)

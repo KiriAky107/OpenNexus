@@ -59,10 +59,21 @@ class RevocationWorkflow(unittest.TestCase):
               'RUNTIME_SCOPE':'sync-revocation','WEBVIEW_PREVIEW':'true'}
         for changes,allowed in (({},True),({'RUNTIME_SCOPE':'sync-conflicts'},True),
                 ({'WEBVIEW_PREVIEW':'false'},True),({'RUNTIME_SCOPE':'sync-initial'},False),
-                ({'SEMANTIC_PREVIEW':'true'},False),({'WEBVIEW_CYCLE':'true'},False)):
+                ({'SEMANTIC_PREVIEW':'true'},False),({'WEBVIEW_CYCLE':'true'},True),
+                ({'WEBVIEW_CYCLE':'true','WEBVIEW_PREVIEW':'false'},False)):
             with self.subTest(changes=changes),patch.dict(os.environ,dict(base,**changes),clear=True):
                 if allowed:exec(compile(code,'workflow-preview-admission','exec'),{})
                 else:
                     with self.assertRaises(AssertionError):exec(compile(code,'workflow-preview-admission','exec'),{})
+
+    def test_only_original_revocation_uses_the_new_input_gate_and_old_failure_cycles_stay_native(self):
+        source=(self.root/'scripts/android-runtime/SyncRuntimeProbe.java').read_text('utf-8')
+        old=source.split('private void failedCycle(',1)[1].split('private static final String REVOKED_MESSAGE',1)[0]
+        revoked=source.split('private void revokedCycle()',1)[1].split('private void revokedRefresh()',1)[0]
+        self.assertNotIn('startOriginalCycleTouch(',old)
+        self.assertIn('click("Sync one cycle now")',old)
+        self.assertEqual(revoked.count('persistOnce("cycle-revoked"'),1)
+        self.assertEqual(revoked.count('startOriginalCycleTouch("cycle-revoked")'),1)
+        self.assertLess(revoked.index('persistOnce('),revoked.index('startOriginalCycleTouch('))
 
 if __name__=='__main__':unittest.main()

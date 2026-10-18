@@ -42,13 +42,13 @@ class WebViewPreview(unittest.TestCase):
                 with self.assertRaises(RuntimeError): runtime.main()
                 host.assert_not_called()
 
-    def test_revocation_admits_explicit_preview_only_without_acquiring_an_owner(self):
+    def test_revocation_admits_its_explicit_webview_inputs_without_acquiring_an_owner(self):
         base = ['probe','--bundle','unused','--sdk','unused','--output','unused','--source-checkout','unused',
                 '--commit','a'*40,'--tools-commit','b'*40,'--build-run-id','39112675356','--revocation']
         class HostedBoundary(Exception): pass
         for flags in (['--webview-preview'], ['--webview-preview','--webview-cycle'],
-                      ['--semantic-preview'], ['--webview-preview','--semantic-preview']):
-            admitted = flags == ['--webview-preview']
+                      ['--webview-cycle'], ['--semantic-preview'], ['--webview-preview','--semantic-preview']):
+            admitted = flags in (['--webview-preview'],['--webview-preview','--webview-cycle'])
             with self.subTest(flags=flags), patch.object(sys,'argv',base+flags), \
                  patch.object(runtime,'require_hosted',side_effect=HostedBoundary) as host, \
                  patch.object(runtime,'owned_root') as owner:
