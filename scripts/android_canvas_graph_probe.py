@@ -30,7 +30,7 @@ UUID=r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
 def graph_steps(remaining):
     require(type(remaining) is bool,'GRAPH_EXPLICIT_SELECTION')
-    return tuple(x for x in STEPS if not remaining or x not in ('graph-add-text','graph-add-file','graph-add-link'))
+    return tuple(x for x in STEPS if not remaining or x not in ('graph-add-text','graph-add-file','graph-add-link','graph-add-group'))
 
 def initial_fixture(remaining):
     require(type(remaining) is bool,'GRAPH_EXPLICIT_FIXTURE_SELECTION')
@@ -40,6 +40,9 @@ def initial_fixture(remaining):
         identity='f58f7b80-8bf1-42da-a619-f1e08c70c'+ending;ids[kind]=identity
         value['nodes'].append(dict(id=identity,type=kind,x=xy[0],y=xy[1],width=120,height=100,
             **{{'text':'text','file':'file','link':'url'}[kind]:content},vendor={'synthetic_fixture_only':True}))
+    ids['group']='f58f7b80-8bf1-42da-a619-f1e08c70c307'
+    value['nodes'].insert(0,dict(id=ids['group'],type='group',x=350,y=0,width=120,height=100,label=GROUP,
+        vendor={'synthetic_fixture_only':True}))
     return encoded(value),ids
 
 def digest(raw):return hashlib.sha256(raw).hexdigest()
@@ -107,7 +110,7 @@ def run_canvas_graph(probe):
     remaining=probe.args.scope=='canvas-graph-remaining';planned=graph_steps(remaining);fixture,fixture_ids=initial_fixture(remaining)
     report={'passed':False,'run_id':os.environ['GITHUB_RUN_ID'],'tools_source':probe.args.tools_commit,
         'compiled_source':probe.args.commit,'APK_sha256':probe.binding['sha256'],'scope':probe.args.scope,
-        'three_type_GUI_additions_and_composition_not_replayed':remaining,'synthetic_fixture_three_type_ids':fixture_ids,
+        'four_type_GUI_additions_and_composition_not_replayed':remaining,'synthetic_fixture_four_type_ids':fixture_ids,
         'physical_phone_touch_geometry_midwrite_or_whole_A3C_complete':False,'executed_steps':[],'saves':[]}
     current=None
     def phase(name):
@@ -136,7 +139,7 @@ def run_canvas_graph(probe):
         require(before['files'][0]['id']==original_id and before['saves'][0]['operation_id']==report['saves'][0]['operation_id'],'GRAPH_COLD_FIXTURE_LOST_CREATION')
         ids=dict(fixture_ids);actual_added={}
         for kind,content,position in [('text',TEXT,(0,120)),('file',FILE,(150,120)),('link',URL,(0,240)),('group',GROUP,(350,0))]:
-            if remaining and kind!='group':continue
+            if remaining:continue
             after,new=phase('graph-add-'+kind);identity=added_node(raw,new,kind,content)
             node=next(x for x in graph(new)['nodes'] if x['id']==identity)
             require(tuple(node[k] for k in ('x','y','width','height'))==(*position,120,100),'GRAPH_ACTUAL_PROPERTIES')

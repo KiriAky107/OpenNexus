@@ -467,7 +467,7 @@ class Probe:
                     (self.output / 'driver-original-canvas-graph.txt').write_bytes(observed)
                     from android_canvas_graph_probe import PATH, SEED_A, SEED_B, TEXT, GROUP, FILE, URL, EDGE, STEPS
                     lines = observed.decode('ascii', 'strict').splitlines()
-                    require(len(lines) == 2 and lines[0] == 'ORIGINAL_CANVAS_GRAPH_DATA_OK 55'
+                    require(len(lines) == 2 and lines[0] == 'ORIGINAL_CANVAS_GRAPH_DATA_OK 69'
                         and lines[1].split() == [digest(x.encode()) for x in (PATH, SEED_A, SEED_B, TEXT, GROUP, FILE, URL, EDGE, *STEPS)],
                         'Original Canvas graph driver fixture data differs')
                 if getattr(self.args, 'scope', '') == 'note-search':

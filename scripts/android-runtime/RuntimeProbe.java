@@ -874,9 +874,66 @@ public final class RuntimeProbe extends Instrumentation {
 
     private void graphNode(String label) {
         graphClosePanel();
-        AccessibilityNodeInfo node=waitNode(value->APP.equals(string(value.getPackageName()))&&!value.isEditable()
-            &&label(value,label,false)&&within(value,"Free canvas"),"original visible graph node: "+label);
-        activate(node,value->within(value,"Free canvas"));
+        Predicate<AccessibilityNodeInfo> target=value->APP.equals(string(value.getPackageName()))&&!value.isEditable()
+            &&label(value,label,false)&&within(value,"Free canvas");
+        waitNode(target,"original visible graph node: "+label);settleUi();
+        int[][] previous=null,observed=null;int stable=0;
+        for(int frame=0;frame<16&&stable<3;frame++) {
+            observed=graphHitObservation(target);
+            stable=java.util.Arrays.deepEquals(previous,observed)?stable+1:0;
+            previous=observed;SystemClock.sleep(32);
+        }
+        require(stable>=3,"Original graph node/control rectangles did not settle; no touch sent");
+        // Refresh once more immediately before input, including descendants.
+        int[][] fresh=graphHitObservation(target);
+        require(java.util.Arrays.deepEquals(observed,fresh),"Original graph hit observation changed; no touch sent");
+        int[][] controls=java.util.Arrays.copyOfRange(fresh,2,fresh.length);
+        int[] point=OriginalCanvasGraph.interiorPoint(fresh[0],fresh[1],controls);
+        progress.append("ORIGINAL_GRAPH_NODE_TOUCH rectangles=").append(java.util.Arrays.deepToString(fresh))
+            .append(" point=").append(java.util.Arrays.toString(point)).append(" single=1\n");
+        long start=SystemClock.uptimeMillis();touch(start,start,MotionEvent.ACTION_DOWN,point[0],point[1]);
+        SystemClock.sleep(60);touch(start,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,point[0],point[1]);
+    }
+
+    private int[][] graphHitObservation(Predicate<AccessibilityNodeInfo> target) {
+        AccessibilityNodeInfo node=uniqueTarget(target),canvas=node;
+        for(int depth=0;depth<64&&!label(canvas,"Free canvas",false);depth++) {
+            canvas=canvas.getParent();require(canvas!=null,"Original graph viewport is missing");
+        }
+        require(APP.equals(string(canvas.getPackageName()))&&canvas.isVisibleToUser()&&label(canvas,"Free canvas",false),
+            "Original graph viewport is not owned and visible");
+        Rect bounds=new Rect(),clip=new Rect();node.getBoundsInScreen(bounds);canvas.getBoundsInScreen(clip);
+        require(!bounds.isEmpty()&&!clip.isEmpty(),"Original graph has empty bounds");
+        AccessibilityNodeInfo active=ui.getRootInActiveWindow();Rect screen=new Rect();
+        require(active!=null&&APP.equals(string(active.getPackageName())),"Original active window is not owned");
+        active.getBoundsInScreen(screen);
+        require(!screen.isEmpty()&&clip.intersect(screen),"Original graph is outside the active owned window");
+        List<int[]> rectangles=new ArrayList<>();
+        rectangles.add(new int[]{bounds.left,bounds.top,bounds.right,bounds.bottom});
+        rectangles.add(new int[]{Math.max(0,clip.left),Math.max(0,clip.top),clip.right,clip.bottom});
+        List<AccessibilityNodeInfo> descendants=new ArrayList<>();descendants.add(node);
+        for(int index=0;index<descendants.size();index++) {
+            AccessibilityNodeInfo value=descendants.get(index);
+            require(APP.equals(string(value.getPackageName())),"Foreign graph descendant; no input sent");
+            if(index>0&&value.isVisibleToUser()&&(value.isClickable()||value.isLongClickable()||value.isEditable()
+                ||value.isCheckable()||"android.widget.Button".equals(string(value.getClassName())))) {
+                Rect control=new Rect();value.getBoundsInScreen(control);
+                require(!control.isEmpty()&&rectangles.size()<34,"Unbounded or empty original graph control");
+                rectangles.add(new int[]{control.left,control.top,control.right,control.bottom});
+            }
+            for(int child=0;child<value.getChildCount();child++) {
+                AccessibilityNodeInfo next=value.getChild(child);
+                if(next!=null) { require(descendants.size()<128,"Original graph descendant bound exceeded");descendants.add(next); }
+            }
+        }
+        // Floating tools can overlap the node without being its descendants.
+        for(AccessibilityNodeInfo value:nodes())if(APP.equals(string(value.getPackageName()))&&value.isVisibleToUser()
+            &&value.isClickable()&&within(value,"Canvas operations")) {
+            Rect control=new Rect();value.getBoundsInScreen(control);
+            require(!control.isEmpty()&&rectangles.size()<34,"Unbounded or empty original canvas tool");
+            rectangles.add(new int[]{control.left,control.top,control.right,control.bottom});
+        }
+        return rectangles.toArray(new int[rectangles.size()][]);
     }
 
     private void graphGeometry(int x,int y) {
