@@ -24,6 +24,18 @@ it('keeps exact source and plain node text while language changes without docume
   expect(wrapper.emitted('update:modelValue')).toBeUndefined(); expect(wrapper.vm.source()).toBe(original)
   wrapper.unmount()
 })
+it('names the mobile property fields in both languages without editing the original Canvas', async () => {
+  const wrapper = setup()
+  await select(wrapper); await button(wrapper, 'Properties').trigger('click')
+  expect(wrapper.get('input[aria-label="Label"]').element).toHaveProperty('value', '')
+  expect(wrapper.get('select[aria-label="Node color"]').element).toHaveProperty('value', '')
+  await wrapper.setProps({ language: 'zh-CN' })
+  expect(wrapper.get('input[aria-label="标签"]').element).toHaveProperty('value', '')
+  expect(wrapper.get('select[aria-label="节点颜色"]').element).toHaveProperty('value', '')
+  expect(wrapper.vm.source()).toBe(original)
+  expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  wrapper.unmount()
+})
 it('starts narrow canvas tools collapsed without hiding the canvas or changing original JSON', async () => {
   const wrapper = mount(MobileCanvas, { props: { modelValue: original, language: 'en' }, attachTo: document.body })
   expect(wrapper.get('.canvas-toolbar').isVisible()).toBe(false)
