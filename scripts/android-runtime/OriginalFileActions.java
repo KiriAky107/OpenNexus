@@ -40,6 +40,16 @@ final class OriginalFileActions {
             && (wanted.equals(text) || wanted.equals(description));
     }
 
+    /** Public AX errors may combine the translated sentence and final invariant code. */
+    static boolean reviewedConflict(boolean owned, String role, String text, String description, boolean editable) {
+        if (!owned || editable || !("android.view.View".equals(role) || "android.widget.TextView".equals(role))) return false;
+        return conflictText(text) || conflictText(description);
+    }
+    private static boolean conflictText(String value) {
+        return value != null && value.length() <= 512 && (value.equals("REVISION_CONFLICT")
+            || value.endsWith(" REVISION_CONFLICT") || value.endsWith("\nREVISION_CONFLICT"));
+    }
+
     static String unique(String text, String regex) {
         if (text == null || text.length() > 32768) throw new IllegalArgumentException("OWNED_FILE_FREEZE_REFUSED");
         Matcher match = Pattern.compile(regex).matcher(text);

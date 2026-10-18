@@ -596,7 +596,9 @@ public final class RuntimeProbe extends Instrumentation {
         } else if (step.equals("reject-old")) {
             waitLabel("Awaiting confirmation");
             localFileButton("Apply reviewed action"); // One old frozen action only.
-            waitLabel("REVISION_CONFLICT");
+            waitNode(node -> OriginalFileActions.reviewedConflict(APP.equals(string(node.getPackageName())),
+                string(node.getClassName()), string(node.getText()), string(node.getContentDescription()), node.isEditable()),
+                "original reviewed file public REVISION_CONFLICT");
             localFileButton("Check original result"); // Read, never execute again.
             waitLabel("Requires a new review");
             recordLocalFileFreeze();

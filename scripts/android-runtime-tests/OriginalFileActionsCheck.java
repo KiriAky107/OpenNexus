@@ -43,6 +43,21 @@ public final class OriginalFileActionsCheck {
         need(!OriginalFileActions.reviewedButton(true,"android.widget.Button","Review action extra","",true,true,"Review action"));
         need(!OriginalFileActions.reviewedButton(true,"android.widget.Button","Sign in","",true,true,"Sign in"));
         need(!OriginalFileActions.reviewedButton(true,"android.widget.Button",null,null,true,true,null));
+        // Actual original39098632304 AX data: native CAS rejected, code joined to sentence.
+        String message="Saved content has changed. Review it or keep your draft as a new note. REVISION_CONFLICT";
+        need(OriginalFileActions.reviewedConflict(true,"android.view.View",message,"",false));
+        need(OriginalFileActions.reviewedConflict(true,"android.widget.TextView","REVISION_CONFLICT","",false));
+        need(OriginalFileActions.reviewedConflict(true,"android.view.View","",message,false));
+        need(OriginalFileActions.reviewedConflict(true,"android.view.View","内容已改变。\nREVISION_CONFLICT","",false));
+        need(!OriginalFileActions.reviewedConflict(false,"android.view.View",message,"",false));
+        need(!OriginalFileActions.reviewedConflict(true,"android.view.View",message,"",true));
+        need(!OriginalFileActions.reviewedConflict(true,"android.widget.EditText",message,"",false));
+        need(!OriginalFileActions.reviewedConflict(true,"android.widget.Button",message,"",false));
+        need(!OriginalFileActions.reviewedConflict(true,"android.view.View","NO_REVISION_CONFLICT","",false));
+        need(!OriginalFileActions.reviewedConflict(true,"android.view.View","REVISION_CONFLICT_EXTRA","",false));
+        need(!OriginalFileActions.reviewedConflict(true,"android.view.View","REVISION_CONFLICT recovered","",false));
+        need(!OriginalFileActions.reviewedConflict(true,"android.view.View",new String(new char[513]).replace('\0','x')+" REVISION_CONFLICT","",false));
+        need(!OriginalFileActions.reviewedConflict(true,"android.view.View",null,null,false));
         System.out.println("ORIGINAL_FILE_ACTIONS_DATA_OK "+count);
         System.out.println(hash(OriginalFileActions.BODY)+" "+hash(OriginalFileActions.UPDATED)+" "+hash(OriginalFileActions.NODE));
     }
