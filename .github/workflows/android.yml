@@ -76,7 +76,7 @@ on:
       runtime_scope:
         description: 'all checks, or a named remaining scope on an existing fixed APK without rebuilding'
         type: choice
-        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, canvas-tools, canvas-tablet, performance, storage-recovery, file-actions, file-actions-remaining, note-search, canvas-graph, offline-pending, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, desktop-startup, desktop-pair, build-only]
+        options: [all, lifecycle, tablet, auth, auth-recovery, auth-background, attachments, attachments-remaining, canvas-remaining, editing-remaining, canvas-tools, canvas-tablet, performance, storage-recovery, file-actions, file-actions-remaining, canvas-file-delete, note-search, canvas-graph, offline-pending, offline-pending-final, sync-initial, sync-exchange, sync-media, sync-stop, sync-recovery, sync-conflicts, desktop-startup, desktop-pair, build-only]
         default: all
         required: false
       sync_cold_originals:
@@ -115,7 +115,7 @@ concurrency:
 
 jobs:
   debug-apk:
-    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'canvas-tools' && inputs.runtime_scope != 'canvas-tablet' && inputs.runtime_scope != 'file-actions' && inputs.runtime_scope != 'file-actions-remaining' && inputs.runtime_scope != 'note-search' && inputs.runtime_scope != 'canvas-graph' && inputs.runtime_scope != 'offline-pending' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'desktop-pair')
+    if: github.event_name != 'workflow_dispatch' || (inputs.apk_run_id == '' && inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'attachments' && inputs.runtime_scope != 'attachments-remaining' && inputs.runtime_scope != 'canvas-remaining' && inputs.runtime_scope != 'editing-remaining' && inputs.runtime_scope != 'canvas-tools' && inputs.runtime_scope != 'canvas-tablet' && inputs.runtime_scope != 'file-actions' && inputs.runtime_scope != 'file-actions-remaining' && inputs.runtime_scope != 'canvas-file-delete' && inputs.runtime_scope != 'note-search' && inputs.runtime_scope != 'canvas-graph' && inputs.runtime_scope != 'offline-pending' && inputs.runtime_scope != 'offline-pending-final' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts' && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'desktop-pair')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -197,7 +197,7 @@ jobs:
       matrix:
         # Independent still-pending offline scenes get separate fresh hosted runners.
         # Every existing single-scope run keeps its original job and artifact names.
-        scene: ${{ fromJSON(inputs.runtime_scope == 'offline-pending' && '["note-search","file-actions-remaining"]' || '[""]') }}
+        scene: ${{ fromJSON(inputs.runtime_scope == 'offline-pending' && '["note-search","file-actions-remaining"]' || inputs.runtime_scope == 'offline-pending-final' && '["note-search","canvas-file-delete"]' || '[""]') }}
     needs: debug-apk
     if: ${{ always() && !cancelled() && inputs.runtime_scope != 'desktop-startup' && inputs.runtime_scope != 'desktop-pair' && inputs.runtime_scope != 'build-only' && (needs.debug-apk.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.apk_run_id != '')) }}
     runs-on: ubuntu-24.04
@@ -224,7 +224,7 @@ jobs:
           import os,re
           run,commit=os.environ['REUSE_RUN'],os.environ['REUSE_COMMIT']
           scope=os.environ['RUNTIME_SCOPE']
-          assert scope in ('all','lifecycle','tablet','auth','auth-recovery','auth-background','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','storage-recovery','file-actions','file-actions-remaining','note-search','canvas-graph','sync-initial','sync-exchange','sync-media','sync-stop','sync-recovery','sync-conflicts')
+          assert scope in ('all','lifecycle','tablet','auth','auth-recovery','auth-background','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','storage-recovery','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','sync-initial','sync-exchange','sync-media','sync-stop','sync-recovery','sync-conflicts')
           assert scope=='all' or bool(run), 'Partial scope requires a fixed existing APK; it is not full acceptance'
           assert bool(run)==bool(commit), 'Supply both immutable APK reuse fields together'
           if run:
@@ -329,7 +329,7 @@ jobs:
           python3 -m unittest discover -s scripts -p test_android_canvas_graph_contract.py -v
           python3 -m unittest discover -s scripts -p test_android_canvas_graph_probe.py -v
       - name: Check original local file review and receipt invariants
-        if: env.OWNED_RUNTIME_SCOPE == 'file-actions' || env.OWNED_RUNTIME_SCOPE == 'file-actions-remaining'
+        if: env.OWNED_RUNTIME_SCOPE == 'file-actions' || env.OWNED_RUNTIME_SCOPE == 'file-actions-remaining' || env.OWNED_RUNTIME_SCOPE == 'canvas-file-delete'
         run: python3 -m unittest discover -s scripts -p test_android_file_actions_probe.py -v
       - name: Check real APK editing, force-stop recovery, Canvas touch and system export
         if: inputs.runtime_scope != 'auth' && inputs.runtime_scope != 'auth-recovery' && inputs.runtime_scope != 'auth-background' && inputs.runtime_scope != 'sync-initial' && inputs.runtime_scope != 'sync-exchange' && inputs.runtime_scope != 'sync-media' && inputs.runtime_scope != 'sync-stop' && inputs.runtime_scope != 'sync-recovery' && inputs.runtime_scope != 'sync-conflicts'

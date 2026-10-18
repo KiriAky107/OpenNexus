@@ -25,10 +25,12 @@ def paths(kind):
     return 'fileops-original.' + kind, 'fileops/资料😀.' + kind
 
 
-def file_steps(kind, remaining):
+def file_steps(kind, remaining, *, canvas_delete=False):
     paths(kind)
-    require(type(remaining) is bool, 'Explicit file component selection required')
-    if remaining and kind == 'md':
+    require(type(remaining) is bool and type(canvas_delete) is bool, 'Explicit file component selection required')
+    if canvas_delete:
+        require(kind == 'canvas' and not remaining, 'Canvas-only deletion scope cannot select other cases')
+    if canvas_delete or remaining and kind == 'md':
         return ('seed-renamed', 'renamed-cold', 'delete-cancel-preview', 'delete-cancel', 'delete-preview', 'delete-apply', 'deleted-cold')
     return tuple(step for step in STEPS if step != 'seed-renamed')
 
@@ -153,7 +155,7 @@ def snapshot(probe, kind, label, file_id=None):
 
 def intent(probe, kind, step, **details):
     require_hosted_emulator(probe.args.serial)
-    require(probe.args.scope in ('file-actions', 'file-actions-remaining') and step in (*STEPS, 'external-owned-change'), 'Explicit own file action required')
+    require(probe.args.scope in ('file-actions', 'file-actions-remaining', 'canvas-file-delete') and step in (*STEPS, 'external-owned-change'), 'Explicit own file action required')
     original, renamed = paths(kind)
     data = {'run_id': os.environ['GITHUB_RUN_ID'], 'tools_source': probe.args.tools_commit,
             'compiled_source': probe.args.commit, 'kind': kind, 'step': step, 'original': original,
@@ -175,21 +177,23 @@ def owned_concurrent_change(probe, kind, target, original, updated, reviewed_ope
 
 def run_file_actions(probe):
     require_hosted_emulator(probe.args.serial)
-    require(probe.args.scope in ('file-actions', 'file-actions-remaining'), 'Local file action scope must be explicit')
+    require(probe.args.scope in ('file-actions', 'file-actions-remaining', 'canvas-file-delete'), 'Local file action scope must be explicit')
     remaining = probe.args.scope == 'file-actions-remaining'
+    canvas_only = probe.args.scope == 'canvas-file-delete'
     proof = {'passed': False, 'scope': probe.args.scope, 'run_id': os.environ['GITHUB_RUN_ID'],
              'tools_source': probe.args.tools_commit, 'compiled_source': probe.args.commit,
              'APK_sha256': probe.binding['sha256'], 'cases': {},
              'physical_phone_or_write_interruption_or_full_A2_A3C_verified': False}
     try:
         probe.enable_test_ime()
-        for kind in ('md', 'canvas'):
+        for kind in (('canvas',) if canvas_only else ('md', 'canvas')):
             result = {'passed': False, 'phase': 'seed', 'cold_processes': []}; proof['cases'][kind] = result
             original, renamed = paths(kind)
-            delete_only = remaining and kind == 'md'
-            planned = file_steps(kind, remaining); executed = []
+            delete_only = canvas_only or remaining and kind == 'md'
+            planned = file_steps(kind, remaining, canvas_delete=canvas_only); executed = []
             result['intended_steps'] = list(planned)
             result['MD_rename_exercised_in_this_fixture'] = not delete_only if kind == 'md' else False
+            result['Canvas_rename_exercised_in_this_fixture'] = not delete_only if kind == 'canvas' else False
             def phase(step, *, operation_id=None):
                 require(len(executed) < len(planned) and step == planned[len(executed)], 'Original remaining file phase changed or repeated')
                 result['phase'] = step
@@ -217,7 +221,7 @@ def run_file_actions(probe):
                 owned_concurrent_change(probe, kind, renamed, raw, updated, None)
                 cold = phase('renamed-cold')
                 require(cold['files'][0]['id'] == result['file_id'] and cold['files'][0]['path'] == renamed
-                        and probe.original(renamed) == updated, 'Fresh direct-destination MD original changed before deletion')
+                        and probe.original(renamed) == updated, 'Fresh direct-destination original changed before deletion')
                 result['original_creation_operation_id'] = seed['saves'][0]['operation_id']
                 result['old_rename_component_not_replayed'] = True
             else:

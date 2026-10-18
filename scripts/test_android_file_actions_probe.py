@@ -20,6 +20,14 @@ OP = '22222222-2222-4222-8222-222222222222'
 
 
 class FileActionBoundaries(unittest.TestCase):
+    def test_Canvas_deletion_only_skips_both_passed_MD_and_Canvas_rename(self):
+        self.assertEqual(file_steps('canvas',False,canvas_delete=True),('seed-renamed','renamed-cold','delete-cancel-preview','delete-cancel','delete-preview','delete-apply','deleted-cold'))
+        for kind,remaining,selected in [('md',False,True),('canvas',True,True),('canvas',False,1)]:
+            with self.assertRaises(RuntimeError):file_steps(kind,remaining,canvas_delete=selected)
+    def test_Canvas_only_scope_dispatches_shared_original_file_driver(self):
+        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope='canvas-file-delete');probe.boot=Mock()
+        with patch('android_file_actions_probe.run_file_actions') as run:probe.run()
+        probe.boot.assert_called_once_with();run.assert_called_once_with(probe)
     def test_remaining_MD_skips_passed_rename_but_keeps_actual_new_delete_cancel_and_cold(self):
         self.assertEqual(file_steps('md',True),('seed-renamed','renamed-cold','delete-cancel-preview','delete-cancel','delete-preview','delete-apply','deleted-cold'))
         self.assertNotIn('rename-old',file_steps('md',True))

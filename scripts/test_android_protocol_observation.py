@@ -28,8 +28,9 @@ class ProtocolObservation(unittest.TestCase):
         responses=iter([SimpleNamespace(status=200,read=lambda n:pages),SimpleNamespace(status=status,read=lambda n:body[:n])])
         calls=[]
         connection=SimpleNamespace(request=lambda *a:calls.append(a),getresponse=lambda:next(responses),close=lambda:None)
-        with patch('android_protocol_observation.require_hosted_emulator'),patch('android_protocol_observation.http.client.HTTPConnection',return_value=connection),patch.dict(os.environ,GITHUB_RUN_ID='123'):
+        with patch('android_protocol_observation.require_hosted_emulator'),patch('android_protocol_observation.http.client.HTTPConnection',return_value=connection) as connect,patch.dict(os.environ,GITHUB_RUN_ID='123'):
             value=observe_owned_protocol(probe)
+        self.assertEqual(connect.call_count,2)
         self.assertEqual(calls,[('GET','/json/list'),('GET','/json/protocol')]);return value
     def test_actual_404_is_recorded_without_fabricated_domain_or_CDP_fallback(self):
         with tempfile.TemporaryDirectory() as d:

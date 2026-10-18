@@ -54,6 +54,12 @@ def observe_owned_protocol(probe):
             require(len(own)==1 and own[0].get('title')=='OpenNexus','PROTOCOL_OBSERVATION_ORIGIN')
             url=urlsplit(own[0].get('url',''));require(url.scheme=='http' and url.hostname=='tauri.localhost' and url.port is None and not url.username and not url.password,'PROTOCOL_OBSERVATION_ORIGIN')
             report['owned_original_page_admitted']=True
+            # Each endpoint gets its own original request. A server closing its
+            # page-list socket must not masquerade as a protocol response.
+            # There is still no retry of either request.
+            connection.close()
+            connection=http.client.HTTPConnection('127.0.0.1',int(port),timeout=5)
+            report['public_HTTP_connections_independent']=True
             connection.request('GET','/json/protocol');response=connection.getresponse();body=response.read(4*1024**2+1)
             report.update(protocol_HTTP_status=response.status,protocol_bytes_bounded=len(body),protocol_exceeds_4MiB=len(body)>4*1024**2)
             if len(body)<=4*1024**2:

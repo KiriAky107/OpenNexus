@@ -9,7 +9,7 @@ from test_android_desktop_workflow import admitted
 class FileActionWorkflow(unittest.TestCase):
     def test_partial_file_scope_reuses_a_fixed_package_and_cannot_start_a_debug_build(self):
         workflow = yaml.load((Path(__file__).resolve().parents[1] / '.github/workflows/android.yml').read_text('utf-8'), Loader=yaml.BaseLoader)
-        for scope in ('file-actions','file-actions-remaining'):
+        for scope in ('file-actions','file-actions-remaining','canvas-file-delete'):
             self.assertIn(scope, workflow['on']['workflow_dispatch']['inputs']['runtime_scope']['options'])
             for reuse in ('','39078195102'):
                 self.assertFalse(admitted(workflow['jobs']['debug-apk']['if'],scope,reuse=reuse))
