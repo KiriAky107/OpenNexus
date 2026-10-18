@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import hashlib,json,tempfile,unittest
 from unittest.mock import Mock,patch
-from android_sync_rejection import OriginalRevocation,validate_rejected_sync,validate_revoked_accounts,validate_rejected_refresh,original_driver_intent
+from android_sync_rejection import OriginalRevocation,validate_rejected_sync,validate_revoked_accounts,validate_rejected_refresh,validate_refresh_local,original_driver_intent
 
 TARGET='a'*32;ACTOR='b'*32;VAULT='c'*32;OP='c4427c0c-463a-4217-b31a-4b96edbca901';FILE='c4427c0c-463a-4217-b31a-4b96edbca902'
 
@@ -122,6 +122,29 @@ class RejectionBoundaries(unittest.TestCase):
             elif change=='extra_archive':left['outbox'].append(deepcopy(row))
             else:left['outbox'][0]['file_id']='c4427c0c-463a-4217-b31a-4b96edbca905'
             with self.subTest(change=change),self.assertRaises(RuntimeError):validate_rejected_sync(left,right,provider,remote,raw,raw)
+
+    def test_actual_401_can_preserve_the_entire_original_state_without_creating_a_queued_job(self):
+        before,_,provider,remote,raw=self.original();before['outbox'][0]['payload_size']=0
+        before['payloads']=[dict(operation_id=OP,hash=before['outbox'][0]['hash'],size=len(raw))]
+        proof=validate_rejected_sync(before,deepcopy(before),provider,remote,raw,raw)
+        self.assertFalse(proof['original_pending_job_and_payload_retained'])
+        self.assertTrue(proof['original_pending_outbox_and_payload_retained'])
+
+    def test_refresh_only_retains_all_original_archive_pending_and_spool_records_without_a_cycle(self):
+        before,after,_,_,raw=self.original();before['outbox'][0]['payload_size']=0;before['payloads']=deepcopy(after['payloads'])
+        archived='c4427c0c-463a-4217-b31a-4b96edbca904'
+        before['outbox'].insert(0,dict(before['outbox'][0],operation_id=archived,state='archived'))
+        before['payloads'].insert(0,dict(before['payloads'][0],operation_id=archived))
+        value=validate_refresh_local(before,deepcopy(before),raw,raw)
+        self.assertEqual(value['operation_id'],OP);self.assertFalse(value['original_pending_job_and_payload_retained'])
+        for change in ('cursor','job','payload','outbox','raw'):
+            current=deepcopy(before);observed=raw
+            if change=='cursor':current['binding']['cursor']=1
+            elif change=='job':current['jobs']=[{'state':'pending'}]
+            elif change=='payload':current['payloads'].pop(0)
+            elif change=='outbox':current['outbox'][1]['operation_id']=archived
+            else:observed=b'changed'
+            with self.subTest(change=change),self.assertRaises(RuntimeError):validate_refresh_local(before,current,raw,observed)
 
     def test_known_refresh_rejection_retains_exact_original_lineage_and_requires_native_401(self):
         login=dict(operation_id=OP,endpoint='owned endpoint',account='owned account',device_name='owned phone',kind='login',

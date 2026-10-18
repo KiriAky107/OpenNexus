@@ -99,6 +99,11 @@ on:
         type: boolean
         default: false
         required: false
+      sync_revocation_refresh_only:
+        description: 'On sync-revocation with WebView preview only, check remaining refresh/cold without repeating the accepted cycle'
+        type: boolean
+        default: false
+        required: false
       sync_original_native_outcome:
         description: 'On the fixed sync-conflicts scope only, verify real stale refusal and hold original native completion through owned stop/cold read'
         type: boolean
@@ -220,6 +225,7 @@ jobs:
           SEMANTIC_PREVIEW: ${{ inputs.sync_semantic_preview }}
           WEBVIEW_PREVIEW: ${{ inputs.sync_webview_preview }}
           WEBVIEW_CYCLE: ${{ inputs.sync_webview_cycle }}
+          REVOCATION_REFRESH_ONLY: ${{ inputs.sync_revocation_refresh_only }}
         run: |
           python3 - <<'PY'
           import os,re
@@ -236,6 +242,8 @@ jobs:
             assert scope in ('sync-conflicts','sync-revocation')
           if os.environ.get('WEBVIEW_CYCLE')=='true':
             assert scope=='sync-conflicts' or scope=='sync-revocation' and os.environ.get('WEBVIEW_PREVIEW')=='true'
+          if os.environ.get('REVOCATION_REFRESH_ONLY')=='true':
+            assert scope=='sync-revocation' and os.environ.get('WEBVIEW_PREVIEW')=='true' and os.environ.get('WEBVIEW_CYCLE')!='true'
           if os.environ.get('ORIGINAL_NATIVE_OUTCOME')=='true':
             assert scope=='sync-conflicts'
             assert all(os.environ.get(key)=='true' for key in ('COLD_ORIGINALS','WEBVIEW_PREVIEW','WEBVIEW_CYCLE'))
@@ -429,6 +437,7 @@ jobs:
           ${{ inputs.sync_semantic_preview && '--semantic-preview' || '' }}
           ${{ inputs.sync_webview_preview && '--webview-preview' || '' }}
           ${{ inputs.sync_webview_cycle && '--webview-cycle' || '' }}
+          ${{ inputs.sync_revocation_refresh_only && '--revocation-refresh-only' || '' }}
           ${{ inputs.sync_original_native_outcome && '--original-native-outcome' || '' }}
       - name: Stop only this job's emulator
         if: always()

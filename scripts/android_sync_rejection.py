@@ -135,7 +135,7 @@ def validate_rejected_sync(before,after,provider,remote,original,observed):
     expected=deepcopy(before);expected['jobs']=[job]
     if payload not in expected['payloads']:expected['payloads'].append(payload)
     expected['outbox'][outbox.index(saved)].update(state='queued',payload_size=0)
-    require(after==expected,'Rejection changed original IDs/cursor/head or acknowledged/lost the queued payload')
+    require(after==before or after==expected,'Rejection changed original IDs/cursor/head or acknowledged/lost the queued payload')
     require(provider['vault']['id']==before['binding']['remote_vault']
         and provider['vault']['sequence']==before['binding']['cursor']==0,
         'Rejection case is not the new original empty remote boundary')
@@ -147,8 +147,31 @@ def validate_rejected_sync(before,after,provider,remote,original,observed):
         'One actual service401 is absent or was substituted/delivered/repeated')
     return dict(operation_id=saved['operation_id'],file_id=saved['file_id'],sha256=digest,size=len(original),
         preserved_archived_operation_ids=[row['operation_id'] for row in archived],
-        cursor=before['binding']['cursor'],original_pending_job_and_payload_retained=True,
+        cursor=before['binding']['cursor'],original_pending_job_and_payload_retained=after['jobs']==[job],
+        original_pending_outbox_and_payload_retained=True,
         actual_401_without_delivery_fault=True,no_provider_content_write=True)
+
+
+def validate_refresh_local(before,after,original,observed):
+    require(type(original) is bytes and original==observed and 0<len(original)<=1024*1024 and before==after,
+        'Rejected refresh changed original local bytes or Native state')
+    digest=hashlib.sha256(original).hexdigest();rows=before['outbox']
+    require(len(rows)==2 and sorted(row['state'] for row in rows)==['archived','pending']
+        and before['binding']['cursor']==0 and before['binding']['state']=='active'
+        and all(before[key]==[] for key in ('jobs','attempts','heads','inbox','conflicts','issuers')),
+        'Refresh-only original is not the unchanged pending association boundary')
+    pending=next(row for row in rows if row['state']=='pending');archived=next(row for row in rows if row['state']=='archived')
+    ids=[row['operation_id'] for row in rows]
+    require(len(set(ids))==2 and str(uuid.UUID(pending['file_id']))==pending['file_id']
+        and all(str(uuid.UUID(row['operation_id']))==row['operation_id'] and row['file_id']==pending['file_id']
+            and row['path']=='runtime-note.md' and row['operation']=='put' and row['hash']==digest
+            and row['revision']==1 and row['payload_size']==0 for row in rows),
+        'Refresh-only original operation or file identity differs')
+    require(before['payloads']==[dict(operation_id=row['operation_id'],hash=digest,size=len(original)) for row in rows],
+        'Rejected refresh lost or replaced an original spool record')
+    return dict(operation_id=pending['operation_id'],file_id=pending['file_id'],sha256=digest,size=len(original),
+        cursor=0,preserved_archived_operation_ids=[archived['operation_id']],original_pending_outbox_and_payload_retained=True,
+        original_pending_job_and_payload_retained=False,unchanged_native_boundary=True)
 
 
 def validate_rejected_refresh(before,after,device):
@@ -203,7 +226,7 @@ def failure_observations(probe):
 
 
 def run_revocation(probe,setup,prepared,device):
-    """One fresh actual login/association, then new revocation/cycle/refresh/cold."""
+    """A fresh owned revocation; the remaining refresh case excludes the cycle."""
     from android_auth_fixture import observe_provider as observe_auth_provider
     from android_runtime_probe import DRAFT
     def auth(label):
@@ -211,6 +234,7 @@ def run_revocation(probe,setup,prepared,device):
         atomic_json(probe.output/(label+'-auth-provider.json'),value,exclusive=True)
         return value
     original=probe.original('runtime-note.md');require(original==DRAFT.encode(),'Fresh revocation note differs')
+    refresh_only=getattr(probe.args,'revocation_refresh_only',False)
     native=probe.host_snapshot('revocation-before',include_outbox=True,include_payloads=True)
     provider=probe.observe('revocation-before');accounts=auth('revocation-before')
     login=probe.snapshot('revocation-login',include_rejections=True)
@@ -218,23 +242,30 @@ def run_revocation(probe,setup,prepared,device):
     actor=prepared['device_id'];require(device!=actor,'Setup actor was substituted for Android')
     atomic_json(probe.output/'revocation-scene-intent.json',dict(device_id=device,setup_actor_device_id=actor,
         original_outbox=native['outbox'],original_note_sha256=hashlib.sha256(original).hexdigest(),
-        automatic_retry=False,scope='Real owned API revoke, single original cycle and refresh; readonly/cold preservation'),exclusive=True)
+        automatic_retry=False,refresh_only=refresh_only,
+        scope='Real owned API revoke; remaining refresh/cold excludes the accepted cycle' if refresh_only
+            else 'Real owned API revoke, single original cycle and refresh; readonly/cold preservation'),exclusive=True)
     receipt=OriginalRevocation(setup).revoke(device)
     atomic_json(probe.output/'revocation-original-API-receipt.json',receipt,exclusive=True)
     revoked=auth('revocation-after-API');validate_revoked_accounts(accounts,revoked,device,actor)
     require(probe.host_snapshot('revocation-after-API',include_outbox=True,include_payloads=True)==native,
         'Independent server revocation changed local original records before a cycle')
-    probe.sync_phase('cycle-revoked')
-    cycle_intent=original_driver_intent(probe,'cycle-revoked')
-    atomic_json(probe.output/'revocation-cycle-driver-intent.json',cycle_intent,exclusive=True)
-    after=probe.host_snapshot('revocation-after-cycle',include_outbox=True,include_payloads=True)
-    remote=probe.observe('revocation-after-cycle')
-    preserved=validate_rejected_sync(native,after,provider,remote,original,probe.original('runtime-note.md'))
+    cycle_intent=None
+    if refresh_only:
+        after=native
+        preserved=validate_refresh_local(native,native,original,probe.original('runtime-note.md'))
+    else:
+        probe.sync_phase('cycle-revoked')
+        cycle_intent=original_driver_intent(probe,'cycle-revoked')
+        atomic_json(probe.output/'revocation-cycle-driver-intent.json',cycle_intent,exclusive=True)
+        after=probe.host_snapshot('revocation-after-cycle',include_outbox=True,include_payloads=True)
+        remote=probe.observe('revocation-after-cycle')
+        preserved=validate_rejected_sync(native,after,provider,remote,original,probe.original('runtime-note.md'))
     payload=probe.private(probe.root+'vault/.ainote/sync-spool/'+preserved['sha256']).stdout
-    require(payload==original,'Original immutable queued payload bytes were not retained')
+    require(payload==original,'Original immutable spool payload bytes were not retained')
     probe.sync_phase('refresh-revoked')
     refresh_intent=original_driver_intent(probe,'refresh-revoked')
-    require(refresh_intent['driver_intent_id']!=cycle_intent['driver_intent_id'],'Distinct original UI actions reused a driver intent')
+    require(cycle_intent is None or refresh_intent['driver_intent_id']!=cycle_intent['driver_intent_id'],'Distinct original UI actions reused a driver intent')
     atomic_json(probe.output/'revocation-refresh-driver-intent.json',refresh_intent,exclusive=True)
     rejected=probe.snapshot('revocation-refresh-rejected',include_rejections=True)
     refresh=validate_rejected_refresh(login,rejected,device)
@@ -244,6 +275,11 @@ def run_revocation(probe,setup,prepared,device):
     require(final_accounts['requests']==dict(counts=counts,events=revoked['requests']['events']+[event]),
         'Exactly one real rejected refresh is not observed')
     require(probe.ciphertext_fingerprints()==sealed,'Rejected refresh replaced original sealed credentials')
+    if refresh_only:
+        current=probe.host_snapshot('revocation-after-refresh-local',include_outbox=True,include_payloads=True)
+        require(validate_refresh_local(native,current,original,probe.original('runtime-note.md'))==preserved,
+            'Rejected refresh changed the original pending boundary')
+        require(probe.observe('revocation-after-refresh-local')==provider,'Refresh-only case issued a Sync request or changed provider content')
     probe.auth_phase('current-unusable',cold=True)
     require(probe.snapshot('revocation-cold-original',include_rejections=True)==rejected,
         'Cold read replaced or activated the original rejected refresh')
@@ -252,11 +288,13 @@ def run_revocation(probe,setup,prepared,device):
         and probe.private(probe.root+'vault/.ainote/sync-spool/'+preserved['sha256']).stdout==payload,
         'Cold auth recovery changed the original local note/queue/payload')
     (probe.output/'revocation-original-note.md').write_bytes(original)
-    atomic_json(probe.output/'sync-revocation-proof.json',dict(passed=True,run_id=__import__('os').environ['GITHUB_RUN_ID'],
+    atomic_json(probe.output/('sync-revocation-refresh-proof.json' if refresh_only else 'sync-revocation-proof.json'),dict(passed=True,run_id=__import__('os').environ['GITHUB_RUN_ID'],
         tools_source=probe.args.tools_commit,compiled_source=probe.args.commit,APK_sha256=probe.binding['sha256'],
         service_source=prepared['source'],provider='Actual owned fixed Sync0.8 PostgreSQL/S3 over platform HTTPS',
         phases=probe.phases,actual_original_revocation=receipt,original_local=preserved,original_refresh_operation_id=refresh,
-        original_driver_intents=[cycle_intent,refresh_intent],driver_ids_not_substituted_for_native_or_API_IDs=True,
-        actual_access_and_refresh_401=True,actual_Native_known_rejection_record_and_cold_preservation=True,
-        actual_original_queued_payload_bytes_equal=True,original_ciphertext_fingerprints_unchanged=True,
+        original_driver_intents=[refresh_intent] if refresh_only else [cycle_intent,refresh_intent],driver_ids_not_substituted_for_native_or_API_IDs=True,
+        actual_access_and_refresh_401=not refresh_only,actual_refresh_401=True,accepted_access_cycle_excluded=refresh_only,
+        actual_Native_known_rejection_record_and_cold_preservation=True,
+        actual_original_queued_payload_bytes_equal=bool(after['jobs']),actual_original_spool_payload_bytes_equal=True,
+        original_ciphertext_fingerprints_unchanged=True,
         expiry_quota_invalid_certificate_or_physical_phone_verified=False,whole_A4_or_release_complete=False),exclusive=True)

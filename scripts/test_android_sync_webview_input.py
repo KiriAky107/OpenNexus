@@ -56,6 +56,16 @@ class WebViewPreview(unittest.TestCase):
                 self.assertEqual(host.call_count, int(admitted))
                 owner.assert_not_called()
 
+    def test_remaining_refresh_admits_no_cycle_or_unrelated_scope_before_any_owner_access(self):
+        base=['probe','--bundle','unused','--sdk','unused','--output','unused','--source-checkout','unused',
+            '--commit','a'*40,'--tools-commit','b'*40,'--build-run-id','39112675356','--revocation-refresh-only']
+        class HostedBoundary(Exception):pass
+        for flags,allowed in ((['--revocation','--webview-preview'],True),(['--revocation'],False),
+            (['--webview-preview'],False),(['--revocation','--webview-preview','--webview-cycle'],False)):
+            with self.subTest(flags=flags),patch.object(sys,'argv',base+flags),patch.object(runtime,'require_hosted',side_effect=HostedBoundary) as hosted:
+                with self.assertRaises(HostedBoundary if allowed else RuntimeError):runtime.main()
+                self.assertEqual(hosted.call_count,int(allowed))
+
     def test_original_stream_accepts_one_nonce_and_never_relaunches_after_unknown_input(self):
         for mode in ('normal','wrong_nonce','duplicate','ended','unknown'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as work:

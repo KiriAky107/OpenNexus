@@ -76,4 +76,20 @@ class RevocationWorkflow(unittest.TestCase):
         self.assertEqual(revoked.count('startOriginalCycleTouch("cycle-revoked")'),1)
         self.assertLess(revoked.index('persistOnce('),revoked.index('startOriginalCycleTouch('))
 
+    def test_remaining_refresh_is_explicit_and_excludes_the_accepted_cycle(self):
+        step=next(s for s in self.workflow['jobs']['emulator-runtime']['steps'] if s.get('name')=='Validate the immutable reuse selection')
+        self.assertEqual(step['env']['REVOCATION_REFRESH_ONLY'],'${{ inputs.sync_revocation_refresh_only }}')
+        code=step['run'].split("python3 - <<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+        base=dict(REUSE_RUN='39112675356',REUSE_COMMIT='20af3d2cad9da2350f0e775f0e5605630f834443',
+            RUNTIME_SCOPE='sync-revocation',WEBVIEW_PREVIEW='true',REVOCATION_REFRESH_ONLY='true')
+        for changes,allowed in (({},True),({'WEBVIEW_CYCLE':'true'},False),({'WEBVIEW_PREVIEW':'false'},False),({'RUNTIME_SCOPE':'sync-conflicts'},False)):
+            with self.subTest(changes=changes),patch.dict(os.environ,dict(base,**changes),clear=True):
+                if allowed:exec(compile(code,'remaining-refresh-workflow','exec'),{})
+                else:
+                    with self.assertRaises(AssertionError):exec(compile(code,'remaining-refresh-workflow','exec'),{})
+        source=(self.root/'scripts/android_sync_rejection.py').read_text('utf-8')
+        branch=next(n for n in ast.walk(ast.parse(source)) if isinstance(n,ast.If) and isinstance(n.test,ast.Name) and n.test.id=='refresh_only')
+        self.assertNotIn("sync_phase('cycle-revoked')",ast.unparse(ast.Module(body=branch.body,type_ignores=[])))
+        self.assertEqual(ast.unparse(ast.Module(body=branch.orelse,type_ignores=[])).count("sync_phase('cycle-revoked')"),1)
+
 if __name__=='__main__':unittest.main()

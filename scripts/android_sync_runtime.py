@@ -637,8 +637,11 @@ def main():
     parser.add_argument('--semantic-preview',action='store_true')
     parser.add_argument('--webview-preview',action='store_true')
     parser.add_argument('--webview-cycle',action='store_true')
+    parser.add_argument('--revocation-refresh-only',action='store_true')
     parser.add_argument('--original-native-outcome',action='store_true')
-    args=parser.parse_args();args.scope='sync-revocation' if args.revocation else 'sync-conflicts' if args.conflicts else 'sync-recovery' if args.recovery else 'sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
+    args=parser.parse_args();args.scope='sync-revocation-refresh' if args.revocation_refresh_only else 'sync-revocation' if args.revocation else 'sync-conflicts' if args.conflicts else 'sync-recovery' if args.recovery else 'sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
+    require(not args.revocation_refresh_only or args.revocation and args.webview_preview and not args.webview_cycle,
+        'Remaining revoked refresh requires its explicit case and Preview; accepted cycle is excluded')
     require(not args.cold_originals or args.conflicts,'Cold original-entry scope requires actual conflicts')
     require(not args.semantic_preview or args.conflicts,'Native accessibility preview requires the explicit conflict scope')
     require(not args.webview_preview or args.conflicts or args.revocation,'Owned WebView preview requires an explicit conflict or revocation scope')
