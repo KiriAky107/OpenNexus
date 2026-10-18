@@ -7,6 +7,7 @@ STAGES=('before','after','cleanup-before','cleanup-after')
 DOMAIN_NONE=0
 DOMAIN_SELECTED=1
 DOMAIN_VERIFIED=2
+MATCH_DEFAULT_ONLY=65536
 
 
 def selected(value,stage):
@@ -49,10 +50,17 @@ def setup(probe):
         fixture_only_not_internet_domain_verification=True,global_default_browser_change=False,automatic_retry=False)
     atomic_json(probe.output/'external-routing-intent.json',intent,exclusive=True);probe.shell(*intent['command'])
     after=observe(probe,'after');require(selected(after,'after'),'EXTERNAL_OWN_DOMAIN_SELECTION_NOT_OBSERVED')
-    resolution=probe.shell('cmd','package','resolve-activity','--brief','-a','android.intent.action.VIEW','-c','android.intent.category.BROWSABLE','-d',MD).stdout.decode('utf-8','strict').strip().splitlines()
+    raw=probe.shell('cmd','package','resolve-activity','--brief','--user','0','--query-flags',str(MATCH_DEFAULT_ONLY),
+        '-a','android.intent.action.VIEW','-c','android.intent.category.BROWSABLE','-d',MD).stdout
+    require(len(raw)<=32768,'EXTERNAL_RESOLVER_RAW_BOUND')
+    with (probe.output/'external-resolver-original.txt').open('xb') as output:
+        import os
+        output.write(raw);output.flush();os.fsync(output.fileno())
+    resolution=raw.decode('utf-8','strict').strip().splitlines()
     require(bool(resolution),'EXTERNAL_OS_RESOLVER_MISSING');component=resolution[-1]
     require(component in (DRIVER+'/.ExternalIntentReceiver',DRIVER+'/'+DRIVER+'.ExternalIntentReceiver'),'EXTERNAL_OS_RESOLVER_NOT_OWN_RECEIVER')
-    atomic_json(probe.output/'external-routing-after.json',dict(after=after,component=component,fixture_only=True),exclusive=True);return intent
+    atomic_json(probe.output/'external-routing-after.json',dict(after=after,component=component,query_flags=MATCH_DEFAULT_ONLY,
+        implicit_startActivity_resolution=True,fixture_only=True),exclusive=True);return intent
 
 
 def cleanup(probe):

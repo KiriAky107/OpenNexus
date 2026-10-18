@@ -24,5 +24,6 @@ public final class OriginalExternalUriCheck {
         System.out.println("ANDROID_DOMAIN_STATES "+android.content.pm.verify.domain.DomainVerificationUserState.DOMAIN_STATE_NONE
             +" "+android.content.pm.verify.domain.DomainVerificationUserState.DOMAIN_STATE_SELECTED
             +" "+android.content.pm.verify.domain.DomainVerificationUserState.DOMAIN_STATE_VERIFIED);
+        System.out.println("ANDROID_MATCH_DEFAULT_ONLY "+android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
     }
 }

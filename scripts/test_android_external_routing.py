@@ -48,6 +48,10 @@ class OwnedRouting(unittest.TestCase):
             setters=[c for c in calls if 'set-app-links-user-selection' in c];self.assertEqual(len(setters),1)
             self.assertEqual(setters[0],('cmd','package','set-app-links-user-selection','--user','0','--package',DRIVER,'true',HOST))
             self.assertIn(b'not used for admission',(probe.output/'external-domain-before-display.txt').read_bytes())
+            resolver=next(c for c in calls if 'resolve-activity' in c)
+            self.assertEqual(resolver[resolver.index('--query-flags')+1],'65536')
+            self.assertEqual(resolver[resolver.index('--user')+1],'0')
+            self.assertEqual((probe.output/'external-resolver-original.txt').read_bytes(),(DRIVER+'/.ExternalIntentReceiver\n').encode())
 
     def test_unknown_setter_cleanup_reads_before_clearing_only_its_own_host(self):
         with tempfile.TemporaryDirectory() as folder,patch.object(subject,'require_hosted_emulator'),patch.object(subject,'observe',side_effect=[state('cleanup-before',True),state('cleanup-after')]) as read:
@@ -80,5 +84,15 @@ class OwnedRouting(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'SINGLE_UNVERIFIED_HOST'):subject.observe(probe,'after')
             self.assertEqual((probe.output/'external-domain-after-raw.json').read_bytes(),raw)
             self.assertFalse((probe.output/'external-domain-after.json').exists());probe.device.assert_not_called();probe.phase.assert_not_called()
+
+    def test_unexpected_resolver_is_retained_and_refused_without_launch_or_product_action(self):
+        with tempfile.TemporaryDirectory() as folder,patch.object(subject,'require_hosted_emulator'),patch.object(subject,'observe',side_effect=[state(),state('after',True)]):
+            probe=Mock();probe.output=Path(folder);probe.args=SimpleNamespace(serial='emulator-5562',scope='external-links')
+            raw=b'priority=0 preferredOrder=0 match=0x208000\nandroid/com.android.internal.app.ResolverActivity\n'
+            probe.shell.side_effect=[subprocess.CompletedProcess([],0,b'get-app-links set-app-links-user-selection',b''),
+                subprocess.CompletedProcess([],0,b'User 0 only\n',b''),subprocess.CompletedProcess([],0,b'',b''),subprocess.CompletedProcess([],0,raw,b'')]
+            with self.assertRaisesRegex(RuntimeError,'RESOLVER_NOT_OWN_RECEIVER'):subject.setup(probe)
+            self.assertEqual((probe.output/'external-resolver-original.txt').read_bytes(),raw)
+            probe.phase.assert_not_called();probe.device.assert_not_called()
 
 if __name__=='__main__':unittest.main()
