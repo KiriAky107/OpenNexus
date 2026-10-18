@@ -352,6 +352,7 @@ jobs:
       - name: Check original local reference observation boundaries
         if: env.OWNED_RUNTIME_SCOPE == 'local-references'
         run: |
+          python3 -m unittest discover -s scripts -p test_android_file_page_readiness.py -v
           python3 -m unittest discover -s scripts -p test_android_reference_contract.py -v
           python3 -m unittest discover -s scripts -p test_android_reference_probe.py -v
           python3 -m unittest discover -s scripts -p test_android_reference_workflow.py -v

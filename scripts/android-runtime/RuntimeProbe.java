@@ -1900,7 +1900,24 @@ public final class RuntimeProbe extends Instrumentation {
         do {
             AccessibilityNodeInfo active=ui.getRootInActiveWindow();
             if(active!=null&&APP.equals(string(active.getPackageName()))) {
-                for(AccessibilityNodeInfo node:nodes())if(node.isVisibleToUser()&&node.isEnabled()
+                List<AccessibilityNodeInfo> observed=nodes();int titles=0;boolean markdown=false,canvas=false;
+                for(AccessibilityNodeInfo node:observed)if(APP.equals(string(node.getPackageName()))&&node.isVisibleToUser()&&node.isEnabled()) {
+                    Rect bounds=new Rect();node.getBoundsInScreen(bounds);if(bounds.isEmpty())continue;
+                    String text=string(node.getText()).toLowerCase(java.util.Locale.ROOT);
+                    if(!node.isClickable()&&"android.widget.TextView".equals(string(node.getClassName()))&&titleBarControl(node)
+                        &&(text.endsWith(".md")||text.endsWith(".canvas")))titles++;
+                    markdown|=node.isEditable()&&label(node,"Markdown note body",false);
+                    canvas|="android.widget.Image".equals(string(node.getClassName()))&&label(node,"Node connections",false);
+                }
+                // A first document opened from the cold landing has no Back
+                // history. Its own title plus real editor/scene still proves
+                // readiness; the landing title alone does not.
+                if(titles==1&&markdown!=canvas) {
+                    progress.append("ORIGINAL_CURRENT_DOCUMENT_READY titles=1 markdown=").append(markdown?1:0)
+                        .append(" canvas=").append(canvas?1:0).append(" no_back_required=1\n");
+                    progress.append("ORIGINAL_FILE_PAGE_READY target=").append(path).append(" editor=1\n");return;
+                }
+                for(AccessibilityNodeInfo node:observed)if(node.isVisibleToUser()&&node.isEnabled()
                     &&node.isClickable()&&APP.equals(string(node.getPackageName()))) {
                     boolean editor=titleBarControl(node)&&label(node,"Back",false);
                     boolean file="android.widget.Button".equals(string(node.getClassName()))&&label(node,path,false);
