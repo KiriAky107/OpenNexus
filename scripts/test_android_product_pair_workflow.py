@@ -15,6 +15,17 @@ class ProductPairWorkflow(unittest.TestCase):
         path=Path(os.environ.get('ANDROID_PAIR_WORKFLOW',Path(__file__).resolve().parents[1]/'.github/workflows/android.yml'))
         cls.workflow=yaml.load(path.read_text(encoding='utf-8'),Loader=yaml.BaseLoader)
 
+    def test_pair_uploads_the_new_bounded_read_and_cursor_observations(self):
+        step=next(s for s in self.workflow['jobs']['desktop-pair']['steps']
+                  if s.get('name')=='Preserve bounded Desktop pair receipts without private key, data or raw logs')
+        paths=[p.strip() for p in step['with']['path'].splitlines() if p.strip()]
+        base='.build/android-desktop-pair/${{ github.run_id }}/'
+        for path in ('stage-1/account-read-*.json','stage-2/account-read-*.json',
+                     'stage-1/cycle-*-observation.json','stage-2/cycle-*-observation.json',
+                     'stage-2/before-cold-native.json','stage-2/after-cold-native.json','stage-2/after-cold-files.json'):
+            self.assertIn(base+path,paths)
+        self.assertFalse(any('/data/' in p or '/vault/' in p or '**' in p or p.endswith('/*.json') for p in paths))
+
     def test_both_jobs_use_the_same_explicit_source_run_admission_without_a_client_rebuild(self):
         jobs=self.workflow['jobs']
         linux=next(s['run'] for s in jobs['android-desktop-pair']['steps'] if s.get('name')=='Validate the immutable reuse selection')

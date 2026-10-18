@@ -271,21 +271,46 @@ class OwnedDesktopUI:
                 'actual_UI_text_and_coordinates_and_Save':True,'unknown_fields_and_other_nodes_preserved':True,
                 'filesystem_write_by_driver':False,'original_seed_SHA256':hashlib.sha256(expected_before).hexdigest()}
 
-    def finish_actual_cycle(self, *, cycle, force=False):
+    def finish_actual_cycle(self, *, cycle, force=False, min_cursor=0):
         require(type(force) is bool and (self.stage==1 and cycle in ('initial','outbound')
-                or self.stage==2 and cycle=='cold'), 'DESKTOP_PAIR_CYCLE_INPUT_INVALID')
+                or self.stage==2 and cycle=='cold') and type(min_cursor) is int
+                and 0<=min_cursor<=9007199254740991, 'DESKTOP_PAIR_CYCLE_INPUT_INVALID')
         panel=self.panel();current=self.wait_status(lambda s:not s.get('running'))
         require(current.get('binding') is not None and current.get('credential_state')=='ready'
-                and not current.get('paused') and not current.get('conflicts'), 'DESKTOP_PAIR_CYCLE_STATE_INVALID')
+                and not current.get('paused') and not current.get('conflicts')
+                and type(current['binding'].get('cursor')) is int
+                and 0<=current['binding']['cursor']<=9007199254740991, 'DESKTOP_PAIR_CYCLE_STATE_INVALID')
         manual=force or current.get('pending',0)>0
-        if manual:
-            self.intent('sync-now-'+cycle,{'pending_before':current['pending'],'manual_click_count':1,'explicit_cycle':cycle})
-            panel.get_by_role('button',name=names('Sync now','\u7acb\u5373\u540c\u6b65')).click()
-        final=self.wait_status(lambda s:not s.get('running') and s.get('pending')==0
-                   and not s.get('error') and not s.get('conflicts') and s.get('last_cycle_success_at') is not None)
+        observed={
+            'cursor_before':current['binding']['cursor'],'cursor_after':None,
+            'minimum_original_cursor':min_cursor,'old_success_at':current.get('last_cycle_success_at'),
+            'manual_UI_trigger':manual,'manual_input_replayed':False,
+            'receipt_is_not_a_new_client_apply_ACK_API':True,'completed':False,'polls':0}
+        def completed(value):
+            observed['polls']+=1
+            require(observed['polls']<=512,'DESKTOP_PAIR_STATUS_TIMEOUT')
+            require(value.get('vault_id')==current.get('vault_id')
+                    and value.get('binding',{}).get('id')==current['binding']['id'], 'DESKTOP_PAIR_CYCLE_SCOPE_CHANGED')
+            cursor=value.get('binding',{}).get('cursor')
+            observed['last_status']={'cursor':cursor if type(cursor) is int and 0<=cursor<=9007199254740991 else None,
+                'pending':value.get('pending') if type(value.get('pending')) is int else None,
+                'running':value.get('running') is True,'has_error':bool(value.get('error')),
+                'has_conflicts':bool(value.get('conflicts'))}
+            return (not value.get('running') and value.get('pending')==0 and not value.get('error')
+                    and not value.get('conflicts') and value.get('last_cycle_success_at') is not None
+                    and type(cursor) is int and min_cursor<=cursor<=9007199254740991)
+        try:
+            if manual:
+                self.intent('sync-now-'+cycle,{'pending_before':current['pending'],'manual_click_count':1,'explicit_cycle':cycle,
+                                             'minimum_original_cursor':min_cursor})
+                panel.get_by_role('button',name=names('Sync now','\u7acb\u5373\u540c\u6b65')).click()
+            final=self.wait_status(completed)
+            observed.update(completed=True,cursor_after=final['binding']['cursor'],observed_success_at=final['last_cycle_success_at'])
+        finally:
+            write_new(self.attempt/('cycle-'+cycle+'-observation.json'),canonical(observed))
         return {'manual_UI_trigger':manual,'automatic_client_may_have_preceded_manual_control':True,
                 'pending':final['pending'],'cursor':final['binding']['cursor'],
-                'last_cycle_success':final['last_cycle_success_at'],'client_apply_ACK_API_claimed':False}
+                'last_cycle_success':final['last_cycle_success_at'],'minimum_original_cursor':min_cursor,'client_apply_ACK_API_claimed':False}
 
     def read_cold_originals(self, note, canvas_text, image_path):
         """Actual rendered content after the original client's cold incoming cycle."""

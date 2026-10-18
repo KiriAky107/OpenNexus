@@ -25,7 +25,7 @@ class DesktopStages(unittest.TestCase):
         (root/'vault').mkdir();(root/'stage-1').mkdir()
         with patch('android_desktop_pair_ui.owned_root',return_value=root),patch('android_desktop_pair_ui.original_marker'):
             ui=OwnedDesktopUI(self.context(),Mock(),root/'vault',root/'stage-1',1)
-        ui.panel=Mock();ui.wait_status=Mock(return_value={'binding':{'id':'b'},'credential_state':'ready',
+        ui.panel=Mock();ui.wait_status=Mock(return_value={'binding':{'id':'b','cursor':3},'credential_state':'ready',
             'paused':False,'running':False,'pending':0,'conflicts':[],'last_cycle_success_at':1})
         return ui
 
@@ -59,6 +59,50 @@ class DesktopStages(unittest.TestCase):
             self.assertEqual(len(read_bodies(vault)),3)
             with patch('pathlib.Path.is_symlink',lambda path:path==image):
                 with self.assertRaisesRegex(HandoffError,'FILE_SCOPE_INVALID'):read_bodies(vault)
+
+
+    def test_old_success_timestamp_cannot_acknowledge_unapplied_original_incoming_cursor(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);ui=self.make_ui(root);ui.stage=2
+            old={'vault_id':'own-vault','binding':{'id':'b','cursor':7},'credential_state':'ready',
+                 'paused':False,'running':False,'pending':0,'conflicts':[],'last_cycle_success_at':1}
+            new=dict(old,binding={'id':'b','cursor':9},last_cycle_success_at=2)
+            calls=[]
+            def wait(condition):
+                calls.append(condition)
+                if len(calls)==1:return old
+                self.assertFalse(condition(old),'Earlier persisted success cannot acknowledge the original incoming revision')
+                self.assertTrue(condition(new));return new
+            ui.wait_status=wait
+            value=ui.finish_actual_cycle(cycle='cold',force=True,min_cursor=9)
+            self.assertEqual(value['cursor'],9);self.assertEqual(value['minimum_original_cursor'],9)
+            ui.panel.return_value.get_by_role.return_value.click.assert_called_once()
+
+    def test_invalid_original_cursor_refuses_before_UI_or_status_access(self):
+        for minimum in (True,-1,2**53,'9'):
+            with tempfile.TemporaryDirectory() as folder:
+                ui=self.make_ui(Path(folder));ui.stage=2
+                with self.subTest(minimum=minimum),self.assertRaises(HandoffError):
+                    ui.finish_actual_cycle(cycle='cold',force=True,min_cursor=minimum)
+                ui.panel.assert_not_called();ui.wait_status.assert_not_called()
+
+    def test_changed_binding_cannot_acknowledge_another_vaults_cursor(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ui=self.make_ui(Path(folder));ui.stage=2
+            old={'vault_id':'own-vault','binding':{'id':'b','cursor':7},'credential_state':'ready',
+                 'paused':False,'running':False,'pending':0,'conflicts':[],'last_cycle_success_at':1}
+            other=dict(old,binding={'id':'different','cursor':9})
+            calls=[]
+            def wait(condition):
+                calls.append(condition)
+                if len(calls)==1:return old
+                condition(other)
+            ui.wait_status=wait
+            with self.assertRaisesRegex(HandoffError,'DESKTOP_PAIR_CYCLE_SCOPE_CHANGED'):
+                ui.finish_actual_cycle(cycle='cold',force=True,min_cursor=9)
+            ui.panel.return_value.get_by_role.return_value.click.assert_called_once()
+            value=json.loads((ui.attempt/'cycle-cold-observation.json').read_text('utf-8'))
+            self.assertFalse(value['completed']);self.assertEqual(value['polls'],1)
 
 
 if __name__=='__main__':unittest.main()

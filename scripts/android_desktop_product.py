@@ -110,7 +110,8 @@ STARTUP_CHECKPOINTS = frozenset({'native-launch', 'webview-attach', 'frontend-bo
 
 SOURCE_METHODS = {'android_desktop_pair_ui.py': frozenset({
     '__init__', 'intent', 'status', 'panel', 'login_and_merge', 'wait_status', 'account_identity',
-    'edit_original_note', 'wait_original_note_save', 'set_paused', 'edit_original_canvas', 'finish_actual_cycle', 'read_cold_originals'})}
+    'edit_original_note', 'wait_original_note_save', 'set_paused', 'edit_original_canvas', 'finish_actual_cycle', 'read_cold_originals'}),
+    'android_product_pair_desktop.py': frozenset({'first','final','read_bodies'})}
 
 
 def safe_source_frame(error):
@@ -146,7 +147,9 @@ def safe_failure(error, checkpoint=None):
             'DESKTOP_PAIR_PICKER_DELIVERY_INVALID', 'DESKTOP_PAIR_PICKER_OUTCOME_UNKNOWN',
             'DESKTOP_PAIR_PICKER_NATIVE_REFUSED', 'DESKTOP_PAIR_PICKER_TARGET_MISMATCH',
             'DESKTOP_PAIR_ORIGINAL_SAVE_UNKNOWN', 'DESKTOP_PAIR_ORIGINAL_NOTE_CHANGED',
-            'DESKTOP_PAIR_ACCOUNT_READ_BUSY', 'DESKTOP_PAIR_ACCOUNT_READ_UNCONFIRMED'}:
+            'DESKTOP_PAIR_ACCOUNT_READ_BUSY', 'DESKTOP_PAIR_ACCOUNT_READ_UNCONFIRMED',
+            'PAIR_DESKTOP_COLD_BYTES_CHANGED', 'PAIR_DESKTOP_COLD_IDENTITY_CHANGED',
+            'DESKTOP_PAIR_STATUS_TIMEOUT', 'DESKTOP_PAIR_CYCLE_STATE_INVALID', 'DESKTOP_PAIR_CYCLE_SCOPE_CHANGED'}:
         result['checkpoint_code'] = str(error)
     if checkpoint is not None:
         result['failed_checkpoint'] = checkpoint if checkpoint in STARTUP_CHECKPOINTS else 'unknown'

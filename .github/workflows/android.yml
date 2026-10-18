@@ -722,6 +722,20 @@ jobs:
 
           .build/android-desktop-pair/${{ github.run_id }}/stage-2/actual-cold-read-actions.json
 
+          .build/android-desktop-pair/${{ github.run_id }}/stage-1/account-read-*.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-2/account-read-*.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-1/cycle-*-observation.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-2/cycle-*-observation.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-2/before-cold-native.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-2/after-cold-native.json
+
+          .build/android-desktop-pair/${{ github.run_id }}/stage-2/after-cold-files.json
+
           '
         if-no-files-found: warn
         retention-days: 14
