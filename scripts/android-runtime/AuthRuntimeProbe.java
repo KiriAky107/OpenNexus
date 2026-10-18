@@ -57,6 +57,14 @@ public class AuthRuntimeProbe extends Instrumentation {
                     waitText("Check original operation"); click("Keep original record and continue");
                     unusable(); break;
                 case "current-unusable": click("Read current connection"); unusable(); break;
+                case "certificate-cold-unusable":
+                    // Mounting the real connection pane already reads the
+                    // current Native record. Observe that completed result;
+                    // a second offscreen read button is unnecessary here.
+                    stage="certificate-cold-auto-read-result";
+                    waitPresent(node->text(node.getText()).contains("Original result is unconfirmed")
+                        &&text(node.getText()).contains("No confirmed usable session"));
+                    unusable();break;
                 case "invalid-certificate":
                     readCurrent(); signInUntrustedCertificate();
                     waitPresent(node->text(node.getText()).endsWith("(SYNC_NETWORK_ERROR)")

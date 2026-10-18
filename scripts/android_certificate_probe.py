@@ -165,16 +165,20 @@ def run_certificate(probe):
         require(probe.ciphertext_fingerprints()==sealed and probe.observe('certificate-after-login')==provider
             and local_snapshot(probe,'certificate-after-login')==local and probe.original('runtime-note.md')==DRAFT.encode(),
             'Rejected TLS changed provider, credentials or original local data')
-        probe.auth_phase('current-unusable',cold=True)
-        cold_native=probe.snapshot('certificate-cold',include_rejections=True)
-        cold_local=local_snapshot(probe,'certificate-cold')
-        cold_raw=probe.original('runtime-note.md')
-        cold_provider=probe.observe('certificate-cold')
-        cold_sealed=probe.ciphertext_fingerprints();cold_origin=server.snapshot()
-        cold_spool=probe.private(probe.root+'vault/.ainote/sync-spool/'+digest).stdout
-        atomic_json(probe.output/'certificate-cold-ciphertext-fingerprints.json',cold_sealed,exclusive=True)
-        atomic_json(probe.output/'certificate-cold-origin.json',cold_origin,exclusive=True)
-        (probe.output/'certificate-cold-original-spool.md').write_bytes(cold_spool)
+        try:
+            probe.auth_phase('certificate-cold-unusable',cold=True)
+        finally:
+            # Retain the original post-cold data even when a readonly UI
+            # observation fails. The original UI failure still propagates.
+            cold_native=probe.snapshot('certificate-cold',include_rejections=True)
+            cold_local=local_snapshot(probe,'certificate-cold')
+            cold_raw=probe.original('runtime-note.md')
+            cold_provider=probe.observe('certificate-cold')
+            cold_sealed=probe.ciphertext_fingerprints();cold_origin=server.snapshot()
+            cold_spool=probe.private(probe.root+'vault/.ainote/sync-spool/'+digest).stdout
+            atomic_json(probe.output/'certificate-cold-ciphertext-fingerprints.json',cold_sealed,exclusive=True)
+            atomic_json(probe.output/'certificate-cold-origin.json',cold_origin,exclusive=True)
+            (probe.output/'certificate-cold-original-spool.md').write_bytes(cold_spool)
         validate_cold_certificate_intent(native,cold_native)
         require(cold_local==local and cold_raw==DRAFT.encode() and cold_provider==provider
             and cold_sealed==sealed and cold_origin==after and cold_spool==spool,

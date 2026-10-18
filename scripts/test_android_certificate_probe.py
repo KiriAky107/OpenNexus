@@ -101,4 +101,41 @@ class CertificateBoundaries(unittest.TestCase):
         for forbidden in ('CERT_NONE','check_hostname=False','load_verify_locations','verify=False','UPDATE sessions'):
             self.assertNotIn(forbidden,source)
 
+    def test_certificate_cold_observes_the_completed_real_mount_read_without_an_extra_button(self):
+        root=Path(__file__).resolve().parents[1]
+        java=(root/'scripts/android-runtime/AuthRuntimeProbe.java').read_text('utf-8')
+        phase=java.split('case "certificate-cold-unusable":',1)[1].split('case "invalid-certificate":',1)[0]
+        self.assertIn('Original result is unconfirmed',phase);self.assertIn('No confirmed usable session',phase)
+        self.assertNotIn('click(',phase);self.assertNotIn('readCurrent()',phase)
+        self.assertIn('unusable()',phase)
+        pane=(root/'frontend/mobile/src/MobileSyncConnection.vue').read_text('utf-8')
+        mounted=pane.split('onMounted(async () => {',1)[1].split('onBeforeUnmount',1)[0]
+        self.assertIn('await session.reload()',mounted)
+        source=Path(subject.__file__).read_text('utf-8')
+        self.assertIn("probe.auth_phase('certificate-cold-unusable',cold=True)",source)
+        self.assertIn("cold_local=local_snapshot(probe,'certificate-cold')",source)
+
+    def test_original_readonly_ui_failure_still_captures_cold_data_and_propagates(self):
+        from unittest.mock import Mock
+        function=next(v for v in ast.parse(Path(subject.__file__).read_text('utf-8')).body
+            if isinstance(v,ast.FunctionDef) and v.name=='run_certificate')
+        block=next(v for v in ast.walk(function) if isinstance(v,ast.Try) and any(
+            isinstance(item,ast.Expr) and isinstance(item.value,ast.Call)
+            and isinstance(item.value.func,ast.Attribute) and item.value.func.attr=='auth_phase'
+            and item.value.args and isinstance(item.value.args[0],ast.Constant)
+            and item.value.args[0].value=='certificate-cold-unusable' for item in v.body))
+        probe=Mock();probe.auth_phase.side_effect=RuntimeError('synthetic readonly UI observation')
+        probe.private.return_value.stdout=b'controlled original spool'
+        local=Mock();atomic=Mock();server=Mock()
+        with tempfile.TemporaryDirectory() as directory:
+            probe.output=Path(directory);probe.root='./'
+            with self.assertRaisesRegex(RuntimeError,'synthetic readonly UI observation'):
+                exec(compile(ast.Module(body=[block],type_ignores=[]),'actual-cold-finally','exec'),
+                    dict(probe=probe,local_snapshot=local,atomic_json=atomic,server=server,digest='a'*64))
+            local.assert_called_once_with(probe,'certificate-cold')
+            probe.original.assert_called_once_with('runtime-note.md')
+            probe.observe.assert_called_once_with('certificate-cold')
+            self.assertEqual((probe.output/'certificate-cold-original-spool.md').read_bytes(),b'controlled original spool')
+            self.assertEqual(atomic.call_count,2)
+
 if __name__=='__main__':unittest.main()
