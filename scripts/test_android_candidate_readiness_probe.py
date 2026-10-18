@@ -9,19 +9,27 @@ from android_workflow_gate import admitted
 
 class CandidateReadinessBoundaries(unittest.TestCase):
     def test_remaining_mode_does_not_run_the_already_accepted_native_suites(self):
-        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope='lifecycle-remaining')
-        probe.device=Mock();probe.shell=Mock()
-        probe.native_keystore_tests();probe.device.assert_not_called();probe.shell.assert_not_called()
+        for scope in ('lifecycle-remaining','lifecycle-editor-remaining'):
+            probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope=scope)
+            probe.device=Mock();probe.shell=Mock()
+            probe.native_keystore_tests();probe.device.assert_not_called();probe.shell.assert_not_called()
 
     def test_remaining_workflow_can_only_reuse_a_fixed_apk(self):
         root=Path(__file__).resolve().parents[1];flow=yaml.load((root/'.github/workflows/android.yml').read_text('utf-8'),Loader=yaml.BaseLoader)
-        for reuse in ('','39148381613'):
-            for job in ('debug-apk','desktop-startup','desktop-pair','android-desktop-pair'):
-                self.assertFalse(admitted(flow['jobs'][job]['if'],'lifecycle-remaining',reuse=reuse,build='skipped'))
-        self.assertTrue(admitted(flow['jobs']['emulator-runtime']['if'],'lifecycle-remaining',reuse='39148381613',build='skipped'))
+        for scope in ('lifecycle-remaining','lifecycle-editor-remaining'):
+            for reuse in ('','39148381613'):
+                for job in ('debug-apk','desktop-startup','desktop-pair','android-desktop-pair'):
+                    self.assertFalse(admitted(flow['jobs'][job]['if'],scope,reuse=reuse,build='skipped'))
+            self.assertTrue(admitted(flow['jobs']['emulator-runtime']['if'],scope,reuse='39148381613',build='skipped'))
+
+    def test_content_remaining_excludes_the_original_auth_read_and_theme_actions(self):
+        self._remaining_ui('lifecycle-editor-remaining',False)
 
     def test_remaining_ui_routes_past_old_theme_diagnostics_and_keeps_auth_index_read(self):
-        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope='lifecycle-remaining')
+        self._remaining_ui('lifecycle-remaining',True)
+
+    def _remaining_ui(self,scope,auth):
+        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope=scope)
         probe.binding={'native_auth_gateway':{'present':True}};probe.boot=Mock();probe.check_empty_native_auth_index=Mock()
         probe.enable_test_ime=Mock();probe.finish_editing=Mock();current={'note':BODY.encode()}
         def phase(name,**kwargs):
@@ -30,8 +38,8 @@ class CandidateReadinessBoundaries(unittest.TestCase):
         probe.original=Mock(side_effect=lambda path:current['note'] if path=='runtime-note.md' else ('**'+RICH_TEXT+'**\n').encode())
         probe.draft_rows=Mock(return_value=[('runtime-note.md',DRAFT,2,1)])
         with patch.object(candidate,'verify_candidate') as verify:probe.run()
-        self.assertEqual([c.args[0] for c in probe.phase.call_args_list],['auth-read','markdown','rich-markdown','rich-reopen','draft','recover'])
-        probe.check_empty_native_auth_index.assert_called_once();probe.finish_editing.assert_called_once();verify.assert_called_once_with(probe)
+        self.assertEqual([c.args[0] for c in probe.phase.call_args_list],(['auth-read'] if auth else [])+['markdown','rich-markdown','rich-reopen','draft','recover'])
+        self.assertEqual(probe.check_empty_native_auth_index.call_count,int(auth));probe.finish_editing.assert_called_once();verify.assert_called_once_with(probe)
 
     @patch.object(candidate,'require_hosted_emulator')
     def test_remaining_bilingual_report_does_not_impersonate_the_original_native_suites(self,_):
@@ -61,7 +69,7 @@ class CandidateReadinessBoundaries(unittest.TestCase):
         self.assertLess(auth.index('empty password'),auth.index('readonlyAuthStatus()'));self.assertIn('pressBack();',auth)
 
     def test_lifecycle_waits_for_original_image_receipt_and_checks_after_the_single_save(self):
-        for scope in ('lifecycle','lifecycle-remaining'):
+        for scope in ('lifecycle','lifecycle-remaining','lifecycle-editor-remaining'):
             with self.subTest(scope=scope):self._original_image_scope(scope)
 
     def _original_image_scope(self,scope):

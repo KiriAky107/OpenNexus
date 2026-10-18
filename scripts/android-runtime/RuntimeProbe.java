@@ -467,6 +467,11 @@ public final class RuntimeProbe extends Instrumentation {
         hideKeyboard();
         click("Create and edit", false);
         waitLabel("Back");
+        // Back can still belong to the previously restored document while the
+        // Native create/open request is pending. Observe this exact new title.
+        final String name = path.substring(path.lastIndexOf('/') + 1);
+        waitNode(node -> APP.equals(string(node.getPackageName())) && !node.isClickable()
+            && label(node,name,false) && titleBarControl(node), "newly created document title: " + name);
     }
 
     private AccessibilityNodeInfo richBody() {
@@ -1967,7 +1972,13 @@ public final class RuntimeProbe extends Instrumentation {
         // Focus the freshly observed named editor before checking stable tap
         // bounds. No text is sent here; exact role and InputConnection ownership
         // are still required by the following actions.
-        require(observed.isFocused() || observed.performAction(AccessibilityNodeInfo.ACTION_FOCUS),
+        // Mode changes replace the Source textarea asynchronously. Never focus
+        // that retained virtual node; re-read the unique current editor first.
+        settleUi();
+        AccessibilityNodeInfo current = uniqueTarget(value -> APP.equals(string(value.getPackageName()))
+            && value.isEditable() && value.isVisibleToUser() && value.isEnabled()
+            && label(value, "Markdown note body", false));
+        require(current.isFocused() || current.performAction(AccessibilityNodeInfo.ACTION_FOCUS),
             "Owned named editor refused input focus; no text sent");
         // The requested semantic name is known by the caller. Do not infer it
         // from a soon-to-be-replaced virtual node or retain its resource id.

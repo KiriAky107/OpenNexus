@@ -9,7 +9,7 @@ PATH='runtime.canvas'
 STEPS=('candidate-language-en','candidate-language-zh','candidate-language-return','candidate-language-cold')
 
 def snapshot(probe,label):
-    require(probe.args.scope in ('lifecycle','lifecycle-remaining') and label.removesuffix('-failure') in ('candidate-before',*STEPS),
+    require(probe.args.scope in ('lifecycle','lifecycle-remaining','lifecycle-editor-remaining') and label.removesuffix('-failure') in ('candidate-before',*STEPS),
         'CANDIDATE_LOCALE_SNAPSHOT_SCOPE')
     value={}
     for key,table,columns in [('drafts','drafts','id,file_id,path,base_hash,generation,saved_generation,content'),
@@ -36,8 +36,8 @@ def snapshot(probe,label):
     atomic_json(probe.output/(label+'-native.json'),value,exclusive=True);return value
 
 def verify_candidate(probe):
-    require_hosted_emulator(probe.args.serial);require(probe.args.scope in ('lifecycle','lifecycle-remaining'),'CANDIDATE_LIFECYCLE_ONLY')
-    remaining=probe.args.scope=='lifecycle-remaining';insets=None
+    require_hosted_emulator(probe.args.serial);require(probe.args.scope in ('lifecycle','lifecycle-remaining','lifecycle-editor-remaining'),'CANDIDATE_LIFECYCLE_ONLY')
+    remaining=probe.args.scope in ('lifecycle-remaining','lifecycle-editor-remaining');insets=None
     if remaining:
         require(probe.keystore_test_result is None and not (probe.output/'window-insets-device-proof.json').exists(),
             'CANDIDATE_REMAINING_MUST_NOT_REPLAY_NATIVE_SUITES')
