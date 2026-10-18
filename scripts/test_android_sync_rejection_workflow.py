@@ -25,7 +25,7 @@ class RevocationWorkflow(unittest.TestCase):
         checkout=next(step for step in steps if step.get('with',{}).get('repository')=='KiriAky107/Sync-for-OpenNexus')
         self.assertEqual(checkout['with']['ref'],'29e2e6d373ea752352981bdad05d34a7a0d9c3d9')
         self.assertTrue(admitted(checkout['if'],'sync-revocation'))
-        prepare=next(step for step in steps if 'scripts/android_auth_hosted.py prepare --fixture sync' in step.get('run',''))
+        prepare=next(step for step in steps if 'scripts/android_auth_hosted.py prepare --fixture' in step.get('run',''))
         self.assertTrue(admitted(prepare['if'],'sync-revocation'))
         # This step uses setup-python's python3, not the service .venv. Its
         # parser dependency must be present before workflow tests import yaml.

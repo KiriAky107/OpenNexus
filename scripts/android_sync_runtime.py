@@ -235,6 +235,9 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
         if getattr(getattr(self,'args',None),'revocation',False):
             from android_sync_rejection import failure_observations
             failure_observations(self)
+        if getattr(getattr(self,'args',None),'expiration',False):
+            from android_sync_rejection import failure_observations
+            failure_observations(self,prefix='expiration')
         # Read-only debug WebView geometry/public error enums only; no DOM
         # input values, raw error text, screenshots or mutation replays.
         try:self.read_native_styles('sync-failure')
@@ -261,7 +264,7 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
         semantic=phase=='associate' and getattr(args,'semantic_preview',False)
         browser_cycle=getattr(args,'webview_cycle',False) and (phase in ('cycle-conflict','cycle-conflict-copy','cycle-incoming','cycle-media')
             or phase=='cycle' and (getattr(args,'scope','')=='product-pair' or getattr(args,'original_native_outcome',False))
-            or phase=='cycle-revoked' and getattr(args,'revocation',False))
+            or phase=='cycle-revoked' and (getattr(args,'revocation',False) or getattr(args,'expiration',False)))
         require(not (webview and semantic),'Choose exactly one original preview input backend')
         atomic_json(self.output/('sync-dispatch-'+str(number)+'.json'),{'phase':phase,
             'driver_dispatch_id':dispatch_id,'server_or_native_operation_id':False,'automatic_retry':False,
@@ -409,6 +412,10 @@ class SyncProbe(ConflictMixin,RecoveryMixin,AuthProbe):
             and all(bound['association'][key]==original[key] for key in original)
             and bound['association']['auth_operation_id']==selected['operation_id'],'Actual original association differs from the frozen UI or identity')
         require(not self.observe('associated')['rows']['revisions'],'Association unexpectedly transferred note revisions')
+        if getattr(self.args,'expiration',False):
+            from android_sync_expiration import run_expiration
+            run_expiration(self,setup,prepared,device)
+            return
         if getattr(self.args,'revocation',False):
             from android_sync_rejection import run_revocation
             run_revocation(self,setup,prepared,device)
@@ -632,25 +639,25 @@ def main():
     for name in ('bundle','sdk','output','source-checkout'):parser.add_argument('--'+name,type=Path,required=True)
     for name in ('commit','tools-commit','build-run-id'):parser.add_argument('--'+name,required=True)
     parser.add_argument('--serial',default='emulator-5562')
-    scope=parser.add_mutually_exclusive_group();scope.add_argument('--exchange',action='store_true');scope.add_argument('--media',action='store_true');scope.add_argument('--stop',action='store_true');scope.add_argument('--recovery',action='store_true');scope.add_argument('--conflicts',action='store_true');scope.add_argument('--revocation',action='store_true')
+    scope=parser.add_mutually_exclusive_group();scope.add_argument('--exchange',action='store_true');scope.add_argument('--media',action='store_true');scope.add_argument('--stop',action='store_true');scope.add_argument('--recovery',action='store_true');scope.add_argument('--conflicts',action='store_true');scope.add_argument('--revocation',action='store_true');scope.add_argument('--expiration',action='store_true')
     parser.add_argument('--cold-originals',action='store_true')
     parser.add_argument('--semantic-preview',action='store_true')
     parser.add_argument('--webview-preview',action='store_true')
     parser.add_argument('--webview-cycle',action='store_true')
     parser.add_argument('--revocation-refresh-only',action='store_true')
     parser.add_argument('--original-native-outcome',action='store_true')
-    args=parser.parse_args();args.scope='sync-revocation-refresh' if args.revocation_refresh_only else 'sync-revocation' if args.revocation else 'sync-conflicts' if args.conflicts else 'sync-recovery' if args.recovery else 'sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
+    args=parser.parse_args();args.scope='sync-expiration' if args.expiration else 'sync-revocation-refresh' if args.revocation_refresh_only else 'sync-revocation' if args.revocation else 'sync-conflicts' if args.conflicts else 'sync-recovery' if args.recovery else 'sync-stop' if args.stop else 'sync-media' if args.media else 'sync-exchange' if args.exchange else 'sync-initial'
     require(not args.revocation_refresh_only or args.revocation and args.webview_preview and not args.webview_cycle,
         'Remaining revoked refresh requires its explicit case and Preview; accepted cycle is excluded')
     require(not args.cold_originals or args.conflicts,'Cold original-entry scope requires actual conflicts')
     require(not args.semantic_preview or args.conflicts,'Native accessibility preview requires the explicit conflict scope')
-    require(not args.webview_preview or args.conflicts or args.revocation,'Owned WebView preview requires an explicit conflict or revocation scope')
-    require(not args.webview_cycle or args.conflicts or args.revocation and args.webview_preview,
+    require(not args.webview_preview or args.conflicts or args.revocation or args.expiration,'Owned WebView preview requires an explicit conflict or rejection scope')
+    require(not args.webview_cycle or args.conflicts or (args.revocation or args.expiration) and args.webview_preview,
         'Owned WebView cycle requires the explicit conflict scope or revocation with WebView preview')
     require(not (args.semantic_preview and args.webview_preview),'Choose exactly one original preview input backend')
     validate_original_outcome_args(args)
     require_hosted();require_hosted_emulator(args.serial);owner=owned_root()
-    state=read_json(owner/'owner-state.json');require(state['result']=='ready' and state.get('fixture')=='sync','Owned Sync origin is not ready')
+    state=read_json(owner/'owner-state.json');require(state['result']=='ready' and state.get('fixture')==('sync-expiration' if args.expiration else 'sync'),'Owned Sync origin is not ready')
     apk,binding=validate_binding(args.bundle,args.commit)
     from release_plan import build_source
     require(re.fullmatch(r'[0-9a-f]{40}',args.commit) and re.fullmatch(r'[0-9a-f]{40}',args.tools_commit),'Immutable sources required')

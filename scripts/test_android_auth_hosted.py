@@ -11,11 +11,12 @@ import android_auth_hosted as module
 
 
 class HostedOriginBoundaries(unittest.TestCase):
-    def test_fixture_selection_is_only_the_two_trusted_scripts_and_defaults_to_original_auth(self):
+    def test_fixture_selection_is_only_the_trusted_scripts_and_defaults_to_original_auth(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             self.assertEqual(module.HostedOrigin(root).fixture,'auth')
             self.assertEqual(module.HostedOrigin(root,fixture='sync').fixture,'sync')
+            self.assertEqual(module.HostedOrigin(root,fixture='sync-expiration').fixture_script(),Path(module.__file__).with_name('android_sync_expiration.py').resolve())
             for kind in ('auth','sync'):
                 selected=module.HostedOrigin(root,fixture=kind).fixture_script()
                 self.assertEqual(selected,Path(module.__file__).with_name('android_'+kind+'_fixture.py').resolve())

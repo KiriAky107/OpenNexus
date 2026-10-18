@@ -208,20 +208,21 @@ def original_driver_intent(probe,phase):
     return value
 
 
-def failure_observations(probe):
+def failure_observations(probe,*,prefix='revocation'):
     from android_auth_fixture import observe_provider as observe_auth_provider
+    require(prefix in ('revocation','expiration'),'Unknown rejection diagnostic scope')
     for label,read in (
         ('auth-provider',lambda:observe_auth_provider(probe.owner)),
-        ('auth-native',lambda:probe.snapshot('revocation-failure',include_rejections=True)),
-        ('host-native',lambda:probe.host_snapshot('revocation-failure',include_outbox=True,include_payloads=True)),
+        ('auth-native',lambda:probe.snapshot(prefix+'-failure',include_rejections=True)),
+        ('host-native',lambda:probe.host_snapshot(prefix+'-failure',include_outbox=True,include_payloads=True)),
         ('cycle-intent',lambda:original_driver_intent(probe,'cycle-revoked')),
         ('refresh-intent',lambda:original_driver_intent(probe,'refresh-revoked'))):
         try:
             value=read()
             if label not in ('auth-native','host-native'):
-                atomic_json(probe.output/('revocation-failure-'+label+'.json'),value,exclusive=True)
+                atomic_json(probe.output/(prefix+'-failure-'+label+'.json'),value,exclusive=True)
         except Exception as error:
-            atomic_json(probe.output/('revocation-failure-'+label+'-unavailable.json'),
+            atomic_json(probe.output/(prefix+'-failure-'+label+'-unavailable.json'),
                 dict(error_class=type(error).__name__,no_mutation_retried=True),exclusive=True)
 
 
