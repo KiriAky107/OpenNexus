@@ -15,6 +15,13 @@ from android_product_pair_clients import CLIENTS
 
 
 class OriginalOutcomeWorkflow(unittest.TestCase):
+    def test_live_protocol_and_original_exit_guards_are_checked_only_in_the_explicit_scope(self):
+        job=self.workflow()['jobs']['emulator-runtime']
+        step=next(s for s in job['steps'] if s.get('name')=='Check original loaded-script observation without invoking a client')
+        self.assertEqual(step['if'],"inputs.runtime_scope == 'sync-conflicts' && inputs.sync_original_native_outcome")
+        self.assertIn('--max-old-space-size=128',step['run']);self.assertIn('--test-concurrency=1',step['run'])
+        for part in ('compiled_scripts','compiled_resources','live_protocol','outcome_gate','outcome_controller','outcome_transport','outcome_bridge'):
+            self.assertIn('scripts/android-runtime-tests/original_'+part+'.test.mjs',step['run'])
     def args(self):
         return SimpleNamespace(original_native_outcome=True, conflicts=True, cold_originals=True,
             webview_preview=True, webview_cycle=True, semantic_preview=False,

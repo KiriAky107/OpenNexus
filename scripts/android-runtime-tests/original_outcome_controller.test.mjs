@@ -1,4 +1,5 @@
 import test from 'node:test'
+import { admitLiveProtocol } from '../android-runtime/original_live_protocol.mjs'
 import assert from 'node:assert/strict'
 import { OriginalOutcomeController } from '../android-runtime/original_outcome_controller.mjs'
 
@@ -17,7 +18,7 @@ function driver(){
     if(method==='Debugger.evaluateOnCallFrame')return {result:{type:'boolean',value:true}}
     return {}
   }}
-  const value=new OriginalOutcomeController(config,protocol,original,transport,event=>events.push(event))
+  const value=new OriginalOutcomeController(config,admitLiveProtocol({domains:[{name:'Debugger',version:'1.3'},{name:'Runtime',version:'1.3'}]},config,transport),original,transport,event=>events.push(event))
   return {value,events,calls,closed:()=>closed}
 }
 

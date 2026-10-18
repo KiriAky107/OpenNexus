@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import vm from 'node:vm'
+import { admitLiveProtocol } from '../android-runtime/original_live_protocol.mjs'
 import { OriginalOutcomeGate,admitProtocol,condition,originalCallbackExpression } from '../android-runtime/original_outcome_gate.mjs'
 
 const config={mode:'complete',nonce:'a326b9cd-165c-4444-b1c2-5b05b48f1994',original_pid:321,
   sequence:2,choice:'copy',destination:'runtime-conflict-copy.md',fingerprint:'a'.repeat(64),expected_hash:'b'.repeat(64)}
 const protocol={domains:[{domain:'Runtime',commands:[{name:'evaluate'}]},
   {domain:'Debugger',commands:['enable','setBreakpointOnFunctionCall','evaluateOnCallFrame','resume'].map(name=>({name,parameters:[{name:'objectId'},{name:'condition'}]}))}]}
+function gateFor(cdp,c=config){const owner={call:cdp};return new OriginalOutcomeGate(c,admitLiveProtocol({domains:[{name:'Debugger',version:'1.3'},{name:'Runtime',version:'1.3'}]},c,owner),owner)}
 function reply(){return {kind:'result',response:{kind:'decision',decision:{sequence:2,state:'completed',choice:'copy',
   destination:config.destination,fingerprint:config.fingerprint,expected_hash:config.expected_hash}}}}
 function check(value,c=config){return new Function('data','return (function runCallback(id,data){return '+condition(c)+'})(17,data)')(value)}
@@ -25,8 +27,9 @@ test('condition selects the real result.response envelope and exact original sco
 
 test('unsupported protocol and writable callback refuse before arming or sending any UI input',async()=>{
   for(const p of [{domains:[]},{domains:[protocol.domains[0]]}])assert.throws(()=>admitProtocol(p))
-  const gate=new OriginalOutcomeGate(config,protocol);const methods=[]
+  const methods=[]
   const cdp=async(method)=>{methods.push(method);return method==='Runtime.evaluate'?{result:{type:'object'}}:{}}
+  const gate=gateFor(cdp)
   await assert.rejects(gate.arm(cdp));assert.deepEqual(methods,['Debugger.enable','Runtime.evaluate'])
   const window={__TAURI_INTERNALS__:{runCallback:function runCallback(){}}}
   assert.throws(()=>vm.runInNewContext(originalCallbackExpression,{window}))
@@ -35,10 +38,11 @@ test('unsupported protocol and writable callback refuse before arming or sending
 })
 
 test('matching pause exports no callback arguments or scopes and complete mode cannot resume or close before original process exit',async()=>{
-  const gate=new OriginalOutcomeGate(config,protocol);const calls=[]
+  const calls=[]
   const cdp=async(method)=>{calls.push(method);if(method==='Runtime.evaluate')return {result:{type:'function',objectId:'original-function'}}
     if(method==='Debugger.setBreakpointOnFunctionCall')return {breakpointId:'original-breakpoint'}
     if(method==='Debugger.evaluateOnCallFrame')return {result:{type:'boolean',value:true}};return {}}
+  const gate=gateFor(cdp)
   await gate.arm(cdp)
   const result=await gate.paused(cdp,{hitBreakpoints:['original-breakpoint'],callFrames:[{functionName:'runCallback',callFrameId:'frame-1',scopeChain:[{DO_NOT_EXPORT_SECRET:'raw'}]}]})
   assert.equal(JSON.stringify(result).includes('DO_NOT_EXPORT'),false);assert.equal(gate.mayClose(),false)
@@ -53,8 +57,8 @@ test('matching pause exports no callback arguments or scopes and complete mode c
 })
 
 test('a known stale rejection requires zero native decisions and the actual concurrent source before exactly one original resume',async()=>{
-  const gate=new OriginalOutcomeGate({...config,mode:'reject',concurrent_hash:'d'.repeat(64)},protocol)
-  gate.state='paused';const cdpCalls=[];const cdp=async(method)=>{cdpCalls.push(method);return {}}
+  const cdpCalls=[];const cdp=async(method)=>{cdpCalls.push(method);return {}}
+  const gate=gateFor(cdp,{...config,mode:'reject',concurrent_hash:'d'.repeat(64)});gate.state='paused'
   const proof={frozen_fingerprint:config.fingerprint,native_resolution_rows:0,native_decision_missing:true,
     original_provider_sequence:2,actual_concurrent_source_sha256:'d'.repeat(64)}
   for(const changed of [{...proof,native_resolution_rows:1},{...proof,actual_concurrent_source_sha256:config.expected_hash}])

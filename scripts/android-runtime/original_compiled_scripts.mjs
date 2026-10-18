@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url'
 import { createHash } from 'node:crypto'
 import { boundedJson, hostedTarget } from './original_outcome_transport.mjs'
 import { compiledMarkers, decodedResource, validateResources } from './original_compiled_resources.mjs'
+import { admitLiveProtocol,requireLiveProtocol } from './original_live_protocol.mjs'
 
 const need=ok=>{if(!ok)throw Error('OWNED_COMPILED_SCRIPT_REFUSED')}
 const stages=new Set(['admission','page-list','protocol','socket-open','script-list','script-content','resource-summary'])
@@ -17,6 +18,7 @@ export function scriptDiagnostic(error){
     ...(error instanceof ScriptReadFailure&&error.summary?{script_summary:error.summary}:{})}
 }
 export function admitScriptProtocol(value){
+  // Offline descriptor parser only, not the live connection admission below.
   need(Array.isArray(value?.domains))
   const domains=value.domains.filter(d=>d.domain==='Debugger');need(domains.length===1)
   const commands=domains[0].commands;need(Array.isArray(commands))
@@ -60,7 +62,6 @@ export async function observeCompiledScripts(config,context,env,dependencies={})
     const pages=await read(target.http+'/json/list');need(Array.isArray(pages))
     const own=pages.filter(p=>p.type==='page');need(own.length===1&&own[0].title==='OpenNexus'
       &&own[0].webSocketDebuggerUrl===target.url&&new URL(own[0].url).origin==='http://tauri.localhost')
-    stage='protocol';admitScriptProtocol(await read(target.http+'/json/protocol'));protocolAdmitted=true
     stage='socket-open'
     socket=dependencies.socketFactory?await dependencies.socketFactory(target.url):new WebSocket(target.url)
     const opened=dependencies.socketFactory?Promise.resolve():new Promise((resolve,reject)=>{
@@ -93,8 +94,9 @@ export async function observeCompiledScripts(config,context,env,dependencies={})
     timer=setTimeout(()=>fault('timeout'),15000)
     await opened
     const call=(method,params)=>{
-      need(!failed&&next<25&&pending.size===0)
-      need(method==='Debugger.enable'&&next===0&&Object.keys(params).length===0
+      need(!failed&&next<26&&pending.size===0)
+      need(method==='Schema.getDomains'&&next===0&&Object.keys(params).length===0
+        ||method==='Debugger.enable'&&protocolAdmitted&&next===1&&Object.keys(params).length===0
         ||method==='Debugger.getScriptSource'&&enabled&&Object.keys(params).length===1&&ids.has(params.scriptId))
       const id=++next
       return new Promise((resolve,reject)=>{
@@ -102,6 +104,9 @@ export async function observeCompiledScripts(config,context,env,dependencies={})
         try{socket.send(JSON.stringify({id,method,params}))}catch{fault('send-unconfirmed')}
       })
     }
+    stage='protocol'
+    const live=admitLiveProtocol(await call('Schema.getDomains',{}),config,socket)
+    requireLiveProtocol(live,config,socket);protocolAdmitted=true
     stage='script-list'
     const enabledReply=await call('Debugger.enable',{})
     need(enabledReply&&typeof enabledReply==='object'&&!Array.isArray(enabledReply)

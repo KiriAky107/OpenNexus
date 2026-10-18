@@ -1,6 +1,7 @@
 // A bounded connection to the sole original hosted emulator WebView. No input,
 // application invocation, scope/property dump, credential or external origin.
-import { admitProtocol, configuration, condition, originalCallbackExpression } from './original_outcome_gate.mjs'
+import { configuration, condition, originalCallbackExpression } from './original_outcome_gate.mjs'
+import { admitLiveProtocol,requireLiveProtocol } from './original_live_protocol.mjs'
 import { originalExit } from './original_outcome_controller.mjs'
 
 const need=ok=>{if(!ok)throw Error('OWNED_NATIVE_OUTCOME_TRANSPORT_REFUSED')}
@@ -23,7 +24,7 @@ export function hostedTarget(config,context,env){
 export async function boundedJson(url){
   const parsed=new URL(url)
   need(parsed.protocol==='http:'&&parsed.hostname==='127.0.0.1'&&Number(parsed.port)>=1024&&Number(parsed.port)<=65535&&!parsed.username&&!parsed.password
-    &&['/json/protocol','/json/list'].includes(parsed.pathname)&&!parsed.search&&!parsed.hash)
+    &&parsed.pathname==='/json/list'&&!parsed.search&&!parsed.hash)
   const response=await fetch(url,{redirect:'error',signal:AbortSignal.timeout(5000)})
   need(response.status===200&&response.body)
   const parts=[];let size=0;const reader=response.body.getReader()
@@ -43,16 +44,28 @@ export class OriginalOutcomeTransport{
     this.socket=socket;this.onPaused=onPaused;this.onClosed=onClosed;this.onFault=onFault
     this.timeout=options.timeout??10000;need(Number.isSafeInteger(this.timeout)&&this.timeout>0&&this.timeout<=10000)
     this.next=0;this.pending=new Map();this.object=null;this.breakpoint=null;this.frame=null;this.closed=false;this.explicitClose=false
+    this.protocol=null
+    this.liveReply=null
+    this.debuggerEnabled=false
     socket.addEventListener('message',event=>this.receive(event))
     socket.addEventListener('close',()=>this.remoteClosed())
     socket.addEventListener('error',()=>this.onFault({code:'OWNED_DEBUGGER_CONNECTION_UNCONFIRMED'}))
   }
   allow(method,params){
-    if(method==='Debugger.enable')return ownKeys(params,[])
-    if(method==='Runtime.evaluate')return ownKeys(params,['expression','returnByValue'])&&params.expression===originalCallbackExpression&&params.returnByValue===false
-    if(method==='Debugger.setBreakpointOnFunctionCall')return ownKeys(params,['objectId','condition'])&&text(this.object)&&params.objectId===this.object&&params.condition===condition(this.config)
-    if(method==='Debugger.evaluateOnCallFrame')return ownKeys(params,['callFrameId','expression','returnByValue'])&&text(this.frame)&&params.callFrameId===this.frame&&params.expression===condition(this.config)&&params.returnByValue===true
+    if(method==='Schema.getDomains')return this.next===0&&ownKeys(params,[])
+    if(this.protocol===null)return false
+    requireLiveProtocol(this.protocol,this.config,this)
+    if(method==='Debugger.enable')return !this.debuggerEnabled&&this.next===1&&ownKeys(params,[])
+    if(method==='Runtime.evaluate')return this.debuggerEnabled&&this.next===2&&this.object===null&&ownKeys(params,['expression','returnByValue'])&&params.expression===originalCallbackExpression&&params.returnByValue===false
+    if(method==='Debugger.setBreakpointOnFunctionCall')return this.next===3&&this.breakpoint===null&&ownKeys(params,['objectId','condition'])&&text(this.object)&&params.objectId===this.object&&params.condition===condition(this.config)
+    if(method==='Debugger.evaluateOnCallFrame')return this.next===4&&ownKeys(params,['callFrameId','expression','returnByValue'])&&text(this.frame)&&params.callFrameId===this.frame&&params.expression===condition(this.config)&&params.returnByValue===true
     return false // Includes Debugger.resume, property/scope reads and every app invocation.
+  }
+  admit=(reply)=>{
+    need(this.protocol===null&&this.next===1&&this.pending.size===0&&reply!==null&&reply===this.liveReply&&!this.closed)
+    this.protocol=admitLiveProtocol(reply,this.config,this);requireLiveProtocol(this.protocol,this.config,this)
+    this.liveReply=null
+    return this.protocol
   }
   call=(method,params)=>{
     need(!this.closed&&!this.explicitClose&&this.next<32&&this.pending.size<4&&this.allow(method,params))
@@ -75,6 +88,11 @@ export class OriginalOutcomeTransport{
         if(message.error){pending.reject(Error('OWNED_DEBUGGER_ORIGINAL_COMMAND_REFUSED'));return}
         try{
           const value=message.result
+          if(pending.method==='Schema.getDomains')this.liveReply=value
+          if(pending.method==='Debugger.enable'){
+            need(value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).every(k=>k==='debuggerId')
+              &&(!Object.hasOwn(value,'debuggerId')||text(value.debuggerId)));this.debuggerEnabled=true
+          }
           if(pending.method==='Runtime.evaluate'&&!value?.exceptionDetails&&value?.result?.type==='function'){
             need(text(value.result.objectId));this.object=value.result.objectId
           }
@@ -109,7 +127,6 @@ export async function connectOriginalOutcome(config,context,env,handlers,depende
   const pages=await read(target.http+'/json/list');need(Array.isArray(pages))
   const own=pages.filter(p=>p.type==='page');need(own.length===1&&own[0].title==='OpenNexus'
     &&own[0].webSocketDebuggerUrl===target.url&&new URL(own[0].url).origin==='http://tauri.localhost')
-  const protocol=await read(target.http+'/json/protocol');admitProtocol(protocol)
   const socket=dependencies.socketFactory?await dependencies.socketFactory(target.url):new WebSocket(target.url)
   // An admission failure before any breakpoint/input may close its unopened
   // connection. Once transport is returned, only an original-exit proof closes.
@@ -118,5 +135,12 @@ export async function connectOriginalOutcome(config,context,env,handlers,depende
     socket.addEventListener('open',()=>{clearTimeout(timer);resolve()},{once:true})
     socket.addEventListener('error',()=>{clearTimeout(timer);socket.close();reject(Error('OWNED_DEBUGGER_CONNECT_FAILED'))},{once:true})
   })
-  return {protocol,transport:new OriginalOutcomeTransport(config,socket,handlers.paused,handlers.closed,handlers.fault,dependencies.options)}
+  const transport=new OriginalOutcomeTransport(config,socket,handlers.paused,handlers.closed,handlers.fault,dependencies.options)
+  try{
+    const protocol=transport.admit(await transport.call('Schema.getDomains',{}))
+    return {protocol,transport}
+  }catch{
+    // No callback descriptor, breakpoint or parent UI action was admitted yet.
+    socket.close();throw Error('OWNED_LIVE_PROTOCOL_REFUSED')
+  }
 }

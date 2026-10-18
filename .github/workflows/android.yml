@@ -355,7 +355,15 @@ jobs:
           --output .build/android-auth-evidence --scope "$AUTH_PROBE_SCOPE"
       - name: Check original loaded-script observation without invoking a client
         if: inputs.runtime_scope == 'sync-conflicts' && inputs.sync_original_native_outcome
-        run: node --max-old-space-size=128 --test scripts/android-runtime-tests/original_compiled_scripts.test.mjs
+        run: >-
+          node --max-old-space-size=128 --test --test-concurrency=1
+          scripts/android-runtime-tests/original_compiled_scripts.test.mjs
+          scripts/android-runtime-tests/original_compiled_resources.test.mjs
+          scripts/android-runtime-tests/original_live_protocol.test.mjs
+          scripts/android-runtime-tests/original_outcome_gate.test.mjs
+          scripts/android-runtime-tests/original_outcome_controller.test.mjs
+          scripts/android-runtime-tests/original_outcome_transport.test.mjs
+          scripts/android-runtime-tests/original_outcome_bridge.test.mjs
       - name: Install isolated tooling for the explicit original native outcome
         if: inputs.runtime_scope == 'sync-conflicts' && inputs.sync_original_native_outcome
         shell: bash

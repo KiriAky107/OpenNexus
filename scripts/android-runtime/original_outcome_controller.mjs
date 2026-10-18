@@ -26,7 +26,7 @@ export function originalExit(value,pid){
 export class OriginalOutcomeController{
   constructor(config,protocol,original,transport,emit){
     this.config=configuration(config);need(this.config.mode==='complete')
-    this.baseline=baseline(original);this.gate=new OriginalOutcomeGate(config,protocol)
+    this.baseline=baseline(original);this.gate=new OriginalOutcomeGate(config,protocol,transport)
     need(transport&&typeof transport.call==='function'&&typeof transport.close==='function'&&typeof emit==='function')
     this.transport=transport;this.emit=emit;this.state='new';this.stopAuthorized=false
     this.pauseCount=0;this.remoteCloseCount=0;this.earlyClose=false;this.explicitClose=false;this.decision=null

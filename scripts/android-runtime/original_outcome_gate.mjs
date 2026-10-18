@@ -1,5 +1,6 @@
 // Conditional observation of the original immutable Tauri callback. No Tauri
 // invocation, binding rewrite, UI input, scope dump or native operation here.
+import { requireLiveProtocol } from './original_live_protocol.mjs'
 const digest=value=>typeof value==='string'&&/^[0-9a-f]{64}$/.test(value)
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value)
 const need=ok=>{if(!ok)throw Error('OWNED_NATIVE_OUTCOME_GATE_REFUSED')}
@@ -15,6 +16,7 @@ export function configuration(value){
 }
 
 export function admitProtocol(protocol){
+  // Legacy offline descriptor validation. It is never a live admission witness.
   need(protocol&&Array.isArray(protocol.domains))
   for(const [domain,commands]of [['Debugger',['enable','setBreakpointOnFunctionCall','evaluateOnCallFrame','resume']],['Runtime',['evaluate']]]){
     const matches=protocol.domains.filter(d=>d.domain===domain);need(matches.length===1&&Array.isArray(matches[0].commands))
@@ -42,10 +44,15 @@ export const originalCallbackExpression=`(()=>{
 })()`
 
 export class OriginalOutcomeGate{
-  constructor(value,protocol){this.config=configuration(value);admitProtocol(protocol);this.state='new';this.breakpoint=null}
+  constructor(value,protocol,owner){
+    this.config=configuration(value);requireLiveProtocol(protocol,this.config,owner)
+    need(owner&&typeof owner.call==='function');this.owner=owner;this.protocol=protocol;this.state='new';this.breakpoint=null
+  }
   async arm(cdp){
-    need(this.state==='new');this.state='arming'
-    await cdp('Debugger.enable',{})
+    need(this.state==='new'&&cdp===this.owner.call);requireLiveProtocol(this.protocol,this.config,this.owner);this.state='arming'
+    const enabled=await cdp('Debugger.enable',{})
+    need(enabled&&typeof enabled==='object'&&!Array.isArray(enabled)&&Object.keys(enabled).every(k=>k==='debuggerId')
+      &&(!Object.hasOwn(enabled,'debuggerId')||typeof enabled.debuggerId==='string'&&enabled.debuggerId.length>0&&enabled.debuggerId.length<=256))
     const original=await cdp('Runtime.evaluate',{expression:originalCallbackExpression,returnByValue:false})
     need(!original.exceptionDetails&&original.result?.type==='function'&&typeof original.result.objectId==='string')
     const bound=await cdp('Debugger.setBreakpointOnFunctionCall',{objectId:original.result.objectId,condition:condition(this.config)})
@@ -54,7 +61,7 @@ export class OriginalOutcomeGate{
     return {armed:true,nonce:this.config.nonce,original_pid:this.config.original_pid,callback_binding_rewritten:false,UI_input_sent:false}
   }
   async paused(cdp,event){
-    need(this.state==='armed'&&event&&Array.isArray(event.hitBreakpoints)&&event.hitBreakpoints.length===1
+    need(cdp===this.owner.call&&this.state==='armed'&&event&&Array.isArray(event.hitBreakpoints)&&event.hitBreakpoints.length===1
       &&event.hitBreakpoints[0]===this.breakpoint&&Array.isArray(event.callFrames)&&event.callFrames.length>0)
     const frame=event.callFrames[0]
     need(frame.functionName==='runCallback'&&typeof frame.callFrameId==='string'&&frame.callFrameId.length<=256)
@@ -78,7 +85,7 @@ export class OriginalOutcomeGate{
     this.state='original-exited';return this.publicState()
   }
   async resumeKnownRejection(cdp,proof){
-    need(this.state==='paused'&&this.config.mode==='reject'&&proof?.frozen_fingerprint===this.config.fingerprint
+    need(cdp===this.owner.call&&this.state==='paused'&&this.config.mode==='reject'&&proof?.frozen_fingerprint===this.config.fingerprint
       &&proof.native_resolution_rows===0&&proof.native_decision_missing===true&&proof.original_provider_sequence===2
       &&proof.actual_concurrent_source_sha256===this.config.concurrent_hash)
     // Continue this known rejected callback once. It is never used for the

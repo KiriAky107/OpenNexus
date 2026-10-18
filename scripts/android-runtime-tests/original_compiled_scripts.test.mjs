@@ -10,14 +10,14 @@ const source='const privateBody="SOURCE_MUST_NOT_ESCAPE";const codes=new Set(["S
 const protocol=()=>({domains:[{domain:'Debugger',commands:[{name:'enable'},{name:'getScriptSource',parameters:[{name:'scriptId'}]}],events:[{name:'scriptParsed'}]}]})
 const parsed=(id='1',url='http://tauri.localhost/assets/index-original.js')=>({scriptId:id,url,startLine:0,startColumn:0,executionContextId:1,hasSourceURL:false})
 const pages=()=>[{type:'page',title:'OpenNexus',url:'http://tauri.localhost/#/connection',webSocketDebuggerUrl:context.socket_url}]
-function fixture({scripts=[parsed()],respond,notificationCount=0,readJson,settleScripts}={}){
+function fixture({scripts=[parsed()],respond,notificationCount=0,readJson,settleScripts,schemaReply={domains:[{name:'Debugger',version:'1.3'},{name:'Runtime',version:'1.3'}]}}={}){
   const listeners={},calls=[],reads=[];let closed=0
   const emit=value=>listeners.message({data:JSON.stringify(value)})
   const socket={addEventListener:(name,fn)=>{listeners[name]=fn},send:raw=>{
     const call=JSON.parse(raw);calls.push(call)
     for(let n=0;n<notificationCount;n++)emit({method:'Debugger.unrelated',params:{n}})
     if(call.method==='Debugger.enable')for(const item of scripts)emit({method:'Debugger.scriptParsed',params:item})
-    emit({id:call.id,...(respond?respond(call):{result:call.method==='Debugger.enable'?{debuggerId:'not-exported'}:{scriptSource:source}})})
+    emit({id:call.id,...(call.method==='Schema.getDomains'?{result:schemaReply}:respond?respond(call):{result:call.method==='Debugger.enable'?{debuggerId:'not-exported'}:{scriptSource:source}})})
   },close:()=>closed++}
   return {calls,reads,emit,closed:()=>closed,dependencies:{readJson:async url=>{
     reads.push(url);return readJson?readJson(url):url.endsWith('/json/list')?pages():protocol()
@@ -48,8 +48,8 @@ test('decoded V8 source is exact UTF-8 text without bytecode, extra fields or ra
 })
 test('actual parsed-source path enables Debugger explicitly and sends no evaluation, pause or native input',async()=>{
   const f=fixture();const result=await observeCompiledScripts(config,context,env,f.dependencies)
-  assert.deepEqual(f.calls.map(c=>c.method),['Debugger.enable','Debugger.getScriptSource'])
-  assert.deepEqual(f.calls[0].params,{});assert.deepEqual(f.calls[1].params,{scriptId:'1'})
+  assert.deepEqual(f.calls.map(c=>c.method),['Schema.getDomains','Debugger.enable','Debugger.getScriptSource'])
+  assert.deepEqual(f.calls[0].params,{});assert.deepEqual(f.calls[1].params,{});assert.deepEqual(f.calls[2].params,{scriptId:'1'})
   assert.equal(result.Debugger_enabled,true);assert.equal(result.Debugger_pause_breakpoint_or_evaluation_sent,false)
   assert.equal(result.application_or_native_IPC_sent,false);assert.equal(result.page_fetch_or_CSP_change_sent,false)
   assert.equal(result.resource_read_transport,'Debugger.getScriptSource')
@@ -66,14 +66,14 @@ test('foreign parsed modules are ignored without reading their source or changin
 })
 test('duplicate parsed notifications for one original module do not cause another read',async()=>{
   const f=fixture({scripts:[parsed(),parsed()]});await observeCompiledScripts(config,context,env,f.dependencies)
-  assert.equal(f.calls.length,2)
+  assert.equal(f.calls.length,3)
 })
 test('ambiguous original URL or reused script ID refuses before reading any body',async()=>{
   for(const scripts of [[parsed(),parsed('2')],[parsed(),parsed('1','http://tauri.localhost/assets/other.js')]]){
     const f=fixture({scripts})
     await assert.rejects(observeCompiledScripts(config,context,env,f.dependencies),error=>{
       assert.equal(scriptDiagnostic(error).reason,'script-ambiguous');return true
-    });assert.equal(f.calls.length,1);assert.equal(f.closed(),1)
+    });assert.equal(f.calls.length,2);assert.equal(f.closed(),1)
   }
 })
 test('original source failure is not retried and raw protocol content is discarded',async()=>{
@@ -81,19 +81,19 @@ test('original source failure is not retried and raw protocol content is discard
   await assert.rejects(observeCompiledScripts(config,context,env,f.dependencies),error=>{
     const d=scriptDiagnostic(error);assert.equal(d.stage,'script-content');assert.equal(d.reason,'reply-refused')
     assert.equal(JSON.stringify(d).includes('PRIVATE'),false);return true
-  });assert.equal(f.calls.length,2);assert.equal(f.closed(),1)
+  });assert.equal(f.calls.length,3);assert.equal(f.closed(),1)
 })
 test('no owned compiled module stays unconfirmed without fallback fetch or another enable',async()=>{
   const f=fixture({scripts:[]})
   await assert.rejects(observeCompiledScripts(config,context,env,f.dependencies),e=>scriptDiagnostic(e).reason==='no-owned-script')
-  assert.equal(f.calls.length,1)
+  assert.equal(f.calls.length,2)
 })
 test('an unconfirmed enable reply never permits a source read or exports its extra fields',async()=>{
   for(const reply of [null,{body:'PRIVATE_ENABLE'},{debuggerId:''}]){
     const f=fixture({respond:()=>({result:reply})})
     await assert.rejects(observeCompiledScripts(config,context,env,f.dependencies),error=>{
       assert.equal(JSON.stringify(scriptDiagnostic(error)).includes('PRIVATE'),false);return true
-    });assert.equal(f.calls.length,1)
+    });assert.equal(f.calls.length,2)
   }
 })
 test('bounded candidate set refuses before any source request',async()=>{
@@ -101,7 +101,7 @@ test('bounded candidate set refuses before any source request',async()=>{
   const f=fixture({scripts})
   await assert.rejects(observeCompiledScripts(config,context,env,f.dependencies),error=>{
     const d=scriptDiagnostic(error);assert.equal(d.reason,'bound');assert.equal(d.script_summary.owned_candidates,25);return true
-  });assert.equal(f.calls.length,1)
+  });assert.equal(f.calls.length,2)
 })
 test('non-hosted context refuses before a page, protocol or socket observation',async()=>{
   const f=fixture();await assert.rejects(observeCompiledScripts(config,context,{...env,RUNNER_ENVIRONMENT:'self-hosted'},f.dependencies))
@@ -116,7 +116,7 @@ test('unexpected pause never resumes, evaluates or substitutes an original callb
   await assert.rejects(observeCompiledScripts(config,context,env,f.dependencies),error=>{
     const d=scriptDiagnostic(error);assert.equal(d.reason,'unexpected-pause');assert.equal(d.script_summary.unexpected_pause_observed,true)
     assert.equal(JSON.stringify(d).includes('PRIVATE'),false);return true
-  });assert.deepEqual(f.calls.map(x=>x.method),['Debugger.enable'])
+  });assert.deepEqual(f.calls.map(x=>x.method),['Schema.getDomains','Debugger.enable'])
 })
 test('bounded notification flood cannot hang the reader or cause a resend',async()=>{
   const f=fixture({notificationCount:1025})
@@ -124,9 +124,20 @@ test('bounded notification flood cannot hang the reader or cause a resend',async
 })
 test('late initial parsed notifications are observed after the sole enable reply',async()=>{
   const f=fixture({scripts:[],settleScripts:emit=>emit({method:'Debugger.scriptParsed',params:parsed()})})
-  await observeCompiledScripts(config,context,env,f.dependencies);assert.equal(f.calls.length,2)
+  await observeCompiledScripts(config,context,env,f.dependencies);assert.equal(f.calls.length,3)
 })
 test('arbitrary errors expose only allowlisted diagnostics',()=>{
   assert.deepEqual(scriptDiagnostic(Object.assign(Error('PRIVATE'),{stage:'PRIVATE',reason:'PRIVATE'})),
     {error:'OWNED_COMPILED_RESOURCE_UNCONFIRMED',stage:'admission',reason:'unconfirmed'})
+})
+
+test('original live domain refusal stops before enable or source read without any HTTP protocol endpoint',async()=>{
+  for(const schemaReply of [null,{domains:[]},{domains:[{name:'Runtime',version:'1.3'}]}]){
+    const f=fixture({schemaReply})
+    await assert.rejects(observeCompiledScripts(config,context,env,f.dependencies),error=>{
+      const value=scriptDiagnostic(error);assert.equal(value.stage,'protocol');assert.equal(value.script_summary.protocol_admitted,false);assert.equal(value.script_summary.Debugger_enable_reply_seen,false);return true
+    })
+    assert.deepEqual(f.calls.map(x=>x.method),['Schema.getDomains'])
+    assert.deepEqual(f.reads,['http://127.0.0.1:12345/json/list']);assert.equal(f.closed(),1)
+  }
 })

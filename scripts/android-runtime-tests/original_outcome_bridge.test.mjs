@@ -13,6 +13,7 @@ class Socket{
   addEventListener(name,fn){(this.listeners[name]??=[]).push(fn)}
   emit(name,event){for(const fn of this.listeners[name]??[])fn(event)}
   send(raw){const m=JSON.parse(raw);this.sent.push(m);let result={}
+    if(m.method==='Schema.getDomains')result={domains:[{name:'Debugger',version:'1.3'},{name:'Runtime',version:'1.3'}]}
     if(m.method==='Runtime.evaluate')result={result:{type:'function',objectId:'original'}}
     if(m.method==='Debugger.setBreakpointOnFunctionCall')result={breakpointId:'original'}
     if(m.method==='Debugger.evaluateOnCallFrame')result={result:{type:'boolean',value:true}}
@@ -57,7 +58,7 @@ test('hosted bridge arms the original observer and explicit cleanup closes only 
 test('parent EOF after arm keeps the original connection and has no automatic stop, close, resume or retry',async()=>{
   const h=harness()
   await assert.rejects(runOriginalOutcomeBridge(sequence([start()]),v=>h.events.push(v),env,h.dependencies),/EXIT_PROOF_MISSING/)
-  assert.equal(h.socket.closed,0);assert.equal(h.socket.sent.length,3);assert.equal(h.events.length,1)
+  assert.equal(h.socket.closed,0);assert.deepEqual(h.socket.sent.map(x=>x.method),['Schema.getDomains','Debugger.enable','Runtime.evaluate','Debugger.setBreakpointOnFunctionCall']);assert.equal(h.events.length,1)
 })
 
 test('invalid native observation or exit never releases the observer and the parent may only perform proven cleanup',async()=>{
