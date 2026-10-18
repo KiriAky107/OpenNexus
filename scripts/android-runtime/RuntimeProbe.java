@@ -648,7 +648,8 @@ public final class RuntimeProbe extends Instrumentation {
             inputText(noteBody(),"# Limits seed 原件 😀\nOne actual original GUI Save.\n");save();return;
         }
         if(phase.equals("limits-list")) {
-            clickTitleBar("Files");
+            waitFilePageReady("limits-seed.md");
+            if(!visibleFilePanel())clickTitleBar("Files");
             for(String path:paths)waitNode(n->label(n,path,false)&&n.isEnabled()&&fileDrawerRow(n),"owned original byte-limit file: "+path);
             AccessibilityNodeInfo close=waitNode(n->label(n,"Close",false)&&fileDrawerRow(n),"owned file panel Close");
             activate(close,this::fileDrawerRow);return;
@@ -1314,8 +1315,36 @@ public final class RuntimeProbe extends Instrumentation {
         return false;
     }
 
+    private boolean visibleFilePanel() {
+        for(AccessibilityNodeInfo node:nodes())if(node.isVisibleToUser()&&node.isEnabled()
+            &&label(node,"Close",false)&&fileDrawerRow(node))return true;
+        return false;
+    }
+    private void waitFilePageReady(String path) {
+        // The title bar exists before boot's asynchronous Native list returns.
+        // Observe that original data (or an already open editor) before one tap;
+        // geometry stability alone is not a completed cold-start observation.
+        long until=SystemClock.uptimeMillis()+25_000;
+        do {
+            AccessibilityNodeInfo active=ui.getRootInActiveWindow();
+            if(active!=null&&APP.equals(string(active.getPackageName()))) {
+                for(AccessibilityNodeInfo node:nodes())if(node.isVisibleToUser()&&node.isEnabled()
+                    &&node.isClickable()&&APP.equals(string(node.getPackageName()))) {
+                    boolean editor=titleBarControl(node)&&label(node,"Back",false);
+                    boolean file="android.widget.Button".equals(string(node.getClassName()))&&label(node,path,false);
+                    if(editor||file) {
+                        progress.append("ORIGINAL_FILE_PAGE_READY target=").append(path)
+                            .append(" editor=").append(editor?1:0).append('\n');return;
+                    }
+                }
+            }
+            SystemClock.sleep(150);
+        }while(SystemClock.uptimeMillis()<until);
+        throw new IllegalStateException("Original Native file data did not become ready; no file-menu input sent");
+    }
     private void open(String path) {
-        clickTitleBar("Files");
+        waitFilePageReady(path);
+        if(!visibleFilePanel())clickTitleBar("Files");
         AccessibilityNodeInfo row = waitNode(node -> label(node, path, false)
             && node.isEnabled() && fileDrawerRow(node), "file drawer row: " + path);
         activate(row, this::fileDrawerRow);
