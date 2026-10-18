@@ -25,10 +25,19 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Separate test app drives the installed APK through Android accessibility and real touch events. */
-public final class RuntimeProbe extends Instrumentation {
-    private static final String APP = "cc.kronecker.opennexus.dev";
-    private static final String NOTE = "runtime-note.md";
-    private static final String CANVAS = "runtime.canvas";
+public class RuntimeProbe extends Instrumentation {
+    private final String APP;
+    private final String NOTE;
+    private final String CANVAS;
+    private final boolean stableRelease;
+
+    public RuntimeProbe() { this(false); }
+    protected RuntimeProbe(boolean release) {
+        stableRelease = release;
+        APP = ReleaseScene.application(release);
+        NOTE = ReleaseScene.note(release);
+        CANVAS = ReleaseScene.canvas(release);
+    }
     private static final String BODY = "# 原始 Markdown 😀\n\n离线正文 / original content\n";
     private static final String DRAFT = BODY + "未保存的恢复草稿 / recovered draft\n";
     private static final String NODE = "中文画布节点 😀 / original canvas text";
@@ -173,6 +182,20 @@ public final class RuntimeProbe extends Instrumentation {
                     progress.append("auth: native current/profile read, no sign-in or credentials entered\n");
                     pressBack();
                     waitLabel("Start writing");
+                    break;
+                case "release-upgrade-read":
+                    require(stableRelease, "Stable release driver required before any product input");
+                    open(CANVAS);
+                    waitLabel(NODE);
+                    pressBack();
+                    waitNotesLanding();
+                    clickMenu("Main navigation");
+                    click("Recover drafts", false);
+                    click(NOTE, true);
+                    waitNode(node -> APP.equals(string(node.getPackageName())) && node.isEditable()
+                        && label(node, "Markdown note body", false)
+                        && string(node.getText()).contains("未保存的恢复草稿"), "original release unconfirmed draft after package update");
+                    progress.append("release: original Canvas and unconfirmed Markdown draft read; no Save or original write\n");
                     break;
                 case "pair-note-reopen":
                 case "pair-note-return":
