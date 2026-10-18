@@ -112,6 +112,9 @@ public final class RuntimeProbe extends Instrumentation {
                 case "limits-canvas-over-md": case "limits-canvas": case "limits-canvas-over": case "limits-cold":
                     originalDocumentLimits(phase); break;
                 case "storage-init": case "atomic-init": waitLabel("Start writing"); break;
+                case "properties-seed": case "properties-open": case "properties-text": case "properties-group":
+                case "properties-link": case "properties-file": case "properties-edge": case "properties-cold":
+                    remainingCanvasProperties(phase); break;
                 case "canvas-storage-init": waitLabel("Start writing"); break;
                 case "canvas-storage-seed": case "canvas-storage-edit": case "canvas-storage-fail":
                 case "canvas-storage-check": case "canvas-storage-retry": case "canvas-storage-cold":
@@ -573,6 +576,63 @@ public final class RuntimeProbe extends Instrumentation {
         try(FileOutputStream out=new FileOutputStream(target)) {
             out.write(report.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));out.flush();out.getFD().sync();
         }
+    }
+
+    private AccessibilityNodeInfo propertyControl(String name) {
+        long until=SystemClock.uptimeMillis()+25_000;boolean shown=false;
+        do {
+            List<AccessibilityNodeInfo> found=new ArrayList<>();
+            for(AccessibilityNodeInfo node:nodes())if(APP.equals(string(node.getPackageName()))&&node.isEnabled()
+                &&(node.isEditable()||node.isClickable()||"android.widget.Spinner".equals(string(node.getClassName())))
+                &&label(node,name,false)&&within(node,"Canvas nodes and connections"))found.add(node);
+            require(found.size()<=1,"Ambiguous original property control; no input sent");
+            if(found.size()==1) {
+                AccessibilityNodeInfo node=found.get(0);
+                if(node.isVisibleToUser())return node;
+                if(!shown) { shown=true;require(node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId()),"Original property control could not be shown"); }
+            }
+            SystemClock.sleep(150);
+        }while(SystemClock.uptimeMillis()<until);
+        throw new IllegalStateException("Original named property control not visible");
+    }
+
+    private boolean propertyValue(AccessibilityNodeInfo node,String name,String expected) {
+        return label(node,name,false)&&(string(node.getText()).equals(expected)||string(node.getText()).equals(expected+", "+name));
+    }
+
+    private void remainingCanvasProperties(String phase) throws Exception {
+        String path="properties-original.canvas";
+        if(phase.equals("properties-seed")) { create("New canvas",path);save();return; }
+        if(phase.equals("properties-open")||phase.equals("properties-cold")) { open(path);waitLabel("Free canvas");return; }
+        File form=new File(getContext().getFilesDir(),"owned-properties-form.json");
+        require(form.isFile()&&form.length()>0&&form.length()<=8192,"Original property form missing or unbounded");
+        org.json.JSONObject value=new org.json.JSONObject(new String(java.nio.file.Files.readAllBytes(form.toPath()),java.nio.charset.StandardCharsets.UTF_8)).getJSONObject(phase);
+        require(value.getInt("schema")==1&&value.getString("scope").equals("canvas-properties")
+            &&value.getString("phase").equals(phase),"Original property phase does not match the reviewed form");
+        require(value.getString("target_id").matches("917cc458-6ab0-43bf-8c12-2bc54c0ae10[1-5]"),"Foreign property fixture identity");
+        graphClosePanel();graphAction("Show all");graphNode(value.getString("target_node_label"));graphAction("Properties");
+        if(!value.getString("edge_label").isEmpty())graphInspectorAction(value.getString("edge_label"));
+        org.json.JSONArray fields=value.getJSONArray("fields");require(fields.length()>0&&fields.length()<=7,"Unbounded original property form");
+        String names="|Label|Node content|Background image path|Heading or block subpath|Node color|Source node|Destination node|From side|To side|From arrow|To arrow|Color|";
+        for(int i=0;i<fields.length();i++) {
+            org.json.JSONObject field=fields.getJSONObject(i);
+            String name=field.getString("name"),before=field.getString("before"),after=field.getString("after"),kind=field.getString("kind");
+            require(names.contains("|"+name+"|")&&before.length()<=512&&after.length()<=512&&!before.equals(after),"Unreviewed property field or value");
+            AccessibilityNodeInfo control=propertyControl(name);
+            require(propertyValue(control,name,before),"Original property value changed before input; no input sent");
+            if(kind.equals("input")) { require(control.isEditable(),"Original property input is not editable");setText(control,after);hideKeyboard(); }
+            else {
+                require(kind.equals("select"),"Unknown original property control kind");
+                activate(control,node->label(node,name,false)&&within(node,"Canvas nodes and connections"));
+                AccessibilityNodeInfo option=waitNode(node->APP.equals(string(node.getPackageName()))&&node.isVisibleToUser()&&node.isEnabled()
+                    &&"android.widget.CheckedTextView".equals(string(node.getClassName()))&&label(node,after,false),"original Native property option");
+                activate(option,node->"android.widget.CheckedTextView".equals(string(node.getClassName()))&&label(node,after,false));
+            }
+            require(propertyValue(propertyControl(name),name,after),"Original property result differs after the sole input");
+            progress.append("ORIGINAL_PROPERTY_FIELD ").append(phase).append(' ').append(field.getString("key")).append(" input=1\n");
+        }
+        graphClosePanel();save();
+        progress.append("ORIGINAL_PROPERTY_FORM ").append(phase).append(" fields=").append(fields.length()).append(" save=1\n");
     }
 
     private void canvasStorageRecovery(String phase) throws Exception {

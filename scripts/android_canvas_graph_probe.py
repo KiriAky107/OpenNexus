@@ -49,13 +49,18 @@ def initial_fixture(remaining):
 
 def digest(raw):return hashlib.sha256(raw).hexdigest()
 
-def snapshot(probe,label):
-    require(probe.args.scope in ('canvas-graph','canvas-graph-remaining') and label.removesuffix('-failure') in graph_steps(probe.args.scope=='canvas-graph-remaining'),'GRAPH_SNAPSHOT_SCOPE')
+def snapshot(probe,label,*,path=PATH):
+    if probe.args.scope=='canvas-properties':
+        from android_canvas_properties import PATH as property_path,STEPS as property_steps
+        require(path==property_path and label.removesuffix('-failure') in property_steps,'PROPERTY_SNAPSHOT_SCOPE')
+    else:
+        require(path==PATH and probe.args.scope in ('canvas-graph','canvas-graph-remaining')
+            and label.removesuffix('-failure') in graph_steps(probe.args.scope=='canvas-graph-remaining'),'GRAPH_SNAPSHOT_SCOPE')
     value={}
     for key,table,columns in [('drafts','drafts','id,file_id,path,base_hash,generation,saved_generation,content,edit_session'),
         ('saves','save_intents','operation_id,draft_id,generation,file_id,path,expected,content,state,error')]:
         value[key]=[dict(zip(columns.split(','),row)) for row in probe.database_rows(
-            'SELECT '+columns+' FROM '+table+' WHERE path=? ORDER BY rowid',(PATH,))]
+            'SELECT '+columns+' FROM '+table+' WHERE path=? ORDER BY rowid',(path,))]
     folder=Path(tempfile.mkdtemp(prefix='owned-canvas-graph-native-',dir=probe.tools));database=folder/'host.sqlite3'
     for suffix in ('','-wal','-shm'):
         raw=probe.private(probe.root+'vault/.ainote/host.sqlite3'+suffix,check=False)
@@ -63,7 +68,7 @@ def snapshot(probe,label):
     with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True)) as db:
         require(db.execute('PRAGMA integrity_check').fetchone()==('ok',),'GRAPH_NATIVE_INTEGRITY')
         columns='id,path,hash,revision,deleted'
-        value['files']=[dict(zip(columns.split(','),row)) for row in db.execute('SELECT '+columns+' FROM files WHERE path=?',(PATH,))]
+        value['files']=[dict(zip(columns.split(','),row)) for row in db.execute('SELECT '+columns+' FROM files WHERE path=?',(path,))]
         require(len(value['files'])==1,'GRAPH_SINGLE_OWN_FILE')
         columns='operation_id,file_id,revision,path,hash,operation,state'
         value['outbox']=[dict(zip(columns.split(','),row)) for row in db.execute(
