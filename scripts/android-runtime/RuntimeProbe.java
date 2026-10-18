@@ -90,6 +90,13 @@ public final class RuntimeProbe extends Instrumentation {
                 case "search-query-5":
                 case "search-open":
                     originalNoteSearch(phase); break;
+                case "graph-seed": case "graph-open": case "graph-add-text":
+                case "graph-add-file": case "graph-add-link": case "graph-add-group":
+                case "graph-connect": case "graph-edge-label": case "graph-copy":
+                case "graph-duplicate": case "graph-undo-duplicate": case "graph-paste":
+                case "graph-undo": case "graph-redo": case "graph-delete":
+                case "graph-undo-delete": case "graph-redo-delete": case "graph-fit": case "graph-cold":
+                    originalCanvasGraph(phase); break;
                 case "storage-init": waitLabel("Start writing"); break;
                 case "storage-seed":
                 case "storage-fail":
@@ -766,6 +773,140 @@ public final class RuntimeProbe extends Instrumentation {
             click("Collapse right sidebar", false);
             save();
         }
+    }
+
+    private void graphAction(String name) {
+        showCanvasTools();
+        AccessibilityNodeInfo target=waitNode(node->APP.equals(string(node.getPackageName()))
+            && node.isClickable()&&!node.isEditable()&&node.isEnabled()&&label(node,name,false)
+            && within(node,"Canvas operations"),"original graph toolbar action: "+name);
+        activate(target,value->within(value,"Canvas operations"));
+    }
+
+    private AccessibilityNodeInfo graphField(String name) {
+        long until=SystemClock.uptimeMillis()+25_000;boolean shown=false;
+        do {
+            List<AccessibilityNodeInfo> found=new ArrayList<>();
+            for(AccessibilityNodeInfo node:nodes())if(APP.equals(string(node.getPackageName()))
+                &&node.isEditable()&&node.isEnabled()&&within(node,"Canvas nodes and connections")
+                &&OriginalCanvasGraph.field(name,string(node.getText()),label(node,name,false)))found.add(node);
+            require(found.size()<=1,"Ambiguous graph field; no input sent");
+            if(found.size()==1) {
+                AccessibilityNodeInfo node=found.get(0);
+                if(node.isVisibleToUser())return node;
+                if(!shown) { shown=true;require(node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId()),
+                    "Original graph field could not be shown"); }
+            }
+            SystemClock.sleep(150);
+        }while(SystemClock.uptimeMillis()<until);
+        throw new IllegalStateException("Original graph field not visible");
+    }
+
+    private void graphValue(String name,String value) {
+        setText(graphField(name),value);
+        waitNode(node->node.isEditable()&&within(node,"Canvas nodes and connections")
+            &&OriginalCanvasGraph.field(name,string(node.getText()),label(node,name,false))
+            &&(string(node.getText()).equals(value)||string(node.getText()).equals(value+", "+name)),"original graph value after one input");
+    }
+
+    private void graphClosePanel() {
+        if(visibleLabel("Collapse right sidebar")) {
+            AccessibilityNodeInfo close=waitNode(node->APP.equals(string(node.getPackageName()))&&node.isClickable()
+                &&label(node,"Collapse right sidebar",false)&&within(node,"Canvas nodes and connections"),"original graph inspector close");
+            activate(close,value->within(value,"Canvas nodes and connections"));
+            waitNode(node->label(node,"Free canvas",false),"owned graph after closing inspector");
+        }
+    }
+
+    private void graphNode(String label) {
+        graphClosePanel();
+        AccessibilityNodeInfo node=waitNode(value->APP.equals(string(value.getPackageName()))&&!value.isEditable()
+            &&label(value,label,false)&&within(value,"Free canvas"),"original visible graph node: "+label);
+        activate(node,value->within(value,"Free canvas"));
+    }
+
+    private void graphGeometry(int x,int y) {
+        graphValue("x",Integer.toString(x));graphValue("y",Integer.toString(y));
+        graphValue("width","120");graphValue("height","100");
+    }
+
+    private void graphReference(String action,String dialog,String value) {
+        graphAction(action);
+        AccessibilityNodeInfo field=waitNode(node->APP.equals(string(node.getPackageName()))&&node.isEditable()
+            &&within(node,dialog),"original graph reference input");
+        setText(field,value);hideKeyboard();
+        AccessibilityNodeInfo add=waitNode(node->APP.equals(string(node.getPackageName()))&&node.isClickable()
+            &&node.isEnabled()&&label(node,"Add to canvas",false)&&within(node,dialog),"owned graph reference confirmation");
+        activate(add,node->within(node,dialog));
+        waitNode(node->label(node,"Node properties",true),"new graph reference properties");
+    }
+
+    private void graphMenu(String action) {
+        clickMenu("More canvas actions");
+        AccessibilityNodeInfo target=waitNode(node->APP.equals(string(node.getPackageName()))&&node.isClickable()
+            &&node.isEnabled()&&!node.isEditable()&&label(node,action,false)&&within(node,"Canvas operations"),"original graph menu: "+action);
+        activate(target,value->within(value,"Canvas operations"));
+    }
+
+    private void graphInspectorAction(String name) {
+        long until=SystemClock.uptimeMillis()+25_000;boolean shown=false;
+        do {
+            List<AccessibilityNodeInfo> found=new ArrayList<>();
+            for(AccessibilityNodeInfo node:nodes())if(APP.equals(string(node.getPackageName()))&&node.isClickable()
+                &&node.isEnabled()&&label(node,name,false)&&within(node,"Canvas nodes and connections"))found.add(node);
+            require(found.size()<=1,"Ambiguous original inspector action; no input sent");
+            if(found.size()==1) {
+                AccessibilityNodeInfo node=found.get(0);
+                if(node.isVisibleToUser()) { activate(node,value->within(value,"Canvas nodes and connections"));return; }
+                if(!shown) { shown=true;require(node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId()),"Original inspector action could not be shown"); }
+            }
+            SystemClock.sleep(150);
+        }while(SystemClock.uptimeMillis()<until);
+        throw new IllegalStateException("Original inspector action not visible");
+    }
+
+    private void originalCanvasGraph(String phase) throws Exception {
+        require(OriginalCanvasGraph.phase(phase),"Unknown graph phase");
+        String step=phase.substring("graph-".length());boolean save=true;
+        switch(step) {
+            case "seed":create("New canvas",OriginalCanvasGraph.PATH);break;
+            case "open":case "cold":
+                open(OriginalCanvasGraph.PATH);waitLabel("Free canvas");save=false;break;
+            case "add-text":
+                graphAction("Text");
+                AccessibilityNodeInfo field=graphField("Node content");activate(field);CompositionIme.awaitTarget(APP);
+                long now=SystemClock.uptimeMillis();
+                for(int action:new int[]{KeyEvent.ACTION_DOWN,KeyEvent.ACTION_UP})require(ui.injectInputEvent(
+                    new KeyEvent(now,SystemClock.uptimeMillis(),action,KeyEvent.KEYCODE_A,0,KeyEvent.META_CTRL_ON),true),"Graph select-all rejected");
+                CompositionIme.compose(APP,OriginalCanvasGraph.TEXT+"草稿");
+                waitNode(node->APP.equals(string(node.getPackageName()))&&label(node,"Save",false)&&!node.isEnabled(),"Save blocked during actual Canvas composition");
+                CompositionIme.compose(APP,OriginalCanvasGraph.TEXT);CompositionIme.confirm(APP);
+                waitNode(node->node.isEditable()&&label(node,"Node content",false)
+                    &&string(node.getText()).equals(OriginalCanvasGraph.TEXT),"actual confirmed Canvas Chinese composition");
+                progress.append("ORIGINAL_GRAPH_IME compose=2 confirm=1 save_during_composition=0\n");
+                graphGeometry(0,120);graphClosePanel();break;
+            case "add-file":graphReference("Note / image","File or image",OriginalCanvasGraph.FILE);graphGeometry(150,120);graphClosePanel();break;
+            case "add-link":graphReference("URL","Web link",OriginalCanvasGraph.URL);graphGeometry(0,240);graphClosePanel();break;
+            case "add-group":graphAction("Group");graphValue("Node content",OriginalCanvasGraph.GROUP);graphGeometry(350,0);graphClosePanel();break;
+            case "connect":
+                graphAction("Connect nodes");graphNode("link: example.invalid");graphNode("file: "+OriginalCanvasGraph.FILE);break;
+            case "edge-label":
+                graphNode("link: example.invalid");graphAction("Properties");
+                graphInspectorAction("example.invalid → 原笔记😀.md");
+                graphValue("Connection label",OriginalCanvasGraph.EDGE);graphClosePanel();break;
+            case "copy":
+                graphNode("text: "+OriginalCanvasGraph.SEED_A);graphAction("Select several");graphNode("text: "+OriginalCanvasGraph.SEED_B);
+                graphMenu("Copy");save=false;break;
+            case "duplicate":graphMenu("Duplicate");break;
+            case "undo-duplicate":case "undo":case "undo-delete":graphAction("Undo");break;
+            case "paste":graphMenu("Paste");break;
+            case "redo":case "redo-delete":graphAction("Redo");break;
+            case "delete":graphNode("link: example.invalid");graphMenu("Delete selected");break;
+            case "fit":graphAction("Show all");save=false;break;
+            default:throw new IllegalStateException("Unexpected graph action");
+        }
+        if(save)save();
+        progress.append("ORIGINAL_CANVAS_GRAPH_STEP ").append(step).append(" save=").append(save?1:0).append('\n');
     }
 
     private void pairProperty(String name, String before, String after) {
