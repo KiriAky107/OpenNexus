@@ -97,6 +97,9 @@ public final class RuntimeProbe extends Instrumentation {
                 case "graph-undo": case "graph-redo": case "graph-delete":
                 case "graph-undo-delete": case "graph-redo-delete": case "graph-fit": case "graph-cold":
                     originalCanvasGraph(phase); break;
+                case "limits-seed": case "limits-list": case "limits-md": case "limits-md-over":
+                case "limits-canvas-over-md": case "limits-canvas": case "limits-canvas-over": case "limits-cold":
+                    originalDocumentLimits(phase); break;
                 case "storage-init": case "atomic-init": waitLabel("Start writing"); break;
                 case "atomic-seed": case "atomic-edit": case "atomic-save": case "atomic-cold":
                     originalAtomicWrite(phase); break;
@@ -636,6 +639,49 @@ public final class RuntimeProbe extends Instrumentation {
         try(FileOutputStream out=new FileOutputStream(target)) {
             out.write(value.getBytes(java.nio.charset.StandardCharsets.US_ASCII));out.flush();out.getFD().sync();
         }
+    }
+
+    private void originalDocumentLimits(String phase) throws Exception {
+        String[] paths={"limits-exact.md","limits-over.md","limits-above-md.canvas","limits-exact.canvas","limits-over.canvas"};
+        if(phase.equals("limits-seed")) {
+            create("New note","limits-seed.md");
+            inputText(noteBody(),"# Limits seed 原件 😀\nOne actual original GUI Save.\n");save();return;
+        }
+        if(phase.equals("limits-list")) {
+            clickTitleBar("Files");
+            for(String path:paths)waitNode(n->label(n,path,false)&&n.isEnabled()&&fileDrawerRow(n),"owned original byte-limit file: "+path);
+            AccessibilityNodeInfo close=waitNode(n->label(n,"Close",false)&&fileDrawerRow(n),"owned file panel Close");
+            activate(close,this::fileDrawerRow);return;
+        }
+        String path;boolean allowed;
+        switch(phase) {
+            case "limits-md":path=paths[0];allowed=true;break;
+            case "limits-md-over":path=paths[1];allowed=false;break;
+            case "limits-canvas-over-md":path=paths[2];allowed=true;break;
+            case "limits-canvas":case "limits-cold":path=paths[3];allowed=true;break;
+            case "limits-canvas-over":path=paths[4];allowed=false;break;
+            default:throw new IllegalStateException("Unknown document-limit phase");
+        }
+        if(!allowed) {
+            clickTitleBar("Files");
+            AccessibilityNodeInfo file=waitNode(n->label(n,path,false)&&n.isEnabled()&&fileDrawerRow(n),"original oversize file");
+            activate(file,this::fileDrawerRow);
+            // An unsuccessful open keeps the file drawer for recovery. Close
+            // that same owned panel once to read its original scoped feedback.
+            AccessibilityNodeInfo close=waitNode(n->label(n,"Close",false)&&fileDrawerRow(n),"owned file panel after refused open");
+            activate(close,this::fileDrawerRow);
+            waitNode(n->APP.equals(string(n.getPackageName()))&&n.isVisibleToUser()
+                &&label(n,"This file exceeds editing limits (Markdown 1 MiB, canvas 4 MiB).",false),"actual original Native size refusal");
+        } else {
+            open(path);
+            if(path.endsWith(".canvas"))waitNode(n->APP.equals(string(n.getPackageName()))&&n.isVisibleToUser()
+                &&label(n,"text: Limits 原节点 😀",false),"actual original bounded Canvas node");
+            else require(noteBody().isEditable(),"Accepted original Markdown has no editor");
+            AccessibilityNodeInfo save=waitNode(n->APP.equals(string(n.getPackageName()))&&n.isVisibleToUser()
+                &&label(n,"Save",false),"original saved file Save action");
+            require(!save.isEnabled(),"Read-only open enabled a new Save");
+        }
+        progress.append("ORIGINAL_DOCUMENT_LIMIT path=").append(path).append(" allowed=").append(allowed?1:0).append('\n');
     }
 
     private void originalNoteSearch(String phase) throws Exception {
