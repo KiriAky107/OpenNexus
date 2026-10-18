@@ -51,7 +51,7 @@ final class OriginalFileActions {
     }
 
     static boolean documentAction(boolean owned, String role, String text, String description, String wanted) {
-        return owned && ("Rename".equals(wanted) || "Delete".equals(wanted))
+        return owned && ("Rename".equals(wanted) || "Delete".equals(wanted) || "Export saved content".equals(wanted))
             && "android.widget.Button".equals(role) && (wanted.equals(text) || wanted.equals(description));
     }
     /** Read again while an expanded menu's AX descendants are still arriving. */

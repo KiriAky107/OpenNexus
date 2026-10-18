@@ -65,6 +65,11 @@ public final class OriginalFileActionsCheck {
         need(!OriginalFileActions.documentAction(false,"android.widget.Button","Delete","","Delete"));
         need(!OriginalFileActions.documentAction(true,"android.widget.Button","Delete","","Copy"));
         need(!OriginalFileActions.documentAction(true,"android.widget.Button",null,null,null));
+        need(OriginalFileActions.documentAction(true,"android.widget.Button","Export saved content","","Export saved content"));
+        need(OriginalFileActions.documentAction(true,"android.widget.Button","","Export saved content","Export saved content"));
+        need(!OriginalFileActions.documentAction(false,"android.widget.Button","Export saved content","","Export saved content"));
+        need(!OriginalFileActions.documentAction(true,"android.view.View","Export saved content","","Export saved content"));
+        need(!OriginalFileActions.documentAction(true,"android.widget.Button","Export saved content again","","Export saved content"));
         need(OriginalFileActions.menuDecision(1,-1,0)==2);
         need(OriginalFileActions.menuDecision(0,-1,0)==0);
         need(OriginalFileActions.menuDecision(0,-1,2)==0);

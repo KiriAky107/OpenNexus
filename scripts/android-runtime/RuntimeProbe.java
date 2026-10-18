@@ -416,7 +416,7 @@ public final class RuntimeProbe extends Instrumentation {
                     waitOriginalImageNode();
                     break;
                 case "export":
-                    click("Export saved content", false);
+                    localDocumentAction("Export saved content");
                     click("Prepare content snapshot", false);
                     click("Choose save location", false);
                     // DocumentsUI is Android's real ACTION_CREATE_DOCUMENT destination picker.
