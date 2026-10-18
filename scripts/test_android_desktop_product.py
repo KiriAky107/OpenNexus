@@ -159,5 +159,15 @@ class ProductIsolation(unittest.TestCase):
             self.assertFalse(value['original_exception_text_returned'])
 
 
+    def test_account_read_failure_keeps_only_known_static_observation_code(self):
+        for code in ('DESKTOP_PAIR_ACCOUNT_READ_BUSY','DESKTOP_PAIR_ACCOUNT_READ_UNCONFIRMED'):
+            value=safe_failure(HandoffError(code),'client-action')
+            self.assertEqual(value['checkpoint_code'],code)
+            self.assertFalse(value['original_exception_text_returned'])
+        value=safe_failure(HandoffError('PRIVATE_TOKEN_OR_REQUEST_ARGUMENT'),'client-action')
+        self.assertNotIn('checkpoint_code',value)
+        self.assertNotIn('PRIVATE',str(value))
+
+
 if __name__ == '__main__':
     unittest.main()

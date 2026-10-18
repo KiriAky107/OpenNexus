@@ -131,18 +131,50 @@ class OwnedDesktopUI:
         require(self.stage == 1 or previous is not None, 'DESKTOP_PAIR_COLD_ORIGINAL_REQUIRED')
         scope_keys=('local_vault_id','binding_id','remote_vault_id')
         expected=None if previous is None else {k:previous.get(k) for k in scope_keys}
-        value=self.status();identity=bound_identity(value,payload,expected)
-        details=self.page.evaluate("args=>pairInvoke('sync_account_status',{request:args})",
-                   {'vault_id':identity['local_vault_id'],'binding_id':identity['binding_id']})
-        current=details.get('current_device_id')
-        require(details.get('vault_id')==identity['local_vault_id']
-                and details.get('binding_id')==identity['binding_id']
-                and details.get('vault',{}).get('id')==identity['remote_vault_id']
-                and type(current) is str and re.fullmatch(r'[0-9a-f]{32}',current)
-                and any(d.get('id')==current and d.get('revoked') is False for d in details.get('devices',[])),
-                'DESKTOP_PAIR_CURRENT_DEVICE_INVALID')
-        require(previous is None or current == previous.get('current_device_id'), 'DESKTOP_PAIR_COLD_DEVICE_CHANGED')
-        return {**identity,'current_device_id':current,'credential_state_ready':True}
+        self.account_reads=getattr(self,'account_reads',0)+1
+        observed={'results':[],'original_identity_confirmed':False,'mutation_or_login_replayed':False,
+                  'scope':'Bounded original account reads; only exact SYNC_BUSY is re-observed'}
+        deadline=time.monotonic()+60
+        try:
+            while True:
+                value=self.status();identity=bound_identity(value,payload,expected)
+                if expected is None:expected={k:identity[k] for k in scope_keys}
+                if value.get('running') is True:
+                    observed['results'].append('original_cycle_running')
+                else:
+                    # Catch native rejection inside the read. Playwright's error
+                    # text can contain private arguments and is never preserved.
+                    response=self.page.evaluate("""async args=>{
+                        try {return {ok:true,details:await pairInvoke('sync_account_status',{request:args})}}
+                        catch(error) {return {ok:false,code:typeof error==='string' &&
+                            ['SYNC_BUSY','SYNC_AUTH_REQUIRED','SYNC_TOKEN_EXPIRED','SYNC_BINDING_CHANGED','VAULT_CHANGED'].includes(error)
+                            ? error:'UNCONFIRMED_ACCOUNT_READ'}}
+                    }""", {'vault_id':identity['local_vault_id'],'binding_id':identity['binding_id']})
+                    require(type(response) is dict and type(response.get('ok')) is bool,
+                            'DESKTOP_PAIR_ACCOUNT_READ_UNCONFIRMED')
+                    if response['ok'] is True:
+                        require(set(response)=={'ok','details'} and type(response['details']) is dict,
+                                'DESKTOP_PAIR_ACCOUNT_READ_UNCONFIRMED')
+                        details=response['details'];current=details.get('current_device_id')
+                        require(details.get('vault_id')==identity['local_vault_id']
+                                and details.get('binding_id')==identity['binding_id']
+                                and details.get('vault',{}).get('id')==identity['remote_vault_id']
+                                and type(current) is str and re.fullmatch(r'[0-9a-f]{32}',current)
+                                and any(d.get('id')==current and d.get('revoked') is False for d in details.get('devices',[])),
+                                'DESKTOP_PAIR_CURRENT_DEVICE_INVALID')
+                        require(previous is None or current == previous.get('current_device_id'), 'DESKTOP_PAIR_COLD_DEVICE_CHANGED')
+                        bound_identity(self.status(),payload,expected)
+                        observed['results'].append('read_confirmed');observed['original_identity_confirmed']=True
+                        return {**identity,'current_device_id':current,'credential_state_ready':True}
+                    code=response.get('code')
+                    require(set(response)=={'ok','code'} and code in ('SYNC_BUSY','SYNC_AUTH_REQUIRED','SYNC_TOKEN_EXPIRED',
+                            'SYNC_BINDING_CHANGED','VAULT_CHANGED','UNCONFIRMED_ACCOUNT_READ'), 'DESKTOP_PAIR_ACCOUNT_READ_UNCONFIRMED')
+                    observed['results'].append(code)
+                    require(code=='SYNC_BUSY','DESKTOP_PAIR_ACCOUNT_READ_UNCONFIRMED')
+                require(time.monotonic()<deadline and len(observed['results'])<240,'DESKTOP_PAIR_ACCOUNT_READ_BUSY')
+                time.sleep(.25)
+        finally:
+            write_new(self.attempt/('account-read-'+str(self.account_reads)+'.json'),canonical(observed))
 
     def edit_original_note(self, expected_before, after):
         require(type(expected_before) is bytes and type(after) is bytes and 0<len(after)<=1024**2,

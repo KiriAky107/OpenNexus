@@ -44,11 +44,12 @@ class PairUIBoundaries(unittest.TestCase):
         details={'vault_id':public['local_vault_id'],'binding_id':public['binding_id'],
                  'vault':{'id':public['remote_vault_id']},'current_device_id':device,
                  'devices':[{'id':device,'revoked':False}]}
-        ui.page.evaluate.return_value=details
+        folder=tempfile.TemporaryDirectory();self.addCleanup(folder.cleanup);ui.attempt=Path(folder.name)
+        ui.page.evaluate.return_value={'ok':True,'details':details}
         first=ui.account_identity(self.payload);ui.stage=2
         self.assertEqual(ui.account_identity(self.payload,first),first)
         details=dict(details,current_device_id='0'*32,devices=[{'id':'0'*32,'revoked':False}])
-        ui.page.evaluate.return_value=details
+        ui.page.evaluate.return_value={'ok':True,'details':details}
         with self.assertRaisesRegex(HandoffError,'DESKTOP_PAIR_COLD_DEVICE_CHANGED'):ui.account_identity(self.payload,first)
 
     def test_cold_stage_requires_original_identity_before_observing_a_new_device(self):
@@ -148,6 +149,60 @@ class PairUIBoundaries(unittest.TestCase):
             reconciled=ui.set_paused(True)
             self.assertFalse(reconciled['new_UI_input']);self.assertTrue(reconciled['original_intent_readonly_reconciled'])
             panel.get_by_role.return_value.click.assert_called_once()
+
+
+    def account_observer(self, folder):
+        ui=object.__new__(OwnedDesktopUI);ui.stage=2;ui.attempt=Path(folder);ui.page=Mock()
+        ui.status=Mock(return_value=self.status)
+        public=bound_identity(self.status,self.payload);device='f'*32
+        details={'vault_id':public['local_vault_id'],'binding_id':public['binding_id'],
+                 'vault':{'id':public['remote_vault_id']},'current_device_id':device,
+                 'devices':[{'id':device,'revoked':False}]}
+        original={**public,'current_device_id':device,'credential_state_ready':True}
+        return ui,details,original
+
+    def test_busy_original_account_read_reconciles_only_reads_without_repeating_UI_actions(self):
+        import json
+        with tempfile.TemporaryDirectory() as folder:
+            ui,details,original=self.account_observer(folder)
+            ui.page.evaluate.side_effect=[{'ok':False,'code':'SYNC_BUSY'}, {'ok':True,'details':details}]
+            with patch('android_desktop_pair_ui.time.sleep'):
+                self.assertEqual(ui.account_identity(self.payload,original),original)
+            self.assertEqual(ui.page.evaluate.call_count,2)
+            self.assertTrue(all(call[0]=='evaluate' for call in ui.page.mock_calls))
+            value=json.loads((ui.attempt/'account-read-1.json').read_text('utf-8'))
+            self.assertEqual(value['results'],['SYNC_BUSY','read_confirmed'])
+            self.assertTrue(value['original_identity_confirmed']);self.assertFalse(value['mutation_or_login_replayed'])
+
+    def test_busy_account_read_cannot_cross_a_changed_original_binding(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ui,details,original=self.account_observer(folder)
+            changed=deepcopy(self.status);changed['binding']['id']='33333333-3333-4333-8333-333333333333'
+            ui.status.side_effect=[self.status,changed]
+            ui.page.evaluate.return_value={'ok':False,'code':'SYNC_BUSY'}
+            with patch('android_desktop_pair_ui.time.sleep'),self.assertRaisesRegex(HandoffError,'DESKTOP_PAIR_COLD_IDENTITY_CHANGED'):
+                ui.account_identity(self.payload,original)
+            ui.page.evaluate.assert_called_once()
+
+    def test_unknown_account_read_is_preserved_without_retry_or_exception_text(self):
+        import json
+        with tempfile.TemporaryDirectory() as folder:
+            ui,details,original=self.account_observer(folder)
+            ui.page.evaluate.return_value={'ok':False,'code':'UNCONFIRMED_ACCOUNT_READ'}
+            with self.assertRaisesRegex(HandoffError,'DESKTOP_PAIR_ACCOUNT_READ_UNCONFIRMED'):
+                ui.account_identity(self.payload,original)
+            ui.page.evaluate.assert_called_once()
+            value=json.loads((ui.attempt/'account-read-1.json').read_text('utf-8'))
+            self.assertEqual(value['results'],['UNCONFIRMED_ACCOUNT_READ']);self.assertFalse(value['original_identity_confirmed'])
+
+    def test_permanently_busy_account_read_stops_at_deadline_with_no_input(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ui,details,original=self.account_observer(folder)
+            ui.page.evaluate.return_value={'ok':False,'code':'SYNC_BUSY'}
+            with patch('android_desktop_pair_ui.time.monotonic',side_effect=[0,61]),self.assertRaisesRegex(HandoffError,'DESKTOP_PAIR_ACCOUNT_READ_BUSY'):
+                ui.account_identity(self.payload,original)
+            ui.page.evaluate.assert_called_once()
+
 
 
 if __name__=='__main__':unittest.main(verbosity=2)
