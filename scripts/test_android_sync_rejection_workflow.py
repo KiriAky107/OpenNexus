@@ -26,6 +26,11 @@ class RevocationWorkflow(unittest.TestCase):
         self.assertTrue(admitted(checkout['if'],'sync-revocation'))
         prepare=next(step for step in steps if 'scripts/android_auth_hosted.py prepare --fixture sync' in step.get('run',''))
         self.assertTrue(admitted(prepare['if'],'sync-revocation'))
+        # This step uses setup-python's python3, not the service .venv. Its
+        # parser dependency must be present before workflow tests import yaml.
+        dependency='python3 -m pip install --disable-pip-version-check PyYAML==6.0.3'
+        self.assertIn(dependency,prepare['run'])
+        self.assertLess(prepare['run'].index(dependency),prepare['run'].index('python3 -m unittest'))
         run=next(step for step in steps if 'scripts/android_sync_runtime.py' in step.get('run',''))
         self.assertTrue(admitted(run['if'],'sync-revocation'));self.assertIn("'--revocation'",run['run'])
         generic=next(step for step in steps if 'scripts/android_runtime_probe.py --commit' in step.get('run',''))
