@@ -31,6 +31,7 @@ static pid_t original;
 static uid_t owner;
 static unsigned long long start_ticks;
 static int pinned=-1,held=0;
+static unsigned long long entries_seen,renames_seen,destinations_seen,identity_checks;
 static char nonce[33],target[MAX_PATH];
 static volatile sig_atomic_t expired;
 static void timeout_signal(int signal_number) { (void)signal_number;expired=1; }
@@ -47,9 +48,11 @@ static int hex_nonce(const char *text) {
 static ssize_t small_file(const char *path,char *body,size_t capacity) {
     int fd=open(path,O_RDONLY|O_CLOEXEC);if(fd<0)return -1;
     ssize_t size=read(fd,body,capacity);int saved=errno;close(fd);errno=saved;
-    if(size<0||(size_t)size>=capacity)return -1;body[size]=0;return size;
+    if(size<0||(size_t)size>=capacity)return -1;
+    body[size]=0;return size;
 }
 static int identity(pid_t tid,int main_process) {
+    identity_checks++;
     char path[96],body[16384];snprintf(path,sizeof path,"/proc/%d/status",tid);
     if(small_file(path,body,sizeof body)<0)return 0;
     unsigned int a,b,c,d;int tgid;char *group=strstr(body,"\nTgid:"),*uids=strstr(body,"\nUid:");
@@ -80,7 +83,10 @@ static int observe_stop(pid_t tid,int status) {
     int index=task_index(tid);
     if(index<0&&(index=add_task(tid,0))<0)return -1;
     if(WIFEXITED(status)||WIFSIGNALED(status)) { tasks[index].alive=0;return index; }
-    if(!WIFSTOPPED(status)||!identity(tid,0))return -1;
+    /* waitpid reports only our ptrace-owned thread lifetimes. New/clone TIDs
+     * were checked by add_task; an exited lifetime is never revived without
+     * a new identity check. Do not open /proc twice for every syscall. */
+    if(!WIFSTOPPED(status))return -1;
     tasks[index].stopped=1;
     if((unsigned int)status>>16==PTRACE_EVENT_CLONE) {
         unsigned long child=0;
@@ -133,7 +139,8 @@ static void cleanup(void) {
             if(tasks[i].alive&&tasks[i].stopped) { ptrace(PTRACE_DETACH,tasks[i].tid,0,0);tasks[i].alive=0; }
             else if(tasks[i].alive)remaining++;
         }
-        if(!remaining)break;usleep(1000);
+        if(!remaining)break;
+        usleep(1000);
     }
 }
 static int command(const char *expected,int milliseconds) {
@@ -186,6 +193,11 @@ static int self_test(void) {
     CHECK(!temporary_path("/data/user/0/" APP "/files/vault/atomic-area/original.md",target));
     CHECK(!temporary_path("/data/user/0/" APP "/files/vault/atomic-area/.tmp../a",target));
     CHECK(!temporary_path("/data/user/0/" APP "/files/vault/atomic-area/.tmpA12345","/foreign/original.md"));
+    original=2147483000;owner=10123;count=1;tasks[0].tid=original;tasks[0].alive=1;
+    CHECK(observe_stop(original,((SIGTRAP|0x80)<<8)|0x7f)==0&&tasks[0].stopped);
+    CHECK(observe_stop(original-1,((SIGTRAP|0x80)<<8)|0x7f)==-1);
+    CHECK(observe_stop(original,0)==0&&!tasks[0].alive);
+    CHECK(observe_stop(original,((SIGTRAP|0x80)<<8)|0x7f)==-1);
     printf("ORIGINAL_ATOMIC_OBSERVER_DATA_OK %d\n",checks);return 0;
 }
 int main(int argc,char **argv) {
@@ -217,22 +229,26 @@ int main(int argc,char **argv) {
             long bytes=ptrace(PTRACE_GET_SYSCALL_INFO,tid,(void *)sizeof info,&info);
             if(bytes<0||info.arch!=AUDIT_ARCH_X86_64)goto refused;
             if(info.op==PTRACE_SYSCALL_INFO_ENTRY) {
+                if(++entries_seen>1000000)goto refused;
                 if((size_t)bytes<offsetof(struct ptrace_syscall_info,entry.args)+sizeof info.entry.args)goto refused;
                 uint64_t from=0,to=0;unsigned long nr=(unsigned long)info.entry.nr;
                 if(nr==__NR_rename) { from=info.entry.args[0];to=info.entry.args[1]; }
                 else if(nr==__NR_renameat||(nr==__NR_renameat2&&!info.entry.args[4])) { from=info.entry.args[1];to=info.entry.args[3]; }
                 if(to) {
+                    renames_seen++;
+                    if(!identity(tid,0)||!identity(original,1))goto refused;
                     char destination[MAX_PATH],source[MAX_PATH];
                     if(path_argument(tid,to,destination)&&!strcmp(destination,target)) {
+                        destinations_seen++;
                         struct stat old,temp;
                         if(!path_argument(tid,from,source)||!temporary_path(source,destination)
                             ||lstat(target,&old)||lstat(source,&temp)||!S_ISREG(old.st_mode)||!S_ISREG(temp.st_mode)
                             ||old.st_uid!=owner||temp.st_uid!=owner||old.st_nlink!=1||temp.st_nlink!=1
                             ||old.st_dev!=temp.st_dev||old.st_ino==temp.st_ino)goto refused;
                         held=1;if(!freeze_others(tid))goto refused;
-                        printf("{\"event\":\"entry\",\"nonce\":\"%s\",\"pid\":%d,\"tid\":%d,\"syscall\":%lu,\"temporary\":\"%s\",\"old_inode\":%llu,\"temp_inode\":%llu,\"device\":%llu,\"old_bytes\":%lld,\"temp_bytes\":%lld}\n",
+                        printf("{\"event\":\"entry\",\"nonce\":\"%s\",\"pid\":%d,\"tid\":%d,\"syscall\":%lu,\"temporary\":\"%s\",\"old_inode\":%llu,\"temp_inode\":%llu,\"device\":%llu,\"old_bytes\":%lld,\"temp_bytes\":%lld,\"trace_counts\":{\"entries\":%llu,\"renames\":%llu,\"destinations\":%llu,\"identity_checks\":%llu}}\n",
                             nonce,original,tid,nr,strrchr(source,'/')+1,(unsigned long long)old.st_ino,(unsigned long long)temp.st_ino,
-                            (unsigned long long)old.st_dev,(long long)old.st_size,(long long)temp.st_size);
+                            (unsigned long long)old.st_dev,(long long)old.st_size,(long long)temp.st_size,entries_seen,renames_seen,destinations_seen,identity_checks);
                         if(!command("stop\n",60000)||!identity(original,1)||syscall(__NR_pidfd_send_signal,pinned,SIGKILL,NULL,0))goto refused;
                         held=0;for(size_t i=0;i<count;i++)tasks[i].alive=0;
                         printf("{\"event\":\"stopped\",\"nonce\":\"%s\",\"pid\":%d,\"original_syscall_resumed\":false}\n",nonce,original);return 0;
@@ -243,5 +259,6 @@ int main(int argc,char **argv) {
         if(!resume_task((size_t)index,delivered))goto refused;
     }
 refused:
-    printf("{\"event\":\"refused\",\"nonce\":\"%s\",\"pid\":%d,\"held\":%s,\"raw_error_exported\":false}\n",nonce,original,held?"true":"false");return 2;
+    printf("{\"event\":\"refused\",\"nonce\":\"%s\",\"pid\":%d,\"held\":%s,\"raw_error_exported\":false,\"trace_counts\":{\"entries\":%llu,\"renames\":%llu,\"destinations\":%llu,\"identity_checks\":%llu}}\n",
+        nonce,original,held?"true":"false",entries_seen,renames_seen,destinations_seen,identity_checks);return 2;
 }

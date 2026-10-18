@@ -606,7 +606,9 @@ public final class RuntimeProbe extends Instrumentation {
                 "Original atomic pending body changed; no Save sent");
             // The parent must deliberately interrupt this one invocation at
             // the original OS replacement boundary. An ordinary success fails.
+            atomicTouchMark("before");
             click("Save",false);
+            atomicTouchMark("after");
             long until=SystemClock.uptimeMillis()+120_000;
             while(SystemClock.uptimeMillis()<until&&!visibleLabel("Saved"))SystemClock.sleep(100);
             require(visibleLabel("Saved"),"Original atomic Save did not complete; no retry sent");
@@ -622,6 +624,17 @@ public final class RuntimeProbe extends Instrumentation {
                 click("Check original result",false);waitLabel("Saved");
             }
             require(OriginalMarkdownAccessibility.matches(string(noteBody().getText()),OriginalAtomicWrite.UPDATED),"Cold original atomic body differs");
+        }
+    }
+
+    private void atomicTouchMark(String stage) throws java.io.IOException {
+        String nonce=arguments.getString("atomic_nonce","");
+        require(nonce.matches("[0-9a-f]{32}")&&(stage.equals("before")||stage.equals("after")),"Original atomic touch scope refused");
+        File target=new File(getContext().getFilesDir(),"atomic-"+nonce+"-"+stage+".json");
+        require(target.createNewFile(),"Original atomic touch checkpoint already exists");
+        String value="{\"nonce\":\""+nonce+"\",\"stage\":\""+stage+"\",\"uptime_ms\":"+SystemClock.uptimeMillis()+"}\n";
+        try(FileOutputStream out=new FileOutputStream(target)) {
+            out.write(value.getBytes(java.nio.charset.StandardCharsets.US_ASCII));out.flush();out.getFD().sync();
         }
     }
 

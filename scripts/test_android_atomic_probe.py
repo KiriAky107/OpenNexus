@@ -3,10 +3,13 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
-from android_atomic_probe import APP,NOTE,ORIGINAL,UPDATED,digest,start_time,target_path,decode_event,event,pending,recovered,run_atomic
+from android_atomic_probe import APP,NOTE,ORIGINAL,UPDATED,OriginalTrace,digest,start_time,target_path,decode_event,event,trace_counts,touch_marker,pending,recovered,run_atomic
 
 class AtomicContracts(unittest.TestCase):
     def fixture(self):
@@ -50,7 +53,7 @@ class AtomicContracts(unittest.TestCase):
         for change in [dict(pid=124),dict(nonce='b'*32),dict(uid=0),dict(threads=257),dict(threads=True),dict(extra=1)]:
             with self.assertRaises(RuntimeError):event(dict(value,**change),'ready','a'*32,123,10123)
     def test_entry_is_original_supported_rename_with_distinct_owned_files(self):
-        value=dict(event='entry',nonce='a'*32,pid=123,tid=124,syscall=264,temporary='.tmpA12345',old_inode=10,temp_inode=11,device=2,old_bytes=len(ORIGINAL),temp_bytes=len(UPDATED))
+        value=dict(event='entry',nonce='a'*32,pid=123,tid=124,syscall=264,temporary='.tmpA12345',old_inode=10,temp_inode=11,device=2,old_bytes=len(ORIGINAL),temp_bytes=len(UPDATED),trace_counts=dict(entries=100,renames=2,destinations=1,identity_checks=125))
         self.assertEqual(event(value,'entry','a'*32,123,10123),value)
         for change in [dict(syscall=87),dict(temp_inode=10),dict(temporary='../original.md'),dict(temp_bytes=1),dict(tid=True),dict(event='exit')]:
             with self.assertRaises(RuntimeError):event(dict(value,**change),'entry','a'*32,123,10123)
@@ -96,5 +99,36 @@ class AtomicContracts(unittest.TestCase):
             if change=='journal':changed['journal']=deepcopy(held['journal'])
             else:changed['files'][0]['revision']=3
             with self.assertRaises(RuntimeError):recovered(before,held,changed)
+    def test_trace_counts_are_bounded_integers_without_unrelated_paths(self):
+        counts=dict(entries=100,renames=2,destinations=1,identity_checks=125);self.assertEqual(trace_counts(counts,True),counts)
+        for change in [dict(entries=True),dict(renames=101),dict(destinations=2),dict(entries=1000002),dict(path='/foreign')]:
+            with self.assertRaises(RuntimeError):trace_counts(dict(counts,**change),True)
+    def test_touch_checkpoint_requires_the_original_nonce_stage_and_numeric_clock(self):
+        value=dict(nonce='a'*32,stage='before',uptime_ms=100)
+        self.assertEqual(touch_marker(json.dumps(value).encode(),'a'*32,'before'),value)
+        for change in [dict(nonce='b'*32),dict(stage='after'),dict(uptime_ms=True),dict(extra='unrelated')]:
+            with self.assertRaises(RuntimeError):touch_marker(json.dumps(dict(value,**change)).encode(),'a'*32,'before')
+    def ended_trace(self,folder,body):
+        # Small real Python pipes exercise EOF/close behavior, not native tracing.
+        trace=OriginalTrace.__new__(OriginalTrace);trace.probe=SimpleNamespace(output=Path(folder));trace.pid=123;trace.nonce='a'*32
+        trace.buffer=b'';trace.ended_output=None;trace.ended_validation_failed=False
+        trace.process=subprocess.Popen([sys.executable,'-I','-c','import sys;sys.stdout.buffer.write('+repr(body.encode())+')'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        trace.process.stdin.close();trace.process.wait(timeout=5);return trace
+    def test_original_finished_pipe_remainder_is_preserved_once_and_closed_safely(self):
+        raw=json.dumps(dict(event='refused',nonce='a'*32,pid=123,held=False,raw_error_exported=False,trace_counts=dict(entries=20,renames=0,destinations=0,identity_checks=120)))+'\n'
+        with tempfile.TemporaryDirectory() as folder:
+            trace=self.ended_trace(folder,raw);first=trace.finish();self.assertEqual(first,(raw.encode(),b''));self.assertEqual(trace.finish(),first)
+            self.assertTrue(trace.process.stdout.closed and trace.process.stderr.closed)
+            self.assertEqual((Path(folder)/'atomic-observer-remainder.stdout').read_bytes(),raw.encode())
+    def test_success_with_empty_finished_pipes_does_not_read_closed_streams_again(self):
+        with tempfile.TemporaryDirectory() as folder:
+            trace=self.ended_trace(folder,'');self.assertEqual(trace.finish(),(b'',b''));self.assertEqual(trace.finish(),(b'',b''))
+    def test_foreign_original_remainder_is_preserved_but_never_admitted_on_second_read(self):
+        raw=json.dumps(dict(event='refused',nonce='b'*32,pid=123,held=False,raw_error_exported=False,trace_counts=dict(entries=20,renames=0,destinations=0,identity_checks=120)))+'\n'
+        with tempfile.TemporaryDirectory() as folder:
+            trace=self.ended_trace(folder,raw)
+            with self.assertRaises(RuntimeError):trace.finish()
+            with self.assertRaises(RuntimeError):trace.finish()
+            self.assertEqual((Path(folder)/'atomic-observer-remainder.stdout').read_bytes(),raw.encode())
 
 if __name__=='__main__':unittest.main()

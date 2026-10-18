@@ -47,9 +47,40 @@ def decode_event(raw):
     return json.loads(raw.decode('utf-8','strict'),object_pairs_hook=unique,
         parse_constant=lambda value:require(False,'ATOMIC_TRACE_NONFINITE'))
 
+def trace_counts(value,matched=False):
+    require(type(value) is dict and set(value)=={'entries','renames','destinations','identity_checks'}
+        and all(type(v) is int and 0<=v<=4000000 for v in value.values())
+        and value['destinations']<=value['renames']<=value['entries']<=1000001,'ATOMIC_TRACE_COUNTS')
+    if matched:require(value['destinations']==1 and value['identity_checks']>0 and value['entries']<=1000000,'ATOMIC_TRACE_MATCH_COUNTS')
+    return value
+
+def touch_marker(raw,nonce,stage):
+    require(type(raw) is bytes and len(raw)<=256 and re.fullmatch(r'[0-9a-f]{32}',nonce) and stage in ('before','after'),'ATOMIC_TOUCH_MARKER_BOUND')
+    value=decode_event(raw)
+    require(type(value) is dict and set(value)=={'nonce','stage','uptime_ms'} and value['nonce']==nonce and value['stage']==stage
+        and type(value['uptime_ms']) is int and 0<value['uptime_ms']<2**53,'ATOMIC_TOUCH_MARKER_IDENTITY')
+    return value
+
+def collect_touch_markers(probe,nonce):
+    require_hosted_emulator(probe.args.serial);require(type(nonce) is str and re.fullmatch(r'[0-9a-f]{32}',nonce),'ATOMIC_TOUCH_SCOPE')
+    found={}
+    for stage in ('before','after'):
+        result=probe.shell('run-as',DRIVER,'cat','files/atomic-'+nonce+'-'+stage+'.json',check=False)
+        value={'present':False,'returncode':result.returncode}
+        if result.returncode==0:value={'present':True,'marker':touch_marker(result.stdout,nonce,stage)}
+        atomic_json(probe.output/('atomic-touch-'+stage+'.json'),value,exclusive=True);found[stage]=value
+    return found
+
+def preserve_driver_output(probe,output):
+    out,err=output;limit=256*1024
+    require(type(out) is bytes and type(err) is bytes,'ATOMIC_DRIVER_OUTPUT_TYPE')
+    (probe.output/'atomic-interrupted-driver.log').write_bytes(out[:limit])
+    (probe.output/'atomic-interrupted-driver.stderr').write_bytes(err[:limit])
+    return len(out)>limit or len(err)>limit
+
 def event(value,expected,nonce,pid,uid):
     fields={'ready':{'event','nonce','pid','uid','threads'},'armed':{'event','nonce','pid'},
-        'entry':{'event','nonce','pid','tid','syscall','temporary','old_inode','temp_inode','device','old_bytes','temp_bytes'},
+        'entry':{'event','nonce','pid','tid','syscall','temporary','old_inode','temp_inode','device','old_bytes','temp_bytes','trace_counts'},
         'stopped':{'event','nonce','pid','original_syscall_resumed'}}
     require(expected in fields and type(value) is dict and set(value)==fields[expected]
         and value['event']==expected and value['nonce']==nonce and type(value['pid']) is int and value['pid']==pid,'ATOMIC_ORIGINAL_TRACE_EVENT')
@@ -57,6 +88,7 @@ def event(value,expected,nonce,pid,uid):
         require(type(value['uid']) is int and value['uid']==uid and type(value['threads']) is int
             and 1<=value['threads']<=256,'ATOMIC_ORIGINAL_TRACE_THREADS')
     elif expected=='entry':
+        trace_counts(value['trace_counts'],True)
         require(all(type(value[k]) is int and value[k]>0 for k in ('tid','syscall','old_inode','temp_inode','device','old_bytes','temp_bytes'))
             and value['tid']<2**31 and value['syscall'] in (82,264,316)
             and value['old_inode']!=value['temp_inode'] and value['old_bytes']==len(ORIGINAL)
@@ -130,7 +162,7 @@ def snapshot(probe,label):
 
 class OriginalTrace:
     def __init__(self,probe,pid,uid,ticks,target,nonce,binary):
-        self.probe,self.pid,self.uid,self.nonce=probe,pid,uid,nonce;self.buffer=b'';self.ordinal=0
+        self.probe,self.pid,self.uid,self.nonce=probe,pid,uid,nonce;self.buffer=b'';self.ordinal=0;self.ended_output=None;self.ended_validation_failed=False
         remote='cache/original-atomic-'+nonce
         require(probe.shell('run-as',APP,'test','!','-e',remote,check=False).returncode==0,'ATOMIC_TRACE_TOOL_EXISTS')
         probe.device('shell','-T',shlex.join(('run-as',APP,'sh','-c','set -C; umask 077; cat > '+remote)),input=binary.read_bytes())
@@ -151,6 +183,29 @@ class OriginalTrace:
         return event(value,kind,self.nonce,self.pid,self.uid)
     def send(self,value):
         require(value in (b'arm\n',b'stop\n'),'ATOMIC_TRACE_COMMAND');self.process.stdin.write(value);self.process.stdin.flush()
+    def finish(self):
+        if self.ended_output is not None:
+            require(not self.ended_validation_failed,'ATOMIC_OBSERVER_REMAINDER_PREVIOUSLY_REFUSED')
+            return self.ended_output
+        require(self.process.poll() is not None,'ATOMIC_OBSERVER_STILL_LIVE')
+        out=self.buffer+self.process.stdout.read(4097);err=self.process.stderr.read(4097)
+        require(len(out)<=4096 and len(err)<=4096,'ATOMIC_OBSERVER_REMAINDER_BOUND')
+        self.ended_output=(out,err)
+        (self.probe.output/'atomic-observer-remainder.stdout').write_bytes(out)
+        (self.probe.output/'atomic-observer-ended.stderr').write_bytes(err)
+        # Drain each actual pipe once. communicate() closes these streams and
+        # caused the former success cleanup to read an already-closed stderr.
+        self.process.stdout.close();self.process.stderr.close()
+        try:
+            for line in out.splitlines():
+                value=decode_event(line)
+                require(type(value) is dict and set(value)=={'event','nonce','pid','held','raw_error_exported','trace_counts'}
+                    and value['event']=='refused' and value['nonce']==self.nonce and value['pid']==self.pid
+                    and type(value['held']) is bool and value['raw_error_exported'] is False,'ATOMIC_OBSERVER_REMAINDER_IDENTITY')
+                trace_counts(value['trace_counts'])
+        except Exception:
+            self.ended_validation_failed=True;raise
+        return self.ended_output
 
 def build_observer(probe):
     root=Path(__file__).resolve().parent;source=root/'android-runtime-native/atomic_replace_observer.c'
@@ -161,7 +216,7 @@ def build_observer(probe):
     require(check.returncode==0,'ATOMIC_HOST_C_COMPILE')
     check=probe.command([host,'--self-test'],check=False)
     (probe.output/'atomic-observer-data.txt').write_bytes(check.stdout)
-    require(check.returncode==0 and check.stdout==b'ORIGINAL_ATOMIC_OBSERVER_DATA_OK 11\n','ATOMIC_HOST_C_DATA_CHECK')
+    require(check.returncode==0 and check.stdout==b'ORIGINAL_ATOMIC_OBSERVER_DATA_OK 15\n','ATOMIC_HOST_C_DATA_CHECK')
     compiler=probe.args.sdk/'ndk'/NDK/'toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang'
     require(compiler.is_file() and compiler.resolve().is_relative_to(probe.args.sdk.resolve()),'ATOMIC_PINNED_NDK_REQUIRED')
     result=probe.command([compiler,'-std=c11','-O1','-Wall','-Wextra','-Werror=implicit-function-declaration',source,'-o',binary],check=False)
@@ -176,7 +231,7 @@ def run_atomic(probe):
     require_hosted_emulator(probe.args.serial);require(probe.args.scope=='write-interruption','ATOMIC_EXPLICIT_SCOPE')
     report={'passed':False,'run_id':os.environ['GITHUB_RUN_ID'],'tools_source':probe.args.tools_commit,'compiled_source':probe.args.commit,
         'APK_sha256':probe.binding['sha256'],'physical_phone_upgrade_or_all_A2_complete':False,'no_native_code_or_callback_replacement':True}
-    tracer=driver=None
+    tracer=driver=None;driver_output=None;markers=None;nonce=None
     def intent(stage,**data):
         report['stage']=stage;atomic_json(probe.output/(stage+'-original-intent.json'),{'scope':'write-interruption','stage':stage,'path':NOTE,'automatic_retry':False,**data},exclusive=True)
     try:
@@ -194,7 +249,7 @@ def run_atomic(probe):
         intent('atomic-observer',original_pid=pid,original_uid=uid,start_ticks=ticks,nonce=nonce)
         tracer=OriginalTrace(probe,pid,uid,ticks,target,nonce,binary);tracer.read('ready');tracer.send(b'arm\n');tracer.read('armed')
         intent('atomic-save',original_pid=pid,nonce=nonce,requested_sha256=digest(UPDATED))
-        driver=subprocess.Popen([str(probe.adb),'-s',probe.args.serial,'shell','-T',shlex.join(('am','instrument','-w','-e','phase','atomic-save',DRIVER+'/.RuntimeProbe'))],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        driver=subprocess.Popen([str(probe.adb),'-s',probe.args.serial,'shell','-T',shlex.join(('am','instrument','-w','-e','phase','atomic-save','-e','atomic_nonce',nonce,DRIVER+'/.RuntimeProbe'))],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         report['original_GUI_Save_invocations']=1
         entry=tracer.read('entry');require(driver.poll() is None,'ATOMIC_ORIGINAL_DRIVER_ALREADY_ENDED')
         held=snapshot(probe,'atomic-entry');original=pending(before,held)
@@ -207,22 +262,28 @@ def run_atomic(probe):
         require(spool.returncode==0 and spool.stdout==UPDATED,'ATOMIC_ORIGINAL_PAYLOAD_BYTES')
         (probe.output/'atomic-original-payload.md').write_bytes(spool.stdout)
         intent('atomic-original-stop',operation_id=original['operation_id'],original_pid=pid,nonce=nonce)
-        tracer.send(b'stop\n');tracer.read('stopped');stdout,stderr=tracer.process.communicate(timeout=15)
+        tracer.send(b'stop\n');tracer.read('stopped');tracer.process.stdin.close();tracer.process.wait(timeout=15)
+        stdout,stderr=tracer.finish()
         require(tracer.process.returncode==0 and not stdout and not stderr,'ATOMIC_ORIGINAL_TRACE_EXIT')
         until=time.monotonic()+10
         while time.monotonic()<until and probe.shell('pidof',APP,check=False).stdout.strip():time.sleep(.1)
         require(not probe.shell('pidof',APP,check=False).stdout.strip(),'ATOMIC_ORIGINAL_PROCESS_NOT_ABSENT')
-        probe.shell('am','force-stop',DRIVER);out,err=driver.communicate(timeout=15)
-        (probe.output/'atomic-interrupted-driver.log').write_bytes(out);(probe.output/'atomic-interrupted-driver.stderr').write_bytes(err)
+        probe.shell('am','force-stop',DRIVER);driver_output=driver.communicate(timeout=15);out,err=driver_output
+        require(not preserve_driver_output(probe,driver_output),'ATOMIC_DRIVER_OUTPUT_TRUNCATED')
         require(b'OPENNEXUS_RUNTIME_PHASE_OK atomic-save' not in out,'ATOMIC_INTERRUPTED_GUI_FALSLY_SUCCEEDED')
+        markers=collect_touch_markers(probe,nonce);require(markers['before']['present'],'ATOMIC_ORIGINAL_TOUCH_CHECKPOINT_MISSING')
         stopped=snapshot(probe,'atomic-stopped');require(stopped==held and probe.original(NOTE)==ORIGINAL,'ATOMIC_UNACKNOWLEDGED_ORIGINAL_CHANGED')
         intent('atomic-cold',operation_id=original['operation_id'],original_pid=pid)
         probe.phase('atomic-cold',keep_running=True);cold=snapshot(probe,'atomic-cold');decision=recovered(before,held,cold)
         cold_pid=int(probe.shell('pidof',APP).stdout.strip());require(cold_pid!=pid and probe.original(NOTE)==UPDATED,'ATOMIC_COLD_EXACT_ORIGINAL')
         report.update(passed=True,original_PID=pid,cold_PID=cold_pid,original_decision=decision,actual_original_replace_syscall_entry=entry,
-            interrupted_original_GUI_invocations=1,no_new_Save_or_replayed_native_apply=True,old_target_sha256=digest(ORIGINAL),recovered_sha256=digest(UPDATED))
+            interrupted_original_GUI_invocations=1,original_touch_markers=markers,no_new_Save_or_replayed_native_apply=True,old_target_sha256=digest(ORIGINAL),recovered_sha256=digest(UPDATED))
     except Exception as error:
         report['failure_class']=type(error).__name__
+        if probe.root is not None:
+            try:
+                probe.original(NOTE);snapshot(probe,'atomic-failure-readonly')
+            except Exception as observation:report['failure_readonly_observation_class']=type(observation).__name__
         raise
     finally:
         # Cleanup owns only this fresh installed app/driver/observer. A refused
@@ -230,13 +291,21 @@ def run_atomic(probe):
         try:
             probe.force_stop()
             if driver is not None and driver.poll() is None:probe.shell('am','force-stop',DRIVER,check=False)
+            if driver is not None and driver_output is None:
+                try:
+                    driver_output=driver.communicate(timeout=15)
+                    report['driver_output_truncated']=preserve_driver_output(probe,driver_output)
+                except (OSError,subprocess.TimeoutExpired):report['driver_cleanup_unconfirmed']=True;report['passed']=False
+            if driver is not None and markers is None and nonce is not None:
+                try:report['original_touch_markers']=collect_touch_markers(probe,nonce)
+                except Exception as observation:report['touch_observation_class']=type(observation).__name__
             if tracer is not None:
                 if tracer.process.poll() is None:
                     try:
-                        tracer.process.stdin.close();tracer.process.wait(timeout=15)
-                    except (OSError,subprocess.TimeoutExpired):report['observer_cleanup_unconfirmed']=True
+                        if not tracer.process.stdin.closed:tracer.process.stdin.close()
+                        tracer.process.wait(timeout=15)
+                    except (OSError,subprocess.TimeoutExpired):report['observer_cleanup_unconfirmed']=True;report['passed']=False
                 if tracer.process.poll() is not None:
-                    diagnostic=tracer.process.stderr.read(4097)
-                    require(len(diagnostic)<=4096,'ATOMIC_OBSERVER_STDERR_BOUND')
-                    (probe.output/'atomic-observer-ended.stderr').write_bytes(diagnostic)
+                    try:tracer.finish()
+                    except Exception as observation:report['observer_diagnostic_class']=type(observation).__name__;report['passed']=False
         finally:atomic_json(probe.output/'atomic-write-interruption-proof.json',report,exclusive=True)
