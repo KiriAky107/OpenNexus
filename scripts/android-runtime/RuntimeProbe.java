@@ -112,6 +112,10 @@ public final class RuntimeProbe extends Instrumentation {
                 case "limits-canvas-over-md": case "limits-canvas": case "limits-canvas-over": case "limits-cold":
                     originalDocumentLimits(phase); break;
                 case "storage-init": case "atomic-init": waitLabel("Start writing"); break;
+                case "canvas-storage-init": waitLabel("Start writing"); break;
+                case "canvas-storage-seed": case "canvas-storage-edit": case "canvas-storage-fail":
+                case "canvas-storage-check": case "canvas-storage-retry": case "canvas-storage-cold":
+                    canvasStorageRecovery(phase); break;
                 case "atomic-seed": case "atomic-edit": case "atomic-save": case "atomic-cold":
                     originalAtomicWrite(phase); break;
                 case "storage-seed":
@@ -568,6 +572,33 @@ public final class RuntimeProbe extends Instrumentation {
         require(!target.exists(),"Original performance metrics already exist");
         try(FileOutputStream out=new FileOutputStream(target)) {
             out.write(report.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));out.flush();out.getFD().sync();
+        }
+    }
+
+    private void canvasStorageRecovery(String phase) throws Exception {
+        String path="full-area/original.canvas",text="Canvas 空间不足草稿 😀 / preserve this original content";
+        switch(phase) {
+            case "canvas-storage-seed":create("New canvas",path);save();break;
+            case "canvas-storage-edit":
+                waitLabel("Free canvas");graphAction("Text");graphValue("Node content",text);graphClosePanel();
+                waitLabel("Draft kept on this device");break;
+            case "canvas-storage-fail":
+                waitLabel("Draft kept on this device");click("Save",false);
+                waitLabel("FILESYSTEM_ERROR");waitLabel("Completion is not yet confirmed.");break;
+            case "canvas-storage-check":
+                waitLabel("Completion is not yet confirmed.");click("Check original result",false);
+                waitLabel("Completion is not yet confirmed.");break;
+            case "canvas-storage-retry":
+                waitLabel("Completion is not yet confirmed.");click("Retry original content",false);waitLabel("Saved");break;
+            case "canvas-storage-cold":
+                clickTitleBar("Files");
+                AccessibilityNodeInfo folder=waitNode(node->label(node,"full-area",false)&&node.isEnabled()&&fileDrawerRow(node),"original owned Canvas directory");
+                activate(folder,this::fileDrawerRow);
+                AccessibilityNodeInfo file=waitNode(node->label(node,"original.canvas",false)&&node.isEnabled()&&fileDrawerRow(node),"original recovered Canvas file");
+                activate(file,this::fileDrawerRow);waitLabel("Free canvas");
+                waitNode(node->APP.equals(string(node.getPackageName()))&&label(node,"text: "+text,false)&&!node.isEditable(),"cold original recovered Canvas node");
+                waitNode(node->APP.equals(string(node.getPackageName()))&&label(node,"Save",false)&&!node.isEnabled(),"cold original Canvas remains saved");break;
+            default:throw new IllegalStateException("Unknown owned Canvas storage phase");
         }
     }
 

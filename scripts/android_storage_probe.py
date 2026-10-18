@@ -15,6 +15,8 @@ CAPACITY = 16 * 1024**2
 NOTE = 'full-area/original.md'
 ORIGINAL = '# 原始文件 😀\nA confirmed original before the owned filesystem is full.\n'.encode()
 UPDATED = ORIGINAL + '空间不足时保留此草稿 / retry this exact original content\n'.encode()
+CANVAS_NOTE = 'full-area/original.canvas'
+CANVAS_TEXT = 'Canvas 空间不足草稿 😀 / preserve this original content'
 
 
 def action_intent(probe, phase, **details):
@@ -22,7 +24,7 @@ def action_intent(probe, phase, **details):
     require(phase in ('storage-mount', 'storage-seed', 'storage-fill', 'storage-fail', 'storage-check',
                       'storage-release', 'storage-retry', 'storage-cold'), 'Unsafe storage action phase')
     value = {'run_id': os.environ['GITHUB_RUN_ID'], 'tools_source': probe.args.tools_commit,
-             'compiled_source': probe.args.commit, 'phase': phase, 'path': NOTE,
+             'compiled_source': probe.args.commit, 'phase': phase, 'path': CANVAS_NOTE if probe.args.scope=='canvas-storage-recovery' else NOTE,
              'automatic_retry': False, 'native_operation_id': False, **details}
     with (probe.output / (phase + '-original-intent.json')).open('xb') as f:
         f.write((json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode()); f.flush(); os.fsync(f.fileno())
@@ -76,40 +78,40 @@ def mount_identity(raw, target, source):
     return matches[0]
 
 
-def original_pending(before, failed):
+def original_pending(before, failed, original=ORIGINAL, updated=UPDATED):
     require(len(before['saves']) == 1 and before['saves'][0]['state'] == 'committed', 'Original seed save is not unique')
     pending = [s for s in failed['saves'] if s['state'] == 'prepared']
-    require(len(failed['saves']) == 2 and len(pending) == 1 and pending[0]['content'].encode() == UPDATED
+    require(len(failed['saves']) == 2 and len(pending) == 1 and pending[0]['content'].encode() == updated
             and pending[0]['error'] == 'FILESYSTEM_ERROR', 'Actual failed original save was not preserved')
     intent = pending[0]
     require(len(failed['drafts']) == len(failed['files']) == 1
             and failed['saves'][0] == before['saves'][0]
             and failed['drafts'][0]['id'] == before['drafts'][0]['id']
-            and failed['drafts'][0]['content'].encode() == UPDATED
+            and failed['drafts'][0]['content'].encode() == updated
             and failed['drafts'][0]['generation'] == intent['generation']
             and failed['drafts'][0]['saved_generation'] == before['drafts'][0]['saved_generation']
             and failed['files'] == before['files'] and failed['outbox'] == before['outbox'],
             'File ENOSPC changed the original saved metadata or lost its actual durable draft')
-    require(intent['file_id'] == before['drafts'][0]['file_id'] and intent['expected'] == hashlib.sha256(ORIGINAL).hexdigest()
+    require(intent['file_id'] == before['drafts'][0]['file_id'] and intent['expected'] == hashlib.sha256(original).hexdigest()
             and intent['generation'] > before['drafts'][0]['saved_generation'], 'Failed intent replaced the original file or generation')
     rows = [r for r in failed['operations'] if r['operation_id'] == intent['operation_id']]
     journal = [r for r in failed['journal'] if r['operation_id'] == intent['operation_id']]
     payload = [r for r in failed['payloads'] if r['operation_id'] == intent['operation_id']]
     require(len(rows) == len(journal) == len(payload) == 1 and rows[0]['state'] == journal[0]['state'] == 'pending'
-            and payload[0]['hash'] == hashlib.sha256(UPDATED).hexdigest() and payload[0]['size'] == len(UPDATED)
+            and payload[0]['hash'] == hashlib.sha256(updated).hexdigest() and payload[0]['size'] == len(updated)
             and not any(r['operation_id'] == intent['operation_id'] for r in failed['outbox']),
             'File ENOSPC did not retain the original accepted journal outside its filesystem')
     return intent
 
 
-def snapshot(probe, label):
+def snapshot(probe, label, path=NOTE):
     # Only the new fixture's one note and its original operation IDs are read.
     draft_columns = 'id,file_id,path,base_hash,generation,saved_generation,content,edit_session'
     save_columns = 'operation_id,draft_id,generation,file_id,path,expected,content,state,error'
     value = {'drafts': [dict(zip(draft_columns.split(','), r)) for r in probe.database_rows(
-        'SELECT ' + draft_columns + ' FROM drafts WHERE path=?', (NOTE,))],
+        'SELECT ' + draft_columns + ' FROM drafts WHERE path=?', (path,))],
         'saves': [dict(zip(save_columns.split(','), r)) for r in probe.database_rows(
-        'SELECT ' + save_columns + ' FROM save_intents WHERE path=? ORDER BY rowid', (NOTE,))]}
+        'SELECT ' + save_columns + ' FROM save_intents WHERE path=? ORDER BY rowid', (path,))]}
     require(len(value['drafts']) == 1 and 1 <= len(value['saves']) <= 2, 'Unexpected own storage fixture rows')
     folder = Path(tempfile.mkdtemp(prefix='owned-storage-metadata-', dir=probe.tools)); db_path = folder / 'host.sqlite3'
     for suffix in ('', '-wal', '-shm'):
@@ -122,7 +124,7 @@ def snapshot(probe, label):
                                ('outbox', 'operation_id,file_id,revision,path,hash,operation,state'),
                                ('files', 'id,path,hash,revision,deleted')):
             value[table] = [dict(zip(columns.split(','), row)) for row in db.execute(
-                'SELECT ' + columns + ' FROM ' + table + ' WHERE path=? ORDER BY rowid', (NOTE,))]
+                'SELECT ' + columns + ' FROM ' + table + ' WHERE path=? ORDER BY rowid', (path,))]
         ids = [s['operation_id'] for s in value['saves']]
         for table, columns in (('operations', 'operation_id,fingerprint,state,result'), ('payloads', 'operation_id,hash,size')):
             value[table] = [dict(zip(columns.split(','), row)) for row in db.execute(
@@ -134,7 +136,7 @@ def snapshot(probe, label):
 class OwnedFilesystem:
     def __init__(self, probe):
         require_hosted_emulator(probe.args.serial)
-        require(probe.args.scope == 'storage-recovery' and probe.root is not None, 'Explicit initialized storage scope required')
+        require(probe.args.scope in ('storage-recovery','canvas-storage-recovery') and probe.root is not None, 'Explicit initialized storage scope required')
         self.probe = probe
         home = probe.shell('run-as', APP, 'pwd').stdout.decode('ascii', 'strict').strip()
         home = probe.shell('readlink', '-f', home).stdout.decode('ascii', 'strict').strip()
@@ -221,16 +223,32 @@ class OwnedFilesystem:
         require(self.verify()['available_bytes'] > CAPACITY // 2, 'Original bounded space did not return')
 
 
+def validate_canvas_draft(original,updated):
+    from android_canvas_graph_contract import graph
+    import uuid
+    before=graph(original);after=graph(updated)
+    require(before==dict(nodes=[],edges=[]) and after['edges']==[] and len(after['nodes'])==1
+        and set(after)==set(before),'Canvas ENOSPC planned graph differs from its original single-node edit')
+    node=after['nodes'][0]
+    require(node['type']=='text' and node.get('text')==CANVAS_TEXT
+        and set(node)=={'id','type','x','y','width','height','text'}
+        and str(uuid.UUID(node['id']))==node['id'],'Canvas ENOSPC planned content or identity differs')
+    return node['id']
+
+
 def run_storage_recovery(probe):
     require_hosted_emulator(probe.args.serial)
-    require(probe.args.scope == 'storage-recovery', 'Storage recovery must be explicit')
-    proof = {'passed': False, 'scope': 'storage-recovery', 'compiled_source': probe.args.commit,
+    canvas=probe.args.scope=='canvas-storage-recovery'
+    require(probe.args.scope in ('storage-recovery','canvas-storage-recovery'), 'Storage recovery must be explicit')
+    note=CANVAS_NOTE if canvas else NOTE;original=ORIGINAL;updated=UPDATED
+    phase=lambda name,**options:probe.phase(('canvas-' if canvas else '')+name,**options)
+    proof = {'passed': False, 'scope': probe.args.scope, 'compiled_source': probe.args.commit,
              'tools_source': probe.args.tools_commit, 'APK_sha256': probe.binding['sha256'],
-             'run_id': os.environ['GITHUB_RUN_ID'], 'physical_phone_or_Canvas_or_write_interruption_verified': False}
-    output = probe.output / 'storage-recovery-proof.json'
+             'run_id': os.environ['GITHUB_RUN_ID'], 'physical_phone_or_write_interruption_verified': False, 'actual_Canvas_file_ENOSPC_verified': False}
+    output = probe.output / (probe.args.scope+'-proof.json')
     try:
         proof['stage'] = 'initialize-owned-native-UI'
-        probe.phase('storage-init', keep_running=True)
+        phase('storage-init', keep_running=True)
         fs = OwnedFilesystem(probe)
         proof['platform'] = fs.observed
         proof['stage'] = 'admit-new-bounded-filesystem'
@@ -238,37 +256,53 @@ def run_storage_recovery(probe):
         proof['filesystem'] = fs.prepare()
         probe.enable_test_ime()
         proof['stage'] = 'one-original-seed-Save'
-        action_intent(probe, 'storage-seed', original_sha256=hashlib.sha256(ORIGINAL).hexdigest())
-        probe.phase('storage-seed', continue_process=True, keep_running=True)
+        action_intent(probe, 'storage-seed', original_sha256=None if canvas else hashlib.sha256(original).hexdigest(), expected_empty_Canvas_graph=canvas)
+        phase('storage-seed', continue_process=True, keep_running=True)
         fs.verify()
-        require(probe.original(NOTE) == ORIGINAL, 'Original seeded file differs before filling')
-        before = snapshot(probe, 'storage-seed')
+        if canvas:
+            original=probe.original(note)
+            require(json.loads(original)==dict(nodes=[],edges=[]),'Canvas seed was not the original empty graph')
+        else:require(probe.original(note) == original, 'Original seeded file differs before filling')
+        before = snapshot(probe, 'storage-seed', note)
+        if canvas:
+            proof['stage']='one-new-owned-Canvas-draft-before-fill'
+            phase('storage-edit',continue_process=True,keep_running=True)
+            planned=snapshot(probe,'storage-reviewed-Canvas',note)
+            updated=planned['drafts'][0]['content'].encode()
+            validate_canvas_draft(original,updated)
+            require(planned['saves']==before['saves'] and planned['files']==before['files']
+                and planned['outbox']==before['outbox'],'Canvas editing unexpectedly committed before filling')
+            (probe.output/'storage-reviewed-content.canvas').write_bytes(updated)
         proof['stage'] = 'one-bounded-owned-filler'
         action_intent(probe, 'storage-fill', source=fs.source, filler=fs.filler_name, maximum_bytes=CAPACITY)
         proof['fill'] = fs.fill()
         proof['stage'] = 'one-new-Save-under-real-file-ENOSPC'
-        action_intent(probe, 'storage-fail', original_content_sha256=hashlib.sha256(UPDATED).hexdigest())
-        probe.phase('storage-fail', continue_process=True, keep_running=True)
-        require(probe.original(NOTE) == ORIGINAL, 'Failed Save replaced the acknowledged original')
-        failed = snapshot(probe, 'storage-failed'); original = original_pending(before, failed)
-        proof['original_operation_id'] = original['operation_id']
+        action_intent(probe, 'storage-fail', original_content_sha256=hashlib.sha256(updated).hexdigest())
+        phase('storage-fail', continue_process=True, keep_running=True)
+        require(probe.original(note) == original, 'Failed Save replaced the acknowledged original')
+        failed = snapshot(probe, 'storage-failed', note); pending = original_pending(before, failed, original, updated)
+        proof['original_operation_id'] = pending['operation_id']
+        if canvas:
+            spool=probe.private(probe.root+'vault/.ainote/sync-spool/'+hashlib.sha256(updated).hexdigest()).stdout
+            require(spool==updated,'Canvas original pending spool bytes changed under file ENOSPC')
+            (probe.output/'storage-failed-original-spool.canvas').write_bytes(spool)
         proof['stage'] = 'read-original-pending-result'
-        action_intent(probe, 'storage-check', native_operation_id=original['operation_id'])
-        probe.phase('storage-check', continue_process=True, keep_running=True)
-        checked = snapshot(probe, 'storage-checked')
-        require(checked == failed and probe.original(NOTE) == ORIGINAL, 'Original result check changed the accepted action or file')
+        action_intent(probe, 'storage-check', native_operation_id=pending['operation_id'])
+        phase('storage-check', continue_process=True, keep_running=True)
+        checked = snapshot(probe, 'storage-checked', note)
+        require(checked == failed and probe.original(note) == original, 'Original result check changed the accepted action or file')
         proof['stage'] = 'release-only-identity-checked-filler'
         action_intent(probe, 'storage-release', original_filler=fs.filler)
         fs.release_filler()
         proof['stage'] = 'explicit-same-ID-original-content-retry'
-        action_intent(probe, 'storage-retry', native_operation_id=original['operation_id'], original_content_sha256=hashlib.sha256(UPDATED).hexdigest())
-        probe.phase('storage-retry', continue_process=True, keep_running=True)
-        recovered = snapshot(probe, 'storage-recovered')
-        require(probe.original(NOTE) == UPDATED, 'Explicit original retry did not preserve exact requested bytes')
-        require(len(recovered['saves']) == 2 and recovered['saves'][1]['operation_id'] == original['operation_id']
+        action_intent(probe, 'storage-retry', native_operation_id=pending['operation_id'], original_content_sha256=hashlib.sha256(updated).hexdigest())
+        phase('storage-retry', continue_process=True, keep_running=True)
+        recovered = snapshot(probe, 'storage-recovered', note)
+        require(probe.original(note) == updated, 'Explicit original retry did not preserve exact requested bytes')
+        require(len(recovered['saves']) == 2 and recovered['saves'][1]['operation_id'] == pending['operation_id']
                 and recovered['saves'][1]['state'] == 'committed' and recovered['saves'][1]['error'] is None
                 and not recovered['journal'] and len(recovered['outbox']) == 2
-                and recovered['operations'][1]['operation_id'] == original['operation_id']
+                and recovered['operations'][1]['operation_id'] == pending['operation_id']
                 and recovered['operations'][1]['fingerprint'] == failed['operations'][1]['fingerprint']
                 and recovered['operations'][1]['state'] == 'committed'
                 and recovered['files'][0]['id'] == before['files'][0]['id']
@@ -276,24 +310,24 @@ def run_storage_recovery(probe):
                 'Recovery replaced the original operation, file identity or saved generation')
         old_pid = probe.shell('pidof', APP).stdout.strip()
         proof['stage'] = 'new-process-cold-original-read'
-        action_intent(probe, 'storage-cold', native_operation_id=original['operation_id'], original_PID=int(old_pid))
-        probe.phase('storage-cold', keep_running=True)
+        action_intent(probe, 'storage-cold', native_operation_id=pending['operation_id'], original_PID=int(old_pid))
+        phase('storage-cold', keep_running=True)
         fs.verify()
-        require(probe.shell('pidof', APP).stdout.strip() != old_pid and probe.original(NOTE) == UPDATED,
+        require(probe.shell('pidof', APP).stdout.strip() != old_pid and probe.original(note) == updated,
                 'New original process did not reopen exact recovered bytes')
-        cold = snapshot(probe, 'storage-cold')
+        cold = snapshot(probe, 'storage-cold', note)
         require(cold['saves'] == recovered['saves'] and cold['operations'] == recovered['operations']
                 and cold['outbox'] == recovered['outbox'], 'Cold reopening replayed a Save or changed its receipt')
-        proof.update(passed=True, original_file_sha256=hashlib.sha256(ORIGINAL).hexdigest(),
-                     recovered_file_sha256=hashlib.sha256(UPDATED).hexdigest(),
+        proof.update(passed=True, original_file_sha256=hashlib.sha256(original).hexdigest(),
+                     recovered_file_sha256=hashlib.sha256(updated).hexdigest(),
                      original_id_retry_once=True, cold_original_receipt_preserved=True,
-                     metadata_and_drafts_outside_full_filesystem=True)
+                     metadata_and_drafts_outside_full_filesystem=True, actual_Canvas_file_ENOSPC_verified=canvas)
     except Exception as error:
         proof['failure_class'] = type(error).__name__
         if probe.root is not None:
             try:
-                probe.original(NOTE)
-                snapshot(probe, 'storage-failure-observation')
+                probe.original(note)
+                snapshot(probe, 'storage-failure-observation', note)
                 proof['failure_originals_preserved'] = True
             except Exception as observation:
                 proof['failure_observation_class'] = type(observation).__name__
