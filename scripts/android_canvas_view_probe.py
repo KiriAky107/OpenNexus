@@ -14,9 +14,25 @@ from android_canvas_view_geometry import PHASES,effect,frame_check
 PATH='view-original.canvas'
 STEPS=tuple('view-'+name for name in ('seed','open','pan','pinch','cancel','takeover','background','cold','inspector'))
 REMAINING_STEPS=tuple('view-'+name for name in ('seed','open','background','cold','inspector'))
+COLD_STEPS=tuple('view-'+name for name in ('seed','open','cold','inspector'))
 value=graph(SOURCE_FIXTURE);value['nodes'][0].update(x=80,y=75,width=200,height=175)
 FIXTURE=encoded(value).replace(b'\n',b'\r\n');del value
 def digest(raw):return hashlib.sha256(raw).hexdigest()
+
+def cold_window_record(probe,check=True):
+    require(probe.args.scope=='canvas-view-cold','VIEW_COLD_WINDOW_SCOPE')
+    raw=probe.device('exec-out','run-as',DRIVER,'cat','files/view-cold-input-window.json',check=False)
+    if raw.returncode or not raw.stdout:
+        require(not check,'VIEW_COLD_WINDOW_RECORD_MISSING');return None
+    require(len(raw.stdout)<=2048,'VIEW_COLD_WINDOW_RECORD_BOUND');value=json.loads(raw.stdout)
+    require(value['schema']==1 and value['scope']=='canvas-view-cold-window' and value['owner']==APP
+        and value['active_focused'] is True and value['before_any_navigation_input'] is True and value['stable_samples']==3,
+        'VIEW_COLD_WINDOW_RECORD_ORIGIN')
+    target=probe.output/'view-cold-input-window.json'
+    if target.exists():require(target.read_bytes()==raw.stdout,'VIEW_COLD_WINDOW_RECORD_CHANGED')
+    else:
+        with target.open('xb') as stream:stream.write(raw.stdout);stream.flush();os.fsync(stream.fileno())
+    return value
 
 
 def original_touch_records(probe,phase,check=True):
@@ -45,14 +61,14 @@ def original_touch_records(probe,phase,check=True):
 
 
 def run_canvas_view(probe):
-    require_hosted_emulator(probe.args.serial);require(probe.args.scope in ('canvas-view','canvas-view-remaining'),'VIEW_EXPLICIT_SCOPE')
-    steps=REMAINING_STEPS if probe.args.scope=='canvas-view-remaining' else STEPS
+    require_hosted_emulator(probe.args.serial);require(probe.args.scope in ('canvas-view','canvas-view-remaining','canvas-view-cold'),'VIEW_EXPLICIT_SCOPE')
+    steps=COLD_STEPS if probe.args.scope=='canvas-view-cold' else REMAINING_STEPS if probe.args.scope=='canvas-view-remaining' else STEPS
     report=dict(passed=False,run_id=os.environ['GITHUB_RUN_ID'],tools_source=probe.args.tools_commit,
         compiled_source=probe.args.commit,APK_sha256=probe.binding['sha256'],executed_steps=[],touches=[],saves=[],
         synthetic_original_fixture_not_GUI_additions=True,completed_move_resize_or_other_graph_Saves_replayed=False,
         geometry_alone_does_not_prove_input_or_raw_preservation=True,
         physical_properties_upgrade_or_whole_A3C_complete=False,scope=probe.args.scope,
-        accepted_four_view_gestures_replayed=probe.args.scope=='canvas-view')
+        accepted_four_view_gestures_replayed=probe.args.scope=='canvas-view',accepted_Home_resume_replayed=probe.args.scope!='canvas-view-cold')
     current=None
     def phase(name):
         nonlocal current
@@ -62,6 +78,7 @@ def run_canvas_view(probe):
             previous_observed_sha256=report.get('last_observed_sha256'),automatic_retry=False),exclusive=True)
         old=probe.shell('pidof',APP,check=False).stdout.strip()
         probe.phase(name,continue_process=name not in ('view-seed','view-open','view-cold'),keep_running=True)
+        if name=='view-cold' and probe.args.scope=='canvas-view-cold':report['cold_input_window']=cold_window_record(probe)
         new=probe.shell('pidof',APP).stdout.strip();require(re.fullmatch(rb'[1-9][0-9]{0,9}',new),'VIEW_ORIGINAL_PID')
         if name not in ('view-seed','view-open','view-cold'):require(new==old,'VIEW_ORIGINAL_PROCESS_CHANGED')
         elif name!='view-seed':require(old!=new,'VIEW_NOT_NEW_COLD_PROCESS')
@@ -92,6 +109,9 @@ def run_canvas_view(probe):
             exact_original_raw_drafts_CAS_receipts_and_outbox_unchanged=True)
     except Exception as error:
         report.update(failure_class=type(error).__name__,phase=current)
+        if current=='view-cold' and probe.args.scope=='canvas-view-cold':
+            try:cold_window_record(probe,check=False)
+            except Exception as observation:report['failure_cold_window_observation_class']=type(observation).__name__
         if current in PHASES:
             try:original_touch_records(probe,current,check=False)
             except Exception as observation:report['failure_touch_observation_class']=type(observation).__name__

@@ -1269,7 +1269,10 @@ public final class RuntimeProbe extends Instrumentation {
         boolean view=viewPhase(phase);require(view||OriginalCanvasMotion.phase(phase),"Original motion phase refused");String step=phase.substring(view?5:7);
         String path=view?"view-original.canvas":OriginalCanvasMotion.PATH;
         if(step.equals("seed")){create("New canvas",path);save();return;}
-        if(step.equals("open")||step.equals("cold")){open(path);waitLabel("Free canvas");waitNode(motionTarget(),"original declared motion node");return;}
+        if(step.equals("open")||step.equals("cold")){
+            if(phase.equals("view-cold")&&arguments.getString("view_cold_window_guard","").equals("yes"))awaitColdInputWindow();
+            open(path);waitLabel("Free canvas");waitNode(motionTarget(),"original declared motion node");return;
+        }
         graphClosePanel();graphAction("Show all");graphNode("text: "+OriginalCanvasMotion.NODE);settleUi();
         if(step.equals("inspector")){graphAction("Properties");waitNode(node->within(node,"Canvas nodes and connections")&&label(node,"Node properties",true),"original node inspector, read only");return;}
         int[][] observation=motionObservation();int[] bounds=observation[0],clip=observation[1];int[][] controls=java.util.Arrays.copyOfRange(observation,2,observation.length);
@@ -1327,6 +1330,33 @@ public final class RuntimeProbe extends Instrumentation {
         if(step.equals("move")||step.equals("resize"))save();
         else waitNode(node->APP.equals(string(node.getPackageName()))&&label(node,"Save",false)&&!node.isEnabled(),"view-only/interrupted gesture keeps Save disabled");
         if(view)viewCheckpoint(phase,"after",viewNonce,afterObservation);
+    }
+
+    private void awaitColdInputWindow()throws Exception {
+        require(arguments.getString("phase","").equals("view-cold"),"Original cold window observation scope refused");
+        long until=SystemClock.uptimeMillis()+10000;int stable=0,previous=-1;Rect bounds=new Rect();
+        while(SystemClock.uptimeMillis()<until&&stable<3) {
+            AccessibilityNodeInfo active=ui.getRootInActiveWindow();AccessibilityWindowInfo found=null;
+            if(active!=null&&APP.equals(string(active.getPackageName())))for(AccessibilityWindowInfo window:ui.getWindows()) {
+                AccessibilityNodeInfo root=window.getRoot();
+                if(window.isActive()&&window.isFocused()&&root!=null&&APP.equals(string(root.getPackageName()))) {
+                    require(found==null,"Original cold focused window is ambiguous; no input sent");found=window;
+                }
+            }
+            if(found==null){stable=0;previous=-1;}else {
+                Rect current=new Rect();found.getBoundsInScreen(current);
+                stable=found.getId()==previous&&bounds.equals(current)&&!current.isEmpty()?stable+1:1;
+                previous=found.getId();bounds=current;
+            }
+            if(stable<3)SystemClock.sleep(100);
+        }
+        require(stable==3,"Original cold owned input window did not become focused; no input sent");
+        JSONObject value=new JSONObject().put("schema",1).put("scope","canvas-view-cold-window").put("owner",APP)
+            .put("active_focused",true).put("stable_samples",stable).put("window_id",previous)
+            .put("bounds",new JSONArray(new int[]{bounds.left,bounds.top,bounds.right,bounds.bottom}))
+            .put("before_any_navigation_input",true).put("recorded_ms",SystemClock.uptimeMillis());
+        File file=new File(getContext().getFilesDir(),"view-cold-input-window.json");require(file.createNewFile(),"Original cold window record exists; no input retry");
+        try(FileOutputStream output=new FileOutputStream(file)){output.write((value.toString()+"\n").getBytes("UTF-8"));output.getFD().sync();}
     }
 
     private void pairProperty(String name, String before, String after) {
@@ -1815,7 +1845,12 @@ public final class RuntimeProbe extends Instrumentation {
         MotionEvent event=MotionEvent.obtain(start,when,action,1,new MotionEvent.PointerProperties[]{pointer},
             new MotionEvent.PointerCoords[]{point},0,0,1,1,0,0,InputDevice.SOURCE_TOUCHSCREEN,0);
         require(event.getToolType(0)==MotionEvent.TOOL_TYPE_FINGER,"Owned touch has no finger identity");
-        try { require(ui.injectInputEvent(event, true), "Touch injection rejected"); } finally { event.recycle(); }
+        try {
+            boolean accepted=ui.injectInputEvent(event,true);
+            progress.append("ORIGINAL_TOUCH_RESULT action=").append(event.getActionMasked()).append(" accepted=").append(accepted)
+                .append(" down_ms=").append(event.getDownTime()).append(" time_ms=").append(event.getEventTime()).append('\n');
+            require(accepted,"Touch injection rejected");
+        } finally { event.recycle(); }
     }
 
     private boolean keyboardVisible() {

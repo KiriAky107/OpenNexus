@@ -5,14 +5,15 @@ from unittest.mock import Mock,patch
 import yaml
 from android_workflow_gate import admitted
 from android_runtime_probe import Probe
-from android_canvas_view_probe import PATH,STEPS,REMAINING_STEPS,FIXTURE,graph,run_canvas_view
-from android_canvas_view_geometry import MODEL
+from android_canvas_view_probe import PATH,STEPS,REMAINING_STEPS,COLD_STEPS,FIXTURE,graph,run_canvas_view,cold_window_record
+from android_canvas_view_geometry import MODEL,PHASES
+import json,tempfile
 
 class ViewWorkflow(unittest.TestCase):
     def test_remaining_only_fixed_package_scope_does_not_build_or_launch_desktop(self):
         workflow=yaml.load((Path(__file__).resolve().parents[1]/'.github/workflows/android.yml').read_text('utf-8'),Loader=yaml.BaseLoader)
         self.assertIn('canvas-view',workflow['on']['workflow_dispatch']['inputs']['runtime_scope']['options'])
-        for scope in ('canvas-view','canvas-view-remaining'):
+        for scope in ('canvas-view','canvas-view-remaining','canvas-view-cold'):
             self.assertIn(scope,workflow['on']['workflow_dispatch']['inputs']['runtime_scope']['options'])
             for reuse in ('','39112675356'):
                 self.assertFalse(admitted(workflow['jobs']['debug-apk']['if'],scope,reuse=reuse))
@@ -21,6 +22,7 @@ class ViewWorkflow(unittest.TestCase):
                     self.assertFalse(admitted(workflow['jobs'][name]['if'],scope,reuse=reuse))
         check=next(s for s in workflow['jobs']['emulator-runtime']['steps'] if s.get('name')=='Check remaining Canvas view contracts without executing input')
         self.assertTrue(admitted(check['if'],'canvas-view'));self.assertTrue(admitted(check['if'],'canvas-view-remaining'))
+        self.assertTrue(admitted(check['if'],'canvas-view-cold'))
         self.assertFalse(admitted(check['if'],'sync-revocation'))
         self.assertIn('PyYAML==6.0.3',check['run']);self.assertIn('canvas_view_expression.test.mjs',check['run'])
 
@@ -47,5 +49,24 @@ class ViewWorkflow(unittest.TestCase):
         with patch('android_canvas_view_probe.run_canvas_view') as run,patch.object(probe,'phase',side_effect=AssertionError('No other runtime scene allowed')):
             probe.run()
         run.assert_called_once_with(probe);probe.native_keystore_tests()
+
+    def test_cold_only_scene_does_not_repeat_any_accepted_gesture_or_Home(self):
+        self.assertEqual(COLD_STEPS,('view-seed','view-open','view-cold','view-inspector'))
+        self.assertFalse(set(COLD_STEPS)&set(PHASES))
+        probe=Probe.__new__(Probe);probe.args=SimpleNamespace(scope='canvas-view-cold');probe.boot=Mock()
+        with patch('android_canvas_view_probe.run_canvas_view') as run,patch.object(probe,'phase',side_effect=AssertionError('No other runtime scene allowed')):
+            probe.run()
+        run.assert_called_once_with(probe);probe.native_keystore_tests()
+
+    def test_original_cold_focus_record_is_owned_bounded_and_never_replaced(self):
+        with tempfile.TemporaryDirectory() as folder:
+            record=dict(schema=1,scope='canvas-view-cold-window',owner='cc.kronecker.opennexus.dev',
+                active_focused=True,stable_samples=3,window_id=17,bounds=[0,0,1080,2400],before_any_navigation_input=True,recorded_ms=1000)
+            raw=(json.dumps(record)+'\n').encode();device=Mock(return_value=SimpleNamespace(returncode=0,stdout=raw))
+            probe=SimpleNamespace(args=SimpleNamespace(scope='canvas-view-cold'),output=Path(folder),device=device)
+            self.assertEqual(cold_window_record(probe),record)
+            self.assertEqual((Path(folder)/'view-cold-input-window.json').read_bytes(),raw)
+            device.return_value.stdout=(json.dumps(dict(record,window_id=18))+'\n').encode()
+            with self.assertRaises(RuntimeError):cold_window_record(probe)
 
 if __name__=='__main__':unittest.main()

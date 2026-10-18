@@ -417,7 +417,7 @@ class Probe:
         self.build_driver()
 
     def native_keystore_tests(self):
-        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining'):
+        if getattr(self.args,'scope',None) in ('attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'):
             return  # Same immutable APK's five cases already have their own evidence.
         if not (binding := self.binding.get('native_tests')):
             return
@@ -671,9 +671,12 @@ class Probe:
             require(re.fullmatch(rb'[1-9][0-9]{0,9}', self.shell('pidof', APP).stdout.strip()),
                 'Tablet rotation requires the same single owned app process')
         self.native_tls_startup(phase)
-        if getattr(getattr(self,'args',None),'scope','') in ('canvas-view','canvas-view-remaining') and phase in ('view-pan','view-pinch','view-cancel','view-takeover','view-background'):
+        if getattr(getattr(self,'args',None),'scope','') in ('canvas-view','canvas-view-remaining','canvas-view-cold') and phase in ('view-pan','view-pinch','view-cancel','view-takeover','view-background'):
             from android_canvas_view_input import instrument_original_view
             result=instrument_original_view(self,phase)
+        elif getattr(getattr(self,'args',None),'scope','')=='canvas-view-cold' and phase=='view-cold':
+            result=self.shell('am','instrument','-w','-e','phase',phase,'-e','view_cold_window_guard','yes',
+                f'{DRIVER}/.RuntimeProbe',timeout=180)
         elif phase in ('rich-image', 'canvas-image') and getattr(getattr(self, 'args', None), 'scope', '') in ('attachments-remaining','canvas-remaining','editing-remaining'):
             result = self.image_save_instrumentation(phase)
         elif getattr(getattr(self,'args',None),'scope','')=='canvas-motion' and phase=='motion-background':
@@ -923,7 +926,7 @@ class Probe:
             if getattr(getattr(self,'args',None),'scope',None) == 'canvas-motion':
                 from android_canvas_motion_probe import PATH
                 owned_names = (PATH,)
-            if getattr(getattr(self,'args',None),'scope',None) in ('canvas-view','canvas-view-remaining'):
+            if getattr(getattr(self,'args',None),'scope',None) in ('canvas-view','canvas-view-remaining','canvas-view-cold'):
                 from android_canvas_view_probe import PATH
                 owned_names = (PATH,)
             if getattr(getattr(self,'args',None),'scope',None) in ('document-limits','document-export'):
@@ -1246,7 +1249,7 @@ class Probe:
 
     def run(self):
         self.boot()
-        if self.args.scope in ('canvas-view','canvas-view-remaining'):
+        if self.args.scope in ('canvas-view','canvas-view-remaining','canvas-view-cold'):
             from android_canvas_view_probe import run_canvas_view
             run_canvas_view(self)
             return
@@ -1404,7 +1407,7 @@ def main():
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--tools-commit')
     parser.add_argument('--build-run-id')
-    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining'), default='all')
+    parser.add_argument('--scope', choices=('all', 'lifecycle', 'tablet','attachments','attachments-remaining','canvas-remaining','editing-remaining','canvas-tools','canvas-tablet','performance','document-limits','document-export','storage-recovery','write-interruption','file-actions','file-actions-remaining','canvas-file-delete','note-search','canvas-graph','canvas-graph-remaining','canvas-motion','canvas-view','canvas-view-remaining','canvas-view-cold'), default='all')
     args = parser.parse_args()
     require_hosted_emulator(args.serial)
     if args.stop_owned:
