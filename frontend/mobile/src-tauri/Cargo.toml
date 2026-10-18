@@ -1,6 +1,6 @@
 [package]
 name = "opennexus-mobile"
-version = "0.1.0-dev1"
+version = "0.1.0-alpha1"
 edition = "2021"
 rust-version = "1.89"
 
