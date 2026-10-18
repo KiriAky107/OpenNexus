@@ -9,12 +9,33 @@ const stages=new Set(['admission','page-list','socket-open','resource-tree','res
 const reasons=new Set(['unconfirmed','timeout','send-unconfirmed','connection-unconfirmed','reply-refused','summary-refused',
   'origin','bound','resource-unavailable','no-owned-script'])
 class ResourceReadFailure extends Error{
-  constructor(stage,reason){super('OWNED_COMPILED_RESOURCE_UNCONFIRMED');this.stage=stage;this.reason=reason}
+  constructor(stage,reason,treeSummary){super('OWNED_COMPILED_RESOURCE_UNCONFIRMED');this.stage=stage;this.reason=reason;this.treeSummary=treeSummary}
 }
 export function resourceDiagnostic(error){
   return {error:'OWNED_COMPILED_RESOURCE_UNCONFIRMED',
     stage:error instanceof ResourceReadFailure&&stages.has(error.stage)?error.stage:'admission',
-    reason:error instanceof ResourceReadFailure&&reasons.has(error.reason)?error.reason:'unconfirmed'}
+    reason:error instanceof ResourceReadFailure&&reasons.has(error.reason)?error.reason:'unconfirmed',
+    ...(error instanceof ResourceReadFailure&&error.treeSummary?{tree_summary:error.treeSummary}:{})}
+}
+export function resourceTreeSummary(result){
+  const tree=result?.frameTree,frame=tree?.frame,resources=Array.isArray(tree?.resources)?tree.resources:null
+  const types={Script:0,Other:0,Image:0,Stylesheet:0,Fetch:0,XHR:0,Unknown:0}
+  let owned=false,script=0,other=0
+  try{const url=new URL(frame?.url);owned=url.origin==='http://tauri.localhost'&&!url.username&&!url.password}catch{}
+  for(const item of (resources??[]).slice(0,512)){
+    types[Object.hasOwn(types,item?.type)?item.type:'Unknown']++
+    try{
+      const url=new URL(item?.url)
+      if(url.origin==='http://tauri.localhost'&&!url.username&&!url.password&&!url.search&&!url.hash
+        &&/^\/assets\/[A-Za-z0-9_.-]+\.js$/.test(url.pathname)){
+        if(item.type==='Script')script++
+        if(item.type==='Other')other++
+      }
+    }catch{}
+  }
+  return {frame_present:!!frame,frame_id_valid:typeof frame?.id==='string'&&/^[A-Za-z0-9_.:-]{1,128}$/.test(frame.id),
+    frame_origin_owned:!!owned,resources_array:!!resources,resource_count_bounded:Math.min(resources?.length??0,513),
+    owned_script_candidates:script,owned_other_js_candidates:other,types}
 }
 export function compiledMarkers(text){
   const lists=[...text.matchAll(/new\s+Set\s*\(\s*\[([^\]]{1,18000})\]\s*\)/g)]
@@ -38,7 +59,8 @@ export function resourceCandidates(result){
     if(url.origin==='http://tauri.localhost'&&!url.username&&!url.password&&!url.search&&!url.hash
       &&/^\/assets\/[A-Za-z0-9_.-]+\.js$/.test(url.pathname))urls.add(url.href)
   }
-  need(urls.size>0&&urls.size<=24)
+  if(!urls.size)throw new ResourceReadFailure('resource-tree','no-owned-script')
+  if(urls.size>24)throw new ResourceReadFailure('resource-tree','bound')
   return {frameId:frame.id,urls:[...urls].sort()}
 }
 
@@ -69,7 +91,7 @@ export function validateResources(value){
 }
 
 export async function observeCompiledResources(config,context,env,dependencies={}){
-  let stage='admission',socket,timer,openReject
+  let stage='admission',socket,timer,openReject,treeSummary
   const pending=new Map();let next=0,failed=false,received=0,messages=0
   const fault=reason=>{
     failed=true;const error=new ResourceReadFailure(stage,reasons.has(reason)?reason:'unconfirmed')
@@ -114,7 +136,8 @@ export async function observeCompiledResources(config,context,env,dependencies={
         try{socket.send(JSON.stringify({id,method,params}))}catch{fault('send-unconfirmed')}
       })
     }
-    stage='resource-tree';candidate=resourceCandidates(await call('Page.getResourceTree',{}))
+    stage='resource-tree'
+    const tree=await call('Page.getResourceTree',{});treeSummary=resourceTreeSummary(tree);candidate=resourceCandidates(tree)
     const assets=[];let total=0
     for(const url of candidate.urls){
       stage='resource-content'
@@ -131,7 +154,8 @@ export async function observeCompiledResources(config,context,env,dependencies={
       resource_bytes_written_to_artifacts:false,digest_scope:'Decoded CDP resource content bytes, not HTTP wire encoding',
       current_native_SYNC_REVIEW_CHANGED_bug_or_execution_claimed:false}
   }catch(error){
-    throw error instanceof ResourceReadFailure?error:new ResourceReadFailure(stage,'unconfirmed')
+    if(error instanceof ResourceReadFailure){error.treeSummary=treeSummary;throw error}
+    throw new ResourceReadFailure(stage,'unconfirmed',treeSummary)
   }finally{
     clearTimeout(timer)
     // This connection never enables the debugger or pauses a callback.

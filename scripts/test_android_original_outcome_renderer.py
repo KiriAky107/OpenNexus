@@ -62,5 +62,28 @@ class RendererLink(unittest.TestCase):
         self.assertEqual(value['stage'],'admission');self.assertEqual(value['reason'],'unconfirmed')
         self.assertNotIn('PRIVATE',path.read_text('utf-8'));self.probe.command.assert_called_once()
 
+    def test_safe_actual_tree_counts_are_preserved_without_paths_or_resource_bodies(self):
+        summary={'frame_present':True,'frame_id_valid':True,'frame_origin_owned':True,'resources_array':True,
+                 'resource_count_bounded':2,'owned_script_candidates':0,'owned_other_js_candidates':1,
+                 'types':{'Script':0,'Other':1,'Image':1,'Stylesheet':0,'Fetch':0,'XHR':0,'Unknown':0}}
+        self.probe.command=Mock(return_value=SimpleNamespace(returncode=1,stderr=b'',
+            stdout=json.dumps({'error':'OWNED_COMPILED_RESOURCE_UNCONFIRMED','stage':'resource-tree',
+                               'reason':'no-owned-script','tree_summary':summary}).encode()))
+        with self.assertRaisesRegex(HandoffError,'READ_UNCONFIRMED'):
+            renderer.read_original_renderer(self.probe,self.context,self.manifest,self.value)
+        value=json.loads((self.probe.output/'original-renderer-resource-diagnostic.json').read_text('utf-8'))
+        self.assertEqual(value['tree_summary'],summary);self.probe.command.assert_called_once()
+
+    def test_tree_summary_refuses_hidden_fields_unknown_type_names_and_invalid_bounds(self):
+        summary={'frame_present':True,'frame_id_valid':True,'frame_origin_owned':True,'resources_array':True,
+                 'resource_count_bounded':1,'owned_script_candidates':1,'owned_other_js_candidates':0,
+                 'types':{'Script':1,'Other':0,'Image':0,'Stylesheet':0,'Fetch':0,'XHR':0,'Unknown':0}}
+        from copy import deepcopy
+        for change in (lambda v:v.update(url='PRIVATE_URL'),lambda v:v['types'].update(PRIVATE_TYPE=1),
+                       lambda v:v.update(resource_count_bounded=999),lambda v:v.update(owned_script_candidates=True),
+                       lambda v:v.update(resource_count_bounded=0)):
+            value=deepcopy(summary);change(value)
+            with self.assertRaises(HandoffError):renderer.safe_tree_summary(value)
+
 
 if __name__=='__main__':unittest.main()

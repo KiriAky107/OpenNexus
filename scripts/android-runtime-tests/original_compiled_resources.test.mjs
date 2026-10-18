@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { compiledMarkers, decodedResource, resourceCandidates, validateResources, observeCompiledResources, resourceDiagnostic } from '../android-runtime/original_compiled_resources.mjs'
+import { compiledMarkers, decodedResource, resourceCandidates, resourceTreeSummary, validateResources, observeCompiledResources, resourceDiagnostic } from '../android-runtime/original_compiled_resources.mjs'
 
 const config={mode:'complete',nonce:'00000000-0000-4000-8000-000000000001',original_pid:321,sequence:2,choice:'copy',destination:'runtime-conflict-copy.md',fingerprint:'a'.repeat(64),expected_hash:'b'.repeat(64)}
 const context={run_id:1234,tools_commit:'a'.repeat(40),socket_url:'ws://127.0.0.1:12345/devtools/page/owned'}
@@ -73,12 +73,36 @@ test('fixed IPC-only CSP needs no page fetch, evaluation, debugger or policy cha
 test('original CDP resource failure keeps a safe stage and never retries or exports raw protocol text',async()=>{
   const f=fixture({respond:call=>call.method==='Page.getResourceTree'?{result:tree()}:{error:{message:'PRIVATE_PROTOCOL_BODY'}}})
   await assert.rejects(observeCompiledResources(config,context,env,f.dependencies),error=>{
-    assert.deepEqual(resourceDiagnostic(error),{error:'OWNED_COMPILED_RESOURCE_UNCONFIRMED',stage:'resource-content',reason:'reply-refused'})
+    assert.deepEqual(resourceDiagnostic(error),{error:'OWNED_COMPILED_RESOURCE_UNCONFIRMED',stage:'resource-content',reason:'reply-refused',tree_summary:resourceTreeSummary(tree())})
     assert.equal(JSON.stringify(resourceDiagnostic(error)).includes('PRIVATE'),false);return true
   })
   assert.equal(f.calls.length,2);assert.equal(f.closed(),1)
   assert.deepEqual(resourceDiagnostic(Object.assign(Error('PRIVATE'),{stage:'PRIVATE',reason:'PRIVATE'})),
     {error:'OWNED_COMPILED_RESOURCE_UNCONFIRMED',stage:'admission',reason:'unconfirmed'})
+})
+
+test('resource tree diagnostics retain only bounded classifications, never raw URLs or frame identifiers',()=>{
+  const value=tree();value.frameTree.frame.id='PRIVATE_FRAME'
+  value.frameTree.resources.push({type:'Other',url}, {type:'PRIVATE_TYPE',url:'https://foreign.invalid/PRIVATE_TOKEN'},
+    {type:'Script',url:'http://tauri.localhost/assets/private.js?PRIVATE_TOKEN'})
+  const result=resourceTreeSummary(value)
+  assert.equal(result.types.Script,2);assert.equal(result.types.Other,1);assert.equal(result.types.Unknown,1)
+  assert.equal(result.owned_script_candidates,1);assert.equal(result.owned_other_js_candidates,1)
+  assert.equal(JSON.stringify(result).includes('PRIVATE'),false)
+  const many=tree();many.frameTree.resources=Array.from({length:1000},()=>({type:'Script',url}))
+  const bounded=resourceTreeSummary(many);assert.equal(bounded.resource_count_bounded,513);assert.equal(bounded.types.Script,512)
+})
+
+test('missing Script resources refuse without weakening candidate types and keep safe actual tree shape',async()=>{
+  const value=tree();value.frameTree.resources[0].type='Other'
+  const f=fixture({respond:()=>({result:value})})
+  await assert.rejects(observeCompiledResources(config,context,env,f.dependencies),error=>{
+    const result=resourceDiagnostic(error)
+    assert.equal(result.stage,'resource-tree');assert.equal(result.reason,'no-owned-script')
+    assert.equal(result.tree_summary.types.Other,1);assert.equal(result.tree_summary.owned_other_js_candidates,1)
+    return true
+  })
+  assert.equal(f.calls.length,1);assert.equal(f.closed(),1)
 })
 
 test('local or foreign page is refused before a resource socket is opened',async()=>{

@@ -8,6 +8,21 @@ from android_runtime_probe import APP
 import android_original_outcome_process as original
 
 
+def safe_tree_summary(value):
+    flags = ('frame_present', 'frame_id_valid', 'frame_origin_owned', 'resources_array')
+    counts = ('resource_count_bounded', 'owned_script_candidates', 'owned_other_js_candidates')
+    types = ('Script', 'Other', 'Image', 'Stylesheet', 'Fetch', 'XHR', 'Unknown')
+    require(type(value) is dict and set(value) == set(flags + counts + ('types',)), 'OUTCOME_RESOURCE_SUMMARY_REFUSED')
+    require(all(type(value[k]) is bool for k in flags)
+            and all(type(value[k]) is int and 0 <= value[k] <= 513 for k in counts)
+            and type(value['types']) is dict and set(value['types']) == set(types)
+            and all(type(v) is int and 0 <= v <= 512 for v in value['types'].values())
+            and sum(value['types'].values()) <= min(value['resource_count_bounded'], 512)
+            and value['owned_script_candidates'] <= value['types']['Script']
+            and value['owned_other_js_candidates'] <= value['types']['Other'], 'OUTCOME_RESOURCE_SUMMARY_REFUSED')
+    return value
+
+
 def read_original_renderer(probe, context, manifest, value):
     original.scope(probe, context, manifest)
     require(set(value)=={'configuration','context'} and value['configuration']['nonce']==manifest['nonce']
@@ -22,13 +37,15 @@ def read_original_renderer(probe, context, manifest, value):
         if 0<len(result.stdout)<=65536:
             try:
                 child=json.loads(result.stdout)
-                if (type(child) is dict and set(child)=={'error','stage','reason'}
+                if (type(child) is dict and set(child) in ({'error','stage','reason'}, {'error','stage','reason','tree_summary'})
                     and child['error']=='OWNED_COMPILED_RESOURCE_UNCONFIRMED'
                     and child['stage'] in ('admission','page-list','socket-open','evaluation-send','evaluation-reply','evaluation-exception','resource-summary','resource-tree','resource-content')
                     and child['reason'] in ('unconfirmed','timeout','send-unconfirmed','connection-unconfirmed','reply-refused','summary-refused',
                         'origin','bound','resource-unavailable','crypto-unavailable','page-exception','no-owned-script')):
                     diagnostic={'stage':child['stage'],'reason':child['reason']}
-            except (ValueError,TypeError):pass
+                    if 'tree_summary' in child:
+                        diagnostic['tree_summary']=safe_tree_summary(child['tree_summary'])
+            except (ValueError,TypeError,RuntimeError):pass
         atomic_json(probe.output/'original-renderer-resource-diagnostic.json',
             {'nonce':manifest['nonce'],'original_pid':manifest['original_pid'],**diagnostic,
              'child_returncode':result.returncode,'stderr_bytes_discarded':len(result.stderr),
