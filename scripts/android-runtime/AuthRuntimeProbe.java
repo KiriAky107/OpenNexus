@@ -276,6 +276,7 @@ public class AuthRuntimeProbe extends Instrumentation {
         // an accessibility scroll. Observe those layout changes before input;
         // do not abort on the first moved frame or ever re-tap after dispatch.
         TargetStability stability=new TargetStability(),visibleStability=new TargetStability();
+        TouchViewport.RevealBudget reveal=new TouchViewport.RevealBudget();
         long until=SystemClock.uptimeMillis()+5000;Rect before=new Rect(),hit=new Rect();boolean stable=false;
         do {
             AccessibilityNodeInfo node=unique(target);node.getBoundsInScreen(before);
@@ -283,6 +284,14 @@ public class AuthRuntimeProbe extends Instrumentation {
             if(visible==null)visible=new Rect();hit.set(visible);
             inputTrace="original_bounds="+before.toShortString()+" visible_hit="+hit.toShortString()+" down=not_sent up=not_sent";
             long observed=SystemClock.uptimeMillis();
+            // ACTION_SHOW_ON_SCREEN acceptance alone does not confirm that a
+            // restored scroll offset exposed the button. Reacquire it and use
+            // at most two directional ancestor scrolls before any touch.
+            if(viewportAdmission() && reveal.scrollBeforeInput(!hit.isEmpty(),observed)) {
+                scrollOwnedTarget(node);
+                stability.observe(0,0,0,0,observed);visibleStability.observe(0,0,0,0,observed);
+                SystemClock.sleep(100);continue;
+            }
             boolean originalStable=stability.observe(before.left,before.top,before.right,before.bottom,observed);
             boolean hitStable=visibleStability.observe(hit.left,hit.top,hit.right,hit.bottom,observed);
             stable=originalStable && hitStable;
@@ -380,14 +389,22 @@ public class AuthRuntimeProbe extends Instrumentation {
         // Scroll only the named target's owned ancestor, in the direction of
         // its actual bounds. A target above a restored scroll offset must not
         // trigger an endless forward-only search. No tap uses guessed bounds.
+        scrollOwnedTarget(target);
+    }
+    private void scrollOwnedTarget(AccessibilityNodeInfo target) {
+        if(!APP.equals(text(target.getPackageName())))return;
         Rect bounds=new Rect();target.getBoundsInScreen(bounds);
-        for (AccessibilityNodeInfo parent=target.getParent();parent!=null;parent=parent.getParent()) {
+        if(bounds.isEmpty())return;
+        int depth=0;
+        for (AccessibilityNodeInfo parent=target.getParent();parent!=null && depth++<32;parent=parent.getParent()) {
             if (!APP.equals(text(parent.getPackageName()))) return;
             if (parent.isScrollable()) {
                 Rect viewport=new Rect();parent.getBoundsInScreen(viewport);
-                parent.performAction(bounds.top<viewport.top || bounds.isEmpty()
-                    ? AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD : AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
-                return;
+                int direction=TouchViewport.verticalExposure(rectangle(bounds),rectangle(viewport));
+                if(direction!=0) {
+                    parent.performAction(direction<0 ? AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD : AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+                    return;
+                }
             }
         }
     }

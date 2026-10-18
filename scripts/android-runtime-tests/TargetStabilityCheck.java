@@ -26,6 +26,27 @@ public final class TargetStabilityCheck {
         require(java.util.Arrays.equals(TouchViewport.avoid(new int[]{10,50,90,100},new int[]{0,80,100,150}),new int[]{10,50,90,80}));
         require(TouchViewport.avoid(new int[]{10,50,90,100},new int[]{0,0,100,150})==null);
         require(java.util.Arrays.equals(TouchViewport.avoid(new int[]{10,50,90,100},new int[]{10,50,30,100}),new int[]{30,50,90,100}));
-        System.out.println("TARGET_STABILITY_OK moving/empty/backward-clock/repeated-time/final-original-bounds/clipped/covered/keyboard");
+        TouchViewport.RevealBudget reveal=new TouchViewport.RevealBudget();
+        require(!reveal.scrollBeforeInput(false,100));
+        require(!reveal.scrollBeforeInput(false,599));
+        require(reveal.scrollBeforeInput(false,600));
+        require(!reveal.scrollBeforeInput(false,700));
+        require(!reveal.scrollBeforeInput(true,1100));
+        require(reveal.scrollBeforeInput(false,1100));
+        require(!reveal.scrollBeforeInput(false,999999));
+        TouchViewport.RevealBudget clock=new TouchViewport.RevealBudget();
+        require(!clock.scrollBeforeInput(false,-1));
+        require(!clock.scrollBeforeInput(false,800));
+        require(!clock.scrollBeforeInput(false,700));
+        require(!clock.scrollBeforeInput(false,1199));
+        require(clock.scrollBeforeInput(false,1200));
+        // Synthetic clipping viewport; only the original target rectangle was
+        // exported by the failed run. Do not claim its ancestor bounds known.
+        require(TouchViewport.verticalExposure(new int[]{89,136,971,159},new int[]{0,160,1080,2200})==-1);
+        require(TouchViewport.verticalExposure(new int[]{10,2100,90,2300},new int[]{0,160,1080,2200})==1);
+        require(TouchViewport.verticalExposure(new int[]{10,200,90,260},new int[]{0,160,1080,2200})==0);
+        require(TouchViewport.verticalExposure(new int[]{10,200,10,260},new int[]{0,160,1080,2200})==0);
+        require(TouchViewport.verticalExposure(new int[]{10,200,90,260},null)==0);
+        System.out.println("TARGET_STABILITY_OK moving/empty/backward-clock/repeated-time/final-original-bounds/clipped/covered/keyboard/bounded-pre-input-reveal/directional-ancestor");
     }
 }
