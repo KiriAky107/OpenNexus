@@ -1,9 +1,29 @@
 // @vitest-environment happy-dom
 import { mount } from '@vue/test-utils'
 import { expect,it } from 'vitest'
+import { nextTick } from 'vue'
+import { appLocale } from '../../i18n'
 import CanvasScene from './CanvasScene.vue'
 import { CanvasGeometry } from './canvasGeometry'
 import type { CanvasNode, CanvasEdge } from './canvasModel'
+
+it('updates the connection layer accessible name with the interface language while preserving graph content',async()=>{
+  const language=appLocale.value
+  const nodes:CanvasNode[]=[{id:'original-node',type:'text',x:0,y:0,width:120,height:100,text:'原文 😀'}]
+  const edges:CanvasEdge[]=[]
+  const original=JSON.stringify({nodes,edges})
+  appLocale.value='en'
+  const wrapper=mount(CanvasScene,{props:{nodes,nodeCount:1,edges:[],order:new Map([['original-node',0]]),
+    pan:{x:0,y:0},zoom:1,selected:[],selectedEdge:'',previews:{},readOnly:false,label:'Free canvas',emptyLabel:'Empty'}})
+  try {
+    expect(wrapper.get('svg.canvas-edges').attributes('aria-label')).toBe('Node connections')
+    appLocale.value='zh-CN';await nextTick()
+    expect(wrapper.get('svg.canvas-edges').attributes('aria-label')).toBe('节点连接')
+    expect(JSON.stringify({nodes,edges})).toBe(original)
+    expect(wrapper.emitted('selectEdge')).toBeUndefined()
+    expect(wrapper.emitted('nodePointer')).toBeUndefined()
+  } finally { wrapper.unmount();appLocale.value=language }
+})
 
 it('names an unnamed visible connection from the full node index and refreshes a renamed offscreen endpoint',async()=>{
   const nodes:CanvasNode[]=[{id:'a',type:'link',x:0,y:0,width:120,height:100,url:'https://example.invalid'},

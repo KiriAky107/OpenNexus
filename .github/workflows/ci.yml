@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       check_scope:
-        description: 'Run all checks, standalone Sync transport, or affected Windows record replacement checks'
+        description: 'Run all checks, shared renderers, standalone Sync transport, or affected Windows records'
         type: choice
-        options: [all, sync-http, windows-records]
+        options: [all, frontend, sync-http, windows-records]
         default: all
         required: false
 
@@ -65,7 +65,7 @@ jobs:
       - run: uv run --frozen pytest
 
   frontend:
-    if: github.event_name != 'workflow_dispatch' || inputs.check_scope == 'all'
+    if: github.event_name != 'workflow_dispatch' || inputs.check_scope == 'all' || inputs.check_scope == 'frontend'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -73,6 +73,9 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v7
+      - name: Check scoped renderer CI selection
+        working-directory: .
+        run: python3 scripts/test_frontend_ci_workflow.py
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
@@ -87,6 +90,9 @@ jobs:
       - run: pnpm test --maxWorkers=2
       - run: pnpm type-check
       - run: pnpm build
+      - name: Build the shared mobile renderer without an APK
+        if: github.event_name == 'workflow_dispatch' && inputs.check_scope == 'frontend'
+        run: pnpm mobile:build
 
   rust:
     if: github.event_name != 'workflow_dispatch' || inputs.check_scope == 'all'
@@ -371,7 +377,7 @@ jobs:
           if-no-files-found: warn
 
   sync-http:
-    if: github.event_name != 'workflow_dispatch' || inputs.check_scope != 'windows-records'
+    if: github.event_name != 'workflow_dispatch' || inputs.check_scope == 'all' || inputs.check_scope == 'sync-http'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
@@ -404,7 +410,7 @@ jobs:
         run: cargo clippy --lib --no-default-features --features sync-http --locked -- -D warnings
 
   sync-http-android:
-    if: github.event_name != 'workflow_dispatch' || inputs.check_scope != 'windows-records'
+    if: github.event_name != 'workflow_dispatch' || inputs.check_scope == 'all' || inputs.check_scope == 'sync-http'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
